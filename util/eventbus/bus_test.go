@@ -16,6 +16,8 @@ import (
 
 	"github.com/creachadair/taskgroup"
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/tstest"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 )
 
@@ -495,6 +497,14 @@ func TestMonitor(t *testing.T) {
 	t.Run("Wait", testMon(t, func(c *eventbus.Client, m eventbus.Monitor) { c.Close(); m.Wait() }))
 }
 
+type slowSubscriberMetric struct {
+	Metric *clientmetric.Metric
+}
+
+func (s slowSubscriberMetric) AddSlowSubscriber(string, time.Duration) {
+	s.Metric.Add(1)
+}
+
 func TestSlowSubs(t *testing.T) {
 	t.Run("Subscriber", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -527,6 +537,49 @@ func TestSlowSubs(t *testing.T) {
 		})
 	})
 
+	t.Run("SubscriberWithTracker", func(t *testing.T) {
+		tstest.AssertNotParallel(t)
+		clientmetric.ResetForTest(t)
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			tracker := slowSubscriberMetric{
+				Metric: clientmetric.NewCounter("testonly_SubscriberWithTracker")}
+			opts := eventbus.BusOptions{
+				SlowSubscriberTracker: tracker,
+			}
+			b := eventbus.NewWithOptions(opts)
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventA](pc)
+
+			sc := b.Client("sub")
+			s := eventbus.Subscribe[EventA](sc)
+
+			go func() {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("Subscriber accepted %v", <-s.Events())
+			}()
+
+			p.Publish(EventA{12345})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventA is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+
+			gotMetric := tracker.Metric.Value()
+			if gotMetric != 1 {
+				t.Errorf("Want slow subscriber metric 1, got %d", gotMetric)
+			}
+		})
+	})
+
 	t.Run("SubscriberFunc", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			buf := swapLogBuf(t)
@@ -552,6 +605,47 @@ func TestSlowSubs(t *testing.T) {
 				`subscriber for eventbus_test.EventB is slow.*`)
 			if got := buf.String(); !want.MatchString(got) {
 				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+		})
+	})
+
+	t.Run("SubscriberFuncWithTracker", func(t *testing.T) {
+		tstest.AssertNotParallel(t)
+		clientmetric.ResetForTest(t)
+		synctest.Test(t, func(t *testing.T) {
+			buf := swapLogBuf(t)
+
+			tracker := slowSubscriberMetric{
+				Metric: clientmetric.NewCounter("testonly_SubscriberFuncWithTracker")}
+			opts := eventbus.BusOptions{
+				SlowSubscriberTracker: tracker,
+			}
+			b := eventbus.NewWithOptions(opts)
+			defer b.Close()
+
+			pc := b.Client("pub")
+			p := eventbus.Publish[EventB](pc)
+
+			sc := b.Client("sub")
+			eventbus.SubscribeFunc[EventB](sc, func(e EventB) {
+				time.Sleep(6 * time.Second) // trigger the slow check at 5s.
+				t.Logf("SubscriberFunc processed %v", e)
+			})
+
+			p.Publish(EventB{67890})
+
+			time.Sleep(7 * time.Second) // advance time...
+			synctest.Wait()             // subscriber is done
+
+			want := regexp.MustCompile(`^.* tailscale.com/util/eventbus_test bus_test.go:\d+: ` +
+				`subscriber for eventbus_test.EventB is slow.*`)
+			if got := buf.String(); !want.MatchString(got) {
+				t.Errorf("Wrong log output\ngot:  %q\nwant: %s", got, want)
+			}
+
+			gotMetric := tracker.Metric.Value()
+			if gotMetric != 1 {
+				t.Errorf("Want slow subscriber metric 1, got %d", gotMetric)
 			}
 		})
 	})

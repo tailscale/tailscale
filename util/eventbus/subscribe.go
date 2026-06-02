@@ -194,8 +194,8 @@ type Subscriber[T any] struct {
 	read chan T
 }
 
-func newSubscriber[T any](r *subscribeState, logf logger.Logf) *Subscriber[T] {
-	core := newSubscriberCore(r, logf, reflect.TypeFor[T]())
+func newSubscriber[T any](r *subscribeState, logf logger.Logf, sst SlowSubscriberTracker) *Subscriber[T] {
+	core := newSubscriberCore(r, logf, reflect.TypeFor[T](), sst)
 	s := &Subscriber[T]{
 		core: core,
 		read: make(chan T),
@@ -256,7 +256,9 @@ func (s *Subscriber[T]) dispatchTyped(
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
 		case <-s.core.slow.C:
-			s.core.logf("subscriber for %s is slow (%v elapsed)", s.core.typeName, time.Since(start))
+			elapsed := time.Since(start)
+			s.core.logf("subscriber for %s is slow (%v elapsed)", s.core.typeName, elapsed)
+			s.core.slowTracker.AddSlowSubscriber(s.core.typeName, elapsed)
 			s.core.slow.Reset(slowSubscriberTimeout)
 		}
 	}
@@ -323,10 +325,11 @@ type SubscriberFunc[T any] struct {
 // channel send or user callback invocation) is encapsulated in the dispatchFn
 // closure set up by the constructor of the typed facade.
 type subscriberCore struct {
-	stop       stopFlag
-	unregister func(reflect.Type)
-	logf       logger.Logf
-	slow       *time.Timer // used to detect slow subscriber service
+	stop        stopFlag
+	unregister  func(reflect.Type)
+	logf        logger.Logf
+	slow        *time.Timer // used to detect slow subscriber service
+	slowTracker SlowSubscriberTracker
 
 	// typ is the cached reflect.Type of T. Returned by
 	// subscribeType() and used by the dispatch closure to format
@@ -354,8 +357,8 @@ type subscriberCore struct {
 	) bool
 }
 
-func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf) *SubscriberFunc[T] {
-	core := newSubscriberCore(r, logf, reflect.TypeFor[T]())
+func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf, sst SlowSubscriberTracker) *SubscriberFunc[T] {
+	core := newSubscriberCore(r, logf, reflect.TypeFor[T](), sst)
 	// The dispatch closure is the only piece that intrinsically
 	// needs T: it performs the type assertion on the head queue
 	// value and forwards the unboxed value to the user callback.
@@ -391,14 +394,15 @@ func newSubscriberFunc[T any](r *subscribeState, f func(T), logf logger.Logf) *S
 // reflect.TypeFor[T]() call (whose body is shared via the
 // internal/abi.TypeFor[T] dictionary) and the construction of the dispatch
 // closure itself.
-func newSubscriberCore(r *subscribeState, logf logger.Logf, typ reflect.Type) *subscriberCore {
+func newSubscriberCore(r *subscribeState, logf logger.Logf, typ reflect.Type, s SlowSubscriberTracker) *subscriberCore {
 	slow := time.NewTimer(0)
 	slow.Stop() // reset in dispatch
 	core := &subscriberCore{
-		logf:     logf,
-		slow:     slow,
-		typ:      typ,
-		typeName: typ.String(),
+		logf:        logf,
+		slow:        slow,
+		typ:         typ,
+		typeName:    typ.String(),
+		slowTracker: s,
 	}
 	core.unregister = r.deleteSubscriber
 	return core
@@ -470,7 +474,9 @@ func dispatchFunc(
 			core.slow.Reset(5 * slowSubscriberTimeout)
 			select {
 			case <-core.slow.C:
-				core.logf("giving up on subscriber for %s after %v at close", core.typeName, time.Since(start))
+				elapsed := time.Since(start)
+				core.logf("giving up on subscriber for %s after %v at close", core.typeName, elapsed)
+				core.slowTracker.AddSlowSubscriber(core.typeName, elapsed)
 				if cibuild.On() {
 					all := make([]byte, 2<<20)
 					n := runtime.Stack(all, true)
@@ -482,7 +488,9 @@ func dispatchFunc(
 		case ch := <-snapshot:
 			ch <- vals.Snapshot()
 		case <-core.slow.C:
-			core.logf("subscriber for %s is slow (%v elapsed)", core.typeName, time.Since(start))
+			elapsed := time.Since(start)
+			core.logf("subscriber for %s is slow (%v elapsed)", core.typeName, elapsed)
+			core.slowTracker.AddSlowSubscriber(core.typeName, elapsed)
 			core.slow.Reset(slowSubscriberTimeout)
 		}
 	}

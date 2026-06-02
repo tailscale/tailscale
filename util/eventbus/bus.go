@@ -8,6 +8,7 @@ import (
 	"log"
 	"reflect"
 	"slices"
+	"time"
 
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
@@ -25,6 +26,14 @@ type RoutedEvent struct {
 	To    []*Client
 }
 
+// SlowSubscriberTracker is an interface that tracks diagnostics
+// whenever a slow subscriber is detected.
+type SlowSubscriberTracker interface {
+	// AddSlowSubscriber is invoked upon detection of a slow subscriber.
+	// It is ok to call multiple times per typeName.
+	AddSlowSubscriber(typeName string, elapsed time.Duration)
+}
+
 // Bus is an event bus that distributes published events to interested
 // subscribers.
 type Bus struct {
@@ -33,6 +42,8 @@ type Bus struct {
 	snapshot   chan chan []PublishedEvent
 	routeDebug hook[RoutedEvent]
 	logf       logger.Logf
+
+	slowSubscriberTracker SlowSubscriberTracker
 
 	topicsMu syncs.Mutex
 	topics   map[reflect.Type][]*subscribeState
@@ -53,11 +64,12 @@ func New() *Bus { return NewWithOptions(BusOptions{}) }
 // Use [Subscribe] and [SubscribeFunc] to make event subscribers.
 func NewWithOptions(opts BusOptions) *Bus {
 	ret := &Bus{
-		write:    make(chan PublishedEvent),
-		snapshot: make(chan chan []PublishedEvent),
-		topics:   map[reflect.Type][]*subscribeState{},
-		clients:  set.Set[*Client]{},
-		logf:     opts.logger(),
+		write:                 make(chan PublishedEvent),
+		snapshot:              make(chan chan []PublishedEvent),
+		topics:                map[reflect.Type][]*subscribeState{},
+		clients:               set.Set[*Client]{},
+		logf:                  opts.logger(),
+		slowSubscriberTracker: opts.slowSubscriberTracker(),
 	}
 	ret.router = runWorker(ret.pump)
 	return ret
@@ -70,6 +82,10 @@ type BusOptions struct {
 	// publishers, and subscribers under its care. If it is nil, logs are sent
 	// to [log.Printf].
 	Logf logger.Logf
+
+	// SlowSubscriberTracker, if non-nil, is used to track whenever a slow subscriber
+	// client is detected.
+	SlowSubscriberTracker SlowSubscriberTracker
 }
 
 func (o BusOptions) logger() logger.Logf {
@@ -78,6 +94,19 @@ func (o BusOptions) logger() logger.Logf {
 	}
 	return o.Logf
 }
+
+func (o BusOptions) slowSubscriberTracker() SlowSubscriberTracker {
+	if o.SlowSubscriberTracker == nil {
+		return NoopSlowSubscriberTracker{}
+	}
+	return o.SlowSubscriberTracker
+}
+
+// NoopSlowSubscriberTracker is a noop implementation of [SlowSubscriberTracker].
+type NoopSlowSubscriberTracker struct{}
+
+// Add is a noop.
+func (NoopSlowSubscriberTracker) AddSlowSubscriber(string, time.Duration) {}
 
 // Client returns a new client with no subscriptions. Use [Subscribe]
 // to receive events, and [Publish] to emit events.
@@ -101,6 +130,22 @@ func (b *Bus) Client(name string) *Client {
 // Debugger returns the debugging facility for the bus.
 func (b *Bus) Debugger() *Debugger {
 	return &Debugger{b}
+}
+
+// SetSlowSubScriberTracker sets the Bus's slow subscriber diagnostics tracker,
+// to be used in case it couldn't be set in `BusOptions` at creation time. This
+// should be called close to Bus initialization.
+func (b *Bus) SetSlowSubscriberTracker(s SlowSubscriberTracker) {
+	b.clientsMu.Lock()
+	defer b.clientsMu.Unlock()
+	// Forbid if any subscribers already hooked in, as this may imply some subscribers
+	// are set up with a stale SlowSubscriberTracker.
+	for c := range b.clients {
+		if c.peekSubscribeState() != nil {
+			panic("Cannot set SlowSubscriberTracker for eventbus")
+		}
+	}
+	b.slowSubscriberTracker = s
 }
 
 // Close closes the bus. It implicitly closes all clients, publishers and

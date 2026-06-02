@@ -145,7 +145,11 @@ func Subscribe[T any](c *Client) *Subscriber[T] {
 	}
 
 	r := c.subscribeStateLocked()
-	s := newSubscriber[T](r, logfForCaller(c.logger()))
+	sst := c.bus.slowSubscriberTracker
+	if sst == nil {
+		sst = NoopSlowSubscriberTracker{}
+	}
+	s := newSubscriber[T](r, logfForCaller(c.logger()), sst)
 	// Register the non-generic core with the bus rather than the typed facade,
 	// mirroring SubscribeFunc and Publish: this keeps the bus's outputs map
 	// and subscriber-interface itab out of per-T cost.
@@ -171,7 +175,7 @@ func SubscribeFunc[T any](c *Client, f func(T)) *SubscriberFunc[T] {
 	}
 
 	r := c.subscribeStateLocked()
-	s := newSubscriberFunc[T](r, f, logfForCaller(c.logger()))
+	s := newSubscriberFunc[T](r, f, logfForCaller(c.logger()), c.bus.slowSubscriberTracker)
 	// Register the non-generic core, not the typed facade. Doing
 	// so means the bus's outputs map and the subscriber interface
 	// itab are not parameterized by T, eliminating per-T itab and

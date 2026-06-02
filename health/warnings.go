@@ -311,3 +311,18 @@ var ipForwardingWarnable = condRegister(func() *Warnable {
 		ImpactsConnectivity: true,
 	}
 })
+
+// eventbusSlowSubscriberWarnable is a Warnable that warns the user that some
+// [tailscale.com/util/eventbus.Subscriber] was detected to be slow. It might
+// be rep
+// abtodo: how much detail do we put in here for end users?
+var eventbusSlowSubscriberWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:     tsconst.HealthWarnableEventbusSlowSubscriber,
+		Title:    "A Tailscale daemon eventbus subscriber is slow",
+		Severity: SeverityMedium,
+		Text: func(args Args) string {
+			return fmt.Sprintf("Tailscale daemon eventbus subscriber for '%s' is slow. You might experience connectivity issues.", args[ArgEventBusSubscriberTypeName])
+		},
+	}
+})

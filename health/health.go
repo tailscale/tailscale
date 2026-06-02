@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
@@ -130,8 +131,10 @@ type Tracker struct {
 	controlMessages             map[tailcfg.DisplayMessageID]tailcfg.DisplayMessage // latest control messages received
 	lastLoginErr                error
 	localLogConfigErr           error
-	tlsConnectionErrors         map[string]error // map[ServerName]error
-	metricHealthMessage         any              // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
+	tlsConnectionErrors         map[string]error     // map[ServerName]error
+	metricHealthMessage         any                  // nil or *metrics.MultiLabelMap[metricHealthMessageLabel]
+	slowBusSubscriberCount      *clientmetric.Metric // metric updated when some (not just the [Tracker]'s!) eventbus subscriber is found to be slow
+	lastSlowBusSubscriber       string               // typename associated with the last recorded slow event subscriber
 
 	// IP forwarding check
 	// If non-nil, called periodically to check if IP forwarding is broken.
@@ -151,9 +154,11 @@ func NewTracker(bus *eventbus.Bus) *Tracker {
 
 	ec := bus.Client("health.Tracker")
 	t := &Tracker{
-		eventClient: ec,
-		changePub:   eventbus.Publish[Change](ec),
+		eventClient:            ec,
+		changePub:              eventbus.Publish[Change](ec),
+		slowBusSubscriberCount: clientmetric.NewCounter("health_eventbus_subscriber_slow"),
 	}
+	bus.SetSlowSubscriberTracker(t)
 	t.timer = t.clock().AfterFunc(time.Minute, t.timerSelfCheck)
 
 	ec.Monitor(t.awaitEventClientDone)
@@ -1276,6 +1281,12 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 		t.setHealthyLocked(tlsConnectionFailedWarnable)
 	}
 
+	if t.slowBusSubscriberCount.Value() > 0 && t.lastSlowBusSubscriber != "" {
+		t.setUnhealthyLocked(eventbusSlowSubscriberWarnable, Args{
+			ArgEventBusSubscriberTypeName: t.lastSlowBusSubscriber,
+		})
+	}
+
 	if e := fakeErrForTesting(); len(t.warnables) == 0 && e != "" {
 		t.setUnhealthyLocked(testWarnable, Args{
 			ArgError: e,
@@ -1439,4 +1450,14 @@ func (t *Tracker) updateIPForwardingWarnableLocked() {
 	} else {
 		t.setHealthyLocked(ipForwardingWarnable)
 	}
+}
+
+func (t *Tracker) AddSlowSubscriber(typeName string, elapsed time.Duration) {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.slowBusSubscriberCount.Add(1)
+	t.lastSlowBusSubscriber = typeName
 }

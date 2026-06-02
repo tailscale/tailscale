@@ -24,4 +24,5 @@ const (
 	HealthWarnableApplyDiskConfig           = "apply-disk-config"
 	HealthWarnableWarmingUp                 = "warming-up"
 	HealthWarnableTLSCertPending            = "tls-cert-pending"
+	HealthWarnableEventbusSlowSubscriber    = "eventbus-slow-subscriber"
 )

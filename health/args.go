@@ -40,4 +40,8 @@ const (
 	// ArgDomains provides a Warnable with a comma-delimited list of domain
 	// names involved in the unhealthy state.
 	ArgDomains Arg = "domains"
+
+	// ArgEventBusSubscriberTypeName provides a Warnable with the typename of the [tailscale.com/util/eventbus.Subscriber]
+	// involved in the unhealthy state.
+	ArgEventBusSubscriberTypeName Arg = "eventbus-subscriber-typename"
 )
