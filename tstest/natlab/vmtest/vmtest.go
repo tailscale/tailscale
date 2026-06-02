@@ -93,6 +93,7 @@ type Env struct {
 	allOnline                 bool // mark every peer as Online=true in MapResponses
 	peerRelayGrants           bool // grant peer-relay capabilities on the wildcard packet filter
 	selfSignedDERPCertPinning bool // serve test DERP map with sha256-raw cert pins
+	fakeACME                  bool // point tailscaled at vnet's fake ACME server
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
@@ -394,6 +395,12 @@ func SelfSignedDERPCertPinning() EnvOption {
 	return envOptFunc(func(e *Env) { e.selfSignedDERPCertPinning = true })
 }
 
+// FakeACME returns an [EnvOption] that points nodes at vnet's in-process ACME
+// CA and configures the test control server to advertise MagicDNS cert domains.
+func FakeACME() EnvOption {
+	return envOptFunc(func(e *Env) { e.fakeACME = true })
+}
+
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
 // vnet.Config.AddNetwork (string IPs, NAT types, NetworkService values).
 func (e *Env) AddNetwork(opts ...any) *vnet.Network {
@@ -462,6 +469,12 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			// Pass through to vnet (TailscaledEnv, NodeOption, MAC, etc.)
 			vnetOpts = append(vnetOpts, o)
 		}
+	}
+	if e.fakeACME {
+		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
+			Key:   "TS_DEBUG_ACME_DIRECTORY_URL",
+			Value: "http://acme.example/directory",
+		})
 	}
 
 	// macOS VMs require a macOS arm64 host (Apple Virtualization.framework via
@@ -808,6 +821,12 @@ func (e *Env) SetExitNodeIP(client *Node, ip netip.Addr) {
 // the next netmap update sent to peers.
 func (e *Env) ControlServer() *testcontrol.Server {
 	return e.server.ControlServer()
+}
+
+// FakeACMERootPEM returns the root certificate for vnet's fake ACME CA.
+func (e *Env) FakeACMERootPEM() []byte {
+	e.initVnet()
+	return e.server.FakeACMERootPEM()
 }
 
 // BringUpMullvadWGServer brings up a userspace WireGuard server on n,
@@ -1229,6 +1248,7 @@ func (e *Env) SSHExec(n *Node, cmd string) (string, error) {
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=5",
+		"-o", "LogLevel=ERROR",
 		"-i", "/tmp/vmtest_key",
 		"-p", fmt.Sprintf("%d", n.sshPort),
 		"root@127.0.0.1",
@@ -1444,6 +1464,14 @@ func (e *Env) initVnet() {
 		}
 		if e.selfSignedDERPCertPinning {
 			e.server.ControlServer().DERPMap = e.buildSelfSignedDERPMap()
+		}
+		if e.fakeACME {
+			cs := e.server.ControlServer()
+			cs.MagicDNSDomain = "tailnet.test"
+			if cs.DNSConfig == nil {
+				cs.DNSConfig = new(tailcfg.DNSConfig)
+			}
+			cs.DNSConfig.Proxied = true
 		}
 	})
 }

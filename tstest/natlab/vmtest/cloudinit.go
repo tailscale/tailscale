@@ -4,12 +4,18 @@
 package vmtest
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/creachadair/mds/shell"
 	"github.com/kdomanski/iso9660"
+	"golang.org/x/crypto/ssh"
 )
 
 // createCloudInitISO creates a cidata seed ISO for the given cloud VM node.
@@ -18,6 +24,9 @@ import (
 // doesn't use netplan-style network-config; DHCP is enabled in rc.conf).
 func (e *Env) createCloudInitISO(n *Node) (string, error) {
 	metaData := fmt.Sprintf("instance-id: %s\nlocal-hostname: %s\n", n.name, n.name)
+	if err := ensureDebugSSHKey(); err != nil {
+		return "", err
+	}
 	userData := e.generateUserData(n)
 
 	files := map[string]string{
@@ -124,7 +133,7 @@ func (e *Env) generateLinuxUserData(n *Node) string {
 	// features like Taildrop (which needs a place to stash incoming files)
 	// have a directory to work with.
 	ud.WriteString("  - [\"mkdir\", \"-p\", \"/var/lib/tailscale\"]\n")
-	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"]\n")
+	fmt.Fprintf(&ud, "  - [\"/bin/sh\", \"-c\", \"%s/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"]\n", tailscaledEnvPrefix(n))
 	ud.WriteString("  - [\"sleep\", \"2\"]\n")
 
 	// Start tta (Tailscale Test Agent).
@@ -183,11 +192,55 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 	// path). --statedir provides a VarRoot so features like Taildrop have a
 	// directory.
 	ud.WriteString("  - \"mkdir -p /var/lib/tailscale\"\n")
-	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale </dev/null >/var/log/tailscaled.log 2>&1 &\"\n")
+	fmt.Fprintf(&ud, "  - \"export PATH=/usr/local/bin:$PATH && %s/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale </dev/null >/var/log/tailscaled.log 2>&1 &\"\n", tailscaledEnvPrefix(n))
 	ud.WriteString("  - \"sleep 2\"\n")
 
 	// Start tta (Tailscale Test Agent), with the same stdio redirection.
 	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tta </dev/null >/var/log/tta.log 2>&1 &\"\n")
 
 	return ud.String()
+}
+
+func tailscaledEnvPrefix(n *Node) string {
+	env := n.vnetNode.Env()
+	if len(env) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(env))
+	for _, e := range env {
+		parts = append(parts, e.Key+"="+shell.Quote(e.Value))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, " ") + " "
+}
+
+func ensureDebugSSHKey() error {
+	const keyPath = "/tmp/vmtest_key"
+	if privPEM, err := os.ReadFile(keyPath); err == nil {
+		if _, err := os.Stat(keyPath + ".pub"); err == nil {
+			return nil
+		}
+		signer, err := ssh.ParsePrivateKey(privPEM)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", keyPath, err)
+		}
+		return os.WriteFile(keyPath+".pub", ssh.MarshalAuthorizedKey(signer.PublicKey()), 0644)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "vmtest")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(block), 0600); err != nil {
+		return err
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(keyPath+".pub", ssh.MarshalAuthorizedKey(sshPub), 0644)
 }

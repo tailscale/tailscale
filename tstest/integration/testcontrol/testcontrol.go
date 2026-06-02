@@ -60,6 +60,7 @@ type Server struct {
 	DNSConfig          *tailcfg.DNSConfig // nil means no DNS config
 	MagicDNSDomain     string
 	C2NResponses       syncs.Map[string, func(*http.Response)] // token => onResponse func
+	OnSetDNS           func(*tailcfg.SetDNSRequest) error
 
 	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
 	// grants rules.
@@ -508,12 +509,74 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		s.serveMap(w, r, mkey)
 	case "/machine/register":
 		s.serveRegister(w, r, mkey)
+	case "/machine/set-dns":
+		s.serveSetDNS(w, r, mkey)
 	case "/machine/update-health":
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.serveUnhandled(w, r)
 	}
+}
+
+func (s *Server) serveSetDNS(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+	var req tailcfg.SetDNSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Type != "TXT" {
+		http.Error(w, "only TXT records are supported", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.Value == "" {
+		http.Error(w, "missing name or value", http.StatusBadRequest)
+		return
+	}
+	if req.NodeKey.IsZero() {
+		http.Error(w, "missing node key", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	node := s.nodes[req.NodeKey]
+	certDomains := s.certDomainsLocked(node)
+	s.mu.Unlock()
+	if node == nil {
+		http.Error(w, "unknown node key", http.StatusForbidden)
+		return
+	}
+	if node.Machine != mkey {
+		http.Error(w, "node key does not belong to machine", http.StatusForbidden)
+		return
+	}
+	baseName, ok := strings.CutPrefix(req.Name, "_acme-challenge.")
+	if !ok || !slices.Contains(certDomains, baseName) {
+		http.Error(w, "name is not an ACME challenge for a cert domain", http.StatusForbidden)
+		return
+	}
+	if s.OnSetDNS != nil {
+		if err := s.OnSetDNS(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tailcfg.SetDNSResponse{})
+}
+
+func (s *Server) certDomainsLocked(node *tailcfg.Node) []string {
+	if node == nil {
+		return nil
+	}
+	var ret []string
+	if s.DNSConfig != nil {
+		ret = append(ret, s.DNSConfig.CertDomains...)
+	}
+	if s.MagicDNSDomain != "" {
+		ret = append(ret, node.Hostinfo.Hostname()+"."+s.MagicDNSDomain)
+	}
+	return ret
 }
 
 // SetSubnetRoutes sets the list of subnet routes which a node is routing.
