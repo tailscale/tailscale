@@ -14,7 +14,13 @@ package vnet
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -23,10 +29,10 @@ import (
 	"iter"
 	"log"
 	"maps"
+	"math/big"
 	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os/exec"
 	"strconv"
@@ -734,16 +740,23 @@ type derpServer struct {
 	srv       *derpserver.Server
 	handler   http.Handler
 	tlsConfig *tls.Config
+	// certSHA256Hex is the SHA-256 hex fingerprint of the leaf certificate
+	// served by this DERP server. It is the value tests pin against when
+	// they configure a custom DERP map with CertName="sha256-raw:<hex>".
+	certSHA256Hex string
 }
 
-func newDERPServer() *derpServer {
-	// Just to get a self-signed TLS cert:
-	ts := httptest.NewTLSServer(nil)
-	ts.Close()
-
+// newDERPServer returns a derpServer whose TLS cert is a freshly generated
+// self-signed ECDSA cert valid for hostname. Tests that use a stock test DERP
+// map with InsecureForTests=true ignore the cert content entirely; tests that
+// want to exercise sha256-raw cert pinning can read the certSHA256Hex via
+// [Server.DERPCertSHA256Hex].
+func newDERPServer(hostname string) *derpServer {
+	tlsConfig, certHex := selfSignedDERPCert(hostname)
 	ds := &derpServer{
-		srv:       derpserver.New(key.NewNode(), logger.Discard),
-		tlsConfig: ts.TLS, // self-signed; test client configure to not check
+		srv:           derpserver.New(key.NewNode(), logger.Discard),
+		tlsConfig:     tlsConfig,
+		certSHA256Hex: certHex,
 	}
 	var mux http.ServeMux
 	mux.Handle("/derp", derpserver.Handler(ds.srv))
@@ -751,6 +764,40 @@ func newDERPServer() *derpServer {
 
 	ds.handler = &mux
 	return ds
+}
+
+// selfSignedDERPCert builds a self-signed ECDSA P-256 cert valid for hostname
+// and returns a *tls.Config that serves it, along with the SHA-256 hex digest
+// of the cert's DER bytes.
+func selfSignedDERPCert(hostname string) (*tls.Config, string) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: generating DERP cert key: %v", err))
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: hostname},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{hostname},
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+		tmpl.DNSNames = nil
+	}
+	der, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: creating DERP cert: %v", err))
+	}
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{der},
+			PrivateKey:  key,
+		}},
+	}
+	return cfg, fmt.Sprintf("%x", sha256.Sum256(der))
 }
 
 type Server struct {
@@ -810,6 +857,11 @@ func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Add
 	s.onDHCPEvent = fn
 }
 
+// derpHostnames are the SNI/HostName values vnet's fake DERP servers identify
+// as. They are also used to issue the per-DERP self-signed certificate so that
+// hostname verification succeeds for tests that pin via sha256-raw.
+var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
+
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
 		1: {
@@ -820,7 +872,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "1a",
 					RegionID:         1,
-					HostName:         "derp1.tailscale",
+					HostName:         derpHostnames[0],
 					IPv4:             fakeDERP1.v4.String(),
 					IPv6:             fakeDERP1.v6.String(),
 					InsecureForTests: true,
@@ -836,7 +888,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "2a",
 					RegionID:         2,
-					HostName:         "derp2.tailscale",
+					HostName:         derpHostnames[1],
 					IPv4:             fakeDERP2.v4.String(),
 					IPv6:             fakeDERP2.v6.String(),
 					InsecureForTests: true,
@@ -865,8 +917,8 @@ func New(c *Config) (*Server, error) {
 		networkByWAN: &bart.Table[*network]{},
 		networks:     set.Of[*network](),
 	}
-	for range 2 {
-		s.derps = append(s.derps, newDERPServer())
+	for _, host := range derpHostnames {
+		s.derps = append(s.derps, newDERPServer(host))
 	}
 	if err := s.initFromConfig(c); err != nil {
 		return nil, err
@@ -887,6 +939,20 @@ func New(c *Config) (*Server, error) {
 // ControlServer returns the test control server used by this vnet.
 func (s *Server) ControlServer() *testcontrol.Server {
 	return s.control
+}
+
+// DERPHostname returns the SNI/HostName used by vnet's idx'th fake DERP
+// server. idx must be 0 or 1.
+func (s *Server) DERPHostname(idx int) string {
+	return derpHostnames[idx]
+}
+
+// DERPCertSHA256Hex returns the SHA-256 hex fingerprint of the self-signed
+// TLS certificate served by vnet's idx'th fake DERP server. It is the value
+// to pin against in a [tailcfg.DERPNode.CertName] formatted as
+// "sha256-raw:<hex>". idx must be 0 or 1.
+func (s *Server) DERPCertSHA256Hex(idx int) string {
+	return s.derps[idx].certSHA256Hex
 }
 
 // CloudInitData holds the cloud-init configuration for a node.
