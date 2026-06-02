@@ -281,6 +281,11 @@ type LocalBackend struct {
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
 	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
+	lastDeadlockCheckUnix                   atomic.Int64
+	deadlockChecksInFlight                  atomic.Int64
+	deadlockTimerMu                         sync.Mutex
+	deadlockTimer                           *time.Timer
+	deadlockProbeTimer                      *time.Timer
 
 	// goTracker accounts for all goroutines started by LocalBacked, primarily
 	// for testing and graceful shutdown purposes.
@@ -1269,6 +1274,8 @@ func (b *LocalBackend) ClearCaptureSink() {
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
+	defer b.CheckDeadlocks()()
+
 	// Close the [eventbus.Client] to wait for subscribers to
 	// return before acquiring b.mu:
 	//  1. Event handlers also acquire b.mu, they can deadlock with c.Shutdown().
@@ -1786,6 +1793,8 @@ func (b *LocalBackend) GetFilterForTest() *filter.Filter {
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
+	defer b.CheckDeadlocks()()
+
 	if b.ignoreControlClientUpdates.Load() {
 		b.logf("ignoring SetControlClientStatus during controlclient shutdown")
 		return
@@ -2330,6 +2339,8 @@ func (b *LocalBackend) reconcilePrefs() (_ ipn.PrefsView, anyChange bool) {
 // sysPolicyChanged is a callback triggered by syspolicy when it detects
 // a change in one or more syspolicy settings.
 func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
+	defer b.CheckDeadlocks()()
+
 	if policy.HasChangedAnyOf(pkey.AlwaysOn, pkey.AlwaysOnOverrideWithReason) {
 		// If the AlwaysOn or the AlwaysOnOverrideWithReason policy has changed,
 		// we should reset the overrideAlwaysOn flag, as the override might
@@ -2370,6 +2381,8 @@ var (
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
+	defer b.CheckDeadlocks()()
+
 	var notify *ipn.Notify // non-nil if we need to send a Notify
 	defer func() {
 		if notify != nil {
@@ -2504,6 +2517,8 @@ func peerRouteConfigChanged(old, new tailcfg.NodeView) bool {
 // filter. Avoiding a full netmap rebuild matters here because the packet
 // filter currently changes on every peer add on large tailnets.
 func (b *LocalBackend) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool {
+	defer b.CheckDeadlocks()()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cn := b.currentNode()
@@ -2533,6 +2548,8 @@ func (b *LocalBackend) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule],
 // caller's tracking map; nodeBackend stores them as-is, and per-bus
 // sessions can dedup via [UserProfileView.Equal] without copying.
 func (b *LocalBackend) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	defer b.CheckDeadlocks()()
+
 	if len(profiles) == 0 {
 		return true
 	}
@@ -2885,6 +2902,8 @@ func (b *LocalBackend) controlDebugFlags() []string {
 // actually a supported operation (it should be, but it's very unclear
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
+	defer b.CheckDeadlocks()()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.startLocked(opts)
@@ -3601,6 +3620,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		b.e.UpdateStatus(statusSB)
 	}
 
+	// Watch for deadlocks only during the registration phase below; the rest
+	// of this method blocks on ctx (often for hours) and shouldn't trip the
+	// watchdog.
+	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
@@ -3661,6 +3684,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
+	deadlockDone()
 
 	metricCurrentWatchIPNBus.Add(1)
 	defer metricCurrentWatchIPNBus.Add(-1)

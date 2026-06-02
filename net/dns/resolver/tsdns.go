@@ -266,6 +266,16 @@ func New(logf logger.Logf, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, h
 
 func (r *Resolver) TestOnlySetHook(hook func(Config)) { r.saveConfigForTests = hook }
 
+// ProbeLocks acquires and releases the resolver's internal mutexes.
+func (r *Resolver) ProbeLocks() {
+	r.mu.Lock()
+	r.mu.Unlock()
+
+	if r.forwarder != nil {
+		r.forwarder.probeLocks()
+	}
+}
+
 func (r *Resolver) SetConfig(cfg Config) error {
 	if !buildfeatures.HasDNS {
 		return nil

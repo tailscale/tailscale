@@ -267,6 +267,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	defer h.b.CheckDeadlocks()()
 	if fn, route, ok := handlerForPath(r.URL.Path); ok {
 		h.logRequest(r.Method, route)
 		fn(h, w, r)

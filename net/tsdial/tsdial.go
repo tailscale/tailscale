@@ -136,6 +136,12 @@ func (d *Dialer) TUNName() string {
 	return d.tunName
 }
 
+// ProbeLocks acquires and releases the dialer's internal mutex.
+func (d *Dialer) ProbeLocks() {
+	d.mu.Lock()
+	d.mu.Unlock()
+}
+
 // SetExitDNSDoH sets (or clears) the exit node DNS DoH server base URL to use.
 // The doh URL should contain the scheme, authority, and path, but without
 // a '?' and/or query parameters.

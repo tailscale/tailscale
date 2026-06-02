@@ -131,6 +131,16 @@ func (m *Manager) Resolver() *resolver.Resolver {
 	return m.resolver
 }
 
+// ProbeLocks acquires and releases the manager's internal mutexes.
+func (m *Manager) ProbeLocks() {
+	m.mu.Lock()
+	m.mu.Unlock()
+
+	if r := m.Resolver(); r != nil {
+		r.ProbeLocks()
+	}
+}
+
 // RecompileDNSConfig recompiles the last attempted DNS configuration, which has
 // the side effect of re-querying the OS's interface nameservers.  This should be used
 // on platforms where the interface nameservers can change.  Darwin, for example,
