@@ -200,6 +200,8 @@ func (n *network) initStack() error {
 			Destination: ipv6Subnet,
 			NIC:         nicID,
 		})
+
+		n.startUnsolicitedRAs()
 	}
 
 	n.ns.SetRouteTable(routes)
@@ -627,6 +629,17 @@ func (n *network) registerWriter(mac MAC, c vmClient) {
 		nw.interfaceID = node.interfaceID
 	}
 	n.writers.Store(mac, nw)
+
+	// As soon as a host appears on the wire, hand it a Router Advertisement
+	// so its kernel installs the prefix + default route. Without this, hosts
+	// that never emit a Router Solicitation (e.g. gokrazy with DHCPv4 doing
+	// link bringup) would have to wait for the next periodic RA, by which
+	// point the test may have already failed.
+	if n.v6 {
+		if pkt, err := n.buildIPv6RouterAdvertisement(mac, ipv6AllNodes); err == nil {
+			n.writeEth(pkt)
+		}
+	}
 }
 
 func (n *network) unregisterWriter(mac MAC) {
@@ -1926,21 +1939,36 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	n.logf("router got unknown UDP packet: %v", packet)
 }
 
-func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICMPv6RouterSolicitation) {
-	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+// ipv6AllNodes is the IPv6 link-local "all nodes" multicast address (ff02::1).
+// Unsolicited Router Advertisements are sent here so that every connected
+// host on the LAN sees them without the router having to know each host's
+// unicast address.
+var ipv6AllNodes = net.ParseIP("ff02::1")
 
-	// Send a router advertisement back.
+// unsolicitedRAInterval is how often vnet sends an unsolicited IPv6 Router
+// Advertisement on each v6-enabled network. Real routers default to 200s
+// (RFC 4861 §6.2.1, MaxRtrAdvInterval). We pick a much smaller value so
+// short-lived tests don't have to wait: the first RA goes out as soon as
+// a VM connects, and any subsequent gokrazy/Linux init paths that miss the
+// initial RA pick one up quickly.
+const unsolicitedRAInterval = 5 * time.Second
+
+// buildIPv6RouterAdvertisement serializes a Router Advertisement frame
+// addressed to (dstMAC, dstIP), advertising n.wanIP6's /64 as on-link and
+// fe80::1 as a default router. dstMAC/dstIP are typically the soliciting
+// host (for a solicited reply) or the link-local all-nodes group (for an
+// unsolicited periodic RA).
+func (n *network) buildIPv6RouterAdvertisement(dstMAC MAC, dstIP net.IP) ([]byte, error) {
 	eth := &layers.Ethernet{
 		SrcMAC:       n.mac.HWAddr(),
-		DstMAC:       ep.SrcMAC().HWAddr(),
+		DstMAC:       dstMAC.HWAddr(),
 		EthernetType: layers.EthernetTypeIPv6,
 	}
-	n.logf("sending IPv6 router advertisement to %v from %v", eth.DstMAC, eth.SrcMAC)
 	ip := &layers.IPv6{
 		NextHeader: layers.IPProtocolICMPv6,
 		HopLimit:   255, // per RFC 4861, 7.1.1 etc (all NDP messages); don't use mkPacket's default of 64
 		SrcIP:      net.ParseIP("fe80::1"),
-		DstIP:      v6.SrcIP,
+		DstIP:      dstIP,
 	}
 	icmp := &layers.ICMPv6{
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeRouterAdvertisement, 0),
@@ -1963,12 +1991,49 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICM
 			},
 		},
 	}
-	pkt, err := mkPacket(eth, ip, icmp, ra)
+	return mkPacket(eth, ip, icmp, ra)
+}
+
+func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, _ *layers.ICMPv6RouterSolicitation) {
+	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+	n.logf("sending IPv6 router advertisement to %v from %v", ep.SrcMAC(), n.mac)
+	pkt, err := n.buildIPv6RouterAdvertisement(ep.SrcMAC(), v6.SrcIP)
 	if err != nil {
 		n.logf("serializing ICMPv6 RA: %v", err)
 		return
 	}
 	n.writeEth(pkt)
+}
+
+// startUnsolicitedRAs sends an unsolicited Router Advertisement to the
+// link-local all-nodes group every unsolicitedRAInterval until the vnet
+// server shuts down. This ensures hosts on the LAN install vnet's default
+// IPv6 route even if their stack never emits a Router Solicitation, which
+// is what gokrazy's dual-stack init does in practice: it brings the link
+// up via DHCPv4 and then leaves IPv6 to the kernel, which under our
+// configuration never sends an RS.
+func (n *network) startUnsolicitedRAs() {
+	n.s.wg.Go(func() {
+		send := func() {
+			pkt, err := n.buildIPv6RouterAdvertisement(macAllNodes, ipv6AllNodes)
+			if err != nil {
+				n.logf("building unsolicited RA: %v", err)
+				return
+			}
+			n.writeEth(pkt)
+		}
+		send()
+		t := time.NewTicker(unsolicitedRAInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-n.s.shutdownCtx.Done():
+				return
+			case <-t.C:
+				send()
+			}
+		}
+	})
 }
 
 func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.ICMPv6NeighborSolicitation) {

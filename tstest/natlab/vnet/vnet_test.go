@@ -637,15 +637,22 @@ func sendBetweenClients(t testing.TB, clientc [2]*net.UnixConn, s *Server, wrap 
 	t.Logf("writing % 02x", pkt)
 	must.Get(clientc[0].Write(pkt))
 
-	buf := make([]byte, len(pkt))
-	clientc[1].SetReadDeadline(time.Now().Add(5 * time.Second))
-	n, err := clientc[1].Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := buf[:n]
-	if !bytes.Equal(got, pkt) {
-		t.Errorf("bad packet\n got: % 02x\nwant: % 02x", got, pkt)
+	// vnet sends an unsolicited Router Advertisement at writer-register time
+	// on v6-enabled networks; loop until we see the test packet, skipping any
+	// noise that arrived first.
+	buf := make([]byte, 2048)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		clientc[1].SetReadDeadline(deadline)
+		n, err := clientc[1].Read(buf)
+		if err != nil {
+			t.Fatalf("did not receive test packet: %v", err)
+		}
+		got := buf[:n]
+		if bytes.Equal(got, pkt) {
+			return
+		}
+		t.Logf("ignoring unexpected packet (% 02x...)", got[:min(len(got), 16)])
 	}
 }
 
