@@ -18,7 +18,9 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/peterbourgon/ff/v3/ffcli"
+
 	"tailscale.com/net/routecheck"
+	"tailscale.com/tstime"
 )
 
 func init() {
@@ -106,7 +108,7 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 
 	w := tabwriter.NewWriter(Stdout, 10, 5, 5, ' ', 0)
 	defer w.Flush()
-	fmt.Fprintf(w, "\nReachable routers at %s:\n", rp.Done.Local().Format(time.DateTime+"Z07:00"))
+	fmt.Fprintf(w, "\nReachable routers at %s:\n", rp.Done.Local().Format(tstime.DateSpTimeZ))
 	fmt.Fprintf(w, "\n %s\t%s\t%s", "PREFIX", "IP", "HOSTNAME")
 	for prefix, nodes := range routes.Sorted() {
 		slices.SortFunc(nodes, func(a, b routecheck.Node) int {
