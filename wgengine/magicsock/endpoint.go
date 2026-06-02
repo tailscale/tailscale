@@ -139,11 +139,18 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
 
-		// Reaching here, if we are using data from a cached netmap and we are
-		// upgrading from an invalid (missing) address to a valid one, increment
-		// the counter for peers established.
-		if !de.bestAddr.ap.IsValid() && v.ap.IsValid() && de.c.usingCachedNetmap.Load() {
-			metricCachedPeerContactDirect.Add(1)
+		// Reaching here, if we are upgrading from an invalid (missing) address
+		// to a valid one, record metrics:
+		if !de.bestAddr.ap.IsValid() && v.ap.IsValid() {
+			// If we are using data from a cached netmap, increment the counter for peers established.
+			isCached := de.c.usingCachedNetmap.Load()
+			if isCached {
+				metricCachedPeerContactDirect.Add(1)
+			}
+			// Regardless whether the netmap is cached, record how long it has
+			// been since the endpoint was initialized.
+			de.c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
+				de.publicKey.ShortString(), int64(mono.Since(de.c.initializedAt)/time.Microsecond), isCached)
 		}
 	}
 	de.bestAddr = v
