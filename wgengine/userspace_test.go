@@ -91,6 +91,56 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 	}
 }
 
+func TestUserspaceEnginePeerCountMetrics(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	routerCfg := &router.Config{}
+
+	mkPeers := func(hexes ...string) []wgcfg.Peer {
+		peers := make([]wgcfg.Peer, 0, len(hexes))
+		for i, h := range hexes {
+			nk, err := key.ParseNodePublicUntyped(mem.S(h))
+			if err != nil {
+				t.Fatal(err)
+			}
+			peers = append(peers, wgcfg.Peer{
+				PublicKey: nk,
+				AllowedIPs: []netip.Prefix{
+					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, byte(i+1)), 32),
+				},
+			})
+		}
+		return peers
+	}
+
+	hexes := []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}
+
+	// wgengine_peers_available tracks len(config peers) at each config push.
+	// Reconfig with a shrinking peer set and confirm the gauge follows it down
+	// to zero (not just up).
+	for _, want := range []int{3, 1, 0} {
+		cfg := &wgcfg.Config{Peers: mkPeers(hexes[:want]...)}
+		if err := e.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil {
+			t.Fatalf("Reconfig with %d peers: %v", want, err)
+		}
+		if got := metricNumPeersAvailable.Value(); got != int64(want) {
+			t.Errorf("wgengine_peers_available = %d, want %d", got, want)
+		}
+	}
+}
+
 func TestUserspaceEngineTSMPLearned(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 

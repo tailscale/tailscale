@@ -706,6 +706,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
+	metricNumPeersAvailable.Set(int64(len(full.Peers)))
 	return nil
 }
 
@@ -1634,6 +1635,11 @@ var (
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
+
+	// metricNumPeersAvailable is the number of peers in the last wireguard-go
+	// config: the packet-filter-filtered subset of the netmap (always
+	// <= magicsock_netmap_num_peers) that wireguard-go can create on demand.
+	metricNumPeersAvailable = clientmetric.NewGauge("wgengine_peers_available")
 
 	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
 	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
