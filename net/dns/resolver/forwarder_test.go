@@ -1387,6 +1387,52 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 	}
 }
 
+// TestForwarderHealthNoUpstreamResolvers verifies that a query with no upstream
+// resolver never raises dnsForwarderFailing, regardless of acceptDNS; that
+// warning is reserved for resolvers we found but couldn't reach (see
+// TestForwarderHealthOnContextExpiry). See tailscale/tailscale#19931.
+func TestForwarderHealthNoUpstreamResolvers(t *testing.T) {
+	const domain = "no-resolver.example.com."
+
+	for _, acceptDNS := range []bool{true, false} {
+		t.Run(fmt.Sprintf("acceptDNS=%v", acceptDNS), func(t *testing.T) {
+			request := makeTestRequest(t, domain, dns.TypeA, 0)
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			ht := health.NewTracker(bus)
+			fwd := newForwarder(logf, netMon, nil, &dialer, ht, nil)
+			fwd.acceptDNS = acceptDNS
+			// No routes are configured, so the forwarder has no upstream
+			// resolver for the query and returns SERVFAIL.
+
+			rpkt := packet{
+				bs:     request,
+				family: "udp",
+				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+			}
+			// Buffered so the SERVFAIL response can be sent without a reader.
+			responseChan := make(chan packet, 1)
+
+			if err := fwd.forwardWithDestChan(context.Background(), rpkt, responseChan); err != nil {
+				t.Fatalf("forwardWithDestChan: %v", err)
+			}
+
+			if ht.IsUnhealthy(dnsForwarderFailing) {
+				t.Error("dnsForwarderFailing was raised for a query with no upstream resolver; want healthy")
+			}
+		})
+	}
+}
+
 func TestResolversCustomScheme(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
