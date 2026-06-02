@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"tailscale.com/derp/derphttp"
@@ -22,10 +23,27 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/nettype"
 )
+
+// tlsConfigForNode builds a *tls.Config for connecting to a DERP node,
+// mirroring the logic in derphttp.Client.tlsClient so that sha256-raw cert
+// pinning and domain-fronting CertName values are handled correctly.
+func tlsConfigForNode(node *tailcfg.DERPNode) *tls.Config {
+	conf := tlsdial.Config(nil, nil)
+	conf.ServerName = node.HostName
+	if node.CertName != "" {
+		if suf, ok := strings.CutPrefix(node.CertName, "sha256-raw:"); ok {
+			tlsdial.SetConfigExpectedCertHash(conf, suf)
+		} else {
+			tlsdial.SetConfigExpectedCert(conf, node.CertName)
+		}
+	}
+	return conf
+}
 
 func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
@@ -100,9 +118,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 			defer conn.Close()
 
 			// Upgrade to TLS and verify that works properly.
-			tlsConn := tls.Client(conn, &tls.Config{
-				ServerName: cmp.Or(derpNode.CertName, derpNode.HostName),
-			})
+			tlsConn := tls.Client(conn, tlsConfigForNode(derpNode))
 			if err := tlsConn.HandshakeContext(ctx); err != nil {
 				st.Errors = append(st.Errors, fmt.Sprintf("Error upgrading connection to node %q @ %q to TLS over IPv4: %v", derpNode.HostName, addr, err))
 			} else {
@@ -119,12 +135,7 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 			defer conn.Close()
 
 			// Upgrade to TLS and verify that works properly.
-			tlsConn := tls.Client(conn, &tls.Config{
-				ServerName: cmp.Or(derpNode.CertName, derpNode.HostName),
-				// TODO(andrew-d): we should print more
-				// detailed failure information on if/why TLS
-				// verification fails
-			})
+			tlsConn := tls.Client(conn, tlsConfigForNode(derpNode))
 			if err := tlsConn.HandshakeContext(ctx); err != nil {
 				st.Errors = append(st.Errors, fmt.Sprintf("Error upgrading connection to node %q @ %q to TLS over IPv6: %v", derpNode.HostName, addr, err))
 			} else {
