@@ -94,6 +94,7 @@ func (p PortMaps) MarshalJSON() ([]byte, error) {
 // services for a proxy identified by the PodIP.
 type Status struct {
 	PodIPv4 string `json:"podIPv4"`
+	PodIPv6 string `json:"podIPv6,omitempty"`
 	// All egress service status keyed by service name.
 	Services map[string]*ServiceStatus `json:"services"`
 }
