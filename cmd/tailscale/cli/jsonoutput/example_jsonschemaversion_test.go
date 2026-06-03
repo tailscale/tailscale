@@ -1,0 +1,25 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package jsonoutput_test
+
+import (
+	"flag"
+	"fmt"
+
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+)
+
+var args struct {
+	json jsonoutput.JSONSchemaVersion
+}
+
+func ExampleJSONSchemaVersion() {
+	fs := flag.NewFlagSet("ExampleJSONSchemaVersion", flag.ExitOnError)
+	fs.Var(&args.json, "json", "output in JSON format")
+
+	fs.Parse([]string{"-json=2"})
+	fmt.Printf(`{set: %t, value: %d}`, args.json.IsSet, args.json.Value)
+	// Output:
+	// {set: true, value: 2}
+}
