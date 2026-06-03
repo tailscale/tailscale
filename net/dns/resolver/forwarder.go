@@ -1199,10 +1199,11 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	if len(resolvers) == 0 {
 		resolvers = f.resolvers(domain)
 		if len(resolvers) == 0 {
+			// No upstream resolver for this name isn't a forwarder failure:
+			// it's split DNS / a name we weren't asked to handle. Count it
+			// rather than raising dnsForwarderFailing, which is reserved for
+			// resolvers we found but couldn't reach. See tailscale/tailscale#19931.
 			metricDNSFwdErrorNoUpstream.Add(1)
-			if f.acceptDNS {
-				f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
-			}
 			f.logf("no upstream resolvers set, returning SERVFAIL")
 
 			res, err := servfailResponse(query)
