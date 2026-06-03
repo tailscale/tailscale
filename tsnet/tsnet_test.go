@@ -3405,3 +3405,116 @@ func TestListenMultipleEphemeralPorts(t *testing.T) {
 		testMultipleEphemeral(t, lt)
 	})
 }
+
+func TestKeyExtensionAfterRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	controlURL, control := startControl(t)
+	control.RequireAuth = true
+
+	tmp := t.TempDir()
+	tmps := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps, 0755)
+
+	newServer := func() *Server {
+		return &Server{
+			Dir:        tmps,
+			ControlURL: controlURL,
+			Hostname:   "s1",
+			Logf:       tstest.WhileTestRunningLogger(t),
+		}
+	}
+
+	// Start a node as tnset instance s1.
+	s1 := newServer()
+	if err := s1.Start(); err != nil {
+		t.Fatalf("s1.Start: %v", err)
+	}
+	upErrCh := make(chan error, 1)
+	go func() { _, err := s1.Up(ctx); upErrCh <- err }()
+
+	var initialAuthURL string
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		url := s1.lb.StatusWithoutPeers().AuthURL
+		if url == "" {
+			return errors.New("no AuthURL yet")
+		}
+		initialAuthURL = url
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for initial AuthURL: %v", err)
+	}
+	if !control.CompleteAuth(initialAuthURL) {
+		t.Fatal("failed to complete initial AuthURL")
+	}
+	if err := <-upErrCh; err != nil {
+		t.Fatalf("s1.Up: %v", err)
+	}
+
+	nodePub := s1.lb.StatusWithoutPeers().Self.PublicKey
+
+	// Expire s1's node key.
+	serverNode := control.Node(nodePub)
+	if serverNode == nil {
+		t.Fatalf("node %v not in control", nodePub)
+	}
+	serverNode.KeyExpiry = time.Now().Add(-time.Minute)
+	control.UpdateNode(serverNode)
+
+	// Wait for s1 to transition away from the Running state.
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		if got := s1.lb.State(); got == ipn.Running {
+			return errors.New("still Running")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting to transition away from Running: %v", err)
+	}
+
+	if err := s1.Close(); err != nil {
+		t.Fatalf("s1.Close: %v", err)
+	}
+
+	// Restart the node as tsnet instance s2.
+	s2 := newServer()
+	if err := s2.Start(); err != nil {
+		t.Fatalf("s2.Start: %v", err)
+	}
+	s2UpErrCh := make(chan error, 1)
+	go func() { _, err := s2.Up(ctx); s2UpErrCh <- err }()
+
+	// Wait for s2 to transition into the NeedsLogin state.
+	var secondAuthURL string
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		u := s2.lb.StatusWithoutPeers().AuthURL
+		if u == "" {
+			return errors.New("no AuthURL yet")
+		}
+		secondAuthURL = u
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for s2 AuthURL: %v", err)
+	}
+	// We deliberately do not complete the auth.
+	_ = secondAuthURL
+
+	// Extend the old node key.
+	serverNode.KeyExpiry = time.Now().Add(24 * time.Hour)
+	control.UpdateNode(serverNode)
+
+	// Wait for s2 to receive the netmap with the key extension info
+	// and transition to Running.
+	if err := tstest.WaitFor(15*time.Second, func() error {
+		if got := s2.lb.State(); got != ipn.Running {
+			return fmt.Errorf("in state %v; want Running", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting to return to Running after key extension: %v", err)
+	}
+
+	if err := <-s2UpErrCh; err != nil {
+		t.Logf("s2.Up: %v", err)
+	}
+}
