@@ -145,6 +145,22 @@ func TestConnector(t *testing.T) {
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
+	// Set an invalid 4via6 route (site ID too large).
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"fd7a:115c:a1e0:b1a:1:0:a2c:0/116"}
+	})
+	expectReconciled(t, cr, "", "test")
+	// STS should still have the previous valid route, unchanged.
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+
+	// Set a valid 4via6 route.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"fd7a:115c:a1e0:b1a:0:1:a2c:0/116"}
+	})
+	opts.subnetRoutes = "fd7a:115c:a1e0:b1a:0:1:a2c:0/116"
+	expectReconciled(t, cr, "", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+
 	// Delete the Connector.
 	if err = fc.Delete(context.Background(), cn); err != nil {
 		t.Fatalf("error deleting Connector: %v", err)
