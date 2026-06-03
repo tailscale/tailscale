@@ -93,6 +93,7 @@ type Menu struct {
 	connect     *systray.MenuItem
 	disconnect  *systray.MenuItem
 	self        *systray.MenuItem
+	machines    *systray.MenuItem
 	exitNodes   *systray.MenuItem
 	more        *systray.MenuItem
 	rebuildMenu *systray.MenuItem
@@ -100,7 +101,8 @@ type Menu struct {
 
 	rebuildCh  chan struct{} // triggers a menu rebuild
 	accountsCh chan ipn.ProfileID
-	exitNodeCh chan tailcfg.StableNodeID // ID of selected exit node
+	exitNodeCh chan tailcfg.StableNodeID  // ID of selected exit node
+	machineCh  chan *ipnstate.PeerStatus // peer whose IP should be copied
 
 	eventCancel context.CancelFunc // cancel eventLoop
 
@@ -116,6 +118,7 @@ func (menu *Menu) init() {
 	menu.rebuildCh = make(chan struct{}, 1)
 	menu.accountsCh = make(chan ipn.ProfileID)
 	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
+	menu.machineCh = make(chan *ipnstate.PeerStatus)
 
 	// dbus wants a file path for notification icons, so copy to a temp file.
 	menu.notificationIcon, _ = os.CreateTemp("", "tailscale-systray.png")
@@ -321,6 +324,8 @@ func (menu *Menu) rebuild() {
 	}
 	systray.AddSeparator()
 
+	menu.rebuildMachinesMenu(ctx)
+
 	if !menu.readonly {
 		menu.rebuildExitNodeMenu(ctx)
 	}
@@ -466,6 +471,9 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 		case <-menu.self.ClickedCh:
 			menu.copyTailscaleIP(menu.status.Self)
 
+		case ps := <-menu.machineCh:
+			menu.copyTailscaleIP(ps)
+
 		case id := <-menu.accountsCh:
 			if err := menu.lc.SwitchProfile(ctx, id); err != nil {
 				log.Printf("error switching to profile ID %v: %v", id, err)
@@ -597,6 +605,58 @@ func (menu *Menu) sendNotification(title, content string) {
 		menu.notificationIcon.Name(), title, content, []string{}, map[string]dbus.Variant{}, int32(timeout.Milliseconds()))
 	if call.Err != nil {
 		log.Printf("dbus: %v", call.Err)
+	}
+}
+
+// rebuildMachinesMenu adds a "Machines" submenu listing other tailnet peers.
+// Clicking a peer copies its Tailscale IP to the clipboard.
+func (menu *Menu) rebuildMachinesMenu(ctx context.Context) {
+	if menu.status == nil {
+		return
+	}
+
+	type machineItem struct {
+		label string
+		ps    *ipnstate.PeerStatus
+	}
+	var machines []machineItem
+	for _, ps := range menu.status.Peer {
+		if ps == nil || len(ps.TailscaleIPs) == 0 {
+			continue
+		}
+		if ps.Location != nil {
+			continue
+		}
+		name := strings.Split(ps.DNSName, ".")[0]
+		if name == "" {
+			name = ps.HostName
+		}
+		label := fmt.Sprintf("%s (%s)", name, ps.TailscaleIPs[0])
+		if !ps.Online {
+			label += " (offline)"
+		}
+		machines = append(machines, machineItem{label: label, ps: ps})
+	}
+	slices.SortFunc(machines, func(a, b machineItem) int {
+		return stringsx.CompareFold(a.label, b.label)
+	})
+
+	menu.machines = systray.AddMenuItem("Machines", "Other machines on this tailnet")
+	if len(machines) == 0 {
+		menu.machines.Disable()
+		return
+	}
+	time.Sleep(newMenuDelay)
+
+	for _, m := range machines {
+		ps := m.ps
+		item := menu.machines.AddSubMenuItem(m.label, "Copy IP address to clipboard")
+		onClick(ctx, item, func(ctx context.Context) {
+			select {
+			case <-ctx.Done():
+			case menu.machineCh <- ps:
+			}
+		})
 	}
 }
 
