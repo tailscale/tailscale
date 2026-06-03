@@ -8,7 +8,7 @@
 // Historically we only used a boolean -json flag, so changing the output
 // could break scripts that rely on the existing format.
 //
-// This package provides a [JSONSchemaVersion] flag type that allows callers
+// This package provides a [SchemaVersion] flag type that allows callers
 // to pass either a boolean or a version number and get a consistent output.
 // We'll bump the version when we make a breaking change
 // that's likely to break scripts that rely on the existing output,
@@ -27,32 +27,32 @@ import (
 	"strconv"
 )
 
-var _ flag.Value = &JSONSchemaVersion{}
+var _ flag.Value = &SchemaVersion{}
 
-// JSONSchemaVersion implements the [flag.Value] interface,
+// SchemaVersion implements the [flag.Value] interface,
 // tracking whether the flag has been set or cleared, and its value when set.
-type JSONSchemaVersion struct {
+type SchemaVersion struct {
 	// IsSet tracks if the flag was set or cleared.
 	// This flag is true when set by -name or -name=true or -name=INT,
 	// otherwise it is false when cleared by -name=false.
 	IsSet bool
 
-	// Value tracks the desired schema version, as set by the -name=INT flag.
+	// Version tracks the desired schema version, as set by the -name=INT flag.
 	// The version defaults to 1 when implicitly set by -name or -name=true.
-	Value int
+	Version int
 }
 
 // String returns the default value which is printed in the CLI help text.
-func (v *JSONSchemaVersion) String() string {
+func (v *SchemaVersion) String() string {
 	if v.IsSet {
-		return strconv.Itoa(v.Value)
+		return strconv.Itoa(v.Version)
 	} else {
 		return "(not set)"
 	}
 }
 
 // Set is called when the user passes the flag as a command-line argument.
-func (v *JSONSchemaVersion) Set(s string) error {
+func (v *SchemaVersion) Set(s string) error {
 	if v.IsSet {
 		return errors.New("received multiple instances of --json; only pass it once")
 	}
@@ -63,7 +63,7 @@ func (v *JSONSchemaVersion) Set(s string) error {
 	// This ensures that any existing scripts will continue to get their
 	// current output.
 	if s == "true" {
-		v.Value = 1
+		v.Version = 1
 		return nil
 	}
 
@@ -71,14 +71,14 @@ func (v *JSONSchemaVersion) Set(s string) error {
 	if err != nil {
 		return fmt.Errorf("invalid integer value passed to --json: %q", s)
 	}
-	v.Value = version
+	v.Version = version
 	return nil
 }
 
 // IsBoolFlag reports that this [flag.Value] can be set without an argument.
 // This is the magic interface that makes -name equivalent to -name=true
 // rather than using the next command-line argument.
-func (v *JSONSchemaVersion) IsBoolFlag() bool {
+func (v *SchemaVersion) IsBoolFlag() bool {
 	return true
 }
 

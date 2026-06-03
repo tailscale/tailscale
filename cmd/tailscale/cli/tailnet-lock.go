@@ -195,7 +195,7 @@ func runTailnetLockInit(ctx context.Context, args []string) error {
 }
 
 var nlStatusArgs struct {
-	json jsonoutput.JSONSchemaVersion
+	json jsonoutput.SchemaVersion
 }
 
 var tlStatusCmd = &ffcli.Command{
@@ -221,10 +221,10 @@ func runTailnetLockStatus(ctx context.Context, args []string) error {
 	}
 
 	if nlStatusArgs.json.IsSet {
-		if nlStatusArgs.json.Value == 1 {
+		if nlStatusArgs.json.Version == 1 {
 			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
 		} else {
-			return fmt.Errorf("unrecognised version: %d", nlStatusArgs.json.Value)
+			return fmt.Errorf("unrecognised version: %d", nlStatusArgs.json.Version)
 		}
 	}
 
@@ -604,7 +604,7 @@ func runTailnetLockDisablementKDF(ctx context.Context, args []string) error {
 
 var nlLogArgs struct {
 	limit int
-	json  jsonoutput.JSONSchemaVersion
+	json  jsonoutput.SchemaVersion
 }
 
 var tlLogCmd = &ffcli.Command{
@@ -712,12 +712,12 @@ func runTailnetLockLog(ctx context.Context, args []string) error {
 	return printTailnetLockLog(updates, out, nlLogArgs.json, useColor)
 }
 
-func printTailnetLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.JSONSchemaVersion, useColor bool) error {
+func printTailnetLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.SchemaVersion, useColor bool) error {
 	if jsonSchema.IsSet {
-		if jsonSchema.Value == 1 {
+		if jsonSchema.Version == 1 {
 			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
 		} else {
-			return fmt.Errorf("unrecognised version: %d", jsonSchema.Value)
+			return fmt.Errorf("unrecognised version: %d", jsonSchema.Version)
 		}
 	}
 

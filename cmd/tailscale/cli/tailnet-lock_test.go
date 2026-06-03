@@ -85,7 +85,7 @@ func TestTailnetLockLogOutput(t *testing.T) {
 		t.Parallel()
 
 		var outBuf bytes.Buffer
-		json := jsonoutput.JSONSchemaVersion{}
+		json := jsonoutput.SchemaVersion{}
 		useColor := false
 
 		printTailnetLockLog(updates, &outBuf, json, useColor)
@@ -189,9 +189,9 @@ KeyID: tlpub:0202
 		t.Parallel()
 
 		var outBuf bytes.Buffer
-		json := jsonoutput.JSONSchemaVersion{
-			IsSet: true,
-			Value: 1,
+		json := jsonoutput.SchemaVersion{
+			IsSet:   true,
+			Version: 1,
 		}
 		useColor := false
 
