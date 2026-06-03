@@ -130,7 +130,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,7 +149,6 @@ import (
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -1116,8 +1114,7 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 }
 
 // resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which
-// can be either a peer device, a Tailscale Service, or a 4via6 synthesized
-// DNS name (e.g. "10-1-0-5-via-7.tailnet.ts.net").
+// can be either a peer device or a Tailscale Service.
 func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 	dnsFQDN, err := dnsname.ToFQDN(fqdn)
 	if err != nil {
@@ -1139,19 +1136,6 @@ func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 	// If not found yet, check for a matching Tailscale Service.
 	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
 		return svcIPs, nil
-	}
-
-	// If not found yet, check for a matching 4via6 DNS name.
-	if addr, ok := resolveViaDomain(dnsFQDN); ok {
-		prefix := netip.PrefixFrom(addr, addr.BitLen())
-		for nn := range nm.peers() {
-			for _, allowedIP := range nn.AllowedIPs().All() {
-				if allowedIP.Contains(addr) {
-					return []netip.Prefix{prefix}, nil
-				}
-			}
-		}
-		return nil, fmt.Errorf("resolved 4via6 address %v for %q but no peer advertises a route containing it", addr, fqdn)
 	}
 
 	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
@@ -1194,41 +1178,4 @@ func serviceIPsFromNetMap(nm netmapState, fqdn dnsname.FQDN) []netip.Prefix {
 	}
 
 	return prefixes
-}
-
-// resolveViaDomain parses an FQDN as a 4via6 in the format "<ipv4-with-hyphens>-via-<siteID>[.domain]"
-// and returns the IPv6 via address.
-// This borrows heavily from net/dns/resolver.(*Resolver).resolveViaDomain.
-// TODO(beckypauley): consider a refactor of the above to remove duplication.
-func resolveViaDomain(fqdn dnsname.FQDN) (netip.Addr, bool) {
-	// The minimum length of a valid 4via6 FQDN i.e. "via-X.0.0.0.0".
-	const minFQDNLength = 13
-	name := string(fqdn.WithoutTrailingDot())
-	// This is not a  fqdn.
-	if !strings.Contains(name, "-via-") {
-		return netip.Addr{}, false
-	}
-	if len(name) < minFQDNLength {
-		return netip.Addr{}, false // too short to be valid
-	}
-	firstLabel, domain, _ := strings.Cut(name, ".")
-	if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
-		return netip.Addr{}, false
-	}
-	v4hyphens, siteIDStr, ok := strings.Cut(firstLabel, "-via-")
-	if !ok {
-		return netip.Addr{}, false
-	}
-	ip4Str := strings.ReplaceAll(v4hyphens, "-", ".")
-	ip4, err := netip.ParseAddr(ip4Str)
-	if err != nil || !ip4.Is4() {
-		return netip.Addr{}, false
-	}
-	siteID, err := strconv.ParseUint(siteIDStr, 0, 32)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	// MapVia will never error when given an IPv4 netip.Prefix.
-	out, _ := tsaddr.MapVia(uint32(siteID), netip.PrefixFrom(ip4, ip4.BitLen()))
-	return out.Addr(), true
 }

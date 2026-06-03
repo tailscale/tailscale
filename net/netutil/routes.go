@@ -17,7 +17,7 @@ import (
 // It verifies that the prefix is in the Tailscale via range, has a prefix
 // length between /96 and /128, and that the embedded site ID is in the
 // range 0–65535.
-func ValidateViaPrefix(ipp netip.Prefix) error {
+func validateViaPrefix(ipp netip.Prefix) error {
 	if !tsaddr.IsViaPrefix(ipp) {
 		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
 	}
@@ -55,7 +55,7 @@ func CalcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 				return nil, fmt.Errorf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
 			}
 			if tsaddr.IsViaPrefix(ipp) {
-				if err := ValidateViaPrefix(ipp); err != nil {
+				if err := validateViaPrefix(ipp); err != nil {
 					return nil, err
 				}
 			}

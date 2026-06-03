@@ -29,8 +29,6 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/net/netutil"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
@@ -357,11 +355,6 @@ func validateRoutes(routes tsapi.Routes) error {
 		}
 		if pfx.Masked() != pfx {
 			errs = append(errs, fmt.Errorf("route %s has non-address bits set; expected %s", pfx, pfx.Masked()))
-		}
-		if tsaddr.IsViaPrefix(pfx) {
-			if err := netutil.ValidateViaPrefix(pfx); err != nil {
-				errs = append(errs, err)
-			}
 		}
 	}
 	return errors.Join(errs...)
