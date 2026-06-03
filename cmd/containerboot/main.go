@@ -1114,7 +1114,8 @@ func runHTTPServer(mux *http.ServeMux, addr string) (close func() error) {
 }
 
 // resolveTailnetFQDN resolves a tailnet FQDN to a list of IP prefixes, which
-// can be either a peer device or a Tailscale Service.
+// can be either a peer device, a Tailscale Service, or a 4via6 synthesized
+// DNS name (e.g. "10-1-0-5-via-7.tailnet.ts.net").
 func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 	dnsFQDN, err := dnsname.ToFQDN(fqdn)
 	if err != nil {
@@ -1137,8 +1138,20 @@ func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
 		return svcIPs, nil
 	}
+	// If not found yet, check for a matching 4via6 DNS name.
+	if addr, ok := kubeutils.ResolveViaDomain(dnsFQDN.WithTrailingDot()); ok {
+		prefix := netip.PrefixFrom(addr, addr.BitLen())
+		for nn := range nm.peers() {
+			for _, allowedIP := range nn.AllowedIPs().All() {
+				if allowedIP.Contains(addr) {
+					return []netip.Prefix{prefix}, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("resolved 4via6 address %v for %q but no peer advertises a route containing it", addr, fqdn)
+	}
 
-	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
+	return nil, fmt.Errorf("could not find Tailscale node, service or 4via6 address %q; it either does not exist, or not reachable because of ACLs", fqdn)
 }
 
 // serviceIPsFromNetMap returns all IPs of a Tailscale Service if its FQDN is
