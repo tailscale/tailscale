@@ -30,6 +30,7 @@ var (
 	app    = flag.String("app", "tsapp", "appliance name; one of the subdirectories of gokrazy/")
 	bucket = flag.String("bucket", "tskrazy-import", "S3 bucket to upload disk image to while making AMI")
 	build  = flag.Bool("build", false, "if true, just build locally and stop, without uploading")
+	gaf    = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
 )
 
 func findMkfsExt4() (string, error) {
@@ -95,7 +96,7 @@ func main() {
 	if err := buildImage(); err != nil {
 		log.Fatalf("build image: %v", err)
 	}
-	if *build {
+	if *build || *gaf {
 		log.Printf("built. stopping.")
 		return
 	}
@@ -122,11 +123,6 @@ func main() {
 }
 
 func buildImage() error {
-	mkfs, err := findMkfsExt4()
-	if err != nil {
-		return err
-	}
-
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
@@ -134,17 +130,35 @@ func buildImage() error {
 	if fi, err := os.Stat(filepath.Join(dir, *app)); err != nil || !fi.IsDir() {
 		return fmt.Errorf("in wrong directory %v; no %q subdirectory found", dir, *app)
 	}
-	// Build the tsapp.img
+
+	args := []string{"run", "github.com/bradfitz/monogok/cmd/monogok"}
+	if *gaf {
+		args = append(args,
+			"overwrite",
+			"--gaf", filepath.Join(dir, *app+".gaf"),
+		)
+	} else {
+		args = append(args,
+			"overwrite",
+			"--full", filepath.Join(dir, *app+".img"),
+			"--target_storage_bytes=1258299392",
+		)
+	}
+
 	var buf bytes.Buffer
-	cmd := exec.Command("go", "run",
-		"github.com/bradfitz/monogok/cmd/monogok",
-		"overwrite",
-		"--full", filepath.Join(dir, *app+".img"),
-		"--target_storage_bytes=1258299392")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = filepath.Join(dir, *app)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if *gaf {
+		return nil
+	}
+
+	mkfs, err := findMkfsExt4()
+	if err != nil {
 		return err
 	}
 
