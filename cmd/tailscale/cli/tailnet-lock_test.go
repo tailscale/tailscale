@@ -63,7 +63,7 @@ func TestTailnetLockLogOutput(t *testing.T) {
 		Votes: &votes,
 	}
 
-	updates := []ipnstate.NetworkLockUpdate{
+	updates := []ipnstate.TailnetLockUpdate{
 		{
 			Hash:   aum3.Hash(),
 			Change: aum3.MessageKind.String(),
@@ -226,12 +226,12 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 	t.Run("json-1", func(t *testing.T) {
 		for _, tt := range []struct {
 			Name   string
-			Status ipnstate.NetworkLockStatus
+			Status ipnstate.TailnetLockStatus
 			Want   string
 		}{
 			{
 				Name:   "tailnet-lock-disabled",
-				Status: ipnstate.NetworkLockStatus{Enabled: false},
+				Status: ipnstate.TailnetLockStatus{Enabled: false},
 				Want: `{
   "SchemaVersion": "1",
   "Enabled": false
@@ -240,7 +240,7 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 			},
 			{
 				Name: "tailnet-lock-disabled-with-keys",
-				Status: ipnstate.NetworkLockStatus{
+				Status: ipnstate.TailnetLockStatus{
 					Enabled:   false,
 					NodeKey:   &nodeKey1,
 					PublicKey: trustedNlPub,
@@ -255,7 +255,7 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 			},
 			{
 				Name: "tailnet-lock-enabled",
-				Status: ipnstate.NetworkLockStatus{
+				Status: ipnstate.TailnetLockStatus{
 					Enabled:          true,
 					Head:             &head,
 					PublicKey:        nlPub,
@@ -355,9 +355,9 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 				t.Parallel()
 
 				var outBuf bytes.Buffer
-				err := jsonoutput.PrintNetworkLockStatusJSONV1(&outBuf, &tt.Status)
+				err := jsonoutput.PrintTailnetLockStatusJSONV1(&outBuf, &tt.Status)
 				if err != nil {
-					t.Fatalf("PrintNetworkLockStatusJSONV1: %v", err)
+					t.Fatalf("PrintTailnetLockStatusJSONV1: %v", err)
 				}
 
 				if diff := cmp.Diff(outBuf.String(), tt.Want); diff != "" {
