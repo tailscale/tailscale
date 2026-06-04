@@ -92,11 +92,11 @@ is collected), so it is **red on today's code and green once fixed**.
 
 ### Interpreting the output
 
-The race is probabilistic (~5–10% per attempt on the tail of `start()`), so a
+The race is probabilistic (~45–55% per attempt on the tail of `start()`), so a
 single `Close()` rarely shows it. The test reports, e.g.:
 
 ```
-FINAL: 2/45 Servers leaked, 0/45 Close() panics; heapInuse 2 -> 21 MiB
+FINAL: 12/20 Servers leaked, 1/20 Close() panics; heapInuse 36 -> 340 MiB
 ```
 
 It reproduces on every run (a few leaks each), and in a process that restarts

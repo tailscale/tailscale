@@ -12,6 +12,8 @@ import (
 	"tailscale.com/ipn/store/mem"
 )
 
+const ITERS = 20
+
 // TestLeak_CloseRacingStart reproduces a permanent leak: a tsnet.Server — and
 // everything it owns (netstack.Impl, wgengine, magicsock.Conn, the wireguard
 // device + its 64 KiB buffer pools, the netmap) — is never collected after
@@ -56,7 +58,7 @@ func TestLeak_CloseRacingStart(t *testing.T) {
 	// slowest) build is conservative: later, faster builds fall inside [0,build].
 	calibrate := func() time.Duration {
 		s := &Server{
-			Dir: t.TempDir(), Hostname: "leakrepro-cal",
+			Dir: t.TempDir(), Hostname: "lkleakrepro",
 			AuthKey: authKey, ControlURL: controlURL,
 			Ephemeral: true, Store: new(mem.Store),
 		}
@@ -67,13 +69,12 @@ func TestLeak_CloseRacingStart(t *testing.T) {
 		return d
 	}
 	build := calibrate()
-	if build < 50*time.Millisecond {
+	/*if build < 50*time.Millisecond {  // lk wtf claude
 		build = 50 * time.Millisecond
-	}
+	}*/
 	upTimeout := min(max(4*build, 2*time.Second), 8*time.Second)
-	const iters = 60
 	t.Logf("calibration: Start() build ~%s; sweeping close delay across [0, %s] over %d iters (upTimeout %s)",
-		build, time.Duration(float64(build)*1.1), iters, upTimeout)
+		build, time.Duration(float64(build)/2), ITERS, upTimeout)
 
 	heapMB := func() float64 {
 		runtime.GC()
@@ -122,11 +123,12 @@ func TestLeak_CloseRacingStart(t *testing.T) {
 	}
 
 	baseMB := heapMB()
-	for i := 0; i < iters; i++ {
-		// Sweep the close delay uniformly across the build window (slightly past
-		// it). Per-iteration variance in start() duration fills the gaps, so
+	for i := 0; i < ITERS; i++ {
+		// Sweep the close delay uniformly across half of the build window.
+		// The first half is empirically more likely to trigger the error
+		// Per-iteration variance in start() duration fills the gaps, so
 		// some iterations reliably land in the orphan window.
-		delay := time.Duration(float64(build) * 1.1 * float64(i) / float64(iters))
+		delay := time.Duration(float64(build) * float64(i) / float64(ITERS) / 2)
 		wp, crashed := run(i, delay)
 		wps = append(wps, wp)
 		results = append(results, result{delay: delay, crashed: crashed})
@@ -162,19 +164,19 @@ func TestLeak_CloseRacingStart(t *testing.T) {
 		t.Logf("  closeDelay=%5s -> %s", r.delay, status)
 	}
 	t.Logf("FINAL: %d/%d Servers leaked, %d/%d Close() panics; heapInuse %.0f -> %.0f MiB",
-		leaked, iters, crashed, iters, baseMB, heapMB())
+		leaked, ITERS, crashed, ITERS, baseMB, heapMB())
 
 	// A correct tsnet would collect every Server after Close(); on buggy code
-	// some are permanently orphaned. The race is probabilistic (~5-10% per
+	// some are permanently orphaned. The race is probabilistic (~45-55% per
 	// attempt here), so a single Close() rarely shows it, but it reliably
 	// reproduces across the sweep and accumulates without bound in a process
 	// that restarts repeatedly (the production symptom). If a run happens to
 	// observe 0, increase iters or re-center the delay range on your start()
 	// duration.
 	if leaked > 0 {
-		t.Errorf("LEAK: %d/%d tsnet.Servers were never collected after Close() — orphaned by Close() racing an in-flight Start()", leaked, iters)
+		t.Errorf("LEAK: %d/%d tsnet.Servers were never collected after Close() — orphaned by Close() racing an in-flight Start()", leaked, ITERS)
 	}
 	if crashed > 0 {
-		t.Errorf("PANIC: %d/%d Close() calls nil-panicked racing an even-earlier Start()", crashed, iters)
+		t.Errorf("PANIC: %d/%d Close() calls nil-panicked racing an even-earlier Start()", crashed, ITERS)
 	}
 }
