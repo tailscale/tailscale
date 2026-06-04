@@ -3396,6 +3396,107 @@ const LBHeader = "Ts-Lb"
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
 
+// ServiceActionType represents the type of a [ServiceAction]. Clients use
+// this value to determine which protocol or application to use when
+// handling the action.
+//
+// Well-known Tailscale types are defined as constants in this package.
+// They are plain slugs (e.g. "ssh", "http") with no URL prefix.
+//
+// When a type corresponds to an application layer protocol with a
+// well-known port, the slug generally follows the IANA Service Name and
+// Transport Protocol Port Number Registry:
+// https://www.iana.org/assignments/service-names-port-numbers.
+//
+// In cases where the IANA service name differs from the commonly used
+// protocol name, the protocol name is preferred for readability and
+// interoperability (e.g. RDP is registered as "ms-wbt-server").
+//
+// If third-party types are introduced in the future, they must use URL
+// form (e.g. "example.com/my-custom-type") to avoid collisions with
+// first-party types.
+type ServiceActionType string
+
+const (
+	// ServiceActionTypeAWSS3 indicates that a port corresponds to an
+	// AWS S3 compatible endpoint and the AWS configuration may be modified
+	// to point to this endpoint and S3 clients may be used.
+	ServiceActionTypeAWSS3 ServiceActionType = "aws-s3"
+
+	// ServiceActionTypeCockroachDB indicates that a port corresponds to a
+	// CockroachDB server and CockroachDB clients may be used.
+	ServiceActionTypeCockroachDB ServiceActionType = "cockroach"
+
+	// ServiceActionTypeElasticSearch indicates that a port corresponds to
+	// an Elasticsearch server and Elasticsearch clients may be used.
+	ServiceActionTypeElasticSearch ServiceActionType = "elasticsearch"
+
+	// ServiceActionTypeHTTP indicates that a port corresponds to an HTTP
+	// server and HTTP clients may be used.
+	ServiceActionTypeHTTP ServiceActionType = "http"
+
+	// ServiceActionTypeKubernetes indicates that a port corresponds to a
+	// Kubernetes API server and the Kubernetes context may be configured to
+	// point to the service and Kubernetes clients may be used.
+	ServiceActionTypeKubernetes ServiceActionType = "kubernetes"
+
+	// ServiceActionTypeMongoDB indicates that a port corresponds to a MongoDB
+	// server and MongoDB clients may be used.
+	ServiceActionTypeMongoDB ServiceActionType = "mongodb"
+
+	// ServiceActionTypeMSSQL indicates that a port corresponds to a Microsoft
+	// SQL Server and MSSQL clients may be used. The IANA registry uses
+	// "ms-sql-s" but "mssql" is the widely recognized name.
+	ServiceActionTypeMSSQL ServiceActionType = "mssql"
+
+	// ServiceActionTypeMySQL indicates that a port corresponds to a MySQL
+	// server and MySQL clients may be used.
+	ServiceActionTypeMySQL ServiceActionType = "mysql"
+
+	// ServiceActionTypePostgreSQL indicates that a port corresponds to a
+	// PostgreSQL server and PostgreSQL clients may be used.
+	ServiceActionTypePostgreSQL ServiceActionType = "postgresql"
+
+	// ServiceActionTypeRDP indicates that a port corresponds to an RDP
+	// server and RDP clients may be used. The IANA registry uses
+	// "ms-wbt-server" but "rdp" is the widely recognized name.
+	ServiceActionTypeRDP ServiceActionType = "rdp"
+
+	// ServiceActionTypeVNC indicates that a port corresponds to a VNC
+	// server and VNC clients may be used. The IANA registry uses "rfb"
+	// (Remote Framebuffer) but "vnc" is the widely recognized name.
+	ServiceActionTypeVNC ServiceActionType = "vnc"
+
+	// ServiceActionTypeSSH indicates that a port corresponds to an SSH
+	// server and SSH clients may be used.
+	ServiceActionTypeSSH ServiceActionType = "ssh"
+
+	// ServiceActionTypeTCP indicates that a port corresponds to a generic
+	// TCP server and TCP clients may be used.
+	ServiceActionTypeTCP ServiceActionType = "tcp"
+)
+
+// Valid reports whether t is a recognized ServiceActionType.
+func (t ServiceActionType) Valid() bool {
+	switch t {
+	case ServiceActionTypeAWSS3,
+		ServiceActionTypeCockroachDB,
+		ServiceActionTypeElasticSearch,
+		ServiceActionTypeHTTP,
+		ServiceActionTypeKubernetes,
+		ServiceActionTypeMongoDB,
+		ServiceActionTypeMSSQL,
+		ServiceActionTypeMySQL,
+		ServiceActionTypePostgreSQL,
+		ServiceActionTypeRDP,
+		ServiceActionTypeVNC,
+		ServiceActionTypeSSH,
+		ServiceActionTypeTCP:
+		return true
+	}
+	return false
+}
+
 // ServiceActionAttribute represents an attribute key for a [ServiceAction].
 // A given attribute's applicability depends on the [ServiceAction.Type].
 //
@@ -3440,10 +3541,12 @@ const (
 
 // ServiceAction describes an action that a Tailscale
 // client can invoke for a [ServiceDetails].
+//
+// Clients should ignore actions with types they do not recognize.
 type ServiceAction struct {
 	// Type is the action's identifier i.e. a unique slug corresponding to a well
 	// known action. It drives icon selection and client application matching.
-	Type string
+	Type ServiceActionType
 
 	// Port is the target TCP port for this action. It must match one of
 	// the specific (non-range) TCP ports listed in the enclosing
