@@ -7,6 +7,9 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -245,6 +248,69 @@ users:
 			}
 		})
 	}
+}
+
+func TestCheckKubeconfigWritable(t *testing.T) {
+	t.Run("nonexistent-file-in-writable-dir", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := checkKubeconfigWritable(filepath.Join(dir, "config")); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("nonexistent-file-and-dir-in-writable-parent", func(t *testing.T) {
+		dir := t.TempDir()
+		// The .kube directory does not exist yet, but its parent does and is
+		// writable, so this should be fine.
+		if err := checkKubeconfigWritable(filepath.Join(dir, ".kube", "config")); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("existing-writable-file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config")
+		if err := os.WriteFile(path, []byte("apiVersion: v1\nkind: Config\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(path); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("unwritable-existing-file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("file mode permissions are not enforced the same way on Windows")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("root bypasses file permission checks")
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config")
+		if err := os.WriteFile(path, []byte("x"), 0400); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(path); err == nil {
+			t.Error("expected error for read-only file, got nil")
+		}
+	})
+
+	t.Run("unwritable-dir", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory mode permissions are not enforced the same way on Windows")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("root bypasses directory permission checks")
+		}
+		dir := t.TempDir()
+		sub := filepath.Join(dir, "ro")
+		if err := os.Mkdir(sub, 0500); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(filepath.Join(sub, "config")); err == nil {
+			t.Error("expected error for unwritable dir, got nil")
+		}
+	})
 }
 
 func TestGetInputs(t *testing.T) {
