@@ -11,15 +11,15 @@ import (
 )
 
 var args struct {
-	json jsonoutput.JSONSchemaVersion
+	json jsonoutput.SchemaVersion
 }
 
-func ExampleJSONSchemaVersion() {
-	fs := flag.NewFlagSet("ExampleJSONSchemaVersion", flag.ExitOnError)
+func ExampleSchemaVersion() {
+	fs := flag.NewFlagSet("ExampleSchemaVersion", flag.ExitOnError)
 	fs.Var(&args.json, "json", "output in JSON format")
 
 	fs.Parse([]string{"-json=2"})
-	fmt.Printf(`{set: %t, value: %d}`, args.json.IsSet, args.json.Value)
+	fmt.Printf(`{set: %t, value: %d}`, args.json.IsSet, args.json.Version)
 	// Output:
 	// {set: true, value: 2}
 }
