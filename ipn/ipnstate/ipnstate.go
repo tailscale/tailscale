@@ -107,10 +107,10 @@ type TKAPeer struct {
 	NodeKeySignature tka.NodeKeySignature
 }
 
-// NetworkLockStatus represents whether tailnet-lock is enabled,
+// TailnetLockStatus represents whether tailnet-lock is enabled,
 // along with details about the locally-known state of the tailnet
 // key authority.
-type NetworkLockStatus struct {
+type TailnetLockStatus struct {
 	// Enabled is true if tailnet lock is enabled.
 	Enabled bool
 
@@ -151,8 +151,11 @@ type NetworkLockStatus struct {
 	StateID uint64
 }
 
-// NetworkLockUpdate describes a change to tailnet-lock state.
-type NetworkLockUpdate struct {
+// Deprecated: use [TailnetLockStatus] instead.
+type NetworkLockStatus = TailnetLockStatus
+
+// TailnetLockUpdate describes a change to tailnet-lock state.
+type TailnetLockUpdate struct {
 	Hash   [32]byte
 	Change string // values of tka.AUMKind.String()
 
@@ -160,6 +163,9 @@ type NetworkLockUpdate struct {
 	// form to avoid transitive dependences bloating this package.
 	Raw []byte
 }
+
+// Deprecated: use [TailnetLockUpdate] instead.
+type NetworkLockUpdate = TailnetLockUpdate
 
 // TailnetStatus is information about a Tailscale network ("tailnet").
 type TailnetStatus struct {

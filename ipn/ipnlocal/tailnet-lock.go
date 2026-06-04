@@ -49,11 +49,16 @@ var (
 	errTailnetLockNotActive = errors.New("tailnet-lock is not active")
 )
 
-// IsNetworkLockNotActive reports whether the given error indicates that
+// IsTailnetLockNotActive reports whether the given error indicates that
 // tailnet-lock is not active. Stop-gap for feature/tailnetlock to check this
 // until all of this is code is moved to the feature.
-func IsNetworkLockNotActive(err error) bool {
+func IsTailnetLockNotActive(err error) bool {
 	return errors.Is(err, errTailnetLockNotActive)
+}
+
+// Deprecated: use [IsTailnetLockNotActive] instead.
+func IsNetworkLockNotActive(err error) bool {
+	return IsTailnetLockNotActive(err)
 }
 
 type tkaState struct {
@@ -519,9 +524,9 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 	return nil
 }
 
-// NetworkLockStatus returns a structure describing the state of the
+// TailnetLockStatus returns a structure describing the state of the
 // tailnet key authority, if any.
-func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
+func (b *LocalBackend) TailnetLockStatus() *ipnstate.TailnetLockStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -536,13 +541,13 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	}
 
 	if nlPriv.IsZero() {
-		return &ipnstate.NetworkLockStatus{
+		return &ipnstate.TailnetLockStatus{
 			Enabled: false,
 			NodeKey: nodeKey,
 		}
 	}
 	if b.tka == nil {
-		return &ipnstate.NetworkLockStatus{
+		return &ipnstate.TailnetLockStatus{
 			Enabled:   false,
 			NodeKey:   nodeKey,
 			PublicKey: nlPriv.Public(),
@@ -590,7 +595,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 
 	stateID1, _ := b.tka.authority.StateIDs()
 
-	return &ipnstate.NetworkLockStatus{
+	return &ipnstate.TailnetLockStatus{
 		Enabled:          true,
 		Head:             &head,
 		PublicKey:        nlPriv.Public(),
@@ -602,6 +607,11 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		VisiblePeers:     visible,
 		StateID:          stateID1,
 	}
+}
+
+// Deprecated: use [LocalBackend.TailnetLockStatus] instead.
+func (b *LocalBackend) NetworkLockStatus() *ipnstate.TailnetLockStatus {
+	return b.TailnetLockStatus()
 }
 
 func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
@@ -624,7 +634,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 	return fp
 }
 
-// NetworkLockInit enables tailnet-lock for the tailnet, with the tailnets'
+// TailnetLockInit enables tailnet-lock for the tailnet, with the tailnets'
 // key authority initialized to trust the provided keys.
 //
 // Initialization involves two RPCs with control, termed 'begin' and 'finish'.
@@ -633,7 +643,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable tailnet lock.
-func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
+func (b *LocalBackend) TailnetLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
 
@@ -698,15 +708,25 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	return err
 }
 
-// NetworkLockAllowed reports whether the node is allowed to use Tailnet Lock.
-func (b *LocalBackend) NetworkLockAllowed() bool {
+// Deprecated: use [LocalBackend.TailnetLockInit] instead.
+func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
+	return b.TailnetLockInit(keys, disablementValues, supportDisablement)
+}
+
+// TailnetLockAllowed reports whether the node is allowed to use Tailnet Lock.
+func (b *LocalBackend) TailnetLockAllowed() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.capTailnetLock
 }
 
+// Deprecated: use [LocalBackend.TailnetLockAllowed] instead.
+func (b *LocalBackend) NetworkLockAllowed() bool {
+	return b.TailnetLockAllowed()
+}
+
 // Only use is in tests.
-func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
+func (b *LocalBackend) TailnetLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
 	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -716,8 +736,13 @@ func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSi
 	return b.tka.authority.NodeKeyAuthorized(nodeKey, nks)
 }
 
+// Deprecated: use [LocalBackend.TailnetLockVerifySignatureForTest] instead.
+func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
+	return b.TailnetLockVerifySignatureForTest(nks, nodeKey)
+}
+
 // Only use is in tests.
-func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
+func (b *LocalBackend) TailnetLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
 	testenv.AssertInTest()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -727,9 +752,14 @@ func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
 	return b.tka.authority.KeyTrusted(keyID)
 }
 
-// NetworkLockForceLocalDisable shuts down TKA locally, and denylists the current
+// Deprecated: use [LocalBackend.TailnetLockKeyTrustedForTest] instead.
+func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
+	return b.TailnetLockKeyTrustedForTest(keyID)
+}
+
+// TailnetLockForceLocalDisable shuts down TKA locally, and denylists the current
 // TKA from being initialized locally in future.
-func (b *LocalBackend) NetworkLockForceLocalDisable() error {
+func (b *LocalBackend) TailnetLockForceLocalDisable() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -753,9 +783,14 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 	return nil
 }
 
-// NetworkLockSign signs the given node-key and submits it to the control plane.
+// Deprecated: use [LocalBackend.TailnetLockForceLocalDisable] instead.
+func (b *LocalBackend) NetworkLockForceLocalDisable() error {
+	return b.TailnetLockForceLocalDisable()
+}
+
+// TailnetLockSign signs the given node-key and submits it to the control plane.
 // rotationPublic, if specified, must be an ed25519 public key.
-func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
+func (b *LocalBackend) TailnetLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
 	ourNodeKey, sig, err := func(nodeKey key.NodePublic, rotationPublic []byte) (key.NodePublic, tka.NodeKeySignature, error) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -803,8 +838,13 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 	return nil
 }
 
-// NetworkLockModify adds and/or removes keys in the tailnet's key authority.
-func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
+// Deprecated: use [LocalBackend.TailnetLockSign] instead.
+func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
+	return b.TailnetLockSign(nodeKey, rotationPublic)
+}
+
+// TailnetLockModify adds and/or removes keys in the tailnet's key authority.
+func (b *LocalBackend) TailnetLockModify(addKeys, removeKeys []tka.Key) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("modify tailnet-lock keys: %w", err)
@@ -883,8 +923,13 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	return nil
 }
 
-// NetworkLockDisable disables tailnet-lock using the provided disablement secret.
-func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
+// Deprecated: use [LocalBackend.TailnetLockModify] instead.
+func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
+	return b.TailnetLockModify(addKeys, removeKeys)
+}
+
+// TailnetLockDisable disables tailnet-lock using the provided disablement secret.
+func (b *LocalBackend) TailnetLockDisable(secret []byte) error {
 	var (
 		ourNodeKey key.NodePublic
 		head       tka.AUMHash
@@ -915,8 +960,13 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	return err
 }
 
-// NetworkLockLog returns the changelog of TKA state up to maxEntries in size.
-func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpdate, error) {
+// Deprecated: use [LocalBackend.TailnetLockDisable] instead.
+func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
+	return b.TailnetLockDisable(secret)
+}
+
+// TailnetLockLog returns the changelog of TKA state up to maxEntries in size.
+func (b *LocalBackend) TailnetLockLog(maxEntries int) ([]ipnstate.TailnetLockUpdate, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -924,7 +974,7 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 		return nil, errTailnetLockNotActive
 	}
 
-	var out []ipnstate.NetworkLockUpdate
+	var out []ipnstate.TailnetLockUpdate
 	cursor := b.tka.authority.Head()
 	for range maxEntries {
 		aum, err := b.tka.storage.AUM(cursor)
@@ -935,7 +985,7 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 			return out, fmt.Errorf("reading AUM (%v): %w", cursor, err)
 		}
 
-		update := ipnstate.NetworkLockUpdate{
+		update := ipnstate.TailnetLockUpdate{
 			Hash:   cursor,
 			Change: aum.MessageKind.String(),
 			Raw:    aum.Serialize(),
@@ -952,9 +1002,14 @@ func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpd
 	return out, nil
 }
 
-// NetworkLockAffectedSigs returns the signatures which would be invalidated
+// Deprecated: use [LocalBackend.TailnetLockLog] instead.
+func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.TailnetLockUpdate, error) {
+	return b.TailnetLockLog(maxEntries)
+}
+
+// TailnetLockAffectedSigs returns the signatures which would be invalidated
 // by removing trust in the specified KeyID.
-func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.MarshaledSignature, error) {
+func (b *LocalBackend) TailnetLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.MarshaledSignature, error) {
 	var (
 		ourNodeKey key.NodePublic
 		err        error
@@ -1010,12 +1065,17 @@ func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.M
 	return resp.Signatures, nil
 }
 
-// NetworkLockGenerateRecoveryAUM generates an AUM which retroactively removes trust in the
+// Deprecated: use [LocalBackend.TailnetLockAffectedSigs] instead.
+func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.MarshaledSignature, error) {
+	return b.TailnetLockAffectedSigs(keyID)
+}
+
+// TailnetLockGenerateRecoveryAUM generates an AUM which retroactively removes trust in the
 // specified keys. This AUM is signed by the current node and returned.
 //
 // If forkFrom is specified, it is used as the parent AUM to fork from. If the zero value,
 // the parent AUM is determined automatically.
-func (b *LocalBackend) NetworkLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID, forkFrom tka.AUMHash) (*tka.AUM, error) {
+func (b *LocalBackend) TailnetLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID, forkFrom tka.AUMHash) (*tka.AUM, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1043,12 +1103,17 @@ func (b *LocalBackend) NetworkLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID
 	return aum, nil
 }
 
-// NetworkLockCosignRecoveryAUM co-signs the provided recovery AUM and returns
+// Deprecated: use [LocalBackend.TailnetLockGenerateRecoveryAUM] instead.
+func (b *LocalBackend) NetworkLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID, forkFrom tka.AUMHash) (*tka.AUM, error) {
+	return b.TailnetLockGenerateRecoveryAUM(removeKeys, forkFrom)
+}
+
+// TailnetLockCosignRecoveryAUM co-signs the provided recovery AUM and returns
 // the updated structure.
 //
 // The recovery AUM provided should be the output from a previous call to
-// NetworkLockGenerateRecoveryAUM or NetworkLockCosignRecoveryAUM.
-func (b *LocalBackend) NetworkLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, error) {
+// [LocalBackend.TailnetLockGenerateRecoveryAUM] or [LocalBackend.TailnetLockCosignRecoveryAUM].
+func (b *LocalBackend) TailnetLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1077,7 +1142,12 @@ func (b *LocalBackend) NetworkLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, err
 	return aum, nil
 }
 
-func (b *LocalBackend) NetworkLockSubmitRecoveryAUM(aum *tka.AUM) error {
+// Deprecated: use [LocalBackend.TailnetLockCosignRecoveryAUM] instead.
+func (b *LocalBackend) NetworkLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, error) {
+	return b.TailnetLockCosignRecoveryAUM(aum)
+}
+
+func (b *LocalBackend) TailnetLockSubmitRecoveryAUM(aum *tka.AUM) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1097,15 +1167,20 @@ func (b *LocalBackend) NetworkLockSubmitRecoveryAUM(aum *tka.AUM) error {
 	return err
 }
 
+// Deprecated: use [LocalBackend.TailnetLockSubmitRecoveryAUM] instead.
+func (b *LocalBackend) NetworkLockSubmitRecoveryAUM(aum *tka.AUM) error {
+	return b.TailnetLockSubmitRecoveryAUM(aum)
+}
+
 var tkaSuffixEncoder = base64.RawStdEncoding
 
-// NetworkLockWrapPreauthKey wraps a pre-auth key with information to
+// TailnetLockWrapPreauthKey wraps a pre-auth key with information to
 // enable unattended bringup in the locked tailnet.
 //
 // The provided trusted tailnet-lock key is used to sign
 // a SigCredential structure, which is encoded along with the
 // private key and appended to the pre-auth key.
-func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.NLPrivate) (string, error) {
+func (b *LocalBackend) TailnetLockWrapPreauthKey(preauthKey string, tkaKey key.NLPrivate) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1131,9 +1206,14 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString(sig.Serialize()), tkaSuffixEncoder.EncodeToString(priv)), nil
 }
 
-// NetworkLockVerifySigningDeeplink asks the authority to verify the given deeplink
+// Deprecated: use [LocalBackend.TailnetLockWrapPreauthKey] instead.
+func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.NLPrivate) (string, error) {
+	return b.TailnetLockWrapPreauthKey(preauthKey, tkaKey)
+}
+
+// TailnetLockVerifySigningDeeplink asks the authority to verify the given deeplink
 // URL. See the comment for ValidateDeeplink for details.
-func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.DeeplinkValidationResult {
+func (b *LocalBackend) TailnetLockVerifySigningDeeplink(url string) tka.DeeplinkValidationResult {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1141,6 +1221,11 @@ func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.Deeplink
 	}
 
 	return b.tka.authority.ValidateDeeplink(url)
+}
+
+// Deprecated: use [LocalBackend.TailnetLockVerifySigningDeeplink] instead.
+func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.DeeplinkValidationResult {
+	return b.TailnetLockVerifySigningDeeplink(url)
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {

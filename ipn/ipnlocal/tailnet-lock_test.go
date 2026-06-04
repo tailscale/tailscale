@@ -641,7 +641,7 @@ func TestTKAFilterNetmap(t *testing.T) {
 		return node, nodeSig
 	}
 
-	preauth, err := b.NetworkLockWrapPreauthKey("tskey-auth-k7UagY1CNTRL-ZZZZZ", nlPriv)
+	preauth, err := b.TailnetLockWrapPreauthKey("tskey-auth-k7UagY1CNTRL-ZZZZZ", nlPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,11 +791,11 @@ func TestTKADisable(t *testing.T) {
 	b := newLocalBackendForTKA(t, temp, client, pm, authority, chonk)
 
 	// Test that we get an error for an incorrect disablement secret.
-	if err := b.NetworkLockDisable([]byte{1, 2, 3, 4}); err == nil || err.Error() != "incorrect disablement secret" {
-		t.Errorf("NetworkLockDisable(<bad secret>).err = %v, want 'incorrect disablement secret'", err)
+	if err := b.TailnetLockDisable([]byte{1, 2, 3, 4}); err == nil || err.Error() != "incorrect disablement secret" {
+		t.Errorf("TailnetLockDisable(<bad secret>).err = %v, want 'incorrect disablement secret'", err)
 	}
-	if err := b.NetworkLockDisable(disablementSecret); err != nil {
-		t.Errorf("NetworkLockDisable() failed: %v", err)
+	if err := b.TailnetLockDisable(disablementSecret); err != nil {
+		t.Errorf("TailnetLockDisable() failed: %v", err)
 	}
 }
 
@@ -834,8 +834,8 @@ func TestTKASign(t *testing.T) {
 
 	b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
-	if err := b.NetworkLockSign(toSign.Public(), nil); err != nil {
-		t.Errorf("NetworkLockSign() failed: %v", err)
+	if err := b.TailnetLockSign(toSign.Public(), nil); err != nil {
+		t.Errorf("TailnetLockSign() failed: %v", err)
 	}
 }
 
@@ -894,8 +894,8 @@ func TestTKAForceDisable(t *testing.T) {
 	b.pm = pm
 	b.mu.Unlock()
 
-	if err := b.NetworkLockForceLocalDisable(); err != nil {
-		t.Fatalf("NetworkLockForceLocalDisable() failed: %v", err)
+	if err := b.TailnetLockForceLocalDisable(); err != nil {
+		t.Fatalf("TailnetLockForceLocalDisable() failed: %v", err)
 	}
 	if b.tka != nil {
 		t.Fatal("tka was not shut down")
@@ -1000,14 +1000,14 @@ func TestTKAAffectedSigs(t *testing.T) {
 			defer ts.Close()
 			b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
-			sigs, err := b.NetworkLockAffectedSigs(nlPriv.KeyID())
+			sigs, err := b.TailnetLockAffectedSigs(nlPriv.KeyID())
 			switch {
 			case tc.wantErr == "" && err != nil:
-				t.Errorf("NetworkLockAffectedSigs() failed: %v", err)
+				t.Errorf("TailnetLockAffectedSigs() failed: %v", err)
 			case tc.wantErr != "" && err == nil:
-				t.Errorf("NetworkLockAffectedSigs().err = nil, want %q", tc.wantErr)
+				t.Errorf("TailnetLockAffectedSigs().err = nil, want %q", tc.wantErr)
 			case tc.wantErr != "" && err.Error() != tc.wantErr:
-				t.Errorf("NetworkLockAffectedSigs().err = %q, want %q", err.Error(), tc.wantErr)
+				t.Errorf("TailnetLockAffectedSigs().err = %q, want %q", err.Error(), tc.wantErr)
 			}
 
 			if tc.wantErr == "" {
@@ -1064,24 +1064,24 @@ func TestTKARecoverCompromisedKeyFlow(t *testing.T) {
 	defer ts.Close()
 	b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
 
-	aum, err := b.NetworkLockGenerateRecoveryAUM([]tkatype.KeyID{compromisedPriv.KeyID()}, tka.AUMHash{})
+	aum, err := b.TailnetLockGenerateRecoveryAUM([]tkatype.KeyID{compromisedPriv.KeyID()}, tka.AUMHash{})
 	if err != nil {
-		t.Fatalf("NetworkLockGenerateRecoveryAUM() failed: %v", err)
+		t.Fatalf("TailnetLockGenerateRecoveryAUM() failed: %v", err)
 	}
 
 	// Cosign using the cosigning key.
 	{
 		pm := setupProfileManager(t, nodePriv, cosignPriv)
 		b := newLocalBackendForTKA(t, varRoot, client, pm, authority, chonk)
-		if aum, err = b.NetworkLockCosignRecoveryAUM(aum); err != nil {
-			t.Fatalf("NetworkLockCosignRecoveryAUM() failed: %v", err)
+		if aum, err = b.TailnetLockCosignRecoveryAUM(aum); err != nil {
+			t.Fatalf("TailnetLockCosignRecoveryAUM() failed: %v", err)
 		}
 	}
 
 	// Finally, submit the recovery AUM. Validation is done
 	// in the fake control handler.
-	if err := b.NetworkLockSubmitRecoveryAUM(aum); err != nil {
-		t.Errorf("NetworkLockSubmitRecoveryAUM() failed: %v", err)
+	if err := b.TailnetLockSubmitRecoveryAUM(aum); err != nil {
+		t.Errorf("TailnetLockSubmitRecoveryAUM() failed: %v", err)
 	}
 }
 

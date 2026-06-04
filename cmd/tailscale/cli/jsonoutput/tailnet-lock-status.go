@@ -15,9 +15,9 @@ import (
 	"tailscale.com/tka"
 )
 
-// PrintNetworkLockStatusJSONV1 prints the current Tailnet Lock status
+// PrintTailnetLockStatusJSONV1 prints the current Tailnet Lock status
 // as a JSON object to the CLI, in a stable "v1" format.
-func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockStatus) error {
+func PrintTailnetLockStatusJSONV1(out io.Writer, status *ipnstate.TailnetLockStatus) error {
 	responseEnvelope := ResponseEnvelope{
 		SchemaVersion: "1",
 	}
@@ -46,7 +46,7 @@ func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockSta
 	return enc.Encode(result)
 }
 
-func toTailnetLockDisabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLockDisabledStatusV1 {
+func toTailnetLockDisabledStatusV1(status *ipnstate.TailnetLockStatus) tailnetLockDisabledStatusV1 {
 	out := tailnetLockDisabledStatusV1{
 		tailnetLockStatusV1Base: tailnetLockStatusV1Base{
 			Enabled: status.Enabled,
@@ -61,7 +61,7 @@ func toTailnetLockDisabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLo
 	return out
 }
 
-func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLockEnabledStatusV1 {
+func toTailnetLockEnabledStatusV1(status *ipnstate.TailnetLockStatus) tailnetLockEnabledStatusV1 {
 	out := tailnetLockEnabledStatusV1{
 		tailnetLockStatusV1Base: tailnetLockStatusV1Base{
 			Enabled: status.Enabled,

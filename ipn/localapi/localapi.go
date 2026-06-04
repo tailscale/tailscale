@@ -440,7 +440,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	h.logf.JSON(1, "UserBugReportOS", osdiag.SupportInfo(osdiag.LogSupportInfoReasonBugReport))
 
 	// Tailnet Lock details
-	st := h.b.NetworkLockStatus()
+	st := h.b.TailnetLockStatus()
 	if st.Enabled {
 		h.logf.JSON(1, "UserBugReportTailnetLockStatus", st)
 		if st.NodeKeySignature != nil {
