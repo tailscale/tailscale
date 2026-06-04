@@ -23,8 +23,9 @@ package jsonoutput
 import (
 	"errors"
 	"flag"
-	"fmt"
+	"io"
 	"strconv"
+	"strings"
 )
 
 var _ flag.Value = &SchemaVersion{}
@@ -46,32 +47,42 @@ type SchemaVersion struct {
 func (v *SchemaVersion) String() string {
 	if v.IsSet {
 		return strconv.Itoa(v.Version)
-	} else {
-		return "(not set)"
 	}
+	return strconv.FormatBool(false)
 }
 
 // Set is called when the user passes the flag as a command-line argument.
 func (v *SchemaVersion) Set(s string) error {
-	if v.IsSet {
-		return errors.New("received multiple instances of --json; only pass it once")
+	// Delegate to a FlagSet to parse this as both a BoolVar and an IntVar.
+	// This is less efficient than copying the implementation from the standard library
+	// but this design makes it likelier that Set will inherit any upstream fixes.
+	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	fs.BoolVar(&v.IsSet, "bool", false, "")
+	fs.IntVar(&v.Version, "int", 0, "")
+	fs.SetOutput(io.Discard) // silence
+
+	// First, try to parse as an IntVar to handle -flag=INT.
+	// This order is important because -bool=0 will parse as false.
+	if err := fs.Parse([]string{"-int=" + s}); err == nil {
+		v.IsSet = true
+		return nil
 	}
-
-	v.IsSet = true
-
+	// If that fails, parse as a BoolVar to handle -flag and -flag=false.
+	// This is checked last for compatibility with the boolean -json flag.
+	if err := fs.Parse([]string{"-bool=" + s}); err != nil {
+		// Unwrap the header added by FlagSet.failf:
+		// `invalid boolean value "invalid" for -bool: `
+		bits := strings.SplitN(err.Error(), ": ", 2)
+		return errors.New(bits[len(bits)-1])
+	}
 	// If the user doesn't supply a schema version, default to 1.
 	// This ensures that any existing scripts will continue to get their
 	// current output.
-	if s == "true" {
+	if v.IsSet {
 		v.Version = 1
-		return nil
+	} else {
+		v.Version = 0 // if unset, zero out the Version
 	}
-
-	version, err := strconv.Atoi(s)
-	if err != nil {
-		return fmt.Errorf("invalid integer value passed to --json: %q", s)
-	}
-	v.Version = version
 	return nil
 }
 
