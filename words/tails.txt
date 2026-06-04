@@ -453,7 +453,6 @@ silverside
 banjo
 barb
 barbel
-bangus
 batfish
 danio
 betta

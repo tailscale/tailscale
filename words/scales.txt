@@ -239,7 +239,6 @@ silverside
 banjo
 barb
 barbel
-bangus
 banfish
 ray
 danio
