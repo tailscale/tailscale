@@ -69,6 +69,11 @@ func (menu *Menu) Run(client *local.Client) {
 	go menu.lc.SetGauge(menu.bgCtx, "systray_running", 1)
 	defer menu.lc.SetGauge(menu.bgCtx, "systray_running", 0)
 
+	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
+	// This value will get overwritten later as the client status changes.
+	// This must be called before systray.Run.
+	systray.SetTitle("tailscale")
+
 	systray.Run(menu.onReady, menu.onExit)
 }
 
@@ -171,10 +176,6 @@ tailscale systray
 See https://tailscale.com/kb/1597/linux-systray for more information.`)
 	}
 	setAppIcon(disconnected)
-
-	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
-	// This value will get overwritten later as the client status changes.
-	systray.SetTitle("tailscale")
 
 	menu.rebuild()
 
