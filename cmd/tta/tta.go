@@ -213,6 +213,24 @@ func main() {
 		}
 		serveCmd(w, "tailscale", args...)
 	})
+	ttaMux.HandleFunc("/tailscale", func(w http.ResponseWriter, r *http.Request) {
+		serveCmd(w, "tailscale", r.URL.Query()["arg"]...)
+	})
+	ttaMux.HandleFunc("/gokrazy-root", func(w http.ResponseWriter, r *http.Request) {
+		cmdLine, err := os.ReadFile("/proc/cmdline")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for s := range strings.FieldsSeq(string(cmdLine)) {
+			if root, ok := strings.CutPrefix(s, "root="); ok {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				io.WriteString(w, root+"\n")
+				return
+			}
+		}
+		http.Error(w, "no root= in /proc/cmdline", http.StatusInternalServerError)
+	})
 	ttaMux.HandleFunc("/ip", func(w http.ResponseWriter, r *http.Request) {
 		conn, ok := r.Context().Value(connContextKey).(net.Conn)
 		if !ok {

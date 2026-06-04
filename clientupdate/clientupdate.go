@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,24 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+// GokrazyUpdateArgs contains arguments for updating a Gokrazy appliance from a
+// GAF fetched from a URL.
+type GokrazyUpdateArgs struct {
+	// URL is the GAF download URL.
+	URL string
+
+	// AllowUnsigned permits installing a GAF without signature verification.
+	// This is intended for tests until signed GAF verification is implemented.
+	AllowUnsigned bool
+
+	// Logf is optional; nil discards log messages.
+	Logf logger.Logf
+}
+
+// GokrazyUpdateFromURL updates a Gokrazy appliance from a GAF fetched from a
+// URL, if Gokrazy update support is linked into the binary.
+var GokrazyUpdateFromURL feature.Hook[func(context.Context, GokrazyUpdateArgs) error]
 
 const (
 	StableTrack           = "stable"

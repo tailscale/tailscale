@@ -400,6 +400,15 @@ func (e *Env) AddNetwork(opts ...any) *vnet.Network {
 	return e.cfg.AddNetwork(opts...)
 }
 
+// RegisterFile registers a file with the vnet fileserver.
+// It is served at http://files.tailscale/<path>.
+func (e *Env) RegisterFile(path string, data []byte) {
+	if e.server == nil {
+		e.t.Fatalf("RegisterFile called before Start")
+	}
+	e.server.RegisterFile(path, data)
+}
+
 // Node represents a virtual machine in the test environment.
 type Node struct {
 	name string
@@ -1320,6 +1329,50 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	}
 	e.t.Fatalf("HTTPGet from %s to %s: all attempts failed", from.name, targetURL)
 	return ""
+}
+
+// Tailscale runs the tailscale CLI on the given node via TTA.
+func (e *Env) Tailscale(n *Node, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	q := url.Values{}
+	for _, arg := range args {
+		q.Add("arg", arg)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/tailscale?"+q.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return string(body), fmt.Errorf("tailscale %q: %s: %s", args, res.Status, res.Header.Get("Exec-Err"))
+	}
+	return string(body), nil
+}
+
+// GokrazyRoot returns the kernel root= argument from a Gokrazy node.
+func (e *Env) GokrazyRoot(n *Node) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/gokrazy-root", nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gokrazy-root: %s: %s", res.Status, strings.TrimSpace(string(body)))
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 // setNodeScreenshot stores the latest screenshot data URI for a node.
