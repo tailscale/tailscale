@@ -15,6 +15,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"iter"
 	"log"
 	mrand "math/rand/v2"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/creachadair/msync/trigger"
+	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
@@ -57,7 +59,10 @@ const lowMemRatio = 4
 // but not too large to be a notable waste of memory if retained forever.
 const bufferSize = 4 << 10
 
-func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
+// newLogger constructs a *Logger from cfg, applying defaults, but does not start
+// the background uploading goroutine. It is shared by [NewLogger] and the
+// stateless [UploadLogs].
+func newLogger(cfg Config) *Logger {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://" + DefaultHost
 	}
@@ -134,6 +139,14 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	logger.compressLogs = cfg.CompressLogs
 	logger.disabled.Store(cfg.Disabled)
 
+	return logger
+}
+
+// NewLogger returns a new Logger that splits logs as configured between local
+// logging facilities and uploading to a log server in the background.
+func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
+	logger := newLogger(cfg)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	logger.uploadCancel = cancel
 
@@ -142,6 +155,129 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		logger.Write([]byte("logtail started"))
 	}
 	return logger
+}
+
+// Logtail is the reserved "logtail" metadata member of a [LogEntry].
+//
+// Zero-valued fields are omitted when an entry is uploaded. [UploadLogs] fills
+// in any fields the caller leaves zero from its [Config] (e.g. ClientTime and
+// ProcID), so most callers can leave this empty.
+type Logtail struct {
+	// ClientTime is the time the entry was generated. If zero, [UploadLogs]
+	// fills it with the current time unless Config.SkipClientTime is set.
+	ClientTime time.Time `json:"client_time,omitzero"`
+	// ProcID is an ephemeral process identifier; see Config.IncludeProcID.
+	ProcID uint32 `json:"proc_id,omitzero"`
+	// ProcSeq is an ephemeral per-process sequence number; see
+	// Config.IncludeProcSequence.
+	ProcSeq uint64 `json:"proc_seq,omitzero"`
+}
+
+// LogEntry is a single log entry to be uploaded via [UploadLogs].
+//
+// It marshals to a JSON object whose reserved "logtail" member carries the
+// metadata in Logtail and whose remaining members are taken from Value, which
+// is inlined at the top level alongside "logtail".
+//
+// Value must marshal to a JSON object: T must be a Go struct (or pointer to
+// one), a Go map with a string key, or a [jsontext.Value] holding an object
+// (for example jsontext.Value(`{"text":"hello"}`)). This is enforced when the
+// entry is uploaded, not at compile time. Use T = [jsontext.Value] to mix
+// differently-shaped payloads in a single upload.
+type LogEntry[T any] struct {
+	Logtail Logtail `json:"logtail,omitzero"`
+	Value   T       `json:",inline"`
+}
+
+// UploadLogs uploads entries to the log server described by conf and returns
+// once they have all been sent (or an upload fails).
+//
+// It is a stateless alternative to [NewLogger] for callers that just want to
+// push a batch of log entries without the background uploader, ring buffer,
+// stderr echoing, or network-up gating that a [Logger] provides. Each entry is
+// marshaled to JSON, its [Logtail] metadata is filled in from conf where the
+// caller left it zero (honoring conf.SkipClientTime, conf.IncludeProcID, and
+// conf.IncludeProcSequence), and entries are batched up to the server's maximum
+// upload size and POSTed synchronously (compressed when conf.CompressLogs is
+// set).
+//
+// Unlike [Logger], UploadLogs does not retry: if a batch fails to upload it
+// returns the error immediately and any remaining entries are not sent. The
+// conf.Stderr and conf.Bus fields are ignored.
+func UploadLogs[T any](ctx context.Context, conf Config, entries iter.Seq[LogEntry[T]]) error {
+	conf.Stderr = io.Discard // pure uploader: never echo to stderr
+	conf.Bus = nil           // no netmon/eventbus subscription for a one-shot
+	lg := newLogger(conf)
+
+	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
+	if lg.lowMem {
+		maxLen /= lowMemRatio
+	}
+
+	// body accumulates a JSON array of encoded entries: "[e1,e2,...]".
+	// The framing mirrors Logger.drainPending.
+	body := make([]byte, 0, bufferSize) // reused across batches
+	body = append(body, '[')
+
+	sendBatch := func() error {
+		if len(body) <= len("[") {
+			return nil
+		}
+		out := bytes.TrimRight(body, ",")
+		out = append(out, ']')
+		origlen := -1 // sentinel value: uncompressed
+		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
+		if lg.compressLogs && len(out) > 256 {
+			zbody := zstdframe.AppendEncode(nil, out,
+				zstdframe.FastestCompression, zstdframe.LowMemory(true))
+			// Only send it compressed if the bandwidth savings are sufficient.
+			if len(out)-len(zbody) > 64 {
+				origlen = len(out)
+				out = zbody
+			}
+		}
+		// upload is synchronous, so it is safe to reuse body's backing array
+		// for the next batch once upload returns.
+		if _, err := lg.upload(ctx, out, origlen); err != nil {
+			return err
+		}
+		body = body[:len("[")]
+		return nil
+	}
+
+	var procSeq uint64
+	for e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Fill in metadata from conf, preserving any caller-set values.
+		if e.Logtail.ClientTime.IsZero() && !lg.skipClientTime {
+			e.Logtail.ClientTime = lg.clock.Now().UTC()
+		}
+		if e.Logtail.ProcID == 0 {
+			e.Logtail.ProcID = lg.procID
+		}
+		if lg.includeProcSequence {
+			procSeq++
+			e.Logtail.ProcSeq = procSeq
+		}
+
+		enc, err := jsonv2.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("logtail: encoding entry: %w", err)
+		}
+
+		// Flush the current batch before adding an entry that would overflow it.
+		if len(body) > len("[") && len(body)+len(enc) > maxLen {
+			if err := sendBatch(); err != nil {
+				return err
+			}
+		}
+		body = append(body, enc...)
+		body = append(body, ',')
+	}
+	return sendBatch()
 }
 
 // Logger writes logs, splitting them as configured between local
