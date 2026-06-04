@@ -47,8 +47,11 @@ require (
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
+	github.com/gokrazy/firmware v0.0.0-20260522070551-527ce0ed43cf
 	github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7
 	github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a
+	github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de
+	github.com/gokrazy/rpi-eeprom v0.0.0-20260518070910-95f7328a8228
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
 	github.com/golang/snappy v0.0.4
