@@ -86,7 +86,11 @@ func (e *Extension) Init(h ipnext.Host) error {
 	h.Hooks().OnRoutersChange.Add(e.onRoutersChange)
 	h.Hooks().OnSelfChange.Add(e.onSelfChange)
 
-	go e.Client.Start(context.Background())
+	go func() {
+		if err := e.Client.Start(context.Background()); err != nil {
+			e.logf("routecheck: background client failed: %v", err)
+		}
+	}()
 	return nil
 }
 
