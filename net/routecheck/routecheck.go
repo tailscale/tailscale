@@ -271,22 +271,28 @@ func (c *Client) bootstrap(nm *netmap.NetworkMap) *Report {
 	addrFor := addrPicker(can4, can6)
 
 	var r Report
-	for _, n := range nm.Peers {
-		if !n.Online().Get() {
-			continue // Not connected to the control plane.
+	for _, nodes := range GroupRoutersByPrefix(nm.Peers) {
+		if len(nodes) <= 1 {
+			continue // Not an overlapping router
 		}
 
-		addr := addrFor(n)
-		if !addr.IsValid() {
-			continue // No valid addresses.
-		}
+		for _, n := range nodes {
+			if !n.Online().Get() {
+				continue // Not connected to the control plane.
+			}
 
-		mak.Set(&r.Reachable, n.ID(), Node{
-			ID:     n.ID(),
-			Name:   n.Name(),
-			Addr:   addr,
-			Routes: routes(n),
-		})
+			addr := addrFor(n)
+			if !addr.IsValid() {
+				continue // No valid addresses.
+			}
+
+			mak.Set(&r.Reachable, n.ID(), Node{
+				ID:     n.ID(),
+				Name:   n.Name(),
+				Addr:   addr,
+				Routes: routes(n),
+			})
+		}
 	}
 	r.Done = time.Now()
 	return &r

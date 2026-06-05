@@ -21,16 +21,22 @@ import (
 // Routers for the general prefix aren’t candidates. See tailscale/tailscale#18550.
 type RoutersByPrefix map[netip.Prefix][]tailcfg.NodeView
 
-// RoutersByPrefix returns a map of nodes grouped by the subnet that they route.
+// GroupRoutersByPrefix returns a map of nodes grouped by the subnet that they route.
 // See [RoutersByPrefix] for more detail.
-func (c *Client) RoutersByPrefix() RoutersByPrefix {
+func GroupRoutersByPrefix(nodes []tailcfg.NodeView) RoutersByPrefix {
 	var routers RoutersByPrefix
-	for _, n := range c.nb.NodeBackend().Peers() {
+	for _, n := range nodes {
 		for _, pfx := range routes(n) {
 			mak.Set(&routers, pfx, append(routers[pfx], n))
 		}
 	}
 	return routers
+}
+
+// RoutersByPrefix returns a map of nodes grouped by the subnet that they route.
+// See [RoutersByPrefix] for more detail.
+func (c *Client) RoutersByPrefix() RoutersByPrefix {
+	return GroupRoutersByPrefix(c.nb.NodeBackend().Peers())
 }
 
 // Routes returns a slice of subnets that the given node will route.
