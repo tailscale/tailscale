@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/def"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -448,7 +449,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if defBool(r.URL.Query().Get("diagnose"), false) {
+	if def.Bool(r.URL.Query().Get("diagnose"), false) {
 		if f, ok := ipnlocal.HookDoctor.GetOk(); ok {
 			f(r.Context(), h.b, logger.WithPrefix(h.logf, "diag: "))
 		}
@@ -458,7 +459,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 
 	// Nothing else to do if we're not in record mode; we wrote the marker
 	// above, so we can just finish our response now.
-	if !defBool(r.URL.Query().Get("record"), false) {
+	if !def.Bool(r.URL.Query().Get("record"), false) {
 		return
 	}
 
@@ -846,7 +847,7 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	var st *ipnstate.Status
-	if defBool(r.FormValue("peers"), true) {
+	if def.Bool(r.FormValue("peers"), true) {
 		st = h.b.Status()
 	} else {
 		st = h.b.StatusWithoutPeers()
@@ -1656,17 +1657,6 @@ func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func defBool(a string, def bool) bool {
-	if a == "" {
-		return def
-	}
-	v, err := strconv.ParseBool(a)
-	if err != nil {
-		return def
-	}
-	return v
 }
 
 // serveUpdateCheck returns the ClientVersion from Status, which contains
