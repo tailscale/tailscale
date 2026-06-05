@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"tailscale.com/cmd/tailscale/tslockjsonv1"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnlocal"
 )
 

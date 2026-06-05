@@ -5,14 +5,6 @@
 
 package tslockjsonv1
 
-import (
-	"encoding/base64"
-	"fmt"
-
-	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/tka"
-)
-
 // AUM is the expanded version of a [tka.AUM], designed so external tools
 // can read the AUM without knowing our CBOR definitions.
 type AUM struct {
@@ -56,28 +48,6 @@ type Key struct {
 	Meta map[string]string `json:",omitzero"`
 }
 
-// ipnTKAKeytoTKAKeyV1 converts an [ipnstate.TKAKey] to the JSON output returned
-// by the CLI.
-func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) Key {
-	return Key{
-		Kind:   key.Kind,
-		Votes:  key.Votes,
-		Public: key.Key.CLIString(),
-		Meta:   key.Metadata,
-	}
-}
-
-// toTKAKeyV1 converts a [tka.Key] to the JSON output returned
-// by the CLI.
-func toTKAKeyV1(key *tka.Key) Key {
-	return Key{
-		Kind:   key.Kind.String(),
-		Votes:  key.Votes,
-		Public: fmt.Sprintf("tlpub:%x", key.Public),
-		Meta:   key.Meta,
-	}
-}
-
 // NodeKeySignature is the JSON representation of a [tka.NodeKeySignature],
 // which describes a signature that authorizes a specific node key.
 type NodeKeySignature struct {
@@ -104,26 +74,6 @@ type NodeKeySignature struct {
 	// WrappingPubkey specifies the ed25519 public key which must be used
 	// to sign a Signature which embeds this one.
 	WrappingPublicKey string `json:",omitzero"`
-}
-
-func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *NodeKeySignature {
-	out := NodeKeySignature{
-		SigKind: sig.SigKind.String(),
-	}
-	if len(sig.Pubkey) > 0 {
-		out.PublicKey = fmt.Sprintf("tlpub:%x", sig.Pubkey)
-	}
-	if len(sig.KeyID) > 0 {
-		out.KeyID = fmt.Sprintf("tlpub:%x", sig.KeyID)
-	}
-	out.Signature = base64.URLEncoding.EncodeToString(sig.Signature)
-	if sig.Nested != nil {
-		out.Nested = toTKANodeKeySignatureV1(sig.Nested)
-	}
-	if len(sig.WrappingPubkey) > 0 {
-		out.WrappingPublicKey = fmt.Sprintf("tlpub:%x", sig.WrappingPubkey)
-	}
-	return &out
 }
 
 // Peer is the JSON representation of an [ipnstate.TKAPeer], which describes
@@ -159,30 +109,6 @@ type TrustedPeer struct {
 
 	// The node's key signature
 	NodeKeySignature *NodeKeySignature `json:",omitzero"`
-}
-
-func toTKAPeerV1(peer *ipnstate.TKAPeer) Peer {
-	out := Peer{
-		DNSName: peer.Name,
-		ID:      string(peer.StableID),
-	}
-	for _, ip := range peer.TailscaleIPs {
-		out.TailscaleIPs = append(out.TailscaleIPs, ip.String())
-	}
-	out.NodeKey = peer.NodeKey.String()
-
-	return out
-}
-
-func toTrustedTKAPeerV1(peer *ipnstate.TKAPeer) TrustedPeer {
-	out := toTKAPeerV1(peer)
-	return TrustedPeer{
-		DNSName:          out.DNSName,
-		ID:               out.ID,
-		TailscaleIPs:     out.TailscaleIPs,
-		NodeKey:          out.NodeKey,
-		NodeKeySignature: toTKANodeKeySignatureV1(&peer.NodeKeySignature),
-	}
 }
 
 // Signature is the expanded form of a [tka.Signature], which
