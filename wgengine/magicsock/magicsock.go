@@ -3049,7 +3049,7 @@ func (c *Conn) SetNetworkMapCached(self tailcfg.NodeView, peers []tailcfg.NodeVi
 
 // setNetworkMapInternal is the shared implementation of SetNetworkMap and SetNetworkMapCached.
 func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.NodeView, isCached bool) {
-	peersChanged := c.updateNodes(self, peers)
+	peersChanged, selfWasValid := c.updateNodes(self, peers)
 
 	relayClientEnabled := self.Valid() &&
 		!self.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
@@ -3064,7 +3064,7 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	selfView := c.self
 	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
-	wasCached := c.usingCachedNetmap.Swap(isCached)
+	c.usingCachedNetmap.Store(isCached)
 	if !self.Valid() {
 		c.initializedAt = mono.Now() // the netmap is being reset
 	}
@@ -3083,11 +3083,11 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	if isClosed {
 		return // nothing to do here, the conn is closed and the update is no longer relevant
 	}
-	if self.Valid() && wasCached && !isCached {
-		// Reaching here, we have a "real" netmap (self is valid), and we are
-		// transitioning from cached to non-cached, so record the latency from
-		// reset.
-		c.logf("magicsock: new contact: control-netmap usec=%d", int64(mono.Since(initializedAt)/time.Microsecond))
+	if self.Valid() && !selfWasValid {
+		// Reaching here, we have our first "real" netmap (self is valid, and
+		// the previous netmap was unset or reset), so record the latency from reset.
+		c.logf("magicsock: new contact: control-netmap usec=%d cached=%v",
+			int64(mono.Since(initializedAt)/time.Microsecond), isCached)
 	}
 
 	if udpOffloadKnobsChanged {
@@ -3111,17 +3111,17 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 }
 
 // updateNodes updates [Conn] to reflect the given self node and peers.
-// It reports whether the peer set (membership or any field) changed.
-func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged bool) {
+// It reports whether the peer set (membership or any field) changed,
+// and whether the previous self node was valid.
+func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged, wasValid bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	if c.closed {
-		return false
+		return false, false
 	}
 
 	metricNumPeers.Set(int64(len(peers)))
-
+	selfWasValid := c.self.Valid()
 	c.self = self
 
 	// [debugFlags] are mutable in [Conn.SetSilentDisco] &
@@ -3146,7 +3146,7 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 			}
 		}
 		if allSame {
-			return false
+			return false, selfWasValid
 		}
 	}
 
@@ -3188,7 +3188,7 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 		}
 	}
 
-	return true
+	return true, selfWasValid
 }
 
 // upsertPeerLocked upserts a single peer's endpoint in c.peerMap. It is the
