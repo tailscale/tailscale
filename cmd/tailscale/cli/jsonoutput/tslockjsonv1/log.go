@@ -105,17 +105,6 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 	}
 }
 
-// toTKAKeyV1 converts a [tka.Key] to the JSON output returned
-// by the CLI.
-func toTKAKeyV1(key *tka.Key) tkaKeyV1 {
-	return tkaKeyV1{
-		Kind:   key.Kind.String(),
-		Votes:  key.Votes,
-		Public: fmt.Sprintf("tlpub:%x", key.Public),
-		Meta:   key.Meta,
-	}
-}
-
 // logMessageV1 is the JSON representation of an AUM as both raw bytes and
 // in its expanded form, and the CLI output is a list of these entries.
 type logMessageV1 struct {
@@ -130,81 +119,4 @@ type logMessageV1 struct {
 	// The raw bytes of the CBOR-encoded AUM, encoded as base64.
 	// This is useful for verifying the AUM hash.
 	Raw string
-}
-
-// expandedAUMV1 is the expanded version of a [tka.AUM], designed so external tools
-// can read the AUM without knowing our CBOR definitions.
-type expandedAUMV1 struct {
-	MessageKind string
-	PrevAUMHash string `json:"PrevAUMHash,omitzero"`
-
-	// Key encodes a public key to be added to the key authority.
-	// This field is used for AddKey AUMs.
-	Key tkaKeyV1 `json:"Key,omitzero"`
-
-	// KeyID references a public key which is part of the key authority.
-	// This field is used for RemoveKey and UpdateKey AUMs.
-	KeyID string `json:"KeyID,omitzero"`
-
-	// State describes the full state of the key authority.
-	// This field is used for Checkpoint AUMs.
-	State expandedStateV1 `json:"State,omitzero"`
-
-	// Votes and Meta describe properties of a key in the key authority.
-	// These fields are used for UpdateKey AUMs.
-	Votes uint              `json:"Votes,omitzero"`
-	Meta  map[string]string `json:"Meta,omitzero"`
-
-	// Signatures lists the signatures over this AUM.
-	Signatures []expandedSignatureV1 `json:"Signatures,omitzero"`
-}
-
-// tkaKeyV1 is the expanded version of a [tka.Key], which describes
-// the public components of a key known to tailnet-lock.
-type tkaKeyV1 struct {
-	Kind string `json:"Kind,omitzero"`
-
-	// Votes describes the weight applied to signatures using this key.
-	Votes uint
-
-	// Public encodes the public key of the key as a hex string.
-	Public string
-
-	// Meta describes arbitrary metadata about the key. This could be
-	// used to store the name of the key, for instance.
-	Meta map[string]string `json:"Meta,omitzero"`
-}
-
-// expandedStateV1 is the expanded version of a [tka.State], which describes
-// Tailnet Key Authority state at an instant in time.
-type expandedStateV1 struct {
-	// LastAUMHash is the blake2s digest of the last-applied AUM.
-	LastAUMHash string `json:"LastAUMHash,omitzero"`
-
-	// DisablementValues are KDF-derived values used to verify that a caller
-	// possesses a valid DisablementSecret. These values are used during the
-	// Tailnet Lock deactivation process.
-	//
-	// These are  safe to share publicly or store in the clear. They cannot be
-	// used to derive the original DisablementSecret.
-	DisablementValues []string
-
-	// Keys are the public keys of either:
-	//
-	//   1. The signing nodes currently trusted by the TKA.
-	//   2. Ephemeral keys that were used to generate pre-signed auth keys.
-	Keys []tkaKeyV1
-
-	// StateID's are nonce's, generated on enablement and fixed for
-	// the lifetime of the Tailnet Key Authority.
-	StateID1 uint64
-	StateID2 uint64
-}
-
-// expandedSignatureV1 is the expanded form of a [tka.Signature], which
-// describes a signature over an AUM. This signature can be verified
-// using the key referenced by KeyID.
-type expandedSignatureV1 struct {
-	KeyID     string
-	Signature string
 }
