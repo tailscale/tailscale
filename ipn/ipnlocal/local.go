@@ -2395,6 +2395,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 
 	cn := b.currentNode()
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
+
+	// Classify router changes before applying the mutations, while cn still
+	// reflects the previous state, so we can tell additions from modifications.
+	// This is O(len(muts)), independent of the tailnet size.
+	var addedRouters, modifiedRouters, removedRouters []tailcfg.NodeView
+	if len(b.extHost.Hooks().OnRoutersChange) > 0 {
+		addedRouters, modifiedRouters, removedRouters = routerChanges(muts, cn)
+	}
+
 	cn.UpdateNetmapDelta(muts)
 
 	// Dispatch Upsert/Remove per-peer to magicsock, and any per-field
@@ -2442,12 +2451,10 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 
 	if cn.NetMap() != nil {
-		// Are any of the mutated nodes also routers?
-		if hooks := b.extHost.Hooks().OnRoutersChange; len(hooks) > 0 {
-			if routers := mutatedRouters(muts, cn); len(routers) > 0 {
-				for _, f := range hooks {
-					f(nil, routers, nil)
-				}
+		if hooks := b.extHost.Hooks().OnRoutersChange; len(hooks) > 0 &&
+			(len(addedRouters) > 0 || len(modifiedRouters) > 0 || len(removedRouters) > 0) {
+			for _, f := range hooks {
+				f(addedRouters, modifiedRouters, removedRouters)
 			}
 		}
 	}
@@ -2582,20 +2589,41 @@ func (b *LocalBackend) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.Us
 	return true
 }
 
-// MutatedRouters returns a slice of routers that were mutated by muts.
-func mutatedRouters(muts []netmap.NodeMutation, cn *nodeBackend) (routers []tailcfg.NodeView) {
+// routerChanges classifies the router-affecting mutations in muts into the
+// added, modified, and removed routers they describe. It must be called before
+// the mutations are applied to cn, so that cn still reflects the previous state
+// and additions can be distinguished from modifications.
+//
+// It is O(len(muts)), independent of the tailnet size.
+func routerChanges(muts []netmap.NodeMutation, cn *nodeBackend) (added, modified, removed []tailcfg.NodeView) {
 	for _, m := range muts {
-		n, ok := cn.NodeByID(m.NodeIDBeingMutated())
-		if !ok {
-			// The node being mutated is not in the netmap.
-			continue
-		}
+		old, wasKnown := cn.NodeByID(m.NodeIDBeingMutated())
+		wasRouter := wasKnown && old.IsRouter()
 
-		if n.IsRouter() {
-			routers = append(routers, n)
+		switch m := m.(type) {
+		case netmap.NodeMutationRemove:
+			if wasRouter {
+				removed = append(removed, old)
+			}
+		case netmap.NodeMutationUpsert:
+			switch isRouter := m.Node.IsRouter(); {
+			case isRouter && !wasRouter:
+				added = append(added, m.Node)
+			case isRouter && wasRouter:
+				modified = append(modified, m.Node)
+			case !isRouter && wasRouter:
+				removed = append(removed, old)
+			}
+		default:
+			// A field-level patch (DERP home, endpoints, online, etc.)
+			// to a node that is currently a router counts as a
+			// modification.
+			if wasRouter {
+				modified = append(modified, old)
+			}
 		}
 	}
-	return routers
+	return added, modified, removed
 }
 
 // mustationsAreWorthyOfRecalculatingSuggestedExitNode reports whether any mutation type in muts is
@@ -7049,15 +7077,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}()
 	}
 
-	// OnRoutersChange needs to compare the old and new peers.
-	needsNetMapWithPeers := len(b.extHost.Hooks().OnRoutersChange) > 0
-
-	var oldNetMap *netmap.NetworkMap
-	if needsNetMapWithPeers {
-		oldNetMap = b.currentNode().netMapWithPeers()
-	} else {
-		oldNetMap = b.currentNode().NetMap()
-	}
+	oldNetMap := b.currentNode().NetMap()
 	oldSelf := oldNetMap.SelfNodeOrZero()
 
 	b.dialer.SetNetMap(nm)
@@ -7087,23 +7107,21 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.pauseOrResumeControlClientLocked()
 
 	if hooks := b.extHost.Hooks().OnRoutersChange; len(hooks) > 0 {
-		routers := func(nodes []tailcfg.NodeView) (ret []tailcfg.NodeView) {
-			for _, n := range nodes {
-				if n.IsRouter() {
-					ret = append(ret, n)
-				}
+		// A full netmap install is the bulk/initial path; incremental peer
+		// add/remove/modify is delivered through [LocalBackend.UpdateNetmapDelta].
+		// Report every current router as added rather than diffing against the
+		// previous peer set, which would require an O(N) clone+sort of all peers
+		// on every install. Consumers treat OnRoutersChange as a signal to
+		// recompute, so over-reporting on a full install is harmless.
+		var added []tailcfg.NodeView
+		for _, n := range b.currentNode().Peers() {
+			if n.IsRouter() {
+				added = append(added, n)
 			}
-			return ret
 		}
-		var oldRouters []tailcfg.NodeView
-		if oldNetMap != nil {
-			oldRouters = routers(oldNetMap.Peers)
-		}
-		newRouters := routers(b.currentNode().Peers())
-		added, modified, removed := diffNodeViews(oldRouters, newRouters)
-		if len(added) > 0 || len(modified) > 0 || len(removed) > 0 {
+		if len(added) > 0 {
 			for _, f := range hooks {
-				f(added, modified, removed)
+				f(added, nil, nil)
 			}
 		}
 	}
