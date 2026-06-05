@@ -1500,11 +1500,26 @@ func (w *IPNBusWatcher) Next() (ipn.Notify, error) {
 }
 
 // SuggestExitNode requests an exit node suggestion and returns the exit node's details.
-func (lc *Client) SuggestExitNode(ctx context.Context, probe bool) (apitype.ExitNodeSuggestionResponse, error) {
-	var v url.Values
-	if buildfeatures.HasRouteCheck {
-		v.Set("probe", strconv.FormatBool(probe))
-		v.Set("timeout", "") // default
+func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggestionResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/suggest-exit-node")
+	if err != nil {
+		return apitype.ExitNodeSuggestionResponse{}, err
+	}
+	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+}
+
+// SuggestExitNodeWithProbe requests an exit node suggestion based on an immediate routecheck probe
+// and returns the exit node's details.
+// If the timeout is 0, any probes will immediately timeout.
+// If the timeout is positive, probes will take that duration before timing out.
+// If the timeout is negative, probes will use the default routecheck timeout.
+func (lc *Client) SuggestExitNodeWithProbe(ctx context.Context, timeout time.Duration) (apitype.ExitNodeSuggestionResponse, error) {
+	if !buildfeatures.HasRouteCheck {
+		return apitype.ExitNodeSuggestionResponse{}, feature.ErrUnavailable
+	}
+	v := url.Values{"probe": {"true"}}
+	if timeout >= 0 {
+		v.Set("timeout", timeout.String())
 	}
 	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node?"+v.Encode(), 200, nil)
 	if err != nil {

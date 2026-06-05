@@ -625,7 +625,7 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 
 	// Show recommended exit node if available.
 	if status.Self.CapMap.Contains(tailcfg.NodeAttrSuggestExitNodeUI) {
-		sugg, err := menu.lc.SuggestExitNode(ctx, false)
+		sugg, err := menu.lc.SuggestExitNode(ctx)
 		if err == nil {
 			title := "Recommended: "
 			if loc := sugg.Location; loc.Valid() && loc.Country() != "" {
