@@ -12,9 +12,9 @@ import (
 	"tailscale.com/tka"
 )
 
-// ipnTKAKeytoTKAKeyV1 converts an [ipnstate.TKAKey] to the JSON output returned
-// by the CLI.
-func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) tslockjsonv1.Key {
+// ipnTKAKey converts an [ipnstate.TKAKey] to the JSON output returned by the CLI,
+// in a stable "v1" format.
+func ipnTKAKey(key *ipnstate.TKAKey) tslockjsonv1.Key {
 	return tslockjsonv1.Key{
 		Kind:   key.Kind,
 		Votes:  key.Votes,
@@ -23,9 +23,9 @@ func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) tslockjsonv1.Key {
 	}
 }
 
-// toTKAKeyV1 converts a [tka.Key] to the JSON output returned
-// by the CLI.
-func toTKAKeyV1(key *tka.Key) tslockjsonv1.Key {
+// tkaKey converts a [tka.Key] to the JSON output returned by the CLI,
+// in a stable "v1" format.
+func tkaKey(key *tka.Key) tslockjsonv1.Key {
 	return tslockjsonv1.Key{
 		Kind:   key.Kind.String(),
 		Votes:  key.Votes,
@@ -34,7 +34,9 @@ func toTKAKeyV1(key *tka.Key) tslockjsonv1.Key {
 	}
 }
 
-func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *tslockjsonv1.NodeKeySignature {
+// nodeKeySignature converts a [tka.NodeKeySignature] to the JSON output returned by the CLI,
+// in a stable "v1" format.
+func nodeKeySignature(sig *tka.NodeKeySignature) *tslockjsonv1.NodeKeySignature {
 	out := tslockjsonv1.NodeKeySignature{
 		SigKind: sig.SigKind.String(),
 	}
@@ -46,7 +48,7 @@ func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *tslockjsonv1.NodeKeySig
 	}
 	out.Signature = base64.URLEncoding.EncodeToString(sig.Signature)
 	if sig.Nested != nil {
-		out.Nested = toTKANodeKeySignatureV1(sig.Nested)
+		out.Nested = nodeKeySignature(sig.Nested)
 	}
 	if len(sig.WrappingPubkey) > 0 {
 		out.WrappingPublicKey = fmt.Sprintf("tlpub:%x", sig.WrappingPubkey)
@@ -54,25 +56,29 @@ func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *tslockjsonv1.NodeKeySig
 	return &out
 }
 
-func toTKAPeerV1(peer *ipnstate.TKAPeer) tslockjsonv1.Peer {
+// peer converts a [ipnstate.TKAPeer] to the JSON output returned by the CLI,
+// in a stable "v1" format.
+func peer(p *ipnstate.TKAPeer) tslockjsonv1.Peer {
 	out := tslockjsonv1.Peer{
-		DNSName: peer.Name,
-		ID:      string(peer.StableID),
-		NodeKey: peer.NodeKey.String(),
+		DNSName: p.Name,
+		ID:      string(p.StableID),
+		NodeKey: p.NodeKey.String(),
 	}
-	for _, ip := range peer.TailscaleIPs {
+	for _, ip := range p.TailscaleIPs {
 		out.TailscaleIPs = append(out.TailscaleIPs, ip.String())
 	}
 	return out
 }
 
-func toTrustedTKAPeerV1(peer *ipnstate.TKAPeer) tslockjsonv1.TrustedPeer {
-	out := toTKAPeerV1(peer)
+// trustedPeer converts a trusted [ipnstate.TKAPeer] to the JSON output returned by the CLI,
+// in a stable "v1" format.
+func trustedPeer(p *ipnstate.TKAPeer) tslockjsonv1.TrustedPeer {
+	out := peer(p)
 	return tslockjsonv1.TrustedPeer{
 		DNSName:          out.DNSName,
 		ID:               out.ID,
 		TailscaleIPs:     out.TailscaleIPs,
 		NodeKey:          out.NodeKey,
-		NodeKeySignature: toTKANodeKeySignatureV1(&peer.NodeKeySignature),
+		NodeKeySignature: nodeKeySignature(&p.NodeKeySignature),
 	}
 }

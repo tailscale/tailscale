@@ -66,19 +66,19 @@ func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) tslockjson
 	}
 	out.NodeKeySigned = &status.NodeKeySigned
 	if sig := status.NodeKeySignature; sig != nil {
-		out.NodeKeySignature = toTKANodeKeySignatureV1(sig)
+		out.NodeKeySignature = nodeKeySignature(sig)
 	}
 	out.TrustedKeys = []tslockjsonv1.Key{} // never omit this field when enabled
 	for _, key := range status.TrustedKeys {
-		out.TrustedKeys = append(out.TrustedKeys, ipnTKAKeytoTKAKeyV1(&key))
+		out.TrustedKeys = append(out.TrustedKeys, ipnTKAKey(&key))
 	}
 	out.VisiblePeers = []tslockjsonv1.TrustedPeer{} // never omit this field when enabled
 	for _, vp := range status.VisiblePeers {
-		out.VisiblePeers = append(out.VisiblePeers, toTrustedTKAPeerV1(vp))
+		out.VisiblePeers = append(out.VisiblePeers, trustedPeer(vp))
 	}
 	out.FilteredPeers = []tslockjsonv1.Peer{} // never omit this field when enabled
 	for _, fp := range status.FilteredPeers {
-		out.FilteredPeers = append(out.FilteredPeers, toTKAPeerV1(fp))
+		out.FilteredPeers = append(out.FilteredPeers, peer(fp))
 	}
 	out.StateID = status.StateID
 
