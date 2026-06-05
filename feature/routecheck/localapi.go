@@ -71,12 +71,14 @@ func clampRouteCheckTimeout(timeout time.Duration) time.Duration {
 }
 
 // RouteCheckRefresh is a localapi hook for refreshing the routecheck Report.
+// If the timeout is 0, all probes will timeout immediately.
+// If the timeout is negative, then all probes will use the [DefaultTimeout].
 func routeCheckRefresh(b *ipnlocal.LocalBackend, ctx context.Context, timeout time.Duration) error {
 	rc := ClientFor(b)
 	if rc == nil {
 		return errors.New("routecheck is not enabled")
 	}
-	if timeout <= 0 {
+	if timeout < 0 {
 		timeout = routecheck.DefaultTimeout
 	}
 	_, err := rc.Refresh(ctx, clampRouteCheckTimeout(timeout))

@@ -1837,6 +1837,13 @@ func dnsMessageTypeForString(s string) (t dnsmessage.Type, err error) {
 var HookRouteCheckRefresh feature.Hook[func(*ipnlocal.LocalBackend, context.Context, time.Duration) error]
 
 // serveSuggestExitNode serves a POST endpoint for returning a suggested exit node.
+// If the probe query parameter is true,
+// then a new routecheck report will be probed
+// so that the suggested exit node isn’t based on stale reachability data.
+// Combined with probe=true:
+// if the timeout query parameter is 0, any probes will immediately timeout;
+// if the timeout is positive, probes will take that duration before timing out;
+// if the timeout is negative, probes will use the default routecheck timeout.
 func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 	if !buildfeatures.HasUseExitNode {
 		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
@@ -1863,12 +1870,11 @@ func (h *Handler) serveSuggestExitNode(w http.ResponseWriter, r *http.Request) {
 		// This is also why the default case returns a "want POST" error
 		// and not an "only POST allowed" like the other endpoints.
 		// We still accept GET requests but we don’t want them.
-		break
 	case httpm.POST:
 		if !defBool(r.FormValue("probe"), false) {
 			break
 		}
-		timeout := defDuration(r.FormValue("timeout"), 0)
+		timeout := defDuration(r.FormValue("timeout"), -1)
 		routecheckRefresh := HookRouteCheckRefresh.GetOrNil()
 		if routecheckRefresh == nil {
 			break
