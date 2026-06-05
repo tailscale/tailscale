@@ -438,6 +438,10 @@ func run() (err error) {
 
 	var publicLogID logid.PublicID
 	if buildfeatures.HasLogTail {
+		logpolicy.GetLogTarget.Set(func() string {
+			target, _ := sys.PolicyClientOrDefault().GetString(pkey.LogTarget, "")
+			return target
+		})
 
 		pol := logpolicy.Options{
 			Collection: logtail.CollectionNode,
