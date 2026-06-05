@@ -1237,6 +1237,32 @@ func (e *Env) AddRoute(n *Node, prefix, via string) {
 	}
 }
 
+// AgentGet makes an HTTP GET request to the TTA agent running on n. The path
+// must begin with "/". It returns the response body, or fatals the test on
+// non-200 responses.
+func (e *Env) AgentGet(n *Node, path string) string {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if !strings.HasPrefix(path, "/") {
+		e.t.Fatalf("AgentGet(%s): path %q does not start with /", n.name, path)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused"+path, nil)
+	if err != nil {
+		e.t.Fatalf("AgentGet(%s, %q): %v", n.name, path, err)
+	}
+	resp, err := n.agent.HTTPClient.Do(req)
+	if err != nil {
+		e.t.Fatalf("AgentGet(%s, %q): %v", n.name, path, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		e.t.Fatalf("AgentGet(%s, %q): %s: %s", n.name, path, resp.Status, body)
+	}
+	return string(body)
+}
+
 // SSHExec runs a command on a cloud VM via its debug SSH NIC.
 // Only works for cloud VMs that have the debug NIC and SSH key configured.
 // Returns stdout and any error.

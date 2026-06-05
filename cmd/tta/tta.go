@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/atomicfile"
@@ -79,6 +81,195 @@ func serveCmd(w http.ResponseWriter, cmd string, args ...string) {
 		log.Printf("Did serveCmd for %q %v, %d bytes of output", cmd, args, len(out))
 	}
 	w.Write(out)
+}
+
+var asymUDP asymUDPState
+
+type asymUDPState struct {
+	mu          sync.Mutex
+	started     bool
+	a           atomic.Int64
+	b           atomic.Int64
+	lastASource string
+	lastBSource string
+	lastPong    string
+}
+
+type asymUDPStatus struct {
+	A           int64  `json:"a"`
+	B           int64  `json:"b"`
+	LastASource string `json:"lastASource,omitempty"`
+	LastBSource string `json:"lastBSource,omitempty"`
+	LastPong    string `json:"lastPong,omitempty"`
+}
+
+func asymUDPClientHandler(w http.ResponseWriter, r *http.Request) {
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if err != nil || port <= 0 || port > 65535 {
+		http.Error(w, "bad port", http.StatusBadRequest)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	asymUDP.mu.Lock()
+	if asymUDP.started {
+		asymUDP.mu.Unlock()
+		io.WriteString(w, "already running\n")
+		return
+	}
+	asymUDP.started = true
+	asymUDP.mu.Unlock()
+
+	uc, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
+	if err != nil {
+		asymUDP.mu.Lock()
+		asymUDP.started = false
+		asymUDP.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dst := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: port}
+	go func() {
+		var buf [2048]byte
+		for {
+			n, addr, err := uc.ReadFromUDP(buf[:])
+			if err != nil {
+				log.Printf("asym-udp-client read: %v", err)
+				return
+			}
+			msg := string(buf[:n])
+			switch {
+			case strings.HasPrefix(msg, "A-"):
+				asymUDP.a.Add(1)
+				asymUDP.mu.Lock()
+				asymUDP.lastASource = addr.IP.String()
+				asymUDP.mu.Unlock()
+			case strings.HasPrefix(msg, "B-"):
+				asymUDP.b.Add(1)
+				asymUDP.mu.Lock()
+				asymUDP.lastBSource = addr.IP.String()
+				asymUDP.mu.Unlock()
+			case strings.HasPrefix(msg, "PONG-"):
+				asymUDP.mu.Lock()
+				asymUDP.lastPong = msg
+				asymUDP.mu.Unlock()
+			}
+			log.Printf("asym-udp-client RX %q from %v", msg, addr)
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		payload := []byte("PING-" + token)
+		for range ticker.C {
+			if _, err := uc.WriteToUDP(payload, dst); err != nil {
+				log.Printf("asym-udp-client write: %v", err)
+				return
+			}
+			log.Printf("asym-udp-client TX %q to %v", payload, dst)
+		}
+	}()
+	io.WriteString(w, "OK\n")
+}
+
+func asymUDPRouterHandler(w http.ResponseWriter, r *http.Request) {
+	label := r.URL.Query().Get("label")
+	if label != "A" && label != "B" {
+		http.Error(w, "bad label", http.StatusBadRequest)
+		return
+	}
+	client := net.ParseIP(r.URL.Query().Get("client"))
+	if client == nil || client.To4() == nil {
+		http.Error(w, "bad client", http.StatusBadRequest)
+		return
+	}
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if err != nil || port <= 0 || port > 65535 {
+		http.Error(w, "bad port", http.StatusBadRequest)
+		return
+	}
+	if runtime.GOOS != "linux" {
+		http.Error(w, "asym-udp-router only supports linux", http.StatusNotImplemented)
+		return
+	}
+	for _, args := range [][]string{
+		{"addr", "add", "10.0.0.1/32", "dev", "lo"},
+	} {
+		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil && !bytes.Contains(out, []byte("File exists")) {
+			http.Error(w, fmt.Sprintf("ip %v: %v\n%s", args, err, out), http.StatusInternalServerError)
+			return
+		}
+	}
+	for _, args := range [][]string{
+		{"-w", "net.ipv4.conf.all.rp_filter=0"},
+		{"-w", "net.ipv4.conf.default.rp_filter=0"},
+	} {
+		if out, err := exec.Command("sysctl", args...).CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("sysctl %v: %v\n%s", args, err, out), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	uc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: port})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	go func() {
+		var buf [2048]byte
+		for {
+			n, addr, err := uc.ReadFromUDP(buf[:])
+			if err != nil {
+				log.Printf("asym-udp-router-%s read: %v", label, err)
+				return
+			}
+			msg := string(buf[:n])
+			log.Printf("asym-udp-router-%s RX %q from %v", label, msg, addr)
+			if strings.HasPrefix(msg, "PING-") {
+				pong := []byte("PONG-" + label + "-" + strings.TrimPrefix(msg, "PING-"))
+				if _, err := uc.WriteToUDP(pong, addr); err != nil {
+					log.Printf("asym-udp-router-%s pong: %v", label, err)
+					return
+				}
+				log.Printf("asym-udp-router-%s TX %q to %v", label, pong, addr)
+			}
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		dst := &net.UDPAddr{IP: client, Port: port}
+		var seq int64
+		for range ticker.C {
+			payload := []byte(fmt.Sprintf("%s-%d", label, seq))
+			if _, err := uc.WriteToUDP(payload, dst); err != nil {
+				log.Printf("asym-udp-router-%s write: %v", label, err)
+				return
+			}
+			seq++
+		}
+	}()
+	io.WriteString(w, "OK\n")
+}
+
+func asymUDPStatusHandler(w http.ResponseWriter, r *http.Request) {
+	asymUDP.mu.Lock()
+	st := asymUDPStatus{
+		A:           asymUDP.a.Load(),
+		B:           asymUDP.b.Load(),
+		LastASource: asymUDP.lastASource,
+		LastBSource: asymUDP.lastBSource,
+		LastPong:    asymUDP.lastPong,
+	}
+	asymUDP.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(st); err != nil {
+		log.Printf("asym-udp-status encode: %v", err)
+	}
 }
 
 type localClientRoundTripper struct {
@@ -401,6 +592,9 @@ func main() {
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 	})
+	ttaMux.HandleFunc("/asym-udp-client", asymUDPClientHandler)
+	ttaMux.HandleFunc("/asym-udp-router", asymUDPRouterHandler)
+	ttaMux.HandleFunc("/asym-udp-status", asymUDPStatusHandler)
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
 	ttaMux.HandleFunc("/wg-server-up", func(w http.ResponseWriter, r *http.Request) {
 		if wgServerUp == nil {
