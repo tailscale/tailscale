@@ -12,7 +12,7 @@ import (
 	"go4.org/mem"
 
 	"tailscale.com/cmd/tailscale/jsonoutput"
-	"tailscale.com/cmd/tailscale/tslockjsonv1"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"

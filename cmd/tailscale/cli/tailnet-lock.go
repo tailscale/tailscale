@@ -24,7 +24,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 
 	"tailscale.com/cmd/tailscale/jsonoutput"
-	"tailscale.com/cmd/tailscale/tslockjsonv1"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
