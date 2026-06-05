@@ -7095,12 +7095,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			}
 			return ret
 		}
-		var old []tailcfg.NodeView
+		var oldRouters []tailcfg.NodeView
 		if oldNetMap != nil {
-			old = routers(oldNetMap.Peers)
+			oldRouters = routers(oldNetMap.Peers)
 		}
-		new := routers(b.currentNode().Peers())
-		added, modified, removed := diffNodeViews(old, new)
+		newRouters := routers(b.currentNode().Peers())
+		added, modified, removed := diffNodeViews(oldRouters, newRouters)
 		if len(added) > 0 || len(modified) > 0 || len(removed) > 0 {
 			for _, f := range hooks {
 				f(added, modified, removed)
