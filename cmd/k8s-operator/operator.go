@@ -97,6 +97,7 @@ func main() {
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
 		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
+		operatorSAName        = defaultEnv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
 	)
 
 	var opts []kzap.Opts
@@ -157,6 +158,7 @@ func main() {
 		tsServer:                      s,
 		tsClient:                      tsc,
 		tailscaleNamespace:            tsNamespace,
+		operatorSAName:                operatorSAName,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
 		k8sProxyImage:                 k8sProxyImage,
@@ -349,6 +351,7 @@ func runReconcilers(opts reconcilerOpts) {
 	tailnetOptions := tailnet.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		TailscaleNamespace: opts.tailscaleNamespace,
+		OperatorSAName:     opts.operatorSAName,
 		Clock:              tstime.DefaultClock{},
 		Logger:             opts.log,
 		Registry:           clients,
@@ -818,6 +821,10 @@ type reconcilerOpts struct {
 	// ingressClassName is the name of the ingress class used by reconcilers of Ingress resources. This defaults
 	// to "tailscale" but can be customised.
 	ingressClassName string
+	// operatorSAName is the name of the ServiceAccount that the operator pod runs as. It is used as the target
+	// ServiceAccount when minting tokens via the Kubernetes TokenRequest API for Tailnets that authenticate using
+	// workload identity federation.
+	operatorSAName string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
