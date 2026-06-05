@@ -11,7 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go4.org/mem"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
-	"tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"

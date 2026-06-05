@@ -23,7 +23,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
-	"tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
