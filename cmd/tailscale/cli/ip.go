@@ -17,9 +17,9 @@ import (
 
 var ipCmd = &ffcli.Command{
 	Name:       "ip",
-	ShortUsage: "tailscale ip [-1] [-4] [-6] [peer hostname or ip address]",
+	ShortUsage: "tailscale ip [-1] [-4] [-6] [peer or service hostname or ip address]",
 	ShortHelp:  "Show Tailscale IP addresses",
-	LongHelp:   "Show Tailscale IP addresses for peer. Peer defaults to the current machine.",
+	LongHelp:   "Show Tailscale IP addresses for peer or service. Peer defaults to the current machine.",
 	Exec:       runIP,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("ip")
@@ -79,10 +79,20 @@ func runIP(ctx context.Context, args []string) error {
 			return err
 		}
 		peer, ok := peerMatchingIP(st, ip)
-		if !ok {
-			return fmt.Errorf("no peer found with IP %v", ip)
+		if ok {
+			ips = peer.TailscaleIPs
+		} else {
+			// No peer matched; check if the IP belongs to a service.
+			serviceIPs, err := serviceAddrsMatchingIP(ctx, ip)
+			if err != nil {
+				return err
+			}
+			if serviceIPs != nil {
+				ips = serviceIPs
+			} else {
+				return fmt.Errorf("no peer or service found with IP %v", ip)
+			}
 		}
-		ips = peer.TailscaleIPs
 	}
 	if len(ips) == 0 {
 		return fmt.Errorf("no current Tailscale IPs; state: %v", st.BackendState)
@@ -107,6 +117,25 @@ func runIP(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+// serviceAddrsMatchingIP checks whether ipStr matches a service's VIP address
+// and returns the service's addresses if so.
+func serviceAddrsMatchingIP(ctx context.Context, ipStr string) ([]netip.Addr, error) {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return nil, nil
+	}
+	services, err := localClient.GetServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, svc := range services {
+		if slices.Contains(svc.Addrs, ip) {
+			return svc.Addrs, nil
+		}
+	}
+	return nil, nil
 }
 
 func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus, ok bool) {
