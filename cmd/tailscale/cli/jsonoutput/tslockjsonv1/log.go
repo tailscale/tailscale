@@ -3,7 +3,7 @@
 
 //go:build !ts_omit_tailnetlock
 
-package jsonoutput
+package tslockjsonv1
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 )
@@ -43,10 +44,10 @@ func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpda
 	}
 
 	result := struct {
-		ResponseEnvelope
+		jsonoutput.ResponseEnvelope
 		Messages []logMessageV1
 	}{
-		ResponseEnvelope: ResponseEnvelope{
+		ResponseEnvelope: jsonoutput.ResponseEnvelope{
 			SchemaVersion: "1",
 		},
 		Messages: messages,

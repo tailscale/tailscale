@@ -23,6 +23,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
@@ -222,7 +223,7 @@ func runTailnetLockStatus(ctx context.Context, args []string) error {
 
 	if nlStatusArgs.json.IsSet {
 		if nlStatusArgs.json.Version == 1 {
-			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
+			return tslockjsonv1.PrintNetworkLockStatusJSONV1(os.Stdout, st)
 		} else {
 			return fmt.Errorf("unrecognised version: %d", nlStatusArgs.json.Version)
 		}
@@ -715,7 +716,7 @@ func runTailnetLockLog(ctx context.Context, args []string) error {
 func printTailnetLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.SchemaVersion, useColor bool) error {
 	if jsonSchema.IsSet {
 		if jsonSchema.Version == 1 {
-			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
+			return tslockjsonv1.PrintNetworkLockLogJSONV1(out, updates)
 		} else {
 			return fmt.Errorf("unrecognised version: %d", jsonSchema.Version)
 		}

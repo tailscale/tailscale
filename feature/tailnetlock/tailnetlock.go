@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnlocal"
@@ -50,5 +50,5 @@ func handleC2NDebugTKALog(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *ht
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	jsonoutput.PrintNetworkLockLogJSONV1(w, updates)
+	tslockjsonv1.PrintNetworkLockLogJSONV1(w, updates)
 }

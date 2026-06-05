@@ -3,7 +3,7 @@
 
 //go:build !ts_omit_tailnetlock
 
-package jsonoutput
+package tslockjsonv1
 
 import (
 	"encoding/base64"
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 
+	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 )
@@ -18,14 +19,14 @@ import (
 // PrintNetworkLockStatusJSONV1 prints the current Tailnet Lock status
 // as a JSON object to the CLI, in a stable "v1" format.
 func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockStatus) error {
-	responseEnvelope := ResponseEnvelope{
+	responseEnvelope := jsonoutput.ResponseEnvelope{
 		SchemaVersion: "1",
 	}
 
 	var result any
 	if status.Enabled {
 		result = struct {
-			ResponseEnvelope
+			jsonoutput.ResponseEnvelope
 			tailnetLockEnabledStatusV1
 		}{
 			ResponseEnvelope:           responseEnvelope,
@@ -33,7 +34,7 @@ func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockSta
 		}
 	} else {
 		result = struct {
-			ResponseEnvelope
+			jsonoutput.ResponseEnvelope
 			tailnetLockDisabledStatusV1
 		}{
 			ResponseEnvelope:            responseEnvelope,
