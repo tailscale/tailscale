@@ -72,7 +72,8 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	pinger := e.backend.Sys().Engine.Get()
 
-	c, err := routecheck.NewClient(e.logf, e.nb, e.nm, pinger)
+	logf := logger.WithPrefix(e.logf, "routecheck: ")
+	c, err := routecheck.NewClient(logf, e.nb, e.nm, pinger)
 	if err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 	go func() {
 		if err := e.Client.Start(context.Background()); err != nil {
-			e.logf("routecheck: background client failed: %v", err)
+			logf("background client failed: %v", err)
 		}
 	}()
 	return nil

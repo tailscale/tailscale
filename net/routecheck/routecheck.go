@@ -213,13 +213,13 @@ func (c *Client) NeedsRefresh() {
 // or if the client has already been closed.
 func (c *Client) Start(ctx context.Context) error {
 	if ch := c.hasNetMap.Load(); *ch == nil {
-		return errors.New("routecheck: Client closed")
+		return errors.New("client closed")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	if !c.stop.CompareAndSwap(nil, &cancel) {
 		cancel()
-		return errors.New("routecheck: Client started again")
+		return errors.New("client started again")
 	}
 
 	first := true
