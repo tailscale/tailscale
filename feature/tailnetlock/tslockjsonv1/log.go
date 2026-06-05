@@ -41,7 +41,7 @@ func PrintTailnetLockLogJSONV1(out io.Writer, updates []ipnstate.TailnetLockUpda
 			return fmt.Errorf("incorrect AUM hash: got %v, want %v", h, update)
 		}
 
-		messages[i] = toLogMessageV1(aum, update)
+		messages[i] = logMessage(aum, update)
 	}
 
 	result := tslockjsonv1.LogResponse{
@@ -56,16 +56,16 @@ func PrintTailnetLockLogJSONV1(out io.Writer, updates []ipnstate.TailnetLockUpda
 	return enc.Encode(result)
 }
 
-// toLogMessageV1 converts a [tka.AUM] and [ipnstate.TailnetLockUpdate] to the
-// JSON output returned by the CLI.
-func toLogMessageV1(aum tka.AUM, update ipnstate.TailnetLockUpdate) tslockjsonv1.LogMessage {
+// logMessage converts a [tka.AUM] and [ipnstate.TailnetLockUpdate]
+// the JSON output returned by the CLI, in a stable "v1" format.
+func logMessage(aum tka.AUM, update ipnstate.TailnetLockUpdate) tslockjsonv1.LogMessage {
 	expandedAUM := tslockjsonv1.AUM{}
 	expandedAUM.MessageKind = aum.MessageKind.String()
 	if len(aum.PrevAUMHash) > 0 {
 		expandedAUM.PrevAUMHash = aum.PrevAUMHash.String()
 	}
 	if key := aum.Key; key != nil {
-		expandedAUM.Key = toTKAKeyV1(key)
+		expandedAUM.Key = tkaKey(key)
 	}
 	if keyID := aum.KeyID; keyID != nil {
 		expandedAUM.KeyID = fmt.Sprintf("tlpub:%x", keyID)
@@ -79,7 +79,7 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.TailnetLockUpdate) tslockjsonv1
 			expandedState.DisablementValues = append(expandedState.DisablementValues, fmt.Sprintf("%x", secret))
 		}
 		for _, key := range state.Keys {
-			expandedState.Keys = append(expandedState.Keys, toTKAKeyV1(&key))
+			expandedState.Keys = append(expandedState.Keys, tkaKey(&key))
 		}
 		expandedState.StateID1 = state.StateID1
 		expandedState.StateID2 = state.StateID2
