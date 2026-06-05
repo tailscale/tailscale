@@ -51,7 +51,9 @@ type DNSTailnetInfo struct {
 }
 
 // DNSStatusResult is the full DNS status collected from the local
-// Tailscale daemon.
+// Tailscale daemon. It is the output of:
+//
+//	$ tailscale dns status --json
 type DNSStatusResult struct {
 	// TailscaleDNS is whether the Tailscale DNS configuration is
 	// installed on this device (the --accept-dns setting).
@@ -107,7 +109,9 @@ type DNSAnswer struct {
 }
 
 // DNSQueryResult is the result of a DNS query via the Tailscale
-// internal forwarder (100.100.100.100).
+// internal forwarder (100.100.100.100). It is the output of:
+//
+//	$ tailscale dns query --json NAME
 type DNSQueryResult struct {
 	Name         string
 	QueryType    string            // e.g. "A", "AAAA"
