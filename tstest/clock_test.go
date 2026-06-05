@@ -5,6 +5,7 @@ package tstest
 
 import (
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2428,6 +2429,64 @@ func TestAfterFunc(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAfterFunc_Background tests that AfterFunc calls the callback in a
+// background goroutine. If it calls the callback serially, it blocks forever
+// trying to acquire mu which is already held by the caller.
+// Found in tailscale/corp#42906
+//
+// A deadlock because of this looks like the following:
+//
+//	goroutine 5 [sync.Mutex.Lock]:
+//	internal/sync.runtime_SemacquireMutex(0x5680537be820?, 0x40?, 0x1007b2c58?)
+//	        /goroot/src/runtime/sema.go:95 +0x28
+//	internal/sync.(*Mutex).lockSlow(0x568053736370)
+//	        /goroot/src/internal/sync/mutex.go:149 +0x170
+//	internal/sync.(*Mutex).Lock(...)
+//	        /goroot/src/internal/sync/mutex.go:70
+//	sync.(*Mutex).Lock(...)
+//	        /goroot/src/sync/mutex.go:46
+//	tailscale.com/tstest.TestClock_AfterFunc_Background.func1.1()
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock_test.go:31 +0x94
+//	tailscale.com/tstest.(*Timer).init.func2({0x0?, 0x101019e8c?, 0x1?})
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:643 +0x24
+//	tailscale.com/tstest.(*Timer).Fire(0xc280d70de466242c?, {0x315e83?, 0x101534960?, 0x101534960?})
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:661 +0x130
+//	tailscale.com/tstest.(*eventManager).processEventsLocked(0x5680538ca268, {0x5680538ca268?, 0x10146b940?, 0x101534960?})
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:476 +0xc0
+//	tailscale.com/tstest.(*eventManager).Reschedule(0x5680538ca268, {0x1014e8f40, 0x5680537acb00}, {0x1011b621c?, 0x38?, 0x101534960?})
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:431 +0x280
+//	tailscale.com/tstest.(*Timer).init(0x5680537acb00, 0x315e83?, 0x5680537341c8)
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:645 +0x120
+//	tailscale.com/tstest.(*Clock).AfterFunc(0x5680538ca1e0, 0x0, 0x5680537341c8)
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock.go:308 +0x188
+//	tailscale.com/tstest.TestClock_AfterFunc_Background.func1(0x568053736370, 0x568053736380, 0x5680538ca1e0)
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock_test.go:29 +0x100
+//	tailscale.com/tstest.TestClock_AfterFunc_Background(0x5680538c8248?)
+//	        /gopath/src/github.com/tailscale/tailscale/tstest/clock_test.go:34 +0x84
+//	testing.tRunner(0x5680538c8248, 0x1014e54c8)
+//	        /goroot/src/testing/testing.go:2036 +0xc4
+//	created by testing.(*T).Run in goroutine 1
+//	        /goroot/src/testing/testing.go:2101 +0x3a8
+func TestClock_AfterFunc_Background(t *testing.T) {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	clock := NewClock(ClockOpts{FollowRealTime: true})
+	func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		wg.Add(1)
+		clock.AfterFunc(0, func() {
+			defer wg.Done()
+			mu.Lock()
+			mu.Unlock()
+		})
+	}()
+
+	wg.Wait()
 }
 
 func TestSince(t *testing.T) {

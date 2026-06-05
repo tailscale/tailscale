@@ -640,7 +640,7 @@ func (t *Timer) init(channelSize int, afterFunc func()) {
 			}
 		}
 	} else {
-		t.f = func(_ time.Time) { afterFunc() }
+		t.f = func(_ time.Time) { go afterFunc() }
 	}
 	t.em.Reschedule(t, t.nextTrigger)
 }
