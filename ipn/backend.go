@@ -171,6 +171,13 @@ const (
 	// LocalBackend.WatchNotificationsAs. LocalAPI WatchIPNBus clients must
 	// not request it.
 	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
+
+	// NotifyPeerWireGuardState, if set, opts the watcher into
+	// WireGuard session state notifications via [Notify.PeerState].
+	// The first Notify sent to the watcher includes a dump of current
+	// non-zero peer states, and subsequent Notifies include per-peer
+	// state changes.
+	NotifyPeerWireGuardState NotifyWatchOpt = 1 << 18
 )
 
 // NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
@@ -315,6 +322,10 @@ type Notify struct {
 	// the per-field accessors to read them.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView `json:",omitzero"`
 
+	// PeerState, if non-empty, carries WireGuard session states keyed by stable
+	// node ID. Watchers must opt in via [NotifyPeerWireGuardState].
+	PeerState map[tailcfg.StableNodeID]PeerState `json:",omitzero"`
+
 	Engine      *EngineStatus // if non-nil, the new or current wireguard stats
 	BrowseToURL *string       // if non-nil, UI should open a browser right now
 
@@ -369,6 +380,71 @@ type Notify struct {
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
+// PeerWireGuardState is the WireGuard session state for a peer.
+//
+// It JSON-marshals as a lowercase string (e.g. "handshake", "established")
+// rather than its integer value, so the wire format does not depend on the
+// numeric constants below.
+type PeerWireGuardState uint8
+
+const (
+	PeerWireGuardStateNone        PeerWireGuardState = 0
+	PeerWireGuardStateHandshake   PeerWireGuardState = 1
+	PeerWireGuardStateEstablished PeerWireGuardState = 2
+	PeerWireGuardStateExpired     PeerWireGuardState = 3
+)
+
+// String returns the lowercase string form of s used by [PeerWireGuardState.MarshalText].
+func (s PeerWireGuardState) String() string {
+	switch s {
+	case PeerWireGuardStateNone:
+		return "none"
+	case PeerWireGuardStateHandshake:
+		return "handshake"
+	case PeerWireGuardStateEstablished:
+		return "established"
+	case PeerWireGuardStateExpired:
+		return "expired"
+	}
+	return fmt.Sprintf("PeerWireGuardState(%d)", uint8(s))
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (s PeerWireGuardState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (s *PeerWireGuardState) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "none":
+		*s = PeerWireGuardStateNone
+	case "handshake":
+		*s = PeerWireGuardStateHandshake
+	case "established":
+		*s = PeerWireGuardStateEstablished
+	case "expired":
+		*s = PeerWireGuardStateExpired
+	default:
+		return fmt.Errorf("unknown PeerWireGuardState %q", b)
+	}
+	return nil
+}
+
+// PeerState is the per-peer WireGuard session state delivered in
+// [Notify.PeerState].
+type PeerState struct {
+	// PeerWireGuardState is the current WireGuard session state for the peer.
+	PeerWireGuardState PeerWireGuardState
+
+	// PeerWireGuardStateAt is the wall-clock time at which the peer entered
+	// [PeerState.PeerWireGuardState], as observed by tailscaled.
+	// It is tracked by [LocalBackend] even when no watchers are subscribed,
+	// so a later subscriber's initial snapshot reflects the true transition
+	// time rather than the subscription time.
+	PeerWireGuardStateAt time.Time
+}
+
 func (n Notify) String() string {
 	var sb strings.Builder
 	sb.WriteString("Notify{")
@@ -389,6 +465,9 @@ func (n Notify) String() string {
 	}
 	if n.PeerChangedPatch != nil {
 		fmt.Fprintf(&sb, "PeerChangedPatch(%d) ", len(n.PeerChangedPatch))
+	}
+	if len(n.PeerState) > 0 {
+		fmt.Fprintf(&sb, "PeerState(%d) ", len(n.PeerState))
 	}
 	if n.Engine != nil {
 		fmt.Fprintf(&sb, "wg=%v ", *n.Engine)

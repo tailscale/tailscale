@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"encoding/json"
 	"testing"
 
 	"tailscale.com/health"
@@ -38,6 +39,41 @@ func TestNotifyString(t *testing.T) {
 				t.Fatalf("expected=%q, actual=%q", tt.expected, actual)
 			}
 		})
+	}
+}
+
+func TestPeerWireGuardStateJSON(t *testing.T) {
+	tests := []struct {
+		state PeerWireGuardState
+		json  string
+	}{
+		{PeerWireGuardStateNone, `"none"`},
+		{PeerWireGuardStateHandshake, `"handshake"`},
+		{PeerWireGuardStateEstablished, `"established"`},
+		{PeerWireGuardStateExpired, `"expired"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			got, err := json.Marshal(tt.state)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if string(got) != tt.json {
+				t.Errorf("Marshal(%v) = %s; want %s", tt.state, got, tt.json)
+			}
+			var back PeerWireGuardState
+			if err := json.Unmarshal(got, &back); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if back != tt.state {
+				t.Errorf("round-trip = %v; want %v", back, tt.state)
+			}
+		})
+	}
+
+	var bad PeerWireGuardState
+	if err := json.Unmarshal([]byte(`"bogus"`), &bad); err == nil {
+		t.Errorf("Unmarshal of bogus value did not return an error")
 	}
 }
 

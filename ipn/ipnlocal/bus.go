@@ -241,6 +241,7 @@ func isNotableNotify(n *ipn.Notify) bool {
 		len(n.PeersChanged) > 0 ||
 		len(n.PeersRemoved) > 0 ||
 		len(n.UserProfiles) > 0 ||
+		len(n.PeerState) > 0 ||
 		!n.DriveShares.IsNil() ||
 		n.Health != nil ||
 		len(n.IncomingFiles) > 0 ||

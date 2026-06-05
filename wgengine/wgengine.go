@@ -41,6 +41,28 @@ type StatusCallback func(*Status, error)
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
 
+// PeerWireGuardState is the current WireGuard session state for a peer.
+type PeerWireGuardState uint8
+
+const (
+	// PeerWireGuardStateNone means there is no handshake in progress and no
+	// session key material retained for this peer.
+	PeerWireGuardStateNone PeerWireGuardState = 0
+
+	// PeerWireGuardStateHandshake means a handshake is in progress for this
+	// peer, but there is not currently a usable WireGuard session.
+	PeerWireGuardStateHandshake PeerWireGuardState = 1
+
+	// PeerWireGuardStateEstablished means the peer has a completed WireGuard
+	// session with usable session key material.
+	PeerWireGuardStateEstablished PeerWireGuardState = 2
+
+	// PeerWireGuardStateExpired means the peer's session key material is no
+	// longer considered usable, but final key cleanup or lazy peer removal may
+	// not have happened yet.
+	PeerWireGuardStateExpired PeerWireGuardState = 3
+)
+
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
 
@@ -141,4 +163,20 @@ type Engine interface {
 	// SetPeerByIPPacketFunc installs a callback used by wireguard-go to
 	// look up which peer should handle an outbound packet by destination IP.
 	SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool))
+
+	// SetPeerSessionStateFunc installs a callback used to observe WireGuard
+	// peer session state transitions.
+	//
+	// Calls are serialized per Engine and delivered in transition order from
+	// wireguard-go, while wireguard-go is holding locks. The callback must be
+	// cheap and must not call back into wireguard-go.
+	//
+	// It does not replay current state. Callers that need a complete view should
+	// set it before peers are started or lazily created, and maintain any
+	// snapshots, sequence numbers, and pubsub state outside wireguard-go.
+	//
+	// In Tailscale, the usual implementation is
+	// ipnlocal.LocalBackend.onPeerWireGuardState, installed early in
+	// LocalBackend construction.
+	SetPeerSessionStateFunc(func(key.NodePublic, PeerWireGuardState))
 }
