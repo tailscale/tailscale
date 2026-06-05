@@ -26,7 +26,7 @@ import (
 //   - the raw AUM as base64-encoded bytes
 //   - the expanded AUM, which prints named fields for consumption by other tools
 func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpdate) error {
-	messages := make([]logMessageV1, len(updates))
+	messages := make([]LogMessage, len(updates))
 
 	for i, update := range updates {
 		var aum tka.AUM
@@ -43,10 +43,7 @@ func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpda
 		messages[i] = toLogMessageV1(aum, update)
 	}
 
-	result := struct {
-		jsonoutput.ResponseEnvelope
-		Messages []logMessageV1
-	}{
+	result := LogResponse{
 		ResponseEnvelope: jsonoutput.ResponseEnvelope{
 			SchemaVersion: "1",
 		},
@@ -58,10 +55,16 @@ func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpda
 	return enc.Encode(result)
 }
 
+// LogResponse is the full Tailnet Lock log output collected from the local Tailscale daemon.
+type LogResponse struct {
+	jsonoutput.ResponseEnvelope
+	Messages []LogMessage
+}
+
 // toLogMessageV1 converts a [tka.AUM] and [ipnstate.NetworkLockUpdate] to the
 // JSON output returned by the CLI.
-func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1 {
-	expandedAUM := expandedAUMV1{}
+func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) LogMessage {
+	expandedAUM := AUM{}
 	expandedAUM.MessageKind = aum.MessageKind.String()
 	if len(aum.PrevAUMHash) > 0 {
 		expandedAUM.PrevAUMHash = aum.PrevAUMHash.String()
@@ -73,7 +76,7 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 		expandedAUM.KeyID = fmt.Sprintf("tlpub:%x", keyID)
 	}
 	if state := aum.State; state != nil {
-		expandedState := expandedStateV1{}
+		expandedState := TKAState{}
 		if h := state.LastAUMHash; h != nil {
 			expandedState.LastAUMHash = h.String()
 		}
@@ -92,31 +95,31 @@ func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1
 	}
 	expandedAUM.Meta = aum.Meta
 	for _, signature := range aum.Signatures {
-		expandedAUM.Signatures = append(expandedAUM.Signatures, expandedSignatureV1{
+		expandedAUM.Signatures = append(expandedAUM.Signatures, Signature{
 			KeyID:     fmt.Sprintf("tlpub:%x", signature.KeyID),
 			Signature: base64.URLEncoding.EncodeToString(signature.Signature),
 		})
 	}
 
-	return logMessageV1{
+	return LogMessage{
 		Hash: aum.Hash().String(),
 		AUM:  expandedAUM,
 		Raw:  base64.URLEncoding.EncodeToString(update.Raw),
 	}
 }
 
-// logMessageV1 is the JSON representation of an AUM as both raw bytes and
+// LogMessage is the JSON representation of a [tka.AUM] as both raw bytes and
 // in its expanded form, and the CLI output is a list of these entries.
-type logMessageV1 struct {
-	// The BLAKE2s digest of the CBOR-encoded AUM.  This is printed as a
+type LogMessage struct {
+	// The BLAKE2s digest of the CBOR-encoded [tka.AUM].  This is printed as a
 	// base32-encoded string, e.g. KCE…XZQ
 	Hash string
 
-	// The expanded form of the AUM, which presents the fields in a more
+	// The expanded form of the [tka.AUM], which presents the fields in a more
 	// accessible format than doing a CBOR decoding.
-	AUM expandedAUMV1
+	AUM AUM
 
-	// The raw bytes of the CBOR-encoded AUM, encoded as base64.
+	// The raw bytes of the CBOR-encoded [tka.AUM], encoded as base64.
 	// This is useful for verifying the AUM hash.
 	Raw string
 }

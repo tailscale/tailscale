@@ -13,37 +13,37 @@ import (
 	"tailscale.com/tka"
 )
 
-// expandedAUMV1 is the expanded version of a [tka.AUM], designed so external tools
+// AUM is the expanded version of a [tka.AUM], designed so external tools
 // can read the AUM without knowing our CBOR definitions.
-type expandedAUMV1 struct {
+type AUM struct {
 	MessageKind string
-	PrevAUMHash string `json:"PrevAUMHash,omitzero"`
+	PrevAUMHash string `json:",omitzero"`
 
 	// Key encodes a public key to be added to the key authority.
 	// This field is used for AddKey AUMs.
-	Key tkaKeyV1 `json:"Key,omitzero"`
+	Key Key `json:",omitzero"`
 
 	// KeyID references a public key which is part of the key authority.
 	// This field is used for RemoveKey and UpdateKey AUMs.
-	KeyID string `json:"KeyID,omitzero"`
+	KeyID string `json:",omitzero"`
 
 	// State describes the full state of the key authority.
 	// This field is used for Checkpoint AUMs.
-	State expandedStateV1 `json:"State,omitzero"`
+	State TKAState `json:",omitzero"`
 
 	// Votes and Meta describe properties of a key in the key authority.
 	// These fields are used for UpdateKey AUMs.
-	Votes uint              `json:"Votes,omitzero"`
-	Meta  map[string]string `json:"Meta,omitzero"`
+	Votes uint              `json:",omitzero"`
+	Meta  map[string]string `json:",omitzero"`
 
 	// Signatures lists the signatures over this AUM.
-	Signatures []expandedSignatureV1 `json:"Signatures,omitzero"`
+	Signatures []Signature `json:",omitzero"`
 }
 
-// tkaKeyV1 is the expanded version of a [tka.Key], which describes
+// Key is the expanded version of a [tka.Key], which describes
 // the public components of a key known to tailnet-lock.
-type tkaKeyV1 struct {
-	Kind string `json:"Kind,omitzero"`
+type Key struct {
+	Kind string `json:",omitzero"`
 
 	// Votes describes the weight applied to signatures using this key.
 	Votes uint
@@ -53,13 +53,13 @@ type tkaKeyV1 struct {
 
 	// Meta describes arbitrary metadata about the key. This could be
 	// used to store the name of the key, for instance.
-	Meta map[string]string `json:"Meta,omitzero"`
+	Meta map[string]string `json:",omitzero"`
 }
 
 // ipnTKAKeytoTKAKeyV1 converts an [ipnstate.TKAKey] to the JSON output returned
 // by the CLI.
-func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) tkaKeyV1 {
-	return tkaKeyV1{
+func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) Key {
+	return Key{
 		Kind:   key.Kind,
 		Votes:  key.Votes,
 		Public: key.Key.CLIString(),
@@ -69,8 +69,8 @@ func ipnTKAKeytoTKAKeyV1(key *ipnstate.TKAKey) tkaKeyV1 {
 
 // toTKAKeyV1 converts a [tka.Key] to the JSON output returned
 // by the CLI.
-func toTKAKeyV1(key *tka.Key) tkaKeyV1 {
-	return tkaKeyV1{
+func toTKAKeyV1(key *tka.Key) Key {
+	return Key{
 		Kind:   key.Kind.String(),
 		Votes:  key.Votes,
 		Public: fmt.Sprintf("tlpub:%x", key.Public),
@@ -78,20 +78,20 @@ func toTKAKeyV1(key *tka.Key) tkaKeyV1 {
 	}
 }
 
-// tkaNodeKeySignatureV1 is the JSON representation of a [tka.NodeKeySignature],
+// NodeKeySignature is the JSON representation of a [tka.NodeKeySignature],
 // which describes a signature that authorizes a specific node key.
-type tkaNodeKeySignatureV1 struct {
+type NodeKeySignature struct {
 	// SigKind identifies the variety of signature.
 	SigKind string
 
 	// PublicKey identifies the key.NodePublic which is being authorized.
 	// SigCredential signatures do not use this field.
-	PublicKey string `json:"PublicKey,omitzero"`
+	PublicKey string `json:",omitzero"`
 
 	// KeyID identifies which key in the tailnet key authority should
 	// be used to verify this signature. Only set for SigDirect and
 	// SigCredential signature kinds.
-	KeyID string `json:"KeyID,omitzero"`
+	KeyID string `json:",omitzero"`
 
 	// Signature is the packed (R, S) ed25519 signature over all other
 	// fields of the structure.
@@ -99,15 +99,15 @@ type tkaNodeKeySignatureV1 struct {
 
 	// Nested describes a NodeKeySignature which authorizes the node-key
 	// used as Pubkey. Only used for SigRotation signatures.
-	Nested *tkaNodeKeySignatureV1 `json:"Nested,omitzero"`
+	Nested *NodeKeySignature `json:",omitzero"`
 
 	// WrappingPubkey specifies the ed25519 public key which must be used
 	// to sign a Signature which embeds this one.
-	WrappingPublicKey string `json:"WrappingPublicKey,omitzero"`
+	WrappingPublicKey string `json:",omitzero"`
 }
 
-func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *tkaNodeKeySignatureV1 {
-	out := tkaNodeKeySignatureV1{
+func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *NodeKeySignature {
+	out := NodeKeySignature{
 		SigKind: sig.SigKind.String(),
 	}
 	if len(sig.Pubkey) > 0 {
@@ -126,10 +126,10 @@ func toTKANodeKeySignatureV1(sig *tka.NodeKeySignature) *tkaNodeKeySignatureV1 {
 	return &out
 }
 
-// tkaPeerV1 is the JSON representation of an [ipnstate.TKAPeer], which describes
+// Peer is the JSON representation of an [ipnstate.TKAPeer], which describes
 // a peer and its Tailnet Lock details.
-type tkaPeerV1 struct {
-	// Stable ID, i.e. [tailcfg.StableNodeID]
+type Peer struct {
+	// Stable ID, i.e. [tailscale.com/tailcfg.StableNodeID]
 	ID string
 
 	// DNS name
@@ -142,17 +142,27 @@ type tkaPeerV1 struct {
 	NodeKey string
 }
 
-// tkaPeerV1 is the JSON representation of a trusted [ipnstate.TKAPeer], which
-// has a node key signature.
-type tkaTrustedPeerV1 struct {
-	tkaPeerV1
+// TrustedPeer is the JSON representation of a trusted [ipnstate.TKAPeer], which
+// has a node key signature in addition to [Peer].
+type TrustedPeer struct {
+	// Stable ID, i.e. [tailscale.com/tailcfg.StableNodeID]
+	ID string
+
+	// DNS name
+	DNSName string
+
+	// Tailscale IP(s) assigned to this node
+	TailscaleIPs []string
+
+	// The node's public key
+	NodeKey string
 
 	// The node's key signature
-	NodeKeySignature *tkaNodeKeySignatureV1 `json:"NodeKeySignature,omitzero"`
+	NodeKeySignature *NodeKeySignature `json:",omitzero"`
 }
 
-func toTKAPeerV1(peer *ipnstate.TKAPeer) tkaPeerV1 {
-	out := tkaPeerV1{
+func toTKAPeerV1(peer *ipnstate.TKAPeer) Peer {
+	out := Peer{
 		DNSName: peer.Name,
 		ID:      string(peer.StableID),
 	}
@@ -164,19 +174,30 @@ func toTKAPeerV1(peer *ipnstate.TKAPeer) tkaPeerV1 {
 	return out
 }
 
-// expandedSignatureV1 is the expanded form of a [tka.Signature], which
+func toTrustedTKAPeerV1(peer *ipnstate.TKAPeer) TrustedPeer {
+	out := toTKAPeerV1(peer)
+	return TrustedPeer{
+		DNSName:          out.DNSName,
+		ID:               out.ID,
+		TailscaleIPs:     out.TailscaleIPs,
+		NodeKey:          out.NodeKey,
+		NodeKeySignature: toTKANodeKeySignatureV1(&peer.NodeKeySignature),
+	}
+}
+
+// Signature is the expanded form of a [tka.Signature], which
 // describes a signature over an AUM. This signature can be verified
 // using the key referenced by KeyID.
-type expandedSignatureV1 struct {
+type Signature struct {
 	KeyID     string
 	Signature string
 }
 
-// expandedStateV1 is the expanded version of a [tka.State], which describes
+// TKAState is the expanded version of a [tka.TKAState], which describes
 // Tailnet Key Authority state at an instant in time.
-type expandedStateV1 struct {
+type TKAState struct {
 	// LastAUMHash is the blake2s digest of the last-applied AUM.
-	LastAUMHash string `json:"LastAUMHash,omitzero"`
+	LastAUMHash string `json:",omitzero"`
 
 	// DisablementValues are KDF-derived values used to verify that a caller
 	// possesses a valid DisablementSecret. These values are used during the
@@ -190,7 +211,7 @@ type expandedStateV1 struct {
 	//
 	//   1. The signing nodes currently trusted by the TKA.
 	//   2. Ephemeral keys that were used to generate pre-signed auth keys.
-	Keys []tkaKeyV1
+	Keys []Key
 
 	// StateID's are nonce's, generated on enablement and fixed for
 	// the lifetime of the Tailnet Key Authority.

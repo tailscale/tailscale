@@ -21,23 +21,13 @@ func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockSta
 		SchemaVersion: "1",
 	}
 
-	var result any
+	var result StatusResponse
 	if status.Enabled {
-		result = struct {
-			jsonoutput.ResponseEnvelope
-			tailnetLockEnabledStatusV1
-		}{
-			ResponseEnvelope:           responseEnvelope,
-			tailnetLockEnabledStatusV1: toTailnetLockEnabledStatusV1(status),
-		}
+		result = toTailnetLockEnabledStatusV1(status)
+		result.ResponseEnvelope = responseEnvelope
 	} else {
-		result = struct {
-			jsonoutput.ResponseEnvelope
-			tailnetLockDisabledStatusV1
-		}{
-			ResponseEnvelope:            responseEnvelope,
-			tailnetLockDisabledStatusV1: toTailnetLockDisabledStatusV1(status),
-		}
+		result = toTailnetLockDisabledStatusV1(status)
+		result.ResponseEnvelope = responseEnvelope
 	}
 
 	enc := jsonv1.NewEncoder(out)
@@ -45,11 +35,9 @@ func PrintNetworkLockStatusJSONV1(out io.Writer, status *ipnstate.NetworkLockSta
 	return enc.Encode(result)
 }
 
-func toTailnetLockDisabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLockDisabledStatusV1 {
-	out := tailnetLockDisabledStatusV1{
-		tailnetLockStatusV1Base: tailnetLockStatusV1Base{
-			Enabled: status.Enabled,
-		},
+func toTailnetLockDisabledStatusV1(status *ipnstate.NetworkLockStatus) StatusResponse {
+	out := StatusResponse{
+		Enabled: status.Enabled,
 	}
 	if !status.PublicKey.IsZero() {
 		out.PublicKey = status.PublicKey.CLIString()
@@ -60,11 +48,9 @@ func toTailnetLockDisabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLo
 	return out
 }
 
-func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLockEnabledStatusV1 {
-	out := tailnetLockEnabledStatusV1{
-		tailnetLockStatusV1Base: tailnetLockStatusV1Base{
-			Enabled: status.Enabled,
-		},
+func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) StatusResponse {
+	out := StatusResponse{
+		Enabled: status.Enabled,
 	}
 
 	if status.Head != nil {
@@ -79,19 +65,19 @@ func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLoc
 	if nk := status.NodeKey; nk != nil {
 		out.NodeKey = nk.String()
 	}
-	out.NodeKeySigned = status.NodeKeySigned
+	out.NodeKeySigned = &status.NodeKeySigned
 	if sig := status.NodeKeySignature; sig != nil {
 		out.NodeKeySignature = toTKANodeKeySignatureV1(sig)
 	}
+	out.TrustedKeys = []Key{} // never omit this field when enabled
 	for _, key := range status.TrustedKeys {
 		out.TrustedKeys = append(out.TrustedKeys, ipnTKAKeytoTKAKeyV1(&key))
 	}
+	out.VisiblePeers = []TrustedPeer{} // never omit this field when enabled
 	for _, vp := range status.VisiblePeers {
-		out.VisiblePeers = append(out.VisiblePeers, tkaTrustedPeerV1{
-			tkaPeerV1:        toTKAPeerV1(vp),
-			NodeKeySignature: toTKANodeKeySignatureV1(&vp.NodeKeySignature),
-		})
+		out.VisiblePeers = append(out.VisiblePeers, toTrustedTKAPeerV1(vp))
 	}
+	out.FilteredPeers = []Peer{} // never omit this field when enabled
 	for _, fp := range status.FilteredPeers {
 		out.FilteredPeers = append(out.FilteredPeers, toTKAPeerV1(fp))
 	}
@@ -100,49 +86,44 @@ func toTailnetLockEnabledStatusV1(status *ipnstate.NetworkLockStatus) tailnetLoc
 	return out
 }
 
-type tailnetLockStatusV1Base struct {
+// StatusResponse is the full Tailnet Lock Status output collected from the local Tailscale daemon.
+type StatusResponse struct {
+	jsonoutput.ResponseEnvelope
+
 	// Enabled is true if Tailnet Lock is enabled.
 	Enabled bool
 
 	// PublicKey describes the node's tailnet-lock public key.
-	PublicKey string `json:"PublicKey,omitzero"`
+	PublicKey string `json:",omitzero"`
 
 	// NodeKey describes the node's current node-key. This field is not
 	// populated if the node is not operating (i.e. waiting for a login).
-	NodeKey string `json:"NodeKey,omitzero"`
-}
+	NodeKey string `json:",omitzero"`
 
-// tailnetLockDisabledStatusV1 is the JSON representation of the Tailnet Lock status
-// when Tailnet Lock is disabled.
-type tailnetLockDisabledStatusV1 struct {
-	tailnetLockStatusV1Base
-}
-
-// tailnetLockEnabledStatusV1 is the JSON representation of the Tailnet Lock status.
-type tailnetLockEnabledStatusV1 struct {
-	tailnetLockStatusV1Base
+	//////////////////////////////////////////////////////////////////
+	// The following fields are only present when Tailnet Lock is enabled.
 
 	// Head describes the AUM hash of the leaf AUM.
-	Head string `json:"Head,omitzero"`
+	Head string `json:",omitzero"`
 
 	// NodeKeySigned is true if our node is authorized by Tailnet Lock.
-	NodeKeySigned bool
+	NodeKeySigned *bool `json:",omitzero"`
 
 	// NodeKeySignature is the current signature of this node's key.
-	NodeKeySignature *tkaNodeKeySignatureV1
+	NodeKeySignature *NodeKeySignature `json:",omitzero"`
 
 	// TrustedKeys describes the keys currently trusted to make changes
 	// to tailnet-lock.
-	TrustedKeys []tkaKeyV1
+	TrustedKeys []Key `json:",omitzero"`
 
 	// VisiblePeers describes peers which are visible in the netmap that
 	// have valid Tailnet Lock signatures signatures.
-	VisiblePeers []tkaTrustedPeerV1
+	VisiblePeers []TrustedPeer `json:",omitzero"`
 
 	// FilteredPeers describes peers which were removed from the netmap
 	// (i.e. no connectivity) because they failed Tailnet Lock
 	// checks.
-	FilteredPeers []tkaPeerV1
+	FilteredPeers []Peer `json:",omitzero"`
 
 	// StateID is a nonce associated with the Tailnet Lock authority,
 	// generated upon enablement. This field is empty if Tailnet Lock
