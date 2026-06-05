@@ -923,7 +923,9 @@ func handleTPMFlags() {
 	case !args.hardwareAttestation.set:
 		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, false)
 		if err := canUseHardwareAttestation(); err != nil {
-			log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			if policyHWAttestation {
+				log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			}
 			args.hardwareAttestation.v = false
 		} else {
 			args.hardwareAttestation.v = policyHWAttestation
