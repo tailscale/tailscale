@@ -6696,6 +6696,12 @@ func (b *LocalBackend) setControlClientLocked(cc controlclient.Client) {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	b.ignoreControlClientUpdates.Store(cc == nil)
+
+	// magicsock de-dupes NetInfo against a cache that outlives the control
+	// client; clear it on (re)install so the next netcheck re-reports our
+	// NetInfo (notably PreferredDERP, our home DERP) to the new client rather
+	// than suppressing it as unchanged.
+	b.MagicConn().ResetNetInfoLast()
 }
 
 // resetControlClientLocked sets b.cc to nil and returns the old value. If the

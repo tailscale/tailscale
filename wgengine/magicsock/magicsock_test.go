@@ -489,6 +489,62 @@ collectEndpoints:
 	}
 }
 
+// TestResetNetInfoLast verifies that ResetNetInfoLast clears the NetInfo
+// de-duplication cache, so the next NetInfo is delivered to the callback even
+// when it's structurally unchanged (which callNetInfoCallback would normally
+// suppress). This is what lets a node re-advertise its home DERP
+// (NetInfo.PreferredDERP) to a freshly-installed control client after an
+// interactive login or profile switch; without it, peers can't reach the node
+// over DERP until some unrelated NetInfo field changes.
+func TestResetNetInfoLast(t *testing.T) {
+	tstest.PanicOnLog()
+
+	c := newConn(t.Logf)
+
+	got := make(chan *tailcfg.NetInfo, 8)
+	c.SetNetInfoCallback(func(ni *tailcfg.NetInfo) {
+		got <- ni
+	})
+
+	wantCall := func(why string, wantDERP int) {
+		t.Helper()
+		select {
+		case ni := <-got:
+			if ni.PreferredDERP != wantDERP {
+				t.Fatalf("%s: got PreferredDERP=%d, want %d", why, ni.PreferredDERP, wantDERP)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: timed out waiting for NetInfo callback", why)
+		}
+	}
+	wantNoCall := func(why string) {
+		t.Helper()
+		select {
+		case ni := <-got:
+			t.Fatalf("%s: unexpected NetInfo callback: %+v", why, ni)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	ni := &tailcfg.NetInfo{PreferredDERP: 7, WorkingUDP: "true", LinkType: "wired"}
+
+	// First delivery fires the callback.
+	c.callNetInfoCallback(ni.Clone())
+	wantCall("initial", 7)
+
+	// An identical NetInfo is de-duplicated: no callback. This is exactly the
+	// behavior that, on a control-client swap, drops the home DERP.
+	c.callNetInfoCallback(ni.Clone())
+	wantNoCall("duplicate suppressed")
+
+	// Simulate a new control client being installed: clearing the de-dup cache
+	// must let the next (otherwise-identical) NetInfo through, modeling the
+	// post-login netcheck that re-reports derp-7 to the new session.
+	c.ResetNetInfoLast()
+	c.callNetInfoCallback(ni.Clone())
+	wantCall("after ResetNetInfoLast", 7)
+}
+
 func TestPickDERPFallback(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
