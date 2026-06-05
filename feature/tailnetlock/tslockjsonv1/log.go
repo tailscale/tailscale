@@ -6,9 +6,7 @@ package tslockjsonv1
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
 	"tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1"
@@ -16,7 +14,7 @@ import (
 	"tailscale.com/tka"
 )
 
-// PrintNetworkLockLogJSONV1 prints the stored TKA state as a JSON object to the CLI,
+// LogResponse returns the stored TKA state as a JSON object to the CLI,
 // in a stable "v1" format.
 //
 // This format includes:
@@ -24,34 +22,31 @@ import (
 //   - the AUM hash as a base32-encoded string
 //   - the raw AUM as base64-encoded bytes
 //   - the expanded AUM, which prints named fields for consumption by other tools
-func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpdate) error {
-	messages := make([]tslockjsonv1.LogMessage, len(updates))
+func LogResponse(updates []ipnstate.NetworkLockUpdate) (tslockjsonv1.LogResponse, error) {
+	var zero tslockjsonv1.LogResponse
+	resp := tslockjsonv1.LogResponse{
+		ResponseEnvelope: jsonoutput.ResponseEnvelope{
+			SchemaVersion: "1",
+		},
+		Messages: make([]tslockjsonv1.LogMessage, len(updates)),
+	}
 
 	for i, update := range updates {
 		var aum tka.AUM
 		if err := aum.Unserialize(update.Raw); err != nil {
-			return fmt.Errorf("decoding: %w", err)
+			return zero, fmt.Errorf("decoding: %w", err)
 		}
 
 		h := aum.Hash()
 
 		if !bytes.Equal(h[:], update.Hash[:]) {
-			return fmt.Errorf("incorrect AUM hash: got %v, want %v", h, update)
+			return zero, fmt.Errorf("incorrect AUM hash: got %v, want %v", h, update)
 		}
 
-		messages[i] = logMessage(aum, update)
+		resp.Messages[i] = logMessage(aum, update)
 	}
 
-	result := tslockjsonv1.LogResponse{
-		ResponseEnvelope: jsonoutput.ResponseEnvelope{
-			SchemaVersion: "1",
-		},
-		Messages: messages,
-	}
-
-	enc := json.NewEncoder(out)
-	enc.SetIndent("", "  ")
-	return enc.Encode(result)
+	return resp, nil
 }
 
 // logMessage converts a [tka.AUM] and [ipnstate.NetworkLockUpdate]
