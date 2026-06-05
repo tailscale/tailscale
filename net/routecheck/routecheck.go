@@ -307,7 +307,5 @@ func (c *Client) Close() error {
 		(*stop)()
 	}
 
-	close(c.needsRefresh)
-
 	return nil
 }
