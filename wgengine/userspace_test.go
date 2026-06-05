@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
@@ -34,6 +35,38 @@ import (
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
+
+func TestPeerWireGuardStateValuesMatchWireguardGo(t *testing.T) {
+	const unknownPeerSessionState device.PeerSessionState = 255
+
+	tests := []struct {
+		name string
+		wg   device.PeerSessionState
+		want PeerWireGuardState
+	}{
+		{"none", device.PeerSessionNone, PeerWireGuardStateNone},
+		{"handshake", device.PeerSessionHandshake, PeerWireGuardStateHandshake},
+		{"established", device.PeerSessionEstablished, PeerWireGuardStateEstablished},
+		{"expired", device.PeerSessionExpired, PeerWireGuardStateExpired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := peerWireGuardStateFromDevice(tt.wg); got != tt.want {
+				t.Fatalf("converted state = %v; want %v", got, tt.want)
+			}
+			if got, want := uint8(tt.wg), uint8(tt.want); got != want {
+				t.Fatalf("wireguard-go const = %v; want %v", got, want)
+			}
+		})
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for unknown wireguard-go state")
+		}
+	}()
+	_ = peerWireGuardStateFromDevice(unknownPeerSessionState)
+}
 
 func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 	nv := make([]tailcfg.NodeView, len(v))

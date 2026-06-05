@@ -35,6 +35,7 @@ func TestIsNotableNotify(t *testing.T) {
 		{"peersremoved", &ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, true},
 		{"userprofiles", &ipn.Notify{UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{1: (&tailcfg.UserProfile{}).View()}}, true},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
+		{"peerstate", &ipn.Notify{PeerState: map[tailcfg.StableNodeID]ipn.PeerState{"a": {PeerWireGuardState: ipn.PeerWireGuardStateHandshake}}}, true},
 		{"selfchange", &ipn.Notify{SelfChange: &tailcfg.Node{}}, true},
 	}
 
@@ -45,7 +46,7 @@ func TestIsNotableNotify(t *testing.T) {
 	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
 		switch sf.Name {
-		case "_", "NetMap", "PeerChangedPatch", "SelfChange", "PeersChanged", "PeersRemoved", "UserProfiles", "Engine", "Version":
+		case "_", "NetMap", "PeerChangedPatch", "SelfChange", "PeersChanged", "PeersRemoved", "UserProfiles", "Engine", "PeerState", "Version":
 			// Already covered above or not applicable.
 			continue
 		case "DriveShares":
