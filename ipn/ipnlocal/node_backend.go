@@ -17,6 +17,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/router"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -418,21 +419,25 @@ func (nb *nodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
 
 // RouteCheckReport is an interface that reports whether a peer is reachable by the current node.
 type RouteCheckReport interface {
-	// IsReachable reports whether a peer is reachable by the current node
-	// and whether the peer has been recorded in the report at the time it was compiled.
-	// A peer can be unknown: this peer is new and we have yet to probe it.
-	// A peer can be reachable and known: we had evidence that the peer was reachable.
-	// A peer can be unreachable and known: probes to this peer have failed.
-	IsReachable(tailcfg.NodeID) (ok, known bool)
+	// IsReachable reports whether a peer is reachable by the current node.
+	IsReachable(tailcfg.NodeID) router.Reachability
 }
 
 // PeerIsReachable reports whether the current node can reach p.
 // This function may return a result based on stale reachability data,
 // either from the control plane or from a recent reachability report.
+// If rp is nil, then this will always report that p is reachable.
 func (nb *nodeBackend) PeerIsReachable(rp RouteCheckReport, p tailcfg.NodeView) bool {
 	nb.mu.Lock()
 	nm := nb.netMap
 	nb.mu.Unlock()
+
+	if nm == nil || !p.Valid() {
+		// If there is no netmap, then how did we get a NodeView?
+		// Assuming that p came from the control plane,
+		// report whether it was connected to tailcontrol.
+		return p.Valid() && p.Online().Get()
+	}
 
 	self := nm.SelfNode
 	routecheckEnabled := isRoutecheckEnabled(self)
@@ -463,14 +468,16 @@ func (nb *nodeBackend) PeerIsReachable(rp RouteCheckReport, p tailcfg.NodeView) 
 	}
 
 	if rp == nil {
-		return p.Online().Get() // Fallback
+		// The routecheck report hasn’t been collected yet,
+		// so fall back and report whether it was connected to tailcontrol.
+		return p.Online().Get()
 	}
-	ok, known := rp.IsReachable(p.ID())
-	if !known {
+	r := rp.IsReachable(p.ID())
+	if r == router.Unknown {
 		// Reachability is unknown, because the node is a new router, so fall back.
 		return p.Online().Get()
 	}
-	return ok
+	return r.IsReachable()
 }
 
 func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {

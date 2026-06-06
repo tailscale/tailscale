@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"tailscale.com/net/router"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
@@ -268,6 +269,17 @@ func TestNodeBackendReachability(t *testing.T) {
 
 type routecheckReport opt.Bool
 
-func (rp routecheckReport) IsReachable(_ tailcfg.NodeID) (ok, known bool) {
-	return opt.Bool(rp).Get()
+var _ RouteCheckReport = *new(routecheckReport)
+
+func (rp routecheckReport) IsReachable(_ tailcfg.NodeID) router.Reachability {
+	switch opt.Bool(rp) {
+	case opt.Empty:
+		return router.Unknown
+	case opt.True:
+		return router.Reachable
+	case opt.False:
+		return router.Unreachable
+	default:
+		panic("unreachable")
+	}
 }
