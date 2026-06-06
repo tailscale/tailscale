@@ -11,6 +11,12 @@ import (
 	"tailscale.com/util/def"
 )
 
+var boolCases = []string{
+	// strconv.ParseBool accepts:
+	"1", "t", "T", "TRUE", "true", "True",
+	"0", "f", "F", "FALSE", "false", "False",
+}
+
 func FuzzBool(f *testing.F) {
 	// defBool was copy-pasted multiple times, before being replaced:
 	defBool := func(a string, def bool) bool {
@@ -24,14 +30,12 @@ func FuzzBool(f *testing.F) {
 		return v
 	}
 
-	for _, tc := range []string{
+	testcases := []string{
 		"",
 		"invalid",
-
-		// strconv.ParseBool accepts:
-		"1", "t", "T", "TRUE", "true", "True",
-		"0", "f", "F", "FALSE", "false", "False",
-	} {
+	}
+	testcases = append(testcases, boolCases...)
+	for _, tc := range testcases {
 		f.Add(tc, true)
 		f.Add(tc, false)
 	}

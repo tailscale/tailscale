@@ -34,3 +34,7 @@ func value[T any](s string, def T, conv func(string) (T, error)) T {
 	}
 	return v
 }
+
+func noop(s string) (string, error) {
+	return s, nil
+}

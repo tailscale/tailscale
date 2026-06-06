@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path"
 	"slices"
 	"strconv"
@@ -38,7 +37,6 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/opt"
 	"tailscale.com/util/mak"
 )
 
@@ -1263,23 +1261,6 @@ func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client
 		return nil, err
 	}
 	return ret, nil
-}
-
-func defaultBool(envName string, defVal bool) bool {
-	vs := os.Getenv(envName)
-	if vs == "" {
-		return defVal
-	}
-	v, _ := opt.Bool(vs).Get()
-	return v
-}
-
-func defaultEnv(envName, defVal string) string {
-	v := os.Getenv(envName)
-	if v == "" {
-		return defVal
-	}
-	return v
 }
 
 func nameForService(svc *corev1.Service) string {
