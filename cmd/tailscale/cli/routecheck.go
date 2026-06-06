@@ -121,8 +121,3 @@ func printRouteCheckReport(rp *routecheck.Report) error {
 	fmt.Fprintln(w)
 	return nil
 }
-
-func routeCheckProbe(ctx context.Context) error {
-	_, err := localClient.RouteCheckProbe(ctx)
-	return err
-}
