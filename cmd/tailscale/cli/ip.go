@@ -13,6 +13,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 )
 
 var ipCmd = &ffcli.Command{
@@ -130,12 +131,18 @@ func serviceAddrsMatchingIP(ctx context.Context, ipStr string) ([]netip.Addr, er
 	if err != nil {
 		return nil, err
 	}
+	return allIPsForServiceWithIP(services, ip), nil
+}
+
+// allIPsForServiceWithIP returns the Addrs of the service whose VIP addresses
+// contain ip, or nil if no service matches.
+func allIPsForServiceWithIP(services map[tailcfg.ServiceName]tailcfg.ServiceDetails, ip netip.Addr) []netip.Addr {
 	for _, svc := range services {
 		if slices.Contains(svc.Addrs, ip) {
-			return svc.Addrs, nil
+			return svc.Addrs
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus, ok bool) {
