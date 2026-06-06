@@ -112,6 +112,66 @@ func TestUserDialSelf(t *testing.T) {
 	}
 }
 
+func TestShouldWarnVersionMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		client string
+		server string
+		want   bool
+	}{
+		{
+			name:   "exact match",
+			client: "1.96.5-t4ee448d3a-g74ffbefc2",
+			server: "1.96.5-t4ee448d3a-g74ffbefc2",
+			want:   false,
+		},
+		{
+			name:   "short client long server",
+			client: "1.96.5",
+			server: "1.96.5-t4ee448d3a-g74ffbefc2",
+			want:   false,
+		},
+		{
+			name:   "long client short server",
+			client: "1.96.5-t4ee448d3a-g74ffbefc2",
+			server: "1.96.5",
+			want:   false,
+		},
+		{
+			name:   "short client different patch",
+			client: "1.96.5",
+			server: "1.96.6-t4ee448d3a-g74ffbefc2",
+			want:   true,
+		},
+		{
+			name:   "same short version different long builds",
+			client: "1.96.5-t4ee448d3a-g74ffbefc2",
+			server: "1.96.5-t111111111-g222222222",
+			want:   true,
+		},
+		{
+			name:   "same dev short and long",
+			client: "1.99.0-dev20260519",
+			server: "1.99.0-dev20260519-tabcd12345",
+			want:   false,
+		},
+		{
+			name:   "different dev dates",
+			client: "1.99.0-dev20260519",
+			server: "1.99.0-dev20260520-tabcd12345",
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldWarnVersionMismatch(tt.client, tt.server); got != tt.want {
+				t.Errorf("shouldWarnVersionMismatch(%q, %q) = %v, want %v", tt.client, tt.server, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeps(t *testing.T) {
 	deptest.DepChecker{
 		BadDeps: map[string]string{

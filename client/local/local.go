@@ -155,8 +155,11 @@ func (lc *Client) DoLocalRequest(req *http.Request) (*http.Response, error) {
 func (lc *Client) doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 	res, err := lc.DoLocalRequest(req)
 	if err == nil {
-		if server := res.Header.Get("Tailscale-Version"); server != "" && server != envknob.IPCVersion() && onVersionMismatch != nil {
-			onVersionMismatch(envknob.IPCVersion(), server)
+		if server := res.Header.Get("Tailscale-Version"); server != "" && onVersionMismatch != nil {
+			client := envknob.IPCVersion()
+			if shouldWarnVersionMismatch(client, server) {
+				onVersionMismatch(client, server)
+			}
 		}
 		if res.StatusCode == 403 {
 			all, _ := io.ReadAll(res.Body)
@@ -233,6 +236,18 @@ func errorMessageFromBody(body []byte) string {
 }
 
 var onVersionMismatch func(clientVer, serverVer string)
+
+func shouldWarnVersionMismatch(clientVer, serverVer string) bool {
+	if clientVer == serverVer {
+		return false
+	}
+	// version.Short is a prefix of version.Long for the same build, for example:
+	//  "1.96.5" -> "1.96.5-t4ee448d3a-g74ffbefc2"
+	//  "1.99.0-dev20260519" -> "1.99.0-dev20260519-tabcd12345"
+	// Treat that as compatible, but keep warning for different dev dates,
+	// commits, or release versions.
+	return !strings.HasPrefix(serverVer, clientVer+"-") && !strings.HasPrefix(clientVer, serverVer+"-")
+}
 
 // SetVersionMismatchHandler sets f as the version mismatch handler
 // to be called when the client (the current process) has a version
