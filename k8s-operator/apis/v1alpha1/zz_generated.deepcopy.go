@@ -18,7 +18,7 @@ func (in *AppConnector) DeepCopyInto(out *AppConnector) {
 	*out = *in
 	if in.Routes != nil {
 		in, out := &in.Routes, &out.Routes
-		*out = make(Routes, len(*in))
+		*out = make([]Route, len(*in))
 		copy(*out, *in)
 	}
 }
