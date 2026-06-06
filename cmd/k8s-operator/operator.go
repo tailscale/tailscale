@@ -62,6 +62,7 @@ import (
 	"tailscale.com/tsnet"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/def"
 	"tailscale.com/util/set"
 	"tailscale.com/version"
 )
@@ -86,18 +87,18 @@ const (
 
 func main() {
 	var (
-		tsNamespace           = defaultEnv("OPERATOR_NAMESPACE", "")
-		tslogging             = defaultEnv("OPERATOR_LOGGING", "info")
-		image                 = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		k8sProxyImage         = defaultEnv("K8S_PROXY_IMAGE", "tailscale/k8s-proxy:latest")
-		priorityClassName     = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
-		tags                  = defaultEnv("PROXY_TAGS", "tag:k8s")
-		tsFirewallMode        = defaultEnv("PROXY_FIREWALL_MODE", "")
-		defaultProxyClass     = defaultEnv("PROXY_DEFAULT_CLASS", "")
-		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
-		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
-		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
-		operatorSAName        = defaultEnv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
+		tsNamespace           = def.Getenv("OPERATOR_NAMESPACE", "")
+		tslogging             = def.Getenv("OPERATOR_LOGGING", "info")
+		image                 = def.Getenv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		k8sProxyImage         = def.Getenv("K8S_PROXY_IMAGE", "tailscale/k8s-proxy:latest")
+		priorityClassName     = def.Getenv("PROXY_PRIORITY_CLASS_NAME", "")
+		tags                  = def.Getenv("PROXY_TAGS", "tag:k8s")
+		tsFirewallMode        = def.Getenv("PROXY_FIREWALL_MODE", "")
+		defaultProxyClass     = def.Getenv("PROXY_DEFAULT_CLASS", "")
+		isDefaultLoadBalancer = def.GetenvBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+		loginServer           = strings.TrimSuffix(def.Getenv("OPERATOR_LOGIN_SERVER", ""), "/")
+		ingressClassName      = def.Getenv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
+		operatorSAName        = def.Getenv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
 	)
 
 	var opts []kzap.Opts
@@ -178,12 +179,12 @@ func main() {
 // environment variables to authenticate with static credentials.
 func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, *tailscale.Client) {
 	var (
-		clientID         = defaultEnv("CLIENT_ID", "")          // Used for workload identity federation.
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")     // Used for static client credentials.
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "") // Used for static client credentials.
-		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
-		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		clientID         = def.Getenv("CLIENT_ID", "")          // Used for workload identity federation.
+		clientIDPath     = def.Getenv("CLIENT_ID_FILE", "")     // Used for static client credentials.
+		clientSecretPath = def.Getenv("CLIENT_SECRET_FILE", "") // Used for static client credentials.
+		hostname         = def.Getenv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret       = def.Getenv("OPERATOR_SECRET", "")
+		operatorTags     = def.Getenv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
 	)
 
 	startlog := zlog.Named("startup")

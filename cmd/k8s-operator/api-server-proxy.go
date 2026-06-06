@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/util/def"
 )
 
 func parseAPIProxyMode() *kubetypes.APIServerProxyMode {
@@ -20,13 +21,13 @@ func parseAPIProxyMode() *kubetypes.APIServerProxyMode {
 	case haveAPIProxyEnv && haveAuthProxyEnv:
 		log.Fatal("AUTH_PROXY (deprecated) and APISERVER_PROXY are mutually exclusive, please unset AUTH_PROXY")
 	case haveAuthProxyEnv:
-		var authProxyEnv = defaultBool("AUTH_PROXY", false) // deprecated
+		var authProxyEnv = def.GetenvBool("AUTH_PROXY", false) // deprecated
 		if authProxyEnv {
 			return new(kubetypes.APIServerProxyModeAuth)
 		}
 		return nil
 	case haveAPIProxyEnv:
-		var apiProxyEnv = defaultEnv("APISERVER_PROXY", "") // true, false or "noauth"
+		var apiProxyEnv = def.Getenv("APISERVER_PROXY", "") // true, false or "noauth"
 		switch apiProxyEnv {
 		case "true":
 			return new(kubetypes.APIServerProxyModeAuth)
