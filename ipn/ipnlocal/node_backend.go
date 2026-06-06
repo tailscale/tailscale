@@ -423,8 +423,9 @@ type RouteCheckReport interface {
 	IsReachable(tailcfg.NodeID) (ok, known bool)
 }
 
-// PeerIsReachable reports whether the current node can reach p. If the ctx is
-// done, this function may return a result based on stale reachability data.
+// PeerIsReachable reports whether the current node can reach p.
+// This function may return a result based on stale reachability data,
+// either from the control plane or from a recent reachability report.
 func (nb *nodeBackend) PeerIsReachable(rp RouteCheckReport, p tailcfg.NodeView) bool {
 	nb.mu.Lock()
 	nm := nb.netMap

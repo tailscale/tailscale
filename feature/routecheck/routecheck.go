@@ -136,5 +136,9 @@ func (e *Extension) needsRefresh() {
 }
 
 func routeCheckReport(b *ipnlocal.LocalBackend) ipnlocal.RouteCheckReport {
-	return ClientFor(b).Report()
+	c := ClientFor(b)
+	if c == nil {
+		return nil
+	}
+	return c.Report()
 }
