@@ -142,9 +142,6 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
-	if cfg.ExtraArgs != "" {
-		args = append(args, strings.Fields(cfg.ExtraArgs)...)
-	}
 	log.Printf("Running 'tailscale up'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
@@ -152,6 +149,20 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("tailscale up failed: %v", err)
 	}
+
+	// some args such as --auto-update cannot be provided to 'tailscale up', so
+	// we set them afterwards with 'tailscale set' instead.
+	if cfg.ExtraArgs != "" {
+		args := append([]string{"--socket=" + cfg.Socket, "set"}, strings.Fields(cfg.ExtraArgs)...)
+		log.Printf("Running 'tailscale set'")
+		cmd := exec.CommandContext(ctx, "tailscale", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("tailscale set failed: %v", err)
+		}
+	}
+
 	return nil
 }
 
