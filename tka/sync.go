@@ -60,18 +60,6 @@ func FromSyncOffer(offer SyncOffer) (head string, ancestors []string, err error)
 	return string(headBytes), ancestors, nil
 }
 
-const (
-	// The starting number of AUMs to skip when listing
-	// ancestors in a SyncOffer.
-	ancestorsSkipStart = 4
-
-	// How many bits to advance the skip count when listing
-	// ancestors in a SyncOffer.
-	//
-	// 2 bits, so (4<<2), so after skipping 4 it skips 16.
-	ancestorsSkipShift = 2
-)
-
 // SyncOffer returns an abbreviated description of the current AUM
 // chain, which can be used to synchronize with another (untrusted)
 // Authority instance.
@@ -92,20 +80,10 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		Ancestors: make([]AUMHash, 0, 6), // 6 chosen arbitrarily.
 	}
 
-	// We send some subset of our ancestors to help the remote
-	// find a more-recent 'head intersection'.
-	// The number of AUMs between each ancestor entry gets
-	// exponentially larger.
-	var (
-		skipAmount uint64  = ancestorsSkipStart
-		curs       AUMHash = a.Head()
-	)
-	for i := range uint64(maxSyncHeadIntersectionIter) {
-		if i > 0 && (i%skipAmount) == 0 {
-			out.Ancestors = append(out.Ancestors, curs)
-			skipAmount = skipAmount << ancestorsSkipShift
-		}
-
+	// We send all our checkpoints to help the remote find a
+	// more-recent 'head intersection'.
+	curs := a.Head()
+	for range maxSyncHeadIntersectionIter {
 		parent, err := storage.AUM(curs)
 		if err != nil {
 			if err != os.ErrNotExist {
@@ -118,6 +96,11 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		if parent.Hash() == oldest {
 			break
 		}
+
+		if parent.MessageKind == AUMCheckpoint {
+			out.Ancestors = append(out.Ancestors, curs)
+		}
+
 		copy(curs[:], parent.PrevAUMHash)
 	}
 
