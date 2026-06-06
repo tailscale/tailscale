@@ -21,11 +21,15 @@ func init() {
 // generateAttestationKeyIfEmpty generates a new hardware attestation key if
 // none exists. It returns true if a new key was generated and stored in
 // p.AttestationKey.
-func generateAttestationKeyIfEmpty(p *persist.Persist, logf logger.Logf) (bool, error) {
+func generateAttestationKeyIfEmpty(pp **persist.Persist, logf logger.Logf) (bool, error) {
+	if pp == nil {
+		panic("generateAttestationKeyIfEmpty: pp is nil")
+	}
+
 	// attempt to generate a new hardware attestation key if none exists
 	var ak key.HardwareAttestationKey
-	if p != nil {
-		ak = p.AttestationKey
+	if *pp != nil {
+		ak = (*pp).AttestationKey
 	}
 
 	if ak == nil || ak.IsZero() {
@@ -37,10 +41,10 @@ func generateAttestationKeyIfEmpty(p *persist.Persist, logf logger.Logf) (bool, 
 			}
 		} else if ak != nil {
 			logf("using new hardware attestation key: %v", ak.Public())
-			if p == nil {
-				p = &persist.Persist{}
+			if *pp == nil {
+				*pp = &persist.Persist{}
 			}
-			p.AttestationKey = ak
+			(*pp).AttestationKey = ak
 			return true, nil
 		}
 	}

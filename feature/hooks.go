@@ -57,7 +57,7 @@ var HookProxySetTransportGetProxyConnectHeader Hook[func(*http.Transport)]
 // and available.
 var HookTPMAvailable Hook[func() bool]
 
-var HookGenerateAttestationKeyIfEmpty Hook[func(p *persist.Persist, logf logger.Logf) (bool, error)]
+var HookGenerateAttestationKeyIfEmpty Hook[func(p **persist.Persist, logf logger.Logf) (bool, error)]
 
 // TPMAvailable reports whether a TPM device is supported and available.
 func TPMAvailable() bool {
