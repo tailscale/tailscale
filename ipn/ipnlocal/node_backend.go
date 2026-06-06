@@ -419,7 +419,10 @@ func (nb *nodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
 // RouteCheckReport is an interface that reports whether a peer is reachable by the current node.
 type RouteCheckReport interface {
 	// IsReachable reports whether a peer is reachable by the current node
-	// or if it is unknown because it has yet to be probed.
+	// and whether the peer has been recorded in the report at the time it was compiled.
+	// A peer can be unknown: this peer is new and we have yet to probe it.
+	// A peer can be reachable and known: we had evidence that the peer was reachable.
+	// A peer can be unreachable and known: probes to this peer have failed.
 	IsReachable(tailcfg.NodeID) (ok, known bool)
 }
 
