@@ -397,6 +397,9 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 		name               string
 		curBestAddr        addrQuality
 		trustBestAddrUntil mono.Time
+		lastSendExt        mono.Time
+		lastRecvWG         mono.Time
+		bestAddrAt         mono.Time
 		maybeBest          addrQuality
 		wantBestAddr       addrQuality
 	}{
@@ -429,6 +432,16 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 			wantBestAddr:       peerRelayAddrQuality,
 		},
 		{
+			name:               "maybeBest-diff-relay-higher-latency-wg-stalled",
+			curBestAddr:        peerRelayAddrQuality,
+			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
+			lastSendExt:        mono.Now().Add(-time.Second),
+			lastRecvWG:         mono.Now().Add(-(sessionActiveTimeout + time.Second)),
+			bestAddrAt:         mono.Now().Add(-2 * sessionActiveTimeout),
+			maybeBest:          peerRelayAddrQualityHigherLatencyDiffServer,
+			wantBestAddr:       peerRelayAddrQualityHigherLatencyDiffServer,
+		},
+		{
 			name:               "maybeBest-diff-relay-lower-latency-trusted",
 			curBestAddr:        peerRelayAddrQuality,
 			trustBestAddrUntil: mono.Now().Add(1 * time.Hour),
@@ -448,8 +461,11 @@ func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
 			de := &endpoint{
 				c:                  &Conn{logf: func(msg string, args ...any) { return }},
 				bestAddr:           tt.curBestAddr,
+				bestAddrAt:         tt.bestAddrAt,
 				trustBestAddrUntil: tt.trustBestAddrUntil,
 			}
+			de.lastSendExt = tt.lastSendExt
+			de.lastRecvWG.StoreAtomic(tt.lastRecvWG)
 			de.udpRelayEndpointReady(tt.maybeBest)
 			if de.bestAddr != tt.wantBestAddr {
 				t.Errorf("de.bestAddr = %v, want %v", de.bestAddr, tt.wantBestAddr)
@@ -685,5 +701,116 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func Test_endpoint_peerRelayWGReceiveStall(t *testing.T) {
+	now := mono.Now()
+	relayAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:77")}
+	relayAddr.vni.Set(1)
+
+	tests := []struct {
+		name          string
+		lastSendExt   mono.Time
+		lastRecvWG    mono.Time
+		bestAddrAt    mono.Time
+		wantStalled   bool
+		wantDiscovery bool
+		wantTrusted   bool
+	}{
+		{
+			name:          "recent-send-no-recent-recv",
+			lastSendExt:   now.Add(-time.Second),
+			lastRecvWG:    now.Add(-(sessionActiveTimeout + time.Second)),
+			bestAddrAt:    now.Add(-2 * sessionActiveTimeout),
+			wantStalled:   true,
+			wantDiscovery: true,
+			wantTrusted:   false,
+		},
+		{
+			name:          "recent-send-never-recv",
+			lastSendExt:   now.Add(-time.Second),
+			bestAddrAt:    now.Add(-(sessionActiveTimeout + time.Second)),
+			wantStalled:   true,
+			wantDiscovery: true,
+			wantTrusted:   false,
+		},
+		{
+			name:        "recent-send-recent-recv",
+			lastSendExt: now.Add(-time.Second),
+			lastRecvWG:  now.Add(-time.Second),
+			bestAddrAt:  now.Add(-2 * sessionActiveTimeout),
+			wantTrusted: true,
+		},
+		{
+			name:        "idle-send",
+			lastSendExt: now.Add(-(sessionActiveTimeout + time.Second)),
+			lastRecvWG:  now.Add(-2 * sessionActiveTimeout),
+			bestAddrAt:  now.Add(-2 * sessionActiveTimeout),
+			wantTrusted: true,
+		},
+		{
+			name:        "fresh-best-addr-never-recv",
+			lastSendExt: now.Add(-time.Second),
+			bestAddrAt:  now.Add(-time.Second),
+			wantTrusted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Conn{logf: func(msg string, args ...any) {}}
+			c.relayManager.hasPeerRelayServers.Store(true)
+			de := &endpoint{
+				c:                         c,
+				relayCapable:              true,
+				bestAddr:                  addrQuality{epAddr: relayAddr},
+				bestAddrAt:                tt.bestAddrAt,
+				trustBestAddrUntil:        now.Add(time.Hour),
+				lastUDPRelayPathDiscovery: now.Add(-discoverUDPRelayPathsInterval),
+			}
+			de.lastSendExt = tt.lastSendExt
+			de.lastRecvWG.StoreAtomic(tt.lastRecvWG)
+
+			if got := de.peerRelayWGReceiveStalledLocked(now); got != tt.wantStalled {
+				t.Errorf("peerRelayWGReceiveStalledLocked = %v, want %v", got, tt.wantStalled)
+			}
+			if got := de.wantUDPRelayPathDiscoveryLocked(now); got != tt.wantDiscovery {
+				t.Errorf("wantUDPRelayPathDiscoveryLocked = %v, want %v", got, tt.wantDiscovery)
+			}
+			if got := de.bestAddrTrustedLocked(now); got != tt.wantTrusted {
+				t.Errorf("bestAddrTrustedLocked = %v, want %v", got, tt.wantTrusted)
+			}
+		})
+	}
+}
+
+func Test_endpoint_addrForSendLocked_peerRelayWGReceiveStalled(t *testing.T) {
+	now := mono.Now()
+	relayAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:77")}
+	relayAddr.vni.Set(1)
+	derpAddr := netip.MustParseAddrPort("127.3.3.40:123")
+
+	de := &endpoint{
+		bestAddr:           addrQuality{epAddr: relayAddr},
+		bestAddrAt:         now.Add(-2 * sessionActiveTimeout),
+		derpAddr:           derpAddr,
+		trustBestAddrUntil: now.Add(time.Hour),
+	}
+	de.lastSendExt = now.Add(-time.Second)
+	de.lastRecvWG.StoreAtomic(now.Add(-(sessionActiveTimeout + time.Second)))
+
+	de.mu.Lock()
+	gotUDPAddr, gotDERPAddr, gotSendWGPing := de.addrForSendLocked(now)
+	de.mu.Unlock()
+
+	if gotUDPAddr != relayAddr {
+		t.Errorf("udpAddr = %v, want %v", gotUDPAddr, relayAddr)
+	}
+	if gotDERPAddr != derpAddr {
+		t.Errorf("derpAddr = %v, want %v", gotDERPAddr, derpAddr)
+	}
+	if gotSendWGPing {
+		t.Errorf("sendWGPing = true, want false")
 	}
 }
