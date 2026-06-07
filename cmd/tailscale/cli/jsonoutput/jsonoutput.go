@@ -1,23 +1,129 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package jsonoutput provides stable and versioned JSON serialisation for CLI output.
-// This allows us to provide stable output to scripts/clients, but also make
-// breaking changes to the output when it's useful.
+// Package jsonoutput provides stable and versioned JSON serialization for CLI output.
+// This allows us to provide stable output to scripts and clients,
+// but also allows us to make useful and breaking changes to the output
+// by incrementing the version number.
 //
 // Historically we only used a boolean -json flag, so changing the output
 // could break scripts that rely on the existing format.
 //
-// This package provides a [SchemaVersion] flag type that allows callers
-// to pass either a boolean or a version number and get a consistent output.
-// We'll bump the version when we make a breaking change
-// that's likely to break scripts that rely on the existing output,
-// e.g. if we remove a field or change the type/format.
-// Passing just the boolean flag will always return 1, to preserve
-// compatibility with scripts written before we versioned our output.
+// # Unmarshaling JSON output in other programs
 //
-// This package also provides [ResponseEnvelope] which is used to provide the
-// set of fields common to all versioned JSON output.
+// The Tailscale client can format the output of many commands in JSON,
+// which makes it easier to write programs that read and process this output.
+// Commands that support JSON output will provide a -json flag:
+//
+// For example, performing a DNS query produces this human-readable output:
+//
+//	$ tailscale dns query hello.ts.net
+//	DNS query for "hello.ts.net" (A) using internal resolver:
+//
+//	Forwarding to resolver: 199.247.155.53
+//
+//	Response code: RCodeSuccess
+//
+//	Name           TTL  Class      Type   Body
+//	----           ---  -----      ----   ----
+//	hello.ts.net.  600  ClassINET  TypeA  100.101.102.103
+//
+// that corresponds with this JSON output:
+//
+//	$ tailscale dns query --json hello.ts.net
+//	{
+//	  "Name": "hello.ts.net",
+//	  "QueryType": "A",
+//	  "Resolvers": [
+//	    {
+//	      "Addr": "199.247.155.53"
+//	    }
+//	  ],
+//	  "ResponseCode": "RCodeSuccess",
+//	  "Answers": [
+//	    {
+//	      "Name": "hello.ts.net.",
+//	      "TTL": 600,
+//	      "Class": "ClassINET",
+//	      "Type": "TypeA",
+//	      "Body": "100.101.102.103"
+//	    }
+//	  ]
+//	}
+//
+// To unmarshal this response, use [tailscale.com/cmd/tailscale/cli/jsonoutput.DNSStatusResult].
+// For other responses, you can find the corresponding struct
+// in this package or within one of its subpackages.
+//
+// # Defining a stable, versioned JSON format
+//
+// This package provides the [ResponseEnvelope] struct
+// which provides the set of fields common to all versioned JSON output.
+// This struct must be embedded in every JSON response from the CLI.
+// For example, a hypothetical "tailscale hello" command:
+//
+//	$ tailscale hello --json=1
+//	{
+//	  "SchemaVersion": "1",
+//	  "Greeting": "Hello, 世界"
+//	}
+//
+// would provide a hellocmdjsonv1 package under the
+// [tailscale.com/cmd/tailscale/cli/jsonoutput] package,
+// that exports of a HelloResponse struct for third-party programs to use:
+//
+//	package hellocmdjsonv1
+//
+//	type HelloResponse struct {
+//		jsonoutput.ResponseEnvelope
+//		Greeting string
+//	}
+//
+// For an actual example for the "tailscale lock" subcommand,
+// see [tailscale.com/cmd/tailscale/cli/jsonoutput/tslockjsonv1].
+//
+// When we make a backwards incompatible change to the JSON output,
+// e.g. if we remove a field or change a field’s type or format,
+// we must add a new package with an incremented [ResponseEnvelope.SchemaVersion] number.
+// For example, if we were forced to break the format by changing a field’s type:
+//
+//	$ tailscale hello --json=2
+//	{
+//	  "SchemaVersion": "2",
+//	  "Greeting": {
+//	    "en": "Hello, world",
+//	    "zh": "你好世界"
+//	  }
+//	}
+//
+// We must create a new hellocmdjsonv2 package that exports an updated
+// HelloResponse that can be used to unmarshal the version 2 output:
+//
+//	package hellocmdjsonv2
+//
+//	type HelloResponse struct {
+//		jsonoutput.ResponseEnvelope
+//		Greeting map[string]string
+//	}
+//
+// We should also add a [ResponseEnvelope.ResponseWarning] to older versions
+// that advise clients of the a newer version of this response:
+//
+//	$ tailscale hello --json=1
+//	{
+//	  "_WARNING": "a newer schema version is available",
+//	  "SchemaVersion": "1",
+//	  "Greeting": "Hello, 世界"
+//	}
+//
+// # Marshaling to JSON in the cmd/tailscale client
+//
+// This package provides a [SchemaVersion] flag type that allows callers
+// to pass either a boolean -json flag or a version-numbered -json=2 flag
+// in order to get consistent output.
+//
+// Passing just the boolean flag will always imply -json=1
+// to preserve compatibility with scripts written before we versioned our output.
 package jsonoutput
 
 import (

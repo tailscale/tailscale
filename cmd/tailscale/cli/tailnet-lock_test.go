@@ -304,7 +304,6 @@ func TestTailnetLockStatusOutput(t *testing.T) {
   "NodeKey": "nodekey:0101010101010101010101010101010101010101010101010101010101010101",
   "Head": "WYIVHDR7JUIXBWAJT5UPSCAILEXB7OMINDFEFEPOPNTUCNXMY2KA",
   "NodeKeySigned": false,
-  "NodeKeySignature": null,
   "TrustedKeys": [
     {
       "Kind": "25519",
@@ -350,14 +349,46 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 }
 `,
 			},
+			{
+				Name: "tailnet-lock-enabled-but-empty",
+				Status: ipnstate.NetworkLockStatus{
+					Enabled:          true,
+					Head:             &head,
+					PublicKey:        nlPub,
+					NodeKey:          &nodeKey1,
+					NodeKeySigned:    false,
+					NodeKeySignature: nil,
+					TrustedKeys:      nil,
+					VisiblePeers:     nil,
+					FilteredPeers:    nil,
+					StateID:          98989898,
+				},
+				Want: `{
+  "SchemaVersion": "1",
+  "Enabled": true,
+  "PublicKey": "tlpub:0404040404040404040404040404040404040404040404040404040404040404",
+  "NodeKey": "nodekey:0101010101010101010101010101010101010101010101010101010101010101",
+  "Head": "WYIVHDR7JUIXBWAJT5UPSCAILEXB7OMINDFEFEPOPNTUCNXMY2KA",
+  "NodeKeySigned": false,
+  "TrustedKeys": [],
+  "VisiblePeers": [],
+  "FilteredPeers": [],
+  "State": 98989898
+}
+`,
+			},
 		} {
 			t.Run(tt.Name, func(t *testing.T) {
 				t.Parallel()
 
 				var outBuf bytes.Buffer
-				err := jsonoutput.PrintNetworkLockStatusJSONV1(&outBuf, &tt.Status)
+				json := jsonoutput.SchemaVersion{
+					IsSet:   true,
+					Version: 1,
+				}
+				err := printTailnetLockStatus(&tt.Status, &outBuf, json)
 				if err != nil {
-					t.Fatalf("PrintNetworkLockStatusJSONV1: %v", err)
+					t.Fatalf("printTailnetLockStatus: %v", err)
 				}
 
 				if diff := cmp.Diff(outBuf.String(), tt.Want); diff != "" {

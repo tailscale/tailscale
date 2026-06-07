@@ -22,7 +22,9 @@ import (
 
 	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
+
 	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/feature/tailnetlock/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/tsconst"
@@ -219,40 +221,45 @@ func runTailnetLockStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
+	return printTailnetLockStatus(st, Stdout, nlStatusArgs.json)
+}
 
-	if nlStatusArgs.json.IsSet {
-		if nlStatusArgs.json.Version == 1 {
-			return jsonoutput.PrintNetworkLockStatusJSONV1(os.Stdout, st)
+func printTailnetLockStatus(st *ipnstate.NetworkLockStatus, out io.Writer, jsonSchema jsonoutput.SchemaVersion) error {
+	if jsonSchema.IsSet {
+		if jsonSchema.Version == 1 {
+			enc := jsonv1.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			return enc.Encode(tslockjsonv1.StatusResponse(st))
 		} else {
 			return fmt.Errorf("unrecognised version: %d", nlStatusArgs.json.Version)
 		}
 	}
 
 	if st.Enabled {
-		fmt.Println("Tailnet Lock is ENABLED.")
+		fmt.Fprintln(out, "Tailnet Lock is ENABLED.")
 	} else {
-		fmt.Println("Tailnet Lock is NOT enabled.")
+		fmt.Fprintln(out, "Tailnet Lock is NOT enabled.")
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 
 	if st.Enabled && st.NodeKey != nil && !st.PublicKey.IsZero() {
 		if st.NodeKeySigned {
-			fmt.Println("This node is accessible under Tailnet Lock. Node signature:")
-			fmt.Println(st.NodeKeySignature.String())
+			fmt.Fprintln(out, "This node is accessible under Tailnet Lock. Node signature:")
+			fmt.Fprintln(out, st.NodeKeySignature.String())
 		} else {
-			fmt.Println("This node is LOCKED OUT by Tailnet Lock, and action is required to establish connectivity.")
-			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
+			fmt.Fprintln(out, "This node is LOCKED OUT by Tailnet Lock, and action is required to establish connectivity.")
+			fmt.Fprintf(out, "Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
 		}
-		fmt.Println()
+		fmt.Fprintln(out)
 	}
 
 	if !st.PublicKey.IsZero() {
-		fmt.Printf("This node's tailnet-lock key: %s\n", st.PublicKey.CLIString())
-		fmt.Println()
+		fmt.Fprintf(out, "This node's tailnet-lock key: %s\n", st.PublicKey.CLIString())
+		fmt.Fprintln(out)
 	}
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
-		fmt.Println("Trusted signing keys:")
+		fmt.Fprintln(out, "Trusted signing keys:")
 		for _, k := range st.TrustedKeys {
 			var line strings.Builder
 			line.WriteString("\t")
@@ -272,13 +279,13 @@ func runTailnetLockStatus(ctx context.Context, args []string) error {
 					line.WriteString("(pre-auth key)")
 				}
 			}
-			fmt.Println(line.String())
+			fmt.Fprintln(out, line.String())
 		}
 	}
 
 	if st.Enabled && len(st.FilteredPeers) > 0 {
-		fmt.Println()
-		fmt.Println("The following nodes are locked out by tailnet lock and cannot connect to other nodes:")
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "The following nodes are locked out by tailnet lock and cannot connect to other nodes:")
 		for _, p := range st.FilteredPeers {
 			var line strings.Builder
 			line.WriteString("\t")
@@ -294,7 +301,7 @@ func runTailnetLockStatus(ctx context.Context, args []string) error {
 			line.WriteString(string(p.StableID))
 			line.WriteString("\t")
 			line.WriteString(p.NodeKey.String())
-			fmt.Println(line.String())
+			fmt.Fprintln(out, line.String())
 		}
 	}
 
@@ -715,7 +722,13 @@ func runTailnetLockLog(ctx context.Context, args []string) error {
 func printTailnetLockLog(updates []ipnstate.NetworkLockUpdate, out io.Writer, jsonSchema jsonoutput.SchemaVersion, useColor bool) error {
 	if jsonSchema.IsSet {
 		if jsonSchema.Version == 1 {
-			return jsonoutput.PrintNetworkLockLogJSONV1(out, updates)
+			resp, err := tslockjsonv1.LogResponse(updates)
+			if err != nil {
+				return err
+			}
+			enc := jsonv1.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
 		} else {
 			return fmt.Errorf("unrecognised version: %d", jsonSchema.Version)
 		}
