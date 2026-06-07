@@ -1,1 +1,12 @@
 /tailcfg/ @tailscale/control-protocol-owners
+
+# Kubernetes / containers
+/k8s-operator/        @tailscale/k8s-devs
+/kube/                @tailscale/k8s-devs
+/cmd/k8s-operator/    @tailscale/k8s-devs
+/cmd/k8s-proxy/       @tailscale/k8s-devs
+/cmd/k8s-nameserver/  @tailscale/k8s-devs
+/cmd/containerboot/   @tailscale/k8s-devs
+/cmd/sync-containers/ @tailscale/k8s-devs
+/ipn/store/kubestore/ @tailscale/k8s-devs
+/docs/k8s/            @tailscale/k8s-devs
