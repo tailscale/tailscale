@@ -6,6 +6,7 @@
 package ipnext
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -22,7 +23,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
-	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
@@ -226,6 +226,21 @@ type SafeBackend interface {
 	TailscaleVarRoot() string
 }
 
+// NotifyWatcher is the subset of [ipnlocal.LocalBackend] that subscribes
+// to the IPN notification bus. It is implemented by [*ipnlocal.LocalBackend]
+// and is exposed to extensions that want to consume the bus from within
+// tailscaled.
+//
+// Unlike [SafeBackend], its methods acquire LocalBackend's internal mutex
+// and must not be called from extension hooks; call them from a goroutine
+// (typically one started during [Extension.Init]).
+type NotifyWatcher interface {
+	// WatchNotifications behaves like [ipnlocal.LocalBackend.WatchNotifications]:
+	// it subscribes to the IPN bus, calls fn for each notification, and
+	// blocks until ctx is done.
+	WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool))
+}
+
 // ExtensionServices provides access to the [Host]'s extension management services,
 // such as fetching active extensions.
 type ExtensionServices interface {
@@ -375,16 +390,6 @@ type Hooks struct {
 	// NewControlClient are the functions to be called when a new control client
 	// is created. It is called with the LocalBackend locked.
 	NewControlClient feature.Hooks[NewControlClientCallback]
-
-	// OnNetMapToggle is called (with LocalBackend.mu held) when the network map
-	// is toggled from nil to non-nil, or non-nil to nil. This usually happens
-	// when the client connects to the control plane and receives the initial MapResponse,
-	// or when the client disconnects and the network map is cleared.
-	OnNetMapToggle feature.Hooks[func(*netmap.NetworkMap)]
-
-	// OnRoutersChange is called (with LocalBackend.mu held) when one or more peer nodes,
-	// which function as routers, have been added, modified, or removed.
-	OnRoutersChange feature.Hooks[func(added, modified, removed []tailcfg.NodeView)]
 
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
