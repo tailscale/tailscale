@@ -832,3 +832,4 @@ swordtail
 oarfish
 newt
 olm
+rainbow
