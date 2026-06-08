@@ -115,6 +115,8 @@ type Report struct {
 	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
 	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
 
+	LastFullRegionLatency map[int]time.Duration // keyed by DERP Region ID, from the last full (non-incremental) report
+
 	GlobalV4Counters map[netip.AddrPort]int // number of times the endpoint was observed
 	GlobalV6Counters map[netip.AddrPort]int // number of times the endpoint was observed
 
@@ -867,6 +869,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 		c.nextFull = false
 		c.lastFull = now
 		metricNumGetReportFull.Add(1)
+	} else {
+		rs.report.LastFullRegionLatency = last.RegionLatency
 	}
 
 	rs.incremental = last != nil

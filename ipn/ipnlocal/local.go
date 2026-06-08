@@ -8730,29 +8730,34 @@ func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID
 }
 
 // minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
+// If last netcheck report is incremental, it will use the last full report's latency values.
 // If there are no latency values, it returns 0.
 func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
+	const largeDuration time.Duration = math.MaxInt64
+	get := func(region int) (time.Duration, bool) {
+		latency, ok := report.RegionLatency[region]
+		if ok {
+			return latency, ok
+		}
+		lastFull, ok := report.LastFullRegionLatency[region]
+		if ok {
+			return lastFull, ok
+		}
+		return largeDuration, false
+	}
+
 	min := slices.MinFunc(regions, func(i, j int) int {
-		const largeDuration time.Duration = math.MaxInt64
-		iLatency, ok := report.RegionLatency[i]
-		if !ok {
-			iLatency = largeDuration
-		}
-		jLatency, ok := report.RegionLatency[j]
-		if !ok {
-			jLatency = largeDuration
-		}
+		iLatency, _ := get(i)
+		jLatency, _ := get(j)
 		if c := cmp.Compare(iLatency, jLatency); c != 0 {
 			return c
 		}
 		return cmp.Compare(i, j)
 	})
-	latency, ok := report.RegionLatency[min]
-	if !ok || latency == 0 {
-		return 0
-	} else {
+	if _, ok := get(min); ok {
 		return min
 	}
+	return 0
 }
 
 // longLatDistance returns an estimated distance given the geographic coordinates of two locations, in degrees.
