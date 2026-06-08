@@ -820,6 +820,98 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 	return newDisco
 }
 
+// TestHomeDERPReportedAfterRelogin is a regression test for the bug where, after
+// an in-process control-client swap (an interactive login or profile switch),
+// magicsock's NetInfo de-dup cache (netInfoLast) survived the swap. Because the
+// post-relogin NetInfo was structurally identical (same PreferredDERP, same NAT
+// shape), it was suppressed as unchanged and never re-reported to the new
+// control session, so control never learned the node's home DERP and peers
+// couldn't reach it over DERP. See ipn/ipnlocal:
+// setControlClientLocked -> MagicConn().ResetNetInfoLast.
+//
+// The test brings a node up, records the home DERP region the test control
+// learned, re-logs the node in (new node identity, same control/network/NAT/
+// DERP), and asserts control re-learns the same non-zero home DERP for the new
+// identity. Without the fix this assertion times out at HomeDERP==0.
+func TestHomeDERPReportedAfterRelogin(t *testing.T) {
+	env := vmtest.New(t)
+	net := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	n := env.AddNode("node", net, vmtest.OS(vmtest.Gokrazy))
+
+	baseStep := env.AddStep("Record initial home DERP from control")
+	switchStep := env.AddStep("Re-login (logout + up)")
+	verifyStep := env.AddStep("Verify home DERP re-reported to control after relogin")
+
+	env.Start()
+
+	cs := env.ControlServer()
+
+	// Pin the home DERP region so the reported NetInfo (including PreferredDERP)
+	// is identical before and after the switch. natlab has two DERP regions with
+	// no latency differentiation, so the natural pick could differ across the
+	// switch; a changed PreferredDERP would NOT be de-duped and would mask the
+	// regression. The force persists on the long-lived magicsock.Conn across the
+	// in-process profile switch.
+	const region = 1
+	env.ForcePreferredDERP(n, region)
+
+	// Baseline: control learned the (forced) home DERP for the initial identity.
+	baseStep.Begin()
+	st := env.Status(n)
+	oldKey := st.Self.PublicKey
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		cn := cs.Node(oldKey)
+		if cn == nil {
+			return fmt.Errorf("control has no node for initial key %v", oldKey.ShortString())
+		}
+		if cn.HomeDERP != region {
+			return fmt.Errorf("control home DERP for initial identity = %d, want %d", cn.HomeDERP, region)
+		}
+		return nil
+	}); err != nil {
+		baseStep.Fatal(err)
+	}
+	t.Logf("[node] initial: key=%s homeDERP=%d", oldKey.ShortString(), region)
+	baseStep.End(nil)
+
+	// Re-login on the same control/network/NAT/DERP. The new identity reports a
+	// structurally-identical NetInfo, which the buggy de-dup would have
+	// suppressed. (logout + up funnels through the same
+	// resetForProfileChangeLocked -> setControlClientLocked path as a
+	// localapi PUT /profiles/ switch.)
+	switchStep.Begin()
+	env.Relogin(n)
+	st2 := env.Status(n)
+	newKey := st2.Self.PublicKey
+	if newKey == oldKey {
+		switchStep.Fatalf("node key unchanged after relogin: %v", newKey.ShortString())
+	}
+	t.Logf("[node] after relogin: key=%s", newKey.ShortString())
+	switchStep.End(nil)
+
+	// Regression assertion: control must re-learn the same non-zero home DERP for
+	// the new identity. Times out at HomeDERP==0 without ResetNetInfoLast.
+	verifyStep.Begin()
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		cn := cs.Node(newKey)
+		if cn == nil {
+			return fmt.Errorf("control has no node for new key %v yet", newKey.ShortString())
+		}
+		if cn.HomeDERP == 0 {
+			return fmt.Errorf("home DERP not re-reported after profile switch (HomeDERP=0)")
+		}
+		if cn.HomeDERP != region {
+			return fmt.Errorf("home DERP region changed across switch: was %d, now %d", region, cn.HomeDERP)
+		}
+		return nil
+	}); err != nil {
+		env.DumpStatus(n)
+		verifyStep.Fatal(err)
+	}
+	t.Logf("[node] home DERP %d re-reported to control after profile switch", region)
+	verifyStep.End(nil)
+}
+
 // TestMullvadExitNode verifies that a Tailscale client whose netmap contains
 // a plain-WireGuard exit node (the way Mullvad exit nodes are wired up by
 // the control plane) can route internet traffic through it, with the source
