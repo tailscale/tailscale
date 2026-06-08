@@ -1166,6 +1166,68 @@ func (e *Env) RotateDiscoKey(n *Node) {
 	}
 }
 
+// ForcePreferredDERP pins n's home DERP to the given region via the
+// "force-prefer-derp" debug action, so its reported NetInfo.PreferredDERP is
+// deterministic. The force lives on the long-lived magicsock.Conn and so
+// persists across an in-process profile switch. It fatals the test on error.
+func (e *Env) ForcePreferredDERP(n *Node, region int) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	b, err := json.Marshal(region)
+	if err != nil {
+		e.t.Fatalf("ForcePreferredDERP(%s): %v", n.name, err)
+	}
+	if err := n.agent.DebugActionBody(ctx, "force-prefer-derp", bytes.NewReader(b)); err != nil {
+		e.t.Fatalf("ForcePreferredDERP(%s, %d): %v", n.name, region, err)
+	}
+}
+
+// Relogin switches n to a fresh login profile on the same test control server,
+// in-process (no daemon restart), so it comes up under a NEW node identity while
+// keeping the same long-lived magicsock.Conn. This is the control-client swap
+// that an interactive login or profile switch performs, and is what the
+// home-DERP re-report fix guards (see [magicsock.Conn.ResetNetInfoLast]).
+//
+// It switches to an empty profile (the in-process control-client swap the
+// LocalAPI PUT /profiles/ performs) and then logs back in with "tailscale up",
+// which both points the new control client at the test control and drives
+// registration to completion. It waits for the node to return to Running and
+// fatals the test on error.
+func (e *Env) Relogin(n *Node) {
+	e.t.Helper()
+	// Generous timeout: the profile switch triggers a fresh registration +
+	// netcheck + DERP connect, which is slow under TCG (no KVM).
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	// Switch to a fresh, empty login profile. This runs the in-process control-
+	// client swap (resetForProfileChangeLocked -> setControlClientLocked) that
+	// clears the home-DERP dedup cache under test, while preserving the existing
+	// magicsock.Conn (and any forced home DERP from [Env.ForcePreferredDERP]).
+	if err := n.agent.SwitchToEmptyProfile(ctx); err != nil {
+		e.t.Fatalf("Relogin(%s): SwitchToEmptyProfile: %v", n.name, err)
+	}
+	// Log back in to the same test control. "tailscale up --login-server" points
+	// the new control client at the test control and drives registration to
+	// completion (testcontrol auto-authorizes), the same path Env.Start uses.
+	if err := e.tailscaleUp(ctx, n); err != nil {
+		e.t.Fatalf("Relogin(%s): up: %v", n.name, err)
+	}
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		st, err := n.agent.Status(ctx)
+		if err != nil {
+			return err
+		}
+		if st.BackendState != "Running" {
+			return fmt.Errorf("backend state = %q, want Running", st.BackendState)
+		}
+		return nil
+	}); err != nil {
+		e.t.Fatalf("Relogin(%s): %v", n.name, err)
+	}
+}
+
 // RestartTailscaled signals tailscaled on n to die so that its supervisor
 // (gokrazy) restarts it. It then waits for tailscaled to come back to the
 // "Running" backend state. It fatals the test on error.

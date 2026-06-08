@@ -374,13 +374,22 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 80 && fakeControl.Match(destIP) {
+	if fakeControl.Match(destIP) && (destPort == 80 || destPort == 443) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		// The control client's noise dialer forces an HTTPS (port 443) dial when
+		// it made a noise dial recently — e.g. an immediate re-login or profile
+		// switch; see controlhttp.Dialer.forceNoise443. Serve the test control
+		// over TLS on 443 too so that path reaches it. (The cert isn't
+		// validated: noise dials authenticate via the Noise handshake.)
+		var ln net.Listener = netutil.NewOneConnListener(tc, nil)
+		if destPort == 443 {
+			ln = netutil.NewOneConnListener(tls.Server(tc, n.s.controlTLS), nil)
+		}
 		hs := &http.Server{Handler: n.s.control}
 		n.s.wg.Go(func() {
-			hs.Serve(netutil.NewOneConnListener(tc, nil))
+			hs.Serve(ln)
 		})
 		return
 	}
@@ -776,7 +785,7 @@ type derpServer struct {
 // want to exercise sha256-raw cert pinning can read the certSHA256Hex via
 // [Server.DERPCertSHA256Hex].
 func newDERPServer(hostname string) *derpServer {
-	tlsConfig, certHex := selfSignedDERPCert(hostname)
+	tlsConfig, certHex := selfSignedCert(hostname)
 	ds := &derpServer{
 		srv:           derpserver.New(key.NewNode(), logger.Discard),
 		tlsConfig:     tlsConfig,
@@ -790,10 +799,10 @@ func newDERPServer(hostname string) *derpServer {
 	return ds
 }
 
-// selfSignedDERPCert builds a self-signed ECDSA P-256 cert valid for hostname
-// and returns a *tls.Config that serves it, along with the SHA-256 hex digest
-// of the cert's DER bytes.
-func selfSignedDERPCert(hostname string) (*tls.Config, string) {
+// selfSignedCert builds a self-signed ECDSA P-256 cert valid for hostname and
+// returns a *tls.Config that serves it, along with the SHA-256 hex digest of
+// the cert's DER bytes (used by DERP for sha256-raw cert pinning).
+func selfSignedCert(hostname string) (*tls.Config, string) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if err != nil {
 		panic(fmt.Sprintf("vnet: generating DERP cert key: %v", err))
@@ -840,7 +849,12 @@ type Server struct {
 	networks     set.Set[*network]
 	networkByWAN *bart.Table[*network]
 
-	control    *testcontrol.Server
+	control *testcontrol.Server
+	// controlTLS is a self-signed cert for serving the test control over HTTPS
+	// (port 443) in addition to plaintext HTTP. The control client does not
+	// validate this cert (noise dials authenticate via the Noise handshake, not
+	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
+	controlTLS *tls.Config
 	derps      []*derpServer
 	fakeACME   *fakeACMEServer
 	pcapWriter *pcapWriter
@@ -888,6 +902,9 @@ func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Add
 // hostname verification succeeds for tests that pin via sha256-raw.
 var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
 
+// controlHostname is the hostname the fake control server is reached at.
+const controlHostname = "control.tailscale"
+
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
 		1: {
@@ -933,7 +950,7 @@ func New(c *Config) (*Server, error) {
 
 		control: &testcontrol.Server{
 			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://control.tailscale",
+			ExplicitBaseURL: "http://" + controlHostname,
 		},
 		fakeACME: newFakeACMEServer("http://acme.example"),
 
@@ -950,6 +967,7 @@ func New(c *Config) (*Server, error) {
 		return nil
 	}
 	s.fakeACME.lookupTXT = s.lookupTXT
+	s.controlTLS, _ = selfSignedCert(controlHostname)
 	for _, host := range derpHostnames {
 		s.derps = append(s.derps, newDERPServer(host))
 	}
