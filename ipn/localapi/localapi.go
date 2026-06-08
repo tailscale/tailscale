@@ -902,6 +902,10 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	if err := ipn.ValidateNotifyWatchOpt(mask); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// NotifyInitialNetMap is permitted alongside NotifyPeerChanges /
 	// NotifyPeerPatches for backwards compatibility with clients that
 	// set both (e.g. the Apple client). On platforms where

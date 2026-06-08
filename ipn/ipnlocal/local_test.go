@@ -2116,6 +2116,66 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	}
 }
 
+func TestWatchNotificationsClosesSlowConsumer(t *testing.T) {
+	b := newTestLocalBackend(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchAdded := make(chan struct{})
+	firstNotify := make(chan struct{}, 1)
+	releaseFirstNotify := make(chan struct{})
+	terminalMessage := make(chan string, 1)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		b.WatchNotificationsAs(ctx, nil, 0, func() { close(watchAdded) }, func(n *ipn.Notify) bool {
+			if n.ErrMessage != nil {
+				terminalMessage <- *n.ErrMessage
+				return true
+			}
+			select {
+			case firstNotify <- struct{}{}:
+				<-releaseFirstNotify
+			default:
+			}
+			return true
+		})
+	}()
+	<-watchAdded
+
+	state := ipn.Running
+	b.send(ipn.Notify{State: &state})
+	select {
+	case <-firstNotify:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first notification")
+	}
+
+	// The watcher's callback is blocked on the first notification. Fill the
+	// 128-slot queue, then send one more notification to force overflow.
+	for range 129 {
+		b.send(ipn.Notify{State: &state})
+	}
+
+	close(releaseFirstNotify)
+
+	select {
+	case got := <-terminalMessage:
+		if got != watchIPNBusFellBehindMessage {
+			t.Fatalf("terminal message = %q; want %q", got, watchIPNBusFellBehindMessage)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for terminal notification")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for watcher to close")
+	}
+}
+
 // TestNotifyForSessionPeerVisibility verifies the per-session masking
 // logic in [LocalBackend.notifyForSessionLocked] for the
 // NotifyPeerChanges / NotifyPeerPatches flag pair:

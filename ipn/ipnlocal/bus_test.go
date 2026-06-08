@@ -30,10 +30,10 @@ func TestIsNotableNotify(t *testing.T) {
 		{"empty", &ipn.Notify{}, false},
 		{"version", &ipn.Notify{Version: "foo"}, false},
 		{"netmap", &ipn.Notify{NetMap: new(netmap.NetworkMap)}, false},
-		{"peerchanges", &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{}}}, false},
-		{"peerschanged", &ipn.Notify{PeersChanged: []*tailcfg.Node{{}}}, false},
-		{"peersremoved", &ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, false},
-		{"userprofiles", &ipn.Notify{UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{1: (&tailcfg.UserProfile{}).View()}}, false},
+		{"peerchanges", &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{}}}, true},
+		{"peerschanged", &ipn.Notify{PeersChanged: []*tailcfg.Node{{}}}, true},
+		{"peersremoved", &ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, true},
+		{"userprofiles", &ipn.Notify{UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{1: (&tailcfg.UserProfile{}).View()}}, true},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
 		{"selfchange", &ipn.Notify{SelfChange: &tailcfg.Node{}}, true},
 	}
@@ -126,20 +126,18 @@ func (st *rateLimitingBusSenderTester) advance(d time.Duration) {
 }
 
 func TestRateLimitingBusSender(t *testing.T) {
-	// Both share NodeID 1 so merge collapses to a single PeerChange and
-	// the later one (nm2) wins.
-	nm1 := &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 1, DERPRegion: 1}}}
-	nm2 := &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 1, DERPRegion: 2}}}
+	ver1 := &ipn.Notify{Version: "1"}
+	ver2 := &ipn.Notify{Version: "2"}
 	eng1 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 	eng2 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 
 	t.Run("unbuffered", func(t *testing.T) {
 		st := &rateLimitingBusSenderTester{tb: t}
-		st.send(nm1)
-		st.send(nm2)
+		st.send(ver1)
+		st.send(ver2)
 		st.send(eng1)
 		st.send(eng2)
-		if !slices.Equal(st.got, []*ipn.Notify{nm1, nm2, eng1, eng2}) {
+		if !slices.Equal(st.got, []*ipn.Notify{ver1, ver2, eng1, eng2}) {
 			t.Errorf("got %d items; want 4 specific ones, unmodified", len(st.got))
 		}
 	})
@@ -152,8 +150,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 		if len(st.got) != 1 {
 			t.Fatalf("got %d items; expected 1 (first to flush immediately)", len(st.got))
 		}
-		st.send(nm1)
-		st.send(nm2)
+		st.send(ver1)
+		st.send(ver2)
 		st.send(eng1)
 		st.send(eng2)
 		if len(st.got) != 1 {
@@ -168,8 +166,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 			t.Fatalf("got %d items; want 2", len(st.got))
 		}
 		gotn := st.got[1]
-		if !reflect.DeepEqual(gotn.PeerChangedPatch, nm2.PeerChangedPatch) {
-			t.Errorf("got wrong PeerChangedPatch; got %v want %v", gotn.PeerChangedPatch, nm2.PeerChangedPatch)
+		if gotn.Version != ver1.Version {
+			t.Errorf("got wrong Version; got %q want %q", gotn.Version, ver1.Version)
 		}
 		if gotn.Engine != eng2.Engine {
 			t.Errorf("got wrong Engine; got %p", gotn.Engine)
@@ -206,15 +204,18 @@ func TestRateLimitingBusSender(t *testing.T) {
 
 		incoming := make(chan *ipn.Notify, 2)
 		go func() {
-			incoming <- nm1
+			incoming <- ver1
 			waitSend()
-			incoming <- nm2
+			incoming <- eng2
 			waitSend()
 			st.advance(5 * time.Second)
 			select {
 			case n := <-flushc:
-				if !reflect.DeepEqual(n.PeerChangedPatch, nm2.PeerChangedPatch) {
-					t.Errorf("got wrong PeerChangedPatch; got %v want %v", n.PeerChangedPatch, nm2.PeerChangedPatch)
+				if n.Version != ver1.Version {
+					t.Errorf("got wrong Version; got %q want %q", n.Version, ver1.Version)
+				}
+				if n.Engine != eng2.Engine {
+					t.Errorf("got wrong Engine; got %p", n.Engine)
 				}
 			case <-time.After(10 * time.Second):
 				t.Error("timeout")

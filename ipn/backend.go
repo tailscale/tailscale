@@ -158,6 +158,25 @@ const (
 	NotifyPeerPatches NotifyWatchOpt = 1 << 15
 )
 
+// NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
+// subscription bits that cannot be combined with [NotifyRateLimit].
+//
+// Those bits describe stateful delta streams. Randomly delaying or merging
+// messages in those streams would break the consumer's ability to maintain a
+// coherent local view.
+const NotifyRateLimitIncompatibleBits = NotifyPeerChanges | NotifyNoNetMap | NotifyInitialStatus | NotifyPeerPatches
+
+// ValidateNotifyWatchOpt reports whether mask is a valid WatchIPNBus
+// subscription mask.
+func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
+	if mask&NotifyRateLimit != 0 {
+		if bad := mask & NotifyRateLimitIncompatibleBits; bad != 0 {
+			return fmt.Errorf("NotifyRateLimit is incompatible with new-style IPN bus subscription bits %v", bad)
+		}
+	}
+	return nil
+}
+
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
 // (cmd/tailscale, iOS, macOS, Win Tasktray).
 // In any given notification, any or all of these may be nil, meaning

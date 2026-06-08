@@ -634,6 +634,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 	tests := []struct {
 		desc                    string
 		permitRead, permitWrite bool
+		mask                    ipn.NotifyWatchOpt
 		wantStatus              int
 	}{
 		{
@@ -654,6 +655,12 @@ func TestServeWatchIPNBus(t *testing.T) {
 			permitWrite: true,
 			wantStatus:  http.StatusOK,
 		},
+		{
+			desc:       "invalid-rate-limit-mask",
+			permitRead: true,
+			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -668,7 +675,11 @@ func TestServeWatchIPNBus(t *testing.T) {
 			c := s.Client()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState), nil)
+			mask := tt.mask
+			if mask == 0 {
+				mask = ipn.NotifyInitialState
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, mask), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
