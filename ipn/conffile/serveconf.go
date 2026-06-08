@@ -55,13 +55,14 @@ type ServiceDetailsFile struct {
 type ServiceProtocol string
 
 const (
-	ProtoHTTP             ServiceProtocol = "http"
-	ProtoHTTPS            ServiceProtocol = "https"
-	ProtoHTTPSInsecure    ServiceProtocol = "https+insecure"
-	ProtoTCP              ServiceProtocol = "tcp"
-	ProtoTLSTerminatedTCP ServiceProtocol = "tls-terminated-tcp"
-	ProtoFile             ServiceProtocol = "file"
-	ProtoTUN              ServiceProtocol = "TUN"
+	ProtoHTTP              ServiceProtocol = "http"
+	ProtoHTTPS             ServiceProtocol = "https"
+	ProtoHTTPSInsecure     ServiceProtocol = "https+insecure"
+	ProtoTLSTerminatedHTTP ServiceProtocol = "tls-terminated-http"
+	ProtoTCP               ServiceProtocol = "tcp"
+	ProtoTLSTerminatedTCP  ServiceProtocol = "tls-terminated-tcp"
+	ProtoFile              ServiceProtocol = "file"
+	ProtoTUN               ServiceProtocol = "TUN"
 )
 
 // Target is a destination for traffic to go to when it arrives at a Tailscale
@@ -115,7 +116,7 @@ func (t *Target) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		t.Protocol = ProtoFile
 		t.Destination = target
 		t.DestinationPorts = tailcfg.PortRange{}
-	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTCP, ProtoTLSTerminatedTCP:
+	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTLSTerminatedHTTP, ProtoTCP, ProtoTLSTerminatedTCP:
 		host, portRange, err := tailcfg.ParseHostPortRange(rest)
 		if err != nil {
 			return err
@@ -137,7 +138,7 @@ func (t *Target) MarshalText() ([]byte, error) {
 		out = fmt.Sprintf("%s://%s", t.Protocol, t.Destination)
 	case ProtoTUN:
 		out = "TUN"
-	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTCP, ProtoTLSTerminatedTCP:
+	case ProtoHTTP, ProtoHTTPS, ProtoHTTPSInsecure, ProtoTLSTerminatedHTTP, ProtoTCP, ProtoTLSTerminatedTCP:
 		out = fmt.Sprintf("%s://%s", t.Protocol, net.JoinHostPort(t.Destination, t.DestinationPorts.String()))
 	default:
 		return nil, errors.New("unsupported protocol")
