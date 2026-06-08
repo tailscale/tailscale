@@ -496,3 +496,17 @@ parrotfish
 triggerfish
 tench
 shiner
+pantone
+rainbow
+munsell
+werner
+hue
+saturation
+gamut
+chroma
+tint
+shade
+luma
+spectrum
+roygbiv
+pride
