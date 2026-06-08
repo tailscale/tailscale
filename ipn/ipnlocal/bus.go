@@ -218,7 +218,11 @@ func mergePeerChangeForIpnBus(old, new *tailcfg.PeerChange) *tailcfg.PeerChange 
 // should be sent on the IPN bus immediately (e.g. to GUIs) without
 // rate limiting it for a few seconds.
 //
-// PeerChanges and Engine are the only "boring" (rate-limitable) fields.
+// This is only used for legacy [ipn.NotifyRateLimit] subscribers. New-style
+// subscriptions that receive delta streams are rejected by
+// [ipn.ValidateNotifyWatchOpt] when combined with NotifyRateLimit.
+//
+// Legacy NetMap and Engine are the only "boring" (rate-limitable) fields.
 func isNotableNotify(n *ipn.Notify) bool {
 	if n == nil {
 		return false
@@ -233,6 +237,10 @@ func isNotableNotify(n *ipn.Notify) bool {
 		n.LoginFinished != nil ||
 		n.SelfChange != nil ||
 		n.InitialStatus != nil ||
+		len(n.PeerChangedPatch) > 0 ||
+		len(n.PeersChanged) > 0 ||
+		len(n.PeersRemoved) > 0 ||
+		len(n.UserProfiles) > 0 ||
 		!n.DriveShares.IsNil() ||
 		n.Health != nil ||
 		len(n.IncomingFiles) > 0 ||

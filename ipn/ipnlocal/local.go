@@ -3587,17 +3587,24 @@ func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
 // called with non-nil pointers. The caller must not modify roNotify. If
 // fn returns false, the watch also stops.
 //
-// Failure to consume many notifications in a row will result in dropped
-// notifications. There is currently (2022-11-22) no mechanism provided to
-// detect when a message has been dropped.
+// Failure to consume many notifications in a row will result in one final
+// notification with ErrMessage set, followed by the watch closing.
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	b.WatchNotificationsAs(ctx, nil, mask, onWatchAdded, fn)
 }
+
+const watchIPNBusFellBehindMessage = "IPN bus consumer fell behind; closing watch"
 
 // WatchNotificationsAs is like [LocalBackend.WatchNotifications] but takes an [ipnauth.Actor]
 // as an additional parameter. If non-nil, the specified callback is invoked
 // only for notifications relevant to this actor.
 func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.Actor, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+	if err := ipn.ValidateNotifyWatchOpt(mask); err != nil {
+		msg := err.Error()
+		fn(&ipn.Notify{Version: version.Long(), ErrMessage: &msg})
+		return
+	}
+
 	ch := make(chan *ipn.Notify, 128)
 	sessionID := rands.HexString(16)
 	if mask&ipn.NotifyHealthActions == 0 {
@@ -3916,7 +3923,32 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 		select {
 		case sess.ch <- nForSess:
 		default:
-			// Drop the notification if the channel is full.
+			b.closeLaggingWatchSessionLocked(sess)
+		}
+	}
+}
+
+// closeLaggingWatchSessionLocked removes sess from the active watcher set and
+// arranges for its consumer to receive one final terminal error notification.
+//
+// b.mu must be held.
+func (b *LocalBackend) closeLaggingWatchSessionLocked(sess *watchSession) {
+	delete(b.notifyWatchers, sess.sessionID)
+
+	// The session already fell behind, so the queued delta stream is not
+	// trustworthy. Drop queued messages and replace them with a terminal
+	// notification.
+	for {
+		select {
+		case <-sess.ch:
+		default:
+			msg := watchIPNBusFellBehindMessage
+			sess.ch <- &ipn.Notify{
+				Version:    version.Long(),
+				ErrMessage: &msg,
+			}
+			close(sess.ch)
+			return
 		}
 	}
 }
