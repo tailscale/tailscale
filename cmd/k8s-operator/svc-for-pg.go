@@ -99,7 +99,6 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	pgName := svc.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
-		logger.Infof("[unexpected] no ProxyGroup annotation, skipping Tailscale Service provisioning")
 		return res, nil
 	}
 
@@ -674,7 +673,7 @@ func (r *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			case shouldBeAdvertised:
 				replicaName, ok := strings.CutSuffix(secret.Name, "-config")
 				if !ok {
-					logger.Infof("[unexpected] unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
+					logger.Warnf("unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
 					return nil
 				}
 				ready, err := r.backendRoutesSetup(ctx, serviceName.String(), replicaName, cfg, logger)
@@ -825,7 +824,7 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 	}
 	svcList := &corev1.ServiceList{}
 	if err := r.List(ctx, svcList); err != nil {
-		errs = append(errs, fmt.Errorf("[unexpected] error listing Services: %w", err))
+		errs = append(errs, fmt.Errorf("error listing Services: %w", err))
 		return errors.Join(errs...)
 	}
 	svcName := nameForService(svc)

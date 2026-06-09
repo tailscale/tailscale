@@ -173,14 +173,14 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Infof("error validating tailscale IngressClass: %v.", err)
 		return false, nil
 	}
-	// Get and validate ProxyGroup readiness
+
+	// We only act on services that are annotated as using a proxy group.
 	pgName := ing.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
-		logger.Infof("[unexpected] no ProxyGroup annotation, skipping Tailscale Service provisioning")
 		return false, nil
 	}
-	logger = logger.With("ProxyGroup", pgName)
 
+	logger = logger.With("ProxyGroup", pgName)
 	if !tsoperator.ProxyGroupAvailable(pg) {
 		logger.Infof("ProxyGroup is not (yet) ready")
 		return false, nil
@@ -685,9 +685,10 @@ func (r *HAIngressReconciler) validateIngress(ctx context.Context, ing *networki
 	// It is invalid to have multiple Ingress resources for the same Tailscale Service in one cluster.
 	ingList := &networkingv1.IngressList{}
 	if err := r.List(ctx, ingList); err != nil {
-		errs = append(errs, fmt.Errorf("[unexpected] error listing Ingresses: %w", err))
+		errs = append(errs, fmt.Errorf("failed to list ingresses: %w", err))
 		return errors.Join(errs...)
 	}
+
 	for _, i := range ingList.Items {
 		if r.shouldExpose(&i) && hostnameForIngress(&i) == hostname && i.UID != ing.UID {
 			errs = append(errs, fmt.Errorf("found duplicate Ingress %q for hostname %q - multiple Ingresses for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&i), hostname))
@@ -876,14 +877,16 @@ func ownerAnnotations(operatorID string, svc *tailscale.VIPService) (map[string]
 	}
 	if svc == nil {
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
-		json, err := json.Marshal(c)
+		data, err := json.Marshal(c)
 		if err != nil {
-			return nil, fmt.Errorf("[unexpected] unable to marshal Tailscale Service's owner annotation contents: %w, please report this", err)
+			return nil, fmt.Errorf("failed to marshal Tailscale Service's owner annotation contents: %w", err)
 		}
+
 		return map[string]string{
-			ownerAnnotation: string(json),
+			ownerAnnotation: string(data),
 		}, nil
 	}
+
 	o, err := parseOwnerAnnotation(svc)
 	if err != nil {
 		return nil, err

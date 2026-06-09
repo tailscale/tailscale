@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstime"
@@ -127,11 +128,13 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 			msg = err.Error()
 			return res, err
 		}
+
 		if pod == nil {
-			lg.Warnf("[unexpected] ProxyGroup is ready, but replica %d was not found", i)
+			lg.Warnf("ProxyGroup is ready, but replica %d was not found", i)
 			reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 			return res, nil
 		}
+
 		lg.Debugf("looking at Pod with IPs %v", pod.Status.PodIPs)
 		ready := false
 		for _, ep := range eps.Endpoints {
@@ -166,9 +169,10 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, lg *zap.SugaredLogger) bool {
 	podIP, err := podIPv4(pod)
 	if err != nil {
-		lg.Warnf("[unexpected] error retrieving Pod's IPv4 address: %v", err)
+		lg.Warn("error retrieving Pod's IPv4 address: %v", err)
 		return false
 	}
+
 	// Currently we only ever set a single address on and Endpoint and nothing else is meant to modify this.
 	if len(ep.Addresses) != 1 {
 		return false
