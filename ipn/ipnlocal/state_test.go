@@ -19,6 +19,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	memro "go4.org/mem"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -1614,6 +1615,126 @@ func TestEngineReconfigOnPeerRouteDelta(t *testing.T) {
 		return
 	}
 	t.Fatalf("engine config missing peer %v", replacement.Key.ShortString())
+}
+
+// TestEngineReconfigOnPeerRekeyDelta is a regression test for a bug where a
+// peer that rotates its node (WireGuard) key is left mis-programmed in
+// wireguard-go when the rotation arrives over the incremental delta path.
+//
+// Control can deliver a node-key rotation for a single logical peer (same
+// Tailscale address) as a remove of the old NodeID plus an add of a new NodeID,
+// e.g. a netmap diff of the form:
+//
+//   - [oldkey] d:<disco> D1 100.64.0.1 ...
+//   - [newkey] d:<disco> D1 100.64.0.1 ...
+//
+// where the bracketed node key changes but the disco key, DERP, and address
+// are unchanged.
+//
+// [LocalBackend.UpdateNetmapDelta] hands the new key to magicsock
+// (ms.UpsertPeer) and updates the node backend, but the engine
+// (wireguard-go) is only reprogrammed when [netmapDeltaNeedsAuthReconfig]
+// returns true. That predicate has no case for removes and skips Upserts of a
+// NodeID it doesn't already know (`!ok` => continue), so a remove+add re-key
+// triggers no authReconfig: wireguard-go is left holding the dead old key and
+// never learns the new one. Its PeerLookupFunc/PeerByIPPacketFunc callbacks
+// then miss and handshakes with the re-keyed peer never complete.
+//
+// This test drives that exact delta and asserts the engine ends up programmed
+// with the new key (and not the old). It fails against the buggy code.
+func TestEngineReconfigOnPeerRekeyDelta(t *testing.T) {
+	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	peerAddr := netip.MustParsePrefix("100.64.0.1/32")
+
+	const oldID = tailcfg.NodeID(1)
+	const newID = tailcfg.NodeID(2)
+	// staticNodeKey returns a deterministic node key built by repeating b
+	// across all 32 bytes. Because ShortString (debug32) derives from the
+	// leading key bytes, distinct b values render as distinct, stable
+	// ShortStrings, keeping the re-key assertions legible.
+	staticNodeKey := func(b byte) key.NodePublic {
+		var raw [32]byte
+		for i := range raw {
+			raw[i] = b
+		}
+		return key.NodePublicFromRaw32(memro.B(raw[:]))
+	}
+	// oldKey renders as [qqqqq], newKey as [u7u7u].
+	oldKey := staticNodeKey(0xaa)
+	newKey := staticNodeKey(0xbb)
+	// The same logical peer keeps its disco key across the rotation, mirroring
+	// the netmap diff above.
+	sharedDisco := makeDiscoKeyFromID(oldID)
+
+	// The peer as initially known to us: NodeID oldID, node key oldKey.
+	oldPeerStruct := makePeer(oldID, withName("rekey-node"), withAddresses(peerAddr)).AsStruct()
+	oldPeerStruct.Key = oldKey
+	oldPeerStruct.DiscoKey = sharedDisco
+	oldPeerStruct.AllowedIPs = []netip.Prefix{peerAddr}
+	oldPeer := oldPeerStruct.View()
+
+	nm := buildNetmapWithPeers(makePeer(100, withName("self")), oldPeer)
+
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, false)
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc().authenticated(nm)
+
+	// Precondition: after the initial netmap, wireguard-go is programmed with
+	// the old key.
+	if cfg := engine.Config(); cfg == nil || !slices.ContainsFunc(cfg.Peers, func(p wgcfg.Peer) bool {
+		return p.PublicKey == oldKey
+	}) {
+		t.Fatalf("precondition failed: engine not programmed with old key %v", oldKey.ShortString())
+	}
+
+	// The same logical peer rotates its node key: control removes the old
+	// NodeID and adds a new NodeID reusing the same address and disco key.
+	newPeerStruct := makePeer(newID, withName("rekey-node"), withAddresses(peerAddr)).AsStruct()
+	newPeerStruct.Key = newKey
+	newPeerStruct.DiscoKey = sharedDisco
+	newPeerStruct.AllowedIPs = []netip.Prefix{peerAddr}
+
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersRemoved: []tailcfg.NodeID{oldID},
+		PeersChanged: []*tailcfg.Node{newPeerStruct},
+	}, time.Unix(123, 0))
+	if !ok {
+		t.Fatal("MutationsFromMapResponse: not handled incrementally")
+	}
+	if !lb.UpdateNetmapDelta(muts) {
+		t.Fatal("UpdateNetmapDelta = false, want true")
+	}
+
+	// magicsock learned the new key (this side of the state stays consistent)...
+	if _, err := lb.MagicConn().ParseEndpoint(newKey.UntypedHexString()); err != nil {
+		t.Errorf("magicsock has no endpoint for new key %v: %v", newKey.ShortString(), err)
+	}
+
+	// ...but wireguard-go must be reprogrammed to the new key too, or its
+	// on-demand peer-lookup callbacks miss and the handshake never completes.
+	cfg := engine.Config()
+	if cfg == nil {
+		t.Fatal("engine config is nil")
+	}
+	var gotKeys []string
+	hasOld, hasNew := false, false
+	for _, p := range cfg.Peers {
+		gotKeys = append(gotKeys, p.PublicKey.ShortString())
+		switch p.PublicKey {
+		case oldKey:
+			hasOld = true
+		case newKey:
+			hasNew = true
+		}
+	}
+	if hasOld {
+		t.Errorf("wireguard-go still programmed with dead old key %v after re-key", oldKey.ShortString())
+	}
+	if !hasNew {
+		t.Errorf("wireguard-go not reprogrammed with new key %v after re-key (engine never reconfigured); got peers %v",
+			newKey.ShortString(), gotKeys)
+	}
 }
 
 // TestSendPreservesAuthURL tests that wgengine updates arriving in the middle of
