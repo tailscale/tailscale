@@ -763,23 +763,16 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 }
 
 // resolveViaDomain synthesizes an IP address for quad-A DNS requests of the form
-// `<IPv4-address-with-hypens-instead-of-dots>-via-<siteid>[.*]`. Two prior formats that
-// didn't pan out (due to a Chrome issue and DNS search ndots issues) were
-// `<IPv4-address>.via-<X>` and the older `via-<X>.<IPv4-address>`,
-// where X is a decimal, or hex-encoded number with a '0x' prefix.
+// `<IPv4-address-with-hypens-instead-of-dots>-via-<siteid>[.*]`.
+// For example: "192-168-1-2-via-7" or "192-168-1-2-via-7.foo.ts.net."
 //
 // This exists as a convenient mapping into Tailscales 'Via Range'.
 //
 // It returns a zero netip.Addr and true to indicate a successful response with
 // an empty answers section if the specified domain is a valid Tailscale 4via6
 // domain, but the request type is neither quad-A nor ALL.
-//
-// TODO(maisem/bradfitz/tom): `<IPv4-address>.via-<X>` was introduced
-// (2022-06-02) to work around an issue in Chrome where it would treat
-// "http://via-1.1.2.3.4" as a search string instead of a URL. We should rip out
-// the old format in early 2023.
-func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
-	fqdn := string(domain.WithoutTrailingDot())
+func (r *Resolver) resolveViaDomain(dnsName dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
+	fqdn := string(dnsName.WithoutTrailingDot())
 	switch typ {
 	case dns.TypeA, dns.TypeAAAA, dns.TypeALL:
 		// For Type A requests, we should return a successful response
@@ -793,45 +786,23 @@ func (r *Resolver) resolveViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Ad
 	default:
 		return netip.Addr{}, false
 	}
-	if len(fqdn) < len("via-X.0.0.0.0") {
+	if len(fqdn) < len("0-0-0-0-via-0") {
 		return netip.Addr{}, false // too short to be valid
 	}
 
-	var siteID string
-	var ip4Str string
-	switch {
-	case strings.Contains(fqdn, "-via-"):
-		// Format number 3: "192-168-1-2-via-7" or "192-168-1-2-via-7.foo.ts.net."
-		// Third time's a charm. The earlier two formats follow after this block.
-		firstLabel, domain, _ := strings.Cut(fqdn, ".") // "192-168-1-2-via-7"
-		if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
-			return netip.Addr{}, false
-		}
-		v4hyphens, suffix, ok := strings.Cut(firstLabel, "-via-")
-		if !ok {
-			return netip.Addr{}, false
-		}
-		siteID = suffix
-		ip4Str = strings.ReplaceAll(v4hyphens, "-", ".")
-	case strings.HasPrefix(fqdn, "via-"):
-		firstDot := strings.Index(fqdn, ".")
-		if firstDot < 0 {
-			return netip.Addr{}, false // missing dot delimiters
-		}
-		siteID = fqdn[len("via-"):firstDot]
-		ip4Str = fqdn[firstDot+1:]
-	default:
-		lastDot := strings.LastIndex(fqdn, ".")
-		if lastDot < 0 {
-			return netip.Addr{}, false // missing dot delimiters
-		}
-		suffix := fqdn[lastDot+1:]
-		if !strings.HasPrefix(suffix, "via-") {
-			return netip.Addr{}, false
-		}
-		siteID = suffix[len("via-"):]
-		ip4Str = fqdn[:lastDot]
+	if !strings.Contains(fqdn, "-via-") {
+		return netip.Addr{}, false // not a 4via6 domain
 	}
+	firstLabel, domain, _ := strings.Cut(fqdn, ".") // "192-168-1-2-via-7"
+	if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
+		return netip.Addr{}, false
+	}
+	v4hyphens, suffix, ok := strings.Cut(firstLabel, "-via-")
+	if !ok {
+		return netip.Addr{}, false
+	}
+	siteID := suffix
+	ip4Str := strings.ReplaceAll(v4hyphens, "-", ".")
 
 	ip4, err := netip.ParseAddr(ip4Str)
 	if err != nil {
