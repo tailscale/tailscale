@@ -156,6 +156,21 @@ const (
 	// promotes any patch into a full-Node entry in [Notify.PeersChanged]
 	// for this session, at the cost of bandwidth.
 	NotifyPeerPatches NotifyWatchOpt = 1 << 15
+
+	// NotifyInProcessNoDisconnect, if set, marks this watcher as an
+	// in-process subscriber that must not be disconnected for falling behind
+	// on its notification queue. Instead, if its queue fills, Notify
+	// production blocks until the watcher catches up.
+	//
+	// Callers using this bit must receive and process notifications promptly.
+	// Their callbacks must not call back into LocalBackend or wait on work that
+	// might call back into LocalBackend, because the producer might be holding
+	// LocalBackend's mutex while waiting for the watcher to catch up.
+	//
+	// This bit is only valid for in-process callers of
+	// LocalBackend.WatchNotificationsAs. LocalAPI WatchIPNBus clients must
+	// not request it.
+	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
 )
 
 // NotifyRateLimitIncompatibleBits is the set of new-style IPN bus

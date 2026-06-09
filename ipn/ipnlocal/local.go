@@ -167,6 +167,7 @@ func (b *LocalBackend) ListenSSH(ln net.Listener, logf logger.Logf) (net.Listene
 // and sessionID as required to close targeted buses.
 type watchSession struct {
 	ch        chan *ipn.Notify
+	ctx       context.Context
 	owner     ipnauth.Actor // or nil
 	sessionID string
 	cancel    context.CancelFunc // to shut down the session
@@ -3588,7 +3589,10 @@ func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
 // fn returns false, the watch also stops.
 //
 // Failure to consume many notifications in a row will result in one final
-// notification with ErrMessage set, followed by the watch closing.
+// notification with ErrMessage set, followed by the watch closing, unless mask
+// includes [ipn.NotifyInProcessNoDisconnect]. Watchers using
+// NotifyInProcessNoDisconnect must not call back into LocalBackend from fn or
+// wait on work that might call back into LocalBackend.
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	b.WatchNotificationsAs(ctx, nil, mask, onWatchAdded, fn)
 }
@@ -3684,6 +3688,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 
 	session := &watchSession{
 		ch:        ch,
+		ctx:       ctx,
 		owner:     actor,
 		sessionID: sessionID,
 		cancel:    cancel,
@@ -3822,8 +3827,10 @@ func (b *LocalBackend) DebugForcePreferDERP(n int) {
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //
-// If no frontend is connected or API watchers are backed up, the notification
-// is dropped without being delivered.
+// If no frontend is connected, the notification is dropped without being
+// delivered. If an out-of-process watcher is backed up, it is disconnected. If
+// an in-process no-disconnect watcher is backed up, sending blocks until the
+// watcher catches up.
 //
 // If n contains Prefs, those will be sanitized before being delivered.
 //
@@ -3903,6 +3910,9 @@ func (b *LocalBackend) sendTo(n ipn.Notify, recipient notificationTarget) {
 }
 
 // sendToLocked is like [LocalBackend.sendTo], but assumes b.mu is already held.
+// If a [ipn.NotifyInProcessNoDisconnect] watcher falls behind, sendToLocked
+// blocks until that watcher catches up or closes. Such watchers must not call
+// back into LocalBackend from their notification callback.
 func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) {
 	if n.Prefs != nil {
 		n.Prefs = new(stripKeysFromPrefs(*n.Prefs))
@@ -3923,6 +3933,13 @@ func (b *LocalBackend) sendToLocked(n ipn.Notify, recipient notificationTarget) 
 		select {
 		case sess.ch <- nForSess:
 		default:
+			if sess.mask&ipn.NotifyInProcessNoDisconnect != 0 {
+				select {
+				case sess.ch <- nForSess:
+				case <-sess.ctx.Done():
+				}
+				continue
+			}
 			b.closeLaggingWatchSessionLocked(sess)
 		}
 	}

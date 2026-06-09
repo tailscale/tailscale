@@ -56,6 +56,10 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 			mask: NotifyPeerChanges | NotifyPeerPatches | NotifyNoNetMap | NotifyInitialStatus,
 		},
 		{
+			name: "in-process-no-disconnect",
+			mask: NotifyInProcessNoDisconnect | NotifyPeerChanges,
+		},
+		{
 			name:    "rate-limit-with-peer-changes",
 			mask:    NotifyRateLimit | NotifyPeerChanges,
 			wantErr: true,
