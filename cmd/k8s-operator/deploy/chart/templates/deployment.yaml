@@ -6,6 +6,9 @@ kind: Deployment
 metadata:
   name: operator
   namespace: {{ .Release.Namespace }}
+  {{- if .Values.annotations }}
+  annotations: {{- toYaml .Values.annotations | nindent 4 }}
+  {{- end }}
 spec:
   replicas: 1
   strategy:
