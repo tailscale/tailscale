@@ -419,7 +419,7 @@ func (lg *Logger) uploading(ctx context.Context) {
 				if retryAfter <= 0 {
 					retryAfter = mrand.N(30*time.Second) + 30*time.Second
 				}
-				tstime.Sleep(ctx, max(retryAfter, 5*time.Minute)) // ignore absurdly large retryAfter values
+				tstime.Sleep(ctx, min(retryAfter, 5*time.Minute)) // ignore absurdly large retryAfter values
 			} else {
 				// Only print a success message after recovery.
 				if numFailures > 0 {
