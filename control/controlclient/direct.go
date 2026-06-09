@@ -108,6 +108,7 @@ type Direct struct {
 
 	persist                 persist.PersistView
 	authKey                 string
+	tailnet                 string // optional Tailnet ID or Legacy ID; if empty, fall back to syspolicy pkey.Tailnet
 	tryingNewKey            key.NodePrivate
 	expiry                  time.Time         // or zero value if none/unknown
 	hostinfo                *tailcfg.Hostinfo // always non-nil
@@ -139,6 +140,7 @@ type Options struct {
 	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
 	ServerURL            string                             // URL of the tailcontrol server
 	AuthKey              string                             // optional node auth key for auto registration
+	Tailnet              string                             // optional Tailnet ID or Legacy ID to log into; sent verbatim to the control server
 	Clock                tstime.Clock
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
@@ -384,6 +386,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		logf:              opts.Logf,
 		persist:           opts.Persist.View(),
 		authKey:           opts.AuthKey,
+		tailnet:           opts.Tailnet,
 		debugFlags:        opts.DebugFlags,
 		netMon:            netMon,
 		health:            opts.HealthTracker,
@@ -779,9 +782,13 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := c.polc.GetString(pkey.Tailnet, "")
-	if err != nil {
-		c.logf("unable to provide Tailnet field in register request. err: %v", err)
+	tailnet := c.tailnet
+	if tailnet == "" {
+		var err error
+		tailnet, err = c.polc.GetString(pkey.Tailnet, "")
+		if err != nil {
+			c.logf("unable to provide Tailnet field in register request. err: %v", err)
+		}
 	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{

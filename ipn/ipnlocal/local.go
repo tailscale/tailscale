@@ -963,6 +963,11 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 	// before anything is running, so there's no need to lock and we don't
 	// update any subsystems. At runtime, we both need to lock and update
 	// subsystems with the new prefs.
+	if j, err := conf.Parsed.RedactedJSON(); err != nil {
+		b.logf("config: loaded %s (failed to render for logging: %v)", conf.Path, err)
+	} else {
+		b.logf("config: loaded %s: %s", conf.Path, j)
+	}
 	p := b.pm.CurrentPrefs().AsStruct()
 	mp, err := conf.Parsed.ToPrefs()
 	if err != nil {
@@ -3030,6 +3035,7 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		Persist:              *persistv,
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
+		Tailnet:              b.confTailnetLocked(),
 		Hostinfo:             b.hostInfoWithServicesLocked(),
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
@@ -3505,6 +3511,18 @@ func applyConfigToHostinfo(hi *tailcfg.Hostinfo, c *conffile.Config) {
 	if c.Parsed.Hostname != nil {
 		hi.Hostname = *c.Parsed.Hostname
 	}
+}
+
+// confTailnetLocked returns the Tailnet identifier (Tailnet ID or Legacy ID)
+// configured in the loaded config file, or the empty string if no config file
+// is loaded or the field is unset.
+//
+// b.mu must be held.
+func (b *LocalBackend) confTailnetLocked() string {
+	if b.conf == nil || b.conf.Parsed.Tailnet == nil {
+		return ""
+	}
+	return *b.conf.Parsed.Tailnet
 }
 
 // WatchNotifications subscribes to the ipn.Notify message bus notification
