@@ -33,7 +33,7 @@ type ConfigVAlpha struct {
 	// it to a specific tailnet.
 	// If empty, no tailnet is sent and the control server uses its
 	// default behavior for the authenticating user.
-	Tailnet *string `json:",omitempty"`
+	Tailnet *string `json:",omitzero"`
 
 	AcceptDNS    opt.Bool `json:"acceptDNS,omitempty"`    // --accept-dns
 	AcceptRoutes opt.Bool `json:"acceptRoutes,omitempty"` // --accept-routes defaults to true
