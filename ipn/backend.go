@@ -6,6 +6,7 @@ package ipn
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,6 +173,80 @@ const (
 	// not request it.
 	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
 )
+
+// String implements the [fmt.Stringer] interface.
+// Returns the string representation of all the bits joined by the bitwise-or "|" operator.
+func (o NotifyWatchOpt) String() string {
+	if o == NotifyWatchOpt(0) {
+		return fmt.Sprintf("%T(%#x)", o, uint64(o))
+	}
+
+	pkg, _, found := strings.Cut(fmt.Sprintf("%T", o), ".")
+
+	var bits []string
+	var mask NotifyWatchOpt
+	try := func(bit NotifyWatchOpt, s string) {
+		if o&bit == 0 {
+			return
+		}
+		if found {
+			bits = append(bits, pkg+"."+s)
+		} else {
+			bits = append(bits, s)
+		}
+		mask |= bit
+	}
+	try(NotifyWatchEngineUpdates, "NotifyWatchEngineUpdates")
+	try(NotifyInitialState, "NotifyInitialState")
+	try(NotifyInitialPrefs, "NotifyInitialPrefs")
+	try(NotifyInitialNetMap, "NotifyInitialNetMap")
+	try(NotifyNoPrivateKeys, "NotifyNoPrivateKeys")
+	try(NotifyInitialDriveShares, "NotifyInitialDriveShares")
+	try(NotifyInitialOutgoingFiles, "NotifyInitialOutgoingFiles")
+	try(NotifyInitialHealthState, "NotifyInitialHealthState")
+	try(NotifyRateLimit, "NotifyRateLimit")
+	try(NotifyHealthActions, "NotifyHealthActions")
+	try(NotifyInitialSuggestedExitNode, "NotifyInitialSuggestedExitNode")
+	try(NotifyInitialClientVersion, "NotifyInitialClientVersion")
+	try(NotifyPeerChanges, "NotifyPeerChanges")
+	try(NotifyNoNetMap, "NotifyNoNetMap")
+	try(NotifyInitialStatus, "NotifyInitialStatus")
+	try(NotifyPeerPatches, "NotifyPeerPatches")
+	try(NotifyInProcessNoDisconnect, "NotifyInProcessNoDisconnect")
+
+	if mask != o {
+		bits = append(bits, fmt.Sprintf("%T(%#x)", o, uint64(o^mask))) // unknown
+	}
+
+	if len(bits) == 1 {
+		return bits[0]
+	}
+	// Multiple values, so we need to wrap with parentheses.
+	return "(" + strings.Join(bits, " | ") + ")"
+}
+
+// AppendText implements the [encoding.TextAppender] interface
+// by encoding its textual representation.
+func (o NotifyWatchOpt) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendUint(b, uint64(o), 10), nil
+}
+
+// MarshalText implements the [encoding.TextMarshaler] interface
+// by encoding its textual representation.
+func (o NotifyWatchOpt) MarshalText() (text []byte, err error) {
+	return o.AppendText(nil)
+}
+
+// UnmarshalText implements the [encoding.TextUnmarshaler] interface
+// by decoding its textual representation.
+func (o *NotifyWatchOpt) UnmarshalText(text []byte) error {
+	v, err := strconv.ParseUint(string(text), 10, 64)
+	if err != nil {
+		return err
+	}
+	*o = NotifyWatchOpt(v)
+	return nil
+}
 
 // NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
 // subscription bits that cannot be combined with [NotifyRateLimit].
