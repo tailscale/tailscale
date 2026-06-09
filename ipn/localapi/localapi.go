@@ -902,6 +902,10 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		}
 		mask = ipn.NotifyWatchOpt(v)
 	}
+	if mask&ipn.NotifyInProcessNoDisconnect != 0 {
+		http.Error(w, "NotifyInProcessNoDisconnect is only valid for in-process IPN bus subscribers", http.StatusBadRequest)
+		return
+	}
 	if err := ipn.ValidateNotifyWatchOpt(mask); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

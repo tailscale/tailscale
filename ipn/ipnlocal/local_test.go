@@ -2176,6 +2176,81 @@ func TestWatchNotificationsClosesSlowConsumer(t *testing.T) {
 	}
 }
 
+func TestWatchNotificationsInProcessNoDisconnectBlocksSender(t *testing.T) {
+	b := newTestLocalBackend(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchAdded := make(chan struct{})
+	firstNotify := make(chan struct{}, 1)
+	releaseFirstNotify := make(chan struct{})
+	terminalMessage := make(chan string, 1)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		b.WatchNotificationsAs(ctx, nil, ipn.NotifyInProcessNoDisconnect, func() { close(watchAdded) }, func(n *ipn.Notify) bool {
+			if n.ErrMessage != nil {
+				terminalMessage <- *n.ErrMessage
+				return true
+			}
+			select {
+			case firstNotify <- struct{}{}:
+				<-releaseFirstNotify
+			default:
+			}
+			return true
+		})
+	}()
+	<-watchAdded
+
+	state := ipn.Running
+	b.send(ipn.Notify{State: &state})
+	select {
+	case <-firstNotify:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first notification")
+	}
+
+	// Fill the 128-slot queue. The next send should block until the
+	// subscriber catches up, not disconnect the subscriber.
+	for range 128 {
+		b.send(ipn.Notify{State: &state})
+	}
+
+	sendDone := make(chan struct{})
+	go func() {
+		b.send(ipn.Notify{State: &state})
+		close(sendDone)
+	}()
+	select {
+	case <-sendDone:
+		t.Fatal("send returned before the subscriber caught up")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case got := <-terminalMessage:
+		close(releaseFirstNotify)
+		t.Fatalf("got terminal message %q; want none", got)
+	default:
+	}
+
+	close(releaseFirstNotify)
+	select {
+	case <-sendDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for blocked send to complete")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for watcher to close")
+	}
+}
+
 // TestNotifyForSessionPeerVisibility verifies the per-session masking
 // logic in [LocalBackend.notifyForSessionLocked] for the
 // NotifyPeerChanges / NotifyPeerPatches flag pair:

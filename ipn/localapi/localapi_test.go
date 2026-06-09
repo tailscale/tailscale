@@ -661,6 +661,12 @@ func TestServeWatchIPNBus(t *testing.T) {
 			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			desc:       "in-process-no-disconnect-forbidden",
+			permitRead: true,
+			mask:       ipn.NotifyInProcessNoDisconnect,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
