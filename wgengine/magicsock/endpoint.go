@@ -43,7 +43,7 @@ var mtuProbePingSizesV6 []int
 // discoKeyAdvertisementInterval tells how often a disco update via TSMP can
 // happen. The update is triggered via enqueueCallMeMaybe, and thus it will
 // only be sent if the magicsock is in a state to send out CallMeMaybe.
-const discoKeyAdvertisementInterval = time.Second * 60
+const discoKeyAdvertisementInterval = time.Minute * 2
 
 func init() {
 	for _, m := range tstun.WireMTUsToProbe {
