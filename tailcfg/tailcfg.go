@@ -194,7 +194,8 @@ type CapabilityVersion int
 //   - 143: 2026-07-22: Client correctly ignores conn25 node attributes when not enabled by environment variable
 //   - 144: 2026-07-31: Client sends [packet.TSMPDiscoKeyAdvertisement] around WireGuard handshakes
 //   - 145: 2026-08-04: Client understands [NodeAttrScopeQuad100OnMacOS]
-const CurrentCapabilityVersion CapabilityVersion = 145
+//   - 146: 2026-08-28: ts2021 control transport uses a hybrid X25519 + ML-KEM-768 (Noise IKhfs) handshake.
+const CurrentCapabilityVersion CapabilityVersion = 146
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
