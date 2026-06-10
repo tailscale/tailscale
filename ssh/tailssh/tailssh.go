@@ -1129,7 +1129,6 @@ func (ss *sshSession) run() {
 		if _, err := io.Copy(rec.writer("o", ss), ss.rdStdout); err != nil && !errors.Is(err, io.EOF) {
 			logf("stdout copy: %v", err)
 		}
-		ss.CloseWrite() // CHANNEL_EOF; channel stays open for exit-status (RFC 4254 §5.3).
 	})
 
 	// rdStderr is nil for ptys.
@@ -1168,11 +1167,15 @@ func (ss *sshSession) run() {
 		exitCode = 1
 	}
 
-	// Order on the wire: exit-status, EOF (CloseWrite in stdout copier),
-	// CHANNEL_CLOSE (deferred ss.Close). RFC 4254 §6.10.
+	// Order on the wire: exit-status, remaining output, EOF,
+	// CHANNEL_CLOSE (deferred ss.Close). RFC 4254 §6.10. CloseWrite
+	// (CHANNEL_EOF) must wait for both output copiers: a write on
+	// either stream after EOF fails and silently truncates that
+	// stream's tail.
 	ss.Exit(exitCode)
 	closeAll(ss.childPipes...)
 	wg.Wait()
+	ss.CloseWrite()
 }
 
 // recordSSHToLocalDisk is a deprecated dev knob to allow recording SSH sessions
