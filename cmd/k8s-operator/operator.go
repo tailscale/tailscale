@@ -1727,7 +1727,7 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 		}
 
 		if crd.Name != serviceMonitorCRD {
-			logger.Warn("ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
+			logger.Warnf("ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
 			return nil
 		}
 
