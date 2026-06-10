@@ -515,9 +515,10 @@ func runningAsRoot() bool {
 //     shell, and requires a TTY (without one it exits immediately, breaking
 //     mosh and VSCode).
 //   - login on darwin can exec commands, but /usr/bin/login -pq exits 0 as
-//     soon as the child is spawned, so the child's exit status is lost on
-//     non-TTY exec (#18256). TTY shells keep using login for PAM "remote"
-//     session and utmpx accounting.
+//     soon as the child is spawned, so the child's exit status is lost
+//     (#18256). Only interactive TTY shells go through login, where the
+//     PAM "remote" session and utmpx accounting are worth that trade;
+//     exec sessions and non-TTY shells need the real exit status.
 func shouldUseLogin(goos string, hasTTY, isShell bool) (use bool, reason string) {
 	switch goos {
 	case linux, freebsd, openbsd:
@@ -529,10 +530,10 @@ func shouldUseLogin(goos string, hasTTY, isShell bool) (use bool, reason string)
 		}
 		return true, ""
 	case darwin:
-		if !hasTTY && !isShell {
-			return false, "darwin non-TTY exec swallows child exit status (#18256)"
+		if hasTTY && isShell {
+			return true, ""
 		}
-		return true, ""
+		return false, "darwin login -pq swallows the child exit status (#18256); only interactive TTY shells use login"
 	}
 	return false, "unsupported GOOS: " + goos
 }
@@ -547,9 +548,9 @@ func shouldUseLogin(goos string, hasTTY, isShell bool) (use bool, reason string)
 //
 // However, login is subject to some limitations:
 //
-//  1. login cannot be used to execute commands except on macOS, and even on
-//     macOS we skip it for non-TTY commands because /usr/bin/login -pq does
-//     not propagate the child's exit status (#18256).
+//  1. login cannot be used to execute commands except on macOS, and on
+//     macOS /usr/bin/login -pq does not propagate the child's exit
+//     status (#18256), so only interactive TTY shells use it there.
 //  2. On Linux and BSD, login requires a TTY to keep running.
 //
 // In these cases, tryExecLogin returns nil to indicate that processing

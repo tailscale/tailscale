@@ -245,12 +245,20 @@ func TestOpenSSHExitCodes(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		cmd      string
+		cmd      string // remote command; empty = shell session
+		stdin    string // fed to the ssh client's stdin
+		forceTTY bool   // -tt instead of -T
 		wantCode int
 	}{
-		{"success", "true", 0},
-		{"exit_code_passthrough", "exit 42", 42},
-		{"command_not_found", "/nonexistent/binary", 127},
+		{"success", "true", "", false, 0},
+		{"exit_code_passthrough", "exit 42", "", false, 42},
+		{"command_not_found", "/nonexistent/binary", "", false, 127},
+		// TTY exec and non-TTY stdin-fed shell: the two session shapes
+		// that, on darwin, used to route through /usr/bin/login -pq,
+		// which exits 0 once its child spawns and loses the child's
+		// exit status (#18256).
+		{"tty_exec_exit_code", "exit 42", "", true, 42},
+		{"stdin_shell_exit_code", "", "exit 42\n", false, 42},
 	}
 
 	for _, tt := range tests {
@@ -260,10 +268,16 @@ func TestOpenSSHExitCodes(t *testing.T) {
 			runOnce := func() (rc int, out []byte) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				ttyFlag := "-T"
+				if tt.forceTTY {
+					// Double -t forces a remote PTY even though the
+					// test binary itself has no controlling terminal.
+					ttyFlag = "-tt"
+				}
 				cmd := exec.CommandContext(ctx, sshPath,
 					"-vvv",
 					"-F", "/dev/null",
-					"-T",
+					ttyFlag,
 					"-o", "BatchMode=yes",
 					"-o", "ConnectTimeout=15",
 					"-o", "GSSAPIAuthentication=no",
@@ -279,8 +293,13 @@ func TestOpenSSHExitCodes(t *testing.T) {
 					"-o", "UserKnownHostsFile=/dev/null",
 					"-p", port,
 					username+"@"+host,
-					tt.cmd,
 				)
+				if tt.cmd != "" {
+					cmd.Args = append(cmd.Args, tt.cmd)
+				}
+				if tt.stdin != "" {
+					cmd.Stdin = strings.NewReader(tt.stdin)
+				}
 				o, err := cmd.CombinedOutput()
 				if ctx.Err() == context.DeadlineExceeded {
 					t.Logf("ssh command timed out; output:\n%s", o)

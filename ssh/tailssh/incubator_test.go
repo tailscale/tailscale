@@ -17,10 +17,14 @@ func TestShouldUseLogin(t *testing.T) {
 		isShell bool
 		want    bool
 	}{
-		// darwin: login can exec, so only non-TTY exec bails (#18256).
+		// darwin: /usr/bin/login -pq exits 0 once its child is spawned,
+		// losing the child's exit status (#18256). Only interactive TTY
+		// shells go through login, where the PAM "remote" session and
+		// utmpx accounting are worth that trade; every exec and every
+		// non-TTY session needs the real exit status.
 		{darwin, true, true, true},
-		{darwin, true, false, true},
-		{darwin, false, true, true},
+		{darwin, true, false, false},
+		{darwin, false, true, false},
 		{darwin, false, false, false},
 
 		// linux: login can't exec commands and needs a TTY.
