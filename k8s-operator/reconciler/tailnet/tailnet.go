@@ -4,8 +4,8 @@
 //go:build !plan9
 
 // Package tailnet provides reconciliation logic for the Tailnet custom resource definition. It is responsible for
-// ensuring the referenced OAuth credentials are valid and have the required scopes to be able to generate authentication
-// keys, manage devices & manage VIP services.
+// ensuring the referenced credentials (either an OAuth client or a workload identity federation configuration) are
+// valid and have the required scopes to be able to generate authentication keys, manage devices & manage VIP services.
 package tailnet
 
 import (
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,7 @@ type (
 		client.Client
 
 		tailscaleNamespace string
+		operatorSAName     string
 		clock              tstime.Clock
 		logger             *zap.SugaredLogger
 		clientFunc         func(*tsapi.Tailnet, *corev1.Secret) tsclient.Client
@@ -59,9 +61,13 @@ type (
 	ReconcilerOptions struct {
 		// The client for interacting with the Kubernetes API.
 		Client client.Client
-		// The namespace the operator is installed in. This reconciler expects Tailnet OAuth credentials to be stored
+		// The namespace the operator is installed in. This reconciler expects Tailnet credentials to be stored
 		// in Secret resources within this namespace.
 		TailscaleNamespace string
+		// The name of the ServiceAccount the operator runs as, in TailscaleNamespace. This is used as the target
+		// ServiceAccount when minting tokens via the Kubernetes TokenRequest API for Tailnets that authenticate
+		// using workload identity federation.
+		OperatorSAName string
 		// Controls which clock to use for performing time-based functions. This is typically modified for use
 		// in tests.
 		Clock tstime.Clock
@@ -92,6 +98,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 	return &Reconciler{
 		Client:             options.Client,
 		tailscaleNamespace: options.TailscaleNamespace,
+		operatorSAName:     options.OperatorSAName,
 		clock:              options.Clock,
 		logger:             options.Logger.Named(reconcilerName),
 		clientFunc:         options.ClientFunc,
@@ -243,10 +250,11 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 	return reconcile.Result{}, nil
 }
 
-// Constants for OAuth credential fields within the Secret referenced by the Tailnet.
+// Constants for credential fields within the Secret referenced by the Tailnet.
 const (
 	clientIDKey     = "client_id"
 	clientSecretKey = "client_secret"
+	audienceKey     = "audience"
 )
 
 func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret) (tsclient.Client, error) {
@@ -264,14 +272,59 @@ func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 		return nil, fmt.Errorf("failed to parse base URL %q: %w", baseURL, err)
 	}
 
+	var auth tailscale.Auth
+
+	clientID := string(secret.Data[clientIDKey])
+	audience := string(secret.Data[audienceKey])
+	clientSecret := string(secret.Data[clientSecretKey])
+
+	switch {
+	case audience != "":
+		// If the audience field is present, we assume workload identity as the authentication method.
+		auth = &tailscale.IdentityFederation{
+			ClientID:    clientID,
+			IDTokenFunc: r.createToken(audience),
+		}
+	case clientSecret != "":
+		// For a client secret, we assume oauth.
+		auth = &tailscale.OAuth{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+		}
+	default:
+		// We shouldn't land here as previous functions will have ensured the validity of the secret, but we
+		// error here anyway as we won't know what to do:
+		return nil, errors.New("unable to determine authentication method")
+	}
+
 	return tsclient.Wrap(&tailscale.Client{
 		BaseURL:   base,
 		UserAgent: "tailscale-k8s-operator",
-		Auth: &tailscale.OAuth{
-			ClientID:     string(secret.Data[clientIDKey]),
-			ClientSecret: string(secret.Data[clientSecretKey]),
-		},
+		Auth:      auth,
 	}), nil
+}
+
+func (r *Reconciler) createToken(audience string) func() (string, error) {
+	return func() (string, error) {
+		serviceAccount := &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      r.operatorSAName,
+				Namespace: r.tailscaleNamespace,
+			},
+		}
+
+		tokenRequest := &authnv1.TokenRequest{
+			Spec: authnv1.TokenRequestSpec{
+				Audiences: []string{audience},
+			},
+		}
+
+		if err := r.SubResource("token").Create(context.Background(), serviceAccount, tokenRequest); err != nil {
+			return "", fmt.Errorf("failed to mint service account token for %q in namespace %q: %w", r.operatorSAName, r.tailscaleNamespace, err)
+		}
+
+		return tokenRequest.Status.Token, nil
+	}
 }
 
 func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Client, tailnet *tsapi.Tailnet) bool {
@@ -281,15 +334,15 @@ func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Cl
 	// has completely forgotten an entire scope that's required.
 	var errs error
 	if _, err := tsClient.Devices().List(ctx); err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to list devices: %w", err))
+		errs = errors.Join(errs, fmt.Errorf("failed to list devices: %w (client may be missing the devices scope)", err))
 	}
 
 	if _, err := tsClient.Keys().List(ctx, false); err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to list auth keys: %w", err))
+		errs = errors.Join(errs, fmt.Errorf("failed to list auth keys: %w (client may be missing the keys scope)", err))
 	}
 
 	if _, err := tsClient.VIPServices().List(ctx); err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to list tailscale services: %w", err))
+		errs = errors.Join(errs, fmt.Errorf("failed to list tailscale services: %w (client may be missing the services scope)", err))
 	}
 
 	if errs != nil {
@@ -317,8 +370,8 @@ func (r *Reconciler) ensureSecret(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 		message = fmt.Sprintf("Secret %q is empty", secret.Name)
 	case len(secret.Data[clientIDKey]) == 0:
 		message = fmt.Sprintf("Secret %q is missing the client_id field", secret.Name)
-	case len(secret.Data[clientSecretKey]) == 0:
-		message = fmt.Sprintf("Secret %q is missing the client_secret field", secret.Name)
+	case len(secret.Data[clientSecretKey]) == 0 && len(secret.Data[audienceKey]) == 0:
+		message = fmt.Sprintf("Secret %q must contain either a client_secret or an audience field", secret.Name)
 	}
 
 	if message == "" {
