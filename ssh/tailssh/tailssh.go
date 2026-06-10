@@ -860,6 +860,11 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 	}
 }
 
+// sessionKillGracePeriod is how long a session's process group gets
+// between the SIGHUP of session teardown and a SIGKILL escalation.
+// Var, not const, so tests can shorten it.
+var sessionKillGracePeriod = 5 * time.Second
+
 // killProcessOnContextDone waits for ss.ctx to be done and kills the process,
 // unless the process has already exited.
 func (ss *sshSession) killProcessOnContextDone() {
@@ -886,6 +891,19 @@ func (ss *sshSession) killProcessOnContextDone() {
 		if err := terminateSession(ss.cmd.Process, syscall.SIGHUP); err != nil {
 			ss.logf("terminate session: %v", err)
 		}
+		// SIGHUP is ignorable, and teardown may be policy (e.g. session
+		// recording failed and the policy says kill): escalate to
+		// SIGKILL on the same group after a grace period. If everyone
+		// already exited this is ESRCH, which terminateSession maps to
+		// nil. cmd.Wait having returned says nothing about grandchildren,
+		// so the escalation is unconditional.
+		proc := ss.cmd.Process
+		logf := ss.logf
+		time.AfterFunc(sessionKillGracePeriod, func() {
+			if err := terminateSession(proc, syscall.SIGKILL); err != nil {
+				logf("kill session: %v", err)
+			}
+		})
 	})
 }
 

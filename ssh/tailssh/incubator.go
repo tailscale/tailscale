@@ -169,6 +169,12 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 			return nil, err
 		}
 
+		// Own process group, for the same reason as the incubator cmd
+		// below: terminateSession signals kill(-pgid), and without this
+		// the user shell stays in tailscaled's group, the group signal
+		// finds no such pgid (ESRCH), and grandchildren survive session
+		// teardown.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		return cmd, nil
 	}
 
