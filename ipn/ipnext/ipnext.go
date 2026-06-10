@@ -6,6 +6,7 @@
 package ipnext
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -224,6 +225,17 @@ type SafeBackend interface {
 	Sys() *tsd.System
 	Clock() tstime.Clock
 	TailscaleVarRoot() string
+}
+
+// NotifyWatcher is a subset of [tailscale.com/ipn/ipnlocal.LocalBackend]
+// for extensions that subscribe to the IPN notification bus from within tailscaled.
+//
+// Unlike [SafeBackend], its methods acquire LocalBackend’s internal mutex
+// and must not be called from extension hooks,
+// instead call them from a goroutine started by [Extension.Init].
+type NotifyWatcher interface {
+	// WatchNotifications behaves like ipnlocal.LocalBackend.WatchNotifications.
+	WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool))
 }
 
 // ExtensionServices provides access to the [Host]'s extension management services,
