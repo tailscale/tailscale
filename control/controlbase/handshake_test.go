@@ -55,6 +55,158 @@ func TestHandshake(t *testing.T) {
 	}
 }
 
+func TestHandshakePQ(t *testing.T) {
+	var (
+		clientConn, serverConn = memnet.NewConn("noise", 128000)
+		serverKey              = key.NewMachine()
+		clientKey              = key.NewMachine()
+		server                 *Conn
+		serverErr              = make(chan error, 1)
+	)
+	go func() {
+		var err error
+		server, err = Server(context.Background(), serverConn, serverKey, nil)
+		serverErr <- err
+	}()
+
+	client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), pqMinProtocolVersion)
+	if err != nil {
+		t.Fatalf("client connection failed: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server connection failed: %v", err)
+	}
+
+	if client.HandshakeHash() != server.HandshakeHash() {
+		t.Fatal("client and server disagree on handshake hash")
+	}
+	if client.ProtocolVersion() != int(pqMinProtocolVersion) {
+		t.Fatalf("client reporting wrong protocol version %d, want %d", client.ProtocolVersion(), pqMinProtocolVersion)
+	}
+	if client.ProtocolVersion() != server.ProtocolVersion() {
+		t.Fatalf("peers disagree on protocol version, client=%d server=%d", client.ProtocolVersion(), server.ProtocolVersion())
+	}
+	if client.Peer() != serverKey.Public() {
+		t.Fatal("client peer key isn't serverKey")
+	}
+	if server.Peer() != clientKey.Public() {
+		t.Fatal("server peer key isn't clientKey")
+	}
+
+	cb := sinkReads(client)
+	sb := sinkReads(server)
+	if _, err := io.WriteString(client, strings.Repeat("a", 14)); err != nil {
+		t.Fatalf("client>server write failed: %v", err)
+	}
+	if _, err := io.WriteString(server, strings.Repeat("b", 14)); err != nil {
+		t.Fatalf("server>client write failed: %v", err)
+	}
+	cb.String(14)
+	sb.String(14)
+}
+
+func TestHandshakeWireFormatByVersion(t *testing.T) {
+	serverKey := key.NewMachine()
+	clientKey := key.NewMachine()
+
+	init, _, err := ClientDeferred(clientKey, serverKey.Public(), testProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(init), len(initiationMessage{}); got != want {
+		t.Fatalf("legacy initiation length = %d, want %d", got, want)
+	}
+
+	init, _, err = ClientDeferred(clientKey, serverKey.Public(), pqMinProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(init), len(pqInitiationMessage{}); got != want {
+		t.Fatalf("PQ initiation length = %d, want %d", got, want)
+	}
+}
+
+func TestHandshakeVersionRequiresMatchingFormat(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		init []byte
+	}{
+		{
+			name: "pq-version-with-legacy-initiation",
+			init: func() []byte {
+				init := mkInitiationMessage(pqMinProtocolVersion)
+				return init[:]
+			}(),
+		},
+		{
+			name: "legacy-version-with-pq-initiation",
+			init: func() []byte {
+				init := mkPQInitiationMessage(testProtocolVersion)
+				return init[:]
+			}(),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, serverConn := memnet.NewConn("noise", 128000)
+			serverKey := key.NewMachine()
+			_, err := Server(context.Background(), serverConn, serverKey, tt.init)
+			if err == nil {
+				t.Fatal("server accepted mismatched handshake format")
+			}
+			if !strings.Contains(err.Error(), "wrong handshake initiation length") {
+				t.Fatalf("server error = %v, want wrong handshake initiation length", err)
+			}
+		})
+	}
+}
+
+func TestPQHandshakeTampering(t *testing.T) {
+	t.Run("client ML-KEM encapsulation key", func(t *testing.T) {
+		var (
+			clientConn, serverRaw = memnet.NewConn("noise", 128000)
+			serverConn            = &readerConn{serverRaw, &tamperReader{serverRaw, initiationHeaderLen + 32, 0}}
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
+			serverErr             = make(chan error, 1)
+		)
+		go func() {
+			_, err := Server(context.Background(), serverConn, serverKey, nil)
+			if err != nil {
+				serverConn.Close()
+			}
+			serverErr <- err
+		}()
+
+		if _, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), pqMinProtocolVersion); err == nil {
+			t.Fatal("client connection succeeded despite tampering")
+		}
+		if err := <-serverErr; err == nil {
+			t.Fatal("server connection succeeded despite tampering")
+		}
+	})
+
+	t.Run("server ML-KEM ciphertext", func(t *testing.T) {
+		var (
+			clientRaw, serverConn = memnet.NewConn("noise", 128000)
+			clientConn            = &readerConn{clientRaw, &tamperReader{clientRaw, headerLen + 32, 0}}
+			serverKey             = key.NewMachine()
+			clientKey             = key.NewMachine()
+			serverErr             = make(chan error, 1)
+		)
+		go func() {
+			_, err := Server(context.Background(), serverConn, serverKey, nil)
+			serverErr <- err
+		}()
+
+		if _, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), pqMinProtocolVersion); err == nil {
+			t.Fatal("client connection succeeded despite tampering")
+		}
+		if err := <-serverErr; err != nil {
+			t.Fatalf("server connection failed despite response-only tampering: %v", err)
+		}
+	})
+}
+
 // Check that handshaking repeatedly with the same long-term keys
 // result in different handshake hashes and wire traffic.
 func TestNoReuse(t *testing.T) {

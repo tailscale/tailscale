@@ -188,7 +188,8 @@ type CapabilityVersion int
 //   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
 //   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
-const CurrentCapabilityVersion CapabilityVersion = 141
+//   - 142: 2026-06-10: ts2021 control transport uses a hybrid X25519 + ML-KEM-768 handshake.
+const CurrentCapabilityVersion CapabilityVersion = 142
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

@@ -6,6 +6,7 @@ package controlbase
 import (
 	"context"
 	"crypto/cipher"
+	"crypto/mlkem"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -41,12 +42,20 @@ const (
 	// matches the advertised version in the cleartext packet header.
 	protocolVersionPrefix = "Tailscale Control Protocol v"
 	invalidNonce          = ^uint64(0)
+
+	// pqMinProtocolVersion is the first ts2021/control protocol version that
+	// uses the hybrid X25519 + ML-KEM-768 handshake.
+	pqMinProtocolVersion uint16 = 142
 )
 
 func protocolVersionPrologue(version uint16) []byte {
 	ret := make([]byte, 0, len(protocolVersionPrefix)+5) // 5 bytes is enough to encode all possible version numbers.
 	ret = append(ret, protocolVersionPrefix...)
 	return strconv.AppendUint(ret, uint64(version), 10)
+}
+
+func usesPQHandshake(version uint16) bool {
+	return version >= pqMinProtocolVersion
 }
 
 // HandshakeContinuation upgrades a net.Conn to a Conn. The net.Conn
@@ -66,6 +75,10 @@ type HandshakeContinuation func(context.Context, net.Conn) (*Conn, error)
 // message and a continuation, we can embed the handshake initiation
 // into the HTTP protocol switching request and avoid a bit of delay.
 func ClientDeferred(machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16) (initialHandshake []byte, continueHandshake HandshakeContinuation, err error) {
+	if usesPQHandshake(protocolVersion) {
+		return clientDeferredPQ(machineKey, controlKey, protocolVersion)
+	}
+
 	var s symmetricState
 	s.Initialize()
 
@@ -96,6 +109,50 @@ func ClientDeferred(machineKey key.MachinePrivate, controlKey key.MachinePublic,
 
 	cont := func(ctx context.Context, conn net.Conn) (*Conn, error) {
 		return continueClientHandshake(ctx, conn, &s, machineKey, machineEphemeral, controlKey, protocolVersion)
+	}
+	return init[:], cont, nil
+}
+
+func clientDeferredPQ(machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16) (initialHandshake []byte, continueHandshake HandshakeContinuation, err error) {
+	var s symmetricState
+	s.Initialize()
+
+	// prologue
+	s.MixHash(protocolVersionPrologue(protocolVersion))
+
+	// <- s
+	// ...
+	s.MixHash(controlKey.UntypedBytes())
+
+	// -> e, pq, es, s, ss
+	init := mkPQInitiationMessage(protocolVersion)
+	machineEphemeral := key.NewMachine()
+	machineEphemeralPub := machineEphemeral.Public()
+	copy(init.EphemeralPub(), machineEphemeralPub.UntypedBytes())
+	s.MixHash(machineEphemeralPub.UntypedBytes())
+
+	mlkemDecap, err := mlkem.GenerateKey768()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generating ML-KEM key: %w", err)
+	}
+	mlkemEncap := mlkemDecap.EncapsulationKey().Bytes()
+	copy(init.MLKEMEncapsulationKey(), mlkemEncap)
+	s.MixHash(init.MLKEMEncapsulationKey())
+
+	cipher, err := s.MixDH(machineEphemeral, controlKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("computing es: %w", err)
+	}
+	machineKeyPub := machineKey.Public()
+	s.EncryptAndHash(cipher, init.MachinePub(), machineKeyPub.UntypedBytes())
+	cipher, err = s.MixDH(machineKey, controlKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("computing ss: %w", err)
+	}
+	s.EncryptAndHash(cipher, init.Tag(), nil) // empty message payload
+
+	cont := func(ctx context.Context, conn net.Conn) (*Conn, error) {
+		return continueClientHandshakePQ(ctx, conn, &s, machineKey, machineEphemeral, mlkemDecap, controlKey, protocolVersion)
 	}
 	return init[:], cont, nil
 }
@@ -189,6 +246,86 @@ func continueClientHandshake(ctx context.Context, conn net.Conn, s *symmetricSta
 	return c, nil
 }
 
+func continueClientHandshakePQ(ctx context.Context, conn net.Conn, s *symmetricState, machineKey, machineEphemeral key.MachinePrivate, mlkemDecap *mlkem.DecapsulationKey768, controlKey key.MachinePublic, protocolVersion uint16) (*Conn, error) {
+	// No matter what, this function can only run once per s. Ensure
+	// attempted reuse causes a panic.
+	defer func() {
+		s.finished = true
+	}()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("setting conn deadline: %w", err)
+		}
+		defer func() {
+			conn.SetDeadline(time.Time{})
+		}()
+	}
+
+	// Read in the payload and look for errors/protocol violations from the server.
+	var resp pqResponseMessage
+	if _, err := io.ReadFull(conn, resp.Header()); err != nil {
+		return nil, fmt.Errorf("reading response header: %w", err)
+	}
+	if resp.Type() != msgTypeResponse {
+		if resp.Type() != msgTypeError {
+			return nil, fmt.Errorf("unexpected response message type %d", resp.Type())
+		}
+		msg := make([]byte, resp.Length())
+		if _, err := io.ReadFull(conn, msg); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("server error: %q", msg)
+	}
+	if resp.Length() != len(resp.Payload()) {
+		return nil, fmt.Errorf("wrong length %d received for handshake response", resp.Length())
+	}
+	if _, err := io.ReadFull(conn, resp.Payload()); err != nil {
+		return nil, err
+	}
+
+	// <- e, pq, ee, se
+	controlEphemeralPub := key.MachinePublicFromRaw32(mem.B(resp.EphemeralPub()))
+	s.MixHash(controlEphemeralPub.UntypedBytes())
+	s.MixHash(resp.MLKEMCiphertext())
+	if _, err := s.MixDH(machineEphemeral, controlEphemeralPub); err != nil {
+		return nil, fmt.Errorf("computing ee: %w", err)
+	}
+	cipher, err := s.MixDH(machineKey, controlEphemeralPub)
+	if err != nil {
+		return nil, fmt.Errorf("computing se: %w", err)
+	}
+	sharedKey, err := mlkemDecap.Decapsulate(resp.MLKEMCiphertext())
+	if err != nil {
+		return nil, fmt.Errorf("decapsulating ML-KEM shared key: %w", err)
+	}
+	if err := s.MixSecret(sharedKey); err != nil {
+		return nil, fmt.Errorf("mixing ML-KEM shared key: %w", err)
+	}
+	if err := s.DecryptAndHash(cipher, nil, resp.Tag()); err != nil {
+		return nil, fmt.Errorf("decrypting payload: %w", err)
+	}
+
+	c1, c2, err := s.Split()
+	if err != nil {
+		return nil, fmt.Errorf("finalizing handshake: %w", err)
+	}
+
+	c := &Conn{
+		conn:          conn,
+		version:       protocolVersion,
+		peer:          controlKey,
+		handshakeHash: s.h,
+		tx: txState{
+			cipher: c1,
+		},
+		rx: rxState{
+			cipher: c2,
+		},
+	}
+	return c, nil
+}
+
 // Server initiates a control server handshake, returning the resulting
 // control connection.
 //
@@ -226,16 +363,13 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, o
 		return fmt.Errorf("refused client handshake: %q", msg)
 	}
 
-	var s symmetricState
-	s.Initialize()
-
-	var init initiationMessage
+	var initHeader [initiationHeaderLen]byte
 	if optionalInit != nil {
-		if len(optionalInit) != len(init) {
-			return nil, sendErr("wrong handshake initiation size")
+		if len(optionalInit) < len(initHeader) {
+			return nil, sendErr("short handshake initiation")
 		}
-		copy(init[:], optionalInit)
-	} else if _, err := io.ReadFull(conn, init.Header()); err != nil {
+		copy(initHeader[:], optionalInit)
+	} else if _, err := io.ReadFull(conn, initHeader[:]); err != nil {
 		return nil, err
 	}
 	// Just a rename to make it more obvious what the value is. In the
@@ -243,19 +377,40 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, o
 	// versions at this layer, it's safe to let the handshake proceed
 	// and then let the caller make decisions based on the agreed-upon
 	// protocol version.
-	clientVersion := init.Version()
-	if init.Type() != msgTypeInitiation {
+	clientVersion := binary.BigEndian.Uint16(initHeader[:2])
+	msgType := initHeader[2]
+	msgLen := int(binary.BigEndian.Uint16(initHeader[3:5]))
+	if msgType != msgTypeInitiation {
 		return nil, sendErr("unexpected handshake message type")
 	}
-	if init.Length() != len(init.Payload()) {
+	wantPayloadLen := initiationPayloadLen
+	if usesPQHandshake(clientVersion) {
+		wantPayloadLen = pqInitiationPayloadLen
+	}
+	if msgLen != wantPayloadLen {
 		return nil, sendErr("wrong handshake initiation length")
 	}
-	// if optionalInit was provided, we have the payload already.
-	if optionalInit == nil {
-		if _, err := io.ReadFull(conn, init.Payload()); err != nil {
+	init := make([]byte, len(initHeader)+wantPayloadLen)
+	copy(init, initHeader[:])
+	if optionalInit != nil {
+		if len(optionalInit) != len(init) {
+			return nil, sendErr("wrong handshake initiation size")
+		}
+		copy(init, optionalInit)
+	} else {
+		if _, err := io.ReadFull(conn, init[len(initHeader):]); err != nil {
 			return nil, err
 		}
 	}
+
+	if usesPQHandshake(clientVersion) {
+		return serverPQ(conn, controlKey, init, clientVersion)
+	}
+
+	var s symmetricState
+	s.Initialize()
+	var legacyInit initiationMessage
+	copy(legacyInit[:], init)
 
 	// prologue. Can only do this once we at least think the client is
 	// handshaking using a supported version.
@@ -267,8 +422,83 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, o
 	s.MixHash(controlKeyPub.UntypedBytes())
 
 	// -> e, es, s, ss
+	machineEphemeralPub := key.MachinePublicFromRaw32(mem.B(legacyInit.EphemeralPub()))
+	s.MixHash(machineEphemeralPub.UntypedBytes())
+	cipher, err := s.MixDH(controlKey, machineEphemeralPub)
+	if err != nil {
+		return nil, fmt.Errorf("computing es: %w", err)
+	}
+	var machineKeyBytes [32]byte
+	if err := s.DecryptAndHash(cipher, machineKeyBytes[:], legacyInit.MachinePub()); err != nil {
+		return nil, fmt.Errorf("decrypting machine key: %w", err)
+	}
+	machineKey := key.MachinePublicFromRaw32(mem.B(machineKeyBytes[:]))
+	cipher, err = s.MixDH(controlKey, machineKey)
+	if err != nil {
+		return nil, fmt.Errorf("computing ss: %w", err)
+	}
+	if err := s.DecryptAndHash(cipher, nil, legacyInit.Tag()); err != nil {
+		return nil, fmt.Errorf("decrypting initiation tag: %w", err)
+	}
+
+	// <- e, ee, se
+	resp := mkResponseMessage()
+	controlEphemeral := key.NewMachine()
+	controlEphemeralPub := controlEphemeral.Public()
+	copy(resp.EphemeralPub(), controlEphemeralPub.UntypedBytes())
+	s.MixHash(controlEphemeralPub.UntypedBytes())
+	if _, err := s.MixDH(controlEphemeral, machineEphemeralPub); err != nil {
+		return nil, fmt.Errorf("computing ee: %w", err)
+	}
+	cipher, err = s.MixDH(controlEphemeral, machineKey)
+	if err != nil {
+		return nil, fmt.Errorf("computing se: %w", err)
+	}
+	s.EncryptAndHash(cipher, resp.Tag(), nil) // empty message payload
+
+	c1, c2, err := s.Split()
+	if err != nil {
+		return nil, fmt.Errorf("finalizing handshake: %w", err)
+	}
+
+	if _, err := conn.Write(resp[:]); err != nil {
+		return nil, err
+	}
+
+	c := &Conn{
+		conn:          conn,
+		version:       clientVersion,
+		peer:          machineKey,
+		handshakeHash: s.h,
+		tx: txState{
+			cipher: c2,
+		},
+		rx: rxState{
+			cipher: c1,
+		},
+	}
+	return c, nil
+}
+
+func serverPQ(conn net.Conn, controlKey key.MachinePrivate, initBytes []byte, clientVersion uint16) (*Conn, error) {
+	var s symmetricState
+	s.Initialize()
+	var init pqInitiationMessage
+	copy(init[:], initBytes)
+
+	// prologue. Can only do this once we at least think the client is
+	// handshaking using a supported version.
+	s.MixHash(protocolVersionPrologue(clientVersion))
+
+	// <- s
+	// ...
+	controlKeyPub := controlKey.Public()
+	s.MixHash(controlKeyPub.UntypedBytes())
+
+	// -> e, pq, es, s, ss
 	machineEphemeralPub := key.MachinePublicFromRaw32(mem.B(init.EphemeralPub()))
 	s.MixHash(machineEphemeralPub.UntypedBytes())
+	s.MixHash(init.MLKEMEncapsulationKey())
 	cipher, err := s.MixDH(controlKey, machineEphemeralPub)
 	if err != nil {
 		return nil, fmt.Errorf("computing es: %w", err)
@@ -286,18 +516,29 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, o
 		return nil, fmt.Errorf("decrypting initiation tag: %w", err)
 	}
 
-	// <- e, ee, se
-	resp := mkResponseMessage()
+	mlkemEncap, err := mlkem.NewEncapsulationKey768(init.MLKEMEncapsulationKey())
+	if err != nil {
+		return nil, fmt.Errorf("parsing ML-KEM encapsulation key: %w", err)
+	}
+
+	// <- e, pq, ee, se
+	resp := mkPQResponseMessage()
 	controlEphemeral := key.NewMachine()
 	controlEphemeralPub := controlEphemeral.Public()
 	copy(resp.EphemeralPub(), controlEphemeralPub.UntypedBytes())
 	s.MixHash(controlEphemeralPub.UntypedBytes())
+	sharedKey, mlkemCiphertext := mlkemEncap.Encapsulate()
+	copy(resp.MLKEMCiphertext(), mlkemCiphertext)
+	s.MixHash(resp.MLKEMCiphertext())
 	if _, err := s.MixDH(controlEphemeral, machineEphemeralPub); err != nil {
 		return nil, fmt.Errorf("computing ee: %w", err)
 	}
 	cipher, err = s.MixDH(controlEphemeral, machineKey)
 	if err != nil {
 		return nil, fmt.Errorf("computing se: %w", err)
+	}
+	if err := s.MixSecret(sharedKey); err != nil {
+		return nil, fmt.Errorf("mixing ML-KEM shared key: %w", err)
 	}
 	s.EncryptAndHash(cipher, resp.Tag(), nil) // empty message payload
 
@@ -373,6 +614,10 @@ func (s *symmetricState) MixDH(priv key.MachinePrivate, pub key.MachinePublic) (
 		return nil, fmt.Errorf("computing X25519: %w", err)
 	}
 
+	return s.mixKey(keyData)
+}
+
+func (s *symmetricState) mixKey(keyData []byte) (*singleUseCHP, error) {
 	r := hkdf.New(newBLAKE2s, keyData, s.ck[:], nil)
 	if _, err := io.ReadFull(r, s.ck[:]); err != nil {
 		return nil, fmt.Errorf("extracting ck: %w", err)
@@ -382,6 +627,17 @@ func (s *symmetricState) MixDH(priv key.MachinePrivate, pub key.MachinePublic) (
 		return nil, fmt.Errorf("extracting k: %w", err)
 	}
 	return newSingleUseCHP(k), nil
+}
+
+// MixSecret updates s.ck with additional shared secret material. It is used for
+// hybridizing the Noise handshake with an ML-KEM shared key.
+func (s *symmetricState) MixSecret(keyData []byte) error {
+	s.checkFinished()
+	r := hkdf.New(newBLAKE2s, keyData, s.ck[:], nil)
+	if _, err := io.ReadFull(r, s.ck[:]); err != nil {
+		return fmt.Errorf("extracting ck: %w", err)
+	}
+	return nil
 }
 
 // EncryptAndHash encrypts plaintext into ciphertext (which must be
