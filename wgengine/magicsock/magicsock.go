@@ -1240,6 +1240,67 @@ func (c *Conn) GetEndpointChanges(peer tailcfg.NodeView) ([]EndpointChange, erro
 	return ep.debugUpdates.GetAll(), nil
 }
 
+// DebugActiveEndpoints returns debug information about the active dataplane
+// endpoint state of each peer known to magicsock, sorted by node key. Only
+// the magicsock-owned fields ([ipnstate.PeerActiveEndpoints].Magicsock and
+// peer identifiers) are populated; the WireGuard field is left nil for the
+// caller (the engine) to fill in.
+//
+// It is intended for debugging and tests only; see
+// [ipnstate.DebugActiveEndpoints].
+func (c *Conn) DebugActiveEndpoints() []ipnstate.PeerActiveEndpoints {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := mono.Now()
+	peers := make([]ipnstate.PeerActiveEndpoints, 0, len(c.peerMap.byNodeKey))
+	for nk, pi := range c.peerMap.byNodeKey {
+		de := pi.ep
+		st := &ipnstate.MagicsockEndpointState{
+			EpAddrCount: len(pi.epAddrs),
+			LastRecv:    de.lastRecvUDPAny.LoadAtomic().WallTime(),
+			LastRecvWG:  de.lastRecvWG.LoadAtomic().WallTime(),
+		}
+		de.mu.Lock()
+		if de.bestAddr.ap.IsValid() {
+			st.BestAddr = de.bestAddr.epAddr.String()
+			st.BestAddrTrusted = now.Before(de.trustBestAddrUntil)
+		}
+		st.BestAddrAt = de.bestAddrAt.WallTime()
+		st.TrustBestAddrUntil = de.trustBestAddrUntil.WallTime()
+		if de.derpAddr.IsValid() {
+			st.DERPAddr = de.derpAddr.String()
+			st.DERPRegion = int(de.derpAddr.Port())
+		}
+		st.LastSend = de.lastSendExt.WallTime()
+		st.LastFullPing = de.lastFullPing.WallTime()
+		st.IsWireGuardOnly = de.isWireguardOnly
+		st.Expired = de.expired
+		de.mu.Unlock()
+		peers = append(peers, ipnstate.PeerActiveEndpoints{
+			NodeKey:    nk,
+			ShortDisco: de.discoShort(),
+			Magicsock:  st,
+		})
+	}
+	slices.SortFunc(peers, func(a, b ipnstate.PeerActiveEndpoints) int {
+		return a.NodeKey.Compare(b.NodeKey)
+	})
+	return peers
+}
+
+// IsMagicsockEndpoint reports whether ep is a magicsock-managed peer endpoint:
+// the [conn.Endpoint] implementation magicsock hands to wireguard-go for a
+// known peer (whose DstToString is the peer's node public key in untyped hex).
+// It returns false for any other [conn.Endpoint] implementation, including
+// magicsock's internal just-in-time lazy endpoint (whose DstToString is an
+// "ip:port", optionally suffixed with ":vni:<n>"); wireguard-go holding such
+// an endpoint for a peer at rest may indicate a problem, e.g. a stale lazy
+// endpoint black-holing traffic (tailscale/tailscale#20082).
+func IsMagicsockEndpoint(ep conn.Endpoint) bool {
+	_, ok := ep.(*endpoint)
+	return ok
+}
+
 // DiscoPublicKey returns the discovery public key.
 func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 	return c.discoAtomic.Public()
