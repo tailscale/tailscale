@@ -95,7 +95,7 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 		Spec: corev1.ServiceSpec{
 			Selector: opts.proxyLabels,
 			Type:     corev1.ServiceTypeClusterIP,
-			Ports:    []corev1.ServicePort{{Protocol: "TCP", Port: 9002, Name: "metrics"}},
+			Ports:    []corev1.ServicePort{{Protocol: "TCP", Port: 9002, Name: opts.metricsPortName}},
 		},
 	}
 	var err error
@@ -120,7 +120,7 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 	}
 
 	logger.Infof("ensuring ServiceMonitor for metrics Service %s/%s", metricsSvc.Namespace, metricsSvc.Name)
-	svcMonitor, err := newServiceMonitor(metricsSvc, pc.Spec.Metrics.ServiceMonitor)
+	svcMonitor, err := newServiceMonitor(metricsSvc, pc.Spec.Metrics.ServiceMonitor, opts.metricsPortName)
 	if err != nil {
 		return fmt.Errorf("error creating ServiceMonitor: %w", err)
 	}
@@ -176,7 +176,7 @@ func maybeCleanupServiceMonitor(ctx context.Context, cl client.Client, stsName, 
 // newServiceMonitor takes a metrics Service created for a proxy and constructs and returns a ServiceMonitor for that
 // proxy that can be applied to the kube API server.
 // The ServiceMonitor is returned as Unstructured type - this allows us to avoid importing prometheus-operator API server client/schema.
-func newServiceMonitor(metricsSvc *corev1.Service, spec *tsapi.ServiceMonitor) (*unstructured.Unstructured, error) {
+func newServiceMonitor(metricsSvc *corev1.Service, spec *tsapi.ServiceMonitor, portName string) (*unstructured.Unstructured, error) {
 	sm := serviceMonitorTemplate(metricsSvc.Name, metricsSvc.Namespace)
 	sm.ObjectMeta.Labels = metricsSvc.Labels
 	if spec != nil && len(spec.Labels) > 0 {
@@ -187,7 +187,7 @@ func newServiceMonitor(metricsSvc *corev1.Service, spec *tsapi.ServiceMonitor) (
 	sm.Spec = ServiceMonitorSpec{
 		Selector: metav1.LabelSelector{MatchLabels: metricsSvc.Labels},
 		Endpoints: []ServiceMonitorEndpoint{{
-			Port: "metrics",
+			Port: portName,
 		}},
 		NamespaceSelector: ServiceMonitorNamespaceSelector{
 			MatchNames: []string{metricsSvc.Namespace},
@@ -276,10 +276,11 @@ func serviceMonitorTemplate(name, ns string) *ServiceMonitor {
 }
 
 type metricsOpts struct {
-	proxyStsName string            // name of StatefulSet for proxy
-	tsNamespace  string            // namespace in which Tailscale is installed
-	proxyLabels  map[string]string // labels of the proxy StatefulSet
-	proxyType    string
+	proxyStsName    string            // name of StatefulSet for proxy
+	tsNamespace     string            // namespace in which Tailscale is installed
+	proxyLabels     map[string]string // labels of the proxy StatefulSet
+	proxyType       string
+	metricsPortName string // name for the metrics port (defaults to "metrics")
 }
 
 func isNamespacedProxyType(typ string) bool {
@@ -291,4 +292,12 @@ func mergeMapKeys(a, b map[string]string) map[string]string {
 	maps.Copy(m, b)
 	maps.Copy(m, a)
 	return m
+}
+
+// metricsPortName returns the configured metrics port name from ProxyClass, or defaults to "metrics".
+func metricsPortName(pc *tsapi.ProxyClass) string {
+	if pc != nil && pc.Spec.Metrics != nil && pc.Spec.Metrics.PortName != "" {
+		return pc.Spec.Metrics.PortName
+	}
+	return "metrics"
 }
