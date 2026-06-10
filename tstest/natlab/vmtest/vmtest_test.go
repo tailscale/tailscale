@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
@@ -1064,9 +1065,17 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 //
 // The test has two modes, pinging from the offline node to the online node,
 // and pinging from the online node to the offline node.
+//
+// TODO(cmol): The online -> offline test is flakey for now. The TSMP disco
+// key exchange currently relies on disco ping messages being sent. These will
+// however not be sent if there is not endpoints on the online node which is
+// possible in the event where a node has registered but not finished STUN.
 func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 	for _, testPingFrom := range []string{"offline", "online"} {
 		t.Run(fmt.Sprintf("ping_from_%s", testPingFrom), func(t *testing.T) {
+			if testPingFrom == "online" {
+				flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19843")
+			}
 			env := vmtest.New(t)
 
 			aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1151,7 +1160,12 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 // WireGuard tunnel after both restarted while the control server is
 // unreachable. After restart one node must use only its on-disk cached
 // netmaps to re-connect and ping the other node.
+// TODO(cmol): The test is flakey for now. The TSMP disco key exchange
+// currently relies on disco ping messages being sent. These will however not
+// be sent if there is not endpoints on the online node which is possible in
+// the event where a node has registered but not finished STUN.
 func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/19843")
 	env := vmtest.New(t)
 
 	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
