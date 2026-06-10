@@ -169,7 +169,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 func endpointReadyForPod(ep *discoveryv1.Endpoint, pod *corev1.Pod, lg *zap.SugaredLogger) bool {
 	podIP, err := podIPv4(pod)
 	if err != nil {
-		lg.Warn("error retrieving Pod's IPv4 address: %v", err)
+		lg.Warnf("error retrieving Pod's IPv4 address: %v", err)
 		return false
 	}
 
