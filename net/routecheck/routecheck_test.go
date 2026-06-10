@@ -153,7 +153,7 @@ func TestRefresh(t *testing.T) {
 				if tt.init {
 					// This callback simulates the delay between
 					// connecting to the backend and receiving the NetMap.
-					donef := func() { c.NotifyNetMapAvailable(b.NetMapWithPeers()) }
+					donef := func() { c.NotifyNetMapAvailable() }
 					b.donef.Store(&donef)
 				}
 
