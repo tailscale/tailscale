@@ -1334,6 +1334,26 @@ func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerSta
 	return decodeJSON[*status.ServerStatus](body)
 }
 
+// DebugSetPeerRelayServerLifetimes overrides the endpoint bind and steady
+// state lifetimes of this node's running peer relay server. It returns an
+// error if the relay server is not running, e.g. if no RelayServerPort pref
+// is set, or if either lifetime is non-positive.
+//
+// It is meant for tests reproducing relay-session-reap scenarios, e.g.
+// tailscale/tailscale#20082, in seconds rather than the minutes implied by
+// the production default lifetimes.
+func (lc *Client) DebugSetPeerRelayServerLifetimes(ctx context.Context, bind, steadyState time.Duration) error {
+	v := url.Values{
+		"bind-lifetime":         {bind.String()},
+		"steady-state-lifetime": {steadyState.String()},
+	}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-peer-relay-server-lifetimes?"+v.Encode(), 200, nil)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
 // StreamDebugCapture streams a pcap-formatted packet capture.
 //
 // The provided context does not determine the lifetime of the

@@ -67,26 +67,27 @@ const (
 // Server implements an experimental UDP relay server.
 type Server struct {
 	// The following fields are initialized once and never mutated.
-	logf                logger.Logf
-	disco               key.DiscoPrivate
-	discoPublic         key.DiscoPublic
+	logf             logger.Logf
+	disco            key.DiscoPrivate
+	discoPublic      key.DiscoPublic
+	lifetimesChanged chan struct{} // buffered (cap 1), pokes endpointGCLoop on [Server.SetLifetimes]
+	bus              *eventbus.Bus
+	uc4              []batching.Conn // length is always nonzero
+	uc4Port          uint16          // always nonzero
+	uc6              []batching.Conn // length may be zero if udp6 bind fails
+	uc6Port          uint16          // zero if len(uc6) is zero, otherwise nonzero
+	closeOnce        sync.Once
+	wg               sync.WaitGroup
+	closeCh          chan struct{}
+	netChecker       *netcheck.Client
+	metrics          *metrics
+	netMon           *netmon.Monitor
+	cloudInfo        *cloudinfo.CloudInfo // used to query cloud metadata services
+	controlKnobs     *controlknobs.Knobs  // or nil
+
+	mu                  sync.Mutex // guards the following fields
 	bindLifetime        time.Duration
 	steadyStateLifetime time.Duration
-	bus                 *eventbus.Bus
-	uc4                 []batching.Conn // length is always nonzero
-	uc4Port             uint16          // always nonzero
-	uc6                 []batching.Conn // length may be zero if udp6 bind fails
-	uc6Port             uint16          // zero if len(uc6) is zero, otherwise nonzero
-	closeOnce           sync.Once
-	wg                  sync.WaitGroup
-	closeCh             chan struct{}
-	netChecker          *netcheck.Client
-	metrics             *metrics
-	netMon              *netmon.Monitor
-	cloudInfo           *cloudinfo.CloudInfo // used to query cloud metadata services
-	controlKnobs        *controlknobs.Knobs  // or nil
-
-	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
 	macSecretRotatedAt  mono.Time
 	derpMap             *tailcfg.DERPMap
@@ -385,6 +386,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 		disco:                 key.NewDisco(),
 		bindLifetime:          defaultBindLifetime,
 		steadyStateLifetime:   defaultSteadyStateLifetime,
+		lifetimesChanged:      make(chan struct{}, 1),
 		closeCh:               make(chan struct{}),
 		onlyStaticAddrPorts:   onlyStaticAddrPorts,
 		serverEndpointByDisco: make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
@@ -775,14 +777,68 @@ func (s *Server) endpointGC(bindLifetime, steadyStateLifetime time.Duration) {
 	}
 }
 
+// getLifetimes returns the current bind and steady state endpoint lifetimes.
+func (s *Server) getLifetimes() (bind, steadyState time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bindLifetime, s.steadyStateLifetime
+}
+
+// SetLifetimes overrides the lifetimes used to expire endpoints in
+// [Server.endpointGC]: bind bounds the time a newly-allocated endpoint has to
+// complete a handshake for both clients, and steadyState bounds the time a
+// bound endpoint may remain idle (no packets seen from a client) before it is
+// reaped. It returns an error if either value is non-positive, otherwise the
+// new values take effect immediately.
+//
+// It exists to enable tests to reproduce relay-session-reap scenarios, e.g.
+// tailscale/tailscale#20082, in seconds rather than the minutes implied by
+// the production defaults. Tests exercising tailscaled as a separate process
+// can reach it at runtime via the debug-peer-relay-server-lifetimes LocalAPI
+// endpoint registered in the feature/relayserver package; in-process tests
+// should prefer [Server.SetLifetimesForTest].
+//
+// Endpoints allocated before the call were advertised to clients with the
+// previous lifetime values via [endpoint.ServerEndpoint], but are expired
+// using the new values.
+func (s *Server) SetLifetimes(bind, steadyState time.Duration) error {
+	if bind <= 0 || steadyState <= 0 {
+		return fmt.Errorf("lifetimes must be positive; got bind=%v steadyState=%v", bind, steadyState)
+	}
+	s.mu.Lock()
+	s.bindLifetime = bind
+	s.steadyStateLifetime = steadyState
+	s.mu.Unlock()
+	// Poke endpointGCLoop to reload the lifetimes and reset its GC ticker,
+	// which ticks at the bind lifetime interval.
+	select {
+	case s.lifetimesChanged <- struct{}{}:
+	default: // a reload is already pending
+	}
+	return nil
+}
+
+// SetLifetimesForTest is like [Server.SetLifetimes], but panics on invalid
+// values instead of returning an error, for brevity in its only intended
+// callers: in-process tests.
+func (s *Server) SetLifetimesForTest(bind, steadyState time.Duration) {
+	if err := s.SetLifetimes(bind, steadyState); err != nil {
+		panic("SetLifetimesForTest: " + err.Error())
+	}
+}
+
 func (s *Server) endpointGCLoop() {
 	defer s.wg.Done()
-	ticker := time.NewTicker(s.bindLifetime)
+	bind, steadyState := s.getLifetimes()
+	ticker := time.NewTicker(bind)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			s.endpointGC(s.bindLifetime, s.steadyStateLifetime)
+			s.endpointGC(bind, steadyState)
+		case <-s.lifetimesChanged:
+			bind, steadyState = s.getLifetimes()
+			ticker.Reset(bind)
 		case <-s.closeCh:
 			return
 		}
