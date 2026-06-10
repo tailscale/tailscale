@@ -15,6 +15,16 @@ import (
 // lookups would be highly improbable.
 const MinSeparation = 50_000 * Meter
 
+// QuantizedPoint represents a [Point] whose coordinates have been quantized
+// using [Point.Quantize].
+type QuantizedPoint struct {
+	// Avoiding naively embedding a [Point] so that we can change the underlying
+	// implementation in the future, e.g. a different coordinate system.
+	// It is also unexported to deliberately limit the construction of a
+	// [QuantizedPoint] to methods/constructors that do the right math.
+	point Point
+}
+
 // Latitude
 var (
 	// numSepsEquatorToPole is the number of separations between a point on
@@ -103,4 +113,30 @@ func (p Point) Quantize() Point {
 
 	lat, lng := snapToLatLng(p.lat, p.lng180-180)
 	return MakePoint(lat, lng)
+}
+
+// QuantizedPoint returns a new [QuantizedPoint] after throwing away enough location
+// data in p so that it would be difficult to distinguish a node among all the other
+// nodes in its general vicinity. One caveat is that if there’s only one point in an
+// obscure location, someone could triangulate the node using additional data.
+//
+// This method is stable: given the same p, it will always return the same
+// result. It is equivalent to snapping to points on Earth that are at least
+// [MinSeparation] apart.
+func (p Point) QuantizedPoint() QuantizedPoint {
+	if p.IsZero() {
+		return QuantizedPoint{p}
+	}
+
+	lat, lng := snapToLatLng(p.lat, p.lng180-180)
+	return QuantizedPoint{MakePoint(lat, lng)}
+}
+
+// LossyPoint returns a new [Point] constructed from the quantized coordinates in a
+// [QuantizedPoint]. Quantizing a [Point] is necessarily non-injective, i.e. we
+// throw away some precision in the input to return an output (which many inputs
+// could map to). So [LossyPoint] is unlikely to return the exact [Point] that the
+// [QuantizedPoint] was derived from.
+func (p QuantizedPoint) LossyPoint() Point {
+	return p.point
 }
