@@ -6,6 +6,9 @@ package vmtest_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -212,6 +215,76 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 		httpStep.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
 	}
 	httpStep.End(nil)
+}
+
+// TestAsymmetricSubnetRouteUDP demonstrates two subnet routers advertising the
+// same route and sourcing traffic from the same non-Tailscale IP. The client
+// should receive UDP from both routers as 10.0.0.1, and a client-originated
+// UDP ping to 10.0.0.1 should route through one router and get a labeled pong.
+func TestAsymmetricSubnetRouteUDP(t *testing.T) {
+	env := vmtest.New(t, vmtest.AllOnline())
+
+	clientNet := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	routerANet := env.AddNetwork("3.1.1.1", "192.168.2.1/24", vnet.EasyNAT)
+	routerBNet := env.AddNetwork("4.1.1.1", "192.168.3.1/24", vnet.EasyNAT)
+
+	client := env.AddNode("client", clientNet,
+		vmtest.OS(vmtest.Ubuntu2404))
+	routerA := env.AddNode("subnet-router-a", routerANet,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.AdvertiseRoutes("10.0.0.0/8"),
+		vmtest.SNATSubnetRoutes(false))
+	routerB := env.AddNode("subnet-router-b", routerBNet,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.AdvertiseRoutes("10.0.0.0/8"),
+		vmtest.SNATSubnetRoutes(false))
+
+	approveStep := env.AddStep("Approve duplicate subnet routes")
+	configStep := env.AddStep("Configure UDP workers")
+	udpStep := env.AddStep("Verify asymmetric UDP")
+
+	env.Start()
+
+	approveStep.Begin()
+	env.ApproveRoutes(routerA, "10.0.0.0/8")
+	env.ApproveRoutes(routerB, "10.0.0.0/8")
+	approveStep.End(nil)
+
+	configStep.Begin()
+	clientIP := mustStatusTailscaleIPv4(t, env, client)
+	token := randomHex(t, 8)
+	const port = 31987
+	env.AgentGet(client, fmt.Sprintf("/asym-udp-client?port=%d&token=%s", port, token))
+	env.AgentGet(routerA, fmt.Sprintf("/asym-udp-router?label=A&client=%s&port=%d", clientIP, port))
+	env.AgentGet(routerB, fmt.Sprintf("/asym-udp-router?label=B&client=%s&port=%d", clientIP, port))
+	configStep.End(nil)
+
+	udpStep.Begin()
+	var st asymUDPStatus
+	err := tstest.WaitFor(45*time.Second, func() error {
+		body := env.AgentGet(client, "/asym-udp-status")
+		if err := json.Unmarshal([]byte(body), &st); err != nil {
+			return err
+		}
+		if st.A == 0 || st.B == 0 {
+			return fmt.Errorf("UDP counts: A=%d B=%d", st.A, st.B)
+		}
+		if st.LastASource != "10.0.0.1" || st.LastBSource != "10.0.0.1" {
+			return fmt.Errorf("UDP sources: A=%q B=%q, want both 10.0.0.1; UDP counts: A=%d B=%d", st.LastASource, st.LastBSource, st.A, st.B)
+		}
+		if st.LastPong != "PONG-A-"+token && st.LastPong != "PONG-B-"+token {
+			return fmt.Errorf("last pong = %q, want PONG-[AB]-%s; UDP counts: A=%d B=%d", st.LastPong, token, st.A, st.B)
+		}
+		return nil
+	})
+	if err != nil {
+		env.DumpStatus(client)
+		udpStep.Fatalf("waiting for asymmetric UDP traffic: %v", err)
+	}
+	t.Logf("client UDP counts: A=%d B=%d", st.A, st.B)
+	t.Logf("client UDP sources: A=%s B=%s", st.LastASource, st.LastBSource)
+	t.Logf("client UDP pong: %s", st.LastPong)
+	udpStep.End(nil)
 }
 
 // TestInterNetworkTCP verifies that vnet routes raw TCP between simulated
@@ -1445,4 +1518,32 @@ func TestPeerRelay(t *testing.T) {
 	t.Logf("relay session VNI=%d %s <-> %s on UDP port %d",
 		session.VNI, session.Client1.ShortDisco, session.Client2.ShortDisco, *srv.UDPPort)
 	sessionsStep.End(nil)
+}
+
+type asymUDPStatus struct {
+	A           int64  `json:"a"`
+	B           int64  `json:"b"`
+	LastASource string `json:"lastASource"`
+	LastBSource string `json:"lastBSource"`
+	LastPong    string `json:"lastPong"`
+}
+
+func mustStatusTailscaleIPv4(t *testing.T, env *vmtest.Env, n *vmtest.Node) string {
+	t.Helper()
+	for _, ip := range env.Status(n).Self.TailscaleIPs {
+		if ip.Is4() {
+			return ip.String()
+		}
+	}
+	t.Fatalf("%s has no IPv4 Tailscale IP", n.Name())
+	panic("unreachable")
+}
+
+func randomHex(t *testing.T, n int) string {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return hex.EncodeToString(b)
 }
