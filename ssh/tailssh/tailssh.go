@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -62,6 +63,8 @@ var (
 	// hookSSHLoginSuccess is called after successful SSH authentication.
 	// It is set by platform-specific code (e.g., auditd_linux.go).
 	hookSSHLoginSuccess feature.Hook[func(logf logger.Logf, c *conn)]
+
+	uidRegex = regexp.MustCompile("^[0-9]+$")
 )
 
 const (
@@ -338,6 +341,10 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 
 	if c.insecureSkipTailscaleAuth {
 		return &ssh.Permissions{}, nil
+	}
+
+	if uidRegex.MatchString(cm.User()) {
+		return nil, c.errBanner(fmt.Sprintf("rejecting username %q. Usernames that consist of only digits are not allowed as they are ambiguous with numerical UIDs", cm.User()), nil)
 	}
 
 	if err := c.setInfo(cm); err != nil {
