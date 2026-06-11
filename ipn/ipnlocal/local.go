@@ -96,6 +96,9 @@ import (
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/ptype"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/util/vizerror"
@@ -190,6 +193,23 @@ type watchSession struct {
 	// boundary for implicit bus state, so per-session dedup state such as
 	// lastSentUserProfile must be reset when this identity changes.
 	lastSentSelf tailcfg.NodeView
+
+	policyScope    setting.PolicyScope // which user's policy this session gets
+	lastSentPolicy *setting.Snapshot   // dedup: don't re-send identical snapshots
+}
+
+// userPolicyState tracks a per-user RSOP policy store registered on
+// behalf of one or more policy-watching [watchSession]s. The store is
+// created when the first session for a user requests
+// [ipn.NotifyInitialPolicy] and cleaned up when the last session
+// disconnects.
+type userPolicyState struct {
+	refcount int
+	scope    setting.PolicyScope
+	store    source.Store
+	policy   *rsop.Policy
+	reg      *rsop.StoreRegistration
+	unwatch  func()
 }
 
 var (
@@ -357,8 +377,9 @@ type LocalBackend struct {
 	peerAPIServer     *peerAPIServer     // or nil
 	peerAPIListeners  []*peerAPIListener // TODO(nickkhyl): move to nodeBackend
 	loginFlags        controlclient.LoginFlags
-	notifyWatchers    map[string]*watchSession // by session ID
-	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
+	notifyWatchers    map[string]*watchSession               // by session ID
+	userPolicyStores  map[ipn.WindowsUserID]*userPolicyState // refcounted per-user RSOP stores
+	lastStatusTime    time.Time                              // status.AsOf value of the last processed status update
 	componentLogUntil map[string]componentLogState
 	currentUser       ipnauth.Actor
 
@@ -2312,14 +2333,32 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 // registerSysPolicyWatch subscribes to syspolicy change notifications
 // and immediately applies the effective syspolicy settings to the current profile.
 func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
-	if unregister, err = b.polc.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
-		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
+	unregPolc, err := b.polc.RegisterChangeCallback(b.sysPolicyChanged)
+	if err != nil {
+		return nil, fmt.Errorf("syspolicy: LocalBackend failed to register policy change callback: %v", err)
 	}
+
+	// Also watch RSOP directly for device-scope changes, to notify
+	// policy-watching IPN bus sessions. In production, b.polc is backed
+	// by RSOP so sysPolicyChanged already fires on RSOP changes; the
+	// lastSentPolicy dedup in notifyPolicyWatchers prevents double sends.
+	var unregRSOP func()
+	if p, err := rsop.PolicyFor(setting.DefaultScope()); err == nil {
+		unregRSOP = p.RegisterChangeCallback(func(_ policyclient.PolicyChange) {
+			b.notifyPolicyWatchers()
+		})
+	}
+
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
 	}
 	b.refreshAllowedSuggestions()
-	return unregister, nil
+	return func() {
+		unregPolc()
+		if unregRSOP != nil {
+			unregRSOP()
+		}
+	}, nil
 }
 
 // reconcilePrefs overwrites the current profile's preferences with policies
@@ -2372,6 +2411,148 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
 	}
+
+	// Notify policy-watching sessions.
+	b.notifyPolicyWatchers()
+}
+
+func (b *LocalBackend) notifyPolicyWatchers() {
+	p, err := rsop.PolicyFor(setting.DefaultScope())
+	if err != nil {
+		return
+	}
+	newSnapshot := p.Get()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, sess := range b.notifyWatchers {
+		if sess.mask&ipn.NotifyInitialPolicy == 0 {
+			continue
+		}
+		if sess.lastSentPolicy != nil && sess.lastSentPolicy.Equal(newSnapshot) {
+			continue
+		}
+		sess.lastSentPolicy = newSnapshot
+	}
+
+	b.sendToLocked(ipn.Notify{Policy: newSnapshot}, allClients)
+}
+
+// policyScopeForActor returns the RSOP policy scope for the given actor.
+// SYSTEM or unknown actors get DefaultScope; users get UserScopeOf(sid).
+func (b *LocalBackend) policyScopeForActor(actor ipnauth.Actor) setting.PolicyScope {
+	if actor == nil || actor.UserID() == "" {
+		return setting.DefaultScope()
+	}
+	return setting.UserScopeOf(string(actor.UserID()))
+}
+
+// ensureUserPolicyStoreLocked registers a per-user policy store for the
+// given actor if one doesn't already exist. Increments the refcount if
+// one does.
+//
+// b.mu must be held.
+func (b *LocalBackend) ensureUserPolicyStoreLocked(actor ipnauth.Actor) error {
+	uid := actor.UserID()
+	if uid == "" {
+		return nil
+	}
+	if ups, ok := b.userPolicyStores[uid]; ok {
+		ups.refcount++
+		return nil
+	}
+
+	store, err := newUserPolicyStore(string(uid))
+	if err != nil {
+		return fmt.Errorf("syspolicy: creating user policy store for %s: %w", uid, err)
+	}
+
+	scope := setting.UserScopeOf(string(uid))
+	reg, err := rsop.RegisterStore("Platform", scope, store)
+	if err != nil {
+		if c, ok := store.(io.Closer); ok {
+			c.Close()
+		}
+		return fmt.Errorf("syspolicy: registering user policy store for %s: %w", uid, err)
+	}
+
+	policy, err := rsop.PolicyFor(scope)
+	if err != nil {
+		reg.Unregister()
+		if c, ok := store.(io.Closer); ok {
+			c.Close()
+		}
+		return fmt.Errorf("syspolicy: getting policy for %s: %w", uid, err)
+	}
+
+	ups := &userPolicyState{
+		refcount: 1,
+		scope:    scope,
+		store:    store,
+		policy:   policy,
+		reg:      reg,
+	}
+	ups.unwatch = policy.RegisterChangeCallback(func(_ policyclient.PolicyChange) {
+		b.onUserPolicyChanged(uid)
+	})
+
+	mak.Set(&b.userPolicyStores, uid, ups)
+	return nil
+}
+
+// maybeUnregisterUserPolicyStoreLocked decrements the refcount for the
+// user's policy store and cleans up if it hits zero.
+// b.mu must be held.
+func (b *LocalBackend) maybeUnregisterUserPolicyStoreLocked(actor ipnauth.Actor) {
+	uid := actor.UserID()
+	ups, ok := b.userPolicyStores[uid]
+	if !ok {
+		return
+	}
+	ups.refcount--
+	if ups.refcount > 0 {
+		return
+	}
+	if ups.unwatch != nil {
+		ups.unwatch()
+	}
+	ups.reg.Unregister()
+	if c, ok := ups.store.(io.Closer); ok {
+		c.Close()
+	}
+	delete(b.userPolicyStores, uid)
+}
+
+// onUserPolicyChanged is called when the effective policy for a user
+// changes. It sends the new snapshot to all of that user's sessions.
+func (b *LocalBackend) onUserPolicyChanged(uid ipn.WindowsUserID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	ups, ok := b.userPolicyStores[uid]
+	if !ok {
+		return
+	}
+	newSnapshot := ups.policy.Get()
+
+	for _, sess := range b.notifyWatchers {
+		if sess.mask&ipn.NotifyInitialPolicy == 0 {
+			continue
+		}
+		if sess.owner == nil || sess.owner.UserID() != uid {
+			continue
+		}
+		if sess.lastSentPolicy != nil && sess.lastSentPolicy.Equal(newSnapshot) {
+			continue
+		}
+		sess.lastSentPolicy = newSnapshot
+	}
+
+	b.sendToLocked(
+		ipn.Notify{Policy: newSnapshot},
+		notificationTarget{userID: uid},
+	)
 }
 
 var (
@@ -3637,7 +3818,12 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
+	var policyScope setting.PolicyScope
+	var lastSentPolicy *setting.Snapshot
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
+		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
+		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
+		ipn.NotifyInitialClientVersion | ipn.NotifyInitialPolicy
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3681,18 +3867,28 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 				ini.ClientVersion = b.lastClientVersion
 			}
 		}
+		if mask&ipn.NotifyInitialPolicy != 0 {
+			b.ensureUserPolicyStoreLocked(actor)
+			policyScope = b.policyScopeForActor(actor)
+			if policy, err := rsop.PolicyFor(policyScope); err == nil {
+				lastSentPolicy = policy.Get()
+				ini.Policy = lastSentPolicy
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	session := &watchSession{
-		ch:        ch,
-		ctx:       ctx,
-		owner:     actor,
-		sessionID: sessionID,
-		cancel:    cancel,
-		mask:      mask,
+		ch:             ch,
+		ctx:            ctx,
+		owner:          actor,
+		sessionID:      sessionID,
+		cancel:         cancel,
+		mask:           mask,
+		policyScope:    policyScope,
+		lastSentPolicy: lastSentPolicy,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
@@ -3704,6 +3900,9 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	defer func() {
 		b.mu.Lock()
 		delete(b.notifyWatchers, sessionID)
+		if mask&ipn.NotifyInitialPolicy != 0 && actor != nil {
+			b.maybeUnregisterUserPolicyStoreLocked(actor)
+		}
 		b.mu.Unlock()
 	}()
 

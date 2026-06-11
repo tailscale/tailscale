@@ -18,6 +18,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/views"
+	"tailscale.com/util/syspolicy/setting"
 )
 
 type State int
@@ -171,6 +172,27 @@ const (
 	// LocalBackend.WatchNotificationsAs. LocalAPI WatchIPNBus clients must
 	// not request it.
 	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
+
+	// NotifyInitialPolicy, if set, causes the first Notify message, which is sent
+	// immediately, to contain the current effective [setting.Snapshot] in
+	// [Notify.Policy]. [Notify.Policy] is included in subsequent messages whenever
+	// the effective policy changes.
+	//
+	// The snapshot is scoped to the connected user's identity (on Windows,
+	// derived from the named-pipe token's SID). Per-user policy settings are
+	// merged with device-wide settings, with device-wide settings taking
+	// precedence on conflict. Watchers without a user identity  receive the
+	// device-scope policy only.
+	//
+	// On the backend, setting this bit causes tailscaled to register a
+	// per-user policy store (if not already registered for this user)
+	// and subscribe to RSOP change notifications for the user's scope.
+	// The store and subscription are refcounted across sessions and
+	// cleaned up when the last session for a user disconnects.
+	//
+	// The [setting.Snapshot] that is delivered is a full snapshot on every
+	// change.
+	NotifyInitialPolicy NotifyWatchOpt = 1 << 17
 )
 
 // NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
@@ -365,6 +387,13 @@ type Notify struct {
 	// SuggestedExitNode, if non-nil, is the node that the backend has determined to
 	// be the best exit node for the current network conditions.
 	SuggestedExitNode *tailcfg.StableNodeID `json:",omitzero"`
+
+	// Policy, if non-nil, is the effective policy snapshot for the
+	// connected user. It is scoped per-user: per-user policy settings
+	// are merged with device-wide settings, with device-wide taking
+	// precedence. Sent initially when [NotifyInitialPolicy] is set,
+	// and on change thereafter.
+	Policy *setting.Snapshot `json:",omitzero"`
 
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }

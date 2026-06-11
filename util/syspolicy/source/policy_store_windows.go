@@ -117,6 +117,19 @@ func NewUserPlatformPolicyStore(token windows.Token) (*PlatformPolicyStore, erro
 	return newPlatformPolicyStore(gp.UserPolicy, softwareKey, policyLock), nil
 }
 
+func NewUserPlatformPolicyStoreForSID(sid string) (*PlatformPolicyStore, error) {
+	softwareKey, err := registry.OpenKey(registry.USERS, sid+`\`+softwareKeyName, windows.KEY_READ)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the %s key for %s: %w", softwareKeyName, sid, err)
+	}
+	policyLock, err := gp.NewUserPolicyLock(0)
+	if err != nil {
+		softwareKey.Close()
+		return nil, fmt.Errorf("failed to create a user policy lock: %w", err)
+	}
+	return newPlatformPolicyStore(gp.UserPolicy, softwareKey, policyLock), nil
+}
+
 func newPlatformPolicyStore(scope gp.Scope, softwareKey registry.Key, policyLock *gp.PolicyLock) *PlatformPolicyStore {
 	return &PlatformPolicyStore{
 		scope:       scope,
