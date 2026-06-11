@@ -2378,8 +2378,8 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 // registerSysPolicyWatch subscribes to syspolicy change notifications
 // and immediately applies the effective syspolicy settings to the current profile.
 func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
-	if unregister, err = b.polc.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
-		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
+	if unregister, err = b.polc.RegisterChangeCallback("", b.sysPolicyChanged); err != nil {
+		return nil, fmt.Errorf("syspolicy: LocalBackend failed to register policy change callback: %v", err)
 	}
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
@@ -2437,6 +2437,28 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
+	}
+}
+
+// sysPolicyChangedForSession is called when the effective policy for a session's
+// user changes. It fetches the new snapshot and sends it to that session.
+func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	snapshot, err := b.polc.GetPolicySnapshot("")
+	if err != nil || snapshot == nil {
+		return
+	}
+
+	n := ipn.Notify{Policy: snapshot, Version: version.Long()}
+	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
+		f(&n)
+	}
+	nForSess := b.notifyForSessionLocked(sess, &n)
+	select {
+	case sess.ch <- nForSess:
+	default:
 	}
 }
 
@@ -3781,7 +3803,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion | ipn.NotifyPeerWireGuardState
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
+		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
+		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
+		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3825,6 +3850,13 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 				ini.ClientVersion = b.lastClientVersion
 			}
 		}
+		if mask&ipn.NotifySysPolicyChanges != 0 {
+			var err error
+			ini.Policy, err = b.polc.GetPolicySnapshot("")
+			if err != nil {
+				b.logf("syspolicy: GetPolicySnapshot(\"\"): %v", err)
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -3844,6 +3876,16 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	}
 	b.mu.Unlock()
 	deadlockDone()
+
+	if mask&ipn.NotifySysPolicyChanges != 0 {
+		if unreg, err := b.polc.RegisterChangeCallback("", func(_ policyclient.PolicyChange) {
+			b.sysPolicyChangedForSession(session)
+		}); err == nil {
+			defer unreg()
+		} else {
+			b.logf("syspolicy: RegisterChangeCallback(\"\"): %v", err)
+		}
+	}
 
 	metricCurrentWatchIPNBus.Add(1)
 	defer metricCurrentWatchIPNBus.Add(-1)
