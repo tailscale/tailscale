@@ -59,13 +59,6 @@ func mkFlows(n int) []FlowData {
 	return flows
 }
 
-func mustInstallFlow(t *testing.T, ft *FlowTable, flow FlowData) {
-	t.Helper()
-	if err := ft.NewFlow(flow); err != nil {
-		t.Fatalf("error installing flow: %v", err)
-	}
-}
-
 func assertFlowHit(t *testing.T, ft *FlowTable, dir Origin, tuple flowtrack.Tuple) PacketAction {
 	t.Helper()
 	return assertFlowLookup(t, ft, dir, tuple, true)
@@ -113,7 +106,7 @@ func TestFlowTable_NewFlow_Lookup(t *testing.T) {
 	fromWGTuple := mkTuple("4.3.2.2:80", "1.2.3.4:1000")
 
 	flow1, tunCount1, wgCount1 := mkFlowWithActions(fromTunTuple, fromWGTuple)
-	mustInstallFlow(t, ft, flow1)
+	ft.NewFlow(flow1)
 
 	// Test basic lookups, and perform actions on packet.
 	assertFlowHit(t, ft, FromTun, fromTunTuple)(nilPacket)
@@ -136,13 +129,13 @@ func TestFlowTable_NewFlow_Lookup(t *testing.T) {
 	// Overwriting from-tun tuple removes the from-wg tuple as well.
 	newFromWGTuple := mkTuple("9.9.9.9:99", "8.8.8.8:88")
 	flow2 := mkFlow(fromTunTuple, newFromWGTuple)
-	mustInstallFlow(t, ft, flow2)
+	ft.NewFlow(flow2)
 	assertFlowMiss(t, ft, FromWireGuard, fromWGTuple)
 
 	// Overwriting the from-wg tuple removes the from-tun tuple as well.
 	newFromTunTuple := mkTuple("8.8.8.8:88", "9.9.9.9:99")
 	flow3 := mkFlow(newFromTunTuple, newFromWGTuple)
-	mustInstallFlow(t, ft, flow3)
+	ft.NewFlow(flow3)
 	assertFlowMiss(t, ft, FromTun, fromTunTuple)
 }
 
@@ -162,8 +155,8 @@ func TestFlowTable_OneReplacesTwo(t *testing.T) {
 	flow2, tunCount2, wgCount2 := mkFlowWithActions(tunTuple2, wgTuple2)
 
 	// Install the first two flows.
-	mustInstallFlow(t, ft, flow1)
-	mustInstallFlow(t, ft, flow2)
+	ft.NewFlow(flow1)
+	ft.NewFlow(flow2)
 
 	// Confirm they are properly installed through lookups.
 	assertFlowHit(t, ft, FromTun, tunTuple1)
@@ -173,7 +166,7 @@ func TestFlowTable_OneReplacesTwo(t *testing.T) {
 
 	// flow3 tuples overlap with flow1 and flow2.
 	flow3, tunCount3, wgCount3 := mkFlowWithActions(tunTuple1, wgTuple2)
-	mustInstallFlow(t, ft, flow3)
+	ft.NewFlow(flow3)
 
 	// flow3 lookups hit on both of their tuples.
 	tunAction3 := assertFlowHit(t, ft, FromTun, tunTuple1)
@@ -213,14 +206,14 @@ func TestFlowTable_Eviction(t *testing.T) {
 	d := mkFlow(dTun, dWG)
 
 	// Install a and b.
-	mustInstallFlow(t, ft, a)
-	mustInstallFlow(t, ft, b)
+	ft.NewFlow(a)
+	ft.NewFlow(b)
 
 	// Move a to the front from tun side, b is ready for eviction.
 	assertFlowHit(t, ft, FromTun, aTun)
 
 	// Install c.
-	mustInstallFlow(t, ft, c)
+	ft.NewFlow(c)
 
 	// Check b is out.
 	assertFlowMiss(t, ft, FromTun, bTun)
@@ -234,7 +227,7 @@ func TestFlowTable_Eviction(t *testing.T) {
 	assertFlowHit(t, ft, FromWireGuard, aWG)
 
 	// Install d.
-	mustInstallFlow(t, ft, d)
+	ft.NewFlow(d)
 
 	// Check c is out.
 	assertFlowMiss(t, ft, FromTun, cTun)
@@ -334,7 +327,7 @@ func TestFlowTable_removeIdle(t *testing.T) {
 			flows := mkFlows(len(tt.flowSpecs))
 			for i, spec := range tt.flowSpecs {
 				time.Sleep(time.Until(start.Add(spec.installAt)))
-				mustInstallFlow(t, ft, flows[i])
+				ft.NewFlow(flows[i])
 			}
 
 			var wantRemovedCount int
@@ -365,9 +358,9 @@ func TestFlowTable_removeIdle(t *testing.T) {
 		ft := NewFlowTable(0, WithFlowIdleTimeout(time.Minute))
 		flows := mkFlows(2)
 
-		mustInstallFlow(t, ft, flows[0])                      // t=0 (flow 0 install)
+		ft.NewFlow(flows[0])                                  // t=0 (flow 0 install)
 		time.Sleep(30 * time.Second)                          //
-		mustInstallFlow(t, ft, flows[1])                      // t=30s (flow 1 install)
+		ft.NewFlow(flows[1])                                  // t=30s (flow 1 install)
 		time.Sleep(60 * time.Second)                          //
 		assertFlowHit(t, ft, FromTun, flows[0].FromTun.Tuple) // t=90s (flow 0 looked up, lastSeen bumped)
 		time.Sleep(15 * time.Second)                          //
