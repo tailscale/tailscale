@@ -430,7 +430,8 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
-	sshPort          int // host port for SSH debug access (cloud VMs only)
+	sshPort          int    // host port for SSH debug access (cloud VMs only)
+	qmpSock          string // path to QMP monitor unix socket (QEMU VMs only)
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the

@@ -6,7 +6,6 @@ package vmtest
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -117,6 +116,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	}
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
+	n.qmpSock = filepath.Join(e.sockDir, n.name+"-qmp.sock")
 
 	args := []string{
 		"-M", "microvm,isa-serial=off",
@@ -130,6 +130,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 		"-device", "virtio-rng-device",
 		"-chardev", "file,id=virtiocon0,path=" + logPath,
 		"-device", "virtconsole,chardev=virtiocon0",
+		"-qmp", "unix:" + n.qmpSock + ",server,nowait",
 	}
 
 	// Add network devices — one per NIC.
@@ -163,7 +164,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	}
 
 	logPath := filepath.Join(e.tempDir, n.name+".log")
-	qmpSock := filepath.Join(e.sockDir, n.name+"-qmp.sock")
+	n.qmpSock = filepath.Join(e.sockDir, n.name+"-qmp.sock")
 
 	args := []string{
 		"-machine", "q35",
@@ -174,7 +175,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 		"-drive", fmt.Sprintf("file=%s,if=virtio,media=cdrom,readonly=on", seedISO),
 		"-smbios", "type=1,serial=ds=nocloud",
 		"-serial", "file:" + logPath,
-		"-qmp", "unix:" + qmpSock + ",server,nowait",
+		"-qmp", "unix:" + n.qmpSock + ",server,nowait",
 	}
 
 	// Add network devices — one per NIC.
@@ -203,7 +204,7 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	}
 
 	// Query QMP to find the actual SSH port that QEMU allocated.
-	port, err := qmpQueryHostFwd(qmpSock)
+	port, err := qmpQueryHostFwd(n.qmpSock)
 	if err != nil {
 		return fmt.Errorf("querying SSH port via QMP: %w", err)
 	}
@@ -377,35 +378,11 @@ var hostFwdRe = regexp.MustCompile(`TCP\[HOST_FORWARD\]\s+\d+\s+127\.0\.0\.1\s+(
 // qmpQueryHostFwd connects to a QEMU QMP socket and queries the host port
 // assigned to the first TCP host forward rule (the SSH debug port).
 func qmpQueryHostFwd(sockPath string) (int, error) {
-	// Wait for the QMP socket to appear.
-	var conn net.Conn
-	for range 50 {
-		var err error
-		conn, err = net.Dial("unix", sockPath)
-		if err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	c, err := dialQMP(sockPath, 5*time.Second)
+	if err != nil {
+		return 0, err
 	}
-	if conn == nil {
-		return 0, fmt.Errorf("QMP socket %s not available", sockPath)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(20 * time.Second))
-
-	// Read the QMP greeting.
-	var greeting json.RawMessage
-	dec := json.NewDecoder(conn)
-	if err := dec.Decode(&greeting); err != nil {
-		return 0, fmt.Errorf("reading QMP greeting: %w", err)
-	}
-
-	// Send qmp_capabilities to initialize.
-	fmt.Fprintf(conn, `{"execute":"qmp_capabilities"}`+"\n")
-	var capsResp json.RawMessage
-	if err := dec.Decode(&capsResp); err != nil {
-		return 0, fmt.Errorf("reading qmp_capabilities response: %w", err)
-	}
+	defer c.Close()
 
 	// Poll "info usernet" until the SLIRP host-forward rule appears.
 	// On slow runners (e.g. GitHub Actions) QEMU sometimes returns an
@@ -414,15 +391,10 @@ func qmpQueryHostFwd(sockPath string) (int, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	var lastReturn string
 	for {
-		fmt.Fprintf(conn, `{"execute":"human-monitor-command","arguments":{"command-line":"info usernet"}}`+"\n")
-		var hmpResp struct {
-			Return string `json:"return"`
+		if err := c.command("human-monitor-command", map[string]any{"command-line": "info usernet"}, &lastReturn); err != nil {
+			return 0, fmt.Errorf("info usernet: %w", err)
 		}
-		if err := dec.Decode(&hmpResp); err != nil {
-			return 0, fmt.Errorf("reading info usernet response: %w", err)
-		}
-		lastReturn = hmpResp.Return
-		if m := hostFwdRe.FindStringSubmatch(hmpResp.Return); m != nil {
+		if m := hostFwdRe.FindStringSubmatch(lastReturn); m != nil {
 			return strconv.Atoi(m[1])
 		}
 		if time.Now().After(deadline) {
