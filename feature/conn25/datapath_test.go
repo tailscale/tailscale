@@ -33,6 +33,9 @@ func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, tr
 	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
 }
 
+func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) {}
+func (tc *testConn25) ClientFlowRemoved(transitIP netip.Addr) {}
+
 func TestHandlePacketFromTunDevice(t *testing.T) {
 	clientSrcIP := netip.MustParseAddr("100.70.0.1")
 	magicIP := netip.MustParseAddr("10.64.0.1")

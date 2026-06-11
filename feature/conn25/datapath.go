@@ -23,9 +23,14 @@ var (
 	ErrUnmappedSrcAndTransitIP = errors.New("unmapped src and transit IP")
 )
 
-// IPMapper provides methods for mapping special app connector IPs to each other
-// in aid of performing DNAT and SNAT on app connector packets.
-type IPMapper interface {
+// Conn25Datapath is the interface for the surface of [*Conn25] that the datapath
+// handler needs. It provides methods for address mapping to help the datapath handler
+// implement DNAT/SNAT, and flow lifecycle handlers so that *Conn25 can keep address
+// assignments active for active flows.
+//
+// [*Conn25] is the only production implementation; the interface exists to let
+// datapath tests substitute a lightweight fake.
+type Conn25Datapath interface {
 	// ClientTransitIPForMagicIP returns a Transit IP for the given magicIP on a client.
 	// If the magicIP is within a configured Magic IP range for an app on the client,
 	// but not mapped to an active Transit IP, implementations should return [ErrUnmappedMagicIP].
@@ -42,6 +47,14 @@ type IPMapper interface {
 	// a nil error, and a zero-value [netip.Addr] to indicate this is potentially valid,
 	// non-app-connector traffic.
 	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
+
+	// ClientFlowCreated is called after a client-side flow for transitIP has
+	// been installed in the client flow table.
+	ClientFlowCreated(transitIP netip.Addr)
+	// ClientFlowRemoved is called after such a flow is removed. For each
+	// flow installed in the client flow table, ClientFlowCreated is called
+	// before any ClientFlowRemoved that fires for it.
+	ClientFlowRemoved(transitIP netip.Addr)
 }
 
 // datapathHandler handles packets from the datapath,
@@ -65,16 +78,16 @@ type IPMapper interface {
 // There are two exposed methods, one for handling packets from the tun device,
 // and one for handling packets from WireGuard, but through the use of flow tables,
 // we can handle four cases: client outbound, client return, connector outbound,
-// connector return. The first packet goes through IPMapper, which is where Connectors
-// 2025 authoritative state is stored. For valid packets relevant to connectors,
+// connector return. The first packet goes through [Conn25Datapath], which is where
+// Connectors 2025 authoritative state is stored. For valid packets relevant to connectors,
 // a bidirectional flow entry is installed, so that subsequent packets (and all return traffic)
 // hit that cache. Only outbound (towards internet) packets create new flows; return (from internet)
 // packets either match a cached entry or pass through.
 //
-// We check the cache before IPMapper both for performance, and so that existing flows stay alive
-// even if address mappings change mid-flow.
+// We check the cache before [Conn25Datapath] both for performance, and so that existing flows
+// stay alive even if address mappings change mid-flow.
 type datapathHandler struct {
-	ipMapper IPMapper
+	conn25 Conn25Datapath
 
 	// Flow caches. One for the client, and one for the connector.
 	clientFlowTable    *FlowTable
@@ -89,9 +102,9 @@ const (
 	maxConnectorFlows = 100_000
 )
 
-func newDatapathHandler(ipMapper IPMapper, logf logger.Logf) *datapathHandler {
+func newDatapathHandler(conn25 Conn25Datapath, logf logger.Logf) *datapathHandler {
 	return &datapathHandler{
-		ipMapper:           ipMapper,
+		conn25:             conn25,
 		clientFlowTable:    NewFlowTable(maxClientFlows),
 		connectorFlowTable: NewFlowTable(maxConnectorFlows),
 		logf:               logf,
@@ -139,7 +152,7 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 	// other (non-app-connector) traffic, or broken app-connector traffic
 	// that needs to be re-established by a new outbound packet.
 	transitIP := p.Dst.Addr()
-	realIP, err := dh.ipMapper.ConnectorRealIPForTransitIPConnection(p.Src.Addr(), transitIP)
+	realIP, err := dh.conn25.ConnectorRealIPForTransitIPConnection(p.Src.Addr(), transitIP)
 	if err != nil {
 		if errors.Is(err, ErrUnmappedSrcAndTransitIP) {
 			rj := packet.TailscaleRejectedHeader{
@@ -179,7 +192,6 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 		FromTun: incoming,
 		FromWG:  outgoing,
 	})
-
 	outgoing.Action(p)
 	return filter.Accept
 }
@@ -216,7 +228,7 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Re
 	// or broken return app-connector traffic on a connector, which needs to be re-established
 	// with a new outbound packet.
 	magicIP := p.Dst.Addr()
-	transitIP, err := dh.ipMapper.ClientTransitIPForMagicIP(magicIP)
+	transitIP, err := dh.conn25.ClientTransitIPForMagicIP(magicIP)
 	if err != nil {
 		if errors.Is(err, ErrUnmappedMagicIP) {
 			// TODO(tailscale/corp#34257): This path should deliver an ICMP error to the client.
@@ -242,11 +254,19 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Re
 		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(transitIP, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(magicIP),
 	}
+
+	// Notify Conn25 that a flow for transitIP is being established before
+	// installing it in the flow table. This guarantees that ClientFlowCreated
+	// for this flow precedes any ClientFlowRemoved that fires for it.
+	dh.conn25.ClientFlowCreated(transitIP)
+
 	dh.clientFlowTable.NewFlow(FlowData{
 		FromTun: outgoing,
 		FromWG:  incoming,
+		OnRemove: func() {
+			dh.conn25.ClientFlowRemoved(transitIP)
+		},
 	})
-
 	outgoing.Action(p)
 	return filter.Accept
 }
