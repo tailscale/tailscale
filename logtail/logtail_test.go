@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,34 +71,12 @@ type LogtailTestServer struct {
 func newTestLogtailServer(t *testing.T) (*LogtailTestServer, *Logger) {
 	// Enable the logtail started message
 	envknob.Setenv("TS_DEBUG_LOGTAIL", "1")
-	ts := &LogtailTestServer{
-		// max channel backlog = 1 "started" + #logLines x "log line" + 1 "closed"
-		uploaded: make(chan []byte, 2+logLines),
-	}
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Error("failed to read HTTP request")
-		}
-		ts.uploaded <- body
-	})
+	conf, uploaded := newCaptureServer(t, 0)
+	conf.Bus = eventbustest.NewBus(t)
+	ts := &LogtailTestServer{uploaded: uploaded}
 
-	ln := memnet.Listen("logtail-test:0")
-	httpsrv := &http.Server{Handler: handler}
-	go httpsrv.Serve(ln)
-	t.Cleanup(func() {
-		httpsrv.Close()
-		ln.Close()
-	})
-
-	logger := NewLogger(Config{
-		BaseURL: "http://" + ln.Addr().String(),
-		Bus:     eventbustest.NewBus(t),
-		HTTPC: &http.Client{
-			Transport: &http.Transport{DialContext: ln.Dial},
-		},
-	}, t.Logf)
+	logger := NewLogger(conf, t.Logf)
 
 	// There is always an initial "logtail started" message.
 	body := <-ts.uploaded
@@ -262,6 +241,238 @@ func unmarshalOne(t *testing.T, body []byte) map[string]any {
 		t.Fatalf("expected one entry, got %d", len(entries))
 	}
 	return entries[0]
+}
+
+// newCaptureServer wires up an in-memory HTTP server (via memnet) that sends
+// each uploaded request body to the returned channel and responds with
+// respStatus (0 means 200 OK), returning a Config whose HTTPC dials it.
+func newCaptureServer(t *testing.T, respStatus int) (Config, chan []byte) {
+	t.Helper()
+	// max channel backlog = 1 "started" + #logLines x "log line" + 1 "closed"
+	uploaded := make(chan []byte, 2+logLines)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read HTTP request: %v", err)
+		}
+		uploaded <- body
+		if respStatus != 0 {
+			w.WriteHeader(respStatus)
+		}
+	})
+
+	ln := memnet.Listen("logtail-test:0")
+	httpsrv := &http.Server{Handler: handler}
+	go httpsrv.Serve(ln)
+	t.Cleanup(func() {
+		httpsrv.Close()
+		ln.Close()
+	})
+
+	conf := Config{
+		BaseURL: "http://" + ln.Addr().String(),
+		HTTPC:   &http.Client{Transport: &http.Transport{DialContext: ln.Dial}},
+	}
+	return conf, uploaded
+}
+
+func TestUploadLogs(t *testing.T) {
+	t.Run("InlinesValueAlongsideLogtail", func(t *testing.T) {
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[jsontext.Value]{
+			{Value: jsontext.Value(`{"text":"first line"}`)},
+			{Value: jsontext.Value(`{"text":"second line","extra":42}`)},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+
+		var all []map[string]any
+		body := <-got
+		if err := json.Unmarshal(body, &all); err != nil {
+			t.Fatalf("unmarshal %q: %v", body, err)
+		}
+		if len(all) != 2 {
+			t.Fatalf("got %d entries, want 2", len(all))
+		}
+		if got, want := all[0]["text"], "first line"; got != want {
+			t.Errorf("entry 0 text = %v; want %q", got, want)
+		}
+		if got, want := all[1]["text"], "second line"; got != want {
+			t.Errorf("entry 1 text = %v; want %q", got, want)
+		}
+		if got, want := all[1]["extra"], float64(42); got != want {
+			t.Errorf("entry 1 extra = %v; want %v", got, want)
+		}
+		for i, e := range all {
+			lt, ok := e["logtail"].(map[string]any)
+			if !ok {
+				t.Errorf("entry %d missing logtail metadata", i)
+				continue
+			}
+			if _, ok := lt["client_time"]; !ok {
+				t.Errorf("entry %d missing client_time", i)
+			}
+		}
+	})
+
+	t.Run("TypedStructPayload", func(t *testing.T) {
+		conf, got := newCaptureServer(t, 0)
+		type record struct {
+			Text  string `json:"text"`
+			Count int    `json:"count"`
+		}
+		entries := []LogEntry[record]{
+			{Value: record{Text: "hi", Count: 3}},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		if got, want := e["text"], "hi"; got != want {
+			t.Errorf("text = %v; want %q", got, want)
+		}
+		if got, want := e["count"], float64(3); got != want {
+			t.Errorf("count = %v; want %v", got, want)
+		}
+		if _, ok := e["logtail"].(map[string]any); !ok {
+			t.Errorf("missing logtail metadata")
+		}
+	})
+
+	t.Run("MapPayload", func(t *testing.T) {
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[map[string]any]{
+			{Value: map[string]any{"text": "m", "n": 5}},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		if got, want := e["text"], "m"; got != want {
+			t.Errorf("text = %v; want %q", got, want)
+		}
+		if got, want := e["n"], float64(5); got != want {
+			t.Errorf("n = %v; want %v", got, want)
+		}
+	})
+
+	t.Run("MapWithNamedStringKey", func(t *testing.T) {
+		type label string // ~string key
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[map[label]int]{
+			{Value: map[label]int{"a": 1, "b": 2}},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		if got, want := e["a"], float64(1); got != want {
+			t.Errorf("a = %v; want %v", got, want)
+		}
+		if got, want := e["b"], float64(2); got != want {
+			t.Errorf("b = %v; want %v", got, want)
+		}
+	})
+
+	t.Run("PointerToStructPayload", func(t *testing.T) {
+		type record struct {
+			Text string `json:"text"`
+		}
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[*record]{
+			{Value: &record{Text: "ptr"}},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		if got, want := e["text"], "ptr"; got != want {
+			t.Errorf("text = %v; want %q", got, want)
+		}
+	})
+
+	t.Run("NilPointerPayloadOmitsInlinedValue", func(t *testing.T) {
+		type record struct {
+			Text string `json:"text"`
+		}
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[*record]{
+			{Value: nil},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		if _, ok := e["text"]; ok {
+			t.Errorf("expected no inlined members for nil pointer payload, got %v", e)
+		}
+		if _, ok := e["logtail"].(map[string]any); !ok {
+			t.Errorf("missing logtail metadata")
+		}
+	})
+
+	t.Run("RejectsNon-objectPayload", func(t *testing.T) {
+		conf, _ := newCaptureServer(t, 0)
+		entries := []LogEntry[int]{{Value: 5}}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err == nil {
+			t.Fatal("expected an error marshaling a non-object inline payload")
+		}
+	})
+
+	t.Run("PreservesCaller-setLogtailFields", func(t *testing.T) {
+		conf, got := newCaptureServer(t, 0)
+		entries := []LogEntry[jsontext.Value]{
+			{Logtail: Logtail{ProcID: 1234}, Value: jsontext.Value(`{"text":"x"}`)},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+		e := unmarshalOne(t, <-got)
+		lt := e["logtail"].(map[string]any)
+		if got, want := lt["proc_id"], float64(1234); got != want {
+			t.Errorf("proc_id = %v; want %v", got, want)
+		}
+	})
+
+	t.Run("UploadErrorOnNon-200", func(t *testing.T) {
+		conf, _ := newCaptureServer(t, http.StatusInternalServerError)
+		entries := []LogEntry[jsontext.Value]{{Value: jsontext.Value(`{"text":"x"}`)}}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err == nil {
+			t.Fatal("expected an error when the server responds non-200")
+		}
+	})
+
+	t.Run("IncludesIncrementingProc_seq", func(t *testing.T) {
+		conf, got := newCaptureServer(t, 0)
+		conf.IncludeProcSequence = true
+		entries := []LogEntry[jsontext.Value]{
+			{Value: jsontext.Value(`{"text":"one"}`)},
+			{Value: jsontext.Value(`{"text":"two"}`)},
+			{Value: jsontext.Value(`{"text":"three"}`)},
+		}
+		if err := UploadLogs(context.Background(), conf, slices.Values(entries)); err != nil {
+			t.Fatal(err)
+		}
+
+		var all []map[string]any
+		if err := json.Unmarshal(<-got, &all); err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 3 {
+			t.Fatalf("got %d entries, want 3", len(all))
+		}
+		for i, e := range all {
+			lt := e["logtail"].(map[string]any)
+			seq, ok := lt["proc_seq"].(float64)
+			if !ok {
+				t.Fatalf("entry %d missing proc_seq", i)
+			}
+			if int(seq) != i+1 {
+				t.Errorf("entry %d proc_seq = %v; want %d", i, seq, i+1)
+			}
+		}
+	})
 }
 
 type simpleMemBuf struct {
