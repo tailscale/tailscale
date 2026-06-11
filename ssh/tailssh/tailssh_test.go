@@ -832,6 +832,17 @@ func TestSSHAuthFlow(t *testing.T) {
 			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "alice"` + "\n"},
 		},
 		{
+			name:    "digit-only-username",
+			sshUser: "321",
+			state: &localState{
+				sshEnabled:   true,
+				varRoot:      varRoot,
+				matchingRule: bobRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: rejecting username "321". Usernames that consist of only digits are not allowed as they are ambiguous with numerical UIDs` + "\n"},
+		},
+		{
 			name: "accept",
 			state: &localState{
 				sshEnabled:   true,
