@@ -32,6 +32,12 @@ type TupleAndAction struct {
 type FlowData struct {
 	FromTun TupleAndAction
 	FromWG  TupleAndAction
+
+	// OnRemove, if non-nil, is invoked when the flow is removed from the
+	// table for any reason (idle expiration, tuple-collision displacement
+	// in [FlowTable.NewFlow], or capacity eviction). It is called once,
+	// outside the table's mutex, so it may safely acquire other locks.
+	OnRemove func()
 }
 
 // Origin is used to track the direction of a flow.
@@ -52,7 +58,6 @@ type cachedFlow struct {
 	data FlowData // user-defined tuples and actions for both directions
 
 	lastSeen mono.Time // tracks when the flow was last hit for expiration management
-	// onRemove func()    // fires on removal/expiration (e.g. update watchers, send RST to client)
 }
 
 // FlowTable stores and retrieves [FlowData] that can be looked up
@@ -196,27 +201,36 @@ func (t *FlowTable) lookup(k flowtrack.Tuple, dir Origin) (PacketAction, bool) {
 // would cause the table to exceed its maximum size, the least recently used
 // (looked-up or created) flow is evicted. data is not validated, the caller must
 // supply non-nil packet actions.
+//
+// Any [FlowData.OnRemove] callbacks belonging to displaced or evicted flows are
+// invoked after the table's mutex is released, before NewFlow returns.
 func (t *FlowTable) NewFlow(data FlowData) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	var onRemoves []func()
 
+	t.mu.Lock()
 	// If either tuple leads to anything existing, remove it.
-	t.removeFlowLocked(t.fromTunCache[data.FromTun.Tuple])
-	t.removeFlowLocked(t.fromWGCache[data.FromWG.Tuple])
+	onRemoves = append(onRemoves, t.removeFlowLocked(t.fromTunCache[data.FromTun.Tuple]))
+	onRemoves = append(onRemoves, t.removeFlowLocked(t.fromWGCache[data.FromWG.Tuple]))
 
 	flow := &cachedFlow{
 		data:     data,
 		lastSeen: mono.Now(),
-		// Populate onRemove()
 	}
 
 	ele := t.lru.PushFront(flow)
 	if t.maxEntries > 0 && t.lru.Len() > t.maxEntries {
-		t.removeFlowLocked(t.lru.Back())
+		onRemoves = append(onRemoves, t.removeFlowLocked(t.lru.Back()))
 	}
 
 	t.fromTunCache[data.FromTun.Tuple] = ele
 	t.fromWGCache[data.FromWG.Tuple] = ele
+	t.mu.Unlock()
+
+	for _, onRemove := range onRemoves {
+		if onRemove != nil {
+			onRemove()
+		}
+	}
 }
 
 // StartExpiredSweeper starts a sweeper that removes idle flows that have
@@ -246,8 +260,8 @@ func (t *FlowTable) removeIdle(now mono.Time) int {
 		return 0
 	}
 
+	var onRemoves []func()
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	removed := 0
 	for ele := t.lru.Back(); ele != nil; ele = t.lru.Back() {
@@ -258,20 +272,32 @@ func (t *FlowTable) removeIdle(now mono.Time) int {
 		if now.Sub(flow.lastSeen) <= t.idleTimeout {
 			break
 		}
-		t.removeFlowLocked(ele)
+		onRemoves = append(onRemoves, t.removeFlowLocked(ele))
 		removed++
 	}
+	t.mu.Unlock()
+
+	for _, onRemove := range onRemoves {
+		if onRemove != nil {
+			onRemove()
+		}
+	}
+
 	return removed
 }
 
-func (t *FlowTable) removeFlowLocked(ele *list.Element) {
+// removeFlowLocked detaches the flow at ele from t, and returns the flow's
+// [FlowData.OnRemove] callback, which may be nil. The caller must hold the
+// mutex while calling removeFlowLocked, and release it before invoking the
+// callback.
+func (t *FlowTable) removeFlowLocked(ele *list.Element) func() {
 	if ele == nil {
-		return
+		return nil
 	}
 
 	flow := t.lru.Remove(ele).(*cachedFlow)
 	delete(t.fromTunCache, flow.data.FromTun.Tuple)
 	delete(t.fromWGCache, flow.data.FromWG.Tuple)
 
-	// TODO(mzb): run flow.onRemove()
+	return flow.data.OnRemove
 }

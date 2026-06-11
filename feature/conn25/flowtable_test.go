@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
 	"testing"
 	"testing/synctest"
@@ -370,5 +371,147 @@ func TestFlowTable_removeIdle(t *testing.T) {
 		}
 		assertFlowHit(t, ft, FromTun, flows[0].FromTun.Tuple)
 		assertFlowMiss(t, ft, FromTun, flows[1].FromTun.Tuple)
+	})
+}
+
+// recordOnRemove returns an OnRemove that increments fired[name] when invoked.
+// Used to verify OnRemove fires for the right flows the right number of times.
+func recordOnRemove(fired map[string]int, name string) func() {
+	return func() { fired[name]++ }
+}
+
+func TestFlowTable_OnRemove(t *testing.T) {
+	tun1 := mkTuple("1.1.1.1:1000", "2.2.2.2:80")
+	wg1 := mkTuple("2.2.2.2:80", "1.1.1.1:1000")
+	tun2 := mkTuple("3.3.3.3:1000", "4.4.4.4:80")
+	wg2 := mkTuple("4.4.4.4:80", "3.3.3.3:1000")
+
+	t.Run("displacement", func(t *testing.T) {
+		// fd2 collides with fd1 on the FromTun tuple; fd1 is displaced and
+		// its OnRemove fires. fd2 stays installed and its OnRemove does not.
+		ft := NewFlowTable(0)
+		fired := map[string]int{}
+
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = recordOnRemove(fired, "fd1")
+		ft.NewFlow(fd1)
+
+		fd2 := mkFlow(tun1, wg2)
+		fd2.OnRemove = recordOnRemove(fired, "fd2")
+		ft.NewFlow(fd2)
+
+		if want := (map[string]int{"fd1": 1}); !maps.Equal(fired, want) {
+			t.Errorf("fired = %v, want %v", fired, want)
+		}
+	})
+
+	t.Run("one-replaces-two", func(t *testing.T) {
+		// fd3's FromTun matches fd1's, and fd3's FromWG matches fd2's. Both
+		// fd1 and fd2 should be displaced and both OnRemoves should fire.
+		ft := NewFlowTable(0)
+		fired := map[string]int{}
+
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = recordOnRemove(fired, "fd1")
+		ft.NewFlow(fd1)
+
+		fd2 := mkFlow(tun2, wg2)
+		fd2.OnRemove = recordOnRemove(fired, "fd2")
+		ft.NewFlow(fd2)
+
+		fd3 := mkFlow(tun1, wg2)
+		fd3.OnRemove = recordOnRemove(fired, "fd3")
+		ft.NewFlow(fd3)
+
+		if want := (map[string]int{"fd1": 1, "fd2": 1}); !maps.Equal(fired, want) {
+			t.Errorf("fired = %v, want %v", fired, want)
+		}
+	})
+
+	t.Run("reinstall-same-tuples-fires-once", func(t *testing.T) {
+		// Re-installing a flow with identical tuples from both directions
+		// causes removeFlowLocked to be called twice (once from each direction).
+		// Only one OnRemove should be called for the single flow.
+		ft := NewFlowTable(0)
+		fired := map[string]int{}
+
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = recordOnRemove(fired, "fd1")
+		ft.NewFlow(fd1)
+
+		fd2 := mkFlow(tun1, wg1) // identical tuples
+		fd2.OnRemove = recordOnRemove(fired, "fd2")
+		ft.NewFlow(fd2)
+
+		if want := (map[string]int{"fd1": 1}); !maps.Equal(fired, want) {
+			t.Errorf("fired = %v, want %v", fired, want)
+		}
+	})
+
+	t.Run("capacity-eviction", func(t *testing.T) {
+		// With capacity 1, installing fd2 evicts fd1 from the back of the
+		// LRU; fd1's OnRemove fires.
+		ft := NewFlowTable(1)
+		fired := map[string]int{}
+
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = recordOnRemove(fired, "fd1")
+		ft.NewFlow(fd1)
+
+		fd2 := mkFlow(tun2, wg2)
+		fd2.OnRemove = recordOnRemove(fired, "fd2")
+		ft.NewFlow(fd2)
+
+		if want := (map[string]int{"fd1": 1}); !maps.Equal(fired, want) {
+			t.Errorf("fired = %v, want %v", fired, want)
+		}
+	})
+
+	syncSubtest(t, "remove-idle", func(t *testing.T) {
+		ft := NewFlowTable(0, WithFlowIdleTimeout(time.Minute))
+		fired := map[string]int{}
+
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = recordOnRemove(fired, "fd1")
+		ft.NewFlow(fd1)
+
+		time.Sleep(2 * time.Minute) // advance synthetic clock past idleTimeout
+		if got, want := ft.removeIdle(mono.Now()), 1; got != want {
+			t.Errorf("removeIdle returned %d, want %d", got, want)
+		}
+
+		if want := (map[string]int{"fd1": 1}); !maps.Equal(fired, want) {
+			t.Errorf("fired = %v, want %v", fired, want)
+		}
+	})
+
+	t.Run("nil-onremove-no-panic", func(t *testing.T) {
+		ft := NewFlowTable(0)
+
+		ft.NewFlow(mkFlow(tun1, wg1)) // OnRemove unset
+		ft.NewFlow(mkFlow(tun1, wg2)) // displaces the first flow
+	})
+
+	t.Run("runs-outside-table-lock", func(t *testing.T) {
+		ft := NewFlowTable(0)
+
+		var onRemoveRan bool
+		fd1 := mkFlow(tun1, wg1)
+		fd1.OnRemove = func() {
+			// NewFlow is used here because we know it acquires the mutex,
+			// So this will prove OnRemove() is called with the mutex released.
+			ft.NewFlow(mkFlow(tun2, wg2))
+			onRemoveRan = true
+		}
+		ft.NewFlow(fd1)
+
+		// This should cause displacement of the first flow, and OnRemove to fire.
+		ft.NewFlow(mkFlow(tun1, mkTuple("9.9.9.9:99", "8.8.8.8:88")))
+
+		if !onRemoveRan {
+			t.Errorf("OnRemove did not run")
+		}
+		// The new install should be visible.
+		assertFlowHit(t, ft, FromTun, tun2)
 	})
 }

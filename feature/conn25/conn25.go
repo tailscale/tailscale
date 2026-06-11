@@ -257,7 +257,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
-// ClientTransitIPForMagicIP implements [IPMapper].
+// ClientTransitIPForMagicIP implements [Conn25Datapath].
 func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 	if addr, ok := c.client.transitIPForMagicIP(m); ok {
 		return addr, nil
@@ -272,7 +272,17 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 	return netip.Addr{}, ErrUnmappedMagicIP
 }
 
-// ConnectorRealIPForTransitIPConnection implements [IPMapper].
+// ClientFlowCreated implements [Conn25Datapath].
+func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) {
+	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+}
+
+// ClientFlowRemoved implements [Conn25Datapath].
+func (c *Conn25) ClientFlowRemoved(transitIP netip.Addr) {
+	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+}
+
+// ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
 func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) (netip.Addr, error) {
 	if addr, ok := c.connector.realIPForTransitIPConnection(src, transit); ok {
 		return addr, nil
@@ -704,8 +714,8 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is part of the implementation of the IPMapper interface for dataflows lookups.
-// See also [IPMapper.ClientTransitIPForMagicIP].
+// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
+// See also [Conn25Datapath.ClientTransitIPForMagicIP].
 func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1262,8 +1272,8 @@ type connector struct {
 	transitIPs map[netip.Addr]map[netip.Addr]appAddr
 }
 
-// realIPForTransitIPConnection is part of the implementation of the IPMapper interface for dataflows lookups.
-// See also [IPMapper.ConnectorRealIPForTransitIPConnection].
+// realIPForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
+// See also [Conn25Datapath.ConnectorRealIPForTransitIPConnection].
 func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
