@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,7 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 )
 
@@ -2025,4 +2027,24 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 // NumNodes returns the current number of nodes configured in the env.
 func (env *Env) NumNodes() int {
 	return len(env.nodes)
+}
+
+func (e *Env) HasEndpointsForOther(probe, other *Node) error {
+	e.t.Helper()
+
+	nm, err := local.GetDebugResultJSON[netmap.NetworkMap](e.t.Context(), probe.Agent().Client, "current-netmap")
+	if err != nil {
+		return fmt.Errorf("[%s] unable to get netmap: %q", probe.name, err)
+	}
+	otherKey := e.Status(other).Self.PublicKey
+
+	i := slices.IndexFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+		return p.Key() == otherKey
+	})
+	if i < 0 {
+		return fmt.Errorf("[%s] peer %s not found", probe.name, other.name)
+	} else if nm.Peers[i].Endpoints().Len() == 0 {
+		return fmt.Errorf("[%s] no endpoints for peer %s", probe.name, other.name)
+	}
+	return nil
 }
