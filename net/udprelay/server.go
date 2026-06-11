@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/net/udprelay/endpoint"
 	"tailscale.com/net/udprelay/status"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
@@ -84,6 +85,14 @@ type Server struct {
 	netMon           *netmon.Monitor
 	cloudInfo        *cloudinfo.CloudInfo // used to query cloud metadata services
 	controlKnobs     *controlknobs.Knobs  // or nil
+
+	// endpointRemovedHookForTest, if non-nil, is invoked by
+	// [Server.endpointGC] with the VNI of each expired endpoint it removed,
+	// after s.mu has been released. It enables tests to observe endpoint
+	// expiry/removal as an event instead of polling [Server.GetSessions].
+	// The hook must not block; it is invoked from the endpointGCLoop
+	// goroutine.
+	endpointRemovedHookForTest syncs.AtomicValue[func(vni uint32)]
 
 	mu                  sync.Mutex // guards the following fields
 	bindLifetime        time.Duration
@@ -765,6 +774,19 @@ func (s *Server) Close() error {
 
 func (s *Server) endpointGC(bindLifetime, steadyStateLifetime time.Duration) {
 	now := mono.Now()
+	var removed []uint32
+	// This deferred func is registered before the s.mu.Unlock defer below so
+	// that it runs after s.mu has been released.
+	defer func() {
+		if len(removed) == 0 {
+			return
+		}
+		if hook := s.endpointRemovedHookForTest.Load(); hook != nil {
+			for _, vni := range removed {
+				hook(vni)
+			}
+		}
+	}()
 	// TODO: consider performance implications of scanning all endpoints and
 	// holding s.mu for the duration. Keep it simple (and slow) for now.
 	s.mu.Lock()
@@ -773,8 +795,18 @@ func (s *Server) endpointGC(bindLifetime, steadyStateLifetime time.Duration) {
 		if v.maybeExpire(now, bindLifetime, steadyStateLifetime, s.metrics) {
 			delete(s.serverEndpointByDisco, k)
 			s.serverEndpointByVNI.Delete(v.vni)
+			removed = append(removed, v.vni)
 		}
 	}
+}
+
+// SetEndpointRemovedHookForTest sets a hook invoked by the endpoint GC loop
+// with the VNI of each expired endpoint it removes, after the server's mutex
+// has been released. It enables tests to observe endpoint expiry/removal,
+// e.g. relay-session-reap scenarios around tailscale/tailscale#20082, as an
+// event instead of polling [Server.GetSessions]. hook must not block.
+func (s *Server) SetEndpointRemovedHookForTest(hook func(vni uint32)) {
+	s.endpointRemovedHookForTest.Store(hook)
 }
 
 // getLifetimes returns the current bind and steady state endpoint lifetimes.
