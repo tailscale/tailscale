@@ -196,7 +196,7 @@ func (t *FlowTable) lookup(k flowtrack.Tuple, dir Origin) (PacketAction, bool) {
 // would cause the table to exceed its maximum size, the least recently used
 // (looked-up or created) flow is evicted. data is not validated, the caller must
 // supply non-nil packet actions.
-func (t *FlowTable) NewFlow(data FlowData) error {
+func (t *FlowTable) NewFlow(data FlowData) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -217,8 +217,6 @@ func (t *FlowTable) NewFlow(data FlowData) error {
 
 	t.fromTunCache[data.FromTun.Tuple] = ele
 	t.fromWGCache[data.FromWG.Tuple] = ele
-
-	return nil
 }
 
 // StartExpiredSweeper starts a sweeper that removes idle flows that have

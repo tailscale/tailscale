@@ -175,13 +175,11 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(realIP, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(transitIP),
 	}
-	if err := dh.connectorFlowTable.NewFlow(FlowData{
+	dh.connectorFlowTable.NewFlow(FlowData{
 		FromTun: incoming,
 		FromWG:  outgoing,
-	}); err != nil {
-		dh.debugLogf("error installing flow, passing packet unmodified: %v", err)
-		return filter.Accept
-	}
+	})
+
 	outgoing.Action(p)
 	return filter.Accept
 }
@@ -244,13 +242,11 @@ func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Re
 		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(transitIP, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(magicIP),
 	}
-	if err := dh.clientFlowTable.NewFlow(FlowData{
+	dh.clientFlowTable.NewFlow(FlowData{
 		FromTun: outgoing,
 		FromWG:  incoming,
-	}); err != nil {
-		dh.debugLogf("error installing flow from tun device, passing packet unmodified: %v", err)
-		return filter.Accept
-	}
+	})
+
 	outgoing.Action(p)
 	return filter.Accept
 }
