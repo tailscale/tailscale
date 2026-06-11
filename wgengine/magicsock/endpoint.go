@@ -135,6 +135,16 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	}
 }
 
+// setBestAddrHookForTests, if non-nil, is called by setBestAddrLocked (with
+// de.mu held) just after de.bestAddr is updated. Tests use it as a wakeup to
+// re-examine endpoint path state event-driven rather than by polling: all
+// disco path promotion/demotion funnels through setBestAddrLocked, and call
+// sites that make a path usable extend trustBestAddrUntil within the same
+// critical section, so a waiter that re-checks state (under de.mu) after
+// each invocation cannot miss a transition into or out of a usable path.
+// The hook must not block and must not call back into de.
+var setBestAddrHookForTests func(de *endpoint)
+
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
@@ -154,6 +164,9 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 		}
 	}
 	de.bestAddr = v
+	if hook := setBestAddrHookForTests; hook != nil {
+		hook(de)
+	}
 }
 
 const (
