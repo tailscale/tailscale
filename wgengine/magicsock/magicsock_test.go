@@ -39,6 +39,9 @@ import (
 	"go4.org/mem"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	extwgconn "golang.zx2c4.com/wireguard/conn"
+	extwgdevice "golang.zx2c4.com/wireguard/device"
+	extwgtest "golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/disco"
@@ -2267,17 +2270,20 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 }
 
 // newWireguard starts up a new wireguard-go device attached to a test tun, and
-// returns the device, tun and endpoint port. To add peers call device.IpcSet with UAPI instructions.
-func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*device.Device, *tuntest.ChannelTUN, uint16) {
-	wgtun := tuntest.NewChannelTUN()
+// returns the device, tun and endpoint port. To add peers call device.IpcSet
+// with UAPI instructions.
+//
+// This uses stock wireguard-go to simulate a non-Tailscale peer.
+func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*extwgdevice.Device, *extwgtest.ChannelTUN, uint16) {
+	wgtun := extwgtest.NewChannelTUN()
 	wglogf := func(f string, args ...any) {
 		t.Logf("wg-go: "+f, args...)
 	}
-	wglog := device.Logger{
+	wglog := extwgdevice.Logger{
 		Verbosef: func(string, ...any) {},
 		Errorf:   wglogf,
 	}
-	wgdev := wgcfg.NewDevice(wgtun.TUN(), wgconn.NewDefaultBind(), &wglog)
+	wgdev := extwgdevice.NewDevice(wgtun.TUN(), extwgconn.NewDefaultBind(), &wglog)
 
 	if err := wgdev.IpcSet(uapi); err != nil {
 		t.Fatal(err)
