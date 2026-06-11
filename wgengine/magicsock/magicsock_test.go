@@ -2312,6 +2312,13 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	c.logf = logger.Discard
 	c.controlKnobs = knobs // TODO(bradfitz): move silent disco bool to controlknobs
 
+	// Restore the original value when done; the loop below toggles it an
+	// odd number of times, and leaving silent disco enabled disables
+	// heartbeats (and with them background path discovery) for all
+	// magicsock tests that run after this one.
+	old := os.Getenv("TS_DEBUG_ENABLE_SILENT_DISCO")
+	defer envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", old)
+
 	for i := 1; i <= 3; i++ {
 		v := !debugEnableSilentDisco()
 		envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
