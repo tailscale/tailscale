@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
@@ -87,8 +88,9 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		lg.Debugf("Pod is being deleted, do nothing")
 		return res, nil
 	}
+
 	if pod.Labels[LabelParentType] != proxyTypeProxyGroup {
-		lg.Infof("[unexpected] reconciler called for a Pod that is not a ProxyGroup Pod")
+		lg.Warn("reconciler called for a Pod that is not a ProxyGroup Pod")
 		return res, nil
 	}
 
@@ -106,10 +108,12 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	if err := er.Get(ctx, types.NamespacedName{Name: proxyGroupName}, pg); err != nil {
 		return res, fmt.Errorf("error getting ProxyGroup %q: %w", proxyGroupName, err)
 	}
+
 	if pg.Spec.Type != typeEgress {
-		lg.Infof("[unexpected] reconciler called for %q ProxyGroup Pod", pg.Spec.Type)
+		lg.Warnf("reconciler called for %q ProxyGroup Pod", pg.Spec.Type)
 		return res, nil
 	}
+
 	// Get all ClusterIP Services for all egress targets exposed to cluster via this ProxyGroup.
 	lbls := map[string]string{
 		kubetypes.LabelManaged: "true",

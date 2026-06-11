@@ -468,7 +468,7 @@ func retrieveClusterDomain(namespace string, logger *zap.SugaredLogger) string {
 	if err != nil {
 		// Vast majority of clusters use the cluster.local domain, so it
 		// is probably better to fall back to that than error out.
-		logger.Infof("[unexpected] error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
+		logger.Warn("error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
 		return defaultClusterDomain
 	}
 	return clusterDomainFromResolverConf(conf, namespace, logger)
@@ -480,17 +480,17 @@ func retrieveClusterDomain(namespace string, logger *zap.SugaredLogger) string {
 // If the domains don't match the expected structure or an error is encountered, it defaults to 'cluster.local' domain.
 func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string, logger *zap.SugaredLogger) string {
 	if len(conf.SearchDomains) < 3 {
-		logger.Infof("[unexpected] resolver config contains only %d search domains, at least three expected.\nDefaulting cluster domain to 'cluster.local'.")
+		logger.Warnf(" resolver config contains only %d search domains, at least three expected.\nDefaulting cluster domain to 'cluster.local'.", len(conf.SearchDomains))
 		return defaultClusterDomain
 	}
 	first := conf.SearchDomains[0]
 	if !strings.HasPrefix(string(first), namespace+".svc") {
-		logger.Infof("[unexpected] first search domain in resolver config is %s; expected %s.\nDefaulting cluster domain to 'cluster.local'.", first, namespace+".svc.<cluster-domain>")
+		logger.Warnf("first search domain in resolver config is %s; expected %s.\nDefaulting cluster domain to 'cluster.local'.", first, namespace+".svc.<cluster-domain>")
 		return defaultClusterDomain
 	}
 	second := conf.SearchDomains[1]
 	if !strings.HasPrefix(string(second), "svc") {
-		logger.Infof("[unexpected] second search domain in resolver config is %s; expected 'svc.<cluster-domain>'.\nDefaulting cluster domain to 'cluster.local'.", second)
+		logger.Warnf("second search domain in resolver config is %s; expected 'svc.<cluster-domain>'.\nDefaulting cluster domain to 'cluster.local'.", second)
 		return defaultClusterDomain
 	}
 	// Trim the trailing dot for backwards compatibility purposes as the
@@ -499,7 +499,7 @@ func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string
 	probablyClusterDomain := strings.TrimPrefix(second.WithoutTrailingDot(), "svc.")
 	third := conf.SearchDomains[2]
 	if !strings.EqualFold(third.WithoutTrailingDot(), probablyClusterDomain) {
-		logger.Infof("[unexpected] expected resolver config to contain serch domains <namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>; got %s %s %s\n. Defaulting cluster domain to 'cluster.local'.", first, second, third)
+		logger.Warnf("expected resolver config to contain serch domains <namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>; got %s %s %s\n. Defaulting cluster domain to 'cluster.local'.", first, second, third)
 		return defaultClusterDomain
 	}
 	logger.Infof("Cluster domain %q extracted from resolver config", probablyClusterDomain)
