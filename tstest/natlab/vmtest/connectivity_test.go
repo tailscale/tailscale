@@ -111,6 +111,17 @@ func hardNoDERPOrEndpoints(env *vmtest.Env) *vmtest.Node {
 		vmtest.OS(vmtest.Gokrazy))
 }
 
+// one2one is a node behind a One2OneNAT: its STUN-discovered WAN endpoint is
+// directly reachable, which makes it suitable as a peer-relay server.
+func one2one(env *vmtest.Env) *vmtest.Node {
+	n := env.NumNodes()
+	return env.AddNode(fmt.Sprintf("node-%d", n),
+		env.AddNetwork(
+			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+			fmt.Sprintf("192.168.%d.1/24", n), vnet.One2OneNAT),
+		vmtest.OS(vmtest.Gokrazy))
+}
+
 func just6(env *vmtest.Env) *vmtest.Node {
 	n := env.NumNodes()
 	return env.AddNode(fmt.Sprintf("node-%d", n),
@@ -212,6 +223,20 @@ func TestOneHostFW(t *testing.T) {
 func TestFallbackDERPRegionForPeer(t *testing.T) {
 	env := vmtest.New(t)
 	env.RunConnectivityTest(t.Name(), vmtest.PingRouteDERP, hard, hardNoDERPOrEndpoints)
+}
+
+// TestHardHardViaPeerRelay verifies that two nodes whose direct UDP path is
+// impossible (both behind HardNAT, with no port-mapping services) end up
+// communicating via a third node configured as a peer-relay server, and that
+// the path is classified as [vmtest.PingRoutePeerRelay] rather than DERP.
+// HardNAT in natlab is endpoint-dependent, so without NAT-PMP/UPnP the a↔b
+// direct path cannot be established; the relay sits behind a One2OneNAT so
+// its STUN-discovered WAN endpoint is reachable from both peers. See
+// TestPeerRelay for deeper relay-side session assertions on the same
+// topology.
+func TestHardHardViaPeerRelay(t *testing.T) {
+	env := vmtest.New(t, vmtest.PeerRelayGrants())
+	env.RunConnectivityTestViaPeerRelay(t.Name(), hard, hard, one2one)
 }
 
 // TestSingleJustIPv6 tests that a node can connect to control with just IPv6.

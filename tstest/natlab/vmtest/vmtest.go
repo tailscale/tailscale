@@ -1184,6 +1184,25 @@ func (e *Env) ForcePreferredDERP(n *Node, region int) {
 	}
 }
 
+// EnableRelayServer enables the peer-relay server on n via a LocalAPI
+// EditPrefs of [ipn.Prefs.RelayServerPort], listening on an unused port.
+// For n to actually be usable as a relay by its peers, the Env must have
+// been created with the [PeerRelayGrants] option.
+func (e *Env) EnableRelayServer(n *Node) error {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Port 0 picks an unused port.
+	_, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:              ipn.Prefs{RelayServerPort: new(uint16(0))},
+		RelayServerPortSet: true,
+	})
+	if err != nil {
+		return fmt.Errorf("EnableRelayServer(%s): %w", n.name, err)
+	}
+	return nil
+}
+
 // Relogin switches n to a fresh login profile on the same test control server,
 // in-process (no daemon restart), so it comes up under a NEW node identity while
 // keeping the same long-lived magicsock.Conn. This is the control-client swap
@@ -1962,10 +1981,12 @@ func findKernelPath(goMod string) (string, error) {
 type PingRoute string
 
 const (
-	PingRouteDirect PingRoute = "direct"
-	PingRouteDERP   PingRoute = "derp"
-	PingRouteLocal  PingRoute = "local"
-	PingRouteNil    PingRoute = "nil"
+	PingRouteDirect    PingRoute = "direct"
+	PingRouteDERP      PingRoute = "derp"
+	PingRoutePeerRelay PingRoute = "peer-relay"
+	PingRouteLocal     PingRoute = "local"
+	PingRouteNil       PingRoute = "nil"
+	PingRouteUnknown   PingRoute = "unknown"
 )
 
 // classifyPing finds what kind of route has been used on a ping path.
@@ -1975,15 +1996,33 @@ func classifyPing(pr *ipnstate.PingResult) PingRoute {
 		return PingRouteNil
 	}
 
-	if pr.Endpoint == "" {
+	// magicsock populates exactly one of PeerRelay ("ip:port:vni:N"),
+	// Endpoint ("ip:port"), or DERPRegionID in a disco PingResult (see
+	// magicsock.Conn.populateCLIPingResponseLocked). Classify on whichever
+	// is set, and return PingRouteUnknown if none is, so that any future
+	// path type fails loudly here rather than being misclassified.
+	switch {
+	case pr.PeerRelay != "":
+		return PingRoutePeerRelay
+	case pr.Endpoint != "":
+		ap, err := netip.ParseAddrPort(pr.Endpoint)
+		if err == nil && ap.Addr().IsPrivate() {
+			return PingRouteLocal
+		}
+		return PingRouteDirect
+	case pr.DERPRegionID != 0:
 		return PingRouteDERP
 	}
+	return PingRouteUnknown
+}
 
-	ap, err := netip.ParseAddrPort(pr.Endpoint)
-	if err == nil && ap.Addr().IsPrivate() {
-		return PingRouteLocal
+// pingRouteDetail formats the PingResult fields that route classification is
+// based on, for debugging route mismatches.
+func pingRouteDetail(pr *ipnstate.PingResult) string {
+	if pr == nil {
+		return "<nil PingResult>"
 	}
-	return PingRouteDirect
+	return fmt.Sprintf("endpoint=%q derp=%d peer-relay=%q", pr.Endpoint, pr.DERPRegionID, pr.PeerRelay)
 }
 
 // PingExpect retries disco pings until the result matches wantRoute or the
@@ -1994,6 +2033,7 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
 	defer cancel()
 	var lastRoute PingRoute
+	lastDetail := "<no successful ping>"
 	toSt, err := to.agent.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("ping: can't get %s status: %w", to.name, err)
@@ -2007,20 +2047,20 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
 		pingCancel()
 		if err == nil && pr.Err == "" {
-			if got := classifyPing(pr); got == wantRoute {
-				e.t.Logf("Saw ping type %q", got)
+			got := classifyPing(pr)
+			e.t.Logf("Saw ping type %q (%s)", got, pingRouteDetail(pr))
+			if got == wantRoute {
 				return nil
-			} else {
-				e.t.Logf("Saw ping type %q", got)
-				lastRoute = got
 			}
+			lastRoute = got
+			lastDetail = pingRouteDetail(pr)
 		}
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 		}
 	}
-	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
+	return fmt.Errorf("ping route = %q, want %q (after %v; last result: %s)", lastRoute, wantRoute, timeout, lastDetail)
 }
 
 // NumNodes returns the current number of nodes configured in the env.

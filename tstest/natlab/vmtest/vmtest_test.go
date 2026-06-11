@@ -15,7 +15,6 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
-	"tailscale.com/ipn"
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -1357,49 +1356,22 @@ func TestPeerRelay(t *testing.T) {
 
 	env.Start()
 
-	// Turn on the relay server. Port 0 picks an unused port.
+	// Turn on the relay server.
 	enableRelayStep.Begin()
-	editCtx, editCancel := context.WithTimeout(t.Context(), 30*time.Second)
-	_, err := relay.Agent().EditPrefs(editCtx, &ipn.MaskedPrefs{
-		Prefs:              ipn.Prefs{RelayServerPort: new(uint16(0))},
-		RelayServerPortSet: true,
-	})
-	editCancel()
-	if err != nil {
-		enableRelayStep.Fatalf("EditPrefs(relay, RelayServerPort=0): %v", err)
+	if err := env.EnableRelayServer(relay); err != nil {
+		enableRelayStep.Fatal(err)
 	}
 	enableRelayStep.End(nil)
 
 	// Wait for the relay to start, peers to learn about it via netmap,
-	// and the a→b disco ping to traverse it.
-	// PingResult.PeerRelay is set by magicsock to "ip:port:vni:N" when the
-	// disco probe rode a peer relay (vs Endpoint for direct UDP or
-	// DERPRegionID for DERP).
+	// and the a→b disco ping to traverse it; hence the 60s budget, double
+	// the usual 30s connectivity budget.
 	pingStep.Begin()
-	bIP := env.Status(b).Self.TailscaleIPs[0]
-	var lastDetail string
-	err = tstest.WaitFor(60*time.Second, func() error {
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		defer cancel()
-		pr, err := a.Agent().PingWithOpts(ctx, bIP, tailcfg.PingDisco, local.PingOpts{})
-		if err != nil {
-			return fmt.Errorf("ping: %w", err)
-		}
-		if pr.Err != "" {
-			return fmt.Errorf("ping err: %s", pr.Err)
-		}
-		if pr.PeerRelay == "" {
-			lastDetail = fmt.Sprintf("endpoint=%q derp=%d", pr.Endpoint, pr.DERPRegionID)
-			return fmt.Errorf("ping did not use a peer relay; %s", lastDetail)
-		}
-		t.Logf("a → b disco ping rode peer-relay %s", pr.PeerRelay)
-		return nil
-	})
-	if err != nil {
+	if err := env.PingExpect(a, b, vmtest.PingRoutePeerRelay, 60*time.Second); err != nil {
 		env.DumpStatus(a)
 		env.DumpStatus(b)
 		env.DumpStatus(relay)
-		pingStep.Fatalf("waiting for peer-relay path a → b: %v (last: %s)", err, lastDetail)
+		pingStep.Fatalf("waiting for peer-relay path a → b: %v", err)
 	}
 	pingStep.End(nil)
 
