@@ -71,7 +71,10 @@ import (
 	"tailscale.com/util/set"
 	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/syspolicy/pkey"
+	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/syspolicy/policytest"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
 	"tailscale.com/util/syspolicy/source"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -8415,6 +8418,155 @@ func toStrings[T ~string](in []T) []string {
 		out[i] = string(v)
 	}
 	return out
+}
+
+func TestWatchNotificationsInitialPolicy(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	)
+	store := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+
+	nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+	nw.watch(ipn.NotifyInitialPolicy, []wantedNotification{
+		wantPolicyNotify(),
+	})
+	nw.check()
+
+	nw2 := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+	nw2.watch(0, nil, unexpectedPolicy)
+	nw2.check()
+}
+
+func TestPolicyChangeNotifiesWatcher(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	)
+	store := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+	if err := lb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{})
+	nw.watch(ipn.NotifyInitialPolicy, []wantedNotification{
+		wantPolicyNotify(),
+		wantPolicyWithSetting(pkey.AdminConsoleVisibility, "hide"),
+	})
+
+	store.SetStrings(source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"))
+
+	nw.check()
+}
+
+func TestPolicyNotifyPerUser(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	)
+	store := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+
+	actorA := &ipnauth.TestActor{UID: "S-1-5-21-1001"}
+	actorB := &ipnauth.TestActor{UID: "S-1-5-21-1002"}
+
+	nwA := newNotificationWatcher(t, lb, actorA)
+	nwA.watch(ipn.NotifyInitialPolicy, []wantedNotification{
+		wantPolicyNotify(),
+	})
+	nwA.check()
+
+	nwB := newNotificationWatcher(t, lb, actorB)
+	nwB.watch(ipn.NotifyInitialPolicy, []wantedNotification{
+		wantPolicyNotify(),
+	})
+	nwB.check()
+}
+
+func wantPolicyNotify() wantedNotification {
+	return wantedNotification{
+		name: "Policy",
+		cond: func(_ testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.Policy != nil
+		},
+	}
+}
+
+func wantPolicyWithSetting(key pkey.Key, value string) wantedNotification {
+	return wantedNotification{
+		name: fmt.Sprintf("Policy-%s=%s", key, value),
+		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			if n.Policy == nil {
+				return false
+			}
+			snap, ok := n.Policy.(*setting.Snapshot)
+			if !ok {
+				return false
+			}
+			got := snap.Get(key)
+			if got == nil {
+				return false
+			}
+			if fmt.Sprint(got) != value {
+				t.Errorf("Policy[%s] = %v (%T); want %q", key, got, got, value)
+			}
+			return true
+		},
+	}
+}
+
+func unexpectedPolicy(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+	if n.Policy != nil {
+		t.Errorf("unexpected Policy notification")
+		return true
+	}
+	return false
+}
+
+type testPolicyClient struct {
+	policyclient.NoPolicyClient
+}
+
+func (testPolicyClient) GetPolicySnapshot(uid string) (policyclient.PolicySnapshot, error) {
+	scope := setting.DefaultScope()
+	if uid != "" {
+		scope = setting.UserScopeOf(uid)
+	}
+	p, err := rsop.PolicyFor(scope)
+	if err != nil {
+		return nil, err
+	}
+	snap := p.Get()
+	if snap == nil {
+		return nil, nil
+	}
+	return snap, nil
+}
+
+func (testPolicyClient) WatchPolicyChanges(uid string, cb func()) (func(), error) {
+	scope := setting.DefaultScope()
+	if uid != "" {
+		scope = setting.UserScopeOf(uid)
+	}
+	p, err := rsop.PolicyFor(scope)
+	if err != nil {
+		return func() {}, err
+	}
+	unreg := p.RegisterChangeCallback(func(_ policyclient.PolicyChange) {
+		cb()
+	})
+	return unreg, nil
 }
 
 type textUpdate struct {

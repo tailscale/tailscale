@@ -262,3 +262,34 @@ func (globalSyspolicy) HasAnyOf(keys ...pkey.Key) (bool, error) {
 func (globalSyspolicy) RegisterChangeCallback(cb func(policyclient.PolicyChange)) (unregister func(), err error) {
 	return registerChangeCallback(cb)
 }
+
+func (globalSyspolicy) GetPolicySnapshot(uid string) (policyclient.PolicySnapshot, error) {
+	scope := setting.DefaultScope()
+	if uid != "" {
+		scope = setting.UserScopeOf(uid)
+	}
+	p, err := rsop.PolicyFor(scope)
+	if err != nil {
+		return nil, err
+	}
+	snap := p.Get()
+	if snap == nil {
+		return nil, nil
+	}
+	return snap, nil
+}
+
+func (globalSyspolicy) WatchPolicyChanges(uid string, cb func()) (unregister func(), err error) {
+	scope := setting.DefaultScope()
+	if uid != "" {
+		scope = setting.UserScopeOf(uid)
+	}
+	p, err := rsop.PolicyFor(scope)
+	if err != nil {
+		return nil, err
+	}
+	unreg := p.RegisterChangeCallback(func(_ policyclient.PolicyChange) {
+		cb()
+	})
+	return unreg, nil
+}
