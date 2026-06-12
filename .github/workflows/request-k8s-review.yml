@@ -1,18 +1,25 @@
-name: request-dataplane-review
+name: request-k8s-review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - ".github/workflows/request-dataplane-review.yml"
-      - "**/*derp*"
-      - "**/derp*/**"
+      - ".github/workflows/request-k8s-review.yml"
+      - "k8s-operator/**"
+      - "kube/**"
+      - "cmd/k8s-operator/**"
+      - "cmd/k8s-proxy/**"
+      - "cmd/k8s-nameserver/**"
+      - "cmd/containerboot/**"
+      - "cmd/sync-containers/**"
+      - "ipn/store/kubestore/**"
+      - "docs/k8s/**"
       - "!**/depaware.txt"
 
 jobs:
-  request-dataplane-review:
+  request-k8s-review:
     if: github.event.pull_request.draft == false
-    name: Request Dataplane Review
+    name: Request K8s Review
     runs-on: ubuntu-latest
     steps:
       - name: Get access token
@@ -27,4 +34,4 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           url: ${{ github.event.pull_request.html_url }}
         run: |
-          gh pr edit "$url" --add-reviewer tailscale/dataplane
+          gh pr edit "$url" --add-reviewer tailscale/k8s-devs
