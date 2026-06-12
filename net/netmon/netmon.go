@@ -418,6 +418,12 @@ func (m *Monitor) InterfaceState() *State {
 	return m.ifState
 }
 
+// ProbeLocks acquires and releases the monitor's internal mutex.
+func (m *Monitor) ProbeLocks() {
+	m.mu.Lock()
+	m.mu.Unlock()
+}
+
 func (m *Monitor) interfaceStateUncached() (*State, error) {
 	return getState(tsIfProps.tsIfName())
 }

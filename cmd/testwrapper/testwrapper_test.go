@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -30,7 +29,15 @@ func cmdTestwrapper(t *testing.T, args ...string) *exec.Cmd {
 	if buildErr != nil {
 		t.Fatalf("building testwrapper: %s", buildErr)
 	}
-	return exec.Command(buildPath, args...)
+	cmd := exec.Command(buildPath, args...)
+	// Tests of testwrapper run with a small per-test budget so they don't
+	// take 10 minutes when checking permanent-failure behavior.
+	cmd.Env = append(os.Environ(),
+		"TS_TESTWRAPPER_BUDGET=2s",
+		"TS_TESTWRAPPER_MIN_RETRIES=2",
+		"GITHUB_REPOSITORY=tailscale/tailscale",
+	)
+	return cmd
 }
 
 func buildTestWrapper() (string, error) {
@@ -45,6 +52,9 @@ func buildTestWrapper() (string, error) {
 	return filepath.Join(dir, "testwrapper"), nil
 }
 
+// TestRetry covers a Mark()'d test that fails on the first attempt and passes
+// on retry: the wrapper must exit 0, emit a flakytest failures JSON line with
+// the real issue URL, and have run TestFlakeRun twice.
 func TestRetry(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +70,7 @@ import (
 func TestOK(t *testing.T) {}
 
 func TestFlakeRun(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/0") // random issue
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/1234")
 	e := os.Getenv(flakytest.FlakeAttemptEnv)
 	if e == "" {
 		t.Skip("not running in testwrapper")
@@ -79,19 +89,20 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatalf("go run . %s: %s with output:\n%s", testfile, err, out)
 	}
 
-	// Replace the unpredictable timestamp with "0.00s".
-	out = regexp.MustCompile(`\t\d+\.\d\d\ds\t`).ReplaceAll(out, []byte("\t0.00s\t"))
-
-	want := []byte("ok\t" + testfile + "\t0.00s\t[attempt=2]")
-	if !bytes.Contains(out, want) {
-		t.Fatalf("wanted output containing %q but got:\n%s", want, out)
+	if !bytes.Contains(out, []byte("flakytest failures JSON:")) {
+		t.Errorf("missing flakytest failures JSON line in output:\n%s", out)
 	}
-
+	if !bytes.Contains(out, []byte("https://github.com/tailscale/tailscale/issues/1234")) {
+		t.Errorf("missing real issue URL in output:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("permanent test failures JSON:")) {
+		t.Errorf("unexpected permanent failures line in output:\n%s", out)
+	}
 	if okRuns := bytes.Count(out, []byte("=== RUN   TestOK")); okRuns != 1 {
-		t.Fatalf("expected TestOK to be run once but was run %d times in output:\n%s", okRuns, out)
+		t.Errorf("expected TestOK to be run once but was run %d times in output:\n%s", okRuns, out)
 	}
 	if flakeRuns := bytes.Count(out, []byte("=== RUN   TestFlakeRun")); flakeRuns != 2 {
-		t.Fatalf("expected TestFlakeRun to be run twice but was run %d times in output:\n%s", flakeRuns, out)
+		t.Errorf("expected TestFlakeRun to be run twice but was run %d times in output:\n%s", flakeRuns, out)
 	}
 
 	if testing.Verbose() {
@@ -99,45 +110,209 @@ func TestFlakeRun(t *testing.T) {
 	}
 }
 
-func TestNoRetry(t *testing.T) {
+// TestAutoRetry covers a non-Mark()'d test that fails on the first attempt and
+// passes on retry: the wrapper must exit 0, emit a flakytest failures JSON
+// line with a fake /issues/UNKNOWN URL, and have run the test twice.
+func TestAutoRetry(t *testing.T) {
 	t.Parallel()
 
-	testfile := filepath.Join(t.TempDir(), "noretry_test.go")
-	code := []byte(`package noretry_test
+	testfile := filepath.Join(t.TempDir(), "autoretry_test.go")
+	// Note: no flakytest.Mark call. The wrapper should retry anyway.
+	code := []byte(`package autoretry_test
 
 import (
+	"os"
 	"testing"
-	"tailscale.com/cmd/testwrapper/flakytest"
 )
 
-func TestFlakeRun(t *testing.T) {
-	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/0") // random issue
-	t.Error("shouldn't be retried")
-}
-
-func TestAlwaysError(t *testing.T) {
-	t.Error("error")
+func TestAutoFlake(t *testing.T) {
+	e := os.Getenv("TS_TESTWRAPPER_ATTEMPT")
+	if e == "" {
+		t.Skip("not running in testwrapper")
+	}
+	if e == "1" {
+		t.Fatal("First run in testwrapper, failing so that test is retried. This is expected.")
+	}
 }
 `)
 	if err := os.WriteFile(testfile, code, 0o644); err != nil {
 		t.Fatalf("writing package: %s", err)
 	}
 
-	out, err := cmdTestwrapper(t, "-v", testfile).Output()
+	out, err := cmdTestwrapper(t, "-v", testfile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("testwrapper %s: %s with output:\n%s", testfile, err, out)
+	}
+
+	if !bytes.Contains(out, []byte("flakytest failures JSON:")) {
+		t.Errorf("missing flakytest failures JSON line in output:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("/issues/UNKNOWN")) {
+		t.Errorf("missing fake /issues/UNKNOWN URL in output:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("https://github.com/tailscale/tailscale/issues/UNKNOWN")) {
+		t.Errorf("missing fake URL with detected repo in output:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("permanent test failures JSON:")) {
+		t.Errorf("unexpected permanent failures line in output:\n%s", out)
+	}
+	if runs := bytes.Count(out, []byte("=== RUN   TestAutoFlake")); runs != 2 {
+		t.Errorf("expected TestAutoFlake to run twice but ran %d times in output:\n%s", runs, out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
+// TestPermanentFailure covers a test that always fails: the wrapper must exit
+// non-zero, emit a permanent test failures JSON line, and NOT emit a flakytest
+// failures JSON line. The test should be retried at least minRetries times.
+func TestPermanentFailure(t *testing.T) {
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "permfail_test.go")
+	code := []byte(`package permfail_test
+
+import "testing"
+
+func TestAlwaysFail(t *testing.T) {
+	t.Fatal("always fails")
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, "-v", testfile).CombinedOutput()
 	if err == nil {
-		t.Fatalf("go run . %s: expected error but it succeeded with output:\n%s", testfile, out)
+		t.Fatalf("testwrapper %s: expected error but it succeeded with output:\n%s", testfile, out)
 	}
 	if code, ok := errExitCode(err); ok && code != 1 {
-		t.Fatalf("expected exit code 1 but got %d", code)
+		t.Errorf("expected exit code 1 but got %d; output:\n%s", code, out)
 	}
 
-	want := []byte("Not retrying flaky tests because non-flaky tests failed.")
-	if !bytes.Contains(out, want) {
-		t.Fatalf("wanted output containing %q but got:\n%s", want, out)
+	if bytes.Contains(out, []byte("flakytest failures JSON:")) {
+		t.Errorf("unexpected flakytest failures JSON line in output (test never passed):\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("permanent test failures JSON:")) {
+		t.Errorf("missing permanent test failures JSON line in output:\n%s", out)
+	}
+	// First pass + at least minRetries retries = 3 runs.
+	if runs := bytes.Count(out, []byte("=== RUN   TestAlwaysFail")); runs < 3 {
+		t.Errorf("expected TestAlwaysFail to run >= 3 times (1 first + 2 retries) but ran %d times in output:\n%s", runs, out)
 	}
 
-	if flakeRuns := bytes.Count(out, []byte("=== RUN   TestFlakeRun")); flakeRuns != 1 {
-		t.Fatalf("expected TestFlakeRun to be run once but was run %d times in output:\n%s", flakeRuns, out)
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
+// TestRaceSuppressesFlakyRetry verifies that detecting a data race
+// in a package's output stops testwrapper from retrying any flaky
+// test in that package. Races are too serious to paper over: the
+// flaky test might not even be the one whose code is racy, and a
+// retry without the racy goroutine could silently hide the bug.
+func TestRaceSuppressesFlakyRetry(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("test requires the race detector, which needs linux/amd64")
+	}
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "raceretry_test.go")
+	code := []byte(`package raceretry_test
+
+import (
+	"sync"
+	"testing"
+	"tailscale.com/cmd/testwrapper/flakytest"
+)
+
+var counter int
+
+func TestRace(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); counter++ }()
+	go func() { defer wg.Done(); counter++ }()
+	wg.Wait()
+}
+
+func TestFlaky(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/0")
+	t.Fatal("flaky test failing; would normally be retried")
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, testfile, "-race").CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s -race: expected exit code 1, got %v; output was:\n%s", testfile, err, out)
+	}
+	if want := "WARNING: DATA RACE"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("expected race report in output, got:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("Retrying")) {
+		t.Fatalf("expected no retry phase in output, but found one:\n%s", out)
+	}
+	if got := bytes.Count(out, []byte("[retry ")); got != 0 {
+		t.Fatalf("expected no retry attempts to be made, but %d were:\n%s", got, out)
+	}
+	if got := bytes.Count(out, []byte("=== RUN   TestFlaky")); got != 1 {
+		t.Fatalf("expected TestFlaky to be run exactly once, ran %d times:\n%s", got, out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
+// TestRaceAttributedToPassingTest covers the case where go test
+// attributes a data race report to a test that itself reports PASS
+// (e.g. when the racing goroutines outlive the test that spawned
+// them and TSan prints during a different test's window). Without
+// the race-detection fix, the WARNING: DATA RACE block would be
+// stuck in a passing test's log buffer and dropped on the floor.
+// See https://github.com/tailscale/tailscale/issues/19603.
+func TestRaceAttributedToPassingTest(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("test requires the race detector, which needs linux/amd64")
+	}
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "race_test.go")
+	code := []byte(`package race_test
+
+import (
+	"sync"
+	"testing"
+)
+
+var counter int
+var wg sync.WaitGroup
+
+func TestSpawn(t *testing.T) {
+	wg.Add(2)
+	go func() { defer wg.Done(); counter++ }()
+	go func() { defer wg.Done(); counter++ }()
+}
+
+func TestWait(t *testing.T) {
+	wg.Wait()
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, testfile, "-race").CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s -race: expected exit code 1, got %v; output was:\n%s", testfile, err, out)
+	}
+	if want := "WARNING: DATA RACE"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("expected race report in output, got:\n%s", out)
 	}
 
 	if testing.Verbose() {
@@ -204,10 +379,10 @@ func TestTimeout(t *testing.T) {
 
 	out, err := cmdTestwrapper(t, testfile, "-timeout=20ms").CombinedOutput()
 	if code, ok := errExitCode(err); !ok || code != 1 {
-		t.Fatalf("testwrapper %s: expected error with exit code 0 but got: %v; output was:\n%s", testfile, err, out)
+		t.Fatalf("testwrapper %s: expected error with exit code 1 but got: %v; output was:\n%s", testfile, err, out)
 	}
 	if want := "panic: test timed out after 20ms"; !bytes.Contains(out, []byte(want)) {
-		t.Fatalf("testwrapper %s: expected build error containing %q but got:\n%s", testfile, buildErr, out)
+		t.Fatalf("testwrapper %s: expected timeout panic containing %q but got:\n%s", testfile, want, out)
 	}
 
 	if testing.Verbose() {

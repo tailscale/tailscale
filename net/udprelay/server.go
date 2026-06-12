@@ -25,6 +25,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
@@ -83,6 +84,7 @@ type Server struct {
 	metrics             *metrics
 	netMon              *netmon.Monitor
 	cloudInfo           *cloudinfo.CloudInfo // used to query cloud metadata services
+	controlKnobs        *controlknobs.Knobs  // or nil
 
 	mu                  sync.Mutex                      // guards the following fields
 	macSecrets          views.Slice[[blake2s.Size]byte] // [0] is most recent, max 2 elements
@@ -376,8 +378,8 @@ const (
 // port selection is left up to the host networking stack. If
 // onlyStaticAddrPorts is true, then dynamic addr:port discovery will be
 // disabled, and only addr:port's set via [Server.SetStaticAddrPorts] will be
-// used. Metrics must be non-nil.
-func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics *usermetric.Registry) (s *Server, err error) {
+// used. Metrics must be non-nil. knobs may be nil.
+func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics *usermetric.Registry, knobs *controlknobs.Knobs) (s *Server, err error) {
 	s = &Server{
 		logf:                  logf,
 		disco:                 key.NewDisco(),
@@ -388,6 +390,7 @@ func NewServer(logf logger.Logf, port uint16, onlyStaticAddrPorts bool, metrics 
 		serverEndpointByDisco: make(map[key.SortedPairOfDiscoPublic]*serverEndpoint),
 		nextVNI:               minVNI,
 		cloudInfo:             cloudinfo.New(logf),
+		controlKnobs:          knobs,
 	}
 	s.discoPublic = s.disco.Public()
 	s.metrics = registerMetrics(metrics)
@@ -689,7 +692,7 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 					break SocketsLoop
 				}
 			}
-			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize, "udprelay_rxq_overflows")
+			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize, "udprelay_rxq_overflows", s.controlKnobs)
 			bc, ok := pc.(batching.Conn)
 			if !ok {
 				bc = &singlePacketConn{uc}

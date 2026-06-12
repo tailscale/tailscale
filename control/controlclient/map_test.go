@@ -865,6 +865,53 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				nu.lastTSMPKey, nu.lastTSMPDisco)
 		}
 	})
+
+	t.Run("test_deadlock", func(t *testing.T) {
+		nu := &rememberLastNetmapUpdater{
+			done: make(chan any, 1),
+		}
+		ms := newTestMapSession(t, nu)
+		// Very barebones onDebug func that will let us exercise sleep command
+		// from control and potentially induce deadlocks.
+		ms.onDebug = func(ctx context.Context, d *tailcfg.Debug) error {
+			time.Sleep(time.Duration(d.SleepSeconds * float64(time.Second)))
+			return nil
+		}
+
+		oldKey := key.NewDisco()
+
+		// Insert existing node
+		node := tailcfg.Node{
+			ID:       1,
+			Key:      key.NewNode().Public(),
+			DiscoKey: oldKey.Public(),
+			Online:   new(false),
+			LastSeen: new(time.Unix(1, 0)),
+		}
+
+		if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+			Peers: []*tailcfg.Node{&node},
+		}); len(nm.Peers) != 1 {
+			t.Fatalf("node not inserted")
+		}
+
+		sleep1 := &tailcfg.MapResponse{
+			Debug: &tailcfg.Debug{
+				SleepSeconds: 1.0,
+			},
+		}
+		ms.HandleNonKeepAliveMapResponse(t.Context(), sleep1)
+
+		// Resembles the disco key advert subscriber running in a separate context.
+		go func() {
+			newKey := key.NewDisco()
+			ms.updateDiscoForNode(node.ID, node.Key, newKey.Public(), time.Now(), false)
+		}()
+
+		ms.Close()
+
+		<-nu.done
+	})
 }
 
 func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
@@ -1268,6 +1315,56 @@ type countingNetmapUpdater struct {
 
 func (nu *countingNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.full.Add(1)
+}
+
+type countingDeltaNetmapUpdater struct {
+	countingNetmapUpdater
+	delta atomic.Int64
+}
+
+func (nu *countingDeltaNetmapUpdater) UpdateNetmapDelta([]netmap.NodeMutation) bool {
+	nu.delta.Add(1)
+	return true
+}
+
+func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
+	nu := &countingDeltaNetmapUpdater{}
+	ms := newTestMapSession(t, nu)
+	ctx := t.Context()
+
+	peer := &tailcfg.Node{
+		ID:         1,
+		StableID:   "peer",
+		Name:       "peer.example.ts.net.",
+		Key:        key.NewNode().Public(),
+		DiscoKey:   key.NewDisco().Public(),
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
+	}
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
+		Peers: []*tailcfg.Node{peer},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Fatalf("full updates after initial response = %d; want 1", got)
+	}
+
+	replacement := peer.Clone()
+	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Errorf("full updates after route-changing peer replacement = %d; want 1", got)
+	}
+	if got := nu.delta.Load(); got != 1 {
+		t.Errorf("delta updates after route-changing peer replacement = %d; want 1", got)
+	}
 }
 
 // tests (*mapSession).patchifyPeersChanged; smaller tests are in TestPeerChangeDiff
@@ -1863,11 +1960,6 @@ func TestPathDiscokeyerImplementations(t *testing.T) {
 	t.Cleanup(e.Close)
 	if _, ok := e.(patchDiscoKeyer); !ok {
 		t.Error("wgengine.userspaceEngine must implement patchDiscoKeyer")
-	}
-
-	wd := wgengine.NewWatchdog(e)
-	if _, ok := wd.(patchDiscoKeyer); !ok {
-		t.Error("wgengine.watchdogEngine must implement patchDiscoKeyer")
 	}
 }
 

@@ -35,6 +35,7 @@ func (src *Config) Clone() *Config {
 		dst.Routes = map[dnsname.FQDN][]*dnstype.Resolver{}
 		for k, sv := range src.Routes {
 			if sv == nil {
+				dst.Routes[k] = nil
 				continue
 			}
 			dst.Routes[k] = make([]*dnstype.Resolver, len(sv))

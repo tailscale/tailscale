@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,12 +20,14 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
@@ -131,6 +134,12 @@ func (d *Dialer) TUNName() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.tunName
+}
+
+// ProbeLocks acquires and releases the dialer's internal mutex.
+func (d *Dialer) ProbeLocks() {
+	d.mu.Lock()
+	d.mu.Unlock()
 }
 
 // SetExitDNSDoH sets (or clears) the exit node DNS DoH server base URL to use.
@@ -358,18 +367,27 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
-// userDialResolve resolves addr as if a user initiating the dial. (e.g. from a
-// SOCKS or HTTP outbound proxy)
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
+// userDialResolveAll resolves addr as if a user initiating the dial.
+// (e.g. from a SOCKS or HTTP outbound proxy.)
+//
+// It returns all candidate addresses so that the caller can apply
+// happy eyeballs across address families. The returned slice is
+// non-empty on a nil-error return.
+func (d *Dialer) userDialResolveAll(ctx context.Context, network, addr string) ([]netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
 	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
+	// dns.resolveMemory returns a single address; tailnet names have
+	// one IP each, so there's nothing to race.
 	ipp, err := dns.resolveMemory(ctx, network, addr)
 	if err != errUnresolved {
-		return ipp, err
+		if err != nil {
+			return nil, err
+		}
+		return []netip.AddrPort{ipp}, nil
 	}
 
 	// Otherwise, hit the network.
@@ -379,7 +397,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
-		return netip.AddrPort{}, err
+		return nil, err
 	}
 
 	var r net.Resolver
@@ -397,14 +415,51 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {
+		return nil, err
+	}
+	out := make([]netip.AddrPort, 0, len(ips))
+	for _, stdIP := range ips {
+		ip, ok := netip.AddrFromSlice(stdIP)
+		if !ok {
+			continue
+		}
+		out = append(out, netip.AddrPortFrom(ip.Unmap(), port))
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("DNS lookup returned no results for %q", host)
+	}
+	if debugPreferIPv6() {
+		slices.SortStableFunc(out, func(a, b netip.AddrPort) int {
+			a6 := a.Addr().Is6()
+			b6 := b.Addr().Is6()
+			if a6 == b6 {
+				return 0
+			}
+			if a6 {
+				return -1
+			}
+			return 1
+		})
+	}
+	return out, nil
+}
+
+// userDialResolve resolves addr and returns the first candidate.
+// It is for callers that don't perform happy-eyeballs (notably
+// [Dialer.UserDialPlan], which only needs to classify one IP).
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
+	ipps, err := d.userDialResolveAll(ctx, network, addr)
+	if err != nil {
 		return netip.AddrPort{}, err
 	}
-	if len(ips) == 0 {
-		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
-	}
-	ip, _ := netip.AddrFromSlice(ips[0])
-	return netip.AddrPortFrom(ip.Unmap(), port), nil
+	return ipps[0], nil
 }
+
+// debugPreferIPv6 forces userDialResolveAll to sort AAAA results before
+// A results, reproducing the failure mode where a client on an IPv6-capable
+// host picks an unreachable AAAA address through an IPv4-only exit node.
+// Used by TestExitNodeV4Only to exercise the happy-eyeballs fallback.
+var debugPreferIPv6 = envknob.RegisterBool("TS_DEBUG_PREFER_IPV6_USERDIAL")
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
 // to the input value of "tcp", "tcp4", "udp6" etc network
@@ -479,11 +534,33 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 
 // UserDial connects to the provided network address as if a user were
 // initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
+//
+// For TCP, if the name resolves to multiple addresses, UserDial races
+// connect attempts across address families with a happy-eyeballs delay
+// and returns the first one that succeeds. This lets dual-stack names
+// work via an exit node whose egress is single-family without the
+// caller needing to know which family the exit node can reach.
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	ipp, err := d.userDialResolve(ctx, network, addr)
+	ipps, err := d.userDialResolveAll(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
+
+	// Happy eyeballs is a no-op (and undefined) for UDP; there's no
+	// connect to race.
+	if len(ipps) == 1 || strings.HasPrefix(network, "udp") {
+		return d.dialOneUser(ctx, network, ipps[0])
+	}
+	// Family filtering for "tcp4"/"tcp6" is already handled by
+	// userDialResolveAll (via ipNetOfNetwork), so ipps only contains
+	// addresses of the requested family by this point.
+	return d.raceDialUser(ctx, ipps)
+}
+
+// dialOneUser dials ipp using the appropriate transport for a user
+// dial (netstack, peer dialer, system dialer, or std dialer) based
+// on what kind of address ipp is.
+func (d *Dialer) dialOneUser(ctx context.Context, network string, ipp netip.AddrPort) (net.Conn, error) {
 	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil || d.NetstackDialUDP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
@@ -513,6 +590,24 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 	// TODO(bradfitz): netns, etc
 	var stdDialer net.Dialer
 	return stdDialer.DialContext(ctx, network, ipp.String())
+}
+
+// userDialFallbackDelay is the happy-eyeballs gap between starting
+// successive connect attempts. 300ms matches Go's net.Dialer default
+// and the value used by net/dnscache.
+const userDialFallbackDelay = 300 * time.Millisecond
+
+// raceDialUser races connect attempts across ipps with a happy-eyeballs
+// fallback delay, returning the first to succeed. Losers are cancelled
+// and any conns they produce are closed. If all fail, the first error
+// is returned.
+func (d *Dialer) raceDialUser(ctx context.Context, ipps []netip.AddrPort) (net.Conn, error) {
+	return netx.RaceDial(ctx, ipps,
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			return d.dialOneUser(ctx, network, netip.MustParseAddrPort(address))
+		},
+		userDialFallbackDelay,
+	)
 }
 
 // UserDialPlan resolves addr and reports whether the dialer would
@@ -596,7 +691,7 @@ func (d *Dialer) PeerAPIHTTPClient() *http.Client {
 		panic("unreachable")
 	}
 	d.peerClientOnce.Do(func() {
-		t := http.DefaultTransport.(*http.Transport).Clone()
+		t := netutil.NewDefaultTransport()
 		t.Dial = nil
 		t.DialContext = d.dialPeerAPI
 		// Do not use the environment proxy for PeerAPI.

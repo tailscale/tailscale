@@ -7,6 +7,7 @@
 package linuxfw
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -86,19 +87,28 @@ const (
 	bypassMarkNum      = tsconst.LinuxBypassMarkNum
 )
 
-// getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask in bytes.
+// getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask
+// in native byte order.
 func getTailscaleFwmarkMaskNeg() []byte {
-	return []byte{0xff, 0x00, 0xff, 0xff}
+	return nativeEndianUint32(^uint32(fwmarkMaskNum))
 }
 
-// getTailscaleFwmarkMask returns the TailscaleFwmarkMask in bytes.
+// getTailscaleFwmarkMask returns the TailscaleFwmarkMask in native byte order.
 func getTailscaleFwmarkMask() []byte {
-	return []byte{0x00, 0xff, 0x00, 0x00}
+	return nativeEndianUint32(fwmarkMaskNum)
 }
 
-// getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark in bytes.
+// getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark
+// in native byte order.
 func getTailscaleSubnetRouteMark() []byte {
-	return []byte{0x00, 0x04, 0x00, 0x00}
+	return nativeEndianUint32(subnetRouteMarkNum)
+}
+
+// nativeEndianUint32 returns v as a 4-byte slice in the host's native byte order.
+func nativeEndianUint32(v uint32) []byte {
+	b := make([]byte, 4)
+	binary.NativeEndian.PutUint32(b, v)
+	return b
 }
 
 // checkIPv6ForTest can be set in tests.

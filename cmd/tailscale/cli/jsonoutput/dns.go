@@ -3,7 +3,7 @@
 
 package jsonoutput
 
-// DNSResolverInfo is the JSON form of [dnstype.Resolver].
+// DNSResolverInfo is the JSON form of [tailscale.com/types/dnstype.Resolver].
 type DNSResolverInfo struct {
 	// Addr is a plain IP, IP:port, DoH URL, or HTTP-over-WireGuard URL.
 	Addr string
@@ -13,7 +13,7 @@ type DNSResolverInfo struct {
 	BootstrapResolution []string `json:",omitempty"`
 }
 
-// DNSExtraRecord is the JSON form of [tailcfg.DNSRecord].
+// DNSExtraRecord is the JSON form of [tailscale.com/tailcfg.DNSRecord].
 type DNSExtraRecord struct {
 	Name  string
 	Type  string `json:",omitempty"` // empty means A or AAAA, depending on Value
@@ -21,7 +21,7 @@ type DNSExtraRecord struct {
 }
 
 // DNSSystemConfig is the OS DNS configuration as observed by Tailscale,
-// mirroring [net/dns.OSConfig].
+// mirroring [tailscale.com/net/dns.OSConfig].
 type DNSSystemConfig struct {
 	Nameservers   []string `json:",omitzero"`
 	SearchDomains []string `json:",omitzero"`
@@ -33,7 +33,8 @@ type DNSSystemConfig struct {
 }
 
 // DNSTailnetInfo describes MagicDNS configuration for the tailnet,
-// combining [ipnstate.TailnetStatus] and [ipnstate.PeerStatus].
+// combining [tailscale.com/ipn/ipnstate.TailnetStatus]
+// and [tailscale.com/ipn/ipnstate.PeerStatus].
 type DNSTailnetInfo struct {
 	// MagicDNSEnabled is whether MagicDNS is enabled for the
 	// tailnet. The device may still not use it if
@@ -50,7 +51,9 @@ type DNSTailnetInfo struct {
 }
 
 // DNSStatusResult is the full DNS status collected from the local
-// Tailscale daemon.
+// Tailscale daemon. It is the output of:
+//
+//	$ tailscale dns status --json
 type DNSStatusResult struct {
 	// TailscaleDNS is whether the Tailscale DNS configuration is
 	// installed on this device (the --accept-dns setting).
@@ -106,7 +109,9 @@ type DNSAnswer struct {
 }
 
 // DNSQueryResult is the result of a DNS query via the Tailscale
-// internal forwarder (100.100.100.100).
+// internal forwarder (100.100.100.100). It is the output of:
+//
+//	$ tailscale dns query --json NAME
 type DNSQueryResult struct {
 	Name         string
 	QueryType    string            // e.g. "A", "AAAA"

@@ -1273,7 +1273,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `secretName` _string_ | The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and<br />"client_secret". |  |  |
+| `secretName` _string_ | The name of the secret containing the credentials used to authenticate with this Tailnet. The secret must always<br />contain a "client_id" field. To authenticate with a static OAuth client, also set "client_secret". To authenticate<br />via workload identity federation, set "audience" to the audience value expected by the Tailscale OAuth<br />client; the operator will mint a ServiceAccount token for itself with that audience and exchange it for an API<br />token. "client_secret" and "audience" are mutually exclusive. |  |  |
 
 
 #### TailnetDevice
@@ -1328,7 +1328,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `loginUrl` _string_ | URL of the control plane to be used by all resources managed by the operator using this Tailnet. |  |  |
-| `credentials` _[TailnetCredentials](#tailnetcredentials)_ | Denotes the location of the OAuth credentials to use for authenticating with this Tailnet. |  |  |
+| `credentials` _[TailnetCredentials](#tailnetcredentials)_ | Denotes the location of the credentials to use for authenticating with this Tailnet. |  |  |
 
 
 #### TailnetStatus

@@ -1693,18 +1693,18 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 	// and an exit node ID notification (since an exit node is selected).
 	// The netmap notification should be sent first.
 	nw.watch(0, []wantedNotification{
-		wantNetmapNotify(clientNetmap),
+		wantSelfChangeNotify(selfNode),
 		wantExitNodeIDNotify(exitNode1.StableID()),
 	})
 	lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: clientNetmap})
 	nw.check()
 }
 
-func wantNetmapNotify(want *netmap.NetworkMap) wantedNotification {
+func wantSelfChangeNotify(want tailcfg.NodeView) wantedNotification {
 	return wantedNotification{
-		name: "Netmap",
+		name: "SelfChange",
 		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
-			return n.NetMap == want
+			return n.SelfChange != nil && want.Valid() && n.SelfChange.StableID == want.StableID()
 		},
 	}
 }
@@ -2025,6 +2025,44 @@ func TestStatusPeerCapabilities(t *testing.T) {
 	}
 }
 
+// TestStatusWithoutPeersSelfUserProfile verifies that the self user's
+// UserProfile is reported in Status.User even when peers are omitted, so that
+// callers like `tailscale status --peers=false` can resolve the self node's
+// owner to a login name rather than a bare user ID.
+// Regression test for https://github.com/tailscale/tailscale/issues/19894.
+func TestStatusWithoutPeersSelfUserProfile(t *testing.T) {
+	b := newTestLocalBackend(t)
+	const selfUID = tailcfg.UserID(42)
+	const loginName = "alice@example.com"
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
+			User:              selfUID,
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			selfUID: (&tailcfg.UserProfile{
+				ID:        selfUID,
+				LoginName: loginName,
+			}).View(),
+		},
+	})
+	st := b.StatusWithoutPeers()
+	if st.Self == nil {
+		t.Fatal("Status.Self is nil")
+	}
+	if got, want := st.Self.UserID, selfUID; got != want {
+		t.Errorf("Status.Self.UserID = %v; want %v", got, want)
+	}
+	up, ok := st.User[selfUID]
+	if !ok {
+		t.Fatalf("Status.User missing entry for self UserID %v; got %v", selfUID, st.User)
+	}
+	if got, want := up.LoginName, loginName; got != want {
+		t.Errorf("Status.User[%v].LoginName = %q; want %q", selfUID, got, want)
+	}
+}
+
 // legacyBackend was the interface between Tailscale frontends
 // (e.g. cmd/tailscale, iOS/MacOS/Windows GUIs) and the tailscale
 // backend (e.g. cmd/tailscaled) running on the same machine.
@@ -2075,6 +2113,430 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	defer b.mu.Unlock()
 	if len(b.notifyWatchers) != 0 {
 		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
+	}
+}
+
+func TestWatchNotificationsClosesSlowConsumer(t *testing.T) {
+	b := newTestLocalBackend(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchAdded := make(chan struct{})
+	firstNotify := make(chan struct{}, 1)
+	releaseFirstNotify := make(chan struct{})
+	terminalMessage := make(chan string, 1)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		b.WatchNotificationsAs(ctx, nil, 0, func() { close(watchAdded) }, func(n *ipn.Notify) bool {
+			if n.ErrMessage != nil {
+				terminalMessage <- *n.ErrMessage
+				return true
+			}
+			select {
+			case firstNotify <- struct{}{}:
+				<-releaseFirstNotify
+			default:
+			}
+			return true
+		})
+	}()
+	<-watchAdded
+
+	state := ipn.Running
+	b.send(ipn.Notify{State: &state})
+	select {
+	case <-firstNotify:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first notification")
+	}
+
+	// The watcher's callback is blocked on the first notification. Fill the
+	// 128-slot queue, then send one more notification to force overflow.
+	for range 129 {
+		b.send(ipn.Notify{State: &state})
+	}
+
+	close(releaseFirstNotify)
+
+	select {
+	case got := <-terminalMessage:
+		if got != watchIPNBusFellBehindMessage {
+			t.Fatalf("terminal message = %q; want %q", got, watchIPNBusFellBehindMessage)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for terminal notification")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for watcher to close")
+	}
+}
+
+func TestWatchNotificationsInProcessNoDisconnectBlocksSender(t *testing.T) {
+	b := newTestLocalBackend(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchAdded := make(chan struct{})
+	firstNotify := make(chan struct{}, 1)
+	releaseFirstNotify := make(chan struct{})
+	terminalMessage := make(chan string, 1)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		b.WatchNotificationsAs(ctx, nil, ipn.NotifyInProcessNoDisconnect, func() { close(watchAdded) }, func(n *ipn.Notify) bool {
+			if n.ErrMessage != nil {
+				terminalMessage <- *n.ErrMessage
+				return true
+			}
+			select {
+			case firstNotify <- struct{}{}:
+				<-releaseFirstNotify
+			default:
+			}
+			return true
+		})
+	}()
+	<-watchAdded
+
+	state := ipn.Running
+	b.send(ipn.Notify{State: &state})
+	select {
+	case <-firstNotify:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first notification")
+	}
+
+	// Fill the 128-slot queue. The next send should block until the
+	// subscriber catches up, not disconnect the subscriber.
+	for range 128 {
+		b.send(ipn.Notify{State: &state})
+	}
+
+	sendDone := make(chan struct{})
+	go func() {
+		b.send(ipn.Notify{State: &state})
+		close(sendDone)
+	}()
+	select {
+	case <-sendDone:
+		t.Fatal("send returned before the subscriber caught up")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case got := <-terminalMessage:
+		close(releaseFirstNotify)
+		t.Fatalf("got terminal message %q; want none", got)
+	default:
+	}
+
+	close(releaseFirstNotify)
+	select {
+	case <-sendDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for blocked send to complete")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for watcher to close")
+	}
+}
+
+// TestNotifyForSessionPeerVisibility verifies the per-session masking
+// logic in [LocalBackend.notifyForSessionLocked] for the
+// NotifyPeerChanges / NotifyPeerPatches flag pair:
+//
+//   - A watcher with no peer-change bits should not see PeersChanged,
+//     PeersRemoved, or PeerChangedPatch.
+//   - A watcher with NotifyPeerChanges (but not NotifyPeerPatches) should
+//     see PeersChanged and PeersRemoved, AND any incoming
+//     PeerChangedPatch entries should be promoted to full Nodes in
+//     PeersChanged. PeerChangedPatch itself must be cleared.
+//   - A watcher with NotifyPeerPatches should see all three fields.
+func TestNotifyForSessionPeerVisibility(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	// Install a netmap with two peers so the patch-promotion path can
+	// resolve PeerChangedPatch entries to full Nodes.
+	nm := &netmap.NetworkMap{}
+	for _, id := range []tailcfg.NodeID{10, 20} {
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{
+			ID:        id,
+			Key:       makeNodeKeyFromID(id),
+			Addresses: []netip.Prefix{netip.MustParsePrefix(fmt.Sprintf("100.64.0.%d/32", id))},
+		}).View())
+	}
+	b.currentNode().SetNetMap(nm)
+
+	// Build a Notify carrying every peer-change kind: an added peer
+	// (PeersChanged), a removed peer (PeersRemoved), and a patch for an
+	// existing peer (PeerChangedPatch).
+	addedPeer := &tailcfg.Node{ID: 30, Key: makeNodeKeyFromID(30)}
+	online := true
+	notify := ipn.Notify{
+		PeersChanged:     []*tailcfg.Node{addedPeer},
+		PeersRemoved:     []tailcfg.NodeID{99},
+		PeerChangedPatch: []*tailcfg.PeerChange{{NodeID: 10, Online: &online}},
+	}
+
+	deliver := func(mask ipn.NotifyWatchOpt) *ipn.Notify {
+		sess := &watchSession{mask: mask}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, &notify)
+	}
+
+	t.Run("no_peer_bits", func(t *testing.T) {
+		n := deliver(0)
+		if len(n.PeersChanged) != 0 {
+			t.Errorf("PeersChanged = %v; want empty", n.PeersChanged)
+		}
+		if len(n.PeersRemoved) != 0 {
+			t.Errorf("PeersRemoved = %v; want empty", n.PeersRemoved)
+		}
+		if len(n.PeerChangedPatch) != 0 {
+			t.Errorf("PeerChangedPatch = %v; want empty", n.PeerChangedPatch)
+		}
+	})
+
+	t.Run("peer_changes_only_promotes_patches", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerChanges)
+		if len(n.PeerChangedPatch) != 0 {
+			t.Errorf("PeerChangedPatch should be stripped; got %v", n.PeerChangedPatch)
+		}
+		if len(n.PeersRemoved) != 1 || n.PeersRemoved[0] != 99 {
+			t.Errorf("PeersRemoved = %v; want [99]", n.PeersRemoved)
+		}
+		// PeersChanged should contain the originally-added peer (30) AND
+		// a promoted full-Node entry for the patched peer (10).
+		ids := make(map[tailcfg.NodeID]bool, len(n.PeersChanged))
+		for _, p := range n.PeersChanged {
+			ids[p.ID] = true
+		}
+		if !ids[30] {
+			t.Errorf("PeersChanged missing added peer 30; got %+v", n.PeersChanged)
+		}
+		if !ids[10] {
+			t.Errorf("PeersChanged missing promoted peer 10; got %+v", n.PeersChanged)
+		}
+	})
+
+	t.Run("peer_patches_keeps_patch_field", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerPatches)
+		if len(n.PeerChangedPatch) != 1 || n.PeerChangedPatch[0].NodeID != 10 {
+			t.Errorf("PeerChangedPatch = %v; want [{NodeID:10,...}]", n.PeerChangedPatch)
+		}
+		if len(n.PeersChanged) != 1 || n.PeersChanged[0].ID != 30 {
+			t.Errorf("PeersChanged = %v; want [{ID:30}]", n.PeersChanged)
+		}
+		if len(n.PeersRemoved) != 1 || n.PeersRemoved[0] != 99 {
+			t.Errorf("PeersRemoved = %v; want [99]", n.PeersRemoved)
+		}
+	})
+
+	t.Run("both_bits_unchanged", func(t *testing.T) {
+		n := deliver(ipn.NotifyPeerChanges | ipn.NotifyPeerPatches)
+		if len(n.PeerChangedPatch) != 1 {
+			t.Errorf("PeerChangedPatch len = %d; want 1", len(n.PeerChangedPatch))
+		}
+		if len(n.PeersChanged) != 1 {
+			t.Errorf("PeersChanged len = %d; want 1", len(n.PeersChanged))
+		}
+		if len(n.PeersRemoved) != 1 {
+			t.Errorf("PeersRemoved len = %d; want 1", len(n.PeersRemoved))
+		}
+	})
+}
+
+func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
+	b := newTestLocalBackend(t)
+	nw := newNotificationWatcher(t, b, ipnauth.Self)
+	nw.watch(ipn.NotifyPeerChanges|ipn.NotifyNoNetMap, []wantedNotification{{
+		name: "full netmap as peer changes",
+		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			if n.SelfChange == nil {
+				return false
+			}
+			if n.NetMap != nil {
+				t.Errorf("NetMap was delivered to NotifyNoNetMap watcher")
+			}
+			if got, want := len(n.PeersChanged), 2; got != want {
+				t.Errorf("PeersChanged len = %d; want %d", got, want)
+				return false
+			}
+			if got, want := len(n.UserProfiles), 3; got != want {
+				t.Errorf("UserProfiles len = %d; want %d", got, want)
+				return false
+			}
+			gotPeers := set.Of(n.PeersChanged[0].ID, n.PeersChanged[1].ID)
+			wantPeers := set.Of(tailcfg.NodeID(10), tailcfg.NodeID(20))
+			if !gotPeers.Equal(wantPeers) {
+				t.Errorf("PeersChanged IDs = %v; want %v", gotPeers, wantPeers)
+			}
+			return true
+		},
+	}})
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:   1,
+			User: 1,
+			Key:  makeNodeKeyFromID(1),
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{ID: 10, User: 2, Key: makeNodeKeyFromID(10)}).View(),
+			(&tailcfg.Node{ID: 20, User: 3, Key: makeNodeKeyFromID(20)}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
+			1: (&tailcfg.UserProfile{ID: 1, LoginName: "self@example.com"}).View(),
+			2: (&tailcfg.UserProfile{ID: 2, LoginName: "peer1@example.com"}).View(),
+			3: (&tailcfg.UserProfile{ID: 3, LoginName: "peer2@example.com"}).View(),
+		},
+	}
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	nw.check()
+}
+
+// TestNotifyForSessionUserProfilesGating verifies that
+// [Notify.UserProfiles] is only delivered to sessions opted in to
+// NotifyPeerChanges/NotifyPeerPatches, and is deduped per-UserID
+// against [watchSession.lastSentUserProfile] across successive sends.
+func TestNotifyForSessionUserProfilesGating(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	deliver := func(sess *watchSession, profiles map[tailcfg.UserID]tailcfg.UserProfileView) *ipn.Notify {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, &ipn.Notify{UserProfiles: profiles})
+	}
+
+	profiles := map[tailcfg.UserID]tailcfg.UserProfileView{
+		7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+	}
+
+	t.Run("no_bits_strips", func(t *testing.T) {
+		n := deliver(&watchSession{}, profiles)
+		if len(n.UserProfiles) != 0 {
+			t.Errorf("UserProfiles = %v; want empty", n.UserProfiles)
+		}
+	})
+	t.Run("peer_changes_delivers", func(t *testing.T) {
+		n := deliver(&watchSession{mask: ipn.NotifyPeerChanges}, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+		if n.UserProfiles[7].LoginName() != "alice@example.com" {
+			t.Errorf("got %+v; want alice", n.UserProfiles)
+		}
+	})
+	t.Run("peer_patches_delivers", func(t *testing.T) {
+		n := deliver(&watchSession{mask: ipn.NotifyPeerPatches}, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+	})
+
+	// The remaining cases share a single session so the dedup state on
+	// [watchSession.lastSentUserProfile] persists across deliveries.
+	sess := &watchSession{mask: ipn.NotifyPeerChanges}
+
+	t.Run("first_send", func(t *testing.T) {
+		n := deliver(sess, profiles)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d", got, want)
+		}
+	})
+	t.Run("dedup_repeat_same_map", func(t *testing.T) {
+		// Resending the exact same map should deliver nothing.
+		n := deliver(sess, profiles)
+		if len(n.UserProfiles) != 0 {
+			t.Errorf("got UserProfiles=%v on repeat; want empty (deduped)", n.UserProfiles)
+		}
+	})
+	t.Run("per_user_dedup", func(t *testing.T) {
+		// A Notify with two profiles where only one changed should
+		// deliver only the changed one.
+		mixed := map[tailcfg.UserID]tailcfg.UserProfileView{
+			7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),     // unchanged
+			8: (&tailcfg.UserProfile{ID: 8, LoginName: "bob@example.com", DisplayName: "Bob the New"}).View(), // new
+		}
+		n := deliver(sess, mixed)
+		if got, want := len(n.UserProfiles), 1; got != want {
+			t.Fatalf("UserProfiles len = %d; want %d (only the new user)", got, want)
+		}
+		if _, ok := n.UserProfiles[7]; ok {
+			t.Errorf("UserProfiles still includes user 7 (should have been deduped)")
+		}
+		if got := n.UserProfiles[8].LoginName(); got != "bob@example.com" {
+			t.Errorf("UserProfiles[8].LoginName = %q; want bob", got)
+		}
+	})
+	t.Run("changed_user_delivers", func(t *testing.T) {
+		// Updating an existing UserID re-sends just that one.
+		updated := map[tailcfg.UserID]tailcfg.UserProfileView{
+			7: (&tailcfg.UserProfile{ID: 7, LoginName: "alice@example.com", DisplayName: "Alice 2.0"}).View(),
+		}
+		n := deliver(sess, updated)
+		if n.UserProfiles[7].DisplayName() != "Alice 2.0" {
+			t.Errorf("got %+v; want updated alice", n.UserProfiles)
+		}
+	})
+}
+
+func TestNotifyForSessionUserProfilesDedupResetsOnSelfChange(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	deliver := func(sess *watchSession, n *ipn.Notify) *ipn.Notify {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, n)
+	}
+
+	sess := &watchSession{mask: ipn.NotifyPeerChanges}
+	self1 := &tailcfg.Node{ID: 1, StableID: "self1", User: 10}
+	self2 := &tailcfg.Node{ID: 2, StableID: "self2", User: 20}
+	profiles1 := map[tailcfg.UserID]tailcfg.UserProfileView{
+		10: (&tailcfg.UserProfile{ID: 10, LoginName: "alice@example.com", DisplayName: "Alice"}).View(),
+		11: (&tailcfg.UserProfile{ID: 11, LoginName: "peer@example.com", DisplayName: "Peer"}).View(),
+	}
+	profiles2 := map[tailcfg.UserID]tailcfg.UserProfileView{
+		20: (&tailcfg.UserProfile{ID: 20, LoginName: "bob@example.com", DisplayName: "Bob"}).View(),
+	}
+
+	n := deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("initial UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if len(n.UserProfiles) != 0 {
+		t.Fatalf("same self duplicate UserProfiles = %v; want empty", n.UserProfiles)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self2, UserProfiles: profiles2})
+	if got, want := len(n.UserProfiles), len(profiles2); got != want {
+		t.Fatalf("new self UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("returned self UserProfiles len = %d; want %d", got, want)
+	}
+
+	sess = &watchSession{mask: ipn.NotifyPeerChanges}
+	n = deliver(sess, &ipn.Notify{UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("pre-self UserProfiles len = %d; want %d", got, want)
+	}
+	n = deliver(sess, &ipn.Notify{SelfChange: self1, UserProfiles: profiles1})
+	if got, want := len(n.UserProfiles), len(profiles1); got != want {
+		t.Fatalf("first self UserProfiles len = %d; want %d", got, want)
 	}
 }
 
@@ -5640,8 +6102,8 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 				},
 			},
 			// Change this, if the hashing function changes.
-			wantID:   "stable3",
-			wantName: "peer3",
+			wantID:   "stable1",
+			wantName: "peer1",
 		},
 		{
 			name: "exit-nodes-without-priority-for-suggestions",
@@ -5781,8 +6243,9 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 						withLocationPriority(2)), // top
 				},
 			},
-			wantID:   "stable5",
-			wantName: "peer5",
+			// Change this, if the hashing function changes.
+			wantID:   "stable2",
+			wantName: "peer2",
 			wantPri:  2,
 		},
 		{
@@ -8161,38 +8624,199 @@ func TestStartPreservesLoginFlags(t *testing.T) {
 }
 
 func TestShouldUseOneCGNATRoute(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	makeInterface := func(index int, name, addr string) netmon.Interface {
+		t.Helper()
+
+		_, ipnet, err := net.ParseCIDR(addr)
+		if err != nil {
+			t.Fatalf("invalid CIDR %q: %v", addr, err)
+		}
+
+		// Loopback interface:
+		flags := net.FlagUp
+		if strings.HasPrefix(name, "lo") || strings.HasPrefix(name, "Loopback") || name == "/net/ipifc/0" {
+			flags |= net.FlagLoopback
+		}
+
+		return netmon.Interface{
+			Interface: &net.Interface{
+				Index: index,
+				Name:  name,
+				Flags: flags,
+			},
+			AltAddrs: []net.Addr{ipnet},
+		}
+	}
+
 	tests := []struct {
 		name      string
 		versionOS string
+		ifaces    []netmon.Interface
+		tsName    string
+		tsIndex   int
 		want      bool
 	}{
-		{"android", "android", true},
-		{"macOS", "macOS", true},
-		{"plan9", "plan9", true},
-		{"linux", "linux", false},
-		{"windows", "windows", false},
+		{
+			name:      "android/tailscale-cgnat",
+			versionOS: "android",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(15, "rmnet_data1", "10.203.33.114/23"),
+				makeInterface(26, "tun0", "100.95.71.186/32"),
+			},
+			tsName: "tun0",
+			want:   true,
+		},
+		{
+			name:      "android/multiple-cgnats",
+			versionOS: "android",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "rmnet_data1", "100.124.0.1/32"),
+				makeInterface(26, "tun0", "100.95.71.186/32"),
+			},
+			tsName: "tun0",
+			want:   false,
+		},
+		{
+			name:      "linux/tailscale-cgnat",
+			versionOS: "linux",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "eth0", "10.203.33.114/23"),
+				makeInterface(3, "tailscale0", "100.95.71.186/32"),
+			},
+			tsName:  "tailscale0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "linux/multiple-cgnats",
+			versionOS: "linux",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo", "127.0.0.1/8"),
+				makeInterface(2, "eth0", "100.124.0.1/32"),
+				makeInterface(3, "tailscale0", "100.95.71.186/32"),
+			},
+			tsName:  "tailscale0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "macOS/tailscale-cgnat",
+			versionOS: "macOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "10.203.33.114/23"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "macOS/multiple-cgnats",
+			versionOS: "macOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "100.124.0.1/32"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "plan9/tailscale-cgnat",
+			versionOS: "plan9",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "/net/ipifc/0", "127.0.0.1/8"),
+				makeInterface(2, "/net/ipifc/1", "10.203.33.114/23"),
+				makeInterface(3, "/net/ipifc/2", "100.95.71.186/32"),
+			},
+			tsName:  "/net/ipifc/2",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "plan9/multiple-cgnats",
+			versionOS: "plan9",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "/net/ipifc/0", "127.0.0.1/8"),
+				makeInterface(2, "/net/ipifc/1", "100.124.0.1/32"),
+				makeInterface(3, "/net/ipifc/2", "100.95.71.186/32"),
+			},
+			tsName:  "/net/ipifc/2",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "windows/tailscale-cgnat",
+			versionOS: "windows",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "Loopback Pseudo-Interface 1", "127.0.0.1/8"),
+				makeInterface(2, "Wi-Fi", "10.203.33.114/23"),
+				makeInterface(3, "Tailscale", "100.95.71.186/32"),
+			},
+			tsName:  "Tailscale",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
+			name:      "windows/multiple-cgnats",
+			versionOS: "windows",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "Loopback Pseudo-Interface 1", "127.0.0.1/8"),
+				makeInterface(2, "Wi-Fi", "100.124.0.1/32"),
+				makeInterface(3, "Tailscale", "100.95.71.186/32"),
+			},
+			tsName:  "Tailscale",
+			tsIndex: 3,
+			want:    false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tstest.AssertNotParallel(t)
+
+			// Stub out the network interfaces from the system.
+			t.Cleanup(func() {
+				netmon.RegisterInterfaceGetter(nil)
+			})
+			netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) {
+				return tt.ifaces, nil
+			})
+
+			// Stub out the Tailscale interface properties.
+			tsName, _ := netmon.TailscaleInterfaceName()
+			tsIndex, _ := netmon.TailscaleInterfaceIndex()
+			t.Cleanup(func() {
+				netmon.SetTailscaleInterfaceProps(tsName, tsIndex)
+			})
+			netmon.SetTailscaleInterfaceProps(tt.tsName, tt.tsIndex)
+
 			got := shouldUseOneCGNATRoute(t.Logf, nil, nil, tt.versionOS)
 			if got != tt.want {
 				t.Errorf("shouldUseOneCGNATRoute(%q) = %v; want %v", tt.versionOS, got, tt.want)
 			}
+
+			// Control knob takes precedence over everything.
+			t.Run("control-knob-override", func(t *testing.T) {
+				knobs := &controlknobs.Knobs{}
+				knobs.OneCGNAT.Store(opt.NewBool(false))
+				if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, tt.versionOS); got {
+					t.Errorf("control knob should override %s; got true, want false", tt.versionOS)
+				}
+				knobs.OneCGNAT.Store(opt.NewBool(true))
+				if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, tt.versionOS); !got {
+					t.Errorf("control knob should override %s; got false, want true", tt.versionOS)
+				}
+			})
 		})
 	}
 
-	// Control knob takes precedence over everything.
-	t.Run("control-knob-override", func(t *testing.T) {
-		knobs := &controlknobs.Knobs{}
-		knobs.OneCGNAT.Store(opt.NewBool(false))
-		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "android"); got {
-			t.Error("control knob should override android default; got true, want false")
-		}
-		knobs.OneCGNAT.Store(opt.NewBool(true))
-		if got := shouldUseOneCGNATRoute(t.Logf, nil, knobs, "linux"); !got {
-			t.Error("control knob should override linux default; got false, want true")
-		}
-	})
 }
 
 func TestPeerRoutesCGNATCollapse(t *testing.T) {
@@ -8230,5 +8854,35 @@ func TestPeerRoutesCGNATCollapse(t *testing.T) {
 	want := []netip.Prefix{pp("100.64.0.0/10"), pp("10.0.0.0/24")}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("with subnet: got %v; want %v", got, want)
+	}
+}
+
+func TestResetAuthClearsMachineKey(t *testing.T) {
+	store := new(mem.Store)
+
+	// Write a machine key to the store.
+	machineKey := key.NewMachine()
+	keyText, _ := machineKey.MarshalText()
+	if err := store.WriteState(ipn.MachineKeyStateKey, keyText); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify key is readable.
+	if bs, err := store.ReadState(ipn.MachineKeyStateKey); err != nil {
+		t.Fatalf("ReadState before clear: %v", err)
+	} else if len(bs) == 0 {
+		t.Fatal("machine key is empty before clear")
+	}
+
+	// Clear the key the same way ResetAuth does.
+	if err := ipn.WriteState(store, ipn.MachineKeyStateKey, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify key is gone. It should return ErrStateNotExist,
+	// not nil/nil which would cause initMachineKeyLocked to
+	// fail with "invalid key ... doesn't have expected type prefix".
+	if _, err := store.ReadState(ipn.MachineKeyStateKey); err != ipn.ErrStateNotExist {
+		t.Fatalf("ReadState after clear: got err %v, want ErrStateNotExist", err)
 	}
 }

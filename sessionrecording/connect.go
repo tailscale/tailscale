@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
@@ -380,7 +381,7 @@ func (u *readCounter) Read(buf []byte) (int, error) {
 // clientHTTP1 returns a claassic http.Client with a per-dial context. It uses
 // dialCtx and adds a 5s timeout to it.
 func clientHTTP1(dialCtx context.Context, dial netx.DialFunc) *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		perAttemptCtx, cancel := context.WithTimeout(ctx, perDialAttemptTimeout)
 		defer cancel()

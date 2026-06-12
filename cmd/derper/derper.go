@@ -262,7 +262,7 @@ func main() {
 	mux := http.NewServeMux()
 	if *runDERP {
 		derpHandler := derpserver.Handler(s)
-		derpHandler = addWebSocketSupport(s, derpHandler)
+		derpHandler = derpserver.AddWebSocketSupport(s, derpHandler)
 		mux.Handle("/derp", derpHandler)
 	} else {
 		mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

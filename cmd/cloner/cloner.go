@@ -176,6 +176,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				if codegen.ContainsPointers(sliceType.Elem()) {
 					writef("\tfor k, sv := range src.%s {", fname)
 					writef("\t\tif sv == nil {")
+					writef("\t\t\tdst.%s[k] = nil", fname)
 					writef("\t\t\tcontinue")
 					writef("\t\t}")
 					writef("\t\tdst.%s[k] = make([]%s, len(sv))", fname, n)

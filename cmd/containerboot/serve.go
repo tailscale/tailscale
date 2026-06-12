@@ -24,7 +24,6 @@ import (
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/services"
-	"tailscale.com/types/netmap"
 )
 
 // watchServeConfigChanges watches path for changes, and when it sees one, reads
@@ -140,13 +139,6 @@ func refreshAdvertiseServices(ctx context.Context, sc *ipn.ServeConfig, lc klc.L
 	}
 
 	return nil
-}
-
-func certDomainFromNetmap(nm *netmap.NetworkMap) string {
-	if len(nm.DNS.CertDomains) == 0 {
-		return ""
-	}
-	return nm.DNS.CertDomains[0]
 }
 
 func updateServeConfig(ctx context.Context, sc *ipn.ServeConfig, certDomain string, lc klc.LocalClient) error {

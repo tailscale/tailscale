@@ -191,7 +191,7 @@ func (sc *ServeConfig) WebHandlerExists(svcName tailcfg.ServiceName, hp HostPort
 }
 
 // GetWebHandler returns the HTTPHandler for the given host:port and mount point.
-// Returns nil if the handler does not exist.
+// It returns nil if the handler does not exist.
 func (sc *ServeConfig) GetWebHandler(svcName tailcfg.ServiceName, hp HostPort, mount string) *HTTPHandler {
 	if sc == nil {
 		return nil
@@ -261,6 +261,46 @@ func (sc *ServeConfig) HasPathHandler() bool {
 		}
 	}
 
+	return false
+}
+
+// IsServingUnixAny reports whether ServeConfig is serving Unix targets on any
+// port or web handler.
+func (sc *ServeConfig) IsServingUnixAny() bool {
+	if sc == nil {
+		return false
+	}
+	for _, fgSrvCfg := range sc.Foreground {
+		if fgSrvCfg.IsServingUnixAny() {
+			return true
+		}
+	}
+	for _, ph := range sc.TCP {
+		if strings.HasPrefix(ph.TCPForward, "unix:") {
+			return true
+		}
+	}
+	for _, web := range sc.Web {
+		for _, h := range web.Handlers {
+			if strings.HasPrefix(h.Proxy, "unix:") {
+				return true
+			}
+		}
+	}
+	for _, svcCfg := range sc.Services {
+		for _, ph := range svcCfg.TCP {
+			if strings.HasPrefix(ph.TCPForward, "unix:") {
+				return true
+			}
+		}
+		for _, web := range svcCfg.Web {
+			for _, h := range web.Handlers {
+				if strings.HasPrefix(h.Proxy, "unix:") {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 

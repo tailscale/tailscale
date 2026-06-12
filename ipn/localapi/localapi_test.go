@@ -461,6 +461,66 @@ func TestServePeerByID(t *testing.T) {
 	})
 }
 
+type fakeUserProfileBackend map[tailcfg.UserID]*tailcfg.UserProfile
+
+func (f fakeUserProfileBackend) UserProfile(id tailcfg.UserID) (tailcfg.UserProfileView, bool) {
+	u, ok := f[id]
+	if !ok {
+		return tailcfg.UserProfileView{}, false
+	}
+	return u.View(), true
+}
+
+func TestServeUserProfile(t *testing.T) {
+	h := handlerForTest(t, &Handler{PermitRead: true})
+	b := fakeUserProfileBackend{
+		7: {ID: 7, LoginName: "alice@example.com", DisplayName: "Alice"},
+	}
+
+	tests := []struct {
+		name      string
+		query     string
+		wantCode  int
+		wantLogin string
+	}{
+		{"hit", "id=7", 200, "alice@example.com"},
+		{"miss", "id=99", 404, ""},
+		{"bad_id", "id=garbage", 400, ""},
+		{"missing_id", "", 400, ""},
+		{"zero_id", "id=0", 400, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/v0/user-profile?"+tt.query, nil)
+			h.serveUserProfileWithBackend(rec, req, b)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantCode != 200 {
+				return
+			}
+			var got tailcfg.UserProfile
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("unmarshal body %q: %v", rec.Body.Bytes(), err)
+			}
+			if got.LoginName != tt.wantLogin {
+				t.Errorf("LoginName = %q, want %q", got.LoginName, tt.wantLogin)
+			}
+		})
+	}
+
+	t.Run("forbidden", func(t *testing.T) {
+		hh := handlerForTest(t, &Handler{PermitRead: false})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/v0/user-profile?id=7", nil)
+		hh.serveUserProfileWithBackend(rec, req, b)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+		}
+	})
+}
+
 func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 	newHandler := func(connIsLocalAdmin bool) *Handler {
 		return handlerForTest(t, &Handler{
@@ -475,7 +535,7 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "not-path-handler",
+			name: "not-path-or-unix-handler",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -504,6 +564,30 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:       newHandler(false),
+			wantErr: true,
+		},
+		{
+			name: "unix-handler-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
+					}},
+				},
+			},
+			h:       newHandler(true),
+			wantErr: false,
+		},
+		{
+			name: "unix-handler-not-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
 					}},
 				},
 			},
@@ -550,6 +634,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 	tests := []struct {
 		desc                    string
 		permitRead, permitWrite bool
+		mask                    ipn.NotifyWatchOpt
 		wantStatus              int
 	}{
 		{
@@ -570,6 +655,18 @@ func TestServeWatchIPNBus(t *testing.T) {
 			permitWrite: true,
 			wantStatus:  http.StatusOK,
 		},
+		{
+			desc:       "invalid-rate-limit-mask",
+			permitRead: true,
+			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			desc:       "in-process-no-disconnect-forbidden",
+			permitRead: true,
+			mask:       ipn.NotifyInProcessNoDisconnect,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -584,7 +681,11 @@ func TestServeWatchIPNBus(t *testing.T) {
 			c := s.Client()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState), nil)
+			mask := tt.mask
+			if mask == 0 {
+				mask = ipn.NotifyInitialState
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, mask), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

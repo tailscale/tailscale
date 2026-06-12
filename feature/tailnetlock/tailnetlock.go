@@ -41,8 +41,8 @@ func handleC2NDebugTKALog(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *ht
 		}
 	}
 
-	updates, err := b.NetworkLockLog(limit)
-	if ipnlocal.IsNetworkLockNotActive(err) {
+	updates, err := b.TailnetLockLog(limit)
+	if ipnlocal.IsTailnetLockNotActive(err) {
 		http.Error(w, "tailnet lock not active", http.StatusBadRequest)
 		return
 	} else if err != nil {
@@ -50,5 +50,5 @@ func handleC2NDebugTKALog(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *ht
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	jsonoutput.PrintNetworkLockLogJSONV1(w, updates)
+	jsonoutput.PrintTailnetLockLogJSONV1(w, updates)
 }

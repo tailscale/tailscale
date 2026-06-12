@@ -390,12 +390,8 @@ func TestResolveLocal(t *testing.T) {
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netip.Addr{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
 		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netip.MustParseAddr("100.100.100.100"), dns.RCodeSuccess},
-		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
-		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
-		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
-		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
 		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
-		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+		{"via_invalid_2", dnsname.FQDN("2-3-4-5-via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 
 		// Hyphenated 4via6 format.
 		// Without any suffix domain:

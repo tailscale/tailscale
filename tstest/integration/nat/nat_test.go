@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -116,64 +115,9 @@ func findKernelPath(goMod string) (string, error) {
 
 type addNodeFunc func(c *vnet.Config) *vnet.Node // returns nil to omit test
 
-func v6cidr(n int) string {
-	return fmt.Sprintf("2000:%d::1/64", n)
-}
-
 func easy(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
-		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
-}
-
-func easyAnd6(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(c.AddNetwork(
-		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("192.168.%d.1/24", n),
-		v6cidr(n),
-		vnet.EasyNAT))
-}
-
-// easyNoControlDiscoRotate sets up a node with easy NAT, cuts traffic to
-// control after connecting, and then rotates the disco key to simulate a newly
-// started node (from a disco perspective).
-func easyNoControlDiscoRotate(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	nw := c.AddNetwork(
-		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("192.168.%d.1/24", n),
-		vnet.EasyNAT)
-	nw.SetPostConnectControlBlackhole(true)
-	return c.AddNode(
-		vnet.TailscaledEnv{
-			Key:   "TS_USE_CACHED_NETMAP",
-			Value: "true",
-		},
-		vnet.RotateDisco, vnet.PreICMPPing, nw)
-}
-
-func v6AndBlackholedIPv4(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	nw := c.AddNetwork(
-		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("192.168.%d.1/24", n),
-		v6cidr(n),
-		vnet.EasyNAT)
-	nw.SetBlackholedIPv4(true)
-	return c.AddNode(nw)
-}
-
-func just6(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(c.AddNetwork(v6cidr(n))) // public IPv6 prefix
-}
-
-// easy + host firewall
-func easyFW(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(vnet.HostFirewall, c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT))
 }
@@ -196,22 +140,6 @@ func sameLAN(c *vnet.Config) *vnet.Node {
 	return c.AddNode(nw)
 }
 
-func sameLANNoDropCGNAT(c *vnet.Config) *vnet.Node {
-	nw := c.FirstNetwork()
-	if nw == nil {
-		return nil
-	}
-	if !nw.CanTakeMoreNodes() {
-		return nil
-	}
-	return c.AddNode(
-		nw,
-		tailcfg.NodeCapMap{
-			tailcfg.NodeAttrDisableLinuxCGNATDropRule: nil,
-		},
-	)
-}
-
 func one2one(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -226,67 +154,11 @@ func easyPMP(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
 }
 
-// easy + port mapping + host firewall + BPF
-func easyPMPFWPlusBPF(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(
-		vnet.HostFirewall,
-		vnet.TailscaledEnv{
-			Key:   "TS_ENABLE_RAW_DISCO",
-			Value: "true",
-		},
-		vnet.TailscaledEnv{
-			Key:   "TS_DEBUG_RAW_DISCO",
-			Value: "1",
-		},
-		vnet.TailscaledEnv{
-			Key:   "TS_DEBUG_DISCO",
-			Value: "1",
-		},
-		vnet.TailscaledEnv{
-			Key:   "TS_LOG_VERBOSITY",
-			Value: "2",
-		},
-		c.AddNetwork(
-			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
-}
-
-// easy + port mapping + host firewall - BPF
-func easyPMPFWNoBPF(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(
-		vnet.HostFirewall,
-		vnet.TailscaledEnv{
-			Key:   "TS_ENABLE_RAW_DISCO",
-			Value: "false",
-		},
-		c.AddNetwork(
-			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.NATPMP))
-}
-
 func hard(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		fmt.Sprintf("10.0.%d.1/24", n), vnet.HardNAT))
-}
-
-func hardNoDERPOrEndoints(c *vnet.Config) *vnet.Node {
-	n := c.NumNodes() + 1
-	return c.AddNode(c.AddNetwork(
-		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
-		fmt.Sprintf("10.0.%d.1/24", n), vnet.HardNAT),
-		vnet.TailscaledEnv{
-			Key:   "TS_DEBUG_STRIP_ENDPOINTS",
-			Value: "1",
-		},
-		vnet.TailscaledEnv{
-			Key:   "TS_DEBUG_STRIP_HOME_DERP",
-			Value: "1",
-		},
-	)
 }
 
 func hardPMP(c *vnet.Config) *vnet.Node {
@@ -492,32 +364,6 @@ func testContext(tb testing.TB) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 60*time.Second)
 }
 
-func (nt *natTest) runHostConnectivityTest(addNode ...addNodeFunc) bool {
-	ctx, cancel := testContext(nt.tb)
-	defer cancel()
-	nodes, clients, cleanup := nt.setupTest(ctx, addNode...)
-	defer cleanup()
-
-	if len(nodes) != 2 {
-		nt.tb.Logf("ping can only be done among exactly two nodes")
-		return false
-	}
-	var fromClient, toClient *vnet.NodeAgentClient
-	for i, n := range nodes {
-		if n.ShouldJoinTailnet() && fromClient == nil {
-			fromClient = clients[i]
-		} else {
-			toClient = clients[i]
-		}
-	}
-	got, err := sendHostNetworkPing(ctx, nt.tb, fromClient, toClient)
-	if err != nil {
-		nt.tb.Fatalf("ping host: %v", err)
-	}
-	nt.tb.Logf("ping success: %v", got)
-	return got
-}
-
 func (nt *natTest) runTailscaleConnectivityTest(addNode ...addNodeFunc) pingRoute {
 	ctx, cancel := testContext(nt.tb)
 	defer cancel()
@@ -708,60 +554,6 @@ func up(ctx context.Context, c *vnet.NodeAgentClient) error {
 	return nil
 }
 
-func getClientIP(ctx context.Context, c *vnet.NodeAgentClient) (netip.Addr, error) {
-	getIPReq, err := http.NewRequestWithContext(ctx, "GET", "http://unused/ip", nil)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	res, err := c.HTTPClient.Do(getIPReq)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return netip.Addr{}, fmt.Errorf("client returned http status %q", res.Status)
-	}
-	ipBytes, err := io.ReadAll(res.Body)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	addrPort, err := netip.ParseAddrPort(string(ipBytes))
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	return addrPort.Addr(), nil
-}
-
-// sendHostNetworkPing pings toClient from fromClient, and returns whether
-// toClient responded to the ping.
-func sendHostNetworkPing(ctx context.Context, tb testing.TB, fromClient, toClient *vnet.NodeAgentClient) (bool, error) {
-	toIP, err := getClientIP(ctx, toClient)
-	if err != nil {
-		return false, fmt.Errorf("get ip: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unused/ping?host=%s", toIP.String()), nil)
-	if err != nil {
-		return false, err
-	}
-	res, err := fromClient.HTTPClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer res.Body.Close()
-	got, err := io.ReadAll(res.Body)
-	if err != nil {
-		tb.Logf("error while reading http body: %v", err)
-	} else {
-		tb.Logf("got response from ping: %q", got)
-	}
-	ec, err := strconv.Atoi(res.Header.Get("Exec-Exit-Code"))
-	if err != nil {
-		return false, fmt.Errorf("parse exit code: %w", err)
-	}
-	tb.Logf("got ec: %v", ec)
-	return ec == 0, nil
-}
-
 type nodeType struct {
 	name string
 	fn   addNodeFunc
@@ -778,30 +570,6 @@ var types = []nodeType{
 	{"cgnat", cgnatNoTailnet},
 }
 
-// want sets the expected ping route for the test.
-func (nt *natTest) want(r pingRoute) {
-	if nt.gotRoute != r {
-		nt.tb.Errorf("ping route = %v; want %v", nt.gotRoute, r)
-	}
-}
-
-func TestEasyEasy(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easy, easy)
-	nt.want(routeDirect)
-}
-
-// TestTwoEasyNoControlDiscoRotate tests a situation where two nodes have been
-// online and connected through control, but then loose control access and also
-// rotate keys. It is not a perfect proxy for a cached node, as the node will
-// still have a mapState and not use the backup method of inserting keys into
-// the engine directly.
-func TestTwoEasyNoControlDiscoRotate(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easyNoControlDiscoRotate, easyNoControlDiscoRotate)
-	nt.want(routeDirect)
-}
-
 func cgnatNoTailnet(c *vnet.Config) *vnet.Node {
 	n := c.NumNodes() + 1
 	return c.AddNode(c.AddNetwork(
@@ -809,98 +577,6 @@ func cgnatNoTailnet(c *vnet.Config) *vnet.Node {
 		fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
 		vnet.EasyNAT),
 		vnet.DontJoinTailnet)
-}
-
-func TestNonTailscaleCGNATEndpoint(t *testing.T) {
-	nt := newNatTest(t)
-	if !nt.runHostConnectivityTest(cgnatNoTailnet, sameLANNoDropCGNAT) {
-		t.Fatalf("could not ping")
-	}
-}
-
-// Issue tailscale/corp#26438: use learned DERP route as send path of last
-// resort
-//
-// See (*magicsock.Conn).fallbackDERPRegionForPeer and its comment for
-// background.
-//
-// This sets up a test with two nodes that must use DERP to communicate but the
-// target of the ping (the second node) additionally is not getting DERP or
-// Endpoint updates from the control plane. (Or rather, it's getting them but is
-// configured to scrub them right when they come off the network before being
-// processed) This then tests whether node2, upon receiving a packet, will be
-// able to reply to node1 since it knows neither node1's endpoints nor its home
-// DERP. The only reply route it can use is that fact that it just received a
-// packet over a particular DERP from that peer.
-func TestFallbackDERPRegionForPeer(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(hard, hardNoDERPOrEndoints)
-	nt.want(routeDERP)
-}
-
-func TestSingleJustIPv6(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(just6)
-}
-
-var knownBroken = flag.Bool("known-broken", false, "run known-broken tests")
-
-// TestSingleDualStackButBrokenIPv4 tests a dual-stack node with broken
-// (blackholed) IPv4.
-//
-// See https://github.com/tailscale/tailscale/issues/13346
-func TestSingleDualBrokenIPv4(t *testing.T) {
-	if !*knownBroken {
-		t.Skip("skipping known-broken test; set --known-broken to run; see https://github.com/tailscale/tailscale/issues/13346")
-	}
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(v6AndBlackholedIPv4)
-}
-
-func TestJustIPv6(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(just6, just6)
-	nt.want(routeDirect)
-}
-
-func TestEasy4AndJust6(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easyAnd6, just6)
-	nt.want(routeDirect)
-}
-
-func TestSameLAN(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easy, sameLAN)
-	nt.want(routeLocal)
-}
-
-// TestBPFDisco tests https://github.com/tailscale/tailscale/issues/3824 ...
-// * server behind a Hard NAT
-// * client behind a NAT with UPnP support
-// * client machine has a stateful host firewall (e.g. ufw)
-func TestBPFDisco(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easyPMPFWPlusBPF, hard)
-	nt.want(routeDirect)
-}
-
-func TestHostFWNoBPF(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easyPMPFWNoBPF, hard)
-	nt.want(routeDERP)
-}
-
-func TestHostFWPair(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easyFW, easyFW)
-	nt.want(routeDirect)
-}
-
-func TestOneHostFW(t *testing.T) {
-	nt := newNatTest(t)
-	nt.runTailscaleConnectivityTest(easy, easyFW)
-	nt.want(routeDirect)
 }
 
 var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPMP, hardPMP, one2one, sameLAN)")

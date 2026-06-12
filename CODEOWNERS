@@ -1,1 +1,4 @@
 /tailcfg/ @tailscale/control-protocol-owners
+
+# Do not add to this list without wide discussion.
+# See https://github.com/tailscale/corp/issues/13972

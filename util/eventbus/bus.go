@@ -103,6 +103,15 @@ func (b *Bus) Debugger() *Debugger {
 	return &Debugger{b}
 }
 
+// ProbeLocks acquires and releases the bus's internal mutexes.
+func (b *Bus) ProbeLocks() {
+	b.topicsMu.Lock()
+	b.topicsMu.Unlock()
+
+	b.clientsMu.Lock()
+	b.clientsMu.Unlock()
+}
+
 // Close closes the bus. It implicitly closes all clients, publishers and
 // subscribers attached to the bus.
 //

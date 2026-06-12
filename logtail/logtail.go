@@ -138,7 +138,9 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	logger.uploadCancel = cancel
 
 	go logger.uploading(ctx)
-	logger.Write([]byte("logtail started"))
+	if envknob.Bool("TS_DEBUG_LOGTAIL") {
+		logger.Write([]byte("logtail started"))
+	}
 	return logger
 }
 
@@ -417,7 +419,7 @@ func (lg *Logger) uploading(ctx context.Context) {
 				if retryAfter <= 0 {
 					retryAfter = mrand.N(30*time.Second) + 30*time.Second
 				}
-				tstime.Sleep(ctx, retryAfter)
+				tstime.Sleep(ctx, min(retryAfter, 5*time.Minute)) // ignore absurdly large retryAfter values
 			} else {
 				// Only print a success message after recovery.
 				if numFailures > 0 {

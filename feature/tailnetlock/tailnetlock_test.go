@@ -57,7 +57,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 		return sb.String()
 	}
 
-	// matches [jsonoutput.PrintNetworkLockLogJSONV1]
+	// matches [jsonoutput.PrintTailnetLockLogJSONV1]
 	type response struct {
 		SchemaVersion string
 		Messages      []any

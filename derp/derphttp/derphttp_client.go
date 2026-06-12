@@ -280,10 +280,16 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 		return c.url.String()
 	}
 	proto := "https"
+	defaultPort := 443
 	if debugUseDERPHTTP() {
 		proto = "http"
+		defaultPort = 80
 	}
-	return fmt.Sprintf("%s://%s/derp", proto, node.HostName)
+	host := node.HostName
+	if node.DERPPort != 0 && node.DERPPort != defaultPort {
+		host = net.JoinHostPort(host, fmt.Sprint(node.DERPPort))
+	}
+	return fmt.Sprintf("%s://%s/derp", proto, host)
 }
 
 // AddressFamilySelector decides whether IPv6 is preferred for
@@ -867,7 +873,15 @@ func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, pr
 		}
 	}()
 
-	target := net.JoinHostPort(n.HostName, "443")
+	// Keep port selection in sync with dialNode.
+	port := "443"
+	if !c.useHTTPS() {
+		port = "3340"
+	}
+	if n.DERPPort != 0 {
+		port = fmt.Sprint(n.DERPPort)
+	}
+	target := net.JoinHostPort(n.HostName, port)
 
 	var authHeader string
 	if buildfeatures.HasUseProxy {

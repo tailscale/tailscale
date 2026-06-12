@@ -264,6 +264,7 @@ func (src *DNSConfig) Clone() *DNSConfig {
 		dst.Routes = map[string][]*dnstype.Resolver{}
 		for k, sv := range src.Routes {
 			if sv == nil {
+				dst.Routes[k] = nil
 				continue
 			}
 			dst.Routes[k] = make([]*dnstype.Resolver, len(sv))

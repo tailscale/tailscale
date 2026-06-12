@@ -48,6 +48,7 @@ import (
 	"tailscale.com/util/ctxkey"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 )
 
@@ -534,6 +535,56 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 	return servicesList
 }
 
+type serviceMeteredConn struct {
+	net.Conn
+	inbound, outbound *usermetric.MultiLabelMap[serveLabels]
+	key               serveLabels
+}
+
+func (c *serviceMeteredConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.inbound.Add(c.key, int64(n))
+	}
+	return n, err
+}
+
+func (c *serviceMeteredConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.outbound.Add(c.key, int64(n))
+	}
+	return n, err
+}
+
+// CloseWrite forwards a write-half close to the underlying conn. We only embed
+// the net.Conn interface, which would otherwise hide the underlying conn's
+// CloseWrite; net/http's server relies on it (closeWriteAndWait) to send a FIN
+// and drain gracefully when a connection won't be reused, avoiding a truncating
+// RST on the final response.
+func (c *serviceMeteredConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+// meteredConnForService wraps c to count peer bytes against the per-Service
+// Serve counters. The per-Service series is never evicted, so it leaks
+// (intentionally) until tailscaled exits.
+func (b *LocalBackend) meteredConnForService(c net.Conn, svc tailcfg.ServiceName) net.Conn {
+	// Plain (non-Service) serve passes an empty svc; don't meter it.
+	if svc == "" || b.metrics.serveBytesInbound == nil || b.metrics.serveBytesOutbound == nil {
+		return c
+	}
+	return &serviceMeteredConn{
+		Conn:     c,
+		inbound:  b.metrics.serveBytesInbound,
+		outbound: b.metrics.serveBytesOutbound,
+		key:      serveLabels{Service: svc.String()},
+	}
+}
+
 // tcpHandlerForVIPService returns a handler for a TCP connection to a VIP service
 // that is being served via the ipn.ServeConfig. It returns nil if the destination
 // address is not a VIP service or if the VIP service does not have a TCP handler set.
@@ -560,68 +611,14 @@ func (b *LocalBackend) tcpHandlerForVIPService(dstAddr, srcAddr netip.AddrPort) 
 		return nil
 	}
 
-	if tcph.HTTPS() || tcph.HTTP() {
-		hs := &http.Server{
-			Handler: http.HandlerFunc(b.serveWebHandler),
-			BaseContext: func(_ net.Listener) context.Context {
-				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
-					SrcAddr:       srcAddr,
-					ForVIPService: dstSvc,
-					DestPort:      dport,
-				})
-			},
-		}
-		if tcph.HTTPS() {
-			// TODO(kevinliang10): just leaving this TLS cert creation as if we don't have other
-			// hostnames, but for services this getTLSServeCetForPort will need a version that also take
-			// in the hostname. How to store the TLS cert is still being discussed.
-			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport, dstSvc),
-			}
-			return func(c net.Conn) error {
-				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
-			}
-		}
-
-		return func(c net.Conn) error {
-			return hs.Serve(netutil.NewOneConnListener(c, nil))
-		}
-	}
-
-	if backDst := tcph.TCPForward(); backDst != "" {
-		return func(conn net.Conn) error {
-			defer conn.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
-			cancel()
-			if err != nil {
-				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
-				return nil
-			}
-			defer backConn.Close()
-			if sni := tcph.TerminateTLS(); sni != "" {
-				conn = tls.Server(conn, &tls.Config{
-					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-						defer cancel()
-						pair, err := b.GetCertPEM(ctx, sni)
-						if err != nil {
-							return nil, err
-						}
-						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
-						if err != nil {
-							return nil, err
-						}
-						return &cert, nil
-					},
-				})
-			}
-
-			return b.forwardTCPWithProxyProtocol(conn, backConn, tcph.ProxyProtocol(), srcAddr, dport, backDst)
-		}
-	}
-
-	return nil
+	// TODO(kevinliang10): just leaving this TLS cert creation as if we don't have other
+	// hostnames, but for services this getTLSServeCetForPort will need a version that also take
+	// in the hostname. How to store the TLS cert is still being discussed.
+	return b.tcpHandlerForServeTCP(tcph, dport, srcAddr, &serveHTTPContext{
+		SrcAddr:       srcAddr,
+		ForVIPService: dstSvc,
+		DestPort:      dport,
+	}, dstSvc)
 }
 
 // tcpHandlerForServe returns a handler for a TCP connection to be served via
@@ -641,27 +638,32 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 		return nil
 	}
 
+	return b.tcpHandlerForServeTCP(tcph, dport, srcAddr, &serveHTTPContext{
+		Funnel:   f,
+		SrcAddr:  srcAddr,
+		DestPort: dport,
+	}, "")
+}
+
+func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport uint16, srcAddr netip.AddrPort, httpCtx *serveHTTPContext, forVIPService tailcfg.ServiceName) func(net.Conn) error {
 	if tcph.HTTPS() || tcph.HTTP() {
 		hs := &http.Server{
 			Handler: http.HandlerFunc(b.serveWebHandler),
 			BaseContext: func(_ net.Listener) context.Context {
-				return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
-					Funnel:   f,
-					SrcAddr:  srcAddr,
-					DestPort: dport,
-				})
+				c := *httpCtx
+				return serveHTTPContextKey.WithValue(context.Background(), &c)
 			},
 		}
 		if tcph.HTTPS() {
-			hs.TLSConfig = &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport, ""),
-			}
+			hs.TLSConfig = b.serveTLSConfig(b.getTLSServeCertForPort(dport, forVIPService), serveTLSNextProtos())
 			return func(c net.Conn) error {
+				c = b.meteredConnForService(c, forVIPService)
 				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
 			}
 		}
 
 		return func(c net.Conn) error {
+			c = b.meteredConnForService(c, forVIPService)
 			return hs.Serve(netutil.NewOneConnListener(c, nil))
 		}
 	}
@@ -669,6 +671,7 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
+			conn = b.meteredConnForService(conn, forVIPService)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
 			cancel()
@@ -678,21 +681,22 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 			}
 			defer backConn.Close()
 			if sni := tcph.TerminateTLS(); sni != "" {
-				conn = tls.Server(conn, &tls.Config{
-					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-						defer cancel()
-						pair, err := b.GetCertPEM(ctx, sni)
-						if err != nil {
-							return nil, err
-						}
-						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
-						if err != nil {
-							return nil, err
-						}
-						return &cert, nil
-					},
-				})
+				conn = tls.Server(conn, b.serveTLSConfig(func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					if cert, ok := b.getACMETLSALPNCert(hi); ok {
+						return cert, nil
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+					defer cancel()
+					pair, err := b.GetCertPEM(ctx, sni)
+					if err != nil {
+						return nil, err
+					}
+					cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+					if err != nil {
+						return nil, err
+					}
+					return &cert, nil
+				}, nil))
 			}
 
 			// TODO(bradfitz): do the RegisterIPPortIdentity and
@@ -1311,6 +1315,9 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 		if hi == nil || hi.ServerName == "" {
 			return nil, errors.New("no SNI ServerName")
 		}
+		if cert, ok := b.getACMETLSALPNCert(hi); ok {
+			return cert, nil
+		}
 		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
@@ -1328,6 +1335,46 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 		}
 		return &cert, nil
 	}
+}
+
+// serveTLSConfig returns the TLS configuration used by Serve and TCP-forwarded
+// TLS listeners. nextProtos is the ALPN list to advertise for normal
+// handshakes; it should be serveTLSNextProtos for HTTPS Serve and nil for
+// TLS-terminated TCP forwarding where we don't know the backend protocol.
+// During an ACME tls-alpn-01 renewal, GetConfigForClient clones the base config
+// and temporarily prepends acme-tls/1, but only for the exact SNI with a pending
+// challenge certificate. This keeps ordinary Serve traffic from advertising
+// ACME support and lets Go's TLS stack negotiate the challenge protocol before
+// GetCertificate is called.
+func (b *LocalBackend) serveTLSConfig(getCert func(*tls.ClientHelloInfo) (*tls.Certificate, error), nextProtos []string) *tls.Config {
+	base := &tls.Config{
+		GetCertificate: getCert,
+		NextProtos:     nextProtos,
+	}
+	base.GetConfigForClient = func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
+		var nextProtos []string
+		if proto, ok := b.getACMETLSALPNProto(hi); ok {
+			b.logf("serve: accepting ACME tls-alpn-01 challenge for %q", hi.ServerName)
+			nextProtos = append(nextProtos, proto)
+		}
+		if len(nextProtos) == 0 {
+			return nil, nil
+		}
+		cfg := base.Clone()
+		cfg.NextProtos = append(nextProtos, base.NextProtos...)
+		return cfg, nil
+	}
+	return base
+}
+
+func (b *LocalBackend) hasFunnelForHostPort(host string, port uint16) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.serveConfig.Valid() {
+		return false
+	}
+	hp := ipn.HostPort(net.JoinHostPort(host, strconv.Itoa(int(port))))
+	return b.serveConfig.HasFunnelForTarget(hp)
 }
 
 // setServeProxyHandlersLocked ensures there is an http proxy handler for each
@@ -1551,6 +1598,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err != nil {
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		b.updateCertRefreshLoopLocked()
 		return
 	}
 	if b.lastServeConfJSON.Equal(mem.B(confj)) {
@@ -1561,6 +1609,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err := json.Unmarshal(confj, &conf); err != nil {
 		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
 		b.serveConfig = ipn.ServeConfigView{}
+		b.updateCertRefreshLoopLocked()
 		return
 	}
 
@@ -1571,6 +1620,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	})
 
 	b.serveConfig = conf.View()
+	b.updateCertRefreshLoopLocked()
 }
 
 func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tailcfg.ServiceName][]uint16) {

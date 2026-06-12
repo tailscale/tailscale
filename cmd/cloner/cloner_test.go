@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/cmd/cloner/clonerex"
 )
 
@@ -205,6 +206,20 @@ func TestMapSlicePointerContainer(t *testing.T) {
 	*cloned.Routes["route1"][0].Slice[0] = 999
 	if *orig.Routes["route1"][0].Slice[0] == 999 {
 		t.Errorf("Clone() aliased memory in Routes: original was modified")
+	}
+}
+
+func TestMapSlicePointerContainerNilValue(t *testing.T) {
+	num := 7
+	orig := &clonerex.MapSlicePointerContainer{
+		Routes: map[string][]*clonerex.SliceContainer{
+			"nil-value": nil,
+			"non-nil":   {{Slice: []*int{&num}}},
+		},
+	}
+	cloned := orig.Clone()
+	if diff := cmp.Diff(orig.Routes, cloned.Routes); diff != "" {
+		t.Errorf("Clone() Routes mismatch (-orig +cloned):\n%s", diff)
 	}
 }
 

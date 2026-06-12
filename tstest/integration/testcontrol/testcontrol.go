@@ -60,6 +60,7 @@ type Server struct {
 	DNSConfig          *tailcfg.DNSConfig // nil means no DNS config
 	MagicDNSDomain     string
 	C2NResponses       syncs.Map[string, func(*http.Response)] // token => onResponse func
+	OnSetDNS           func(*tailcfg.SetDNSRequest) error
 
 	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
 	// grants rules.
@@ -430,8 +431,12 @@ type peerMachinePublicContextKey struct{}
 
 func (s *Server) serveNoiseUpgrade(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if r.Method != "POST" {
-		http.Error(w, "POST required", 400)
+	// Allow GET for WebSocket-based clients (e.g. cmd/tsconnect/wasm) in
+	// addition to POST for the raw HTTP-upgrade path. AcceptHTTP routes by
+	// the Upgrade header and the underlying websocket library enforces
+	// GET for WebSocket upgrades.
+	if r.Method != "POST" && r.Method != "GET" {
+		http.Error(w, "POST or GET required", 400)
 		return
 	}
 
@@ -504,12 +509,74 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		s.serveMap(w, r, mkey)
 	case "/machine/register":
 		s.serveRegister(w, r, mkey)
+	case "/machine/set-dns":
+		s.serveSetDNS(w, r, mkey)
 	case "/machine/update-health":
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.serveUnhandled(w, r)
 	}
+}
+
+func (s *Server) serveSetDNS(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+	var req tailcfg.SetDNSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Type != "TXT" {
+		http.Error(w, "only TXT records are supported", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.Value == "" {
+		http.Error(w, "missing name or value", http.StatusBadRequest)
+		return
+	}
+	if req.NodeKey.IsZero() {
+		http.Error(w, "missing node key", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	node := s.nodes[req.NodeKey]
+	certDomains := s.certDomainsLocked(node)
+	s.mu.Unlock()
+	if node == nil {
+		http.Error(w, "unknown node key", http.StatusForbidden)
+		return
+	}
+	if node.Machine != mkey {
+		http.Error(w, "node key does not belong to machine", http.StatusForbidden)
+		return
+	}
+	baseName, ok := strings.CutPrefix(req.Name, "_acme-challenge.")
+	if !ok || !slices.Contains(certDomains, baseName) {
+		http.Error(w, "name is not an ACME challenge for a cert domain", http.StatusForbidden)
+		return
+	}
+	if s.OnSetDNS != nil {
+		if err := s.OnSetDNS(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tailcfg.SetDNSResponse{})
+}
+
+func (s *Server) certDomainsLocked(node *tailcfg.Node) []string {
+	if node == nil {
+		return nil
+	}
+	var ret []string
+	if s.DNSConfig != nil {
+		ret = append(ret, s.DNSConfig.CertDomains...)
+	}
+	if s.MagicDNSDomain != "" {
+		ret = append(ret, node.Hostinfo.Hostname()+"."+s.MagicDNSDomain)
+	}
+	return ret
 }
 
 // SetSubnetRoutes sets the list of subnet routes which a node is routing.
@@ -843,7 +910,8 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	}
 
 	// If this is a followup request, wait until interactive followup URL visit complete.
-	if req.Followup != "" {
+	isFollowup := req.Followup != ""
+	if isFollowup {
 		followupURL, err := url.Parse(req.Followup)
 		if err != nil {
 			panic(err)
@@ -859,18 +927,22 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		// some follow-ups? For now all are successes.
 	}
 
-	// The in-memory list of nodes, users, and logins is keyed by
-	// the node key.  If the node key changes, update all the data stores
-	// to use the new node key.
+	// On a key rotation (OldNodeKey set and known to s.nodes), stage
+	// the new key as a candidate entry but keep the old key's entry
+	// alive so an in-flight map poll can still receive updates while
+	// the user completes the auth URL.
 	s.mu.Lock()
 	if _, oldNodeKeyOk := s.nodes[req.OldNodeKey]; oldNodeKeyOk {
 		if _, newNodeKeyOk := s.nodes[req.NodeKey]; !newNodeKeyOk {
-			s.nodes[req.OldNodeKey].Key = req.NodeKey
-			s.nodes[req.NodeKey] = s.nodes[req.OldNodeKey]
-
+			cloned := s.nodes[req.OldNodeKey].Clone()
+			cloned.Key = req.NodeKey
+			s.nodes[req.NodeKey] = cloned
 			s.users[req.NodeKey] = s.users[req.OldNodeKey]
 			s.logins[req.NodeKey] = s.logins[req.OldNodeKey]
-
+		}
+		if isFollowup {
+			// The user has completed the auth URL, the new key
+			// is now authoritative. Retire the old key's entry.
 			delete(s.nodes, req.OldNodeKey)
 			delete(s.users, req.OldNodeKey)
 			delete(s.logins, req.OldNodeKey)
@@ -930,11 +1002,19 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		}
 		s.nodes[nk] = node
 	}
+	// Consider a node key expired if allExpired is set or if the nodeKey has
+	// an expiry time in the past. This allows tests to set per-node KeyExpiry
+	// via UpdateNode to simulate an admin-triggered or time-based expiry.
+	nodeKeyExpired := s.allExpired
+	if !nodeKeyExpired && req.OldNodeKey.IsZero() {
+		if n, ok := s.nodes[nk]; ok && !n.KeyExpiry.IsZero() && n.KeyExpiry.Before(time.Now()) {
+			nodeKeyExpired = true
+		}
+	}
 	requireAuth := s.RequireAuth
-	if requireAuth && s.nodeKeyAuthed.Contains(nk) {
+	if requireAuth && s.nodeKeyAuthed.Contains(nk) && !nodeKeyExpired {
 		requireAuth = false
 	}
-	allExpired := s.allExpired
 	s.mu.Unlock()
 
 	authURL := ""
@@ -947,7 +1027,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	res, err := s.encode(false, tailcfg.RegisterResponse{
 		User:              *user,
 		Login:             *login,
-		NodeKeyExpired:    allExpired,
+		NodeKeyExpired:    nodeKeyExpired,
 		MachineAuthorized: machineAuthorized,
 		AuthURL:           authURL,
 	})
@@ -1211,19 +1291,31 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	var peersToUpdate []tailcfg.NodeID
 	if !req.ReadOnly && !streamingNonUpdate {
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
-		node.Endpoints = endpoints
-		node.DiscoKey = req.DiscoKey
-		node.Cap = req.Version
+		var hi tailcfg.HostinfoView
+		var newDERP int
 		if req.Hostinfo != nil {
-			node.Hostinfo = req.Hostinfo.View()
-			if ni := node.Hostinfo.NetInfo(); ni.Valid() {
-				if ni.PreferredDERP() != 0 {
-					node.HomeDERP = ni.PreferredDERP()
-				}
+			hi = req.Hostinfo.View()
+			if ni := hi.NetInfo(); ni.Valid() {
+				newDERP = ni.PreferredDERP()
 			}
 		}
+		// Mutate the live node under the mutex; writing back the clone
+		// obtained above would clobber any concurrent writer's changes
+		// to other fields (e.g. UpdateNode, SetNodeCapMap).
 		s.mu.Lock()
-		peersToUpdate = s.updateNodeLocked(node)
+		live := s.nodes[req.NodeKey]
+		if live != nil {
+			live.Endpoints = endpoints
+			live.DiscoKey = req.DiscoKey
+			live.Cap = req.Version
+			if hi.Valid() {
+				live.Hostinfo = hi
+				if newDERP != 0 {
+					live.HomeDERP = newDERP
+				}
+			}
+			peersToUpdate = s.nodeIDsLocked(live.ID)
+		}
 		s.mu.Unlock()
 	}
 

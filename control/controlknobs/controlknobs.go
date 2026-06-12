@@ -110,6 +110,31 @@ type Knobs struct {
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	ForceRegisterMagicDNSIPv4Only atomic.Bool
+
+	// EmitRuntimeMetrics is whether the node should poll and emit [runtime/metrics]
+	// as [tailscale.com/util/clientmetric]'s.
+	EmitRuntimeMetrics atomic.Bool
+
+	// DisableUDPGRO disables UDP GRO on the magicsock UDP socket. See
+	// [tailcfg.NodeAttrDisableUDPGRO].
+	DisableUDPGRO atomic.Bool
+
+	// DisableUDPGSO disables UDP GSO on the magicsock UDP socket. See
+	// [tailcfg.NodeAttrDisableUDPGSO].
+	DisableUDPGSO atomic.Bool
+
+	// DisableTUNUDPGRO disables UDP GRO on the Tailscale TUN device. See
+	// [tailcfg.NodeAttrDisableTUNUDPGRO].
+	DisableTUNUDPGRO atomic.Bool
+
+	// DisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device. See
+	// [tailcfg.NodeAttrDisableTUNTCPGRO].
+	DisableTUNTCPGRO atomic.Bool
+
+	// NeverGSOEqualTail enables a UDP GSO sentinel-tail workaround in the
+	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
+	// UDP sockets. See [tailcfg.NodeAttrNeverGSOEqualTail].
+	NeverGSOEqualTail atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -139,6 +164,12 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 		disableHostsFileUpdates              = has(tailcfg.NodeAttrDisableHostsFileUpdates)
 		forceRegisterMagicDNSIPv4Only        = has(tailcfg.NodeAttrForceRegisterMagicDNSIPv4Only)
+		emitRuntimeMetrics                   = has(tailcfg.NodeAttrEmitRuntimeMetrics)
+		disableUDPGRO                        = has(tailcfg.NodeAttrDisableUDPGRO)
+		disableUDPGSO                        = has(tailcfg.NodeAttrDisableUDPGSO)
+		disableTUNUDPGRO                     = has(tailcfg.NodeAttrDisableTUNUDPGRO)
+		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
+		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -166,6 +197,12 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 	k.DisableHostsFileUpdates.Store(disableHostsFileUpdates)
 	k.ForceRegisterMagicDNSIPv4Only.Store(forceRegisterMagicDNSIPv4Only)
+	k.EmitRuntimeMetrics.Store(emitRuntimeMetrics)
+	k.DisableUDPGRO.Store(disableUDPGRO)
+	k.DisableUDPGSO.Store(disableUDPGSO)
+	k.DisableTUNUDPGRO.Store(disableTUNUDPGRO)
+	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
+	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal

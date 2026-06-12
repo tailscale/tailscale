@@ -87,6 +87,16 @@ func defaultTunName() string {
 			// See https://github.com/tailscale/tailscale-synology/issues/35
 			return "tailscale0,userspace-networking"
 		}
+		if buildfeatures.HasNetstack && distro.Get() == distro.Crostini {
+			// cros-garcon NULL-derefs on cold-boot netlink interface
+			// enumeration when tailscale0 is present, preventing the
+			// Crostini container and ChromeOS Terminal from starting
+			// cleanly. Default to userspace-networking until the
+			// upstream ChromiumOS bug is fixed.
+			// See https://github.com/tailscale/tailscale/issues/12090
+			// See https://issuetracker.google.com/issues/517069318
+			return "userspace-networking"
+		}
 	}
 	return "tailscale0"
 }
@@ -428,6 +438,10 @@ func run() (err error) {
 
 	var publicLogID logid.PublicID
 	if buildfeatures.HasLogTail {
+		logpolicy.GetLogTarget.Set(func() string {
+			target, _ := sys.PolicyClientOrDefault().GetString(pkey.LogTarget, "")
+			return target
+		})
 
 		pol := logpolicy.Options{
 			Collection: logtail.CollectionNode,
@@ -460,9 +474,6 @@ func run() (err error) {
 		return nil
 	}
 
-	if envknob.Bool("TS_DEBUG_MEMORY") {
-		logf = logger.RusagePrefixLog(logf)
-	}
 	logf = logger.RateLimitedFn(logf, 5*time.Second, 5, 100)
 
 	if envknob.Bool("TS_PLEASE_PANIC") {
@@ -828,7 +839,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 	if err != nil {
 		return onlyNetstack, err
 	}
-	e = wgengine.NewWatchdog(e)
 	sys.Set(e)
 	sys.NetstackRouter.Set(netstackSubnetRouter)
 
@@ -917,7 +927,9 @@ func handleTPMFlags() {
 	case !args.hardwareAttestation.set:
 		policyHWAttestation, _ := policyclient.Get().GetBoolean(pkey.HardwareAttestation, false)
 		if err := canUseHardwareAttestation(); err != nil {
-			log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			if policyHWAttestation {
+				log.Printf("[unexpected] policy requires hardware attestation, but device does not support it: %v", err)
+			}
 			args.hardwareAttestation.v = false
 		} else {
 			args.hardwareAttestation.v = policyHWAttestation

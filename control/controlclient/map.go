@@ -207,6 +207,7 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		ms.processQueue.Wait()
 		return ErrChangeQueueClosed
 	}
+	defer ms.cqmu.Unlock()
 
 	resp := responseWithSource{
 		response: &tailcfg.MapResponse{
@@ -220,12 +221,24 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		},
 		viaTSMP: true,
 	}
-	ms.changeQueue <- resp
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(resp)
 }
 
+// HandleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
+// incremental).
+//
+// All fields that are valid on a KeepAlive MapResponse have already been
+// handled.
+//
+// Debug messages are handled first, followed by pushing the response onto a
+// queue for new updates handled sequentially.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
+	if debug := resp.Debug; debug != nil {
+		if err := ms.onDebug(ctx, debug); err != nil {
+			return err
+		}
+	}
+
 	ms.cqmu.Lock()
 
 	if ms.changeQueueClosed {
@@ -234,14 +247,23 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		return ErrChangeQueueClosed
 	}
 
+	defer ms.cqmu.Unlock()
+
 	change := responseWithSource{
 		response: resp,
 		viaTSMP:  false,
 	}
 
-	ms.changeQueue <- change
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(change)
+}
+
+func (ms *mapSession) addRespToQueue(resp responseWithSource) error {
+	select {
+	case ms.changeQueue <- resp:
+		return nil
+	case <-ms.sessionAliveCtx.Done():
+		return ErrChangeQueueClosed
+	}
 }
 
 // handleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
@@ -253,12 +275,6 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 // TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
 // is [re]factoring progress enough.
 func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse, viaTSMP bool) error {
-	if debug := resp.Debug; debug != nil {
-		if err := ms.onDebug(ctx, debug); err != nil {
-			return err
-		}
-	}
-
 	if DevKnob.StripEndpoints() {
 		for _, p := range resp.Peers {
 			p.Endpoints = nil
@@ -316,9 +332,11 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	}
 
 	if ms.tryHandleIncrementally(resp) {
+		metricMapResponseHandledIncrementally.Add(1)
 		ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 		return nil
 	}
+	metricMapResponseHandledFullRebuild.Add(1)
 
 	// We have to rebuild the whole netmap (lots of garbage & work downstream of
 	// our UpdateFullNetmap call). This is the part we tried to avoid but
@@ -393,11 +411,49 @@ func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
 	if !ok {
 		return false
 	}
+	// If the response carries a new packet filter, the updater must
+	// support pushing it narrowly; otherwise fall back to a full netmap
+	// rebuild. PacketFilter/PacketFilters are no longer in
+	// mapResponseContainsNonPatchFields, so MutationsFromMapResponse will
+	// happily return mutations alongside a filter change — we need to
+	// deliver the filter separately before those mutations land.
+	if res.PacketFilter != nil || res.PacketFilters != nil {
+		pfu, ok := ms.netmapUpdater.(PacketFilterUpdater)
+		if !ok {
+			return false
+		}
+		if !pfu.UpdatePacketFilter(ms.lastPacketFilterRules, ms.lastParsedPacketFilter) {
+			return false
+		}
+	}
+	// Same shape for UserProfiles: deliver any new/updated profiles before
+	// the peer mutations that may reference them, so bus consumers never
+	// see a UserID for which a profile hasn't been published. The values
+	// are read from ms.lastUserProfile (just populated by
+	// updateStateFromResponse) so views are shared with mapSession's
+	// store; downstream consumers can use [UserProfileView.Equal] for
+	// dedup without copying.
+	if len(res.UserProfiles) > 0 {
+		upu, ok := ms.netmapUpdater.(UserProfileUpdater)
+		if !ok {
+			return false
+		}
+		profiles := make(map[tailcfg.UserID]tailcfg.UserProfileView, len(res.UserProfiles))
+		for _, up := range res.UserProfiles {
+			profiles[up.ID] = ms.lastUserProfile[up.ID]
+		}
+		if !upu.UpdateUserProfiles(profiles) {
+			return false
+		}
+	}
 	mutations, ok := netmap.MutationsFromMapResponse(res, time.Now())
-	if ok && len(mutations) > 0 {
+	if !ok {
+		return false
+	}
+	if len(mutations) > 0 {
 		return nud.UpdateNetmapDelta(mutations)
 	}
-	return ok
+	return true
 }
 
 // updateStats are some stats from updateStateFromResponse, primarily for
@@ -697,6 +753,17 @@ var (
 
 	patchifiedPeer      = clientmetric.NewCounter("controlclient_patchified_peer")
 	patchifiedPeerEqual = clientmetric.NewCounter("controlclient_patchified_peer_equal")
+
+	// metricMapResponseHandledIncrementally counts non-keepalive MapResponses
+	// that were processed via [mapSession.tryHandleIncrementally] (i.e. the
+	// "fast" delta path that avoids rebuilding the full netmap).
+	metricMapResponseHandledIncrementally = clientmetric.NewCounter("controlclient_map_response_handled_incrementally")
+
+	// metricMapResponseHandledFullRebuild counts non-keepalive MapResponses
+	// that fell through to the full netmap rebuild path because they
+	// carried a field that the incremental path can't handle. See
+	// [netmap.mapResponseContainsNonPatchFields].
+	metricMapResponseHandledFullRebuild = clientmetric.NewCounter("controlclient_map_response_handled_full_rebuild")
 )
 
 // updatePeersStateFromResponseres updates ms.peers from resp.

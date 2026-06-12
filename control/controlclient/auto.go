@@ -20,10 +20,12 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/testenv"
+	"tailscale.com/wgengine/filter"
 )
 
 type LoginGoal struct {
@@ -378,9 +380,15 @@ func (c *Auto) authRoutine() {
 			}
 			c.mu.Lock()
 			c.urlToVisit = url
-			c.loginGoal = &LoginGoal{
-				flags: LoginDefault,
-				url:   url,
+			// Only store the URL follow-up goal if no concurrent Login() call has
+			// replaced the goal we were processing while our control plane request
+			// was in flight. Otherwise, the intent from the more recent goal gets
+			// lost.
+			if c.loginGoal == goal {
+				c.loginGoal = &LoginGoal{
+					flags: LoginDefault,
+					url:   url,
+				}
 			}
 			c.mu.Unlock()
 
@@ -398,13 +406,25 @@ func (c *Auto) authRoutine() {
 		// success
 		c.direct.health.SetAuthRoutineInError(nil)
 		c.mu.Lock()
-		c.urlToVisit = ""
-		c.loggedIn = true
-		c.loginGoal = nil
+		// Only commit the login success if no concurrent Login()
+		// call has reset the goal and no Logout() has moved on
+		// while our control plane request was in flight. In the
+		// first case, clearing the goal would prevent the next
+		// iteration from picking it up and running with it. In
+		// the second case, we would record that we're loggedIn
+		// even though we're logged out.
+		goalStillCurrentGoal := c.loginGoal == goal
+		if goalStillCurrentGoal {
+			c.urlToVisit = ""
+			c.loggedIn = true
+			c.loginGoal = nil
+		}
 		c.mu.Unlock()
 
-		c.sendStatus("authRoutine-success", nil, "", nil)
-		c.restartMap()
+		if goalStillCurrentGoal {
+			c.sendStatus("authRoutine-success", nil, "", nil)
+			c.restartMap()
+		}
 		bo.Reset()
 	}
 }
@@ -452,16 +472,15 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	c.inMapPoll = true
 	c.expiry = nm.SelfKeyExpiry()
-	stillAuthed := c.loggedIn
-	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", stillAuthed)
+	c.logf("[v1] mapRoutine: netmap received: loggedIn=%v inMapPoll=true", c.loggedIn)
 
 	// Reset the backoff timer if we got a netmap.
 	mrs.bo.Reset()
 	c.mu.Unlock()
 
-	if stillAuthed {
-		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
-	}
+	// Always send status - sendStatus will check if we should forward the netmap
+	// based on loggedIn, hasNodeKey, and inMapPoll.
+	c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 }
 
 func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
@@ -470,20 +489,89 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	ndu, canDelta := c.observer.(NetmapDeltaUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !canDelta {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
-	var ok bool
-	err := c.observerQueue.RunSync(ctx, func() {
-		ok = ndu.UpdateNetmapDelta(muts)
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- ndu.UpdateNetmapDelta(muts)
 	})
-	return err == nil && ok
+	select {
+	case ok := <-ch:
+		return ok
+	case <-ctx.Done():
+		return false
+	}
+}
+
+var (
+	_ PacketFilterUpdater = mapRoutineState{}
+	_ UserProfileUpdater  = mapRoutineState{}
+)
+
+// UpdatePacketFilter implements [PacketFilterUpdater] by forwarding to
+// [Auto.observer] if it implements [PacketFilterUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [PacketFilterUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	pfu, ok := c.observer.(PacketFilterUpdater)
+	mapCtx := c.mapCtx
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- pfu.UpdatePacketFilter(rules, parsed)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// UpdateUserProfiles implements [UserProfileUpdater] by forwarding to
+// [Auto.observer] if it implements [UserProfileUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [UserProfileUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	upu, ok := c.observer.(UserProfileUpdater)
+	mapCtx := c.mapCtx
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- upu.UpdateUserProfiles(profiles)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
 }
 
 var _ patchDiscoKeyer = mapRoutineState{}
@@ -493,13 +581,14 @@ func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPubl
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	dun, ok := c.observer.(patchDiscoKeyer)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !ok {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	c.observerQueue.RunSync(ctx, func() {
@@ -524,9 +613,15 @@ func (c *Auto) mapRoutine() {
 
 		c.mu.Lock()
 		loggedIn := c.loggedIn
-		c.logf("[v1] mapRoutine: loggedIn=%v", loggedIn)
 		ctx := c.mapCtx
 		c.mu.Unlock()
+
+		// Check if we have a valid node key that could receive updates.
+		// Even if !loggedIn (e.g., key expired, waiting for interactive auth),
+		// we should still poll if we have credentials, because the server
+		// might send us a key extension notification.
+		_, hasNodeKey := c.direct.GetPersist().PublicNodeKeyOK()
+		c.logf("[v1] mapRoutine: loggedIn=%v hasNodeKey=%v", loggedIn, hasNodeKey)
 
 		report := func(err error, msg string) {
 			c.logf("[v1] %s: %v", msg, err)
@@ -538,8 +633,8 @@ func (c *Auto) mapRoutine() {
 			}
 		}
 
-		if !loggedIn {
-			// Wait for something interesting to happen
+		if !loggedIn && !hasNodeKey {
+			// No credentials at all, wait for auth to complete.
 			c.mu.Lock()
 			c.inMapPoll = false
 			c.mu.Unlock()
@@ -630,14 +725,17 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	loginGoal := c.loginGoal
 	c.mu.Unlock()
 
-	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v", who, loggedIn, inMapPoll)
+	// Check if we have a valid node key - if so, we should forward the netmap
+	// even if !loggedIn, to allow the backend to see key expiry changes.
+	_, hasNodeKey := c.direct.GetPersist().PublicNodeKeyOK()
+	c.logf("[v1] sendStatus: %s: loggedIn=%v inMapPoll=%v hasNodeKey=%v", who, loggedIn, inMapPoll, hasNodeKey)
 
 	var p persist.PersistView
-	if nm != nil && loggedIn && inMapPoll {
+	if nm != nil && (loggedIn || hasNodeKey) && inMapPoll {
 		p = c.direct.GetPersist()
 	} else {
 		// don't send netmap status, as it's misleading when we're
-		// not logged in.
+		// not logged in and have no credentials.
 		nm = nil
 	}
 	newSt := &Status{
@@ -752,7 +850,29 @@ func (c *Auto) Login(flags LoginFlags) {
 	c.loginGoal = &LoginGoal{
 		flags: flags,
 	}
-	c.cancelMapCtxLocked()
+	// If we have valid credentials (loggedIn=true) or a valid node key,
+	// don't cancel the map poll. This allows the client to continue receiving
+	// key extension notifications from the server while the auth flow proceeds
+	// in parallel.
+	//
+	// This is important for the "Extend key" feature: if the admin extends a
+	// key while the user has clicked "Login", we want the map poll to receive
+	// that notification and recover without requiring the user to complete the
+	// auth flow.
+	//
+	// The hasNodeKey check handles the case where a tsnet server restarts with
+	// an expired key: loggedIn is false (server returned AuthURL), but we have
+	// a valid node key that can still receive map updates including key extensions.
+	//
+	// "First successful flow wins": if a key extension arrives via map poll,
+	// the client recovers. If the auth flow completes first, that works too.
+	var hasNodeKey bool
+	if c.direct != nil {
+		_, hasNodeKey = c.direct.GetPersist().PublicNodeKeyOK()
+	}
+	if !c.loggedIn && !hasNodeKey {
+		c.cancelMapCtxLocked()
+	}
 	c.cancelAuthCtxLocked()
 }
 

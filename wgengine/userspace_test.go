@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"slices"
+	"sync"
 	"testing"
 
 	"go4.org/mem"
@@ -17,11 +19,16 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/router"
@@ -529,4 +536,77 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 		}
 	})
 	b.Logf("x = %v", x)
+}
+
+// Regression test for #19730: on major link change, MatchDomains Routes must
+// be preserved.
+func TestLinkChangeReapplyPreservesMagicDNSRoutes(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "android", "darwin", "ios", "openbsd":
+	default:
+		t.Skipf("linkChange DNS reapply path not exercised on %s", runtime.GOOS)
+	}
+
+	bus := eventbustest.NewBus(t)
+	noop, err := dns.NewNoopManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewUserspaceEngine(t.Logf, Config{
+		HealthTracker: health.NewTracker(bus),
+		Metrics:       new(usermetric.Registry),
+		EventBus:      bus,
+		DNS:           noop,
+		RespondToPing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	var (
+		mu   sync.Mutex
+		last resolver.Config
+	)
+	e.(*userspaceEngine).dns.Resolver().TestOnlySetHook(func(cfg resolver.Config) {
+		mu.Lock()
+		defer mu.Unlock()
+		last = cfg
+	})
+	snapshot := func() []dnsname.FQDN {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(last.LocalDomains)
+	}
+
+	dnsCfg := &dns.Config{
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"ts.net.":              {{Addr: "199.247.155.53"}},
+			"foo.ts.net.":          nil,
+			"64.100.in-addr.arpa.": nil,
+		},
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"node.foo.ts.net.": {netip.MustParseAddr("100.64.0.5")},
+		},
+		SearchDomains: []dnsname.FQDN{"foo.ts.net."},
+	}
+	if err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, dnsCfg); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	initial := snapshot()
+
+	cd, err := netmon.NewChangeDelta(nil, &netmon.State{HaveV4: true}, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cd.RebindLikelyRequired = true
+	e.(*userspaceEngine).linkChange(cd)
+
+	after := snapshot()
+	slices.Sort(initial)
+	slices.Sort(after)
+	if !slices.Equal(initial, after) {
+		t.Errorf("resolver LocalDomains changed after linkChange:\n  initial: %s\n  after:   %s",
+			logger.AsJSON(initial), logger.AsJSON(after))
+	}
 }

@@ -28,6 +28,9 @@ type funnelFlow = struct{}
 
 func (*LocalBackend) hasIngressEnabledLocked() bool         { return false }
 func (*LocalBackend) shouldWireInactiveIngressLocked() bool { return false }
+func (*LocalBackend) hasFunnelForHostPort(host string, port uint16) bool {
+	return false
+}
 
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	return nil

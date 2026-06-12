@@ -271,47 +271,91 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(*testing.T) {
-			bus := eventbustest.NewBus(t)
-			ht := NewTracker(bus)
-			mw := Register(&Warnable{
-				Code:                "test-warnable-3-secs-to-visible",
-				Title:               "Test Warnable with 3 seconds to visible",
-				Text:                StaticMessage("Hello world"),
-				TimeToVisible:       2 * time.Second,
-				ImpactsConnectivity: true,
+			synctest.Test(t, func(t *testing.T) {
+				clock := tstest.NewClock(tstest.ClockOpts{
+					Start:          time.Unix(123, 0),
+					FollowRealTime: false,
+				})
+				bus := eventbustest.NewBus(t)
+				ht := NewTracker(bus)
+				ht.testClock = clock
+				mw := Register(&Warnable{
+					Code:                "test-warnable-3-secs-to-visible",
+					Title:               "Test Warnable with 3 seconds to visible",
+					Text:                StaticMessage("Hello world"),
+					TimeToVisible:       2 * time.Second,
+					ImpactsConnectivity: true,
+				})
+				defer unregister(mw)
+
+				becameUnhealthy := make(chan struct{})
+				becameHealthy := make(chan struct{})
+
+				watchFunc := func(c Change) {
+					w := c.Warnable
+					us := c.UnhealthyState
+					if w != mw {
+						t.Fatalf("watcherFunc was called, but with an unexpected Warnable: %v, want: %v", w, w)
+					}
+
+					if us != nil {
+						becameUnhealthy <- struct{}{}
+					} else {
+						becameHealthy <- struct{}{}
+					}
+				}
+
+				tt.preFunc(t, ht, bus, watchFunc)
+				ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
+
+				// Advance time by half of the TimeToVisible duration.
+				clock.Advance(mw.TimeToVisible / 2)
+
+				select {
+				case <-becameUnhealthy:
+					// Test failed because the watcher got notified of an unhealthy state
+					t.Fatalf("watcherFunc was called with an unhealthy state")
+				case <-becameHealthy:
+					// Test failed because the watcher got of a healthy state
+					t.Fatalf("watcherFunc was called with a healthy state")
+				default:
+					// As expected, watcherFunc still had not been called
+					// after mw.TimeToVisible / 2.
+				}
+
+				// Advance time to get past the the TimeToVisible duration.
+				// The watcher should be notified of the unhealthy state.
+				clock.Advance(mw.TimeToVisible/2 + 1)
+				<-becameUnhealthy
+
+				// Reset the warnable to neutral / healthy state before
+				// the next part of the test.
+				ht.SetHealthy(mw)
+				<-becameHealthy
+
+				// Mark the warnable unhealthy and then immediately healthy
+				// before the TimeToVisible duration elapses.
+				// The watcher should not be notified of either change
+				// because the warnable never became visible.
+				ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
+				ht.SetHealthy(mw)
+
+				// Advance to get past the the TimeToVisible delay.
+				clock.Advance(mw.TimeToVisible * 2)
+				synctest.Wait()
+
+				select {
+				case <-becameUnhealthy:
+					// Test failed because the watcher got notified of an unhealthy state
+					t.Fatalf("watcherFunc was called with an unhealthy state")
+				case <-becameHealthy:
+					// Test failed because the watcher got of a healthy state
+					t.Fatalf("watcherFunc was called with a healthy state")
+				default:
+					// As expected, watcherFunc was not called after marking
+					// the warnable healthy again as it never became visible.
+				}
 			})
-
-			becameUnhealthy := make(chan struct{})
-			becameHealthy := make(chan struct{})
-
-			watchFunc := func(c Change) {
-				w := c.Warnable
-				us := c.UnhealthyState
-				if w != mw {
-					t.Fatalf("watcherFunc was called, but with an unexpected Warnable: %v, want: %v", w, w)
-				}
-
-				if us != nil {
-					becameUnhealthy <- struct{}{}
-				} else {
-					becameHealthy <- struct{}{}
-				}
-			}
-
-			tt.preFunc(t, ht, bus, watchFunc)
-			ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
-
-			select {
-			case <-becameUnhealthy:
-				// Test failed because the watcher got notified of an unhealthy state
-				t.Fatalf("watcherFunc was called with an unhealthy state")
-			case <-becameHealthy:
-				// Test failed because the watcher got of a healthy state
-				t.Fatalf("watcherFunc was called with a healthy state")
-			case <-time.After(1 * time.Second):
-				// As expected, watcherFunc still had not been called after 1 second
-			}
-			unregister(mw)
 		})
 	}
 }
@@ -739,12 +783,11 @@ func TestControlHealthNotifies(t *testing.T) {
 				ht.SetIPNState("NeedsLogin", true)
 				ht.GotStreamedMapResponse()
 
-				// Expect events at starup, before doing anything else, skip unstable
-				// event and no warning event as they show up at different times.
+				// Expect events at starup, before doing anything else, skip
+				// the warming up events.
 				synctest.Wait()
 				if err := eventbustest.Expect(tw,
 					CompareWarnableCode(t, tsconst.HealthWarnableWarmingUp),
-					CompareWarnableCode(t, tsconst.HealthWarnableNotInMapPoll),
 					CompareWarnableCode(t, tsconst.HealthWarnableWarmingUp),
 				); err != nil {
 					t.Errorf("startup error: %v", err)

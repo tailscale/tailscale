@@ -183,7 +183,7 @@ jobs:
         TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
       working-directory: src
-      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
+      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
@@ -261,6 +261,7 @@ jobs:
         cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
 
     - name: test
+      shell: bash
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
       run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
@@ -268,9 +269,10 @@ jobs:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
     - name: bench all
+      shell: bash
       if: matrix.key == 'win-bench'
       working-directory: src
-      run: ./tool/go test ./... -bench=. -benchtime=1x -run="^$"
+      run: ./tool/go test -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
@@ -642,6 +644,13 @@ jobs:
       run: |
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+    - name: verify Google Chrome is available
+      run: |
+        which google-chrome
+        google-chrome --version
+    - name: tsconnect js/wasm headless-browser tests
+      working-directory: src
+      run: ./tool/go test ./tstest/integration/jswasmtest/ -v -timeout 180s --run-headless-browser-tests
     - name: Tidy cache
       working-directory: src
       shell: bash

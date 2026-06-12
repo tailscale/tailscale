@@ -5,6 +5,7 @@ package vmtest_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
+	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -20,6 +23,7 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/set"
 )
 
 // skipIfNotMacOSArm64 skips the test when the host isn't a macOS arm64 host.
@@ -110,8 +114,7 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 	httpStep.Begin()
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", backend.LanIP(internalNet)))
 	if !strings.Contains(body, "Hello world I am backend") {
-		httpStep.End(fmt.Errorf("got %q", body))
-		t.Fatalf("got %q", body)
+		httpStep.Fatalf("got %q", body)
 	}
 	httpStep.End(nil)
 }
@@ -198,16 +201,14 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 	t.Logf("response: %s", body)
 
 	if !strings.Contains(body, "Hello world I am backend-b") {
-		httpStep.End(fmt.Errorf("expected response from backend-b, got %q", body))
-		t.Fatalf("expected response from backend-b, got %q", body)
+		httpStep.Fatalf("expected response from backend-b, got %q", body)
 	}
 
 	// Verify the source IP was preserved. With --snat-subnet-routes=false,
 	// backend-b should see backend-a's LAN IP as the source, not sr-b's LAN IP.
 	backendAIP := backendA.LanIP(lanA).String()
 	if !strings.Contains(body, "from "+backendAIP) {
-		httpStep.End(fmt.Errorf("source IP not preserved: expected %q in response, got %q", backendAIP, body))
-		t.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
+		httpStep.Fatalf("source IP not preserved: expected %q in response, got %q", backendAIP, body)
 	}
 	httpStep.End(nil)
 }
@@ -244,12 +245,10 @@ func TestInterNetworkTCP(t *testing.T) {
 	body := env.HTTPGet(client, fmt.Sprintf("http://%s:8080/", webWAN))
 	t.Logf("response: %s", body)
 	if !strings.Contains(body, "Hello world I am webserver") {
-		httpStep.End(fmt.Errorf("unexpected response: %q", body))
-		t.Fatalf("unexpected response: %q", body)
+		httpStep.Fatalf("unexpected response: %q", body)
 	}
 	if !strings.Contains(body, "from "+clientWAN) {
-		httpStep.End(fmt.Errorf("expected source %q in response, got %q", clientWAN, body))
-		t.Fatalf("expected source %q in response, got %q", clientWAN, body)
+		httpStep.Fatalf("expected source %q in response, got %q", clientWAN, body)
 	}
 	httpStep.End(nil)
 }
@@ -308,12 +307,10 @@ func TestSubnetRouterPublicIP(t *testing.T) {
 		body := env.HTTPGet(client, webURL)
 		t.Logf("[%s] response: %s", label, body)
 		if !strings.Contains(body, "Hello world I am webserver") {
-			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
-			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
+			step.Fatalf("[%s] unexpected webserver response: %q", label, body)
 		}
 		if !strings.Contains(body, "from "+wantSrc) {
-			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
-			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
+			step.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
 		}
 		step.End(nil)
 	}
@@ -458,15 +455,11 @@ func TestTaildrop(t *testing.T) {
 
 	verifyStep.Begin()
 	if gotName != filename {
-		err := fmt.Errorf("received name = %q; want %q", gotName, filename)
-		verifyStep.End(err)
-		t.Error(err)
+		verifyStep.Fatalf("received name = %q; want %q", gotName, filename)
 		return
 	}
 	if !bytes.Equal(gotContent, want) {
-		err := fmt.Errorf("received content = %q; want %q", gotContent, want)
-		verifyStep.End(err)
-		t.Error(err)
+		verifyStep.Fatalf("received content = %q; want %q", gotContent, want)
 		return
 	}
 	verifyStep.End(nil)
@@ -542,16 +535,73 @@ func TestExitNode(t *testing.T) {
 			body := env.HTTPGet(client, webURL)
 			t.Logf("response: %s", body)
 			if !strings.Contains(body, "Hello world I am webserver") {
-				tt.step.End(fmt.Errorf("unexpected webserver response: %q", body))
-				t.Fatalf("unexpected webserver response: %q", body)
+				tt.step.Fatalf("unexpected webserver response: %q", body)
 			}
 			if !strings.Contains(body, "from "+tt.wantSrc) {
-				tt.step.End(fmt.Errorf("expected source %q in response, got %q", tt.wantSrc, body))
-				t.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
+				tt.step.Fatalf("expected source %q in response, got %q", tt.wantSrc, body)
 			}
 			tt.step.End(nil)
 		})
 	}
+}
+
+// TestExitNodeV4Only verifies that when an exit node is on an
+// IPv4-only network, a client can still connect through it to a
+// webserver whose DNS name has both A and AAAA records. This
+// exercises the happy-eyeballs race dial in net/tsdial.UserDial:
+// the AAAA connect attempt fails (exit node has no IPv6 egress),
+// but the A attempt succeeds.
+//
+// Fixes tailscale/tailscale#13257 and #19792.
+func TestExitNodeV4Only(t *testing.T) {
+	env := vmtest.New(t)
+
+	// Exit node network: IPv4 only (no IPv6 prefix → CanV6()=false).
+	// It advertises both 0.0.0.0/0 and ::/0 (required by tailscale up)
+	// but the network has no IPv6 WAN, so v6 traffic will be dropped.
+	exitNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+	// Client network: dual-stack so Go's net.Resolver prefers AAAA.
+	clientNet := env.AddNetwork("1.0.0.1", "2000:1::1/64", "192.168.1.1/24", vnet.EasyNAT)
+	// Web server network: use the FakeDualStackWeb VIP's v4 as WAN.
+	webNet := env.AddNetwork("5.0.0.100", "192.168.5.1/24", vnet.One2OneNAT)
+
+	client := env.AddNode("client", clientNet,
+		vmtest.OS(vmtest.Gokrazy),
+		// Force AAAA addresses first in userDialResolveAll results so
+		// the old single-IP code path would pick an unreachable v6 addr.
+		vnet.TailscaledEnv{Key: "TS_DEBUG_PREFER_IPV6_USERDIAL", Value: "1"})
+	exit := env.AddNode("exit", exitNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.AdvertiseRoutes("0.0.0.0/0,::/0"))
+	env.AddNode("webserver", webNet,
+		vmtest.OS(vmtest.Gokrazy),
+		vmtest.DontJoinTailnet(),
+		vmtest.WebServer(8080))
+
+	approveStep := env.AddStep("Approve exit-node routes")
+	fetchStep := env.AddStep("HTTP GET via exit node using dual-stack DNS name")
+
+	env.Start()
+
+	approveStep.Begin()
+	env.ApproveRoutes(exit, "0.0.0.0/0", "::/0")
+	approveStep.End(nil)
+
+	fetchStep.Begin()
+	env.SetExitNode(client, exit)
+	// Use the VIP hostname so DNS returns both A (5.0.0.100) and AAAA
+	// (2052::5:100). The exit node's network has no IPv6 WAN, so the
+	// AAAA connect attempt will fail and the dialer must fall back to
+	// the A record via happy eyeballs.
+	body := env.HTTPGet(client, "http://dualstack-web.example.com:8080/")
+	t.Logf("response: %s", body)
+	if !strings.Contains(body, "Hello world I am webserver") {
+		fetchStep.Fatalf("unexpected webserver response: %q", body)
+	}
+	if !strings.Contains(body, "from 2.0.0.1") {
+		fetchStep.Fatalf("expected traffic from exit node WAN (2.0.0.1), got: %q", body)
+	}
+	fetchStep.End(nil)
 }
 
 // TestDiscoKeyChange verifies that when one node's disco key rotates without
@@ -674,8 +724,7 @@ func TestDiscoKeyChange(t *testing.T) {
 
 	pingABStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		pingABStep.End(err)
-		t.Fatal(err)
+		pingABStep.Fatal(err)
 	}
 	pingABStep.End(nil)
 
@@ -719,9 +768,7 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 	verifyStep.Begin()
 	bSt := env.Status(b)
 	if got := bSt.Self.PublicKey; got != bNodeKey {
-		err := fmt.Errorf("[%s] b's node key changed: %v -> %v", label, bNodeKey, got)
-		verifyStep.End(err)
-		t.Fatal(err)
+		verifyStep.Fatalf("[%s] b's node key changed: %v -> %v", label, bNodeKey, got)
 	}
 	var newDisco key.DiscoPublic
 	if err := tstest.WaitFor(15*time.Second, func() error {
@@ -735,8 +782,7 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 		newDisco = n.DiscoKey
 		return nil
 	}); err != nil {
-		verifyStep.End(err)
-		t.Fatalf("[%s] %v", label, err)
+		verifyStep.Fatalf("[%s] %v", label, err)
 	}
 	t.Logf("[b] after %s: nodekey=%s discokey=%s", label, bNodeKey.ShortString(), newDisco.ShortString())
 	verifyStep.End(nil)
@@ -772,6 +818,98 @@ func checkDiscoRotated(t *testing.T, env *vmtest.Env, a, b, pingFrom, pingTo *vm
 	t.Logf("[%s] ping %s -> %s succeeded in %v", label, pingFrom.Name(), pingTo.Name(), time.Since(t0).Round(100*time.Millisecond))
 	pingStep.End(nil)
 	return newDisco
+}
+
+// TestHomeDERPReportedAfterRelogin is a regression test for the bug where, after
+// an in-process control-client swap (an interactive login or profile switch),
+// magicsock's NetInfo de-dup cache (netInfoLast) survived the swap. Because the
+// post-relogin NetInfo was structurally identical (same PreferredDERP, same NAT
+// shape), it was suppressed as unchanged and never re-reported to the new
+// control session, so control never learned the node's home DERP and peers
+// couldn't reach it over DERP. See ipn/ipnlocal:
+// setControlClientLocked -> MagicConn().ResetNetInfoLast.
+//
+// The test brings a node up, records the home DERP region the test control
+// learned, re-logs the node in (new node identity, same control/network/NAT/
+// DERP), and asserts control re-learns the same non-zero home DERP for the new
+// identity. Without the fix this assertion times out at HomeDERP==0.
+func TestHomeDERPReportedAfterRelogin(t *testing.T) {
+	env := vmtest.New(t)
+	net := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	n := env.AddNode("node", net, vmtest.OS(vmtest.Gokrazy))
+
+	baseStep := env.AddStep("Record initial home DERP from control")
+	switchStep := env.AddStep("Re-login (logout + up)")
+	verifyStep := env.AddStep("Verify home DERP re-reported to control after relogin")
+
+	env.Start()
+
+	cs := env.ControlServer()
+
+	// Pin the home DERP region so the reported NetInfo (including PreferredDERP)
+	// is identical before and after the switch. natlab has two DERP regions with
+	// no latency differentiation, so the natural pick could differ across the
+	// switch; a changed PreferredDERP would NOT be de-duped and would mask the
+	// regression. The force persists on the long-lived magicsock.Conn across the
+	// in-process profile switch.
+	const region = 1
+	env.ForcePreferredDERP(n, region)
+
+	// Baseline: control learned the (forced) home DERP for the initial identity.
+	baseStep.Begin()
+	st := env.Status(n)
+	oldKey := st.Self.PublicKey
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		cn := cs.Node(oldKey)
+		if cn == nil {
+			return fmt.Errorf("control has no node for initial key %v", oldKey.ShortString())
+		}
+		if cn.HomeDERP != region {
+			return fmt.Errorf("control home DERP for initial identity = %d, want %d", cn.HomeDERP, region)
+		}
+		return nil
+	}); err != nil {
+		baseStep.Fatal(err)
+	}
+	t.Logf("[node] initial: key=%s homeDERP=%d", oldKey.ShortString(), region)
+	baseStep.End(nil)
+
+	// Re-login on the same control/network/NAT/DERP. The new identity reports a
+	// structurally-identical NetInfo, which the buggy de-dup would have
+	// suppressed. (logout + up funnels through the same
+	// resetForProfileChangeLocked -> setControlClientLocked path as a
+	// localapi PUT /profiles/ switch.)
+	switchStep.Begin()
+	env.Relogin(n)
+	st2 := env.Status(n)
+	newKey := st2.Self.PublicKey
+	if newKey == oldKey {
+		switchStep.Fatalf("node key unchanged after relogin: %v", newKey.ShortString())
+	}
+	t.Logf("[node] after relogin: key=%s", newKey.ShortString())
+	switchStep.End(nil)
+
+	// Regression assertion: control must re-learn the same non-zero home DERP for
+	// the new identity. Times out at HomeDERP==0 without ResetNetInfoLast.
+	verifyStep.Begin()
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		cn := cs.Node(newKey)
+		if cn == nil {
+			return fmt.Errorf("control has no node for new key %v yet", newKey.ShortString())
+		}
+		if cn.HomeDERP == 0 {
+			return fmt.Errorf("home DERP not re-reported after profile switch (HomeDERP=0)")
+		}
+		if cn.HomeDERP != region {
+			return fmt.Errorf("home DERP region changed across switch: was %d, now %d", region, cn.HomeDERP)
+		}
+		return nil
+	}); err != nil {
+		env.DumpStatus(n)
+		verifyStep.Fatal(err)
+	}
+	t.Logf("[node] home DERP %d re-reported to control after profile switch", region)
+	verifyStep.End(nil)
 }
 
 // TestMullvadExitNode verifies that a Tailscale client whose netmap contains
@@ -897,12 +1035,10 @@ func TestMullvadExitNode(t *testing.T) {
 		body := env.HTTPGet(client, webURL)
 		t.Logf("[%s] response: %s", label, body)
 		if !strings.Contains(body, "Hello world I am webserver") {
-			step.End(fmt.Errorf("[%s] unexpected webserver response: %q", label, body))
-			t.Fatalf("[%s] unexpected webserver response: %q", label, body)
+			step.Fatalf("[%s] unexpected webserver response: %q", label, body)
 		}
 		if !strings.Contains(body, "from "+wantSrc) {
-			step.End(fmt.Errorf("[%s] expected source %q in response, got %q", label, wantSrc, body))
-			t.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
+			step.Fatalf("[%s] expected source %q in response, got %q", label, wantSrc, body)
 		}
 		step.End(nil)
 	}
@@ -965,8 +1101,7 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 
 	connectStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		connectStep.End(err)
-		t.Fatal(err)
+		connectStep.Fatal(err)
 	}
 	connectStep.End(nil)
 
@@ -988,12 +1123,10 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	for _, node := range []*vmtest.Node{a, b} {
 		nm, err := local.GetDebugResultJSON[netmap.NetworkMap](t.Context(), node.Agent().Client, "current-netmap")
 		if err != nil {
-			netmapCheckStep.End(fmt.Errorf("[%s] got err fetching netmap %q", node.Name(), err))
-			t.Fatalf("[%s] got err fetching netmap %q", node.Name(), err)
+			netmapCheckStep.Fatalf("[%s] got err fetching netmap %q", node.Name(), err)
 		}
 		if !nm.Cached {
-			netmapCheckStep.End(fmt.Errorf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached))
-			t.Fatalf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached)
+			netmapCheckStep.Fatalf("[%s] expected netmap.Cached = true, got: %t", node.Name(), nm.Cached)
 		}
 	}
 	netmapCheckStep.End(nil)
@@ -1010,8 +1143,7 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 	// because every timer fires multiple times under scheduling jitter.
 	pingStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 90*time.Second); err != nil {
-		pingStep.End(err)
-		t.Fatal(err)
+		pingStep.Fatal(err)
 	}
 	pingStep.End(nil)
 }
@@ -1021,7 +1153,111 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 // WireGuard tunnel after one is restarted while the control server is
 // unreachable. After restart the node must use only its on-disk cached
 // netmaps to re-connect and ping the other (still online) node.
+//
+// The test has two modes, pinging from the offline node to the online node,
+// and pinging from the online node to the offline node.
+//
+// TODO(cmol): The online -> offline test is skipped for now (as of 2026-06-12).
+// The TSMP disco key exchange currently relies on disco ping messages being
+// sent. These will however not be sent if there is not endpoints on the online
+// node which is possible in the event where a node has registered but not
+// finished STUN.
 func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
+	for _, testPingFrom := range []string{"offline", "online"} {
+		t.Run(fmt.Sprintf("ping_from_%s", testPingFrom), func(t *testing.T) {
+			if testPingFrom == "online" {
+				t.Skip("https://github.com/tailscale/tailscale/issues/19843")
+			}
+			env := vmtest.New(t)
+
+			aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
+			bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.EasyNAT)
+
+			// Node "a" is the offline peer, node "b" is the online peer.
+			a := env.AddNode("a", aNet,
+				vmtest.OS(vmtest.Gokrazy),
+				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+			b := env.AddNode("b", bNet,
+				vmtest.OS(vmtest.Gokrazy),
+				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+
+			pStr := "Ping a → b"
+			if testPingFrom == "online" {
+				pStr = "Ping b → a"
+			}
+			checkInitialMetrics := env.AddStep("Check initial client metrics")
+			cutControlStep := env.AddStep("Cut control server access from a")
+			restartStep := env.AddStep("Restart tailscaled on a")
+			tsmpPingStep := env.AddStep(fmt.Sprintf("%s TSMP (cached netmap, no control)", pStr))
+			discoPingStep := env.AddStep(fmt.Sprintf("%s Disco (want Direct)", pStr))
+			checkFinalMetrics := env.AddStep("Check final client metrics")
+
+			env.Start()
+
+			// Before: Verify that we have not recorded any cached contacts.
+			checkInitialMetrics.Begin()
+			checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+				"magicsock_cached_peer_contact_derp":   0,
+				"magicsock_cached_peer_contact_direct": 0,
+			})
+			checkInitialMetrics.End(nil)
+
+			cutControlStep.Begin()
+			a.DropControlTraffic()
+			env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
+				if env.ControlServer().Node(nk).Name == a.Name() {
+					panic(fmt.Sprintf("got connection from %v", a.Name()))
+				}
+			})
+			cutControlStep.End(nil)
+
+			restartStep.Begin()
+			env.RestartTailscaled(a)
+			restartStep.End(nil)
+
+			// Set the direction of the ping.
+			pFrom, pTo := a, b
+			if testPingFrom == "online" {
+				pFrom, pTo = b, a
+			}
+
+			tsmpPingStep.Begin()
+			if err := env.Ping(pFrom, pTo, tailcfg.PingTSMP, 30*time.Second); err != nil {
+				tsmpPingStep.Fatal(err)
+			}
+			tsmpPingStep.End(nil)
+
+			discoPingStep.Begin()
+			if err := env.PingExpect(pFrom, pTo, vmtest.PingRouteDirect, 90*time.Second); err != nil {
+				discoPingStep.Fatal(err)
+			}
+			// Ping back, mostly to give time for the metrics to be set.
+			if err := env.PingExpect(pTo, pFrom, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+				discoPingStep.Fatal(err)
+			}
+			discoPingStep.End(nil)
+
+			// After: Verify that we recorded a direct contact on the disconnected node.
+			checkFinalMetrics.Begin()
+			checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+				"magicsock_cached_peer_contact_direct": 1,
+			})
+			checkFinalMetrics.End(nil)
+		})
+	}
+}
+
+// TestDirectWithCachedNetmapOnTwoNodes verifies that two nodes with netmap
+// caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
+// WireGuard tunnel after both restarted while the control server is
+// unreachable. After restart one node must use only its on-disk cached
+// netmaps to re-connect and ping the other node.
+// TODO(cmol): The test is skipped for now (as of 2026-06-12). The TSMP disco
+// key exchange currently relies on disco ping messages being sent. These will
+// however not be sent if there is not endpoints on the online node which is
+// possible in the event where a node has registered but not finished STUN.
+func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
+	t.Skip("https://github.com/tailscale/tailscale/issues/19843")
 	env := vmtest.New(t)
 
 	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1053,28 +1289,29 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 
 	cutControlStep.Begin()
 	a.DropControlTraffic()
+	b.DropControlTraffic()
 	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
-		if env.ControlServer().Node(nk).Name == a.Name() {
-			panic(fmt.Sprintf("got connection from %v", a.Name()))
+		nodeName := env.ControlServer().Node(nk).Name
+		if nodeName == a.Name() || nodeName == b.Name() {
+			panic(fmt.Sprintf("got connection from %v", nodeName))
 		}
 	})
 	cutControlStep.End(nil)
 
 	restartStep.Begin()
 	env.RestartTailscaled(a)
+	env.RestartTailscaled(b)
 	restartStep.End(nil)
 
 	tsmpPingStep.Begin()
 	if err := env.Ping(a, b, tailcfg.PingTSMP, 30*time.Second); err != nil {
-		tsmpPingStep.End(err)
-		t.Fatal(err)
+		tsmpPingStep.Fatal(err)
 	}
 	tsmpPingStep.End(nil)
 
 	discoPingStep.Begin()
 	if err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
-		discoPingStep.End(err)
-		t.Fatal(err)
+		discoPingStep.Fatal(err)
 	}
 	discoPingStep.End(nil)
 
@@ -1084,4 +1321,128 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 		"magicsock_cached_peer_contact_direct": 1,
 	})
 	checkFinalMetrics.End(nil)
+}
+
+// TestPeerRelay verifies that two Tailscale nodes whose direct UDP path is
+// impossible at the network layer (both behind HardNAT, with no port-mapping
+// services on either of their networks) can still communicate via a third
+// Tailscale node configured as a peer-relay server.
+//
+// Topology:
+//
+//	a     (gokrazy, HardNAT)     — aNet      WAN 1.0.0.1
+//	b     (gokrazy, HardNAT)     — bNet      WAN 2.0.0.1
+//	relay (gokrazy, One2OneNAT)  — relayNet  WAN 3.0.0.1
+//
+// HardNAT in natlab is endpoint-dependent (each (src, dst) tuple gets a fresh
+// outbound port, and the inbound table keys on (wanPort, src)). Without
+// NAT-PMP/UPnP a→b and b→a direct UDP paths cannot be established. The relay
+// uses One2OneNAT so its STUN-discovered WAN endpoint is reachable from both
+// peers. The test then asserts that magicsock chose the peer-relay path
+// (not DERP) and that the relay reports the session.
+func TestPeerRelay(t *testing.T) {
+	env := vmtest.New(t, vmtest.PeerRelayGrants())
+
+	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.HardNAT)
+	bNet := env.AddNetwork("2.0.0.1", "192.168.2.1/24", vnet.HardNAT)
+	relayNet := env.AddNetwork("3.0.0.1", "192.168.3.1/24", vnet.One2OneNAT)
+
+	a := env.AddNode("a", aNet, vmtest.OS(vmtest.Gokrazy))
+	b := env.AddNode("b", bNet, vmtest.OS(vmtest.Gokrazy))
+	relay := env.AddNode("relay", relayNet, vmtest.OS(vmtest.Gokrazy))
+
+	enableRelayStep := env.AddStep("Enable peer-relay server on relay")
+	pingStep := env.AddStep("Disco ping a → b (want peer-relay path)")
+	sessionsStep := env.AddStep("Check DebugPeerRelaySessions on relay")
+
+	env.Start()
+
+	// Turn on the relay server. Port 0 picks an unused port.
+	enableRelayStep.Begin()
+	editCtx, editCancel := context.WithTimeout(t.Context(), 30*time.Second)
+	_, err := relay.Agent().EditPrefs(editCtx, &ipn.MaskedPrefs{
+		Prefs:              ipn.Prefs{RelayServerPort: new(uint16(0))},
+		RelayServerPortSet: true,
+	})
+	editCancel()
+	if err != nil {
+		enableRelayStep.Fatalf("EditPrefs(relay, RelayServerPort=0): %v", err)
+	}
+	enableRelayStep.End(nil)
+
+	// Wait for the relay to start, peers to learn about it via netmap,
+	// and the a→b disco ping to traverse it.
+	// PingResult.PeerRelay is set by magicsock to "ip:port:vni:N" when the
+	// disco probe rode a peer relay (vs Endpoint for direct UDP or
+	// DERPRegionID for DERP).
+	pingStep.Begin()
+	bIP := env.Status(b).Self.TailscaleIPs[0]
+	var lastDetail string
+	err = tstest.WaitFor(60*time.Second, func() error {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		pr, err := a.Agent().PingWithOpts(ctx, bIP, tailcfg.PingDisco, local.PingOpts{})
+		if err != nil {
+			return fmt.Errorf("ping: %w", err)
+		}
+		if pr.Err != "" {
+			return fmt.Errorf("ping err: %s", pr.Err)
+		}
+		if pr.PeerRelay == "" {
+			lastDetail = fmt.Sprintf("endpoint=%q derp=%d", pr.Endpoint, pr.DERPRegionID)
+			return fmt.Errorf("ping did not use a peer relay; %s", lastDetail)
+		}
+		t.Logf("a → b disco ping rode peer-relay %s", pr.PeerRelay)
+		return nil
+	})
+	if err != nil {
+		env.DumpStatus(a)
+		env.DumpStatus(b)
+		env.DumpStatus(relay)
+		pingStep.Fatalf("waiting for peer-relay path a → b: %v (last: %s)", err, lastDetail)
+	}
+	pingStep.End(nil)
+
+	// The relay's local debug-peer-relay-sessions LocalAPI should now
+	// report a single session for the a↔b disco probe. Cross-check the
+	// session's client disco keys against control's view of a and b, and
+	// confirm both sides recorded non-zero packet/byte counts (the disco
+	// ping + pong each take one underlay packet through the relay).
+	sessionsStep.Begin()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	srv, err := relay.Agent().DebugPeerRelaySessions(ctx)
+	if err != nil {
+		sessionsStep.Fatalf("DebugPeerRelaySessions: %v", err)
+	}
+	if srv.UDPPort == nil {
+		sessionsStep.Fatalf("relay UDPPort is nil; want set")
+	}
+	if got, want := len(srv.Sessions), 1; got != want {
+		sessionsStep.Fatalf("relay sessions = %d; want %d: %+v", got, want, srv.Sessions)
+	}
+	cs := env.ControlServer()
+	wantShorts := set.Of(
+		cs.Node(env.Status(a).Self.PublicKey).DiscoKey.ShortString(),
+		cs.Node(env.Status(b).Self.PublicKey).DiscoKey.ShortString(),
+	)
+	session := srv.Sessions[0]
+	gotShorts := set.Of(session.Client1.ShortDisco, session.Client2.ShortDisco)
+	if !gotShorts.Equal(wantShorts) {
+		sessionsStep.Fatalf("session disco shorts = %v; want %v", gotShorts, wantShorts)
+	}
+	for _, ci := range []status.ClientInfo{session.Client1, session.Client2} {
+		if !ci.Endpoint.IsValid() {
+			sessionsStep.Fatalf("session client %s: invalid Endpoint", ci.ShortDisco)
+		}
+		if ci.PacketsTx == 0 {
+			sessionsStep.Fatalf("session client %s: PacketsTx = 0; want >0", ci.ShortDisco)
+		}
+		if ci.BytesTx == 0 {
+			sessionsStep.Fatalf("session client %s: BytesTx = 0; want >0", ci.ShortDisco)
+		}
+	}
+	t.Logf("relay session VNI=%d %s <-> %s on UDP port %d",
+		session.VNI, session.Client1.ShortDisco, session.Client2.ShortDisco, *srv.UDPPort)
+	sessionsStep.End(nil)
 }

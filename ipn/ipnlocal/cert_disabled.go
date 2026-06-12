@@ -7,6 +7,7 @@ package ipnlocal
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net/http"
@@ -25,6 +26,18 @@ type TLSCertKeyPair struct {
 
 func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertKeyPair, error) {
 	return nil, errNoCerts
+}
+
+func serveTLSNextProtos() []string {
+	return []string{"h2", "http/1.1"}
+}
+
+func (b *LocalBackend) getACMETLSALPNCert(hi *tls.ClientHelloInfo) (*tls.Certificate, bool) {
+	return nil, false
+}
+
+func (b *LocalBackend) getACMETLSALPNProto(hi *tls.ClientHelloInfo) (string, bool) {
+	return "", false
 }
 
 var errCertExpired = errors.New("cert expired")

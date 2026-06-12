@@ -91,9 +91,10 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		lg.Debugf("No egress config found, likely because ProxyGroup has not been created")
 		return res, nil
 	}
+
 	cfg, ok := cfgs[tailnetSvc]
 	if !ok {
-		lg.Infof("[unexpected] configuration for tailnet service %s not found", tailnetSvc)
+		lg.Warnf("configuration for tailnet service %q not found", tailnetSvc)
 		return res, nil
 	}
 
@@ -130,11 +131,12 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// run a cleanup for deleted Pods etc.
 	eps.Endpoints = newEndpoints
 	if !reflect.DeepEqual(eps, oldEps) {
-		lg.Infof("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
-		if err := er.Update(ctx, eps); err != nil {
+		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
+		if err = er.Update(ctx, eps); err != nil {
 			return res, fmt.Errorf("error updating EndpointSlice: %w", err)
 		}
 	}
+
 	return res, nil
 }
 
@@ -156,59 +158,69 @@ func podIPv4(pod *corev1.Pod) (string, error) {
 // status written there to the desired service configuration.
 func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, lg *zap.SugaredLogger) (bool, error) {
 	lg = lg.With("proxy_pod", pod.Name)
-	lg.Debugf("checking whether proxy is ready to route to egress service")
+	lg.Debug("checking whether proxy is ready to route to egress service")
 	if !pod.DeletionTimestamp.IsZero() {
-		lg.Debugf("proxy Pod is being deleted, ignore")
+		lg.Debug("proxy Pod is being deleted, ignore")
 		return false, nil
 	}
+
 	podIP, err := podIPv4(&pod)
-	if err != nil {
+	switch {
+	case err != nil:
 		return false, fmt.Errorf("error determining Pod IP address: %v", err)
-	}
-	if podIP == "" {
-		lg.Infof("[unexpected] Pod does not have an IPv4 address, and IPv6 is not currently supported")
+	case podIP == "":
+		lg.Warn("Pod does not have an IPv4 address, and IPv6 is not currently supported")
 		return false, nil
 	}
+
 	stateS := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 		},
 	}
+
 	err = er.Get(ctx, client.ObjectKeyFromObject(stateS), stateS)
-	if apierrors.IsNotFound(err) {
-		lg.Debugf("proxy does not have a state Secret, waiting...")
+	switch {
+	case apierrors.IsNotFound(err):
+		lg.Debug("proxy does not yet have a state Secret, waiting...")
 		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("error retrieving state Secret: %w", err)
 	}
-	if err != nil {
-		return false, fmt.Errorf("error getting state Secret: %w", err)
-	}
+
 	svcStatusBS := stateS.Data[egressservices.KeyEgressServices]
 	if len(svcStatusBS) == 0 {
-		lg.Debugf("proxy's state Secret does not contain egress services status, waiting...")
+		lg.Debug("proxy's state Secret does not contain egress services status, waiting...")
 		return false, nil
 	}
+
 	svcStatus := &egressservices.Status{}
-	if err := json.Unmarshal(svcStatusBS, svcStatus); err != nil {
+	if err = json.Unmarshal(svcStatusBS, svcStatus); err != nil {
 		return false, fmt.Errorf("error unmarshalling egress service status: %w", err)
 	}
+
 	if !strings.EqualFold(podIP, svcStatus.PodIPv4) {
-		lg.Infof("proxy's egress service status is for Pod IP %s, current proxy's Pod IP %s, waiting for the proxy to reconfigure...", svcStatus.PodIPv4, podIP)
+		lg.Infof("proxy's egress service status is for Pod IP %q, current proxy's Pod IP %q, waiting for the proxy to reconfigure...", svcStatus.PodIPv4, podIP)
 		return false, nil
 	}
-	st, ok := (*svcStatus).Services[tailnetSvcName]
+
+	st, ok := svcStatus.Services[tailnetSvcName]
 	if !ok {
 		lg.Infof("proxy's state Secret does not have egress service status, waiting...")
 		return false, nil
 	}
+
 	if !reflect.DeepEqual(cfg.TailnetTarget, st.TailnetTarget) {
-		lg.Infof("proxy has configured egress service for tailnet target %v, current target is %v, waiting for proxy to reconfigure...", st.TailnetTarget, cfg.TailnetTarget)
+		lg.Infof("proxy has configured egress service for tailnet target %q, current target is %q, waiting for proxy to reconfigure...", st.TailnetTarget, cfg.TailnetTarget)
 		return false, nil
 	}
+
 	if !reflect.DeepEqual(cfg.Ports, st.Ports) {
 		lg.Debugf("proxy has configured egress service for ports %#+v, wants ports %#+v, waiting for proxy to reconfigure", st.Ports, cfg.Ports)
 		return false, nil
 	}
-	lg.Debugf("proxy is ready to route traffic to egress service")
+
+	lg.Debug("proxy is ready to route traffic to egress service")
 	return true, nil
 }

@@ -20,6 +20,7 @@ package tsd
 import (
 	"crypto/x509"
 	"fmt"
+	"net/http"
 	"reflect"
 
 	"tailscale.com/control/controlknobs"
@@ -63,6 +64,10 @@ type System struct {
 	DriveForRemote SubSystem[drive.FileSystemForRemote]
 	PolicyClient   SubSystem[policyclient.Client]
 	HealthTracker  SubSystem[*health.Tracker]
+
+	// NoiseRoundTripper, if set, provides an http.RoundTripper that
+	// sends requests over the control plane Noise connection.
+	NoiseRoundTripper SubSystem[http.RoundTripper]
 
 	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs
 	// beyond the system roots. On Android, this includes user-installed

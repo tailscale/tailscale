@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/ace"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
@@ -268,8 +269,7 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Subscribe to IPN message bus",
 				FlagSet: (func() *flag.FlagSet {
 					fs := newFlagSet("watch-ipn")
-					fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
-					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include the initial backend State and Prefs in the first message")
 					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messages")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
 					return fs
@@ -632,16 +632,15 @@ func runPrefs(ctx context.Context, args []string) error {
 }
 
 var watchIPNArgs struct {
-	netmap    bool
 	initial   bool
 	rateLimit bool
 	count     int
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
-	var mask ipn.NotifyWatchOpt
+	mask := ipn.NotifyPeerChanges | ipn.NotifyPeerPatches
 	if watchIPNArgs.initial {
-		mask = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+		mask |= ipn.NotifyInitialState | ipn.NotifyInitialPrefs
 	}
 	if watchIPNArgs.rateLimit {
 		mask |= ipn.NotifyRateLimit
@@ -656,9 +655,6 @@ func runWatchIPN(ctx context.Context, args []string) error {
 		n, err := watcher.Next()
 		if err != nil {
 			return err
-		}
-		if !watchIPNArgs.netmap {
-			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
 		fmt.Printf("%s\n", j)
@@ -791,10 +787,13 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 	}
 	d := json.NewDecoder(logs)
 	for {
+		type logtail struct {
+			Time string `json:"client_time"`
+		}
 		var line struct {
-			Text    string `json:"text"`
-			Verbose int    `json:"v"`
-			Time    string `json:"client_time"`
+			Text    string  `json:"text"`
+			Verbose int     `json:"v"`
+			Logtail logtail `json:"logtail"`
 		}
 		err := d.Decode(&line)
 		if err != nil {
@@ -804,8 +803,8 @@ func runDaemonLogs(ctx context.Context, args []string) error {
 		if line.Text == "" || line.Verbose > daemonLogsArgs.verbose {
 			continue
 		}
-		if daemonLogsArgs.time {
-			fmt.Printf("%s %s\n", line.Time, line.Text)
+		if daemonLogsArgs.time && line.Logtail.Time != "" {
+			fmt.Printf("%s %s\n", line.Logtail.Time, line.Text)
 		} else {
 			fmt.Println(line.Text)
 		}
@@ -991,7 +990,7 @@ func runTS2021(ctx context.Context, args []string) error {
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
 
-	keyTransport := http.DefaultTransport.(*http.Transport).Clone()
+	keyTransport := netutil.NewDefaultTransport()
 	if ts2021Args.aceHost != "" {
 		log.Printf("using ACE server %q", ts2021Args.aceHost)
 		keyTransport.Proxy = nil

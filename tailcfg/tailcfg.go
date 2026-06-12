@@ -185,7 +185,10 @@ type CapabilityVersion int
 //   - 136: 2026-04-09: Client understands [NodeAttrDisableLinuxCGNATDropRule]
 //   - 137: 2026-04-15: Client handles 429 responses to /machine/register.
 //   - 138: 2026-03-31: can handle C2N /debug/tka.
-const CurrentCapabilityVersion CapabilityVersion = 138
+//   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
+//   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
+//   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
+const CurrentCapabilityVersion CapabilityVersion = 141
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -1283,7 +1286,7 @@ type RegisterRequest struct {
 	Ephemeral bool `json:",omitempty"`
 
 	// NodeKeySignature is the node's own node-key signature, re-signed
-	// for its new node key using its network-lock key.
+	// for its new node key using its tailnet-lock key.
 	//
 	// This field is set when the client retries registration after learning
 	// its NodeKeySignature (which is in need of rotation).
@@ -2783,11 +2786,66 @@ const (
 	// discard existing cached maps, and will not store any.
 	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
 
+	// NodeAttrDisableCacheNetworkMaps indicates that the node should not cache
+	// network maps (as per [NodeAttrCacheNetworkMaps]) when it normally would.
+	// This attribute exists to allow the policy document to override the default.
+	// When set, it takes precedence over [NodeAttrCacheNetworkMaps].
+	NodeAttrDisableCacheNetworkMaps NodeCapability = "disable-cache-network-maps"
+
 	// NodeAttrDisableLinuxCGNATDropRule tells Linux clients to not insert a
 	// blanket firewall DROP rule for inbound traffic from the CGNAT IP range
 	// that does not originate from the Tailscale network interface.
 	// This enables access to off-tailnet endpoints within that IP range.
 	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
+
+	// NodeAttrEmitRuntimeMetrics enables emission of [runtime/metrics] as
+	// [tailscale.com/util/clientmetric]'s.
+	NodeAttrEmitRuntimeMetrics NodeCapability = "emit-runtime-metrics"
+
+	// NodeAttrDisableUDPGRO disables UDP GRO (UDP_GRO socket option on Linux)
+	// on the magicsock UDP socket. It exists so control can mitigate kernel
+	// regressions that cause throughput or correctness issues with UDP GRO on
+	// specific OS/kernel versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/19777 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain UDP GRO support.
+	NodeAttrDisableUDPGRO NodeCapability = "disable-udp-gro"
+
+	// NodeAttrDisableUDPGSO disables UDP GSO (UDP_SEGMENT socket option on
+	// Linux) on the magicsock UDP socket. It exists so control can mitigate
+	// kernel regressions that cause throughput or correctness issues with UDP
+	// GSO on specific OS/kernel versions, without requiring a client release.
+	// See https://github.com/tailscale/tailscale/issues/19777 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain UDP GSO support.
+	NodeAttrDisableUDPGSO NodeCapability = "disable-udp-gso"
+
+	// NodeAttrDisableTUNUDPGRO disables UDP GRO on the Tailscale TUN device.
+	// It exists so control can mitigate kernel regressions that cause
+	// throughput or correctness issues with TUN UDP GRO on specific OS/kernel
+	// versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/13041 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain TUN UDP GRO support.
+	NodeAttrDisableTUNUDPGRO NodeCapability = "disable-tun-udp-gro"
+
+	// NodeAttrDisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device.
+	// It exists so control can mitigate kernel regressions that cause
+	// throughput or correctness issues with TUN TCP GRO on specific OS/kernel
+	// versions, without requiring a client release. See
+	// https://github.com/tailscale/tailscale/issues/13041 for example.
+	// Currently only consulted on Linux; may apply to other platforms as they
+	// gain TUN TCP GRO support.
+	NodeAttrDisableTUNTCPGRO NodeCapability = "disable-tun-tcp-gro"
+
+	// NodeAttrNeverGSOEqualTail enables a sentinel-tail workaround in the
+	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
+	// UDP sockets. The workaround avoids emitting UDP GSO batches whose
+	// fragments are all equal in length, at a small payload and packet overhead
+	// cost. It exists so control can mitigate kernel regressions that mangle
+	// UDP headers or checksums for equal-length GSO batches, without requiring
+	// a client release. See https://github.com/tailscale/tailscale/issues/19777.
+	NodeAttrNeverGSOEqualTail NodeCapability = "never-gso-equal-tail"
 )
 
 const (
@@ -3338,12 +3396,157 @@ const LBHeader = "Ts-Lb"
 // this client is hosting can be ignored.
 type ServiceIPMappings map[ServiceName][]netip.Addr
 
+// ServiceActionType represents the type of a [ServiceAction]. Clients use
+// this value to determine which protocol or application to use when
+// handling the action.
+//
+// Well-known Tailscale types are defined as constants in this package.
+// They are plain slugs (e.g. "ssh", "http") with no URL prefix.
+//
+// When a type corresponds to an application layer protocol with a
+// well-known port, the slug generally follows the IANA Service Name and
+// Transport Protocol Port Number Registry:
+// https://www.iana.org/assignments/service-names-port-numbers.
+//
+// In cases where the IANA service name differs from the commonly used
+// protocol name, the protocol name is preferred for readability and
+// interoperability (e.g. RDP is registered as "ms-wbt-server").
+//
+// If third-party types are introduced in the future, they must use URL
+// form (e.g. "example.com/my-custom-type") to avoid collisions with
+// first-party types.
+type ServiceActionType string
+
+const (
+	// ServiceActionTypeAWSS3 indicates that a port corresponds to an
+	// AWS S3 compatible endpoint and the AWS configuration may be modified
+	// to point to this endpoint and S3 clients may be used.
+	ServiceActionTypeAWSS3 ServiceActionType = "aws-s3"
+
+	// ServiceActionTypeCockroachDB indicates that a port corresponds to a
+	// CockroachDB server and CockroachDB clients may be used.
+	ServiceActionTypeCockroachDB ServiceActionType = "cockroach"
+
+	// ServiceActionTypeElasticSearch indicates that a port corresponds to
+	// an Elasticsearch server and Elasticsearch clients may be used.
+	ServiceActionTypeElasticSearch ServiceActionType = "elasticsearch"
+
+	// ServiceActionTypeHTTP indicates that a port corresponds to an HTTP
+	// server and HTTP clients may be used.
+	ServiceActionTypeHTTP ServiceActionType = "http"
+
+	// ServiceActionTypeKubernetes indicates that a port corresponds to a
+	// Kubernetes API server and the Kubernetes context may be configured to
+	// point to the service and Kubernetes clients may be used.
+	ServiceActionTypeKubernetes ServiceActionType = "kubernetes"
+
+	// ServiceActionTypeMongoDB indicates that a port corresponds to a MongoDB
+	// server and MongoDB clients may be used.
+	ServiceActionTypeMongoDB ServiceActionType = "mongodb"
+
+	// ServiceActionTypeMSSQL indicates that a port corresponds to a Microsoft
+	// SQL Server and MSSQL clients may be used. The IANA registry uses
+	// "ms-sql-s" but "mssql" is the widely recognized name.
+	ServiceActionTypeMSSQL ServiceActionType = "mssql"
+
+	// ServiceActionTypeMySQL indicates that a port corresponds to a MySQL
+	// server and MySQL clients may be used.
+	ServiceActionTypeMySQL ServiceActionType = "mysql"
+
+	// ServiceActionTypePostgreSQL indicates that a port corresponds to a
+	// PostgreSQL server and PostgreSQL clients may be used.
+	ServiceActionTypePostgreSQL ServiceActionType = "postgresql"
+
+	// ServiceActionTypeRDP indicates that a port corresponds to an RDP
+	// server and RDP clients may be used. The IANA registry uses
+	// "ms-wbt-server" but "rdp" is the widely recognized name.
+	ServiceActionTypeRDP ServiceActionType = "rdp"
+
+	// ServiceActionTypeVNC indicates that a port corresponds to a VNC
+	// server and VNC clients may be used. The IANA registry uses "rfb"
+	// (Remote Framebuffer) but "vnc" is the widely recognized name.
+	ServiceActionTypeVNC ServiceActionType = "vnc"
+
+	// ServiceActionTypeSSH indicates that a port corresponds to an SSH
+	// server and SSH clients may be used.
+	ServiceActionTypeSSH ServiceActionType = "ssh"
+
+	// ServiceActionTypeTCP indicates that a port corresponds to a generic
+	// TCP server and TCP clients may be used.
+	ServiceActionTypeTCP ServiceActionType = "tcp"
+)
+
+// Valid reports whether t is a recognized ServiceActionType.
+func (t ServiceActionType) Valid() bool {
+	switch t {
+	case ServiceActionTypeAWSS3,
+		ServiceActionTypeCockroachDB,
+		ServiceActionTypeElasticSearch,
+		ServiceActionTypeHTTP,
+		ServiceActionTypeKubernetes,
+		ServiceActionTypeMongoDB,
+		ServiceActionTypeMSSQL,
+		ServiceActionTypeMySQL,
+		ServiceActionTypePostgreSQL,
+		ServiceActionTypeRDP,
+		ServiceActionTypeVNC,
+		ServiceActionTypeSSH,
+		ServiceActionTypeTCP:
+		return true
+	}
+	return false
+}
+
+// ServiceActionAttribute represents an attribute key for a [ServiceAction].
+// A given attribute's applicability depends on the [ServiceAction.Type].
+//
+// Well-known Tailscale attributes are defined as constants in this package.
+// Values are [RawMessage] (raw JSON) whose schema depends on the attribute.
+//
+// Clients should ignore attributes they do not recognize.
+type ServiceActionAttribute string
+
+const (
+	// ServiceActionAttributeWebClientURL is a [ServiceActionAttribute]
+	// that indicates to clients that a browser based client for the
+	// action is available at the URL in the value.
+	//
+	// The value is a JSON string containing a URL with an http(s) scheme.
+	ServiceActionAttributeWebClientURL ServiceActionAttribute = "tailscale.com/cap/web-client-url"
+
+	// ServiceActionAttributeResourceName is a [ServiceActionAttribute]
+	// that indicates to clients that the resource specified by the value
+	// should be selected when opening the application corresponding to
+	// the [ServiceAction.Type].
+	//
+	// This is particularly relevant for PostgreSQL services, where a
+	// database must be specified while opening a connection.
+	//
+	// The value is a JSON string containing the resource name
+	// (e.g. a database name).
+	ServiceActionAttributeResourceName ServiceActionAttribute = "tailscale.com/cap/resource-name"
+
+	// ServiceActionAttributeSkipUsername is a [ServiceActionAttribute]
+	// that indicates to clients that a username is not required.
+	//
+	// This attribute is typically used for services that are backed by
+	// an application-layer proxy. The proxy injects the appropriate
+	// credentials on behalf of the user, and any username provided by
+	// the user is ignored. This attribute informs clients that the
+	// username is irrelevant, and any username prompt should be skipped.
+	//
+	// The value is a JSON boolean.
+	ServiceActionAttributeSkipUsername ServiceActionAttribute = "tailscale.com/cap/skip-username"
+)
+
 // ServiceAction describes an action that a Tailscale
 // client can invoke for a [ServiceDetails].
+//
+// Clients should ignore actions with types they do not recognize.
 type ServiceAction struct {
 	// Type is the action's identifier i.e. a unique slug corresponding to a well
 	// known action. It drives icon selection and client application matching.
-	Type string
+	Type ServiceActionType
 
 	// Port is the target TCP port for this action. It must match one of
 	// the specific (non-range) TCP ports listed in the enclosing
@@ -3354,6 +3557,10 @@ type ServiceAction struct {
 	// in client menus when there are multiple actions to select from.
 	// If empty, a display name may be inferred from the Type field.
 	DisplayName string `json:",omitzero"`
+
+	// Attributes is an optional key-value map carrying additional metadata
+	// to help clients drive UI or behavior related to this action.
+	Attributes map[ServiceActionAttribute]RawMessage `json:",omitzero"`
 }
 
 // ServiceDetails describes a Service visible to this node.

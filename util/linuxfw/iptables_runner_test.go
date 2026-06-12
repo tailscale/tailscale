@@ -367,6 +367,8 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 	preroutingArgs := []string{
 		"-m", "conntrack",
 		"--ctstate", "ESTABLISHED,RELATED",
+		"-m", "connmark",
+		"!", "--mark", "0x0/0xff0000",
 		"-j", "CONNMARK",
 		"--restore-mark",
 		"--nfmask", "0xff0000",

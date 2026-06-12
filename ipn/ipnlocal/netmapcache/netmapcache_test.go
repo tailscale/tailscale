@@ -258,6 +258,104 @@ func TestInvalidCache(t *testing.T) {
 	})
 }
 
+func TestUpdateSelfOnly(t *testing.T) {
+	s := make(testStore)
+	c := netmapcache.NewCache(s)
+
+	// Initialize the cache with the test map so we get a baseline.
+	if err := c.Store(t.Context(), testMap); err != nil {
+		t.Fatalf("Store initial netmap: %v", err)
+	}
+
+	// Modify a shallow copy of the map so we can perform an update and verify
+	// that it round-trips through a Load after calling UpdateSelfOnly.
+	newSelf := &tailcfg.Node{
+		ID:           23456,
+		StableID:     "n23456FAKE",
+		User:         8675309,
+		Name:         "alt.example.com.",
+		Key:          testNodeKey,
+		HomeDERP:     6174,
+		Capabilities: []tailcfg.NodeCapability{"cap1", "cap3"},
+	}
+	updated := *testMap // shallow copy
+	updated.SelfNode = newSelf.View()
+	updated.AllCaps = set.Of[tailcfg.NodeCapability]("cap1", "cap3")
+	updated.DNS = tailcfg.DNSConfig{Domains: []string{"example3.org", "example4.horse"}}
+
+	// Empty the peers and profiles so that we can verify the update does not
+	// attempt to use them or GC based on their absence.
+	updated.Peers = nil
+	updated.UserProfiles = nil
+
+	if err := c.UpdateSelfOnly(t.Context(), &updated); err != nil {
+		t.Fatalf("UpdateSelfOnly failed: %v", err)
+	}
+
+	// Verify we got the same results back. Importantly, we expect the same
+	// peers and profiles as before, to enforce that the self-only update did
+	// not prune
+	updated.Peers = testMap.Peers
+	updated.UserProfiles = testMap.UserProfiles
+
+	got, err := c.Load(t.Context())
+	if err != nil {
+		t.Fatalf("Load netmap failed: %v", err)
+	}
+	if diff := diffNetMaps(got, &updated); diff != "" {
+		t.Fatalf("Updated map differs (-got, +want):\n%s", diff)
+	}
+}
+
+func TestUpdatePeers(t *testing.T) {
+	modNode1 := (&tailcfg.Node{
+		ID:       99001,
+		StableID: "n99001FAKE",
+		Name:     "test1altered.example.com.",
+	}).View() // a modified version of testNode1
+	newNode3 := (&tailcfg.Node{
+		ID:       99003,
+		StableID: "n99003FAKE",
+		Name:     "test3.example.com.",
+	}).View() // a new node hitherto unseen
+
+	update := []tailcfg.NodeView{newNode3, modNode1}
+	remove := []tailcfg.StableNodeID{testNode2.StableID()}
+
+	// Modify a shallow copy of the map so we can perform an update and verify
+	// that it round-trips through a Load after calling UpdatePeers.
+	updated := *testMap
+	updated.Peers = []tailcfg.NodeView{modNode1, newNode3} // N.B. sorted
+
+	s := make(testStore)
+	c := netmapcache.NewCache(s)
+
+	// Prior to storing anything, the cache should reject an update because it
+	// has no base netmap to apply changes to.
+	if err := c.UpdatePeers(t.Context(), update, remove); err == nil {
+		t.Error("UpdatePeers on empty cache unexpectedly succeeded")
+	} else {
+		t.Logf("UpdatePeers on empty cache: %v (OK)", err)
+	}
+
+	// Initialize the cache with the test map so we get a baseline.
+	if err := c.Store(t.Context(), testMap); err != nil {
+		t.Fatalf("Store initial netmap: %v", err)
+	}
+
+	if err := c.UpdatePeers(t.Context(), update, remove); err != nil {
+		t.Fatalf("UpdatePeers failed; %v", err)
+	}
+
+	got, err := c.Load(t.Context())
+	if err != nil {
+		t.Fatalf("Load netmap failed: %v", err)
+	}
+	if diff := diffNetMaps(got, &updated); diff != "" {
+		t.Fatalf("Updated map differs (-got, +want):\n%s", diff)
+	}
+}
+
 // skippedMapFields are the names of fields that should not be considered by
 // network map caching, and thus skipped when comparing test results.
 var skippedMapFields = []string{

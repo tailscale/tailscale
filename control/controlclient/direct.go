@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
@@ -56,6 +57,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/singleflight"
@@ -64,6 +66,7 @@ import (
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/vizerror"
 	"tailscale.com/util/zstdframe"
+	"tailscale.com/wgengine/filter"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
@@ -226,12 +229,61 @@ type NetmapUpdater interface {
 // rather than just full updates.
 type NetmapDeltaUpdater interface {
 	// UpdateNetmapDelta is called with discrete changes to the network map.
+	// The mutation slice may contain [netmap.NodeMutationUpsert] entries when
+	// peers are inserted or replaced, and [netmap.NodeMutationRemove] entries
+	// when peers are removed, alongside per-field patches.
 	//
 	// The ok result is whether the implementation was able to apply the
 	// mutations. It might return false if its internal state doesn't
 	// support applying them or a NetmapUpdater it's wrapping doesn't
 	// implement the NetmapDeltaUpdater optional method.
 	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
+}
+
+// PacketFilterUpdater is an optional interface that can be implemented by
+// NetmapUpdater implementations to receive incremental packet-filter updates
+// without a full netmap rebuild.
+//
+// It exists because the packet filter currently changes on every peer
+// addition, so a MapResponse carrying PeersChanged almost always also carries
+// PacketFilter (or PacketFilters). Handling the filter narrowly keeps peer
+// churn O(1) on the controlclient side.
+type PacketFilterUpdater interface {
+	// UpdatePacketFilter is called when a MapResponse's PacketFilter (or
+	// PacketFilters) changed. rules is the already-merged concatenation of
+	// the session's named packet filter chunks; parsed is the parsed form.
+	//
+	// It returns false to signal the caller to fall back to a full
+	// netmap rebuild. Proxy/forwarder implementations return false when
+	// their downstream destination doesn't implement
+	// [PacketFilterUpdater]; concrete implementations return true on
+	// successful apply.
+	UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool
+}
+
+// UserProfileUpdater is an optional interface that can be implemented by
+// NetmapUpdater implementations to receive incremental UserProfile updates
+// without a full netmap rebuild.
+//
+// It exists so consumers of [ipn.Notify.UserProfiles] can be told about
+// new or updated UserProfiles before (or with) the [ipn.Notify.PeersChanged]
+// or [ipn.Notify.PeerChangedPatch] entry that references the corresponding
+// UserID.
+type UserProfileUpdater interface {
+	// UpdateUserProfiles is called when a MapResponse carries UserProfiles
+	// entries. profiles is the new/updated subset (NOT the full map);
+	// implementations should merge with whatever they already know.
+	//
+	// The values are [tailcfg.UserProfileView]s sharing backing memory
+	// with the caller's tracking map; implementations may store them
+	// directly without copying.
+	//
+	// It returns false to signal the caller to fall back to a full
+	// netmap rebuild. Proxy/forwarder implementations return false when
+	// their downstream destination doesn't implement
+	// [UserProfileUpdater]; concrete implementations return true on
+	// successful apply.
+	UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool
 }
 
 // patchDiscoKeyer is an optional interface that can be implemented by an [Observer] to be
@@ -296,7 +348,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 	var interceptedDial *atomic.Bool
 	if httpc == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr := netutil.NewDefaultTransport()
 		if buildfeatures.HasUseProxy {
 			tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
 			if f, ok := feature.HookProxySetTransportGetProxyConnectHeader.GetOk(); ok {

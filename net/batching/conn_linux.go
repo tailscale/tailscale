@@ -20,6 +20,8 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
+	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/packet"
@@ -58,6 +60,12 @@ type linuxBatchingConn struct {
 	txOffload          atomic.Bool // supports UDP GSO or similar
 	sendBatchPool      sync.Pool
 	rxqOverflowsMetric *clientmetric.Metric
+	// neverGSOEqualTail, when non-nil and true, enables a sentinel-tail
+	// workaround in the UDP GSO TX path. It points at a
+	// [controlknobs.Knobs.NeverGSOEqualTail] field so the value can be
+	// toggled live via the control plane without requiring a socket rebind.
+	// It is read once per write at the top of [linuxBatchingConn.WriteBatchTo].
+	neverGSOEqualTail *atomic.Bool
 
 	// readOpMu guards read operations that must perform accounting against
 	// rxqOverflows in single-threaded fashion. There are no concurrent usages
@@ -105,6 +113,12 @@ const (
 	maxIPv6PayloadLen = 1<<16 - 1 - 8
 )
 
+// neverGSOEqualTailSentinelPayload is appended to UDP GSO packet batches under
+// certain conditions in order to workaround Linux kernel UDP GSO bugs. In the
+// case of magicsock, 0x07 is handled as WireGuard, and wireguard-go silently
+// drops the packet as it's less than [device.MinMessageSize].
+var neverGSOEqualTailSentinelPayload = []byte{0x07}
+
 // coalesceMessages iterates 'buffs', setting and coalescing them in 'msgs'
 // where possible while maintaining datagram order.
 //
@@ -118,20 +132,44 @@ const (
 //
 // All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
 //
+// neverGSOEqualTail, when true, enables the sentinel-tail workaround. It is
+// loaded by the caller and passed in so a single coalesceMessages call sees a
+// consistent value even if the underlying control knob flips concurrently.
+//
 // TODO(illotum) explore MSG_ZEROCOPY for large writes (>10KB).
-func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
+func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int, neverGSOEqualTail bool) int {
 	var (
-		base         = -1 // index of msg we are currently coalescing into
-		gsoSize      int  // segmentation size of msgs[base]
-		dgramCnt     int  // number of dgrams coalesced into msgs[base]
-		endBatch     bool // tracking flag to start a new batch on next iteration of buffs
-		coalescedLen int  // bytes coalesced into msgs[base]
+		base                     = -1 // index of msg we are currently coalescing into
+		gsoSize                  int  // segmentation size of msgs[base]
+		dgramCnt                 int  // number of dgrams coalesced into msgs[base]
+		endBatchDueToSmallerTail bool // tracking flag to start a new batch on next iteration of buffs
+		coalescedLen             int  // bytes coalesced into msgs[base]
 	)
 	maxPayloadLen := maxIPv4PayloadLen
 	if addr.IP.To4() == nil {
 		maxPayloadLen = maxIPv6PayloadLen
 	}
+	maxDatagramsPerGSOBatch := udpSegmentMaxDatagrams
+	if neverGSOEqualTail {
+		// If neverGSOEqualTail is set we might end up appending a sentinel 1-byte
+		// payload, so we must leave space in our accounting.
+		maxDatagramsPerGSOBatch -= 1
+		maxPayloadLen -= len(neverGSOEqualTailSentinelPayload)
+	}
 	vniIsSet := geneve.VNI.IsSet()
+
+	maybeAppendSentinelTail := func() {
+		if !neverGSOEqualTail || endBatchDueToSmallerTail {
+			// If neverGSOEqualTail is unset we should never append a sentinel
+			// payload as we are running on an unaffected kernel. Or, if we
+			// already have a smaller-than-GSO sized tail, there is no need, since
+			// the kernel bug we are avoiding only triggers when all fragments
+			// are equal in length.
+			return
+		}
+		msgs[base].Buffers = append(msgs[base].Buffers, neverGSOEqualTailSentinelPayload)
+	}
+
 	for i, buff := range buffs {
 		if vniIsSet {
 			geneve.Encode(buff)
@@ -140,32 +178,48 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		}
 		if i > 0 {
 			msgLen := len(buff)
+			// okToCoalesceWithSentinel ensures we never coalesce if a sentinel
+			// 1-byte payload might be required, but gsoSize (or more specifically
+			// UDP payload length) is also 1. The whole point of appending a sentinel
+			// 1-byte payload is to append a smaller-than-GSO tail.
+			//
+			// This is defensive as a 1-byte payload, at the time of writing
+			// (2026-05-28), is unlikely to occur. The smallest WireGuard
+			// message size is 32 bytes ([device.MinMessageSize]), and the
+			// [disco.Message] header is 62 bytes.
+			//
+			// It's also overly conservative as it checks for msgLen == 1, but a
+			// msgLen of 1 on the tail where gsoSize is greater would also be fine.
+			okToCoalesceWithSentinel := !neverGSOEqualTail || msgLen > len(neverGSOEqualTailSentinelPayload)
 			if msgLen+coalescedLen <= maxPayloadLen &&
 				msgLen <= gsoSize &&
-				dgramCnt < udpSegmentMaxDatagrams &&
-				!endBatch {
+				dgramCnt < maxDatagramsPerGSOBatch &&
+				!endBatchDueToSmallerTail &&
+				okToCoalesceWithSentinel {
 				// msgs[base].Buffers[0] is set to buff[i] when a new base is set.
 				// This appends a struct iovec element in the underlying struct msghdr (scatter-gather).
 				msgs[base].Buffers = append(msgs[base].Buffers, buff)
-				if i == len(buffs)-1 {
-					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
-				}
 				dgramCnt++
 				coalescedLen += msgLen
 				if msgLen < gsoSize {
 					// A smaller than gsoSize packet on the tail is legal, but
 					// it must end the batch.
-					endBatch = true
+					endBatchDueToSmallerTail = true
+				}
+				if i == len(buffs)-1 {
+					maybeAppendSentinelTail()
+					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 				}
 				continue
 			}
 		}
 		if dgramCnt > 1 {
+			maybeAppendSentinelTail()
 			setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 		}
 		// Reset prior to incrementing base since we are preparing to start a
 		// new potential batch.
-		endBatch = false
+		endBatchDueToSmallerTail = false
 		base++
 		gsoSize = len(buff)
 		msgs[base].OOB = msgs[base].OOB[:0]
@@ -197,6 +251,27 @@ func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	c.sendBatchPool.Put(batch)
 }
 
+// appendSentinelTailBatchSizeThreshold represents the minimum batch size
+// required to enter [linuxBatchingConn.coalesceMessages] when
+// [linuxBatchingConn.neverGSOEqualTail] is set. If the batch of packets is less
+// than this value, and neverGSOEqualTail is set, we avoid UDP GSO altogether.
+// Appending a sentinel packet, regardless of size, is still overhead on sender,
+// middle network, and receiver.
+//
+// Coalescing (UDP GSO) greatly improves performance for sender (and receiver if
+// they support UDP GRO), but there are diminishing returns if batches are small.
+// We attempt to balance these diminishing returns against the introduction of
+// dead-weight sentinel packets.
+//
+// The initial value of 8 is a power of 2, and in the worst case leads to 6%
+// payload overhead if the batch is made up of minimum-sized WireGuard transport
+// messages (empty payload keepalives). Worst case is unlikely.
+//
+// 8 * (20 bytes IPv4 header + 8 byte UDP header + 32 byte WG message) = 480 bytes
+// sentinel tail is 20 byte IPv4 header + 8 byte UDP header + 1 byte payload = 29 bytes
+// 29/480 = 0.060...
+const appendSentinelTailBatchSizeThreshold = 8
+
 func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, geneve packet.GeneveHeader, offset int) error {
 	batch := c.getSendBatch()
 	defer c.putSendBatch(batch)
@@ -210,23 +285,31 @@ func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, ge
 		batch.ua.IP = batch.ua.IP[:4]
 	}
 	batch.ua.Port = int(addr.Port())
+	// Load the control knob once per write so a single call sees a consistent
+	// value even if the knob flips concurrently.
+	neverGSOEqualTail := c.neverGSOEqualTail != nil && c.neverGSOEqualTail.Load()
 	var (
 		n       int
 		retried bool
 	)
 retry:
-	if c.txOffload.Load() {
-		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset)
+	if c.txOffload.Load() && (!neverGSOEqualTail || len(buffs) >= appendSentinelTailBatchSizeThreshold) {
+		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset, neverGSOEqualTail)
 	} else {
+		mutableOffset := offset // don't mutate offset across retries
 		vniIsSet := geneve.VNI.IsSet()
 		if vniIsSet {
-			offset -= packet.GeneveFixedHeaderLength
+			mutableOffset -= packet.GeneveFixedHeaderLength
 		}
 		for i := range buffs {
 			if vniIsSet {
 				geneve.Encode(buffs[i])
 			}
-			batch.msgs[i].Buffers[0] = buffs[i][offset:]
+			batch.msgs[i].Buffers[0] = buffs[i][mutableOffset:]
+			// Buffers length may be > 1 (scatter-gather) if we passed through
+			// coalesceMessages during a first pass, and landed here as part of
+			// goto retry.
+			batch.msgs[i].Buffers = batch.msgs[i].Buffers[:1]
 			batch.msgs[i].Addr = batch.ua
 			batch.msgs[i].OOB = batch.msgs[i].OOB[:0]
 		}
@@ -425,18 +508,29 @@ func tryEnableRXQOverflowsCounter(pconn nettype.PacketConn) (enabled bool) {
 }
 
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
-// and returns two booleans indicating TX and RX UDP offload support.
-func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
+// and returns two booleans indicating TX and RX UDP offload support. If knobs
+// is non-nil, UDP GSO and/or UDP GRO may be disabled via control-plane node
+// attributes.
+func tryEnableUDPOffload(pconn nettype.PacketConn, knobs *controlknobs.Knobs) (hasTX bool, hasRX bool) {
+	disableGSO := envknob.Bool("TS_DEBUG_DISABLE_UDP_GSO") ||
+		(knobs != nil && knobs.DisableUDPGSO.Load())
+	disableGRO := envknob.Bool("TS_DEBUG_DISABLE_UDP_GRO") ||
+		(knobs != nil && knobs.DisableUDPGRO.Load())
 	if c, ok := pconn.(*net.UDPConn); ok {
 		rc, err := c.SyscallConn()
 		if err != nil {
 			return
 		}
 		err = rc.Control(func(fd uintptr) {
-			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
-			hasTX = errSyscall == nil
-			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
-			hasRX = errSyscall == nil
+			var errSyscall error
+			if !disableGSO {
+				_, errSyscall = syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
+				hasTX = errSyscall == nil
+			}
+			if !disableGRO {
+				errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+				hasRX = errSyscall == nil
+			}
 		})
 		if err != nil {
 			return false, false
@@ -512,8 +606,9 @@ func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 // pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
 // suggested for the best performance. If len(rxqOverflowsMetricName) is
 // nonzero, then read ops will propagate the SO_RXQ_OVFL control message counter
-// to a clientmetric with the supplied name.
-func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string) nettype.PacketConn {
+// to a clientmetric with the supplied name. If knobs is non-nil, UDP GSO
+// and/or UDP GRO may be disabled via control-plane node attributes.
+func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -521,7 +616,8 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 	if network != "udp4" && network != "udp6" {
 		return pconn
 	}
-	if strings.HasPrefix(hostinfo.GetOSVersion(), "2.") {
+	osVer := hostinfo.GetOSVersion()
+	if strings.HasPrefix(osVer, "2.") {
 		// recvmmsg/sendmmsg were added in 2.6.33, but we support down to
 		// 2.6.32 for old NAS devices. See https://github.com/tailscale/tailscale/issues/6807.
 		// As a cheap heuristic: if the Linux kernel starts with "2", just
@@ -563,8 +659,11 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 		panic("bogus network")
 	}
 	var txOffload bool
-	txOffload, b.rxOffload = tryEnableUDPOffload(uc)
+	txOffload, b.rxOffload = tryEnableUDPOffload(uc, knobs)
 	b.txOffload.Store(txOffload)
+	if knobs != nil {
+		b.neverGSOEqualTail = &knobs.NeverGSOEqualTail
+	}
 	if len(rxqOverflowsMetricName) > 0 && tryEnableRXQOverflowsCounter(uc) {
 		// Don't register the metric unless the socket option has been
 		// successfully set, otherwise we will report a misleading zero value

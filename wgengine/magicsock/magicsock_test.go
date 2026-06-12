@@ -39,6 +39,9 @@ import (
 	"go4.org/mem"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	extwgconn "golang.zx2c4.com/wireguard/conn"
+	extwgdevice "golang.zx2c4.com/wireguard/device"
+	extwgtest "golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/disco"
@@ -487,6 +490,62 @@ collectEndpoints:
 			t.Fatalf("timeout with endpoints: %v", endpoints)
 		}
 	}
+}
+
+// TestResetNetInfoLast verifies that ResetNetInfoLast clears the NetInfo
+// de-duplication cache, so the next NetInfo is delivered to the callback even
+// when it's structurally unchanged (which callNetInfoCallback would normally
+// suppress). This is what lets a node re-advertise its home DERP
+// (NetInfo.PreferredDERP) to a freshly-installed control client after an
+// interactive login or profile switch; without it, peers can't reach the node
+// over DERP until some unrelated NetInfo field changes.
+func TestResetNetInfoLast(t *testing.T) {
+	tstest.PanicOnLog()
+
+	c := newConn(t.Logf)
+
+	got := make(chan *tailcfg.NetInfo, 8)
+	c.SetNetInfoCallback(func(ni *tailcfg.NetInfo) {
+		got <- ni
+	})
+
+	wantCall := func(why string, wantDERP int) {
+		t.Helper()
+		select {
+		case ni := <-got:
+			if ni.PreferredDERP != wantDERP {
+				t.Fatalf("%s: got PreferredDERP=%d, want %d", why, ni.PreferredDERP, wantDERP)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: timed out waiting for NetInfo callback", why)
+		}
+	}
+	wantNoCall := func(why string) {
+		t.Helper()
+		select {
+		case ni := <-got:
+			t.Fatalf("%s: unexpected NetInfo callback: %+v", why, ni)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	ni := &tailcfg.NetInfo{PreferredDERP: 7, WorkingUDP: "true", LinkType: "wired"}
+
+	// First delivery fires the callback.
+	c.callNetInfoCallback(ni.Clone())
+	wantCall("initial", 7)
+
+	// An identical NetInfo is de-duplicated: no callback. This is exactly the
+	// behavior that, on a control-client swap, drops the home DERP.
+	c.callNetInfoCallback(ni.Clone())
+	wantNoCall("duplicate suppressed")
+
+	// Simulate a new control client being installed: clearing the de-dup cache
+	// must let the next (otherwise-identical) NetInfo through, modeling the
+	// post-login netcheck that re-reports derp-7 to the new session.
+	c.ResetNetInfoLast()
+	c.callNetInfoCallback(ni.Clone())
+	wantCall("after ResetNetInfoLast", 7)
 }
 
 func TestPickDERPFallback(t *testing.T) {
@@ -2242,8 +2301,8 @@ func TestRebindingUDPConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer realConn.Close()
-	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", 1)
-	c.setConnLocked(newBlockForeverConn(), "", 1)
+	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", 1, nil)
+	c.setConnLocked(newBlockForeverConn(), "", 1, nil)
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
@@ -2267,17 +2326,20 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 }
 
 // newWireguard starts up a new wireguard-go device attached to a test tun, and
-// returns the device, tun and endpoint port. To add peers call device.IpcSet with UAPI instructions.
-func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*device.Device, *tuntest.ChannelTUN, uint16) {
-	wgtun := tuntest.NewChannelTUN()
+// returns the device, tun and endpoint port. To add peers call device.IpcSet
+// with UAPI instructions.
+//
+// This uses stock wireguard-go to simulate a non-Tailscale peer.
+func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*extwgdevice.Device, *extwgtest.ChannelTUN, uint16) {
+	wgtun := extwgtest.NewChannelTUN()
 	wglogf := func(f string, args ...any) {
 		t.Logf("wg-go: "+f, args...)
 	}
-	wglog := device.Logger{
+	wglog := extwgdevice.Logger{
 		Verbosef: func(string, ...any) {},
 		Errorf:   wglogf,
 	}
-	wgdev := wgcfg.NewDevice(wgtun.TUN(), wgconn.NewDefaultBind(), &wglog)
+	wgdev := extwgdevice.NewDevice(wgtun.TUN(), extwgconn.NewDefaultBind(), &wglog)
 
 	if err := wgdev.IpcSet(uapi); err != nil {
 		t.Fatal(err)

@@ -4,7 +4,7 @@
 #
 # This workflow runs:
 #   - on demand (workflow_dispatch)
-#   - on PRs that carry the "natlab" label
+#   - on PRs that carry the "run-natlab-tests" label
 #   - on main, every 12 hours, via cron
 #
 # Layout:
@@ -40,7 +40,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'natlab'))
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-natlab-tests'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:

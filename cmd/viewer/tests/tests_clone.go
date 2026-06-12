@@ -98,6 +98,7 @@ func (src *Map) Clone() *Map {
 		dst.SlicesWithPtrs = map[string][]*StructWithPtrs{}
 		for k, sv := range src.SlicesWithPtrs {
 			if sv == nil {
+				dst.SlicesWithPtrs[k] = nil
 				continue
 			}
 			dst.SlicesWithPtrs[k] = make([]*StructWithPtrs, len(sv))
@@ -114,6 +115,7 @@ func (src *Map) Clone() *Map {
 		dst.SlicesWithoutPtrs = map[string][]*StructWithoutPtrs{}
 		for k, sv := range src.SlicesWithoutPtrs {
 			if sv == nil {
+				dst.SlicesWithoutPtrs[k] = nil
 				continue
 			}
 			dst.SlicesWithoutPtrs[k] = make([]*StructWithoutPtrs, len(sv))
@@ -137,6 +139,7 @@ func (src *Map) Clone() *Map {
 		dst.SliceIntPtr = map[string][]*int{}
 		for k, sv := range src.SliceIntPtr {
 			if sv == nil {
+				dst.SliceIntPtr[k] = nil
 				continue
 			}
 			dst.SliceIntPtr[k] = make([]*int, len(sv))
@@ -431,6 +434,7 @@ func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
 		dst.SliceMap = map[string][]T{}
 		for k, sv := range src.SliceMap {
 			if sv == nil {
+				dst.SliceMap[k] = nil
 				continue
 			}
 			dst.SliceMap[k] = make([]T, len(sv))
@@ -538,6 +542,7 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 		dst.MapOfSlicesWithPtrs = map[string][]*StructWithPtrsAlias{}
 		for k, sv := range src.MapOfSlicesWithPtrs {
 			if sv == nil {
+				dst.MapOfSlicesWithPtrs[k] = nil
 				continue
 			}
 			dst.MapOfSlicesWithPtrs[k] = make([]*StructWithPtrsAlias, len(sv))
@@ -554,6 +559,7 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 		dst.MapOfSlicesWithoutPtrs = map[string][]*StructWithoutPtrsAlias{}
 		for k, sv := range src.MapOfSlicesWithoutPtrs {
 			if sv == nil {
+				dst.MapOfSlicesWithoutPtrs[k] = nil
 				continue
 			}
 			dst.MapOfSlicesWithoutPtrs[k] = make([]*StructWithoutPtrsAlias, len(sv))

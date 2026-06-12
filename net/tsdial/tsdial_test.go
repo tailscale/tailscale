@@ -5,8 +5,12 @@ package tsdial
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gaissmai/bart"
 )
@@ -94,4 +98,137 @@ func TestUserDialPlan(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRaceDialUserFallback covers the core happy-eyeballs scenario:
+// the first family (e.g. AAAA via an IPv4-only exit node) fails to
+// connect, and the second family succeeds. The fallback delay should
+// not be required because the failing dial wakes the launcher via
+// failBoost.
+func TestRaceDialUserFallback(t *testing.T) {
+	v6 := netip.MustParseAddrPort("[2001:db8::1]:80")
+	v4 := netip.MustParseAddrPort("192.0.2.1:80")
+
+	var v4Calls, v6Calls atomic.Int32
+	d := &Dialer{
+		UseNetstackForIP: func(netip.Addr) bool { return true },
+		NetstackDialTCP: func(ctx context.Context, ipp netip.AddrPort) (net.Conn, error) {
+			if ipp.Addr().Is6() {
+				v6Calls.Add(1)
+				return nil, errors.New("simulated v6 unreachable")
+			}
+			v4Calls.Add(1)
+			c, _ := net.Pipe()
+			return c, nil
+		},
+		NetstackDialUDP: func(context.Context, netip.AddrPort) (net.Conn, error) {
+			t.Fatal("UDP dialer should not be called for TCP race")
+			return nil, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	t0 := time.Now()
+	c, err := d.raceDialUser(ctx, []netip.AddrPort{v6, v4})
+	elapsed := time.Since(t0)
+	if err != nil {
+		t.Fatalf("raceDialUser: %v", err)
+	}
+	defer c.Close()
+
+	if v6Calls.Load() != 1 {
+		t.Errorf("v6 dial attempts = %d, want 1", v6Calls.Load())
+	}
+	if v4Calls.Load() != 1 {
+		t.Errorf("v4 dial attempts = %d, want 1", v4Calls.Load())
+	}
+	// We allow up to the fallback delay; with failBoost the v4 attempt
+	// should kick off as soon as v6 fails, well under the timer.
+	if elapsed >= userDialFallbackDelay {
+		t.Errorf("race took %v; expected failBoost to short-circuit the %v delay",
+			elapsed, userDialFallbackDelay)
+	}
+}
+
+// TestRaceDialUserAllFail verifies that when every candidate fails,
+// raceDialUser returns the first error rather than hanging.
+func TestRaceDialUserAllFail(t *testing.T) {
+	ipps := []netip.AddrPort{
+		netip.MustParseAddrPort("[2001:db8::1]:80"),
+		netip.MustParseAddrPort("192.0.2.1:80"),
+	}
+	d := &Dialer{
+		UseNetstackForIP: func(netip.Addr) bool { return true },
+		NetstackDialTCP: func(_ context.Context, ipp netip.AddrPort) (net.Conn, error) {
+			return nil, errors.New("nope: " + ipp.String())
+		},
+		NetstackDialUDP: func(context.Context, netip.AddrPort) (net.Conn, error) { return nil, nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := d.raceDialUser(ctx, ipps)
+	if err == nil {
+		t.Fatal("raceDialUser returned nil error; want error")
+	}
+}
+
+// TestRaceDialUserCancelsLosers verifies that once one dial succeeds,
+// any other in-flight dial is cancelled and any conn it eventually
+// produces is closed (rather than leaked).
+func TestRaceDialUserCancelsLosers(t *testing.T) {
+	v6 := netip.MustParseAddrPort("[2001:db8::1]:80")
+	v4 := netip.MustParseAddrPort("192.0.2.1:80")
+
+	// v6 blocks until its context is cancelled, then returns a conn we
+	// must verify is closed.
+	closed := make(chan struct{})
+	d := &Dialer{
+		UseNetstackForIP: func(netip.Addr) bool { return true },
+		NetstackDialTCP: func(ctx context.Context, ipp netip.AddrPort) (net.Conn, error) {
+			if ipp.Addr().Is6() {
+				<-ctx.Done()
+				a, b := net.Pipe()
+				go func() {
+					<-closed
+					b.Close()
+				}()
+				return &closingPipeConn{Conn: a, closed: closed}, nil
+			}
+			c, _ := net.Pipe()
+			return c, nil
+		},
+		NetstackDialUDP: func(context.Context, netip.AddrPort) (net.Conn, error) { return nil, nil },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := d.raceDialUser(ctx, []netip.AddrPort{v6, v4})
+	if err != nil {
+		t.Fatalf("raceDialUser: %v", err)
+	}
+	defer c.Close()
+
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loser conn was not closed within 2s")
+	}
+}
+
+type closingPipeConn struct {
+	net.Conn
+	closed chan struct{}
+}
+
+func (c *closingPipeConn) Close() error {
+	select {
+	case <-c.closed:
+		// already closed
+	default:
+		close(c.closed)
+	}
+	return c.Conn.Close()
 }

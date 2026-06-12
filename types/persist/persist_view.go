@@ -96,7 +96,7 @@ func (v PersistView) NodeID() tailcfg.StableNodeID         { return v.ж.NodeID 
 func (v PersistView) AttestationKey() tailcfg.StableNodeID { panic("unsupported") }
 
 // DisallowedTKAStateIDs stores the tka.State.StateID values which
-// this node will not operate network lock on. This is used to
+// this node will not operate tailnet lock on. This is used to
 // prevent bootstrapping TKA onto a key authority which was forcibly
 // disabled.
 func (v PersistView) DisallowedTKAStateIDs() views.Slice[string] {

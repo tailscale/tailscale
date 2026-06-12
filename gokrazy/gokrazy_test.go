@@ -23,6 +23,78 @@ import (
 
 var runVMTests = flag.Bool("run-vm-tests", false, "run tests that require a VM")
 
+func TestTsappConfigs(t *testing.T) {
+	tests := []struct {
+		name     string
+		app      string
+		goarch   string
+		kernel   string
+		firmware string
+		eeprom   string
+	}{
+		{
+			name:     "tsapp",
+			app:      "tsapp",
+			goarch:   "amd64",
+			kernel:   "github.com/tailscale/gokrazy-kernel",
+			firmware: "github.com/tailscale/gokrazy-kernel",
+		},
+		{
+			name:     "tsapp-vm-arm64",
+			app:      "tsapp-vm.arm64",
+			goarch:   "arm64",
+			kernel:   "github.com/gokrazy/kernel.arm64",
+			firmware: "github.com/gokrazy/kernel.arm64",
+			eeprom:   "",
+		},
+		{
+			name:     "tsapp-pi-arm64",
+			app:      "tsapp-pi.arm64",
+			goarch:   "arm64",
+			kernel:   "github.com/gokrazy/kernel.rpi",
+			firmware: "github.com/gokrazy/firmware",
+			eeprom:   "github.com/gokrazy/rpi-eeprom",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgBytes, err := os.ReadFile(filepath.Join(tt.app, "config.json"))
+			if err != nil {
+				t.Fatalf("reading config.json: %v", err)
+			}
+			var cfg struct {
+				Environment     []string
+				KernelPackage   string
+				FirmwarePackage string
+				EEPROMPackage   *string
+			}
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				t.Fatalf("unmarshaling config.json: %v", err)
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(cfgBytes, &raw); err != nil {
+				t.Fatalf("unmarshaling config.json as map: %v", err)
+			}
+			gokCfg := gokrazyConfig{Environment: cfg.Environment}
+			if got := gokCfg.GOARCH(); got != tt.goarch {
+				t.Errorf("GOARCH = %q; want %q", got, tt.goarch)
+			}
+			if cfg.KernelPackage != tt.kernel {
+				t.Errorf("KernelPackage = %q; want %q", cfg.KernelPackage, tt.kernel)
+			}
+			if cfg.FirmwarePackage != tt.firmware {
+				t.Errorf("FirmwarePackage = %q; want %q", cfg.FirmwarePackage, tt.firmware)
+			}
+			if _, ok := raw["EEPROMPackage"]; tt.goarch == "arm64" && !ok {
+				t.Error("EEPROMPackage is missing")
+			}
+			if cfg.EEPROMPackage != nil && *cfg.EEPROMPackage != tt.eeprom {
+				t.Errorf("EEPROMPackage = %q; want %q", *cfg.EEPROMPackage, tt.eeprom)
+			}
+		})
+	}
+}
+
 func findKernelPath(t *testing.T) string {
 	t.Helper()
 	goModPath := filepath.Join("..", "go.mod")

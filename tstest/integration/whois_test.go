@@ -21,7 +21,6 @@ import (
 // netstack forwards the connection to localhost, and the listener
 // calls WhoIs on n2's LocalAPI to identify the remote peer as n1.
 func TestUserspaceWhoIsProxyMap(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 

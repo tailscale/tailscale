@@ -4,6 +4,9 @@ help:
 image:
 	go run build.go --build
 
+gaf:
+	go run build.go --gaf
+
 qemu: image
 	qemu-system-x86_64 -m 1G -drive file=tsapp.img,format=raw -boot d -netdev user,id=user.0 -device virtio-net-pci,netdev=user.0 -serial mon:stdio -audio none
 

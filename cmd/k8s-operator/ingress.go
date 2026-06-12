@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -364,7 +365,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			proto = "https+insecure://"
 		}
 		mak.Set(&handlers, path, &ipn.HTTPHandler{
-			Proxy: proto + svc.Spec.ClusterIP + ":" + fmt.Sprint(port) + path,
+			Proxy: proto + net.JoinHostPort(svc.Spec.ClusterIP, fmt.Sprint(port)) + path,
 		})
 	}
 	addIngressBackend(ing.Spec.DefaultBackend, "/")

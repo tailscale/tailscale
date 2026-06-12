@@ -6,8 +6,10 @@ package netutil
 import (
 	"io"
 	"net"
+	"net/http"
 	"runtime"
 	"testing"
+	"time"
 )
 
 type conn struct {
@@ -50,6 +52,59 @@ func TestOneConnListener(t *testing.T) {
 	ln = NewOneConnListener(c1, nil)
 	if ln.Addr() == nil {
 		t.Errorf("nil Addr")
+	}
+}
+
+// roundTripperFunc is an http.RoundTripper that is not a *http.Transport,
+// used to exercise the fallback path of NewDefaultTransport.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNewDefaultTransport(t *testing.T) {
+	// Standard case: http.DefaultTransport is still a *http.Transport, so we
+	// get a clone of it with the stdlib defaults.
+	tr := NewDefaultTransport()
+	if tr == nil {
+		t.Fatal("got nil transport")
+	}
+	if got, want := tr.MaxIdleConns, 100; got != want {
+		t.Errorf("MaxIdleConns = %d; want %d", got, want)
+	}
+	if got, want := tr.IdleConnTimeout, 90*time.Second; got != want {
+		t.Errorf("IdleConnTimeout = %v; want %v", got, want)
+	}
+	if !tr.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 = false; want true")
+	}
+
+	// Regression case: an application has replaced http.DefaultTransport with
+	// a RoundTripper that is not a *http.Transport. NewDefaultTransport must
+	// not panic and must still return a usable transport with stdlib defaults.
+	orig := http.DefaultTransport
+	defer func() { http.DefaultTransport = orig }()
+	http.DefaultTransport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, nil
+	})
+
+	tr = NewDefaultTransport()
+	if tr == nil {
+		t.Fatal("got nil transport on fallback path")
+	}
+	if got, want := tr.MaxIdleConns, 100; got != want {
+		t.Errorf("fallback MaxIdleConns = %d; want %d", got, want)
+	}
+	if got, want := tr.IdleConnTimeout, 90*time.Second; got != want {
+		t.Errorf("fallback IdleConnTimeout = %v; want %v", got, want)
+	}
+	if !tr.ForceAttemptHTTP2 {
+		t.Error("fallback ForceAttemptHTTP2 = false; want true")
+	}
+	if tr.DialContext == nil {
+		t.Error("fallback DialContext = nil; want non-nil")
+	}
+	if tr.Proxy == nil {
+		t.Error("fallback Proxy = nil; want non-nil")
 	}
 }
 

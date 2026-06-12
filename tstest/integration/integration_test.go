@@ -34,7 +34,6 @@ import (
 	"github.com/miekg/dns"
 	"go4.org/mem"
 	"tailscale.com/client/local"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
@@ -69,10 +68,17 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
+// fetchNetMapForTest fetches the current netmap from tailscaled via the
+// "current-netmap" debug action. The debug action's payload shape is
+// intentionally not part of any stable API; tests use it to inspect
+// internal state.
+func fetchNetMapForTest(ctx context.Context, lc *local.Client) (*netmap.NetworkMap, error) {
+	return local.GetDebugResultJSON[*netmap.NetworkMap](ctx, lc, "current-netmap")
+}
+
 // Tests that tailscaled starts up in TUN mode, and also without data races:
 // https://github.com/tailscale/tailscale/issues/7894
 func TestTUNMode(t *testing.T) {
-	tstest.Shard(t)
 	tstest.RequireRoot(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -90,7 +96,6 @@ func TestTUNMode(t *testing.T) {
 }
 
 func TestOneNodeUpNoAuth(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -108,7 +113,6 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 }
 
 func TestOneNodeExpiredKey(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -145,7 +149,6 @@ func TestOneNodeExpiredKey(t *testing.T) {
 }
 
 func TestControlKnobs(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -176,7 +179,6 @@ func TestControlKnobs(t *testing.T) {
 }
 
 func TestExpectedFeaturesLinked(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -198,7 +200,6 @@ func TestExpectedFeaturesLinked(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n := NewTestNode(t, env)
@@ -241,7 +242,6 @@ func TestCollectPanic(t *testing.T) {
 }
 
 func TestControlTimeLogLine(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	env.LogCatcher.StoreRawJSON()
@@ -265,7 +265,6 @@ func TestControlTimeLogLine(t *testing.T) {
 
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -466,7 +465,6 @@ func TestOneNodeUpAuth(t *testing.T) {
 			},
 		},
 	} {
-		tstest.Shard(t)
 		t.Run(tt.name, func(t *testing.T) {
 			tstest.Parallel(t)
 
@@ -552,7 +550,6 @@ func isNonZeroExitCode(err error) bool {
 // If we interrupt `tailscale up` and then run it again, we should only
 // print a single auth URL.
 func TestOneNodeUpInterruptedAuth(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 
 	env := NewTestEnv(t, ConfigureControl(
@@ -631,7 +628,6 @@ func TestOneNodeUpInterruptedAuth(t *testing.T) {
 // complete the device approval, we should see the device approval URL
 // when we run `tailscale up` a second time.
 func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 
 	env := NewTestEnv(t, ConfigureControl(
@@ -711,8 +707,6 @@ func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
-	tstest.SkipOnUnshardedCI(t)
-	tstest.Shard(t)
 	t.Parallel()
 	const authKey = "opensesame"
 	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
@@ -738,7 +732,6 @@ func TestConfigFileAuthKey(t *testing.T) {
 }
 
 func TestTwoNodes(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -824,7 +817,6 @@ func TestTwoNodes(t *testing.T) {
 // tests two nodes where the first gets a incremental MapResponse (with only
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -907,8 +899,96 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// TestIncrementalMapUpdatePeerAllowedIPsReachability verifies that an incremental
+// peer upsert changing a peer's AllowedIPs reprograms the local WireGuard config.
+// This covers VIP additions at runtime, where the VIP route is not reachable
+// before the map mutation but is reachable over TSMP afterward.
+func TestIncrementalMapUpdatePeerAllowedIPsReachability(t *testing.T) {
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+
+	n1 := NewTestNode(t, env)
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	n2 := NewTestNode(t, env)
+	d2 := n2.StartDaemon()
+	defer d2.MustCleanShutdown(t)
+	n2.AwaitListening()
+	n2.MustUp()
+	n2.AwaitRunning()
+
+	n1Status := n1.MustStatus()
+	n2Status := n2.MustStatus()
+	tnode1 := env.Control.Node(n1Status.Self.PublicKey)
+	if tnode1 == nil {
+		t.Fatalf("control has no node for %v", n1Status.Self.PublicKey)
+	}
+	tnode2 := env.Control.Node(n2Status.Self.PublicKey)
+	if tnode2 == nil {
+		t.Fatalf("control has no node for %v", n2Status.Self.PublicKey)
+	}
+
+	vip := netip.MustParseAddr("100.99.99.99")
+	vipPrefix := netip.PrefixFrom(vip, vip.BitLen())
+
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=5s", n2.AwaitIP4().String()).Run(); err != nil {
+		t.Fatalf("initial ping n1 -> n2: %v", err)
+	}
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=1s", vip.String()).Run(); err == nil {
+		t.Fatalf("ping n1 -> n2 VIP %v before AllowedIPs delta succeeded unexpectedly", vip)
+	}
+
+	mr, err := env.Control.MapResponse(&tailcfg.MapRequest{NodeKey: tnode1.Key})
+	if err != nil {
+		t.Fatalf("MapResponse: %v", err)
+	}
+	var replacement *tailcfg.Node
+	for _, p := range mr.Peers {
+		if p.ID == tnode2.ID {
+			replacement = p.Clone()
+			break
+		}
+	}
+	if replacement == nil {
+		t.Fatalf("MapResponse for n1 has no peer n2")
+	}
+
+	replacement.AllowedIPs = append(replacement.AllowedIPs, vipPrefix)
+	if !env.Control.AddRawMapResponse(tnode1.Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		st := n1.MustStatus()
+		p, ok := st.Peer[tnode2.Key]
+		if !ok {
+			return fmt.Errorf("node 1 doesn't see node 2 as a peer")
+		}
+		if p.AllowedIPs == nil {
+			return fmt.Errorf("node 1 sees node 2 with no AllowedIPs")
+		}
+		for _, allowedIP := range p.AllowedIPs.All() {
+			if allowedIP == vipPrefix {
+				return nil
+			}
+		}
+		return fmt.Errorf("node 1 sees node 2 AllowedIPs %v; want %v", p.AllowedIPs, vipPrefix)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := n1.Tailscale("ping", "--tsmp", "--c=1", "--timeout=5s", vip.String()).Run(); err != nil {
+		t.Fatalf("ping n1 -> n2 VIP %v after AllowedIPs delta: %v", vip, err)
+	}
+}
+
 func TestNodeAddressIPFields(t *testing.T) {
-	tstest.Shard(t)
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -936,7 +1016,6 @@ func TestNodeAddressIPFields(t *testing.T) {
 }
 
 func TestAddPingRequest(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -989,7 +1068,6 @@ func TestAddPingRequest(t *testing.T) {
 }
 
 func TestC2NPingRequest(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 
 	env := NewTestEnv(t)
@@ -1051,7 +1129,6 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -1074,14 +1151,24 @@ func TestNoControlConnWhenDown(t *testing.T) {
 
 	n1.AwaitBackendState("Stopped")
 
+	// The real test: verify our daemon doesn't have an HTTP request open.
+	// Stopping the client may take some time to disconnect from testcontrol.
+	if err := tstest.WaitFor(time.Second, func() error {
+		if n := env.Control.InServeMap(); n != 0 {
+			return fmt.Errorf("in serve map = %d; want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("unexpected connections while stopped: %v", err)
+	}
+
 	ip2 := n1.AwaitIP4()
 	if ip1 != ip2 {
 		t.Errorf("IPs different: %q vs %q", ip1, ip2)
 	}
 
-	// The real test: verify our daemon doesn't have an HTTP request open.
 	if n := env.Control.InServeMap(); n != 0 {
-		t.Errorf("in serve map = %d; want 0", n)
+		t.Fatalf("unexpected connection triggered by tailscale ip: in serve map = %d; want 0", n)
 	}
 
 	d2.MustCleanShutdown(t)
@@ -1090,7 +1177,6 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -1111,7 +1197,6 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	registerNode := func() (*TestNode, key.NodePublic) {
@@ -1189,20 +1274,18 @@ func TestClientSideJailing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitPeerIsJailed := func(t *testing.T, b *tailscale.IPNBusWatcher, jailed bool) {
+	waitPeerIsJailed := func(t *testing.T, b *local.IPNBusWatcher, lc *local.Client, jailed bool) {
 		t.Helper()
 		for {
-			n, err := b.Next()
+			_, err := b.Next()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n.NetMap == nil {
+			nm, err := fetchNetMapForTest(context.Background(), lc)
+			if err != nil || nm == nil || len(nm.Peers) == 0 {
 				continue
 			}
-			if len(n.NetMap.Peers) == 0 {
-				continue
-			}
-			if j := n.NetMap.Peers[0].IsJailed(); j == jailed {
+			if j := nm.Peers[0].IsJailed(); j == jailed {
 				break
 			}
 		}
@@ -1213,8 +1296,8 @@ func TestClientSideJailing(t *testing.T) {
 			env.Control.SetJailed(k2, k1, tc.n1JailedForN2)
 
 			// Wait for the jailed status to propagate.
-			waitPeerIsJailed(t, b1, tc.n2JailedForN1)
-			waitPeerIsJailed(t, b2, tc.n1JailedForN2)
+			waitPeerIsJailed(t, b1, lc1, tc.n2JailedForN1)
+			waitPeerIsJailed(t, b2, lc2, tc.n1JailedForN2)
 
 			testDial(t, lc1, ip2, port, tc.n1JailedForN2)
 			testDial(t, lc2, ip1, port, tc.n2JailedForN1)
@@ -1226,7 +1309,6 @@ func TestClientSideJailing(t *testing.T) {
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/12169")
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
 		env := NewTestEnv(t)
@@ -1354,7 +1436,6 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	// Spin up some nodes.
@@ -1416,7 +1497,6 @@ func TestAutoUpdateDefaults_cap(t *testing.T) { testAutoUpdateDefaults(t, true) 
 func testAutoUpdateDefaults(t *testing.T, useCap bool) {
 	t.Cleanup(feature.HookCanAutoUpdate.SetForTest(func() bool { return true }))
 
-	tstest.Shard(t)
 	env := NewTestEnv(t)
 
 	var (
@@ -1549,7 +1629,6 @@ func testAutoUpdateDefaults(t *testing.T, useCap bool) {
 // gVisor/netstack.
 // https://github.com/tailscale/corp/issues/22511
 func TestDNSOverTCPIntervalResolver(t *testing.T) {
-	tstest.Shard(t)
 	tstest.RequireRoot(t)
 	env := NewTestEnv(t)
 	env.tunMode = true
@@ -1619,7 +1698,6 @@ func TestDNSOverTCPIntervalResolver(t *testing.T) {
 // TestNetstackTCPLoopback tests netstack loopback of a TCP stream, in both
 // directions.
 func TestNetstackTCPLoopback(t *testing.T) {
-	tstest.Shard(t)
 	tstest.RequireRoot(t)
 
 	env := NewTestEnv(t)
@@ -1759,7 +1837,6 @@ func TestNetstackTCPLoopback(t *testing.T) {
 // TestNetstackUDPLoopback tests netstack loopback of UDP packets, in both
 // directions.
 func TestNetstackUDPLoopback(t *testing.T) {
-	tstest.Shard(t)
 	tstest.RequireRoot(t)
 
 	env := NewTestEnv(t)
@@ -1908,7 +1985,6 @@ func TestEncryptStateMigration(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("--encrypt-state for tailscaled state not supported on this platform")
 	}
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n := NewTestNode(t, env)
@@ -1964,7 +2040,6 @@ func TestEncryptStateMigration(t *testing.T) {
 // expected values.
 func TestPeerRelayPing(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17251")
-	tstest.Shard(t)
 	tstest.Parallel(t)
 
 	env := NewTestEnv(t, ConfigureControl(func(server *testcontrol.Server) {
@@ -2104,7 +2179,6 @@ func TestPeerRelayPing(t *testing.T) {
 }
 
 func TestC2NDebugNetmap(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t, ConfigureControl(func(s *testcontrol.Server) {
 		s.CollectServices = opt.False
@@ -2247,7 +2321,6 @@ func TestTailnetLock(t *testing.T) {
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.
 	t.Run("log-when-not-enabled", func(t *testing.T) {
-		tstest.Shard(t)
 		t.Parallel()
 
 		env := NewTestEnv(t)
@@ -2285,7 +2358,6 @@ func TestTailnetLock(t *testing.T) {
 	// the signed nodes can talk to each other but the unsigned node cannot
 	// talk to anybody.
 	t.Run("node-connectivity", func(t *testing.T) {
-		tstest.Shard(t)
 		t.Parallel()
 
 		env := NewTestEnv(t)
@@ -2361,7 +2433,6 @@ func TestTailnetLock(t *testing.T) {
 	t.Run("no-keys-is-error", func(t *testing.T) {
 		for _, verb := range []string{"add", "remove", "revoke-keys"} {
 			t.Run(verb, func(t *testing.T) {
-				tstest.Shard(t)
 				t.Parallel()
 
 				env := NewTestEnv(t)
@@ -2388,7 +2459,6 @@ func TestTailnetLock(t *testing.T) {
 }
 
 func TestNodeWithBadStateFile(t *testing.T) {
-	tstest.Shard(t)
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)

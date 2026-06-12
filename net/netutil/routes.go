@@ -13,6 +13,10 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
+// ValidateViaPrefix checks that the IP prefix is a valid 4via6 route.
+// It verifies that the prefix is in the Tailscale via range, has a prefix
+// length between /96 and /128, and that the embedded site ID is in the
+// range 0–65535.
 func validateViaPrefix(ipp netip.Prefix) error {
 	if !tsaddr.IsViaPrefix(ipp) {
 		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)

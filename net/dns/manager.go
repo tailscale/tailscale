@@ -131,6 +131,16 @@ func (m *Manager) Resolver() *resolver.Resolver {
 	return m.resolver
 }
 
+// ProbeLocks acquires and releases the manager's internal mutexes.
+func (m *Manager) ProbeLocks() {
+	m.mu.Lock()
+	m.mu.Unlock()
+
+	if r := m.Resolver(); r != nil {
+		r.ProbeLocks()
+	}
+}
+
 // RecompileDNSConfig recompiles the last attempted DNS configuration, which has
 // the side effect of re-querying the OS's interface nameservers.  This should be used
 // on platforms where the interface nameservers can change.  Darwin, for example,
@@ -367,12 +377,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// workaround.
 	isWindows := m.goos == "windows"
 	isApple := (m.goos == "darwin" || m.goos == "ios")
-	if len(cfg.singleResolverSet()) > 0 && m.os.SupportsSplitDNS() && !isWindows && !isApple {
-		// Split DNS configuration requested, where all split domains
-		// go to the same resolvers. We can let the OS do it.
-		ocfg.Nameservers = toIPsOnly(cfg.singleResolverSet())
-		ocfg.MatchDomains = cfg.matchDomains()
-		return rcfg, ocfg, nil
+	if m.os.SupportsSplitDNS() && !isWindows && !isApple {
+		if srs := toIPsOnly(cfg.singleResolverSet()); len(srs) > 0 {
+			// Split DNS configuration requested, where all split domains
+			// go to the same resolvers. We can let the OS do it.
+			ocfg.Nameservers = srs
+			ocfg.MatchDomains = cfg.matchDomains()
+			return rcfg, ocfg, nil
+		}
 	}
 
 	// Split DNS configuration with either multiple upstream routes,

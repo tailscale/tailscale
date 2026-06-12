@@ -34,8 +34,23 @@ type addrAssignments struct {
 
 const defaultExpiry = 48 * time.Hour
 
+func clampExpiryFromTTL(ttl time.Duration) time.Duration {
+	const minTTL = time.Minute * 1
+	const maxTTL = time.Hour * 72
+	expiry := max(minTTL, ttl)
+	return min(maxTTL, expiry)
+}
+
 func (a *addrAssignments) insert(as *addrs) error {
 	return a.insertWithExpiry(as, defaultExpiry)
+}
+
+func (a *addrAssignments) insertFromTTL(as *addrs, ttl time.Duration) error {
+	return a.insertWithExpiry(as, clampExpiryFromTTL(ttl))
+}
+
+func (a *addrAssignments) updateFromTTL(as *addrs, ttl time.Duration) {
+	a.updateExpiry(as, clampExpiryFromTTL(ttl))
 }
 
 func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
@@ -43,22 +58,16 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 	if !as.expiresAt.IsZero() && !as.expiresAt.Before(now) {
 		return errors.New("expiresAt already set")
 	}
-	// we don't expect for addresses to be reused before expiry
-	if existing, ok := a.byMagicIP[as.magic]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byMagicIP key exists")
-		}
+	// addresses must be removed (eg by popExpired) before they can be reused
+	if _, ok := a.byMagicIP[as.magic]; ok {
+		return errors.New("byMagicIP key exists")
 	}
 	ddst := domainDst{domain: as.domain, dst: as.dst}
-	if existing, ok := a.byDomainDst[ddst]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byDomainDst key exists")
-		}
+	if _, ok := a.byDomainDst[ddst]; ok {
+		return errors.New("byDomainDst key exists")
 	}
-	if existing, ok := a.byTransitIP[as.transit]; ok {
-		if !existing.expiresAt.Before(now) {
-			return errors.New("byTransitIP key exists")
-		}
+	if _, ok := a.byTransitIP[as.transit]; ok {
+		return errors.New("byTransitIP key exists")
 	}
 	as.expiresAt = now.Add(d)
 	mak.Set(&a.byMagicIP, as.magic, as)
@@ -96,10 +105,10 @@ func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 // or an invalid addrs if there are no expired members of addrAssignments.
 func (a *addrAssignments) popExpired(now time.Time) *addrs {
 	if a.byExpiresAt.Len() == 0 {
-		return &addrs{}
+		return nil
 	}
 	if !a.byExpiresAt.peek().expiresAt.Before(now) {
-		return &addrs{}
+		return nil
 	}
 	v := heap.Pop(&a.byExpiresAt).(*addrs)
 	delete(a.byMagicIP, v.magic)
@@ -107,6 +116,18 @@ func (a *addrAssignments) popExpired(now time.Time) *addrs {
 	dd := domainDst{domain: v.domain, dst: v.dst}
 	delete(a.byDomainDst, dd)
 	return v
+}
+
+func (a *addrAssignments) updateExpiry(as *addrs, expiresIn time.Duration) {
+	now := a.clock.Now()
+	as.expiresAt = now.Add(expiresIn)
+	// TODO(fran) 2026-05-26 We can make this perform better.
+	//  * With a bit of extra effort, we can track the index so that heap.Fix can
+	//    be used.
+	//  * Alternatively, marking the heap dirty and waiting until the next
+	//    operation that requires it to be in the correct order would mean a
+	//    whole slew of updates can accumulate before paying for a heap.Init.
+	heap.Init(&a.byExpiresAt)
 }
 
 type addrsHeap []*addrs

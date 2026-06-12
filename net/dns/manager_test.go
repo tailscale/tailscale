@@ -957,6 +957,23 @@ func TestManager(t *testing.T) {
 			},
 			goos: "windows",
 		},
+		{
+			// Regression test for #19834
+			name: "single-doh-splitdns-no-magicdns",
+			in: Config{
+				Routes: upstreams(
+					"example.com", "http://100.101.102.103:1234/dns-query"),
+			},
+			split: true,
+			os: OSConfig{
+				Nameservers:  serviceAddr46,
+				MatchDomains: fqdns("example.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams("example.com.", "http://100.101.102.103:1234/dns-query"),
+			},
+			goos: "linux",
+		},
 	}
 
 	trIP := cmp.Transformer("ipStr", func(ip netip.Addr) string { return ip.String() })

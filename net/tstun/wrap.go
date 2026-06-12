@@ -945,6 +945,15 @@ func (t *Wrapper) IdleDuration() time.Duration {
 	return mono.Since(t.lastActivityAtomic.LoadAtomic())
 }
 
+// ProbeLocks acquires and releases Wrapper's internal mutexes.
+func (t *Wrapper) ProbeLocks() {
+	t.bufferConsumedMu.Lock()
+	t.bufferConsumedMu.Unlock()
+
+	t.outboundMu.Lock()
+	t.outboundMu.Unlock()
+}
+
 func (t *Wrapper) awaitStart() {
 	for {
 		select {

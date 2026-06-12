@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"golang.org/x/net/route"
+	"golang.org/x/sys/unix"
 )
 
 func TestIssue1416RIB(t *testing.T) {
@@ -24,4 +25,32 @@ func TestIssue1416RIB(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("Got: %#v", msgs)
+}
+
+func TestSkipRouteMessage(t *testing.T) {
+	m := &darwinRouteMon{logf: t.Logf}
+	dst := &route.Inet6Addr{IP: [16]byte{0x26, 0x07}} // 2607:: (global unicast)
+	tests := []struct {
+		name string
+		msg  *route.RouteMessage
+		want bool
+	}{
+		{
+			name: "rtm_miss",
+			msg:  &route.RouteMessage{Type: unix.RTM_MISS, Addrs: []route.Addr{unix.RTAX_DST: dst}},
+			want: true,
+		},
+		{
+			name: "rtm_add",
+			msg:  &route.RouteMessage{Type: unix.RTM_ADD, Addrs: []route.Addr{unix.RTAX_DST: dst}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := m.skipRouteMessage(tt.msg); got != tt.want {
+				t.Errorf("skipRouteMessage = %v; want %v", got, tt.want)
+			}
+		})
+	}
 }
