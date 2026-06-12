@@ -2397,6 +2397,12 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 	cn.UpdateNetmapDelta(muts)
 
+	// In order that we can update the cache, keep track of which nodes are
+	// updated and removed. The nodeBackend has already applied any deltas, so
+	// we just need to know which nodes need updating.
+	updateIDs := set.Of[tailcfg.NodeID]()
+	removeIDs := set.Of[tailcfg.NodeID]()
+
 	// Dispatch Upsert/Remove per-peer to magicsock, and any per-field
 	// patches via the existing UpdateNetmapDelta path. The per-peer
 	// methods take c.mu themselves, so we can't call them from inside
@@ -2409,12 +2415,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			ms.UpsertPeer(m.Node)
 			peersUpsertedOrRemoved = true
 			metricNetmapDeltaPeerUpserted.Add(1)
+			updateIDs.Add(m.Node.ID())
 		case netmap.NodeMutationRemove:
 			ms.RemovePeer(m.NodeIDBeingMutated())
 			peersUpsertedOrRemoved = true
 			metricNetmapDeltaPeerRemoved.Add(1)
+			removeIDs.Add(m.NodeIDBeingMutated())
 		default:
 			metricNetmapDeltaPeerPatched.Add(1)
+			updateIDs.Add(m.NodeIDBeingMutated())
 		}
 	}
 	ms.UpdateNetmapDelta(muts)
@@ -2449,6 +2458,30 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	if cn.NetMap() == nil {
 		b.logf("[unexpected] got node mutations but netmap is nil; mutations not applied")
 		return true
+	}
+
+	// Reaching here, apply any peer changes to the netmap cache (if relevant).
+	// Note we do this AFTER the updates are applied in the nodeBackend, so that
+	// we can get its updated views to put back into the cache.
+	if buildfeatures.HasCacheNetMap &&
+		cn.SelfHasCap(tailcfg.NodeAttrCacheNetworkMaps) &&
+		envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+
+		var peersToUpdate []tailcfg.NodeView
+		for id := range updateIDs {
+			if n, ok := cn.NodeByID(id); ok {
+				peersToUpdate = append(peersToUpdate, n)
+			}
+		}
+		var peersToRemove []tailcfg.StableNodeID
+		for id := range removeIDs {
+			if n, ok := cn.NodeByID(id); ok {
+				peersToRemove = append(peersToRemove, n.StableID())
+			}
+		}
+		if err := b.writePeerDeltaToDiskLocked(peersToUpdate, peersToRemove); err != nil {
+			b.logf("update netmap cache for peer deltas: %v", err)
+		}
 	}
 
 	// A single MapResponse can carry upserts/removes (full Nodes) AND
