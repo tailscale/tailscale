@@ -301,8 +301,25 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	a.mu.Unlock()
 
+	// If target is 4via6 and the cluster already rejected due to no IPv6 support,
+	// return early to avoid unnecessary additional API calls / errors.
+	if isViaTarget(sts.TailnetTargetFQDN, sts.TailnetTargetIP) {
+		if cond := tsoperator.GetServiceCondition(svc, tsapi.ProxyReady); cond != nil &&
+			cond.Reason == reasonProxyInvalid && strings.Contains(cond.Message, "IPv6") {
+			logger.Warn("4via6 target was specified, but cluster does not support IPv6")
+			return nil
+		}
+	}
+
 	var hsvc *corev1.Service
 	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+		if apierrors.IsInvalid(err) && strings.Contains(err.Error(), "IPv6") {
+			msg := fmt.Sprintf("unable to provision proxy resources: %v", err)
+			a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDCONFIG", msg)
+			a.logger.Error(msg)
+			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
+			return nil
+		}
 		errMsg := fmt.Errorf("failed to provision: %w", err)
 		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
 		return errMsg
