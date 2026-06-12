@@ -242,3 +242,11 @@ func (c Config) RegisterChangeCallback(callback func(policyclient.PolicyChange))
 }
 
 func (sp Config) SetDebugLoggingEnabled(enabled bool) {}
+
+func (c Config) GetPolicySnapshot(uid string) (policyclient.PolicySnapshot, error) {
+	return nil, nil
+}
+
+func (c Config) WatchPolicyChanges(uid string, cb func()) (unregister func(), err error) {
+	return func() {}, nil
+}

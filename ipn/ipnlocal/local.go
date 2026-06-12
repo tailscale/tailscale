@@ -190,6 +190,13 @@ type watchSession struct {
 	// boundary for implicit bus state, so per-session dedup state such as
 	// lastSentUserProfile must be reset when this identity changes.
 	lastSentSelf tailcfg.NodeView
+
+	// policyUID is the user ID used for policy snapshot scoping.
+	// Empty string means default/device scope.
+	policyUID string
+
+	// policyUnwatch unsubscribes from policy change notifications.
+	policyUnwatch func()
 }
 
 var (
@@ -2337,7 +2344,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 // and immediately applies the effective syspolicy settings to the current profile.
 func (b *LocalBackend) registerSysPolicyWatch() (unregister func(), err error) {
 	if unregister, err = b.polc.RegisterChangeCallback(b.sysPolicyChanged); err != nil {
-		return nil, fmt.Errorf("syspolicy: LocalBacked failed to register policy change callback: %v", err)
+		return nil, fmt.Errorf("syspolicy: LocalBackend failed to register policy change callback: %v", err)
 	}
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed initial profile prefs: %v", prefs.Pretty())
@@ -2395,6 +2402,52 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 
 	if prefs, anyChange := b.reconcilePrefs(); anyChange {
 		b.logf("syspolicy: changed profile prefs: %v", prefs.Pretty())
+	}
+
+	// Notify policy-watching sessions.
+	b.notifyAllPolicyWatchers()
+}
+
+// onPolicyChanged is called when the effective policy for a session's
+// user changes. It fetches the new snapshot and sends it to that session.
+func (b *LocalBackend) onPolicyChanged(sessionID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	sess, ok := b.notifyWatchers[sessionID]
+	if !ok {
+		return
+	}
+
+	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
+	if err != nil || snapshot == nil {
+		return
+	}
+
+	b.sendToLocked(
+		ipn.Notify{Policy: snapshot},
+		notificationTarget{userID: sess.owner.UserID()},
+	)
+}
+
+// notifyAllPolicyWatchers sends updated policy snapshots to all
+// sessions that requested NotifyInitialPolicy.
+func (b *LocalBackend) notifyAllPolicyWatchers() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, sess := range b.notifyWatchers {
+		if sess.mask&ipn.NotifyInitialPolicy == 0 {
+			continue
+		}
+		snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
+		if err != nil || snapshot == nil {
+			continue
+		}
+		b.sendToLocked(
+			ipn.Notify{Policy: snapshot},
+			notificationTarget{userID: sess.owner.UserID()},
+		)
 	}
 }
 
@@ -3694,7 +3747,11 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
+	var policyUID string
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
+		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
+		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
+		ipn.NotifyInitialClientVersion | ipn.NotifyInitialPolicy
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3738,6 +3795,14 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 				ini.ClientVersion = b.lastClientVersion
 			}
 		}
+		if mask&ipn.NotifyInitialPolicy != 0 {
+			if actor != nil {
+				policyUID = string(actor.UserID())
+			}
+			if snap, err := b.polc.GetPolicySnapshot(policyUID); err == nil && snap != nil {
+				ini.Policy = snap
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -3750,16 +3815,30 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		sessionID: sessionID,
 		cancel:    cancel,
 		mask:      mask,
+		policyUID: policyUID,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	b.mu.Unlock()
 	deadlockDone()
+
+	if mask&ipn.NotifyInitialPolicy != 0 {
+		if unreg, err := b.polc.WatchPolicyChanges(policyUID, func() {
+			b.onPolicyChanged(sessionID)
+		}); err == nil {
+			session.policyUnwatch = unreg
+		}
+	}
 
 	metricCurrentWatchIPNBus.Add(1)
 	defer metricCurrentWatchIPNBus.Add(-1)
 
 	defer func() {
 		b.mu.Lock()
+		if sess, ok := b.notifyWatchers[sessionID]; ok {
+			if sess.policyUnwatch != nil {
+				sess.policyUnwatch()
+			}
+		}
 		delete(b.notifyWatchers, sessionID)
 		b.mu.Unlock()
 	}()

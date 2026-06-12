@@ -7,12 +7,19 @@
 package policyclient
 
 import (
+	"encoding/json"
 	"time"
 
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/testenv"
 )
+
+// PolicySnapshot is a json marshalable snapshot of effective
+// policy settings
+type PolicySnapshot interface {
+	json.Marshaler
+}
 
 // Client is the interface between code making questions about the system policy
 // and the actual implementation.
@@ -65,6 +72,16 @@ type Client interface {
 	// whenever a policy change is detected. It returns a function to unregister
 	// the callback and an error if the registration fails.
 	RegisterChangeCallback(cb func(PolicyChange)) (unregister func(), err error)
+
+	// GetPolicySnapshot returns the effective policy snapshot for the given user ID.
+	// If uid is empty, returns the default-scope policy. Returns nil, nil if policy
+	// snapshots are not supported.
+	GetPolicySnapshot(uid string) (PolicySnapshot, error)
+
+	// WatchPolicyChanges registers a callback that fires when the effective policy for
+	// the given user changes. If uid is empty, watches the default scope. Returns an
+	// unregister function.
+	WatchPolicyChanges(uid string, cb func()) (unregister func(), err error)
 }
 
 // Get returns a non-nil [Client] implementation as a function of the
@@ -141,5 +158,13 @@ func (NoPolicyClient) HasAnyOf(keys ...pkey.Key) (bool, error) {
 func (NoPolicyClient) SetDebugLoggingEnabled(enabled bool) {}
 
 func (NoPolicyClient) RegisterChangeCallback(cb func(PolicyChange)) (unregister func(), err error) {
+	return func() {}, nil
+}
+
+func (NoPolicyClient) GetPolicySnapshot(uid string) (PolicySnapshot, error) {
+	return nil, nil
+}
+
+func (NoPolicyClient) WatchPolicyChanges(uid string, cb func()) (unregister func(), err error) {
 	return func() {}, nil
 }
