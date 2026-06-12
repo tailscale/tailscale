@@ -4,6 +4,7 @@
 package wgengine
 
 import (
+	"cmp"
 	"context"
 	crand "crypto/rand"
 	"crypto/x509"
@@ -1288,6 +1289,51 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	if e.networkLogger.Running() {
 		e.networkLogger.ReconfigNetworkMap(nm)
 	}
+}
+
+// UpdateNetmapDelta implements [Engine]. It only applies peer upserts and
+// removals; per-field mutations are handled by magicsock and don't affect
+// the IP-to-node mapping served by PeerForIP.
+func (e *userspaceEngine) UpdateNetmapDelta(muts []netmap.NodeMutation) {
+	changesPeerSet := false
+	for _, m := range muts {
+		switch m.(type) {
+		case netmap.NodeMutationUpsert, netmap.NodeMutationRemove:
+			changesPeerSet = true
+		}
+	}
+	if !changesPeerSet {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.netMap == nil {
+		return
+	}
+	// e.netMap is shared and read-only; mutate a copy.
+	nm := new(*e.netMap)
+	nm.Peers = slices.Clone(nm.Peers)
+	peerIndex := func(id tailcfg.NodeID) (int, bool) {
+		return slices.BinarySearchFunc(nm.Peers, id, func(p tailcfg.NodeView, id tailcfg.NodeID) int {
+			return cmp.Compare(p.ID(), id)
+		})
+	}
+	for _, m := range muts {
+		switch m := m.(type) {
+		case netmap.NodeMutationUpsert:
+			if i, ok := peerIndex(m.Node.ID()); ok {
+				nm.Peers[i] = m.Node
+			} else {
+				nm.Peers = slices.Insert(nm.Peers, i, m.Node)
+			}
+		case netmap.NodeMutationRemove:
+			if i, ok := peerIndex(m.NodeIDBeingMutated()); ok {
+				nm.Peers = slices.Delete(nm.Peers, i, i+1)
+			}
+		}
+	}
+	e.netMap = nm
 }
 
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {

@@ -1973,6 +1973,8 @@ func (e *mockEngine) PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool) {
 
 func (e *mockEngine) SetNetworkMap(*netmap.NetworkMap) {}
 
+func (e *mockEngine) UpdateNetmapDelta([]netmap.NodeMutation) {}
+
 func (e *mockEngine) UpdateStatus(*ipnstate.StatusBuilder) {}
 
 func (e *mockEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {

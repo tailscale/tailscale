@@ -2452,6 +2452,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}
 	ms.UpdateNetmapDelta(muts)
+	b.e.UpdateNetmapDelta(muts)
+
 	if needsAuthReconfig {
 		b.authReconfigLocked()
 	}
