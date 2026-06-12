@@ -224,6 +224,11 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 
 	info := infoMap[subcmd]
 
+	backgroundDefault := "default false"
+	if subcmd == serve {
+		backgroundDefault += ", when --service is set default to true"
+	}
+
 	return &ffcli.Command{
 		Name:      info.Name,
 		ShortHelp: info.ShortHelp,
@@ -236,7 +241,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
-			fs.Var(&e.bg, "bg", "Run the command as a background process (default false, when --service is set defaults to true).")
+			fs.Var(&e.bg, "bg", fmt.Sprintf("Run the command as a background process (%s).", backgroundDefault))
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
