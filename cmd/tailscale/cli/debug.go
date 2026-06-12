@@ -270,8 +270,19 @@ func debugCmd() *ffcli.Command {
 				FlagSet: (func() *flag.FlagSet {
 					fs := newFlagSet("watch-ipn")
 					fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include the initial backend State and Prefs in the first message")
-					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "rate limit messages")
+					fs.BoolVar(&watchIPNArgs.rateLimit, "rate-limit", true, "set NotifyRateLimit: rate limit spammy netmap updates")
 					fs.IntVar(&watchIPNArgs.count, "count", 0, "exit after printing this many statuses, or 0 to keep going forever")
+					fs.BoolVar(&watchIPNArgs.engineUpdates, "engine-updates", false, "set NotifyWatchEngineUpdates: send Engine updates")
+					fs.BoolVar(&watchIPNArgs.initialDriveShares, "initial-drive-shares", false, "set NotifyInitialDriveShares: send current Taildrive Shares in first message")
+					fs.BoolVar(&watchIPNArgs.initialOutgoingFiles, "initial-outgoing-files", false, "set NotifyInitialOutgoingFiles: send current Taildrop OutgoingFiles in first message")
+					fs.BoolVar(&watchIPNArgs.initialHealthState, "initial-health", false, "set NotifyInitialHealthState: send current health.State in first message")
+					fs.BoolVar(&watchIPNArgs.healthActions, "health-actions", false, "set NotifyHealthActions: include PrimaryActions in health.State")
+					fs.BoolVar(&watchIPNArgs.initialSuggestedExitNode, "initial-suggested-exit-node", false, "set NotifyInitialSuggestedExitNode: send current SuggestedExitNode in first message")
+					fs.BoolVar(&watchIPNArgs.initialClientVersion, "initial-client-version", false, "set NotifyInitialClientVersion: send current ClientVersion in first message")
+					fs.BoolVar(&watchIPNArgs.peerChanges, "peer-changes", true, "set NotifyPeerChanges: send PeersChanged and PeersRemoved updates")
+					fs.BoolVar(&watchIPNArgs.initialStatus, "initial-status", false, "set NotifyInitialStatus: send current ipnstate.Status in first message")
+					fs.BoolVar(&watchIPNArgs.peerPatches, "peer-patches", true, "set NotifyPeerPatches: send narrow per-field peer patches")
+					fs.BoolVar(&watchIPNArgs.peerWireGuardState, "peer-wireguard-state", false, "set NotifyPeerWireGuardState: send WireGuard session state notifications")
 					return fs
 				})(),
 			},
@@ -635,15 +646,60 @@ var watchIPNArgs struct {
 	initial   bool
 	rateLimit bool
 	count     int
+
+	engineUpdates            bool
+	initialDriveShares       bool
+	initialOutgoingFiles     bool
+	initialHealthState       bool
+	healthActions            bool
+	initialSuggestedExitNode bool
+	initialClientVersion     bool
+	peerChanges              bool
+	initialStatus            bool
+	peerPatches              bool
+	peerWireGuardState       bool
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
-	mask := ipn.NotifyPeerChanges | ipn.NotifyPeerPatches
+	mask := ipn.NotifyNoNetMap
 	if watchIPNArgs.initial {
 		mask |= ipn.NotifyInitialState | ipn.NotifyInitialPrefs
 	}
 	if watchIPNArgs.rateLimit {
 		mask |= ipn.NotifyRateLimit
+	}
+	if watchIPNArgs.engineUpdates {
+		mask |= ipn.NotifyWatchEngineUpdates
+	}
+	if watchIPNArgs.initialDriveShares {
+		mask |= ipn.NotifyInitialDriveShares
+	}
+	if watchIPNArgs.initialOutgoingFiles {
+		mask |= ipn.NotifyInitialOutgoingFiles
+	}
+	if watchIPNArgs.initialHealthState {
+		mask |= ipn.NotifyInitialHealthState
+	}
+	if watchIPNArgs.healthActions {
+		mask |= ipn.NotifyHealthActions
+	}
+	if watchIPNArgs.initialSuggestedExitNode {
+		mask |= ipn.NotifyInitialSuggestedExitNode
+	}
+	if watchIPNArgs.initialClientVersion {
+		mask |= ipn.NotifyInitialClientVersion
+	}
+	if watchIPNArgs.peerChanges {
+		mask |= ipn.NotifyPeerChanges
+	}
+	if watchIPNArgs.initialStatus {
+		mask |= ipn.NotifyInitialStatus
+	}
+	if watchIPNArgs.peerPatches {
+		mask |= ipn.NotifyPeerPatches
+	}
+	if watchIPNArgs.peerWireGuardState {
+		mask |= ipn.NotifyPeerWireGuardState
 	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {

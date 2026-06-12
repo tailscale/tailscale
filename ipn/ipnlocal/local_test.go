@@ -2357,6 +2357,210 @@ func TestNotifyForSessionPeerVisibility(t *testing.T) {
 	})
 }
 
+func TestNotifyForSessionPeerWireGuardStateVisibility(t *testing.T) {
+	b := newTestLocalBackend(t)
+	notify := ipn.Notify{
+		PeerState: map[tailcfg.StableNodeID]ipn.PeerState{
+			"stable1": {PeerWireGuardState: ipn.PeerWireGuardStateEstablished},
+		},
+	}
+
+	deliver := func(mask ipn.NotifyWatchOpt) *ipn.Notify {
+		sess := &watchSession{mask: mask}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.notifyForSessionLocked(sess, &notify)
+	}
+
+	if n := deliver(0); len(n.PeerState) != 0 {
+		t.Fatalf("PeerState without watch bit = %v; want empty", n.PeerState)
+	}
+	if n := deliver(ipn.NotifyPeerWireGuardState); n.PeerState["stable1"].PeerWireGuardState != ipn.PeerWireGuardStateEstablished {
+		t.Fatalf("PeerState with watch bit = %v; want stable1=established", n.PeerState)
+	}
+}
+
+func TestPeerWireGuardStateValuesMatchWGEngine(t *testing.T) {
+	const unknownPeerWireGuardState wgengine.PeerWireGuardState = 255
+
+	tests := []struct {
+		name string
+		in   wgengine.PeerWireGuardState
+		want ipn.PeerWireGuardState
+	}{
+		{"none", wgengine.PeerWireGuardStateNone, ipn.PeerWireGuardStateNone},
+		{"handshake", wgengine.PeerWireGuardStateHandshake, ipn.PeerWireGuardStateHandshake},
+		{"established", wgengine.PeerWireGuardStateEstablished, ipn.PeerWireGuardStateEstablished},
+		{"expired", wgengine.PeerWireGuardStateExpired, ipn.PeerWireGuardStateExpired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := peerWireGuardStateFromEngine(tt.in); got != tt.want {
+				t.Fatalf("converted state = %v; want %v", got, tt.want)
+			}
+			if got, want := uint8(tt.in), uint8(tt.want); got != want {
+				t.Fatalf("wgengine const = %v; want %v", got, want)
+			}
+		})
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for unknown wgengine state")
+		}
+	}()
+	_ = peerWireGuardStateFromEngine(unknownPeerWireGuardState)
+}
+
+func TestPeerWireGuardStateWatchInitialThenDeltas(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	peer1 := &tailcfg.Node{
+		ID:       1,
+		StableID: "stable1",
+		Key:      makeNodeKeyFromID(1),
+	}
+	peer2 := &tailcfg.Node{
+		ID:       2,
+		StableID: "stable2",
+		Key:      makeNodeKeyFromID(2),
+	}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{peer1.View(), peer2.View()},
+	})
+
+	t1 := time.Unix(1700000000, 0)
+	b.handlePeerWireGuardState(peer1.Key, ipn.PeerWireGuardStateEstablished, t1)
+	b.handlePeerWireGuardState(peer1.Key, ipn.PeerWireGuardStateEstablished, t1.Add(time.Second))
+	defer b.handlePeerWireGuardState(peer1.Key, ipn.PeerWireGuardStateNone, time.Now())
+	defer b.handlePeerWireGuardState(peer2.Key, ipn.PeerWireGuardStateNone, time.Now())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotCh := make(chan *ipn.Notify, 2)
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		var got int
+		b.WatchNotificationsAs(ctx, nil, ipn.NotifyPeerWireGuardState, func() {
+			b.onPeerWireGuardState(peer2.Key, wgengine.PeerWireGuardStateHandshake)
+		}, func(n *ipn.Notify) bool {
+			gotCh <- n
+			got++
+			if got == 2 {
+				cancel()
+				return false
+			}
+			return true
+		})
+	}()
+
+	var got []*ipn.Notify
+	for len(got) < 2 {
+		select {
+		case n := <-gotCh:
+			got = append(got, n)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for notifications; got %v", got)
+		}
+	}
+	<-doneCh
+
+	if got[0].PeerState["stable1"].PeerWireGuardState != ipn.PeerWireGuardStateEstablished {
+		t.Fatalf("initial PeerState = %v; want stable1=established", got[0].PeerState)
+	}
+	if got, want := got[0].PeerState["stable1"].PeerWireGuardStateAt, t1; !got.Equal(want) {
+		t.Fatalf("initial PeerState[stable1].PeerWireGuardStateAt = %v; want %v (no-op transition preserves first-entry time)", got, want)
+	}
+	if _, ok := got[0].PeerState["stable2"]; ok {
+		t.Fatalf("initial PeerState includes post-registration delta: %v", got[0].PeerState)
+	}
+	if len(got[1].PeerState) != 1 || got[1].PeerState["stable2"].PeerWireGuardState != ipn.PeerWireGuardStateHandshake {
+		t.Fatalf("delta PeerState = %v; want stable2=handshake only", got[1].PeerState)
+	}
+	if got[1].PeerState["stable2"].PeerWireGuardStateAt.IsZero() {
+		t.Fatalf("delta PeerState[stable2].PeerWireGuardStateAt is zero; want set by LocalBackend clock")
+	}
+}
+
+func TestPeerWireGuardStateMetrics(t *testing.T) {
+	b := newTestLocalBackend(t)
+	peer := &tailcfg.Node{
+		ID:       1,
+		StableID: "stable1",
+		Key:      makeNodeKeyFromID(1),
+	}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{peer.View()},
+	})
+	now := time.Now()
+	defer b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateNone, now)
+
+	baseHandshake := metricPeerWGStateHandshake.Value()
+	baseEstablished := metricPeerWGStateEstablished.Value()
+	baseExpired := metricPeerWGStateExpired.Value()
+
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateEstablished, now)
+	if got, want := metricPeerWGStateEstablished.Value(), baseEstablished+1; got != want {
+		t.Fatalf("established gauge = %v; want %v", got, want)
+	}
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateEstablished, now)
+	if got, want := metricPeerWGStateEstablished.Value(), baseEstablished+1; got != want {
+		t.Fatalf("established gauge after no-op = %v; want %v", got, want)
+	}
+
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateHandshake, now)
+	if got, want := metricPeerWGStateEstablished.Value(), baseEstablished; got != want {
+		t.Fatalf("established gauge after transition = %v; want %v", got, want)
+	}
+	if got, want := metricPeerWGStateHandshake.Value(), baseHandshake+1; got != want {
+		t.Fatalf("handshake gauge = %v; want %v", got, want)
+	}
+
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateExpired, now)
+	if got, want := metricPeerWGStateHandshake.Value(), baseHandshake; got != want {
+		t.Fatalf("handshake gauge after transition = %v; want %v", got, want)
+	}
+	if got, want := metricPeerWGStateExpired.Value(), baseExpired+1; got != want {
+		t.Fatalf("expired gauge = %v; want %v", got, want)
+	}
+
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateNone, now)
+	if got, want := metricPeerWGStateExpired.Value(), baseExpired; got != want {
+		t.Fatalf("expired gauge after none = %v; want %v", got, want)
+	}
+}
+
+func TestPeerWireGuardStateCallbackDoesNotBlockOnLocalBackendMu(t *testing.T) {
+	b := newTestLocalBackend(t)
+	peer := &tailcfg.Node{
+		ID:       1,
+		StableID: "stable1",
+		Key:      makeNodeKeyFromID(1),
+	}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		Peers: []tailcfg.NodeView{peer.View()},
+	})
+
+	b.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		b.onPeerWireGuardState(peer.Key, wgengine.PeerWireGuardStateEstablished)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		b.mu.Unlock()
+		t.Fatal("onPeerWireGuardState blocked on LocalBackend.mu")
+	}
+	b.mu.Unlock()
+
+	_ = b.peerWGStateQueue.Wait(context.Background())
+	b.handlePeerWireGuardState(peer.Key, ipn.PeerWireGuardStateNone, time.Now())
+}
+
 func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 	b := newTestLocalBackend(t)
 	nw := newNotificationWatcher(t, b, ipnauth.Self)

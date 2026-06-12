@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -361,6 +362,21 @@ type LocalBackend struct {
 	lastStatusTime    time.Time                // status.AsOf value of the last processed status update
 	componentLogUntil map[string]componentLogState
 	currentUser       ipnauth.Actor
+	peerWGStateQueue  execqueue.ExecQueue // serializes WireGuard state transitions from wireguard-go
+	// peerWGState is the current non-zero WireGuard session state per peer,
+	// keyed by stable node ID for delivery on the IPN bus.
+	// Entries are added/updated by [LocalBackend.handlePeerWireGuardState]
+	// and removed when wireguard-go reports [wgengine.PeerWireGuardStateNone]
+	// (including the synthetic None fired by wireguard-go's RemovePeer path
+	// when a peer is removed from the WG config).
+	peerWGState map[tailcfg.StableNodeID]ipn.PeerState
+	// peerWGStableIDByKey caches the wireguard-go NodePublic -> StableNodeID
+	// translation so callbacks don't have to re-resolve through the netmap on
+	// every transition, and so the final PeerWireGuardStateNone callback for a
+	// removed peer can still be mapped to its StableNodeID after the peer is
+	// gone from the netmap. Entries are added on the first non-zero transition
+	// for a key and removed alongside the corresponding peerWGState entry.
+	peerWGStableIDByKey map[key.NodePublic]tailcfg.StableNodeID
 
 	// capForcedNetfilter is the netfilter that control instructs Linux clients
 	// to use, unless overridden locally.
@@ -628,6 +644,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	nb.ready()
 
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
+	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
 
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
@@ -1307,6 +1324,7 @@ func (b *LocalBackend) Shutdown() {
 	//  2. Event handlers may not guard against undesirable post/in-progress
 	//     LocalBackend.Shutdown() behaviors.
 	b.appcTask.Shutdown()
+	b.peerWGStateQueue.Shutdown()
 	b.eventClient.Close()
 
 	b.em.close()
@@ -3654,6 +3672,9 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		statusSB = &ipnstate.StatusBuilder{WantPeers: true}
 		b.e.UpdateStatus(statusSB)
 	}
+	if mask&ipn.NotifyPeerWireGuardState != 0 {
+		_ = b.peerWGStateQueue.Wait(ctx)
+	}
 
 	// Watch for deadlocks only during the registration phase below; the rest
 	// of this method blocks on ctx (often for hours) and shouldn't trip the
@@ -3661,7 +3682,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
-	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus | ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode | ipn.NotifyInitialClientVersion | ipn.NotifyPeerWireGuardState
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3719,6 +3740,9 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		mask:      mask,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
+	if mask&ipn.NotifyPeerWireGuardState != 0 {
+		ini.PeerState = maps.Clone(b.peerWGState)
+	}
 	b.mu.Unlock()
 	deadlockDone()
 
@@ -4023,6 +4047,7 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPeersChanged := len(n.PeersChanged) > 0 && !wantsPeerChanges
 	stripPeersRemoved := len(n.PeersRemoved) > 0 && !wantsPeerChanges
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
+	stripPeerState := len(n.PeerState) > 0 && sess.mask&ipn.NotifyPeerWireGuardState == 0
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
 
 	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
@@ -4053,7 +4078,7 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripNetMap && !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
+	if !stripNetMap && !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
 		return n
 	}
 	nCopy := *n
@@ -4081,6 +4106,9 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	if stripPatches {
 		nCopy.PeerChangedPatch = nil
+	}
+	if stripPeerState {
+		nCopy.PeerState = nil
 	}
 	if stripUserProfiles {
 		nCopy.UserProfiles = nil
@@ -5709,6 +5737,98 @@ func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 		return key.NodePublic{}, false
 	}
 	return peer.Key(), true
+}
+
+// onPeerWireGuardState is called by wireguard-go, through wgengine, for
+// serialized WireGuard session state transitions. wireguard-go is holding locks
+// while calling this, so this must stay cheap, must not acquire b.mu, and must
+// not call back into wireguard-go. Acquiring b.mu here can deadlock with
+// LocalBackend operations that hold b.mu while waiting for wireguard-go to make
+// progress.
+func (b *LocalBackend) onPeerWireGuardState(peerKey key.NodePublic, state wgengine.PeerWireGuardState) {
+	st := peerWireGuardStateFromEngine(state)
+	// 10ms granularity is plenty for diagnostics and keeps the JSON form short.
+	at := b.clock.Now().Round(10 * time.Millisecond)
+	b.peerWGStateQueue.Add(func() {
+		b.handlePeerWireGuardState(peerKey, st, at)
+	})
+}
+
+func (b *LocalBackend) handlePeerWireGuardState(peerKey key.NodePublic, st ipn.PeerWireGuardState, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	id, ok := b.peerWGStableIDByKey[peerKey]
+	if !ok {
+		nb := b.currentNode()
+		nid, ok := nb.NodeByKey(peerKey)
+		if !ok {
+			b.logf("[unexpected] WireGuard session state for unknown peer %v", peerKey.ShortString())
+			return
+		}
+		peer, ok := nb.NodeByID(nid)
+		if !ok {
+			b.logf("[unexpected] WireGuard session state for unknown node %v", nid)
+			return
+		}
+		id = peer.StableID()
+	}
+
+	if st == ipn.PeerWireGuardStateNone {
+		old, ok := b.peerWGState[id]
+		if !ok {
+			return
+		}
+		delete(b.peerWGState, id)
+		delete(b.peerWGStableIDByKey, peerKey)
+		addPeerWGStateMetric(old.PeerWireGuardState, -1)
+	} else {
+		old := b.peerWGState[id].PeerWireGuardState
+		if old == st {
+			return
+		}
+		if old != ipn.PeerWireGuardStateNone {
+			addPeerWGStateMetric(old, -1)
+		}
+		mak.Set(&b.peerWGState, id, ipn.PeerState{
+			PeerWireGuardState:   st,
+			PeerWireGuardStateAt: at,
+		})
+		mak.Set(&b.peerWGStableIDByKey, peerKey, id)
+		addPeerWGStateMetric(st, 1)
+	}
+	b.sendToLocked(ipn.Notify{
+		PeerState: map[tailcfg.StableNodeID]ipn.PeerState{id: {
+			PeerWireGuardState:   st,
+			PeerWireGuardStateAt: at,
+		}},
+	}, allClients)
+}
+
+func addPeerWGStateMetric(state ipn.PeerWireGuardState, delta int64) {
+	switch state {
+	case ipn.PeerWireGuardStateHandshake:
+		metricPeerWGStateHandshake.Add(delta)
+	case ipn.PeerWireGuardStateEstablished:
+		metricPeerWGStateEstablished.Add(delta)
+	case ipn.PeerWireGuardStateExpired:
+		metricPeerWGStateExpired.Add(delta)
+	}
+}
+
+func peerWireGuardStateFromEngine(state wgengine.PeerWireGuardState) ipn.PeerWireGuardState {
+	switch state {
+	case wgengine.PeerWireGuardStateNone:
+		return ipn.PeerWireGuardStateNone
+	case wgengine.PeerWireGuardStateHandshake:
+		return ipn.PeerWireGuardStateHandshake
+	case wgengine.PeerWireGuardStateEstablished:
+		return ipn.PeerWireGuardStateEstablished
+	case wgengine.PeerWireGuardStateExpired:
+		return ipn.PeerWireGuardStateExpired
+	default:
+		panic(fmt.Sprintf("unexpected wgengine.PeerWireGuardState %d", state))
+	}
 }
 
 func (b *LocalBackend) isEngineBlocked() bool {
@@ -8900,6 +9020,9 @@ func maybeUsernameOf(actor ipnauth.Actor) string {
 var (
 	metricCurrentWatchIPNBus     = clientmetric.NewGauge("localbackend_current_watch_ipn_bus")
 	metricIPForwardingCheckError = clientmetric.NewCounter("localbackend_ip_forwarding_check_error")
+	metricPeerWGStateHandshake   = clientmetric.NewGauge("localbackend_peer_wireguard_state_handshake")
+	metricPeerWGStateEstablished = clientmetric.NewGauge("localbackend_peer_wireguard_state_established")
+	metricPeerWGStateExpired     = clientmetric.NewGauge("localbackend_peer_wireguard_state_expired")
 
 	// Counters for the controlclient's delta-update fast path: each
 	// counts a destination-side call into [LocalBackend] from

@@ -21,6 +21,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -753,6 +754,29 @@ func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodeP
 		}
 		return device.NoisePublicKey{}, false
 	})
+}
+
+func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWireGuardState)) {
+	e.wgdev.SetSessionStateFunc(func(pk device.NoisePublicKey, state device.PeerSessionState) {
+		if fn != nil {
+			fn(key.NodePublicFromRaw32(mem.B(pk[:])), peerWireGuardStateFromDevice(state))
+		}
+	})
+}
+
+func peerWireGuardStateFromDevice(state device.PeerSessionState) PeerWireGuardState {
+	switch state {
+	case device.PeerSessionNone:
+		return PeerWireGuardStateNone
+	case device.PeerSessionHandshake:
+		return PeerWireGuardStateHandshake
+	case device.PeerSessionEstablished:
+		return PeerWireGuardStateEstablished
+	case device.PeerSessionExpired:
+		return PeerWireGuardStateExpired
+	default:
+		panic(fmt.Sprintf("unexpected wireguard-go PeerSessionState %d", state))
+	}
 }
 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
