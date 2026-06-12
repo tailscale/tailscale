@@ -105,6 +105,20 @@ func genOrderedSwapper(rt reflect.Type) func(reflect.Value) func(i, j int) bool 
 // Delete removes e from the set.
 func (s Set[T]) Delete(e T) { delete(s, e) }
 
+// DeleteSlice removes each element of es to s.
+func (s Set[T]) DeleteSlice(es []T) {
+	for _, e := range es {
+		s.Delete(e)
+	}
+}
+
+// DeleteSet removes each element of es to s.
+func (s Set[T]) DeleteSet(es Set[T]) {
+	for e := range es {
+		s.Delete(e)
+	}
+}
+
 // Contains reports whether s contains e.
 func (s Set[T]) Contains(e T) bool {
 	_, ok := s[e]

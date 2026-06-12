@@ -4163,12 +4163,17 @@ func (sess *watchSession) selfChangeResetsImplicitState(self tailcfg.NodeView) b
 	if !self.Valid() {
 		return false
 	}
-	reset := !sess.lastSentSelf.Valid() || !sameSelfNode(sess.lastSentSelf, self)
+	reset := !sess.lastSentSelf.Valid() || !SameSelfNodeAndUser(sess.lastSentSelf, self)
 	sess.lastSentSelf = self
 	return reset
 }
 
-func sameSelfNode(a, b tailcfg.NodeView) bool {
+// SameSelfNodeAndUser reports whether a and b represent the same self node
+// logged in with the same user.
+func SameSelfNodeAndUser(a, b tailcfg.NodeView) bool {
+	if !a.Valid() || !b.Valid() {
+		return false // invalid nodes are not the same
+	}
 	// Include User in the identity even though a node can move users, for
 	// example when an untagged auth-key node is later tagged. Treating that as
 	// a boundary only causes redundant implicit-state delivery; missing the

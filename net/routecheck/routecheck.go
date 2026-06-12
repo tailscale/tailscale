@@ -200,7 +200,7 @@ func (c *Client) Refresh(ctx context.Context, timeout time.Duration) (*Report, e
 // which will be done in the background by [Client.Start].
 func (c *Client) NeedsRefresh() {
 	select {
-	case c.needsRefresh <- struct{}{}:
+	case c.needsRefresh <- struct{}{}: // no need to close
 		metricNeedsRefresh.Add(1)
 	default:
 		// needsRefresh has already been raised, so debounce.

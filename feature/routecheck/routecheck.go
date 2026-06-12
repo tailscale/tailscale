@@ -21,7 +21,6 @@ import (
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus"
 )
 
@@ -47,6 +46,7 @@ type Extension struct {
 	ec      *eventbus.Client
 	nb      nodeBackender
 	nm      routecheck.NetMapper
+	routers *RouterTracker
 }
 
 var _ ipnext.Extension = new(Extension)
@@ -62,6 +62,9 @@ func (e *Extension) Init(h ipnext.Host) error {
 		return ipnext.SkipExtension
 	}
 
+	ctx := context.Background()
+	logf := logger.WithPrefix(e.logf, "routecheck: ")
+
 	e.nb = nodeBackender{h}
 
 	nm, ok := e.backend.(routecheck.NetMapper)
@@ -70,9 +73,16 @@ func (e *Extension) Init(h ipnext.Host) error {
 	}
 	e.nm = nm
 
+	ipnbus, ok := e.backend.(ipnext.NotifyWatcher)
+	if !ok {
+		return fmt.Errorf("backend %T does not implement ipnext.NotifyWatcher", e.backend)
+	}
+	e.routers = TrackRouters(ctx, logf, ipnbus)
+	e.routers.OnNetMapAvailable = e.onNetMapAvailable
+	e.routers.OnRoutersChange = e.onRoutersChange
+
 	pinger := e.backend.Sys().Engine.Get()
 
-	logf := logger.WithPrefix(e.logf, "routecheck: ")
 	c, err := routecheck.NewClient(logf, e.nb, e.nm, pinger)
 	if err != nil {
 		return err
@@ -83,9 +93,11 @@ func (e *Extension) Init(h ipnext.Host) error {
 	e.ec = bus.Client("routecheck")
 	eventbus.SubscribeFunc(e.ec, e.onNetMonChange)
 
-	h.Hooks().OnNetMapToggle.Add(e.onNetMapToggle)
-	h.Hooks().OnRoutersChange.Add(e.onRoutersChange)
 	h.Hooks().OnSelfChange.Add(e.onSelfChange)
+	// Unlike a cold start, starting with a cached netmap
+	// may have pre-loaded a valid NodeBackend.Self,
+	// so an initial OnSelfChange won’t fire and we have to do it ourselves.
+	e.onSelfChange(e.nb.NodeBackend().Self())
 
 	go func() {
 		if err := e.Client.Start(context.Background()); err != nil {
@@ -97,16 +109,20 @@ func (e *Extension) Init(h ipnext.Host) error {
 
 // Shutdown implements the [ipnext.Extension.Shutdown] interface method.
 func (e *Extension) Shutdown() error {
+	e.routers.Close()
 	e.ec.Close()
-	err := e.Client.Close()
-	return err
+	return e.Client.Close()
 }
 
-func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
-	if nm == nil {
+func (e *Extension) needsRefresh() {
+	if !routecheck.IsEnabled(e.nb.NodeBackend().Self()) {
 		return
 	}
-	e.Client.NotifyNetMapAvailable(nm)
+	e.Client.NeedsRefresh()
+}
+
+func (e *Extension) onNetMapAvailable() {
+	e.Client.NotifyNetMapAvailable(e.nm.NetMapNoPeers())
 }
 
 func (e *Extension) onNetMonChange(delta netmon.ChangeDelta) {
@@ -115,19 +131,13 @@ func (e *Extension) onNetMonChange(delta netmon.ChangeDelta) {
 	}
 }
 
-func (e *Extension) onRoutersChange(added, modified, removed []tailcfg.NodeView) {
+func (e *Extension) onRoutersChange(added, modified, removed []tailcfg.NodeID) {
 	// TODO(sfllaw): This refresh could be incremental,
 	// based on the added, modified, and removed nodes.
 	e.needsRefresh()
 }
 
 func (e *Extension) onSelfChange(self tailcfg.NodeView) {
+	e.routers.OnSelfChange(self)
 	e.needsRefresh()
-}
-
-func (e *Extension) needsRefresh() {
-	if !routecheck.IsEnabled(e.nb.NodeBackend().Self()) {
-		return
-	}
-	e.Client.NeedsRefresh()
 }
