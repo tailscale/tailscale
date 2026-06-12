@@ -520,6 +520,20 @@ type metrics struct {
 	// approvedRoutes is a metric that reports the number of network routes served by the local node and approved
 	// by the control server.
 	approvedRoutes *usermetric.Gauge
+
+	// serveBytesInbound counts bytes received from peers on Serve connections
+	// for Tailscale Services, labeled by Service name. Plain (non-Service)
+	// serve and funnel traffic is not counted.
+	serveBytesInbound *usermetric.MultiLabelMap[serveLabels]
+
+	// serveBytesOutbound counts bytes sent to peers on Serve connections for
+	// Tailscale Services, labeled by Service name. Plain (non-Service) serve
+	// and funnel traffic is not counted.
+	serveBytesOutbound *usermetric.MultiLabelMap[serveLabels]
+}
+
+type serveLabels struct {
+	Service string `prom:"service"`
 }
 
 // clientGen is a func that creates a control plane client.
@@ -571,6 +585,16 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
 		approvedRoutes: sys.UserMetricsRegistry().NewGauge(
 			"tailscaled_approved_routes", "Number of approved network routes (e.g. by a subnet router)"),
+		serveBytesInbound: usermetric.NewMultiLabelMapWithRegistry[serveLabels](
+			sys.UserMetricsRegistry(),
+			"tailscaled_serve_inbound_bytes_total",
+			"counter",
+			"Bytes received from peers on Serve connections for Tailscale Services, labeled by Tailscale Service name."),
+		serveBytesOutbound: usermetric.NewMultiLabelMapWithRegistry[serveLabels](
+			sys.UserMetricsRegistry(),
+			"tailscaled_serve_outbound_bytes_total",
+			"counter",
+			"Bytes sent to peers on Serve connections for Tailscale Services, labeled by Tailscale Service name."),
 	}
 
 	b := &LocalBackend{
