@@ -8220,6 +8220,14 @@ func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr
 	return chs, nil
 }
 
+// DebugActiveEndpoints returns debug information about the active dataplane
+// endpoint state of each peer, as seen by both magicsock and wireguard-go.
+// It is intended for debugging and tests only; see
+// [ipnstate.DebugActiveEndpoints].
+func (b *LocalBackend) DebugActiveEndpoints() (*ipnstate.DebugActiveEndpoints, error) {
+	return b.e.DebugActiveEndpoints()
+}
+
 var breakTCPConns func() error
 
 func (b *LocalBackend) DebugBreakTCPConns() error {

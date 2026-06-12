@@ -1334,6 +1334,19 @@ func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerSta
 	return decodeJSON[*status.ServerStatus](body)
 }
 
+// DebugActiveEndpoints returns debug information about the active dataplane
+// endpoint state of each peer, as seen by both magicsock and wireguard-go.
+//
+// It is intended for debugging and tests only; its contents are subject to
+// change. See [ipnstate.DebugActiveEndpoints].
+func (lc *Client) DebugActiveEndpoints(ctx context.Context) (*ipnstate.DebugActiveEndpoints, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/debug-active-endpoints", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[*ipnstate.DebugActiveEndpoints](body)
+}
+
 // StreamDebugCapture streams a pcap-formatted packet capture.
 //
 // The provided context does not determine the lifetime of the

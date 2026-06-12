@@ -7,10 +7,12 @@ package wgint
 
 import (
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 )
 
@@ -20,6 +22,8 @@ var (
 	offTxBytes   = getPeerStatsOffset("txBytes")
 
 	offHandshakeAttempts = getPeerHandshakeAttemptsOffset()
+
+	offEndpoint, offEndpointVal = getPeerEndpointOffsets()
 )
 
 func getPeerStatsOffset(name string) uintptr {
@@ -48,6 +52,42 @@ func getPeerHandshakeAttemptsOffset() uintptr {
 		panic("unexpected type " + g + " of field handshakeAttempts in device.Peer.timers; want " + w)
 	}
 	return field.Offset + field2.Offset
+}
+
+// getPeerEndpointOffsets returns the offset of the unexported
+// device.Peer.endpoint struct within device.Peer, and the offset of its "val"
+// field (the peer's current [conn.Endpoint]) within that struct. It verifies
+// that the struct's first field is its guarding [sync.Mutex] at offset zero.
+func getPeerEndpointOffsets() (epOff, valOff uintptr) {
+	peerType := reflect.TypeFor[device.Peer]()
+	field, ok := peerType.FieldByName("endpoint")
+	if !ok {
+		panic("no endpoint field in device.Peer")
+	}
+	if field.Type.Kind() != reflect.Struct || field.Type.NumField() == 0 {
+		panic("unexpected type " + field.Type.String() + " of field endpoint in device.Peer")
+	}
+	if mf := field.Type.Field(0); mf.Type != reflect.TypeFor[sync.Mutex]() || mf.Offset != 0 {
+		panic("first field of device.Peer.endpoint is not a sync.Mutex at offset 0")
+	}
+	valField, ok := field.Type.FieldByName("val")
+	if !ok {
+		panic("no val field in device.Peer.endpoint")
+	}
+	if g, w := valField.Type, reflect.TypeFor[conn.Endpoint](); g != w {
+		panic("unexpected type " + g.String() + " of field val in device.Peer.endpoint; want " + w.String())
+	}
+	return field.Offset, valField.Offset
+}
+
+// peerEndpoint returns the peer's current endpoint, holding its lock for the
+// read as wireguard-go's own accesses do.
+func peerEndpoint(peer *device.Peer) conn.Endpoint {
+	ep := unsafe.Add(unsafe.Pointer(peer), offEndpoint)
+	mu := (*sync.Mutex)(ep) // guards the endpoint struct; verified to be its first field
+	mu.Lock()
+	defer mu.Unlock()
+	return *(*conn.Endpoint)(unsafe.Add(ep, offEndpointVal))
 }
 
 // peerLastHandshakeNano returns the last handshake time in nanoseconds since the
@@ -105,4 +145,11 @@ func (p Peer) RxBytes() uint64 { return peerRxBytes(p.p) }
 // and after a successful handshake.
 func (p Peer) HandshakeAttempts() uint32 {
 	return peerHandshakeAttempts(p.p)
+}
+
+// Endpoint returns the peer's current endpoint: the [conn.Endpoint] that
+// wireguard-go uses to transmit to the peer. It is nil if wireguard-go holds
+// no endpoint for the peer.
+func (p Peer) Endpoint() conn.Endpoint {
+	return peerEndpoint(p.p)
 }

@@ -687,3 +687,15 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 		})
 	}
 }
+
+func TestIsMagicsockEndpoint(t *testing.T) {
+	if !IsMagicsockEndpoint(&endpoint{}) {
+		t.Error("IsMagicsockEndpoint(*endpoint) = false; want true")
+	}
+	if IsMagicsockEndpoint(&lazyEndpoint{}) {
+		t.Error("IsMagicsockEndpoint(*lazyEndpoint) = true; want false")
+	}
+	if IsMagicsockEndpoint(nil) {
+		t.Error("IsMagicsockEndpoint(nil) = true; want false")
+	}
+}
