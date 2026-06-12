@@ -15,11 +15,12 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/tailscale/wireguard-go/conn"
-	"github.com/tailscale/wireguard-go/device"
-	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/crypto/curve25519"
-	"tailscale.com/wgengine/wgcfg"
+
+	// Stock wireguard-go to simulate non-Tailscale peers.
+	extwgconn "golang.zx2c4.com/wireguard/conn"
+	extwgdevice "golang.zx2c4.com/wireguard/device"
+	extwgtun "golang.zx2c4.com/wireguard/tun"
 )
 
 func init() {
@@ -28,7 +29,7 @@ func init() {
 
 var (
 	wgServerMu  sync.Mutex
-	wgServerDev *device.Device // retained so the goroutines stay alive
+	wgServerDev *extwgdevice.Device // retained so the goroutines stay alive
 )
 
 // wgServerUpLinux brings up a userspace WireGuard interface on the local VM
@@ -98,16 +99,16 @@ func wgServerUpLinux(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tdev, err := tun.CreateTUN(name, device.DefaultMTU)
+	tdev, err := extwgtun.CreateTUN(name, extwgdevice.DefaultMTU)
 	if err != nil {
 		http.Error(w, "tun.CreateTUN: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	wglog := &device.Logger{
+	wglog := &extwgdevice.Logger{
 		Verbosef: func(string, ...any) {},
 		Errorf:   func(f string, a ...any) { log.Printf("wg-server: "+f, a...) },
 	}
-	dev := wgcfg.NewDevice(tdev, conn.NewDefaultBind(), wglog)
+	dev := extwgdevice.NewDevice(tdev, extwgconn.NewDefaultBind(), wglog)
 
 	uapi := fmt.Sprintf("private_key=%s\nlisten_port=%s\npublic_key=%s\nallowed_ip=%s\n",
 		hex.EncodeToString(priv[:]), listenPort,
