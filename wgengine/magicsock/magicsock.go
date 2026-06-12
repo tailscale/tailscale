@@ -3921,10 +3921,6 @@ func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) {
 			ep.mu.Unlock()
 		}
 	}
-
-	// As of 2026-06-11 we will only get deltas from the control plane, so upon
-	// receiving one we should infer we have switched out of the cached state.
-	c.usingCachedNetmap.Store(false)
 }
 
 // UpdateStatus implements the interface needed by ipnstate.StatusBuilder.
