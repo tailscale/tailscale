@@ -344,6 +344,9 @@ jobs:
   privileged:
     needs: gomod-cache
     runs-on: ubuntu-24.04
+    # This job runs fork-PR code inside a --privileged container, so restrict it
+    # to runs on the tailscale/tailscale repo and never on 3p PRs.
+    if: github.repository == 'tailscale/tailscale'
     container:
       image: golang:latest
       options: --privileged
