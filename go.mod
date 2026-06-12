@@ -106,7 +106,7 @@ require (
 	github.com/tailscale/ts-gokrazy v0.0.0-20260429180033-fe741c6deb44
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20260611164920-3aa5c949d6f7
+	github.com/tailscale/wireguard-go v0.0.0-20260527010701-b48af7099cad
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0
@@ -145,8 +145,6 @@ require (
 )
 
 require github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
-
-require golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
