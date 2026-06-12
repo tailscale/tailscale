@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -268,6 +269,94 @@ func TestValidateService(t *testing.T) {
 	mustCreate(t, lc, svc2)
 	expectReconciled(t, pgr, svc.Namespace, svc.Name)
 	expectEqual(t, lc, wantSvc)
+}
+
+// TestEnsureCertResources_HAService is a regression guard for #20121.
+// Without the per-domain TLS Secret + Role + RoleBinding provisioned by
+// `ensureCertResources`, `tailscale cert <dnsName>` invoked from a
+// ProxyGroup pod fails because the pod's ServiceAccount only has
+// get/patch/update on the per-replica config and state Secrets — the
+// cert path then 500s with `secrets "<dnsName>" is forbidden`.
+func TestEnsureCertResources_HAService(t *testing.T) {
+	pgr, _, fc, _, _ := setupServiceTest(t)
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pg"},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cert-svc",
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Type:      corev1.ServiceTypeLoadBalancer,
+			ClusterIP: "1.2.3.4",
+		},
+	}
+	domain := "test-cert-svc.example.ts.net"
+
+	if err := pgr.ensureCertResources(context.Background(), pg, domain, svc); err != nil {
+		t.Fatalf("ensureCertResources: %v", err)
+	}
+
+	// The TLS Secret name matches the domain so `tailscale cert` can write
+	// to it directly. We only assert existence + the SecretType so we don't
+	// duplicate the per-label assertions covered in certSecret's unit tests.
+	gotSecret := &corev1.Secret{}
+	if err := fc.Get(context.Background(),
+		types.NamespacedName{Name: domain, Namespace: pgr.tsNamespace},
+		gotSecret); err != nil {
+		t.Fatalf("getting TLS Secret %q: %v", domain, err)
+	}
+	if gotSecret.Type != corev1.SecretTypeTLS {
+		t.Errorf("TLS Secret %q: got type %q, want %q",
+			domain, gotSecret.Type, corev1.SecretTypeTLS)
+	}
+
+	expectEqual(t, fc, certSecretRole("test-pg", pgr.tsNamespace, domain))
+	expectEqual(t, fc, certSecretRoleBinding(pg, pgr.tsNamespace, domain))
+
+	// Sanity check the Role permits the verbs that `tailscale cert` needs
+	// (get/patch/update) on the per-domain Secret name. This is the contract
+	// #20121 was reporting violated; pinning the verbs here makes any future
+	// scope reduction loud rather than silent.
+	gotRole := &rbacv1.Role{}
+	if err := fc.Get(context.Background(),
+		types.NamespacedName{Name: domain, Namespace: pgr.tsNamespace},
+		gotRole); err != nil {
+		t.Fatalf("getting Role %q: %v", domain, err)
+	}
+	wantVerbs := map[string]bool{"get": true, "patch": true, "update": true}
+	gotVerbs := map[string]bool{}
+	for _, rule := range gotRole.Rules {
+		hasSecrets := false
+		hasDomainName := false
+		for _, res := range rule.Resources {
+			if res == "secrets" {
+				hasSecrets = true
+			}
+		}
+		for _, name := range rule.ResourceNames {
+			if name == domain {
+				hasDomainName = true
+			}
+		}
+		if hasSecrets && hasDomainName {
+			for _, v := range rule.Verbs {
+				gotVerbs[v] = true
+			}
+		}
+	}
+	for verb := range wantVerbs {
+		if !gotVerbs[verb] {
+			t.Errorf("Role %q is missing required verb %q for Secret %q (got verbs: %v)",
+				domain, verb, domain, gotVerbs)
+		}
+	}
+
+	// Idempotent: calling again with the same domain must not error.
+	if err := pgr.ensureCertResources(context.Background(), pg, domain, svc); err != nil {
+		t.Fatalf("ensureCertResources (second call): %v", err)
+	}
 }
 
 func TestServicePGReconciler_MultiCluster(t *testing.T) {
