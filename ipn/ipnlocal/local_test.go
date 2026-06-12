@@ -2621,6 +2621,44 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	}
 }
 
+func TestEnginePeerForIPAfterDeltaUpsert(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	peerAddr := netip.MustParsePrefix("100.64.0.2/32")
+	peer := makePeer(2, withAddresses(peerAddr))
+
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{peer},
+	}
+
+	b.e.SetNetworkMap(nm)
+	b.currentNode().SetNetMap(nm)
+
+	reauthed := peer.AsStruct()
+	reauthed.Key = makeNodeKeyFromID(102)
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{reauthed},
+	}, time.Unix(123, 0))
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+	if !b.UpdateNetmapDelta(muts) {
+		t.Fatal("UpdateNetmapDelta = false, want true")
+	}
+
+	pip, ok := b.e.PeerForIP(peerAddr.Addr())
+	if !ok {
+		t.Fatalf("PeerForIP(%v) = !ok, want peer", peerAddr.Addr())
+	}
+	if got, want := pip.Node.Key(), reauthed.Key; got != want {
+		t.Errorf("PeerForIP(%v) returned node key %v, want post-re-auth key %v", peerAddr.Addr(), got, want)
+	}
+}
+
 type whoIsTestParams struct {
 	testName   string
 	q          string

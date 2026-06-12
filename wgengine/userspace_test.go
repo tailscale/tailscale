@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"go4.org/mem"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -88,6 +89,84 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestUserspaceEngineUpdateNetmapDelta(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	node := func(id tailcfg.NodeID, key key.NodePublic) *tailcfg.Node {
+		return &tailcfg.Node{
+			ID:        id,
+			Key:       key,
+			Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 64, 0, byte(id)), 32)},
+		}
+	}
+	k1 := nkFromHex("1111111111111111111111111111111111111111111111111111111111111111")
+	k3 := nkFromHex("3333333333333333333333333333333333333333333333333333333333333333")
+	k5 := nkFromHex("5555555555555555555555555555555555555555555555555555555555555555")
+	k5new := nkFromHex("5555555555555555555555555555555555555555555555555555555555555aaa")
+	k4 := nkFromHex("4444444444444444444444444444444444444444444444444444444444444444")
+
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{node(1, k1), node(3, k3), node(5, k5)}),
+	}
+	e.SetNetworkMap(nm)
+
+	// Replace an existing peer, insert a new one between existing IDs,
+	// and remove another.
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{node(5, k5new), node(4, k4)},
+		PeersRemoved: []tailcfg.NodeID{1},
+	}, time.Unix(123, 0))
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+	e.UpdateNetmapDelta(muts)
+
+	wantPeers := map[netip.Addr]struct {
+		key key.NodePublic
+		ok  bool
+	}{
+		netaddr.IPv4(100, 64, 0, 1): {ok: false},            // removed
+		netaddr.IPv4(100, 64, 0, 3): {ok: true, key: k3},    // untouched
+		netaddr.IPv4(100, 64, 0, 4): {ok: true, key: k4},    // inserted
+		netaddr.IPv4(100, 64, 0, 5): {ok: true, key: k5new}, // replaced
+	}
+	for ip, want := range wantPeers {
+		pip, ok := e.PeerForIP(ip)
+		if ok != want.ok {
+			t.Errorf("PeerForIP(%v) ok = %v, want %v", ip, ok, want.ok)
+			continue
+		}
+		if ok && pip.Node.Key() != want.key {
+			t.Errorf("PeerForIP(%v) key = %v, want %v", ip, pip.Node.Key(), want.key)
+		}
+	}
+
+	// The netmap passed to SetNetworkMap is read-only; deltas must not
+	// have mutated it.
+	if len(nm.Peers) != 3 || nm.Peers[2].Key() != k5 {
+		t.Errorf("UpdateNetmapDelta mutated the caller's netmap: %v", nm.Peers)
+	}
+
+	ue := e.(*userspaceEngine)
+	gotIDs := make([]tailcfg.NodeID, 0, 3)
+	ue.mu.Lock()
+	for _, p := range ue.netMap.Peers {
+		gotIDs = append(gotIDs, p.ID())
+	}
+	ue.mu.Unlock()
+	if want := []tailcfg.NodeID{3, 4, 5}; !slices.Equal(gotIDs, want) {
+		t.Errorf("peer IDs after delta = %v, want %v (sorted)", gotIDs, want)
 	}
 }
 

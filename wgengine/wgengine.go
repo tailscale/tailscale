@@ -123,6 +123,12 @@ type Engine interface {
 	// The network map should only be read from.
 	SetNetworkMap(*netmap.NetworkMap)
 
+	// UpdateNetmapDelta applies the given peer mutations to the network
+	// map previously provided via SetNetworkMap. It is called instead of
+	// SetNetworkMap when the control plane sends an incremental (delta)
+	// update.
+	UpdateNetmapDelta([]netmap.NodeMutation)
+
 	// UpdateStatus populates the network state using the provided
 	// status builder.
 	UpdateStatus(*ipnstate.StatusBuilder)
