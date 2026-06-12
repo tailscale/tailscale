@@ -969,6 +969,48 @@ func (de *endpoint) noteTxActivityExtTriggerLocked(now mono.Time) {
 	}
 }
 
+// maybeKickDiscoBootstrap starts disco (pinging known endpoints and soliciting
+// callMeMaybe over DERP) for a peer that has no trusted path yet, without
+// waiting for outbound WireGuard traffic.
+//
+// Disco is normally armed only off an [endpoint.send], which calls
+// [endpoint.sendDiscoPingsLocked] and arms the heartbeat when there is no
+// trusted best path (endpoint.go: `!udpAddr.isDirect() ||
+// now.After(de.trustBestAddrUntil)`). A peer added or re-keyed via the delta
+// path ([Conn.UpsertPeer]) with no traffic flowing toward it never reaches that
+// send, so disco never starts: the node keeps answering pings but never
+// initiates, leaving it one-way dead until traffic happens to flow
+//
+//
+// It only fires for peers that genuinely need bootstrapping — disco-capable,
+// not expired, with something to probe (a DERP home or known UDP candidates)
+// and no currently-trusted path. A peer that already has a trusted path is
+// skipped, so this neither spams active sessions nor re-arms a working path.
+func (de *endpoint) maybeKickDiscoBootstrap() {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if de.isWireguardOnly || de.expired {
+		return
+	}
+	if de.disco.Load() == nil {
+		return
+	}
+	if !de.derpAddr.IsValid() && len(de.endpointState) == 0 {
+		// Nothing to probe toward.
+		return
+	}
+	now := mono.Now()
+	if de.bestAddr.epAddr.ap.IsValid() && now.Before(de.trustBestAddrUntil) {
+		// Already have a trusted path; disco isn't needed.
+		return
+	}
+	// Arm the heartbeat so disco keeps re-driving if the first round doesn't
+	// establish a path, then ping known endpoints and solicit callMeMaybe now.
+	de.noteTxActivityExtTriggerLocked(now)
+	de.sendDiscoPingsLocked(now, true)
+}
+
 // MaxDiscoPingSize is the largest useful ping message size that we
 // can send - the maximum packet size minus the IPv4 and UDP headers.
 var MaxDiscoPingSize = tstun.MaxPacketSize - 20 - 8
@@ -1388,7 +1430,15 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		de.startDiscoPingLocked(epAddr{ap: ep}, now, pingDiscovery, 0, nil)
 	}
 	derpAddr := de.derpAddr
-	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
+	// Send a CallMeMaybe over DERP when we either pinged a UDP candidate
+	// (sentAny) or have no UDP candidates at all but do know a DERP home. The
+	// latter is the bootstrap case for a peer whose endpoints aren't known yet
+	// (e.g. mid-STUN after a relogin): without soliciting the reverse
+	// direction it can never establish a path, leaving the node one-way dead
+	// This is narrower than the reverted #19878:
+	// when UDP candidates exist we still require sentAny, preserving #20088's
+	// anti-spam property.
+	if sendCallMeMaybe && derpAddr.IsValid() && (sentAny || len(de.endpointState) == 0) {
 		// Have our magicsock.Conn figure out its STUN endpoint (if
 		// it doesn't know already) and then send a CallMeMaybe
 		// message to our peer via DERP informing them that we've

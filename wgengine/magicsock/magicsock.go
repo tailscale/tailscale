@@ -3322,6 +3322,16 @@ func (c *Conn) UpsertPeer(n tailcfg.NodeView) {
 	mak.Set(&c.peersByID, n.ID(), n)
 	c.upsertPeerLocked(n, flags, debugRingBufferSize(len(c.peersByID)))
 
+	// A peer added or re-keyed via this delta path won't have disco armed if no
+	// traffic is flowing toward it yet (arming normally happens off an outbound
+	// endpoint.send). Kick disco here for a peer that lacks a trusted path so it
+	// starts initiating instead of staying one-way dead until traffic flows
+	// maybeKickDiscoBootstrap no-ops for peers that
+	// already have a trusted path.
+	if ep, ok := c.peerMap.endpointForNodeID(n.ID()); ok {
+		ep.maybeKickDiscoBootstrap()
+	}
+
 	var relayUpsert candidatePeerRelay
 	relayQualifies := false
 	if c.relayClientEnabled {

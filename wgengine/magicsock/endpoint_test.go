@@ -687,3 +687,103 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 		})
 	}
 }
+
+// TestDERPOnlyPeerSolicitsCallMeMaybe proves a peer reachable only via DERP
+// (no UDP endpoints known yet, e.g. mid-STUN after a relogin) still solicits
+// the reverse direction with callMeMaybe. Without this, such a peer can never
+// bootstrap a path — magicsock_disco_sent_callmemaybe stays frozen and the
+// node is one-way dead — and a control server can strand the client by
+// delivering a re-keyed peer endpoint-less.
+func TestDERPOnlyPeerSolicitsCallMeMaybe(t *testing.T) {
+	conn := newTestConn(t)
+	defer conn.Close()
+
+	de := &endpoint{
+		c:             conn,
+		publicKey:     key.NewNode().Public(),
+		sentPing:      make(map[stun.TxID]sentPing),
+		endpointState: make(map[netip.AddrPort]*endpointState), // no UDP candidates
+		debugUpdates:  ringlog.New[EndpointChange](10),
+	}
+	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1) // reachable only via DERP
+	de.updateDiscoKey(key.NewDisco().Public())
+
+	// enqueueCallMeMaybe records onEndpointRefreshed[de] only when the local
+	// endpoints are stale; otherwise it tries to send immediately over DERP,
+	// which the test harness can't do. The harness's startup STUN keeps
+	// refreshing lastEndpointsTime, so backdate it and re-drive the trigger in
+	// a loop: one iteration where the goroutine sees stale endpoints wins and
+	// records the callback, proving the callMeMaybe gate let the DERP-only peer
+	// through. stopPeriodicReSTUNTimerLocked quiets the periodic refresher.
+	conn.mu.Lock()
+	conn.stopPeriodicReSTUNTimerLocked()
+	conn.mu.Unlock()
+
+	var solicited bool
+	for range 200 {
+		conn.mu.Lock()
+		conn.lastEndpointsTime = time.Now().Add(-2 * endpointsFreshEnoughDuration)
+		conn.mu.Unlock()
+
+		de.mu.Lock()
+		de.lastFullPing = 0 // allow re-driving past discoPingInterval
+		de.sendDiscoPingsLocked(mono.Now(), true)
+		de.mu.Unlock()
+
+		conn.mu.Lock()
+		_, solicited = conn.onEndpointRefreshed[de]
+		conn.mu.Unlock()
+		if solicited {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !solicited {
+		t.Fatal("DERP-only peer with no UDP endpoints did not solicit callMeMaybe")
+	}
+}
+
+// TestUpsertDERPOnlyPeerKicksDisco proves that adding a peer via the delta path
+// (UpsertPeer) with a DERP home but no known UDP endpoints initiates disco
+// solicitation without waiting for outbound WireGuard traffic. Previously disco
+// was only armed off a wireguard endpoint.send(); a re-keyed, endpoint-less peer
+// delivered via UpsertPeer therefore never solicited callMeMaybe and stayed
+// one-way dead until traffic happened to flow.
+func TestUpsertDERPOnlyPeerKicksDisco(t *testing.T) {
+	conn := newTestConn(t)
+	defer conn.Close()
+	conn.SetPrivateKey(key.NewNode())
+
+	nv := (&tailcfg.Node{
+		ID:        1,
+		Key:       key.NewNode().Public(),
+		DiscoKey:  key.NewDisco().Public(),
+		HomeDERP:  1,   // reachable via DERP
+		Endpoints: nil, // but no UDP candidates known yet
+	}).View()
+
+	// The real trigger: nothing else, no manual sendDiscoPingsLocked call.
+	conn.UpsertPeer(nv)
+
+	conn.mu.Lock()
+	de, ok := conn.peerMap.endpointForNodeID(nv.ID())
+	conn.mu.Unlock()
+	if !ok {
+		t.Fatal("UpsertPeer did not create an endpoint")
+	}
+
+	// sendDiscoPingsLocked sets lastFullPing and noteTxActivityExtTriggerLocked
+	// arms heartBeatTimer; both being set proves disco was kicked purely from
+	// the add, with no outbound WireGuard traffic. These reads are deterministic
+	// and independent of DERP/STUN being functional in the test harness.
+	de.mu.Lock()
+	pinged := !de.lastFullPing.IsZero()
+	armed := de.heartBeatTimer != nil
+	de.mu.Unlock()
+	if !pinged {
+		t.Fatal("UpsertPeer of a DERP-only peer did not kick sendDiscoPingsLocked (lastFullPing still zero)")
+	}
+	if !armed {
+		t.Fatal("UpsertPeer of a DERP-only peer did not arm the heartbeat")
+	}
+}
