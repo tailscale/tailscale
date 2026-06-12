@@ -125,10 +125,9 @@ type userspaceEngine struct {
 
 	lastCfgFull        wgcfg.Config
 	lastRouter         *router.Config
-	lastDNSConfig      dns.ConfigView    // or invalid if none
-	lastIsSubnetRouter bool              // was the node a primary subnet router in the last run.
-	reconfigureVPN     func() error      // or nil
-	conn25PacketHooks  Conn25PacketHooks // or nil
+	lastDNSConfig      dns.ConfigView // or invalid if none
+	lastIsSubnetRouter bool           // was the node a primary subnet router in the last run.
+	reconfigureVPN     func() error   // or nil
 
 	// lastAppliedDisableTUNUDPGRO and lastAppliedDisableTUNTCPGRO cache the
 	// controlknobs values that were last applied to the TUN device. They are
@@ -169,19 +168,6 @@ type BIRDClient interface {
 	EnableProtocol(proto string) error
 	DisableProtocol(proto string) error
 	Close() error
-}
-
-// Conn25PacketHooks are hooks for Connectors 2025 app connectors.
-// They are meant to be wired into to corresponding hooks in the
-// [tstun.Wrapper]. They may modify the packet (e.g., NAT), or drop
-// invalid app connector traffic.
-type Conn25PacketHooks interface {
-	// HandlePacketsFromTunDevice sends packets originating from the tun device
-	// for further Connectors 2025 app connectors processing.
-	HandlePacketsFromTunDevice(*packet.Parsed) filter.Response
-	// HandlePacketsFromWireguard sends packets originating from WireGuard
-	// for further Connectors 2025 app connectors processing.
-	HandlePacketsFromWireGuard(*packet.Parsed) filter.Response
 }
 
 // Config is the engine configuration.
@@ -260,10 +246,6 @@ type Config struct {
 	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
 	// become required non-nil.
 	EventBus *eventbus.Bus
-
-	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
-	// app connector handling logic.
-	Conn25PacketHooks Conn25PacketHooks
 
 	// ForceDiscoKey, if non-zero, forces the use of a specific disco
 	// private key. This should only be used for special cases and
@@ -379,20 +361,19 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e := &userspaceEngine{
-		eventBus:          conf.EventBus,
-		timeNow:           mono.Now,
-		logf:              logf,
-		reqCh:             make(chan struct{}, 1),
-		waitCh:            make(chan struct{}),
-		tundev:            tsTUNDev,
-		router:            rtr,
-		dialer:            conf.Dialer,
-		confListenPort:    conf.ListenPort,
-		birdClient:        conf.BIRDClient,
-		controlKnobs:      conf.ControlKnobs,
-		reconfigureVPN:    conf.ReconfigureVPN,
-		health:            conf.HealthTracker,
-		conn25PacketHooks: conf.Conn25PacketHooks,
+		eventBus:       conf.EventBus,
+		timeNow:        mono.Now,
+		logf:           logf,
+		reqCh:          make(chan struct{}, 1),
+		waitCh:         make(chan struct{}),
+		tundev:         tsTUNDev,
+		router:         rtr,
+		dialer:         conf.Dialer,
+		confListenPort: conf.ListenPort,
+		birdClient:     conf.BIRDClient,
+		controlKnobs:   conf.ControlKnobs,
+		reconfigureVPN: conf.ReconfigureVPN,
+		health:         conf.HealthTracker,
 	}
 
 	if e.birdClient != nil {
@@ -464,16 +445,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.tundev.PostFilterPacketInboundFromWireGuard = echoRespondToAll
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
-
-	if e.conn25PacketHooks != nil {
-		e.tundev.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
-			return e.conn25PacketHooks.HandlePacketsFromTunDevice(p)
-		}
-
-		e.tundev.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
-			return e.conn25PacketHooks.HandlePacketsFromWireGuard(p)
-		}
-	}
 
 	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
