@@ -88,6 +88,36 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
+			name: "funnel_redirect",
+			steps: []step{{
+				command: cmd("funnel --bg --redirect=301:https://${HOST}${REQUEST_URI}"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+				},
+			}},
+		},
+		{
+			name: "funnel_redirect_set_path",
+			steps: []step{{
+				command: cmd("funnel --bg --set-path=/old --redirect=301:https://${HOST}/new"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/old": {Redirect: "301:https://${HOST}/new"},
+						}},
+					},
+					AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+				},
+			}},
+		},
+		{
 			name: "serve_background",
 			steps: []step{{
 				command: cmd("serve --bg localhost:3000"),
@@ -124,6 +154,48 @@ func TestServeDevConfigMutations(t *testing.T) {
 					Web: map[ipn.HostPort]*ipn.WebServerConfig{
 						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
 							"/": {Proxy: "http://localhost:3000"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "http_redirect_explicit_status",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --redirect=301:https://${HOST}${REQUEST_URI}"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "http_redirect_default_status",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --redirect=https://${HOST}${REQUEST_URI}"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Redirect: "https://${HOST}${REQUEST_URI}"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "http_redirect_set_path",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --set-path=/old --redirect=301:https://${HOST}/new"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+							"/old": {Redirect: "301:https://${HOST}/new"},
 						}},
 					},
 				},
@@ -855,6 +927,76 @@ func TestServeDevConfigMutations(t *testing.T) {
 			}},
 		},
 		{
+			name: "advertise_service_redirect",
+			initialState: fakeLocalServeClient{
+				statusWithoutPeers: &ipnstate.Status{
+					BackendState: ipn.Running.String(),
+					Self: &ipnstate.PeerStatus{
+						DNSName: "foo.test.ts.net",
+						CapMap: tailcfg.NodeCapMap{
+							tailcfg.NodeAttrFunnel:                            nil,
+							tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
+						},
+						Tags: ptrToReadOnlySlice([]string{"some-tag"}),
+					},
+					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				},
+				SOMarkInUse: true,
+			},
+			steps: []step{{
+				command: cmd("serve --service=svc:foo --http=80 --redirect=301:https://${HOST}${REQUEST_URI}"),
+				want: &ipn.ServeConfig{
+					Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+						"svc:foo": {
+							TCP: map[uint16]*ipn.TCPPortHandler{
+								80: {HTTP: true},
+							},
+							Web: map[ipn.HostPort]*ipn.WebServerConfig{
+								"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+									"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+								}},
+							},
+						},
+					},
+				},
+			}},
+		},
+		{
+			name: "advertise_service_redirect_set_path",
+			initialState: fakeLocalServeClient{
+				statusWithoutPeers: &ipnstate.Status{
+					BackendState: ipn.Running.String(),
+					Self: &ipnstate.PeerStatus{
+						DNSName: "foo.test.ts.net",
+						CapMap: tailcfg.NodeCapMap{
+							tailcfg.NodeAttrFunnel:                            nil,
+							tailcfg.CapabilityFunnelPorts + "?ports=443,8443": nil,
+						},
+						Tags: ptrToReadOnlySlice([]string{"some-tag"}),
+					},
+					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				},
+				SOMarkInUse: true,
+			},
+			steps: []step{{
+				command: cmd("serve --service=svc:foo --http=80 --set-path=/old --redirect=301:https://${HOST}/new"),
+				want: &ipn.ServeConfig{
+					Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+						"svc:foo": {
+							TCP: map[uint16]*ipn.TCPPortHandler{
+								80: {HTTP: true},
+							},
+							Web: map[ipn.HostPort]*ipn.WebServerConfig{
+								"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+									"/old": {Redirect: "301:https://${HOST}/new"},
+								}},
+							},
+						},
+					},
+				},
+			}},
+		},
+		{
 			name: "advertise_service_from_untagged_node",
 			steps: []step{{
 				command: cmd("serve --service=svc:foo --http=80 text:foo"),
@@ -987,6 +1129,42 @@ func TestServeDevConfigMutations(t *testing.T) {
 			steps: []step{{
 				command: cmd("serve --https=443 --proxy-protocol=1 --bg http://localhost:3000"),
 				wantErr: anyErr(),
+			}},
+		},
+		{
+			name: "redirect_with_target",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --redirect=https://${HOST}${REQUEST_URI} localhost:3000"),
+				wantErr: func(err error) (badErrMsg string) {
+					if err == nil || !strings.Contains(err.Error(), "cannot specify both --redirect and a target") {
+						return fmt.Sprintf("wanted redirect target combination error, got %v", err)
+					}
+					return ""
+				},
+			}},
+		},
+		{
+			name: "redirect_with_tcp",
+			steps: []step{{
+				command: cmd("serve --bg --tcp=80 --redirect=https://${HOST}${REQUEST_URI}"),
+				wantErr: func(err error) (badErrMsg string) {
+					if err == nil || !strings.Contains(err.Error(), "--redirect is only supported for HTTP/HTTPS handlers") {
+						return fmt.Sprintf("wanted redirect protocol error, got %v", err)
+					}
+					return ""
+				},
+			}},
+		},
+		{
+			name: "redirect_with_accept_app_caps",
+			steps: []step{{
+				command: cmd("serve --bg --http=80 --accept-app-caps=example.com/cap/foo --redirect=https://${HOST}${REQUEST_URI}"),
+				wantErr: func(err error) (badErrMsg string) {
+					if err == nil || !strings.Contains(err.Error(), "--redirect cannot be combined with --accept-app-caps") {
+						return fmt.Sprintf("wanted redirect accept-app-caps error, got %v", err)
+					}
+					return ""
+				},
 			}},
 		},
 	}
@@ -1441,6 +1619,35 @@ func TestMessageForPort(t *testing.T) {
 				"",
 				"https://foo.test.ts.net:80/",
 				"|-- proxy http://127.0.0.1:3000",
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Serve"),
+				fmt.Sprintf(msgDisableProxy, "serve", "http", 80),
+			}, "\n"),
+		},
+		{
+			name:   "serve-http-redirect",
+			subcmd: serve,
+			serveConfig: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {HTTP: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:80": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+						},
+					},
+				},
+			},
+			status:  &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"}},
+			dnsName: "foo.test.ts.net",
+			srvType: serveTypeHTTP,
+			srvPort: 80,
+			expected: strings.Join([]string{
+				msgServeAvailable,
+				"",
+				"http://foo.test.ts.net/",
+				"|-- redirect 301:https://${HOST}${REQUEST_URI}",
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Serve"),
 				fmt.Sprintf(msgDisableProxy, "serve", "http", 80),

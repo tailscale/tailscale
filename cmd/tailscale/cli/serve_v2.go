@@ -238,6 +238,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
 			fs.Var(&e.bg, "bg", "Run the command as a background process (default false, when --service is set defaults to true).")
 			fs.StringVar(&e.setPath, "set-path", "", "Appends the specified path to the base URL for accessing the underlying service")
+			fs.StringVar(&e.redirect, "redirect", "", "Redirect HTTP requests to the specified URL (optionally prefixed with a status code, e.g. 301:https://${HOST}${REQUEST_URI})")
 			fs.UintVar(&e.https, "https", 0, "Expose an HTTPS server at the specified port (default mode)")
 			if subcmd == serve {
 				fs.UintVar(&e.http, "http", 0, "Expose an HTTP server at the specified port")
@@ -347,6 +348,12 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 	if len(args) == 0 && e.tun {
 		return nil
 	}
+	if e.redirect != "" && len(args) == 0 {
+		return nil
+	}
+	if e.redirect != "" && len(args) > 0 {
+		return errors.New("cannot specify both --redirect and a target")
+	}
 	if len(args) == 0 {
 		return flag.ErrHelp
 	}
@@ -429,6 +436,14 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
 			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
+		}
+		if e.redirect != "" {
+			if srvType != serveTypeHTTP && srvType != serveTypeHTTPS {
+				return fmt.Errorf("--redirect is only supported for HTTP/HTTPS handlers")
+			}
+			if len(e.acceptAppCaps) > 0 {
+				return fmt.Errorf("--redirect cannot be combined with --accept-app-caps")
+			}
 		}
 		// Validate PROXY protocol version
 		if e.proxyProtocol != 0 && e.proxyProtocol != 1 && e.proxyProtocol != 2 {
@@ -1049,6 +1064,8 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			return "path", h.Path
 		case h.Proxy != "":
 			return "proxy", h.Proxy
+		case h.Redirect != "":
+			return "redirect", h.Redirect
 		case h.Text != "":
 			return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
 		}
@@ -1213,6 +1230,8 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
 	h := new(ipn.HTTPHandler)
 	switch {
+	case e.redirect != "":
+		h.Redirect = e.redirect
 	case strings.HasPrefix(target, "text:"):
 		text := strings.TrimPrefix(target, "text:")
 		if text == "" {
