@@ -593,6 +593,18 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 	return n.ComputedName, ""
 }
 
+// IsRouter reports whether n is a router: it routes addresses besides its own.
+// Examples: an exit node, a subnet router, an app connector, etc.
+func (n *Node) IsRouter() bool {
+	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
+	for _, r := range n.AllowedIPs {
+		if !slices.Contains(n.Addresses, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsTagged reports whether the node has any tags.
 func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
@@ -602,6 +614,10 @@ func (n *Node) IsTagged() bool {
 func (n *Node) SharerOrUser() UserID {
 	return cmp.Or(n.Sharer, n.User)
 }
+
+// IsRouter reports whether n is a router: it routes addresses besides its own.
+// Examples: an exit node, a subnet router, an app connector, etc.
+func (n NodeView) IsRouter() bool { return n.ж.IsRouter() }
 
 // IsTagged reports whether the node has any tags.
 func (n NodeView) IsTagged() bool { return n.ж.IsTagged() }
