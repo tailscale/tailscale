@@ -15,17 +15,34 @@ import (
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/mak"
 )
 
+// LegacyVersion is the sentinel [ServicesConfigFile.Version] used to mark a
+// config that was loaded from the legacy raw [ipn.ServeConfig] format (a
+// version-less file, such as "tailscale serve status --json" output). When
+// Version is LegacyVersion, [ServicesConfigFile.Legacy] is set and Services is
+// nil. It is never written to disk; the on-disk format always uses "0.0.1".
+const LegacyVersion = "0.0.0"
+
 // ServicesConfigFile is the config file format for services configuration.
 type ServicesConfigFile struct {
-	// Version is always "0.0.1" and always present.
+	// Version is "0.0.1" for the declarative services configuration file
+	// format, or [LegacyVersion] ("0.0.0") when this value was produced by
+	// [LoadServicesConfig] from a legacy raw ipn.ServeConfig file (in which
+	// case Legacy is set instead of Services).
 	Version string `json:"version"`
 
 	Services map[tailcfg.ServiceName]*ServiceDetailsFile `json:"services,omitzero"`
+
+	// Legacy holds a raw ipn.ServeConfig parsed from a version-less file (e.g.
+	// "tailscale serve status --json" output). It is non-nil only when Version
+	// is [LegacyVersion]. It is an in-memory loading artifact and is never
+	// serialized.
+	Legacy *ipn.ServeConfig `json:"-"`
 }
 
 // ServiceDetailsFile is the config syntax for an individual Tailscale Service.
@@ -145,6 +162,15 @@ func (t *Target) MarshalText() ([]byte, error) {
 	return []byte(out), nil
 }
 
+// LoadServicesConfig loads a serve config file as a [ServicesConfigFile].
+//
+// If the file has a top-level "version" field it is parsed as that versioned
+// declarative format. Otherwise it is treated as a legacy raw [ipn.ServeConfig]
+// (such as "tailscale serve status --json" emits): the returned
+// ServicesConfigFile has Version [LegacyVersion] and its Legacy field set to the
+// parsed raw config, with Services left nil.
+//
+// forService is used only for the versioned Services configuration file format.
 func LoadServicesConfig(filename string, forService string) (*ServicesConfigFile, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -165,13 +191,38 @@ func LoadServicesConfig(filename string, forService string) (*ServicesConfigFile
 	if err = jsonv2.Unmarshal(json, &ver); err != nil {
 		return nil, fmt.Errorf("could not parse config file version: %w", err)
 	}
-	switch ver.Version {
-	case "":
-		return nil, errors.New("config file must have \"version\" field")
-	case "0.0.1":
-		return loadConfigV0(json, forService)
+	if ver.Version == "" {
+		// No "version" field. This is either the legacy raw ipn.ServeConfig
+		// (e.g. "tailscale serve status --json" output, which set-config still
+		// accepts) or a Services configuration file whose required "version"
+		// field was omitted. Distinguish them by the Services config format's
+		// lowercase "services"/"endpoints" keys, which never appear in a raw
+		// ServeConfig: it uses capitalized "Services" and has no "endpoints"
+		// key, and jsonv2 matches case-sensitively. Without this check a
+		// version-less Services config file would parse as an empty
+		// ServeConfig and silently wipe the existing config.
+		var probe struct {
+			Services  jsontext.Value `json:"services"`
+			Endpoints jsontext.Value `json:"endpoints"`
+		}
+		if err := jsonv2.Unmarshal(json, &probe); err == nil &&
+			(len(probe.Services) > 0 || len(probe.Endpoints) > 0) {
+			return nil, errors.New(`config file looks like a Services configuration file but is missing the required "version" field`)
+		}
+		// Legacy raw ipn.ServeConfig: parse leniently (like set-raw and
+		// TS_SERVE_CONFIG) so "serve status --json" round-trips keep working.
+		// It is returned wrapped in a ServicesConfigFile with the LegacyVersion
+		// sentinel so the public function signature stays stable.
+		legacy := new(ipn.ServeConfig)
+		if err := jsonv2.Unmarshal(json, legacy); err != nil {
+			return nil, fmt.Errorf("could not parse serve config: %w", err)
+		}
+		return &ServicesConfigFile{Version: LegacyVersion, Legacy: legacy}, nil
 	}
-	return nil, fmt.Errorf("unsupported config file version %q", ver.Version)
+	if ver.Version != "0.0.1" {
+		return nil, fmt.Errorf("unsupported config file version %q", ver.Version)
+	}
+	return loadConfigV0(json, forService)
 }
 
 func loadConfigV0(json []byte, forService string) (*ServicesConfigFile, error) {

@@ -800,24 +800,57 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	return err
 }
 
+// serveConfigDocsURL documents the Services configuration file format that set-config prefers
+const serveConfigDocsURL = "https://tailscale.com/kb/1589/tailscale-services-configuration-file"
+
+const serveLegacyFormatWarning = "Warning: %q is in the legacy raw serve config format " +
+	"(as emitted by `tailscale serve status --json`), which is deprecated for set-config. " +
+	"Applying its services only. To migrate, run `tailscale serve get-config` to save your " +
+	"configuration in the supported format; see %s\n"
+
+const serveLegacyDroppedWarning = "Warning: ignoring node-level fields not supported by set-config: %s\n"
+
+// legacyNodeLevelFields returns the names of the populated top-level fields in
+// sc, other than Services, that set-config does not apply (it is services-only).
+func legacyNodeLevelFields(sc *ipn.ServeConfig) []string {
+	rest := sc.Clone()
+	rest.Services = nil
+	b, err := json.Marshal(rest)
+	if err != nil {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	fields := make([]string, 0, len(m))
+	for k := range m {
+		fields = append(fields, k)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
 func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err error) {
 	if len(args) != 1 {
 		return errors.New("must specify filename")
 	}
+	filename := args[0]
 	forSingleService := e.service.Validate() == nil
-
-	var scf *conffile.ServicesConfigFile
 	if e.allServices && forSingleService {
 		return errors.New("cannot specify both --all and --service")
-	} else if e.allServices {
-		scf, err = conffile.LoadServicesConfig(args[0], "")
-	} else if forSingleService {
-		scf, err = conffile.LoadServicesConfig(args[0], e.service.String())
-	} else {
+	}
+	if !e.allServices && !forSingleService {
 		return errors.New("must specify either --service=svc:<service-name> or --all")
 	}
+
+	forService := ""
+	if forSingleService {
+		forService = e.service.String()
+	}
+	scf, err := conffile.LoadServicesConfig(filename, forService)
 	if err != nil {
-		return fmt.Errorf("could not read config from file %q: %w", args[0], err)
+		return fmt.Errorf("could not read config from file %q: %w", filename, err)
 	}
 
 	st, err := e.getLocalClientStatusWithoutPeers(ctx)
@@ -842,6 +875,29 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	}
 	advertisedServices := set.Set[string]{}
 
+	if scf.Version == conffile.LegacyVersion {
+		// Legacy raw ipn.ServeConfig (e.g. "tailscale serve status --json"
+		// output). Deprecated for set-config; apply only its services-oriented
+		// content, with a migration warning to stderr (never stdout, which
+		// callers may pipe).
+		legacy := scf.Legacy
+		fmt.Fprintf(e.stderr(), serveLegacyFormatWarning, filename, serveConfigDocsURL)
+		if dropped := legacyNodeLevelFields(legacy); len(dropped) > 0 {
+			fmt.Fprintf(e.stderr(), serveLegacyDroppedWarning, strings.Join(dropped, ", "))
+		}
+		for name, svcCfg := range legacy.Services {
+			if forSingleService && name != e.service {
+				continue
+			}
+			mak.Set(&sc.Services, name, svcCfg.Clone())
+			advertisedServices.Add(name.String())
+		}
+		if forSingleService && sc.Services[e.service] == nil {
+			return fmt.Errorf("service %q not found in %q", e.service, filename)
+		}
+	}
+
+	// scf.Services is nil for the legacy format, making this loop a no-op then.
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
