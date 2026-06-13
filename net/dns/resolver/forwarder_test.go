@@ -209,11 +209,11 @@ func TestGetRCode(t *testing.T) {
 
 var testDNS = flag.Bool("test-dns", false, "run tests that require a working DNS server")
 
-func TestGetKnownDoHClientForProvider(t *testing.T) {
+func TestGetDoHClient_KnownProvider(t *testing.T) {
 	var fwd forwarder
-	c, ok := fwd.getKnownDoHClientForProvider("https://dns.google/dns-query")
-	if !ok {
-		t.Fatal("not found")
+	c, err := fwd.getDoHClient("https://dns.google/dns-query", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !*testDNS {
 		t.Skip("skipping without --test-dns")
@@ -224,6 +224,109 @@ func TestGetKnownDoHClientForProvider(t *testing.T) {
 	}
 	defer res.Body.Close()
 	t.Logf("Got: %+v", res)
+}
+
+func TestGetDoHClient_Bootstrap(t *testing.T) {
+	const url = "https://doh.example.com/dns-query"
+	ipsA := []netip.Addr{netip.MustParseAddr("203.0.113.10"), netip.MustParseAddr("2001:db8::1")}
+	ipsB := []netip.Addr{netip.MustParseAddr("203.0.113.20")}
+
+	var fwd forwarder
+
+	c1, err := fwd.getDoHClient(url, ipsA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c1 == nil {
+		t.Fatal("nil client")
+	}
+
+	// Same IPs => cached client is reused.
+	c2, _ := fwd.getDoHClient(url, ipsA)
+	if c1 != c2 {
+		t.Error("expected cached client to be reused for unchanged bootstrap IPs")
+	}
+
+	// Different IPs => client is rebuilt.
+	c3, _ := fwd.getDoHClient(url, ipsB)
+	if c3 == c1 {
+		t.Error("expected client to be rebuilt when bootstrap IPs change")
+	}
+}
+
+func TestGetDoHClient_BootstrapOverridesKnownProvider(t *testing.T) {
+	// Supplying bootstrap IPs for a publicdns-known URL takes precedence
+	// over the publicdns table. The cached client built with bootstrap IPs
+	// must be a different client than the one built from publicdns alone.
+	var fwd forwarder
+	override := []netip.Addr{netip.MustParseAddr("203.0.113.99")}
+
+	cBootstrap, err := fwd.getDoHClient("https://dns.google/dns-query", override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cPublic, err := fwd.getDoHClient("https://dns.google/dns-query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cBootstrap == cPublic {
+		t.Error("expected bootstrap-overridden client to differ from publicdns-only client")
+	}
+}
+
+func TestGetDoHClient_ExplicitEmptyBootstrapForcesAutoResolve(t *testing.T) {
+	// An explicitly-empty (but non-nil) BootstrapResolution for a
+	// publicdns-known URL skips the publicdns table and falls through to
+	// auto-resolve. The resulting client must differ from the publicdns one.
+	fwd := forwarder{logf: t.Logf}
+
+	cPublic, err := fwd.getDoHClient("https://dns.google/dns-query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cAuto, err := fwd.getDoHClient("https://dns.google/dns-query", []netip.Addr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cAuto == cPublic {
+		t.Error("expected explicit-empty bootstrap to force a distinct (auto-resolve) client")
+	}
+}
+
+func TestGetDoHClient_AutoResolve(t *testing.T) {
+	// An unknown DoH URL with no bootstrap IPs still returns a client; the
+	// hostname is resolved at dial time via the auto-resolve chain.
+	const url = "https://doh.example.com/dns-query"
+	fwd := forwarder{logf: t.Logf}
+
+	c1, err := fwd.getDoHClient(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c1 == nil {
+		t.Fatal("nil client")
+	}
+
+	// Cached on repeat call.
+	c2, _ := fwd.getDoHClient(url, nil)
+	if c1 != c2 {
+		t.Error("expected cached client to be reused")
+	}
+
+	// Supplying bootstrap IPs later promotes the cached entry to the
+	// static-IP path and rebuilds the client.
+	ips := []netip.Addr{netip.MustParseAddr("203.0.113.10")}
+	c3, _ := fwd.getDoHClient(url, ips)
+	if c3 == c1 {
+		t.Error("expected client to be rebuilt when bootstrap IPs are added")
+	}
+}
+
+func TestGetDoHClient_InvalidURL(t *testing.T) {
+	var fwd forwarder
+	if _, err := fwd.getDoHClient("https://[invalid", nil); err == nil {
+		t.Error("expected an error for an unparseable URL")
+	}
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {
