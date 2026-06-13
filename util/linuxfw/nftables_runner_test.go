@@ -314,7 +314,7 @@ func TestAddSetSubnetRouteMarkRule(t *testing.T) {
 		Hooknum:  nftables.ChainHookForward,
 		Priority: nftables.ChainPriorityFilter,
 	})
-	err := addSetSubnetRouteMarkRule(testConn, table, chain, "testTunn")
+	err := addSetSubnetRouteMarkRule(testConn, table, chain, "testTunn", DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestAddMatchSubnetRouteMarkRuleMasq(t *testing.T) {
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityNATSource,
 	})
-	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Masq)
+	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Masq, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestDelMatchSubnetRouteMarkMasqRule(t *testing.T) {
 		Priority: nftables.ChainPriorityNATSource,
 	}
 
-	err := delMatchSubnetRouteMarkMasqRule(conn, table, chain)
+	err := delMatchSubnetRouteMarkMasqRule(conn, table, chain, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestAddMatchSubnetRouteMarkRuleAccept(t *testing.T) {
 		Hooknum:  nftables.ChainHookForward,
 		Priority: nftables.ChainPriorityFilter,
 	})
-	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Accept)
+	err := addMatchSubnetRouteMarkRule(testConn, table, chain, Accept, DefaultPacketMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,12 +680,12 @@ func findCommonBaseRules(
 	forwChain *nftables.Chain,
 	tunname string) ([]*nftables.Rule, error) {
 	want := []*nftables.Rule{}
-	rule, err := createSetSubnetRouteMarkRule(forwChain.Table, forwChain, tunname)
+	rule, err := createSetSubnetRouteMarkRule(forwChain.Table, forwChain, tunname, DefaultPacketMarks())
 	if err != nil {
 		return nil, fmt.Errorf("create rule: %w", err)
 	}
 	want = append(want, rule)
-	rule, err = createMatchSubnetRouteMarkRule(forwChain.Table, forwChain, Accept)
+	rule, err = createMatchSubnetRouteMarkRule(forwChain.Table, forwChain, Accept, DefaultPacketMarks())
 	if err != nil {
 		return nil, fmt.Errorf("create rule: %w", err)
 	}
@@ -1338,7 +1338,7 @@ func TestMakeConnmarkRestoreExprs(t *testing.T) {
 	testConn.InsertRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: makeConnmarkRestoreExprs(),
+		Exprs: makeConnmarkRestoreExprs(DefaultPacketMarks()),
 	})
 	if err := testConn.Flush(); err != nil {
 		t.Fatalf("Flush() failed: %v", err)
@@ -1379,7 +1379,7 @@ func TestMakeConnmarkSaveExprs(t *testing.T) {
 	testConn.InsertRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
-		Exprs: makeConnmarkSaveExprs(),
+		Exprs: makeConnmarkSaveExprs(DefaultPacketMarks()),
 	})
 	if err := testConn.Flush(); err != nil {
 		t.Fatalf("Flush() failed: %v", err)
@@ -1420,4 +1420,55 @@ func TestGetOrCreateChainNilHooknum(t *testing.T) {
 	if !strings.Contains(err.Error(), "nil hooknum") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+// TestSetPacketMarks_nftablesRunner_Exprs verifies that non-default packet
+// marks configured via SetPacketMarks flow through the runner into the
+// nftables rule expressions it produces.
+//
+// AddConnmarkSaveRule (the runner's only rule-installer that consumes
+// n.marks at expression-construction time) calls makeConnmarkRestoreExprs
+// and makeConnmarkSaveExprs with n.marks; exercising those helpers with the
+// runner's stored marks therefore proves the end-to-end path without needing
+// a real netfilter conn. A separate integration test
+// (TestNFTAddAndDelConnmarkRules) covers the wire-level flow under root.
+func TestSetPacketMarks_nftablesRunner_Exprs(t *testing.T) {
+	// Defaults shifted up by one byte: a realistic non-default choice for
+	// users avoiding conflicts with other software that uses the third
+	// byte (e.g. Calico). Passes LinuxPacketMarks.Validate.
+	custom := PacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	wantMask := custom.FwmarkMaskBytes()
+	defaultMask := DefaultPacketMarks().FwmarkMaskBytes()
+
+	var n nftablesRunner
+	n.SetPacketMarks(custom)
+	if n.marks != custom {
+		t.Fatalf("SetPacketMarks: n.marks = %+v, want %+v", n.marks, custom)
+	}
+
+	check := func(name string, exprs []expr.Any) {
+		t.Helper()
+		var found bool
+		for _, e := range exprs {
+			bw, ok := e.(*expr.Bitwise)
+			if !ok {
+				continue
+			}
+			if bytes.Equal(bw.Mask, wantMask) {
+				found = true
+			}
+			if bytes.Equal(bw.Mask, defaultMask) {
+				t.Errorf("%s: bitwise expression unexpectedly used the default mask %x", name, defaultMask)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no bitwise expression used the custom mask %x", name, wantMask)
+		}
+	}
+	check("makeConnmarkRestoreExprs", makeConnmarkRestoreExprs(n.marks))
+	check("makeConnmarkSaveExprs", makeConnmarkSaveExprs(n.marks))
 }

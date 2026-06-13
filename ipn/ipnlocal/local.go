@@ -1088,12 +1088,22 @@ func (b *LocalBackend) SetIPServiceMappingsForTest(m netmap.IPServiceMappings) {
 // and other state.
 func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 	syncs.RequiresMutex(&b.mu)
+	oldMarks := b.pm.CurrentPrefs().LinuxPacketMarks().Clone()
 	p := b.pm.CurrentPrefs().AsStruct()
 	mp, err := conf.Parsed.ToPrefs()
 	if err != nil {
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
 	p.ApplyEdits(&mp)
+	// LinuxPacketMarks is intentionally applied only at startup: changing
+	// the values at runtime would require atomically rebuilding every
+	// mark-referencing iptables/nftables rule and would leave sockets
+	// already opened with the old bypass SO_MARK desynchronized from the
+	// new value. Reject any reload that would change them; tailscaled
+	// must be restarted to pick up new marks.
+	if !p.LinuxPacketMarks.Equals(oldMarks) {
+		return errors.New(`LinuxPacketMarks cannot be changed via config reload; restart tailscaled to apply`)
+	}
 	b.setStaticEndpointsFromConfigLocked(conf)
 	b.setPrefsLocked(p)
 
@@ -4895,6 +4905,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := checkAdvertiseRoutes(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := b.checkLinuxPacketMarksLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -5002,6 +5015,38 @@ func checkAdvertiseRoutes(p *ipn.Prefs) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// checkLinuxPacketMarksLocked rejects any change to LinuxPacketMarks made via
+// EditPrefs / CheckPrefs (i.e. the LocalAPI path used by `tailscale set`).
+// Custom marks are intentionally only configurable through the tailscaled
+// config file, applied once at startup, because changing them at runtime
+// would (a) leave already-open sockets carrying the old SO_MARK bypass
+// value, and (b) require atomically rebuilding every mark-referencing
+// netfilter and policy-routing rule. The config-file path bypasses this
+// check because [initPrefsFromConfig] goes through [setPrefsLocked]
+// directly; [setConfigLocked] (config reload) enforces the same
+// immutability inline.
+//
+// b.mu must be held.
+func (b *LocalBackend) checkLinuxPacketMarksLocked(p *ipn.Prefs) error {
+	if err := p.LinuxPacketMarks.Validate(); err != nil {
+		return err
+	}
+	curPrefs := b.pm.CurrentPrefs()
+	if !curPrefs.Valid() {
+		// No prior prefs to compare against. Reject any explicit value so the
+		// only way to introduce LinuxPacketMarks remains the config file.
+		if p.LinuxPacketMarks != nil {
+			return errors.New(`LinuxPacketMarks can only be configured via the tailscaled config file`)
+		}
+		return nil
+	}
+	cur := curPrefs.LinuxPacketMarks().Clone()
+	if p.LinuxPacketMarks.Equals(cur) {
+		return nil
+	}
+	return errors.New(`LinuxPacketMarks can only be configured via the tailscaled config file`)
 }
 
 // SetUseExitNodeEnabled turns on or off the most recently selected exit node.
@@ -6379,6 +6424,15 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		Routes:              peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
 		NetfilterKind:       netfilterKind,
 		RemoveCGNATDropRule: nm.HasCap(tailcfg.NodeAttrDisableLinuxCGNATDropRule),
+	}
+
+	// Add Linux packet marks if configured
+	if pm, ok := prefs.LinuxPacketMarks().GetOk(); ok {
+		rs.LinuxPacketMarks = &router.LinuxPacketMarks{
+			FwmarkMask:      pm.FwmarkMask,
+			SubnetRouteMark: pm.SubnetRouteMark,
+			BypassMark:      pm.BypassMark,
+		}
 	}
 
 	if buildfeatures.HasSynology && distro.Get() == distro.Synology {
