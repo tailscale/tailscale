@@ -574,7 +574,6 @@ func nodeMight6(n *tailcfg.DERPNode) bool {
 	}
 	ip, _ := netip.ParseAddr(n.IPv6)
 	return ip.Is6()
-
 }
 
 // nodeMight4 reports whether n might reply to STUN over IPv4 based on
@@ -722,14 +721,14 @@ func (rs *reportState) setOptBool(b *opt.Bool, v bool) {
 	b.Set(v)
 }
 
-func (rs *reportState) probePortMapServices() {
+func (rs *reportState) probePortMapServices(ctx context.Context) {
 	defer rs.waitPortMap.Done()
 
 	rs.setOptBool(&rs.report.UPnP, false)
 	rs.setOptBool(&rs.report.PMP, false)
 	rs.setOptBool(&rs.report.PCP, false)
 
-	res, err := rs.c.PortMapper.Probe(context.Background())
+	res, err := rs.c.PortMapper.Probe(ctx)
 	if err != nil {
 		if !errors.Is(err, portmappertype.ErrGatewayRange) {
 			// "skipping portmap; gateway range likely lacks support"
@@ -900,7 +899,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 
 	if !c.SkipExternalNetwork && c.PortMapper != nil {
 		rs.waitPortMap.Add(1)
-		go rs.probePortMapServices()
+		go rs.probePortMapServices(ctx)
 	}
 
 	var plan probePlan

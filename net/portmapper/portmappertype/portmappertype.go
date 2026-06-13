@@ -19,7 +19,8 @@ import (
 
 // HookNewPortMapper is a hook to install the portmapper creation function.
 // It must be set by an init function when buildfeatures.HasPortmapper is true.
-var HookNewPortMapper feature.Hook[func(logf logger.Logf,
+var HookNewPortMapper feature.Hook[func(ctx context.Context,
+	logf logger.Logf,
 	bus *eventbus.Bus,
 	netMon *netmon.Monitor,
 	disableUPnPOrNil,
@@ -82,7 +83,13 @@ type Client interface {
 type Mapping struct {
 	External  netip.AddrPort
 	Type      string
+	Status    string
 	GoodUntil time.Time
 
 	// TODO(creachadair): Record whether we reused an existing mapping?
 }
+
+const (
+	StatusCreated            = "StatusCreated"
+	StatusRemovedFromGateway = "StatusRemovedFromGateway"
+)
