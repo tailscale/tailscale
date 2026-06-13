@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -24,6 +25,15 @@ type ConfigVAlpha struct {
 
 	OperatorUser *string `json:",omitempty"` // local user name who is allowed to operate tailscaled without being root or using sudo
 	Hostname     *string `json:",omitempty"`
+
+	// Tailnet is an optional identifier of the tailnet to log into.
+	// It accepts either a Tailnet ID or a Legacy ID (formerly known as
+	// "Organization"); see https://tailscale.com/kb/1217/tailnet-name.
+	// The value is sent verbatim to the control server, which resolves
+	// it to a specific tailnet.
+	// If empty, no tailnet is sent and the control server uses its
+	// default behavior for the authenticating user.
+	Tailnet *string `json:",omitzero"`
 
 	AcceptDNS    opt.Bool `json:"acceptDNS,omitempty"`    // --accept-dns
 	AcceptRoutes opt.Bool `json:"acceptRoutes,omitempty"` // --accept-routes defaults to true
@@ -54,6 +64,21 @@ type ConfigVAlpha struct {
 
 	// TODO(bradfitz,maisem): future something like:
 	// Profile map[string]*Config // keyed by alice@gmail.com, corp.com (TailnetSID)
+}
+
+// RedactedJSON returns the config marshaled to JSON with secret values
+// redacted, suitable for logging. The AuthKey field is replaced with a
+// placeholder when set so the secret is never written to logs.
+func (c *ConfigVAlpha) RedactedJSON() ([]byte, error) {
+	if c == nil {
+		return []byte("null"), nil
+	}
+	redacted := *c // shallow copy; only pointer fields we rewrite below are shared
+	if c.AuthKey != nil {
+		v := "**redacted**"
+		redacted.AuthKey = &v
+	}
+	return json.Marshal(redacted)
 }
 
 func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
