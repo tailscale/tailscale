@@ -580,6 +580,20 @@ func isTailscaleInterface(name string, ips []netip.Prefix) bool {
 		strings.HasPrefix(name, "tailscale") // TODO: use --tun flag value, etc; see TODO in method doc
 }
 
+// IsTailscaleInterfaceName reports whether name looks like a Tailscale-managed
+// network interface, based purely on the name. It is the name-only counterpart
+// of [isTailscaleInterface] for callers that don't have the interface's IPs
+// handy (e.g. reacting to a netlink RTM_DELLINK).
+func IsTailscaleInterfaceName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if tsIfName, err := TailscaleInterfaceName(); err == nil {
+		return name == tsIfName
+	}
+	return name == "Tailscale" || strings.HasPrefix(name, "tailscale")
+}
+
 // getPAC, if non-nil, returns the current PAC file URL.
 var getPAC func() string
 

@@ -1609,3 +1609,129 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 			nfr.addExternalCGNATCalls)
 	}
 }
+
+// TestRPFIifRuleLifecycle verifies that a non-Tailscale link going up causes
+// an iif diversion rule to be installed at pref ipPolicyPrefBase + rpfIifPriorityOffset
+// pointing to the main routing table, and that going down (or being deleted)
+// removes it.
+func TestRPFIifRuleLifecycle(t *testing.T) {
+	tstest.RequireRoot(t)
+
+	bus := eventbustest.NewBus(t)
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	rr, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	}
+	r := rr.(*linuxRouter)
+	r.nfr = fake.nfr
+	defer r.Close()
+
+	// Force the netlink path even though tests usually use the fake "ip"
+	// command, so we exercise the real installer.
+	r.cmd = osCommandRunner{}
+	r.ipRuleAvailable = true
+	// Pretend the host is using an exit node so the rules are active.
+	r.mu.Lock()
+	r.rpfIifEnabled = true
+	r.mu.Unlock()
+
+	const fakeIface = "tstest-rpfiif0"
+	r.onLinkChanged(netmon.LinkChanged{Name: fakeIface, Index: 9999, Up: true})
+	if !r.rpfIifLinks[fakeIface] {
+		t.Fatalf("rpfIifLinks missing %q after up event: %v", fakeIface, r.rpfIifLinks)
+	}
+
+	// Confirm a rule exists at the expected priority for that iif.
+	pri := r.ipPolicyPrefBase + rpfIifPriorityOffset
+	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+	if err != nil {
+		t.Fatalf("RuleList: %v", err)
+	}
+	found := false
+	for _, ru := range rules {
+		if ru.Priority == pri && ru.IifName == fakeIface {
+			found = true
+			if ru.Table != 254 { // main
+				t.Errorf("rule for %q points at table %d; want main (254)", fakeIface, ru.Table)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no rule at priority %d for iif %q after onLinkChanged Up", pri, fakeIface)
+	}
+
+	r.onLinkChanged(netmon.LinkChanged{Name: fakeIface, Index: 9999, Deleted: true})
+	if r.rpfIifLinks[fakeIface] {
+		t.Errorf("rpfIifLinks still contains %q after delete event", fakeIface)
+	}
+
+	rules, err = netlink.RuleList(netlink.FAMILY_V4)
+	if err != nil {
+		t.Fatalf("RuleList post-delete: %v", err)
+	}
+	for _, ru := range rules {
+		if ru.Priority == pri && ru.IifName == fakeIface {
+			t.Errorf("rule at priority %d for iif %q still present after delete event", pri, fakeIface)
+		}
+	}
+}
+
+// TestRPFIifEligible verifies that LinkChanged events for ineligible
+// interfaces (Tailscale, loopback, empty name) never produce an iif diversion
+// rule. Loopback is the most important case: lo is the iif of every
+// locally-originated packet (LOOPBACK_IFINDEX), so a rule on it would divert
+// tailscaled's own outbound traffic away from table 52.
+func TestRPFIifEligible(t *testing.T) {
+	for _, name := range []string{"tailscale0", "lo", ""} {
+		t.Run(name, func(t *testing.T) {
+			r := &linuxRouter{
+				logf:             logger.Discard,
+				rpfIifLinks:      map[string]bool{},
+				rpfIifEnabled:    true,
+				ipPolicyPrefBase: 5200,
+				ipRuleAvailable:  true,
+				cmd:              fakeCmdRunner{},
+			}
+			r.onLinkChanged(netmon.LinkChanged{Name: name, Index: 1, Up: true})
+			if len(r.rpfIifLinks) != 0 {
+				t.Errorf("rpfIifLinks = %v; want empty for ineligible iface %q", r.rpfIifLinks, name)
+			}
+		})
+	}
+}
+
+// TestRPFIifGatedOnExitNodeUse verifies that LinkChanged events are ignored
+// unless the host is using an exit node. Subnet routers and exit-node servers
+// must not get pref-rpfIif rules installed because those rules short-circuit
+// the FIB lookup for forwarded traffic destined to a Tailscale CGNAT peer
+// away from table 52.
+func TestRPFIifGatedOnExitNodeUse(t *testing.T) {
+	r := &linuxRouter{
+		logf:             logger.Discard,
+		rpfIifLinks:      map[string]bool{},
+		ipPolicyPrefBase: 5200,
+		ipRuleAvailable:  true,
+		cmd:              fakeCmdRunner{},
+		// rpfIifEnabled defaults to false: not using an exit node.
+	}
+	r.onLinkChanged(netmon.LinkChanged{Name: "eth0", Index: 1, Up: true})
+	if len(r.rpfIifLinks) != 0 {
+		t.Errorf("rpfIifLinks = %v; want empty when rpfIifEnabled is false", r.rpfIifLinks)
+	}
+}
+
+// fakeCmdRunner exists only so that useIPCommand() returns true and the
+// onLinkChanged path early-returns without attempting netlink.
+type fakeCmdRunner struct{}
+
+func (fakeCmdRunner) run(...string) error              { return nil }
+func (fakeCmdRunner) output(...string) ([]byte, error) { return nil, nil }

@@ -37,6 +37,23 @@ type RuleDeleted struct {
 	Priority uint32
 }
 
+// LinkChanged reports that an interface was added, removed, or changed
+// administrative state. The Tailscale interface is filtered out at publish
+// time so subscribers never see it.
+type LinkChanged struct {
+	// Name is the interface name. Empty if the netlink message did not
+	// carry an IFLA_IFNAME attribute (e.g. some RTM_DELLINK messages).
+	Name string
+	// Index is the system-wide interface index.
+	Index uint32
+	// Up is true when the interface is administratively up after the
+	// reported change. Always false for delete events.
+	Up bool
+	// Deleted is true if this event reports that the interface was removed
+	// (RTM_DELLINK). For RTM_NEWLINK, Deleted is false.
+	Deleted bool
+}
+
 // nlConn wraps a *netlink.Conn and returns a monitor.Message
 // instead of a netlink.Message. Currently, messages are discarded,
 // but down the line, when messages trigger different logic depending
@@ -45,6 +62,7 @@ type RuleDeleted struct {
 type nlConn struct {
 	busClient    *eventbus.Client
 	rulesDeleted *eventbus.Publisher[RuleDeleted]
+	linksChanged *eventbus.Publisher[LinkChanged]
 	logf         logger.Logf
 	conn         *netlink.Conn
 	buffered     []netlink.Message
@@ -54,6 +72,12 @@ type nlConn struct {
 	// by RTM_NEWADDR messages and de-populated by RTM_DELADDR. See
 	// issue #4282.
 	addrCache map[uint32]map[netip.Addr]bool
+
+	// linkNames remembers the last known name for each interface index so
+	// RTM_DELLINK messages (which often arrive without IFLA_IFNAME) can be
+	// resolved back to a name, and so renames can be reported as
+	// remove+add by the subscriber.
+	linkNames map[uint32]string
 }
 
 func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
@@ -64,7 +88,8 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 		// but all reachability would.
 		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
 			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
-			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
+			unix.RTMGRP_IPV4_RULE | // no IPV6_RULE in x/sys/unix
+			unix.RTMGRP_LINK,
 	})
 	if err != nil {
 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
@@ -75,9 +100,11 @@ func newOSMon(bus *eventbus.Bus, logf logger.Logf, m *Monitor) (osMon, error) {
 	return &nlConn{
 		busClient:    client,
 		rulesDeleted: eventbus.Publish[RuleDeleted](client),
+		linksChanged: eventbus.Publish[LinkChanged](client),
 		logf:         logf,
 		conn:         conn,
 		addrCache:    make(map[uint32]map[netip.Addr]bool),
+		linkNames:    make(map[uint32]string),
 	}, nil
 }
 
@@ -249,8 +276,58 @@ func (c *nlConn) Receive() (message, error) {
 		}
 		return ignoreMessage{}, nil
 	case unix.RTM_NEWLINK, unix.RTM_DELLINK:
-		// This is an unhandled message, but don't print an error.
-		// See https://github.com/tailscale/tailscale/issues/6806
+		var rmsg rtnetlink.LinkMessage
+		if err := rmsg.UnmarshalBinary(msg.Data); err != nil {
+			c.logf("failed to parse type %v: %v", msg.Header.Type, err)
+			return unspecifiedMessage{}, nil
+		}
+		deleted := msg.Header.Type == unix.RTM_DELLINK
+		name := ""
+		if rmsg.Attributes != nil {
+			name = rmsg.Attributes.Name
+		}
+		// IFLA_IFNAME is sometimes absent on RTM_DELLINK; fall back to the
+		// name we remembered from the last RTM_NEWLINK for this index.
+		if name == "" {
+			if prev, ok := c.linkNames[rmsg.Index]; ok {
+				name = prev
+			}
+		}
+		// IFF_UP from netdevice(7); see linux/if.h.
+		up := !deleted && rmsg.Flags&unix.IFF_UP != 0
+		// Update the index→name cache. If the name changed for an existing
+		// index this is effectively a rename; we publish a Deleted event for
+		// the old name first so subscribers can treat rename as remove+add.
+		if deleted {
+			delete(c.linkNames, rmsg.Index)
+		} else if name != "" {
+			if old, ok := c.linkNames[rmsg.Index]; ok && old != name {
+				if debugNetlinkMessages() {
+					c.logf("RTM_NEWLINK: rename %s -> %s (idx=%d)", old, name, rmsg.Index)
+				}
+				c.linksChanged.Publish(LinkChanged{
+					Name:    old,
+					Index:   rmsg.Index,
+					Deleted: true,
+				})
+			}
+			c.linkNames[rmsg.Index] = name
+		}
+
+		if debugNetlinkMessages() {
+			typ := "RTM_NEWLINK"
+			if deleted {
+				typ = "RTM_DELLINK"
+			}
+			c.logf("%s: name=%s idx=%d up=%v", typ, name, rmsg.Index, up)
+		}
+
+		c.linksChanged.Publish(LinkChanged{
+			Name:    name,
+			Index:   rmsg.Index,
+			Up:      up,
+			Deleted: deleted,
+		})
 		return unspecifiedMessage{}, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
