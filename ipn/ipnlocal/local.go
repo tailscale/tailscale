@@ -2418,7 +2418,24 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		}
 	}
 	ms.UpdateNetmapDelta(muts)
+
+	// Temporary for 1.100.x: force a full authReconfig + SetNetworkMap
+	// on any peer add or remove. netmapDeltaNeedsAuthReconfig only
+	// considered NodeMutationUpsert of already-known NodeIDs whose
+	// peerRouteConfigChanged, so brand-new peers and removes left
+	// e.lastCfgFull / the engine BART / wgdev's PeerLookupFunc closure
+	// / e.netMap all stale, and Engine.PeerForIP, lookupPeerByIP, and
+	// outbound wgdev encryption all missed those peers. authReconfig
+	// fixes the wireguard side; SetNetworkMap fixes the e.netMap that
+	// PeerForIP reads. The proper per-peer fix lands in the next dev
+	// cycle. See tailscale/corp#43394.
+	needsAuthReconfig = needsAuthReconfig || peersUpsertedOrRemoved
 	if needsAuthReconfig {
+		if peersUpsertedOrRemoved {
+			if nm := cn.netMapWithPeers(); nm != nil {
+				b.e.SetNetworkMap(nm)
+			}
+		}
 		b.authReconfigLocked()
 	}
 
