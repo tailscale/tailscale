@@ -6,6 +6,7 @@
 package tailssh
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"os/user"
@@ -18,6 +19,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/util/lineiter"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/osuser"
 	"tailscale.com/version/distro"
 )
@@ -150,4 +152,73 @@ func expandDefaultPathTmpl(t string, u *user.User) string {
 		return ""
 	}
 	return p
+}
+
+// runLocaleCommand runs the "locale" command and returns its output. It's a
+// variable so it can be overridden in tests.
+var runLocaleCommand = func() ([]byte, error) {
+	return exec.Command("locale").Output()
+}
+
+var sshDisableLocale = envknob.RegisterBool("TS_SSH_DISABLE_LOCALE")
+
+// readLocale returns the default LANG and LC_* environment variables to use
+// for new sessions, if they can be discovered from the system. The fs argument
+// is used to read configuration files, and may be os.DirFS("/") or a test FS.
+// The returned map is from variable name to value (e.g. "LANG" => "en_US.UTF-8").
+//
+// A nil map means no defaults found or locale support is disabled by envknob.
+func readLocale(root *os.Root) (vars map[string]string) {
+	if sshDisableLocale() {
+		return nil
+	}
+
+	// First off, if we have a default LANG set in a system-wide
+	// configuration file, use that. Note that we intentionally don't have
+	// the leading '/' prefix here since that's added by the Root.
+	for _, fpath := range []string{
+		"etc/locale.conf",
+		"etc/default/locale",
+		"etc/environment",
+	} {
+		fbytes, err := root.ReadFile(fpath)
+		if err != nil {
+			continue
+		}
+
+		for lineb := range lineiter.Bytes(fbytes) {
+			k, v, ok := bytes.Cut(lineb, []byte("="))
+			if !ok {
+				continue
+			}
+			v = bytes.TrimSpace(v)
+			if bytes.Equal(k, []byte("LANG")) || bytes.HasPrefix(k, []byte("LC_")) && len(v) > 0 {
+				ks := string(k)
+				if _, found := vars[ks]; !found {
+					mak.Set(&vars, ks, string(v))
+				}
+			}
+		}
+	}
+
+	// Next, if we're on a system with the "locale" command, try that.
+	out, err := runLocaleCommand()
+	if err != nil {
+		return vars
+	}
+	for line := range lineiter.Bytes(out) {
+		k, v, ok := bytes.Cut(line, []byte("="))
+		if !ok {
+			continue
+		}
+		v = bytes.TrimSpace(v)
+		if bytes.Equal(k, []byte("LANG")) || bytes.HasPrefix(k, []byte("LC_")) && len(v) > 0 {
+			ks := string(k)
+			if _, found := vars[ks]; !found {
+				mak.Set(&vars, ks, string(v))
+			}
+		}
+	}
+
+	return vars
 }
