@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -87,6 +88,9 @@ type Status struct {
 	// version of the Tailscale client that's available. Depending on
 	// the platform and client settings, it may not be available.
 	ClientVersion *tailcfg.ClientVersion
+
+	// FilteredSplitDNSRoutes maps domain suffixes to resolvers the local client dropped from [tailcfg.DNSConfig.Routes] at netmap reconfig time. Non-empty only when [tailcfg.NodeAttrFilterSplitDNSUnreachableTailscaleResolvers] is set.
+	FilteredSplitDNSRoutes map[string][]*dnstype.Resolver `json:",omitempty"`
 }
 
 // TKAKey describes a key trusted by tailnet lock.

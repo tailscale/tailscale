@@ -1131,6 +1131,8 @@ func (h *Handler) serveCertDomains(w http.ResponseWriter, r *http.Request) {
 
 // serveDNSConfig returns the [tailcfg.DNSConfig] from the current netmap.
 // It returns 503 if no netmap has been received yet.
+//
+// Client-side filtering decisions live on [ipnstate.Status] (via /status), not here.
 func (h *Handler) serveDNSConfig(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "dns-config access denied", http.StatusForbidden)
