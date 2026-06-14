@@ -235,7 +235,7 @@ store state on filesystem.`)
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
 		if fp, ok := subCommands[sub]; ok {
-			if fp == nil {
+			if *fp == nil {
 				log.SetFlags(0)
 				log.Fatalf("%s not available on %v", sub, runtime.GOOS)
 			}
