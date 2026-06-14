@@ -1695,6 +1695,245 @@ func TestFallbackTCPHandler(t *testing.T) {
 	}
 }
 
+// TestPingPeerLearnedViaDelta verifies that `tailscale ping` works
+// for a peer that the local node learned about only via a
+// [tailcfg.MapResponse.PeersChanged] delta, never via a full
+// [tailcfg.MapResponse.Peers] list.
+//
+// Before aa5da2e5f22a, every peer change rebuilt a full netmap on
+// the engine, so [wgengine.Engine.SetNetworkMap] kept the engine's
+// cached netmap fresh and [wgengine.Engine.Reconfig] kept wgdev and
+// e.lastCfgFull fresh. After that refactor, peer adds and removes
+// ride the delta path and only mutate [nodeBackend]; the engine's
+// cached netmap and wireguard config stayed stale, and
+// [wgengine.Engine.PeerForIP] / [wgengine.Engine.Ping] / wgdev's
+// outbound encryption all missed the new peer.
+//
+// Two subtests exercise different layers:
+//
+//   - "disco" uses [tailcfg.PingDisco], which goes straight to
+//     magicsock (which has the peer via UpsertPeer) and bypasses
+//     wireguard-go entirely. It targets the cold-path PeerForIP
+//     lookup -- before the fix this missed the new peer with
+//     "no matching peer".
+//
+//   - "tsmp" uses [tailcfg.PingTSMP], which builds a real
+//     IP-proto-99 packet and pushes it through the full data path:
+//     PeerForIP -> lookupPeerByIP -> wgdev encryption ->
+//     magicsock transport. The receiving side's [tstun.Wrapper]
+//     intercepts TSMP and replies with a pong. Catches the
+//     wireguard-go side too: wgdev's PeerLookupFunc closure
+//     (captured at the last ReconfigDevice) didn't have the new
+//     peer's noise key, so even after lookupPeerByIP returned the
+//     right NodePublic wgdev couldn't lazily create the peer for
+//     outbound encryption.
+//
+// See tailscale/corp#43394.
+func TestPingPeerLearnedViaDelta(t *testing.T) {
+	for _, pt := range []tailcfg.PingType{tailcfg.PingDisco, tailcfg.PingTSMP} {
+		t.Run(string(pt), func(t *testing.T) {
+			testPingPeerLearnedViaDelta(t, pt)
+		})
+	}
+}
+
+func testPingPeerLearnedViaDelta(t *testing.T, pt tailcfg.PingType) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, control := startControl(t)
+
+	// Bring up s1 alone so its initial (auto-generated) MapResponse
+	// has no peers; testcontrol only has s1 registered at this point.
+	s1, _, s1Key := startServer(t, ctx, controlURL, "s1")
+
+	// Switch s1 into manual MapResponse mode. The empty response is a
+	// no-op heartbeat; the side effect is that suppressAutoMapResponses
+	// is set for s1, so the s2 join below cannot reach s1 as a full
+	// auto-generated netmap.
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{}) {
+		t.Fatal("AddRawMapResponse(s1, empty): node not connected")
+	}
+
+	// Bring up s2. testcontrol would normally push a peer-changed
+	// update to s1's long-poll, but autos for s1 are suppressed.
+	// s2 itself is not suppressed, so it gets a full netmap that
+	// includes s1, which is necessary for disco to complete in both
+	// directions (and for the TSMP pong to make it back).
+	s2, s2ip, s2Key := startServer(t, ctx, controlURL, "s2")
+	_ = s2
+
+	// Snapshot s2's node-as-seen-by-control and inject it into s1's
+	// stream as a PeersChanged delta.
+	s2Node := control.Node(s2Key)
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{s2Node},
+	}) {
+		t.Fatal("AddRawMapResponse(s1, PeersChanged): node not connected")
+	}
+
+	// Wait for the delta to land in s1's nodeBackend.
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		for _, p := range nm.Peers {
+			if p.Key() == s2Key {
+				return true
+			}
+		}
+		return false
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bound each Ping individually; userspaceEngine.Ping holds the
+	// callback open until the pong arrives or the surrounding ctx is
+	// cancelled, so without a tighter bound a failure waits the full
+	// 30s test deadline.
+	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, s2ip, pt)
+	if err != nil {
+		t.Fatalf("Ping(%s): %v", pt, err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("Ping(%s) s1->s2 failed: %s (want success)", pt, pr.Err)
+	}
+}
+
+// TestPingSubnetRouteOfDeltaPeer verifies that when a peer arrives
+// purely via a [tailcfg.MapResponse.PeersChanged] delta and that peer
+// advertises a subnet route, the local node can resolve an IP within
+// that subnet to the new peer and exchange traffic with it.
+//
+// Before the fix, [netmapDeltaNeedsAuthReconfig] returned false for a
+// brand-new peer Upsert (the NodeID wasn't already known), so
+// [LocalBackend.authReconfigLocked] -- the only path that pushes a
+// fresh wireguard config into the engine -- never ran. The engine's
+// wireguard-filtered peer list and BART stayed stale, so
+// [LocalBackend.lookupPeerByIP] and [LocalBackend.peerForIP] both
+// missed any IP inside the advertised CIDR, and wgdev's
+// PeerLookupFunc closure didn't have the new peer's noise key for
+// outbound encryption.
+//
+// See tailscale/corp#43394.
+func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, control := startControl(t)
+
+	// Bring up s1 alone so its initial netmap has no peers.
+	s1, _, s1Key := startServer(t, ctx, controlURL, "s1")
+
+	// Accept subnet routes on s1; otherwise nmcfg.WGCfg strips a peer's
+	// non-self AllowedIPs out of the wireguard config (and thus out of
+	// the engine BART), and a subnet-router delta wouldn't actually
+	// install the route locally even with the fix.
+	lc1 := must.Get(s1.LocalClient())
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:       ipn.Prefs{RouteAll: true},
+		RouteAllSet: true,
+	}))
+
+	// Switch s1 into manual MapResponse mode so the s2 join cannot
+	// arrive as a full auto-generated netmap.
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{}) {
+		t.Fatal("AddRawMapResponse(s1, empty): node not connected")
+	}
+
+	// Bring up s2. We'll treat it as a subnet router for 10.0.0.0/24
+	// by adding that prefix to its AllowedIPs in the delta we inject
+	// below. (s2 isn't a real subnet router -- we don't try to forward
+	// traffic through it. The receiving side's tstun.Wrapper handles
+	// TSMP regardless of dst IP, so the pong comes back as long as
+	// the encrypt/transport chain works.)
+	s2, _, s2Key := startServer(t, ctx, controlURL, "s2")
+	_ = s2
+
+	const subnet = "10.0.0.0/24"
+	subnetPrefix := netip.MustParsePrefix(subnet)
+	probeIP := netip.MustParseAddr("10.0.0.5")
+
+	// Inject s2 into s1 as a PeersChanged delta with the subnet route
+	// in AllowedIPs.
+	s2Node := control.Node(s2Key)
+	s2Node.PrimaryRoutes = []netip.Prefix{subnetPrefix}
+	s2Node.AllowedIPs = append(s2Node.AllowedIPs, subnetPrefix)
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{s2Node},
+	}) {
+		t.Fatal("AddRawMapResponse(s1, PeersChanged): node not connected")
+	}
+
+	// Wait for the delta to land in s1's nodeBackend.
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		for _, p := range nm.Peers {
+			if p.Key() == s2Key {
+				return true
+			}
+		}
+		return false
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	// PingTSMP sends a real IP packet (IP proto 99) over wireguard
+	// to probeIP, exercising the full data path -- PeerForIP lookup,
+	// outbound wgdev encryption, magicsock transport. The receiving
+	// side (s2's tstun.Wrapper) intercepts TSMP regardless of dst
+	// IP and replies with a pong. So this catches both halves of
+	// the bug: a stale BART / lastCfgFull (PeerForIP / lookupPeerByIP
+	// miss) AND a stale wgdev PeerLookupFunc closure (peer's noise
+	// key not yet registered for outbound encryption).
+	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, probeIP, tailcfg.PingTSMP)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("ping s1->%v (subnet route via s2) failed: %s (want success)", probeIP, pr.Err)
+	}
+}
+
+// TestPingSelfReturnsIsLocalIP verifies that pinging one's own
+// Tailscale IP takes the IsSelf early-out in [wgengine.Engine.Ping]
+// instead of trying to ping self via magicsock. Lives here as a
+// regression guard against future refactors of the PeerForIP self
+// path; the original userspaceEngine.PeerForIP handles self via a
+// dedicated nm.GetAddresses() scan, but anything that re-routes
+// PeerForIP through a more general index needs to keep
+// [wgengine.PeerForIP.IsSelf] set for self addresses.
+func TestPingSelfReturnsIsLocalIP(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+
+	lc, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := lc.Ping(ctx, s1ip, tailcfg.PingDisco)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if !pr.IsLocalIP {
+		t.Errorf("IsLocalIP = false, want true (pr=%+v)", pr)
+	}
+	if pr.Err == "" {
+		t.Errorf("Err = %q, want a 'local Tailscale IP' message", pr.Err)
+	}
+}
+
 func TestCapturePcap(t *testing.T) {
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
