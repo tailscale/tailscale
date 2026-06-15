@@ -357,6 +357,40 @@ var udp6SmallOffsetFragmentDecode = Parsed{
 	Dst:       mustIPPort("[2607:f8b0:400a:809::200e]:0"),
 }
 
+// A first fragment reachable only through a chained extension header: the base
+// header's Next Header is Hop-by-Hop Options (0), which then chains to the
+// Fragment header. decode6 only parses the Fragment header when it is the
+// base header's immediate Next Header, so it must classify this as Unknown
+// rather than walking the chain. This locks in that scoping decision so a
+// future change can't silently start (mis)parsing chained headers.
+var udp6ChainedFragmentBuffer = []byte{
+	// IPv6 header. Next header = 0 (Hop-by-Hop Options), payload len = 24.
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x40,
+	// Src addr
+	0x20, 0x01, 0x05, 0x59, 0xbc, 0x13, 0x54, 0x00, 0x17, 0x49, 0x46, 0x28, 0x39, 0x34, 0x0e, 0x1b,
+	// Dst addr
+	0x26, 0x07, 0xf8, 0xb0, 0x40, 0x0a, 0x08, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x0e,
+	// Hop-by-Hop Options header (8 bytes): NextHeader=44 (Fragment),
+	// HdrExtLen=0, followed by PadN option padding.
+	0x2c, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00,
+	// Fragment extension header: NextHeader=UDP, Reserved, Offset=0 + M=1, Identification.
+	0x11, 0x00, 0x00, 0x01, 0xde, 0xad, 0xbe, 0xef,
+	// UDP header (unreachable: decoder stops at the unhandled Hop-by-Hop header).
+	0xd4, 0x04, 0x01, 0xbb, 0x00, 0x18, 0x00, 0x00,
+}
+
+var udp6ChainedFragmentDecode = Parsed{
+	b:       udp6ChainedFragmentBuffer,
+	subofs:  40, // base header only; the Hop-by-Hop header is not parsed
+	dataofs: 0,
+	length:  len(udp6ChainedFragmentBuffer),
+
+	IPVersion: 6,
+	IPProto:   Unknown,
+	Src:       mustIPPort("[2001:559:bc13:5400:1749:4628:3934:e1b]:0"),
+	Dst:       mustIPPort("[2607:f8b0:400a:809::200e]:0"),
+}
+
 var udp4ReplyBuffer = []byte{
 	// IP header up to checksum
 	0x45, 0x00, 0x00, 0x29, 0x21, 0x52, 0x00, 0x00, 0x40, 0x11, 0x49, 0x5f,
@@ -696,6 +730,7 @@ func TestDecode(t *testing.T) {
 		{"ipv6_frag_nonfirst", udp6NonFirstFragmentBuffer, udp6NonFirstFragmentDecode},
 		{"ipv6_frag_short_first", udp6ShortFirstFragmentBuffer, udp6ShortFirstFragmentDecode},
 		{"ipv6_frag_small_offset", udp6SmallOffsetFragmentBuffer, udp6SmallOffsetFragmentDecode},
+		{"ipv6_frag_chained", udp6ChainedFragmentBuffer, udp6ChainedFragmentDecode},
 		{"ipv4_fragtooshort", tcp4ShortFragmentBuffer, tcp4ShortFragmentDecode},
 		{"ipv4_short_first_fragment", ipv4ShortFirstFragmentBuffer, ipv4ShortFirstFragmentDecode},
 		{"ipv4_small_offset_fragment", ipv4SmallOffsetFragmentBuffer, ipv4SmallOffsetFragmentDecode},
