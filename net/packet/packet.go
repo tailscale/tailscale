@@ -17,6 +17,11 @@ import (
 const unknown = ipproto.Unknown
 
 // RFC1858: prevent overlapping fragment attacks.
+//
+// The bound is sized for IPv4 (max IPv4 header + basic TCP header) but is
+// intentionally reused by decode6 for IPv6 fragments. It is conservative for
+// IPv6, whose fragments carry no per-fragment IP header, so it only ever
+// rejects more later fragments as Unknown, never fewer.
 const minFragBlks = (60 + 20) / 8 // max IPv4 header + basic TCP header in fragment blocks (8 bytes each)
 
 // ip6FragHeader is the IANA protocol number for the IPv6 Fragment extension
