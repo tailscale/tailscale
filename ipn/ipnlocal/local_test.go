@@ -1421,9 +1421,11 @@ func TestConfigureExitNode(t *testing.T) {
 			lb := newTestLocalBackendWithSys(t, sys)
 			lb.SetPrefsForTest(tt.prefs.Clone())
 
-			// Then set the netcheck report and netmap, if any.
+			// Then set the netcheck report and netmap, if any. Clone the shared
+			// report because AddNetcheckReportForTest mutates it and subtests run
+			// in parallel.
 			if tt.report != nil {
-				lb.MagicConn().SetLastNetcheckReportForTest(t.Context(), tt.report)
+				lb.MagicConn().AddNetcheckReportForTest(clientNetmap.DERPMap, tt.report, time.Now())
 			}
 			if tt.netMap != nil {
 				lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: tt.netMap})
@@ -1681,7 +1683,7 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 	clientNetmap := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
 
 	lb := newTestLocalBackend(t)
-	lb.sys.MagicSock.Get().SetLastNetcheckReportForTest(lb.ctx, report)
+	lb.sys.MagicSock.Get().AddNetcheckReportForTest(clientNetmap.DERPMap, report, time.Now())
 	lb.SetPrefsForTest(&ipn.Prefs{
 		ControlURL:   controlURL,
 		AutoExitNode: ipn.AnyExitNode,
@@ -4090,7 +4092,7 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			b := newTestLocalBackendWithSys(t, sys)
 			b.currentNode().SetNetMap(tt.netmap)
 			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
-			b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, tt.report)
+			b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, tt.report, time.Now())
 			b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
 
 			allDone := make(chan bool, 1)
@@ -4224,14 +4226,14 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 		t.Errorf("got initial exit node %v, want %v", eid, peer1.StableID())
 	}
 	b.refreshAutoExitNode = true
-	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, &netcheck.Report{
+	b.sys.MagicSock.Get().AddNetcheckReportForTest(defaultDERPMap, &netcheck.Report{
 		RegionLatency: map[int]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 5 * time.Millisecond,
 			3: 30 * time.Millisecond,
 		},
 		PreferredDERP: 2,
-	})
+	}, time.Now())
 	b.setNetInfo(&ni)
 	if eid := b.Prefs().ExitNodeID(); eid != peer2.StableID() {
 		t.Errorf("got final exit node %v, want %v", eid, peer2.StableID())
@@ -4288,7 +4290,7 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 	// Peer 2 should be the initial exit node, as it's better than peer 1
 	// in terms of latency and DERP region.
 	b.lastSuggestedExitNode = peer2.StableID()
-	b.sys.MagicSock.Get().SetLastNetcheckReportForTest(b.ctx, report)
+	b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, report, time.Now())
 	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
 	offlinePeer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
 	updatedNetmap := &netmap.NetworkMap{
@@ -6058,7 +6060,14 @@ func TestSuggestExitNode(t *testing.T) {
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 
-			got, err := suggestExitNode(tt.lastReport, nb, tt.lastSuggestion, selectRegion, selectNode, allowList)
+			var preferredDERP int
+			var regionLatency map[int]time.Duration
+			if tt.lastReport != nil {
+				preferredDERP = tt.lastReport.PreferredDERP
+				regionLatency = tt.lastReport.RegionLatency
+			}
+
+			got, err := suggestExitNode(preferredDERP, regionLatency, nb, tt.lastSuggestion, selectRegion, selectNode, allowList)
 			if got.Name != tt.wantName {
 				t.Errorf("name=%v, want %v", got.Name, tt.wantName)
 			}
@@ -6075,6 +6084,89 @@ func TestSuggestExitNode(t *testing.T) {
 				t.Errorf("location=%v, want %v", got.Location, tt.wantLocation)
 			}
 		})
+	}
+}
+
+// TestSuggestExitNodeUsesRecentDERPLatency exercises DERP latency-based exit node
+// suggestion when the most recent netcheck report is incremental.
+func TestSuggestExitNodeUsesRecentDERPLatency(t *testing.T) {
+	t.Parallel()
+
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1}}},
+			2: {Nodes: []*tailcfg.DERPNode{{Name: "2a", RegionID: 2}}},
+			3: {Nodes: []*tailcfg.DERPNode{{Name: "3a", RegionID: 3}}},
+			4: {Nodes: []*tailcfg.DERPNode{{Name: "4a", RegionID: 4}}},
+			5: {Nodes: []*tailcfg.DERPNode{{Name: "5a", RegionID: 5}}},
+		},
+	}
+
+	// Two candidate exit nodes, each homed in a far region (4 and 5) that the most
+	// recent (incremental) netcheck won't re-probe.
+	exitRegion4 := makePeer(4, withDERP(4), withExitRoutes(), withSuggest())
+	exitRegion5 := makePeer(5, withDERP(5), withExitRoutes(), withSuggest())
+
+	selfNode := tailcfg.Node{
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+	}
+	netMap := &netmap.NetworkMap{
+		SelfNode: selfNode.View(),
+		DERPMap:  derpMap,
+		Peers:    []tailcfg.NodeView{exitRegion4, exitRegion5},
+	}
+
+	// A full netcheck measured every region: region 4 (100ms) is closer than
+	// region 5 (200ms).
+	fullReport := &netcheck.Report{
+		PreferredDERP: 1,
+		RegionLatency: map[int]time.Duration{
+			1: 10 * time.Millisecond,
+			2: 20 * time.Millisecond,
+			3: 30 * time.Millisecond,
+			4: 100 * time.Millisecond,
+			5: 200 * time.Millisecond,
+		},
+	}
+	// A later incremental netcheck only re-probed the home and fastest regions, so
+	// it has no latency for regions 4 or 5.
+	incrementalReport := &netcheck.Report{
+		RegionLatency: map[int]time.Duration{
+			1: 10 * time.Millisecond,
+			2: 20 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+	}
+
+	b := newTestLocalBackend(t)
+	b.currentNode().SetNetMap(netMap)
+	mc := b.sys.MagicSock.Get()
+
+	// Without any netcheck reports, SuggestExitNode returns an error because no
+	// preferred DERP can be determined.
+	if _, err := b.SuggestExitNode(); !errors.Is(err, ErrNoPreferredDERP) {
+		t.Fatalf("SuggestExitNode() error = %v, want ErrNoPreferredDERP", err)
+	}
+
+	// Seed the full report, then the incremental one a minute later, so both
+	// remain in netcheck's recent history.
+	now := time.Now()
+	mc.AddNetcheckReportForTest(derpMap, fullReport, now.Add(-time.Minute))
+	mc.AddNetcheckReportForTest(derpMap, incrementalReport, now)
+
+	// suggestExitNodeLocked falls back to a random region when it cannot order the
+	// candidates by latency, so query repeatedly to make sure it always returns the closer region-4 node.
+	const iterations = 64
+	got := make(map[tailcfg.StableNodeID]int)
+	for range iterations {
+		res, err := b.SuggestExitNode()
+		if err != nil {
+			t.Fatalf("SuggestExitNode() error = %v", err)
+		}
+		got[res.ID]++
+	}
+	if len(got) != 1 || got[exitRegion4.StableID()] != iterations {
+		t.Errorf("expected all %v suggestions to be for %v, got %+v", iterations, exitRegion4.StableID(), got)
 	}
 }
 
@@ -6565,46 +6657,41 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 
 func TestMinLatencyDERPregion(t *testing.T) {
 	tests := []struct {
-		name       string
-		regions    []int
-		report     *netcheck.Report
-		wantRegion int
+		name          string
+		regions       []int
+		regionLatency map[int]time.Duration
+		wantRegion    int
 	}{
 		{
 			name:       "regions-no-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 0,
-			report:     &netcheck.Report{},
 		},
 		{
 			name:       "regions-different-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 2,
-			report: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
-					1: 10 * time.Millisecond,
-					2: 5 * time.Millisecond,
-					3: 30 * time.Millisecond,
-				},
+			regionLatency: map[int]time.Duration{
+				1: 10 * time.Millisecond,
+				2: 5 * time.Millisecond,
+				3: 30 * time.Millisecond,
 			},
 		},
 		{
 			name:       "regions-same-latency",
 			regions:    []int{1, 2, 3},
 			wantRegion: 1,
-			report: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
-					1: 10 * time.Millisecond,
-					2: 10 * time.Millisecond,
-					3: 10 * time.Millisecond,
-				},
+			regionLatency: map[int]time.Duration{
+				1: 10 * time.Millisecond,
+				2: 10 * time.Millisecond,
+				3: 10 * time.Millisecond,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := minLatencyDERPRegion(tt.regions, tt.report)
+			got := minLatencyDERPRegion(tt.regions, tt.regionLatency)
 			if got != tt.wantRegion {
 				t.Errorf("got region %v want region %v", got, tt.wantRegion)
 			}
