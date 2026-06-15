@@ -32,7 +32,7 @@ func (b *LocalBackend) writePeerDeltaToDiskLocked(update []tailcfg.NodeView, rem
 	} else if err := b.ensureDiskCacheLocked(); err != nil {
 		return err
 	}
-	b.logf("updating netmap peers in disk cache (%d to update, %d to remove)", len(update), len(remove))
+	// Do not log this, we get deltas all the time and it's very noisy.
 	return b.diskCache.cache.UpdatePeers(b.currentNode().Context(), update, remove)
 }
 
