@@ -1593,6 +1593,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		sb.AddUser(id, up)
 	}
 	exitNodeID := b.pm.CurrentPrefs().ExitNodeID()
+	blankHostinfo := new(tailcfg.Hostinfo).View()
 	for _, p := range cn.Peers() {
 		tailscaleIPs := make([]netip.Addr, 0, p.Addresses().Len())
 		for i := range p.Addresses().Len() {
@@ -1601,20 +1602,24 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
+		hostinfo := p.Hostinfo()
+		if !hostinfo.Valid() {
+			hostinfo = blankHostinfo
+		}
 		ps := &ipnstate.PeerStatus{
 			InNetworkMap:    true,
 			UserID:          p.User(),
 			AltSharerUserID: p.Sharer(),
 			TailscaleIPs:    tailscaleIPs,
-			HostName:        p.Hostinfo().Hostname(),
+			HostName:        hostinfo.Hostname(),
 			DNSName:         p.Name(),
-			OS:              p.Hostinfo().OS(),
+			OS:              hostinfo.OS(),
 			LastSeen:        p.LastSeen().Get(),
 			Online:          p.Online().Get(),
-			ShareeNode:      p.Hostinfo().ShareeNode(),
+			ShareeNode:      hostinfo.ShareeNode(),
 			ExitNode:        p.StableID() != "" && p.StableID() == exitNodeID,
-			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
-			Location:        p.Hostinfo().Location().AsStruct(),
+			SSH_HostKeys:    hostinfo.SSH_HostKeys().AsSlice(),
+			Location:        hostinfo.Location().AsStruct(),
 			Capabilities:    p.Capabilities().AsSlice(),
 		}
 		for _, f := range b.extHost.Hooks().SetPeerStatus {
@@ -7517,6 +7522,9 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 }
 
 func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
+	if !peer.Valid() || !peer.Hostinfo().Valid() {
+		return
+	}
 	svcs := peer.Hostinfo().Services()
 	for _, s := range svcs.All() {
 		switch s.Proto {
