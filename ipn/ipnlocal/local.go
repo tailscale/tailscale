@@ -58,7 +58,6 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
-	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -8643,10 +8642,19 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	if !buildfeatures.HasUseExitNode {
 		return response, feature.ErrUnavailable
 	}
-	lastReport := b.MagicConn().GetLastNetcheckReport(b.ctx)
+	mc := b.MagicConn()
+	var preferredDERP int
+	if lastReport := mc.GetLastNetcheckReport(b.ctx); lastReport != nil {
+		preferredDERP = lastReport.PreferredDERP
+	}
+	// Use netcheck's recent per-region latency rather than only the latest report:
+	// the latest report may be an incremental netcheck that didn't re-probe the
+	// regions where far-away candidate exit nodes live, which would otherwise force
+	// a random choice.
+	regionLatency := mc.GetDERPRegionLatency()
 	prevSuggestion := b.lastSuggestedExitNode
 
-	res, err := suggestExitNode(lastReport, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
+	res, err := suggestExitNode(preferredDERP, regionLatency, b.currentNode(), prevSuggestion, randomRegion, randomNode, b.getAllowedSuggestions())
 	if err != nil {
 		return res, err
 	}
@@ -8718,7 +8726,11 @@ func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNod
 
 // suggestExitNode returns a suggestion for reasonably good exit node based on
 // the current netmap and the previous suggestion.
-func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+//
+// preferredDERP is this device's home DERP region (0 if unknown) and
+// regionLatency is the best recent latency to each DERP region; both come from
+// netcheck and are only used by the DERP-based algorithm.
+func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
@@ -8727,7 +8739,7 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 		// The control plane will always strip the `traffic-steering`
 		// node attribute if it isn’t enabled for this tailnet, even if
 		// it is set in the policy file: tailscale/corp#34401
-		res, err = suggestExitNodeUsingDERP(report, nb, prevSuggestion, selectRegion, selectNode, allowList)
+		res, err = suggestExitNodeUsingDERP(preferredDERP, regionLatency, nb, prevSuggestion, selectRegion, selectNode, allowList)
 	}
 	if err != nil {
 		nb.logf("netmap: suggested exit node: %v", err)
@@ -8742,22 +8754,23 @@ func suggestExitNode(report *netcheck.Report, nb *nodeBackend, prevSuggestion ta
 // before traffic steering was implemented. This handles the plain failover
 // case, in addition to the optional Regional Routing.
 //
-// It computes a suggestion based on the current netmap and last netcheck
-// report. If there are multiple equally good options, one is selected at
-// random, so the result is not stable. To be eligible for consideration, the
-// peer must have NodeAttrSuggestExitNode in its CapMap.
+// It computes a suggestion based on the current netmap, this device's preferred
+// DERP region, and the recent measured latency to each DERP region (regionLatency).
+// If there are multiple equally good options, one is selected at random, so the
+// result is not stable. To be eligible for consideration, the peer must have
+// NodeAttrSuggestExitNode in its CapMap.
 //
 // Currently, peers with a DERP home are preferred over those without (typically
 // this means Mullvad). Peers are selected based on having a DERP home that is
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
-func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNodeUsingDERP(preferredRegionID int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	// TODO(sfllaw): Context needs to be plumbed down here to support
 	// reachability testing.
 	ctx := context.TODO()
 
 	netMap := nb.NetMap()
-	if report == nil || report.PreferredDERP == 0 || netMap == nil || netMap.DERPMap == nil {
+	if preferredRegionID == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
 	}
 	// Use [nodeBackend.AppendMatchingPeers] instead of the netmap directly,
@@ -8788,7 +8801,7 @@ func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSugg
 	}
 
 	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
-	preferredDERP, ok := netMap.DERPMap.Regions[report.PreferredDERP]
+	preferredDERP, ok := netMap.DERPMap.Regions[preferredRegionID]
 	if !ok {
 		return res, ErrNoPreferredDERP
 	}
@@ -8824,10 +8837,10 @@ func suggestExitNodeUsingDERP(report *netcheck.Report, nb *nodeBackend, prevSugg
 		}
 		distances = append(distances, nodeDistance{nv: c, distance: distance})
 	}
-	// First, try to select an exit node that has the closest DERP home, based on lastReport's DERP latency.
+	// First, try to select an exit node that has the closest DERP home, based on recent DERP latency.
 	// If there are no latency values, it returns an arbitrary region
 	if len(candidatesByRegion) > 0 {
-		minRegion := minLatencyDERPRegion(slicesx.MapKeys(candidatesByRegion), report)
+		minRegion := minLatencyDERPRegion(slicesx.MapKeys(candidatesByRegion), regionLatency)
 		if minRegion == 0 {
 			minRegion = selectRegion(views.SliceOf(slicesx.MapKeys(candidatesByRegion)))
 		}
@@ -9016,16 +9029,16 @@ func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID
 	return nodes.At(rand.IntN(nodes.Len()))
 }
 
-// minLatencyDERPRegion returns the region with the lowest latency value given the last netcheck report.
-// If there are no latency values, it returns 0.
-func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
+// minLatencyDERPRegion returns the region with the lowest latency value given
+// the per-region latency map. If there are no latency values, it returns 0.
+func minLatencyDERPRegion(regions []int, regionLatency map[int]time.Duration) int {
 	min := slices.MinFunc(regions, func(i, j int) int {
 		const largeDuration time.Duration = math.MaxInt64
-		iLatency, ok := report.RegionLatency[i]
+		iLatency, ok := regionLatency[i]
 		if !ok {
 			iLatency = largeDuration
 		}
-		jLatency, ok := report.RegionLatency[j]
+		jLatency, ok := regionLatency[j]
 		if !ok {
 			jLatency = largeDuration
 		}
@@ -9034,7 +9047,7 @@ func minLatencyDERPRegion(regions []int, report *netcheck.Report) int {
 		}
 		return cmp.Compare(i, j)
 	})
-	latency, ok := report.RegionLatency[min]
+	latency, ok := regionLatency[min]
 	if !ok || latency == 0 {
 		return 0
 	} else {
