@@ -50,6 +50,7 @@ import (
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnlocal/serviceprefs"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
@@ -74,6 +75,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -397,6 +399,8 @@ type LocalBackend struct {
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock syncs.Mutex
 	clock       tstime.Clock
+
+	servicePrefsStore lazy.SyncValue[serviceprefs.Store]
 
 	// Last ClientVersion received in MapResponse, guarded by mu.
 	lastClientVersion *tailcfg.ClientVersion
@@ -1453,6 +1457,82 @@ func (b *LocalBackend) Prefs() ipn.PrefsView {
 func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	syncs.RequiresMutex(&b.mu)
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
+}
+
+// servicePrefsRetention is the duration for which service prefs are retained in the store.
+const servicePrefsRetention = 365 * 24 * time.Hour // 1 year
+
+// newServicePrefsStore returns a new [serviceprefs.Store] for the backend, or an error if one
+// cannot be created. It does not cache the store. Use [LocalBackend.getServicePrefsStore] to
+// get a cached store.
+func (b *LocalBackend) newServicePrefsStore() (serviceprefs.Store, error) {
+	root := b.TailscaleVarRoot()
+	if root == "" {
+		// No writable directory when it's either an ephemeral node or a non-file based
+		// [ipn.StateStore] (eg. Kubernetes). Service prefs at the moment are only used
+		// by the desktop clients, so it's fine to return an in-memory store in these
+		// cases, rather than erroring out.
+		//
+		// TODO(waltzofpearls): Implement a [serviceprefs.Store] that uses the [ipn.StateStore]
+		// to persist service prefs, so that service prefs can be persisted across restarts
+		// for cases like Kubernetes.
+		return serviceprefs.NewInMemoryStore(servicePrefsRetention, b.clock.Now), nil
+	}
+	dir := filepath.Join(root, "service-prefs")
+	return serviceprefs.NewFileStore(context.Background(), dir, servicePrefsRetention, b.clock.Now)
+}
+
+// getServicePrefsStore returns a cached [serviceprefs.Store] for the backend, or an error
+// if one cannot be created. It caches the store for future calls.
+func (b *LocalBackend) getServicePrefsStore() (serviceprefs.Store, error) {
+	return b.servicePrefsStore.GetErr(b.newServicePrefsStore)
+}
+
+// ServicePrefs returns the service prefs for the current profile, or an error if
+// one cannot be loaded.
+func (b *LocalBackend) ServicePrefs(ctx context.Context) (ipn.ServicePrefs, error) {
+	pid := b.CurrentProfile().ID()
+	if pid == "" {
+		return nil, errors.New("no current profile")
+	}
+	store, err := b.getServicePrefsStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.LoadForProfile(ctx, pid)
+}
+
+// SetServicePref merges the non-empty fields from [apitype.ServicePrefRequest] into the saved
+// service prefs, record [ipn.ServicePref.LastUsed], and returns the updated prefs for the
+// current profile.
+func (b *LocalBackend) SetServicePref(ctx context.Context, req apitype.ServicePrefRequest) (ipn.ServicePrefs, error) {
+	pid := b.CurrentProfile().ID()
+	if pid == "" {
+		return nil, errors.New("no current profile")
+	}
+	store, err := b.getServicePrefsStore()
+	if err != nil {
+		return nil, err
+	}
+	cur, err := store.LoadForProfile(ctx, pid)
+	if err != nil {
+		return nil, err
+	}
+	pref := cur[req.Key]
+	if req.Client != "" {
+		pref.Client = req.Client
+	}
+	if req.Username != "" {
+		pref.Username = req.Username
+	}
+	if req.DatabaseName != "" {
+		pref.DatabaseName = req.DatabaseName
+	}
+	pref.LastUsed = b.clock.Now()
+	if err := store.SaveForService(ctx, pid, req.Key, pref); err != nil {
+		return nil, err
+	}
+	return store.LoadForProfile(ctx, pid)
 }
 
 // unsanitizedPersist returns the current PersistView, including any private keys.

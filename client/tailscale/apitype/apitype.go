@@ -62,6 +62,23 @@ type SetPushDeviceTokenRequest struct {
 	PushDeviceToken string
 }
 
+// ServicePrefRequest is the body POSTed to the LocalAPI endpoint /service-prefs.
+// Empty values for Client, Username, and DatabaseName mean "don't change this value".
+type ServicePrefRequest struct {
+	// Key is the identifier for the service pref. Required. Format is "<service>:<port>",
+	// e.g. "ssh:22".
+	Key string
+
+	// Client is the name of the client that user picked in the service launch. Optional.
+	Client string
+
+	// Username is the username that user entered in the service launch. Optional.
+	Username string
+
+	// DatabaseName is the database name that user entered in the service launch. Optional.
+	DatabaseName string
+}
+
 // ReloadConfigResponse is the response to a LocalAPI reload-config request.
 //
 // There are three possible outcomes: (false, "") if no config mode in use,

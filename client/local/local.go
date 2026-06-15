@@ -1552,3 +1552,21 @@ func (lc *Client) GetServices(ctx context.Context) (map[tailcfg.ServiceName]tail
 	}
 	return decodeJSON[map[tailcfg.ServiceName]tailcfg.ServiceDetails](body)
 }
+
+// GetServicePrefs returns the current service prefs for the current profile.
+func (lc *Client) GetServicePrefs(ctx context.Context) (ipn.ServicePrefs, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/service-prefs")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[ipn.ServicePrefs](body)
+}
+
+// SetServicePref sets the service prefs for the current profile.
+func (lc *Client) SetServicePref(ctx context.Context, req apitype.ServicePrefRequest) (ipn.ServicePrefs, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/service-prefs", http.StatusOK, jsonBody(req))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[ipn.ServicePrefs](body)
+}
