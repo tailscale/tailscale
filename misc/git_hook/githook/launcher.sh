@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ts-git-hook launcher (installed at .git/hooks/ts-git-hook).
 #
-# Written by misc/install-git-hooks.go from the canonical copy embedded
+# Written by misc/add-git-hooks.go from the canonical copy embedded
 # in tailscale.com/misc/git_hook/githook. On every invocation it:
 #
 #   1. Compares the binary's reported version against the shared
@@ -41,7 +41,7 @@ HAVE="$("$BINARY" version 2>/dev/null || echo none)"
 if [ "$WANT" != "$HAVE" ]; then
   echo "git-hook: rebuilding ts-git-hook-bin..." >&2
   (cd "$REPO_ROOT" && GOWORK=off "$GO" build -o "$BINARY" ./misc/git_hook) || {
-    echo "git-hook: rebuild failed, run: ./tool/go run ./misc/install-git-hooks.go" >&2
+    echo "git-hook: rebuild failed, run: ./tool/go run ./misc/add-git-hooks.go" >&2
     exit 1
   }
   "$BINARY" install

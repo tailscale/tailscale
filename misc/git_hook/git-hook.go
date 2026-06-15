@@ -3,7 +3,7 @@
 
 // The git-hook command is Tailscale's git hook binary, built and
 // installed under .git/hooks/ts-git-hook-bin by the launcher at
-// .git/hooks/ts-git-hook. misc/install-git-hooks.go writes the initial
+// .git/hooks/ts-git-hook. misc/add-git-hooks.go writes the initial
 // launcher; subsequent HOOK_VERSION bumps trigger self-rebuilds.
 //
 // # Adding your own hooks
