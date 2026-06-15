@@ -7,6 +7,8 @@ package logtail
 
 import (
 	"context"
+	"iter"
+	"time"
 
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -17,6 +19,21 @@ import (
 type Logger struct{}
 
 type Buffer any
+
+type Logtail struct {
+	ClientTime time.Time `json:"client_time,omitzero"`
+	ProcID     uint32    `json:"proc_id,omitzero"`
+	ProcSeq    uint64    `json:"proc_seq,omitzero"`
+}
+
+type LogEntry[T any] struct {
+	Logtail Logtail `json:"logtail,omitzero"`
+	Value   T       `json:",inline"`
+}
+
+func UploadLogs[T any](ctx context.Context, conf Config, entries iter.Seq[LogEntry[T]]) error {
+	return nil
+}
 
 func Disable() {}
 
