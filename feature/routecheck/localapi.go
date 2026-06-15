@@ -5,7 +5,6 @@ package routecheck
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
@@ -13,6 +12,7 @@ import (
 
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/routecheck"
+	"tailscale.com/util/def"
 	"tailscale.com/util/httpm"
 )
 
@@ -39,8 +39,8 @@ func serveRouteCheck(h *localapi.Handler, w http.ResponseWriter, r *http.Request
 
 	var err error
 	var report *routecheck.Report
-	if defBool(r.FormValue("probe"), false) {
-		timeout := defDuration(r.FormValue("timeout"), routecheck.DefaultTimeout)
+	if def.Bool(r.FormValue("probe"), false) {
+		timeout := def.Duration(r.FormValue("timeout"), routecheck.DefaultTimeout)
 		timeout = min(max(0, timeout), 60*time.Second) // clamp to [0s, 60s]
 		report, err = rc.Refresh(r.Context(), timeout)
 	} else {
@@ -60,26 +60,4 @@ func serveRouteCheck(h *localapi.Handler, w http.ResponseWriter, r *http.Request
 	// TODO(sfllaw): Since ipn/localapi is still using encoding/json
 	// with its default options, marshal with DefaultOptionsV1.
 	jsonv2.MarshalWrite(w, report, jsonv1.DefaultOptionsV1())
-}
-
-func defBool(a string, def bool) bool {
-	if a == "" {
-		return def
-	}
-	v, err := strconv.ParseBool(a)
-	if err != nil {
-		return def
-	}
-	return v
-}
-
-func defDuration(a string, def time.Duration) time.Duration {
-	if a == "" {
-		return def
-	}
-	v, err := time.ParseDuration(a)
-	if err != nil {
-		return def
-	}
-	return v
 }
