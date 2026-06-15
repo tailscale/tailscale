@@ -3,7 +3,7 @@
 
 //go:build ignore
 
-// The install-git-hooks program installs git hooks by delegating to
+// The add-git-hooks program installs git hooks by delegating to
 // githook.Install. See that function's doc for what it does.
 package main
 
@@ -16,6 +16,6 @@ import (
 func main() {
 	log.SetFlags(0)
 	if err := githook.Install(); err != nil {
-		log.Fatalf("install-git-hooks: %v", err)
+		log.Fatalf("add-git-hooks: %v", err)
 	}
 }
