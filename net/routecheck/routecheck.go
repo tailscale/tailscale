@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -22,6 +23,26 @@ import (
 var (
 	metricRefresh = clientmetric.NewCounter("routecheck_refresh")
 )
+
+// DebugForceClientSideReachabilityRoutecheck reports whether routecheck should be forced on or off.
+// If the TS_DEBUG_FORCE_CLIENT_SIDE_REACHABILITY_ROUTECHECK environment variable is true,
+// then routecheck is forced on. If it is false, then routecheck is forced off.
+// If unset, then the client respects the client-side-reachability and
+// client-side-reachability-routecheck node attributes.
+var DebugForceClientSideReachabilityRoutecheck = envknob.RegisterOptBool("TS_DEBUG_FORCE_CLIENT_SIDE_REACHABILITY_ROUTECHECK")
+
+// IsEnabled reports whether routecheck probing has been enabled for this client.
+func IsEnabled(self tailcfg.NodeView) bool {
+	if v, ok := DebugForceClientSideReachabilityRoutecheck().Get(); ok {
+		return v // forced
+	}
+	if !self.Valid() {
+		return false
+	}
+	// TODO(sfllaw): We intend to eventually enable this behaviour by default.
+	return self.HasCap(tailcfg.NodeAttrClientSideReachability) &&
+		self.HasCap(tailcfg.NodeAttrClientSideReachabilityRouteCheck)
+}
 
 // Client generates Reports describing the result of both passive and active
 // reachability probing.
