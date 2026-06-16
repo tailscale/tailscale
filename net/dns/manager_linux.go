@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
@@ -60,6 +61,8 @@ var (
 	optDBusPing       feature.Hook[func(name, objectPath string) error]
 	optDBusReadString feature.Hook[func(name, objectPath, iface, member string) (string, error)]
 )
+
+var forceMode = envknob.RegisterString("TS_DEBUG_LINUX_DNS_MODE")
 
 // NewOSConfigurator created a new OS configurator.
 //
@@ -139,6 +142,11 @@ func dnsMode(logf logger.Logf, health *health.Tracker, env newOSConfigEnv) (ret 
 		debug = append(debug, kv{k, v})
 	}
 	defer func() {
+		if fm := forceMode(); fm != "" {
+			dbg("forced", fm)
+			dbg("detected", ret)
+			ret = fm
+		}
 		if ret != "" {
 			dbg("ret", ret)
 		}
