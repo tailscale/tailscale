@@ -157,6 +157,11 @@ type userspaceEngine struct {
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
 
+	// netLogSource is the [netlog.NodeSource] installed via
+	// [Engine.SetNetLogNodeSource]; it is read when starting up the network
+	// logger from inside Reconfig. It may be nil if no source was installed.
+	netLogSource syncs.AtomicValue[netlog.NodeSource]
+
 	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
 	// wgLock must be held when using this map.
 	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
@@ -735,6 +740,12 @@ func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWi
 	})
 }
 
+// SetNetLogNodeSource installs the [netlog.NodeSource] used by the engine's
+// network logger.
+func (e *userspaceEngine) SetNetLogNodeSource(src netlog.NodeSource) {
+	e.netLogSource.Store(src)
+}
+
 func peerWireGuardStateFromDevice(state device.PeerSessionState) PeerWireGuardState {
 	switch state {
 	case device.PeerSessionNone:
@@ -969,7 +980,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		tid := cfg.NetworkLogging.DomainID
 		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
 		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(e.logf, nm, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
+		src := e.netLogSource.Load()
+		if src == nil {
+			e.logf("wgengine: Reconfig: no NodeSource installed; network logger not started")
+		} else if err := e.networkLogger.Startup(e.logf, src, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		e.networkLogger.ReconfigRoutes(routerCfg)
@@ -1308,9 +1322,6 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 		e.logf("wgengine: TUN GRO knobs changed (DisableTUNUDPGRO=%v DisableTUNTCPGRO=%v); applying",
 			curUDP, curTCP)
 		e.tundev.ApplyGROKnobs(e.controlKnobs)
-	}
-	if e.networkLogger.Running() {
-		e.networkLogger.ReconfigNetworkMap(nm)
 	}
 }
 

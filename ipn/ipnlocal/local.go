@@ -105,6 +105,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -645,6 +646,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
+	e.SetNetLogNodeSource(netLogNodeSource{b})
 
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
@@ -8045,6 +8047,40 @@ type noiseRoundTripper struct {
 func (n noiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return n.lb.DoNoiseRequest(req)
 }
+
+// netLogNodeSource adapts LocalBackend's nodeBackend to [netlog.NodeSource].
+// Each method consults [LocalBackend.currentNode] so that profile rotations
+// are picked up automatically without re-installing the source.
+type netLogNodeSource struct {
+	b *LocalBackend
+}
+
+func (s netLogNodeSource) SelfNode() (tailcfg.NodeView, tailcfg.UserProfileView) {
+	nb := s.b.currentNode()
+	self := nb.Self()
+	if !self.Valid() {
+		return tailcfg.NodeView{}, tailcfg.UserProfileView{}
+	}
+	up, _ := nb.UserByID(self.User())
+	return self, up
+}
+
+func (s netLogNodeSource) NodeByAddr(addr netip.Addr) (_ tailcfg.NodeView, _ tailcfg.UserProfileView, ok bool) {
+	nb := s.b.currentNode()
+	nid, ok := nb.NodeByAddr(addr)
+	if !ok {
+		return tailcfg.NodeView{}, tailcfg.UserProfileView{}, false
+	}
+	nv, ok := nb.NodeByID(nid)
+	if !ok {
+		return tailcfg.NodeView{}, tailcfg.UserProfileView{}, false
+	}
+	up, _ := nb.UserByID(nv.User())
+	return nv, up, true
+}
+
+// Compile-time assertion that netLogNodeSource implements [netlog.NodeSource].
+var _ netlog.NodeSource = netLogNodeSource{}
 
 // ActiveSSHConns returns the number of active SSH connections,
 // or 0 if SSH is not linked into the binary or available on the platform.

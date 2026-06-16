@@ -16,6 +16,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -163,6 +164,13 @@ type Engine interface {
 	// SetPeerByIPPacketFunc installs a callback used by wireguard-go to
 	// look up which peer should handle an outbound packet by destination IP.
 	SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool))
+
+	// SetNetLogNodeSource installs the [netlog.NodeSource] used by the engine's
+	// network logger to look up Tailscale node info on demand.
+	//
+	// It is expected to be called once during LocalBackend construction,
+	// before any [Engine.Reconfig] call that starts up the network logger.
+	SetNetLogNodeSource(netlog.NodeSource)
 
 	// SetPeerSessionStateFunc installs a callback used to observe WireGuard
 	// peer session state transitions.
