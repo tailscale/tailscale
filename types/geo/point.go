@@ -230,16 +230,34 @@ func (p Point) MarshalText() ([]byte, error) {
 	return p.AppendText(b[:0])
 }
 
-// MarshalUint64 produces the same output as MashalBinary, encoded in a uint64.
-func (p Point) MarshalUint64() (uint64, error) {
+// MarshalScalar implements [encoding.ScalarMarshaler].
+// It produces the same output as MashalBinary, encoded in a uint64.
+func (p Point) MarshalScalar() (uint64, error) {
 	b, err := p.MarshalBinary()
 	return binary.NativeEndian.Uint64(b), err
 }
 
-// UnmarshalUint64 expects input formatted by MarshalUint64.
-func (p *Point) UnmarshalUint64(v uint64) error {
+// UnmarshalScalar implements [encoding.ScalarUnmarshaler].
+// It expects input formatted by MarshalScalar.
+func (p *Point) UnmarshalScalar(v uint64) error {
 	b := binary.NativeEndian.AppendUint64(nil, v)
 	return p.UnmarshalBinary(b)
+}
+
+// MarshalUint64 produces the same output as MashalBinary, encoded in a uint64.
+// Deprecated: this function simply calls [Point.MarshalScalar].
+//
+//go:fix inline
+func (p Point) MarshalUint64() (uint64, error) {
+	return p.MarshalScalar()
+}
+
+// UnmarshalUint64 expects input formatted by MarshalUint64.
+// Deprecated: this function simply calls [Point.UnmarshalScalar].
+//
+//go:fix inline
+func (p *Point) UnmarshalUint64(v uint64) error {
+	return p.UnmarshalScalar(v)
 }
 
 // IsZero reports if p is the zero value.
