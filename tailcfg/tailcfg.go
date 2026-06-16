@@ -570,7 +570,7 @@ func (n *Node) DisplayName(forOwner bool) string {
 	return n.ComputedName
 }
 
-// DisplayName returns the decomposed user-facing name for a node.
+// DisplayNames returns the decomposed user-facing name for a node.
 //
 // Parameter forOwner specifies whether the name is requested by
 // the owner of the node. When forOwner is false, hostIfDifferent
