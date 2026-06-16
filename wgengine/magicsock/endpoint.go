@@ -20,9 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tailscale/wireguard-go/device"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
@@ -40,10 +43,9 @@ import (
 var mtuProbePingSizesV4 []int
 var mtuProbePingSizesV6 []int
 
-// discoKeyAdvertisementInterval tells how often a disco update via TSMP can
-// happen. The update is triggered via enqueueCallMeMaybe, and thus it will
-// only be sent if the magicsock is in a state to send out CallMeMaybe.
-const discoKeyAdvertisementInterval = time.Minute * 2
+// discoKeyAdvertisementInterval gates how frequently a disco update via TSMP
+// can happen. The update is triggered via outbound WireGuard handshake response.
+const discoKeyAdvertisementInterval = device.RekeyAfterTime*2 + sessionActiveTimeout
 
 func init() {
 	for _, m := range tstun.WireMTUsToProbe {
@@ -1054,6 +1056,15 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 	if de.expired {
 		de.mu.Unlock()
 		return errExpired
+	}
+
+	if len(buffs) == 1 && looksLikeHandshakeResponse(buffs[0][offset:]) {
+		// We hook TSMP disco advert around outbound (and inbound via DERP)
+		// WireGuard handshake response as it's synonymous with handshake
+		// completion. TSMP sits on the other side of wireguard-go, so we must
+		// be careful as to not close a packet scheduling loop between
+		// wireguard-go and magicsock.
+		de.maybeSendTSMPDiscoAdvertLocked()
 	}
 
 	now := mono.Now()
@@ -2105,4 +2116,32 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	if de.c.relayManager.hasPeerRelayServers.Load() {
 		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
 	}
+}
+
+// maybeSendTSMPDiscoAdvertLocked conditionally emits an event indicating that we
+// should send our DiscoKey to the first node address of the [endpoint].
+//
+// The event is suppressed if we are communicating with de over a direct
+// connection, or it has been less than [discoKeyAdvertisementInterval] since
+// the previous emission.
+func (de *endpoint) maybeSendTSMPDiscoAdvertLocked() {
+	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
+	if !de.nodeAddr.IsValid() {
+		return
+	}
+
+	now := mono.Now()
+	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
+		(!de.lastDiscoKeyAdvertisement.IsZero() && de.bestAddr.isDirect()) {
+		return
+	}
+
+	de.lastDiscoKeyAdvertisement = now
+	de.c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
+		NodeFirstAddr: de.nodeAddr,
+		NodeID:        de.nodeID,
+	})
 }

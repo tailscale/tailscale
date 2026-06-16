@@ -769,6 +769,12 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		update(0, netip.AddrPortFrom(ep.nodeAddr, 0), srcAddr.ap, 1, dm.n, true)
 	}
 
+	if looksLikeHandshakeResponse(b[:n]) {
+		ep.mu.Lock()
+		ep.maybeSendTSMPDiscoAdvertLocked()
+		ep.mu.Unlock()
+	}
+
 	c.metrics.inboundPacketsDERPTotal.Add(1)
 	c.metrics.inboundBytesDERPTotal.Add(int64(n))
 	return n, ep
