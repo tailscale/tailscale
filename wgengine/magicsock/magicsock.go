@@ -1815,6 +1815,11 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 	}
 }
 
+func looksLikeHandshakeResponse(b []byte) bool {
+	return len(b) == device.MessageResponseSize &&
+		binary.LittleEndian.Uint32(b) == device.MessageResponseType
+}
+
 // looksLikeInitiationMsg returns true if b looks like a WireGuard initiation
 // message, otherwise it returns false.
 func looksLikeInitiationMsg(b []byte) bool {
@@ -2674,8 +2679,6 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		go c.ReSTUN("refresh-for-peering")
 		return
 	}
-
-	c.maybeSendTSMPDiscoAdvert(de)
 
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -4522,35 +4525,4 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 type NewDiscoKeyAvailable struct {
 	NodeFirstAddr netip.Addr
 	NodeID        tailcfg.NodeID
-}
-
-// maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
-// should send our DiscoKey to the first node address of the magicksock endpoint.
-// The event is only emitted if we are not already communicating directly and
-// more than 60 seconds has passed since the last DiscoKey was sent.
-//
-// We do not need the Conn to be locked, but the endpoint should be.
-func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
-	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
-		return
-	}
-
-	de.mu.Lock()
-	defer de.mu.Unlock()
-
-	if !de.nodeAddr.IsValid() {
-		return
-	}
-
-	now := mono.Now()
-	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
-		(!de.lastDiscoKeyAdvertisement.IsZero() && de.bestAddr.isDirect()) {
-		return
-	}
-
-	de.lastDiscoKeyAdvertisement = now
-	c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
-		NodeFirstAddr: de.nodeAddr,
-		NodeID:        de.nodeID,
-	})
 }
