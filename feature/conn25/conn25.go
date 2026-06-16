@@ -202,6 +202,12 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		}
 		return dph.HandlePacketFromWireGuard(p, tun)
 	}
+	tun.OnUnmappedTransitIPMessage = func(pkt packet.TailscaleRejectedHeader) {
+		if !e.conn25.isConfigured() {
+			return
+		}
+		e.conn25.client.resendTransitIPMapping(pkt.Dst.Addr())
+	}
 
 	// Manage how we react to changes to the current node,
 	// including property changes (e.g. HostInfo, Capabilities, CapMap).
@@ -374,21 +380,25 @@ func (c *Conn25) isConfigured() bool {
 
 func newConn25(logf logger.Logf) *Conn25 {
 	c := &Conn25{
-		logf:      logf,
-		connector: &connector{logf: logf},
+		logf: logf,
+	}
+	getIPSets := func() ipSets {
+		cfg, ok := c.getConfig()
+		if !ok {
+			return emptyIPSets()
+		}
+		return cfg.ipSets
 	}
 	c.config.Store(&config{}) // initialize with empty to avoid nil checks
 	c.client = &client{
 		logf:        logf,
 		addrsCh:     make(chan addrs, 64),
 		assignments: addrAssignments{clock: tstime.StdClock{}},
-		getIPSets: func() ipSets {
-			cfg, ok := c.getConfig()
-			if !ok {
-				return emptyIPSets()
-			}
-			return cfg.ipSets
-		},
+		getIPSets:   getIPSets,
+	}
+	c.connector = &connector{
+		logf:      logf,
+		getIPSets: getIPSets,
 	}
 	return c
 }
@@ -1254,7 +1264,8 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 }
 
 type connector struct {
-	logf logger.Logf
+	logf      logger.Logf
+	getIPSets func() ipSets
 
 	mu sync.Mutex // protects the fields below
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
@@ -1276,13 +1287,16 @@ func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP net
 
 const packetFilterAllowReason = "app connector transit IP"
 
-// packetFilterAllow returns true if the provided packet has a Src that maps to a peer
-// that has a transit IP with us that is the packet Dst, and false otherwise.
+// packetFilterAllow returns true if the provided packet has a Src that is in
+// the configured transit IP range for this connector, false otherwise.
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
-	if ok {
+	ipSets := c.getIPSets()
+	if ipSets.v4Transit != nil && ipSets.v4Transit.Contains(p.Dst.Addr()) {
+		return true, packetFilterAllowReason
+	}
+	if ipSets.v6Transit != nil && ipSets.v6Transit.Contains(p.Dst.Addr()) {
 		return true, packetFilterAllowReason
 	}
 	return false, ""
@@ -1328,11 +1342,7 @@ func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic
 
 	ctips, ok := c.byConnKey[connKey]
 	tipp := netip.PrefixFrom(tip, tip.BitLen())
-	if ok {
-		if ctips.Contains(tipp) {
-			return errors.New("byConnKey already contains transit")
-		}
-	} else {
+	if !ok {
 		ctips.Make()
 		mak.Set(&c.byConnKey, connKey, ctips)
 	}
@@ -1349,4 +1359,20 @@ func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bo
 		return nil, false
 	}
 	return s.Slice(), true
+}
+
+// resendTransitIPMapping enqueues a request to re-establish an existing
+// transit IP-real IP mapping after a connector tells the client that the
+// mapping does not exist on its end. If a mapping is not found on the client
+// either, this is a no-op.
+func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
+	mapping, ok := c.assignments.lookupByTransitIP(transitIP)
+	if !ok {
+		// We have no mappings for this transit IP, so nothing to resend.
+		return
+	}
+	err := c.enqueueAddressAssignment(mapping)
+	if err != nil {
+		c.logf("error enqueueing address assignment for resend: %v", err)
+	}
 }
