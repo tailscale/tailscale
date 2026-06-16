@@ -166,7 +166,7 @@ func (p Point) AppendBinary(b []byte) ([]byte, error) {
 	return b, nil
 }
 
-// MarshalBinary implements [encoding.BinaryMarshaller]. The output matches that
+// MarshalBinary implements [encoding.BinaryMarshaler]. The output matches that
 // of calling [Point.AppendBinary].
 func (p Point) MarshalBinary() ([]byte, error) {
 	var b [8]byte
@@ -223,7 +223,7 @@ func (p Point) AppendText(b []byte) ([]byte, error) {
 	return b, nil
 }
 
-// MarshalText implements [encoding.TextMarshaller]. The output matches that
+// MarshalText implements [encoding.TextMarshaler]. The output matches that
 // of calling [Point.AppendText].
 func (p Point) MarshalText() ([]byte, error) {
 	var b [8]byte
