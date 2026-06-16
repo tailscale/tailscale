@@ -65,6 +65,15 @@ import (
 	"tailscale.com/util/must"
 )
 
+// pingTimeout returns a per-ping budget for use within the larger test ctx:
+// enough headroom for wireguard-go's RekeyTimeout (5s) plus the actual handshake on slow CI
+// (notably GOARCH=386 emulation where Curve25519/ChaCha20 lack the amd64 assembly fast paths),
+// but tight enough that a hung Ping points the finger at its callsite
+// rather than swallowing the whole test deadline.
+func pingTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, 10*time.Second)
+}
+
 // TestListener_Server ensures that the listener type always keeps the Server
 // method, which is used by some external applications to identify a tsnet.Listener
 // from other net.Listeners, as well as access the underlying Server.
@@ -336,7 +345,35 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	}
 	s.lb.ConfigureCertsForTest(testCertRoot.getCert)
 
+	// Wait for the server to finish connecting to its home DERP server,
+	// to prevent fast tests from racing the DERP handshake resulting
+	// in a dropped request with PeerGoneNotHere.
+	waitForHomeDERPConnected(t, ctx, s)
+
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
+}
+
+// waitForHomeDERPConnected blocks until s has selected a home DERP region
+// and received its first frame from that region.
+// Until s establishes a complete connection to its home DERP server,
+// the DERP server will drop any incoming peer DISCO frames looking for s
+// with PeerGoneNotHere.
+func waitForHomeDERPConnected(t testing.TB, ctx context.Context, s *Server) {
+	t.Helper()
+	h := s.Sys().HealthTracker.Get()
+	ms := s.Sys().MagicSock.Get()
+	for {
+		if r := ms.GetLastNetcheckReport(ctx); r != nil &&
+			r.PreferredDERP != 0 &&
+			!h.GetDERPRegionReceivedTime(r.PreferredDERP).IsZero() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waitForHomeDERPConnected(%s): %v", s.hostname, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func TestDialBlocks(t *testing.T) {
@@ -427,7 +464,9 @@ func TestConn(t *testing.T) {
 	}))
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingTSMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,7 +1707,9 @@ func TestFallbackTCPHandler(t *testing.T) {
 	}
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1792,13 +1833,7 @@ func testPingPeerLearnedViaDelta(t *testing.T, pt tailcfg.PingType) {
 		t.Fatal(err)
 	}
 
-	// Per-ping budget within the larger test ctx: enough headroom for
-	// wireguard-go's RekeyTimeout (5s) plus the actual handshake on
-	// slow CI (notably GOARCH=386 emulation where Curve25519/ChaCha20
-	// lack the amd64 assembly fast paths), but tight enough that a
-	// hung Ping points the finger at this call rather than swallowing
-	// the whole test deadline.
-	pingCtx, cancelPing := context.WithTimeout(ctx, 60*time.Second)
+	pingCtx, cancelPing := pingTimeout(ctx)
 	defer cancelPing()
 	pr, err := lc1.Ping(pingCtx, s2ip, pt)
 	if err != nil {
@@ -1897,7 +1932,7 @@ func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
 	// the bug: a stale BART / lastCfgFull (PeerForIP / lookupPeerByIP
 	// miss) AND a stale wgdev PeerLookupFunc closure (peer's noise
 	// key not yet registered for outbound encryption).
-	pingCtx, cancelPing := context.WithTimeout(ctx, 60*time.Second)
+	pingCtx, cancelPing := pingTimeout(ctx)
 	defer cancelPing()
 	pr, err := lc1.Ping(pingCtx, probeIP, tailcfg.PingTSMP)
 	if err != nil {
@@ -1928,7 +1963,9 @@ func TestPingSelfReturnsIsLocalIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr, err := lc.Ping(ctx, s1ip, tailcfg.PingDisco)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc.Ping(pingCtx, s1ip, tailcfg.PingDisco)
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
@@ -1961,7 +1998,9 @@ func TestCapturePcap(t *testing.T) {
 	}
 
 	// send a packet which both nodes will capture
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2008,7 +2047,9 @@ func TestUDPConn(t *testing.T) {
 	}
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2226,7 +2267,9 @@ func TestUserMetricsByteCounters(t *testing.T) {
 	})
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatalf("pinging: %s", err)
 	}
@@ -2608,7 +2651,10 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	waitForPeerReachable(t, s2, s1.lb.NodeKey())
 
 	lc1 := must.Get(s1.LocalClient())
-	must.Get(lc1.Ping(ctx, s2ip4, tailcfg.PingTSMP))
+
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	must.Get(lc1.Ping(pingCtx, s2ip4, tailcfg.PingTSMP))
 
 	return &listenTest{
 		control: control,
