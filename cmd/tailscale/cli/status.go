@@ -28,7 +28,7 @@ import (
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "tailscale status [--active] [--web] [--json]",
+	ShortUsage: "tailscale status [--active] [--web] [--json] [--tags] [--name <name>] [--tag <tag>] [--os <os>]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
@@ -56,20 +56,34 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
+		fs.BoolVar(&statusArgs.showTags, "tags", false, "show tags column in table output")
+		fs.StringVar(&statusArgs.filterName, "name", "", "filter peers by hostname (case-insensitive substring match)")
+		fs.Var(&statusArgs.filterTags, "tag", "filter peers by tag (repeatable; peer must have all given tags; \"tag:\" prefix is optional; use --tags to discover tags)")
+		fs.StringVar(&statusArgs.filterOS, "os", "", "filter peers by OS (case-insensitive substring match)")
 		return fs
 	})(),
 }
 
 var statusArgs struct {
-	json    bool   // JSON output mode
-	web     bool   // run webserver
-	listen  string // in web mode, webserver address to listen on, empty means auto
-	browser bool   // in web mode, whether to open browser
-	active  bool   // in CLI mode, filter output to only peers with active sessions
-	self    bool   // in CLI mode, show status of local machine
-	peers   bool   // in CLI mode, show status of peer machines
-	header  bool   // in CLI mode, show column headers in table format
+	json       bool             // JSON output mode
+	web        bool             // run webserver
+	listen     string           // in web mode, webserver address to listen on, empty means auto
+	browser    bool             // in web mode, whether to open browser
+	active     bool             // in CLI mode, filter output to only peers with active sessions
+	self       bool             // in CLI mode, show status of local machine
+	peers      bool             // in CLI mode, show status of peer machines
+	header     bool             // in CLI mode, show column headers in table format
+	showTags   bool             // in CLI mode, show tags column
+	filterName string           // in CLI mode, filter peers by hostname substring
+	filterTags multiStringFlag  // in CLI mode, filter peers by tag (all must match)
+	filterOS   string           // in CLI mode, filter peers by OS substring
 }
+
+// multiStringFlag is a flag.Value that accumulates repeated flag values into a slice.
+type multiStringFlag []string
+
+func (f multiStringFlag) String() string       { return strings.Join(f, ",") }
+func (f *multiStringFlag) Set(v string) error  { *f = append(*f, v); return nil }
 
 const mullvadTCD = "mullvad.ts.net."
 
@@ -86,11 +100,13 @@ func runStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if statusArgs.json {
-		if statusArgs.active {
-			for peer, ps := range st.Peer {
-				if !ps.Active {
-					delete(st.Peer, peer)
-				}
+		for peer, ps := range st.Peer {
+			if statusArgs.active && !ps.Active {
+				delete(st.Peer, peer)
+				continue
+			}
+			if !peerMatchesFilters(ps) {
+				delete(st.Peer, peer)
 			}
 		}
 		j, err := json.MarshalIndent(st, "", "  ")
@@ -156,9 +172,15 @@ func runStatus(ctx context.Context, args []string) error {
 
 	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
 	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
+	wantTagsCol := statusArgs.showTags || len(statusArgs.filterTags) > 0
 	if statusArgs.header {
-		fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
-		fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		if wantTagsCol {
+			fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\tTags\t")
+			fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t----\t")
+		} else {
+			fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
+			fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		}
 	}
 
 	printPS := func(ps *ipnstate.PeerStatus) {
@@ -207,6 +229,9 @@ func runStatus(ctx context.Context, args []string) error {
 		if anyTraffic {
 			f(", tx %d rx %d", ps.TxBytes, ps.RxBytes)
 		}
+		if wantTagsCol {
+			f("\t%s", peerTagsDisplay(ps))
+		}
 		f("\t\n")
 	}
 
@@ -232,6 +257,9 @@ func runStatus(ctx context.Context, args []string) error {
 		ipnstate.SortPeers(peers)
 		for _, ps := range peers {
 			if statusArgs.active && !ps.Active {
+				continue
+			}
+			if !peerMatchesFilters(ps) {
 				continue
 			}
 			printPS(ps)
@@ -318,4 +346,43 @@ func firstIPString(v []netip.Addr) string {
 		return ""
 	}
 	return v[0].String()
+}
+
+// peerTagsDisplay returns a comma-separated string of the peer's tags for table display,
+// with the "tag:" prefix stripped for readability.
+func peerTagsDisplay(ps *ipnstate.PeerStatus) string {
+	if ps.Tags == nil || ps.Tags.Len() == 0 {
+		return "-"
+	}
+	tags := ps.Tags.AsSlice()
+	for i, t := range tags {
+		tags[i] = strings.TrimPrefix(t, "tag:")
+	}
+	return strings.Join(tags, ",")
+}
+
+// peerMatchesFilters reports whether ps satisfies all active --name / --tag / --os filters.
+func peerMatchesFilters(ps *ipnstate.PeerStatus) bool {
+	if name := statusArgs.filterName; name != "" {
+		host := strings.ToLower(dnsname.TrimSuffix(ps.DNSName, ""))
+		if !strings.Contains(strings.ToLower(ps.HostName), strings.ToLower(name)) &&
+			!strings.Contains(host, strings.ToLower(name)) {
+			return false
+		}
+	}
+	for _, raw := range statusArgs.filterTags {
+		tag := raw
+		if !strings.HasPrefix(tag, "tag:") {
+			tag = "tag:" + tag
+		}
+		if ps.Tags == nil || !ps.Tags.ContainsFunc(func(t string) bool { return t == tag }) {
+			return false
+		}
+	}
+	if os := statusArgs.filterOS; os != "" {
+		if !strings.Contains(strings.ToLower(ps.OS), strings.ToLower(os)) {
+			return false
+		}
+	}
+	return true
 }
