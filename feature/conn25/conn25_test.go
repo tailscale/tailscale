@@ -2412,7 +2412,8 @@ func TestIsKnownTransitIP(t *testing.T) {
 		transit: knownTip,
 	})
 	if err != nil {
-		t.Fatalf("error inserting address assignment: %v", err)
+		t.Errorf("error inserting address assignment: %v", err)
+		return
 	}
 
 	if !c.client.isKnownTransitIP(knownTip) {
