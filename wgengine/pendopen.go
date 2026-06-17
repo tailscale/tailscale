@@ -78,6 +78,7 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 		} else if f := tsRejectFlow(rh); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
 		}
+		e.notifyConnRejectTSMPRecv(rh)
 		return
 	}
 
@@ -175,37 +176,55 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 	return filter.Accept
 }
 
-func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
-	e.mu.Lock()
-	of, ok := e.pendOpen[flow]
-	if !ok {
-		// Not a tracked flow, or already handled & deleted.
-		e.mu.Unlock()
-		return
-	}
-	delete(e.pendOpen, flow)
-	problem := of.problem
-	e.mu.Unlock()
+// openTimeoutDiag captures what [userspaceEngine.diagnoseOpenTimeout]
+// inferred about a pendopen flow that timed out. It is the input to
+// [classifyOpenTimeout].
+type openTimeoutDiag struct {
+	// problem is the TSMP reject reason previously reported by the peer
+	// via a MaybeBroken TSMP header, or zero if none.
+	problem packet.TailscaleRejectReason
+
+	// noPeer is true if PeerForIP did not find a peer for the flow.
+	noPeer bool
+	// peerUnreachable is true when we identified a Tailscale peer for
+	// the flow but it cannot currently be reached (pre-0.100 client,
+	// no HomeDERP, in-netmap-but-unknown-to-WireGuard, etc.).
+	peerUnreachable bool
+	// onlyZeroRoute is true if PeerForIP matched the peer only via a
+	// /0 route (likely a non-selected exit node). The outer code
+	// deliberately stays silent in this case; classification would be
+	// misleading.
+	onlyZeroRoute bool
+}
+
+// diagnoseOpenTimeout examines the engine state and logs a description
+// of why a pendopen flow timed out. It returns the populated
+// [openTimeoutDiag] so the caller can classify and (optionally) emit a
+// connreject event.
+func (e *userspaceEngine) diagnoseOpenTimeout(flow flowtrack.Tuple, problem packet.TailscaleRejectReason) openTimeoutDiag {
+	d := openTimeoutDiag{problem: problem}
 
 	if !problem.IsZero() {
 		e.logf("open-conn-track: timeout opening %v; peer reported problem: %v", flow, problem)
 	}
 
-	// Diagnose why it might've timed out.
 	pip, ok := e.PeerForIP(flow.DstAddr())
 	if !ok {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
-		return
+		d.noPeer = true
+		return d
 	}
 	n := pip.Node
 	if !n.IsWireGuardOnly() {
 		if n.DiscoKey().IsZero() {
 			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key().ShortString())
-			return
+			d.peerUnreachable = true
+			return d
 		}
 		if n.HomeDERP() == 0 {
 			e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key().ShortString())
-			return
+			d.peerUnreachable = true
+			return d
 		}
 	}
 
@@ -219,19 +238,19 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			}
 		}
 		if onlyZeroRoute {
-			// This node was returned by peerForIP because
-			// its exit node /0 route(s) matched, but this
-			// might not be the exit node that's currently
-			// selected.  Rather than log misleading
-			// errors, just don't log at all for now.
-			// TODO(bradfitz): update this code to be
-			// exit-node-aware and make peerForIP return
-			// the node of the currently selected exit
-			// node.
-			return
+			// This node was returned by peerForIP because its exit
+			// node /0 route(s) matched, but this might not be the
+			// exit node that's currently selected. Rather than log
+			// misleading errors, just don't log at all for now.
+			// TODO(bradfitz): update this code to be exit-node-aware
+			// and make peerForIP return the node of the currently
+			// selected exit node.
+			d.onlyZeroRoute = true
+			return d
 		}
 		e.logf("open-conn-track: timeout opening %v; target node %v in netmap but unknown to WireGuard", flow, n.Key().ShortString())
-		return
+		d.peerUnreachable = true
+		return d
 	}
 
 	// TODO(bradfitz): figure out what PeerStatus.LastHandshake
@@ -259,6 +278,23 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		flow, n.Key().ShortString(),
 		online,
 		e.magicConn.LastRecvActivityOfNodeKey(n.Key()))
+	return d
+}
+
+func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
+	e.mu.Lock()
+	of, ok := e.pendOpen[flow]
+	if !ok {
+		// Not a tracked flow, or already handled & deleted.
+		e.mu.Unlock()
+		return
+	}
+	delete(e.pendOpen, flow)
+	problem := of.problem
+	e.mu.Unlock()
+
+	d := e.diagnoseOpenTimeout(flow, problem)
+	e.notifyConnRejectOpenTimeout(flow, d)
 }
 
 func durFmt(t time.Time) string {

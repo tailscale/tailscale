@@ -52,8 +52,19 @@ func (t Tuple) DstAddr() netip.Addr {
 	return netip.AddrFrom16(t.dst).Unmap()
 }
 
-func (t Tuple) SrcPort() uint16 { return t.srcPort }
-func (t Tuple) DstPort() uint16 { return t.dstPort }
+func (t Tuple) SrcPort() uint16      { return t.srcPort }
+func (t Tuple) DstPort() uint16      { return t.dstPort }
+func (t Tuple) Proto() ipproto.Proto { return t.proto }
+
+// Src returns the tuple's source endpoint as a netip.AddrPort.
+func (t Tuple) Src() netip.AddrPort {
+	return netip.AddrPortFrom(t.SrcAddr(), t.srcPort)
+}
+
+// Dst returns the tuple's destination endpoint as a netip.AddrPort.
+func (t Tuple) Dst() netip.AddrPort {
+	return netip.AddrPortFrom(t.DstAddr(), t.dstPort)
+}
 
 func (t Tuple) String() string {
 	return fmt.Sprintf("(%v %v => %v)", t.proto,
