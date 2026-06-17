@@ -853,7 +853,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	}
 
 	doFull := false
-	if c.nextFull || now.Sub(c.lastFull) > 5*time.Minute {
+	if c.nextFull || now.Sub(c.lastFull) > fullReportInterval {
 		doFull = true
 	}
 	// If the last report had a captive portal and reported no UDP access,
@@ -1329,6 +1329,12 @@ func (c *Client) timeNow() time.Time {
 }
 
 const (
+	// fullReportInterval is the maximum time between full netcheck reports.
+	// Once this long has elapsed since the last full report, the next GetReport
+	// re-probes every DERP region rather than only the home and fastest regions
+	// (see GetReport). It also informs retention window for report history
+	// (c.prev).
+	fullReportInterval = 5 * time.Minute
 	// preferredDERPAbsoluteDiff specifies the minimum absolute difference
 	// in latencies between two DERP regions that would cause a node to
 	// switch its PreferredDERP ("home DERP"). This ensures that if a node
