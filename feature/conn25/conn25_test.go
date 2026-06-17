@@ -2233,9 +2233,10 @@ func TestTransitIPConnMapping(t *testing.T) {
 	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
 		t.Errorf("unexpected error for first time add: %v", err)
 	}
-	// But doing it again should fail
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err == nil {
-		t.Error("adding a duplicate transitIP for a connector should fail")
+	// And doing it again shouldn't fail (this is done when resending mappings
+	// to a restarted connector)
+	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
+		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
 	}
 }
 
@@ -2407,9 +2408,13 @@ func TestIsKnownTransitIP(t *testing.T) {
 	unknownTip := netip.MustParseAddr("100.64.0.42")
 
 	c := newConn25(t.Logf)
-	c.client.assignments.insert(&addrs{
+	err := c.client.assignments.insert(&addrs{
 		transit: knownTip,
 	})
+	if err != nil {
+		t.Errorf("error inserting address assignment: %v", err)
+		return
+	}
 
 	if !c.client.isKnownTransitIP(knownTip) {
 		t.Fatal("knownTip: should have been known")
@@ -2423,9 +2428,12 @@ func TestLinkLocalAllow(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 
 	c := newConn25(t.Logf)
-	c.client.assignments.insert(&addrs{
+	err := c.client.assignments.insert(&addrs{
 		transit: knownTip,
 	})
+	if err != nil {
+		t.Fatalf("error inserting address assignment: %v", err)
+	}
 
 	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
 		Dst: netip.AddrPortFrom(knownTip, 1234),
@@ -2441,31 +2449,31 @@ func TestLinkLocalAllow(t *testing.T) {
 }
 
 func TestConnectorPacketFilterAllow(t *testing.T) {
-	knownTip := netip.MustParseAddr("100.64.0.41")
-	knownSrc := netip.MustParseAddr("100.64.0.1")
+	src := netip.MustParseAddr("100.64.0.1")
+	knownTip := netip.MustParseAddr("192.0.2.1")
 	unknownTip := netip.MustParseAddr("100.64.0.42")
-	unknownSrc := netip.MustParseAddr("100.64.0.42")
+
+	v4TransitIPsBuilder := netipx.IPSetBuilder{}
+	v4TransitIPsBuilder.AddPrefix(netip.MustParsePrefix("192.0.2.0/24"))
+	v4TransitIPs := must.Get(v4TransitIPsBuilder.IPSet())
 
 	c := newConn25(t.Logf)
-	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
-	c.connector.transitIPs[knownSrc] = map[netip.Addr]appAddr{}
-	c.connector.transitIPs[knownSrc][knownTip] = appAddr{}
+	c.reconfig(&config{
+		isConfigured: true,
+		ipSets: ipSets{
+			v4Transit: v4TransitIPs,
+		},
+	})
 
 	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
-		Src: netip.AddrPortFrom(knownSrc, 1234),
+		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); !allow {
 		t.Fatal("knownTip: should have been allowed")
 	}
 
 	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
-		Src: netip.AddrPortFrom(unknownSrc, 1234),
-		Dst: netip.AddrPortFrom(knownTip, 1234),
-	}); allow {
-		t.Fatal("unknownSrc: should not have been allowed")
-	}
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
-		Src: netip.AddrPortFrom(knownSrc, 1234),
+		Src: netip.AddrPortFrom(src, 1234),
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {
 		t.Fatal("unknownTip: should not have been allowed")

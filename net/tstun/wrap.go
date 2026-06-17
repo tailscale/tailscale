@@ -203,6 +203,11 @@ type Wrapper struct {
 	// false otherwise.
 	OnICMPEchoResponseReceived func(*packet.Parsed) bool
 
+	// OnUnmappedTransitIPMessage, if non-nil, is called when a TSMP message is
+	// received indicating that a packet was rejected by a connector due to a
+	// missing transit IP->real IP mapping.
+	OnUnmappedTransitIPMessage func(packet.TailscaleRejectedHeader)
+
 	// PeerAPIPort, if non-nil, returns the peerapi port that's
 	// running for the given IP address.
 	PeerAPIPort func(netip.Addr) (port uint16, ok bool)
@@ -1170,6 +1175,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 		} else if data, ok := p.AsTSMPPong(); ok {
 			if f := t.OnTSMPPongReceived; f != nil {
 				f(data)
+			}
+		} else if data, ok := p.AsTailscaleRejectedHeader(); ok {
+			if data.Reason == packet.RejectedDueToUnknownAppConnectorTransitIP {
+				if f := t.OnUnmappedTransitIPMessage; f != nil {
+					f(data)
+				}
 			}
 		}
 	}
