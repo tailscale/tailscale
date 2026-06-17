@@ -218,7 +218,7 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	if cn.Spec.AppConnector != nil {
 		sts.Connector.isAppConnector = true
 		if len(cn.Spec.AppConnector.Routes) != 0 {
-			sts.Connector.routes = cn.Spec.AppConnector.Routes.Stringify()
+			sts.Connector.routes = tsapi.Routes(cn.Spec.AppConnector.Routes).Stringify()
 		}
 	}
 
