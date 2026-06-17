@@ -15,40 +15,10 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
 var debugEnableServiceCommands = envknob.RegisterBool("TS_DEBUG_ENABLE_SERVICE_COMMANDS")
-
-// serviceLister is the subset of [local.Client] that the service commands
-// need. It is injected via the command's context (see [withServiceLister] /
-// [serviceListerFromContext]) so tests can supply a mock. Outside of tests
-// it is suplied by the package-level localClient var.
-//
-// NOTE(adrianosela): Could be replaced by a more generic way to mock
-// local.Client e.g. https://github.com/tailscale/tailscale/issues/20164.
-type serviceLister interface {
-	GetServices(ctx context.Context) (map[tailcfg.ServiceName]tailcfg.ServiceDetails, error)
-	Status(ctx context.Context) (*ipnstate.Status, error)
-}
-
-type serviceListerCtxKey struct{}
-
-// withServiceLister returns a copy of ctx carrying sl, retrievable with
-// [serviceListerFromContext].
-func withServiceLister(ctx context.Context, sl serviceLister) context.Context {
-	return context.WithValue(ctx, serviceListerCtxKey{}, sl)
-}
-
-// serviceListerFromContext returns the [serviceLister] stored in ctx by
-// [withServiceLister], or the package-level localClient if none was injected.
-func serviceListerFromContext(ctx context.Context) serviceLister {
-	if sl, ok := ctx.Value(serviceListerCtxKey{}).(serviceLister); ok {
-		return sl
-	}
-	return &localClient
-}
 
 const serviceListUsage = "tailscale service list"
 
@@ -106,7 +76,7 @@ func runServiceList(ctx context.Context, args []string) error {
 		return fmt.Errorf("usage: %s", serviceListUsage)
 	}
 
-	lc := serviceListerFromContext(ctx)
+	lc := localClientFromContext(ctx)
 
 	services, err := lc.GetServices(ctx)
 	if err != nil {

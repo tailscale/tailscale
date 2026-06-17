@@ -14,28 +14,12 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/stretchr/testify/mock"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 )
-
-// fakeServiceLister is a test-only [serviceLister] injected via
-// [withServiceLister] in place of the real localClient.
-type fakeServiceLister struct {
-	services    map[tailcfg.ServiceName]tailcfg.ServiceDetails
-	servicesErr error
-	status      *ipnstate.Status
-	statusErr   error
-}
-
-func (f fakeServiceLister) GetServices(context.Context) (map[tailcfg.ServiceName]tailcfg.ServiceDetails, error) {
-	return f.services, f.servicesErr
-}
-
-func (f fakeServiceLister) Status(context.Context) (*ipnstate.Status, error) {
-	return f.status, f.statusErr
-}
 
 // mustParsePorts parses ProtoPortRanges or fails the test.
 func mustParsePorts(t *testing.T, ports ...string) []tailcfg.ProtoPortRange {
@@ -54,14 +38,14 @@ func statusWithSuffix(suffix string) *ipnstate.Status {
 	}
 }
 
-// runList runs the list command with the given lister, capturing stdout.
-func runList(t *testing.T, lc serviceLister, jsonOut bool) string {
+// runList runs the list command with the given client, capturing stdout.
+func runList(t *testing.T, lc localClientI, jsonOut bool) string {
 	t.Helper()
 	var buf strings.Builder
 	tstest.Replace[io.Writer](t, &Stdout, &buf)
 	tstest.Replace(t, &serviceListArgs.json, jsonOut)
 
-	ctx := withServiceLister(context.Background(), lc)
+	ctx := withLocalClient(context.Background(), lc)
 	if err := runServiceList(ctx, nil); err != nil {
 		t.Fatalf("runServiceList: %v", err)
 	}
@@ -69,23 +53,24 @@ func runList(t *testing.T, lc serviceLister, jsonOut bool) string {
 }
 
 func TestServiceListTable(t *testing.T) {
-	lc := fakeServiceLister{
-		status: statusWithSuffix("ts-tailnet.ts.net."),
-		services: map[tailcfg.ServiceName]tailcfg.ServiceDetails{
-			// Intentionally out of order to exercise sorting.
-			"svc:web": {
-				Name:        "svc:web",
-				DisplayName: "Web",
-				Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
-				Ports:       mustParsePorts(t, "tcp:443"),
-			},
-			"svc:db": {
-				Name:  "svc:db",
-				Addrs: []netip.Addr{netip.MustParseAddr("100.80.0.1")},
-				Ports: mustParsePorts(t, "tcp:5432"),
-			},
+	services := map[tailcfg.ServiceName]tailcfg.ServiceDetails{
+		// Intentionally out of order to exercise sorting.
+		"svc:web": {
+			Name:        "svc:web",
+			DisplayName: "Web",
+			Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
+			Ports:       mustParsePorts(t, "tcp:443"),
+		},
+		"svc:db": {
+			Name:  "svc:db",
+			Addrs: []netip.Addr{netip.MustParseAddr("100.80.0.1")},
+			Ports: mustParsePorts(t, "tcp:5432"),
 		},
 	}
+
+	lc := newMockLocalClient(t)
+	lc.EXPECT().GetServices(mock.Anything).Return(services, nil).Once()
+	lc.EXPECT().Status(mock.Anything).Return(statusWithSuffix("ts-tailnet.ts.net."), nil).Once()
 
 	out := runList(t, lc, false)
 
@@ -128,16 +113,17 @@ func TestServiceListTable(t *testing.T) {
 // TestServiceListIPv6Only verifies that when a Service only has a v6 address
 // (e.g. a tailnet with IPv4 disabled), the v6 address is shown as the IP.
 func TestServiceListIPv6Only(t *testing.T) {
-	lc := fakeServiceLister{
-		status: statusWithSuffix("ts-tailnet.ts.net"),
-		services: map[tailcfg.ServiceName]tailcfg.ServiceDetails{
-			"svc:v6": {
-				Name:  "svc:v6",
-				Addrs: []netip.Addr{netip.MustParseAddr("fd7a::9")},
-				Ports: mustParsePorts(t, "tcp:80"),
-			},
+	services := map[tailcfg.ServiceName]tailcfg.ServiceDetails{
+		"svc:v6": {
+			Name:  "svc:v6",
+			Addrs: []netip.Addr{netip.MustParseAddr("fd7a::9")},
+			Ports: mustParsePorts(t, "tcp:80"),
 		},
 	}
+
+	lc := newMockLocalClient(t)
+	lc.EXPECT().GetServices(mock.Anything).Return(services, nil).Once()
+	lc.EXPECT().Status(mock.Anything).Return(statusWithSuffix("ts-tailnet.ts.net"), nil).Once()
 
 	out := runList(t, lc, false)
 	if !strings.Contains(out, "fd7a::9") {
@@ -146,25 +132,26 @@ func TestServiceListIPv6Only(t *testing.T) {
 }
 
 func TestServiceListJSON(t *testing.T) {
-	lc := fakeServiceLister{
-		status: statusWithSuffix("ts-tailnet.ts.net"),
-		services: map[tailcfg.ServiceName]tailcfg.ServiceDetails{
-			// Intentionally out of order to exercise sorting, and svc:web has
-			// both v4 and v6 addresses to confirm the JSON carries the full
-			// address list (unlike the table, which shows only the first).
-			"svc:web": {
-				Name:        "svc:web",
-				DisplayName: "Web",
-				Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
-				Ports:       mustParsePorts(t, "tcp:443", "tcp:8443"),
-			},
-			"svc:db": {
-				Name:  "svc:db",
-				Addrs: []netip.Addr{netip.MustParseAddr("100.80.0.1")},
-				Ports: mustParsePorts(t, "tcp:5432"),
-			},
+	services := map[tailcfg.ServiceName]tailcfg.ServiceDetails{
+		// Intentionally out of order to exercise sorting, and svc:web has both
+		// v4 and v6 addresses to confirm the JSON carries the full address
+		// list (unlike the table, which shows only the first).
+		"svc:web": {
+			Name:        "svc:web",
+			DisplayName: "Web",
+			Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
+			Ports:       mustParsePorts(t, "tcp:443", "tcp:8443"),
+		},
+		"svc:db": {
+			Name:  "svc:db",
+			Addrs: []netip.Addr{netip.MustParseAddr("100.80.0.1")},
+			Ports: mustParsePorts(t, "tcp:5432"),
 		},
 	}
+
+	lc := newMockLocalClient(t)
+	lc.EXPECT().GetServices(mock.Anything).Return(services, nil).Once()
+	lc.EXPECT().Status(mock.Anything).Return(statusWithSuffix("ts-tailnet.ts.net"), nil).Once()
 
 	out := runList(t, lc, true)
 
@@ -201,10 +188,10 @@ func TestServiceListJSON(t *testing.T) {
 }
 
 func TestServiceListEmpty(t *testing.T) {
-	lc := fakeServiceLister{
-		status:   statusWithSuffix("ts-tailnet.ts.net"),
-		services: map[tailcfg.ServiceName]tailcfg.ServiceDetails{},
-	}
+	lc := newMockLocalClient(t)
+	lc.EXPECT().GetServices(mock.Anything).Return(map[tailcfg.ServiceName]tailcfg.ServiceDetails{}, nil).Once()
+	lc.EXPECT().Status(mock.Anything).Return(statusWithSuffix("ts-tailnet.ts.net"), nil).Once()
+
 	out := runList(t, lc, false)
 	if !strings.Contains(out, "No Tailscale Services are available") {
 		t.Errorf("expected empty message, got\n%s", out)
@@ -213,9 +200,10 @@ func TestServiceListEmpty(t *testing.T) {
 
 func TestServiceListGetServicesError(t *testing.T) {
 	wantErr := errors.New("boom")
-	lc := fakeServiceLister{servicesErr: wantErr}
+	lc := newMockLocalClient(t)
+	lc.EXPECT().GetServices(mock.Anything).Return(nil, wantErr).Once()
 
-	ctx := withServiceLister(context.Background(), lc)
+	ctx := withLocalClient(context.Background(), lc)
 	err := runServiceList(ctx, nil)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want %v", err, wantErr)
@@ -223,7 +211,8 @@ func TestServiceListGetServicesError(t *testing.T) {
 }
 
 func TestServiceListRejectsArgs(t *testing.T) {
-	ctx := withServiceLister(context.Background(), fakeServiceLister{})
+	// The args check happens before any LocalAPI call, so no expectations.
+	ctx := withLocalClient(context.Background(), newMockLocalClient(t))
 	if err := runServiceList(ctx, []string{"unexpected"}); err == nil {
 		t.Error("expected error for extra args, got nil")
 	}
@@ -247,11 +236,11 @@ func TestServiceDNSName(t *testing.T) {
 	}
 }
 
-// TestServiceListerFromContextDefault verifies that without injection the
+// TestLocalClientFromContextDefault verifies that without injection the
 // real localClient is returned.
-func TestServiceListerFromContextDefault(t *testing.T) {
-	if got := serviceListerFromContext(context.Background()); got != &localClient {
-		t.Errorf("serviceListerFromContext default = %v, want &localClient", got)
+func TestLocalClientFromContextDefault(t *testing.T) {
+	if got := localClientFromContext(context.Background()); got != &localClient {
+		t.Errorf("localClientFromContext default = %v, want &localClient", got)
 	}
 }
 

@@ -1,0 +1,9 @@
+with-expecter: true
+dir: "{{.InterfaceDir}}"
+inpackage: true
+filename: "mock_localclient_test.go"
+mockname: "mockLocalClient"
+packages:
+  tailscale.com/cmd/tailscale/cli:
+    interfaces:
+      localClientI:
