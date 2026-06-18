@@ -4515,6 +4515,10 @@ func TestSendingTSMPDiscoTimer(t *testing.T) {
 	tw := eventbustest.NewWatcher(t, conn.eventBus)
 	t.Cleanup(func() { conn.Close() })
 
+	// maybeSendTSMPDiscoAdvert only advertises when netmap caching is enabled.
+	conn.controlKnobs = new(controlknobs.Knobs)
+	conn.controlKnobs.CacheNetworkMaps.Store(true)
+
 	peerKey := key.NewNode().Public()
 	ep := &endpoint{
 		nodeID:    1,
@@ -4574,5 +4578,45 @@ func TestSendingTSMPDiscoTimer(t *testing.T) {
 	conn.maybeSendTSMPDiscoAdvert(ep)
 	if err := eventbustest.ExpectExactly(tw, eventbustest.Type[NewDiscoKeyAvailable]()); err != nil {
 		t.Errorf("expected only one event, got: %s", err)
+	}
+}
+
+// TestSendingTSMPDiscoCachingDisabled verifies that maybeSendTSMPDiscoAdvert
+// early-returns (sends no advert) when netmap caching is not enabled via the
+// CacheNetworkMaps control knob, including when no knobs are present at all.
+func TestSendingTSMPDiscoCachingDisabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		knobs *controlknobs.Knobs
+	}{
+		{name: "no-knobs", knobs: nil},
+		// Knobs present but CacheNetworkMaps left at its false default.
+		{name: "caching-disabled", knobs: new(controlknobs.Knobs)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := newTestConn(t)
+			t.Cleanup(func() { conn.Close() })
+			conn.controlKnobs = tt.knobs
+
+			ep := &endpoint{
+				nodeID:    1,
+				publicKey: key.NewNode().Public(),
+				nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+			}
+			ep.c = conn
+
+			// A fresh endpoint with a zero lastDiscoKeyAdvertisement and no
+			// direct bestAddr would otherwise advertise; the only thing
+			// suppressing it here is the disabled caching knob. On early
+			// return the timestamp is left untouched (zero).
+			conn.maybeSendTSMPDiscoAdvert(ep)
+
+			ep.mu.Lock()
+			defer ep.mu.Unlock()
+			if !ep.lastDiscoKeyAdvertisement.IsZero() {
+				t.Errorf("lastDiscoKeyAdvertisement = %v; want zero (advert should have been suppressed)", ep.lastDiscoKeyAdvertisement)
+			}
+		})
 	}
 }
