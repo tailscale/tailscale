@@ -637,6 +637,12 @@ type network struct {
 
 	blackholeMu  sync.Mutex
 	blackholeMap map[netip.Addr]netip.Addr // blackholeMap contains address pairs for dropping traffic (in either direction)
+
+	// raStopMu guards raStopped and serializes with the unsolicited RA
+	// goroutine's send so that StopUnsolicitedRAsForTest can deterministically
+	// silence the background traffic.
+	raStopMu  sync.Mutex
+	raStopped bool
 }
 
 // registerWriter registers a client address with a MAC address.
@@ -1140,6 +1146,18 @@ func (s *Server) AwaitFirstPacket(ctx context.Context, mac MAC) error {
 // MACs returns the MAC addresses of the configured nodes.
 func (s *Server) MACs() iter.Seq[MAC] {
 	return maps.Keys(s.nodeByMAC)
+}
+
+// StopUnsolicitedRAsForTest stops all networks from sending periodic
+// unsolicited IPv6 Router Advertisements. It blocks until any in-progress
+// send has finished, so callers may safely register sinks afterwards
+// without races against background RA traffic.
+func (s *Server) StopUnsolicitedRAsForTest() {
+	for n := range s.networks {
+		n.raStopMu.Lock()
+		n.raStopped = true
+		n.raStopMu.Unlock()
+	}
 }
 
 func (s *Server) RegisterSinkForTest(mac MAC, fn func(eth []byte)) {
@@ -2075,6 +2093,15 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, _ *layers.ICMP
 func (n *network) startUnsolicitedRAs() {
 	n.s.wg.Go(func() {
 		send := func() {
+			// Hold raStopMu across the writeEth so that
+			// StopUnsolicitedRAsForTest can synchronize with any
+			// in-progress send: once StopUnsolicitedRAsForTest returns,
+			// no further unsolicited RAs will be delivered to writers.
+			n.raStopMu.Lock()
+			defer n.raStopMu.Unlock()
+			if n.raStopped {
+				return
+			}
 			pkt, err := n.buildIPv6RouterAdvertisement(macAllNodes, ipv6AllNodes)
 			if err != nil {
 				n.logf("building unsolicited RA: %v", err)
