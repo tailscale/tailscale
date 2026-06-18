@@ -212,7 +212,7 @@ func getSvcTriggerInfo(svc *mgr.Service) (*_SERVICE_TRIGGER_INFO, error) {
 
 // makeLogEntry consolidates relevant service information into a svcStateLogEntry.
 // We record the values of various service configuration constants as strings
-// so the the log entries are easy to interpret at a glance by humans.
+// so the log entries are easy to interpret at a glance by humans.
 func makeLogEntry(svc *mgr.Service, status svc.Status, cfg mgr.Config) (entry svcStateLogEntry) {
 	entry.ServiceName = svc.Name
 

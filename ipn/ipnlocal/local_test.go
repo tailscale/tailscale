@@ -8377,7 +8377,7 @@ func (f *fakeAttestationKey) Clone() key.HardwareAttestationKey {
 // TestStripKeysFromPrefs tests that LocalBackend's [stripKeysFromPrefs] (as used
 // by sendNotify etc) correctly removes all private keys from an ipn.Notify.
 //
-// It does so by testing the the two ways that Notifys are sent: via sendNotify,
+// It does so by testing the two ways that Notifys are sent: via sendNotify,
 // and via extension hooks.
 func TestStripKeysFromPrefs(t *testing.T) {
 	// genNotify generates a sample ipn.Notify with various private keys set

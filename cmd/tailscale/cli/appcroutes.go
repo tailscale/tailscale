@@ -40,7 +40,7 @@ By default this command prints the domains configured in the app connector confi
 learned for each domain.
 
 --all prints the routes learned from the domains configured in the app connector configuration; and any extra routes provided
-in the the policy app connector 'routes' field.
+in the policy app connector 'routes' field.
 
 --map prints the routes learned from the domains configured in the app connector configuration.
 

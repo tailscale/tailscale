@@ -386,7 +386,7 @@ func runTailnetLockRemove(ctx context.Context, args []string) error {
 		if isatty.IsTerminal(os.Stdout.Fd()) {
 			fmt.Printf(`Warning
 Removal of a signing key(s) without resigning nodes (--re-sign=false)
-will cause any nodes signed by the the given key(s) to be locked out
+will cause any nodes signed by the given key(s) to be locked out
 of the Tailscale network. Proceed with caution.
 `)
 			if !prompt.YesNo("Are you sure you want to remove the signing key(s)?", true) {
