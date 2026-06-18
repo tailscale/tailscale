@@ -169,6 +169,12 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 			return nil, err
 		}
 
+		// Own process group, for the same reason as the incubator cmd
+		// below: terminateSession signals kill(-pgid), and without this
+		// the user shell stays in tailscaled's group, the group signal
+		// finds no such pgid (ESRCH), and grandchildren survive session
+		// teardown.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		return cmd, nil
 	}
 
@@ -246,6 +252,12 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 	// The incubator will chdir into the home directory after it drops privileges.
 	cmd.Dir = "/"
+
+	// Own process group so SIGHUP via kill(-pgid) reaches the
+	// grandchild user shell, not just the incubator. The PTY path
+	// overrides this in startWithPTY with Setsid (which also creates
+	// a new pgrp), so the assignment is harmless to overwrite there.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd, nil
 }
 
@@ -493,6 +505,39 @@ func runningAsRoot() bool {
 	return euid == 0
 }
 
+// shouldUseLogin decides whether tryExecLogin should hand the session off
+// to /usr/bin/login or fall through to other mechanisms. It is pure to keep
+// the per-GOOS policy testable on any host.
+//
+// Constraints encoded here:
+//
+//   - login on linux/freebsd/openbsd cannot exec a command, only launch a
+//     shell, and requires a TTY (without one it exits immediately, breaking
+//     mosh and VSCode).
+//   - login on darwin can exec commands, but /usr/bin/login -pq exits 0 as
+//     soon as the child is spawned, so the child's exit status is lost
+//     (#18256). Only interactive TTY shells go through login, where the
+//     PAM "remote" session and utmpx accounting are worth that trade;
+//     exec sessions and non-TTY shells need the real exit status.
+func shouldUseLogin(goos string, hasTTY, isShell bool) (use bool, reason string) {
+	switch goos {
+	case linux, freebsd, openbsd:
+		if !isShell {
+			return false, "login on " + goos + " cannot exec a command, only a shell"
+		}
+		if !hasTTY {
+			return false, "login on " + goos + " requires a TTY"
+		}
+		return true, ""
+	case darwin:
+		if hasTTY && isShell {
+			return true, ""
+		}
+		return false, "darwin login -pq swallows the child exit status (#18256); only interactive TTY shells use login"
+	}
+	return false, "unsupported GOOS: " + goos
+}
+
 // tryExecLogin attempts to handle the ssh session by creating a full login
 // shell using the login command. If it never tried, it returns nil. If it
 // failed to do so, it returns an error.
@@ -501,34 +546,22 @@ func runningAsRoot() bool {
 // the login session, trigger PAM authentication, and get the "remote" PAM
 // profile.
 //
-// However, login is subject to some limitations.
+// However, login is subject to some limitations:
 //
-// 1. login cannot be used to execute commands except on macOS.
-// 2. On Linux and BSD, login requires a TTY to keep running.
+//  1. login cannot be used to execute commands except on macOS, and on
+//     macOS /usr/bin/login -pq does not propagate the child's exit
+//     status (#18256), so only interactive TTY shells use it there.
+//  2. On Linux and BSD, login requires a TTY to keep running.
 //
-// In these cases, tryExecLogin returns (false, nil) to indicate that processing
+// In these cases, tryExecLogin returns nil to indicate that processing
 // should fall through to other methods, such as using the su command.
 //
 // Note that this uses unix.Exec to replace the current process, so in cases
 // where we actually do run login, no subsequent Go code will execute.
 func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
-	// Only the macOS version of the login command supports executing a
-	// command, all other versions only support launching a shell without
-	// taking any arguments.
-	if !ia.isShell && runtime.GOOS != darwin {
-		dlogf("won't use login because we're not in a shell or on macOS")
+	if use, reason := shouldUseLogin(runtime.GOOS, ia.hasTTY, ia.isShell); !use {
+		dlogf("not using login: %s", reason)
 		return nil
-	}
-
-	switch runtime.GOOS {
-	case linux, freebsd, openbsd:
-		if !ia.hasTTY {
-			dlogf("can't use login because of missing TTY")
-			// We can only use the login command if a shell was requested with
-			// a TTY. If there is no TTY, login exits immediately, which
-			// breaks things like mosh and VSCode.
-			return nil
-		}
 	}
 
 	loginCmdPath, err := exec.LookPath("login")
@@ -1216,4 +1249,24 @@ func groupsMatchCurrent(groupIDs []int) bool {
 	sort.Ints(groupIDs)
 	sort.Ints(existing)
 	return slices.Equal(groupIDs, existing)
+}
+
+// terminateSession delivers sig to the incubator's process group
+// (kill(-pgid)) so it reaches any user shell the incubator spawned.
+// The incubator is the group leader via Setpgid in newIncubatorCommand
+// or Setsid in startWithPTY. ESRCH maps to nil: the session has exited
+// via cmd.Wait.
+func terminateSession(p *os.Process, sig os.Signal) error {
+	if p == nil {
+		return errors.New("nil process")
+	}
+	ssig, ok := sig.(syscall.Signal)
+	if !ok {
+		return p.Signal(sig)
+	}
+	err := syscall.Kill(-p.Pid, ssig)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }
