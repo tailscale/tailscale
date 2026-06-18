@@ -416,6 +416,16 @@ type LocalBackend struct {
 	// notified about.
 	lastNotifiedDriveShares *views.SliceView[*drive.Share, drive.ShareView]
 
+	// driveGen is the generation counter consulted by the [drive.RemoteSource]
+	// installed on [sys.DriveForLocal]. It is bumped whenever the inputs that
+	// could change the set of drive-capable remotes might have changed: full
+	// netmap installs (domain + self caps), netmap delta updates (peer set or
+	// per-peer addresses), and packet-filter updates (which is where
+	// [PeerCapability] values actually live). The bump is a single atomic.Add,
+	// so we do it unconditionally rather than try to detect "did this
+	// mutation actually matter".
+	driveGen atomic.Uint64
+
 	// lastSuggestedExitNode stores the last suggested exit node suggestion to
 	// avoid unnecessary churn between multiple equally-good options.
 	lastSuggestedExitNode tailcfg.StableNodeID
@@ -737,6 +747,12 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	eventbus.SubscribeFunc(ec, b.onAppConnectorStoreRoutes)
 	eventbus.SubscribeFunc(ec, b.onHomeDERPUpdate)
 	mConn.SetNetInfoCallback(b.setNetInfo) // TODO(tailscale/tailscale#17887): move to eventbus
+
+	if buildfeatures.HasDrive {
+		if f, ok := hookInstallDriveRemoteSource.GetOk(); ok {
+			f(b)
+		}
+	}
 
 	return b, nil
 }
@@ -2455,6 +2471,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 	cn.UpdateNetmapDelta(muts)
+	if buildfeatures.HasDrive {
+		// Drive's lazy remotes-source caches its rebuild keyed by this
+		// generation, so any delta — peer add/remove, address change,
+		// or otherwise — needs to invalidate that cache. We bump
+		// unconditionally rather than type-switch over [muts]; the
+		// atomic add is cheaper than the switch and immune to future
+		// mutation kinds that might affect drive-cap evaluation.
+		b.driveGen.Add(1)
+	}
 
 	// In order that we can update the cache, keep track of which nodes are
 	// updated and removed. The nodeBackend has already applied any deltas, so
@@ -2639,6 +2664,13 @@ func (b *LocalBackend) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule],
 	metricUpdatePacketFilter.Add(1)
 	cn.setPacketFilter(rules, parsed)
 	b.updateFilterLocked(b.pm.CurrentPrefs())
+	if buildfeatures.HasDrive {
+		// The drive sharer cap (and any other PeerCapability) is
+		// derived from the packet filter, so an updated rule set can
+		// flip a peer in or out of the drive-capable set without any
+		// per-peer mutation. Bump so the next WebDAV request rebuilds.
+		b.driveGen.Add(1)
+	}
 	return true
 }
 
@@ -7396,9 +7428,17 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}
 	}
 
-	if buildfeatures.HasDrive && nm != nil {
-		if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
-			f(b, nm)
+	if buildfeatures.HasDrive {
+		// Bump the drive remotes-source generation on every full netmap
+		// install. The hook is invoked separately below for share-list
+		// notifications; the bump itself is unconditional because the
+		// drive feature might not be wired in this build but the atomic
+		// add is cheap.
+		b.driveGen.Add(1)
+		if nm != nil {
+			if f, ok := hookSetNetMapLockedDrive.GetOk(); ok {
+				f(b)
+			}
 		}
 	}
 
@@ -7429,7 +7469,21 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 // HookSetRuntimeMetricsEnabled is an optional hook for the "runtimemetrics" feature.
 var HookSetRuntimeMetricsEnabled feature.Hook[func(enabled bool)]
 
-var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend, *netmap.NetworkMap)]
+// hookSetNetMapLockedDrive is invoked on every full netmap install when the
+// drive feature is linked in. It does NOT fire on netmap delta updates (peer
+// add/remove etc.); those are picked up by the lazy [drive.RemoteSource]
+// installed via [hookInstallDriveRemoteSource] plus the per-event bumps to
+// [LocalBackend.driveGen]. Its only remaining job is to re-notify IPN bus
+// listeners of the current local share list, whose visibility depends on
+// self caps that only change on full installs.
+var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend)]
+
+// hookInstallDriveRemoteSource is invoked from [NewLocalBackend] once the
+// LocalBackend is far enough along to be used as a source. It registers a
+// [drive.RemoteSource] on [sys.DriveForLocal] so the filesystem can pull
+// remotes lazily instead of being pushed a fresh list on every netmap
+// update.
+var hookInstallDriveRemoteSource feature.Hook[func(*LocalBackend)]
 
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
 func roundTraffic(bytes int64) float64 {

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"tailscale.com/drive"
@@ -52,10 +53,18 @@ type FileSystemForLocal struct {
 	logf     logger.Logf
 	h        *compositedav.Handler
 	listener *connListener
+
+	// sourceMu guards source and cachedGen. It also serializes the
+	// rebuild path so concurrent requests don't race to replace
+	// children with stale data.
+	sourceMu  sync.Mutex
+	source    drive.RemoteSource
+	cachedGen uint64
+	haveGen   bool // true once cachedGen reflects an actual source.Generation call
 }
 
 func (s *FileSystemForLocal) startServing() {
-	hs := &http.Server{Handler: s.h}
+	hs := &http.Server{Handler: http.HandlerFunc(s.serveHTTP)}
 	go func() {
 		err := hs.Serve(s.listener)
 		if err != nil {
@@ -65,17 +74,35 @@ func (s *FileSystemForLocal) startServing() {
 	}()
 }
 
-// HandleConn handles connections from local WebDAV clients
-func (s *FileSystemForLocal) HandleConn(conn net.Conn, remoteAddr net.Addr) error {
-	return s.listener.HandleConn(conn, remoteAddr)
+// serveHTTP refreshes the underlying compositedav children from the
+// remote source if its generation has changed, then delegates to the
+// composite handler. The refresh path is skipped entirely when the
+// generation is unchanged, which is the common case.
+func (s *FileSystemForLocal) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	s.refresh()
+	s.h.ServeHTTP(w, r)
 }
 
-// SetRemotes sets the complete set of remotes on the given tailnet domain
-// using a map of name -> url. If transport is specified, that transport
-// will be used to connect to these remotes.
-func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*drive.Remote, transport http.RoundTripper) {
-	children := make([]*compositedav.Child, 0, len(remotes))
-	for _, remote := range remotes {
+// refresh rebuilds the compositedav children from the current source
+// if its generation has changed since the last refresh. It is a no-op
+// when no source is set or when the generation matches the cached
+// value.
+func (s *FileSystemForLocal) refresh() {
+	s.sourceMu.Lock()
+	defer s.sourceMu.Unlock()
+
+	source := s.source
+	if source == nil {
+		return
+	}
+	gen := source.Generation()
+	if s.haveGen && gen == s.cachedGen {
+		return
+	}
+
+	transport := source.Transport()
+	var children []*compositedav.Child
+	for remote := range source.Remotes() {
 		children = append(children, &compositedav.Child{
 			Child: &dirfs.Child{
 				Name:      remote.Name,
@@ -85,8 +112,25 @@ func (s *FileSystemForLocal) SetRemotes(domain string, remotes []*drive.Remote, 
 			Transport: transport,
 		})
 	}
+	s.h.SetChildren(source.Domain(), children...)
+	s.cachedGen = gen
+	s.haveGen = true
+}
 
-	s.h.SetChildren(domain, children...)
+// HandleConn handles connections from local WebDAV clients
+func (s *FileSystemForLocal) HandleConn(conn net.Conn, remoteAddr net.Addr) error {
+	return s.listener.HandleConn(conn, remoteAddr)
+}
+
+// SetRemoteSource sets the source from which the filesystem reads the
+// current set of remotes. It replaces any previously set source and
+// forces a rebuild on the next incoming request.
+func (s *FileSystemForLocal) SetRemoteSource(source drive.RemoteSource) {
+	s.sourceMu.Lock()
+	s.source = source
+	s.cachedGen = 0
+	s.haveGen = false
+	s.sourceMu.Unlock()
 }
 
 // Close() stops serving the WebDAV content
