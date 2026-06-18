@@ -216,7 +216,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	tsTun.SetFilter(filter.NewAllowAllForTest(logf))
 	tsTun.Start()
 
-	wgLogger := wglog.NewLogger(logf)
+	wgLogger := wglog.NewLogger(logf, nil)
 	dev := wgcfg.NewDevice(tsTun, conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 
@@ -244,7 +244,6 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 
 func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
 	s.tsTun.SetWGConfig(cfg)
-	s.wgLogger.SetPeers(cfg.Peers)
 
 	// In production, LocalBackend installs a PeerByIPPacketFunc via
 	// Engine.SetPeerByIPPacketFunc. Tests that bypass LocalBackend need
@@ -687,7 +686,7 @@ func TestDeviceStartStop(t *testing.T) {
 	defer conn.Close()
 
 	tun := tuntest.NewChannelTUN()
-	wgLogger := wglog.NewLogger(t.Logf)
+	wgLogger := wglog.NewLogger(t.Logf, nil)
 	dev := wgcfg.NewDevice(tun.TUN(), conn.Bind(), wgLogger.DeviceLogger)
 	dev.Up()
 	dev.Close()

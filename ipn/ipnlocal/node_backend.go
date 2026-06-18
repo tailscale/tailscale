@@ -116,6 +116,15 @@ type nodeBackend struct {
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByKey map[key.NodePublic]tailcfg.NodeID
 
+	// nodeByWGString indexes wireguard-go's truncated peer-string form
+	// (see [key.NodePublic.WireGuardGoString]) to node ID. It mirrors
+	// nodeByKey and lets the wireguard-go log path resolve
+	// "peer(XXXX…YYYY)" references in O(1), without scanning every
+	// peer, while still tolerating the fact that the wireguard-go form
+	// is lossy and can't be inverted to a [key.NodePublic].
+	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
+	nodeByWGString map[string]tailcfg.NodeID
+
 	// userProfiles is the live set of user profiles, updated incrementally
 	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
 	// netMap.UserProfiles is the frozen snapshot from the last full install,
@@ -226,6 +235,16 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	nid, ok := nb.nodeByKey[k]
+	return nid, ok
+}
+
+// NodeByWireGuardString returns the node ID of the peer whose
+// [key.NodePublic.WireGuardGoString] form is s (e.g. "peer(IMTB…r7lM)").
+// ok is false if no current peer matches.
+func (nb *nodeBackend) NodeByWireGuardString(s string) (_ tailcfg.NodeID, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nid, ok := nb.nodeByWGString[s]
 	return nid, ok
 }
 
@@ -580,18 +599,26 @@ func (nb *nodeBackend) updateNodeByKeyLocked() {
 	nm := nb.netMap
 	if nm == nil {
 		nb.nodeByKey = nil
+		nb.nodeByWGString = nil
 		return
 	}
 
 	if nb.nodeByKey == nil {
 		nb.nodeByKey = map[key.NodePublic]tailcfg.NodeID{}
 	}
+	if nb.nodeByWGString == nil {
+		nb.nodeByWGString = map[string]tailcfg.NodeID{}
+	}
 	// First pass, mark everything unwanted.
 	for k := range nb.nodeByKey {
 		nb.nodeByKey[k] = 0
 	}
+	for k := range nb.nodeByWGString {
+		nb.nodeByWGString[k] = 0
+	}
 	addNode := func(n tailcfg.NodeView) {
 		nb.nodeByKey[n.Key()] = n.ID()
+		nb.nodeByWGString[n.Key().WireGuardGoString()] = n.ID()
 	}
 	if nm.SelfNode.Valid() {
 		addNode(nm.SelfNode)
@@ -603,6 +630,11 @@ func (nb *nodeBackend) updateNodeByKeyLocked() {
 	for k, v := range nb.nodeByKey {
 		if v == 0 {
 			delete(nb.nodeByKey, k)
+		}
+	}
+	for k, v := range nb.nodeByWGString {
+		if v == 0 {
+			delete(nb.nodeByWGString, k)
 		}
 	}
 }
@@ -684,6 +716,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				}
 			}
 			mak.Set(&nb.nodeByKey, m.Node.Key(), nid)
+			mak.Set(&nb.nodeByWGString, m.Node.Key().WireGuardGoString(), nid)
 			continue
 		case netmap.NodeMutationRemove:
 			nid := m.NodeIDBeingMutated()
@@ -694,6 +727,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 					}
 				}
 				delete(nb.nodeByKey, old.Key())
+				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
 				delete(nb.peers, nid)
 			}
 			continue
