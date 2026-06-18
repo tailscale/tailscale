@@ -26,8 +26,10 @@ import (
 
 	"tailscale.com/feature"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
@@ -277,6 +279,9 @@ func (m *directManager) rename(old, new string) error {
 	if !m.renameBroken {
 		err := m.fs.Rename(old, new)
 		if err == nil {
+			if new == resolvConf {
+				m.relabelResolvConf()
+			}
 			return nil
 		}
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
@@ -309,8 +314,54 @@ func (m *directManager) rename(old, new string) error {
 			return fmt.Errorf("remove of %q failed (%w) and so did truncate: %v", old, err, err2)
 		}
 	}
+	if new == resolvConf {
+		m.relabelResolvConf()
+	}
 	return nil
 }
+
+var restoreconPath lazy.SyncValue[string] // path to restorecon, or "" if absent
+
+// relabelResolvConf restores the policy-default SELinux context on
+// /etc/resolv.conf. Best effort: only runs when SELinux is enforcing. See:
+//
+//	https://github.com/tailscale/tailscale/issues/20149.
+func (m *directManager) relabelResolvConf() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	restorecon := restoreconPath.Get(func() string {
+		p, _ := exec.LookPath("restorecon")
+		return p
+	})
+	if restorecon == "" {
+		return
+	}
+	if !hostinfo.IsSELinuxEnforcing() {
+		// Clear any prior warning, e.g. if SELinux was turned off at runtime
+		// with setenforce(8) since the last failure.
+		m.health.SetHealthy(selinuxRelabelWarnable)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// m.fs may be rooted at a test prefix; restorecon needs the real path.
+	actualPath := m.fs.ActualPath(resolvConf)
+	if out, err := exec.CommandContext(ctx, restorecon, actualPath).CombinedOutput(); err != nil {
+		m.logf("dns: restorecon of %q failed: %v, output: %s", actualPath, err, bytes.TrimSpace(out))
+		m.health.SetUnhealthy(selinuxRelabelWarnable, nil)
+	} else {
+		m.health.SetHealthy(selinuxRelabelWarnable)
+	}
+}
+
+var selinuxRelabelWarnable = health.Register(&health.Warnable{
+	Code:     "resolv-conf-relabel-failed",
+	Severity: health.SeverityMedium,
+	Title:    "DNS configuration issue",
+	Text:     health.StaticMessage("Failed to restore the SELinux label on /etc/resolv.conf; DNS may break when other services manage the file. See https://github.com/tailscale/tailscale/issues/20149"),
+})
 
 // setWant sets the expected contents of /etc/resolv.conf, if any.
 //
