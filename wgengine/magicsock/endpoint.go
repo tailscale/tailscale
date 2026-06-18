@@ -1827,6 +1827,8 @@ type addrQuality struct {
 	wireMTU          tstun.WireMTU
 }
 
+func (a addrQuality) isZero() bool { return a == addrQuality{} }
+
 func (a addrQuality) String() string {
 	// TODO(jwhited): consider including relayServerDisco
 	return fmt.Sprintf("%v@%v+%v", a.epAddr, a.latency, a.wireMTU)
