@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -194,6 +195,10 @@ func TestPacketSideEffects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Silence the periodic unsolicited Router Advertisements
+			// before registering sinks; otherwise a background RA can
+			// race with the synchronous packet-count assertions below.
+			s.StopUnsolicitedRAsForTest()
 			defer s.Close()
 
 			for _, tt := range tt.tests {
@@ -558,7 +563,7 @@ func TestProtocolQEMU(t *testing.T) {
 		go s.ServeUnixConn(conn.(*net.UnixConn), ProtocolQEMU)
 	}
 
-	sendBetweenClients(t, clientc, s, mkLenPrefixed)
+	sendBetweenClients(t, clientc, s, ProtocolQEMU)
 }
 
 // TestProtocolUnixDgram tests the protocol that macOS Virtualization.framework
@@ -601,11 +606,11 @@ func TestProtocolUnixDgram(t *testing.T) {
 		clientc[i] = c
 	}
 
-	sendBetweenClients(t, clientc, s, nil)
+	sendBetweenClients(t, clientc, s, ProtocolUnixDGRAM)
 }
 
 // sendBetweenClients is a test helper that tries to send an ethernet frame from
-// one client to another.
+// one client to another using the given vnet wire protocol.
 //
 // It first makes the two clients send a packet to a fictitious node 3, which
 // forces their src MACs to be registered with a networkWriter internally so
@@ -615,12 +620,11 @@ func TestProtocolUnixDgram(t *testing.T) {
 // effect here, so this does it manually.
 //
 // It also then waits for them to be registered.
-//
-// wrap is an optional function that wraps the packet before sending it.
-func sendBetweenClients(t testing.TB, clientc [2]*net.UnixConn, s *Server, wrap func([]byte) []byte) {
+func sendBetweenClients(t testing.TB, clientc [2]*net.UnixConn, s *Server, proto Protocol) {
 	t.Helper()
-	if wrap == nil {
-		wrap = func(b []byte) []byte { return b }
+	wrap := func(b []byte) []byte { return b }
+	if proto == ProtocolQEMU {
+		wrap = mkLenPrefixed
 	}
 	for i, c := range clientc {
 		must.Get(c.Write(wrap(mkEth(nodeMac(3), nodeMac(i+1), testingEthertype, []byte("hello")))))
@@ -637,18 +641,41 @@ func sendBetweenClients(t testing.TB, clientc [2]*net.UnixConn, s *Server, wrap 
 	t.Logf("writing % 02x", pkt)
 	must.Get(clientc[0].Write(pkt))
 
-	// vnet sends an unsolicited Router Advertisement at writer-register time
-	// on v6-enabled networks; loop until we see the test packet, skipping any
-	// noise that arrived first.
-	buf := make([]byte, 2048)
+	// vnet sends a Router Advertisement at writer-register time on v6-enabled
+	// networks (and may also send periodic unsolicited RAs). Loop until we
+	// see the test packet, skipping any noise that arrived first.
+	//
+	// For the QEMU stream protocol the kernel is free to coalesce multiple
+	// length-prefixed frames into one Read, so the reader must parse the
+	// framing or it may swallow the test packet alongside an RA.
 	deadline := time.Now().Add(5 * time.Second)
+	clientc[1].SetReadDeadline(deadline)
+	readFrame := func() ([]byte, error) {
+		if proto == ProtocolUnixDGRAM {
+			buf := make([]byte, 2048)
+			n, err := clientc[1].Read(buf)
+			if err != nil {
+				return nil, err
+			}
+			return buf[:n], nil
+		}
+		var hdr [4]byte
+		if _, err := io.ReadFull(clientc[1], hdr[:]); err != nil {
+			return nil, err
+		}
+		n := binary.BigEndian.Uint32(hdr[:])
+		frame := make([]byte, 4+n)
+		copy(frame, hdr[:])
+		if _, err := io.ReadFull(clientc[1], frame[4:]); err != nil {
+			return nil, err
+		}
+		return frame, nil
+	}
 	for {
-		clientc[1].SetReadDeadline(deadline)
-		n, err := clientc[1].Read(buf)
+		got, err := readFrame()
 		if err != nil {
 			t.Fatalf("did not receive test packet: %v", err)
 		}
-		got := buf[:n]
 		if bytes.Equal(got, pkt) {
 			return
 		}
