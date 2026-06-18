@@ -135,6 +135,11 @@ type Knobs struct {
 	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
 	// UDP sockets. See [tailcfg.NodeAttrNeverGSOEqualTail].
 	NeverGSOEqualTail atomic.Bool
+
+	// CacheNetworkMaps is whether the node should persistently cache network
+	// maps and use them to establish peer connectivity on start, if doing so
+	// is supported by the client and storage is available.
+	CacheNetworkMaps atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -170,6 +175,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableTUNUDPGRO                     = has(tailcfg.NodeAttrDisableTUNUDPGRO)
 		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
 		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
+		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -203,6 +209,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableTUNUDPGRO.Store(disableTUNUDPGRO)
 	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
 	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
+	k.CacheNetworkMaps.Store(cacheNetworkMaps)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal

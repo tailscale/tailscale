@@ -4526,12 +4526,25 @@ type NewDiscoKeyAvailable struct {
 
 // maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
 // should send our DiscoKey to the first node address of the magicksock endpoint.
-// The event is only emitted if we are not already communicating directly and
-// more than 60 seconds has passed since the last DiscoKey was sent.
+//
+// The event is suppressed if we are already communicating directly or
+// less than 60 seconds has passed since the last DiscoKey was sent, or netmap
+// caching is disabled on this node.
 //
 // We do not need the Conn to be locked, but the endpoint should be.
 func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
+	// Disable TSMP disco advert by default, unless network map caching is
+	// enabled for the local node. Caching network maps on the remote node is
+	// what really matters in terms of handling a TSMP disco advert and applying
+	// it in a useful way, but the TSMP disco advert implementation as it exists
+	// here has pathological behaviors. Therefore, it should be disabled for
+	// almost all tailnets, and we lean on the network map caching control knob
+	// for this purpose. See #20081.
+	if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
 		return
 	}
 
