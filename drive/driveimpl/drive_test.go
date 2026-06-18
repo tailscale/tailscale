@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"log"
 	"net"
 	"net/http"
@@ -456,10 +457,48 @@ func (r *remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type system struct {
-	t       *testing.T
-	local   *local
-	client  *gowebdav.Client
+	t         *testing.T
+	local     *local
+	client    *gowebdav.Client
+	transport http.RoundTripper
+
+	mu      sync.Mutex
 	remotes map[string]*remote
+	gen     uint64
+}
+
+// Domain implements [drive.RemoteSource].
+func (s *system) Domain() string { return domain }
+
+// Transport implements [drive.RemoteSource].
+func (s *system) Transport() http.RoundTripper { return s.transport }
+
+// Remotes implements [drive.RemoteSource].
+func (s *system) Remotes() iter.Seq[*drive.Remote] {
+	s.mu.Lock()
+	rs := make([]*drive.Remote, 0, len(s.remotes))
+	for name, r := range s.remotes {
+		url := fmt.Sprintf("http://%s", r.ln.Addr())
+		rs = append(rs, &drive.Remote{
+			Name: name,
+			URL:  func() string { return url },
+		})
+	}
+	s.mu.Unlock()
+	return func(yield func(*drive.Remote) bool) {
+		for _, r := range rs {
+			if !yield(r) {
+				return
+			}
+		}
+	}
+}
+
+// Generation implements [drive.RemoteSource].
+func (s *system) Generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen
 }
 
 func newSystem(t *testing.T) *system {
@@ -486,11 +525,16 @@ func newSystem(t *testing.T) *system {
 	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", ln.Addr()), &noopAuthorizer{})
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
-		t:       t,
-		local:   &local{ln: ln, fs: fs},
+		t:     t,
+		local: &local{ln: ln, fs: fs},
+		transport: &http.Transport{
+			DisableKeepAlives:     true,
+			ResponseHeaderTimeout: 5 * time.Second,
+		},
 		client:  client,
 		remotes: make(map[string]*remote),
 	}
+	fs.SetRemoteSource(s)
 	t.Cleanup(s.stop)
 	return s
 }
@@ -518,22 +562,11 @@ func (s *system) addRemote(name string) string {
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
 	go http.Serve(ln, r)
-	s.remotes[name] = r
 
-	remotes := make([]*drive.Remote, 0, len(s.remotes))
-	for name, r := range s.remotes {
-		remotes = append(remotes, &drive.Remote{
-			Name: name,
-			URL:  func() string { return fmt.Sprintf("http://%s", r.ln.Addr()) },
-		})
-	}
-	s.local.fs.SetRemotes(
-		domain,
-		remotes,
-		&http.Transport{
-			DisableKeepAlives:     true,
-			ResponseHeaderTimeout: 5 * time.Second,
-		})
+	s.mu.Lock()
+	s.remotes[name] = r
+	s.gen++
+	s.mu.Unlock()
 
 	return fileServer.Addr()
 }
