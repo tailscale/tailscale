@@ -110,6 +110,11 @@ type Knobs struct {
 	// See https://github.com/tailscale/tailscale/issues/15404.
 	// TODO(bradfitz): remove this a few releases after 2026-02-16.
 	ForceRegisterMagicDNSIPv4Only atomic.Bool
+
+	// CacheNetworkMaps is whether the node should persistently cache network
+	// maps and use them to establish peer connectivity on start, if doing so
+	// is supported by the client and storage is available.
+	CacheNetworkMaps atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -139,6 +144,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
 		disableHostsFileUpdates              = has(tailcfg.NodeAttrDisableHostsFileUpdates)
 		forceRegisterMagicDNSIPv4Only        = has(tailcfg.NodeAttrForceRegisterMagicDNSIPv4Only)
+		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -166,6 +172,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableSkipStatusQueue.Store(disableSkipStatusQueue)
 	k.DisableHostsFileUpdates.Store(disableHostsFileUpdates)
 	k.ForceRegisterMagicDNSIPv4Only.Store(forceRegisterMagicDNSIPv4Only)
+	k.CacheNetworkMaps.Store(cacheNetworkMaps)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
