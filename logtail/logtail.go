@@ -973,7 +973,7 @@ func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	}
 
 	// Check whether the reserved logtail member occurs in the log data.
-	// If so, it is moved to the the logtail/error member.
+	// If so, it is moved to the logtail/error member.
 	const jsonSeperators = ",:"      // per RFC 8259, section 2
 	const jsonWhitespace = " \n\r\t" // per RFC 8259, section 2
 	var errDetail string

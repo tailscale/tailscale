@@ -1247,7 +1247,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}{
 		{
 			name: "Initial",
-			// The configs are nil until the the LocalBackend is started.
+			// The configs are nil until the LocalBackend is started.
 			wantState:     ipn.NoState,
 			wantCfg:       nil,
 			wantRouterCfg: nil,
