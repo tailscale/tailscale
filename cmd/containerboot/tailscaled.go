@@ -215,12 +215,15 @@ func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Cl
 		return
 	}
 	prevTailscaledCfg = b
-	// kubelet mounts Secrets to Pods using a series of symlinks, one of
-	// which is <mount-dir>/..data that Kubernetes recommends consumers to
-	// use if they need to monitor changes
-	// https://github.com/kubernetes/kubernetes/blob/v1.28.1/pkg/volume/util/atomic_writer.go#L39-L61
-	const kubeletMountedCfg = "..data"
-	toWatch := filepath.Join(tailscaledCfgDir, kubeletMountedCfg)
+	// kubelet mounts Secrets to Pods using a series of symlinks. The atomic
+	// writer rotates the mount by creating a new ..<timestamp> directory,
+	// swapping the ..data symlink into it, and removing the old directory.
+	// Across kernels/fsnotify versions the resulting fsnotify events are not
+	// reliable to filter on (they may arrive as CREATE/REMOVE on ..<timestamp>,
+	// on the leaf symlinks, or be coalesced/missed for the ..data swap itself).
+	// So, like the serve-config watcher, we re-read the file on any event and
+	// let the byte comparison below decide whether anything actually changed.
+	// See https://github.com/kubernetes/kubernetes/blob/v1.28.1/pkg/volume/util/atomic_writer.go#L39-L61
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,10 +232,7 @@ func watchTailscaledConfigChanges(ctx context.Context, path string, lc *local.Cl
 			errCh <- fmt.Errorf("watcher error: %w", err)
 			return
 		case <-tickChan:
-		case event := <-eventChan:
-			if event.Name != toWatch {
-				continue
-			}
+		case <-eventChan:
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {
