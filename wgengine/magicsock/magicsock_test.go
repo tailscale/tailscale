@@ -4620,3 +4620,62 @@ func TestSendingTSMPDiscoCachingDisabled(t *testing.T) {
 		})
 	}
 }
+
+// TestSendingTSMPDiscoPeerRelaySuppressed verifies that maybeSendTSMPDiscoAdvert
+// suppresses the advert when the bestAddr is a peer relay path (a non-zero
+// addrQuality whose epAddr has a VNI set), even though such a path is not
+// direct. Suppression is observed via lastDiscoKeyAdvertisement remaining
+// unchanged, since a fired advert would overwrite it with the current time.
+func TestSendingTSMPDiscoPeerRelaySuppressed(t *testing.T) {
+	conn := newTestConn(t)
+	t.Cleanup(func() { conn.Close() })
+
+	// maybeSendTSMPDiscoAdvert only advertises when netmap caching is enabled.
+	conn.controlKnobs = new(controlknobs.Knobs)
+	conn.controlKnobs.CacheNetworkMaps.Store(true)
+
+	peerKey := key.NewNode().Public()
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: peerKey,
+		nodeAddr:  netip.MustParseAddr("100.64.0.1"),
+	}
+	discoKey := key.NewDisco().Public()
+	ep.disco.Store(&endpointDisco{
+		key:   discoKey,
+		short: discoKey.ShortString(),
+	})
+	ep.c = conn
+	conn.mu.Lock()
+	nodeView := (&tailcfg.Node{
+		Key: ep.publicKey,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+	}).View()
+	conn.peersByID = map[tailcfg.NodeID]tailcfg.NodeView{nodeView.ID(): nodeView}
+	conn.mu.Unlock()
+
+	conn.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+
+	// A peer relay bestAddr: an epAddr with a VNI set. It is past the
+	// rate-limit interval with a non-zero lastDiscoKeyAdvertisement, so the
+	// only thing suppressing the advert is the active (non-zero) bestAddr.
+	var vni packet.VirtualNetworkID
+	vni.Set(7)
+	lastAdvert := mono.Now().Add(-discoKeyAdvertisementInterval - time.Second)
+	ep.mu.Lock()
+	ep.lastDiscoKeyAdvertisement = lastAdvert
+	ep.bestAddr = addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.2.3.4:567"), vni: vni}}
+	ep.mu.Unlock()
+
+	conn.maybeSendTSMPDiscoAdvert(ep)
+
+	// A fired advert would have overwritten lastDiscoKeyAdvertisement with the
+	// current time; confirm it was left untouched, indicating suppression.
+	ep.mu.Lock()
+	defer ep.mu.Unlock()
+	if ep.lastDiscoKeyAdvertisement != lastAdvert {
+		t.Errorf("lastDiscoKeyAdvertisement = %v; want unchanged %v (advert should have been suppressed)", ep.lastDiscoKeyAdvertisement, lastAdvert)
+	}
+}
