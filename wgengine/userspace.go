@@ -162,6 +162,13 @@ type userspaceEngine struct {
 	// logger from inside Reconfig. It may be nil if no source was installed.
 	netLogSource syncs.AtomicValue[netlog.NodeSource]
 
+	// wgPeerLookup is the lookup function installed via
+	// [Engine.SetWGPeerLookup]; it is consulted by [wgLogger] to translate
+	// wireguard-go peer references in log lines. It may be nil if no
+	// lookup was installed, in which case peer references are not
+	// rewritten.
+	wgPeerLookup syncs.AtomicValue[func(wgString string) (tsString string, ok bool)]
+
 	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
 	// wgLock must be held when using this map.
 	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
@@ -463,7 +470,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
 	}
 
-	e.wgLogger = wglog.NewLogger(logf)
+	e.wgLogger = wglog.NewLogger(logf, func(wgString string) (tsString string, ok bool) {
+		fn := e.wgPeerLookup.Load()
+		if fn == nil {
+			return "", false
+		}
+		return fn(wgString)
+	})
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -685,7 +698,10 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	}
 
 	full := e.lastCfgFull
-	e.wgLogger.SetPeers(full.Peers)
+	// The wireguard-go peer set may have changed; drop the cached
+	// peer-string rewrites so the next log line re-resolves them
+	// against the current lookup.
+	e.wgLogger.Invalidate()
 
 	// Rebuild the prefix-match peer routing table from the current
 	// (wireguard-filtered) peer list and publish it atomically.
@@ -744,6 +760,12 @@ func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWi
 // network logger.
 func (e *userspaceEngine) SetNetLogNodeSource(src netlog.NodeSource) {
 	e.netLogSource.Store(src)
+}
+
+// SetWGPeerLookup installs the lookup function used by the engine's
+// wireguard-go log wrapper to rewrite peer references in log lines.
+func (e *userspaceEngine) SetWGPeerLookup(fn func(wgString string) (tsString string, ok bool)) {
+	e.wgPeerLookup.Store(fn)
 }
 
 func peerWireGuardStateFromDevice(state device.PeerSessionState) PeerWireGuardState {

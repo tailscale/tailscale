@@ -646,6 +646,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
 	e.SetNetLogNodeSource(netLogNodeSource{b})
+	e.SetWGPeerLookup(b.lookupPeerWireGuardString)
 
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
@@ -8089,6 +8090,25 @@ func (s netLogNodeSource) NodeByAddr(addr netip.Addr) (_ tailcfg.NodeView, _ tai
 
 // Compile-time assertion that netLogNodeSource implements [netlog.NodeSource].
 var _ netlog.NodeSource = netLogNodeSource{}
+
+// lookupPeerWireGuardString returns the Tailscale-conventional short string
+// (e.g. "[IMTBr]") for the peer whose wireguard-go-formatted public key
+// string is wgString (e.g. "peer(IMTB…r7lM)"), or "", false if no current
+// peer matches. It is installed on the engine via [Engine.SetWGPeerLookup]
+// in [NewLocalBackend] so that [wglog.Logger] can rewrite peer references
+// in wireguard-go log lines without any per-Reconfig denormalization.
+func (b *LocalBackend) lookupPeerWireGuardString(wgString string) (tsString string, ok bool) {
+	nb := b.currentNode()
+	nid, ok := nb.NodeByWireGuardString(wgString)
+	if !ok {
+		return "", false
+	}
+	nv, ok := nb.NodeByID(nid)
+	if !ok {
+		return "", false
+	}
+	return nv.Key().ShortString(), true
+}
 
 // ActiveSSHConns returns the number of active SSH connections,
 // or 0 if SSH is not linked into the binary or available on the platform.

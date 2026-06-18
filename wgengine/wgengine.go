@@ -172,6 +172,16 @@ type Engine interface {
 	// before any [Engine.Reconfig] call that starts up the network logger.
 	SetNetLogNodeSource(netlog.NodeSource)
 
+	// SetWGPeerLookup installs the function used by the engine's
+	// wireguard-go log wrapper to rewrite peer references in log lines
+	// (mapping wireguard-go's "peer(XXXX…YYYY)" form to the
+	// Tailscale-conventional short string form).
+	//
+	// It is expected to be called once during LocalBackend construction.
+	// The function is called concurrently and must be safe to call with
+	// no Engine locks held.
+	SetWGPeerLookup(func(wgString string) (tsString string, ok bool))
+
 	// SetPeerSessionStateFunc installs a callback used to observe WireGuard
 	// peer session state transitions.
 	//

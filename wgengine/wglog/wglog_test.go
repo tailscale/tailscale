@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"testing"
 
+	extwgconn "github.com/tailscale/wireguard-go/conn"
+	extwgdevice "github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -40,12 +41,19 @@ func TestLogger(t *testing.T) {
 		}
 	}
 
-	x := wglog.NewLogger(logf)
-	key, err := key.ParseNodePublicUntyped(mem.S("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53"))
+	k, err := key.ParseNodePublicUntyped(mem.S("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	x.SetPeers([]wgcfg.Peer{{PublicKey: key}})
+	wantWG := k.WireGuardGoString()
+	wantTS := k.ShortString()
+	lookup := func(s string) (string, bool) {
+		if s == wantWG {
+			return wantTS, true
+		}
+		return "", false
+	}
+	x := wglog.NewLogger(logf, lookup)
 
 	for _, tt := range tests {
 		if tt.omit {
@@ -69,7 +77,7 @@ func TestSuppressLogs(t *testing.T) {
 	logf := func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
-	x := wglog.NewLogger(logf)
+	x := wglog.NewLogger(logf, nil)
 	x.DeviceLogger.Verbosef("pass")
 	x.DeviceLogger.Verbosef("UAPI: Adding allowedip")
 
@@ -81,6 +89,35 @@ func TestSuppressLogs(t *testing.T) {
 	}
 }
 
+// TestWireGuardGoStringMatchesWireGuardGo guards against a wireguard-go bump
+// silently changing the wireguard-go peer-string format from under us. The
+// LocalBackend's nodeByWGString index is built using
+// [key.NodePublic.WireGuardGoString]; if wireguard-go's *device.Peer.String
+// were to drift, the index would quietly stop matching and wglog would no
+// longer translate peer references in log lines.
+func TestWireGuardGoStringMatchesWireGuardGo(t *testing.T) {
+	var raw [32]byte
+	for i := range raw {
+		raw[i] = byte(i + 1)
+	}
+	nodeKey := key.NodePublicFromRaw32(mem.B(raw[:]))
+
+	dev := extwgdevice.NewDevice(
+		tuntest.NewChannelTUN().TUN(),
+		extwgconn.NewDefaultBind(),
+		extwgdevice.NewLogger(extwgdevice.LogLevelError, ""),
+	)
+	t.Cleanup(dev.Close)
+	peer, err := dev.NewPeer(extwgdevice.NoisePublicKey(raw))
+	if err != nil {
+		t.Fatalf("NewPeer: %v", err)
+	}
+
+	if got, want := nodeKey.WireGuardGoString(), peer.String(); got != want {
+		t.Errorf("NodePublic.WireGuardGoString() = %q, want wireguard-go *device.Peer.String() = %q", got, want)
+	}
+}
+
 func stringer(s string) stringerString {
 	return stringerString(s)
 }
@@ -88,30 +125,3 @@ func stringer(s string) stringerString {
 type stringerString string
 
 func (s stringerString) String() string { return string(s) }
-
-func BenchmarkSetPeers(b *testing.B) {
-	b.ReportAllocs()
-	x := wglog.NewLogger(logger.Discard)
-	peers := [][]wgcfg.Peer{genPeers(0), genPeers(15), genPeers(16), genPeers(15)}
-	for range b.N {
-		for _, p := range peers {
-			x.SetPeers(p)
-		}
-	}
-}
-
-func genPeers(n int) []wgcfg.Peer {
-	if n > 32 {
-		panic("too many peers")
-	}
-	if n == 0 {
-		return nil
-	}
-	peers := make([]wgcfg.Peer, n)
-	for i := range peers {
-		var k [32]byte
-		k[n] = byte(n)
-		peers[i].PublicKey = key.NodePublicFromRaw32(mem.B(k[:]))
-	}
-	return peers
-}

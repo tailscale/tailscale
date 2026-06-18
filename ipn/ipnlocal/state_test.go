@@ -1986,6 +1986,7 @@ func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, o
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
 func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource) {}
+func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}
 
 func (e *mockEngine) Close() {
 	e.mu.Lock()
