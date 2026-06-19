@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	jsonv1 "github.com/go-json-experiment/json/v1"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
@@ -40,6 +41,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -85,7 +87,7 @@ func init() {
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
-	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
+	ipnlocal.HookAllowPeerAPIDNS.Add(dnsAllowedSuffixes)
 	localapi.Register("conn25/state", serveLocalAPIStateGet)
 	ipnlocal.RegisterC2N("GET /conn25/state", serveC2NStateGet)
 }
@@ -103,12 +105,17 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 	e.handleConnectorTransitIP(h, w, r)
 }
 
-func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
+func dnsAllowedSuffixes(h ipnlocal.PeerAPIHandler, urlQuery url.Values) views.Slice[string] {
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
-		return false
+		return ipnlocal.PeerAPIDNSRejectAllNames
 	}
-	return e.handleHookReplyToDNSQueries(h)
+	cfg, isConfigured := e.conn25.getConfig()
+	if !isConfigured {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	return e.conn25.connector.dnsAllowedSuffixes(h, urlQuery, cfg)
 }
 
 // extension is an [ipnext.Extension] managing the connector on platforms
@@ -314,19 +321,19 @@ func (c *Conn25) ClientFlowRemoved(transitIP netip.Addr) {
 	c.client.flowRemoved(transitIP)
 }
 
-// ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
-func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) (netip.Addr, error) {
-	if addr, ok := c.connector.realIPForTransitIPConnection(src, transit); ok {
+// ConnectorAppAddrForTransitIPConnection implements [Conn25Datapath].
+func (c *Conn25) ConnectorAppAddrForTransitIPConnection(src, transit netip.Addr) (AppAddr, error) {
+	if addr, ok := c.connector.appAddrForTransitIPConnection(src, transit); ok {
 		return addr, nil
 	}
 	cfg, ok := c.getConfig()
 	if !ok {
-		return netip.Addr{}, nil
+		return AppAddr{}, nil
 	}
 	if !cfg.ipSets.v4Transit.Contains(transit) && !cfg.ipSets.v6Transit.Contains(transit) {
-		return netip.Addr{}, nil
+		return AppAddr{}, nil
 	}
-	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
+	return AppAddr{}, ErrUnmappedSrcAndTransitIP
 }
 
 func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
@@ -369,15 +376,6 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 	w.Write(bs)
 }
 
-func (e *extension) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
-	if !e.conn25.isConfigured() {
-		return false
-	}
-	// TODO(tailscale/corp#40076): verify the peer has access to the query's
-	// app (if any) domain.
-	return true
-}
-
 // onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.
 func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 	cfg, err := configFromNodeView(selfNode)
@@ -417,9 +415,14 @@ func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip
 	return e.conn25.client.extraWireGuardAllowedIPs(k)
 }
 
-type appAddr struct {
-	app         string
-	addr        netip.Addr
+// AppAddr is a tuple of an App name and real destination Addr.
+type AppAddr struct {
+	// App is the name of the app being referenced, in "app:example" form.
+	App string
+	// Addr is the real destination IP address being referenced.
+	Addr netip.Addr
+	// Filter is the acceptable incoming protocol/port combinations.
+	Filter      views.Slice[tailcfg.ProtoPortRange]
 	expiryEntry *list.Element
 }
 
@@ -487,6 +490,7 @@ const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
 const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
 const unknownAppNameMessage = "The App name in the request does not match a configured App"
 const missingAppPermissionMessage = "You do not have permission to use this App"
+const misconfiguredAppPermissionMessage = "Your permissions to use this App are misconfigured"
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
 // to a ConnectorTransitIPRequest. It updates the connectors mapping of
@@ -522,6 +526,8 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 	}
 
 	seen := map[netip.Addr]bool{}
+
+transitIPs:
 	for _, each := range ctipr.TransitIPs {
 		if seen[each.TransitIP] {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
@@ -533,7 +539,7 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 			continue
 		}
 
-		authorized := peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App))
+		appPeerCapValues, authorized := peerCaps[peercap.Conn25Prefix.ToAttribute(each.App)]
 
 		app, ok := cfg.appsByName[each.App]
 		if !authorized && !(ok && app.TemporaryUnsafeBypassFilter) {
@@ -557,14 +563,36 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 				n.StableID(), each.App)
 			continue
 		}
-		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
+
+		// TODO(adrian): an optimization could cache this on a peer+app basis
+		// so they can all share a [views.Slice] instead of storing a copy with
+		// each TransitIP allocation
+		var appPermittedPorts []tailcfg.ProtoPortRange
+		if app.TemporaryUnsafeBypassFilter {
+			appPermittedPorts = []tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}}
+		} else {
+			appPermittedPorts = make([]tailcfg.ProtoPortRange, 0, len(appPeerCapValues))
+			for _, v := range appPeerCapValues {
+				var ppr tailcfg.ProtoPortRange
+				if err := jsonv1.Unmarshal([]byte(v), &ppr); err != nil {
+					resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+						Code:    MissingAppPermission,
+						Message: misconfiguredAppPermissionMessage,
+					})
+					continue transitIPs
+				}
+				appPermittedPorts = append(appPermittedPorts, ppr)
+			}
+		}
+
+		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each, views.SliceOf(appPermittedPorts))
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}
 	return resp
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, filterPorts views.Slice[tailcfg.ProtoPortRange]) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -589,13 +617,10 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.transitIPs == nil {
-		c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
-	}
 	peerMap, ok := c.transitIPs[peerAddr]
 	if !ok {
-		peerMap = make(map[netip.Addr]appAddr)
-		c.transitIPs[peerAddr] = peerMap
+		peerMap = make(map[netip.Addr]AppAddr)
+		mak.Set(&c.transitIPs, peerAddr, peerMap)
 	}
 	// if there's already an entry for this peer+transitIP, clean up the expiryQueue entry
 	if prev, ok := peerMap[tipr.TransitIP]; ok && prev.expiryEntry != nil {
@@ -607,7 +632,12 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		transitIP: tipr.TransitIP,
 		createdAt: c.clock.Now(),
 	})
-	peerMap[tipr.TransitIP] = appAddr{addr: tipr.DestinationIP, app: tipr.App, expiryEntry: elem}
+	peerMap[tipr.TransitIP] = AppAddr{
+		App:         tipr.App,
+		Addr:        tipr.DestinationIP,
+		Filter:      filterPorts,
+		expiryEntry: elem,
+	}
 	return TransitIPResponse{}
 }
 
@@ -831,16 +861,11 @@ func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ok := c.isKnownTransitIP(p.Dst.Addr())
+	_, ok := c.assignments.lookupByTransitIP(p.Dst.Addr())
 	if ok {
-		return true, packetFilterAllowReason
+		return true, "app connector egress to transit IP"
 	}
 	return false, ""
-}
-
-func (c *client) isKnownTransitIP(tip netip.Addr) bool {
-	_, ok := c.assignments.lookupByTransitIP(tip)
-	return ok
 }
 
 func (c *client) reconfig() {
@@ -1476,7 +1501,7 @@ type connector struct {
 	mu sync.Mutex // protects the fields below
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
 	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
-	transitIPs map[netip.Addr]map[netip.Addr]appAddr
+	transitIPs map[netip.Addr]map[netip.Addr]AppAddr
 	// expiryQueue is processed by the goroutine from [connector.startExpirySweeper] so
 	// that transitIPs doesn't grow indefinitely.
 	expiryQueue *list.List
@@ -1488,38 +1513,104 @@ type transitIPExpiryEntry struct {
 	createdAt time.Time
 }
 
-// realIPForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
-// See also [Conn25Datapath.ConnectorRealIPForTransitIPConnection].
-func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, bool) {
+// appAddrForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
+// See also [Conn25Datapath.ConnectorAppAddrForTransitIPConnection].
+func (c *connector) appAddrForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (AppAddr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lookupAddrBySrcIPAndTransitIP(srcIP, transitIP)
+	v, ok := c.transitIPs[srcIP][transitIP]
+	return v, ok
 }
-
-const packetFilterAllowReason = "app connector transit IP"
 
 // packetFilterAllow returns true if the provided packet has a Src that is in
 // the configured transit IP range for this connector, false otherwise.
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ipSets := c.getIPSets()
-	if ipSets.v4Transit != nil && ipSets.v4Transit.Contains(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
+	appAddr, ok := c.appAddrForTransitIPConnection(p.Src.Addr(), p.Dst.Addr())
+	if !ok {
+		return false, ""
 	}
-	if ipSets.v6Transit != nil && ipSets.v6Transit.Contains(p.Dst.Addr()) {
-		return true, packetFilterAllowReason
+
+	// This is modelled after [filter.Filter.RunIn].
+	switch p.IPProto {
+	case ipproto.ICMPv4, ipproto.ICMPv6:
+		var icmp ipproto.Proto
+		switch p.IPVersion {
+		case 4:
+			icmp = ipproto.ICMPv4
+		case 6:
+			icmp = ipproto.ICMPv6
+		}
+		if p.IPProto != icmp {
+			// This is a diversion from RunIn: it the wrong ICMP type for
+			// the packet's protocol would fall to the default case but that
+			// difference seems unlikely to be a problem in practise.
+			return false, ""
+		}
+		if p.IsEchoResponse() || p.IsError() {
+			// ICMP responses are allowed.
+			return true, "app connector icmp response ok"
+		}
+		if appAddr.Filter.Len() > 0 {
+			// If any port is open to an IP, allow ICMP to it.
+			return true, "app connector icmp ok"
+		}
+	case ipproto.TCP:
+		if !p.IsTCPSyn() {
+			return true, "app connector tcp non-syn"
+		}
+		for _, ppr := range appAddr.Filter.All() {
+			if (ppr.Proto == 0 || ppr.Proto == int(ipproto.TCP)) &&
+				ppr.Ports.Contains(p.Dst.Port()) {
+				return true, "app connector tcp ok"
+			}
+		}
+	case ipproto.UDP, ipproto.SCTP:
+		allowProto0 := p.IPProto == ipproto.UDP
+		for _, ppr := range appAddr.Filter.All() {
+			if ((allowProto0 && ppr.Proto == 0) || ppr.Proto == int(p.IPProto)) &&
+				ppr.Ports.Contains(p.Dst.Port()) {
+				return true, "app connector ok"
+			}
+		}
+	default:
+		for _, ppr := range appAddr.Filter.All() {
+			if ppr.Proto == int(p.IPProto) && ppr.Ports == tailcfg.PortRangeAny {
+				return true, "app connector other-portless ok"
+			}
+		}
 	}
 	return false, ""
 }
 
-func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
-	m, ok := c.transitIPs[srcIP]
-	if !ok || m == nil {
-		return netip.Addr{}, false
+func (c *connector) dnsAllowedSuffixes(h ipnlocal.PeerAPIHandler, urlQuery url.Values, cfg *config) views.Slice[string] {
+	rawApp, hasApp := urlQuery["app"]
+	if !hasApp || len(rawApp) != 1 {
+		return ipnlocal.PeerAPIDNSRejectAllNames
 	}
-	v, ok := m[transitIP]
-	return v.addr, ok
+	app := rawApp[0]
+
+	a, ok := cfg.appsByName[app]
+	if !ok {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	appPeerCap := peercap.Conn25Prefix.ToAttribute(a.Name)
+	if !h.PeerCaps().HasCapability(appPeerCap) {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	// TODO(adrian): cache this
+	trimmedDomains := make([]string, 0, len(a.Domains))
+	for _, d := range a.Domains {
+		trimmedDomains = append(trimmedDomains, strings.TrimPrefix(d, "*."))
+	}
+
+	return views.SliceOf(trimmedDomains)
+}
+
+func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (AppAddr, bool) {
+	v, ok := c.transitIPs[srcIP][transitIP]
+	return v, ok
 }
 
 // expireTransitIPs expires entries in the connector's transitIPs map that are
@@ -1599,7 +1690,7 @@ func (c *connector) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
+	c.transitIPs = make(map[netip.Addr]map[netip.Addr]AppAddr)
 	c.expiryQueue = list.New()
 }
 

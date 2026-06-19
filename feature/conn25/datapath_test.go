@@ -23,16 +23,16 @@ import (
 )
 
 type testConn25 struct {
-	clientTransitIPForMagicIPFn             func(netip.Addr) (netip.Addr, error)
-	connectorRealIPForTransitIPConnectionFn func(netip.Addr, netip.Addr) (netip.Addr, error)
+	clientTransitIPForMagicIPFn              func(netip.Addr) (netip.Addr, error)
+	connectorAppAddrForTransitIPConnectionFn func(netip.Addr, netip.Addr) (AppAddr, error)
 }
 
 func (tc *testConn25) ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error) {
 	return tc.clientTransitIPForMagicIPFn(magicIP)
 }
 
-func (tc *testConn25) ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error) {
-	return tc.connectorRealIPForTransitIPConnectionFn(srcIP, transitIP)
+func (tc *testConn25) ConnectorAppAddrForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (AppAddr, error) {
+	return tc.connectorAppAddrForTransitIPConnectionFn(srcIP, transitIP)
 }
 
 func (tc *testConn25) ClientFlowCreated(transitIP netip.Addr) {}
@@ -383,18 +383,18 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
 			mock := &testConn25{}
-			mock.connectorRealIPForTransitIPConnectionFn = func(src, tip netip.Addr) (netip.Addr, error) {
+			mock.connectorAppAddrForTransitIPConnectionFn = func(src, tip netip.Addr) (AppAddr, error) {
 				if tt.throwMappingErr {
-					return netip.Addr{}, errors.New("synthetic mapping error")
+					return AppAddr{}, errors.New("synthetic mapping error")
 				}
 				if tip == transitIP {
 					if src == clientSrcIP {
-						return realIP, nil
+						return AppAddr{Addr: realIP}, nil
 					} else {
-						return netip.Addr{}, ErrUnmappedSrcAndTransitIP
+						return AppAddr{}, ErrUnmappedSrcAndTransitIP
 					}
 				}
-				return netip.Addr{}, nil
+				return AppAddr{}, nil
 			}
 			dph := newDatapathHandler(mock, t.Logf)
 			tun := newFakeTUN(t)
@@ -508,12 +508,12 @@ func TestConnectorFlowCache(t *testing.T) {
 	serverPort := uint16(80)
 
 	mock := &testConn25{}
-	mock.connectorRealIPForTransitIPConnectionFn = func(src, tip netip.Addr) (netip.Addr, error) {
+	mock.connectorAppAddrForTransitIPConnectionFn = func(src, tip netip.Addr) (AppAddr, error) {
 		if getRealIPCalled {
 			t.Errorf("ConnectorRealIPForTransitIPConnection unexpectedly called more than once")
 		}
 		getRealIPCalled = true
-		return realIP, nil
+		return AppAddr{Addr: realIP}, nil
 	}
 	dph := newDatapathHandler(mock, t.Logf)
 

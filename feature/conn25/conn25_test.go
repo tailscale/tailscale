@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
@@ -96,12 +97,12 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	}).View()
 
 	tests := []struct {
-		name           string
-		ctipReqPeers   []tailcfg.NodeView          // One entry per request and the other
-		ctipReqs       []ConnectorTransitIPRequest // arrays in this struct must have the same
-		missingPeerCap bool
-		bypassFilter   bool
-		wants          []ConnectorTransitIPResponse // cardinality
+		name            string
+		ctipReqPeers    []tailcfg.NodeView // One entry per request and the other
+		ctipReqPeerCaps []tailcfg.PeerCapMap
+		ctipReqs        []ConnectorTransitIPRequest // arrays in this struct must have the same
+		bypassFilter    bool
+		wants           []ConnectorTransitIPResponse // cardinality
 		// For checking lookups:
 		//	The outer array needs to correspond to the number of requests,
 		//	can be nil if no lookups need to be done after the request is processed.
@@ -118,6 +119,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
@@ -131,6 +137,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
@@ -146,6 +157,14 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName}}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
@@ -164,6 +183,14 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
@@ -180,6 +207,14 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
@@ -200,6 +235,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName},
 				}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
 			},
@@ -217,6 +257,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName},
 					{TransitIP: tipV4_2, DestinationIP: dipV4_3, App: appName},
 				}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{
@@ -237,6 +282,14 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
@@ -256,6 +309,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{TransitIP: tipV4_2, DestinationIP: dipV4_1, App: appName},
 				}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
 			},
@@ -272,6 +330,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
 					{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName},
 				}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{
@@ -293,6 +356,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
 				}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{
 					{Code: NoMatchingPeerIPFamily, Message: noMatchingPeerIPFamilyMessage},
@@ -310,6 +378,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV6_1, App: appName}}},
 			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(appName): {`"*"`},
+				},
+			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}}},
 			},
@@ -323,6 +396,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(invalidAppName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
@@ -338,7 +416,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 			},
-			missingPeerCap: true,
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{nil},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: MissingAppPermission, Message: missingAppPermissionMessage}}},
 			},
@@ -353,8 +431,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 			},
-			missingPeerCap: true,
-			bypassFilter:   true,
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{nil},
+			bypassFilter:    true,
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
@@ -369,7 +447,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
 			},
-			bypassFilter: true,
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{nil},
+			bypassFilter:    true,
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
@@ -382,6 +461,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+			},
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{
+				{
+					peercap.Conn25Prefix.ToAttribute(invalidAppName): {`"*"`},
+				},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
@@ -396,7 +480,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
 			},
-			missingPeerCap: true,
+			ctipReqPeerCaps: []tailcfg.PeerCapMap{nil},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: MissingAppPermission, Message: missingAppPermissionMessage}}},
 			},
@@ -435,13 +519,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			for i, peer := range tt.ctipReqPeers {
 				req := tt.ctipReqs[i]
 				want := tt.wants[i]
-				peerCap := tailcfg.PeerCapMap{
-					peercap.Conn25Prefix.ToAttribute(appName):        []tailcfg.RawMessage{`"*"`},
-					peercap.Conn25Prefix.ToAttribute(invalidAppName): []tailcfg.RawMessage{`"*"`},
-				}
-				if tt.missingPeerCap {
-					peerCap = nil
-				}
+				peerCap := tt.ctipReqPeerCaps[i]
 
 				resp := c.handleConnectorTransitIPRequest(peer, peerCap, req)
 
@@ -472,7 +550,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 								i, j, len(wantLookup))
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
-						gotDip, _ := c.connector.lookupAddrBySrcIPAndTransitIP(pip, tip)
+						aa, _ := c.connector.lookupBySrcIPAndTransitIP(pip, tip)
+						gotDip := aa.Addr
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -2668,7 +2747,7 @@ func TestClientTransitIPForMagicIP(t *testing.T) {
 	}
 }
 
-func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
+func TestConnectorAppAddrForTransitIPConnection(t *testing.T) {
 	sn := makeSelfNode(t, []appctype.Conn25Attr{{Name: "app1"}}, appctype.Conn25PoolsAttr{
 		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")}, // 100.64.0.40 - 100.64.0.50
 	}, []string{})
@@ -2726,11 +2805,11 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
 			c.reconfig(cfg)
-			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc][mappedTip] = appAddr{addr: mappedMip}
-			mip, err := c.ConnectorRealIPForTransitIPConnection(tt.src, tt.tip)
-			if mip != tt.wantMip {
+			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc] = map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc][mappedTip] = AppAddr{Addr: mappedMip}
+			mip, err := c.ConnectorAppAddrForTransitIPConnection(tt.src, tt.tip)
+			if mip.Addr != tt.wantMip {
 				t.Fatalf("checking magic ip: want %v, got %v", tt.wantMip, mip)
 			}
 			if err != tt.wantErr {
@@ -2841,27 +2920,6 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	c.connector.mu.Unlock()
 }
 
-func TestIsKnownTransitIP(t *testing.T) {
-	knownTip := netip.MustParseAddr("100.64.0.41")
-	unknownTip := netip.MustParseAddr("100.64.0.42")
-
-	c := newConn25(t.Logf)
-	err := c.client.assignments.insert(&addrs{
-		transit: knownTip,
-	})
-	if err != nil {
-		t.Errorf("error inserting address assignment: %v", err)
-		return
-	}
-
-	if !c.client.isKnownTransitIP(knownTip) {
-		t.Fatal("knownTip: should have been known")
-	}
-	if c.client.isKnownTransitIP(unknownTip) {
-		t.Fatal("unknownTip: should not have been known")
-	}
-}
-
 func TestLinkLocalAllow(t *testing.T) {
 	knownTip := netip.MustParseAddr("100.64.0.41")
 
@@ -2902,6 +2960,14 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 			v4Transit: v4TransitIPs,
 		},
 	})
+	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{
+		src: {
+			knownTip: {
+				Addr:   netip.MustParseAddr("198.51.100.1"),
+				Filter: views.SliceOf([]tailcfg.ProtoPortRange{{Ports: tailcfg.PortRangeAny}}),
+			},
+		},
+	}
 
 	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(src, 1234),

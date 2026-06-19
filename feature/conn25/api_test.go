@@ -56,14 +56,14 @@ func TestGetActiveState(t *testing.T) {
 		addClientAssignment("zebra", "z.example.org", "10.0.0.4", "100.64.0.4", "169.254.0.4", 1)
 
 		// IP addresses should be sorted numerically, not lexigraphically.
-		c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{
+		c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{
 			netip.MustParseAddr("100.64.0.1"): {
-				netip.MustParseAddr("169.254.0.100"): {app: "app1", addr: netip.MustParseAddr("10.0.0.100")},
-				netip.MustParseAddr("169.254.0.11"):  {app: "app1", addr: netip.MustParseAddr("10.0.0.11")},
+				netip.MustParseAddr("169.254.0.100"): {App: "app1", Addr: netip.MustParseAddr("10.0.0.100")},
+				netip.MustParseAddr("169.254.0.11"):  {App: "app1", Addr: netip.MustParseAddr("10.0.0.11")},
 			},
 			netip.MustParseAddr("11.0.0.1"): {
-				netip.MustParseAddr("169.254.0.5"): {app: "zapp", addr: netip.MustParseAddr("10.0.0.5")},
-				netip.MustParseAddr("169.254.0.6"): {app: "app1", addr: netip.MustParseAddr("10.0.0.6")},
+				netip.MustParseAddr("169.254.0.5"): {App: "zapp", Addr: netip.MustParseAddr("10.0.0.5")},
+				netip.MustParseAddr("169.254.0.6"): {App: "app1", Addr: netip.MustParseAddr("10.0.0.6")},
 			},
 		}
 
