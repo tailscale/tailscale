@@ -381,6 +381,26 @@ func createFakeGPKey() error {
 	return nil
 }
 
+// isPolicyConfigSubkeyEmpty returns true if and only if the nrptBaseGP exists
+// and does not contain any values or subkeys.
+func isPolicyConfigSubkeyEmpty() (bool, error) {
+	subKey, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBaseGP, registry.READ)
+	if err != nil {
+		if err == registry.ErrNotExist {
+			return false, nil
+		}
+		return false, err
+	}
+	defer subKey.Close()
+
+	ki, err := subKey.Stat()
+	if err != nil {
+		return false, err
+	}
+
+	return (ki.ValueCount == 0 && ki.SubKeyCount == 0), nil
+}
+
 func deleteFakeGPKey(t *testing.T) {
 	keyName := nrptBaseGP + `\` + testGPRuleID
 	if err := registry.DeleteKey(registry.LOCAL_MACHINE, keyName); err != nil && err != registry.ErrNotExist {

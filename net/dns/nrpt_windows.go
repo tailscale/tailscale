@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/set"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/gp"
 )
@@ -83,9 +82,8 @@ func (db *nrptRuleDatabase) loadRuleSubkeyNames() {
 }
 
 // detectWriteAsGP determines which registry path should be used for writing
-// NRPT rules. If there are rules in the GP path that don't belong to us, then
-// we should use the GP path. When detectWriteAsGP determines that the desired
-// path has changed, it moves the NRPT policies as appropriate.
+// NRPT rules. When detectWriteAsGP determines that group policy has been
+// enabled for the NRPT, it moves the NRPT policies as appropriate.
 func (db *nrptRuleDatabase) detectWriteAsGP() {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -103,42 +101,16 @@ func (db *nrptRuleDatabase) detectWriteAsGP() {
 		// When db.watcher == nil, prev != writeAsGP because we're initializing, not
 		// because anything has changed. We do not invoke
 		// db.updateGroupPoliciesLocked in that case.
-		if db.watcher != nil && prev != writeAsGP {
-			db.updateGroupPoliciesLocked(writeAsGP)
+		if db.watcher != nil && prev != writeAsGP && writeAsGP {
+			db.updateGroupPoliciesLocked()
 		}
 	}()
 
-	// Get a list of all the NRPT rules under the GP subkey.
-	nrptKey, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBaseGP, registry.READ)
-	if err != nil {
-		if err != registry.ErrNotExist {
-			db.logf("Failed to open key %q with error: %v\n", nrptBaseGP, err)
-		}
-		// If this subkey does not exist then we definitely don't need to use the GP key.
-		return
+	// dnsapi simply uses the presence of this key to determine NRPT location.
+	if nrptKey, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBaseGP, registry.READ); err == nil {
+		nrptKey.Close()
+		writeAsGP = true
 	}
-	defer nrptKey.Close()
-
-	gpSubkeyNames, err := nrptKey.ReadSubKeyNames(0)
-	if err != nil {
-		db.logf("Failed to list subkeys under %q with error: %v\n", nrptBaseGP, err)
-		return
-	}
-
-	// Add *all* rules from the GP subkey into a set.
-	gpSubkeyMap := make(set.Set[string], len(gpSubkeyNames))
-	for _, gpSubkey := range gpSubkeyNames {
-		gpSubkeyMap.Add(strings.ToUpper(gpSubkey))
-	}
-
-	// Remove *our* rules from the set.
-	for _, ourRuleID := range db.ruleIDs {
-		gpSubkeyMap.Delete(strings.ToUpper(ourRuleID))
-	}
-
-	// Any leftover rules do not belong to us. When group policy is being used
-	// by something else, we must also use the GP path.
-	writeAsGP = len(gpSubkeyMap) > 0
 }
 
 // DelAllRuleKeys removes any and all NRPT rules that are owned by Tailscale.
@@ -179,38 +151,7 @@ func (db *nrptRuleDatabase) delRuleKeys(nrptRuleIDs []string) error {
 		}
 	}
 
-	if !db.isGPDirty {
-		return nil
-	}
-
-	// If we've removed keys from the Group Policy subkey, and the DNSPolicyConfig
-	// subkey is now empty, we need to remove that subkey.
-	isEmpty, err := isPolicyConfigSubkeyEmpty()
-	if err != nil || !isEmpty {
-		return err
-	}
-
-	return registry.DeleteKey(registry.LOCAL_MACHINE, nrptBaseGP)
-}
-
-// isPolicyConfigSubkeyEmpty returns true if and only if the nrptBaseGP exists
-// and does not contain any values or subkeys.
-func isPolicyConfigSubkeyEmpty() (bool, error) {
-	subKey, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBaseGP, registry.READ)
-	if err != nil {
-		if err == registry.ErrNotExist {
-			return false, nil
-		}
-		return false, err
-	}
-	defer subKey.Close()
-
-	ki, err := subKey.Stat()
-	if err != nil {
-		return false, err
-	}
-
-	return (ki.ValueCount == 0 && ki.SubKeyCount == 0), nil
+	return nil
 }
 
 func (db *nrptRuleDatabase) WriteSplitDNSConfig(servers []string, domains []dnsname.FQDN) error {
@@ -372,57 +313,21 @@ func (db *nrptRuleDatabase) watchForGPChanges() {
 	db.watcher = watcher
 }
 
-// updateGroupPoliciesLocked updates the NRPT group policy table depending on
-// the value of writeAsGP. When writeAsGP is true, each NRPT rule is copied from
-// the local NRPT table to the group policy NRPT table. When writeAsGP is false,
-// we remove any Tailscale NRPT rules from the group policy table and, if no
-// non-Tailscale rules remain, we also delete the entire DnsPolicyConfig subkey.
+// updateGroupPoliciesLocked updates the group policy NRPT. Each NRPT rule is
+// copied from the local NRPT to the group policy NRPT.
 // db.mu must already be locked.
-func (db *nrptRuleDatabase) updateGroupPoliciesLocked(writeAsGP bool) {
-	// Since we're updating the group policy NRPT table, we need
-	// to refresh once this updateGroupPoliciesLocked is done.
+func (db *nrptRuleDatabase) updateGroupPoliciesLocked() {
+	// Since we're updating the group policy NRPT, we need to refresh upon return.
 	defer db.refreshLocked()
 
 	for _, id := range db.ruleIDs {
-		if writeAsGP {
-			if err := copyNRPTRule(id); err != nil {
-				db.logf("updateGroupPoliciesLocked: copyNRPTRule(%q) failed with error %v", id, err)
-				return
-			}
-		} else {
-			subKeyFrom := strings.Join([]string{nrptBaseGP, id}, `\`)
-			if err := registry.DeleteKey(registry.LOCAL_MACHINE, subKeyFrom); err != nil && err != registry.ErrNotExist {
-				db.logf("updateGroupPoliciesLocked: DeleteKey for rule %q failed with error %v", id, err)
-				return
-			}
+		if err := copyNRPTRule(id); err != nil {
+			db.logf("updateGroupPoliciesLocked: copyNRPTRule(%q) failed with error %v", id, err)
+			return
 		}
 
 		db.isGPDirty = true
 	}
-
-	if writeAsGP {
-		return
-	}
-
-	// Now that we have removed our rules from group policy subkey, it should
-	// now be empty. Let's verify that.
-	isEmpty, err := isPolicyConfigSubkeyEmpty()
-	if err != nil {
-		db.logf("updateGroupPoliciesLocked: isPolicyConfigSubkeyEmpty error %v", err)
-		return
-	}
-	if !isEmpty {
-		db.logf("updateGroupPoliciesLocked: policy config subkey should be empty, but isn't!")
-		return
-	}
-
-	// Delete the subkey itself. Group policy will continue to override local
-	// settings unless we do so.
-	if err := registry.DeleteKey(registry.LOCAL_MACHINE, nrptBaseGP); err != nil {
-		db.logf("updateGroupPoliciesLocked DeleteKey error %v", err)
-	}
-
-	db.isGPDirty = true
 }
 
 func copyNRPTRule(ruleID string) error {
