@@ -1935,6 +1935,8 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		b.blockEngineUpdatesLocked(false)
 	}
 
+	adoptNetMap := st.LoggedIn || keyExpiryExtended
+
 	if st.LoggedIn && (wasBlocked || authWasInProgress) {
 		if wasBlocked {
 			// Auth completed, unblock the engine
@@ -1964,7 +1966,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		prefs.ControlURL = prefs.ControlURLOrDefault(b.polc)
 		prefsChanged = true
 	}
-	if st.Persist.Valid() {
+	if adoptNetMap && st.Persist.Valid() {
 		if !prefs.Persist.View().Equals(st.Persist) {
 			prefsChanged = true
 			prefs.Persist = st.Persist.AsStruct()
@@ -2025,8 +2027,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		b.logf("initTKALocked: %v", err)
 	}
 
-	// Perform all reconfiguration based on the netmap here.
-	if st.NetMap != nil {
+	if adoptNetMap && st.NetMap != nil {
 		b.capTailnetLock = st.NetMap.HasCap(tailcfg.CapabilityTailnetLock)
 		b.setWebClientAtomicBoolLocked(st.NetMap)
 
@@ -2058,7 +2059,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	}
 
 	// Now complete the lock-free parts of what we started while locked.
-	if st.NetMap != nil {
+	if adoptNetMap && st.NetMap != nil {
 		if envknob.NoLogsNoSupport() && st.NetMap.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
 			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			b.health.SetLocalLogConfigHealth(errors.New(msg))
