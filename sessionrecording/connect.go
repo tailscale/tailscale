@@ -38,6 +38,9 @@ const (
 // in tests.
 var uploadAckWindow = 30 * time.Second
 
+// idleConnTimeout is the idle timeout for connections to the recorder.
+var idleConnTimeout = 30 * time.Second
+
 // ConnectToRecorder connects to the recorder at any of the provided addresses.
 // It returns the first successful response, or a multierr if all attempts fail.
 //
@@ -233,6 +236,7 @@ func connectV1(ctx context.Context, hc *http.Client, ap netip.AddrPort) (io.Writ
 	// errChan is used to indicate the result of the request.
 	errChan := make(chan error, 1)
 	go func() {
+		defer hc.CloseIdleConnections()
 		defer close(errChan)
 		resp, err := hc.Do(req)
 		if err != nil {
@@ -291,6 +295,7 @@ func connectV2(ctx context.Context, hc *http.Client, ap netip.AddrPort) (io.Writ
 	acks := make(chan int64)
 	// Read acks from the response and send them to the acks channel.
 	go func() {
+		defer hc.CloseIdleConnections()
 		defer close(errChan)
 		defer close(acks)
 		defer resp.Body.Close()
@@ -393,6 +398,7 @@ func clientHTTP1(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 		}()
 		return dial(perAttemptCtx, network, addr)
 	}
+	tr.IdleConnTimeout = idleConnTimeout
 	return &http.Client{Transport: tr}
 }
 
@@ -417,6 +423,7 @@ func clientHTTP2(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 				}()
 				return dial(perAttemptCtx, network, addr)
 			},
+			IdleConnTimeout: idleConnTimeout,
 		},
 	}
 }
