@@ -382,7 +382,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
 						aa, _ := c.connector.lookupBySrcIPAndTransitIP(pip, tip)
-						gotDip := aa.addr
+						gotDip := aa.Addr
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -2388,9 +2388,9 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
 			c.reconfig(cfg)
-			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc][mappedTip] = appAddr{addr: mappedMip}
+			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc] = map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc][mappedTip] = AppAddr{Addr: mappedMip}
 			mip, err := c.ConnectorRealIPForTransitIPConnection(tt.src, tt.tip)
 			if mip != tt.wantMip {
 				t.Fatalf("checking magic ip: want %v, got %v", tt.wantMip, mip)
@@ -2447,9 +2447,9 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 	unknownSrc := netip.MustParseAddr("100.64.0.42")
 
 	c := newConn25(t.Logf)
-	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
-	c.connector.transitIPs[knownSrc] = map[netip.Addr]appAddr{}
-	c.connector.transitIPs[knownSrc][knownTip] = appAddr{}
+	c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{}
+	c.connector.transitIPs[knownSrc] = map[netip.Addr]AppAddr{}
+	c.connector.transitIPs[knownSrc][knownTip] = AppAddr{}
 
 	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(knownSrc, 1234),

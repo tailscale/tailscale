@@ -39,14 +39,14 @@ type Conn25Datapath interface {
 	// this potentially valid, non-app-connector traffic.
 	ClientTransitIPForMagicIP(magicIP netip.Addr) (netip.Addr, error)
 
-	// ConnectorRealIPForTransitIPConnection returns a real destination IP for the given
-	// srcIP and transitIP on a connector. If the transitIP is within a configured Transit IP
-	// range for an app on the connector, but not mapped to the client at srcIP, implementations
-	// should return [ErrUnmappedSrcAndTransitIP]. If the transitIP is not within a configured
-	// Transit IP range, i.e. it is not actually a Transit IP, implementations should return
-	// a nil error, and a zero-value [netip.Addr] to indicate this is potentially valid,
+	// ConnectorAppAddrForTransitIPConnection returns a real destination IP and its associated app
+	// for the given srcIP and transitIP on a connector. If the transitIP is within a configured
+	// Transit IP range for an app on the connector, but not mapped to the client at srcIP,
+	// implementations should return [ErrUnmappedSrcAndTransitIP]. If the transitIP is not within a
+	// configured Transit IP range, i.e. it is not actually a Transit IP, implementations should
+	// return a nil error, and a zero-value [netip.Addr] to indicate this is potentially valid,
 	// non-app-connector traffic.
-	ConnectorRealIPForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (netip.Addr, error)
+	ConnectorAppAddrForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (AppAddr, error)
 
 	// ClientFlowCreated is called after a client-side flow for transitIP has
 	// been installed in the client flow table.
@@ -152,7 +152,7 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 	// other (non-app-connector) traffic, or broken app-connector traffic
 	// that needs to be re-established by a new outbound packet.
 	transitIP := p.Dst.Addr()
-	realIP, err := dh.conn25.ConnectorRealIPForTransitIPConnection(p.Src.Addr(), transitIP)
+	appAddr, err := dh.conn25.ConnectorAppAddrForTransitIPConnection(p.Src.Addr(), transitIP)
 	if err != nil {
 		if errors.Is(err, ErrUnmappedSrcAndTransitIP) {
 			rj := packet.TailscaleRejectedHeader{
@@ -173,7 +173,7 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 	}
 
 	// If this is normal non-app-connector traffic, forward it along unmodified.
-	if !realIP.IsValid() {
+	if !appAddr.Addr.IsValid() {
 		return filter.Accept
 	}
 
@@ -182,10 +182,10 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 	// return direction.
 	outgoing := TupleAndAction{
 		Tuple:  flowtrack.MakeTuple(p.IPProto, p.Src, p.Dst),
-		Action: dh.dnatAction(realIP),
+		Action: dh.dnatAction(appAddr.Addr),
 	}
 	incoming := TupleAndAction{
-		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(realIP, p.Dst.Port()), p.Src),
+		Tuple:  flowtrack.MakeTuple(p.IPProto, netip.AddrPortFrom(appAddr.Addr, p.Dst.Port()), p.Src),
 		Action: dh.snatAction(transitIP),
 	}
 	dh.connectorFlowTable.NewFlow(FlowData{
