@@ -399,7 +399,7 @@ func clientHTTP1(dialCtx context.Context, dial netx.DialFunc) *http.Client {
 		}()
 		return dial(perAttemptCtx, network, addr)
 	}
-	tr.IdleConnTimeout = idleConnTimeout
+	tr.IdleConnTimeout = idleConnTimeout // match clientHTTP2's timeout for consistency
 	return &http.Client{Transport: tr}
 }
 
