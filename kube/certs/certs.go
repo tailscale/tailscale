@@ -144,11 +144,18 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			// node's HTTPS endpoint share the same state/renewal lock mechanism,
 			// so we should not run into redundant issuances during concurrent
 			// renewal checks.
-
-			// An issuance holds a shared lock, so we need to avoid a situation
-			// where other services cannot issue certs because a single one is
-			// holding the lock.
-			ctxT, cancel := context.WithTimeout(ctx, time.Second*300)
+			//
+			// The 30m timeout below is a wedge detector, not a bound on ACME
+			// work. All issuances on a write replica serialise through a
+			// single mutex inside tailscaled, so this call must allow for both
+			// queue-wait and the ACME flow itself. Realistic ACME work is
+			// ~30s-2min per call; 30m comfortably covers queue contention from
+			// ~15 domains ahead of us. Values below ~15m cause spurious
+			// failures under realistic queue contention and drive the schedule
+			// above into backoff for loops that never reached the CA. If this
+			// timeout ever fires it is genuine evidence that something is
+			// stuck (deadlock, leaked lock, wedged socket), not slow.
+			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
 			if err != nil {
