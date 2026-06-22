@@ -63,6 +63,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
+	"tailscale.com/wgengine/filter"
 )
 
 // pingTimeout returns a per-ping budget for use within the larger test ctx:
@@ -3167,6 +3168,146 @@ func TestDialUDP(t *testing.T) {
 			t.Errorf("%d UDP packets escaped to TUN", escaped)
 		}
 	})
+}
+
+// TestDialUDPInjectedReadRecordsFlowState reproduces tailscale/tailscale#14229
+// and #20064: a tsnet/netstack client dialing UDP must record reverse-flow
+// state in its inbound filter for the outbound packet it injects via
+// [netstack.Impl] → [tstun.Wrapper.InjectOutboundPacketBuffer]. If it doesn't,
+// the inbound reply is silently dropped by the inbound packet filter when no
+// ACL rule explicitly admits it.
+//
+// [TestDialUDP] doesn't catch this because [testcontrol.Server] serves
+// [tailcfg.FilterAllowAll] by default, so the reply is always admitted by
+// rule and the flow-state path is never exercised. Each subtest below sets
+// up s1 and s2 so that the inbound reply is admissible only via the
+// reverse-flow state recorded when s2 dialed.
+func TestDialUDPInjectedReadRecordsFlowState(t *testing.T) {
+	// RestrictedACL replaces the default allow-all PacketFilter with a
+	// one-way rule that permits s2 → s1 only. The reply path s1 → s2 matches
+	// no rule, so it can only be admitted by reverse-flow state on s2's
+	// main filter.
+	t.Run("RestrictedACL", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false) // netstack on both sides.
+		rule := []tailcfg.FilterRule{{
+			SrcIPs: []string{lt.s2ip4.String(), lt.s2ip6.String()},
+			DstPorts: []tailcfg.NetPortRange{
+				{IP: lt.s1ip4.String(), Ports: tailcfg.PortRange{First: 0, Last: 65535}},
+				{IP: lt.s1ip6.String(), Ports: tailcfg.PortRange{First: 0, Last: 65535}},
+			},
+			IPProto: []int{int(ipproto.TCP), int(ipproto.UDP)},
+		}}
+
+		for _, s := range []*Server{lt.s1, lt.s2} {
+			if !lt.control.AddRawMapResponse(s.lb.NodeKey(), &tailcfg.MapResponse{
+				PacketFilter: rule,
+			}) {
+				t.Fatalf("AddRawMapResponse(%s) failed", s.Hostname)
+			}
+		}
+
+		// PacketFilter-only changes don't necessarily fire peer/netmap
+		// notifications, so poll the wgengine filter directly.
+		if err := tstest.WaitFor(30*time.Second, func() error {
+			f := lt.s2.lb.GetFilterForTest()
+			if f == nil {
+				return errors.New("no filter yet")
+			}
+			if got := f.Check(lt.s1ip4, lt.s2ip4, 1234, ipproto.UDP); got != filter.Drop {
+				return fmt.Errorf("inbound s1 → s2:1234 UDP: got %v, want Drop", got)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("waiting for restrictive filter on s2: %v", err)
+		}
+
+		runDialUDPEcho(t, lt)
+	})
+
+	// JailedPeer marks s1 as jailed from s2's perspective. tstun.Wrapper
+	// then routes s2's outbound to s1 and inbound from s1 through a
+	// separate "jailed" filter (a shields-up filter with no rules; also
+	// used for Mullvad exit nodes). The reply path can only be admitted
+	// by reverse-flow state on the *jailed* filter, so injectedRead must
+	// select the right filter for the outbound packet.
+	t.Run("JailedPeer", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false) // netstack on both sides.
+		s1Key := lt.s1.lb.NodeKey()
+		lt.control.SetJailed(lt.s2.lb.NodeKey(), s1Key, true)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		if err := waitFor(t, ctx, lt.s2, func(nm *netmap.NetworkMap) bool {
+			for _, p := range nm.Peers {
+				if p.Key() == s1Key && p.IsJailed() {
+					return true
+				}
+			}
+			return false
+		}); err != nil {
+			t.Fatalf("waiting for s1 to appear jailed in s2's netmap: %v", err)
+		}
+
+		runDialUDPEcho(t, lt)
+	})
+}
+
+// runDialUDPEcho runs an s2.Dial("udp", s1-listener)/Write/Read round trip
+// against listeners on lt.s1's IPv4 and IPv6 addresses as t.Run subtests,
+// asserting that the echoed reply makes it back to s2. The caller is
+// responsible for configuring lt so that the inbound reply on s2 is only
+// admissible via reverse-flow state recorded by the outbound dial.
+func runDialUDPEcho(t *testing.T, lt *listenTest) {
+	t.Helper()
+	test := func(t *testing.T, listenIP netip.Addr) {
+		pc, err := lt.s1.ListenPacket("udp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatalf("ListenPacket: %v", err)
+		}
+		defer pc.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 1500)
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			if _, err := pc.WriteTo(buf[:n], addr); err != nil {
+				echoErr <- err
+			}
+		}()
+
+		conn, err := lt.s2.Dial(t.Context(), "udp", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		defer conn.Close()
+
+		want := "hello udp"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("UDP reply dropped — injectedRead didn't record flow state on the filter that runs on the reply (#14229, #20064): %v", err)
+			}
+		}
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("IPv4", func(t *testing.T) { test(t, lt.s1ip4) })
+	t.Run("IPv6", func(t *testing.T) { test(t, lt.s1ip6) })
 }
 
 // buildDNSQuery builds a UDP/IP packet containing a DNS query for name to the

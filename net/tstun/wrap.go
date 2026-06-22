@@ -1101,7 +1101,10 @@ func invertGSOChecksum(pkt []byte, gso netstack_GSO) {
 	pkt[at+1] = ^pkt[at+1]
 }
 
-// injectedRead handles injected reads, which bypass filters.
+// injectedRead handles injected reads. Injected packets bypass the outbound
+// filter rules, but UDP/SCTP flow state is still recorded via
+// [filter.Filter.UpdateOutboundFlowState] so inbound replies are admitted by
+// [filter.Filter.RunIn].
 func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
 	var gso netstack_GSO
 
@@ -1127,6 +1130,28 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(pkt)
+
+	// Record reverse-flow connection-tracking state for this outbound packet so
+	// that inbound replies are admitted by the filter. Injected packets bypass
+	// the regular RunOut path that records this state for UDP/SCTP flows; doing
+	// it here keeps userspace-networking and tsnet UDP replies from being
+	// dropped as "no matching rule". This must run before SNAT so the tracked
+	// tuple matches what RunIn sees after DNAT on the inbound side. Select
+	// between the normal and jailed filters the same way
+	// filterPacketOutboundToWireGuard does, so jailed peers (e.g. Mullvad exit
+	// nodes) record state on the filter that will run on the reply. See #14229
+	// and #20064.
+	if !t.disableFilter {
+		var filt *filter.Filter
+		if pc.outboundPacketIsJailed(p) {
+			filt = t.jailedFilter.Load()
+		} else {
+			filt = t.filter.Load()
+		}
+		if filt != nil {
+			filt.UpdateOutboundFlowState(p)
+		}
+	}
 
 	invertGSOChecksum(pkt, gso)
 	pc.snat(p)
@@ -1500,7 +1525,8 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 // InjectOutbound makes the Wrapper device behave as if a packet
 // with the given contents was sent to the network.
 // It does not block, but takes ownership of the packet.
-// The injected packet will not pass through outbound filters.
+// The injected packet will not pass through outbound filter rules,
+// but UDP/SCTP flow state is recorded so inbound replies are admitted.
 // Injecting an empty packet is a no-op.
 func (t *Wrapper) InjectOutbound(pkt []byte) error {
 	if len(pkt) > MaxPacketSize {
