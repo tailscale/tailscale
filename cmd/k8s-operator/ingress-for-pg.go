@@ -440,8 +440,13 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 // operator instances, else the owner reference is cleaned up.  Returns true if
 // the operation resulted in an existing Tailscale Service updates (owner
 // reference removal).
+//
+// Per-orphan cleanup order matches [HAIngressReconciler.maybeCleanup]: serve
+// config first (so the proxy's cert loop is cancelled), then unadvertise,
+// then VIPService delete, then cluster cert resources. This means the serve
+// config ConfigMap is updated once per orphan rather than once at the end --
+// orphans are rare so the extra API calls do not matter.
 func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger *zap.SugaredLogger, tsClient tsclient.Client, pg *tsapi.ProxyGroup) (svcsChanged bool, err error) {
-	// Get serve config for the ProxyGroup
 	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg.Name)
 	if err != nil {
 		return false, fmt.Errorf("getting serve config: %w", err)
@@ -455,63 +460,70 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 	if err := r.List(ctx, ingList); err != nil {
 		return false, fmt.Errorf("listing Ingresses: %w", err)
 	}
-	serveConfigChanged := false
-	// For each Tailscale Service in serve config...
+
+	// Collect orphans first so we are not mutating cfg.Services during
+	// iteration.
+	var orphans []tailcfg.ServiceName
 	for tsSvcName := range cfg.Services {
-		// ...check if there is currently an Ingress with this hostname
 		found := false
 		for _, i := range ingList.Items {
-			ingressHostname := hostnameForIngress(&i)
-			if ingressHostname == tsSvcName.WithoutPrefix() {
+			if hostnameForIngress(&i) == tsSvcName.WithoutPrefix() {
 				found = true
 				break
 			}
 		}
-
 		if !found {
-			logger.Infof("Tailscale Service %q is not owned by any Ingress, cleaning up", tsSvcName)
-			tsService, err := tsClient.VIPServices().Get(ctx, tsSvcName.String())
-			switch {
-			case tailscale.IsNotFound(err):
-				return false, nil
-			case err != nil:
-				return false, fmt.Errorf("getting Tailscale Service %q: %w", tsSvcName, err)
-			}
+			orphans = append(orphans, tsSvcName)
+		}
+	}
 
-			// Delete the Tailscale Service from control if necessary.
-			svcsChanged, err = r.cleanupTailscaleService(ctx, tsService, logger, tsClient)
+	for _, tsSvcName := range orphans {
+		logger.Infof("Tailscale Service %q is not owned by any Ingress, cleaning up", tsSvcName)
+
+		// 1. Remove from serve config and persist immediately so the proxy's
+		// cert loop is cancelled before we delete the VIPService.
+		if _, ok := cfg.Services[tsSvcName]; ok {
+			logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
+			delete(cfg.Services, tsSvcName)
+			cfgBytes, err := json.Marshal(cfg)
 			if err != nil {
-				return false, fmt.Errorf("deleting Tailscale Service %q: %w", tsSvcName, err)
+				return svcsChanged, fmt.Errorf("marshaling serve config: %w", err)
 			}
+			mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
+			if err := r.Update(ctx, cm); err != nil {
+				return svcsChanged, fmt.Errorf("updating serve config: %w", err)
+			}
+		}
 
-			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
-				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
-			}
+		// 2. Unadvertise the Tailscale Service in tailscaled config.
+		if err := r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
+			return svcsChanged, fmt.Errorf("failed to update tailscaled config services: %w", err)
+		}
 
-			_, ok := cfg.Services[tsSvcName]
-			if ok {
-				logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
-				delete(cfg.Services, tsSvcName)
-				serveConfigChanged = true
+		// 3. Delete the Tailscale Service from the control plane.
+		tsService, err := tsClient.VIPServices().Get(ctx, tsSvcName.String())
+		switch {
+		case tailscale.IsNotFound(err):
+			// Already gone at the control plane; nothing more to do for this
+			// orphan at that layer. Continue with the remaining cluster
+			// cleanup rather than aborting the whole function (the previous
+			// code returned here, silently skipping later orphans).
+		case err != nil:
+			return svcsChanged, fmt.Errorf("getting Tailscale Service %q: %w", tsSvcName, err)
+		default:
+			updated, err := r.cleanupTailscaleService(ctx, tsService, logger, tsClient)
+			if err != nil {
+				return svcsChanged, fmt.Errorf("deleting Tailscale Service %q: %w", tsSvcName, err)
 			}
+			svcsChanged = svcsChanged || updated
+		}
 
-			if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, tsSvcName, pg); err != nil {
-				return false, fmt.Errorf("failed to clean up cert resources: %w", err)
-			}
+		// 4. Clean up cluster cert resources.
+		if err := cleanupCertResources(ctx, r.Client, r.tsNamespace, tsSvcName, pg); err != nil {
+			return svcsChanged, fmt.Errorf("failed to clean up cert resources: %w", err)
 		}
 	}
 
-	if serveConfigChanged {
-		cfgBytes, err := json.Marshal(cfg)
-		if err != nil {
-			return false, fmt.Errorf("marshaling serve config: %w", err)
-		}
-		mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
-		if err := r.Update(ctx, cm); err != nil {
-			return false, fmt.Errorf("updating serve config: %w", err)
-		}
-	}
 	return svcsChanged, nil
 }
 
@@ -519,6 +531,19 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 // Ingress is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Ingress.
+//
+// Cleanup steps are ordered so the proxy stops *using* the Tailscale Service
+// before the service is removed from the control plane. Removing it from the
+// serve config triggers the proxy to cancel its cert loop for the domain (see
+// [kube/certs.CertManager.EnsureCertLoops]); if that happens after the
+// VIPService is already gone, the cert loop spends its window retrying
+// against a domain the control plane no longer recognises, and an immediately
+// re-provisioned Ingress with the same hostname races the still-running loop
+// while the new VIPService registration is still propagating.
+//
+// Each step is idempotent so that if the reconcile is interrupted mid-way,
+// the next call picks up where it left off rather than skipping remaining
+// steps based on a partial state.
 func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsclient.Client, pg *tsapi.ProxyGroup) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Ingress are cleaned up")
 	ix := slices.Index(ing.Finalizers, FinalizerNamePG)
@@ -543,49 +568,53 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 		err = r.deleteFinalizer(ctx, ing, logger)
 	}()
 
-	// 1. Check if there is a Tailscale Service associated with this Ingress.
 	cm, cfg, err := r.proxyGroupServeConfig(ctx, pg.Name)
 	if err != nil {
 		return false, fmt.Errorf("error getting ProxyGroup serve config: %w", err)
 	}
 
-	// Tailscale Service is always first added to serve config and only then created in the Tailscale API, so if it is not
-	// found in the serve config, we can assume that there is no Tailscale Service. (If the serve config does not exist at
-	// all, it is possible that the ProxyGroup has been deleted before cleaning up the Ingress, so carry on with
-	// cleanup).
-	if cfg != nil && cfg.Services != nil && cfg.Services[serviceName] == nil {
-		return false, nil
+	// 1. Remove the Tailscale Service from the proxy's serve config. The proxy
+	// picks up the change via fsnotify on the mounted ConfigMap and cancels
+	// its cert loop for this domain before we proceed to delete the
+	// VIPService.
+	if cfg != nil && cfg.Services != nil {
+		if _, ok := cfg.Services[serviceName]; ok {
+			logger.Infof("Removing TailscaleService %q from serve config for ProxyGroup %q", hostname, pg.Name)
+			delete(cfg.Services, serviceName)
+			cfgBytes, err := json.Marshal(cfg)
+			if err != nil {
+				return false, fmt.Errorf("error marshaling serve config: %w", err)
+			}
+			mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
+			if err := r.Update(ctx, cm); err != nil {
+				return false, fmt.Errorf("error updating serve config: %w", err)
+			}
+		}
 	}
 
-	// 2. Clean up the Tailscale Service resources.
+	// 2. Unadvertise the Tailscale Service in each proxy's tailscaled config.
+	// Skipped if the ProxyGroup itself has been deleted (no config Secrets to
+	// update).
+	if cfg != nil {
+		if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, serviceAdvertisementOff, pg); err != nil {
+			return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
+		}
+	}
+
+	// 3. Delete the Tailscale Service from the control plane. By now the
+	// proxy has stopped serving HTTPS for the domain and stopped trying to
+	// renew its cert.
 	svcChanged, err = r.cleanupTailscaleService(ctx, svc, logger, tsClient)
 	if err != nil {
 		return false, fmt.Errorf("error deleting Tailscale Service: %w", err)
 	}
 
-	// 3. Clean up any cluster resources
+	// 4. Clean up cluster cert resources (TLS Secret + RBAC).
 	if err = cleanupCertResources(ctx, r.Client, r.tsNamespace, serviceName, pg); err != nil {
 		return false, fmt.Errorf("failed to clean up cert resources: %w", err)
 	}
 
-	if cfg == nil || cfg.Services == nil { // user probably deleted the ProxyGroup
-		return svcChanged, nil
-	}
-
-	// 4. Unadvertise the Tailscale Service in tailscaled config.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, serviceAdvertisementOff, pg); err != nil {
-		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
-	}
-
-	// 5. Remove the Tailscale Service from the serve config for the ProxyGroup.
-	logger.Infof("Removing TailscaleService %q from serve config for ProxyGroup %q", hostname, pg.Name)
-	delete(cfg.Services, serviceName)
-	cfgBytes, err := json.Marshal(cfg)
-	if err != nil {
-		return false, fmt.Errorf("error marshaling serve config: %w", err)
-	}
-	mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
-	return svcChanged, r.Update(ctx, cm)
+	return svcChanged, nil
 }
 
 func (r *HAIngressReconciler) deleteFinalizer(ctx context.Context, ing *networkingv1.Ingress, logger *zap.SugaredLogger) error {
