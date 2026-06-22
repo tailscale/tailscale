@@ -7490,6 +7490,78 @@ func TestConfigFileReload(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "enable_relay_server",
+			initial: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version: "alpha0",
+				},
+			},
+			updated: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:                    "alpha0",
+					RelayServerPort:            new(uint16(12345)),
+					RelayServerStaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:40000")},
+				},
+			},
+			checkFn: func(t *testing.T, b *LocalBackend) {
+				pv := b.Prefs()
+				if port, ok := pv.RelayServerPort().GetOk(); !ok || port != 12345 {
+					t.Errorf("RelayServerPort = (%d, %v); want (12345, true)", port, ok)
+				}
+				if got := pv.RelayServerStaticEndpoints().AsSlice(); !slices.Equal(got, []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:40000")}) {
+					t.Errorf("RelayServerStaticEndpoints = %v; want [[2001:db8::1]:40000]", got)
+				}
+			},
+		},
+		{
+			// Disabling: a config that omits the relay server fields
+			// must clear any previously configured values, because
+			// ToPrefs sets the masks unconditionally.
+			name: "disable_relay_server",
+			initial: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:                    "alpha0",
+					RelayServerPort:            new(uint16(12345)),
+					RelayServerStaticEndpoints: []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:40000")},
+				},
+			},
+			updated: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version: "alpha0",
+				},
+			},
+			checkFn: func(t *testing.T, b *LocalBackend) {
+				pv := b.Prefs()
+				if _, ok := pv.RelayServerPort().GetOk(); ok {
+					t.Errorf("RelayServerPort = %v; want disabled", pv.RelayServerPort())
+				}
+				if got := pv.RelayServerStaticEndpoints().AsSlice(); len(got) != 0 {
+					t.Errorf("RelayServerStaticEndpoints = %v; want empty", got)
+				}
+			},
+		},
+		{
+			name: "change_relay_server_port",
+			initial: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:         "alpha0",
+					RelayServerPort: new(uint16(12345)),
+				},
+			},
+			updated: &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:         "alpha0",
+					RelayServerPort: new(uint16(54321)),
+				},
+			},
+			checkFn: func(t *testing.T, b *LocalBackend) {
+				pv := b.Prefs()
+				if port, ok := pv.RelayServerPort().GetOk(); !ok || port != 54321 {
+					t.Errorf("RelayServerPort = (%d, %v); want (54321, true)", port, ok)
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
