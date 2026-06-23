@@ -5,7 +5,6 @@ package ipnlocal
 
 import (
 	"log"
-	"net/netip"
 	"runtime"
 	"time"
 
@@ -117,7 +116,7 @@ func (b *LocalBackend) probeLocks() {
 		dm.ProbeLocks()
 	}
 	if e, ok := sys.Engine.GetOK(); ok && e != nil {
-		e.PeerForIP(netip.Addr{}) // acquires e.mu and e.wgLock
+		e.ProbeLocks()
 	}
 	if nm, ok := sys.NetMon.GetOK(); ok && nm != nil {
 		nm.ProbeLocks()
