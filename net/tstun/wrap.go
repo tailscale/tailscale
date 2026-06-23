@@ -1154,6 +1154,26 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	}
 
 	invertGSOChecksum(pkt, gso)
+	// Check if this is a packet for conn25-style app connectors,
+	// and perform the necessary NAT. The main case that requires
+	// NAT from netstack toward WireGuard is an SNAT on return traffic
+	// from the target application on the internet, translating
+	// the original server's source IP to the TransitIP.
+	// The hook can also perform DNAT for client-originated traffic,
+	// translating the destination MagicIP to a TransitIP, and rejects
+	// MagicIPs that have not been approved for the client.
+	//
+	// Normal non-connector traffic is forwarded unmodified.
+	//
+	// Cross-tailnet conn25 app connector connections are not supported,
+	// so at most one of this hook and the following pc.snat should modify the packet.
+	if t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept != nil {
+		if r := t.PreFilterPacketOutboundToWireGuardAppConnectorIntercept(p, t); r.IsDrop() {
+			metricPacketOut.Add(1)
+			metricPacketOutDrop.Add(1)
+			return 0, nil
+		}
+	}
 	pc.snat(p)
 	invertGSOChecksum(pkt, gso)
 
