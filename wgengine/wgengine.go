@@ -100,8 +100,44 @@ type Engine interface {
 	ResetAndStop() (*Status, error)
 
 	// PeerForIP returns the node to which the provided IP routes,
-	// if any. If none is found, (nil, false) is returned.
+	// if any. If none is found, (zero, false) is returned.
+	//
+	// Despite the name, it can return the self node (with
+	// PeerForIP.IsSelf set). It handles Tailscale IPs, subnet-routed
+	// IPs, and exit-node global internet IPs, returning whichever
+	// node would handle that traffic.
+	//
+	// This is the cold path used by Ping, TSMP, pendopen diagnostics,
+	// and debug endpoints. It uses the same underlying data structures
+	// as the wireguard-go outbound packet path
+	// ([Engine.SetPeerByIPPacketFunc]), but is slower because it
+	// returns richer data (a full NodeView, the matched route prefix,
+	// and the IsSelf flag) requiring extra lookups.
+	//
+	// In production, the lookup is implemented by LocalBackend and
+	// plumbed in via [Engine.SetPeerForIPFunc]; the engine itself holds
+	// no peer-lookup state on this path.
 	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)
+
+	// SetPeerForIPFunc installs a callback used by [Engine.PeerForIP].
+	// It parallels [Engine.SetPeerByIPPacketFunc] but serves the
+	// cold-path control lookups (Ping, TSMP, pendopen diagnostics,
+	// [tsdial.Dialer.UseNetstackForIP], debug endpoints).
+	//
+	// If fn is nil, PeerForIP returns (zero, false) for every IP.
+	//
+	// LocalBackend installs a func backed by the live nodeBackend for
+	// exact-match and self addresses, with [Engine.PeerKeyForIP]
+	// supplying the subnet-route / exit-node fallback.
+	SetPeerForIPFunc(fn func(netip.Addr) (_ PeerForIP, ok bool))
+
+	// PeerKeyForIP returns the peer's NodePublic and the matched prefix
+	// for the longest-prefix match of ip in the engine's AllowedIPs
+	// table (the wireguard config most recently installed via
+	// [Engine.Reconfig]). Exit-node selection is honored: an unselected
+	// exit node's 0.0.0.0/0 is not matched. It is the same table the
+	// outbound packet hot path consults via [Engine.SetPeerByIPPacketFunc].
+	PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
