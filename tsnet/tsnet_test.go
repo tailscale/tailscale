@@ -1819,12 +1819,9 @@ func testPingPeerLearnedViaDelta(t *testing.T, pt tailcfg.PingType) {
 
 	// Wait for the delta to land in s1's nodeBackend.
 	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
-		for _, p := range nm.Peers {
-			if p.Key() == s2Key {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
 	}); err != nil {
 		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
 	}
@@ -1915,12 +1912,9 @@ func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
 
 	// Wait for the delta to land in s1's nodeBackend.
 	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
-		for _, p := range nm.Peers {
-			if p.Key() == s2Key {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
 	}); err != nil {
 		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
 	}
@@ -1975,6 +1969,61 @@ func TestPingSelfReturnsIsLocalIP(t *testing.T) {
 	}
 	if pr.Err == "" {
 		t.Errorf("Err = %q, want a 'local Tailscale IP' message", pr.Err)
+	}
+}
+
+// TestStatusReportsPeerInEngine verifies that a peer with an active
+// wireguard session is reported as InEngine=true in the local
+// [ipnstate.Status]. This exercises [wgengine.Engine.UpdateStatus] ->
+// userspaceEngine.getStatus -> the active-wgdev-peer iteration ->
+// [ipnstate.StatusBuilder.AddPeer] with InEngine=true. It's the only
+// signal in the tree that exercises getStatus's peer-list path; the
+// wgengine and ipnlocal unit tests don't assert on it.
+func TestStatusReportsPeerInEngine(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+	_, s2ip, s2Key := startServer(t, ctx, controlURL, "s2")
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	// Ping via ICMP so a real packet flows through wireguard-go and
+	// instantiates s2 in s1's wgdev peer map. PingDisco wouldn't
+	// suffice; it goes directly to magicsock and bypasses wgdev.
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, s2ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("Ping s1->s2 failed: %s", pr.Err)
+	}
+
+	status, err := lc1.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, ok := status.Peer[s2Key]
+	if !ok {
+		t.Fatalf("status.Peer missing s2 (%v); peers=%v", s2Key, status.Peers())
+	}
+	if !peer.InEngine {
+		t.Errorf("peer.InEngine = false, want true (peer=%+v)", peer)
 	}
 }
 
@@ -3238,12 +3287,9 @@ func TestDialUDPInjectedReadRecordsFlowState(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 		if err := waitFor(t, ctx, lt.s2, func(nm *netmap.NetworkMap) bool {
-			for _, p := range nm.Peers {
-				if p.Key() == s1Key && p.IsJailed() {
-					return true
-				}
-			}
-			return false
+			return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+				return p.Key() == s1Key && p.IsJailed()
+			})
 		}); err != nil {
 			t.Fatalf("waiting for s1 to appear jailed in s2's netmap: %v", err)
 		}
