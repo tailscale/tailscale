@@ -142,7 +142,6 @@ type userspaceEngine struct {
 	netMap         *netmap.NetworkMap // or nil
 	closing        bool               // Close was called (even if we're still closing)
 	statusCallback StatusCallback
-	peerSequence   views.Slice[key.NodePublic]
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
@@ -829,15 +828,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.tundev.SetWGConfig(cfg)
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
-
-	e.mu.Lock()
-	seq := make([]key.NodePublic, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
-		seq = append(seq, p.PublicKey)
 		peerSet.Add(p.PublicKey)
 	}
-	e.peerSequence = views.SliceOf(seq)
 
+	e.mu.Lock()
 	nm := e.netMap
 	e.mu.Unlock()
 
@@ -1155,7 +1150,6 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	e.mu.Lock()
 	closing := e.closing
-	peerKeys := e.peerSequence
 	localAddrs := slices.Clone(e.endpoints)
 	e.mu.Unlock()
 
@@ -1163,9 +1157,20 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, ErrEngineClosing
 	}
 
-	peers := make([]ipnstate.PeerStatusLite, 0, peerKeys.Len())
-	for _, key := range peerKeys.All() {
-		if status, ok := e.getPeerStatusLite(key); ok {
+	// Snapshot the set of active wgdev peers. wireguard-go has no
+	// read-only iterator over its peer map; RemoveMatchingPeers with
+	// a callback that always returns false is the cheap equivalent
+	// (the callback can't itself call LookupActivePeer, though, as
+	// RemoveMatchingPeers holds the wireguard device's mutex).
+	var peerKeys []key.NodePublic
+	e.wgdev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+		peerKeys = append(peerKeys, key.NodePublicFromRaw32(mem.B(pk[:])))
+		return false
+	})
+
+	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
+	for _, k := range peerKeys {
+		if status, ok := e.getPeerStatusLite(k); ok {
 			peers = append(peers, status)
 		}
 	}
