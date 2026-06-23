@@ -52,7 +52,7 @@ func metricValue(t *testing.T, metrics []prometheus.Metric, name string) float64
 }
 
 func TestHTTPBandwidth(t *testing.T) {
-	const size = 1 << 16 // 64 KiB
+	const size = 1 << 20 // 1 MiB
 
 	mux := http.NewServeMux()
 	// /download writes exactly `size` zero bytes.
@@ -109,6 +109,9 @@ func TestHTTPBandwidth(t *testing.T) {
 				t.Fatal("Metrics callback is nil")
 			}
 			metrics := pc.Metrics(prometheus.Labels{})
+			transferTime := func() float64 {
+				return metricValue(t, metrics, "http_bw_transfer_time_seconds_total")
+			}
 			wantDescs := map[string]bool{
 				"http_bw_probe_size_bytes":            false,
 				"http_bw_transfer_time_seconds_total": false,
@@ -137,8 +140,23 @@ func TestHTTPBandwidth(t *testing.T) {
 			if got := metricValue(t, metrics, "http_bw_bytes_total"); got != float64(tc.size) {
 				t.Errorf("http_bw_bytes_total = %v, want %v", got, tc.size)
 			}
-			if got := metricValue(t, metrics, "http_bw_transfer_time_seconds_total"); got <= 0 {
-				t.Errorf("http_bw_transfer_time_seconds_total = %v, want > 0", got)
+			// The transfer time counter accumulates across Probe calls.
+			// At 1 MiB over loopback a zero reading means the timing logic
+			// is broken, but retry a few times.
+			if transferTime() <= 0 {
+				const retries = 3
+				for range retries {
+					if err := pc.Probe(ctx); err != nil {
+						t.Fatalf("Probe() = %v, want nil", err)
+					}
+					metrics = pc.Metrics(prometheus.Labels{})
+					if transferTime() > 0 {
+						break
+					}
+				}
+				if transferTime() <= 0 {
+					t.Fatalf("http_bw_transfer_time_seconds_total = 0 after %d attempts, want > 0", retries+1)
+				}
 			}
 		})
 	}
