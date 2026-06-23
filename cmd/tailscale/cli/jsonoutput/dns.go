@@ -71,6 +71,17 @@ type DNSStatusResult struct {
 	// Tailscale's built-in resolver (100.100.100.100).
 	SplitDNSRoutes map[string][]DNSResolverInfo `json:",omitzero"`
 
+	// FilteredSplitDNSRoutes maps domain suffixes to the resolvers
+	// that the local client decided not to install at netmap
+	// reconfig time. Populated only when
+	// [tailcfg.NodeAttrFilterSplitDNSUnreachableTailscaleResolvers]
+	// is set and at least one resolver was filtered for targeting an
+	// unreachable Tailscale destination. Suffixes whose entire
+	// resolver list was filtered are absent from SplitDNSRoutes;
+	// suffixes with a partial filter are present in both maps with
+	// disjoint resolver lists.
+	FilteredSplitDNSRoutes map[string][]DNSResolverInfo `json:",omitzero"`
+
 	// FallbackResolvers are like Resolvers but only used when
 	// split DNS needs explicit default resolvers.
 	FallbackResolvers []DNSResolverInfo `json:",omitzero"`
