@@ -63,6 +63,7 @@ func init() {
 		RegisterC2N("/debug/logheap", handleC2NDebugLogHeap)
 		RegisterC2N("/debug/netmap", handleC2NDebugNetMap)
 		RegisterC2N("/debug/health", handleC2NDebugHealth)
+		RegisterC2N("GET /debug/active-endpoints", handleC2NDebugActiveEndpoints)
 	}
 	if runtime.GOOS == "linux" && buildfeatures.HasOSRouter {
 		RegisterC2N("POST /netfilter-kind", handleC2NSetNetfilterKind)
@@ -151,6 +152,22 @@ func handleC2NDebugHealth(b *LocalBackend, w http.ResponseWriter, r *http.Reques
 		st = b.health.CurrentState()
 	}
 	writeJSON(w, st)
+}
+
+// handleC2NDebugActiveEndpoints serves debug information about the active
+// dataplane endpoint state of each peer, as seen by both magicsock and
+// wireguard-go. See [ipnstate.DebugActiveEndpoints].
+func handleC2NDebugActiveEndpoints(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
+		return
+	}
+	res, err := b.DebugActiveEndpoints()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, res)
 }
 
 func handleC2NDebugNetMap(b *LocalBackend, w http.ResponseWriter, r *http.Request) {

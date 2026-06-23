@@ -1972,6 +1972,10 @@ func (e *mockEngine) PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool) {
 	return wgint.Peer{}, false
 }
 
+func (e *mockEngine) DebugActiveEndpoints() (*ipnstate.DebugActiveEndpoints, error) {
+	return &ipnstate.DebugActiveEndpoints{}, nil
+}
+
 func (e *mockEngine) SetNetworkMap(*netmap.NetworkMap) {}
 
 func (e *mockEngine) UpdateStatus(*ipnstate.StatusBuilder) {}

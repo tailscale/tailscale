@@ -128,6 +128,12 @@ type Engine interface {
 	// If the peer is not found, ok is false.
 	PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool)
 
+	// DebugActiveEndpoints returns debug information about the active
+	// dataplane endpoint state of each peer, as seen by both magicsock
+	// and wireguard-go. It is intended for debugging and tests only; see
+	// [ipnstate.DebugActiveEndpoints].
+	DebugActiveEndpoints() (*ipnstate.DebugActiveEndpoints, error)
+
 	// Close shuts down this wireguard instance, remove any routes
 	// it added, etc. To bring it up again later, you'll need a
 	// new Engine.

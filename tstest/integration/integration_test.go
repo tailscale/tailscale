@@ -40,6 +40,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/net/udprelay/status"
@@ -175,6 +176,70 @@ func TestControlKnobs(t *testing.T) {
 	}
 	if got, want := m["DisableUPnP"], true; got != want {
 		t.Errorf("control-knobs DisableUPnP = %v; want %v", got, want)
+	}
+}
+
+func TestDebugActiveEndpoints(t *testing.T) {
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+
+	n1 := NewTestNode(t, env)
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n2 := NewTestNode(t, env)
+	d2 := n2.StartDaemon()
+	defer d2.MustCleanShutdown(t)
+
+	n1.AwaitListening()
+	n2.AwaitListening()
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning()
+	n2.AwaitRunning()
+
+	n2Key := n2.MustStatus().Self.PublicKey
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		if _, ok := n1.MustStatus().Peer[n2Key]; !ok {
+			return fmt.Errorf("n1 does not see n2 (%v) as a peer yet", n2Key)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := n1.LocalClient().DebugActiveEndpoints(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var peer *ipnstate.PeerActiveEndpoints
+	for i := range res.Peers {
+		if res.Peers[i].NodeKey == n2Key {
+			peer = &res.Peers[i]
+			break
+		}
+	}
+	if peer == nil {
+		t.Fatalf("n2 (%v) not in active-endpoints peers: %+v", n2Key, res.Peers)
+	}
+	if peer.Magicsock == nil {
+		t.Errorf("missing magicsock state for n2: %+v", peer)
+	}
+
+	// And the same via the CLI.
+	cmd := n1.Tailscale("debug", "active-endpoints")
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("active-endpoints output:\n%s", out)
+	var res2 ipnstate.DebugActiveEndpoints
+	if err := json.Unmarshal(out, &res2); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(res2.Peers), len(res.Peers); got != want {
+		t.Errorf("CLI reported %d peers; LocalAPI reported %d", got, want)
 	}
 }
 

@@ -354,6 +354,12 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print debug information about a peer's endpoint changes",
 			},
 			{
+				Name:       "active-endpoints",
+				ShortUsage: "tailscale debug active-endpoints",
+				Exec:       runDebugActiveEndpoints,
+				ShortHelp:  "Print the active dataplane endpoint state of each peer, as seen by both magicsock and wireguard-go",
+			},
+			{
 				Name:       "dial-types",
 				ShortUsage: "tailscale debug dial-types <hostname-or-IP> <port>",
 				Exec:       runDebugDialTypes,
@@ -1333,6 +1339,19 @@ func runPeerEndpointChanges(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("%s", dst.String())
 	return nil
+}
+
+func runDebugActiveEndpoints(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	res, err := localClient.DebugActiveEndpoints(ctx)
+	if err != nil {
+		return err
+	}
+	e := json.NewEncoder(Stdout)
+	e.SetIndent("", "\t")
+	return e.Encode(res)
 }
 
 func debugControlKnobs(ctx context.Context, args []string) error {

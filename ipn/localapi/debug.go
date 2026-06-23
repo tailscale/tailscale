@@ -33,6 +33,7 @@ import (
 func init() {
 	Register("component-debug-logging", (*Handler).serveComponentDebugLogging)
 	Register("debug", (*Handler).serveDebug)
+	Register("debug-active-endpoints", (*Handler).serveDebugActiveEndpoints)
 	Register("debug-rotate-disco-key", (*Handler).serveDebugRotateDiscoKey)
 	Register("dev-set-state-store", (*Handler).serveDevSetStateStore)
 	Register("debug-bus-events", (*Handler).serveDebugBusEvents)
@@ -73,6 +74,25 @@ func (h *Handler) serveDebugPeerEndpointChanges(w http.ResponseWriter, r *http.R
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(chs)
+}
+
+// serveDebugActiveEndpoints serves debug information about the active
+// dataplane endpoint state of each peer, as seen by both magicsock and
+// wireguard-go. See [ipnstate.DebugActiveEndpoints].
+func (h *Handler) serveDebugActiveEndpoints(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "active-endpoints access denied", http.StatusForbidden)
+		return
+	}
+	res, err := h.b.DebugActiveEndpoints()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(res)
 }
 
 func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {
