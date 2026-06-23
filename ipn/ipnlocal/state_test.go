@@ -1983,6 +1983,10 @@ func (e *mockEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb
 func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
+func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
+func (e *mockEngine) PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool) {
+	return key.NodePublic{}, netip.Prefix{}, false
+}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
 func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource)                            {}

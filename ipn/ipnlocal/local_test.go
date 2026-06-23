@@ -9177,3 +9177,281 @@ func TestResetAuthClearsMachineKey(t *testing.T) {
 		t.Fatalf("ReadState after clear: got err %v, want ErrStateNotExist", err)
 	}
 }
+
+func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
+	// Build a netmap with:
+	//   - self node at 100.64.0.1
+	//   - exitA (node 1): exit node at 100.64.0.2
+	//   - exitB (node 2): exit node at 100.64.0.3
+	//   - subnetBig (node 3): subnet router for 10.0.0.0/16 at 100.64.0.4
+	//   - subnetSmall (node 4): subnet router for 10.0.0.0/24 at 100.64.0.5
+	hi := (&tailcfg.Hostinfo{}).View()
+
+	selfNode := (&tailcfg.Node{
+		ID:       10,
+		StableID: "self",
+		Key:      makeNodeKeyFromID(10),
+		DiscoKey: makeDiscoKeyFromID(10),
+		Name:     "self",
+		Hostinfo: hi,
+		Cap:      26,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+		MachineAuthorized: true,
+	}).View()
+
+	exitA := (&tailcfg.Node{
+		ID:       1,
+		StableID: "exitA",
+		Key:      makeNodeKeyFromID(1),
+		DiscoKey: makeDiscoKeyFromID(1),
+		Name:     "exitA",
+		Hostinfo: hi,
+		Cap:      26,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.2/32"),
+		},
+		AllowedIPs:        append([]netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, tsaddr.ExitRoutes()...),
+		MachineAuthorized: true,
+		HomeDERP:          1,
+	}).View()
+
+	exitB := (&tailcfg.Node{
+		ID:       2,
+		StableID: "exitB",
+		Key:      makeNodeKeyFromID(2),
+		DiscoKey: makeDiscoKeyFromID(2),
+		Name:     "exitB",
+		Hostinfo: hi,
+		Cap:      26,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.3/32"),
+		},
+		AllowedIPs:        append([]netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")}, tsaddr.ExitRoutes()...),
+		MachineAuthorized: true,
+		HomeDERP:          2,
+	}).View()
+
+	subnetBig := (&tailcfg.Node{
+		ID:       3,
+		StableID: "subnetBig",
+		Key:      makeNodeKeyFromID(3),
+		DiscoKey: makeDiscoKeyFromID(3),
+		Name:     "subnetBig",
+		Hostinfo: hi,
+		Cap:      26,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.4/32"),
+		},
+		AllowedIPs: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.4/32"),
+			netip.MustParsePrefix("10.0.0.0/16"),
+		},
+		PrimaryRoutes:     []netip.Prefix{netip.MustParsePrefix("10.0.0.0/16")},
+		MachineAuthorized: true,
+		HomeDERP:          1,
+	}).View()
+
+	subnetSmall := (&tailcfg.Node{
+		ID:       4,
+		StableID: "subnetSmall",
+		Key:      makeNodeKeyFromID(4),
+		DiscoKey: makeDiscoKeyFromID(4),
+		Name:     "subnetSmall",
+		Hostinfo: hi,
+		Cap:      26,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.5/32"),
+		},
+		AllowedIPs: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.5/32"),
+			netip.MustParsePrefix("10.0.0.0/24"),
+		},
+		PrimaryRoutes:     []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")},
+		MachineAuthorized: true,
+		HomeDERP:          1,
+	}).View()
+
+	nm := buildNetmapWithPeers(selfNode, exitA, exitB, subnetBig, subnetSmall)
+
+	var eng wgengine.Engine
+	var curT *testing.T // active subtest, for test helpers
+
+	wantPeer := func(ip string, n tailcfg.NodeView) {
+		t := curT
+		t.Helper()
+		pip, ok := eng.PeerForIP(netip.MustParseAddr(ip))
+		if !ok {
+			t.Fatalf("PeerForIP(%s): ok=false, want true", ip)
+		}
+		if pip.IsSelf {
+			t.Fatalf("PeerForIP(%s): IsSelf=true, want false", ip)
+		}
+		if pip.Node.Key() != n.Key() {
+			t.Fatalf("PeerForIP(%s): key=%v, want %v", ip, pip.Node.Key(), n.Key())
+		}
+	}
+	wantNotPeer := func(ip string) {
+		t := curT
+		t.Helper()
+		if _, ok := eng.PeerForIP(netip.MustParseAddr(ip)); ok {
+			t.Fatalf("PeerForIP(%s): ok=true, want false", ip)
+		}
+	}
+	wantKey := func(ip string, n tailcfg.NodeView) {
+		t := curT
+		t.Helper()
+		pk, _, ok := eng.PeerKeyForIP(netip.MustParseAddr(ip))
+		if !ok {
+			t.Fatalf("PeerKeyForIP(%s): ok=false, want true", ip)
+		}
+		if pk != n.Key() {
+			t.Fatalf("PeerKeyForIP(%s): key=%v, want %v", ip, pk, n.Key())
+		}
+	}
+	wantNotKey := func(ip string) {
+		t := curT
+		t.Helper()
+		if _, _, ok := eng.PeerKeyForIP(netip.MustParseAddr(ip)); ok {
+			t.Fatalf("PeerKeyForIP(%s): ok=true, want false", ip)
+		}
+	}
+	wantSelf := func(ip string) {
+		t := curT
+		t.Helper()
+		pip, ok := eng.PeerForIP(netip.MustParseAddr(ip))
+		if !ok {
+			t.Fatalf("PeerForIP(%s): ok=false, want true", ip)
+		}
+		if !pip.IsSelf {
+			t.Fatalf("PeerForIP(%s): IsSelf=false, want true", ip)
+		}
+	}
+
+	tests := []struct {
+		name  string
+		prefs ipn.Prefs
+		check func()
+	}{
+		{
+			name: "no_routes_no_exit",
+			prefs: ipn.Prefs{
+				RouteAll:   false,
+				ExitNodeID: "",
+			},
+			check: func() {
+				wantSelf("100.64.0.1")
+				wantPeer("100.64.0.2", exitA)
+				wantPeer("100.64.0.3", exitB)
+				wantPeer("100.64.0.4", subnetBig)
+				wantPeer("100.64.0.5", subnetSmall)
+				wantNotPeer("10.0.0.5")
+				wantNotPeer("10.0.1.5")
+				wantNotPeer("8.8.8.8")
+				wantNotKey("10.0.0.5")
+				wantNotKey("8.8.8.8")
+			},
+		},
+		{
+			name: "accept_routes_on",
+			prefs: ipn.Prefs{
+				RouteAll:   true,
+				ExitNodeID: "",
+			},
+			check: func() {
+				// 10.0.0.5 is in both /16 and /24; longest prefix match picks subnetSmall.
+				wantPeer("10.0.0.5", subnetSmall)
+				wantKey("10.0.0.5", subnetSmall)
+				// 10.0.1.5 is in /16 only; goes to subnetBig.
+				wantPeer("10.0.1.5", subnetBig)
+				wantKey("10.0.1.5", subnetBig)
+				wantNotPeer("8.8.8.8")
+			},
+		},
+		{
+			name: "exit_node_A",
+			prefs: ipn.Prefs{
+				RouteAll:   true,
+				ExitNodeID: "exitA",
+			},
+			check: func() {
+				wantPeer("8.8.8.8", exitA)
+				wantKey("8.8.8.8", exitA)
+				wantPeer("10.0.0.5", subnetSmall)
+				wantPeer("10.0.1.5", subnetBig)
+			},
+		},
+		{
+			name: "exit_node_B",
+			prefs: ipn.Prefs{
+				RouteAll:   true,
+				ExitNodeID: "exitB",
+			},
+			check: func() {
+				wantPeer("8.8.8.8", exitB)
+				wantKey("8.8.8.8", exitB)
+				wantPeer("10.0.0.5", subnetSmall)
+				wantPeer("10.0.1.5", subnetBig)
+			},
+		},
+		{
+			name: "exit_node_off_routes_on",
+			prefs: ipn.Prefs{
+				RouteAll:   true,
+				ExitNodeID: "",
+			},
+			check: func() {
+				wantNotPeer("8.8.8.8")
+				wantNotKey("8.8.8.8")
+				wantPeer("10.0.0.5", subnetSmall)
+				wantPeer("10.0.1.5", subnetBig)
+			},
+		},
+		{
+			name: "accept_routes_off",
+			prefs: ipn.Prefs{
+				RouteAll:   false,
+				ExitNodeID: "",
+			},
+			check: func() {
+				wantNotPeer("10.0.0.5")
+				wantNotKey("10.0.0.5")
+				wantPeer("100.64.0.4", subnetBig)
+				wantPeer("100.64.0.5", subnetSmall)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lb := newTestLocalBackend(t)
+
+			nk := key.NewNode()
+			nmCopy := new(*nm)
+			nmCopy.NodeKey = nk.Public()
+
+			lb.mu.Lock()
+			err := lb.pm.SetPrefs((&ipn.Prefs{
+				ControlURL:  "https://localhost:1/",
+				WantRunning: true,
+				RouteAll:    tt.prefs.RouteAll,
+				ExitNodeID:  tt.prefs.ExitNodeID,
+				Persist:     &persist.Persist{PrivateNodeKey: nk},
+			}).View(), ipn.NetworkProfile{})
+			lb.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			lb.SetControlClientStatus(lb.cc, controlclient.Status{
+				NetMap:   nmCopy,
+				LoggedIn: true,
+			})
+
+			eng = lb.sys.Engine.Get()
+			curT = t
+			tt.check()
+		})
+	}
+}

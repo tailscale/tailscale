@@ -35,7 +35,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockstats"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
@@ -123,6 +122,11 @@ type userspaceEngine struct {
 	// Replaced (not mutated) by maybeReconfigWireguardLocked. Read by
 	// the per-packet wgdev callback without locking.
 	peerByIPRoute atomic.Pointer[bart.Table[key.NodePublic]]
+
+	// peerForIP, if non-nil, is the callback installed via
+	// [userspaceEngine.SetPeerForIPFunc]. PeerForIP delegates to it
+	// for the cold-path control lookups (Ping, TSMP, pendopen, etc).
+	peerForIP atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
 
 	lastCfgFull        wgcfg.Config
 	lastRouter         *router.Config
@@ -1571,65 +1575,39 @@ func (e *userspaceEngine) ProbeLocks() {
 	e.wgLock.Unlock()
 }
 
-// PeerForIP returns the Node in the wireguard config
-// that's responsible for handling the given IP address.
-//
-// If none is found in the wireguard config but one is found in
-// the netmap, it's described in an error.
-//
-// peerForIP acquires both e.mu and e.wgLock, but neither at the same
-// time.
-func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
-	e.mu.Lock()
-	nm := e.netMap
-	e.mu.Unlock()
+// SetPeerForIPFunc installs the callback used by [userspaceEngine.PeerForIP].
+// See [Engine.SetPeerForIPFunc].
+func (e *userspaceEngine) SetPeerForIPFunc(fn func(netip.Addr) (PeerForIP, bool)) {
+	if fn == nil {
+		e.peerForIP.Store(nil)
+		return
+	}
+	e.peerForIP.Store(&fn)
+}
 
-	if nm == nil {
+// PeerKeyForIP looks up ip in the engine's AllowedIPs table
+// ([userspaceEngine.peerByIPRoute]). See [Engine.PeerKeyForIP].
+func (e *userspaceEngine) PeerKeyForIP(ip netip.Addr) (pk key.NodePublic, route netip.Prefix, ok bool) {
+	if !ip.IsValid() {
+		return pk, route, false
+	}
+	rt := e.peerByIPRoute.Load()
+	if rt == nil {
+		return pk, route, false
+	}
+	route, pk, ok = rt.LookupPrefixLPM(netip.PrefixFrom(ip, ip.BitLen()))
+	return pk, route, ok
+}
+
+// PeerForIP returns the node responsible for handling the given IP.
+// It delegates to the callback installed via [SetPeerForIPFunc]; engines
+// without an installed callback return (zero, false).
+func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
+	if !ip.IsValid() {
 		return ret, false
 	}
-
-	// Check for exact matches before looking for subnet matches.
-	// TODO(bradfitz): add maps for these. on NetworkMap?
-	for _, p := range nm.Peers {
-		for i := range p.Addresses().Len() {
-			a := p.Addresses().At(i)
-			if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-				return PeerForIP{Node: p, Route: a}, true
-			}
-		}
-	}
-	addrs := nm.GetAddresses()
-	for i := range addrs.Len() {
-		if a := addrs.At(i); a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
-		}
-	}
-
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-
-	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
-	var best netip.Prefix
-	var bestKey key.NodePublic
-	for _, p := range e.lastCfgFull.Peers {
-		for _, cidr := range p.AllowedIPs {
-			if !cidr.Contains(ip) {
-				continue
-			}
-			if !best.IsValid() || cidr.Bits() > best.Bits() {
-				best = cidr
-				bestKey = p.PublicKey
-			}
-		}
-	}
-	// And another pass. Probably better than allocating a map per peerForIP
-	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
-	if !bestKey.IsZero() {
-		for _, p := range nm.Peers {
-			if p.Key() == bestKey {
-				return PeerForIP{Node: p, Route: best}, true
-			}
-		}
+	if fn := e.peerForIP.Load(); fn != nil {
+		return (*fn)(ip)
 	}
 	return ret, false
 }

@@ -654,6 +654,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	nb.ready()
 
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
+	e.SetPeerForIPFunc(b.peerForIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
 	e.SetNetLogNodeSource(netLogNodeSource{b})
 	e.SetWGPeerLookup(b.lookupPeerWireGuardString)
@@ -5835,6 +5836,43 @@ func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 		return key.NodePublic{}, false
 	}
 	return peer.Key(), true
+}
+
+// peerForIP is the [wgengine.Engine.SetPeerForIPFunc] callback. It returns
+// which peer is responsible for a given IP address. Despite the name, it
+// can also return the self node (with IsSelf set). It handles both
+// Tailscale IPs (returning the owning peer or self) and non-Tailscale
+// addresses like subnet-routed IPs or exit-node global internet IPs
+// (returning whichever peer would route that traffic).
+func (b *LocalBackend) peerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) {
+	nb := b.currentNode()
+
+	if tsaddr.IsTailscaleIP(ip) {
+		if nid, ok := nb.NodeByAddr(ip); ok {
+			if n, ok := nb.NodeByID(nid); ok {
+				self := nb.Self()
+				return wgengine.PeerForIP{
+					Node:   n,
+					IsSelf: self.Valid() && self.ID() == nid,
+					Route:  netip.PrefixFrom(ip, ip.BitLen()),
+				}, true
+			}
+		}
+	}
+
+	pk, route, ok := b.e.PeerKeyForIP(ip)
+	if !ok {
+		return wgengine.PeerForIP{}, false
+	}
+	nid, ok := nb.NodeByKey(pk)
+	if !ok {
+		return wgengine.PeerForIP{}, false
+	}
+	n, ok := nb.NodeByID(nid)
+	if !ok {
+		return wgengine.PeerForIP{}, false
+	}
+	return wgengine.PeerForIP{Node: n, Route: route}, true
 }
 
 // onPeerWireGuardState is called by wireguard-go, through wgengine, for
