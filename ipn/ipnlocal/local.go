@@ -2443,6 +2443,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	defer b.mu.Unlock()
 
 	cn := b.currentNode()
+	// Filter the mutations through tailnet lock before applying them.
+	// Unsigned (or invalidly-signed) peers arriving via PeersChanged
+	// ride the delta path as NodeMutationUpsert and would otherwise
+	// land in nodeBackend.peers without ever passing through
+	// tkaFilterNetmapLocked. tkaFilterDeltaMutsLocked rewrites any
+	// such upsert into a NodeMutationRemove for the same node ID, so
+	// any previously-signed peer at that ID is also evicted, matching
+	// the full-netmap behavior of [tkaFilterNetmapLocked].
+	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 	cn.UpdateNetmapDelta(muts)
 
