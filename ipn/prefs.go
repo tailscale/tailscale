@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/drive"
@@ -1108,6 +1109,12 @@ type LoginProfile struct {
 	// ControlURL is the URL of the control server that this profile is logged
 	// into.
 	ControlURL string
+
+	// Created is when this profile was first added to this client. It is
+	// stamped once at profile creation and never changes. It is used to sort
+	// the profile list with newest first; profiles created before this field
+	// existed have a zero value and sort after all stamped profiles.
+	Created time.Time `json:",omitzero"`
 }
 
 // Equals reports whether p and p2 are equal.

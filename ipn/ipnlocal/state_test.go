@@ -1985,7 +1985,7 @@ func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
-func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource) {}
+func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource)                            {}
 func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}
 
 func (e *mockEngine) Close() {

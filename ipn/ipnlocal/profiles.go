@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
@@ -64,6 +65,10 @@ type profileManager struct {
 
 	// Override for key.NewEmptyHardwareAttestationKey used for testing.
 	newEmptyHardwareAttestationKey func() (key.HardwareAttestationKey, error)
+
+	// clock supplies the current time when stamping LoginProfile.Created.
+	// Tests substitute a fake clock to make creation timestamps deterministic.
+	clock tstime.DefaultClock
 }
 
 // SetExtensionHost sets the [ExtensionHost] for the [profileManager].
@@ -250,7 +255,14 @@ func (pm *profileManager) allProfilesFor(uid ipn.WindowsUserID) []ipn.LoginProfi
 		}
 	}
 	slices.SortFunc(out, func(a, b ipn.LoginProfileView) int {
-		return cmp.Compare(a.Name(), b.Name())
+		// Legacy (zero Created) first, then stamped oldest-first.
+		if c := a.Created().Compare(b.Created()); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.Name(), b.Name()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.NetworkProfile().DomainName, b.NetworkProfile().DomainName)
 	})
 	return out
 }
@@ -413,6 +425,7 @@ func (pm *profileManager) setProfilePrefs(lp *ipn.LoginProfile, prefsIn ipn.Pref
 		if persist := prefsIn.Persist(); persist.Valid() && persist.NodeID() != "" && persist.UserProfile().LoginName() != "" {
 			// Generate an ID and [ipn.StateKey] now that we have the node info.
 			lp.ID, lp.Key = newUnusedID(pm.knownProfiles)
+			lp.Created = pm.clock.Now()
 		}
 
 		// Set the current user as the profile owner, unless the current user ID does
