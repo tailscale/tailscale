@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/sys/unix"
+	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -39,6 +41,7 @@ import (
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
@@ -1943,5 +1946,59 @@ func newTestEnv(t *testing.T) testEnv {
 		runningSockPath: runningSockPath,
 		localAddrPort:   localAddrPort,
 		healthAddrPort:  healthAddrPort,
+	}
+}
+
+// TestProcessNotifyRefreshesDNSOnSelfChange verifies that a SelfChange
+// notification triggers a DNS refresh; without it, VIPServices created
+// after pod boot are invisible to resolveTailnetFQDN.
+func TestProcessNotifyRefreshesDNSOnSelfChange(t *testing.T) {
+	extraRec := tailcfg.DNSRecord{
+		Name:  "my-ingress.tailnet.ts.net.",
+		Type:  "A",
+		Value: "100.99.10.20",
+	}
+	dnsCfg := &tailcfg.DNSConfig{
+		ExtraRecords: []tailcfg.DNSRecord{extraRec},
+		CertDomains:  []string{"node.tailnet.ts.net"},
+	}
+
+	lal := memnet.Listen("local-tailscaled.sock:80")
+	defer lal.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/localapi/v0/dns-config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(dnsCfg); err != nil {
+			t.Errorf("encoding dns config: %v", err)
+		}
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(lal)
+	t.Cleanup(func() { srv.Shutdown(context.Background()) })
+
+	client := &local.Client{Dial: lal.Dial}
+
+	// Empty starting state, as if the InitialStatus captured at pod
+	// boot carried no ExtraRecords because the VIPService didn't exist
+	// yet at that time.
+	var s netmapState
+
+	n := ipn.Notify{
+		SelfChange: &tailcfg.Node{
+			ID:   1,
+			Name: "self.tailnet.ts.net.",
+		},
+	}
+
+	got := s.processNotify(context.Background(), client, n)
+
+	if got.dnsExtraRecords.Len() != 1 {
+		t.Fatalf("dnsExtraRecords.Len() = %d, want 1", got.dnsExtraRecords.Len())
+	}
+	if rec := got.dnsExtraRecords.At(0); rec.Name != extraRec.Name {
+		t.Errorf("dnsExtraRecords[0].Name = %q, want %q", rec.Name, extraRec.Name)
+	}
+	if got.certDomains.Len() != 1 || got.certDomains.At(0) != "node.tailnet.ts.net" {
+		t.Errorf("certDomains = %v, want [node.tailnet.ts.net]", got.certDomains.AsSlice())
 	}
 }
