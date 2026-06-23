@@ -1557,6 +1557,15 @@ func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {
 	}
 }
 
+// ProbeLocks implements [Engine.ProbeLocks].
+func (e *userspaceEngine) ProbeLocks() {
+	e.mu.Lock()
+	e.mu.Unlock()
+
+	e.wgLock.Lock()
+	e.wgLock.Unlock()
+}
+
 // PeerForIP returns the Node in the wireguard config
 // that's responsible for handling the given IP address.
 //
@@ -1569,16 +1578,6 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	e.mu.Lock()
 	nm := e.netMap
 	e.mu.Unlock()
-
-	if !ip.IsValid() {
-		// Treat invalid IPs as just a mutex probe to detect deadlocks.
-		// TODO(bradfitz): extend the Engine interface to have an explicit method for
-		// this purpose, instead of overloading PeerForIP with this special case.
-		// But I'd rather do that at the beginning of a dev cycle.
-		e.wgLock.Lock()
-		defer e.wgLock.Unlock()
-		return ret, false
-	}
 
 	if nm == nil {
 		return ret, false

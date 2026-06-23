@@ -197,4 +197,9 @@ type Engine interface {
 	// ipnlocal.LocalBackend.onPeerWireGuardState, installed early in
 	// LocalBackend construction.
 	SetPeerSessionStateFunc(func(key.NodePublic, PeerWireGuardState))
+
+	// ProbeLocks acquires and releases the engine's internal locks so
+	// that [ipnlocal.LocalBackend]'s watchdog can detect deadlocks in
+	// the engine. It is otherwise a no-op.
+	ProbeLocks()
 }
