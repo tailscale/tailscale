@@ -28,6 +28,7 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/packet/checksum"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
@@ -1053,5 +1054,38 @@ func TestInterceptOrdering(t *testing.T) {
 
 	if seq != numOutboundIntercepts {
 		t.Errorf("got number of intercepts run in Read(): %d; want: %d", seq, numOutboundIntercepts)
+	}
+}
+
+func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
+	var called bool
+	hook := func(p *packet.Parsed, _ *Wrapper) filter.Response {
+		called = true
+		checksum.UpdateSrcAddr(p, netip.MustParseAddr("169.254.0.1"))
+		return filter.Accept
+	}
+
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = hook
+	tun.Start()
+	defer tun.Close()
+
+	if err := tun.InjectOutbound(udp4("145.53.32.10", "100.25.63.57", 80, 12345)); err != nil {
+		t.Fatalf("InjectOutbound error: %v", err)
+	}
+
+	var buf [MaxPacketSize]byte
+	sizes := make([]int, 1)
+	tun.Read([][]byte{buf[:]}, sizes, 0)
+
+	if !called {
+		t.Error("app connector hook was not called in InjectOutbound")
+	}
+
+	wantPkt := udp4("169.254.0.1", "100.25.63.57", 80, 12345)
+	gotPkt := buf[:sizes[0]]
+	if !bytes.Equal(wantPkt, gotPkt) {
+		t.Errorf("packet mismatch\nwant:\t% x\ngot:\t% x", wantPkt, gotPkt)
 	}
 }
