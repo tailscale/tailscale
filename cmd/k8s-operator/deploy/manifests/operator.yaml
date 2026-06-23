@@ -6338,6 +6338,16 @@ rules:
     - apiGroups:
         - tailscale.com
       resources:
+        - peerrelays
+        - peerrelays/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
+    - apiGroups:
+        - tailscale.com
+      resources:
         - proxygrouppolicies
         - proxygrouppolicies/status
       verbs:
