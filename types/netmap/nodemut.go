@@ -89,6 +89,13 @@ type NodeMutationRemove struct {
 
 func (m NodeMutationRemove) Apply(*tailcfg.Node) {}
 
+// MakeNodeMutationRemove returns a NodeMutationRemove that targets nodeID.
+// It is the constructor for NodeMutationRemove for callers outside this
+// package, since the embedded ID field is unexported.
+func MakeNodeMutationRemove(nodeID tailcfg.NodeID) NodeMutationRemove {
+	return NodeMutationRemove{mutatingNodeID(nodeID)}
+}
+
 var peerChangeFields = sync.OnceValue(func() []reflect.StructField {
 	var fields []reflect.StructField
 	rt := reflect.TypeFor[tailcfg.PeerChange]()

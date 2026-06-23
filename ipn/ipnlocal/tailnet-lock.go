@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
@@ -65,7 +66,10 @@ type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
 	storage   tka.CompactableChonk
-	filtered  []ipnstate.TKAPeer
+
+	// filtered tracks peers that were removed from the netmap because
+	// they failed tailnet lock signature verification.
+	filtered map[tailcfg.NodeID]ipnstate.TKAPeer
 }
 
 func (b *LocalBackend) initTKALocked() error {
@@ -122,6 +126,54 @@ var noTailnetLockStateDirWarnable = health.Register(&health.Warnable{
 	Text:     health.StaticMessage(healthmsg.InMemoryTailnetLockState),
 })
 
+// tkaFilterDeltaMutsLocked drops any [netmap.NodeMutationUpsert] in muts
+// whose peer would fail tailnet lock signature verification, replacing
+// each such upsert with a [netmap.NodeMutationRemove] for the same node
+// ID. This matches the semantics of [tkaFilterNetmapLocked] on a full
+// netmap: an unsigned (or invalidly-signed) peer must not land in
+// [nodeBackend.peers], and a previously-signed peer at the same node ID
+// must be evicted if the latest state from control fails verification.
+//
+// If tailnet lock is not active on this node (b.tka == nil) muts is
+// returned unchanged. The returned slice may share backing storage with
+// the input.
+//
+// b.mu must be held.
+func (b *LocalBackend) tkaFilterDeltaMutsLocked(muts []netmap.NodeMutation) []netmap.NodeMutation {
+	if b.tka == nil {
+		return muts
+	}
+	if envknob.TKASkipSignatureCheck() {
+		return muts
+	}
+	for i, m := range muts {
+		switch m := m.(type) {
+		case netmap.NodeMutationUpsert:
+			n := m.Node
+			if n.UnsignedPeerAPIOnly() {
+				continue
+			}
+			var why string
+			if n.KeySignature().Len() == 0 {
+				why = "missing signature"
+			} else if err := b.tka.authority.NodeKeyAuthorized(n.Key(), n.KeySignature().AsSlice()); err != nil {
+				why = fmt.Sprintf("failed signature check: %v", err)
+			} else {
+				continue
+			}
+			b.logf("Tailnet lock is dropping delta-upserted peer %v(%v) due to %v", n.ID(), n.StableID(), why)
+			mak.Set(&b.tka.filtered, n.ID(), tkaStateFromPeer(n))
+			muts[i] = netmap.MakeNodeMutationRemove(n.ID())
+		case netmap.NodeMutationRemove:
+			// If a peer is explicitly removed by control, clear it from
+			// the filtered set too so TailnetLockStatus doesn't report
+			// stale entries.
+			delete(b.tka.filtered, m.NodeIDBeingMutated())
+		}
+	}
+	return muts
+}
+
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
 //
@@ -165,7 +217,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 || len(obsoleteByRotation) > 0 {
 		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
-		filtered := make([]ipnstate.TKAPeer, 0, len(toDelete)+len(obsoleteByRotation))
+		filtered := make(map[tailcfg.NodeID]ipnstate.TKAPeer, len(toDelete)+len(obsoleteByRotation))
 		for i, p := range nm.Peers {
 			if !toDelete[i] && !obsoleteByRotation.Contains(p.Key()) {
 				peers = append(peers, p)
@@ -173,8 +225,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 				if obsoleteByRotation.Contains(p.Key()) {
 					b.logf("Tailnet lock is dropping peer %v(%v) due to key rotation", p.ID(), p.StableID())
 				}
-				// Record information about the node we filtered out.
-				filtered = append(filtered, tkaStateFromPeer(p))
+				filtered[p.ID()] = tkaStateFromPeer(p)
 			}
 		}
 		nm.Peers = peers
@@ -579,9 +630,9 @@ func (b *LocalBackend) TailnetLockStatus() *ipnstate.TailnetLockStatus {
 		}
 	}
 
-	filtered := make([]*ipnstate.TKAPeer, len(b.tka.filtered))
-	for i := range len(filtered) {
-		filtered[i] = b.tka.filtered[i].Clone()
+	var filtered []*ipnstate.TKAPeer
+	for _, fp := range b.tka.filtered {
+		filtered = append(filtered, new(fp))
 	}
 
 	var visible []*ipnstate.TKAPeer
