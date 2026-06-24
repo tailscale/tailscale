@@ -8851,6 +8851,8 @@ func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNod
 // preferredDERP is this device's home DERP region (0 if unknown) and
 // regionLatency is the best recent latency to each DERP region; both come from
 // netcheck and are only used by the DERP-based algorithm.
+//
+// Errors are always logged. Suggestions are logged if they defer from prevSuggestion.
 func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	switch {
 	case nb.SelfHasCap(tailcfg.NodeAttrTrafficSteering):
@@ -8865,8 +8867,10 @@ func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, nb 
 	if err != nil {
 		nb.logf("netmap: suggested exit node: %v", err)
 	} else {
-		name, _, _ := strings.Cut(res.Name, ".")
-		nb.logf("netmap: suggested exit node: %s (%s)", name, res.ID)
+		if res.ID != prevSuggestion {
+			name, _, _ := strings.Cut(res.Name, ".")
+			nb.logf("netmap: suggested exit node: %s (%s)", name, res.ID)
+		}
 	}
 	return res, err
 }
