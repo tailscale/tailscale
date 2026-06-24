@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/creachadair/mds/shell"
 	"github.com/kdomanski/iso9660"
@@ -214,7 +215,16 @@ func tailscaledEnvPrefix(n *Node) string {
 	return strings.Join(parts, " ") + " "
 }
 
+// debugSSHKeyMu serializes ensureDebugSSHKey calls. Env.Start boots all
+// nodes in parallel and each calls createCloudInitISO -> ensureDebugSSHKey,
+// which would otherwise race on creating /tmp/vmtest_key: one goroutine
+// can observe a newly-created-but-still-empty key file written by another
+// and fail to parse it.
+var debugSSHKeyMu sync.Mutex
+
 func ensureDebugSSHKey() error {
+	debugSSHKeyMu.Lock()
+	defer debugSSHKeyMu.Unlock()
 	const keyPath = "/tmp/vmtest_key"
 	if privPEM, err := os.ReadFile(keyPath); err == nil {
 		if _, err := os.Stat(keyPath + ".pub"); err == nil {
