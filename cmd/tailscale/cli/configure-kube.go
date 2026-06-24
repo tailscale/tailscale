@@ -44,7 +44,7 @@ See: https://tailscale.com/s/k8s-auth-proxy
 `),
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("kubeconfig")
-			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "Use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
+			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
 			return fs
 		})(),
 		Exec: runConfigureKubeconfig,
