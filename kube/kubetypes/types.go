@@ -62,6 +62,23 @@ const (
 	LabelSecretTypeState  = "state"
 	LabelSecretTypeCerts  = "certs"
 
+	// ACMEAccountsSecretName is the name of the Secret in the operator
+	// namespace that holds shared ACME account private keys, one field per
+	// tailnet. Sharing one account key across all replicas of every
+	// ProxyGroup attached to a tailnet preserves Let's Encrypt's renewal
+	// exemption (via the ARI "replaces" extension) across pod restarts,
+	// ProxyGroup recreation, and ingress migration.
+	ACMEAccountsSecretName = "tailscale-acme-accounts"
+
+	// ACMEAccountDefaultKey is the field used inside ACMEAccountsSecretName
+	// for the "default" tailnet (i.e., when ProxyGroup.spec.tailnet is empty
+	// and the operator uses its own credentials).
+	ACMEAccountDefaultKey = "_default"
+
+	// ACMEAccountKeySuffix is appended to the tailnet identifier to form a
+	// field name within ACMEAccountsSecretName.
+	ACMEAccountKeySuffix = ".acme-account.key.pem"
+
 	KubeAPIServerConfigFile                     = "config.hujson"
 	APIServerProxyModeAuth   APIServerProxyMode = "auth"
 	APIServerProxyModeNoAuth APIServerProxyMode = "noauth"

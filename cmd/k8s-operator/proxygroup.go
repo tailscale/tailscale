@@ -394,6 +394,25 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 		}); err != nil {
 			return r.notReadyErrf(pg, logger, "error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
+
+		// Ensure the shared ACME accounts Secret exists. Fields are
+		// populated lazily by write replicas on first cert issuance for
+		// their tailnet; we only create the container here. The Secret is
+		// deliberately not owned by this ProxyGroup so it survives
+		// ProxyGroup recreation and preserves renewal continuity across
+		// the tailnet.
+		acmeSecret := pgACMEAccountSecret(r.tsNamespace)
+		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, acmeSecret, func(existing *corev1.Secret) {
+			// Idempotent: only touch labels, never overwrite data.
+			if existing.Labels == nil {
+				existing.Labels = map[string]string{}
+			}
+			for k, v := range acmeSecret.Labels {
+				existing.Labels[k] = v
+			}
+		}); err != nil {
+			return r.notReadyErrf(pg, logger, "error provisioning shared ACME accounts Secret %q: %w", acmeSecret.Name, err)
+		}
 	}
 
 	defaultImage := r.tsProxyImage

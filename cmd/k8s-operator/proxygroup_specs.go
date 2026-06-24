@@ -187,14 +187,6 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 				Name:  "TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR",
 				Value: "/etc/tsconfig/$(POD_NAME)",
 			},
-			{
-				// This ensures that cert renewals can succeed if ACME account
-				// keys have changed since issuance. We cannot guarantee or
-				// validate that the account key has not changed, see
-				// https://github.com/tailscale/tailscale/issues/18251
-				Name:  "TS_DEBUG_ACME_FORCE_RENEWAL",
-				Value: "true",
-			},
 		}
 
 		if port != nil {
@@ -250,6 +242,19 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 					// issued for an HA Ingress.
 					Name:  "TS_EXPERIMENTAL_CERT_SHARE",
 					Value: "true",
+				},
+				// Share one ACME account key across all replicas of every
+				// ProxyGroup attached to this tailnet. Account-key continuity
+				// is what makes LE classify subsequent issuances as renewals
+				// (via the ARI "replaces" extension) and exempts them from
+				// the 50-certs-per-registered-domain weekly limit.
+				corev1.EnvVar{
+					Name:  "TS_ACME_ACCOUNT_SECRET_NAME",
+					Value: kubetypes.ACMEAccountsSecretName,
+				},
+				corev1.EnvVar{
+					Name:  "TS_ACME_ACCOUNT_FIELD",
+					Value: pgACMEAccountField(pg),
 				},
 			)
 		}
@@ -439,6 +444,12 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string) *rbacv1.Role {
 							pgPodName(pg.Name, i),          // State.
 						)
 					}
+					// Ingress ProxyGroup write replicas need access to the
+					// shared ACME account Secret so they can read the
+					// per-tailnet account key and write it on first use.
+					if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
+						secrets = append(secrets, kubetypes.ACMEAccountsSecretName)
+					}
 					return secrets
 				}(),
 			},
@@ -473,6 +484,40 @@ func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 		RoleRef: rbacv1.RoleRef{
 			Kind: "Role",
 			Name: pg.Name,
+		},
+	}
+}
+
+// pgACMEAccountField returns the field name used inside the shared
+// tailscale-acme-accounts Secret for this ProxyGroup's tailnet. The blank
+// tailnet (operator-default credentials) is represented by a reserved
+// identifier so it gets a stable, unique field.
+func pgACMEAccountField(pg *tsapi.ProxyGroup) string {
+	tn := pg.Spec.Tailnet
+	if tn == "" {
+		tn = kubetypes.ACMEAccountDefaultKey
+	}
+	return tn + kubetypes.ACMEAccountKeySuffix
+}
+
+// pgACMEAccountSecret returns the Secret object that holds shared ACME
+// account private keys for every tailnet served by this operator. The Secret
+// is created empty; write replicas of ingress ProxyGroups populate fields
+// lazily on first cert issuance for their tailnet. Owned by no specific
+// ProxyGroup — survives ProxyGroup deletion so renewal continuity is
+// preserved across recreation.
+func pgACMEAccountSecret(namespace string) *corev1.Secret {
+	return &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kubetypes.ACMEAccountsSecretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				kubetypes.LabelManaged: "true",
+			},
 		},
 	}
 }
