@@ -281,11 +281,18 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 // ClientFlowCreated implements [Conn25Datapath].
 func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) {
 	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+	// how is this going to work?
+	// count how many times cfc is called vs cfr for transitIP
+	// when we go to expire, check that the count is 0 before expiring
+	// if it's nonzero adjust the expiry time and reinsert
+	// TODO we know that this doesn't necessarily mean the address isn't in active use
+	c.client.flowCreated(transitIP)
 }
 
 // ClientFlowRemoved implements [Conn25Datapath].
 func (c *Conn25) ClientFlowRemoved(transitIP netip.Addr) {
 	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+	c.client.flowRemoved(transitIP)
 }
 
 // ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
@@ -722,6 +729,7 @@ type client struct {
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
+	flowCounts      map[netip.Addr]int
 }
 
 // transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
@@ -923,6 +931,18 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
 		return errors.New("queue full")
 	}
+}
+
+func (c *client) flowCreated(transit netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.flowCounts[transit]++
+}
+
+func (c *client) flowRemoved(transit netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.flowCounts[transit]--
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {

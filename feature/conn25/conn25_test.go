@@ -1208,9 +1208,30 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		nil,
 	)
 	c.mapDNSResponse(dnsResp)
-	clock.Advance(24 * time.Hour)
-
 	fmt.Println(len(c.client.assignments.byMagicIP))
+	ipOneAddrs := c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.0")]
+	c.ClientFlowCreated(ipOneAddrs.transit)
+	clock.Advance(24 * time.Hour)
+	ipTwo := netip.MustParseAddr("1.0.0.2")
+	dnsResp2 := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
+			},
+		},
+		nil,
+	)
+	c.mapDNSResponse(dnsResp2)
+
+	numUnexpiredAddrs := len(c.client.assignments.byMagicIP)
+	fmt.Println(c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.1")].dst)
+	// yay
+	want := 2
+	if numUnexpiredAddrs != want {
+		t.Fatalf("want %v, got %v", want, numUnexpiredAddrs)
+	}
 }
 
 func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
