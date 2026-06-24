@@ -8609,7 +8609,7 @@ var ErrNoPreferredDERP = errors.New("no preferred DERP, try again later")
 // suggestExitNodeLocked computes a suggestion based on the current netmap and
 // other optional factors. If there are multiple equally good options, one may
 // be selected at random, so the result is not stable. To be eligible for
-// consideration, the peer must have NodeAttrSuggestExitNode in its CapMap.
+// consideration, the peer must have [tailcfg.NodeAttrSuggestExitNode] in its CapMap.
 //
 // b.mu must be held.
 func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggestionResponse, err error) {
@@ -8641,6 +8641,10 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	return res, err
 }
 
+// SuggestExitNode computes an exit-node suggestion based on the current netmap and
+// other optional factors. If there are multiple equally good options, one may
+// be selected at random, so the result is not stable. To be eligible for
+// consideration, the peer must have [tailcfg.NodeAttrSuggestExitNode] in its CapMap.
 func (b *LocalBackend) SuggestExitNode() (response apitype.ExitNodeSuggestionResponse, err error) {
 	if !buildfeatures.HasUseExitNode {
 		return response, feature.ErrUnavailable

@@ -137,8 +137,13 @@ func (c *Client) probe(ctx context.Context, nodes iter.Seq[probed], limit int, t
 				metricPingError.Add(1)
 				return nil
 			default:
-				c.vlogf("ping %s (%s): result: %f ms (err: %v)",
-					n.addr, n.ID(), pong.LatencySeconds*1000, pong.Err)
+				if pong.Err != "" {
+					c.vlogf("ping %s (%s): result: %f ms (err: %v)",
+						n.addr, n.ID(), pong.LatencySeconds*1000, pong.Err)
+				} else {
+					c.vlogf("ping %s (%s): result: %f ms",
+						n.addr, n.ID(), pong.LatencySeconds*1000)
+				}
 				metricPingReachable.Add(1)
 			}
 

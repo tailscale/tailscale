@@ -195,9 +195,9 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	ch := c.hasNetMap.Swap(nil) // clear before waking anything up
-	if ch != nil && *ch != nil {
-		close(*ch)
+	hasNetMap := c.hasNetMap.Swap(nil) // clear before waking anything up
+	if hasNetMap != nil && *hasNetMap != nil {
+		close(*hasNetMap) // wake waitForNetMap
 	}
 
 	return nil
