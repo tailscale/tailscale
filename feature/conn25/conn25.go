@@ -729,7 +729,6 @@ type client struct {
 	v6TransitIPPool *ippool
 	assignments     addrAssignments
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
-	flowCounts      map[netip.Addr]int
 }
 
 // transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
@@ -936,13 +935,13 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 func (c *client) flowCreated(transit netip.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.flowCounts[transit]++
+	c.assignments.byTransitIP[transit].activeFlowCount++
 }
 
 func (c *client) flowRemoved(transit netip.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.flowCounts[transit]--
+	c.assignments.byTransitIP[transit].activeFlowCount--
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
@@ -1342,12 +1341,13 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 }
 
 type addrs struct {
-	dst       netip.Addr
-	magic     netip.Addr
-	transit   netip.Addr
-	domain    dnsname.FQDN
-	app       string
-	expiresAt time.Time
+	dst             netip.Addr
+	magic           netip.Addr
+	transit         netip.Addr
+	domain          dnsname.FQDN
+	app             string
+	expiresAt       time.Time
+	activeFlowCount int
 }
 
 func (as addrs) isValid() bool {

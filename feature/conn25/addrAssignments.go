@@ -6,6 +6,7 @@ package conn25
 import (
 	"container/heap"
 	"errors"
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -105,13 +106,24 @@ func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 // or an invalid addrs if there are no expired members of addrAssignments.
 // TODO: fix comment nil return
 func (a *addrAssignments) popExpired(now time.Time) *addrs {
-	if a.byExpiresAt.Len() == 0 {
-		return nil
+	fmt.Println("pop expired called at", now)
+	var v *addrs
+	for v == nil {
+		if a.byExpiresAt.Len() == 0 {
+			return nil
+		}
+		if !a.byExpiresAt.peek().expiresAt.Before(now) {
+			return nil
+		}
+		v = heap.Pop(&a.byExpiresAt).(*addrs)
+
+		if v.activeFlowCount > 0 {
+			v.expiresAt = v.expiresAt.Add(24 * time.Hour)
+			heap.Push(&a.byExpiresAt, v)
+			v = nil
+		}
 	}
-	if !a.byExpiresAt.peek().expiresAt.Before(now) {
-		return nil
-	}
-	v := heap.Pop(&a.byExpiresAt).(*addrs)
+
 	delete(a.byMagicIP, v.magic)
 	delete(a.byTransitIP, v.transit)
 	dd := domainDst{domain: v.domain, dst: v.dst}
