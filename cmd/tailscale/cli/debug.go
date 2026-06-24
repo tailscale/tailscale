@@ -258,7 +258,7 @@ func debugCmd() *ffcli.Command {
 				ShortHelp:  "Print prefs",
 				FlagSet: (func() *flag.FlagSet {
 					fs := newFlagSet("prefs")
-					fs.BoolVar(&prefsArgs.pretty, "pretty", false, "If true, pretty-print output")
+					fs.BoolVar(&prefsArgs.pretty, "pretty", false, "if true, pretty-print output")
 					return fs
 				})(),
 			},

@@ -33,7 +33,7 @@ func systrayConfigCmd() *ffcli.Command {
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("systray")
 			fs.StringVar(&configSystrayArgs.initSystem, "enable-startup", "",
-				"Install startup script for init system. Currently supported systems are [systemd, freedesktop].")
+				"install startup script for init system. Currently supported systems are [systemd, freedesktop].")
 			return fs
 		})(),
 	}

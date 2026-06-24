@@ -28,9 +28,9 @@ var appcRoutesCmd = &ffcli.Command{
 	ShortHelp:  "Print the current app connector routes",
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("appc-routes")
-		fs.BoolVar(&appcRoutesArgs.all, "all", false, "Print learned domains and routes and extra policy configured routes.")
-		fs.BoolVar(&appcRoutesArgs.domainMap, "map", false, "Print the map of learned domains: [routes].")
-		fs.BoolVar(&appcRoutesArgs.n, "n", false, "Print the total number of routes this node advertises.")
+		fs.BoolVar(&appcRoutesArgs.all, "all", false, "print learned domains and routes and extra policy configured routes.")
+		fs.BoolVar(&appcRoutesArgs.domainMap, "map", false, "print the map of learned domains: [routes].")
+		fs.BoolVar(&appcRoutesArgs.n, "n", false, "print the total number of routes this node advertises.")
 		return fs
 	})(),
 	LongHelp: strings.TrimSpace(`
