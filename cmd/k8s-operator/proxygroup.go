@@ -400,15 +400,19 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 		// their tailnet; we only create the container here. The Secret is
 		// deliberately not owned by this ProxyGroup so it survives
 		// ProxyGroup recreation and preserves renewal continuity across
-		// the tailnet.
+		// the tailnet. The finalizer protects against accidental
+		// kubectl-delete; see kubetypes.ACMEAccountsFinalizer for why.
 		acmeSecret := pgACMEAccountSecret(r.tsNamespace)
 		if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, acmeSecret, func(existing *corev1.Secret) {
-			// Idempotent: only touch labels, never overwrite data.
+			// Idempotent: only touch labels and finalizers, never overwrite data.
 			if existing.Labels == nil {
 				existing.Labels = map[string]string{}
 			}
 			for k, v := range acmeSecret.Labels {
 				existing.Labels[k] = v
+			}
+			if !slices.Contains(existing.Finalizers, kubetypes.ACMEAccountsFinalizer) {
+				existing.Finalizers = append(existing.Finalizers, kubetypes.ACMEAccountsFinalizer)
 			}
 		}); err != nil {
 			return r.notReadyErrf(pg, logger, "error provisioning shared ACME accounts Secret %q: %w", acmeSecret.Name, err)

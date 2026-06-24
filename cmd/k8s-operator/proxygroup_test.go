@@ -1295,10 +1295,16 @@ func TestProxyGroupTypes(t *testing.T) {
 			}
 		}
 
-		// Verify the shared ACME accounts Secret exists.
+		// Verify the shared ACME accounts Secret exists and is
+		// protected by the deletion finalizer (see #18251 for why a
+		// kubectl-delete on this Secret would silently break renewals
+		// months down the line).
 		acmeSecret := &corev1.Secret{}
 		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: kubetypes.ACMEAccountsSecretName}, acmeSecret); err != nil {
 			t.Errorf("failed to get shared ACME accounts Secret: %v", err)
+		}
+		if !slices.Contains(acmeSecret.Finalizers, kubetypes.ACMEAccountsFinalizer) {
+			t.Errorf("shared ACME accounts Secret missing finalizer %q (got %v)", kubetypes.ACMEAccountsFinalizer, acmeSecret.Finalizers)
 		}
 
 		// Verify the per-ProxyGroup Role grants access to the shared

@@ -518,6 +518,9 @@ func pgACMEAccountSecret(namespace string) *corev1.Secret {
 			Labels: map[string]string{
 				kubetypes.LabelManaged: "true",
 			},
+			// Block accidental kubectl-delete; see the constant's
+			// godoc for the failure mode this protects against.
+			Finalizers: []string{kubetypes.ACMEAccountsFinalizer},
 		},
 	}
 }

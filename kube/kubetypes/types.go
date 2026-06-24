@@ -79,6 +79,19 @@ const (
 	// field name within ACMEAccountsSecretName.
 	ACMEAccountKeySuffix = ".acme-account.key.pem"
 
+	// ACMEAccountsFinalizer is stamped on ACMEAccountsSecretName by the
+	// operator to block accidental `kubectl delete secret` from removing
+	// the shared ACME account keys. Losing those keys silently breaks
+	// renewals for every existing cert in the affected tailnet (LE will
+	// reject the ARI "replaces" claim because the new account is not the
+	// one that signed the previous cert), and the failure only surfaces
+	// at renewal time — potentially months later. An admin who really
+	// wants to delete the Secret has to first remove the finalizer
+	// manually, making the action deliberate. The operator never removes
+	// the finalizer in normal operation. See
+	// https://github.com/tailscale/tailscale/issues/18251 for context.
+	ACMEAccountsFinalizer = "tailscale.com/acme-account-protection"
+
 	KubeAPIServerConfigFile                     = "config.hujson"
 	APIServerProxyModeAuth   APIServerProxyMode = "auth"
 	APIServerProxyModeNoAuth APIServerProxyMode = "noauth"
