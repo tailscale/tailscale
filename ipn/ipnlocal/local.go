@@ -2103,7 +2103,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			}
 		}
 
-		b.e.SetNetworkMap(st.NetMap)
+		b.e.SetSelfNode(st.NetMap.SelfNode)
 
 		var cachedHome int
 		if c == nil && st.NetMap.Cached && st.NetMap.SelfNode.Valid() {
@@ -2514,21 +2514,25 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 	ms.UpdateNetmapDelta(muts)
 
-	// Temporary for 1.100.x: force a full authReconfig + SetNetworkMap
-	// on any peer add or remove. netmapDeltaNeedsAuthReconfig only
-	// considered NodeMutationUpsert of already-known NodeIDs whose
+	// Force a full authReconfig + SetSelfNode on any peer add or
+	// remove. netmapDeltaNeedsAuthReconfig only considered
+	// NodeMutationUpsert of already-known NodeIDs whose
 	// peerRouteConfigChanged, so brand-new peers and removes left
-	// e.lastCfgFull / the engine BART / wgdev's PeerLookupFunc closure
-	// / e.netMap all stale, and Engine.PeerForIP, lookupPeerByIP, and
-	// outbound wgdev encryption all missed those peers. authReconfig
-	// fixes the wireguard side; SetNetworkMap fixes the e.netMap that
-	// PeerForIP reads. The proper per-peer fix lands in the next dev
-	// cycle. See tailscale/corp#43394.
+	// e.lastCfgFull and wgdev's PeerLookupFunc closure stale, and
+	// outbound wgdev encryption missed those peers. authReconfig
+	// fixes the wireguard side; SetSelfNode refreshes the engine's
+	// cached self node. PeerForIP / lookupPeerByIP staleness was
+	// addressed separately in d4f2917c1b, which routes those lookups
+	// through nodeBackend's live data, and as part of the broader
+	// netmap.NetworkMap removal effort the engine no longer caches
+	// the netmap at all (see tailscale/corp#43394). As of 2026-06-24
+	// the only remaining staleness this guards against is
+	// e.lastCfgFull and the wgdev peer set.
 	needsAuthReconfig = needsAuthReconfig || peersUpsertedOrRemoved
 	if needsAuthReconfig {
 		if peersUpsertedOrRemoved {
 			if nm := cn.netMapWithPeers(); nm != nil {
-				b.e.SetNetworkMap(nm)
+				b.e.SetSelfNode(nm.SelfNode)
 			}
 		}
 		b.authReconfigLocked()
@@ -3953,7 +3957,11 @@ func (b *LocalBackend) DebugForceNetmapUpdate() {
 	defer b.mu.Unlock()
 	// TODO(nickkhyl): this all should be done in [LocalBackend.setNetMapLocked].
 	nm := b.currentNode().NetMap()
-	b.e.SetNetworkMap(nm)
+	var self tailcfg.NodeView
+	if nm != nil {
+		self = nm.SelfNode
+	}
+	b.e.SetSelfNode(self)
 	if nm != nil {
 		b.MagicConn().SetDERPMap(nm.DERPMap)
 	}
@@ -8375,8 +8383,8 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	defer newNode.ready()
 	b.setNetMapLocked(nil) // Reset netmap.
 	b.updateFilterLocked(ipn.PrefsView{})
-	// Reset the NetworkMap in the engine
-	b.e.SetNetworkMap(new(netmap.NetworkMap))
+	// Reset the self node in the engine.
+	b.e.SetSelfNode(tailcfg.NodeView{})
 	if prevCC := b.resetControlClientLocked(); prevCC != nil {
 		// Shutdown outside of b.mu to avoid deadlocks.
 		b.goTracker.Go(prevCC.Shutdown)
