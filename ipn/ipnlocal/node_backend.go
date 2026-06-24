@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/mapx"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
@@ -124,6 +126,17 @@ type nodeBackend struct {
 	// is lossy and can't be inverted to a [key.NodePublic].
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByWGString map[string]tailcfg.NodeID
+
+	// nodeByName maps MagicDNS hostnames (lowercase, no trailing dot) to
+	// node IDs. Both the FQDN and the short name (suffix stripped) are
+	// keys. It is used by the tsdial MagicDNS resolution callback.
+	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
+	nodeByName map[string]tailcfg.NodeID
+
+	// extraDNS stores DNS.ExtraRecords A/AAAA entries from the netmap
+	// (typically service VIPs pushed by control), keyed by canonicalized
+	// hostname (lowercase, no trailing dot).
+	extraDNS map[string]netip.Addr
 
 	// userProfiles is the live set of user profiles, updated incrementally
 	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
@@ -507,6 +520,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.netMap = nm
 	nb.updateNodeByAddrLocked()
 	nb.updateNodeByKeyLocked()
+	nb.updateNodeByNameLocked()
 	nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
@@ -566,33 +580,21 @@ func (nb *nodeBackend) updateNodeByAddrLocked() {
 		return
 	}
 
-	// Update the nodeByAddr index.
-	if nb.nodeByAddr == nil {
-		nb.nodeByAddr = map[netip.Addr]tailcfg.NodeID{}
-	}
-	// First pass, mark everything unwanted.
-	for k := range nb.nodeByAddr {
-		nb.nodeByAddr[k] = 0
-	}
-	addNode := func(n tailcfg.NodeView) {
+	addNodeAddr := func(n tailcfg.NodeView) {
 		for _, ipp := range n.Addresses().All() {
 			if ipp.IsSingleIP() {
 				nb.nodeByAddr[ipp.Addr()] = n.ID()
 			}
 		}
 	}
-	if nm.SelfNode.Valid() {
-		addNode(nm.SelfNode)
-	}
-	for _, p := range nm.Peers {
-		addNode(p)
-	}
-	// Third pass, actually delete the unwanted items.
-	for k, v := range nb.nodeByAddr {
-		if v == 0 {
-			delete(nb.nodeByAddr, k)
+	mapx.RepopulateNonzero(&nb.nodeByAddr, func() {
+		if nm.SelfNode.Valid() {
+			addNodeAddr(nm.SelfNode)
 		}
-	}
+		for _, p := range nm.Peers {
+			addNodeAddr(p)
+		}
+	})
 }
 
 func (nb *nodeBackend) updateNodeByKeyLocked() {
@@ -603,40 +605,99 @@ func (nb *nodeBackend) updateNodeByKeyLocked() {
 		return
 	}
 
-	if nb.nodeByKey == nil {
-		nb.nodeByKey = map[key.NodePublic]tailcfg.NodeID{}
-	}
-	if nb.nodeByWGString == nil {
-		nb.nodeByWGString = map[string]tailcfg.NodeID{}
-	}
-	// First pass, mark everything unwanted.
-	for k := range nb.nodeByKey {
-		nb.nodeByKey[k] = 0
-	}
-	for k := range nb.nodeByWGString {
-		nb.nodeByWGString[k] = 0
-	}
-	addNode := func(n tailcfg.NodeView) {
-		nb.nodeByKey[n.Key()] = n.ID()
-		nb.nodeByWGString[n.Key().WireGuardGoString()] = n.ID()
-	}
-	if nm.SelfNode.Valid() {
-		addNode(nm.SelfNode)
-	}
-	for _, p := range nm.Peers {
-		addNode(p)
-	}
-	// Third pass, actually delete the unwanted items.
-	for k, v := range nb.nodeByKey {
-		if v == 0 {
-			delete(nb.nodeByKey, k)
+	mapx.RepopulateNonzero(&nb.nodeByKey, func() {
+		if nm.SelfNode.Valid() {
+			nb.nodeByKey[nm.SelfNode.Key()] = nm.SelfNode.ID()
 		}
-	}
-	for k, v := range nb.nodeByWGString {
-		if v == 0 {
-			delete(nb.nodeByWGString, k)
+		for _, p := range nm.Peers {
+			nb.nodeByKey[p.Key()] = p.ID()
 		}
+	})
+	mapx.RepopulateNonzero(&nb.nodeByWGString, func() {
+		if nm.SelfNode.Valid() {
+			nb.nodeByWGString[nm.SelfNode.Key().WireGuardGoString()] = nm.SelfNode.ID()
+		}
+		for _, p := range nm.Peers {
+			nb.nodeByWGString[p.Key().WireGuardGoString()] = p.ID()
+		}
+	})
+}
+
+// addNodeNameLocked adds both the FQDN and short-name keys for the given
+// node to nb.nodeByName. nb.mu must be held.
+func (nb *nodeBackend) addNodeNameLocked(name string, nid tailcfg.NodeID) {
+	if name == "" {
+		// We might support name-less nodes in the future; tailscale/corp#43949
+		return
 	}
+	canon := strings.ToLower(strings.TrimSuffix(name, "."))
+	mak.Set(&nb.nodeByName, canon, nid)
+	if suffix := nb.netMap.MagicDNSSuffix(); dnsname.HasSuffix(canon, suffix) {
+		mak.Set(&nb.nodeByName, dnsname.TrimSuffix(canon, suffix), nid)
+	}
+}
+
+// removeNodeNameLocked removes both the FQDN and short-name keys for the
+// given node from nb.nodeByName. nb.mu must be held.
+func (nb *nodeBackend) removeNodeNameLocked(name string) {
+	if name == "" {
+		// We might support name-less nodes in the future; tailscale/corp#43949
+		return
+	}
+	canon := strings.ToLower(strings.TrimSuffix(name, "."))
+	delete(nb.nodeByName, canon)
+	if suffix := nb.netMap.MagicDNSSuffix(); dnsname.HasSuffix(canon, suffix) {
+		delete(nb.nodeByName, dnsname.TrimSuffix(canon, suffix))
+	}
+}
+
+func (nb *nodeBackend) updateNodeByNameLocked() {
+	nm := nb.netMap
+	if nm == nil {
+		nb.nodeByName = nil
+		nb.extraDNS = nil
+		return
+	}
+
+	mapx.RepopulateNonzero(&nb.nodeByName, func() {
+		if nm.SelfNode.Valid() {
+			nb.addNodeNameLocked(nm.SelfNode.Name(), nm.SelfNode.ID())
+		}
+		for _, p := range nm.Peers {
+			nb.addNodeNameLocked(p.Name(), p.ID())
+		}
+	})
+
+	// Rebuild extraDNS from DNS.ExtraRecords (service VIPs, etc).
+	nb.extraDNS = nil
+	for _, rec := range nm.DNS.ExtraRecords {
+		if rec.Type != "" {
+			continue
+		}
+		ip, err := netip.ParseAddr(rec.Value)
+		if err != nil {
+			continue
+		}
+		mak.Set(&nb.extraDNS, strings.ToLower(strings.TrimSuffix(rec.Name, ".")), ip)
+	}
+}
+
+// NodeByName returns the node ID for a MagicDNS hostname. The input
+// must be lowercase with no trailing dot; both short names ("foo") and
+// FQDNs ("foo.tail-scale.ts.net") are accepted.
+func (nb *nodeBackend) NodeByName(hostname string) (_ tailcfg.NodeID, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nid, ok := nb.nodeByName[hostname]
+	return nid, ok
+}
+
+// ExtraDNSByName returns the IP for a DNS.ExtraRecords entry (e.g. service VIPs).
+func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	ip, ok := nb.extraDNS[hostname]
+	return ip, ok
 }
 
 func (nb *nodeBackend) updatePeersLocked() {
@@ -646,22 +707,11 @@ func (nb *nodeBackend) updatePeersLocked() {
 		return
 	}
 
-	// First pass, mark everything unwanted.
-	for k := range nb.peers {
-		nb.peers[k] = tailcfg.NodeView{}
-	}
-
-	// Second pass, add everything wanted.
-	for _, p := range nm.Peers {
-		mak.Set(&nb.peers, p.ID(), p)
-	}
-
-	// Third pass, remove deleted things.
-	for k, v := range nb.peers {
-		if !v.Valid() {
-			delete(nb.peers, k)
+	mapx.RepopulateNonzero(&nb.peers, func() {
+		for _, p := range nm.Peers {
+			nb.peers[p.ID()] = p
 		}
-	}
+	})
 }
 
 // setPacketFilter stores the live packet filter rules and parsed
@@ -717,6 +767,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			}
 			mak.Set(&nb.nodeByKey, m.Node.Key(), nid)
 			mak.Set(&nb.nodeByWGString, m.Node.Key().WireGuardGoString(), nid)
+			nb.addNodeNameLocked(m.Node.Name(), nid)
 			continue
 		case netmap.NodeMutationRemove:
 			nid := m.NodeIDBeingMutated()
@@ -728,6 +779,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				}
 				delete(nb.nodeByKey, old.Key())
 				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
+				nb.removeNodeNameLocked(old.Name())
 				delete(nb.peers, nid)
 			}
 			continue

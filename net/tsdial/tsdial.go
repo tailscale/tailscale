@@ -32,7 +32,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
@@ -90,9 +89,16 @@ type Dialer struct {
 
 	routes atomic.Pointer[bart.Table[bool]] // or nil if UserDial should not use routes. `true` indicates routes that point into the Tailscale interface
 
+	// resolveMagicDNS, if non-nil, resolves a MagicDNS hostname (short
+	// name or FQDN, without trailing dot, lowercased) to an IP address.
+	// The network parameter ("tcp", "tcp4", "tcp6", "udp", "udp4",
+	// "udp6") constrains the address family of the result. The normal
+	// implementation is [ipnlocal.LocalBackend.resolveMagicDNS],
+	// installed at construction time. It is read without holding mu.
+	resolveMagicDNS atomic.Pointer[func(hostname, network string) (_ netip.Addr, ok bool)]
+
 	mu               syncs.Mutex
 	closed           bool
-	dns              dnsMap
 	tunName          string // tun device name
 	netMon           *netmon.Monitor
 	netMonUnregister func()
@@ -357,14 +363,34 @@ func (d *Dialer) PeerDialControlFunc() func(network, address string, c syscall.R
 	return peerDialControlFunc(d)
 }
 
-// SetNetMap sets the current network map and notably, the DNS names
-// in its DNS configuration.
-func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
-	m := dnsMapFromNetworkMap(nm)
+// SetResolveMagicDNS installs a callback that resolves MagicDNS hostnames
+// to IP addresses for UserDial.
+func (d *Dialer) SetResolveMagicDNS(fn func(hostname, network string) (_ netip.Addr, ok bool)) {
+	if fn == nil {
+		d.resolveMagicDNS.Store(nil)
+		return
+	}
+	d.resolveMagicDNS.Store(&fn)
+}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.dns = m
+// resolveAddr tries to resolve addr (a "host:port" string) via MagicDNS.
+// The network parameter ("tcp", "tcp4", "tcp6", etc.) constrains the
+// address family. It returns errUnresolved if the hostname is not a
+// known MagicDNS name.
+func (d *Dialer) resolveAddr(_ context.Context, network, addr string) (netip.AddrPort, error) {
+	host, port, err := splitHostPort(addr)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return netip.AddrPortFrom(ip, port), nil
+	}
+	if fn := d.resolveMagicDNS.Load(); fn != nil {
+		if ip, ok := (*fn)(canonMapKey(host), network); ok {
+			return netip.AddrPortFrom(ip, port), nil
+		}
+	}
+	return netip.AddrPort{}, errUnresolved
 }
 
 // userDialResolveAll resolves addr as if a user initiating the dial.
@@ -375,14 +401,12 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 // non-empty on a nil-error return.
 func (d *Dialer) userDialResolveAll(ctx context.Context, network, addr string) ([]netip.AddrPort, error) {
 	d.mu.Lock()
-	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
 	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
-	// dns.resolveMemory returns a single address; tailnet names have
-	// one IP each, so there's nothing to race.
-	ipp, err := dns.resolveMemory(ctx, network, addr)
+	// Tailnet names have one IP each, so there's nothing to race.
+	ipp, err := d.resolveAddr(ctx, network, addr)
 	if err != errUnresolved {
 		if err != nil {
 			return nil, err
