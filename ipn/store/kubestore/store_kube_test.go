@@ -847,3 +847,230 @@ func TestNewWithClient(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedACMEAccountKey(t *testing.T) {
+	const (
+		stateSecretName  = "ingress-proxies-0"
+		sharedSecretName = kubetypes.ACMEAccountsSecretName
+		sharedField      = "my-tailnet" + kubetypes.ACMEAccountKeySuffix
+	)
+	existingKey := []byte("-----BEGIN PRIVATE KEY-----\nexisting\n-----END PRIVATE KEY-----")
+	freshKey := []byte("-----BEGIN PRIVATE KEY-----\nfresh\n-----END PRIVATE KEY-----")
+
+	tests := []struct {
+		name             string
+		certMode         string
+		stateSecret      map[string][]byte
+		sharedSecret     map[string][]byte // nil = Secret does not exist
+		envSecretName    string
+		envField         string
+		writeAfterInit   []byte // if non-nil, call WriteState(acmeAccountStateKey, …) after init
+		wantMemoryACME   []byte
+		wantSharedSecret map[string][]byte
+		wantStateSecret  map[string][]byte // optional: when set, asserts state Secret was not touched on the ACME path
+	}{
+		{
+			name:          "adopts_shared_key_when_present",
+			certMode:      "rw",
+			envSecretName: sharedSecretName,
+			envField:      sharedField,
+			stateSecret:   map[string][]byte{},
+			sharedSecret:  map[string][]byte{sharedField: existingKey},
+			wantMemoryACME: existingKey,
+			wantSharedSecret: map[string][]byte{sharedField: existingKey},
+		},
+		{
+			name:          "shared_overrides_per_pod_key",
+			certMode:      "rw",
+			envSecretName: sharedSecretName,
+			envField:      sharedField,
+			stateSecret: map[string][]byte{
+				acmeAccountStateKey: freshKey, // would be stale
+			},
+			sharedSecret:     map[string][]byte{sharedField: existingKey},
+			wantMemoryACME:   existingKey,
+			wantSharedSecret: map[string][]byte{sharedField: existingKey},
+		},
+		{
+			name:          "migrates_per_pod_key_when_shared_field_empty",
+			certMode:      "rw",
+			envSecretName: sharedSecretName,
+			envField:      sharedField,
+			stateSecret: map[string][]byte{
+				acmeAccountStateKey: existingKey,
+			},
+			sharedSecret:     map[string][]byte{}, // exists but no field for this tailnet
+			wantMemoryACME:   existingKey,
+			wantSharedSecret: map[string][]byte{sharedField: existingKey},
+		},
+		{
+			name:             "no_op_when_no_keys_anywhere",
+			certMode:         "rw",
+			envSecretName:    sharedSecretName,
+			envField:         sharedField,
+			stateSecret:      map[string][]byte{},
+			sharedSecret:     map[string][]byte{},
+			wantMemoryACME:   nil,
+			wantSharedSecret: map[string][]byte{},
+		},
+		{
+			name:          "ro_mode_ignores_env_vars",
+			certMode:      "ro",
+			envSecretName: sharedSecretName,
+			envField:      sharedField,
+			stateSecret: map[string][]byte{
+				acmeAccountStateKey: freshKey,
+			},
+			sharedSecret:   map[string][]byte{sharedField: existingKey},
+			wantMemoryACME: freshKey, // per-pod copy stays; shared Secret never consulted
+		},
+		{
+			name:           "write_routes_to_shared_secret",
+			certMode:       "rw",
+			envSecretName:  sharedSecretName,
+			envField:       sharedField,
+			stateSecret:    map[string][]byte{},
+			sharedSecret:   map[string][]byte{},
+			writeAfterInit: freshKey,
+			wantMemoryACME: freshKey,
+			wantSharedSecret: map[string][]byte{sharedField: freshKey},
+			wantStateSecret:  map[string][]byte{}, // state Secret untouched by the ACME write
+		},
+		{
+			name:           "write_in_ro_mode_goes_to_state_secret",
+			certMode:       "ro",
+			envSecretName:  sharedSecretName,
+			envField:       sharedField,
+			stateSecret:    map[string][]byte{},
+			sharedSecret:   map[string][]byte{},
+			writeAfterInit: freshKey,
+			wantMemoryACME: freshKey,
+			wantSharedSecret: map[string][]byte{}, // env vars ignored in ro mode
+			wantStateSecret:  map[string][]byte{acmeAccountStateKey: freshKey},
+		},
+		{
+			name:          "no_env_vars_routes_to_state_secret",
+			certMode:      "rw",
+			envSecretName: "", // shared account disabled
+			envField:      "",
+			stateSecret: map[string][]byte{
+				acmeAccountStateKey: existingKey,
+			},
+			sharedSecret:    nil, // does not exist; should not be touched
+			wantMemoryACME:  existingKey,
+			wantStateSecret: map[string][]byte{acmeAccountStateKey: existingKey},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TS_CERT_SHARE_MODE", tt.certMode)
+			t.Setenv("TS_ACME_ACCOUNT_SECRET_NAME", tt.envSecretName)
+			t.Setenv("TS_ACME_ACCOUNT_FIELD", tt.envField)
+			t.Setenv("POD_NAME", stateSecretName)
+
+			stateData := cloneMap(tt.stateSecret)
+			sharedData := cloneMap(tt.sharedSecret)
+			sharedExists := tt.sharedSecret != nil
+
+			client := &kubeclient.FakeClient{
+				GetSecretImpl: func(ctx context.Context, name string) (*kubeapi.Secret, error) {
+					switch name {
+					case stateSecretName:
+						return &kubeapi.Secret{Data: stateData}, nil
+					case sharedSecretName:
+						if !sharedExists {
+							return nil, &kubeapi.Status{Code: 404}
+						}
+						return &kubeapi.Secret{Data: sharedData}, nil
+					}
+					return nil, &kubeapi.Status{Code: 404}
+				},
+				CheckSecretPermissionsImpl: func(ctx context.Context, name string) (bool, bool, error) {
+					return true, true, nil
+				},
+				JSONPatchResourceImpl: func(ctx context.Context, name, resourceType string, patches []kubeclient.JSONPatch) error {
+					var target *map[string][]byte
+					switch name {
+					case stateSecretName:
+						target = &stateData
+					case sharedSecretName:
+						target = &sharedData
+						sharedExists = true
+					default:
+						t.Errorf("unexpected patch target Secret %q", name)
+						return nil
+					}
+					if *target == nil {
+						*target = map[string][]byte{}
+					}
+					for _, p := range patches {
+						if p.Op == "add" && p.Path == "/data" {
+							*target = p.Value.(map[string][]byte)
+						} else if p.Op == "add" && strings.HasPrefix(p.Path, "/data/") {
+							key := strings.TrimPrefix(p.Path, "/data/")
+							(*target)[key] = p.Value.([]byte)
+						}
+					}
+					return nil
+				},
+				CreateSecretImpl: func(ctx context.Context, s *kubeapi.Secret) error {
+					switch s.Name {
+					case stateSecretName:
+						stateData = s.Data
+					case sharedSecretName:
+						sharedData = s.Data
+						sharedExists = true
+					default:
+						t.Errorf("unexpected create target Secret %q", s.Name)
+					}
+					return nil
+				},
+				ListSecretsImpl: func(ctx context.Context, selector map[string]string) (*kubeapi.SecretList, error) {
+					// Used by ro-mode TLS Secret preload; irrelevant to this test.
+					return &kubeapi.SecretList{}, nil
+				},
+			}
+
+			s, err := newWithClient(t.Logf, client, stateSecretName)
+			if err != nil {
+				t.Fatalf("newWithClient: %v", err)
+			}
+
+			if tt.writeAfterInit != nil {
+				if err := s.WriteState(ipn.StateKey(acmeAccountStateKey), tt.writeAfterInit); err != nil {
+					t.Fatalf("WriteState(ACME key): %v", err)
+				}
+			}
+
+			gotMemACME, err := s.memory.ReadState(ipn.StateKey(acmeAccountStateKey))
+			if err != nil && tt.wantMemoryACME != nil {
+				t.Errorf("memory ReadState(ACME key): %v", err)
+			}
+			if !bytes.Equal(gotMemACME, tt.wantMemoryACME) {
+				t.Errorf("memory ACME key = %q, want %q", gotMemACME, tt.wantMemoryACME)
+			}
+			if tt.wantSharedSecret != nil {
+				if diff := cmp.Diff(sharedData, tt.wantSharedSecret); diff != "" {
+					t.Errorf("shared Secret contents mismatch (-got +want):\n%s", diff)
+				}
+			}
+			if tt.wantStateSecret != nil {
+				if diff := cmp.Diff(stateData, tt.wantStateSecret); diff != "" {
+					t.Errorf("state Secret contents mismatch (-got +want):\n%s", diff)
+				}
+			}
+		})
+	}
+}
+
+func cloneMap(m map[string][]byte) map[string][]byte {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string][]byte, len(m))
+	for k, v := range m {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}

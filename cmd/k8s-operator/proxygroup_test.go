@@ -1283,6 +1283,41 @@ func TestProxyGroupTypes(t *testing.T) {
 		verifyEnvVar(t, sts, "TS_INTERNAL_APP", kubetypes.AppProxyGroupIngress)
 		verifyEnvVar(t, sts, "TS_SERVE_CONFIG", "/etc/proxies/serve-config.json")
 		verifyEnvVar(t, sts, "TS_EXPERIMENTAL_CERT_SHARE", "true")
+		verifyEnvVar(t, sts, "TS_ACME_ACCOUNT_SECRET_NAME", kubetypes.ACMEAccountsSecretName)
+		// pg.Spec.Tailnet is empty here so the default tailnet field is used.
+		verifyEnvVar(t, sts, "TS_ACME_ACCOUNT_FIELD", kubetypes.ACMEAccountDefaultKey+kubetypes.ACMEAccountKeySuffix)
+		// TS_DEBUG_ACME_FORCE_RENEWAL must NOT be set: forcing renewal
+		// disables the ARI "replaces" extension which is what claims LE's
+		// renewal exemption from the per-registered-domain rate limit.
+		for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "TS_DEBUG_ACME_FORCE_RENEWAL" {
+				t.Errorf("TS_DEBUG_ACME_FORCE_RENEWAL must not be set on ingress ProxyGroup pods (forces re-issuance to count against the LE 50/week limit)")
+			}
+		}
+
+		// Verify the shared ACME accounts Secret exists.
+		acmeSecret := &corev1.Secret{}
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: kubetypes.ACMEAccountsSecretName}, acmeSecret); err != nil {
+			t.Errorf("failed to get shared ACME accounts Secret: %v", err)
+		}
+
+		// Verify the per-ProxyGroup Role grants access to the shared
+		// ACME accounts Secret (write replicas need it to read/write the
+		// per-tailnet account key).
+		role := &rbacv1.Role{}
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, role); err != nil {
+			t.Fatalf("failed to get ProxyGroup Role: %v", err)
+		}
+		var sawACMEAccess bool
+		for _, rule := range role.Rules {
+			if slices.Contains(rule.Verbs, "patch") && slices.Contains(rule.ResourceNames, kubetypes.ACMEAccountsSecretName) {
+				sawACMEAccess = true
+				break
+			}
+		}
+		if !sawACMEAccess {
+			t.Errorf("ProxyGroup Role does not grant patch access to %q", kubetypes.ACMEAccountsSecretName)
+		}
 
 		// Verify ConfigMap volume mount
 		cmName := fmt.Sprintf("%s-ingress-config", pg.Name)
