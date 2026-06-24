@@ -7,12 +7,14 @@ package certs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
 	"sync"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/types/logger"
@@ -151,9 +153,9 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 				cm.logf("error refreshing certificate for %s: %v", domain, err)
 			}
 			var nextInterval time.Duration
-			// TODO(irbekrm): distinguish between LE rate limit errors and other
-			// error types like transient network errors, and honour any
-			// Retry-After hint returned by LE on a 429.
+			// TODO(irbekrm): distinguish between transient transport errors
+			// (timeout, connection reset) and genuine CA-side failures so
+			// the former do not advance retryCount.
 			if err == nil {
 				retryCount = 0
 				nextInterval = normalInterval
@@ -164,6 +166,12 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 					idx = len(retrySchedule) - 1
 				}
 				nextInterval = retrySchedule[idx]
+				// CA-supplied Retry-After overrides the local schedule;
+				// retryCount still advances.
+				var rle *local.RateLimitedError
+				if errors.As(err, &rle) && rle.RetryAfter > 0 {
+					nextInterval = rle.RetryAfter
+				}
 				cm.logf("Error refreshing certificate for %s (retry %d): %v. Will retry in %v\n",
 					domain, retryCount, err, nextInterval)
 			}

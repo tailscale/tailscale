@@ -6,12 +6,15 @@
 package localapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/tempfork/acme"
 )
 
 func init() {
@@ -39,6 +42,17 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	}
 	pair, err := h.b.GetCertPEMWithValidity(r.Context(), domain, minValidity)
 	if err != nil {
+		// acme.RateLimit uses a direct type assertion, so unwrap first.
+		var acmeErr *acme.Error
+		if errors.As(err, &acmeErr) {
+			if d, ok := acme.RateLimit(acmeErr); ok {
+				if d > 0 {
+					w.Header().Set("Retry-After", strconv.Itoa(int(d.Round(time.Second).Seconds())))
+				}
+				http.Error(w, fmt.Sprint(err), http.StatusTooManyRequests)
+				return
+			}
+		}
 		// TODO(bradfitz): 500 is a little lazy here. The errors returned from
 		// GetCertPEM (and everywhere) should carry info info to get whether
 		// they're 400 vs 403 vs 500 at minimum. And then we should have helpers

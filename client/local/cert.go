@@ -10,12 +10,42 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"go4.org/mem"
 )
+
+// RateLimitedError is returned from cert-fetching methods when the upstream
+// ACME CA reported a rate limit. RetryAfter is the CA's suggested wait, or
+// zero if it gave no hint.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+	Underlying error
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.Underlying != nil {
+		return e.Underlying.Error()
+	}
+	return "rate limited"
+}
+
+func (e *RateLimitedError) Unwrap() error { return e.Underlying }
+
+// retryAfterFromHeader parses the delta-seconds form of a Retry-After header.
+// The HTTP-date form is permitted by the spec but not emitted by the LocalAPI
+// cert handler.
+func retryAfterFromHeader(h http.Header) time.Duration {
+	n, err := strconv.Atoi(h.Get("Retry-After"))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
+}
 
 // SetDNS adds a DNS TXT record for the given domain name, containing
 // the provided TXT value. The intended use case is answering
@@ -69,6 +99,13 @@ func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM 
 func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minValidity time.Duration) (certPEM, keyPEM []byte, err error) {
 	res, err := lc.send(ctx, "GET", fmt.Sprintf("/localapi/v0/cert/%s?type=pair&min_validity=%s", domain, minValidity), 200, nil)
 	if err != nil {
+		var hse httpStatusError
+		if errors.As(err, &hse) && hse.HTTPStatus == http.StatusTooManyRequests {
+			return nil, nil, &RateLimitedError{
+				RetryAfter: retryAfterFromHeader(hse.Header),
+				Underlying: err,
+			}
+		}
 		return nil, nil, err
 	}
 	// with ?type=pair, the response PEM is first the one private
