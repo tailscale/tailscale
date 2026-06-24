@@ -70,7 +70,7 @@ jobs:
         run: go mod download
       - name: Cache Go modules
         if: steps.check-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
         with:
           path: gomodcache # relative to workspace; see env note at top of file
           key: ${{ steps.hash.outputs.key }}
@@ -345,7 +345,7 @@ jobs:
     needs: gomod-cache
     runs-on: ubuntu-24.04
     container:
-      image: golang:latest
+      image: golang:latest # zizmor: ignore[unpinned-images]
       options: --privileged
     steps:
     - name: checkout

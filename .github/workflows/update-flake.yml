@@ -33,6 +33,9 @@ jobs:
           # Get token for app: https://github.com/apps/tailscale-code-updater
           app-id: ${{ secrets.CODE_UPDATER_APP_ID }}
           private-key: ${{ secrets.CODE_UPDATER_APP_PRIVATE_KEY }}
+          # Limit the token to only pushing a branch and opening a pull request.
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Send pull request
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 #v8.1.0

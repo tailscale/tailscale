@@ -69,7 +69,7 @@ jobs:
           - { image: "fedora:latest", deps: "curl", version: "1.80.0" }
     runs-on: ubuntu-latest
     container:
-      image: ${{ matrix.image }}
+      image: ${{ matrix.image }} # zizmor: ignore[unpinned-images]
       options: --user root
     steps:
     - name: install dependencies (pacman)

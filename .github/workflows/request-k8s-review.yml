@@ -29,6 +29,8 @@ jobs:
           # Get token for app: https://github.com/apps/change-visibility-bot
           app-id: ${{ secrets.VISIBILITY_BOT_APP_ID }}
           private-key: ${{ secrets.VISIBILITY_BOT_APP_PRIVATE_KEY }}
+          # Limit the token to only requesting reviewers on pull requests.
+          permission-pull-requests: write
       - name: Add reviewers
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
