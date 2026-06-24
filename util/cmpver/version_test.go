@@ -92,6 +92,12 @@ func TestCompare(t *testing.T) {
 			want: 1,
 		},
 		{
+			name: "tailscale-three-digits",
+			v1:   "1.100.2",
+			v2:   "1.55.0",
+			want: 1,
+		},
+		{
 			// Though ۱ and ۲ both satisfy unicode.IsNumber, our previous use
 			// of strconv.ParseUint with these characters would have lead us to
 			// panic. We're now only looking at ascii numbers, so test these are
