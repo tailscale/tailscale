@@ -103,6 +103,7 @@ func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 
 // popExpired returns the member of addrAssignments that expired earliest,
 // or an invalid addrs if there are no expired members of addrAssignments.
+// TODO: fix comment nil return
 func (a *addrAssignments) popExpired(now time.Time) *addrs {
 	if a.byExpiresAt.Len() == 0 {
 		return nil
