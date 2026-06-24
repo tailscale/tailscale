@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/util/must"
 )
 
@@ -188,6 +189,7 @@ func TestPacketSideEffects(t *testing.T) {
 			},
 		},
 	}
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/20019")
 	for _, tt := range tests {
 		t.Run(tt.netName, func(t *testing.T) {
 			s, err := tt.setup()
