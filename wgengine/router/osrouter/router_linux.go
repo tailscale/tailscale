@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,10 +28,12 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/version/distro"
@@ -92,6 +95,19 @@ type linuxRouter struct {
 	cgnatMode         linuxfw.CGNATMode
 	magicsockPortV4   uint16
 	magicsockPortV6   uint16
+
+	// rpfIifEnabled is true when the host is using a Tailscale exit node
+	// (i.e., cfg.Routes contains a default route), which is the only
+	// configuration where the catch-all "lookup table 52" rule causes
+	// rp_filter on the physical NIC to misresolve reply traffic. See
+	// [linuxRouter.setRPFIifEnabledLocked].
+	rpfIifEnabled bool
+
+	// rpfIifLinks tracks the set of non-Tailscale interface names for which
+	// we have installed pref-rpfIif rules diverting reverse-path-filter
+	// lookups to the main routing table. Keyed by interface name. Empty
+	// unless rpfIifEnabled is true. See [linuxRouter.onLinkChanged].
+	rpfIifLinks map[string]bool
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor, health *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
@@ -119,6 +135,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipPolicyPrefBase: 5200,
+		rpfIifLinks:      map[string]bool{},
 	}
 	ec := bus.Client("router-linux")
 	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
@@ -130,6 +147,9 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		if err := r.updateMagicsockPort(pu.UDPPort, pu.EndpointNetwork); err != nil {
 			r.logf("updateMagicsockPort(port=%v, network=%s) failed: %v", pu.UDPPort, pu.EndpointNetwork, err)
 		}
+	})
+	eventbus.SubscribeFunc(ec, func(lc netmon.LinkChanged) {
+		r.onLinkChanged(lc)
 	})
 	r.eventClient = ec
 
@@ -324,7 +344,9 @@ type AddIPRules struct{}
 // about the priority number. We could just do this in response to any netlink
 // change. Filtering by known priority ranges cuts back on some logspam.
 func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
-	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
+	loPri := r.ipPolicyPrefBase + rpfIifPriorityOffset
+	hiPri := r.ipPolicyPrefBase + 100
+	if int(priority) < loPri || int(priority) >= hiPri {
 		// Not our rule.
 		return
 	}
@@ -344,6 +366,14 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
+			r.mu.Lock()
+			// Drop the bookkeeping for any rules that might have been
+			// flushed; reseeding will reinstall them and re-populate the map.
+			if r.rpfIifEnabled {
+				r.rpfIifLinks = map[string]bool{}
+				r.seedRPFIifRulesLocked()
+			}
+			r.mu.Unlock()
 		}
 	})
 }
@@ -357,6 +387,11 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
+	// Sweep up any pref-rpfIif rules left behind by a previous tailscaled
+	// process that crashed without cleanup. We don't install rules here;
+	// that happens via Set() once we know whether this host is using an
+	// exit node.
+	r.flushRPFIifRulesLocked()
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -377,6 +412,12 @@ func (r *linuxRouter) Close() error {
 	if err := r.nfr.DelConnmarkSaveRule(); err != nil {
 		r.logf("warning: failed to delete connmark rules: %v", err)
 	}
+
+	// Remove any per-interface rp_filter diversion rules we installed,
+	// regardless of bookkeeping state.
+	r.flushRPFIifRulesLocked()
+	r.rpfIifLinks = nil
+	r.rpfIifEnabled = false
 
 	if err := r.downInterface(); err != nil {
 		return err
@@ -450,6 +491,15 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 	r.routes = newRoutes
 
+	// rp_filter diversion rules are only needed when this host is using an
+	// exit node — that's the only configuration where table 52 contains a
+	// route (0.0.0.0/0 dev tailscale0) that competes with the physical
+	// interface during reverse-path filtering. Outside that case the rules
+	// are unneeded; on a subnet router or exit-node server they actively
+	// break forwarding by short-circuiting the FIB lookup for traffic
+	// destined to a Tailscale CGNAT peer away from table 52.
+	r.setRPFIifEnabledLocked(tsaddr.ContainsExitRoute(views.SliceOf(cfg.Routes)))
+
 	newAddrs, err := cidrDiff("addr", r.addrs, cfg.LocalAddrs, r.addAddress, r.delAddress, r.logf)
 	if err != nil {
 		errs = append(errs, err)
@@ -488,8 +538,8 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	r.updateStatefulFilteringWithDockerWarning(cfg)
 
 	// Connmark rules for rp_filter compatibility.
-	// Always enabled when netfilter is ON to handle all rp_filter=1 scenarios
-	// (normal operation, exit nodes, subnet routers, and clients using exit nodes).
+	// Enabled when netfilter is ON to handle rp_filter=1 scenarios where packets
+	// would be dropped due to device mismatch during reverse path filtering.
 	// Gate on r.netfilterMode (actual state) rather than cfg.NetfilterMode
 	// (desired state) so we don't call into the runner when chain setup failed.
 	netfilterOn := r.netfilterMode == netfilterOn
@@ -504,14 +554,6 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		} else {
 			// Only update state on success to keep it in sync with actual rules
 			r.connmarkEnabled = true
-		}
-		// Enable src_valid_mark so the kernel uses the packet's fwmark
-		// during the rp_filter reverse-path check. Without this, the
-		// connmark restore in mangle/PREROUTING is ineffective — rp_filter
-		// does its routing lookup with fwmark=0, ignoring the restored
-		// bypass mark, and drops reply packets as martians.
-		if err := writeSysctl("net.ipv4.conf.all.src_valid_mark", "1"); err != nil {
-			r.logf("warning: failed to enable src_valid_mark: %v", err)
 		}
 	default:
 		r.logf("disabling connmark-based rp_filter workaround")
@@ -1158,7 +1200,10 @@ func (r *linuxRouter) enableIPForwarding() {
 }
 
 func writeSysctl(key, val string) error {
-	fn := "/proc/sys/" + strings.Replace(key, ".", "/", -1)
+	// Convert sysctl key (e.g. "net.ipv4.ip_forward") to path components
+	components := strings.Split(key, ".")
+	// Build path using filepath.Join for proper path construction
+	fn := filepath.Join(append([]string{"/proc/sys"}, components...)...)
 	if err := os.WriteFile(fn, []byte(val), 0644); err != nil {
 		return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)
 	}
@@ -1553,6 +1598,213 @@ func (r *linuxRouter) delIPRulesWithIPCommand() error {
 	}
 
 	return rg.ErrAcc
+}
+
+// rpfIifPriorityOffset is the offset, relative to r.ipPolicyPrefBase, of the
+// per-interface rules that divert reverse-path-filter lookups to the main
+// routing table. Sits below pref 10 (the lowest baseIPRules entry) so the
+// catch-all → tailscale table never gets consulted for replies arriving on a
+// physical NIC. See [linuxRouter.installRPFIifRule] for context.
+const rpfIifPriorityOffset = -10
+
+// rpfIifEligible reports whether the named interface is one we should install
+// a per-iif rp_filter diversion rule for. The loopback interface is excluded:
+// the kernel uses LOOPBACK_IFINDEX as the iif of locally-originated packets,
+// so an "iif lo lookup main" rule would silently divert tailscaled's own
+// outbound traffic away from table 52 — exactly the opposite of what the
+// catch-all at pref 5270 is meant to do.
+func (r *linuxRouter) rpfIifEligible(name string) bool {
+	if name == "" || name == "lo" {
+		return false
+	}
+	if netmon.IsTailscaleInterfaceName(name) {
+		return false
+	}
+	return true
+}
+
+// onLinkChanged is the callback invoked when netmon publishes a link change.
+// It installs (or removes) a per-interface rule that diverts reverse-path
+// filter lookups for that interface to the main routing table, so the
+// tailscale table's catch-all default route can't accidentally cause
+// martian-source drops on replies arriving via the physical NIC.
+func (r *linuxRouter) onLinkChanged(lc netmon.LinkChanged) {
+	if !r.rpfIifEligible(lc.Name) {
+		return
+	}
+	if !r.ipRuleAvailable || r.useIPCommand() {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed.Load() || !r.rpfIifEnabled {
+		return
+	}
+
+	switch {
+	case lc.Deleted, !lc.Up:
+		if !r.rpfIifLinks[lc.Name] {
+			return
+		}
+		if err := r.delRPFIifRule(lc.Name); err != nil {
+			r.logf("warning: rp_filter iif rule cleanup for %q failed: %v", lc.Name, err)
+		}
+		delete(r.rpfIifLinks, lc.Name)
+	default:
+		if r.rpfIifLinks[lc.Name] {
+			return
+		}
+		if err := r.addRPFIifRule(lc.Name); err != nil {
+			r.logf("warning: rp_filter iif rule install for %q failed: %v", lc.Name, err)
+			return
+		}
+		r.rpfIifLinks[lc.Name] = true
+	}
+}
+
+// setRPFIifEnabledLocked turns the per-interface rp_filter diversion rules on
+// or off based on whether this host is using a Tailscale exit node. Idempotent.
+//
+// linuxRouter.mu must be held.
+func (r *linuxRouter) setRPFIifEnabledLocked(enabled bool) {
+	if enabled == r.rpfIifEnabled {
+		return
+	}
+	r.rpfIifEnabled = enabled
+	if !r.ipRuleAvailable || r.useIPCommand() {
+		return
+	}
+	if enabled {
+		r.seedRPFIifRulesLocked()
+		return
+	}
+	r.flushRPFIifRulesLocked()
+	r.rpfIifLinks = map[string]bool{}
+}
+
+// seedRPFIifRulesLocked installs an rp_filter diversion rule for every
+// non-Tailscale link the netmon currently knows about. Called when this host
+// starts using an exit node so we don't have to wait for an RTM_NEWLINK to
+// install rules for interfaces that already exist.
+//
+// linuxRouter.mu must be held.
+func (r *linuxRouter) seedRPFIifRulesLocked() {
+	if !r.ipRuleAvailable || r.useIPCommand() || r.netMon == nil {
+		return
+	}
+	// Clear any stale rules left over from a previous tailscaled run that
+	// crashed without cleanup, so we don't pile up duplicates.
+	r.flushRPFIifRulesLocked()
+	st := r.netMon.InterfaceState()
+	if st == nil {
+		return
+	}
+	for name, ifc := range st.Interface {
+		if !r.rpfIifEligible(name) {
+			continue
+		}
+		if !ifc.IsUp() {
+			continue
+		}
+		if r.rpfIifLinks[name] {
+			continue
+		}
+		if err := r.addRPFIifRule(name); err != nil {
+			r.logf("warning: rp_filter iif rule install for %q failed: %v", name, err)
+			continue
+		}
+		r.rpfIifLinks[name] = true
+	}
+}
+
+// flushRPFIifRulesLocked deletes any kernel rules at our rpfIif priority
+// regardless of which interface they reference. This sweeps up rules that may
+// have been left behind by a previous tailscaled process.
+//
+// linuxRouter.mu must be held.
+func (r *linuxRouter) flushRPFIifRulesLocked() {
+	pri := r.ipPolicyPrefBase + rpfIifPriorityOffset
+	for _, family := range r.rpfIifAddrFamilies() {
+		rules, err := netlink.RuleList(family.netlinkInt())
+		if err != nil {
+			continue
+		}
+		for _, ru := range rules {
+			if ru.Priority != pri || ru.IifName == "" {
+				continue
+			}
+			ru.Family = family.netlinkInt()
+			if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, errENOENT) {
+				r.logf("warning: failed to delete stale rp_filter iif rule for %q: %v", ru.IifName, err)
+			}
+		}
+	}
+}
+
+// rpfIifAddrFamilies returns the address families to install per-iif
+// rp_filter diversion rules for. Unlike [linuxRouter.addrFamilies], it does
+// not consult r.nfr (which is nil until Set() runs and netfilter is set up);
+// rpfIif rules are managed independently of netfilter and may be installed
+// before the first Set().
+func (r *linuxRouter) rpfIifAddrFamilies() []addrFamily {
+	if r.v6Available {
+		return []addrFamily{v4, v6}
+	}
+	return []addrFamily{v4}
+}
+
+// addRPFIifRule installs the per-interface main-table diversion rule for the
+// given interface name, in every address family supported by the host.
+func (r *linuxRouter) addRPFIifRule(name string) error {
+	pri := r.ipPolicyPrefBase + rpfIifPriorityOffset
+	var errAcc error
+	for _, family := range r.rpfIifAddrFamilies() {
+		ru := &netlink.Rule{
+			Priority:          pri,
+			Family:            family.netlinkInt(),
+			IifName:           name,
+			Table:             mainRouteTable.Num,
+			Mark:              -1,
+			Mask:              -1,
+			Goto:              -1,
+			SuppressIfgroup:   -1,
+			SuppressPrefixlen: -1,
+			Flow:              -1,
+		}
+		if err := netlink.RuleAdd(ru); err != nil && !errors.Is(err, errEEXIST) {
+			if errAcc == nil {
+				errAcc = err
+			}
+		}
+	}
+	return errAcc
+}
+
+// delRPFIifRule removes the per-interface rule installed by addRPFIifRule.
+func (r *linuxRouter) delRPFIifRule(name string) error {
+	pri := r.ipPolicyPrefBase + rpfIifPriorityOffset
+	var errAcc error
+	for _, family := range r.rpfIifAddrFamilies() {
+		ru := &netlink.Rule{
+			Priority:          pri,
+			Family:            family.netlinkInt(),
+			IifName:           name,
+			Table:             mainRouteTable.Num,
+			Mark:              -1,
+			Mask:              -1,
+			Goto:              -1,
+			SuppressIfgroup:   -1,
+			SuppressPrefixlen: -1,
+			Flow:              -1,
+		}
+		if err := netlink.RuleDel(ru); err != nil && !errors.Is(err, errENOENT) {
+			if errAcc == nil {
+				errAcc = err
+			}
+		}
+	}
+	return errAcc
 }
 
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
