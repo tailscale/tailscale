@@ -2046,7 +2046,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = st.NetMap.HasCap(tailcfg.CapabilityTailnetLock)
-		b.setWebClientAtomicBoolLocked(st.NetMap)
+		b.setWebClientAtomicBoolLocked(st.NetMap.AllCaps)
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
@@ -7042,13 +7042,14 @@ func (b *LocalBackend) ShouldExposeRemoteWebClient() bool {
 }
 
 // setWebClientAtomicBoolLocked sets webClientAtomicBool based on whether
-// tailcfg.NodeAttrDisableWebClient has been set in the netmap.NetworkMap.
+// tailcfg.NodeAttrDisableWebClient is present in caps. caps may be nil
+// if the caller has no netmap.
 //
 // b.mu must be held.
-func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
+func (b *LocalBackend) setWebClientAtomicBoolLocked(caps set.Set[tailcfg.NodeCapability]) {
 	syncs.RequiresMutex(&b.mu)
 
-	shouldRun := !nm.HasCap(tailcfg.NodeAttrDisableWebClient)
+	shouldRun := !caps.Contains(tailcfg.NodeAttrDisableWebClient)
 	wasRunning := b.webClientAtomicBool.Swap(shouldRun)
 	if wasRunning && !shouldRun {
 		b.goTracker.Go(b.webClientShutdown) // stop web client
@@ -7364,7 +7365,11 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 
 	if buildfeatures.HasDebug {
-		b.setDebugLogsByCapabilityLocked(nm)
+		var caps set.Set[tailcfg.NodeCapability]
+		if nm != nil {
+			caps = nm.AllCaps
+		}
+		b.setDebugLogsByCapabilityLocked(caps)
 	}
 
 	// See the netns package for documentation on what these capability do.
@@ -7500,11 +7505,11 @@ func roundTraffic(bytes int64) float64 {
 }
 
 // setDebugLogsByCapabilityLocked sets debug logging based on the self node's
-// capabilities in the provided NetMap.
-func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
+// capabilities. caps may be nil if the caller has no netmap.
+func (b *LocalBackend) setDebugLogsByCapabilityLocked(caps set.Set[tailcfg.NodeCapability]) {
 	// These are sufficiently cheap (atomic bools) that we don't need to
 	// store state and compare.
-	if nm.HasCap(tailcfg.CapabilityDebugTSDNSResolution) {
+	if caps.Contains(tailcfg.CapabilityDebugTSDNSResolution) {
 		dnscache.SetDebugLoggingEnabled(true)
 	} else {
 		dnscache.SetDebugLoggingEnabled(false)
