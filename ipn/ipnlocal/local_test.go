@@ -2904,6 +2904,7 @@ func TestWhoIs(t *testing.T) {
 		{"round1MyselfWithPort", "100.101.102.103:123", 1, "Myself", nil},
 		{"round1Peer2NoPort", "100.200.200.200:0", 2, "Peer2", []string{"group:foo"}},
 		{"round1Peer2WithPort", "100.200.200.200:123", 2, "Peer2", []string{"group:foo"}},
+		{"round1Peer2Mapped4in6", "[::ffff:100.200.200.200]:123", 2, "Peer2", []string{"group:foo"}},
 		{"round1UnknownPeer", "100.4.0.4:404", 0, "", nil},
 	}
 	expectWhois(t, testsRound1, b)
