@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1302,21 +1303,42 @@ func (e *Env) AddRoute(n *Node, prefix, via string) {
 // SSHExec runs a command on a cloud VM via its debug SSH NIC.
 // Only works for cloud VMs that have the debug NIC and SSH key configured.
 // Returns stdout and any error.
+//
+// SSH transport-level errors (exit code 255: connection refused, auth
+// failure, etc.) are retried for up to ~30s to absorb the race window
+// between Env.Start() returning (when tta reports the tailscale backend
+// as Running) and cloud-init finishing the user/SSH-key setup. The remote
+// command's own non-zero exit codes are returned to the caller without
+// retry.
 func (e *Env) SSHExec(n *Node, cmd string) (string, error) {
 	if n.sshPort == 0 {
 		return "", fmt.Errorf("node %s has no SSH debug port", n.name)
 	}
-	sshCmd := exec.Command("ssh",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "ConnectTimeout=5",
-		"-o", "LogLevel=ERROR",
-		"-i", "/tmp/vmtest_key",
-		"-p", fmt.Sprintf("%d", n.sshPort),
-		"root@127.0.0.1",
-		cmd)
-	out, err := sshCmd.CombinedOutput()
-	return string(out), err
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		sshCmd := exec.Command("ssh",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "LogLevel=ERROR",
+			"-i", "/tmp/vmtest_key",
+			"-p", fmt.Sprintf("%d", n.sshPort),
+			"root@127.0.0.1",
+			cmd)
+		out, err := sshCmd.CombinedOutput()
+		if err == nil {
+			return string(out), nil
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 255 {
+			return string(out), err
+		}
+		if time.Now().After(deadline) {
+			return string(out), err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // DumpStatus logs the tailscale status of a node, including its peers and their
