@@ -137,6 +137,19 @@ type Config struct {
 	NetfilterMode       preftype.NetfilterMode // how much to manage netfilter rules
 	NetfilterKind       string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
 	RemoveCGNATDropRule bool                   // whether to remove the firewall rule to drop non-Tailscale inbound traffic from CGNAT IPs
+
+	// LinuxPacketMarks contains the packet mark values to use for Linux
+	// firewall rules and routing. If nil, defaults from tsconst are used.
+	// Only used on Linux.
+	LinuxPacketMarks *LinuxPacketMarks
+}
+
+// LinuxPacketMarks holds the packet mark configuration for Linux.
+// This is a copy of ipn.LinuxPacketMarks to avoid circular imports.
+type LinuxPacketMarks struct {
+	FwmarkMask      uint32
+	SubnetRouteMark uint32
+	BypassMark      uint32
 }
 
 func (a *Config) Equal(b *Config) bool {

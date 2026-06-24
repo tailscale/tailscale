@@ -1007,6 +1007,9 @@ func (n *fakeIPTablesRunner) DelExternalCGNATRules(mode linuxfw.CGNATMode, tunna
 func (n *fakeIPTablesRunner) HasIPV6() bool       { return true }
 func (n *fakeIPTablesRunner) HasIPV6NAT() bool    { return true }
 func (n *fakeIPTablesRunner) HasIPV6Filter() bool { return true }
+func (n *fakeIPTablesRunner) SetPacketMarks(marks linuxfw.PacketMarks) {
+	// No-op for testing
+}
 
 // fakeOS implements commandRunner and provides v4 and v6
 // netfilterRunners, but captures changes without touching the OS.
@@ -1506,8 +1509,19 @@ func TestIPRulesForUBNT(t *testing.T) {
 	}
 	defer func() { getDistroFunc = distro.Get }() // Restore original after the test
 
-	expected := ubntIPRules
-	actual := ipRules()
+	r := &linuxRouter{
+		marks: linuxfw.DefaultPacketMarks(),
+	}
+
+	expected := []netlink.Rule{
+		{
+			Priority: 70,
+			Invert:   true,
+			Mark:     int(r.marks.BypassMark),
+			Table:    tailscaleRouteTable.Num,
+		},
+	}
+	actual := r.ipRules()
 
 	if len(expected) != len(actual) {
 		t.Fatalf("Expected %d rules, got %d", len(expected), len(actual))
@@ -1517,6 +1531,58 @@ func TestIPRulesForUBNT(t *testing.T) {
 		if rule != actual[i] {
 			t.Errorf("Rule mismatch at index %d: expected %+v, got %+v", i, rule, actual[i])
 		}
+	}
+}
+
+func TestIPRulesWithCustomMarks(t *testing.T) {
+	// Defaults shifted up by one byte: a realistic non-default choice for
+	// users avoiding conflicts with other software that uses the third
+	// byte (e.g. Calico). Passes preftype.LinuxPacketMarks.Validate.
+	const customBypass uint32 = 0x80000000
+	custom := linuxfw.PacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      customBypass,
+	}
+
+	tests := []struct {
+		name   string
+		distro distro.Distro
+	}{
+		{"base", distro.Debian},
+		{"ubnt", distro.UBNT},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getDistroFunc = func() distro.Distro { return tt.distro }
+			defer func() { getDistroFunc = distro.Get }()
+
+			r := &linuxRouter{marks: custom}
+			rules := r.ipRules()
+			if len(rules) == 0 {
+				t.Fatalf("no rules returned")
+			}
+			var marked int
+			for _, ru := range rules {
+				if ru.Mark == 0 {
+					continue
+				}
+				marked++
+				// Compare via uint32 because customBypass (0x80000000) is a
+				// typed const that overflows int on 32-bit platforms; the
+				// raw netlink rule stores the mark in an int (sign-extended
+				// or wrapped depending on platform).
+				if got, want := uint32(ru.Mark), customBypass; got != want {
+					t.Errorf("rule %+v: Mark=0x%x, want custom bypass mark 0x%x", ru, got, want)
+				}
+				if uint32(ru.Mark) == linuxfw.DefaultPacketMarks().BypassMark {
+					t.Errorf("rule %+v leaks the default BypassMark", ru)
+				}
+			}
+			if marked == 0 {
+				t.Fatalf("no rules referenced the bypass mark; rules=%+v", rules)
+			}
+		})
 	}
 }
 
@@ -1607,5 +1673,110 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 	if nfr.addExternalCGNATCalls != 0 {
 		t.Errorf("AddExternalCGNATRules called %d times; want 0 when chain setup failed",
 			nfr.addExternalCGNATCalls)
+	}
+}
+
+// TestUpDoesNotInstallIPRules verifies that [linuxRouter.Up] no longer
+// installs IP rules. Installation is deferred to [linuxRouter.Set] so the
+// rules can be built with marks from prefs rather than the defaults.
+func TestUpDoesNotInstallIPRules(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	}
+	lr := r.(*linuxRouter)
+	lr.nfr = fake.nfr
+	defer lr.Close()
+
+	if err := lr.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if lr.ipRulesInstalled {
+		t.Error("ipRulesInstalled = true after Up; want false")
+	}
+	if len(fake.rules) != 0 {
+		t.Errorf("Up installed %d IP rule(s); want 0: %v", len(fake.rules), fake.rules)
+	}
+}
+
+// TestSetInstallsIPRulesWithCustomMarks verifies that the first
+// [linuxRouter.Set] call installs IP rules referencing the marks supplied
+// in the config (rather than the runner's default marks).
+func TestSetInstallsIPRulesWithCustomMarks(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	r, err := newUserspaceRouterAdvanced(logger.Discard, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("newUserspaceRouterAdvanced: %v", err)
+	}
+	lr := r.(*linuxRouter)
+	lr.nfr = fake.nfr
+	// Force fwmask support so the fake's recorded rules are in the
+	// "fwmark X/Y" form regardless of whether the host 'ip' binary
+	// (or the CI Docker image's lack thereof) actually supports masks.
+	lr.fwmaskWorksLazy.Set(true)
+	defer lr.Close()
+
+	if err := lr.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Custom marks shifted up by one byte (Calico-conflict workaround).
+	custom := linuxfw.PacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	cfg := &Config{
+		LocalAddrs: mustCIDRs("100.101.102.103/10"),
+		LinuxPacketMarks: &router.LinuxPacketMarks{
+			FwmarkMask:      custom.FwmarkMask,
+			SubnetRouteMark: custom.SubnetRouteMark,
+			BypassMark:      custom.BypassMark,
+		},
+	}
+	if err := lr.Set(cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if !lr.ipRulesInstalled {
+		t.Fatal("ipRulesInstalled = false after Set; want true")
+	}
+
+	// Use the full "fwmark 0x.../0x..." form to avoid substring false
+	// positives between e.g. 0x80000 (default) and 0x80000000 (custom).
+	defaults := linuxfw.DefaultPacketMarks()
+	wantCustom := fmt.Sprintf("fwmark 0x%x/0x%x", custom.BypassMark, custom.FwmarkMask)
+	wantDefault := fmt.Sprintf("fwmark 0x%x/0x%x", defaults.BypassMark, defaults.FwmarkMask)
+	var sawCustom bool
+	for _, rule := range fake.rules {
+		if strings.Contains(rule, wantDefault) {
+			t.Errorf("IP rule references the default fwmark: %q", rule)
+		}
+		if strings.Contains(rule, wantCustom) {
+			sawCustom = true
+		}
+	}
+	if !sawCustom {
+		t.Errorf("custom fwmark %q not found in IP rules: %v", wantCustom, fake.rules)
 	}
 }

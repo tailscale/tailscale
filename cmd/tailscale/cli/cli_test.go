@@ -1054,6 +1054,11 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "AutoExitNode":
 			// Handled by tailscale {set,up} --exit-node=auto:any.
 			continue
+		case "LinuxPacketMarks":
+			// Linux-only and intentionally not configurable via CLI flags;
+			// the only supported way to set custom marks is the tailscaled
+			// config file.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

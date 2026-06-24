@@ -62,6 +62,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
+	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
@@ -8780,6 +8781,199 @@ func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
 			_, err := b.EditPrefs(mp)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("EditPrefs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestEditPrefs_RejectsLinuxPacketMarks verifies that LinuxPacketMarks
+// changes via EditPrefs (the path used by `tailscale set` and other
+// LocalAPI consumers) are rejected. The only supported way to configure
+// custom marks is the tailscaled config file, which bypasses this check
+// because [initPrefsFromConfig] / [setConfigLocked] go through
+// [setPrefsLocked] directly.
+func TestEditPrefs_RejectsLinuxPacketMarks(t *testing.T) {
+	valid := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	differs := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0xff00,
+		SubnetRouteMark: 0x4000,
+		BypassMark:      0x8000,
+	}
+	invalid := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0, // fails Validate
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+
+	tests := []struct {
+		name      string
+		curMarks  *preftype.LinuxPacketMarks
+		newMarks  *preftype.LinuxPacketMarks
+		wantErrIs string // empty = expect success; otherwise substring of expected error
+	}{
+		{
+			name:      "set_from_nil_rejected",
+			newMarks:  valid,
+			wantErrIs: "config file",
+		},
+		{
+			name:      "change_rejected",
+			curMarks:  valid,
+			newMarks:  differs,
+			wantErrIs: "config file",
+		},
+		{
+			name:      "clear_rejected",
+			curMarks:  valid,
+			wantErrIs: "config file",
+		},
+		{
+			name:     "same_value_allowed",
+			curMarks: valid,
+			newMarks: valid,
+		},
+		{
+			name: "both_nil_allowed",
+		},
+		{
+			name:      "invalid_rejected",
+			newMarks:  invalid,
+			wantErrIs: "fwmark mask must be non-zero",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			if tt.curMarks != nil {
+				b.mu.Lock()
+				p := b.pm.CurrentPrefs().AsStruct()
+				p.LinuxPacketMarks = tt.curMarks
+				if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+					b.mu.Unlock()
+					t.Fatalf("SetPrefs: %v", err)
+				}
+				b.mu.Unlock()
+			}
+			mp := &ipn.MaskedPrefs{
+				Prefs:               ipn.Prefs{LinuxPacketMarks: tt.newMarks},
+				LinuxPacketMarksSet: true,
+			}
+			_, err := b.EditPrefs(mp)
+			if tt.wantErrIs == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("got nil error, want error containing %q", tt.wantErrIs)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrIs) {
+				t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrIs)
+			}
+		})
+	}
+}
+
+// TestConfigFile_AllowsLinuxPacketMarks verifies that the config-file path
+// (tested via [initPrefsFromConfig], used at startup) is NOT subject to
+// the EditPrefs rejection — the config file is the sole supported way to
+// set custom packet marks.
+func TestConfigFile_AllowsLinuxPacketMarks(t *testing.T) {
+	b := newTestLocalBackend(t)
+	want := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	conf := &conffile.Config{
+		Parsed: ipn.ConfigVAlpha{
+			Version:          "alpha0",
+			LinuxPacketMarks: want,
+		},
+	}
+	b.mu.Lock()
+	err := b.initPrefsFromConfig(conf)
+	b.mu.Unlock()
+	if err != nil {
+		t.Fatalf("initPrefsFromConfig: %v", err)
+	}
+	got, ok := b.Prefs().LinuxPacketMarks().GetOk()
+	if !ok {
+		t.Fatalf("LinuxPacketMarks not set after config-file load")
+	}
+	if !got.Equals(want) {
+		t.Errorf("LinuxPacketMarks = %+v; want %+v", got, want)
+	}
+}
+
+// TestReloadConfig_RejectsLinuxPacketMarksChange verifies that
+// [LocalBackend.setConfigLocked] (the config-reload path) refuses to
+// change LinuxPacketMarks at runtime, matching the EditPrefs rejection.
+// A reload that doesn't change the marks must still succeed, and the
+// stored prefs must be untouched when the reload errors out.
+func TestReloadConfig_RejectsLinuxPacketMarksChange(t *testing.T) {
+	initial := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0xff000000,
+		SubnetRouteMark: 0x40000000,
+		BypassMark:      0x80000000,
+	}
+	changed := &preftype.LinuxPacketMarks{
+		FwmarkMask:      0xff00,
+		SubnetRouteMark: 0x4000,
+		BypassMark:      0x8000,
+	}
+
+	tests := []struct {
+		name    string
+		updated *preftype.LinuxPacketMarks
+		wantErr bool
+	}{
+		{name: "same_marks_allowed", updated: initial},
+		{name: "different_marks_rejected", updated: changed, wantErr: true},
+		{name: "omitted_in_reload_no_op", updated: nil}, // ToPrefs leaves prefs unchanged
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			initialConf := &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:          "alpha0",
+					LinuxPacketMarks: initial,
+				},
+			}
+			b.mu.Lock()
+			if err := b.initPrefsFromConfig(initialConf); err != nil {
+				b.mu.Unlock()
+				t.Fatalf("initPrefsFromConfig: %v", err)
+			}
+			b.mu.Unlock()
+
+			updatedConf := &conffile.Config{
+				Parsed: ipn.ConfigVAlpha{
+					Version:          "alpha0",
+					LinuxPacketMarks: tt.updated,
+				},
+			}
+			b.mu.Lock()
+			err := b.setConfigLocked(updatedConf)
+			b.mu.Unlock()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("setConfigLocked error = %v, wantErr %v", err, tt.wantErr)
+			}
+			// Prefs should still reflect the initial marks in every case:
+			// either reload succeeded and they matched, or it failed and was
+			// rolled back, or the reload omitted the field entirely.
+			got, ok := b.Prefs().LinuxPacketMarks().GetOk()
+			if !ok {
+				t.Fatalf("LinuxPacketMarks unexpectedly cleared after reload")
+			}
+			if !got.Equals(initial) {
+				t.Errorf("LinuxPacketMarks = %+v; want %+v (unchanged)", got, initial)
 			}
 		})
 	}
