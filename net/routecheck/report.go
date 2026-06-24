@@ -26,7 +26,7 @@ var (
 )
 
 // Report returns the latest reachability report.
-// Returns nil if a report isn’t available, which happens during initialization.
+// It returns nil if a report isn’t available, which happens during initialization.
 func (c *Client) Report() *Report {
 	metricReport.Add(1)
 	nm := c.nm.NetMapNoPeers()
