@@ -1730,6 +1730,11 @@ var debugWhoIs = envknob.RegisterBool("TS_DEBUG_WHOIS")
 // If ok == true, n and u are valid.
 func (b *LocalBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
 	var zero tailcfg.NodeView
+
+	// Normalize IPv4-mapped IPv6 addresses (e.g. "::ffff:100.87.98.86") to
+	// their canonical IPv4 form so the lookup matches the node's IPv4 address.
+	ipp = netip.AddrPortFrom(ipp.Addr().Unmap(), ipp.Port())
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
