@@ -1,3 +1,5 @@
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
 # flake.nix describes a Nix source repository that provides
 # development builds of Tailscale and the fork of the Go compiler
 # toolchain that Tailscale maintains. It also provides a development
@@ -80,7 +82,12 @@
             })
           ];
         }));
+
+    # tailscaleRev is the git commit at which this flake was imported,
+    # or the empty string when building from a local checkout of the
+    # tailscale repo.
     tailscaleRev = self.rev or "";
+    lib = nixpkgs.lib;
   in {
     # tailscale takes a nixpkgs package set, and builds Tailscale from
     # the same commit as this flake. IOW, it provides "tailscale built
@@ -103,6 +110,8 @@
       default = pkgs.buildGo126Module {
         name = "tailscale";
         pname = "tailscale";
+        meta.mainProgram = "tailscaled";
+
         src = ./.;
         vendorHash = flakeHashes.vendor.sri;
         nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
@@ -111,7 +120,6 @@
         subPackages = [
           "cmd/tailscale"
           "cmd/tailscaled"
-          "cmd/tsidp"
         ];
         doCheck = false;
 
@@ -143,6 +151,24 @@
       };
       tailscale = default;
     });
+
+    overlays.default = final: prev: {
+      tailscale = self.packages.${prev.stdenv.hostPlatform.system}.default;
+    };
+
+    nixosModules = {
+      tailscale = import ./nixos/tailscaled-module.nix self;
+      # Module that disables upstream and uses this one
+      override = {
+        config,
+        pkgs,
+        ...
+      }: {
+        imports = [(import ./nixos/tailscaled-module.nix self)];
+        disabledModules = ["services/networking/tailscale.nix"];
+      };
+      default = self.nixosModules.tailscale;
+    };
 
     devShells = eachSystem (pkgs: {
       default = pkgs.mkShell {
