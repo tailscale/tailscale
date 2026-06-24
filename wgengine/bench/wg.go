@@ -19,19 +19,11 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
-	for _, ep := range eps {
-		ret = append(ret, ep.Addr)
-	}
-	return
-}
 
 func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.Prefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
@@ -103,17 +95,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e1 status: %v", *st)
 
-		n := &tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
-			Name:       "n1",
-			Addresses:  []netip.Prefix{a1},
-			AllowedIPs: []netip.Prefix{a1},
-			Endpoints:  epFromTyped(st.LocalAddrs),
-		}
-		e2.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey: k2.Public(),
-			Peers:   []tailcfg.NodeView{n.View()},
-		})
+		e2.SetSelfNode(tailcfg.NodeView{})
 
 		p := wgcfg.Peer{
 			PublicKey:  c1.PrivateKey.Public(),
@@ -134,17 +116,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e2 status: %v", *st)
 
-		n := &tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
-			Name:       "n2",
-			Addresses:  []netip.Prefix{a2},
-			AllowedIPs: []netip.Prefix{a2},
-			Endpoints:  epFromTyped(st.LocalAddrs),
-		}
-		e1.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey: k1.Public(),
-			Peers:   []tailcfg.NodeView{n.View()},
-		})
+		e1.SetSelfNode(tailcfg.NodeView{})
 
 		p := wgcfg.Peer{
 			PublicKey:  c2.PrivateKey.Public(),

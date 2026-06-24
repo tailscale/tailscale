@@ -116,7 +116,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			},
 		}
 
-		e.SetNetworkMap(nm)
+		e.SetSelfNode(nm.SelfNode)
 		err = e.Reconfig(cfg, routerCfg, &dns.Config{})
 		if err != nil {
 			t.Fatal(err)
@@ -168,7 +168,7 @@ func TestUserspaceEngineTSMPLearned(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.SetNetworkMap(nm)
+		e.SetSelfNode(nm.SelfNode)
 
 		newDisco := key.NewDisco()
 		cfg := &wgcfg.Config{
@@ -244,7 +244,7 @@ func TestUserspaceEngineTSMPLearnedMismatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.SetNetworkMap(nm)
+		e.SetSelfNode(nm.SelfNode)
 
 		newDisco := key.NewDisco()
 		cfg := &wgcfg.Config{
@@ -485,7 +485,7 @@ func TestTSMPKeyAdvertisement(t *testing.T) {
 		},
 	}
 
-	ue.SetNetworkMap(nm)
+	ue.SetSelfNode(nm.SelfNode)
 	err = ue.Reconfig(cfg, routerCfg, &dns.Config{})
 	if err != nil {
 		t.Fatal(err)

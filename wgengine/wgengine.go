@@ -175,12 +175,9 @@ type Engine interface {
 	// You don't have to call this.
 	Done() <-chan struct{}
 
-	// SetNetworkMap informs the engine of the latest network map
-	// from the server. The network map's DERPMap field should be
-	// ignored as as it might be disabled; get it from SetDERPMap
-	// instead.
-	// The network map should only be read from.
-	SetNetworkMap(*netmap.NetworkMap)
+	// SetSelfNode informs the engine of the current self node.
+	// The zero (invalid) NodeView indicates no self node.
+	SetSelfNode(tailcfg.NodeView)
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.

@@ -45,7 +45,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
@@ -142,9 +141,9 @@ type userspaceEngine struct {
 	lastAppliedDisableTUNUDPGRO bool
 	lastAppliedDisableTUNTCPGRO bool
 
-	mu             sync.Mutex         // guards following; see lock order comment below
-	netMap         *netmap.NetworkMap // or nil
-	closing        bool               // Close was called (even if we're still closing)
+	mu             sync.Mutex       // guards following; see lock order comment below
+	selfNode       tailcfg.NodeView // or invalid if none
+	closing        bool             // Close was called (even if we're still closing)
 	statusCallback StatusCallback
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
@@ -837,7 +836,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	e.mu.Lock()
-	nm := e.netMap
+	self := e.selfNode
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
@@ -848,10 +847,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	peerMTUEnable := e.magicConn.ShouldPMTUD()
 
 	isSubnetRouter := false
-	if buildfeatures.HasBird && e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
-		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs())
+	if buildfeatures.HasBird && e.birdClient != nil && self.Valid() {
+		isSubnetRouter = hasOverlap(self.PrimaryRoutes(), self.Hostinfo().RoutableIPs())
 		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
-			nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs(),
+			self.PrimaryRoutes(), self.Hostinfo().RoutableIPs(),
 			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
 	}
 	isSubnetRouterChanged := buildfeatures.HasAdvertiseRoutes && isSubnetRouter != e.lastIsSubnetRouter
@@ -1331,9 +1330,9 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
+func (e *userspaceEngine) SetSelfNode(self tailcfg.NodeView) {
 	e.mu.Lock()
-	e.netMap = nm
+	e.selfNode = self
 	tunGROKnobsChanged := false
 	var curUDP, curTCP bool
 	if buildfeatures.HasGRO && runtime.GOOS == "linux" && e.controlKnobs != nil {
@@ -1409,19 +1408,19 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	var zero netip.Addr
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.netMap == nil {
-		return zero, errors.New("no netmap")
+	if !e.selfNode.Valid() {
+		return zero, errors.New("no self node")
 	}
-	addrs := e.netMap.GetAddresses()
+	addrs := e.selfNode.Addresses()
 	if addrs.Len() == 0 {
-		return zero, errors.New("no self address in netmap")
+		return zero, errors.New("no self address")
 	}
 	for _, p := range addrs.All() {
 		if p.IsSingleIP() && p.Addr().BitLen() == dst.BitLen() {
 			return p.Addr(), nil
 		}
 	}
-	return zero, errors.New("no self address in netmap matching address family")
+	return zero, errors.New("no self address matching address family")
 }
 
 func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
