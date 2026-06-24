@@ -130,6 +130,17 @@ func (e *extension) onDERPMapView(view tailcfg.DERPMapView) {
 	}
 }
 
+// onAllocReq handles a [magicsock.UDPRelayAllocReq] event by allocating an
+// endpoint on the relay server and publishing a [magicsock.UDPRelayAllocResp]
+// back towards [magicsock.Conn].
+//
+// Note: the response construction below is reproduced in
+// wgengine/magicsock/relay_e2e_test.go (newRelayedMeshForTest/TestPeerRelayE2E),
+// which exercises the same eventbus seam against a real [udprelay.Server].
+// The test cannot use this handler directly: it is unexported, constructing
+// the extension requires an [ipnext.SafeBackend], and importing this package
+// from an in-package magicsock test would form an import cycle. Keep the two
+// in sync when changing the response construction here.
 func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
