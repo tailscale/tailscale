@@ -12,6 +12,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
 
 	"tailscale.com/client/local"
@@ -96,6 +97,26 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	return nil
 }
 
+// isTransientCertErr reports whether err represents a failure that did not
+// reach the CA (ctx timeout, LocalAPI socket unreachable). Such errors must
+// not advance the loop's retryCount.
+func isTransientCertErr(err error) bool {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, syscall.ECONNREFUSED),
+		errors.Is(err, syscall.ECONNRESET),
+		errors.Is(err, syscall.EHOSTUNREACH),
+		errors.Is(err, syscall.EPIPE):
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return false
+}
+
 // retrySchedule is the wait between successive failed issuance attempts,
 // following LE's recommended schedule.
 // https://letsencrypt.org/docs/integration-guide/#retrying-failures
@@ -149,17 +170,15 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
-			if err != nil {
-				cm.logf("error refreshing certificate for %s: %v", domain, err)
-			}
 			var nextInterval time.Duration
-			// TODO(irbekrm): distinguish between transient transport errors
-			// (timeout, connection reset) and genuine CA-side failures so
-			// the former do not advance retryCount.
-			if err == nil {
+			switch {
+			case err == nil:
 				retryCount = 0
 				nextInterval = normalInterval
-			} else {
+			case isTransientCertErr(err):
+				// Never reached the CA. Don't escalate.
+				nextInterval = retrySchedule[0]
+			default:
 				retryCount++
 				idx := retryCount - 1
 				if idx >= len(retrySchedule) {
@@ -172,6 +191,8 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 				if errors.As(err, &rle) && rle.RetryAfter > 0 {
 					nextInterval = rle.RetryAfter
 				}
+			}
+			if err != nil {
 				cm.logf("Error refreshing certificate for %s (retry %d): %v. Will retry in %v\n",
 					domain, retryCount, err, nextInterval)
 			}
