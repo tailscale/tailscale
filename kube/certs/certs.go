@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"net"
 	"slices"
 	"sync"
@@ -147,7 +148,9 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 		cm.logf("error waiting for cert domain %s: %v", domain, err)
 	}
 
-	timer := time.NewTimer(0) // fire off timer immediately
+	// Stagger initial fire so that when several domains come online at
+	// once we don't stampede tailscaled's shared cert mutex.
+	timer := time.NewTimer(mathrand.N(initialJitter))
 	defer timer.Stop()
 	retryCount := 0
 	for {
@@ -215,6 +218,11 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 // waitForCertDomainHeartbeat is how often waitForCertDomain logs while still
 // waiting. var (not const) so tests can shorten it.
 var waitForCertDomainHeartbeat = 5 * time.Minute
+
+// initialJitter is the max random delay before a cert loop's first CertPair
+// call. Spreads startup load across the shared cert mutex in tailscaled.
+// var (not const) so tests can shorten it.
+var initialJitter = 60 * time.Second
 
 // domains before issuing the cert for the first time. It uses the IPN bus
 // only as a wake-up trigger (Notify.SelfChange) and queries the current
