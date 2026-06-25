@@ -586,12 +586,6 @@ func TestCertStoreRoundTrip(t *testing.T) {
 }
 
 func TestShouldStartDomainRenewal(t *testing.T) {
-	reset := func() {
-		renewMu.Lock()
-		defer renewMu.Unlock()
-		clear(renewCertAt)
-	}
-
 	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -653,8 +647,6 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 	b := new(LocalBackend)
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			reset()
-
 			ret, err := b.domainRenewalTimeByExpiry(mustMakePair(&x509.Certificate{
 				SerialNumber: big.NewInt(2019),
 				Subject:      subject,

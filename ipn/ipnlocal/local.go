@@ -9,7 +9,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -272,13 +271,6 @@ type LocalBackend struct {
 	// is never called.
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
-	// pendingACMETLSALPNCerts maps SNI names to short-lived ACME tls-alpn-01
-	// challenge certificates while an ACME order is waiting for validation.
-	// Entries are deleted by the cleanup function returned from
-	// storeACMETLSALPNCert after the challenge validation path finishes,
-	// whether it succeeds or fails.
-	pendingACMETLSALPNCerts syncs.Map[string, *tls.Certificate] // "foo.bar.com" => challenge cert
-
 	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
@@ -454,18 +446,6 @@ type LocalBackend struct {
 	// (sending false).
 	needsCaptiveDetection chan bool
 
-	// certRefreshCancel cancels the background TLS cert refresh loop that
-	// periodically pokes [LocalBackend.GetCertPEM] so renewals happen on
-	// idle nodes. It is protected by mu and is non-nil while the loop is
-	// running.
-	certRefreshCancel context.CancelFunc
-
-	// pendingCertDomains tracks the set of domains for which an ACME
-	// issuance is currently in flight with no usable cached cert. It backs
-	// the tls-cert-pending health Warnable. Guarded by pendingCertDomainsMu.
-	pendingCertDomainsMu sync.Mutex
-	pendingCertDomains   set.Set[string]
-
 	// overrideAlwaysOn is whether [pkey.AlwaysOn] is overridden by the user
 	// and should have no impact on the WantRunning state until the policy changes,
 	// or the user re-connects manually, switches to a different profile, etc.
@@ -494,10 +474,6 @@ type LocalBackend struct {
 	// hardwareAttested is whether backend should use a hardware-backed key to
 	// bind the node identity to this device.
 	hardwareAttested atomic.Bool
-
-	// getCertForTest is used to retrieve TLS certificates in tests.
-	// See [LocalBackend.ConfigureCertsForTest].
-	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
 
 	// existsPendingAuthReconfig tracks if a goroutine is waiting to
 	// acquire [LocalBackend]'s mutex inside of [LocalBackend.AuthReconfig].
@@ -1361,9 +1337,11 @@ func (b *LocalBackend) Shutdown() {
 		b.captiveCancel()
 	}
 
-	if buildfeatures.HasACME && b.certRefreshCancel != nil {
-		b.certRefreshCancel()
-		b.certRefreshCancel = nil
+	if buildfeatures.HasACME {
+		if state := b.certState(); state != nil && state.certRefreshCancel != nil {
+			state.certRefreshCancel()
+			state.certRefreshCancel = nil
+		}
 	}
 
 	b.stopReconnectTimerLocked()
@@ -7571,18 +7549,22 @@ func (b *LocalBackend) updateCertRefreshLoopLocked() {
 	if !buildfeatures.HasACME {
 		return
 	}
+	state := b.certState()
+	if state == nil {
+		return
+	}
 	shouldRun := hookCertRefreshLoop.IsSet() &&
 		b.state == ipn.Running &&
 		serveConfigUsesACMECerts(b.serveConfig)
 
 	switch {
-	case shouldRun && b.certRefreshCancel == nil:
+	case shouldRun && state.certRefreshCancel == nil:
 		ctx, cancel := context.WithCancel(b.ctx)
-		b.certRefreshCancel = cancel
+		state.certRefreshCancel = cancel
 		b.goTracker.Go(func() { hookCertRefreshLoop.Get()(b, ctx) })
-	case !shouldRun && b.certRefreshCancel != nil:
-		b.certRefreshCancel()
-		b.certRefreshCancel = nil
+	case !shouldRun && state.certRefreshCancel != nil:
+		state.certRefreshCancel()
+		state.certRefreshCancel = nil
 	}
 }
 
