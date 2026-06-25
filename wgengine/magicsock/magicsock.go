@@ -2371,7 +2371,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		ep.mu.Lock()
 		relayCapable := ep.relayCapable
 		lastBest := ep.bestAddr
-		lastBestIsTrusted := mono.Now().Before(ep.trustBestAddrUntil)
+		lastBestIsTrusted := ep.bestAddrTrustedLocked(mono.Now())
 		ep.mu.Unlock()
 		if isVia && !relayCapable {
 			c.logf("magicsock: disco: ignoring %s from %v; %v is not known to be relay capable", msgType, sender.ShortString(), sender.ShortString())

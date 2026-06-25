@@ -113,7 +113,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	now := mono.Now()
-	curBestAddrTrusted := now.Before(de.trustBestAddrUntil)
+	curBestAddrTrusted := de.bestAddrTrustedLocked(now)
 	sameRelayServer := de.bestAddr.vni.IsSet() && maybeBest.relayServerDisco.Compare(de.bestAddr.relayServerDisco) == 0
 
 	if !curBestAddrTrusted ||
@@ -583,7 +583,7 @@ func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr netip.AddrPort, sendWGPing bool) {
 	udpAddr = de.bestAddr.epAddr
 
-	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) && !de.peerRelayWGReceiveStalledLocked(now) {
 		return udpAddr, netip.AddrPort{}, false
 	}
 
@@ -896,7 +896,7 @@ func (de *endpoint) setHeartbeatDisabled(v bool) {
 func (de *endpoint) discoverUDPRelayPathsLocked(now mono.Time) {
 	de.lastUDPRelayPathDiscovery = now
 	lastBest := de.bestAddr
-	lastBestIsTrusted := mono.Now().Before(de.trustBestAddrUntil)
+	lastBestIsTrusted := de.bestAddrTrustedLocked(now)
 	de.c.relayManager.startUDPRelayPathDiscoveryFor(de, lastBest, lastBestIsTrusted)
 }
 
@@ -933,10 +933,45 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 	if now.After(de.trustBestAddrUntil) {
 		return true
 	}
+	if de.peerRelayWGReceiveStalledLocked(now) {
+		return true
+	}
 	if !de.lastUDPRelayPathDiscovery.IsZero() && now.Sub(de.lastUDPRelayPathDiscovery) >= upgradeUDPRelayInterval {
 		return true
 	}
 	return false
+}
+
+// bestAddrTrustedLocked reports whether de.bestAddr should be considered
+// trusted for path-selection decisions.
+//
+// A peer-relay path can keep answering disco while the WireGuard session over
+// that relay has stopped receiving. In that case, do not let the disco trust
+// window suppress relay re-handshake/VNI refresh.
+func (de *endpoint) bestAddrTrustedLocked(now mono.Time) bool {
+	if !now.Before(de.trustBestAddrUntil) {
+		return false
+	}
+	return !de.peerRelayWGReceiveStalledLocked(now)
+}
+
+// peerRelayWGReceiveStalledLocked reports whether recent externally-triggered
+// send activity over a peer-relay bestAddr has not been matched by inbound
+// WireGuard traffic for a session window.
+//
+// de.mu must be held.
+func (de *endpoint) peerRelayWGReceiveStalledLocked(now mono.Time) bool {
+	if !de.bestAddr.vni.IsSet() || de.lastSendExt.IsZero() {
+		return false
+	}
+	if now.Sub(de.lastSendExt) > sessionActiveTimeout {
+		return false
+	}
+	lastRecvWG := de.lastRecvWG.LoadAtomic()
+	if lastRecvWG.IsZero() {
+		lastRecvWG = de.bestAddrAt
+	}
+	return !lastRecvWG.IsZero() && now.Sub(lastRecvWG) > sessionActiveTimeout
 }
 
 // wantFullPingLocked reports whether we should ping to all our peers looking for
