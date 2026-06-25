@@ -1444,6 +1444,13 @@ func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
 	case "http":
 		cmd = append(cmd, fmt.Sprintf("--http %s", srcPortStr))
 	case "tcp", "tls-terminated-tcp":
+		if _, err := strconv.ParseUint(srcPortStr, 10, 16); err != nil {
+			// srcPortStr isn't a valid port number (e.g. user ran
+			// "tailscale serve tcp://localhost:3000" instead of
+			// "tailscale serve tcp:3000 tcp://localhost:3000").
+			// Don't emit a broken hint; let the new code reject it.
+			return "", false
+		}
 		cmd = append(cmd, fmt.Sprintf("--%s %s", srcType, srcPortStr))
 	}
 
