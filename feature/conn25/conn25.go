@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	jsonv1 "github.com/go-json-experiment/json/v1"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
@@ -427,6 +428,7 @@ const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
 const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
 const unknownAppNameMessage = "The App name in the request does not match a configured App"
 const missingAppPermissionMessage = "You do not have permission to use this App"
+const misconfiguredAppPermissionMessage = "Your permissions to use this App are misconfigured"
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
 // to a ConnectorTransitIPRequest. It updates the connectors mapping of
@@ -464,6 +466,8 @@ func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctip
 
 	peerCaps := h.PeerCaps()
 	seen := map[netip.Addr]bool{}
+
+transitIPs:
 	for _, each := range ctipr.TransitIPs {
 		if seen[each.TransitIP] {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
@@ -485,14 +489,9 @@ func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctip
 			continue
 		}
 
-		// TODO(adrian): in future, unmarshal the capability here and store the
-		// permitted [tailcfg.ProtoPortRange]s so that it doesn't need to be
-		// done on flow creation (which is more performance sensitive than
-		// PeerAPI). A further optimization could cache this on a peer+app basis
-		// so they can all share a [views.Slice] instead of storing a copy with
-		// each TransitIP allocation. That might need to be done anyway to
-		// properly handle ACL updates.
-		if appPeerCap := tailcfg.PeerCapabilityConn25Prefix + tailcfg.PeerCapability(each.App); !peerCaps.HasCapability(appPeerCap) {
+		appPeerCap := tailcfg.PeerCapabilityConn25Prefix + tailcfg.PeerCapability(each.App)
+		appPeerCapValues, ok := peerCaps[appPeerCap]
+		if !ok {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    MissingAppPermission,
 				Message: missingAppPermissionMessage,
@@ -500,14 +499,30 @@ func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctip
 			continue
 		}
 
-		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
+		// TODO(adrian): an optimization could cache this on a peer+app basis
+		// so they can all share a [views.Slice] instead of storing a copy with
+		// each TransitIP allocation
+		var appPermittedPorts []tailcfg.ProtoPortRange
+		for _, v := range appPeerCapValues {
+			var ppr []tailcfg.ProtoPortRange
+			if err := jsonv1.Unmarshal([]byte(v), &ppr); err != nil {
+				resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+					Code:    MissingAppPermission,
+					Message: misconfiguredAppPermissionMessage,
+				})
+				continue transitIPs
+			}
+			appPermittedPorts = append(appPermittedPorts, ppr...)
+		}
+
+		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each, views.SliceOf(appPermittedPorts))
 		seen[each.TransitIP] = true
 		resp.TransitIPs = append(resp.TransitIPs, tipresp)
 	}
 	return resp
 }
 
-func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
+func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest, filterPorts views.Slice[tailcfg.ProtoPortRange]) TransitIPResponse {
 	if tipr.TransitIP.Is4() != tipr.DestinationIP.Is4() {
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
@@ -532,15 +547,16 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.transitIPs == nil {
-		c.transitIPs = make(map[netip.Addr]map[netip.Addr]AppAddr)
-	}
 	peerMap, ok := c.transitIPs[peerAddr]
 	if !ok {
 		peerMap = make(map[netip.Addr]AppAddr)
-		c.transitIPs[peerAddr] = peerMap
+		mak.Set(&c.transitIPs, peerAddr, peerMap)
 	}
-	peerMap[tipr.TransitIP] = AppAddr{Addr: tipr.DestinationIP, App: tipr.App}
+	peerMap[tipr.TransitIP] = AppAddr{
+		App:    tipr.App,
+		Addr:   tipr.DestinationIP,
+		Filter: filterPorts,
+	}
 	return TransitIPResponse{}
 }
 
@@ -1313,7 +1329,9 @@ func (c *connector) appAddrForTransitIPConnection(srcIP netip.Addr, transitIP ne
 	return AppAddr{}, false
 }
 
-const packetFilterAllowReason = "app connector transit IP"
+const packetFilterAllowOtherReason = "app connector ok"
+const packetFilterAllowTCPReason = "app connector tcp ok"
+const packetFilterAllowICMPReason = "app connector ICMP ok"
 
 // packetFilterAllow returns true if the provided packet has a Src that maps to a peer
 // that has a transit IP with us that is the packet Dst, and false otherwise.
@@ -1321,13 +1339,29 @@ func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if appAddr, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr()); ok {
+		if appAddr.Filter.Len() > 0 &&
+			p.Dst.Addr().Is4() && p.IPProto == ipproto.ICMPv4 ||
+			p.Dst.Addr().Is6() && p.IPProto == ipproto.ICMPv6 {
+			return true, packetFilterAllowICMPReason
+		}
 		for _, ppr := range appAddr.Filter.All() {
-			if p.Dst.Addr().IPProto == ipproto.ICMPv4 {
-				if ppr.Proto == 0 || ppr.Proto == ipproto.ICMPv4
+			if p.IPProto == ipproto.TCP {
+
 			}
-			if (ppr.Proto != 0 && ppr.Proto != p.IPProto) ||
-				(ppr.Proto == 0 && (ppr.Proto == int(ipproto.TCP) || ppr.Proto == int(ipproto.UDP)) {})
-			return true, packetFilterAllowReason
+
+			if ppr.Proto == 0 { // ICMP + TCP + UDP
+				if p.IPProto == ipproto.TCP ||
+					p.IPProto == ipproto.UDP {
+					continue
+				}
+				if !ppr.Ports.Contains(p.Dst.Port()) {
+					continue
+				}
+				return true, packetFilterAllowOtherReason
+			}
+			if ppr.Proto != int(p.IPProto) || !ppr.Ports.Contains(p.Dst.Port()) {
+				continue
+			}
 		}
 	}
 	return false, ""
