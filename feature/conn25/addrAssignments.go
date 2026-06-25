@@ -116,7 +116,7 @@ func (a *addrAssignments) popExpired(now time.Time) *addrs {
 		v = heap.Pop(&a.byExpiresAt).(*addrs)
 
 		if v.activeFlowCount > 0 || now.Add(-2*time.Minute).Before(v.zeroFlowTime) {
-			v.expiresAt = v.expiresAt.Add(24 * time.Hour)
+			v.expiresAt = now.Add(24 * time.Hour) // come back later
 			heap.Push(&a.byExpiresAt, v)
 			v = nil
 		}

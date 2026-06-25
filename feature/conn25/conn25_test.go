@@ -1218,7 +1218,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		name                string
 		setup               func(*Conn25, *tstest.Clock, netip.Addr)
 		wantUnexpiredDstIPs set.Set[netip.Addr]
-		wantExpiredAtTime   map[netip.Addr]time.Time
+		wantExpiredAtTime   map[netip.Addr]time.Duration // since the startTime
 	}{
 		{
 			name: "flows-zero",
@@ -1226,8 +1226,8 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(24 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
-			wantExpiredAtTime: map[netip.Addr]time.Time{
-				ipTwo: 5 * time.Minute,
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipTwo: (24 * time.Hour) + (5 * time.Minute), // 24 hour for clock advance + 5 mins for ttl
 			},
 		},
 		{
@@ -1237,9 +1237,9 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(24 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
-			wantExpiredAtTime: map[netip.Addr]time.Time{
-				ipOne: 24 * time.Hour,
-				ipTwo: 5 * time.Minute,
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipOne: 48 * time.Hour,                       // 24 hr for clock advance + 24 hr for resched the check when the flow wasn't zero when response 2 came in
+				ipTwo: (24 * time.Hour) + (5 * time.Minute), // 24 hour for clock advance + 5 mins for ttl
 			},
 		},
 		{
@@ -1251,6 +1251,10 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(1 * time.Second)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipOne: (48 * time.Hour) + (1 * time.Second),                     // 24 hr 1s for clock advance + 24 hr for resched the check when the flow was removed too recently when response 2 came in
+				ipTwo: (24 * time.Hour) + (1 * time.Second) + (5 * time.Minute), // 24 hour 1s for clock advance + 5 mins for ttl
+			},
 		},
 		{
 			name: "last-flow-removed-a-while-ago",
@@ -1261,12 +1265,16 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(3 * time.Minute)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipTwo: (24 * time.Hour) + (3 * time.Minute) + (5 * time.Minute), // 24 hour 3m for clock advance + 5 mins for ttl
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(logger.Discard)
-			clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+			startTime := time.Now()
+			clock := tstest.NewClock(tstest.ClockOpts{Start: startTime})
 			c.client.assignments.clock = clock
 			cfg := mustConfig(t, sn)
 			c.reconfig(cfg)
@@ -1295,7 +1303,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 					dst:    a,
 				}
 				as := c.client.assignments.byDomainDst[dd]
-				expected := clock.Now().Add(dur)
+				expected := startTime.Add(dur)
 				if !as.expiresAt.Equal(expected) {
 					t.Fatalf("a: %v, as.ExpiredAt: %v, expected: %v, dur: %v", a, as.expiresAt, expected, dur)
 				}
