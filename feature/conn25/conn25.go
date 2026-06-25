@@ -36,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -364,6 +365,8 @@ type AppAddr struct {
 	App string
 	// Addr is the real destination IP address being referenced.
 	Addr netip.Addr
+	// Filter is the acceptable incoming protocol/port combinations.
+	Filter views.Slice[tailcfg.ProtoPortRange]
 }
 
 // Conn25 holds state for routing traffic for a domain via a connector.
@@ -1317,9 +1320,15 @@ const packetFilterAllowReason = "app connector transit IP"
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
-	if ok {
-		return true, packetFilterAllowReason
+	if appAddr, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr()); ok {
+		for _, ppr := range appAddr.Filter.All() {
+			if p.Dst.Addr().IPProto == ipproto.ICMPv4 {
+				if ppr.Proto == 0 || ppr.Proto == ipproto.ICMPv4
+			}
+			if (ppr.Proto != 0 && ppr.Proto != p.IPProto) ||
+				(ppr.Proto == 0 && (ppr.Proto == int(ipproto.TCP) || ppr.Proto == int(ipproto.UDP)) {})
+			return true, packetFilterAllowReason
+		}
 	}
 	return false, ""
 }
