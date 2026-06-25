@@ -942,6 +942,9 @@ func (c *client) flowRemoved(transit netip.Addr) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.assignments.byTransitIP[transit].activeFlowCount--
+	if c.assignments.byTransitIP[transit].activeFlowCount == 0 {
+		c.assignments.byTransitIP[transit].zeroFlowTime = c.assignments.clock.Now()
+	}
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
@@ -1348,6 +1351,7 @@ type addrs struct {
 	app             string
 	expiresAt       time.Time
 	activeFlowCount int
+	zeroFlowTime    time.Time
 }
 
 func (as addrs) isValid() bool {

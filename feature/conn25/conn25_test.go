@@ -1268,13 +1268,7 @@ func TestAddressExpiryDependsOnActiveFlows2(t *testing.T) {
 		},
 		nil,
 	)
-	// we get a dns response for ipone
-	c.mapDNSResponse(dnsResp)
-	fmt.Println(len(c.client.assignments.byMagicIP))
-	ipOneAddrs := c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.0")]
-	c.ClientFlowCreated(ipOneAddrs.transit)
-	clock.Advance(24 * time.Hour)
-	c.ClientFlowRemoved(ipOneAddrs.transit)
+
 	ipTwo := netip.MustParseAddr("1.0.0.2")
 	dnsResp2 := makeDNSResponseForSections(t,
 		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
@@ -1286,6 +1280,28 @@ func TestAddressExpiryDependsOnActiveFlows2(t *testing.T) {
 		},
 		nil,
 	)
+
+	tt := struct {
+		name                string
+		setup               func(netip.Addr)
+		wantUnexpiredDstIPs []netip.Addr
+	}{
+		name: "last-flow-recently-removed",
+		setup: func(transit netip.Addr) {
+			c.ClientFlowCreated(transit)
+			clock.Advance(24 * time.Hour)
+			c.ClientFlowRemoved(transit)
+		},
+		wantUnexpiredDstIPs: ,
+	}
+	// we get a dns response for ipone
+	c.mapDNSResponse(dnsResp)
+	ipOneDD := domainDst{
+		domain: dnsname.FQDN(configuredDomain),
+		dst:    ipOne,
+	}
+	ipOneAddrs := c.client.assignments.byDomainDst[ipOneDD]
+	tt.setup(ipOneAddrs.transit)
 	// we get a dns response for iptwo
 	c.mapDNSResponse(dnsResp2)
 
@@ -1316,6 +1332,8 @@ func TestAddressExpiryDependsOnActiveFlows2(t *testing.T) {
 // flows did exist, but they've dropped to zero, but _not recently_
 // response for iptwo
 // ipone assignment _is_ expired
+
+// test for always been 0
 
 func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 	configuredDomain := "example.com"
