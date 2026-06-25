@@ -5,10 +5,16 @@ package certs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/tailcfg"
@@ -282,5 +288,182 @@ func TestEnsureCertLoops(t *testing.T) {
 			case <-allDone:
 			}
 		})
+	}
+}
+
+func TestIsTransientCertErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"deadline", context.DeadlineExceeded, true},
+		{"canceled", context.Canceled, true},
+		{"wrapped_deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), true},
+		{"connrefused", fmt.Errorf("dial: %w", syscall.ECONNREFUSED), true},
+		{"connreset", fmt.Errorf("read: %w", syscall.ECONNRESET), true},
+		{"random", errors.New("badNonce"), false},
+		{"rate_limited", &local.RateLimitedError{RetryAfter: time.Minute}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientCertErr(tt.err); got != tt.want {
+				t.Errorf("isTransientCertErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextRetryInterval(t *testing.T) {
+	const normal = 24 * time.Hour
+	tests := []struct {
+		name           string
+		err            error
+		startCount     int
+		wantCount      int
+		wantInterval   time.Duration
+	}{
+		{"success", nil, 5, 0, normal},
+		{"transient_no_advance", context.DeadlineExceeded, 3, 3, retrySchedule[0]},
+		{"rate_limit_with_hint", &local.RateLimitedError{RetryAfter: 17 * time.Minute}, 0, 1, 17 * time.Minute},
+		{"rate_limit_no_hint", &local.RateLimitedError{}, 0, 1, retrySchedule[0]},
+		{"other_advances", errors.New("badNonce"), 0, 1, retrySchedule[0]},
+		{"other_clamps", errors.New("badNonce"), len(retrySchedule) + 3, len(retrySchedule) + 4, retrySchedule[len(retrySchedule)-1]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := tt.startCount
+			got := nextRetryInterval(tt.err, &c, normal)
+			if c != tt.wantCount {
+				t.Errorf("retryCount = %d, want %d", c, tt.wantCount)
+			}
+			if got != tt.wantInterval {
+				t.Errorf("interval = %v, want %v", got, tt.wantInterval)
+			}
+		})
+	}
+}
+
+func TestWaitForCertDomainHeartbeat(t *testing.T) {
+	prev := waitForCertDomainHeartbeat
+	waitForCertDomainHeartbeat = 20 * time.Millisecond
+	defer func() { waitForCertDomainHeartbeat = prev }()
+
+	var hits atomic.Int32
+	logf := func(format string, args ...any) {
+		if format == "cert: still waiting for domain %s in netmap (%v elapsed)" {
+			hits.Add(1)
+		}
+	}
+
+	notifyChan := make(chan ipn.Notify) // never closed, never sent to
+	cm := &CertManager{
+		lc: &localclient.FakeLocalClient{
+			FakeIPNBusWatcher: localclient.FakeIPNBusWatcher{NotifyChan: notifyChan},
+		},
+		logf: logf,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- cm.waitForCertDomain(ctx, "foo.tailnetxyz.ts.net") }()
+
+	// Wait for at least two heartbeats.
+	deadline := time.Now().Add(2 * time.Second)
+	for hits.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if hits.Load() < 2 {
+		cancel()
+		t.Fatalf("expected >=2 heartbeats, got %d", hits.Load())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("waitForCertDomain did not return after ctx cancel")
+	}
+}
+
+// blockingLocalClient is a LocalClient whose CertPair blocks until release is
+// closed, used to verify Shutdown waits for in-flight loops.
+type blockingLocalClient struct {
+	localclient.FakeLocalClient
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (b *blockingLocalClient) CertPair(_ context.Context, _ string) ([]byte, []byte, error) {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
+	<-b.release // intentionally ignores ctx so we can verify Shutdown waits.
+	return nil, nil, nil
+}
+
+func TestShutdownWaitsForLoops(t *testing.T) {
+	prev := initialJitter
+	initialJitter = 1 * time.Millisecond
+	defer func() { initialJitter = prev }()
+
+	notifyChan := make(chan ipn.Notify, 1)
+	notifyChan <- ipn.Notify{SelfChange: &tailcfg.Node{StableID: "x"}}
+
+	blc := &blockingLocalClient{
+		FakeLocalClient: localclient.FakeLocalClient{
+			FakeIPNBusWatcher: localclient.FakeIPNBusWatcher{NotifyChan: notifyChan},
+			CertDomainsResult: []string{"foo.tailnetxyz.ts.net"},
+		},
+		release: make(chan struct{}),
+	}
+	cm := &CertManager{lc: blc, logf: log.Printf, certLoops: map[string]context.CancelFunc{}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := cm.EnsureCertLoops(ctx, &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:foo": {Web: map[ipn.HostPort]*ipn.WebServerConfig{"foo.tailnetxyz.ts.net:443": {}}},
+		},
+	}); err != nil {
+		t.Fatalf("EnsureCertLoops: %v", err)
+	}
+
+	// Wait for CertPair to be entered (so we know a loop is mid-flight).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		blc.mu.Lock()
+		n := blc.calls
+		blc.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer scancel()
+		shutdownDone <- cm.Shutdown(sctx)
+	}()
+
+	// Shutdown must NOT return while CertPair is blocked.
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned early with %v while CertPair was in flight", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(blc.release) // unblock CertPair so the loop can exit
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown did not return after loops were released")
 	}
 }
