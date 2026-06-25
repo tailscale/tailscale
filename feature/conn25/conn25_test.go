@@ -1195,7 +1195,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 		[]dnsmessage.Resource{
 			{
-				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
 				Body:   &dnsmessage.AResource{A: ipOne.As4()},
 			},
 		},
@@ -1207,7 +1207,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 		[]dnsmessage.Resource{
 			{
-				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
 				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
 			},
 		},
@@ -1218,6 +1218,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		name                string
 		setup               func(*Conn25, *tstest.Clock, netip.Addr)
 		wantUnexpiredDstIPs set.Set[netip.Addr]
+		wantExpiredAtTime   map[netip.Addr]time.Time
 	}{
 		{
 			name: "flows-zero",
@@ -1225,6 +1226,9 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(24 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Time{
+				ipTwo: 5 * time.Minute,
+			},
 		},
 		{
 			name: "flows-not-zero",
@@ -1233,6 +1237,10 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				clock.Advance(24 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Time{
+				ipOne: 24 * time.Hour,
+				ipTwo: 5 * time.Minute,
+			},
 		},
 		{
 			name: "last-flow-recently-removed",
@@ -1281,12 +1289,16 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			if !got.Equal(tt.wantUnexpiredDstIPs) {
 				t.Fatal("oh no")
 			}
-			for a, _ := range got {
+			for a, dur := range tt.wantExpiredAtTime {
 				dd := domainDst{
 					domain: dnsname.FQDN(domainName),
 					dst:    a,
 				}
 				as := c.client.assignments.byDomainDst[dd]
+				expected := clock.Now().Add(dur)
+				if !as.expiresAt.Equal(expected) {
+					t.Fatalf("a: %v, as.ExpiredAt: %v, expected: %v, dur: %v", a, as.expiresAt, expected, dur)
+				}
 				fmt.Println(a, as.expiresAt)
 			}
 		})
