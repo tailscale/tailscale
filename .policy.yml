@@ -1,0 +1,57 @@
+# Approval policy for this repository, enforced by policy-bot
+# (https://github.com/palantir/policy-bot) running at
+# https://policybot.corp.ts.net.
+#
+# This file replaces the role GitHub's CODEOWNERS played: when a pull
+# request touches a path covered by a rule below, policy-bot posts a
+# status check that blocks merging until the required reviewers approve.
+#
+# Policy and rule syntax reference:
+#   https://github.com/palantir/policy-bot/blob/develop/README.md
+# Example policy files (team-approval, disapproval, remote, etc.):
+#   https://github.com/palantir/policy-bot/tree/develop/config/policy-examples
+#
+# Do not add to this policy without wide discussion.
+# See https://github.com/tailscale/corp/issues/13972.
+
+policy:
+  approval:
+    - or:
+        - tailcfg changes approved by control-protocol-owners
+        - tailcfg changes overridden by another tailscale/dev
+
+approval_rules:
+  - name: tailcfg changes approved by control-protocol-owners
+    if:
+      changed_files:
+        paths:
+          - "^tailcfg/"
+    requires:
+      count: 1
+      teams:
+        - "tailscale/control-protocol-owners"
+
+  - name: tailcfg changes overridden by another tailscale/dev
+    description: |
+      Any member of @tailscale/dev (other than the PR author) can
+      override the control-protocol-owners requirement by leaving a
+      comment of the form
+
+          policybot-override: <reason>
+
+      on the pull request. The reason can be anything but should
+      explain why the override is appropriate; it stays in the PR
+      conversation as a record. The override comment also counts as
+      that developer's approval.
+    if:
+      changed_files:
+        paths:
+          - "^tailcfg/"
+    requires:
+      count: 1
+      teams:
+        - "tailscale/dev"
+    options:
+      methods:
+        comment_patterns:
+          - '^policybot-override: \S.*'

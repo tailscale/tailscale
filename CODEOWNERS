@@ -1,4 +1,7 @@
-/tailcfg/ @tailscale/control-protocol-owners
-
-# Do not add to this list without wide discussion.
-# See https://github.com/tailscale/corp/issues/13972
+# This repository does NOT use GitHub's CODEOWNERS for review enforcement.
+# Approval policies live in .policy.yml at the repository root and are
+# enforced by policy-bot (https://github.com/palantir/policy-bot).
+#
+# To change required reviewers for a path, edit .policy.yml.
+#
+# See https://github.com/tailscale/corp/issues/13972.
