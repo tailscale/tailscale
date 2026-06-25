@@ -212,6 +212,10 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 	}
 }
 
+// waitForCertDomainHeartbeat is how often waitForCertDomain logs while still
+// waiting. var (not const) so tests can shorten it.
+var waitForCertDomainHeartbeat = 5 * time.Minute
+
 // domains before issuing the cert for the first time. It uses the IPN bus
 // only as a wake-up trigger (Notify.SelfChange) and queries the current
 // cert domains explicitly via [LocalClient.CertDomains].
@@ -222,20 +226,57 @@ func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) err
 	}
 	defer w.Close()
 
+	// Pump w.Next() through a channel so we can interleave with a
+	// heartbeat ticker. Closing w (via defer above on ctx cancel) is what
+	// unblocks Next.
+	type wake struct {
+		hasSelfChange bool
+		err           error
+	}
+	wakes := make(chan wake, 1)
+	go func() {
+		for {
+			n, err := w.Next()
+			if err != nil {
+				select {
+				case wakes <- wake{err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if n.SelfChange == nil {
+				continue
+			}
+			select {
+			case wakes <- wake{hasSelfChange: true}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	heartbeat := time.NewTicker(waitForCertDomainHeartbeat)
+	defer heartbeat.Stop()
+	start := time.Now()
+
 	for {
-		n, err := w.Next()
-		if err != nil {
-			return err
-		}
-		if n.SelfChange == nil {
-			continue
-		}
-		domains, err := cm.lc.CertDomains(ctx)
-		if err != nil {
-			continue
-		}
-		if slices.Contains(domains, domain) {
-			return nil
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-heartbeat.C:
+			cm.logf("cert: still waiting for domain %s in netmap (%v elapsed)",
+				domain, time.Since(start).Round(time.Second))
+		case wk := <-wakes:
+			if wk.err != nil {
+				return wk.err
+			}
+			domains, err := cm.lc.CertDomains(ctx)
+			if err != nil {
+				continue
+			}
+			if slices.Contains(domains, domain) {
+				return nil
+			}
 		}
 	}
 }
