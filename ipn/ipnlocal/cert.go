@@ -41,12 +41,12 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
@@ -58,18 +58,6 @@ func init() {
 	RegisterC2N("GET /tls-cert-status", handleC2NTLSCertStatus)
 	hookCertRefreshLoop.Set(certRefreshLoop)
 }
-
-// Process-wide cache. (A new *Handler is created per connection,
-// effectively per request)
-var (
-	// acmeMu guards all ACME operations, so concurrent requests
-	// for certs don't slam ACME. The first will go through and
-	// populate the on-disk cache and the rest should use that.
-	acmeMu syncs.Mutex
-
-	renewMu     syncs.Mutex // lock order: acmeMu before renewMu
-	renewCertAt = map[string]time.Time{}
-)
 
 var (
 	metricACMEDNS01Start       = clientmetric.NewCounter("cert_acme_dns01_start")
@@ -114,7 +102,11 @@ func (b *LocalBackend) getACMETLSALPNCert(hi *tls.ClientHelloInfo) (cert *tls.Ce
 	if hi == nil || hi.ServerName == "" || !slices.Contains(hi.SupportedProtos, acme.ALPNProto) {
 		return nil, false
 	}
-	cert, ok = b.pendingACMETLSALPNCerts.Load(hi.ServerName)
+	cs := b.certState()
+	if cs == nil {
+		return nil, false
+	}
+	cert, ok = cs.pendingACMETLSALPNCerts.Load(hi.ServerName)
 	return cert, ok
 }
 
@@ -133,10 +125,16 @@ func (b *LocalBackend) getACMETLSALPNProto(hi *tls.ClientHelloInfo) (proto strin
 
 // storeACMETLSALPNCert publishes cert to Serve TLS handshakes for domain until
 // the returned cleanup function is called.
+//
+// It returns a no-op cleanup if the cert extension is not registered.
 func (b *LocalBackend) storeACMETLSALPNCert(domain string, cert *tls.Certificate) (cleanup func()) {
-	b.pendingACMETLSALPNCerts.Store(domain, cert)
+	cs := b.certState()
+	if cs == nil {
+		return func() {}
+	}
+	cs.pendingACMETLSALPNCerts.Store(domain, cert)
 	return func() {
-		b.pendingACMETLSALPNCerts.Delete(domain)
+		cs.pendingACMETLSALPNCerts.Delete(domain)
 	}
 }
 
@@ -193,8 +191,13 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 // Funnel domains are issued via tls-alpn-01 over the same Funnel TLS path
 // that serves real traffic.
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
+	state := b.certState()
+	if state == nil {
+		return nil, errors.New("cert extension not registered")
+	}
+
 	b.mu.Lock()
-	getCertForTest := b.getCertForTest
+	getCertForTest := state.getCertForTest
 	b.mu.Unlock()
 
 	if getCertForTest != nil {
@@ -278,9 +281,13 @@ func (b *LocalBackend) shouldStartDomainRenewal(cs certStore, domain string, now
 		}
 		return cert.NotAfter.Sub(now) < minValidity, nil
 	}
-	renewMu.Lock()
-	defer renewMu.Unlock()
-	if renewAt, ok := renewCertAt[domain]; ok {
+	state := b.certState()
+	if state == nil {
+		return false, errors.New("cert extension not registered")
+	}
+	state.renewMu.Lock()
+	defer state.renewMu.Unlock()
+	if renewAt, ok := state.renewCertAt[domain]; ok {
 		return now.After(renewAt), nil
 	}
 
@@ -294,14 +301,18 @@ func (b *LocalBackend) shouldStartDomainRenewal(cs certStore, domain string, now
 		}
 	}
 
-	renewCertAt[domain] = renewTime
+	mak.Set(&state.renewCertAt, domain, renewTime)
 	return now.After(renewTime), nil
 }
 
 func (b *LocalBackend) domainRenewed(domain string) {
-	renewMu.Lock()
-	defer renewMu.Unlock()
-	delete(renewCertAt, domain)
+	state := b.certState()
+	if state == nil {
+		return
+	}
+	state.renewMu.Lock()
+	defer state.renewMu.Unlock()
+	delete(state.renewCertAt, domain)
 }
 
 func (b *LocalBackend) domainRenewalTimeByExpiry(pair *TLSCertKeyPair) (time.Time, error) {
@@ -461,8 +472,12 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 // only be used in tests.
 func (b *LocalBackend) ConfigureCertsForTest(getCert func(hostname string) (*TLSCertKeyPair, error)) {
 	testenv.AssertInTest()
+	cs := b.certState()
+	if cs == nil {
+		panic("ConfigureCertsForTest called without cert extension registered")
+	}
 	b.mu.Lock()
-	b.getCertForTest = getCert
+	cs.getCertForTest = getCert
 	b.mu.Unlock()
 }
 
@@ -657,8 +672,12 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 // domain is the resolved cert domain (e.g., "*.node.ts.net" for wildcards).
 // It can be overridden in tests.
 var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
-	acmeMu.Lock()
-	defer acmeMu.Unlock()
+	state := b.certState()
+	if state == nil {
+		return nil, errors.New("cert extension not registered")
+	}
+	state.acmeMu.Lock()
+	defer state.acmeMu.Unlock()
 
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
@@ -1239,20 +1258,24 @@ func handleC2NTLSCertStatus(b *LocalBackend, w http.ResponseWriter, r *http.Requ
 // domain and updates the [certPendingWarnable] to reflect the current set
 // of pending domains.
 func (b *LocalBackend) setCertPending(domain string, pending bool) {
-	b.pendingCertDomainsMu.Lock()
-	defer b.pendingCertDomainsMu.Unlock()
-	if pending {
-		b.pendingCertDomains.Make()
-		b.pendingCertDomains.Add(domain)
-	} else {
-		b.pendingCertDomains.Delete(domain)
+	state := b.certState()
+	if state == nil {
+		return
 	}
-	if b.pendingCertDomains.Len() == 0 {
+	state.pendingCertDomainsMu.Lock()
+	defer state.pendingCertDomainsMu.Unlock()
+	if pending {
+		state.pendingCertDomains.Make()
+		state.pendingCertDomains.Add(domain)
+	} else {
+		state.pendingCertDomains.Delete(domain)
+	}
+	if state.pendingCertDomains.Len() == 0 {
 		b.health.SetHealthy(certPendingWarnable)
 		return
 	}
 	b.health.SetUnhealthy(certPendingWarnable, health.Args{
-		health.ArgDomains: joinedPendingCertDomainsLocked(b.pendingCertDomains),
+		health.ArgDomains: joinedPendingCertDomainsLocked(state.pendingCertDomains),
 	})
 }
 
