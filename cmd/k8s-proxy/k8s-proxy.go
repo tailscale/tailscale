@@ -353,6 +353,13 @@ func run(logger *zap.SugaredLogger) error {
 	if shouldIssueCerts(cfg) {
 		logger.Infof("Will issue TLS certs for Tailscale Service")
 		cm = certs.NewCertManager(klc.New(lc), logger.Infof)
+		defer func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := cm.Shutdown(sctx); err != nil {
+				logger.Warnf("cert manager shutdown: %v", err)
+			}
+		}()
 	}
 	if err := setServeConfig(ctx, lc, cm, apiServerProxyService(cfg)); err != nil {
 		return err

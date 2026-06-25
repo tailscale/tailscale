@@ -58,6 +58,13 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 	var cm *certs.CertManager
 	if cfg.CertShareMode == "rw" {
 		cm = certs.NewCertManager(klc.New(lc), log.Printf)
+		defer func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := cm.Shutdown(sctx); err != nil {
+				log.Printf("serve proxy: cert manager shutdown: %v", err)
+			}
+		}()
 	}
 
 	var err error

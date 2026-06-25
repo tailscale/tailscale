@@ -98,6 +98,30 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	return nil
 }
 
+// Shutdown cancels all running cert loops and blocks until they exit, or
+// until ctx is done.
+func (cm *CertManager) Shutdown(ctx context.Context) error {
+	cm.mu.Lock()
+	for d, cancel := range cm.certLoops {
+		cancel()
+		delete(cm.certLoops, d)
+	}
+	cm.mu.Unlock()
+
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if cm.tracker.RunningGoroutines() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
 // isTransientCertErr reports whether err represents a failure that did not
 // reach the CA (ctx timeout, LocalAPI socket unreachable). Such errors must
 // not advance the loop's retryCount.
