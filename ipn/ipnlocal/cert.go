@@ -62,14 +62,60 @@ func init() {
 // Process-wide cache. (A new *Handler is created per connection,
 // effectively per request)
 var (
-	// acmeMu guards all ACME operations, so concurrent requests
-	// for certs don't slam ACME. The first will go through and
-	// populate the on-disk cache and the rest should use that.
-	acmeMu syncs.Mutex
+	// acmeDomainsMu guards acmeDomainLocks.
+	acmeDomainsMu syncs.Mutex
+	// acmeDomainLocks holds a per-domain mutex. Entries are never
+	// deleted; the map is bounded by the set of cert domains this
+	// process ever issues for.
+	acmeDomainLocks = map[string]*syncs.Mutex{}
 
-	renewMu     syncs.Mutex // lock order: acmeMu before renewMu
+	// acmeAccountMu serializes ACME account bootstrap (key creation and
+	// LE registration) so concurrent first issuances for different
+	// domains can't generate competing account keys or accounts.
+	acmeAccountMu syncs.Mutex
+
+	renewMu     syncs.Mutex // lock order: per-domain ACME lock before renewMu
 	renewCertAt = map[string]time.Time{}
 )
+
+// lockACMEDomain returns the mutex for domain, creating it on first use.
+func lockACMEDomain(domain string) *syncs.Mutex {
+	acmeDomainsMu.Lock()
+	defer acmeDomainsMu.Unlock()
+	m, ok := acmeDomainLocks[domain]
+	if !ok {
+		m = new(syncs.Mutex)
+		acmeDomainLocks[domain] = m
+	}
+	return m
+}
+
+// ensureACMEAccount returns a valid ACME account for ac, creating one if
+// necessary. The bootstrap is serialised by acmeAccountMu so concurrent
+// first-time issuances don't generate competing account keys.
+func ensureACMEAccount(ctx context.Context, ac *acme.Client, logf logger.Logf, traceACME func(any)) (*acme.Account, error) {
+	acmeAccountMu.Lock()
+	defer acmeAccountMu.Unlock()
+	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
+	switch {
+	case err == nil:
+		logf("already had ACME account.")
+		return a, nil
+	case err == acme.ErrNoAccount:
+		a, err = ac.Register(ctx, new(acme.Account), acme.AcceptTOS)
+		if err == acme.ErrAccountAlreadyExists {
+			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("acme.Register: %w", err)
+		}
+		logf("registered ACME account.")
+		traceACME(a)
+		return a, nil
+	default:
+		return nil, fmt.Errorf("acme.GetReg: %w", err)
+	}
+}
 
 var (
 	metricACMEDNS01Start       = clientmetric.NewCounter("cert_acme_dns01_start")
@@ -657,8 +703,9 @@ func getCertPEMCached(cs certStore, domain string, now time.Time) (p *TLSCertKey
 // domain is the resolved cert domain (e.g., "*.node.ts.net" for wildcards).
 // It can be overridden in tests.
 var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
-	acmeMu.Lock()
-	defer acmeMu.Unlock()
+	dm := lockACMEDomain(domain)
+	dm.Lock()
+	defer dm.Unlock()
 
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
@@ -696,25 +743,9 @@ var getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf l
 		logf("acme: using Directory URL %q", ac.DirectoryURL)
 	}
 
-	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
-	switch {
-	case err == nil:
-		// Great, already registered.
-		logf("already had ACME account.")
-	case err == acme.ErrNoAccount:
-		a, err = ac.Register(ctx, new(acme.Account), acme.AcceptTOS)
-		if err == acme.ErrAccountAlreadyExists {
-			// Potential race. Double check.
-			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("acme.Register: %w", err)
-		}
-		logf("registered ACME account.")
-		traceACME(a)
-	default:
-		return nil, fmt.Errorf("acme.GetReg: %w", err)
-
+	a, err := ensureACMEAccount(ctx, ac, logf, traceACME)
+	if err != nil {
+		return nil, err
 	}
 	if a.Status != acme.StatusValid {
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
@@ -999,6 +1030,13 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 }
 
 func acmeKey(cs certStore) (crypto.Signer, error) {
+	// Serialize the read-then-generate-if-absent transaction. Without
+	// this, concurrent first-time issuances for different domains could
+	// each generate a fresh account key and race on the certStore write,
+	// leaving one of them holding a key that's not the persisted one.
+	acmeAccountMu.Lock()
+	defer acmeAccountMu.Unlock()
+
 	if v, err := cs.ACMEKey(); err == nil {
 		priv, _ := pem.Decode(v)
 		if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
