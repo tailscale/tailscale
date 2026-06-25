@@ -1207,6 +1207,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		},
 		nil,
 	)
+	// we get a dns response for ipone
 	c.mapDNSResponse(dnsResp)
 	fmt.Println(len(c.client.assignments.byMagicIP))
 	ipOneAddrs := c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.0")]
@@ -1223,6 +1224,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		},
 		nil,
 	)
+	// we get a dns response for iptwo
 	c.mapDNSResponse(dnsResp2)
 
 	numUnexpiredAddrs := len(c.client.assignments.byMagicIP)
@@ -1233,6 +1235,87 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		t.Fatalf("want %v, got %v", want, numUnexpiredAddrs)
 	}
 }
+
+func TestAddressExpiryDependsOnActiveFlows2(t *testing.T) {
+	configuredDomain := "example.com"
+	domainName := configuredDomain + "."
+	dnsMessageName := dnsmessage.MustNewName(domainName)
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
+	}, nil)
+
+	c := newConn25(logger.Discard)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	c.client.assignments.clock = clock
+	cfg := mustConfig(t, sn)
+	c.reconfig(cfg)
+
+	ipOne := netip.MustParseAddr("1.0.0.1")
+	dnsResp := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+				Body:   &dnsmessage.AResource{A: ipOne.As4()},
+			},
+		},
+		nil,
+	)
+	// we get a dns response for ipone
+	c.mapDNSResponse(dnsResp)
+	fmt.Println(len(c.client.assignments.byMagicIP))
+	ipOneAddrs := c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.0")]
+	c.ClientFlowCreated(ipOneAddrs.transit)
+	clock.Advance(24 * time.Hour)
+	c.ClientFlowRemoved(ipOneAddrs.transit)
+	ipTwo := netip.MustParseAddr("1.0.0.2")
+	dnsResp2 := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
+			},
+		},
+		nil,
+	)
+	// we get a dns response for iptwo
+	c.mapDNSResponse(dnsResp2)
+
+	numUnexpiredAddrs := len(c.client.assignments.byMagicIP)
+	fmt.Println(c.client.assignments.byMagicIP[netip.MustParseAddr("100.64.0.1")].dst)
+	// yay
+	want := 2
+	if numUnexpiredAddrs != want {
+		t.Fatalf("want %v, got %v", want, numUnexpiredAddrs)
+	}
+}
+
+// we have a test
+// response for ipone
+// expiry time passes
+// flows exist
+// response for iptwo
+// ipone assignment is not expired
+
+// response for ipone
+// expiry time passes
+// flows did exist, but they've dropped to zero, but _recently_
+// response for iptwo
+// ipone assignment is not expired
+
+// response for ipone
+// expiry time passes
+// flows did exist, but they've dropped to zero, but _not recently_
+// response for iptwo
+// ipone assignment _is_ expired
 
 func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 	configuredDomain := "example.com"
