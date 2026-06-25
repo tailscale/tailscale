@@ -142,6 +142,32 @@ func isTransientCertErr(err error) bool {
 	return false
 }
 
+// nextRetryInterval picks the wait until the next CertPair attempt:
+//   - success: reset retryCount, normalInterval.
+//   - transient (never reached the CA): retrySchedule[0], no retryCount advance.
+//   - CA Retry-After hint: honour the hint, retryCount still advances.
+//   - other: advance retryCount, walk retrySchedule.
+func nextRetryInterval(err error, retryCount *int, normalInterval time.Duration) time.Duration {
+	switch {
+	case err == nil:
+		*retryCount = 0
+		return normalInterval
+	case isTransientCertErr(err):
+		return retrySchedule[0]
+	}
+	*retryCount++
+	idx := *retryCount - 1
+	if idx >= len(retrySchedule) {
+		idx = len(retrySchedule) - 1
+	}
+	interval := retrySchedule[idx]
+	var rle *local.RateLimitedError
+	if errors.As(err, &rle) && rle.RetryAfter > 0 {
+		interval = rle.RetryAfter
+	}
+	return interval
+}
+
 // retrySchedule is the wait between successive failed issuance attempts.
 // It follows the schedule that Let's Encrypt's rate-limit adjustment guidance
 // recommends ("1 minute, then 10 minutes, then 100 minutes, then once per
@@ -208,28 +234,7 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
-			var nextInterval time.Duration
-			switch {
-			case err == nil:
-				retryCount = 0
-				nextInterval = normalInterval
-			case isTransientCertErr(err):
-				// Never reached the CA. Don't escalate.
-				nextInterval = retrySchedule[0]
-			default:
-				retryCount++
-				idx := retryCount - 1
-				if idx >= len(retrySchedule) {
-					idx = len(retrySchedule) - 1
-				}
-				nextInterval = retrySchedule[idx]
-				// CA-supplied Retry-After overrides the local schedule;
-				// retryCount still advances.
-				var rle *local.RateLimitedError
-				if errors.As(err, &rle) && rle.RetryAfter > 0 {
-					nextInterval = rle.RetryAfter
-				}
-			}
+			nextInterval := nextRetryInterval(err, &retryCount, normalInterval)
 			if err != nil {
 				cm.logf("Error refreshing certificate for %s (retry %d): %v. Will retry in %v\n",
 					domain, retryCount, err, nextInterval)
