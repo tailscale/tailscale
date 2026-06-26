@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"math"
 	"net"
@@ -8614,7 +8615,9 @@ func (testPolicyClient) GetPolicySnapshot(uid string) (*policyclient.PolicySnaps
 	if err != nil {
 		return nil, err
 	}
-	return p.Get(), nil
+	snap := p.Get()
+	log.Printf("GetPolicySnapshot(%q): scope=%v snap=%v", uid, scope, snap)
+	return snap, nil
 }
 
 func (testPolicyClient) RegisterChangeCallback(uid string, cb func(policyclient.PolicyChange)) (func(), error) {
@@ -8629,6 +8632,67 @@ func (testPolicyClient) RegisterChangeCallback(uid string, cb func(policyclient.
 	return p.RegisterChangeCallback(func(change policyclient.PolicyChange) {
 		cb(change)
 	}), nil
+}
+
+func TestPolicySnapshotMergesDeviceAndUserScopes(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+		setting.NewDefinition(pkey.ExitNodeMenuVisibility, setting.UserSetting, setting.VisibilityValue),
+		setting.NewDefinition(pkey.ManagedByOrganizationName, setting.UserSetting, setting.StringValue),
+	)
+
+	deviceStore := source.NewTestStore(t)
+	deviceStore.SetStrings(
+		source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"),
+		source.TestSettingOf(pkey.ManagedByOrganizationName, "DeviceCorp"),
+	)
+	rsop.RegisterStoreForTest(t, "DeviceStore", setting.DeviceScope, deviceStore)
+
+	uid := "S-1-5-21-1001"
+	userStore := source.NewTestStore(t)
+	userStore.SetStrings(
+		source.TestSettingOf(pkey.AdminConsoleVisibility, "show"),
+		source.TestSettingOf(pkey.ExitNodeMenuVisibility, "hide"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStore", setting.UserScopeOf(uid), userStore)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+
+	snap, err := rsop.PolicyFor(setting.UserScopeOf(uid))
+	if err != nil {
+		t.Fatalf("PolicyFor: %v", err)
+	}
+	t.Logf("direct PolicyFor snapshot: %v", snap.Get())
+
+	nw := newNotificationWatcher(t, lb, &ipnauth.TestActor{UID: ipn.WindowsUserID(uid)})
+	nw.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
+		{
+			name: "MergedPolicy",
+			cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+				if n.Policy == nil {
+					return false
+				}
+
+				// Device scope should win on conflict.
+				if got := fmt.Sprint(n.Policy.Get(pkey.AdminConsoleVisibility)); got != "hide" {
+					t.Errorf("AdminConsole = %v; want hide (device wins)", got)
+				}
+
+				if got := fmt.Sprint(n.Policy.Get(pkey.ExitNodeMenuVisibility)); got != "hide" {
+					t.Errorf("ExitNodesPicker = %v; want hide (from user)", got)
+				}
+
+				if got := fmt.Sprint(n.Policy.Get(pkey.ManagedByOrganizationName)); got != "DeviceCorp" {
+					t.Errorf("ManagedByOrganizationName = %v; want DeviceCorp", got)
+				}
+
+				return true
+			},
+		},
+	})
+	nw.check()
 }
 
 type textUpdate struct {

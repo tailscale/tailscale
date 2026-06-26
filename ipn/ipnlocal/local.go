@@ -190,6 +190,10 @@ type watchSession struct {
 	// boundary for implicit bus state, so per-session dedup state such as
 	// lastSentUserProfile must be reset when this identity changes.
 	lastSentSelf tailcfg.NodeView
+
+	// policyUID is the user ID used for policy snapshot scoping.
+	// Empty string means default/device scope.
+	policyUID string
 }
 
 var (
@@ -3733,6 +3737,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
+	var policyUID string
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
@@ -3781,10 +3786,13 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			}
 		}
 		if mask&ipn.NotifySysPolicyChanges != 0 {
+			if actor != nil {
+				policyUID = string(actor.UserID())
+			}
 			var err error
-			ini.Policy, err = b.polc.GetPolicySnapshot("")
+			ini.Policy, err = b.polc.GetPolicySnapshot(policyUID)
 			if err != nil {
-				b.logf("syspolicy: GetPolicySnapshot(\"\"): %v", err)
+				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
 			}
 		}
 	}
@@ -3799,6 +3807,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		sessionID: sessionID,
 		cancel:    cancel,
 		mask:      mask,
+		policyUID: policyUID,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
@@ -3808,12 +3817,12 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone()
 
 	if mask&ipn.NotifySysPolicyChanges != 0 {
-		if unreg, err := b.polc.RegisterChangeCallback("", func(_ policyclient.PolicyChange) {
+		if unreg, err := b.polc.RegisterChangeCallback(policyUID, func(_ policyclient.PolicyChange) {
 			b.sysPolicyChangedForSession(session)
 		}); err == nil {
 			defer unreg()
 		} else {
-			b.logf("syspolicy: RegisterChangeCallback(\"\"): %v", err)
+			b.logf("syspolicy: RegisterChangeCallback(%q): %v", policyUID, err)
 		}
 	}
 
