@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/types/logger"
@@ -190,8 +191,15 @@ var retrySchedule = []time.Duration{
 // Note that renewal check also happens when the node receives an HTTPS request and it is possible that certs get
 // renewed at that point. Renewal here is needed to prevent the shared certs from expiry in edge cases where the 'write'
 // replica does not get any HTTPS requests.
+// certLoopInterval returns how often runCertLoop re-checks each domain.
+// 24h in production; tests override via TS_DEBUG_CERT_LOOP_INTERVAL.
+var certLoopInterval = envknob.RegisterDuration("TS_DEBUG_CERT_LOOP_INTERVAL")
+
 func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
-	const normalInterval = 24 * time.Hour // regular renewal check
+	normalInterval := 24 * time.Hour
+	if d := certLoopInterval(); d > 0 {
+		normalInterval = d
+	}
 
 	if err := cm.waitForCertDomain(ctx, domain); err != nil {
 		// Best-effort, log and continue with the issuing loop.
