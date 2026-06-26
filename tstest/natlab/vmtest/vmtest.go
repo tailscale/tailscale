@@ -41,6 +41,7 @@ import (
 	"github.com/google/gopacket/layers"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
@@ -909,7 +910,11 @@ func (e *Env) ClientMetrics(n *Node) ClientMetrics {
 	}
 
 	// Metrics are reported in Prometheus exposition format.
-	var parser expfmt.TextParser
+	// prometheus/common v0.67 made the validation scheme mandatory;
+	// the zero-value parser now panics. LegacyValidation matches the
+	// classic ASCII metric/label name rules that the tailscaled
+	// client exporter uses.
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	mfs, err := parser.TextToMetricFamilies(bytes.NewReader(raw))
 	if err != nil {
 		e.t.Fatalf("Node %q parse client metrics: %v", n.Name(), err)
