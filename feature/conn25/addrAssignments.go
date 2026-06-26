@@ -6,6 +6,7 @@ package conn25
 import (
 	"container/heap"
 	"errors"
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -105,6 +106,7 @@ func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 // or an invalid addrs if there are no expired members of addrAssignments.
 // TODO: fix comment nil return
 func (a *addrAssignments) popExpired(now time.Time) *addrs {
+	fmt.Println("  popExpired")
 	var v *addrs
 	for v == nil {
 		if a.byExpiresAt.Len() == 0 {
