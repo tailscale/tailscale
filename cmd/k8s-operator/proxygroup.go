@@ -419,10 +419,11 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 	}
 
 	mo := &metricsOpts{
-		tsNamespace:  r.tsNamespace,
-		proxyStsName: pg.Name,
-		proxyLabels:  pgLabels(pg.Name, nil),
-		proxyType:    "proxygroup",
+		tsNamespace:     r.tsNamespace,
+		proxyStsName:    pg.Name,
+		proxyLabels:     pgLabels(pg.Name, nil),
+		proxyType:       "proxygroup",
+		metricsPortName: metricsPortName(proxyClass),
 	}
 	if err := reconcileMetricsResources(ctx, logger, mo, proxyClass, r.Client); err != nil {
 		return r.notReadyErrf(pg, logger, "error reconciling metrics resources: %w", err)
