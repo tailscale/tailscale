@@ -82,9 +82,6 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay) map[string]string {
 	return annotations
 }
 
-// peerRelayService builds the desired LoadBalancer Service for the given PeerRelay replica index. Each replica
-// gets a dedicated Service: peer relays are an underlay technology and require sticky relay selection per
-// participant, so a single Service round-robining over all replicas would not work.
 func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Service {
 	name := fmt.Sprintf("%s-%d", pr.Name, idx)
 

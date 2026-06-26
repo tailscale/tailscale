@@ -99,7 +99,6 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		replicas = *pr.Spec.Replicas
 	}
 
-	// Ensure one LoadBalancer Service per replica exists.
 	for i := int32(0); i < replicas; i++ {
 		desired := r.peerRelayService(pr, i)
 		if err := r.ensureService(ctx, desired); err != nil {
@@ -107,7 +106,6 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		}
 	}
 
-	// Delete any Services left over from a scale-down.
 	if err := r.deleteServicesFrom(ctx, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
@@ -116,7 +114,6 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 }
 
 func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
-	// Remove all Services associated with this PeerRelay, regardless of current replica count.
 	if err := r.deleteServicesFrom(ctx, pr, 0); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
