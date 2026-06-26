@@ -1020,3 +1020,30 @@ func TestRefreshApplicableCerts(t *testing.T) {
 	default:
 	}
 }
+
+func TestLockACMEDomain(t *testing.T) {
+	if a, b := lockACMEDomain("foo.example.com"), lockACMEDomain("foo.example.com"); a != b {
+		t.Errorf("same domain returned different mutexes")
+	}
+	if a, b := lockACMEDomain("foo.example.com"), lockACMEDomain("bar.example.com"); a == b {
+		t.Errorf("different domains returned the same mutex")
+	}
+
+	// Holding the lock for one domain must not block locking another.
+	ma := lockACMEDomain("a.example.com")
+	mb := lockACMEDomain("b.example.com")
+	ma.Lock()
+	defer ma.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		mb.Lock()
+		mb.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("locking b.example.com blocked on a.example.com's lock")
+	}
+}
