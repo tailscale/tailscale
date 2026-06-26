@@ -1190,12 +1190,15 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
 	}, nil)
 
+	var ttlSecs uint32 = 300
+	ttlDur := time.Duration(ttlSecs) * time.Second
+
 	ipOne := netip.MustParseAddr("1.0.0.1")
 	dnsResp1 := makeDNSResponseForSections(t,
 		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 		[]dnsmessage.Resource{
 			{
-				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: ttlSecs},
 				Body:   &dnsmessage.AResource{A: ipOne.As4()},
 			},
 		},
@@ -1207,7 +1210,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 		[]dnsmessage.Resource{
 			{
-				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: ttlSecs},
 				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
 			},
 		},
@@ -1229,11 +1232,11 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			firstDNSReponse:   dnsResp1,
 			secondDNSResponse: dnsResp2,
 			setup: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
-				clock.Advance(24 * time.Hour)
+				clock.Advance(30 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
 			wantExpiredAtTime: map[netip.Addr]time.Duration{
-				ipTwo: (24 * time.Hour) + (5 * time.Minute), // 24 hour for clock advance + 5 mins for ttl
+				ipTwo: (30 * time.Hour) + ttlDur,
 			},
 			assertFirstDNSResponse: assertParsesToAnswers(
 				[]netip.Addr{
@@ -1252,12 +1255,12 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			secondDNSResponse: dnsResp2,
 			setup: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
 				c.ClientFlowCreated(transit)
-				clock.Advance(24 * time.Hour)
+				clock.Advance(30 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
 			wantExpiredAtTime: map[netip.Addr]time.Duration{
-				ipOne: 48 * time.Hour,                       // 24 hr for clock advance + 24 hr for resched the check when the flow wasn't zero when response 2 came in
-				ipTwo: (24 * time.Hour) + (5 * time.Minute), // 24 hour for clock advance + 5 mins for ttl
+				ipOne: (30 * time.Hour) + extendForActiveFlowDuration,
+				ipTwo: (30 * time.Hour) + ttlDur,
 			},
 			assertFirstDNSResponse: assertParsesToAnswers(
 				[]netip.Addr{
@@ -1276,14 +1279,14 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			secondDNSResponse: dnsResp2,
 			setup: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
 				c.ClientFlowCreated(transit)
-				clock.Advance(24 * time.Hour)
+				clock.Advance(30 * time.Hour)
 				c.ClientFlowRemoved(transit)
 				clock.Advance(1 * time.Second)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
 			wantExpiredAtTime: map[netip.Addr]time.Duration{
-				ipOne: (48 * time.Hour) + (1 * time.Second),                     // 24 hr 1s for clock advance + 24 hr for resched the check when the flow was removed too recently when response 2 came in
-				ipTwo: (24 * time.Hour) + (1 * time.Second) + (5 * time.Minute), // 24 hour 1s for clock advance + 5 mins for ttl
+				ipOne: (30 * time.Hour) + extendForActiveFlowDuration + (1 * time.Second),
+				ipTwo: (30 * time.Hour) + (1 * time.Second) + ttlDur,
 			},
 			assertFirstDNSResponse: assertParsesToAnswers(
 				[]netip.Addr{
@@ -1302,13 +1305,13 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			secondDNSResponse: dnsResp2,
 			setup: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
 				c.ClientFlowCreated(transit)
-				clock.Advance(24 * time.Hour)
+				clock.Advance(30 * time.Hour)
 				c.ClientFlowRemoved(transit)
 				clock.Advance(3 * time.Minute)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
 			wantExpiredAtTime: map[netip.Addr]time.Duration{
-				ipTwo: (24 * time.Hour) + (3 * time.Minute) + (5 * time.Minute), // 24 hour 3m for clock advance + 5 mins for ttl
+				ipTwo: (30 * time.Hour) + (3 * time.Minute) + ttlDur,
 			},
 			assertFirstDNSResponse: assertParsesToAnswers(
 				[]netip.Addr{
@@ -1327,11 +1330,11 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			secondDNSResponse: dnsResp1,
 			setup: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
 				c.ClientFlowCreated(transit)
-				clock.Advance(24 * time.Hour)
+				clock.Advance(30 * time.Hour)
 			},
 			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne}),
 			wantExpiredAtTime: map[netip.Addr]time.Duration{
-				ipOne: (24 * time.Hour) + (24 * time.Hour), // 24 advance + 24 from attempted popExpired
+				ipOne: (30 * time.Hour) + ttlDur,
 			},
 			assertFirstDNSResponse: assertParsesToAnswers(
 				[]netip.Addr{

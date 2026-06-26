@@ -80,7 +80,7 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (*addrs, bool) {
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
@@ -88,7 +88,7 @@ func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr)
 
 func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (*addrs, bool) {
 	v, ok := a.byMagicIP[mip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
@@ -96,11 +96,16 @@ func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (*addrs, bool) {
 
 func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 	v, ok := a.byTransitIP[tip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
 }
+
+const (
+	deadFlowWaitTimeout         = 2 * time.Minute
+	extendForActiveFlowDuration = 24 * time.Hour
+)
 
 // popExpired returns the member of addrAssignments that expired earliest,
 // or an invalid addrs if there are no expired members of addrAssignments.
@@ -117,8 +122,8 @@ func (a *addrAssignments) popExpired(now time.Time) *addrs {
 		}
 		v = heap.Pop(&a.byExpiresAt).(*addrs)
 
-		if v.activeFlowCount > 0 || now.Add(-2*time.Minute).Before(v.zeroFlowTime) {
-			v.expiresAt = now.Add(24 * time.Hour) // come back later
+		if v.activeFlowCount > 0 || now.Add(-1*deadFlowWaitTimeout).Before(v.zeroFlowTime) {
+			v.expiresAt = now.Add(extendForActiveFlowDuration) // come back later
 			heap.Push(&a.byExpiresAt, v)
 			v = nil
 		}
