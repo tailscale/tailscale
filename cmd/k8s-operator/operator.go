@@ -371,8 +371,9 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	peerRelayOptions := peerrelay.ReconcilerOptions{
-		Client: mgr.GetClient(),
-		Logger: opts.log,
+		Client:             mgr.GetClient(),
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
 	}
 
 	if err = peerrelay.NewReconciler(peerRelayOptions).Register(mgr); err != nil {
