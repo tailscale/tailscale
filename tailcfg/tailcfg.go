@@ -2756,7 +2756,17 @@ const (
 	// reachability itself when choosing connectors. When absent, the
 	// default behavior is to trust the control plane when it claims that a
 	// node is no longer online, but that is not a reliable signal.
-	NodeAttrClientSideReachability = "client-side-reachability"
+	//
+	// It is temporary and will be ignored once its behaviour becomes the default.
+	NodeAttrClientSideReachability NodeCapability = "client-side-reachability"
+
+	// NodeAttrClientSideReachabilityRouteCheck configures the node to use
+	// the routecheck subsystem to determine reachability when choosing
+	// connectors. This relies on [NodeAttrClientSideReachability] being set.
+	// See tailscale/tailscale#17367.
+	//
+	// It is temporary and will be ignored once its behaviour becomes the default.
+	NodeAttrClientSideReachabilityRouteCheck NodeCapability = "client-side-reachability-routecheck"
 
 	// NodeAttrDefaultAutoUpdate advertises the default node auto-update setting
 	// for this tailnet. The node is free to opt-in or out locally regardless of

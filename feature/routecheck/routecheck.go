@@ -53,6 +53,10 @@ func (e *Extension) Name() string {
 
 // Init implements the [ipnext.Extension.Init] interface method.
 func (e *Extension) Init(h ipnext.Host) error {
+	if routecheck.DebugForceClientSideReachabilityRoutecheck().EqualBool(false) {
+		return ipnext.SkipExtension
+	}
+
 	e.nb = nodeBackender{h}
 
 	nm, ok := e.backend.(routecheck.NetMapper)
