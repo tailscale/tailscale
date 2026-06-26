@@ -7,7 +7,9 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
+	"slices"
 	"time"
 
 	"tailscale.com/tstime"
@@ -31,6 +33,27 @@ type addrAssignments struct {
 	byDomainDst map[domainDst]*addrs
 	byExpiresAt addrsHeap
 	clock       tstime.Clock
+}
+
+func (as addrAssignments) String() string {
+	keys := slices.Collect(maps.Keys(as.byDomainDst))
+	slices.SortFunc(keys, func(a, b domainDst) int {
+		if a.domain == b.domain {
+			return a.dst.Compare(b.dst)
+		}
+		if a.domain < b.domain {
+			return -1
+		}
+		return 1
+	})
+
+	var str string
+	for _, key := range keys {
+		addrAssignment := as.byDomainDst[key]
+		str += fmt.Sprintf("%v\n", addrAssignment)
+	}
+
+	return str
 }
 
 const defaultExpiry = 48 * time.Hour

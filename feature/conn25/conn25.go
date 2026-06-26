@@ -185,7 +185,11 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		if !e.conn25.isConfigured() {
 			return bs
 		}
-		return e.conn25.mapDNSResponse(bs)
+		newbs := e.conn25.mapDNSResponse(bs)
+		e.conn25.client.mu.Lock()
+		defer e.conn25.client.mu.Unlock()
+		fmt.Println(e.conn25.client.assignments)
+		return newbs
 	})
 
 	// Intercept packets from the tun device and from WireGuard
