@@ -104,7 +104,6 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
-	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})
 
