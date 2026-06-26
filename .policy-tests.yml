@@ -1,0 +1,258 @@
+# Tests for testdata/tailscale.com.policy.yml.
+#
+# Run from the parent directory with:
+#   go run . -policy testdata/tailscale.com.policy.yml \
+#            -tests  testdata/tailscale.com.policy-test.yml
+
+teams:
+  # Members are picked solely so tests below can refer to them.
+  # `alice` and `bob` are control-protocol-owners *and* dev. `carol`,
+  # `dave`, and `eve` are dev only. `outsider` is in nothing.
+  tailscale/control-protocol-owners:
+    - alice
+    - bob
+  tailscale/dev:
+    - alice
+    - bob
+    - carol
+    - dave
+    - eve
+
+tests:
+  # ------------------------------------------------------------------
+  # Baseline: every PR (touching tailcfg/ or not) requires a +1 from a
+  # tailscale/dev member.
+  # ------------------------------------------------------------------
+
+  - name: non-tailcfg PR with no review is pending
+    pull_request:
+      author: carol
+      changed_files:
+        - README.md
+        - cmd/tailscale/main.go
+    expect:
+      status: pending
+      rules:
+        "tailcfg changes approved by control-protocol-owners": skipped
+        "tailcfg changes overridden by another tailscale/dev": skipped
+        "any tailscale/dev review": pending
+
+  - name: non-tailcfg PR with dev review is approved
+    pull_request:
+      author: carol
+      changed_files:
+        - README.md
+      reviews:
+        - user: dave
+          state: approved
+    expect:
+      status: approved
+      rules:
+        "any tailscale/dev review": approved
+
+  - name: non-tailcfg PR with thumbs-up comment from dev is approved
+    pull_request:
+      author: carol
+      changed_files:
+        - README.md
+      comments:
+        - user: dave
+          body: ":+1:"
+    expect:
+      status: approved
+      rules:
+        "any tailscale/dev review": approved
+
+  - name: non-tailcfg PR with non-dev review is pending
+    pull_request:
+      author: carol
+      changed_files:
+        - README.md
+      reviews:
+        - user: outsider
+          state: approved
+    expect:
+      status: pending
+      rules:
+        "any tailscale/dev review": pending
+
+  - name: PR with no files at all is pending without a dev review
+    pull_request:
+      author: carol
+      changed_files: []
+    expect:
+      status: pending
+      rules:
+        "any tailscale/dev review": pending
+
+  # ------------------------------------------------------------------
+  # tailcfg/ requires BOTH a control-protocol-owners review (or an
+  # override comment) AND a dev +1. Owners are in tailscale/dev too,
+  # so their single review satisfies both gates.
+  # ------------------------------------------------------------------
+
+  - name: tailcfg change without anything is pending
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+    expect:
+      status: pending
+      rules:
+        "tailcfg changes approved by control-protocol-owners": pending
+        "tailcfg changes overridden by another tailscale/dev": pending
+        "any tailscale/dev review": pending
+
+  - name: a single owner review approves both the owner rule and the dev rule
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      reviews:
+        - user: alice
+          state: approved
+    expect:
+      status: approved
+      rules:
+        "tailcfg changes approved by control-protocol-owners": approved
+        "any tailscale/dev review": approved
+
+  - name: owner cannot self-approve their own tailcfg PR
+    pull_request:
+      author: alice
+      changed_files:
+        - tailcfg/tailcfg.go
+      reviews:
+        - user: alice
+          state: approved
+    expect:
+      status: pending
+
+  - name: non-owner dev review alone leaves the tailcfg gate pending
+    pull_request:
+      author: alice
+      changed_files:
+        - tailcfg/tailcfg.go
+      reviews:
+        - user: carol
+          state: approved
+    expect:
+      status: pending
+      rules:
+        "tailcfg changes approved by control-protocol-owners": pending
+        "tailcfg changes overridden by another tailscale/dev": pending
+        "any tailscale/dev review": approved
+
+  # ------------------------------------------------------------------
+  # policybot-override flow on a tailcfg/ PR.
+  # ------------------------------------------------------------------
+
+  # An override comment by itself only satisfies the override rule.
+  # The baseline dev-review rule still needs a separate +1.
+  - name: override comment alone leaves baseline dev review pending
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: dave
+          body: "policybot-override: emergency rollback"
+    expect:
+      status: pending
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": approved
+        "any tailscale/dev review": pending
+
+  - name: override comment plus a separate dev review approves
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: dave
+          body: "policybot-override: emergency rollback"
+      reviews:
+        - user: eve
+          state: approved
+    expect:
+      status: approved
+
+  # One dev doing BOTH (post the override AND a regular +1) works too.
+  - name: same dev posts both the override and a +1 review
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: dave
+          body: "policybot-override: shipping a typo fix"
+      reviews:
+        - user: dave
+          state: approved
+    expect:
+      status: approved
+
+  - name: override comment from the author does not approve the override
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: carol
+          body: "policybot-override: please let me ship this"
+    expect:
+      status: pending
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": pending
+
+  - name: override comment from a non-dev does not approve the override
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: outsider
+          body: "policybot-override: I am not on the dev team"
+    expect:
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": pending
+
+  - name: empty-reason policybot-override does not approve
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: dave
+          body: "policybot-override:"
+    expect:
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": pending
+
+  # Defaults regression guards: a normal review approval from a dev
+  # member must NOT silently approve the override rule. Same for a
+  # plain :+1: comment. Without the explicit `methods: github_review:
+  # false` / `comments: []` on the override rule, both would.
+  - name: a regular dev review does not silently satisfy the override rule
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      reviews:
+        - user: dave
+          state: approved
+    expect:
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": pending
+
+  - name: a thumbs-up comment from a dev does not silently satisfy the override rule
+    pull_request:
+      author: carol
+      changed_files:
+        - tailcfg/tailcfg.go
+      comments:
+        - user: dave
+          body: ":+1:"
+    expect:
+      rules:
+        "tailcfg changes overridden by another tailscale/dev": pending
