@@ -40,6 +40,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/proxy"
 
@@ -2157,7 +2158,11 @@ func TestUDPConn(t *testing.T) {
 func parseMetrics(m []byte) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 
-	var parser expfmt.TextParser
+	// prometheus/common v0.67 made the validation scheme mandatory;
+	// the zero-value parser now panics. LegacyValidation matches the
+	// classic ASCII metric/label name rules that the tailscaled exporter
+	// uses (e.g. tailscaled_inbound_bytes_total).
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	mf, err := parser.TextToMetricFamilies(bytes.NewReader(m))
 	if err != nil {
 		return nil, err
