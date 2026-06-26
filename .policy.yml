@@ -16,9 +16,17 @@
 
 policy:
   approval:
+    # tailcfg/ has an extra gate: either a control-protocol-owners
+    # review or an explicit policybot-override: comment from a dev.
+    # The block is skipped on PRs that don't touch tailcfg/.
     - or:
         - tailcfg changes approved by control-protocol-owners
         - tailcfg changes overridden by another tailscale/dev
+    # And every PR, regardless of files, needs a +1 from a dev.
+    # This rule also keeps the policy from collapsing into "all rules
+    # skipped" (which policy-bot treats as a failure) on non-tailcfg
+    # PRs.
+    - any tailscale/dev review
 
 approval_rules:
   - name: tailcfg changes approved by control-protocol-owners
@@ -53,5 +61,24 @@ approval_rules:
         - "tailscale/dev"
     options:
       methods:
+        # Explicitly turn off the defaults (github_review: true,
+        # comments: [":+1:", "👍"]) so the ONLY way to satisfy this
+        # rule is a "policybot-override:" comment. Otherwise a normal
+        # review approval or thumbs-up from any tailscale/dev member
+        # would silently pass the rule.
+        github_review: false
+        comments: []
         comment_patterns:
           - '^policybot-override: \S.*'
+
+  - name: any tailscale/dev review
+    description: |
+      Every PR needs at least one approval from a member of
+      @tailscale/dev. policy-bot's default approval methods count
+      a GitHub review approval, a ":+1:" comment, or a "👍"
+      comment as approval. The PR author cannot approve their
+      own PR.
+    requires:
+      count: 1
+      teams:
+        - "tailscale/dev"
