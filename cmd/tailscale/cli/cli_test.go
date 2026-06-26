@@ -1016,9 +1016,6 @@ func TestPrefFlagMapping(t *testing.T) {
 			continue
 		}
 		switch prefName {
-		case "AllowSingleHosts":
-			// Fake pref for downgrade compat. See #12058.
-			continue
 		case "WantRunning", "Persist", "LoggedOut":
 			// All explicitly handled (ignored) by checkForAccidentalSettingReverts.
 			continue

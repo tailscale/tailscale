@@ -291,16 +291,6 @@ type Prefs struct {
 	// non-nil.
 	RelayServerStaticEndpoints []netip.AddrPort `json:",omitempty"`
 
-	// AllowSingleHosts was a legacy field that was always true
-	// for the past 4.5 years. It controlled whether Tailscale
-	// peers got /32 or /128 routes for each other.
-	// As of 2024-05-17 we're starting to ignore it, but to let
-	// people still downgrade Tailscale versions and not break
-	// all peer-to-peer networking we still write it to disk (as JSON)
-	// so it can be loaded back by old versions.
-	// TODO(bradfitz): delete this in 2025 sometime. See #12058.
-	AllowSingleHosts marshalAsTrueInJSON
-
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -330,13 +320,6 @@ func (au1 AutoUpdatePrefs) Equals(au2 AutoUpdatePrefs) bool {
 		apply1 == apply2 &&
 		ok1 == ok2
 }
-
-type marshalAsTrueInJSON struct{}
-
-var trueJSON = []byte("true")
-
-func (marshalAsTrueInJSON) MarshalJSON() ([]byte, error) { return trueJSON, nil }
-func (*marshalAsTrueInJSON) UnmarshalJSON([]byte) error  { return nil }
 
 // AppConnectorPrefs are the app connector settings for the node agent.
 type AppConnectorPrefs struct {

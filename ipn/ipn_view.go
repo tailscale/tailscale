@@ -453,16 +453,6 @@ func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
 
-// AllowSingleHosts was a legacy field that was always true
-// for the past 4.5 years. It controlled whether Tailscale
-// peers got /32 or /128 routes for each other.
-// As of 2024-05-17 we're starting to ignore it, but to let
-// people still downgrade Tailscale versions and not break
-// all peer-to-peer networking we still write it to disk (as JSON)
-// so it can be loaded back by old versions.
-// TODO(bradfitz): delete this in 2025 sometime. See #12058.
-func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
-
 // The Persist field is named 'Config' in the file for backward
 // compatibility with earlier versions.
 // TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -506,7 +496,6 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
-	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})
 
