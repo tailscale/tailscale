@@ -1138,6 +1138,7 @@ func (b *LocalBackend) shouldPauseControlClientLocked(prefs ipn.PrefsView) bool 
 
 	pauseForSyncPref := prefs.Valid() && prefs.Sync().EqualBool(false)
 	if pauseForSyncPref {
+		b.logf("[v1] shouldPauseControlClient: true (pauseForSyncPref)")
 		return true
 	}
 
@@ -1145,12 +1146,14 @@ func (b *LocalBackend) shouldPauseControlClientLocked(prefs ipn.PrefsView) bool 
 	// it mustn’t pause until the initial netmap has been loaded.
 	isStopped := b.state == ipn.Stopped && b.NetMapNoPeers() != nil
 	if isStopped {
+		b.logf("[v1] shouldPauseControlClient: true (isStopped: state=%v, netMap=%v)", b.state, b.NetMapNoPeers() != nil)
 		return true
 	}
 
 	networkUp := b.interfaceState.AnyInterfaceUp()
 	pauseForNetwork := !networkUp && !testenv.InTest() && !envknob.AssumeNetworkUp()
 	if pauseForNetwork {
+		b.logf("[v1] shouldPauseControlClient: true (pauseForNetwork)")
 		return true
 	}
 
@@ -2049,6 +2052,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
 		}
+		b.logf("[v1] setNetMapLocked: storing netmap; b.NetMapNoPeers() will become non-nil")
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(prefs.View())
 	}
