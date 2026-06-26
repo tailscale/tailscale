@@ -192,6 +192,10 @@ type watchSession struct {
 	// lastSentUserProfile must be reset when this identity changes.
 	lastSentSelf tailcfg.NodeView
 
+	// policyUID is the user ID used for policy snapshot scoping.
+	// Empty string means default/device scope.
+	policyUID string
+
 	// policyUnwatch unsubscribes from policy change notifications.
 	policyUnwatch func()
 }
@@ -2457,7 +2461,7 @@ func (b *LocalBackend) onPolicyChanged(sessionID string) {
 		return
 	}
 
-	snapshot, err := b.polc.GetPolicySnapshot("")
+	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
 	if err != nil || snapshot == nil {
 		return
 	}
@@ -2478,7 +2482,7 @@ func (b *LocalBackend) notifyAllPolicyWatchers() {
 		if sess.mask&ipn.NotifyInitialPolicy == 0 {
 			continue
 		}
-		snapshot, err := b.polc.GetPolicySnapshot("")
+		snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
 		if err != nil || snapshot == nil {
 			continue
 		}
@@ -3830,6 +3834,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone := b.CheckDeadlocks()
 	b.mu.Lock()
 
+	var policyUID string
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
@@ -3878,7 +3883,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			}
 		}
 		if mask&ipn.NotifyInitialPolicy != 0 {
-			if snap, err := b.polc.GetPolicySnapshot(""); err == nil && snap != nil {
+			if actor != nil {
+				policyUID = string(actor.UserID())
+			}
+			if snap, err := b.polc.GetPolicySnapshot(policyUID); err == nil && snap != nil {
 				ini.Policy = snap
 			}
 		}
@@ -3894,6 +3902,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		sessionID: sessionID,
 		cancel:    cancel,
 		mask:      mask,
+		policyUID: policyUID,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
@@ -3903,7 +3912,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone()
 
 	if mask&ipn.NotifyInitialPolicy != 0 {
-		if unreg, err := b.polc.WatchPolicyChanges("", func() {
+		if unreg, err := b.polc.WatchPolicyChanges(policyUID, func() {
 			b.onPolicyChanged(sessionID)
 		}); err == nil {
 			session.policyUnwatch = unreg
