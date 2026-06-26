@@ -2268,3 +2268,71 @@ func testCasesForLEStagingTests() []leStagingTestCase {
 		},
 	}
 }
+
+func TestFindStaticEndpoints_OrderStability(t *testing.T) {
+	const port = uint16(30001)
+
+	ip1 := netip.MustParseAddr("10.0.0.1")
+	ip2 := netip.MustParseAddr("10.0.0.2")
+	ap1 := netip.AddrPortFrom(ip1, port)
+	ap2 := netip.AddrPortFrom(ip2, port)
+
+	// "anode" sorts before "znode" alphabetically, so the fake client returns
+	// [anode, znode]. ip2 is on anode and ip1 is on znode, so naive node-order
+	// iteration produces [ip2, ip1]. The fix must sort and return [ip1, ip2].
+	nodes := []corev1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "anode", Labels: map[string]string{"foo": "bar"}},
+			Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeExternalIP, Address: ip2.String()}}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "znode", Labels: map[string]string{"foo": "bar"}},
+			Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeExternalIP, Address: ip1.String()}}},
+		},
+	}
+
+	objs := make([]client.Object, len(nodes))
+	for i := range nodes {
+		objs[i] = &nodes[i]
+	}
+	fc := fake.NewClientBuilder().WithScheme(tsapi.GlobalScheme).WithObjects(objs...).Build()
+
+	zl, _ := zap.NewDevelopment()
+	r := &ProxyGroupReconciler{Client: fc}
+
+	pc := &tsapi.ProxyClass{
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: port}},
+					Selector: map[string]string{"foo": "bar"},
+				},
+			},
+		},
+	}
+
+	// Call twice with the same nodes — both calls must return the same sorted
+	// slice, regardless of which currAddrs were stored after the first call.
+	for range 2 {
+		// On the second iteration, simulate a stored config with the
+		// "wrong" order [ip2, ip1] to confirm sorting overrides it.
+		existingCfg := ipn.ConfigVAlpha{StaticEndpoints: []netip.AddrPort{ap2, ap1}}
+		cfgB, err := json.Marshal(existingCfg)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		existingSecret := &corev1.Secret{
+			Data: map[string][]byte{tsoperator.TailscaledConfigFileName(106): cfgB},
+		}
+
+		got, err := r.findStaticEndpoints(context.Background(), existingSecret, pc, port, zl.Sugar())
+		if err != nil {
+			t.Fatalf("findStaticEndpoints: %v", err)
+		}
+
+		want := []netip.AddrPort{ap1, ap2}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v — result must be sorted regardless of node list or stored order", got, want)
+		}
+	}
+}
