@@ -443,6 +443,7 @@ func TestNewConn(t *testing.T) {
 		Logf:              t.Logf,
 		NetMon:            netMon,
 		EventBus:          bus,
+		HealthTracker:     health.NewTracker(bus),
 		Metrics:           new(usermetric.Registry),
 	})
 	if err != nil {
@@ -678,6 +679,7 @@ func TestDeviceStartStop(t *testing.T) {
 		Logf:          t.Logf,
 		NetMon:        netMon,
 		EventBus:      bus,
+		HealthTracker: health.NewTracker(bus),
 		Metrics:       new(usermetric.Registry),
 	})
 	if err != nil {
@@ -1553,6 +1555,7 @@ func newTestConn(t testing.TB) *Conn {
 	t.Helper()
 
 	bus := eventbustest.NewBus(t)
+	t.Cleanup(bus.Close)
 
 	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
 	if err != nil {
@@ -1576,6 +1579,7 @@ func newTestConn(t testing.TB) *Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { conn.Close() })
 	return conn
 }
 
@@ -3344,10 +3348,13 @@ func TestMaybeRebindOnError(t *testing.T) {
 	})
 }
 
-func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry, func()) {
+func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry) {
 	t.Helper()
 	bus := eventbus.New()
+	t.Cleanup(bus.Close)
+
 	netMon := must.Get(netmon.New(bus, t.Logf))
+	t.Cleanup(func() { netMon.Close() })
 
 	reg := new(usermetric.Registry)
 
@@ -3356,14 +3363,12 @@ func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry, func()) 
 		Logf:              t.Logf,
 		NetMon:            netMon,
 		EventBus:          bus,
+		HealthTracker:     health.NewTracker(bus),
 		Metrics:           reg,
 	}))
+	t.Cleanup(func() { conn.Close() })
 
-	return conn, reg, func() {
-		bus.Close()
-		netMon.Close()
-		conn.Close()
-	}
+	return conn, reg
 }
 
 func TestNetworkSendErrors(t *testing.T) {
@@ -3383,8 +3388,7 @@ func TestNetworkSendErrors(t *testing.T) {
 
 		tstest.Replace(t, &checkNetworkDownDuringTests, true)
 
-		conn, reg, close := newTestConnAndRegistry(t)
-		defer close()
+		conn, reg := newTestConnAndRegistry(t)
 
 		buffs := [][]byte{{00, 00, 00, 00, 00, 00, 00, 00}}
 		ep := &lazyEndpoint{
@@ -3413,8 +3417,7 @@ func TestNetworkSendErrors(t *testing.T) {
 	})
 
 	t.Run("invalid-payload", func(t *testing.T) {
-		conn, reg, close := newTestConnAndRegistry(t)
-		defer close()
+		conn, reg := newTestConnAndRegistry(t)
 
 		conn.SetNetworkUp(false)
 		err := conn.Send([][]byte{{00}}, &lazyEndpoint{}, 0)
