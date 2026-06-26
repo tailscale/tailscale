@@ -2175,6 +2175,35 @@ func packetLooksLike(msg []byte) (t packetLooksLikeType, isGeneveEncap bool) {
 	}
 }
 
+// handleDiscoOpenFailOrUnknownSenderLocked handles a failed disco message open
+// operation, or a disco message from an unknown sender public key.
+func (c *Conn) handleDiscoOpenFailOrUnknownSenderLocked(src epAddr, derpNodeSrc key.NodePublic) {
+	// Provide the sender of the disco message that failed to open with our
+	// current disco key if they appear to be a known node key.
+	var (
+		ep *endpoint
+		ok bool
+	)
+	if !derpNodeSrc.IsZero() {
+		// The node is unambiguous, as the disco message arrived over DERP,
+		// and DERP src is node key.
+		ep, ok = c.peerMap.endpointForNodeKey(derpNodeSrc)
+	} else {
+		// The node is ambiguous, but we make it unambiguous through [epAddr]
+		// lookup in the [peerMap]. The sender of the disco message that
+		// failed to open was sourced from [epAddr], which can map to an
+		// [endpoint]. Writes into the [peerMap] by [epAddr] only occur upon
+		// successful disco transaction over the address, or a
+		// WireGuard-authenticated round trip of [lazyEndpoint] through
+		// wireguard-go. Since we've arrived here due to disco open failure,
+		// this is likely the latter.
+		ep, ok = c.peerMap.endpointForEpAddr(src)
+	}
+	if ok {
+		ep.maybeSendTSMPDiscoAdvert(mono.Now())
+	}
+}
+
 // handleDiscoMessage handles a discovery message. The caller is assumed to have
 // verified 'msg' returns [packetLooksLikeDisco] from packetLooksLike().
 //
@@ -2230,6 +2259,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if debugDisco() {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know of key %v", sender.ShortString())
 		}
+		c.handleDiscoOpenFailOrUnknownSenderLocked(src, derpNodeSrc)
 		return
 	}
 
@@ -2263,6 +2293,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 
 		metricRecvDiscoBadKey.Add(1)
+		c.handleDiscoOpenFailOrUnknownSenderLocked(src, derpNodeSrc)
 		return
 	}
 
@@ -2369,7 +2400,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 
 		ep.mu.Lock()
-		relayCapable := ep.relayCapable
+		relayCapable := capVerIsRelayCapable(ep.capVer)
 		lastBest := ep.bestAddr
 		lastBestIsTrusted := mono.Now().Before(ep.trustBestAddrUntil)
 		ep.mu.Unlock()
@@ -2675,8 +2706,6 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		return
 	}
 
-	c.maybeSendTSMPDiscoAdvert(de)
-
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
@@ -2901,6 +2930,12 @@ func (c *Conn) SetProbeUDPLifetime(v bool) {
 // capable, otherwise it returns false.
 func capVerIsRelayCapable(version tailcfg.CapabilityVersion) bool {
 	return version >= 121
+}
+
+// capVerIsTSMPDiscoAdvertCapable returns true if version is TSMP disco advert
+// capable, otherwise it returns false.
+func capVerIsTSMPDiscoAdvertCapable(version tailcfg.CapabilityVersion) bool {
+	return version >= 142
 }
 
 // SetFilter updates the packet filter used by the connection.
@@ -4547,48 +4582,4 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 type NewDiscoKeyAvailable struct {
 	NodeFirstAddr netip.Addr
 	NodeID        tailcfg.NodeID
-}
-
-// maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
-// should send our DiscoKey to the first node address of the magicksock endpoint.
-//
-// The event is suppressed if we are communicating over a non-DERP path, or
-// less than [discoKeyAdvertisementInterval] has passed since the last DiscoKey
-// was sent, or netmap caching is disabled on this node.
-//
-// We do not need the Conn to be locked, but the endpoint should be.
-func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
-	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
-		return
-	}
-
-	// Disable TSMP disco advert by default, unless network map caching is
-	// enabled for the local node. Caching network maps on the remote node is
-	// what really matters in terms of handling a TSMP disco advert and applying
-	// it in a useful way, but the TSMP disco advert implementation as it exists
-	// here has pathological behaviors. Therefore, it should be disabled for
-	// almost all tailnets, and we lean on the network map caching control knob
-	// for this purpose. See #20081.
-	if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
-		return
-	}
-
-	de.mu.Lock()
-	defer de.mu.Unlock()
-
-	if !de.nodeAddr.IsValid() {
-		return
-	}
-
-	now := mono.Now()
-	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
-		(!de.lastDiscoKeyAdvertisement.IsZero() && !de.bestAddr.isZero()) {
-		return
-	}
-
-	de.lastDiscoKeyAdvertisement = now
-	c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
-		NodeFirstAddr: de.nodeAddr,
-		NodeID:        de.nodeID,
-	})
 }
