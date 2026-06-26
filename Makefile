@@ -133,6 +133,9 @@ publishdevtsidp: check-image-repo ## Build and publish tsidp image to location s
 publishdevproxy: check-image-repo ## Build and publish k8s-proxy image to location specified by ${REPO}
 	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-proxy ./build_docker.sh
 
+publishdevacmeratelimitproxy: check-image-repo ## Build and publish acmeratelimitproxy (e2e cascade test only) image to location specified by ${REPO}
+	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=acmeratelimitproxy ./build_docker.sh
+
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \

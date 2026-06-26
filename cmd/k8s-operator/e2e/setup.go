@@ -379,9 +379,10 @@ func runTests(m *testing.M) (int, error) {
 		}
 		logger.Infof("using OSS image tag: %q", ossTag)
 		ossImageToTarget := map[string]string{
-			"local/k8s-operator": "publishdevoperator",
-			"local/tailscale":    "publishdevimage",
-			"local/k8s-proxy":    "publishdevproxy",
+			"local/k8s-operator":        "publishdevoperator",
+			"local/tailscale":           "publishdevimage",
+			"local/k8s-proxy":           "publishdevproxy",
+			"local/acmeratelimitproxy":  "publishdevacmeratelimitproxy",
 		}
 		for img, target := range ossImageToTarget {
 			if err := buildImage(ctx, ossDir, img, target, ossTag, caPaths); err != nil {
@@ -414,6 +415,13 @@ func runTests(m *testing.M) (int, error) {
 				if err := nodeutils.LoadImageArchive(n, pr); err != nil {
 					return 0, fmt.Errorf("failed to load image into node %q: %w", n.String(), err)
 				}
+			}
+		}
+
+		// Deploy the rate-limit proxy now that its image is loaded.
+		if *fDevcontrol {
+			if err := applyACMERatelimitProxyResources(ctx, kubeClient, ossTag); err != nil {
+				return 0, fmt.Errorf("apply acme-ratelimit resources: %w", err)
 			}
 		}
 	}

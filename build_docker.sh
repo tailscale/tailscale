@@ -148,6 +148,21 @@ case "$TARGET" in
       --files="${FILES}" \
       /usr/local/bin/k8s-proxy
     ;;
+  acmeratelimitproxy)
+    DEFAULT_REPOS="tailscale/acmeratelimitproxy"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="tailscale.com/cmd/k8s-operator/e2e/acmeratelimitproxy:/usr/local/bin/acmeratelimitproxy" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      --target="${PLATFORM}" \
+      --goarch="${GOARCH}" \
+      --annotations="${ANNOTATIONS}" \
+      --files="${FILES}" \
+      /usr/local/bin/acmeratelimitproxy
+    ;;
   *)
     echo "unknown target: $TARGET"
     exit 1
