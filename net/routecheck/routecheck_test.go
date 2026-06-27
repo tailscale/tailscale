@@ -145,7 +145,7 @@ func TestRefresh(t *testing.T) {
 						withDelay(t, 10*time.Second))
 				}
 				t.Cleanup(func() { b.Close() })
-				c, err := routecheck.NewClient(t.Logf, b, b, b)
+				c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -153,16 +153,16 @@ func TestRefresh(t *testing.T) {
 				if tt.init {
 					// This callback simulates the delay between
 					// connecting to the backend and receiving the NetMap.
-					donef := func() { c.NotifyNetMapAvailable(b.NetMapWithPeers()) }
+					donef := func() { c.NotifyNetMapAvailable() }
 					b.donef.Store(&donef)
 				}
 
 				before := time.Now()
-				got, err := c.Refresh(t.Context(), routecheck.DefaultTimeout)
-				if err != nil {
+				if err := c.Refresh(t.Context(), routecheck.DefaultTimeout); err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				after := time.Now() // synctest will freeze time.
+				got := c.Report()
 
 				peers := makeDB(tt.peers)
 				want := &routecheck.Report{
@@ -388,7 +388,7 @@ func TestRoutersByPrefix(t *testing.T) {
 			self := makeNode(99, withName("self"))
 			b := newStubBackend(self, tt.peers)
 			t.Cleanup(func() { b.Close() })
-			c, err := routecheck.NewClient(t.Logf, b, b, b)
+			c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

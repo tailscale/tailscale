@@ -13,12 +13,15 @@
 package routecheck
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/net/routecheck"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 )
 
 // FeatureName is the name of the feature implemented by this package.
@@ -40,8 +43,10 @@ type Extension struct {
 
 	logf    logger.Logf
 	backend ipnext.SafeBackend
+	ec      *eventbus.Client
 	nb      nodeBackender
 	nm      routecheck.NetMapper
+	routers *RouterTracker
 }
 
 var _ ipnext.Extension = new(Extension)
@@ -65,28 +70,62 @@ func (e *Extension) Init(h ipnext.Host) error {
 	}
 	e.nm = nm
 
+	ipnbus, ok := e.backend.(ipnext.NotifyWatcher)
+	if !ok {
+		return fmt.Errorf("backend %T does not implement ipnext.NotifyWatcher", e.backend)
+	}
+
 	pinger := e.backend.Sys().Engine.Get()
 
-	c, err := routecheck.NewClient(e.logf, e.nb, e.nm, pinger)
+	c, err := routecheck.NewClient(context.Background(), e.logf, e.nb, e.nm, pinger)
 	if err != nil {
 		return err
 	}
 	e.Client = c
 
-	h.Hooks().OnNetMapToggle.Add(e.onNetMapToggle)
+	e.routers = TrackRouters(context.Background(), e.logf, ipnbus)
+	e.routers.OnNetMapAvailable = e.Client.NotifyNetMapAvailable
+	e.routers.OnRoutersChange = e.Client.NeedsIncrRefresh
+
+	bus := e.backend.Sys().Bus.Get()
+	e.ec = bus.Client("routecheck")
+	eventbus.SubscribeFunc(e.ec, e.Client.WatchForNetMonRebind)
+
+	// Watch for changes to the self node that would toggle the routecheck feature.
+	h.Hooks().OnSelfChange.Add(e.reconcileWatcher)
+
+	// Probe for reachable peers.
+	go e.Client.Start()
 
 	return nil
 }
 
 // Shutdown implements the [ipnext.Extension.Shutdown] interface method.
 func (e *Extension) Shutdown() error {
-	err := e.Client.Close()
-	return err
+	e.ec.Close()
+	e.routers.Close()
+	return e.Client.Close()
 }
 
-func (e *Extension) onNetMapToggle(nm *netmap.NetworkMap) {
-	if nm == nil {
-		return
-	}
-	e.Client.NotifyNetMapAvailable(nm)
+// reconcileWatcher is called whenever e.routers should start, stop, or restart its watcher.
+// It may trigger a restart when self indicates that we have switched to a different tailnet or user,
+// in order to reset the internal state of e.routers and start tracking from scratch.
+//
+// This function must never block, because it’s called from
+// [ipnlocal.LocalBackend.SetControlClientStatus], which locks LocalBackend.mu.
+// This lock is also acquired when unwinding [ipnlocal.LocalBackend.WatchNotificationsAs]
+// which is what [RouterTracker.stopWatcherLocked] is waiting for.
+func (e *Extension) reconcileWatcher(self tailcfg.NodeView) {
+	go func() {
+		started, err := e.routers.StartStopWatcher(self)
+		if err != nil {
+			if !errors.Is(err, ErrRouteCheckNotEnabled) {
+				e.logf("error tracking routers: %v", err)
+			}
+			return // can be started by toggling the nodeattr
+		}
+		if started {
+			e.Client.NeedsRefresh()
+		}
+	}()
 }
