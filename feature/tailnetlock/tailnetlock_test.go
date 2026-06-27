@@ -68,7 +68,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/debug/tka/log", nil)
 		rec := httptest.NewRecorder()
-		b.HandleC2NForTest(rec, req)
+		b.ForTest().HandleC2N(rec, req)
 
 		if rec.Code != 400 {
 			t.Fatalf("got status code: %v, want: 400\nBody: %s", rec.Code, rec.Body)
@@ -81,7 +81,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/debug/tka/log", nil)
 		rec := httptest.NewRecorder()
-		b.HandleC2NForTest(rec, req)
+		b.ForTest().HandleC2N(rec, req)
 
 		if rec.Code != 200 {
 			t.Fatalf("got status code: %v, want: 200\nBody: %s", rec.Code, bodyHead(rec.Body))
@@ -103,7 +103,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/debug/tka/log", nil)
 		rec := httptest.NewRecorder()
-		b.HandleC2NForTest(rec, req)
+		b.ForTest().HandleC2N(rec, req)
 
 		if rec.Code != 200 {
 			t.Fatalf("got status code: %v, want: 200\nBody: %s", rec.Code, bodyHead(rec.Body))
@@ -125,7 +125,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/debug/tka/log?limit=60", nil)
 		rec := httptest.NewRecorder()
-		b.HandleC2NForTest(rec, req)
+		b.ForTest().HandleC2N(rec, req)
 
 		if rec.Code != 200 {
 			t.Fatalf("got status code: %v, want: 200\nBody: %s", rec.Code, bodyHead(rec.Body))

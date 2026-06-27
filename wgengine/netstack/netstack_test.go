@@ -470,7 +470,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				IPServiceMap := netmap.IPServiceMappings{
 					serviceIP: "svc:test-service",
 				}
-				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+				i.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
 					return addr == serviceIP
@@ -517,7 +517,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				IPServiceMap := netmap.IPServiceMappings{
 					serviceIP: "svc:test-service",
 				}
-				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+				i.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
 					return addr == serviceIP
@@ -543,7 +543,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				IPServiceMap := netmap.IPServiceMappings{
 					serviceIPv6: "svc:test-service",
 				}
-				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+				i.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
 					return addr == serviceIPv6
@@ -587,7 +587,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				IPServiceMap := netmap.IPServiceMappings{
 					serviceIPv6: "svc:test-service",
 				}
-				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+				i.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
 					return addr == serviceIPv6
@@ -614,7 +614,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				IPServiceMap := netmap.IPServiceMappings{
 					serviceIP: "svc:test-service",
 				}
-				i.lb.SetIPServiceMappingsForTest(IPServiceMap)
+				i.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 				i.atomicIsVIPServiceIPFunc.Store(func(addr netip.Addr) bool {
 					return addr == serviceIP
@@ -954,7 +954,7 @@ func TestHandleLocalPackets(t *testing.T) {
 		netip.MustParseAddr("100.99.55.111"):        "svc:test-service",
 		netip.MustParseAddr("fd7a:115c:a1e0::abcd"): "svc:test-service",
 	}
-	impl.lb.SetIPServiceMappingsForTest(IPServiceMap)
+	impl.lb.ForTest().SetIPServiceMappings(IPServiceMap)
 
 	t.Run("ShouldHandleServiceIP", func(t *testing.T) {
 		t.Parallel()

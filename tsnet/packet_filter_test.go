@@ -199,7 +199,7 @@ func TestPacketFilterFromNetmap(t *testing.T) {
 				t.Fatalf("waitFor: %s", err)
 			}
 
-			pf := s.lb.GetFilterForTest()
+			pf := s.lb.ForTest().GetFilter()
 
 			for _, check := range test.checks {
 				got := pf.Check(netip.MustParseAddr(check.src), netip.MustParseAddr(check.dst), check.port, ipproto.TCP)
@@ -230,7 +230,7 @@ func TestPacketFilterFromNetmap(t *testing.T) {
 					t.Fatalf("waitFor: %s", err)
 				}
 
-				pf := s.lb.GetFilterForTest()
+				pf := s.lb.ForTest().GetFilter()
 
 				for _, check := range test.checks {
 					got := pf.Check(netip.MustParseAddr(check.src), netip.MustParseAddr(check.dst), check.port, ipproto.TCP)
