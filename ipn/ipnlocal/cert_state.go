@@ -53,8 +53,8 @@ type CertState struct {
 	pendingCertDomains   set.Set[string]
 
 	// getCertForTest is used to retrieve TLS certificates in tests.
-	// See [LocalBackend.ConfigureCertsForTest]. Guarded by the
-	// containing [LocalBackend]'s mutex (b.mu).
+	// See [forTest.ConfigureCerts]. Guarded by the containing
+	// [LocalBackend]'s mutex (b.mu).
 	getCertForTest func(hostname string) (*TLSCertKeyPair, error)
 
 	// certRefreshCancel cancels the background TLS cert refresh loop

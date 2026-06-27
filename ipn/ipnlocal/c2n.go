@@ -27,7 +27,6 @@ import (
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/set"
-	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 )
 
@@ -323,11 +322,4 @@ func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.R
 	b.authReconfig()
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// HandleC2NForTest calls [handleC2N], for use by feature/ packages that
-// register C2N handlers and want to test them.
-func (b *LocalBackend) HandleC2NForTest(w http.ResponseWriter, r *http.Request) {
-	testenv.AssertInTest()
-	b.handleC2N(w, r)
 }
