@@ -20,6 +20,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/testenv"
 )
 
@@ -213,7 +214,6 @@ func (d *TestIGD) handlePMPQuery(pkt []byte, src netip.AddrPort) {
 			return
 		}
 		d.inc(&d.counters.numPMPPublicAddrRecv)
-
 	}
 	// TODO
 }
@@ -266,15 +266,15 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 // A cleanup for the resulting client is also added to t.
 func newTestClient(t *testing.T, igd *TestIGD, bus *eventbus.Bus) *Client {
 	if bus == nil {
-		bus = eventbus.New()
+		bus = eventbustest.NewBus(t)
 		t.Log("Created empty event bus for test client")
-		t.Cleanup(bus.Close)
 	}
 	var c *Client
 	c = NewClient(Config{
-		Logf:     tstest.WhileTestRunningLogger(t),
-		NetMon:   netmon.NewStatic(),
-		EventBus: bus,
+		ShutdownCtx: t.Context(),
+		Logf:        tstest.WhileTestRunningLogger(t),
+		NetMon:      netmon.NewStatic(),
+		EventBus:    bus,
 		OnChange: func() { // TODO(creachadair): Remove.
 			t.Logf("port map changed")
 			t.Logf("have mapping: %v", c.HaveMapping())
