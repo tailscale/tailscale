@@ -375,9 +375,11 @@ type LocalBackend struct {
 	capForcedNetfilter string // TODO(nickkhyl): move to nodeBackend
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO                   // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView      // or !Valid if none
-	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeBackend
+	lastServeConfJSON     mem.RO                   // last JSON that was parsed into serveConfig
+	serveConfig           ipn.ServeConfigView      // or !Valid if none
+	serveConfigLoadedOnce sync.Once                // latches serveConfigLoaded to true the first time reloadServeConfigLocked consults the store
+	serveConfigLoaded     bool                     // whether reloadServeConfigLocked has consulted the store yet; until then serveConfig may be stale/empty even if one is persisted. Set only via serveConfigLoadedOnce; never reset.
+	ipVIPServiceMap       netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeBackend
 
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
