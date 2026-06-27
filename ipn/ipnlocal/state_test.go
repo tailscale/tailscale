@@ -397,7 +397,7 @@ func TestStateMachine(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc, previousCC *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		previousCC = cc
 		cc = newClient(t, opts)
 
@@ -1147,7 +1147,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})

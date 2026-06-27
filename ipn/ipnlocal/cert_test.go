@@ -986,7 +986,7 @@ func TestRefreshApplicableCerts(t *testing.T) {
 	b.mu.Unlock()
 
 	gotCh := make(chan string, 4)
-	b.ConfigureCertsForTest(func(host string) (*TLSCertKeyPair, error) {
+	b.ForTest().ConfigureCerts(func(host string) (*TLSCertKeyPair, error) {
 		gotCh <- host
 		return &TLSCertKeyPair{}, nil
 	})

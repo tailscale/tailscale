@@ -80,7 +80,7 @@ func TestLocalLogLines(t *testing.T) {
 	persist := &persist.Persist{}
 	prefs := ipn.NewPrefs()
 	prefs.Persist = persist
-	lb.SetPrefsForTest(prefs)
+	lb.ForTest().SetPrefs(prefs)
 
 	t.Run("after_prefs", testWantRemain("[v1] peer keys: %s", "[v1] v%v peers: %v"))
 
