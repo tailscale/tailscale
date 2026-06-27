@@ -15,7 +15,8 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+
+	"tailscale.com/cmd/tailscale/cli/jsonoutput/tsdnsjsonv0"
 )
 
 var dnsQueryArgs struct {
@@ -73,7 +74,7 @@ func runDNSQuery(ctx context.Context, args []string) error {
 		return fmt.Errorf("failed to query DNS: %w", err)
 	}
 
-	data := &jsonoutput.DNSQueryResult{
+	data := &tsdnsjsonv0.QueryResponse{
 		Name:      name,
 		QueryType: queryType,
 	}
@@ -96,9 +97,9 @@ func runDNSQuery(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to parse DNS answers: %w", err)
 		}
-		data.Answers = make([]jsonoutput.DNSAnswer, 0, len(answers))
+		data.Answers = make([]tsdnsjsonv0.Answer, 0, len(answers))
 		for _, a := range answers {
-			data.Answers = append(data.Answers, jsonoutput.DNSAnswer{
+			data.Answers = append(data.Answers, tsdnsjsonv0.Answer{
 				Name:  a.Header.Name.String(),
 				TTL:   a.Header.TTL,
 				Class: a.Header.Class.String(),
@@ -120,7 +121,7 @@ func runDNSQuery(ctx context.Context, args []string) error {
 	return nil
 }
 
-func formatDNSQueryText(data *jsonoutput.DNSQueryResult) string {
+func formatDNSQueryText(data *tsdnsjsonv0.QueryResponse) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "DNS query for %q (%s) using internal resolver:\n", data.Name, data.QueryType)
@@ -158,8 +159,8 @@ func formatDNSQueryText(data *jsonoutput.DNSQueryResult) string {
 	return sb.String()
 }
 
-// formatResolverString formats a jsonoutput.DNSResolverInfo for human-readable text output.
-func formatResolverString(r jsonoutput.DNSResolverInfo) string {
+// formatResolverString formats a [tsdnsjsonv0.ResolverInfo] for human-readable text output.
+func formatResolverString(r tsdnsjsonv0.ResolverInfo) string {
 	if len(r.BootstrapResolution) > 0 {
 		return fmt.Sprintf("%s (bootstrap: %v)", r.Addr, r.BootstrapResolution)
 	}

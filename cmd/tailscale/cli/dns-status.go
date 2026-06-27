@@ -13,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+
+	"tailscale.com/cmd/tailscale/cli/jsonoutput/tsdnsjsonv0"
 	"tailscale.com/types/dnstype"
 )
 
@@ -84,9 +85,9 @@ var dnsStatusArgs struct {
 	json bool
 }
 
-// makeDNSResolverInfo converts a dnstype.Resolver to a jsonoutput.DNSResolverInfo.
-func makeDNSResolverInfo(r *dnstype.Resolver) jsonoutput.DNSResolverInfo {
-	info := jsonoutput.DNSResolverInfo{Addr: r.Addr}
+// makeDNSResolverInfo converts a [dnstype.Resolver] to a [tsdnsjsonv0.ResolverInfo].
+func makeDNSResolverInfo(r *dnstype.Resolver) tsdnsjsonv0.ResolverInfo {
+	info := tsdnsjsonv0.ResolverInfo{Addr: r.Addr}
 	if r.BootstrapResolution != nil {
 		info.BootstrapResolution = make([]string, 0, len(r.BootstrapResolution))
 		for _, a := range r.BootstrapResolution {
@@ -107,12 +108,12 @@ func runDNSStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	data := &jsonoutput.DNSStatusResult{
+	data := &tsdnsjsonv0.StatusResponse{
 		TailscaleDNS: prefs.CorpDNS,
 	}
 
 	if s.CurrentTailnet != nil {
-		data.CurrentTailnet = &jsonoutput.DNSTailnetInfo{
+		data.CurrentTailnet = &tsdnsjsonv0.TailnetInfo{
 			MagicDNSEnabled: s.CurrentTailnet.MagicDNSEnabled,
 			MagicDNSSuffix:  s.CurrentTailnet.MagicDNSSuffix,
 			SelfDNSName:     s.Self.DNSName,
@@ -127,7 +128,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 			data.Resolvers = append(data.Resolvers, makeDNSResolverInfo(r))
 		}
 
-		data.SplitDNSRoutes = make(map[string][]jsonoutput.DNSResolverInfo)
+		data.SplitDNSRoutes = make(map[string][]tsdnsjsonv0.ResolverInfo)
 		for k, v := range dnsConfig.Routes {
 			for _, r := range v {
 				data.SplitDNSRoutes[k] = append(data.SplitDNSRoutes[k], makeDNSResolverInfo(r))
@@ -149,7 +150,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 		data.CertDomains = dnsConfig.CertDomains
 
 		for _, er := range dnsConfig.ExtraRecords {
-			data.ExtraRecords = append(data.ExtraRecords, jsonoutput.DNSExtraRecord{
+			data.ExtraRecords = append(data.ExtraRecords, tsdnsjsonv0.ExtraRecord{
 				Name:  er.Name,
 				Type:  er.Type,
 				Value: er.Value,
@@ -166,7 +167,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 				data.SystemDNSError = err.Error()
 			}
 		} else if osCfg != nil {
-			data.SystemDNS = &jsonoutput.DNSSystemConfig{
+			data.SystemDNS = &tsdnsjsonv0.SystemConfig{
 				Nameservers:   osCfg.Nameservers,
 				SearchDomains: osCfg.SearchDomains,
 				MatchDomains:  osCfg.MatchDomains,
@@ -186,7 +187,7 @@ func runDNSStatus(ctx context.Context, args []string) error {
 	return nil
 }
 
-func formatDNSStatusText(data *jsonoutput.DNSStatusResult, all bool) string {
+func formatDNSStatusText(data *tsdnsjsonv0.StatusResponse, all bool) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "\n")
