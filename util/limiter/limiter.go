@@ -131,6 +131,13 @@ func (lm *Limiter[K]) allowBucketLocked(b *bucket, now time.Time) bool {
 }
 
 func (lm *Limiter[K]) updateBucketLocked(b *bucket, now time.Time) {
+	if lm.RefillInterval <= 0 {
+		// No refill rate configured (e.g. the zero-value limiter, which
+		// is documented to reject all requests). Tokens never regenerate,
+		// so there's nothing to update, and dividing by the interval below
+		// would panic.
+		return
+	}
 	now = now.Truncate(lm.RefillInterval)
 	if now.Before(b.lastUpdate) {
 		return
