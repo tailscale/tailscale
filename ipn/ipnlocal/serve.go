@@ -1367,7 +1367,9 @@ func (b *LocalBackend) serveTLSConfig(getCert func(*tls.ClientHelloInfo) (*tls.C
 	return base
 }
 
-func (b *LocalBackend) hasFunnelForHostPort(host string, port uint16) bool {
+// HasFunnelForHostPort reports whether the LocalBackend's serve config
+// has Funnel enabled for host:port.
+func (b *LocalBackend) HasFunnelForHostPort(host string, port uint16) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.serveConfig.Valid() {

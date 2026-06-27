@@ -3,19 +3,34 @@
 
 // Package acme registers the ACME/TLS-cert feature and implements its
 // associated [ipnext.Extension]. The extension owns the per-LocalBackend
-// state previously held in package-level globals and on LocalBackend
-// fields (ACME serialization mutex, in-flight cert tracking, etc.).
+// ACME serialization mutex, in-flight cert tracking, the refresh loop's
+// cancel func, and the test-only cert override; together with the cert
+// acquisition logic in this package, it is everything tailscaled needs
+// to obtain and renew TLS certificates via ACME.
 //
-// The cert code that runs against this state still lives in
-// [tailscale.com/ipn/ipnlocal]; this extension simply owns the state
-// and installs a hook so cert.go can find it from a *LocalBackend.
+// In builds without ACME support (js or ts_omit_acme), this package is
+// not linked in; [ipn/ipnlocal] then exposes only stub wrappers that
+// return errNoCerts or no-op.
 package acme
 
 import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"net/http"
+	"sync"
+	"time"
+
 	"tailscale.com/feature"
+	"tailscale.com/health"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/syncs"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -24,39 +39,189 @@ const featureName = "acme"
 func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, newExtension)
-	ipnlocal.HookCertState.Set(certStateFor)
+
+	ipnlocal.HookGetCertPEM.Set(getCertPEMHook)
+	ipnlocal.HookGetACMETLSALPNCert.Set(getACMETLSALPNCertHook)
+	ipnlocal.HookGetACMETLSALPNProto.Set(getACMETLSALPNProtoHook)
+	ipnlocal.HookUpdateCertRefreshLoop.Set(updateCertRefreshLoopHook)
+	ipnlocal.HookShutdownCertRefreshLoop.Set(shutdownCertRefreshLoopHook)
+	ipnlocal.HookConfigureCertsForTest.Set(configureCertsForTestHook)
+	ipnlocal.HookHandleC2NTLSCertStatus.Set(handleC2NTLSCertStatus)
 }
 
+// errNoExt is returned when a hook is invoked on a [*ipnlocal.LocalBackend]
+// that has no [Extension] registered (shouldn't happen in practice, but
+// guards against misuse from tests that swap extension registrations).
+var errNoExt = errors.New("acme extension not registered on this LocalBackend")
+
+// Extension is the ACME/cert [ipnext.Extension]. It owns the
+// per-[*ipnlocal.LocalBackend] state previously held in package-level
+// globals and in [*ipnlocal.LocalBackend] fields.
+//
+// All methods that take a [*ipnlocal.LocalBackend] argument operate on
+// the backend the extension was instantiated for; the argument is
+// passed through from the hook in [ipn/ipnlocal] rather than stored on
+// the Extension, which keeps the Extension's lifecycle independent of
+// any specific backend reference.
+type Extension struct {
+	logf logger.Logf
+
+	// acmeMu serializes ACME operations so concurrent requests for
+	// certs don't slam ACME. The first goroutine through populates the
+	// on-disk cache and the rest reuse it.
+	acmeMu syncs.Mutex
+
+	// renewMu guards renewCertAt.
+	// Lock order: acmeMu before renewMu.
+	renewMu     syncs.Mutex
+	renewCertAt map[string]time.Time // lazily initialized under renewMu
+
+	// pendingACMETLSALPNCerts maps SNI names to short-lived ACME
+	// tls-alpn-01 challenge certificates while an ACME order is
+	// waiting for validation. Entries are deleted by the cleanup
+	// function returned from storeACMETLSALPNCert after the challenge
+	// validation path finishes, whether it succeeds or fails.
+	pendingACMETLSALPNCerts syncs.Map[string, *tls.Certificate]
+
+	// pendingCertDomains tracks the set of domains for which an ACME
+	// issuance is currently in flight with no usable cached cert. It
+	// backs the tls-cert-pending health Warnable.
+	// Guarded by pendingCertDomainsMu.
+	pendingCertDomainsMu sync.Mutex
+	pendingCertDomains   set.Set[string]
+
+	// mu guards the test/lifecycle fields below.
+	mu sync.Mutex
+
+	// getCertForTest is used to retrieve TLS certificates in tests.
+	// See [LocalBackend.ConfigureCertsForTest].
+	getCertForTest func(hostname string) (*ipnlocal.TLSCertKeyPair, error)
+
+	// certRefreshCancel cancels the background TLS cert refresh loop
+	// that periodically pokes [LocalBackend.GetCertPEM] so renewals
+	// happen on idle nodes. Non-nil while the loop is running.
+	certRefreshCancel context.CancelFunc
+}
+
+// newExtension is the [ipnext.NewExtensionFn] registered for this
+// feature. It is called once per [*ipnlocal.LocalBackend].
 func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, error) {
-	return &extension{
-		state: new(ipnlocal.CertState),
-		logf:  logger.WithPrefix(logf, featureName+": "),
+	return &Extension{
+		logf: logger.WithPrefix(logf, featureName+": "),
 	}, nil
 }
 
-// extension is an [ipnext.Extension] that owns the per-LocalBackend
-// ACME/cert state. Most of the cert logic still lives in ipnlocal;
-// this extension exists to give that state a non-global home.
-type extension struct {
-	state *ipnlocal.CertState
-	logf  logger.Logf
-}
-
 // Name implements [ipnext.Extension].
-func (e *extension) Name() string { return featureName }
+func (e *Extension) Name() string { return featureName }
 
 // Init implements [ipnext.Extension].
-func (e *extension) Init(ipnext.Host) error { return nil }
+func (e *Extension) Init(ipnext.Host) error { return nil }
 
-// Shutdown implements [ipnext.Extension].
-func (e *extension) Shutdown() error { return nil }
-
-// certStateFor returns the [ipnlocal.CertState] owned by the acme
-// extension registered on b, or nil if none.
-func certStateFor(b *ipnlocal.LocalBackend) *ipnlocal.CertState {
-	e, ok := ipnlocal.GetExt[*extension](b)
-	if !ok {
-		return nil
+// Shutdown implements [ipnext.Extension]. It cancels the cert refresh
+// loop if it's running.
+func (e *Extension) Shutdown() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.certRefreshCancel != nil {
+		e.certRefreshCancel()
+		e.certRefreshCancel = nil
 	}
-	return e.state
+	return nil
 }
+
+// extFor returns the [*Extension] for b, or an error if no acme
+// extension is registered on b.
+func extFor(b *ipnlocal.LocalBackend) (*Extension, error) {
+	e, ok := ipnlocal.GetExt[*Extension](b)
+	if !ok {
+		return nil, errNoExt
+	}
+	return e, nil
+}
+
+// Hook adapter funcs that thread (b *ipnlocal.LocalBackend) into the
+// extension's methods. These are what get installed in
+// [ipnlocal.Hook*] at init time.
+
+func getCertPEMHook(b *ipnlocal.LocalBackend, ctx context.Context, domain string, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+	e, err := extFor(b)
+	if err != nil {
+		return nil, err
+	}
+	return e.getCertPEMWithValidity(b, ctx, domain, minValidity)
+}
+
+func getACMETLSALPNCertHook(b *ipnlocal.LocalBackend, hi *tls.ClientHelloInfo) (*tls.Certificate, bool) {
+	e, err := extFor(b)
+	if err != nil {
+		return nil, false
+	}
+	return e.getACMETLSALPNCert(hi)
+}
+
+func getACMETLSALPNProtoHook(b *ipnlocal.LocalBackend, hi *tls.ClientHelloInfo) (string, bool) {
+	e, err := extFor(b)
+	if err != nil {
+		return "", false
+	}
+	return e.getACMETLSALPNProto(hi)
+}
+
+func updateCertRefreshLoopHook(b *ipnlocal.LocalBackend, state ipn.State, sc ipn.ServeConfigView) {
+	e, err := extFor(b)
+	if err != nil {
+		return
+	}
+	e.updateCertRefreshLoop(b, state, sc)
+}
+
+func shutdownCertRefreshLoopHook(b *ipnlocal.LocalBackend) {
+	e, err := extFor(b)
+	if err != nil {
+		return
+	}
+	e.Shutdown()
+}
+
+func configureCertsForTestHook(b *ipnlocal.LocalBackend, getCert func(string) (*ipnlocal.TLSCertKeyPair, error)) {
+	e, err := extFor(b)
+	if err != nil {
+		panic(err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.getCertForTest = getCert
+}
+
+func handleC2NTLSCertStatus(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Request) {
+	e, err := extFor(b)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	e.handleC2NTLSCertStatus(b, w, r)
+}
+
+// ACME / cert metrics. These are package-level (process-wide) because
+// they aggregate across all [*Extension]s in the process.
+var (
+	metricACMEDNS01Start       = clientmetric.NewCounter("cert_acme_dns01_start")
+	metricACMEDNS01Success     = clientmetric.NewCounter("cert_acme_dns01_success")
+	metricACMEDNS01Failure     = clientmetric.NewCounter("cert_acme_dns01_failure")
+	metricACMETLSALPN01Start   = clientmetric.NewCounter("cert_acme_tls_alpn01_start")
+	metricACMETLSALPN01Success = clientmetric.NewCounter("cert_acme_tls_alpn01_success")
+	metricACMETLSALPN01Failure = clientmetric.NewCounter("cert_acme_tls_alpn01_failure")
+)
+
+// certPendingWarnable fires while ACME is fetching a TLS certificate
+// for which no usable cached copy exists (initial issuance or after
+// the cached cert has expired). Async renewal of a still-valid cert
+// does not fire it.
+var certPendingWarnable = health.Register(&health.Warnable{
+	Code:     tsconst.HealthWarnableTLSCertPending,
+	Title:    "Fetching TLS certificate",
+	Severity: health.SeverityLow,
+	Text: func(args health.Args) string {
+		return "Fetching TLS certificate via ACME for: " + args[health.ArgDomains]
+	},
+})

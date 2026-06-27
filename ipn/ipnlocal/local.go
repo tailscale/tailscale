@@ -498,6 +498,13 @@ func (b *LocalBackend) HardwareAttested() bool {
 // HealthTracker returns the health tracker for the backend.
 func (b *LocalBackend) HealthTracker() *health.Tracker { return b.health }
 
+// Go runs f in a new goroutine that's tracked by b's goroutine tracker.
+// [LocalBackend.Shutdown] waits for all such goroutines to finish.
+//
+// Extensions outside this package should prefer Go over plain `go f()`
+// so that shutdown is orderly.
+func (b *LocalBackend) Go(f func()) { b.goTracker.Go(f) }
+
 // Logger returns the logger for the backend.
 func (b *LocalBackend) Logger() logger.Logf { return b.logf }
 
@@ -1221,11 +1228,6 @@ var (
 	hookCheckCaptivePortalLoop    feature.Hook[func(*LocalBackend, context.Context)]
 )
 
-// hookCertRefreshLoop is set by the ACME-enabled cert code to a function
-// that periodically refreshes TLS certs for Serve/Funnel-configured
-// domains so renewals proceed even on otherwise-idle nodes.
-var hookCertRefreshLoop feature.Hook[func(*LocalBackend, context.Context)]
-
 func (b *LocalBackend) onHealthChange(change health.Change) {
 	if !buildfeatures.HasHealth {
 		return
@@ -1327,12 +1329,7 @@ func (b *LocalBackend) Shutdown() {
 		b.captiveCancel()
 	}
 
-	if buildfeatures.HasACME {
-		if state := b.certState(); state != nil && state.certRefreshCancel != nil {
-			state.certRefreshCancel()
-			state.certRefreshCancel = nil
-		}
-	}
+	b.shutdownCertRefreshLoopLocked()
 
 	b.stopReconnectTimerLocked()
 
@@ -7472,69 +7469,6 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 //
 // The LocalBackend's mutex is held while calling.
 var hookMaybeMutateHostinfoLocked feature.Hooks[func(*LocalBackend, *tailcfg.Hostinfo, ipn.PrefsView) bool]
-
-// updateCertRefreshLoopLocked starts or stops the background TLS cert
-// refresh loop based on whether we currently have any HTTPS-serving
-// hostname whose cert we should keep fresh. The loop runs only while:
-//
-//   - ACME support is compiled in,
-//   - the node is in [ipn.Running], and
-//   - the current [ipn.ServeConfig] has at least one HTTPS Web entry.
-//
-// We deliberately don't keep an idle timer around on hosts that have no
-// certs to maintain (e.g. mobile devices that never run Serve), so this
-// must be called whenever any of those inputs change: state transitions
-// and ServeConfig reloads.
-//
-// b.mu must be held.
-func (b *LocalBackend) updateCertRefreshLoopLocked() {
-	if !buildfeatures.HasACME {
-		return
-	}
-	state := b.certState()
-	if state == nil {
-		return
-	}
-	shouldRun := hookCertRefreshLoop.IsSet() &&
-		b.state == ipn.Running &&
-		serveConfigUsesACMECerts(b.serveConfig)
-
-	switch {
-	case shouldRun && state.certRefreshCancel == nil:
-		ctx, cancel := context.WithCancel(b.ctx)
-		state.certRefreshCancel = cancel
-		b.goTracker.Go(func() { hookCertRefreshLoop.Get()(b, ctx) })
-	case !shouldRun && state.certRefreshCancel != nil:
-		state.certRefreshCancel()
-		state.certRefreshCancel = nil
-	}
-}
-
-// serveConfigUsesACMECerts reports whether sc has any entry that
-// causes tailscaled to obtain ACME-managed TLS certs: an HTTPS Web
-// entry (background, foreground, or service) or a TCP handler with
-// TerminateTLS set (`tailscale serve --tls-terminated-tcp`).
-func serveConfigUsesACMECerts(sc ipn.ServeConfigView) bool {
-	if !sc.Valid() {
-		return false
-	}
-	for range sc.Webs() {
-		return true
-	}
-	for _, tcp := range sc.TCPs() {
-		if tcp.TerminateTLS() != "" {
-			return true
-		}
-	}
-	for _, svc := range sc.Services().All() {
-		for _, tcp := range svc.TCP().All() {
-			if tcp.TerminateTLS() != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // maybeSentHostinfoIfChangedLocked updates the hostinfo.ServicesHash, hostinfo.WireIngress and
 // hostinfo.IngressEnabled fields and kicks off a Hostinfo update if the values have changed.
