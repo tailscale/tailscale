@@ -14,4 +14,4 @@ Please squash your code review edits & force push. Multiple commits in
 a PR are fine, but only if they're each logically separate and all tests pass
 at each stage. No fixup commits.
 
-See [commit-messages.md](docs/commit-messages.md) (or skim `git log`) for our commit message style.
+See [commit-messages.md](../docs/commit-messages.md) (or skim `git log`) for our commit message style.
