@@ -20,6 +20,10 @@ import (
 	"tailscale.com/types/views"
 )
 
+type mockPolicySnapshot struct{}
+
+func (mockPolicySnapshot) MarshalJSON() ([]byte, error) { return []byte("{}"), nil }
+
 func TestIsNotableNotify(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -51,6 +55,8 @@ func TestIsNotableNotify(t *testing.T) {
 			continue
 		case "DriveShares":
 			n.DriveShares = views.SliceOfViews[*drive.Share, drive.ShareView](make([]*drive.Share, 1))
+		case "Policy":
+			n.Policy = mockPolicySnapshot{}
 		default:
 			rf := reflect.ValueOf(n).Elem().FieldByIndex(sf.Index)
 			switch rf.Kind() {
