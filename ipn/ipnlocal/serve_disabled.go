@@ -28,7 +28,7 @@ type funnelFlow = struct{}
 
 func (*LocalBackend) hasIngressEnabledLocked() bool         { return false }
 func (*LocalBackend) shouldWireInactiveIngressLocked() bool { return false }
-func (*LocalBackend) hasFunnelForHostPort(host string, port uint16) bool {
+func (*LocalBackend) HasFunnelForHostPort(host string, port uint16) bool {
 	return false
 }
 
