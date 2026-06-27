@@ -467,20 +467,6 @@ func (b *LocalBackend) getCertStore() (certStore, error) {
 	return certFileStore{dir: dir, testRoots: testX509Roots}, nil
 }
 
-// ConfigureCertsForTest sets a certificate retrieval function to be used by
-// this local backend, skipping the usual ACME certificate registration. Should
-// only be used in tests.
-func (b *LocalBackend) ConfigureCertsForTest(getCert func(hostname string) (*TLSCertKeyPair, error)) {
-	testenv.AssertInTest()
-	cs := b.certState()
-	if cs == nil {
-		panic("ConfigureCertsForTest called without cert extension registered")
-	}
-	b.mu.Lock()
-	cs.getCertForTest = getCert
-	b.mu.Unlock()
-}
-
 // certFileStore implements certStore by storing the cert & key files in the named directory.
 type certFileStore struct {
 	dir string

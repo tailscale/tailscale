@@ -1419,7 +1419,7 @@ func TestConfigureExitNode(t *testing.T) {
 			sys := tsd.NewSystem()
 			sys.PolicyClient.Set(pol)
 			lb := newTestLocalBackendWithSys(t, sys)
-			lb.SetPrefsForTest(tt.prefs.Clone())
+			lb.ForTest().SetPrefs(tt.prefs.Clone())
 
 			// Then set the netcheck report and netmap, if any. Clone the shared
 			// report because AddNetcheckReportForTest mutates it and subtests run
@@ -1643,9 +1643,9 @@ func TestPrefsChangeDisablesExitNode(t *testing.T) {
 			if tt.netMap != nil {
 				lb.SetControlClientStatus(lb.cc, controlclient.Status{NetMap: tt.netMap})
 			}
-			// Set the initial prefs via SetPrefsForTest
+			// Set the initial prefs via the test helper.
 			// to apply necessary adjustments.
-			lb.SetPrefsForTest(tt.prefs.Clone())
+			lb.ForTest().SetPrefs(tt.prefs.Clone())
 			initialPrefs := lb.Prefs()
 
 			// Check whether changeDisablesExitNodeLocked correctly identifies the change.
@@ -1684,7 +1684,7 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 
 	lb := newTestLocalBackend(t)
 	lb.sys.MagicSock.Get().AddNetcheckReportForTest(clientNetmap.DERPMap, report, time.Now())
-	lb.SetPrefsForTest(&ipn.Prefs{
+	lb.ForTest().SetPrefs(&ipn.Prefs{
 		ControlURL:   controlURL,
 		AutoExitNode: ipn.AnyExitNode,
 	})
@@ -3969,11 +3969,11 @@ func TestSetExitNodeIDPolicy(t *testing.T) {
 				t.Errorf("wanted prefs changed %v, got prefs changed %v", test.prefsChanged, changed)
 			}
 
-			// Both [LocalBackend.SetPrefsForTest] and [LocalBackend.EditPrefs]
+			// Both [forTest.SetPrefs] and [LocalBackend.EditPrefs]
 			// apply syspolicy settings to the current profile's preferences. Therefore,
 			// we pass the current, unmodified preferences and expect the effective
 			// preferences to change.
-			b.SetPrefsForTest(pm.CurrentPrefs().AsStruct())
+			b.ForTest().SetPrefs(pm.CurrentPrefs().AsStruct())
 
 			if got := b.Prefs().ExitNodeID(); got != tailcfg.StableNodeID(test.exitNodeIDWant) {
 				t.Errorf("ExitNodeID: got %q; want %q", got, test.exitNodeIDWant)
@@ -4093,7 +4093,7 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 			b.currentNode().SetNetMap(tt.netmap)
 			b.lastSuggestedExitNode = tt.lastSuggestedExitNode
 			b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, tt.report, time.Now())
-			b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+			b.ForTest().SetPrefs(b.pm.CurrentPrefs().AsStruct())
 
 			allDone := make(chan bool, 1)
 			defer b.goTracker.AddDoneCallback(func() {
@@ -4221,7 +4221,7 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 		DERPMap: defaultDERPMap,
 	})
 	b.lastSuggestedExitNode = peer1.StableID()
-	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+	b.ForTest().SetPrefs(b.pm.CurrentPrefs().AsStruct())
 	if eid := b.Prefs().ExitNodeID(); eid != peer1.StableID() {
 		t.Errorf("got initial exit node %v, want %v", eid, peer1.StableID())
 	}
@@ -4291,7 +4291,7 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 	// in terms of latency and DERP region.
 	b.lastSuggestedExitNode = peer2.StableID()
 	b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, report, time.Now())
-	b.SetPrefsForTest(b.pm.CurrentPrefs().AsStruct())
+	b.ForTest().SetPrefs(b.pm.CurrentPrefs().AsStruct())
 	offlinePeer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(false), withNodeKey())
 	updatedNetmap := &netmap.NetworkMap{
 		Peers: []tailcfg.NodeView{
@@ -5387,15 +5387,6 @@ func TestRoundTraffic(t *testing.T) {
 			}
 		})
 	}
-}
-
-func (b *LocalBackend) SetPrefsForTest(newp *ipn.Prefs) {
-	if newp == nil {
-		panic("SetPrefsForTest got nil prefs")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.setPrefsLocked(newp)
 }
 
 type peerOptFunc func(*tailcfg.Node)
@@ -7079,7 +7070,7 @@ func newLocalBackendWithSysAndTestControl(t testing.TB, enableLogging bool, sys 
 	}
 	t.Cleanup(b.Shutdown)
 
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		return newControl(t, opts), nil
 	})
 	return b
@@ -7873,7 +7864,7 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 				return newClient(tb, opts)
 			})
 			if tt.initialPrefs != nil {
-				lb.SetPrefsForTest(tt.initialPrefs)
+				lb.ForTest().SetPrefs(tt.initialPrefs)
 			}
 			if err := lb.Start(ipn.Options{}); err != nil {
 				t.Fatalf("(*LocalBackend).Start(): %v", err)
@@ -8154,7 +8145,7 @@ func TestSrcCapPacketFilter(t *testing.T) {
 		}},
 	}})
 
-	f := lb.GetFilterForTest()
+	f := lb.ForTest().GetFilter()
 	res := f.Check(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP)
 	if res != filter.Accept {
 		t.Errorf("Check(2.2.2.2, ...) = %s, want %s", res, filter.Accept)
@@ -8316,7 +8307,7 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 				},
 			}})
 
-			lb.SetPrefsForTest(&ipn.Prefs{
+			lb.ForTest().SetPrefs(&ipn.Prefs{
 				ControlURL:  "https://localhost:1/",
 				WantRunning: true,
 				LoggedOut:   false,
@@ -8386,7 +8377,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 	}
 
 	// With Check disabled, onClientVersion should cache but not broadcast.
-	lb.SetPrefsForTest(&ipn.Prefs{
+	lb.ForTest().SetPrefs(&ipn.Prefs{
 		AutoUpdate: ipn.AutoUpdatePrefs{Check: false},
 	})
 
@@ -8404,7 +8395,7 @@ func TestOnClientVersionRespectsAutoUpdateCheck(t *testing.T) {
 	}
 
 	// With Check enabled, onClientVersion should broadcast.
-	lb.SetPrefsForTest(&ipn.Prefs{
+	lb.ForTest().SetPrefs(&ipn.Prefs{
 		AutoUpdate: ipn.AutoUpdatePrefs{Check: true},
 	})
 
@@ -8424,7 +8415,7 @@ func TestWatchNotificationsInitialClientVersion(t *testing.T) {
 	}
 
 	// Set Check=true and cache a ClientVersion.
-	lb.SetPrefsForTest(&ipn.Prefs{
+	lb.ForTest().SetPrefs(&ipn.Prefs{
 		AutoUpdate: ipn.AutoUpdatePrefs{Check: true},
 	})
 	lb.mu.Lock()
@@ -8444,7 +8435,7 @@ func TestWatchNotificationsInitialClientVersion(t *testing.T) {
 	nw2.check()
 
 	// Watch with the flag but Check=false, should not include it.
-	lb.SetPrefsForTest(&ipn.Prefs{
+	lb.ForTest().SetPrefs(&ipn.Prefs{
 		AutoUpdate: ipn.AutoUpdatePrefs{Check: false},
 	})
 	nw3 := newNotificationWatcher(t, lb, ipnauth.Self)
@@ -8907,7 +8898,7 @@ func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newTestLocalBackend(t)
-			b.SetPrefsForTest(tt.prefs)
+			b.ForTest().SetPrefs(tt.prefs)
 			_, hasWarning := b.HealthTracker().CurrentState().Warnings[warnCode]
 			if hasWarning != tt.wantWarning {
 				t.Errorf("warning present = %v, want %v", hasWarning, tt.wantWarning)
@@ -8918,11 +8909,11 @@ func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
 	// Verify that the warning clears when the conflicting combination is resolved.
 	t.Run("warning-clears-on-fix", func(t *testing.T) {
 		b := newTestLocalBackend(t)
-		b.SetPrefsForTest(&ipn.Prefs{NoSNAT: true, AdvertiseRoutes: exitRoutes})
+		b.ForTest().SetPrefs(&ipn.Prefs{NoSNAT: true, AdvertiseRoutes: exitRoutes})
 		if _, ok := b.HealthTracker().CurrentState().Warnings[warnCode]; !ok {
 			t.Fatal("expected warning to be set")
 		}
-		b.SetPrefsForTest(&ipn.Prefs{NoSNAT: false, AdvertiseRoutes: exitRoutes})
+		b.ForTest().SetPrefs(&ipn.Prefs{NoSNAT: false, AdvertiseRoutes: exitRoutes})
 		if _, ok := b.HealthTracker().CurrentState().Warnings[warnCode]; ok {
 			t.Fatal("expected warning to be cleared after enabling SNAT")
 		}
@@ -8956,7 +8947,7 @@ func TestStartPreservesLoginFlags(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})

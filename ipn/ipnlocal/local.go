@@ -539,7 +539,7 @@ type serveLabels struct {
 }
 
 // clientGen is a func that creates a control plane client.
-// It's the type used by LocalBackend.SetControlClientGetterForTesting.
+// It's the type used by forTest.SetControlClientGetter.
 type clientGen func(controlclient.Options) (controlclient.Client, error)
 
 // NewLocalBackend returns a new LocalBackend that is ready to run,
@@ -1085,16 +1085,6 @@ func (b *LocalBackend) IPServiceMappings() netmap.IPServiceMappings {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.ipVIPServiceMap
-}
-
-func (b *LocalBackend) SetIPServiceMappingsForTest(m netmap.IPServiceMappings) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	testenv.AssertInTest()
-	b.ipVIPServiceMap = m
-	if ns, ok := b.sys.Netstack.GetOK(); ok {
-		ns.UpdateIPServiceMappings(m)
-	}
 }
 
 // setConfigLocked uses the provided config to update the backend's prefs
@@ -1822,18 +1812,6 @@ func (b *LocalBackend) PeerByID(id tailcfg.NodeID) (n tailcfg.NodeView, ok bool)
 // UserID they don't recognize and want to resolve it.
 func (b *LocalBackend) UserProfile(id tailcfg.UserID) (u tailcfg.UserProfileView, ok bool) {
 	return b.currentNode().UserByID(id)
-}
-
-func (b *LocalBackend) GetFilterForTest() *filter.Filter {
-	testenv.AssertInTest()
-	// Take b.mu so the read serializes with [setControlClientStatusLocked],
-	// which installs the netmap and the filter at separate sub-steps. Without
-	// this, a test thread that observes the new netmap (via [NetMapWithPeers])
-	// can race ahead of the filter store and read the previous filter.
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	nb := b.currentNode()
-	return nb.filterAtomic.Load()
 }
 
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
@@ -2965,37 +2943,11 @@ func (b *LocalBackend) SetHTTPTestClient(c *http.Client) {
 	b.httpTestClient = c
 }
 
-// SetControlClientGetterForTesting sets the func that creates a
-// control plane client. It can be called at most once, before Start.
-func (b *LocalBackend) SetControlClientGetterForTesting(newControlClient func(controlclient.Options) (controlclient.Client, error)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.ccGen != nil {
-		panic("invalid use of SetControlClientGetterForTesting after Start")
-	}
-	b.ccGen = newControlClient
-}
-
-// PeersForTest returns all the current peers, sorted by Node.ID,
-// for integration tests in another repo.
-func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
-	testenv.AssertInTest()
-	return b.currentNode().PeersForTest()
-}
-
-// AwaitNodeKeyForTest returns a channel that is closed once a peer with the
-// given node key first appears in the current netmap. If the peer is already
-// present, the returned channel is already closed. See
-// [nodeBackend.AwaitNodeKeyForTest].
-func (b *LocalBackend) AwaitNodeKeyForTest(k key.NodePublic) <-chan struct{} {
-	return b.currentNode().AwaitNodeKeyForTest(k)
-}
-
 func (b *LocalBackend) getNewControlClientFuncLocked() clientGen {
 	if b.ccGen == nil {
 		// Initialize it rather than just returning the
 		// default to make any future call to
-		// SetControlClientGetterForTesting panic.
+		// forTest.SetControlClientGetter panic.
 		b.ccGen = func(opts controlclient.Options) (controlclient.Client, error) {
 			return controlclient.New(opts)
 		}
@@ -4920,16 +4872,6 @@ func (b *LocalBackend) resolveBestProfileLocked() (_ ipn.LoginProfileView, isBac
 	// such as when [pkey.Tailnet] policy setting requires a specific Tailnet.
 	// See tailscale/corp#26249.
 	return b.pm.CurrentProfile(), false
-}
-
-// CurrentUserForTest returns the current user and the associated WindowsUserID.
-// It is used for testing only, and will be removed along with the rest of the
-// "current user" functionality as we progress on the multi-user improvements (tailscale/corp#18342).
-func (b *LocalBackend) CurrentUserForTest() (ipn.WindowsUserID, ipnauth.Actor) {
-	testenv.AssertInTest()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.pm.CurrentUserID(), b.currentUser
 }
 
 // CheckPrefs validates the provided user modifiable settings for correctness

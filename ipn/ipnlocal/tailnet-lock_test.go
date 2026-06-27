@@ -883,7 +883,7 @@ func TestTKAForceDisable(t *testing.T) {
 
 	b := newTestLocalBackendWithSys(t, sys)
 	b.SetVarRoot(temp)
-	b.SetControlClientGetterForTesting(func(controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(controlclient.Options) (controlclient.Client, error) {
 		return cc, nil
 	})
 	b.mu.Lock()

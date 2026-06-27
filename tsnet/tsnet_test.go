@@ -345,7 +345,7 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.lb.ConfigureCertsForTest(testCertRoot.getCert)
+	s.lb.ForTest().ConfigureCerts(testCertRoot.getCert)
 
 	// Wait for the server to finish connecting to its home DERP server,
 	// to prevent fast tests from racing the DERP handshake resulting
@@ -2693,7 +2693,7 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2.lb.ConfigureCertsForTest(testCertRoot.getCert)
+	s2.lb.ForTest().ConfigureCerts(testCertRoot.getCert)
 
 	s1ip4, s1ip6 := s1.TailscaleIPs()
 	s2ip4 := s2status.TailscaleIPs[0]
@@ -3263,7 +3263,7 @@ func TestDialUDPInjectedReadRecordsFlowState(t *testing.T) {
 		// PacketFilter-only changes don't necessarily fire peer/netmap
 		// notifications, so poll the wgengine filter directly.
 		if err := tstest.WaitFor(30*time.Second, func() error {
-			f := lt.s2.lb.GetFilterForTest()
+			f := lt.s2.lb.ForTest().GetFilter()
 			if f == nil {
 				return errors.New("no filter yet")
 			}

@@ -776,9 +776,10 @@ func (b *LocalBackend) NetworkLockAllowed() bool {
 	return b.TailnetLockAllowed()
 }
 
-// Only use is in tests.
-func (b *LocalBackend) TailnetLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
-	testenv.AssertInTest()
+// TailnetLockVerifySignature verifies that nks is a valid tailnet lock
+// signature for the given node key.
+func (f forTest) TailnetLockVerifySignature(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
+	b := f.b
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -787,25 +788,16 @@ func (b *LocalBackend) TailnetLockVerifySignatureForTest(nks tkatype.MarshaledSi
 	return b.tka.authority.NodeKeyAuthorized(nodeKey, nks)
 }
 
-// Deprecated: use [LocalBackend.TailnetLockVerifySignatureForTest] instead.
-func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
-	return b.TailnetLockVerifySignatureForTest(nks, nodeKey)
-}
-
-// Only use is in tests.
-func (b *LocalBackend) TailnetLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
-	testenv.AssertInTest()
+// TailnetLockKeyTrusted reports whether keyID is trusted by the tailnet lock
+// authority. It panics if tailnet lock is not initialized.
+func (f forTest) TailnetLockKeyTrusted(keyID tkatype.KeyID) bool {
+	b := f.b
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
 		panic("tailnet lock not initialized")
 	}
 	return b.tka.authority.KeyTrusted(keyID)
-}
-
-// Deprecated: use [LocalBackend.TailnetLockKeyTrustedForTest] instead.
-func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
-	return b.TailnetLockKeyTrustedForTest(keyID)
 }
 
 // TailnetLockForceLocalDisable shuts down TKA locally, and denylists the current
