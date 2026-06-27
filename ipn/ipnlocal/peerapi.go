@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -35,9 +36,12 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/dnsname"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -674,26 +678,68 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 	dh.ServeHTTP(w, r)
 }
 
-func (h *peerAPIHandler) replyToDNSQueries() bool {
+func (h *peerAPIHandler) areDNSQueriesAllowed(uriQuery url.Values) (allowed bool, suffixes views.Slice[string]) {
 	if !buildfeatures.HasDNS {
-		return false
+		return false, PeerAPIDNSRejectAllNames
 	}
-	if h.isSelf {
-		// If the peer is owned by the same user, just allow it
-		// without further checks.
-		return true
+	var num int
+	allHooks := make([]views.Slice[string], 0, len(HookAllowPeerAPIDNS))
+	for _, f := range HookAllowPeerAPIDNS {
+		cur := f(h, uriQuery)
+		// Handle the common allow-all and deny-all cases first
+		if cur.Len() == 0 {
+			continue
+		}
+		if views.SliceEqual(cur, PeerAPIDNSAllowAllNames) {
+			return true, cur
+		}
+		num += cur.Len()
+		allHooks = append(allHooks, cur)
 	}
-	b := h.ps.b
-	if !b.OfferingExitNode() && !b.OfferingAppConnector() {
-		// If we're not an exit node or app connector, there's
-		// no point to being a DNS server for somebody.
-		return false
+
+	if len(allHooks) == 0 {
+		return false, PeerAPIDNSRejectAllNames
 	}
-	if !h.remoteAddr.IsValid() {
+	if len(allHooks) == 1 {
+		return true, allHooks[0]
+	}
+
+	dedupedSuffixes := make(set.Set[string], num)
+	for _, v := range allHooks {
+		for _, name := range v.All() {
+			dedupedSuffixes.Add(name)
+		}
+	}
+
+	out := make([]string, 0, len(dedupedSuffixes))
+	for suffix := range dedupedSuffixes {
+		out = append(out, suffix)
+	}
+	return true, views.SliceOf(out)
+}
+
+func peerAPIDNSAllowSelf(h PeerAPIHandler, _ url.Values) views.Slice[string] {
+	// If the peer is owned by the same user, just allow it
+	// without further checks.
+	return bools.IfElse(!h.IsSelfUntagged(), PeerAPIDNSAllowAllNames, PeerAPIDNSRejectAllNames)
+}
+
+func peerAPIDNSAllowWhenExitNode(h PeerAPIHandler, _ url.Values) views.Slice[string] {
+	if !h.LocalBackend().OfferingExitNode() && !h.LocalBackend().OfferingAppConnector() {
+		// TODO(adrian): ideally, app connector logic should migrate to
+		// feature/appconnectors but the 0.0.0.0 check below requires access to
+		// nodeBackend.filter, which is unexported. It would be nice to migrate
+		// that to a check for domains within one of the configured apps, but
+		// care must be taken not to break existing deployments.
+		return PeerAPIDNSRejectAllNames
+	}
+
+	if !h.RemoteAddr().IsValid() {
 		// This should never be the case if the peerAPIHandler
 		// was wired up correctly, but just in case.
-		return false
+		return PeerAPIDNSRejectAllNames
 	}
+
 	// Otherwise, we're an exit node but the peer is not us, so
 	// we need to check if they're allowed access to the internet.
 	// As peerapi bypasses wgengine/filter checks, we need to check
@@ -707,24 +753,51 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// but an app connector explicitly adds 0.0.0.0/32 (and the
 	// IPv6 equivalent) to make this work (see updateFilterLocked
 	// in LocalBackend).
-	f := b.currentNode().filter()
+	f := h.LocalBackend().currentNode().filter()
 	if f == nil {
-		return false
+		return PeerAPIDNSRejectAllNames
 	}
 	// Note: we check TCP here because the Filter type already had
 	// a CheckTCP method (for unit tests), but it's pretty
 	// arbitrary. DNS runs over TCP and UDP, so sure... we check
 	// TCP.
 	dstIP := netaddr.IPv4(0, 0, 0, 0)
-	remoteIP := h.remoteAddr.Addr()
+	remoteIP := h.RemoteAddr().Addr()
 	if remoteIP.Is6() {
 		// autogroup:internet for IPv6 is defined to start with 2000::/3,
 		// so use 2000::0 as the probe "the internet" address.
 		dstIP = netip.MustParseAddr("2000::")
 	}
 	verdict := f.CheckTCP(remoteIP, dstIP, 53)
-	return verdict == filter.Accept
+	return bools.IfElse(verdict == filter.Accept, PeerAPIDNSAllowAllNames, PeerAPIDNSRejectAllNames)
 }
+
+var (
+	// PeerAPIDNSAllowAllNames is a convenience return value for handlers in
+	// HookAllowPeerAPIDNS to allow all queries.
+	PeerAPIDNSAllowAllNames = views.SliceOf([]string{""})
+	// PeerAPIDNSRejectAllNames is a convenience return value for handlers in
+	// HookAllowPeerAPIDNS to reject all queries.
+	PeerAPIDNSRejectAllNames = views.Slice[string]{}
+
+	// HookAllowPeerAPIDNS is a collection of handlers that control if PeerAPI
+	// DNS queries are permitted from this peer, possibly based on the URL query
+	// string.
+	// The return value is a slice of name suffixes to permit.
+	//
+	// Use [PeerAPIDNSAllowAllNames] or a slice view containing "" to accept all
+	// names other than those blocked by [tailcfg.DNSConfig.ExitNodeFilteredSet].
+	// Use [PeerAPIDNSRejectAllNames], an invalid (nil) slice view, or an empty
+	// slice view to indicate that this handler does not offer any approvals.
+	//
+	// A query is accepted if at least one handler allows queries and the
+	// query's name matches one of the accepting handlers' permitted suffix
+	// lists.
+	HookAllowPeerAPIDNS = feature.Hooks[func(PeerAPIHandler, url.Values) views.Slice[string]]{
+		peerAPIDNSAllowSelf,
+		peerAPIDNSAllowWhenExitNode,
+	}
+)
 
 // handleDNSQuery implements a DoH server (RFC 8484) over the peerapi.
 // It's not over HTTPS as the spec dictates, but rather HTTP-over-WireGuard.
@@ -733,7 +806,8 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "DNS not wired up", http.StatusNotImplemented)
 		return
 	}
-	if !h.replyToDNSQueries() {
+	allow, suffixes := h.areDNSQueriesAllowed(r.URL.Query())
+	if !allow {
 		http.Error(w, "DNS access denied", http.StatusForbidden)
 		return
 	}
@@ -755,9 +829,26 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	// but long enough that it's longer than real DNS timeouts.
 	const arbitraryTimeout = 5 * time.Second
 
+	allowName := h.ps.b.allowExitNodeDNSProxyToServeName
+	if !views.SliceEqual(suffixes, PeerAPIDNSAllowAllNames) {
+		allowName = func(name string) bool {
+			if !h.ps.b.allowExitNodeDNSProxyToServeName(name) {
+				return false
+			}
+
+			for _, suffix := range suffixes.All() {
+				if dnsname.HasSuffix(name, suffix) {
+					return true
+				}
+			}
+
+			return false
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), arbitraryTimeout)
 	defer cancel()
-	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
+	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, allowName)
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {

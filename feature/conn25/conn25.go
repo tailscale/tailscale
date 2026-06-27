@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -83,6 +84,7 @@ func init() {
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
+	ipnlocal.HookAllowPeerAPIDNS.Add(dnsAllowedSuffixes)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
@@ -97,6 +99,23 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 		return
 	}
 	e.handleConnectorTransitIP(h, w, r)
+}
+
+func dnsAllowedSuffixes(h ipnlocal.PeerAPIHandler, urlQuery url.Values) views.Slice[string] {
+	// TODO(tailscale/corp#39033): Remove for alpha release.
+	if !envknob.UseWIPCode() && !testenv.InTest() {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
+	if !ok {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+	cfg, isConfigured := e.conn25.getConfig()
+	if !isConfigured {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	return e.conn25.connector.dnsAllowedSuffixes(h, urlQuery, cfg)
 }
 
 // extension is an [ipnext.Extension] managing the connector on platforms
@@ -176,7 +195,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		if urlBase == "" {
 			return "", nil
 		}
-		return urlBase + "/dns-query", nil
+		return fmt.Sprintf("%s/dns-query?app=%s", urlBase, url.QueryEscape(app.Name)), nil
 	}); err != nil {
 		return fmt.Errorf("could not register DNS resolver scheme: %w", err)
 	}
@@ -779,16 +798,11 @@ func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ok := c.isKnownTransitIP(p.Dst.Addr())
+	_, ok := c.assignments.lookupByTransitIP(p.Dst.Addr())
 	if ok {
-		return true, packetFilterAllowReason
+		return true, "app connector egress to transit IP"
 	}
 	return false, ""
-}
-
-func (c *client) isKnownTransitIP(tip netip.Addr) bool {
-	_, ok := c.assignments.lookupByTransitIP(tip)
-	return ok
 }
 
 func (c *client) reconfig() {
@@ -1322,57 +1336,98 @@ type connector struct {
 func (c *connector) appAddrForTransitIPConnection(srcIP netip.Addr, transitIP netip.Addr) (AppAddr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.lookupBySrcIPAndTransitIP(srcIP, transitIP)
-	if ok {
-		return v, true
-	}
-	return AppAddr{}, false
+	v, ok := c.transitIPs[srcIP][transitIP]
+	return v, ok
 }
-
-const packetFilterAllowOtherReason = "app connector ok"
-const packetFilterAllowTCPReason = "app connector tcp ok"
-const packetFilterAllowICMPReason = "app connector ICMP ok"
 
 // packetFilterAllow returns true if the provided packet has a Src that maps to a peer
 // that has a transit IP with us that is the packet Dst, and false otherwise.
 func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if appAddr, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr()); ok {
-		if appAddr.Filter.Len() > 0 &&
-			p.Dst.Addr().Is4() && p.IPProto == ipproto.ICMPv4 ||
-			p.Dst.Addr().Is6() && p.IPProto == ipproto.ICMPv6 {
-			return true, packetFilterAllowICMPReason
+	appAddr, ok := c.appAddrForTransitIPConnection(p.Src.Addr(), p.Dst.Addr())
+	if !ok {
+		return false, ""
+	}
+
+	// This is modelled after [filter.Filter.RunIn].
+	switch p.IPProto {
+	case ipproto.ICMPv4, ipproto.ICMPv6:
+		var icmp ipproto.Proto
+		switch p.IPVersion {
+		case 4:
+			icmp = ipproto.ICMPv4
+		case 6:
+			icmp = ipproto.ICMPv6
+		}
+		if p.IPProto != icmp {
+			// This is a diversion from RunIn: it the wrong ICMP type for
+			// the packet's protocol would fall to the default case but that
+			// difference seems unlikely to be a problem in practise.
+			return false, ""
+		}
+		if p.IsEchoResponse() || p.IsError() {
+			// ICMP responses are allowed.
+			return true, "app connector icmp response ok"
+		}
+		if appAddr.Filter.Len() > 0 {
+			// If any port is open to an IP, allow ICMP to it.
+			return true, "app connector icmp ok"
+		}
+	case ipproto.TCP:
+		if !p.IsTCPSyn() {
+			return true, "app connector tcp non-syn"
 		}
 		for _, ppr := range appAddr.Filter.All() {
-			if p.IPProto == ipproto.TCP {
-
+			if (ppr.Proto == 0 || ppr.Proto == int(ipproto.TCP)) &&
+				ppr.Ports.Contains(p.Dst.Port()) {
+				return true, "app connector tcp ok"
 			}
-
-			if ppr.Proto == 0 { // ICMP + TCP + UDP
-				if p.IPProto == ipproto.TCP ||
-					p.IPProto == ipproto.UDP {
-					continue
-				}
-				if !ppr.Ports.Contains(p.Dst.Port()) {
-					continue
-				}
-				return true, packetFilterAllowOtherReason
+		}
+	case ipproto.UDP, ipproto.SCTP:
+		allowProto0 := p.IPProto == ipproto.UDP
+		for _, ppr := range appAddr.Filter.All() {
+			if ((allowProto0 && ppr.Proto == 0) || ppr.Proto == int(p.IPProto)) &&
+				ppr.Ports.Contains(p.Dst.Port()) {
+				return true, "app connector ok"
 			}
-			if ppr.Proto != int(p.IPProto) || !ppr.Ports.Contains(p.Dst.Port()) {
-				continue
+		}
+	default:
+		for _, ppr := range appAddr.Filter.All() {
+			if ppr.Proto == int(p.IPProto) && ppr.Ports == tailcfg.PortRangeAny {
+				return true, "app connector other-portless ok"
 			}
 		}
 	}
 	return false, ""
 }
 
-func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (AppAddr, bool) {
-	m, ok := c.transitIPs[srcIP]
-	if !ok || m == nil {
-		return AppAddr{}, false
+func (c *connector) dnsAllowedSuffixes(h ipnlocal.PeerAPIHandler, urlQuery url.Values, cfg *config) views.Slice[string] {
+	rawApp, hasApp := urlQuery["app"]
+	if !hasApp || len(rawApp) != 1 {
+		return ipnlocal.PeerAPIDNSRejectAllNames
 	}
-	v, ok := m[transitIP]
+	app := rawApp[0]
+
+	a, ok := cfg.appsByName[app]
+	if !ok {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	appPeerCap := tailcfg.PeerCapabilityConn25Prefix + tailcfg.PeerCapability(a.Name)
+	if !h.PeerCaps().HasCapability(appPeerCap) {
+		return ipnlocal.PeerAPIDNSRejectAllNames
+	}
+
+	// TODO(adrian): cache this
+	trimmedDomains := make([]string, 0, len(a.Domains))
+	for _, d := range a.Domains {
+		trimmedDomains = append(trimmedDomains, strings.TrimPrefix(d, "*."))
+	}
+
+	return views.SliceOf(trimmedDomains)
+}
+
+func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (AppAddr, bool) {
+	v, ok := c.transitIPs[srcIP][transitIP]
 	return v, ok
 }
 

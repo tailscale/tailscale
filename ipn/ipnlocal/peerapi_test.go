@@ -190,7 +190,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	var h peerAPIHandler
 
 	h.isSelf = true
-	if !h.replyToDNSQueries() {
+	if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 		t.Errorf("for isSelf = false; want true")
 	}
 	h.isSelf = false
@@ -222,25 +222,25 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 		t.Fatal("unexpectedly not offering exit node")
 	}
 
-	if h.replyToDNSQueries() {
+	if allow, _ := h.areDNSQueriesAllowed(nil); allow {
 		t.Errorf("unexpectedly doing DNS without filter")
 	}
 
 	h.ps.b.setFilter(filter.NewAllowNone(logger.Discard, new(netipx.IPSet)))
-	if h.replyToDNSQueries() {
+	if allow, _ := h.areDNSQueriesAllowed(nil); allow {
 		t.Errorf("unexpectedly doing DNS without filter")
 	}
 
 	f := filter.NewAllowAllForTest(logger.Discard)
 
 	h.ps.b.setFilter(f)
-	if !h.replyToDNSQueries() {
+	if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 		t.Errorf("unexpectedly deny; wanted to be a DNS server")
 	}
 
 	// Also test IPv6.
 	h.remoteAddr = netip.MustParseAddrPort("[fe70::1]:12345")
-	if !h.replyToDNSQueries() {
+	if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
 	}
 }
@@ -297,7 +297,7 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		f := filter.NewAllowAllForTest(logger.Discard)
 		h.ps.b.setFilter(f)
 
-		if !h.replyToDNSQueries() {
+		if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 
@@ -368,7 +368,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		if !h.ps.b.OfferingAppConnector() {
 			t.Fatal("expecting to be offering app connector")
 		}
-		if !h.replyToDNSQueries() {
+		if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 
@@ -454,7 +454,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		if !h.ps.b.OfferingAppConnector() {
 			t.Fatal("expecting to be offering app connector")
 		}
-		if !h.replyToDNSQueries() {
+		if allow, _ := h.areDNSQueriesAllowed(nil); !allow {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 
