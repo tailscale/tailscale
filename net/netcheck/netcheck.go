@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"syscall"
@@ -1408,17 +1409,36 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		}
 	}
 
+	// Exclude avoided DERP regions, unless they’re the only ones with latencies.
+	candidates := make([]int, 0, len(r.RegionLatency))
+	// Collect regions that have DERPRegion.Avoid set to false.
+	// If the DERPRegion isn’t defined, assume the zero value.
+	regions := dm.Regions()
+	for regionID := range r.RegionLatency {
+		if region := regions.Get(regionID); !region.Valid() || !region.Avoid() {
+			candidates = append(candidates, regionID)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = slices.Collect(maps.Keys(r.RegionLatency))
+	}
+
 	// Then, pick which currently-alive DERP server from the
 	// current report has the best latency over the past maxAge.
 	var (
 		bestAny             time.Duration // global minimum
 		oldRegionCurLatency time.Duration // latency of old PreferredDERP
 	)
-	for regionID, d := range r.RegionLatency {
+	for _, regionID := range candidates {
 		// Scale this report's latency by any scores provided by the
 		// server; we did this for the bestRecent map above, but we
 		// don't mutate the actual reports in-place (in case scores
 		// change), so we need to do it here as well.
+		d, ok := r.RegionLatency[regionID]
+		if !ok {
+			continue
+		}
+
 		if score := scores.Get(regionID); score > 0 {
 			d = time.Duration(float64(d) * score)
 		}

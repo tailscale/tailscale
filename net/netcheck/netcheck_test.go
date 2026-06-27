@@ -199,6 +199,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		name        string
 		steps       []step
 		homeParams  *tailcfg.DERPHomeParams
+		derpRegions map[int]*tailcfg.DERPRegion
 		opts        *GetReportOpts
 		forcedDERP  int // if non-zero, force this DERP to be the preferred one
 		wantDERP    int // want PreferredDERP on final step
@@ -280,6 +281,18 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			},
 			wantPrevLen: 2,
 			wantDERP:    2, // 2 got fast enough
+		},
+		{
+			name: "preferred_derp_hysteresis_avoid_d2",
+			derpRegions: map[int]*tailcfg.DERPRegion{
+				2: {Avoid: true}, // d2
+			},
+			steps: []step{
+				{0 * time.Second, report("d1", 4, "d2", 5)},
+				{1 * time.Second, report("d1", 4, "d2", 1)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // 2 got fast enough, but is avoided
 		},
 		{
 			name: "derp_home_params",
@@ -451,6 +464,33 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 3,
 			wantDERP:    0,
 		},
+		{
+			name: "avoid_all",
+			derpRegions: map[int]*tailcfg.DERPRegion{
+				1: {Avoid: true}, // d1
+				2: {Avoid: true}, // d2
+				3: {Avoid: true}, // d3
+				4: {Avoid: true}, // d4
+			},
+			steps: []step{
+				{0 * time.Second, report("d1", 3, "d2", 2, "d3", 4, "d4", 5)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    2, // all regions are avoided and 2 is best
+		},
+		{
+			name: "avoid_all_but_one",
+			derpRegions: map[int]*tailcfg.DERPRegion{
+				1: {Avoid: true}, // d1
+				2: {Avoid: true}, // d2
+				4: {Avoid: true}, // d4
+			},
+			steps: []step{
+				{0 * time.Second, report("d1", 3, "d2", 2, "d3", 4, "d4", 5)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    3, // 3 is the only one not avoided
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -459,7 +499,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 				TimeNow:            func() time.Time { return fakeTime },
 				ForcePreferredDERP: tt.forcedDERP,
 			}
-			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
+			dm := &tailcfg.DERPMap{
+				HomeParams: tt.homeParams,
+				Regions:    tt.derpRegions,
+			}
 			rs := &reportState{
 				c:     c,
 				start: fakeTime,
