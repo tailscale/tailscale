@@ -4,12 +4,14 @@
 package ipnlocal
 
 import (
+	"crypto/tls"
 	"net/http"
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/testenv"
@@ -99,15 +101,44 @@ func (f forTest) CurrentUser() (ipn.WindowsUserID, ipnauth.Actor) {
 // ConfigureCerts sets a certificate retrieval function to be used by this
 // local backend, skipping the usual ACME certificate registration.
 func (f forTest) ConfigureCerts(getCert func(hostname string) (*TLSCertKeyPair, error)) {
-	b := f.b
-	cs := b.certState()
-	if cs == nil {
+	hook, ok := HookConfigureCertsForTest.GetOk()
+	if !ok {
 		panic("forTest.ConfigureCerts called without cert extension registered")
 	}
-	b.mu.Lock()
-	cs.getCertForTest = getCert
-	b.mu.Unlock()
+	hook(f.b, getCert)
 }
+
+// GetACMETLSALPNCert returns the short-lived ACME tls-alpn-01 challenge
+// certificate for hi, if any.
+func (f forTest) GetACMETLSALPNCert(hi *tls.ClientHelloInfo) (*tls.Certificate, bool) {
+	return f.b.getACMETLSALPNCert(hi)
+}
+
+// SetServeConfig installs sc as the backend's current
+// [ipn.ServeConfig] without going through the validation in
+// [LocalBackend.SetServeConfig]. It is intended for tests that need a
+// specific serve config without first standing up the prerequisites
+// (netmap, prefs, etc.).
+func (f forTest) SetServeConfig(sc ipn.ServeConfigView) {
+	b := f.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.serveConfig = sc
+}
+
+// SetNetMap installs nm as the backend's current netmap without going
+// through control-plane plumbing. It is intended for tests that need a
+// specific netmap (e.g. CertDomains, capabilities).
+func (f forTest) SetNetMap(nm *netmap.NetworkMap) {
+	b := f.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.currentNode().SetNetMap(nm)
+}
+
+// SetClock replaces b's clock with c, for tests that need
+// time-dependent behavior to be deterministic.
+func (f forTest) SetClock(c tstime.Clock) { f.b.clock = c }
 
 // SetPrefs replaces the current prefs with newp.
 func (f forTest) SetPrefs(newp *ipn.Prefs) {
