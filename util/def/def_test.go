@@ -4,6 +4,7 @@
 package def_test
 
 import (
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -67,6 +68,138 @@ func TestDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnv(t *testing.T) {
+	const key = "TS_DEF_TEST_ENV"
+	t.Run("unset", func(t *testing.T) {
+		os.Unsetenv(key)
+		if got := def.Env(key, "fallback"); got != "fallback" {
+			t.Errorf("Env(unset) = %q; want %q", got, "fallback")
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv(key, "value")
+		if got := def.Env(key, "fallback"); got != "value" {
+			t.Errorf("Env(set) = %q; want %q", got, "value")
+		}
+	})
+	t.Run("set_empty", func(t *testing.T) {
+		t.Setenv(key, "")
+		if got := def.Env(key, "fallback"); got != "" {
+			t.Errorf("Env(set empty) = %q; want %q", got, "")
+		}
+	})
+}
+
+func TestEnvs(t *testing.T) {
+	const k1, k2 = "TS_DEF_TEST_ENVS_1", "TS_DEF_TEST_ENVS_2"
+	t.Run("none_set", func(t *testing.T) {
+		os.Unsetenv(k1)
+		os.Unsetenv(k2)
+		if got := def.Envs([]string{k1, k2}, "fallback"); got != "fallback" {
+			t.Errorf("Envs(none set) = %q; want %q", got, "fallback")
+		}
+	})
+	t.Run("first_set_wins", func(t *testing.T) {
+		t.Setenv(k1, "first")
+		t.Setenv(k2, "second")
+		if got := def.Envs([]string{k1, k2}, "fallback"); got != "first" {
+			t.Errorf("Envs(both set) = %q; want %q", got, "first")
+		}
+	})
+	t.Run("second_set", func(t *testing.T) {
+		os.Unsetenv(k1)
+		t.Setenv(k2, "second")
+		if got := def.Envs([]string{k1, k2}, "fallback"); got != "second" {
+			t.Errorf("Envs(second set) = %q; want %q", got, "second")
+		}
+	})
+}
+
+func TestEnvBool(t *testing.T) {
+	const key = "TS_DEF_TEST_ENV_BOOL"
+	tests := []struct {
+		name string
+		set  bool
+		val  string
+		def  bool
+		want bool
+	}{
+		{name: "unset_true", set: false, def: true, want: true},
+		{name: "unset_false", set: false, def: false, want: false},
+		{name: "empty_true", set: true, val: "", def: true, want: true},
+		{name: "valid_true", set: true, val: "true", def: false, want: true},
+		{name: "valid_false", set: true, val: "false", def: true, want: false},
+		{name: "invalid_true", set: true, val: "sure", def: true, want: true},
+		{name: "invalid_false", set: true, val: "sure", def: false, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv(key, tt.val)
+			} else {
+				os.Unsetenv(key)
+			}
+			if got := def.EnvBool(key, tt.def); got != tt.want {
+				t.Errorf("EnvBool(%q=%q, %v) = %v; want %v", key, tt.val, tt.def, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvStringPointer(t *testing.T) {
+	const key = "TS_DEF_TEST_ENV_STR_PTR"
+	t.Run("unset", func(t *testing.T) {
+		os.Unsetenv(key)
+		if got := def.EnvStringPointer(key); got != nil {
+			t.Errorf("EnvStringPointer(unset) = %v; want nil", *got)
+		}
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv(key, "value")
+		got := def.EnvStringPointer(key)
+		if got == nil || *got != "value" {
+			t.Errorf("EnvStringPointer(set) = %v; want pointer to %q", got, "value")
+		}
+	})
+	t.Run("set_empty", func(t *testing.T) {
+		t.Setenv(key, "")
+		got := def.EnvStringPointer(key)
+		if got == nil || *got != "" {
+			t.Errorf("EnvStringPointer(set empty) = %v; want pointer to %q", got, "")
+		}
+	})
+}
+
+func TestEnvBoolPointer(t *testing.T) {
+	const key = "TS_DEF_TEST_ENV_BOOL_PTR"
+	t.Run("unset", func(t *testing.T) {
+		os.Unsetenv(key)
+		if got := def.EnvBoolPointer(key); got != nil {
+			t.Errorf("EnvBoolPointer(unset) = %v; want nil", *got)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		t.Setenv(key, "sure")
+		if got := def.EnvBoolPointer(key); got != nil {
+			t.Errorf("EnvBoolPointer(invalid) = %v; want nil", *got)
+		}
+	})
+	t.Run("valid_true", func(t *testing.T) {
+		t.Setenv(key, "true")
+		got := def.EnvBoolPointer(key)
+		if got == nil || *got != true {
+			t.Errorf("EnvBoolPointer(true) = %v; want pointer to true", got)
+		}
+	})
+	t.Run("valid_false", func(t *testing.T) {
+		t.Setenv(key, "false")
+		got := def.EnvBoolPointer(key)
+		if got == nil || *got != false {
+			t.Errorf("EnvBoolPointer(false) = %v; want pointer to false", got)
+		}
+	})
 }
 
 func FuzzBool(f *testing.F) {
