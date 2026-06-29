@@ -81,6 +81,7 @@ func init() {
 		}, nil
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
+	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
@@ -95,6 +96,18 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 		return
 	}
 	e.handleConnectorTransitIP(h, w, r)
+}
+
+func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
+	// TODO(tailscale/corp#39033): Remove for alpha release.
+	if !envknob.UseWIPCode() && !testenv.InTest() {
+		return false
+	}
+	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
+	if !ok {
+		return false
+	}
+	return e.handleHookReplyToDNSQueries(h)
 }
 
 // extension is an [ipnext.Extension] managing the connector on platforms
@@ -341,6 +354,15 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 		return
 	}
 	w.Write(bs)
+}
+
+func (e *extension) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
+	if !e.conn25.isConfigured() {
+		return false
+	}
+	// TODO(tailscale/corp#40076): verify the peer has access to the query's
+	// app (if any) domain.
+	return true
 }
 
 // onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.
