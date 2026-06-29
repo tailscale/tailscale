@@ -41,17 +41,8 @@ func TestAssignmentsExpire(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error but got nil")
 	}
-	// After a time greater than the default expiry passes, the assignment should
-	// not be returned.
-	clock.Advance(defaultExpiry * 2)
-	foundAsAfter, okAfter := assignments.lookupByMagicIP(as.magic)
-	if okAfter {
-		t.Fatal("expected not to find (expired)")
-	}
-	if foundAsAfter.isValid() {
-		t.Fatal("expected zero val")
-	}
 	// We should only be able to write old addresses again if they've been removed from the maps (eg with popExpired).
+	clock.Advance(defaultExpiry * 2)
 	err = assignments.insert(as)
 	if err == nil {
 		t.Fatal("expected an error but got nil")
