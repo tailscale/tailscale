@@ -380,6 +380,7 @@ func (s *Server) initMux() {
 	})
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/tka/", s.serveTKA)
+	s.mux.HandleFunc("/machine/webclient/", s.serveWebClient)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
 	s.mux.HandleFunc("/ts2021", s.serveNoiseUpgrade)
 	s.mux.HandleFunc("/c2n/", s.serveC2N)
@@ -516,6 +517,35 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.serveUnhandled(w, r)
+	}
+}
+
+// serveWebClient handles the Noise-protected web client auth flow endpoints
+// posted to /machine/webclient/init/<src>/to/<dst> and
+// /machine/webclient/wait/<src>/to/<dst>/<id>. It is the test-control
+// counterpart to client/web's check-mode session creation: it returns a
+// placeholder auth URL for init, and immediately Complete=true for wait, so
+// tests can drive the full check-mode session lifecycle without a real
+// browser-click loop.
+func (s *Server) serveWebClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.POST {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var resp tailcfg.WebClientAuthResponse
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/machine/webclient/init/"):
+		resp.ID = "testcontrol-webclient-auth"
+		resp.URL = "https://control.tailscale/test-web-auth"
+	case strings.HasPrefix(r.URL.Path, "/machine/webclient/wait/"):
+		resp.Complete = true
+	default:
+		s.serveUnhandled(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("testcontrol: encoding web client response: %v", err)
 	}
 }
 
