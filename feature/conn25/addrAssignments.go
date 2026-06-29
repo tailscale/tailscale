@@ -79,7 +79,7 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 
 func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr) (*addrs, bool) {
 	v, ok := a.byDomainDst[domainDst{domain: domain, dst: dst}]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
@@ -87,7 +87,7 @@ func (a *addrAssignments) lookupByDomainDst(domain dnsname.FQDN, dst netip.Addr)
 
 func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (*addrs, bool) {
 	v, ok := a.byMagicIP[mip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
@@ -95,7 +95,7 @@ func (a *addrAssignments) lookupByMagicIP(mip netip.Addr) (*addrs, bool) {
 
 func (a *addrAssignments) lookupByTransitIP(tip netip.Addr) (*addrs, bool) {
 	v, ok := a.byTransitIP[tip]
-	if !ok || v.expiresAt.Before(a.clock.Now()) {
+	if !ok {
 		return &addrs{}, false
 	}
 	return v, true
