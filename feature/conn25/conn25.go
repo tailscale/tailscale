@@ -279,13 +279,17 @@ func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 }
 
 // ClientFlowCreated implements [Conn25Datapath].
+// The datapath notifies Conn25 that a flow with transitIP has been created so
+// that Conn25 can prevent that transit IP and associated addresses from being
+// removed from its state and returned to their pools.
 func (c *Conn25) ClientFlowCreated(transitIP netip.Addr) {
-	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+	c.client.flowCreated(transitIP)
 }
 
 // ClientFlowRemoved implements [Conn25Datapath].
+// See [Conn25.ClientFlowCreated].
 func (c *Conn25) ClientFlowRemoved(transitIP netip.Addr) {
-	// TODO(tailscale/corp#43180): manage state for address assignment expiry
+	c.client.flowRemoved(transitIP)
 }
 
 // ConnectorRealIPForTransitIPConnection implements [Conn25Datapath].
@@ -925,6 +929,29 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	}
 }
 
+func (c *client) flowCreated(transit netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.assignments.byTransitIP[transit]
+	if !ok {
+		return
+	}
+	entry.activeFlowCount++
+}
+
+func (c *client) flowRemoved(transit netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.assignments.byTransitIP[transit]
+	if !ok {
+		return
+	}
+	entry.activeFlowCount--
+	if entry.activeFlowCount == 0 {
+		entry.zeroFlowTime = c.assignments.clock.Now()
+	}
+}
+
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1322,12 +1349,14 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 }
 
 type addrs struct {
-	dst       netip.Addr
-	magic     netip.Addr
-	transit   netip.Addr
-	domain    dnsname.FQDN
-	app       string
-	expiresAt time.Time
+	dst             netip.Addr
+	magic           netip.Addr
+	transit         netip.Addr
+	domain          dnsname.FQDN
+	app             string
+	expiresAt       time.Time
+	activeFlowCount int
+	zeroFlowTime    time.Time
 }
 
 func (as addrs) isValid() bool {
