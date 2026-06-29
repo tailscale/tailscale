@@ -1531,6 +1531,29 @@ func parseResponse(t *testing.T, buf []byte) ([]dnsmessage.Resource, []dnsmessag
 	return answers, additionals
 }
 
+func compareToRecords(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
+	t.Helper()
+	var got []netip.Addr
+	for _, r := range resources {
+		if b, ok := r.Body.(*dnsmessage.AResource); ok {
+			got = append(got, netip.AddrFrom4(b.A))
+		} else if b, ok := r.Body.(*dnsmessage.AAAAResource); ok {
+			got = append(got, netip.AddrFrom16(b.AAAA))
+		}
+	}
+	if diff := cmp.Diff(want, got, cmpopts.EquateComparable(netip.Addr{})); diff != "" {
+		t.Fatalf("A/AAAA records mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func assertParsesToAnswers(want []netip.Addr) func(t *testing.T, bs []byte) {
+	return func(t *testing.T, bs []byte) {
+		t.Helper()
+		answers, _ := parseResponse(t, bs)
+		compareToRecords(t, answers, want)
+	}
+}
+
 func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	configuredDomain := "example.com"
 	domainName := configuredDomain + "."
@@ -1547,29 +1570,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 	}, []string{})
 
 	cfg := mustConfig(t, sn)
-
-	compareToRecords := func(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
-		t.Helper()
-		var got []netip.Addr
-		for _, r := range resources {
-			if b, ok := r.Body.(*dnsmessage.AResource); ok {
-				got = append(got, netip.AddrFrom4(b.A))
-			} else if b, ok := r.Body.(*dnsmessage.AAAAResource); ok {
-				got = append(got, netip.AddrFrom16(b.AAAA))
-			}
-		}
-		if diff := cmp.Diff(want, got, cmpopts.EquateComparable(netip.Addr{})); diff != "" {
-			t.Fatalf("A/AAAA records mismatch (-want +got):\n%s", diff)
-		}
-	}
-
-	assertParsesToAnswers := func(want []netip.Addr) func(t *testing.T, bs []byte) {
-		return func(t *testing.T, bs []byte) {
-			t.Helper()
-			answers, _ := parseResponse(t, bs)
-			compareToRecords(t, answers, want)
-		}
-	}
 
 	assertParsesToAdditionals := func(want []netip.Addr) func(t *testing.T, bs []byte) {
 		return func(t *testing.T, bs []byte) {
@@ -2592,6 +2592,215 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 			}
 			if afterAddrs.magic == beforeAddrs.magic {
 				t.Errorf("pool reissued magic: %v that was already assigned", beforeAddrs.magic)
+			}
+		})
+	}
+}
+
+// TestAddressExpiryDependsOnActiveFlows creates a Conn25 and
+//
+//  1. runs a DNS response through it
+//  2. uses the ClientFlowCreated/Removed API and advances the clock
+//  3. runs a second DNS response through the Conn25
+//  4. asserts things about the expected state of the clients assignments
+//     table based on 1-3
+//
+// to try and verify how the assignments table entries expiration is affected
+// by the presence of active flows for the addresses in the entry
+func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
+	configuredDomain := "example.com"
+	domainName := configuredDomain + "."
+	dnsMessageName := dnsmessage.MustNewName(domainName)
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
+	}, nil)
+
+	var ttlSecs uint32 = 300
+	ttlDur := time.Duration(ttlSecs) * time.Second
+
+	ipOne := netip.MustParseAddr("1.0.0.1")
+	dnsRespIPOne := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: ttlSecs},
+				Body:   &dnsmessage.AResource{A: ipOne.As4()},
+			},
+		},
+		nil,
+	)
+
+	ipTwo := netip.MustParseAddr("1.0.0.2")
+	dnsRespIPTwo := makeDNSResponseForSections(t,
+		[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+		[]dnsmessage.Resource{
+			{
+				Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: ttlSecs},
+				Body:   &dnsmessage.AResource{A: ipTwo.As4()},
+			},
+		},
+		nil,
+	)
+
+	tests := []struct {
+		name                    string
+		flowsAndTimeFx          func(*Conn25, *tstest.Clock, netip.Addr)
+		secondDNSResponse       []byte
+		assertSecondDNSResponse func(*testing.T, []byte)
+		wantUnexpiredDstIPs     set.Set[netip.Addr]
+		wantExpiredAtTime       map[netip.Addr]time.Duration // since the startTime
+	}{
+		{
+			// The first dns response should create an assignments entry for ipOne
+			// (tested elsewhere).
+			// Then time advances past that entry's expiresAt.
+			// Then a second dns response creates an assignments entry for ipTwo.
+			// We clean up some expired assignments entries when we create a new one
+			// and so we expect the entry for ipOne to be removed, and the entry for
+			// ipTwo to be present.
+			name: "flows-zero",
+			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
+				clock.Advance(30 * time.Hour)
+			},
+			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipTwo: (30 * time.Hour) + ttlDur,
+			},
+		},
+		{
+			// Same as flows-zero except this time the datapath has let us know that
+			// there is a flow for the transit address that was assigned to the entry for
+			// ipOne.
+			// And so that entry does not get expired.
+			name: "flows-not-zero",
+			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
+				c.ClientFlowCreated(transit)
+				clock.Advance(30 * time.Hour)
+			},
+			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipOne: (30 * time.Hour) + extendForActiveFlowDuration,
+				ipTwo: (30 * time.Hour) + ttlDur,
+			},
+		},
+		{
+			// Like flows-not-zero except that this time the datapath removed the
+			// client flow after creating it.
+			// So the expired entry is removed.
+			name: "last-flow-removed-a-while-ago",
+			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
+				c.ClientFlowCreated(transit)
+				clock.Advance(30 * time.Hour)
+				c.ClientFlowRemoved(transit)
+				clock.Advance(3 * time.Minute)
+			},
+			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipTwo: (30 * time.Hour) + (3 * time.Minute) + ttlDur,
+			},
+		},
+		{
+			// Like last-flow-removed-a-while-ago except the flow was removed recently,
+			// within the cooldown period.
+			// And so the expired entry is not removed.
+			name: "last-flow-recently-removed",
+			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
+				c.ClientFlowCreated(transit)
+				clock.Advance(30 * time.Hour)
+				c.ClientFlowRemoved(transit)
+				clock.Advance(1 * time.Second)
+			},
+			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne, ipTwo}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipOne: (30 * time.Hour) + extendForActiveFlowDuration + (1 * time.Second),
+				ipTwo: (30 * time.Hour) + (1 * time.Second) + ttlDur,
+			},
+		},
+		{
+			// Like flows-not-zero except that the second dns response is for the same address as the first.
+			// So the entry is not removed.
+			name:              "repeated-response-with-expired-and-active-flow",
+			secondDNSResponse: dnsRespIPOne,
+			flowsAndTimeFx: func(c *Conn25, clock *tstest.Clock, transit netip.Addr) {
+				c.ClientFlowCreated(transit)
+				clock.Advance(30 * time.Hour)
+			},
+			wantUnexpiredDstIPs: set.SetOf([]netip.Addr{ipOne}),
+			wantExpiredAtTime: map[netip.Addr]time.Duration{
+				ipOne: (30 * time.Hour) + ttlDur,
+			},
+			assertSecondDNSResponse: assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("100.64.0.0"),
+				},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			startTime := time.Now()
+			clock := tstest.NewClock(tstest.ClockOpts{Start: startTime})
+			c.client.assignments.clock = clock
+			cfg := mustConfig(t, sn)
+			c.reconfig(cfg)
+
+			// we get a dns response for ipone
+			bs1 := c.mapDNSResponse(dnsRespIPOne)
+			assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("100.64.0.0"),
+				},
+			)(t, bs1)
+
+			ipOneDD := domainDst{
+				domain: dnsname.FQDN(domainName),
+				dst:    ipOne,
+			}
+
+			// there are client flows and time passes
+			tt.flowsAndTimeFx(c, clock, c.client.assignments.byDomainDst[ipOneDD].transit)
+
+			// then a second dns response
+			dnsR2 := tt.secondDNSResponse
+			assertSecondResponseFx := tt.assertSecondDNSResponse
+			if dnsR2 == nil {
+				dnsR2 = dnsRespIPTwo
+				assertSecondResponseFx = assertParsesToAnswers(
+					[]netip.Addr{
+						netip.MustParseAddr("100.64.0.1"),
+					},
+				)
+			}
+			bs2 := c.mapDNSResponse(dnsR2)
+			assertSecondResponseFx(t, bs2)
+
+			// assert which addresses have expired / remain unexpired
+			assignmentsDsts := set.Set[netip.Addr]{}
+			for _, a := range c.client.assignments.byMagicIP {
+				assignmentsDsts.Add(a.dst)
+			}
+			if !assignmentsDsts.Equal(tt.wantUnexpiredDstIPs) {
+				t.Fatalf("unexpired dst IPs: want: %v, got %v", tt.wantUnexpiredDstIPs, assignmentsDsts)
+			}
+
+			for a, dur := range tt.wantExpiredAtTime {
+				dd := domainDst{
+					domain: dnsname.FQDN(domainName),
+					dst:    a,
+				}
+				as := c.client.assignments.byDomainDst[dd]
+				expected := startTime.Add(dur)
+				if !as.expiresAt.Equal(expected) {
+					t.Fatalf("a: %v, as.ExpiredAt: %v, expected: %v, dur: %v", a, as.expiresAt, expected, dur)
+				}
 			}
 		})
 	}
