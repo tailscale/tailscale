@@ -19,7 +19,7 @@ func ExampleSchemaVersion() {
 	fs.Var(&args.json, "json", "output in JSON format")
 
 	fs.Parse([]string{"-json=2"})
-	fmt.Printf(`{set: %t, value: %d}`, args.json.IsSet, args.json.Version)
+	fmt.Printf(`{set: %t, version: %d}`, args.json.IsSet, args.json.Version)
 	// Output:
-	// {set: true, value: 2}
+	// {set: true, version: 2}
 }
