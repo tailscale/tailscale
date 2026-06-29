@@ -3386,9 +3386,8 @@ func TestNetworkSendErrors(t *testing.T) {
 			t.Skipf("skipping on %s", runtime.GOOS)
 		}
 
-		tstest.Replace(t, &checkNetworkDownDuringTests, true)
-
 		conn, reg := newTestConnAndRegistry(t)
+		conn.checkNetworkUpDuringTests = true
 
 		buffs := [][]byte{{00, 00, 00, 00, 00, 00, 00, 00}}
 		ep := &lazyEndpoint{
