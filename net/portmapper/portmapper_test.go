@@ -102,7 +102,7 @@ func TestPCPIntegration(t *testing.T) {
 	defer igd.Close()
 
 	c := newTestClient(t, igd, nil)
-	res, err := c.Probe(context.Background())
+	res, err := c.Probe(t.Context())
 	if err != nil {
 		t.Fatalf("probe failed: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPCPIntegration(t *testing.T) {
 		t.Fatalf("probe did not see pcp: %+v", res)
 	}
 
-	_, external, err := c.createOrGetMapping(context.Background())
+	_, external, err := c.createOrGetMapping(t.Context())
 	if err != nil {
 		t.Fatalf("failed to get mapping: %v", err)
 	}
