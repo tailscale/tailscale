@@ -126,7 +126,7 @@ func gokrazyUpdateArgsFromMagicArg(args []string) (*clientupdate.GokrazyUpdateAr
 	fs.SetOutput(io.Discard)
 	// This flag path is exercised end-to-end by TestGokrazyUpdatesItselfToSameImage.
 	fs.StringVar(&updateURL, gokrazyUpdateFromURLMagicArg[2:], "", "URL of the Gokrazy archive format file to install")
-	fs.BoolVar(&unsigned, "unsigned", false, "allow an unsigned GAF; for tests only")
+	fs.BoolVar(&unsigned, "unsigned", false, "skip GAF signature verification; for tests only")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -135,9 +135,6 @@ func gokrazyUpdateArgsFromMagicArg(args []string) (*clientupdate.GokrazyUpdateAr
 	}
 	if updateURL == "" {
 		return nil, nil
-	}
-	if !unsigned {
-		return nil, errors.New("signed GAF verification is not implemented yet; see https://github.com/tailscale/tailscale/issues/20002; pass --unsigned for test updates")
 	}
 	if !clientupdate.GokrazyUpdateFromURL.IsSet() {
 		return nil, errors.New("gokrazy update support is not linked into this binary")
