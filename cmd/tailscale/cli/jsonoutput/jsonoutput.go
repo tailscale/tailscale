@@ -16,6 +16,12 @@
 // Passing just the boolean flag will always return 1, to preserve
 // compatibility with scripts written before we versioned our output.
 //
+// This package provides a [Format] flag type that allows callers to specify
+// which output format the command should print.
+// This flag provides [Format.JSONBool] and [Format.JSONSchemaVersion] methods
+// to support combining both -format=json and -format=json-line options
+// with either boolean or versioned -json flags.
+//
 // This package also provides [ResponseEnvelope] which is used to provide the
 // set of fields common to all versioned JSON output.
 package jsonoutput
@@ -44,7 +50,7 @@ type SchemaVersion struct {
 }
 
 // String returns the default value which is printed in the CLI help text.
-func (v *SchemaVersion) String() string {
+func (v SchemaVersion) String() string {
 	if v.IsSet {
 		return strconv.Itoa(v.Version)
 	}
