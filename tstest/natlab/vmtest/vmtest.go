@@ -1440,6 +1440,80 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 	return ""
 }
 
+// HTTPResponse is the result of a successful [Env.HTTPGetStatus] call.
+type HTTPResponse struct {
+	// Status is the upstream HTTP status code.
+	Status int
+	// Body is the upstream response body.
+	Body string
+	// SetCookies is the parsed list of cookies the upstream set, if any.
+	SetCookies []*http.Cookie
+}
+
+// HTTPGetStatus is like [Env.HTTPGet] but returns the upstream HTTP status
+// code, body, and any Set-Cookie response cookies, so callers can assert on
+// rejection responses (e.g. 401, 403) and drive multi-request flows that need
+// cookie continuity (e.g. session-based authentication).
+//
+// Any sendCookies are sent on the upstream request via the Cookie header.
+//
+// The request is proxied through TTA's /http-get handler, which dials via
+// Tailscale's UserDial; this works on any OS the test agent runs on.
+//
+// Like [Env.HTTPGet], HTTPGetStatus retries up to 3 times on TTA-level
+// connection failures (502 / 503 from TTA when it cannot reach upstream).
+// Upstream responses (including 4xx) are returned to the caller without retry.
+func (e *Env) HTTPGetStatus(from *Node, targetURL string, sendCookies ...*http.Cookie) (*HTTPResponse, error) {
+	cookieHeader := ""
+	if len(sendCookies) > 0 {
+		parts := make([]string, 0, len(sendCookies))
+		for _, c := range sendCookies {
+			parts = append(parts, c.Name+"="+c.Value)
+		}
+		cookieHeader = strings.Join(parts, "; ")
+	}
+
+	var lastErr error
+	for attempt := range 3 {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		reqURL := "http://unused/http-get?url=" + url.QueryEscape(targetURL)
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		if cookieHeader != "" {
+			req.Header.Set("Cookie", cookieHeader)
+		}
+		res, err := from.agent.HTTPClient.Do(req)
+		cancel()
+		if err != nil {
+			e.logVerbosef("HTTPGetStatus attempt %d from %s: %v", attempt+1, from.name, err)
+			lastErr = err
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		// A bare 502/503 with no X-Upstream-Status means TTA itself couldn't
+		// reach upstream; retry. If the header is set, the upstream really
+		// did answer with that status and we should pass it through.
+		if (res.StatusCode == http.StatusBadGateway || res.StatusCode == http.StatusServiceUnavailable) &&
+			res.Header.Get("X-Upstream-Status") == "" {
+			e.logVerbosef("HTTPGetStatus attempt %d from %s: TTA %d: %s", attempt+1, from.name, res.StatusCode, string(b))
+			lastErr = fmt.Errorf("TTA %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		return &HTTPResponse{
+			Status:     res.StatusCode,
+			Body:       string(b),
+			SetCookies: res.Cookies(),
+		}, nil
+	}
+	return nil, fmt.Errorf("HTTPGetStatus from %s to %s: gave up: %w", from.name, targetURL, lastErr)
+}
+
 // Tailscale runs the tailscale CLI on the given node via TTA.
 func (e *Env) Tailscale(n *Node, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
