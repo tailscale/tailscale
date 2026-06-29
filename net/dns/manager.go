@@ -33,6 +33,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/version"
 )
 
 var (
@@ -376,8 +377,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// This bool is used in a couple of places below to implement this
 	// workaround.
 	isWindows := m.goos == "windows"
-	isApple := (m.goos == "darwin" || m.goos == "ios")
-	if m.os.SupportsSplitDNS() && !isWindows && !isApple {
+	isIOS := m.goos == "ios"
+	// Sandboxed macOS builds use NetworkExtension DNS settings, not
+	// tailscaled's /etc/resolver configurator, so keep the Apple workaround.
+	appleSplitDNSWorkaround := isIOS || (m.goos == "darwin" && isSandboxedMacOS())
+	if m.os.SupportsSplitDNS() && !isWindows && !appleSplitDNSWorkaround {
 		if srs := toIPsOnly(cfg.singleResolverSet()); len(srs) > 0 {
 			// Split DNS configuration requested, where all split domains
 			// go to the same resolvers. We can let the OS do it.
@@ -395,11 +399,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 	var baseCfg *OSConfig // base config; non-nil if/when known
 
-	// Even though Apple devices can do split DNS, they don't provide a way to
+	// Even though iOS devices can do split DNS, they don't provide a way to
 	// selectively answer ExtraRecords, and ignore other DNS traffic. As a
 	// workaround, we read the existing default resolver configuration and use
 	// that as the forwarder for all DNS traffic that quad-100 doesn't handle.
-	if isApple || !m.os.SupportsSplitDNS() {
+	if appleSplitDNSWorkaround || !m.os.SupportsSplitDNS() {
 		// If the OS can't do native split-dns, read out the underlying
 		// resolver config and blend it into our config.  On apple platforms, [OSConfigurator.GetBaseConfig]
 		// has a tendency to temporarily fail if called immediately following
@@ -408,9 +412,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		cfg, err := m.os.GetBaseConfig()
 		if err == nil {
 			baseCfg = &cfg
-		} else if (isApple || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
+		} else if (isIOS || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
 			// Expected when using noopManager (userspace networking) or on
-			// certain iOS/macOS builds. Continue without base config.
+			// certain iOS builds. Continue without base config.
 		} else {
 			m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
 			return resolver.Config{}, OSConfig{}, err
@@ -459,6 +463,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
+
+var isSandboxedMacOS = version.IsSandboxedMacOS
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
 // Only safe to use if the resolvers slice has been cleared of

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 
 	"go4.org/mem"
@@ -30,6 +32,7 @@ func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ *eventbus.Bus, _ p
 		ifName:         ifName,
 		resolverDir:    "/etc/resolver",
 		resolvConfPath: "/etc/resolv.conf",
+		runScutil:      runScutil,
 	}, nil
 }
 
@@ -41,11 +44,14 @@ type darwinConfigurator struct {
 	ifName         string
 	resolverDir    string // default "/etc/resolver"
 	resolvConfPath string // default "/etc/resolv.conf"
+	runScutil      func(script string) (output string, err error)
 }
 
 func (c *darwinConfigurator) Close() error {
-	c.removeResolverFiles(func(domain string) bool { return true })
-	return nil
+	if err := c.removeGlobalDNS(); err != nil {
+		return err
+	}
+	return c.removeResolverFiles(func(domain string) bool { return true })
 }
 
 func (c *darwinConfigurator) SupportsSplitDNS() bool {
@@ -53,6 +59,16 @@ func (c *darwinConfigurator) SupportsSplitDNS() bool {
 }
 
 func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
+	if len(cfg.Nameservers) > 0 && len(cfg.MatchDomains) == 0 {
+		if err := c.setGlobalDNS(cfg); err != nil {
+			return err
+		}
+		return c.removeResolverFiles(func(domain string) bool { return true })
+	}
+	if err := c.removeGlobalDNS(); err != nil {
+		return err
+	}
+
 	var buf bytes.Buffer
 	buf.WriteString(macResolverFileHeader)
 	for _, ip := range cfg.Nameservers {
@@ -105,6 +121,89 @@ func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
 		}
 	}
 	return c.removeResolverFiles(func(domain string) bool { return !keep[domain] })
+}
+
+// macOSGlobalDNSKey is a stable synthetic SystemConfiguration service key for
+// tailscaled's global DNS resolver. The UUID does not identify a real network
+// service; it just gives tailscaled one well-known dynamic-store location to
+// set and later remove.
+const macOSGlobalDNSKey = "State:/Network/Service/FF457792-79C0-4A25-8392-D875BBEACCA6/DNS"
+
+// setGlobalDNS installs cfg.Nameservers as a default resolver using
+// SystemConfiguration's dynamic store. /etc/resolver is only a split-DNS
+// mechanism; it cannot express a primary resolver.
+func (c *darwinConfigurator) setGlobalDNS(cfg OSConfig) error {
+	var script strings.Builder
+	script.WriteString("d.init\n")
+	script.WriteString("d.add SearchOrder # 100000\n")
+	script.WriteString("d.add ServerAddresses *")
+	for _, ip := range cfg.Nameservers {
+		script.WriteByte(' ')
+		script.WriteString(ip.String())
+	}
+	script.WriteByte('\n')
+	// An empty SupplementalMatchDomains entry makes this a default resolver.
+	script.WriteString("d.add SupplementalMatchDomains * \"\"\n")
+	if len(cfg.SearchDomains) > 0 {
+		script.WriteString("d.add SearchDomains *")
+		for _, fqdn := range cfg.SearchDomains {
+			script.WriteByte(' ')
+			writeScutilString(&script, fqdn.WithoutTrailingDot())
+		}
+		script.WriteByte('\n')
+	}
+	script.WriteString("set ")
+	script.WriteString(macOSGlobalDNSKey)
+	script.WriteString("\nquit\n")
+
+	out, err := c.runScutilScript(script.String())
+	if err != nil {
+		return err
+	}
+	out = strings.TrimSpace(out)
+	if out != "" {
+		return fmt.Errorf("scutil set %s: %s", macOSGlobalDNSKey, out)
+	}
+	return nil
+}
+
+func (c *darwinConfigurator) removeGlobalDNS() error {
+	script := "remove " + macOSGlobalDNSKey + "\nquit\n"
+	out, err := c.runScutilScript(script)
+	if err != nil {
+		return err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" || out == "No such key" {
+		return nil
+	}
+	return fmt.Errorf("scutil remove %s: %s", macOSGlobalDNSKey, out)
+}
+
+func (c *darwinConfigurator) runScutilScript(script string) (string, error) {
+	run := c.runScutil
+	if run == nil {
+		run = runScutil
+	}
+	return run(script)
+}
+
+func runScutil(script string) (string, error) {
+	cmd := exec.Command("/usr/sbin/scutil")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("scutil: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func writeScutilString(b *strings.Builder, v string) {
+	if v == "" || strings.ContainsAny(v, " \t\n\"") {
+		b.WriteString(strconv.Quote(v))
+		return
+	}
+	b.WriteString(v)
 }
 
 func isValidResolverFileName(name string) bool {
