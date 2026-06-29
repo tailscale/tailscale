@@ -349,7 +349,7 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
 		return
 	}
-	resp := e.conn25.handleConnectorTransitIPRequest(h, req)
+	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), h.PeerCaps(), req)
 	bs, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
@@ -454,7 +454,7 @@ const misconfiguredAppPermissionMessage = "Your permissions to use this App are 
 // TransitIP->DestinationIP per peer (using the Peer's IP that matches the address
 // family of the transitIP). If a peer has stored this mapping in the connector,
 // Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
-func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps tailcfg.PeerCapMap, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
 	resp := ConnectorTransitIPResponse{}
 	cfg, ok := c.getConfig()
 	if !ok {
@@ -470,7 +470,6 @@ func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctip
 		return resp
 	}
 
-	n := h.Peer()
 	var peerIPv4, peerIPv6 netip.Addr
 	for _, ip := range n.Addresses().All() {
 		if !ip.IsSingleIP() || !tsaddr.IsTailscaleIP(ip.Addr()) {
@@ -483,7 +482,6 @@ func (c *Conn25) handleConnectorTransitIPRequest(h ipnlocal.PeerAPIHandler, ctip
 		}
 	}
 
-	peerCaps := h.PeerCaps()
 	seen := map[netip.Addr]bool{}
 
 transitIPs:
