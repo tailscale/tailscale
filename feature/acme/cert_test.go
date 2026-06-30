@@ -6,7 +6,9 @@
 package acme
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -20,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -642,7 +645,8 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 		const setting = "TS_DEBUG_ACME_DIRECTORY_URL"
 		t.Run(tc, func(t *testing.T) {
 			t.Setenv(setting, tc)
-			ac, err := acmeClient(certStateStore{StateStore: new(mem.Store)})
+			e := &extension{}
+			ac, err := e.acmeClient(certStateStore{StateStore: new(mem.Store)})
 			if err != nil {
 				t.Fatalf("acmeClient creation err: %v", err)
 			}
@@ -968,5 +972,110 @@ func TestRefreshApplicableCerts(t *testing.T) {
 	case h := <-gotCh:
 		t.Errorf("unexpected extra fetch for %q", h)
 	default:
+	}
+}
+
+// TestLockDomain_SameDomainReturnsSameMutex verifies the repeat
+// calls for the same domain return the same mutex, and different
+// domains get distinct mutexes.
+func TestLockDomain_SameDomainReturnsSameMutex(t *testing.T) {
+	const domA, domB = "a.example.com", "b.example.com"
+	e := &extension{}
+	a1 := e.lockDomain(domA)
+	a2 := e.lockDomain(domA)
+	b := e.lockDomain(domB)
+	if a1 != a2 {
+		t.Errorf("lockDomain(%q) second call = %p, want %p", domA, a2, a1)
+	}
+	if a1 == b {
+		t.Errorf("lockDomain(%q) = lockDomain(%q) = %p, want different", domA, domB, a1)
+	}
+}
+
+// TestLockDomain_PerDomainConcurrency verifies a lock on one
+// domain doesn't block another, and the same domain blocks while held
+// and is acquireable again after release.
+func TestLockDomain_PerDomainConcurrency(t *testing.T) {
+	const domA, domB = "a.example.com", "b.example.com"
+	e := &extension{}
+
+	aLock := e.lockDomain(domA)
+	aLock.Lock()
+
+	bLock := e.lockDomain(domB)
+	if !bLock.TryLock() {
+		t.Errorf("lockDomain(%q).TryLock() = false while %q held, want true", domB, domA)
+	} else {
+		bLock.Unlock()
+	}
+
+	if aLock.TryLock() {
+		t.Errorf("lockDomain(%q).TryLock() = true while held, want false", domA)
+	}
+
+	aLock.Unlock()
+
+	if !aLock.TryLock() {
+		t.Errorf("lockDomain(%q).TryLock() = false after release, want true", domA)
+	}
+	aLock.Unlock()
+}
+
+// TestAcmeKey_ConcurrentFirstCall verifies that N goroutines racing on
+// an empty store all return the key that ends up persisted.
+func TestAcmeKey_ConcurrentFirstCall(t *testing.T) {
+	e := &extension{}
+	cs := certStateStore{StateStore: new(mem.Store)}
+
+	const n = 16
+	type result struct {
+		key crypto.Signer
+		err error
+	}
+	results := make(chan result, n)
+	var start sync.WaitGroup
+	start.Add(1)
+	for range n {
+		go func() {
+			start.Wait()
+			k, err := e.acmeKey(cs)
+			results <- result{k, err}
+		}()
+	}
+	start.Done()
+
+	var keys []crypto.Signer
+	for range n {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("acmeKey: %v", r.err)
+		}
+		keys = append(keys, r.key)
+	}
+
+	persisted, err := cs.ACMEKey()
+	if err != nil {
+		t.Fatalf("cs.ACMEKey after race: %v", err)
+	}
+	block, _ := pem.Decode(persisted)
+	if block == nil {
+		t.Fatal("no PEM block in persisted ACME key")
+	}
+	want, err := parsePrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing persisted key: %v", err)
+	}
+	wantPub, err := x509.MarshalPKIXPublicKey(want.Public())
+	if err != nil {
+		t.Fatalf("marshaling persisted pubkey: %v", err)
+	}
+	for i, k := range keys {
+		gotPub, err := x509.MarshalPKIXPublicKey(k.Public())
+		if err != nil {
+			t.Fatalf("marshaling returned key %d: %v", i, err)
+		}
+		if !bytes.Equal(gotPub, wantPub) {
+			t.Errorf("goroutine %d returned a different account key than the persisted one", i)
+		}
 	}
 }

@@ -329,7 +329,12 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 	return nil, errors.New("acme/autocert: failed to parse private key")
 }
 
-func acmeKey(cs certStore) (crypto.Signer, error) {
+func (e *extension) acmeKey(cs certStore) (crypto.Signer, error) {
+	// Lock so two callers don't both generate a key and race on the
+	// write.
+	e.accountMu.Lock()
+	defer e.accountMu.Unlock()
+
 	if v, err := cs.ACMEKey(); err == nil {
 		priv, _ := pem.Decode(v)
 		if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
@@ -354,8 +359,8 @@ func acmeKey(cs certStore) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-func acmeClient(cs certStore) (*xacme.Client, error) {
-	key, err := acmeKey(cs)
+func (e *extension) acmeClient(cs certStore) (*xacme.Client, error) {
+	key, err := e.acmeKey(cs)
 	if err != nil {
 		return nil, fmt.Errorf("acmeKey: %w", err)
 	}
