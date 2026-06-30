@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -52,11 +51,11 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 	defer os.Remove(tmpName)
 
 	if args.AllowUnsigned {
-		if err := downloadGAFUnverified(ctx, args.URL, tmpName); err != nil {
+		if err := downloadUnverified(ctx, args.URL, tmpName); err != nil {
 			return err
 		}
 	} else {
-		if err := downloadGAFVerified(ctx, logf, args.URL, tmpName); err != nil {
+		if err := distsign.DownloadVerified(ctx, logf, args.URL, tmpName); err != nil {
 			return err
 		}
 	}
@@ -92,10 +91,10 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 	return nil
 }
 
-// downloadGAFUnverified saves the GAF at srcURL to dstPath without verifying a
-// signature. It is used only when args.AllowUnsigned is set, for tests that
-// serve the GAF from a fileserver that does not publish distsign.pub.
-func downloadGAFUnverified(ctx context.Context, srcURL, dstPath string) error {
+// downloadUnverified saves the GAF at srcURL to dstPath without verifying
+// a signature. It is used only when args.AllowUnsigned is set, for tests
+// that serve the GAF from a fileserver that does not publish distsign.pub.
+func downloadUnverified(ctx context.Context, srcURL, dstPath string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", srcURL, nil)
 	if err != nil {
 		return err
@@ -117,32 +116,6 @@ func downloadGAFUnverified(ctx context.Context, srcURL, dstPath string) error {
 		return err
 	}
 	return f.Close()
-}
-
-// downloadGAFVerified saves the GAF at srcURL to dstPath, verifying the
-// detached ed25519 signature at "<srcURL>.sig" against the root signing keys
-// embedded in this binary via the distsign package.
-//
-// The signing-key bundle distsign.pub and its signature distsign.pub.sig are
-// fetched from the root of the server hosting srcURL.
-func downloadGAFVerified(ctx context.Context, logf logger.Logf, srcURL, dstPath string) error {
-	u, err := url.Parse(srcURL)
-	if err != nil {
-		return fmt.Errorf("parsing GAF URL %q: %w", srcURL, err)
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("GAF URL %q is missing scheme or host", srcURL)
-	}
-	base := &url.URL{Scheme: u.Scheme, User: u.User, Host: u.Host}
-	path := strings.TrimPrefix(u.Path, "/")
-	if path == "" {
-		return fmt.Errorf("GAF URL %q has no path component", srcURL)
-	}
-	c, err := distsign.NewClient(logf, base.String())
-	if err != nil {
-		return err
-	}
-	return c.Download(ctx, path, dstPath)
 }
 
 func gokrazyHTTPClient() *http.Client {

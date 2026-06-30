@@ -361,7 +361,7 @@ func (up *Updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	latest, err := latestPackages(up.Track)
+	latest, err := LatestPackages(up.Track)
 	if err != nil {
 		return err
 	}
@@ -906,7 +906,7 @@ func (up *Updater) updateGokrazy() error {
 	if err != nil {
 		return err
 	}
-	latest, err := latestPackages(up.Track)
+	latest, err := LatestPackages(up.Track)
 	if err != nil {
 		return err
 	}
@@ -1305,7 +1305,7 @@ func LatestTailscaleVersion(track string) (string, error) {
 		track = CurrentTrack
 	}
 
-	latest, err := latestPackages(track)
+	latest, err := LatestPackages(track)
 	if err != nil {
 		return "", err
 	}
@@ -1331,7 +1331,8 @@ func LatestTailscaleVersion(track string) (string, error) {
 	return ver, nil
 }
 
-type trackPackages struct {
+// TrackPackages is the JSON shape served at <pkgs>/<track>/?mode=json.
+type TrackPackages struct {
 	Version         string
 	Tarballs        map[string]string
 	TarballsVersion string
@@ -1349,14 +1350,16 @@ type trackPackages struct {
 
 var tailscaleHTTPEndpoint = "https://pkgs.tailscale.com"
 
-func latestPackages(track string) (*trackPackages, error) {
+// LatestPackages fetches the package manifest served at
+// <pkgs>/<track>/?mode=json for the current runtime.GOOS.
+func LatestPackages(track string) (*TrackPackages, error) {
 	url := fmt.Sprintf("%s/%s/?mode=json&os=%s", tailscaleHTTPEndpoint, track, runtime.GOOS)
 	res, err := http.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetching latest tailscale version: %w", err)
 	}
 	defer res.Body.Close()
-	var latest trackPackages
+	var latest TrackPackages
 	if err := json.NewDecoder(res.Body).Decode(&latest); err != nil {
 		return nil, fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
 	}

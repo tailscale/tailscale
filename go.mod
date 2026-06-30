@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.45.0
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02
 	github.com/bradfitz/go-tool-cache v0.0.0-20260216153636-9e5201344fe5
-	github.com/bradfitz/monogok v0.0.0-20260604043651-77f55eaefb19
+	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1
@@ -31,6 +31,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e
+	github.com/diskfs/go-diskfs v1.9.3
 	github.com/distribution/reference v0.6.0
 	github.com/djherbis/times v1.6.0
 	github.com/dsnet/try v0.0.3

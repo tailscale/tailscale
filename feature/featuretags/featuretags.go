@@ -160,6 +160,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"desktop_sessions": {Sym: "DesktopSessions", Desc: "Desktop sessions support"},
 	"doctor":           {Sym: "Doctor", Desc: "Diagnose possible issues with Tailscale and its host environment"},
 	"drive":            {Sym: "Drive", Desc: "Tailscale Drive (file server) support"},
+	"flashappliance":   {Sym: "FlashAppliance", Desc: "'tailscale configure flash-appliance' CLI command for writing a Tailscale appliance image to a local disk"},
 	"gro": {
 		Sym:  "GRO",
 		Desc: "Generic Receive Offload support (performance)",

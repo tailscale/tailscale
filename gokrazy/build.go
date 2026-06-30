@@ -10,20 +10,17 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"runtime"
 	"strings"
 	"time"
+
+	"tailscale.com/gokrazy/mkfs"
 )
 
 var (
@@ -33,25 +30,22 @@ var (
 	gaf    = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
 )
 
-func findMkfsExt4() (string, error) {
-	tries := []string{
-		"/opt/homebrew/opt/e2fsprogs/sbin/mkfs.ext4",
-		"/sbin/mkfs.ext4",
-	}
-	for _, p := range tries {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	p, err := exec.LookPath("mkfs.ext4")
-	if err == nil {
-		return p, nil
-	}
-	if runtime.GOOS == "darwin" {
-		return "", errors.New("no mkfs.ext4 found; run `brew install e2fsprogs`")
-	}
-	return "", errors.New("No mkfs.ext4 found on system")
-}
+// imageSizeBytes is the size of the disk image we ask monogok to
+// produce (and that the AWS AMI import expects). It has to be large
+// enough to fit gokrazy's standard partition layout (see
+// github.com/bradfitz/monogok/disklayout):
+//
+//	  4 MiB gap before the first partition
+//	100 MiB boot      (FAT)
+//	500 MiB root A    (squashfs; the partition OTA updates write into)
+//	500 MiB root B    (squashfs)
+//	 ~96 MiB /perm    (ext4; rest of the disk minus the secondary GPT)
+//
+// Bump this to give /perm more room (and to make the produced .img
+// file larger). The same value is passed to monogok via
+// --target_storage_bytes and to mkfs.Perm so the GPT and the ext4
+// inside it agree on the disk's size.
+const imageSizeBytes = 1258299392
 
 var conf gokrazyConfig
 
@@ -141,14 +135,13 @@ func buildImage() error {
 		args = append(args,
 			"overwrite",
 			"--full", filepath.Join(dir, *app+".img"),
-			"--target_storage_bytes=1258299392",
+			fmt.Sprintf("--target_storage_bytes=%d", imageSizeBytes),
 		)
 	}
 
-	var buf bytes.Buffer
 	cmd := exec.Command("go", args...)
 	cmd.Dir = filepath.Join(dir, *app)
-	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
+	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
@@ -157,31 +150,16 @@ func buildImage() error {
 		return nil
 	}
 
-	mkfs, err := findMkfsExt4()
+	imgPath := filepath.Join(dir, *app+".img")
+	f, err := os.OpenFile(imgPath, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("open %s: %w", imgPath, err)
 	}
-
-	// monogok overwrite emits a line of text saying how to run mkfs.ext4
-	// to create the ext4 /perm filesystem. Parse that and run it.
-	// The regexp is tight to avoid matching if the command changes,
-	// to force us to check it's still correct/safe. But it shouldn't
-	// change on its own because we pin the monogok version in our go.mod.
-	//
-	// TODO(bradfitz): emit this in a machine-readable way from monogok.
-	rx := regexp.MustCompile(`(?m)/mkfs.ext4 (-F) (-E) (offset=\d+) (\S+) (\d+)\s*?$`)
-	m := rx.FindStringSubmatch(buf.String())
-	if m == nil {
-		return fmt.Errorf("found no ext4 instructions in output")
+	defer f.Close()
+	if err := mkfs.Perm(f, imageSizeBytes); err != nil {
+		return fmt.Errorf("formatting /perm in %s: %v", imgPath, err)
 	}
-
-	log.Printf("Running %s %q ...", mkfs, m[1:])
-	out, err := exec.Command(mkfs, m[1:]...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error running %v: %v, %s", mkfs, err, out)
-	}
-	log.Printf("Success.")
-
+	log.Printf("Wrote ext4 /perm filesystem to %s.", imgPath)
 	return nil
 }
 
