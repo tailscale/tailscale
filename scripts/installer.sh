@@ -351,6 +351,16 @@ main() {
 				echo "https://github.com/tailscale-dev/deck-tailscale"
 				exit 1
 				;;
+			solus)
+				OS="$ID"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="eopkg"
+				;;
+			aerynos|serpentos)
+				OS="$ID"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="moss"
+				;;
 			kde-linux)
 				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
 				echo "https://linux.kde.org/docs/more-software/#tailscale"
@@ -445,6 +455,12 @@ main() {
 			# Rolling release, no version checking needed.
 			;;
 		gentoo)
+			# Rolling release, no version checking needed.
+			;;
+		solus)
+			# Rolling release, no version checking needed.
+			;;
+		aerynos|serpentos)
 			# Rolling release, no version checking needed.
 			;;
 		freebsd)
@@ -716,6 +732,28 @@ main() {
 			else
 				$SUDO emerge --ask=n net-vpn/tailscale
 			fi
+			set +x
+			;;
+		eopkg)
+			set -x
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: Solus maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO eopkg install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO eopkg install -y tailscale
+			fi
+			$SUDO systemctl enable --now tailscaled
+			set +x
+			;;
+		moss)
+			set -x
+			if [ -n "$TAILSCALE_VERSION" ]; then
+				echo "Warning: AerynOS maintains their own Tailscale package. Version pinning may not work as expected, as the target version may no longer be available."
+				$SUDO moss install -y "tailscale-$TAILSCALE_VERSION"
+			else
+				$SUDO moss install -y tailscale
+			fi
+			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		appstore)
