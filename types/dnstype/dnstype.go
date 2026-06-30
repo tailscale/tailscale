@@ -17,24 +17,33 @@ type Resolver struct {
 	//  - A plain IP address for a "classic" UDP+TCP DNS resolver.
 	//    This is the common format as sent by the control plane.
 	//  - An IP:port, for tests.
-	//  - "https://resolver.com/path" for DNS over HTTPS; currently
-	//    as of 2022-09-08 only used for certain well-known resolvers
-	//    (see the publicdns package) for which the IP addresses to dial DoH are
-	//    known ahead of time, so bootstrap DNS resolution is not required.
+	//  - "https://resolver.com/path" for DNS over HTTPS. The IPs to dial come
+	//    from BootstrapResolution when that field is set, otherwise from the
+	//    publicdns package when the URL is a well-known provider, otherwise
+	//    resolved at dial time via in-memory MagicDNS or the system resolver.
+	//    See BootstrapResolution for the nil-vs-empty distinction.
 	//  - "http://node-address:port/path" for DNS over HTTP over WireGuard. This
 	//    is implemented in the PeerAPI for exit nodes and app connectors.
 	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
 	Addr string `json:",omitempty"`
 
-	// BootstrapResolution is an optional suggested resolution for the
-	// DoT/DoH resolver, if the resolver URL does not reference an IP
-	// address directly.
-	// BootstrapResolution may be empty, in which case clients should
-	// look up the DoT/DoH server using their local "classic" DNS
-	// resolver.
+	// BootstrapResolution lists IP addresses to use to reach the DoT/DoH
+	// resolver, overriding any IPs that the client would otherwise infer
+	// from Addr.
 	//
-	// As of 2022-09-08, BootstrapResolution is not yet used.
-	BootstrapResolution []netip.Addr `json:",omitempty"`
+	// The field carries three distinguishable states:
+	//
+	//   - nil (field absent): the client falls back to its own resolution.
+	//     For DoH, that means the publicdns package when Addr is a
+	//     well-known provider, else resolution at dial time.
+	//   - non-empty: the listed IPs are used directly, taking precedence
+	//     over publicdns and any dial-time resolution.
+	//   - explicit empty list: the client uses dial-time resolution even
+	//     if Addr would otherwise match a well-known provider.
+	//
+	// To preserve the nil-vs-empty distinction on the wire, this field is
+	// intentionally not tagged `omitempty`.
+	BootstrapResolution []netip.Addr
 
 	// UseWithExitNode designates that this resolver should continue to be used when an
 	// exit node is in use. Normally, DNS resolution is delegated to the exit node but
@@ -71,6 +80,7 @@ func (r *Resolver) Equal(other *Resolver) bool {
 	}
 
 	return r.Addr == other.Addr &&
+		(r.BootstrapResolution == nil) == (other.BootstrapResolution == nil) &&
 		slices.Equal(r.BootstrapResolution, other.BootstrapResolution) &&
 		r.UseWithExitNode == other.UseWithExitNode
 }

@@ -49,9 +49,9 @@ func TestDoH(t *testing.T) {
 
 	for _, urlBase := range prefixes {
 		t.Run(urlBase, func(t *testing.T) {
-			c, ok := f.getKnownDoHClientForProvider(urlBase)
-			if !ok {
-				t.Fatal("expected DoH")
+			c, err := f.getDoHClient(urlBase, nil)
+			if err != nil {
+				t.Fatal(err)
 			}
 			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t))
 			if err != nil {
