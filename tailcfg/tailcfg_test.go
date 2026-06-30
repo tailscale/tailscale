@@ -1033,3 +1033,31 @@ func TestDisplayMessageEqual(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceActionTypeValid(t *testing.T) {
+	tests := []struct {
+		typ  ServiceActionType
+		want bool
+	}{
+		{ServiceActionTypeAWSS3, true},
+		{ServiceActionTypeCockroachDB, true},
+		{ServiceActionTypeElasticSearch, true},
+		{ServiceActionTypeHTTP, true},
+		{ServiceActionTypeKubernetes, true},
+		{ServiceActionTypeMongoDB, true},
+		{ServiceActionTypeMSSQL, true},
+		{ServiceActionTypeMySQL, true},
+		{ServiceActionTypePostgreSQL, true},
+		{ServiceActionTypeRDP, true},
+		{ServiceActionTypeVNC, true},
+		{ServiceActionTypeSSH, true},
+		{ServiceActionTypeTCP, true},
+		{"ftp", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := tt.typ.Valid(); got != tt.want {
+			t.Errorf("ServiceActionType(%q).Valid() = %v, want %v", tt.typ, got, tt.want)
+		}
+	}
+}

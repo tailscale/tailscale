@@ -97,6 +97,7 @@ func main() {
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 		loginServer           = strings.TrimSuffix(defaultEnv("OPERATOR_LOGIN_SERVER", ""), "/")
 		ingressClassName      = defaultEnv("OPERATOR_INGRESS_CLASS_NAME", "tailscale")
+		operatorSAName        = defaultEnv("OPERATOR_SERVICE_ACCOUNT_NAME", "operator")
 	)
 
 	var opts []kzap.Opts
@@ -157,6 +158,7 @@ func main() {
 		tsServer:                      s,
 		tsClient:                      tsc,
 		tailscaleNamespace:            tsNamespace,
+		operatorSAName:                operatorSAName,
 		restConfig:                    restConfig,
 		proxyImage:                    image,
 		k8sProxyImage:                 k8sProxyImage,
@@ -349,6 +351,7 @@ func runReconcilers(opts reconcilerOpts) {
 	tailnetOptions := tailnet.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		TailscaleNamespace: opts.tailscaleNamespace,
+		OperatorSAName:     opts.operatorSAName,
 		Clock:              tstime.DefaultClock{},
 		Logger:             opts.log,
 		Registry:           clients,
@@ -818,6 +821,10 @@ type reconcilerOpts struct {
 	// ingressClassName is the name of the ingress class used by reconcilers of Ingress resources. This defaults
 	// to "tailscale" but can be customised.
 	ingressClassName string
+	// operatorSAName is the name of the ServiceAccount that the operator pod runs as. It is used as the target
+	// ServiceAccount when minting tokens via the Kubernetes TokenRequest API for Tailnets that authenticate using
+	// workload identity federation.
+	operatorSAName string
 }
 
 // enqueueAllIngressEgressProxySvcsinNS returns a reconcile request for each
@@ -1470,9 +1477,10 @@ func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		secret, ok := o.(*corev1.Secret)
 		if !ok {
-			logger.Infof("[unexpected] Secret handler triggered for an object that is not a Secret")
+			logger.Warn("Secret handler triggered for an object that is not a Secret")
 			return nil
 		}
+
 		if isTLSSecret(secret) {
 			return []reconcile.Request{
 				{
@@ -1509,15 +1517,16 @@ func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.
 	}
 }
 
-// HAServiceFromSecret returns a handler that returns reconcile requests for
+// HAServicesFromSecret returns a handler that returns reconcile requests for
 // all HA Services that should be reconciled in response to a Secret event.
 func HAServicesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		secret, ok := o.(*corev1.Secret)
 		if !ok {
-			logger.Infof("[unexpected] Secret handler triggered for an object that is not a Secret")
+			logger.Warn("Secret handler triggered for an object that is not a Secret")
 			return nil
 		}
+
 		if !isPGStateSecret(secret) {
 			return nil
 		}
@@ -1549,9 +1558,10 @@ func kubeAPIServerPGsFromSecret(cl client.Client, logger *zap.SugaredLogger) han
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		secret, ok := o.(*corev1.Secret)
 		if !ok {
-			logger.Infof("[unexpected] Secret handler triggered for an object that is not a Secret")
+			logger.Warn("Secret handler triggered for an object that is not a Secret")
 			return nil
 		}
+
 		if secret.ObjectMeta.Labels[kubetypes.LabelManaged] != "true" ||
 			secret.ObjectMeta.Labels[LabelParentType] != "proxygroup" {
 			return nil
@@ -1587,9 +1597,10 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		pg, ok := o.(*tsapi.ProxyGroup)
 		if !ok {
-			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			logger.Warn("ProxyGroup handler triggered for an object that is not a ProxyGroup")
 			return nil
 		}
+
 		if pg.Spec.Type != tsapi.ProxyGroupTypeEgress {
 			return nil
 		}
@@ -1617,9 +1628,10 @@ func ingressesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		pg, ok := o.(*tsapi.ProxyGroup)
 		if !ok {
-			logger.Infof("[unexpected] ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			logger.Warn("ProxyGroup handler triggered for an object that is not a ProxyGroup")
 			return nil
 		}
+
 		if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
 			return nil
 		}
@@ -1647,9 +1659,10 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns 
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svc, ok := o.(*corev1.Service)
 		if !ok {
-			logger.Infof("[unexpected] Service handler triggered for an object that is not a Service")
+			logger.Warn("Service handler triggered for an object that is not a Service")
 			return nil
 		}
+
 		if !isEgressSvcForProxyGroup(svc) {
 			return nil
 		}
@@ -1676,9 +1689,10 @@ func podsFromEgressEps(cl client.Client, logger *zap.SugaredLogger, ns string) h
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		eps, ok := o.(*discoveryv1.EndpointSlice)
 		if !ok {
-			logger.Infof("[unexpected] EndpointSlice handler triggered for an object that is not a EndpointSlice")
+			logger.Warn("EndpointSlice handler triggered for an object that is not a EndpointSlice")
 			return nil
 		}
+
 		if eps.Labels[labelProxyGroup] == "" {
 			return nil
 		}
@@ -1715,18 +1729,21 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
 		if !ok {
-			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an object that is not a CustomResourceDefinition")
+			logger.Warn("ServiceMonitor CRD handler received an object that is not a CustomResourceDefinition")
 			return nil
 		}
+
 		if crd.Name != serviceMonitorCRD {
-			logger.Debugf("[unexpected] ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
+			logger.Warnf("ServiceMonitor CRD handler received an unexpected CRD %q", crd.Name)
 			return nil
 		}
+
 		pcl := &tsapi.ProxyClassList{}
 		if err := cl.List(ctx, pcl); err != nil {
-			logger.Debugf("[unexpected] error listing ProxyClasses: %v", err)
+			logger.Errorf("failed to list ProxyClass resources: %v", err)
 			return nil
 		}
+
 		reqs := make([]reconcile.Request, 0)
 		for _, pc := range pcl.Items {
 			if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
@@ -1735,6 +1752,7 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 				})
 			}
 		}
+
 		return reqs
 	}
 }
@@ -1744,9 +1762,10 @@ func crdTransformer(log *zap.SugaredLogger) toolscache.TransformFunc {
 	return func(o any) (any, error) {
 		crd, ok := o.(*apiextensionsv1.CustomResourceDefinition)
 		if !ok {
-			log.Infof("[unexpected] CRD transformer called for a non-CRD type")
+			log.Warn("CRD transformer called for a non-CRD type")
 			return crd, nil
 		}
+
 		crd.Spec = apiextensionsv1.CustomResourceDefinitionSpec{}
 		return crd, nil
 	}

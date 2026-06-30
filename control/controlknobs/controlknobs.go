@@ -25,7 +25,7 @@ type Knobs struct {
 	// the client port.
 	RandomizeClientPort atomic.Bool
 
-	// OneCGNAT is whether the the node should make one big CGNAT route
+	// OneCGNAT is whether the node should make one big CGNAT route
 	// in the OS rather than one /32 per peer.
 	OneCGNAT syncs.AtomicValue[opt.Bool]
 
@@ -130,6 +130,16 @@ type Knobs struct {
 	// DisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device. See
 	// [tailcfg.NodeAttrDisableTUNTCPGRO].
 	DisableTUNTCPGRO atomic.Bool
+
+	// NeverGSOEqualTail enables a UDP GSO sentinel-tail workaround in the
+	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
+	// UDP sockets. See [tailcfg.NodeAttrNeverGSOEqualTail].
+	NeverGSOEqualTail atomic.Bool
+
+	// CacheNetworkMaps is whether the node should persistently cache network
+	// maps and use them to establish peer connectivity on start, if doing so
+	// is supported by the client and storage is available.
+	CacheNetworkMaps atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -164,6 +174,8 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableUDPGSO                        = has(tailcfg.NodeAttrDisableUDPGSO)
 		disableTUNUDPGRO                     = has(tailcfg.NodeAttrDisableTUNUDPGRO)
 		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
+		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
+		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -196,6 +208,8 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableUDPGSO.Store(disableUDPGSO)
 	k.DisableTUNUDPGRO.Store(disableTUNUDPGRO)
 	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
+	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
+	k.CacheNetworkMaps.Store(cacheNetworkMaps)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal

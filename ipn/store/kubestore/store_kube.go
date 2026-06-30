@@ -147,6 +147,9 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) (err error) {
 			s.memory.WriteState(ipn.StateKey(sanitizeKey(id)), bs)
 		}
 	}()
+	if bs == nil {
+		return s.removeSecretField(string(id), s.secretName)
+	}
 	return s.updateSecret(map[string][]byte{string(id): bs}, s.secretName)
 }
 
@@ -335,6 +338,29 @@ func (s *Store) updateSecret(data map[string][]byte, secretName string) (err err
 	}
 	if err := s.client.UpdateSecret(ctx, secret); err != nil {
 		return fmt.Errorf("error updating Secret %s: %w", s.secretName, err)
+	}
+	return nil
+}
+
+func (s *Store) removeSecretField(key, secretName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if s.canPatchSecret(secretName) {
+		return s.client.JSONPatchResource(ctx, secretName, kubeclient.TypeSecrets, []kubeclient.JSONPatch{
+			{
+				Op:   "remove",
+				Path: "/data/" + sanitizeKey(ipn.StateKey(key)),
+			},
+		})
+	}
+	// No patch permissions, use UPDATE: get the secret, delete the key, update.
+	secret, err := s.client.GetSecret(ctx, secretName)
+	if err != nil {
+		return fmt.Errorf("error getting Secret %s: %w", secretName, err)
+	}
+	delete(secret.Data, sanitizeKey(ipn.StateKey(key)))
+	if err := s.client.UpdateSecret(ctx, secret); err != nil {
+		return fmt.Errorf("error updating Secret %s: %w", secretName, err)
 	}
 	return nil
 }

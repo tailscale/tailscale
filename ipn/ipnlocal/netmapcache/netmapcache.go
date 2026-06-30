@@ -242,6 +242,44 @@ func (c *Cache) Store(ctx context.Context, nm *netmap.NetworkMap) error {
 	return c.removeUnwantedKeys(ctx)
 }
 
+// UpdatePeers updates the cache to add or replace ("upsert") any peers
+// specified in update, and discard any peers specified in remove. This does
+// not affect any previous cached values for the self node or user profiles.
+//
+// It is expected that update and remove will be disjoint, but in the event
+// they are not, remove takes precedence. If the cache does not already contain
+// at least a self node, UpdatePeers reports an error without changing anything.
+func (c *Cache) UpdatePeers(ctx context.Context, update []tailcfg.NodeView, remove []tailcfg.StableNodeID) error {
+	if !buildfeatures.HasCacheNetMap {
+		return nil
+	}
+	if !c.wantKeys.Contains(selfKey) {
+		return errors.New("no netmap is cached to apply an update")
+	}
+
+	// Attempt all updates and removals before reporting any errors.
+	var errs []error
+	for _, p := range update {
+		// We may already have an entry for this peer, or it may be new, but
+		// rather than do a lookup we can just replace the existing entry if it
+		// exists.
+		key := peerKeyPrefix + cacheKey(p.StableID())
+		if err := c.writeJSON(ctx, key, netmapNode{Node: &p}); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		c.wantKeys.Add(key)
+	}
+	for _, q := range remove {
+		key := peerKeyPrefix + cacheKey(q)
+		if err := c.store.Remove(ctx, string(key)); err != nil {
+			errs = append(errs, err)
+		}
+		c.wantKeys.Delete(key)
+	}
+	return errors.Join(errs...)
+}
+
 // updateSelfOnly updates the "static" parts of the netmap in the cache.  It is
 // shared between [Cache.UpdateSelfOnly] and [Cache.Store].
 func (c *Cache) updateSelfOnly(ctx context.Context, nm *netmap.NetworkMap) error {

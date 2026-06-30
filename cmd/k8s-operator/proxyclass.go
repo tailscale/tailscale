@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstime"
@@ -170,10 +171,11 @@ func (pcr *ProxyClassReconciler) validate(ctx context.Context, pc *tsapi.ProxyCl
 			}
 		}
 	}
+
 	if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
 		found, err := hasServiceMonitorCRD(ctx, pcr.Client)
 		if err != nil {
-			pcr.logger.Infof("[unexpected]: error retrieving %q CRD: %v", serviceMonitorCRD, err)
+			pcr.logger.Errorf("error retrieving %q CRD: %v", serviceMonitorCRD, err)
 			// best effort validation - don't error out here
 		} else if !found {
 			msg := fmt.Sprintf("ProxyClass defines that a ServiceMonitor custom resource should be created, but %q CRD was not found", serviceMonitorCRD)

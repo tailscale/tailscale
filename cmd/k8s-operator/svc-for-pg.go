@@ -99,7 +99,6 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	pgName := svc.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
-		logger.Infof("[unexpected] no ProxyGroup annotation, skipping Tailscale Service provisioning")
 		return res, nil
 	}
 
@@ -674,7 +673,7 @@ func (r *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			case shouldBeAdvertised:
 				replicaName, ok := strings.CutSuffix(secret.Name, "-config")
 				if !ok {
-					logger.Infof("[unexpected] unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
+					logger.Warnf("unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
 					return nil
 				}
 				ready, err := r.backendRoutesSetup(ctx, serviceName.String(), replicaName, cfg, logger)
@@ -825,14 +824,40 @@ func (r *HAServiceReconciler) validateService(ctx context.Context, svc *corev1.S
 	}
 	svcList := &corev1.ServiceList{}
 	if err := r.List(ctx, svcList); err != nil {
-		errs = append(errs, fmt.Errorf("[unexpected] error listing Services: %w", err))
+		errs = append(errs, fmt.Errorf("error listing Services: %w", err))
 		return errors.Join(errs...)
 	}
 	svcName := nameForService(svc)
 	for _, s := range svcList.Items {
-		if r.shouldExpose(&s) && nameForService(&s) == svcName && s.UID != svc.UID {
-			errs = append(errs, fmt.Errorf("found duplicate Service %q for hostname %q - multiple HA Services for the same hostname in the same cluster are not allowed", client.ObjectKeyFromObject(&s), svcName))
+		if s.UID == svc.UID {
+			continue
 		}
+		// Only check services managed by the ProxyGroup reconciler. Services
+		// exposed via the single-proxy path in svc.go have their own
+		// hostname tracking and live in a separate per-proxy tailnet
+		// namespace; flagging them as duplicates here breaks multi-tailnet
+		// setups where a single-proxy Service on the primary tailnet shares
+		// a hostname with a ProxyGroup ingress on a secondary tailnet.
+		if !r.isTailscaleService(&s) {
+			continue
+		}
+		if nameForService(&s) != svcName {
+			continue
+		}
+		// Two ProxyGroups joined to different tailnets each have their own
+		// DNS namespace, so a hostname collision across them is not a real
+		// conflict. Look up the other Service's ProxyGroup and skip the
+		// duplicate report when the tailnets differ; if the lookup fails
+		// fall through and flag the collision so a genuine duplicate isn't
+		// silently allowed.
+		otherPGName := s.Annotations[AnnotationProxyGroup]
+		if otherPGName != "" && otherPGName != pg.Name {
+			otherPG := &tsapi.ProxyGroup{}
+			if err := r.Get(ctx, client.ObjectKey{Name: otherPGName}, otherPG); err == nil && otherPG.Spec.Tailnet != pg.Spec.Tailnet {
+				continue
+			}
+		}
+		errs = append(errs, fmt.Errorf("found duplicate Service %q for hostname %q - multiple HA Services for the same hostname on the same tailnet are not allowed", client.ObjectKeyFromObject(&s), svcName))
 	}
 	return errors.Join(errs...)
 }

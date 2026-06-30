@@ -95,9 +95,21 @@ func tsChain(chain string) string {
 }
 
 // DelLoopbackRule removes the iptables rule permitting loopback
-// traffic to a Tailscale IP.
+// traffic to a Tailscale IP. A missing rule is not an error: an address
+// left on the interface by a previous tailscaled instance never went
+// through AddLoopbackRule in this one, so removing it must not be
+// blocked by the absence of its loopback rule.
 func (i *iptablesRunner) DelLoopbackRule(addr netip.Addr) error {
-	if err := i.getIPTByAddr(addr).Delete("filter", "ts-input", "-i", "lo", "-s", addr.String(), "-j", "ACCEPT"); err != nil {
+	ipt := i.getIPTByAddr(addr)
+	args := []string{"-i", "lo", "-s", addr.String(), "-j", "ACCEPT"}
+	exists, err := ipt.Exists("filter", "ts-input", args...)
+	if err != nil {
+		return fmt.Errorf("checking loopback allow rule for %q: %w", addr, err)
+	}
+	if !exists {
+		return nil
+	}
+	if err := ipt.Delete("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("deleting loopback allow rule for %q: %w", addr, err)
 	}
 
@@ -322,7 +334,16 @@ func (i *iptablesRunner) DNATWithLoadBalancer(origDst netip.Addr, dsts []netip.A
 
 func (i *iptablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	table := i.getIPTByAddr(addr)
-	return table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+	// Clamp MSS on forwarded TCP handshakes in both directions: the SYN
+	// leaving via tun towards the tailnet peer, and the SYN-ACK arriving on
+	// tun and being forwarded back out towards the originating endpoint. A
+	// single -o tun rule only clamps one side of the handshake, leaving the
+	// endpoint on the other side advertising an MSS that is too large for the
+	// tun MTU, which black-holes large segments when PMTU discovery is broken.
+	if err := table.Append("mangle", "FORWARD", "-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"); err != nil {
+		return err
+	}
+	return table.Append("mangle", "FORWARD", "-i", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
 }
 
 // addBase6 adds some basic IPv6 processing rules to be

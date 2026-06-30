@@ -1,0 +1,84 @@
+# Approval policy for this repository, enforced by policy-bot
+# (https://github.com/palantir/policy-bot) running at
+# https://policybot.corp.ts.net.
+#
+# This file replaces the role GitHub's CODEOWNERS played: when a pull
+# request touches a path covered by a rule below, policy-bot posts a
+# status check that blocks merging until the required reviewers approve.
+#
+# Policy and rule syntax reference:
+#   https://github.com/palantir/policy-bot/blob/develop/README.md
+# Example policy files (team-approval, disapproval, remote, etc.):
+#   https://github.com/palantir/policy-bot/tree/develop/config/policy-examples
+#
+# Do not add to this policy without wide discussion.
+# See https://github.com/tailscale/corp/issues/13972.
+
+policy:
+  approval:
+    # tailcfg/ has an extra gate: either a control-protocol-owners
+    # review or an explicit policybot-override: comment from a dev.
+    # The block is skipped on PRs that don't touch tailcfg/.
+    - or:
+        - tailcfg changes approved by control-protocol-owners
+        - tailcfg changes overridden by another tailscale/dev
+    # And every PR, regardless of files, needs a +1 from a dev.
+    # This rule also keeps the policy from collapsing into "all rules
+    # skipped" (which policy-bot treats as a failure) on non-tailcfg
+    # PRs.
+    - any tailscale/dev review
+
+approval_rules:
+  - name: tailcfg changes approved by control-protocol-owners
+    if:
+      changed_files:
+        paths:
+          - "^tailcfg/"
+    requires:
+      count: 1
+      teams:
+        - "tailscale/control-protocol-owners"
+
+  - name: tailcfg changes overridden by another tailscale/dev
+    description: |
+      Any member of @tailscale/dev (other than the PR author) can
+      override the control-protocol-owners requirement by leaving a
+      comment of the form
+
+          policybot-override: <reason>
+
+      on the pull request. The reason can be anything but should
+      explain why the override is appropriate; it stays in the PR
+      conversation as a record. The override comment also counts as
+      that developer's approval.
+    if:
+      changed_files:
+        paths:
+          - "^tailcfg/"
+    requires:
+      count: 1
+      teams:
+        - "tailscale/dev"
+    options:
+      methods:
+        # Explicitly turn off the defaults (github_review: true,
+        # comments: [":+1:", "👍"]) so the ONLY way to satisfy this
+        # rule is a "policybot-override:" comment. Otherwise a normal
+        # review approval or thumbs-up from any tailscale/dev member
+        # would silently pass the rule.
+        github_review: false
+        comments: []
+        comment_patterns:
+          - '^policybot-override: \S.*'
+
+  - name: any tailscale/dev review
+    description: |
+      Every PR needs at least one approval from a member of
+      @tailscale/dev. policy-bot's default approval methods count
+      a GitHub review approval, a ":+1:" comment, or a "👍"
+      comment as approval. The PR author cannot approve their
+      own PR.
+    requires:
+      count: 1
+      teams:
+        - "tailscale/dev"

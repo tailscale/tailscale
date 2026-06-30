@@ -10,8 +10,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/netip"
+	"strconv"
+	"strings"
 
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/dnsname"
 )
 
 const (
@@ -51,6 +56,43 @@ func CapVerFromFileName(name string) (tailcfg.CapabilityVersion, error) {
 	var cap tailcfg.CapabilityVersion
 	_, err := fmt.Sscanf(name, "cap-%d.hujson", &cap)
 	return cap, err
+}
+
+// ResolveViaDomain parses an FQDN (with or without trailing dot) as a
+// 4via6 domain in the format "<ipv4-with-hyphens>-via-<siteID>[.domain]"
+// and returns the synthesized IPv6 via address.
+// This borrows heavily from net/dns/resolver.(*Resolver).resolveViaDomain.
+// TODO(beckypauley): consider a refactor of the above to remove duplication.
+func ResolveViaDomain(name string) (netip.Addr, bool) {
+	// The minimum length of a valid 4via6 FQDN i.e. "0-0-0-0-via-X".
+	const minFQDNLength = 13
+	fqdn := strings.TrimSuffix(name, ".")
+	if len(fqdn) < minFQDNLength {
+		return netip.Addr{}, false // too short to be valid
+	}
+	if !strings.Contains(fqdn, "-via-") {
+		return netip.Addr{}, false
+	}
+	firstLabel, domain, _ := strings.Cut(fqdn, ".")
+	if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
+		return netip.Addr{}, false
+	}
+	v4hyphens, siteIDStr, ok := strings.Cut(firstLabel, "-via-")
+	if !ok {
+		return netip.Addr{}, false
+	}
+	ip4Str := strings.ReplaceAll(v4hyphens, "-", ".")
+	ip4, err := netip.ParseAddr(ip4Str)
+	if err != nil || !ip4.Is4() {
+		return netip.Addr{}, false
+	}
+	prefix, err := strconv.ParseUint(siteIDStr, 0, 32)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	// MapVia will never error when given an IPv4 netip.Prefix.
+	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
+	return out.Addr(), true
 }
 
 // TruncateLabelValue truncates a Kubernetes label value to fit within the

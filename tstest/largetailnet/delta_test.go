@@ -51,7 +51,7 @@ func metricByName(t testing.TB, name string) *clientmetric.Metric {
 //   - the corresponding side effect is observable on the [LocalBackend]
 //     (a fresh peer resolvable via PeerByID, a UserProfile resolvable
 //     via UserProfile, a packet filter rule reflected in
-//     GetFilterForTest, a per-field patch reflected in PeerByID, etc.).
+//     ForTest().GetFilter, a per-field patch reflected in PeerByID, etc.).
 //
 // This is the destination-side companion to
 // [tstest/largetailnet/BenchmarkGiantTailnet], which only measures cost
@@ -201,7 +201,7 @@ func TestNetmapDeltaFastPath(t *testing.T) {
 		if !ok || uv.LoginName() != "alice@example.com" {
 			t.Errorf("UserProfile(%d) ok=%v login=%q", newUser, ok, uv.LoginName())
 		}
-		pf := lb.GetFilterForTest()
+		pf := lb.ForTest().GetFilter()
 		if got := pf.Check(netip.MustParseAddr("100.64.0.42"), selfIP4, 22, ipproto.TCP); got != filter.Accept {
 			t.Errorf("packet filter Check from new peer = %s; want Accept", got)
 		}

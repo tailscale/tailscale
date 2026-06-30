@@ -155,7 +155,7 @@ func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 
 		// Get the current user from the LocalBackend's perspective
 		// as soon as we're connected.
-		gotUID, gotActor := server.Backend().CurrentUserForTest()
+		gotUID, gotActor := server.Backend().ForTest().CurrentUser()
 
 		// Wait for the first notification to arrive.
 		// It will either be the initial state we've requested via [ipn.NotifyInitialState],

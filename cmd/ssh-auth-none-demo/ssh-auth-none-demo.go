@@ -86,19 +86,20 @@ func main() {
 					if cm.User() == "banners" {
 						totalBanners = 5
 					}
+
 					for banner := 2; banner <= totalBanners; banner++ {
 						time.Sleep(time.Second)
 						if banner == totalBanners {
-							spac.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
+							spac.SendAuthBanner(fmt.Sprintf("# Final banner saying access granted (+%v)\r\n", time.Since(start).Round(time.Millisecond)))
 						} else {
-							spac.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
+							spac.SendAuthBanner(fmt.Sprintf("# Another banner saying we're still waiting for auth server-side (+%v)\r\n", time.Since(start).Round(time.Millisecond)))
 						}
 					}
 					return nil, nil
 				},
 				BannerCallback: func(cm ssh.ConnMetadata) string {
 					log.Printf("Got connection from user %q, %q from %v", cm.User(), cm.ClientVersion(), cm.RemoteAddr())
-					return fmt.Sprintf("# Banner for user %q, %q\n", cm.User(), cm.ClientVersion())
+					return fmt.Sprintf("# Example URL in auth bannner for %q, %q: https://github.com/tailscale/tailscale\r\n", cm.User(), cm.ClientVersion())
 				},
 			}
 		},
@@ -135,6 +136,8 @@ func handleSessionPostSSHAuth(s gliderssh.Session) {
 			}
 		}
 	}()
+
+	fmt.Fprintf(s, "We're past auth phase now. Goodbye in ...\n")
 
 	for i := 10; i > 0; i-- {
 		fmt.Fprintf(s, "%v ...\n", i)

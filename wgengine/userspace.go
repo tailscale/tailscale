@@ -21,6 +21,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
+	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/envknob"
@@ -34,7 +35,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockstats"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
@@ -45,7 +45,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
@@ -123,12 +122,16 @@ type userspaceEngine struct {
 	// the per-packet wgdev callback without locking.
 	peerByIPRoute atomic.Pointer[bart.Table[key.NodePublic]]
 
+	// peerForIP, if non-nil, is the callback installed via
+	// [userspaceEngine.SetPeerForIPFunc]. PeerForIP delegates to it
+	// for the cold-path control lookups (Ping, TSMP, pendopen, etc).
+	peerForIP atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
+
 	lastCfgFull        wgcfg.Config
 	lastRouter         *router.Config
-	lastDNSConfig      dns.ConfigView    // or invalid if none
-	lastIsSubnetRouter bool              // was the node a primary subnet router in the last run.
-	reconfigureVPN     func() error      // or nil
-	conn25PacketHooks  Conn25PacketHooks // or nil
+	lastDNSConfig      dns.ConfigView // or invalid if none
+	lastIsSubnetRouter bool           // was the node a primary subnet router in the last run.
+	reconfigureVPN     func() error   // or nil
 
 	// lastAppliedDisableTUNUDPGRO and lastAppliedDisableTUNTCPGRO cache the
 	// controlknobs values that were last applied to the TUN device. They are
@@ -138,11 +141,10 @@ type userspaceEngine struct {
 	lastAppliedDisableTUNUDPGRO bool
 	lastAppliedDisableTUNTCPGRO bool
 
-	mu             sync.Mutex         // guards following; see lock order comment below
-	netMap         *netmap.NetworkMap // or nil
-	closing        bool               // Close was called (even if we're still closing)
+	mu             sync.Mutex       // guards following; see lock order comment below
+	selfNode       tailcfg.NodeView // or invalid if none
+	closing        bool             // Close was called (even if we're still closing)
 	statusCallback StatusCallback
-	peerSequence   views.Slice[key.NodePublic]
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
@@ -157,6 +159,18 @@ type userspaceEngine struct {
 	// networkLogger logs statistics about network connections.
 	networkLogger netlog.Logger
 
+	// netLogSource is the [netlog.NodeSource] installed via
+	// [Engine.SetNetLogNodeSource]; it is read when starting up the network
+	// logger from inside Reconfig. It may be nil if no source was installed.
+	netLogSource syncs.AtomicValue[netlog.NodeSource]
+
+	// wgPeerLookup is the lookup function installed via
+	// [Engine.SetWGPeerLookup]; it is consulted by [wgLogger] to translate
+	// wireguard-go peer references in log lines. It may be nil if no
+	// lookup was installed, in which case peer references are not
+	// rewritten.
+	wgPeerLookup syncs.AtomicValue[func(wgString string) (tsString string, ok bool)]
+
 	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
 	// wgLock must be held when using this map.
 	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
@@ -169,19 +183,6 @@ type BIRDClient interface {
 	EnableProtocol(proto string) error
 	DisableProtocol(proto string) error
 	Close() error
-}
-
-// Conn25PacketHooks are hooks for Connectors 2025 app connectors.
-// They are meant to be wired into to corresponding hooks in the
-// [tstun.Wrapper]. They may modify the packet (e.g., NAT), or drop
-// invalid app connector traffic.
-type Conn25PacketHooks interface {
-	// HandlePacketsFromTunDevice sends packets originating from the tun device
-	// for further Connectors 2025 app connectors processing.
-	HandlePacketsFromTunDevice(*packet.Parsed) filter.Response
-	// HandlePacketsFromWireguard sends packets originating from WireGuard
-	// for further Connectors 2025 app connectors processing.
-	HandlePacketsFromWireGuard(*packet.Parsed) filter.Response
 }
 
 // Config is the engine configuration.
@@ -260,10 +261,6 @@ type Config struct {
 	// TODO(creachadair): As of 2025-03-19 this is optional, but is intended to
 	// become required non-nil.
 	EventBus *eventbus.Bus
-
-	// Conn25PacketHooks, if non-nil, is used to hook packets for Connectors 2025
-	// app connector handling logic.
-	Conn25PacketHooks Conn25PacketHooks
 
 	// ForceDiscoKey, if non-zero, forces the use of a specific disco
 	// private key. This should only be used for special cases and
@@ -379,20 +376,19 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	e := &userspaceEngine{
-		eventBus:          conf.EventBus,
-		timeNow:           mono.Now,
-		logf:              logf,
-		reqCh:             make(chan struct{}, 1),
-		waitCh:            make(chan struct{}),
-		tundev:            tsTUNDev,
-		router:            rtr,
-		dialer:            conf.Dialer,
-		confListenPort:    conf.ListenPort,
-		birdClient:        conf.BIRDClient,
-		controlKnobs:      conf.ControlKnobs,
-		reconfigureVPN:    conf.ReconfigureVPN,
-		health:            conf.HealthTracker,
-		conn25PacketHooks: conf.Conn25PacketHooks,
+		eventBus:       conf.EventBus,
+		timeNow:        mono.Now,
+		logf:           logf,
+		reqCh:          make(chan struct{}, 1),
+		waitCh:         make(chan struct{}),
+		tundev:         tsTUNDev,
+		router:         rtr,
+		dialer:         conf.Dialer,
+		confListenPort: conf.ListenPort,
+		birdClient:     conf.BIRDClient,
+		controlKnobs:   conf.ControlKnobs,
+		reconfigureVPN: conf.ReconfigureVPN,
+		health:         conf.HealthTracker,
 	}
 
 	if e.birdClient != nil {
@@ -465,16 +461,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
-	if e.conn25PacketHooks != nil {
-		e.tundev.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
-			return e.conn25PacketHooks.HandlePacketsFromTunDevice(p)
-		}
-
-		e.tundev.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
-			return e.conn25PacketHooks.HandlePacketsFromWireGuard(p)
-		}
-	}
-
 	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
 			return nil, errors.New("unexpected PreFilterIn already set")
@@ -486,7 +472,13 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
 	}
 
-	e.wgLogger = wglog.NewLogger(logf)
+	e.wgLogger = wglog.NewLogger(logf, func(wgString string) (tsString string, ok bool) {
+		fn := e.wgPeerLookup.Load()
+		if fn == nil {
+			return "", false
+		}
+		return fn(wgString)
+	})
 	e.tundev.OnTSMPPongReceived = func(pong packet.TSMPPongReply) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -708,7 +700,10 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	}
 
 	full := e.lastCfgFull
-	e.wgLogger.SetPeers(full.Peers)
+	// The wireguard-go peer set may have changed; drop the cached
+	// peer-string rewrites so the next log line re-resolves them
+	// against the current lookup.
+	e.wgLogger.Invalidate()
 
 	// Rebuild the prefix-match peer routing table from the current
 	// (wireguard-filtered) peer list and publish it atomically.
@@ -753,6 +748,41 @@ func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodeP
 		}
 		return device.NoisePublicKey{}, false
 	})
+}
+
+func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWireGuardState)) {
+	e.wgdev.SetSessionStateFunc(func(pk device.NoisePublicKey, state device.PeerSessionState) {
+		if fn != nil {
+			fn(key.NodePublicFromRaw32(mem.B(pk[:])), peerWireGuardStateFromDevice(state))
+		}
+	})
+}
+
+// SetNetLogNodeSource installs the [netlog.NodeSource] used by the engine's
+// network logger.
+func (e *userspaceEngine) SetNetLogNodeSource(src netlog.NodeSource) {
+	e.netLogSource.Store(src)
+}
+
+// SetWGPeerLookup installs the lookup function used by the engine's
+// wireguard-go log wrapper to rewrite peer references in log lines.
+func (e *userspaceEngine) SetWGPeerLookup(fn func(wgString string) (tsString string, ok bool)) {
+	e.wgPeerLookup.Store(fn)
+}
+
+func peerWireGuardStateFromDevice(state device.PeerSessionState) PeerWireGuardState {
+	switch state {
+	case device.PeerSessionNone:
+		return PeerWireGuardStateNone
+	case device.PeerSessionHandshake:
+		return PeerWireGuardStateHandshake
+	case device.PeerSessionEstablished:
+		return PeerWireGuardStateEstablished
+	case device.PeerSessionExpired:
+		return PeerWireGuardStateExpired
+	default:
+		panic(fmt.Sprintf("unexpected wireguard-go PeerSessionState %d", state))
+	}
 }
 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
@@ -801,16 +831,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.tundev.SetWGConfig(cfg)
 
 	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
-
-	e.mu.Lock()
-	seq := make([]key.NodePublic, 0, len(cfg.Peers))
 	for _, p := range cfg.Peers {
-		seq = append(seq, p.PublicKey)
 		peerSet.Add(p.PublicKey)
 	}
-	e.peerSequence = views.SliceOf(seq)
 
-	nm := e.netMap
+	e.mu.Lock()
+	self := e.selfNode
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
@@ -821,10 +847,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	peerMTUEnable := e.magicConn.ShouldPMTUD()
 
 	isSubnetRouter := false
-	if buildfeatures.HasBird && e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
-		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs())
+	if buildfeatures.HasBird && e.birdClient != nil && self.Valid() {
+		isSubnetRouter = hasOverlap(self.PrimaryRoutes(), self.Hostinfo().RoutableIPs())
 		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
-			nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs(),
+			self.PrimaryRoutes(), self.Hostinfo().RoutableIPs(),
 			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
 	}
 	isSubnetRouterChanged := buildfeatures.HasAdvertiseRoutes && isSubnetRouter != e.lastIsSubnetRouter
@@ -974,7 +1000,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		tid := cfg.NetworkLogging.DomainID
 		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
 		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		if err := e.networkLogger.Startup(e.logf, nm, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
+		src := e.netLogSource.Load()
+		if src == nil {
+			e.logf("wgengine: Reconfig: no NodeSource installed; network logger not started")
+		} else if err := e.networkLogger.Startup(e.logf, src, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
 		e.networkLogger.ReconfigRoutes(routerCfg)
@@ -1124,7 +1153,6 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	e.mu.Lock()
 	closing := e.closing
-	peerKeys := e.peerSequence
 	localAddrs := slices.Clone(e.endpoints)
 	e.mu.Unlock()
 
@@ -1132,9 +1160,20 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, ErrEngineClosing
 	}
 
-	peers := make([]ipnstate.PeerStatusLite, 0, peerKeys.Len())
-	for _, key := range peerKeys.All() {
-		if status, ok := e.getPeerStatusLite(key); ok {
+	// Snapshot the set of active wgdev peers. wireguard-go has no
+	// read-only iterator over its peer map; RemoveMatchingPeers with
+	// a callback that always returns false is the cheap equivalent
+	// (the callback can't itself call LookupActivePeer, though, as
+	// RemoveMatchingPeers holds the wireguard device's mutex).
+	var peerKeys []key.NodePublic
+	e.wgdev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+		peerKeys = append(peerKeys, key.NodePublicFromRaw32(mem.B(pk[:])))
+		return false
+	})
+
+	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
+	for _, k := range peerKeys {
+		if status, ok := e.getPeerStatusLite(k); ok {
 			peers = append(peers, status)
 		}
 	}
@@ -1291,9 +1330,9 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
+func (e *userspaceEngine) SetSelfNode(self tailcfg.NodeView) {
 	e.mu.Lock()
-	e.netMap = nm
+	e.selfNode = self
 	tunGROKnobsChanged := false
 	var curUDP, curTCP bool
 	if buildfeatures.HasGRO && runtime.GOOS == "linux" && e.controlKnobs != nil {
@@ -1313,9 +1352,6 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 		e.logf("wgengine: TUN GRO knobs changed (DisableTUNUDPGRO=%v DisableTUNTCPGRO=%v); applying",
 			curUDP, curTCP)
 		e.tundev.ApplyGROKnobs(e.controlKnobs)
-	}
-	if e.networkLogger.Running() {
-		e.networkLogger.ReconfigNetworkMap(nm)
 	}
 }
 
@@ -1372,19 +1408,19 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	var zero netip.Addr
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.netMap == nil {
-		return zero, errors.New("no netmap")
+	if !e.selfNode.Valid() {
+		return zero, errors.New("no self node")
 	}
-	addrs := e.netMap.GetAddresses()
+	addrs := e.selfNode.Addresses()
 	if addrs.Len() == 0 {
-		return zero, errors.New("no self address in netmap")
+		return zero, errors.New("no self address")
 	}
 	for _, p := range addrs.All() {
 		if p.IsSingleIP() && p.Addr().BitLen() == dst.BitLen() {
 			return p.Addr(), nil
 		}
 	}
-	return zero, errors.New("no self address in netmap matching address family")
+	return zero, errors.New("no self address matching address family")
 }
 
 func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
@@ -1529,64 +1565,48 @@ func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {
 	}
 }
 
-// PeerForIP returns the Node in the wireguard config
-// that's responsible for handling the given IP address.
-//
-// If none is found in the wireguard config but one is found in
-// the netmap, it's described in an error.
-//
-// peerForIP acquires both e.mu and e.wgLock, but neither at the same
-// time.
-func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
+// ProbeLocks implements [Engine.ProbeLocks].
+func (e *userspaceEngine) ProbeLocks() {
 	e.mu.Lock()
-	nm := e.netMap
 	e.mu.Unlock()
-	if nm == nil {
-		return ret, false
-	}
-
-	// Check for exact matches before looking for subnet matches.
-	// TODO(bradfitz): add maps for these. on NetworkMap?
-	for _, p := range nm.Peers {
-		for i := range p.Addresses().Len() {
-			a := p.Addresses().At(i)
-			if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-				return PeerForIP{Node: p, Route: a}, true
-			}
-		}
-	}
-	addrs := nm.GetAddresses()
-	for i := range addrs.Len() {
-		if a := addrs.At(i); a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
-		}
-	}
 
 	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
+	e.wgLock.Unlock()
+}
 
-	// TODO(bradfitz): this is O(n peers). Add ART to netaddr?
-	var best netip.Prefix
-	var bestKey key.NodePublic
-	for _, p := range e.lastCfgFull.Peers {
-		for _, cidr := range p.AllowedIPs {
-			if !cidr.Contains(ip) {
-				continue
-			}
-			if !best.IsValid() || cidr.Bits() > best.Bits() {
-				best = cidr
-				bestKey = p.PublicKey
-			}
-		}
+// SetPeerForIPFunc installs the callback used by [userspaceEngine.PeerForIP].
+// See [Engine.SetPeerForIPFunc].
+func (e *userspaceEngine) SetPeerForIPFunc(fn func(netip.Addr) (PeerForIP, bool)) {
+	if fn == nil {
+		e.peerForIP.Store(nil)
+		return
 	}
-	// And another pass. Probably better than allocating a map per peerForIP
-	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
-	if !bestKey.IsZero() {
-		for _, p := range nm.Peers {
-			if p.Key() == bestKey {
-				return PeerForIP{Node: p, Route: best}, true
-			}
-		}
+	e.peerForIP.Store(&fn)
+}
+
+// PeerKeyForIP looks up ip in the engine's AllowedIPs table
+// ([userspaceEngine.peerByIPRoute]). See [Engine.PeerKeyForIP].
+func (e *userspaceEngine) PeerKeyForIP(ip netip.Addr) (pk key.NodePublic, route netip.Prefix, ok bool) {
+	if !ip.IsValid() {
+		return pk, route, false
+	}
+	rt := e.peerByIPRoute.Load()
+	if rt == nil {
+		return pk, route, false
+	}
+	route, pk, ok = rt.LookupPrefixLPM(netip.PrefixFrom(ip, ip.BitLen()))
+	return pk, route, ok
+}
+
+// PeerForIP returns the node responsible for handling the given IP.
+// It delegates to the callback installed via [SetPeerForIPFunc]; engines
+// without an installed callback return (zero, false).
+func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
+	if !ip.IsValid() {
+		return ret, false
+	}
+	if fn := e.peerForIP.Load(); fn != nil {
+		return (*fn)(ip)
 	}
 	return ret, false
 }

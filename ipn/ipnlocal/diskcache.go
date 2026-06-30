@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnlocal/netmapcache"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 )
 
@@ -19,6 +20,20 @@ type diskCache struct {
 
 	dir   string // active profile cache directory
 	cache *netmapcache.Cache
+}
+
+// writePeerDeltaToDiskLocked applies the specified peer delta to the cache,
+// leaving other existing cached fields (self, profiles, other peers not
+// mentioned in the arguments) unchanged.  It does nothing (without error) if
+// both slices are empty.
+func (b *LocalBackend) writePeerDeltaToDiskLocked(update []tailcfg.NodeView, remove []tailcfg.StableNodeID) error {
+	if !buildfeatures.HasCacheNetMap || (len(update) == 0 && len(remove) == 0) {
+		return nil
+	} else if err := b.ensureDiskCacheLocked(); err != nil {
+		return err
+	}
+	// Do not log this, we get deltas all the time and it's very noisy.
+	return b.diskCache.cache.UpdatePeers(b.currentNode().Context(), update, remove)
 }
 
 // writeNetmapToDiskLockedWithoutPeers updates nm in the cache, excluding peers and profiles.

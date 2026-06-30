@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/set"
@@ -143,7 +144,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("netcheck: %w", err)
 		}
-		if err := printReport(dm, report); err != nil {
+		if err := printNetCheckReport(dm, report); err != nil {
 			return err
 		}
 		if netcheckArgs.every == 0 {
@@ -153,7 +154,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 	}
 }
 
-func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
+func printNetCheckReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	var j []byte
 	var err error
 	switch netcheckArgs.format {
@@ -175,7 +176,7 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	}
 
 	printf("\nReport:\n")
-	printf("\t* Time: %v\n", report.Now.Format(time.RFC3339Nano))
+	printf("\t* Time: %v\n", report.Now.Local().Format(tstime.DateSpTimeNanoZ))
 	printf("\t* UDP: %v\n", report.UDP)
 	if report.GlobalV4.IsValid() {
 		printf("\t* IPv4: yes, %s\n", report.GlobalV4)

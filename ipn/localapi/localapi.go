@@ -44,6 +44,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/def"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
@@ -267,6 +268,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	defer h.b.CheckDeadlocks()()
 	if fn, route, ok := handlerForPath(r.URL.Path); ok {
 		h.logRequest(r.Method, route)
 		fn(h, w, r)
@@ -401,7 +403,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	defer h.b.TryFlushLogs() // kick off upload after bugreport's done logging
 
 	logMarker := func() string {
-		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format("20060102150405Z"), rands.HexString(16))
+		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format(tstime.NumericDateTimeZ), rands.HexString(16))
 	}
 	if envknob.NoLogsNoSupport() {
 		logMarker = func() string { return "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled" }
@@ -439,7 +441,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	h.logf.JSON(1, "UserBugReportOS", osdiag.SupportInfo(osdiag.LogSupportInfoReasonBugReport))
 
 	// Tailnet Lock details
-	st := h.b.NetworkLockStatus()
+	st := h.b.TailnetLockStatus()
 	if st.Enabled {
 		h.logf.JSON(1, "UserBugReportTailnetLockStatus", st)
 		if st.NodeKeySignature != nil {
@@ -447,7 +449,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if defBool(r.URL.Query().Get("diagnose"), false) {
+	if def.Bool(r.URL.Query().Get("diagnose"), false) {
 		if f, ok := ipnlocal.HookDoctor.GetOk(); ok {
 			f(r.Context(), h.b, logger.WithPrefix(h.logf, "diag: "))
 		}
@@ -457,7 +459,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 
 	// Nothing else to do if we're not in record mode; we wrote the marker
 	// above, so we can just finish our response now.
-	if !defBool(r.URL.Query().Get("record"), false) {
+	if !def.Bool(r.URL.Query().Get("record"), false) {
 		return
 	}
 
@@ -845,7 +847,7 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	var st *ipnstate.Status
-	if defBool(r.FormValue("peers"), true) {
+	if def.Bool(r.FormValue("peers"), true) {
 		st = h.b.Status()
 	} else {
 		st = h.b.StatusWithoutPeers()
@@ -894,12 +896,18 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 
 	var mask ipn.NotifyWatchOpt
 	if s := r.FormValue("mask"); s != "" {
-		v, err := strconv.ParseUint(s, 10, 64)
-		if err != nil {
+		if err := mask.UnmarshalText([]byte(s)); err != nil {
 			http.Error(w, "bad mask", http.StatusBadRequest)
 			return
 		}
-		mask = ipn.NotifyWatchOpt(v)
+	}
+	if mask&ipn.NotifyInProcessNoDisconnect != 0 {
+		http.Error(w, "NotifyInProcessNoDisconnect is only valid for in-process IPN bus subscribers", http.StatusBadRequest)
+		return
+	}
+	if err := ipn.ValidateNotifyWatchOpt(mask); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	// NotifyInitialNetMap is permitted alongside NotifyPeerChanges /
 	// NotifyPeerPatches for backwards compatibility with clients that
@@ -1655,17 +1663,6 @@ func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-}
-
-func defBool(a string, def bool) bool {
-	if a == "" {
-		return def
-	}
-	v, err := strconv.ParseBool(a)
-	if err != nil {
-		return def
-	}
-	return v
 }
 
 // serveUpdateCheck returns the ClientVersion from Status, which contains

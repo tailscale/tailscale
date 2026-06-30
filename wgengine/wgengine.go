@@ -16,6 +16,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -40,6 +41,28 @@ type StatusCallback func(*Status, error)
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
+
+// PeerWireGuardState is the current WireGuard session state for a peer.
+type PeerWireGuardState uint8
+
+const (
+	// PeerWireGuardStateNone means there is no handshake in progress and no
+	// session key material retained for this peer.
+	PeerWireGuardStateNone PeerWireGuardState = 0
+
+	// PeerWireGuardStateHandshake means a handshake is in progress for this
+	// peer, but there is not currently a usable WireGuard session.
+	PeerWireGuardStateHandshake PeerWireGuardState = 1
+
+	// PeerWireGuardStateEstablished means the peer has a completed WireGuard
+	// session with usable session key material.
+	PeerWireGuardStateEstablished PeerWireGuardState = 2
+
+	// PeerWireGuardStateExpired means the peer's session key material is no
+	// longer considered usable, but final key cleanup or lazy peer removal may
+	// not have happened yet.
+	PeerWireGuardStateExpired PeerWireGuardState = 3
+)
 
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
@@ -77,8 +100,44 @@ type Engine interface {
 	ResetAndStop() (*Status, error)
 
 	// PeerForIP returns the node to which the provided IP routes,
-	// if any. If none is found, (nil, false) is returned.
+	// if any. If none is found, (zero, false) is returned.
+	//
+	// Despite the name, it can return the self node (with
+	// PeerForIP.IsSelf set). It handles Tailscale IPs, subnet-routed
+	// IPs, and exit-node global internet IPs, returning whichever
+	// node would handle that traffic.
+	//
+	// This is the cold path used by Ping, TSMP, pendopen diagnostics,
+	// and debug endpoints. It uses the same underlying data structures
+	// as the wireguard-go outbound packet path
+	// ([Engine.SetPeerByIPPacketFunc]), but is slower because it
+	// returns richer data (a full NodeView, the matched route prefix,
+	// and the IsSelf flag) requiring extra lookups.
+	//
+	// In production, the lookup is implemented by LocalBackend and
+	// plumbed in via [Engine.SetPeerForIPFunc]; the engine itself holds
+	// no peer-lookup state on this path.
 	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)
+
+	// SetPeerForIPFunc installs a callback used by [Engine.PeerForIP].
+	// It parallels [Engine.SetPeerByIPPacketFunc] but serves the
+	// cold-path control lookups (Ping, TSMP, pendopen diagnostics,
+	// [tsdial.Dialer.UseNetstackForIP], debug endpoints).
+	//
+	// If fn is nil, PeerForIP returns (zero, false) for every IP.
+	//
+	// LocalBackend installs a func backed by the live nodeBackend for
+	// exact-match and self addresses, with [Engine.PeerKeyForIP]
+	// supplying the subnet-route / exit-node fallback.
+	SetPeerForIPFunc(fn func(netip.Addr) (_ PeerForIP, ok bool))
+
+	// PeerKeyForIP returns the peer's NodePublic and the matched prefix
+	// for the longest-prefix match of ip in the engine's AllowedIPs
+	// table (the wireguard config most recently installed via
+	// [Engine.Reconfig]). Exit-node selection is honored: an unselected
+	// exit node's 0.0.0.0/0 is not matched. It is the same table the
+	// outbound packet hot path consults via [Engine.SetPeerByIPPacketFunc].
+	PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
@@ -116,12 +175,9 @@ type Engine interface {
 	// You don't have to call this.
 	Done() <-chan struct{}
 
-	// SetNetworkMap informs the engine of the latest network map
-	// from the server. The network map's DERPMap field should be
-	// ignored as as it might be disabled; get it from SetDERPMap
-	// instead.
-	// The network map should only be read from.
-	SetNetworkMap(*netmap.NetworkMap)
+	// SetSelfNode informs the engine of the current self node.
+	// The zero (invalid) NodeView indicates no self node.
+	SetSelfNode(tailcfg.NodeView)
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.
@@ -141,4 +197,42 @@ type Engine interface {
 	// SetPeerByIPPacketFunc installs a callback used by wireguard-go to
 	// look up which peer should handle an outbound packet by destination IP.
 	SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool))
+
+	// SetNetLogNodeSource installs the [netlog.NodeSource] used by the engine's
+	// network logger to look up Tailscale node info on demand.
+	//
+	// It is expected to be called once during LocalBackend construction,
+	// before any [Engine.Reconfig] call that starts up the network logger.
+	SetNetLogNodeSource(netlog.NodeSource)
+
+	// SetWGPeerLookup installs the function used by the engine's
+	// wireguard-go log wrapper to rewrite peer references in log lines
+	// (mapping wireguard-go's "peer(XXXX…YYYY)" form to the
+	// Tailscale-conventional short string form).
+	//
+	// It is expected to be called once during LocalBackend construction.
+	// The function is called concurrently and must be safe to call with
+	// no Engine locks held.
+	SetWGPeerLookup(func(wgString string) (tsString string, ok bool))
+
+	// SetPeerSessionStateFunc installs a callback used to observe WireGuard
+	// peer session state transitions.
+	//
+	// Calls are serialized per Engine and delivered in transition order from
+	// wireguard-go, while wireguard-go is holding locks. The callback must be
+	// cheap and must not call back into wireguard-go.
+	//
+	// It does not replay current state. Callers that need a complete view should
+	// set it before peers are started or lazily created, and maintain any
+	// snapshots, sequence numbers, and pubsub state outside wireguard-go.
+	//
+	// In Tailscale, the usual implementation is
+	// ipnlocal.LocalBackend.onPeerWireGuardState, installed early in
+	// LocalBackend construction.
+	SetPeerSessionStateFunc(func(key.NodePublic, PeerWireGuardState))
+
+	// ProbeLocks acquires and releases the engine's internal locks so
+	// that [ipnlocal.LocalBackend]'s watchdog can detect deadlocks in
+	// the engine. It is otherwise a no-op.
+	ProbeLocks()
 }

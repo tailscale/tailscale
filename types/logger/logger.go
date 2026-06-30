@@ -141,6 +141,7 @@ var rateFree = []string{
 	"magicsock: disco: ",
 	"magicsock: ParseEndpoint:",
 	// grinder stats lines
+	"magicsock: new contact: ",
 	"SetPrefs: %v",
 	"peer keys: %s",
 	"v%v peers: %v",

@@ -47,6 +47,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -396,7 +397,7 @@ func TestStateMachine(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc, previousCC *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		previousCC = cc
 		cc = newClient(t, opts)
 
@@ -1146,7 +1147,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
@@ -1246,7 +1247,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}{
 		{
 			name: "Initial",
-			// The configs are nil until the the LocalBackend is started.
+			// The configs are nil until the LocalBackend is started.
 			wantState:     ipn.NoState,
 			wantCfg:       nil,
 			wantRouterCfg: nil,
@@ -1971,7 +1972,7 @@ func (e *mockEngine) PeerByKey(key.NodePublic) (_ wgint.Peer, ok bool) {
 	return wgint.Peer{}, false
 }
 
-func (e *mockEngine) SetNetworkMap(*netmap.NetworkMap) {}
+func (e *mockEngine) SetSelfNode(tailcfg.NodeView) {}
 
 func (e *mockEngine) UpdateStatus(*ipnstate.StatusBuilder) {}
 
@@ -1982,6 +1983,15 @@ func (e *mockEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb
 func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
+func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
+func (e *mockEngine) PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool) {
+	return key.NodePublic{}, netip.Prefix{}, false
+}
+func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
+}
+func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource)                            {}
+func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}
+func (e *mockEngine) ProbeLocks()                                                      {}
 
 func (e *mockEngine) Close() {
 	e.mu.Lock()

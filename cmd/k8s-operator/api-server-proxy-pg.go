@@ -436,14 +436,16 @@ func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tai
 	}
 	if svc == nil {
 		c := ownerAnnotationValue{OwnerRefs: []OwnerRef{ref}}
-		json, err := json.Marshal(c)
+		data, err := json.Marshal(c)
 		if err != nil {
-			return nil, fmt.Errorf("[unexpected] unable to marshal Tailscale Service's owner annotation contents: %w, please report this", err)
+			return nil, fmt.Errorf("failed to marshal Tailscale Service's owner annotation contents: %w", err)
 		}
+
 		return map[string]string{
-			ownerAnnotation: string(json),
+			ownerAnnotation: string(data),
 		}, nil
 	}
+
 	o, err := parseOwnerAnnotation(svc)
 	if err != nil {
 		return nil, err
@@ -451,15 +453,19 @@ func exclusiveOwnerAnnotations(pg *tsapi.ProxyGroup, operatorID string, svc *tai
 	if o == nil || len(o.OwnerRefs) == 0 {
 		return nil, fmt.Errorf("Tailscale Service %s exists, but does not contain owner annotation with owner references; not proceeding as this is likely a resource created by something other than the Tailscale Kubernetes operator", svc.Name)
 	}
+
 	if len(o.OwnerRefs) > 1 || o.OwnerRefs[0].OperatorID != operatorID {
 		return nil, fmt.Errorf("Tailscale Service %s is already owned by other operator(s) and cannot be shared across multiple clusters; configure a difference Service name to continue", svc.Name)
 	}
+
 	if o.OwnerRefs[0].Resource == nil {
 		return nil, fmt.Errorf("Tailscale Service %s exists, but does not reference an owning resource; not proceeding as this is likely a Service already owned by an Ingress", svc.Name)
 	}
+
 	if o.OwnerRefs[0].Resource.Kind != "ProxyGroup" || o.OwnerRefs[0].Resource.UID != string(pg.UID) {
 		return nil, fmt.Errorf("Tailscale Service %s is already owned by another resource: %#v; configure a difference Service name to continue", svc.Name, o.OwnerRefs[0].Resource)
 	}
+
 	if o.OwnerRefs[0].Resource.Name != pg.Name {
 		// ProxyGroup name can be updated in place.
 		o.OwnerRefs[0].Resource.Name = pg.Name

@@ -51,6 +51,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -272,7 +273,7 @@ type Conn struct {
 	// discoAtomic is the current disco private and public keypair for this conn.
 	discoAtomic discoAtomic
 
-	// usingCacheNetmap is whether the latest update to self and peersByID are from a cached network map
+	// usingCacheNetmap is whether the latest update to self and peersByID are from a cached network map.
 	usingCachedNetmap atomic.Bool
 
 	// ============================================================
@@ -416,9 +417,21 @@ type Conn struct {
 	// metrics contains the metrics for the magicsock instance.
 	metrics *metrics
 
+	// initializedAt records the latest time at which the conn was
+	// (re)initialized for latency metrics. This is set at construction, and
+	// updated by netmap resets.
+	initializedAt mono.Time
+
 	// homeDERPGauge is the usermetric gauge for the home DERP region ID.
 	// This can be nil when [Options.Metrics] are not enabled.
 	homeDERPGauge *usermetric.Gauge
+
+	// checkNetworkUpDuringTests controls whether [Conn.networkDown]
+	// will report the value of [Conn.networkUp] while running tests.
+	//
+	// This allows tests to pass when the user's machine is offline,
+	// but allows us to still test network-down behaviour when desired.
+	checkNetworkUpDuringTests bool
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
@@ -569,13 +582,14 @@ type UDPRelayAllocResp struct {
 func newConn(logf logger.Logf) *Conn {
 	discoPrivate := key.NewDisco()
 	c := &Conn{
-		logf:         logf,
-		derpRecvCh:   make(chan derpReadResult, 1), // must be buffered, see issue 3736
-		derpStarted:  make(chan struct{}),
-		peerLastDerp: make(map[key.NodePublic]int),
-		peerMap:      newPeerMap(),
-		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
-		cloudInfo:    cloudinfo.New(logf),
+		logf:          logf,
+		derpRecvCh:    make(chan derpReadResult, 1), // must be buffered, see issue 3736
+		derpStarted:   make(chan struct{}),
+		peerLastDerp:  make(map[key.NodePublic]int),
+		peerMap:       newPeerMap(),
+		discoInfo:     make(map[key.DiscoPublic]*discoInfo),
+		cloudInfo:     cloudinfo.New(logf),
+		initializedAt: mono.Now(),
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
@@ -1097,6 +1111,26 @@ func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 	}
 }
 
+// ResetNetInfoLast clears the cached NetInfo used to de-duplicate NetInfo
+// callbacks, so that the next NetInfo is delivered to the registered callback
+// (see [Conn.SetNetInfoCallback]) even if it's structurally identical to the
+// previously delivered one.
+//
+// It must be called whenever the downstream consumer of NetInfo updates is
+// replaced, notably when [ipnlocal.LocalBackend] installs a new control client
+// after an interactive login or a profile switch.
+//
+// TODO(tailscale/tailscale#17887): remove once NetInfo updates move to the
+// eventbus, where a newly-installed consumer can fetch current state on
+// subscribe instead of magicsock exposing this de-dup-cache reset hook.
+//
+// c.mu must NOT be held.
+func (c *Conn) ResetNetInfoLast() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.netInfoLast = nil
+}
+
 // addValidDiscoPathForTest makes addr a validated disco address for
 // discoKey. It's used in tests to enable receiving of packets from
 // addr without having to spin up the entire active discovery
@@ -1142,6 +1176,12 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 		return "never"
 	}
 	return mono.Since(saw).Round(time.Second).String()
+}
+
+// ProbeLocks acquires and releases Conn's internal mutex.
+func (c *Conn) ProbeLocks() {
+	c.mu.Lock()
+	c.mu.Unlock()
 }
 
 // Ping handles a "tailscale ping" CLI query.
@@ -1449,14 +1489,10 @@ func (c *Conn) LocalPort() uint16 {
 
 var errNetworkDown = errors.New("magicsock: network down")
 
-// This allows tests to pass when the user's machine is offline, but allows us
-// to still test network-down behaviour when desired.
-var checkNetworkDownDuringTests = false
-
 func (c *Conn) networkDown() bool {
 	// For tests, always assume the network is up unless we're explicitly
 	// testing this behaviour.
-	if envknob.AssumeNetworkUp() || (testenv.InTest() && !checkNetworkDownDuringTests) {
+	if envknob.AssumeNetworkUp() || (testenv.InTest() && !c.checkNetworkUpDuringTests) {
 		return false
 	}
 	return !c.networkUp.Load()
@@ -2361,8 +2397,15 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// Reaching here, if we are using data from a cached network map the
 		// receipt of a CallMeMaybe from a peer indicates we have a sufficiently
 		// viable connection to that peer to count it as active while cached.
-		if c.usingCachedNetmap.Load() {
+		isCached := c.usingCachedNetmap.Load()
+		if isCached {
 			metricCachedPeerContactDERP.Add(1)
+		}
+		// If we did not already have an an endpoint for this peer, even a stale
+		// one, record how long it has been since the endpoint was initialized.
+		if !lastBest.ap.IsValid() {
+			c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
+				nodeKey.ShortString(), int64(mono.Since(c.initializedAt)/time.Microsecond), isCached)
 		}
 		if isVia {
 			c.dlogf("[v1] magicsock: disco: %v<-%v via %v (%v, %v)  got call-me-maybe-via, %d endpoints",
@@ -3009,7 +3052,7 @@ func (c *Conn) SetNetworkMapCached(self tailcfg.NodeView, peers []tailcfg.NodeVi
 
 // setNetworkMapInternal is the shared implementation of SetNetworkMap and SetNetworkMapCached.
 func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.NodeView, isCached bool) {
-	peersChanged := c.updateNodes(self, peers)
+	peersChanged, selfWasValid := c.updateNodes(self, peers)
 
 	relayClientEnabled := self.Valid() &&
 		!self.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
@@ -3025,6 +3068,10 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	peersSnap := c.peerSnapshotLocked()
 	isClosed := c.closed
 	c.usingCachedNetmap.Store(isCached)
+	if !self.Valid() {
+		c.initializedAt = mono.Now() // the netmap is being reset
+	}
+	initializedAt := c.initializedAt
 	if runtime.GOOS == "linux" && c.controlKnobs != nil {
 		curGRO = c.controlKnobs.DisableUDPGRO.Load()
 		curGSO = c.controlKnobs.DisableUDPGSO.Load()
@@ -3038,6 +3085,12 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 
 	if isClosed {
 		return // nothing to do here, the conn is closed and the update is no longer relevant
+	}
+	if self.Valid() && !selfWasValid {
+		// Reaching here, we have our first "real" netmap (self is valid, and
+		// the previous netmap was unset or reset), so record the latency from reset.
+		c.logf("magicsock: new contact: control-netmap usec=%d cached=%v",
+			int64(mono.Since(initializedAt)/time.Microsecond), isCached)
 	}
 
 	if udpOffloadKnobsChanged {
@@ -3061,17 +3114,17 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 }
 
 // updateNodes updates [Conn] to reflect the given self node and peers.
-// It reports whether the peer set (membership or any field) changed.
-func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged bool) {
+// It reports whether the peer set (membership or any field) changed,
+// and whether the previous self node was valid.
+func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (peersChanged, wasValid bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	if c.closed {
-		return false
+		return false, false
 	}
 
 	metricNumPeers.Set(int64(len(peers)))
-
+	selfWasValid := c.self.Valid()
 	c.self = self
 
 	// [debugFlags] are mutable in [Conn.SetSilentDisco] &
@@ -3096,7 +3149,7 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 			}
 		}
 		if allSame {
-			return false
+			return false, selfWasValid
 		}
 	}
 
@@ -3138,7 +3191,7 @@ func (c *Conn) updateNodes(self tailcfg.NodeView, peers []tailcfg.NodeView) (pee
 		}
 	}
 
-	return true
+	return true, selfWasValid
 }
 
 // upsertPeerLocked upserts a single peer's endpoint in c.peerMap. It is the
@@ -3891,6 +3944,10 @@ func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) {
 			ep.mu.Unlock()
 		}
 	}
+
+	// As of 2026-06-11 we will only get deltas from the control plane, so upon
+	// receiving one we should infer we have switched out of the cached state.
+	c.usingCachedNetmap.Store(false)
 }
 
 // UpdateStatus implements the interface needed by ipnstate.StatusBuilder.
@@ -3995,18 +4052,18 @@ const (
 var (
 	// pingTimeoutDuration is how long we wait for a pong reply before
 	// assuming it's never coming.
-	pingTimeoutDuration = 5 * time.Second
+	pingTimeoutDuration = tsconst.DefaultPingTimeout
 
 	// discoPingInterval is the minimum time between pings
 	// to an endpoint. (Except in the case of CallMeMaybe frames
 	// resetting the counter, as the first pings likely didn't through
 	// the firewall)
-	discoPingInterval = 5 * time.Second
+	discoPingInterval = tsconst.DefaultPingInterval
 
 	// wireguardPingInterval is the minimum time between pings to an endpoint.
 	// Pings are only sent if we have not observed bidirectional traffic with an
 	// endpoint in at least this duration.
-	wireguardPingInterval = 5 * time.Second
+	wireguardPingInterval = tsconst.DefaultPingInterval
 )
 
 // indexSentinelDeleted is the temporary value that endpointState.index takes while
@@ -4291,10 +4348,35 @@ func (c *Conn) GetLastNetcheckReport(ctx context.Context) *netcheck.Report {
 	return c.lastNetCheckReport.Load()
 }
 
-// SetLastNetcheckReportForTest sets the magicsock conn's last netcheck report.
-// Used for testing purposes.
-func (c *Conn) SetLastNetcheckReportForTest(ctx context.Context, report *netcheck.Report) {
-	c.lastNetCheckReport.Store(report)
+// AddNetcheckReportForTest records report in the conn's netcheck client's
+// recent-report history as if it had been produced at time now, seeding the
+// netcheck client's per-region latency history. If report is newer than the
+// currently stored last netcheck report, it also becomes the last netcheck
+// report.
+func (c *Conn) AddNetcheckReportForTest(dm *tailcfg.DERPMap, report *netcheck.Report, now time.Time) {
+	testenv.AssertInTest()
+	rep := report.Clone() // netchecker mutates the report, so create a copy
+	c.netChecker.AddReportHistoryForTest(dm, rep, now)
+	for {
+		if cur := c.lastNetCheckReport.Load(); cur == nil || rep.Now.After(cur.Now) {
+			if c.lastNetCheckReport.CompareAndSwap(cur, rep) {
+				break
+			}
+		}
+	}
+}
+
+// GetDERPRegionLatency returns the lowest latency seen per DERP region over
+// netcheck's recent history, keyed by region ID. Unlike the most recent report
+// from GetLastNetcheckReport (which for an incremental netcheck covers only a
+// few regions), netcheck's history retains every region measured by the most
+// recent full netcheck, so this can rank regions the latest report did not
+// re-probe. It returns nil if the netcheck client is not yet initialized.
+func (c *Conn) GetDERPRegionLatency() map[int]time.Duration {
+	if c.netChecker == nil {
+		return nil
+	}
+	return c.netChecker.RecentRegionLatency()
 }
 
 // lazyEndpoint is a wireguard [conn.Endpoint] for when magicsock received a
@@ -4472,12 +4554,25 @@ type NewDiscoKeyAvailable struct {
 
 // maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
 // should send our DiscoKey to the first node address of the magicksock endpoint.
-// The event is only emitted if we are not already communicating directly and
-// more than 60 seconds has passed since the last DiscoKey was sent.
+//
+// The event is suppressed if we are communicating over a non-DERP path, or
+// less than [discoKeyAdvertisementInterval] has passed since the last DiscoKey
+// was sent, or netmap caching is disabled on this node.
 //
 // We do not need the Conn to be locked, but the endpoint should be.
 func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
+	// Disable TSMP disco advert by default, unless network map caching is
+	// enabled for the local node. Caching network maps on the remote node is
+	// what really matters in terms of handling a TSMP disco advert and applying
+	// it in a useful way, but the TSMP disco advert implementation as it exists
+	// here has pathological behaviors. Therefore, it should be disabled for
+	// almost all tailnets, and we lean on the network map caching control knob
+	// for this purpose. See #20081.
+	if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
 		return
 	}
 
@@ -4490,7 +4585,7 @@ func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 
 	now := mono.Now()
 	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
-		(!de.lastDiscoKeyAdvertisement.IsZero() && de.bestAddr.isDirect()) {
+		(!de.lastDiscoKeyAdvertisement.IsZero() && !de.bestAddr.isZero()) {
 		return
 	}
 

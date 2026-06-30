@@ -50,6 +50,40 @@ func TestSet(t *testing.T) {
 			t.Errorf("slice missing %d (%#v)", e, es)
 		}
 	}
+
+	s.Delete(1)
+	if s.Contains(1) {
+		t.Error("shouldn't have 1")
+	}
+	if !s.Contains(2) {
+		t.Error("missing 2")
+	}
+	if !s.Contains(3) {
+		t.Error("missing 3")
+	}
+	if !s.Contains(4) {
+		t.Error("missing 4")
+	}
+	if s.Len() != 3 {
+		t.Errorf("wrong len %d; want 3", s.Len())
+	}
+
+	s.DeleteSeq(slices.Values([]int{2, 3}))
+	if s.Contains(1) {
+		t.Error("shouldn't have 1")
+	}
+	if s.Contains(2) {
+		t.Error("shouldn't have 2")
+	}
+	if s.Contains(3) {
+		t.Error("shouldn't have 3")
+	}
+	if !s.Contains(4) {
+		t.Error("missing 4")
+	}
+	if s.Len() != 1 {
+		t.Errorf("wrong len %d; want 1", s.Len())
+	}
 }
 
 func TestSetOf(t *testing.T) {

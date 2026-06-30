@@ -43,7 +43,7 @@ var mtuProbePingSizesV6 []int
 // discoKeyAdvertisementInterval tells how often a disco update via TSMP can
 // happen. The update is triggered via enqueueCallMeMaybe, and thus it will
 // only be sent if the magicsock is in a state to send out CallMeMaybe.
-const discoKeyAdvertisementInterval = time.Second * 60
+const discoKeyAdvertisementInterval = time.Minute * 2
 
 func init() {
 	for _, m := range tstun.WireMTUsToProbe {
@@ -139,11 +139,18 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
 
-		// Reaching here, if we are using data from a cached netmap and we are
-		// upgrading from an invalid (missing) address to a valid one, increment
-		// the counter for peers established.
-		if !de.bestAddr.ap.IsValid() && v.ap.IsValid() && de.c.usingCachedNetmap.Load() {
-			metricCachedPeerContactDirect.Add(1)
+		// Reaching here, if we are upgrading from an invalid (missing) address
+		// to a valid one, record metrics:
+		if !de.bestAddr.ap.IsValid() && v.ap.IsValid() {
+			// If we are using data from a cached netmap, increment the counter for peers established.
+			isCached := de.c.usingCachedNetmap.Load()
+			if isCached {
+				metricCachedPeerContactDirect.Add(1)
+			}
+			// Regardless whether the netmap is cached, record how long it has
+			// been since the endpoint was initialized.
+			de.c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
+				de.publicKey.ShortString(), int64(mono.Since(de.c.initializedAt)/time.Microsecond), isCached)
 		}
 	}
 	de.bestAddr = v
@@ -1381,19 +1388,12 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		de.startDiscoPingLocked(epAddr{ap: ep}, now, pingDiscovery, 0, nil)
 	}
 	derpAddr := de.derpAddr
-	if sendCallMeMaybe && derpAddr.IsValid() && (sentAny || de.c.usingCachedNetmap.Load()) {
+	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
 		// Have our magicsock.Conn figure out its STUN endpoint (if
 		// it doesn't know already) and then send a CallMeMaybe
 		// message to our peer via DERP informing them that we've
 		// sent so our firewall ports are probably open and now
 		// would be a good time for them to connect.
-		//
-		// When working off of a cached netmap, send out a CallMeMaybe
-		// even if we don't know about any peer endpoints.
-		// Since we cannot rely on control to transfer endpoints for us,
-		// this makes establishing direct connections more reliable
-		// as the peer will respond with its own message and initiate
-		// the connection.
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
 	}
 }
@@ -1840,6 +1840,8 @@ type addrQuality struct {
 	latency          time.Duration
 	wireMTU          tstun.WireMTU
 }
+
+func (a addrQuality) isZero() bool { return a == addrQuality{} }
 
 func (a addrQuality) String() string {
 	// TODO(jwhited): consider including relayServerDisco

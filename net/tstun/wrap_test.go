@@ -28,6 +28,7 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/packet/checksum"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
@@ -456,6 +457,71 @@ func TestFilter(t *testing.T) {
 	assertMetricPackets(t, "inACL", 3, metricInboundDroppedPacketsACL)
 	assertMetricPackets(t, "inError", 0, metricInboundDroppedPacketsErr)
 	assertMetricPackets(t, "outACL", 0, metricOutboundDroppedPacketsACL)
+}
+
+// TestInjectOutboundRecordsUDPFlowState verifies that an injected outbound UDP
+// packet (as produced by netstack on userspace-networking / tsnet / SOCKS5
+// callers) records reverse-flow state so that the matching inbound reply is
+// admitted by the inbound filter, even when no explicit ACL rule covers the
+// reply. See tailscale/tailscale#14229 and tailscale/tailscale#20064.
+func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, true) // secure: install filter
+	defer tun.Close()
+
+	// 53 isn't in setfilter's allowed inbound port range (89-90), so a reply
+	// from 5.6.7.8:53 → 1.2.3.4:<port> is only admissible via reverse-flow
+	// state recorded by the prior outbound packet.
+	const localPort, peerPort = 33333, 53
+	const localIP, peerIP = "1.2.3.4", "5.6.7.8"
+
+	// Inject a UDP packet outbound. Run in a goroutine since
+	// InjectOutbound blocks on the unbuffered vectorOutbound channel
+	// until Read drains it.
+	go func() {
+		if err := tun.InjectOutbound(udp4(localIP, peerIP, localPort, peerPort)); err != nil {
+			t.Errorf("InjectOutbound: %v", err)
+		}
+	}()
+
+	// Drain the injected packet via Read. This drives injectedRead, which
+	// is what records the reverse-flow tuple in filter state.
+	var buf [MaxPacketSize]byte
+	sizes := make([]int, 1)
+	if n, err := tun.Read([][]byte{buf[:]}, sizes, 0); err != nil {
+		t.Fatalf("Read: %v", err)
+	} else if n != 1 {
+		t.Fatalf("Read returned %d packets, want 1", n)
+	}
+
+	// Now simulate the inbound UDP reply. Without flow-state tracking on the
+	// injected outbound path, the inbound filter has no matching rule and
+	// drops the reply silently. With tracking, it should be delivered.
+	replyPkt := udp4(peerIP, localIP, peerPort, localPort)
+
+	// tun.Write blocks writing to chtun.Inbound when the filter accepts the
+	// packet, so drain Inbound concurrently and confirm delivery there.
+	delivered := make(chan []byte, 1)
+	go func() {
+		select {
+		case got := <-chtun.Inbound:
+			delivered <- got
+		case <-tun.closed:
+		}
+	}()
+
+	if _, err := tun.Write([][]byte{replyPkt}, 0); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	select {
+	case got := <-delivered:
+		if !bytes.Equal(got, replyPkt) {
+			t.Errorf("delivered packet mismatch")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("inbound UDP reply was dropped by filter; injected outbound did not record flow state")
+	}
 }
 
 func assertMetricPackets(t *testing.T, metricName string, want, got int64) {
@@ -1053,5 +1119,38 @@ func TestInterceptOrdering(t *testing.T) {
 
 	if seq != numOutboundIntercepts {
 		t.Errorf("got number of intercepts run in Read(): %d; want: %d", seq, numOutboundIntercepts)
+	}
+}
+
+func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
+	var called bool
+	hook := func(p *packet.Parsed, _ *Wrapper) filter.Response {
+		called = true
+		checksum.UpdateSrcAddr(p, netip.MustParseAddr("169.254.0.1"))
+		return filter.Accept
+	}
+
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = hook
+	tun.Start()
+	defer tun.Close()
+
+	if err := tun.InjectOutbound(udp4("145.53.32.10", "100.25.63.57", 80, 12345)); err != nil {
+		t.Fatalf("InjectOutbound error: %v", err)
+	}
+
+	var buf [MaxPacketSize]byte
+	sizes := make([]int, 1)
+	tun.Read([][]byte{buf[:]}, sizes, 0)
+
+	if !called {
+		t.Error("app connector hook was not called in InjectOutbound")
+	}
+
+	wantPkt := udp4("169.254.0.1", "100.25.63.57", 80, 12345)
+	gotPkt := buf[:sizes[0]]
+	if !bytes.Equal(wantPkt, gotPkt) {
+		t.Errorf("packet mismatch\nwant:\t% x\ngot:\t% x", wantPkt, gotPkt)
 	}
 }

@@ -15,9 +15,7 @@ import (
 
 // NewDevice returns a wireguard-go Device configured for Tailscale use.
 func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device.Device {
-	ret := device.NewDevice(tunDev, bind, logger)
-	ret.DisableSomeRoamingForBrokenMobileSemantics()
-	return ret
+	return device.NewDevice(tunDev, bind, logger)
 }
 
 // ReconfigDevice replaces the existing device configuration with cfg.

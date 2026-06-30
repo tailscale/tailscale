@@ -15,7 +15,7 @@ import (
 
 // Install writes the launcher to .git/hooks/ts-git-hook and runs it
 // once with "version", bootstrapping the binary build and per-hook
-// wrappers. Called from each repo's misc/install-git-hooks.go.
+// wrappers. Called from each repo's misc/add-git-hooks.go.
 func Install() error {
 	hookDir, err := findHookDir()
 	if err != nil {
@@ -74,7 +74,7 @@ func WriteHooks(hooks []string) error {
 		switch {
 		case want[name] && !mine:
 			return fmt.Errorf("%s exists and is not a ts-git-hook wrapper; "+
-				"move your hook to %s.local (it will be chained after the wrapper) or delete it, then re-run: ./tool/go run ./misc/install-git-hooks.go",
+				"move your hook to %s.local (it will be chained after the wrapper) or delete it, then re-run: ./tool/go run ./misc/add-git-hooks.go",
 				path, name)
 		case !want[name] && mine:
 			// Stale wrapper from a prior version (e.g. a hook we used

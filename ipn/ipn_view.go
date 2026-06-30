@@ -9,6 +9,7 @@ import (
 	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
+	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -131,6 +132,12 @@ func (v LoginProfileView) LocalUserID() WindowsUserID { return v.ж.LocalUserID 
 // into.
 func (v LoginProfileView) ControlURL() string { return v.ж.ControlURL }
 
+// Created is when this profile was first added to this client. It is
+// stamped once at profile creation and never changes. It is used to sort
+// the profile list with newest first; profiles created before this field
+// existed have a zero value and sort after all stamped profiles.
+func (v LoginProfileView) Created() time.Time { return v.ж.Created }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	ID             ProfileID
@@ -141,6 +148,7 @@ var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	NodeID         tailcfg.StableNodeID
 	LocalUserID    WindowsUserID
 	ControlURL     string
+	Created        time.Time
 }{})
 
 // View returns a read-only view of Prefs.
@@ -453,16 +461,6 @@ func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
 
-// AllowSingleHosts was a legacy field that was always true
-// for the past 4.5 years. It controlled whether Tailscale
-// peers got /32 or /128 routes for each other.
-// As of 2024-05-17 we're starting to ignore it, but to let
-// people still downgrade Tailscale versions and not break
-// all peer-to-peer networking we still write it to disk (as JSON)
-// so it can be loaded back by old versions.
-// TODO(bradfitz): delete this in 2025 sometime. See #12058.
-func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
-
 // The Persist field is named 'Config' in the file for backward
 // compatibility with earlier versions.
 // TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -506,7 +504,6 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
-	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})
 

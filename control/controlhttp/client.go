@@ -459,7 +459,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Ad
 		}()
 	}
 
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	defer tr.CloseIdleConnections()
 	if optACEHost != "" {
 		// If using ACE, we don't want to use any HTTP proxy.

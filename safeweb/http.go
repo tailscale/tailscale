@@ -19,7 +19,7 @@
 // package. The application must template the CSRF token into its forms using
 // the [TemplateField] and [TemplateTag] APIs. Applications that are served in a
 // secure context (over HTTPS) should also set the SecureContext field to true
-// to ensure that the the CSRF cookies are marked as Secure.
+// to ensure that the CSRF cookies are marked as Secure.
 //
 // In addition, browser routes will also have the following applied:
 //   - Content-Security-Policy header that disallows inline scripts, framing, and third party resources.

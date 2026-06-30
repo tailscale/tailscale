@@ -14,7 +14,13 @@ package vnet
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -23,10 +29,10 @@ import (
 	"iter"
 	"log"
 	"maps"
+	"math/big"
 	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os/exec"
 	"strconv"
@@ -194,6 +200,8 @@ func (n *network) initStack() error {
 			Destination: ipv6Subnet,
 			NIC:         nicID,
 		})
+
+		n.startUnsolicitedRAs()
 	}
 
 	n.ns.SetRouteTable(routes)
@@ -366,13 +374,22 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 80 && fakeControl.Match(destIP) {
+	if fakeControl.Match(destIP) && (destPort == 80 || destPort == 443) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		// The control client's noise dialer forces an HTTPS (port 443) dial when
+		// it made a noise dial recently — e.g. an immediate re-login or profile
+		// switch; see controlhttp.Dialer.forceNoise443. Serve the test control
+		// over TLS on 443 too so that path reaches it. (The cert isn't
+		// validated: noise dials authenticate via the Noise handshake.)
+		var ln net.Listener = netutil.NewOneConnListener(tc, nil)
+		if destPort == 443 {
+			ln = netutil.NewOneConnListener(tls.Server(tc, n.s.controlTLS), nil)
+		}
 		hs := &http.Server{Handler: n.s.control}
 		n.s.wg.Go(func() {
-			hs.Serve(netutil.NewOneConnListener(tc, nil))
+			hs.Serve(ln)
 		})
 		return
 	}
@@ -431,6 +448,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		hs := &http.Server{Handler: n.s.fileServerHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
+	if destPort == 80 && fakeACME.Match(destIP) && n.s.fakeACME != nil {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		hs := &http.Server{Handler: n.s.fakeACME}
 		n.s.wg.Go(func() {
 			hs.Serve(netutil.NewOneConnListener(tc, nil))
 		})
@@ -609,6 +637,12 @@ type network struct {
 
 	blackholeMu  sync.Mutex
 	blackholeMap map[netip.Addr]netip.Addr // blackholeMap contains address pairs for dropping traffic (in either direction)
+
+	// raStopMu guards raStopped and serializes with the unsolicited RA
+	// goroutine's send so that StopUnsolicitedRAsForTest can deterministically
+	// silence the background traffic.
+	raStopMu  sync.Mutex
+	raStopped bool
 }
 
 // registerWriter registers a client address with a MAC address.
@@ -621,6 +655,17 @@ func (n *network) registerWriter(mac MAC, c vmClient) {
 		nw.interfaceID = node.interfaceID
 	}
 	n.writers.Store(mac, nw)
+
+	// As soon as a host appears on the wire, hand it a Router Advertisement
+	// so its kernel installs the prefix + default route. Without this, hosts
+	// that never emit a Router Solicitation (e.g. gokrazy with DHCPv4 doing
+	// link bringup) would have to wait for the next periodic RA, by which
+	// point the test may have already failed.
+	if n.v6 {
+		if pkt, err := n.buildIPv6RouterAdvertisement(mac, ipv6AllNodes); err == nil {
+			n.writeEth(pkt)
+		}
+	}
 }
 
 func (n *network) unregisterWriter(mac MAC) {
@@ -734,16 +779,23 @@ type derpServer struct {
 	srv       *derpserver.Server
 	handler   http.Handler
 	tlsConfig *tls.Config
+	// certSHA256Hex is the SHA-256 hex fingerprint of the leaf certificate
+	// served by this DERP server. It is the value tests pin against when
+	// they configure a custom DERP map with CertName="sha256-raw:<hex>".
+	certSHA256Hex string
 }
 
-func newDERPServer() *derpServer {
-	// Just to get a self-signed TLS cert:
-	ts := httptest.NewTLSServer(nil)
-	ts.Close()
-
+// newDERPServer returns a derpServer whose TLS cert is a freshly generated
+// self-signed ECDSA cert valid for hostname. Tests that use a stock test DERP
+// map with InsecureForTests=true ignore the cert content entirely; tests that
+// want to exercise sha256-raw cert pinning can read the certSHA256Hex via
+// [Server.DERPCertSHA256Hex].
+func newDERPServer(hostname string) *derpServer {
+	tlsConfig, certHex := selfSignedCert(hostname)
 	ds := &derpServer{
-		srv:       derpserver.New(key.NewNode(), logger.Discard),
-		tlsConfig: ts.TLS, // self-signed; test client configure to not check
+		srv:           derpserver.New(key.NewNode(), logger.Discard),
+		tlsConfig:     tlsConfig,
+		certSHA256Hex: certHex,
 	}
 	var mux http.ServeMux
 	mux.Handle("/derp", derpserver.Handler(ds.srv))
@@ -751,6 +803,40 @@ func newDERPServer() *derpServer {
 
 	ds.handler = &mux
 	return ds
+}
+
+// selfSignedCert builds a self-signed ECDSA P-256 cert valid for hostname and
+// returns a *tls.Config that serves it, along with the SHA-256 hex digest of
+// the cert's DER bytes (used by DERP for sha256-raw cert pinning).
+func selfSignedCert(hostname string) (*tls.Config, string) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: generating DERP cert key: %v", err))
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: hostname},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{hostname},
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+		tmpl.DNSNames = nil
+	}
+	der, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: creating DERP cert: %v", err))
+	}
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{der},
+			PrivateKey:  key,
+		}},
+	}
+	return cfg, fmt.Sprintf("%x", sha256.Sum256(der))
 }
 
 type Server struct {
@@ -769,8 +855,14 @@ type Server struct {
 	networks     set.Set[*network]
 	networkByWAN *bart.Table[*network]
 
-	control    *testcontrol.Server
+	control *testcontrol.Server
+	// controlTLS is a self-signed cert for serving the test control over HTTPS
+	// (port 443) in addition to plaintext HTTP. The control client does not
+	// validate this cert (noise dials authenticate via the Noise handshake, not
+	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
+	controlTLS *tls.Config
 	derps      []*derpServer
+	fakeACME   *fakeACMEServer
 	pcapWriter *pcapWriter
 
 	// writeMu serializes all writes to VM clients.
@@ -785,6 +877,7 @@ type Server struct {
 
 	cloudInitData map[int]*CloudInitData // node num → cloud-init config
 	fileContents  map[string][]byte      // filename → file bytes
+	dnsTXTRecords map[string][]string
 
 	// onDHCPEvent, if non-nil, is called when DHCP messages are processed.
 	// Parameters are: source MAC, node number, DHCP message type, assigned IP.
@@ -810,6 +903,14 @@ func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Add
 	s.onDHCPEvent = fn
 }
 
+// derpHostnames are the SNI/HostName values vnet's fake DERP servers identify
+// as. They are also used to issue the per-DERP self-signed certificate so that
+// hostname verification succeeds for tests that pin via sha256-raw.
+var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
+
+// controlHostname is the hostname the fake control server is reached at.
+const controlHostname = "control.tailscale"
+
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
 		1: {
@@ -820,7 +921,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "1a",
 					RegionID:         1,
-					HostName:         "derp1.tailscale",
+					HostName:         derpHostnames[0],
 					IPv4:             fakeDERP1.v4.String(),
 					IPv6:             fakeDERP1.v6.String(),
 					InsecureForTests: true,
@@ -836,7 +937,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "2a",
 					RegionID:         2,
-					HostName:         "derp2.tailscale",
+					HostName:         derpHostnames[1],
 					IPv4:             fakeDERP2.v4.String(),
 					IPv6:             fakeDERP2.v6.String(),
 					InsecureForTests: true,
@@ -855,18 +956,26 @@ func New(c *Config) (*Server, error) {
 
 		control: &testcontrol.Server{
 			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://control.tailscale",
+			ExplicitBaseURL: "http://" + controlHostname,
 		},
+		fakeACME: newFakeACMEServer("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
 
-		nodeByMAC:    map[MAC]*node{},
-		networkByWAN: &bart.Table[*network]{},
-		networks:     set.Of[*network](),
+		nodeByMAC:     map[MAC]*node{},
+		networkByWAN:  &bart.Table[*network]{},
+		networks:      set.Of[*network](),
+		dnsTXTRecords: map[string][]string{},
 	}
-	for range 2 {
-		s.derps = append(s.derps, newDERPServer())
+	s.control.OnSetDNS = func(req *tailcfg.SetDNSRequest) error {
+		s.setDNSRecord(req.Name, req.Value)
+		return nil
+	}
+	s.fakeACME.lookupTXT = s.lookupTXT
+	s.controlTLS, _ = selfSignedCert(controlHostname)
+	for _, host := range derpHostnames {
+		s.derps = append(s.derps, newDERPServer(host))
 	}
 	if err := s.initFromConfig(c); err != nil {
 		return nil, err
@@ -887,6 +996,42 @@ func New(c *Config) (*Server, error) {
 // ControlServer returns the test control server used by this vnet.
 func (s *Server) ControlServer() *testcontrol.Server {
 	return s.control
+}
+
+// DERPHostname returns the SNI/HostName used by vnet's idx'th fake DERP
+// server. idx must be 0 or 1.
+func (s *Server) DERPHostname(idx int) string {
+	return derpHostnames[idx]
+}
+
+// DERPCertSHA256Hex returns the SHA-256 hex fingerprint of the self-signed
+// TLS certificate served by vnet's idx'th fake DERP server. It is the value
+// to pin against in a [tailcfg.DERPNode.CertName] formatted as
+// "sha256-raw:<hex>". idx must be 0 or 1.
+func (s *Server) DERPCertSHA256Hex(idx int) string {
+	return s.derps[idx].certSHA256Hex
+}
+
+// FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
+func (s *Server) FakeACMEDirectoryURL() string {
+	return s.fakeACME.directoryURL()
+}
+
+// FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
+func (s *Server) FakeACMERootPEM() []byte {
+	return s.fakeACME.rootPEM()
+}
+
+func (s *Server) setDNSRecord(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsTXTRecords[name] = append(s.dnsTXTRecords[name], value)
+}
+
+func (s *Server) lookupTXT(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.dnsTXTRecords[name]...)
 }
 
 // CloudInitData holds the cloud-init configuration for a node.
@@ -1001,6 +1146,18 @@ func (s *Server) AwaitFirstPacket(ctx context.Context, mac MAC) error {
 // MACs returns the MAC addresses of the configured nodes.
 func (s *Server) MACs() iter.Seq[MAC] {
 	return maps.Keys(s.nodeByMAC)
+}
+
+// StopUnsolicitedRAsForTest stops all networks from sending periodic
+// unsolicited IPv6 Router Advertisements. It blocks until any in-progress
+// send has finished, so callers may safely register sinks afterwards
+// without races against background RA traffic.
+func (s *Server) StopUnsolicitedRAsForTest() {
+	for n := range s.networks {
+		n.raStopMu.Lock()
+		n.raStopped = true
+		n.raStopMu.Unlock()
+	}
 }
 
 func (s *Server) RegisterSinkForTest(mac MAC, fn func(eth []byte)) {
@@ -1860,21 +2017,36 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	n.logf("router got unknown UDP packet: %v", packet)
 }
 
-func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICMPv6RouterSolicitation) {
-	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+// ipv6AllNodes is the IPv6 link-local "all nodes" multicast address (ff02::1).
+// Unsolicited Router Advertisements are sent here so that every connected
+// host on the LAN sees them without the router having to know each host's
+// unicast address.
+var ipv6AllNodes = net.ParseIP("ff02::1")
 
-	// Send a router advertisement back.
+// unsolicitedRAInterval is how often vnet sends an unsolicited IPv6 Router
+// Advertisement on each v6-enabled network. Real routers default to 200s
+// (RFC 4861 §6.2.1, MaxRtrAdvInterval). We pick a much smaller value so
+// short-lived tests don't have to wait: the first RA goes out as soon as
+// a VM connects, and any subsequent gokrazy/Linux init paths that miss the
+// initial RA pick one up quickly.
+const unsolicitedRAInterval = 5 * time.Second
+
+// buildIPv6RouterAdvertisement serializes a Router Advertisement frame
+// addressed to (dstMAC, dstIP), advertising n.wanIP6's /64 as on-link and
+// fe80::1 as a default router. dstMAC/dstIP are typically the soliciting
+// host (for a solicited reply) or the link-local all-nodes group (for an
+// unsolicited periodic RA).
+func (n *network) buildIPv6RouterAdvertisement(dstMAC MAC, dstIP net.IP) ([]byte, error) {
 	eth := &layers.Ethernet{
 		SrcMAC:       n.mac.HWAddr(),
-		DstMAC:       ep.SrcMAC().HWAddr(),
+		DstMAC:       dstMAC.HWAddr(),
 		EthernetType: layers.EthernetTypeIPv6,
 	}
-	n.logf("sending IPv6 router advertisement to %v from %v", eth.DstMAC, eth.SrcMAC)
 	ip := &layers.IPv6{
 		NextHeader: layers.IPProtocolICMPv6,
 		HopLimit:   255, // per RFC 4861, 7.1.1 etc (all NDP messages); don't use mkPacket's default of 64
 		SrcIP:      net.ParseIP("fe80::1"),
-		DstIP:      v6.SrcIP,
+		DstIP:      dstIP,
 	}
 	icmp := &layers.ICMPv6{
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeRouterAdvertisement, 0),
@@ -1897,12 +2069,58 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICM
 			},
 		},
 	}
-	pkt, err := mkPacket(eth, ip, icmp, ra)
+	return mkPacket(eth, ip, icmp, ra)
+}
+
+func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, _ *layers.ICMPv6RouterSolicitation) {
+	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+	n.logf("sending IPv6 router advertisement to %v from %v", ep.SrcMAC(), n.mac)
+	pkt, err := n.buildIPv6RouterAdvertisement(ep.SrcMAC(), v6.SrcIP)
 	if err != nil {
 		n.logf("serializing ICMPv6 RA: %v", err)
 		return
 	}
 	n.writeEth(pkt)
+}
+
+// startUnsolicitedRAs sends an unsolicited Router Advertisement to the
+// link-local all-nodes group every unsolicitedRAInterval until the vnet
+// server shuts down. This ensures hosts on the LAN install vnet's default
+// IPv6 route even if their stack never emits a Router Solicitation, which
+// is what gokrazy's dual-stack init does in practice: it brings the link
+// up via DHCPv4 and then leaves IPv6 to the kernel, which under our
+// configuration never sends an RS.
+func (n *network) startUnsolicitedRAs() {
+	n.s.wg.Go(func() {
+		send := func() {
+			// Hold raStopMu across the writeEth so that
+			// StopUnsolicitedRAsForTest can synchronize with any
+			// in-progress send: once StopUnsolicitedRAsForTest returns,
+			// no further unsolicited RAs will be delivered to writers.
+			n.raStopMu.Lock()
+			defer n.raStopMu.Unlock()
+			if n.raStopped {
+				return
+			}
+			pkt, err := n.buildIPv6RouterAdvertisement(macAllNodes, ipv6AllNodes)
+			if err != nil {
+				n.logf("building unsolicited RA: %v", err)
+				return
+			}
+			n.writeEth(pkt)
+		}
+		send()
+		t := time.NewTicker(unsolicitedRAInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-n.s.shutdownCtx.Done():
+				return
+			case <-t.C:
+				send()
+			}
+		}
+	})
 }
 
 func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.ICMPv6NeighborSolicitation) {
@@ -2139,7 +2357,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	}
 
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
-		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher, fakeCloudInit, fakeFiles} {
+		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher, fakeCloudInit, fakeFiles, fakeACME} {
 			if v.Match(flow.dst) {
 				return true
 			}
@@ -2265,6 +2483,17 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 					Type:  q.Type,
 					Class: q.Class,
 					IP:    ip.AsSlice(),
+					TTL:   60,
+				})
+			}
+		} else if q.Type == layers.DNSTypeTXT {
+			for _, txt := range s.lookupTXT(string(q.Name)) {
+				response.ANCount++
+				response.Answers = append(response.Answers, layers.DNSResourceRecord{
+					Name:  q.Name,
+					Type:  q.Type,
+					Class: q.Class,
+					TXTs:  [][]byte{[]byte(txt)},
 					TTL:   60,
 				})
 			}

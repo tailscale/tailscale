@@ -3,7 +3,7 @@
 
 //go:build !ios && !android && !js
 
-package ipnlocal
+package acme
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -24,16 +25,34 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnlocal/ipnlocaltest"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/acme"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
 	"tailscale.com/util/set"
 )
+
+//go:embed testdata/*
+var certTestFS embed.FS
+
+// extOf returns the [*extension] registered on b, failing the test if
+// it's not present.
+func extOf(t *testing.T, b *ipnlocal.LocalBackend) *extension {
+	t.Helper()
+	e, ok := ipnlocal.GetExt[*extension](b)
+	if !ok {
+		t.Fatal("acme extension not registered on backend")
+	}
+	return e
+}
 
 func TestCertRequest(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -117,62 +136,46 @@ func TestResolveCertDomain(t *testing.T) {
 			name:        "wildcard_without_cap",
 			domain:      "*.node.ts.net",
 			certDomains: []string{"node.ts.net"},
-			hasCap:      false,
 			wantErr:     "wildcard certificates are not enabled for this node",
 		},
 		{
-			name:        "subdomain_with_cap_rejected",
-			domain:      "app.node.ts.net",
+			name:        "wildcard_wrong_domain_with_cap",
+			domain:      "*.other.com",
 			certDomains: []string{"node.ts.net"},
 			hasCap:      true,
-			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
+			wantErr:     `invalid domain "*.other.com"; wildcard certificates are not enabled for this domain`,
 		},
 		{
-			name:        "subdomain_without_cap_rejected",
-			domain:      "app.node.ts.net",
+			name:        "missing_domain",
+			domain:      "",
 			certDomains: []string{"node.ts.net"},
-			hasCap:      false,
-			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
+			wantErr:     "missing domain name",
 		},
 		{
-			name:        "multi_level_subdomain_rejected",
-			domain:      "a.b.node.ts.net",
-			certDomains: []string{"node.ts.net"},
+			name:        "no_cert_domains_with_cap",
+			domain:      "node.ts.net",
+			certDomains: nil,
 			hasCap:      true,
-			wantErr:     `invalid domain "a.b.node.ts.net"; must be one of ["node.ts.net"]`,
+			wantErr:     "your Tailscale account does not support getting TLS certs",
 		},
 		{
-			name:        "wildcard_no_matching_parent",
-			domain:      "*.unrelated.ts.net",
-			certDomains: []string{"node.ts.net"},
-			hasCap:      true,
-			wantErr:     `invalid domain "*.unrelated.ts.net"; wildcard certificates are not enabled for this domain`,
-		},
-		{
-			name:        "subdomain_unrelated_rejected",
-			domain:      "app.unrelated.ts.net",
-			certDomains: []string{"node.ts.net"},
-			hasCap:      true,
-			wantErr:     `invalid domain "app.unrelated.ts.net"; must be one of ["node.ts.net"]`,
-		},
-		{
-			name:        "no_cert_domains",
+			name:        "no_cert_domains_without_cap",
 			domain:      "node.ts.net",
 			certDomains: nil,
 			wantErr:     "your Tailscale account does not support getting TLS certs",
 		},
 		{
-			name:        "wildcard_no_cert_domains",
-			domain:      "*.foo.ts.net",
-			certDomains: nil,
-			hasCap:      true,
-			wantErr:     "your Tailscale account does not support getting TLS certs",
+			name:        "subdomain_request_rejected_without_cap",
+			domain:      "app.node.ts.net",
+			certDomains: []string{"node.ts.net"},
+			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
 		},
 		{
-			name:        "empty_domain",
-			domain:      "",
+			name:        "subdomain_request_rejected_with_cap",
+			domain:      "app.node.ts.net",
 			certDomains: []string{"node.ts.net"},
-			wantErr:     "missing domain name",
+			hasCap:      true,
+			wantErr:     `invalid domain "app.node.ts.net"; must be one of ["node.ts.net"]`,
 		},
 		{
 			name:       "nil_netmap",
@@ -184,26 +187,24 @@ func TestResolveCertDomain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newTestLocalBackend(t)
+			b := ipnlocaltest.NewBackend(t)
+			e := extOf(t, b)
 
 			if !tt.skipNetmap {
-				// Set up netmap with CertDomains and capability
 				var allCaps set.Set[tailcfg.NodeCapability]
 				if tt.hasCap {
 					allCaps = set.Of(tailcfg.NodeAttrDNSSubdomainResolve)
 				}
-				b.mu.Lock()
-				b.currentNode().SetNetMap(&netmap.NetworkMap{
+				b.ForTest().SetNetMap(&netmap.NetworkMap{
 					SelfNode: (&tailcfg.Node{}).View(),
 					DNS: tailcfg.DNSConfig{
 						CertDomains: tt.certDomains,
 					},
 					AllCaps: allCaps,
 				})
-				b.mu.Unlock()
 			}
 
-			got, err := b.resolveCertDomain(tt.domain)
+			got, err := e.resolveCertDomain(b, tt.domain)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Errorf("resolveCertDomain(%q) = %q, want error %q", tt.domain, got, tt.wantErr)
@@ -254,53 +255,37 @@ func TestValidLookingCertDomain(t *testing.T) {
 }
 
 func TestACMETLSALPNCertHook(t *testing.T) {
-	b := newTestLocalBackend(t)
+	b := ipnlocaltest.NewBackend(t)
+	e := extOf(t, b)
 	cert := &tls.Certificate{}
-	cleanup := b.storeACMETLSALPNCert("example.com", cert)
+	cleanup := e.storeACMETLSALPNCert("example.com", cert)
 	defer cleanup()
 
-	if got, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+	if got, ok := b.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "example.com",
 		SupportedProtos: []string{acme.ALPNProto},
 	}); !ok || got != cert {
 		t.Fatalf("getACMETLSALPNCert = %v, %v; want stored cert, true", got, ok)
 	}
-	if _, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+	if _, ok := b.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "example.com",
 		SupportedProtos: []string{"http/1.1"},
 	}); ok {
 		t.Fatal("getACMETLSALPNCert without acme ALPN = ok, want false")
 	}
-	if _, ok := b.getACMETLSALPNCert(&tls.ClientHelloInfo{
+	if _, ok := b.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "other.example.com",
 		SupportedProtos: []string{acme.ALPNProto},
 	}); ok {
 		t.Fatal("getACMETLSALPNCert for other name = ok, want false")
 	}
 
-	otherBackend := newTestLocalBackend(t)
-	if _, ok := otherBackend.getACMETLSALPNCert(&tls.ClientHelloInfo{
+	otherBackend := ipnlocaltest.NewBackend(t)
+	if _, ok := otherBackend.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "example.com",
 		SupportedProtos: []string{acme.ALPNProto},
 	}); ok {
 		t.Fatal("getACMETLSALPNCert on different LocalBackend = ok, want false")
-	}
-}
-
-func TestServeTLSConfigNextProtos(t *testing.T) {
-	b := newTestLocalBackend(t)
-	getCert := func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-		return nil, nil
-	}
-
-	httpsConfig := b.serveTLSConfig(getCert, serveTLSNextProtos())
-	if got, want := httpsConfig.NextProtos, []string{"h2", "http/1.1"}; !slices.Equal(got, want) {
-		t.Fatalf("HTTPS NextProtos = %q; want %q", got, want)
-	}
-
-	tcpForwardConfig := b.serveTLSConfig(getCert, nil)
-	if got := tcpForwardConfig.NextProtos; got != nil {
-		t.Fatalf("TLS-terminated TCP forward NextProtos = %q; want nil", got)
 	}
 }
 
@@ -309,30 +294,26 @@ func TestShouldUseACMETLSALPN01(t *testing.T) {
 		tsNetDomain = "node.ts.net"
 		byoDomain   = "foo.com"
 	)
-	previous := &TLSCertKeyPair{}
+	previous := &ipnlocal.TLSCertKeyPair{}
 
-	setFunnel := func(b *LocalBackend, hosts ...string) {
+	setFunnel := func(b *ipnlocal.LocalBackend, hosts ...string) {
 		funnel := map[ipn.HostPort]bool{}
 		for _, h := range hosts {
 			funnel[ipn.HostPort(h+":443")] = true
 		}
-		b.mu.Lock()
-		b.serveConfig = (&ipn.ServeConfig{AllowFunnel: funnel}).View()
-		b.mu.Unlock()
+		b.ForTest().SetServeConfig((&ipn.ServeConfig{AllowFunnel: funnel}).View())
 	}
-	setNetmap := func(b *LocalBackend, certDomains ...string) {
-		b.mu.Lock()
-		b.currentNode().SetNetMap(&netmap.NetworkMap{
+	setNetmap := func(b *ipnlocal.LocalBackend, certDomains ...string) {
+		b.ForTest().SetNetMap(&netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{}).View(),
 			DNS:      tailcfg.DNSConfig{CertDomains: certDomains},
 		})
-		b.mu.Unlock()
 	}
 
 	tests := []struct {
 		name     string
 		domain   string
-		previous *TLSCertKeyPair
+		previous *ipnlocal.TLSCertKeyPair
 		funnel   []string
 		netmap   []string // CertDomains; if nil, no netmap installed
 		want     bool
@@ -396,12 +377,13 @@ func TestShouldUseACMETLSALPN01(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newTestLocalBackend(t)
+			b := ipnlocaltest.NewBackend(t)
+			e := extOf(t, b)
 			if tt.netmap != nil {
 				setNetmap(b, tt.netmap...)
 			}
 			setFunnel(b, tt.funnel...)
-			if got := b.shouldUseACMETLSALPN01(tt.domain, tt.previous, t.Logf); got != tt.want {
+			if got := e.shouldUseACMETLSALPN01(b, tt.domain, tt.previous, t.Logf); got != tt.want {
 				t.Errorf("shouldUseACMETLSALPN01(%q, previous=%v) = %v, want %v",
 					tt.domain, tt.previous != nil, got, tt.want)
 			}
@@ -410,22 +392,18 @@ func TestShouldUseACMETLSALPN01(t *testing.T) {
 }
 
 func TestIsBYOFunnelDomain(t *testing.T) {
-	setFunnel := func(b *LocalBackend, hosts ...string) {
+	setFunnel := func(b *ipnlocal.LocalBackend, hosts ...string) {
 		funnel := map[ipn.HostPort]bool{}
 		for _, h := range hosts {
 			funnel[ipn.HostPort(h+":443")] = true
 		}
-		b.mu.Lock()
-		b.serveConfig = (&ipn.ServeConfig{AllowFunnel: funnel}).View()
-		b.mu.Unlock()
+		b.ForTest().SetServeConfig((&ipn.ServeConfig{AllowFunnel: funnel}).View())
 	}
-	setNetmap := func(b *LocalBackend, certDomains ...string) {
-		b.mu.Lock()
-		b.currentNode().SetNetMap(&netmap.NetworkMap{
+	setNetmap := func(b *ipnlocal.LocalBackend, certDomains ...string) {
+		b.ForTest().SetNetMap(&netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{}).View(),
 			DNS:      tailcfg.DNSConfig{CertDomains: certDomains},
 		})
-		b.mu.Unlock()
 	}
 
 	tests := []struct {
@@ -443,10 +421,11 @@ func TestIsBYOFunnelDomain(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newTestLocalBackend(t)
+			b := ipnlocaltest.NewBackend(t)
+			e := extOf(t, b)
 			setNetmap(b, tt.certDomains...)
 			setFunnel(b, tt.funnel...)
-			if got := b.isBYOFunnelDomain(tt.domain); got != tt.want {
+			if got := e.isBYOFunnelDomain(b, tt.domain); got != tt.want {
 				t.Errorf("isBYOFunnelDomain(%q) = %v, want %v", tt.domain, got, tt.want)
 			}
 		})
@@ -458,41 +437,36 @@ func TestResolveCertDomainBYO(t *testing.T) {
 		tsNetDomain = "node.ts.net"
 		byoDomain   = "foo.com"
 	)
-	b := newTestLocalBackend(t)
-	b.mu.Lock()
-	b.currentNode().SetNetMap(&netmap.NetworkMap{
+	b := ipnlocaltest.NewBackend(t)
+	e := extOf(t, b)
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{}).View(),
 		DNS:      tailcfg.DNSConfig{CertDomains: []string{tsNetDomain}},
 	})
-	b.mu.Unlock()
 
 	// Without a serve config, BYO is rejected.
-	if _, err := b.resolveCertDomain(byoDomain); err == nil {
+	if _, err := e.resolveCertDomain(b, byoDomain); err == nil {
 		t.Fatalf("resolveCertDomain(%q) without serve config: want error, got nil", byoDomain)
 	}
 
 	// Web entry alone (no AllowFunnel) is not enough; the gate is Funnel.
-	b.mu.Lock()
-	b.serveConfig = (&ipn.ServeConfig{
+	b.ForTest().SetServeConfig((&ipn.ServeConfig{
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			byoDomain + ":443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
 		},
-	}).View()
-	b.mu.Unlock()
-	if _, err := b.resolveCertDomain(byoDomain); err == nil {
+	}).View())
+	if _, err := e.resolveCertDomain(b, byoDomain); err == nil {
 		t.Fatalf("resolveCertDomain(%q) with Web but no Funnel: want error, got nil", byoDomain)
 	}
 
 	// With AllowFunnel, BYO is accepted.
-	b.mu.Lock()
-	b.serveConfig = (&ipn.ServeConfig{
+	b.ForTest().SetServeConfig((&ipn.ServeConfig{
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			byoDomain + ":443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "http://127.0.0.1:8080"}}},
 		},
 		AllowFunnel: map[ipn.HostPort]bool{byoDomain + ":443": true},
-	}).View()
-	b.mu.Unlock()
-	got, err := b.resolveCertDomain(byoDomain)
+	}).View())
+	got, err := e.resolveCertDomain(b, byoDomain)
 	if err != nil {
 		t.Fatalf("resolveCertDomain(%q): %v", byoDomain, err)
 	}
@@ -501,7 +475,7 @@ func TestResolveCertDomainBYO(t *testing.T) {
 	}
 
 	// The ts.net path still works alongside BYO entries.
-	got, err = b.resolveCertDomain(tsNetDomain)
+	got, err = e.resolveCertDomain(b, tsNetDomain)
 	if err != nil {
 		t.Fatalf("resolveCertDomain(%q): %v", tsNetDomain, err)
 	}
@@ -509,9 +483,6 @@ func TestResolveCertDomainBYO(t *testing.T) {
 		t.Errorf("resolveCertDomain(%q) = %q, want %q", tsNetDomain, got, tsNetDomain)
 	}
 }
-
-//go:embed testdata/*
-var certTestFS embed.FS
 
 func TestCertStoreRoundTrip(t *testing.T) {
 	const testDomain = "example.com"
@@ -583,13 +554,7 @@ func TestCertStoreRoundTrip(t *testing.T) {
 }
 
 func TestShouldStartDomainRenewal(t *testing.T) {
-	reset := func() {
-		renewMu.Lock()
-		defer renewMu.Unlock()
-		clear(renewCertAt)
-	}
-
-	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {
+	mustMakePair := func(template *x509.Certificate) *ipnlocal.TLSCertKeyPair {
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			panic(err)
@@ -604,7 +569,7 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 			Bytes: b,
 		})
 
-		return &TLSCertKeyPair{
+		return &ipnlocal.TLSCertKeyPair{
 			Cached:  false,
 			CertPEM: certPEM,
 			KeyPEM:  []byte("unused"),
@@ -647,12 +612,9 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 			want:      false,
 		},
 	}
-	b := new(LocalBackend)
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			reset()
-
-			ret, err := b.domainRenewalTimeByExpiry(mustMakePair(&x509.Certificate{
+			ret, err := domainRenewalTimeByExpiry(mustMakePair(&x509.Certificate{
 				SerialNumber: big.NewInt(2019),
 				Subject:      subject,
 				NotBefore:    tt.notBefore,
@@ -693,24 +655,23 @@ func TestDebugACMEDirectoryURL(t *testing.T) {
 
 func TestGetCertPEMWithValidity(t *testing.T) {
 	const testDomain = "example.com"
-	b := newTestLocalBackend(t)
-	b.varRoot = t.TempDir()
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
 
-	// Set up netmap with CertDomains so resolveCertDomain works
-	b.mu.Lock()
-	b.currentNode().SetNetMap(&netmap.NetworkMap{
+	// Set up netmap with CertDomains so resolveCertDomain works.
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{}).View(),
 		DNS: tailcfg.DNSConfig{
 			CertDomains: []string{testDomain},
 		},
 	})
-	b.mu.Unlock()
 
-	certDir, err := b.certDir()
+	certDirPath, err := certDir(b)
 	if err != nil {
 		t.Fatalf("certDir error: %v", err)
 	}
-	if _, err := b.getCertStore(); err != nil {
+	if _, err := e.getCertStore(b); err != nil {
 		t.Fatalf("getCertStore error: %v", err)
 	}
 	testRoot, err := certTestFS.ReadFile("testdata/rootCA.pem")
@@ -786,54 +747,46 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 				envknob.Setenv("TS_CERT_SHARE_MODE", "")
 			}
 
-			os.RemoveAll(certDir)
+			os.RemoveAll(certDirPath)
 			if tt.storeCerts {
-				os.MkdirAll(certDir, 0755)
-				if err := os.WriteFile(filepath.Join(certDir, "example.com.crt"),
-					must.Get(os.ReadFile("testdata/example.com.pem")), 0644); err != nil {
+				os.MkdirAll(certDirPath, 0755)
+				if err := os.WriteFile(filepath.Join(certDirPath, "example.com.crt"),
+					must.Get(certTestFS.ReadFile("testdata/example.com.pem")), 0644); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(certDir, "example.com.key"),
-					must.Get(os.ReadFile("testdata/example.com-key.pem")), 0644); err != nil {
+				if err := os.WriteFile(filepath.Join(certDirPath, "example.com.key"),
+					must.Get(certTestFS.ReadFile("testdata/example.com-key.pem")), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			b.clock = tstest.NewClock(tstest.ClockOpts{Start: tt.now})
+			b.ForTest().SetClock(tstest.NewClock(tstest.ClockOpts{Start: tt.now}))
 
-			allDone := make(chan bool, 1)
-			defer b.goTracker.AddDoneCallback(func() {
-				b.mu.Lock()
-				defer b.mu.Unlock()
-				if b.goTracker.RunningGoroutines() > 0 {
-					return
-				}
-				select {
-				case allDone <- true:
-				default:
-				}
-			})()
-
-			// Set to true if get getCertPEM is called. GetCertPEM can be called in a goroutine for async
-			// renewal or in the main goroutine if issuance is required to obtain valid TLS credentials.
+			// Set to true if getCertPEM is called. GetCertPEM can be called in
+			// a goroutine for async renewal or in the main goroutine if
+			// issuance is required to obtain valid TLS credentials.
 			getCertPemWasCalled := false
-			getCertPEM = func(ctx context.Context, b *LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*TLSCertKeyPair, error) {
+			orig := getCertPEM
+			getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
 				getCertPemWasCalled = true
 				return nil, nil
 			}
-			prevGoRoutines := b.goTracker.StartedGoroutines()
+			t.Cleanup(func() { getCertPEM = orig })
+			prevGo := e.goroutinesStarted.Load()
 			_, err = b.GetCertPEMWithValidity(context.Background(), testDomain, 0)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("b.GetCertPemWithValidity got err %v, wants error: '%v'", err, tt.wantErr)
 			}
-			// GetCertPEMWithValidity calls getCertPEM in a goroutine if async renewal is needed. That's the
-			// only goroutine it starts, so this can be used to test if async renewal was started.
-			gotAsyncRenewal := b.goTracker.StartedGoroutines()-prevGoRoutines != 0
+			// GetCertPEMWithValidity spawns one tracked goroutine (via
+			// extension.Go) iff it kicked off async renewal.
+			gotAsyncRenewal := e.goroutinesStarted.Load()-prevGo != 0
 			if gotAsyncRenewal {
+				done := make(chan struct{})
+				go func() { e.wg.Wait(); close(done) }()
 				select {
 				case <-time.After(5 * time.Second):
-					t.Fatal("timed out waiting for goroutines to finish")
-				case <-allDone:
+					t.Fatal("timed out waiting for async renewal goroutine to finish")
+				case <-done:
 				}
 			}
 			// Verify that async renewal was triggered if expected.
@@ -846,5 +799,174 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 				t.Errorf("wants getCertPem to be called: %v, got called %v", tt.wantIssuance, gotIssuance)
 			}
 		})
+	}
+}
+
+func TestCertPendingWarnable(t *testing.T) {
+	b := ipnlocaltest.NewBackend(t)
+	e := extOf(t, b)
+
+	// currentWarning returns the pending warning's rendered text and
+	// domain-list arg, or "", "" if the warnable is currently healthy.
+	currentWarning := func() (text, domains string) {
+		ws, ok := b.HealthTracker().CurrentState().Warnings[tsconst.HealthWarnableTLSCertPending]
+		if !ok {
+			return "", ""
+		}
+		return ws.Text, ws.Args[health.ArgDomains]
+	}
+
+	if b.HealthTracker().IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable unexpectedly unhealthy before any setCertPending")
+	}
+
+	e.setCertPending(b, "a.example.com", true)
+	if !b.HealthTracker().IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable not unhealthy after first setCertPending")
+	}
+	if text, domains := currentWarning(); domains != "a.example.com" ||
+		text != "Fetching TLS certificate via ACME for: a.example.com" {
+		t.Errorf("after first setCertPending: text=%q domains=%q", text, domains)
+	}
+
+	e.setCertPending(b, "b.example.com", true)
+	if !b.HealthTracker().IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable not unhealthy after second setCertPending")
+	}
+	if text, domains := currentWarning(); domains != "a.example.com, b.example.com" ||
+		text != "Fetching TLS certificate via ACME for: a.example.com, b.example.com" {
+		t.Errorf("after second setCertPending: text=%q domains=%q", text, domains)
+	}
+
+	e.setCertPending(b, "a.example.com", false)
+	if !b.HealthTracker().IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable cleared too early; one domain still pending")
+	}
+	if text, domains := currentWarning(); domains != "b.example.com" ||
+		text != "Fetching TLS certificate via ACME for: b.example.com" {
+		t.Errorf("after clearing a.example.com: text=%q domains=%q", text, domains)
+	}
+
+	e.setCertPending(b, "b.example.com", false)
+	if b.HealthTracker().IsUnhealthy(certPendingWarnable) {
+		t.Fatal("warnable still unhealthy after clearing all domains")
+	}
+	if text, domains := currentWarning(); text != "" || domains != "" {
+		t.Errorf("after clearing all domains: text=%q domains=%q", text, domains)
+	}
+}
+
+func TestServeConfigUsesACMECerts(t *testing.T) {
+	tests := []struct {
+		name string
+		sc   *ipn.ServeConfig
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", &ipn.ServeConfig{}, false},
+		{
+			name: "background_web",
+			sc: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"node.ts.net:443": {},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "tcp_forward_no_tls",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {TCPForward: "127.0.0.1:443"}},
+			},
+			want: false,
+		},
+		{
+			name: "tls_terminated_tcp",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {TCPForward: "127.0.0.1:443", TerminateTLS: "node.ts.net"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "service_tls_terminated_tcp",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:web": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							443: {TCPForward: "127.0.0.1:443", TerminateTLS: "web.svc.ts.net"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v ipn.ServeConfigView
+			if tt.sc != nil {
+				v = tt.sc.View()
+			}
+			if got := serveConfigUsesACMECerts(v); got != tt.want {
+				t.Errorf("serveConfigUsesACMECerts = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRefreshApplicableCerts(t *testing.T) {
+	const (
+		certDomain = "node1.example.com"
+		byoDomain  = "byo.example.org"
+	)
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS: tailcfg.DNSConfig{
+			CertDomains: []string{certDomain},
+		},
+	})
+	b.ForTest().SetServeConfig((&ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(certDomain + ":443"): {},
+			ipn.HostPort(byoDomain + ":443"):  {},
+			// Not in CertDomains and no Funnel entry; must be filtered out.
+			ipn.HostPort("not-ours.other.tld:443"): {},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{
+			ipn.HostPort(byoDomain + ":443"): true,
+		},
+	}).View())
+
+	gotCh := make(chan string, 4)
+	b.ForTest().ConfigureCerts(func(host string) (*ipnlocal.TLSCertKeyPair, error) {
+		gotCh <- host
+		return &ipnlocal.TLSCertKeyPair{}, nil
+	})
+
+	e.refreshApplicableCerts(context.Background(), b)
+
+	want := set.Of(certDomain, byoDomain)
+	got := set.Set[string]{}
+	for got.Len() < want.Len() {
+		select {
+		case h := <-gotCh:
+			got.Add(h)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for refresh workers; got %v, want %v", got, want)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("got fetches %v, want %v", got, want)
+	}
+	select {
+	case h := <-gotCh:
+		t.Errorf("unexpected extra fetch for %q", h)
+	default:
 	}
 }

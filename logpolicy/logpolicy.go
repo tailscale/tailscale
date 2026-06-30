@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/paths"
@@ -53,12 +54,14 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
-	"tailscale.com/util/syspolicy/pkey"
-	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+// GetLogTarget is an optional hook to register a function
+// that returns the log target URL to be used by logpolicy.
+var GetLogTarget feature.Hook[func() string]
 
 var getLogTargetOnce struct {
 	sync.Once
@@ -67,8 +70,12 @@ var getLogTargetOnce struct {
 
 func getLogTarget() string {
 	getLogTargetOnce.Do(func() {
-		envTarget, _ := os.LookupEnv("TS_LOG_TARGET")
-		getLogTargetOnce.v, _ = policyclient.Get().GetString(pkey.LogTarget, envTarget)
+		if f, ok := GetLogTarget.GetOk(); ok {
+			getLogTargetOnce.v = f()
+		}
+		if getLogTargetOnce.v == "" {
+			getLogTargetOnce.v, _ = os.LookupEnv("TS_LOG_TARGET")
+		}
 	})
 
 	return getLogTargetOnce.v
@@ -878,7 +885,7 @@ func (opts TransportOptions) New() http.RoundTripper {
 		opts.NetMon = netmon.NewStatic()
 	}
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	if opts.TLSClientConfig != nil {
 		tr.TLSClientConfig = opts.TLSClientConfig.Clone()
 	}

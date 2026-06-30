@@ -790,8 +790,10 @@ func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelay
 		go r.sendCallMeMaybeVia(newServerEndpoint.wlb.ep, newServerEndpoint.se)
 	}
 
-	lastBestMatchingServer := newServerEndpoint.se.ServerDisco.Compare(newServerEndpoint.wlb.lastBest.relayServerDisco) == 0
-	if lastBestMatchingServer && newServerEndpoint.wlb.lastBestIsTrusted {
+	lastBestMatchingServerVNI := newServerEndpoint.wlb.lastBest.vni.IsSet() &&
+		newServerEndpoint.se.ServerDisco.Compare(newServerEndpoint.wlb.lastBest.relayServerDisco) == 0 &&
+		newServerEndpoint.se.VNI == newServerEndpoint.wlb.lastBest.vni.Get()
+	if lastBestMatchingServerVNI && newServerEndpoint.wlb.lastBestIsTrusted {
 		// This relay server endpoint is the same as [endpoint]'s bestAddr at
 		// the time UDP relay path discovery was started, and it was also a
 		// trusted path (see endpoint.trustBestAddrUntil), so return early.

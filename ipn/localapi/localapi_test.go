@@ -535,7 +535,7 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "not-path-handler",
+			name: "not-path-or-unix-handler",
 			configIn: &ipn.ServeConfig{
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
@@ -564,6 +564,30 @@ func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
 						"/": {Path: "/tmp"},
+					}},
+				},
+			},
+			h:       newHandler(false),
+			wantErr: true,
+		},
+		{
+			name: "unix-handler-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
+					}},
+				},
+			},
+			h:       newHandler(true),
+			wantErr: false,
+		},
+		{
+			name: "unix-handler-not-admin",
+			configIn: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/var/run/foo.sock"},
 					}},
 				},
 			},
@@ -610,6 +634,7 @@ func TestServeWatchIPNBus(t *testing.T) {
 	tests := []struct {
 		desc                    string
 		permitRead, permitWrite bool
+		mask                    ipn.NotifyWatchOpt
 		wantStatus              int
 	}{
 		{
@@ -630,6 +655,18 @@ func TestServeWatchIPNBus(t *testing.T) {
 			permitWrite: true,
 			wantStatus:  http.StatusOK,
 		},
+		{
+			desc:       "invalid-rate-limit-mask",
+			permitRead: true,
+			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			desc:       "in-process-no-disconnect-forbidden",
+			permitRead: true,
+			mask:       ipn.NotifyInProcessNoDisconnect,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -644,7 +681,11 @@ func TestServeWatchIPNBus(t *testing.T) {
 			c := s.Client()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, ipn.NotifyInitialState), nil)
+			mask := tt.mask
+			if mask == 0 {
+				mask = ipn.NotifyInitialState
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/localapi/v0/watch-ipn-bus?mask=%d", s.URL, mask), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

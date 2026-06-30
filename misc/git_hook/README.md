@@ -9,7 +9,7 @@ The shared logic lives in the `githook/` package and is also imported by
 
 From the repo root:
 
-    ./tool/go run ./misc/install-git-hooks.go
+    ./tool/go run ./misc/add-git-hooks.go
 
 The script auto-updates in the future.
 

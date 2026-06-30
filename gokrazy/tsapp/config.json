@@ -24,7 +24,15 @@
         "tailscale.com/cmd/tailscale": {
             "ExtraFilePaths": {
                 "/usr": "usr-dir"
-            }
+            },
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
+        },
+        "tailscale.com/cmd/tailscaled": {
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
         }
     },
     "Environment": [

@@ -5,17 +5,18 @@ package appc
 
 import (
 	"encoding/json"
-	"reflect"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/opt"
 )
 
-func TestPickSplitDNSPeers(t *testing.T) {
+func TestAppDNSRoutes(t *testing.T) {
 	getBytesForAttr := func(name string, domains []string, tags []string) []byte {
 		attr := appctype.AppConnectorAttr{
 			Name:       name,
@@ -35,206 +36,102 @@ func TestPickSplitDNSPeers(t *testing.T) {
 	appFiveBytes := getBytesForAttr("app5", []string{"*.example.com", "example.com"}, []string{"tag:one"})
 	appSixBytes := getBytesForAttr("app6", []string{"*.Example.com", "EXAMPLE.com", "EXAMPLE.COM"}, []string{"tag:one"})
 
-	makeNodeView := func(id tailcfg.NodeID, name string, tags []string) tailcfg.NodeView {
-		return (&tailcfg.Node{
-			ID:       id,
-			Name:     name,
-			Tags:     tags,
-			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
-		}).View()
+	resolver := func(appName string) []*dnstype.Resolver {
+		return []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName)}}
 	}
-	nvp1 := makeNodeView(1, "p1", []string{"tag:one"})
-	nvp2 := makeNodeView(2, "p2", []string{"tag:four1", "tag:four2"})
-	nvp3 := makeNodeView(3, "p3", []string{"tag:two", "tag:three1"})
-	nvp4 := makeNodeView(4, "p4", []string{"tag:two", "tag:three2", "tag:four2"})
 
 	for _, tt := range []struct {
-		name                string
-		peers               []tailcfg.NodeView
-		config              []tailcfg.RawMessage
-		isEligibleConnector bool
-		selfTags            []string
-		want                map[string][]tailcfg.NodeView
+		name   string
+		hasCap bool
+		config []tailcfg.RawMessage
+		want   map[string][]*dnstype.Resolver
 	}{
 		{
-			name: "empty",
+			name:   "no-capability", // hasCap false should return nil regardless of config.
+			hasCap: false,
 		},
 		{
-			name:   "bad-config", // bad config should return a nil map rather than error.
+			name:   "no-apps", // hasCap true but no configured apps returns an empty map.
+			hasCap: true,
+			want:   map[string][]*dnstype.Resolver{},
+		},
+		{
+			name:   "bad-config", // bad config should return nil rather than error.
+			hasCap: true,
 			config: []tailcfg.RawMessage{tailcfg.RawMessage(`hey`)},
 		},
 		{
-			name:   "no-peers",
+			name:   "single-app",
+			hasCap: true,
 			config: []tailcfg.RawMessage{tailcfg.RawMessage(appOneBytes)},
-		},
-		{
-			name:   "peers-that-are-not-connectors",
-			config: []tailcfg.RawMessage{tailcfg.RawMessage(appOneBytes)},
-			peers: []tailcfg.NodeView{
-				(&tailcfg.Node{
-					ID:   5,
-					Name: "p5",
-					Tags: []string{"tag:one"},
-				}).View(),
-				(&tailcfg.Node{
-					ID:   6,
-					Name: "p6",
-					Tags: []string{"tag:one"},
-				}).View(),
+			want: map[string][]*dnstype.Resolver{
+				"example.com": resolver("app1"),
 			},
 		},
 		{
-			name:   "peers-that-dont-match-tags",
-			config: []tailcfg.RawMessage{tailcfg.RawMessage(appOneBytes)},
-			peers: []tailcfg.NodeView{
-				makeNodeView(5, "p5", []string{"tag:seven"}),
-				makeNodeView(6, "p6", nil),
+			name:   "single-app-multi-domain",
+			hasCap: true,
+			config: []tailcfg.RawMessage{tailcfg.RawMessage(appThreeBytes)},
+			want: map[string][]*dnstype.Resolver{
+				"woo.b.example.com": resolver("app3"),
+				"hoo.b.example.com": resolver("app3"),
 			},
 		},
 		{
-			name: "matching-tagged-connector-peers",
+			name:   "multi-app-no-overlap",
+			hasCap: true,
 			config: []tailcfg.RawMessage{
 				tailcfg.RawMessage(appOneBytes),
 				tailcfg.RawMessage(appTwoBytes),
-				tailcfg.RawMessage(appThreeBytes),
-				tailcfg.RawMessage(appFourBytes),
 			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-				nvp2,
-				nvp3,
-				nvp4,
-				makeNodeView(5, "p5", nil),
-			},
-			want: map[string][]tailcfg.NodeView{
-				// p5 has no matching tags and so doesn't appear
-				"example.com":       {nvp1},
-				"a.example.com":     {nvp3, nvp4},
-				"woo.b.example.com": {nvp2, nvp3, nvp4},
-				"hoo.b.example.com": {nvp3, nvp4},
-				"c.example.com":     {nvp2, nvp4},
+			want: map[string][]*dnstype.Resolver{
+				"example.com":   resolver("app1"),
+				"a.example.com": resolver("app2"),
 			},
 		},
 		{
-			name: "self-connector-exclude-self-domains",
+			name:   "domain-collision-last-write-wins",
+			hasCap: true,
 			config: []tailcfg.RawMessage{
-				tailcfg.RawMessage(appOneBytes),
-				tailcfg.RawMessage(appTwoBytes),
-				tailcfg.RawMessage(appThreeBytes),
-				tailcfg.RawMessage(appFourBytes),
+				tailcfg.RawMessage(appThreeBytes), // app3: woo.b.example.com, hoo.b.example.com
+				tailcfg.RawMessage(appFourBytes),  // app4: woo.b.example.com, c.example.com
 			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-				nvp2,
-				nvp3,
-				nvp4,
-			},
-			isEligibleConnector: true,
-			selfTags:            []string{"tag:three1"},
-			want: map[string][]tailcfg.NodeView{
-				// woo.b.example.com and hoo.b.example.com are covered
-				// by tag:three1, and so is this self-node.
-				// So those domains should not be routed to peers.
-				// woo.b.example.com is also covered by another tag,
-				// but still not included since this connector can route to it.
-				"example.com":   {nvp1},
-				"a.example.com": {nvp3, nvp4},
-				"c.example.com": {nvp2, nvp4},
+			want: map[string][]*dnstype.Resolver{
+				// app4 overwrites app3 for the shared domain
+				"woo.b.example.com": resolver("app4"),
+				"hoo.b.example.com": resolver("app3"),
+				"c.example.com":     resolver("app4"),
 			},
 		},
 		{
-			name: "self-eligible-connector-no-matching-tag-include-all-domains",
-			config: []tailcfg.RawMessage{
-				tailcfg.RawMessage(appOneBytes),
-				tailcfg.RawMessage(appTwoBytes),
-				tailcfg.RawMessage(appThreeBytes),
-				tailcfg.RawMessage(appFourBytes),
-			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-				nvp2,
-				nvp3,
-				nvp4,
-			},
-			isEligibleConnector: true,
-			selfTags:            []string{"tag:unrelated"},
-			want: map[string][]tailcfg.NodeView{
-				// Self has prefs set but no tags matching any app,
-				// so no domains are self-routed and all appear.
-				"example.com":       {nvp1},
-				"a.example.com":     {nvp3, nvp4},
-				"woo.b.example.com": {nvp2, nvp3, nvp4},
-				"hoo.b.example.com": {nvp3, nvp4},
-				"c.example.com":     {nvp2, nvp4},
+			name:   "wildcards-are-stripped-and-deduped",
+			hasCap: true,
+			config: []tailcfg.RawMessage{tailcfg.RawMessage(appFiveBytes)},
+			want: map[string][]*dnstype.Resolver{
+				// *.example.com and example.com should both normalize to example.com.
+				"example.com": resolver("app5"),
 			},
 		},
 		{
-			name: "self-not-eligible-connector-but-tagged-include-all-domains",
-			config: []tailcfg.RawMessage{
-				tailcfg.RawMessage(appOneBytes),
-				tailcfg.RawMessage(appTwoBytes),
-				tailcfg.RawMessage(appThreeBytes),
-				tailcfg.RawMessage(appFourBytes),
-			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-				nvp2,
-				nvp3,
-				nvp4,
-			},
-			selfTags: []string{"tag:three1"},
-			want: map[string][]tailcfg.NodeView{
-				// Even though this self node has a tag for an app
-				// the prefs don't advertise as connector, so
-				// should still route through other connectors.
-				"example.com":       {nvp1},
-				"a.example.com":     {nvp3, nvp4},
-				"woo.b.example.com": {nvp2, nvp3, nvp4},
-				"hoo.b.example.com": {nvp3, nvp4},
-				"c.example.com":     {nvp2, nvp4},
+			name:   "domains-are-normalized-and-deduped",
+			hasCap: true,
+			config: []tailcfg.RawMessage{tailcfg.RawMessage(appSixBytes)},
+			want: map[string][]*dnstype.Resolver{
+				// *.Example.com, EXAMPLE.com, EXAMPLE.COM should all normalize to example.com.
+				"example.com": resolver("app6"),
 			},
 		},
 		{
-			name: "wildcards-are-stripped-and-deduped",
-			config: []tailcfg.RawMessage{
-				tailcfg.RawMessage(appOneBytes),
-				tailcfg.RawMessage(appFiveBytes),
-			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-			},
-			want: map[string][]tailcfg.NodeView{
-				// All the domains should be normalized to example.com
-				"example.com": {nvp1},
-			},
-		},
-		{
-			name: "domains-are-normalized-and-deduped",
-			config: []tailcfg.RawMessage{
-				tailcfg.RawMessage(appSixBytes),
-			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-			},
-			want: map[string][]tailcfg.NodeView{
-				// All the domains should be normalized to example.com
-				"example.com": {nvp1},
-			},
-		},
-		{
-			name: "sub-domains-and-top-domains-do-not-collide",
+			name:   "sub-domains-and-top-domains-do-not-collide",
+			hasCap: true,
 			config: []tailcfg.RawMessage{
 				tailcfg.RawMessage(appTwoBytes),
 				tailcfg.RawMessage(appFiveBytes),
 			},
-			peers: []tailcfg.NodeView{
-				nvp1,
-				nvp3,
-			},
-			want: map[string][]tailcfg.NodeView{
-				// The sub.example.com should remain distinct from example.com
-				"example.com":   {nvp1},
-				"a.example.com": {nvp3},
+			want: map[string][]*dnstype.Resolver{
+				// *.example.com normalizes to example.com; a.example.com remains distinct.
+				"a.example.com": resolver("app2"),
+				"example.com":   resolver("app5"),
 			},
 		},
 	} {
@@ -245,18 +142,12 @@ func TestPickSplitDNSPeers(t *testing.T) {
 					tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): tt.config,
 				}
 			}
-			selfNode.Tags = append(selfNode.Tags, tt.selfTags...)
 			selfView := selfNode.View()
-			peers := map[tailcfg.NodeID]tailcfg.NodeView{}
-			for _, p := range tt.peers {
-				peers[p.ID()] = p
-			}
-			got := PickSplitDNSPeers(func(_ tailcfg.NodeCapability) bool {
-				return true
-			}, selfView, peers, tt.isEligibleConnector)
-
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("got %v, want %v", got, tt.want)
+			got := AppDNSRoutes(func(_ tailcfg.NodeCapability) bool {
+				return tt.hasCap
+			}, selfView)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("AppDNSRoutes (-want, +got):\n%s", diff)
 			}
 		})
 	}

@@ -2361,3 +2361,216 @@ func ptrToReadOnlySlice[T any](s []T) *views.Slice[T] {
 	vs := views.SliceOf(s)
 	return &vs
 }
+
+func writeTmpServeConfig(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "serve.json")
+	if err := os.WriteFile(p, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestRunServeSetConfig covers set-config accepting both the declarative
+// Services configuration file (with a "version" field) and the legacy raw
+// ipn.ServeConfig format (no "version"), the latter applying services only and
+// warning on stderr.
+func TestRunServeSetConfig(t *testing.T) {
+	const fooSvc = tailcfg.ServiceName("svc:foo")
+
+	t.Run("legacy_all_services_only", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"Services":{"svc:foo":{"TCP":{"443":{"HTTPS":true}}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if lc.setCount != 1 {
+			t.Fatalf("setCount = %d, want 1", lc.setCount)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil || !svc.TCP[443].HTTPS {
+			t.Errorf("svc:foo TCP/443 HTTPS not applied; got %+v", lc.config.Services)
+		}
+		if !slices.Contains(lc.prefs.AdvertiseServices, fooSvc.String()) {
+			t.Errorf("svc:foo not advertised; AdvertiseServices=%v", lc.prefs.AdvertiseServices)
+		}
+		if !strings.Contains(stderr.String(), "legacy raw serve config format") ||
+			!strings.Contains(stderr.String(), serveConfigDocsURL) {
+			t.Errorf("missing legacy migration warning; stderr:\n%s", stderr.String())
+		}
+		if strings.Contains(stderr.String(), "ignoring node-level fields") {
+			t.Errorf("unexpected dropped-fields warning; stderr:\n%s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout must stay clean, got:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("legacy_drops_node_level_fields", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{
+			"TCP":{"443":{"HTTPS":true}},
+			"Web":{"foo.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}},
+			"AllowFunnel":{"foo.test.ts.net:443":true},
+			"Services":{"svc:foo":{"Tun":true}}
+		}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if svc := lc.config.Services[fooSvc]; svc == nil || !svc.Tun {
+			t.Errorf("svc:foo Tun not applied; got %+v", lc.config.Services)
+		}
+		// Fields are derived from the JSON dynamically and sorted.
+		if !strings.Contains(stderr.String(), "ignoring node-level fields not supported by set-config: AllowFunnel, TCP, Web") {
+			t.Errorf("missing/incorrect dropped-fields warning; stderr:\n%s", stderr.String())
+		}
+		// Node-level content must not have leaked into the applied config.
+		if len(lc.config.TCP) != 0 || len(lc.config.Web) != 0 {
+			t.Errorf("node-level TCP/Web should not be applied; got TCP=%v Web=%v", lc.config.TCP, lc.config.Web)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout must stay clean, got:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("versionless_new_format_errors", func(t *testing.T) {
+		// A Services config file (lowercase "services"/"endpoints") that omits
+		// the required "version" field must error, not be misread as a legacy
+		// raw ServeConfig and silently wipe the existing config.
+		existing := &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			fooSvc: {Tun: true},
+		}}
+		lc := &fakeLocalServeClient{config: existing}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"services":{"svc:foo":{"endpoints":{"tcp:443":"https://localhost:8000"}}}}`)
+
+		err := e.runServeSetConfig(context.Background(), []string{path})
+		if err == nil || !strings.Contains(err.Error(), "version") {
+			t.Fatalf("err = %v, want an error mentioning the missing version field", err)
+		}
+		if lc.setCount != 0 {
+			t.Errorf("setCount = %d, want 0 (existing config must not be wiped)", lc.setCount)
+		}
+		if lc.config.Services[fooSvc] == nil {
+			t.Errorf("existing svc:foo was wiped; got %+v", lc.config.Services)
+		}
+	})
+
+	t.Run("version_0_0_0_rejected", func(t *testing.T) {
+		// A file can never forge the internal LegacyVersion ("0.0.0") sentinel
+		// that LoadServicesConfig uses to wrap a legacy raw config: it is
+		// rejected as an unsupported version, and must not wipe existing config.
+		existing := &ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			fooSvc: {Tun: true},
+		}}
+		lc := &fakeLocalServeClient{config: existing}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"version":"0.0.0","services":{}}`)
+
+		err := e.runServeSetConfig(context.Background(), []string{path})
+		if err == nil || !strings.Contains(err.Error(), `unsupported config file version "0.0.0"`) {
+			t.Fatalf("err = %v, want an 'unsupported config file version \"0.0.0\"' error", err)
+		}
+		if lc.setCount != 0 {
+			t.Errorf("setCount = %d, want 0 (existing config must not be wiped)", lc.setCount)
+		}
+		if lc.config.Services[fooSvc] == nil {
+			t.Errorf("existing svc:foo was wiped; got %+v", lc.config.Services)
+		}
+	})
+
+	t.Run("legacy_service_selects_one", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"Services":{"svc:foo":{"Tun":true},"svc:bar":{"Tun":true}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if lc.config.Services[fooSvc] == nil {
+			t.Errorf("svc:foo not applied; got %+v", lc.config.Services)
+		}
+		if lc.config.Services[tailcfg.ServiceName("svc:bar")] != nil {
+			t.Errorf("svc:bar should not be applied with --service=svc:foo; got %+v", lc.config.Services)
+		}
+	})
+
+	t.Run("legacy_service_missing_errors", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, service: tailcfg.ServiceName("svc:missing"), testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"Services":{"svc:foo":{"Tun":true}}}`)
+
+		err := e.runServeSetConfig(context.Background(), []string{path})
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("err = %v, want a 'not found' error", err)
+		}
+		if lc.setCount != 0 {
+			t.Errorf("setCount = %d, want 0", lc.setCount)
+		}
+	})
+
+	t.Run("both_flags_error", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, allServices: true, service: fooSvc, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		err := e.runServeSetConfig(context.Background(), []string{"unused.json"})
+		if err == nil || !strings.Contains(err.Error(), "cannot specify both") {
+			t.Fatalf("err = %v, want 'cannot specify both'", err)
+		}
+	})
+
+	t.Run("neither_flag_error", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		err := e.runServeSetConfig(context.Background(), []string{"unused.json"})
+		if err == nil || !strings.Contains(err.Error(), "must specify either") {
+			t.Fatalf("err = %v, want 'must specify either'", err)
+		}
+	})
+
+	t.Run("new_format_all_no_warning", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:443":"https://localhost:8000"}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if lc.setCount != 1 {
+			t.Fatalf("setCount = %d, want 1", lc.setCount)
+		}
+		if lc.config.Services[fooSvc] == nil {
+			t.Errorf("svc:foo not applied; got %+v", lc.config.Services)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("new format must not warn; stderr:\n%s", stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout must stay clean, got:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("new_format_single_service_no_warning", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"https://localhost:8000"}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		if lc.config.Services[fooSvc] == nil {
+			t.Errorf("svc:foo not applied; got %+v", lc.config.Services)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("new format must not warn; stderr:\n%s", stderr.String())
+		}
+	})
+}

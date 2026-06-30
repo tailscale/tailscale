@@ -16,7 +16,7 @@ import (
 	"tailscale.com/tka"
 )
 
-// PrintNetworkLockLogJSONV1 prints the stored TKA state as a JSON object to the CLI,
+// PrintTailnetLockLogJSONV1 prints the stored TKA state as a JSON object to the CLI,
 // in a stable "v1" format.
 //
 // This format includes:
@@ -24,7 +24,7 @@ import (
 //   - the AUM hash as a base32-encoded string
 //   - the raw AUM as base64-encoded bytes
 //   - the expanded AUM, which prints named fields for consumption by other tools
-func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpdate) error {
+func PrintTailnetLockLogJSONV1(out io.Writer, updates []ipnstate.TailnetLockUpdate) error {
 	messages := make([]logMessageV1, len(updates))
 
 	for i, update := range updates {
@@ -57,9 +57,9 @@ func PrintNetworkLockLogJSONV1(out io.Writer, updates []ipnstate.NetworkLockUpda
 	return enc.Encode(result)
 }
 
-// toLogMessageV1 converts a [tka.AUM] and [ipnstate.NetworkLockUpdate] to the
+// toLogMessageV1 converts a [tka.AUM] and [ipnstate.TailnetLockUpdate] to the
 // JSON output returned by the CLI.
-func toLogMessageV1(aum tka.AUM, update ipnstate.NetworkLockUpdate) logMessageV1 {
+func toLogMessageV1(aum tka.AUM, update ipnstate.TailnetLockUpdate) logMessageV1 {
 	expandedAUM := expandedAUMV1{}
 	expandedAUM.MessageKind = aum.MessageKind.String()
 	if len(aum.PrevAUMHash) > 0 {

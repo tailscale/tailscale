@@ -1365,8 +1365,12 @@ func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error)
 //
 // A default set of ipn.Notify messages are returned but the set can be modified by mask.
 func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IPNBusWatcher, error) {
+	m, err := mask.MarshalText()
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+fmt.Sprint(mask),
+		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+string(m),
 		nil)
 	if err != nil {
 		return nil, err

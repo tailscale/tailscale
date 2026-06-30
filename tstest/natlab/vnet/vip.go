@@ -21,6 +21,7 @@ var (
 	fakeSyslog            = newVIP("syslog.tailscale", 9)
 	fakeCloudInit         = newVIP("cloud-init.tailscale", 5) // serves cloud-init metadata/userdata per node
 	fakeFiles             = newVIP("files.tailscale", 6)      // serves binary files (tta, tailscale, tailscaled) to VMs
+	fakeACME              = newVIP("acme.example", 7)         // fake ACME CA for vmtests
 
 	// FakeDualStackWeb is a dual-stack webserver VIP used by
 	// TestExitNodeV4Only to verify that traffic works through an

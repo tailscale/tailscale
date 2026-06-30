@@ -323,7 +323,7 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 					// after mw.TimeToVisible / 2.
 				}
 
-				// Advance time to get past the the TimeToVisible duration.
+				// Advance time to get past the TimeToVisible duration.
 				// The watcher should be notified of the unhealthy state.
 				clock.Advance(mw.TimeToVisible/2 + 1)
 				<-becameUnhealthy
@@ -340,7 +340,7 @@ func TestSetUnhealthyWithTimeToVisible(t *testing.T) {
 				ht.SetUnhealthy(mw, Args{ArgError: "Hello world"})
 				ht.SetHealthy(mw)
 
-				// Advance to get past the the TimeToVisible delay.
+				// Advance to get past the TimeToVisible delay.
 				clock.Advance(mw.TimeToVisible * 2)
 				synctest.Wait()
 
@@ -577,7 +577,7 @@ func TestNoDERPHomeWarnable(t *testing.T) {
 	clock.Advance(30 * time.Second)
 	ht.updateBuiltinWarnablesLocked()
 
-	// Advance to get past the the TimeToVisible delay.
+	// Advance to get past the TimeToVisible delay.
 	clock.Advance(noDERPHomeWarnable.TimeToVisible * 2)
 
 	ht.updateBuiltinWarnablesLocked()

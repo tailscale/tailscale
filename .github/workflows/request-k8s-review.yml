@@ -1,0 +1,39 @@
+name: request-k8s-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/request-k8s-review.yml"
+      - "k8s-operator/**"
+      - "kube/**"
+      - "cmd/k8s-operator/**"
+      - "cmd/k8s-proxy/**"
+      - "cmd/k8s-nameserver/**"
+      - "cmd/containerboot/**"
+      - "cmd/sync-containers/**"
+      - "ipn/store/kubestore/**"
+      - "docs/k8s/**"
+      - "!**/depaware.txt"
+
+jobs:
+  request-k8s-review:
+    if: github.event.pull_request.draft == false
+    name: Request K8s Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get access token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: generate-token
+        with:
+          # Get token for app: https://github.com/apps/change-visibility-bot
+          app-id: ${{ secrets.VISIBILITY_BOT_APP_ID }}
+          private-key: ${{ secrets.VISIBILITY_BOT_APP_PRIVATE_KEY }}
+          # Limit the token to only requesting reviewers on pull requests.
+          permission-pull-requests: write
+      - name: Add reviewers
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          url: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr edit "$url" --add-reviewer tailscale/k8s-devs

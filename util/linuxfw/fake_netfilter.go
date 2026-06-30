@@ -94,8 +94,8 @@ func (f *FakeNetfilterRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error 
 func (f *FakeNetfilterRunner) GetClampedAddrs() []netip.Addr {
 	return f.clampedAddrs
 }
-func (f *FakeNetfilterRunner) AddMagicsockPortRule(port uint16, network string) error   { return nil }
-func (f *FakeNetfilterRunner) DelMagicsockPortRule(port uint16, network string) error   { return nil }
+func (f *FakeNetfilterRunner) AddMagicsockPortRule(port uint16, network string) error { return nil }
+func (f *FakeNetfilterRunner) DelMagicsockPortRule(port uint16, network string) error { return nil }
 func (f *FakeNetfilterRunner) DeletePortMapRuleForSvc(svc, tun string, targetIP netip.Addr, pm PortMap) error {
 	return nil
 }

@@ -80,7 +80,7 @@ func BenchmarkGiantTailnetBusWatcher(b *testing.B) {
 // The wait mechanism differs by variant:
 //
 //   - busWatcher=false: block on a channel returned by
-//     [ipnlocal.LocalBackend.AwaitNodeKeyForTest] (reached via
+//     [ipnlocal.forTest.AwaitNodeKey] (reached via
 //     [tsnet.TestHooks]). The channel is closed by LocalBackend the moment
 //     the just-added peer's key appears in the netmap, so the wait has zero
 //     polling overhead.
@@ -209,7 +209,7 @@ func benchGiantTailnet(b *testing.B, busWatcher bool) {
 			// the just-added peer key has landed in the netmap.
 			// No polling, no notify fan-out cost.
 			select {
-			case <-lb.AwaitNodeKeyForTest(added.Key):
+			case <-lb.ForTest().AwaitNodeKey(added.Key):
 			case <-time.After(10 * time.Second):
 				b.Fatalf("timed out waiting for node key %v", added.Key)
 			case <-ctx.Done():

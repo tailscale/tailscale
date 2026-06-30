@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,25 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+// GokrazyUpdateArgs contains arguments for updating a Gokrazy appliance from a
+// GAF fetched from a URL.
+type GokrazyUpdateArgs struct {
+	// URL is the GAF download URL.
+	URL string
+
+	// AllowUnsigned permits installing a GAF without signature verification.
+	// It is intended for tests that serve a GAF from a fileserver that does
+	// not publish distsign.pub.
+	AllowUnsigned bool
+
+	// Logf is optional; nil discards log messages.
+	Logf logger.Logf
+}
+
+// GokrazyUpdateFromURL updates a Gokrazy appliance from a GAF fetched from a
+// URL, if Gokrazy update support is linked into the binary.
+var GokrazyUpdateFromURL feature.Hook[func(context.Context, GokrazyUpdateArgs) error]
 
 const (
 	StableTrack           = "stable"
@@ -197,6 +217,17 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
 			// release cadence with Synology Package Center and use their
 			// auto-update mechanism.
 			return up.updateSynology, false
+		case distro.Gokrazy:
+			// Only the official Tailscale appliance image (built with the
+			// ts_appliance build tag, which causes hostinfo to report
+			// Package="tsapp") is auto-updatable. A user running a custom
+			// Gokrazy build that happens to include tailscaled must not be
+			// updated with our stock GAFs. TS_FORCE_ALLOW_TSAPP_UPDATE is an
+			// escape hatch for callers who know what they're doing.
+			if hi.Package != "tsapp" && !envknob.Bool("TS_FORCE_ALLOW_TSAPP_UPDATE") {
+				return nil, false
+			}
+			return up.updateGokrazy, true
 		case distro.Debian: // includes Ubuntu
 			return up.updateDebLike, true
 		case distro.Arch:
@@ -864,6 +895,56 @@ func (up *Updater) updateFreeBSD() (err error) {
 	return nil
 }
 
+// updateGokrazy fetches the latest signed GAF for this gokrazy device variant
+// (vm-amd64, vm-arm64, or pi-arm64) from up.PkgsAddr and applies it via the
+// local gokrazy init update API.
+func (up *Updater) updateGokrazy() error {
+	if !GokrazyUpdateFromURL.IsSet() {
+		return errors.New("gokrazy update support is not linked into this binary")
+	}
+	variant, err := gokrazyDeviceVariant()
+	if err != nil {
+		return err
+	}
+	latest, err := latestPackages(up.Track)
+	if err != nil {
+		return err
+	}
+	gafName, ok := latest.GAFs[variant]
+	if !ok {
+		return fmt.Errorf("no GAF for device %q on %q track", variant, up.Track)
+	}
+	if latest.GAFsVersion == "" {
+		return fmt.Errorf("no GAF version on %q track", up.Track)
+	}
+	if !up.confirm(latest.GAFsVersion) {
+		return nil
+	}
+	gafURL := fmt.Sprintf("%s/%s/%s", strings.TrimRight(up.PkgsAddr, "/"), up.Track, gafName)
+	up.Logf("Updating to %s (%s)", latest.GAFsVersion, gafURL)
+	return GokrazyUpdateFromURL.Get()(context.Background(), GokrazyUpdateArgs{
+		URL:  gafURL,
+		Logf: up.Logf,
+	})
+}
+
+// gokrazyDeviceVariant returns the GAFs JSON key for the current gokrazy
+// device, e.g. "vm-amd64", "vm-arm64", or "pi-arm64". On arm64, it reads the
+// device-tree model to tell a Raspberry Pi apart from a VM.
+func gokrazyDeviceVariant() (string, error) {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "vm-amd64", nil
+	case "arm64":
+		b, _ := os.ReadFile("/sys/firmware/devicetree/base/model")
+		if strings.HasPrefix(strings.Trim(string(b), "\x00\r\n\t "), "Raspberry Pi") {
+			return "pi-arm64", nil
+		}
+		return "vm-arm64", nil
+	}
+	return "", fmt.Errorf("unsupported gokrazy GOARCH %q", runtime.GOARCH)
+}
+
 func (up *Updater) updateLinuxBinary() error {
 	// Root is needed to overwrite binaries and restart systemd unit.
 	if err := requireRoot(); err != nil {
@@ -1236,8 +1317,11 @@ func LatestTailscaleVersion(track string) (string, error) {
 		ver = latest.MacZipsVersion
 	case "linux":
 		ver = latest.TarballsVersion
-		if distro.Get() == distro.Synology {
+		switch distro.Get() {
+		case distro.Synology:
 			ver = latest.SPKsVersion
+		case distro.Gokrazy:
+			ver = latest.GAFsVersion
 		}
 	}
 
@@ -1255,6 +1339,8 @@ type trackPackages struct {
 	ExesVersion     string
 	MSIs            map[string]string
 	MSIsVersion     string
+	GAFs            map[string]string
+	GAFsVersion     string
 	MacZips         map[string]string
 	MacZipsVersion  string
 	SPKs            map[string]map[string]string

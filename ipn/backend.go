@@ -6,6 +6,7 @@ package ipn
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,7 +157,123 @@ const (
 	// promotes any patch into a full-Node entry in [Notify.PeersChanged]
 	// for this session, at the cost of bandwidth.
 	NotifyPeerPatches NotifyWatchOpt = 1 << 15
+
+	// NotifyInProcessNoDisconnect, if set, marks this watcher as an
+	// in-process subscriber that must not be disconnected for falling behind
+	// on its notification queue. Instead, if its queue fills, Notify
+	// production blocks until the watcher catches up.
+	//
+	// Callers using this bit must receive and process notifications promptly.
+	// Their callbacks must not call back into LocalBackend or wait on work that
+	// might call back into LocalBackend, because the producer might be holding
+	// LocalBackend's mutex while waiting for the watcher to catch up.
+	//
+	// This bit is only valid for in-process callers of
+	// LocalBackend.WatchNotificationsAs. LocalAPI WatchIPNBus clients must
+	// not request it.
+	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
+
+	// NotifyPeerWireGuardState, if set, opts the watcher into
+	// WireGuard session state notifications via [Notify.PeerState].
+	// The first Notify sent to the watcher includes a dump of current
+	// non-zero peer states, and subsequent Notifies include per-peer
+	// state changes.
+	NotifyPeerWireGuardState NotifyWatchOpt = 1 << 18
 )
+
+// String implements the [fmt.Stringer] interface.
+// Returns the string representation of all the bits joined by the bitwise-or "|" operator.
+func (o NotifyWatchOpt) String() string {
+	if o == NotifyWatchOpt(0) {
+		return fmt.Sprintf("%T(%#x)", o, uint64(o))
+	}
+
+	pkg, _, found := strings.Cut(fmt.Sprintf("%T", o), ".")
+
+	var bits []string
+	var mask NotifyWatchOpt
+	try := func(bit NotifyWatchOpt, s string) {
+		if o&bit == 0 {
+			return
+		}
+		if found {
+			bits = append(bits, pkg+"."+s)
+		} else {
+			bits = append(bits, s)
+		}
+		mask |= bit
+	}
+	try(NotifyWatchEngineUpdates, "NotifyWatchEngineUpdates")
+	try(NotifyInitialState, "NotifyInitialState")
+	try(NotifyInitialPrefs, "NotifyInitialPrefs")
+	try(NotifyInitialNetMap, "NotifyInitialNetMap")
+	try(NotifyNoPrivateKeys, "NotifyNoPrivateKeys")
+	try(NotifyInitialDriveShares, "NotifyInitialDriveShares")
+	try(NotifyInitialOutgoingFiles, "NotifyInitialOutgoingFiles")
+	try(NotifyInitialHealthState, "NotifyInitialHealthState")
+	try(NotifyRateLimit, "NotifyRateLimit")
+	try(NotifyHealthActions, "NotifyHealthActions")
+	try(NotifyInitialSuggestedExitNode, "NotifyInitialSuggestedExitNode")
+	try(NotifyInitialClientVersion, "NotifyInitialClientVersion")
+	try(NotifyPeerChanges, "NotifyPeerChanges")
+	try(NotifyNoNetMap, "NotifyNoNetMap")
+	try(NotifyInitialStatus, "NotifyInitialStatus")
+	try(NotifyPeerPatches, "NotifyPeerPatches")
+	try(NotifyInProcessNoDisconnect, "NotifyInProcessNoDisconnect")
+	try(NotifyPeerWireGuardState, "NotifyPeerWireGuardState")
+
+	if mask != o {
+		bits = append(bits, fmt.Sprintf("%T(%#x)", o, uint64(o^mask))) // unknown
+	}
+
+	if len(bits) == 1 {
+		return bits[0]
+	}
+	// Multiple values, so we need to wrap with parentheses.
+	return "(" + strings.Join(bits, " | ") + ")"
+}
+
+// AppendText implements the [encoding.TextAppender] interface
+// by encoding its textual representation.
+func (o NotifyWatchOpt) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendUint(b, uint64(o), 10), nil
+}
+
+// MarshalText implements the [encoding.TextMarshaler] interface
+// by encoding its textual representation.
+func (o NotifyWatchOpt) MarshalText() (text []byte, err error) {
+	return o.AppendText(nil)
+}
+
+// UnmarshalText implements the [encoding.TextUnmarshaler] interface
+// by decoding its textual representation.
+func (o *NotifyWatchOpt) UnmarshalText(text []byte) error {
+	v, err := strconv.ParseUint(string(text), 10, 64)
+	if err != nil {
+		return err
+	}
+	*o = NotifyWatchOpt(v)
+	return nil
+}
+
+// NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
+// subscription bits that cannot be combined with [NotifyRateLimit].
+//
+// Those bits describe stateful delta streams. Randomly delaying or merging
+// messages in those streams would break the consumer's ability to maintain a
+// coherent local view.
+const NotifyRateLimitIncompatibleBits = NotifyPeerChanges | NotifyNoNetMap | NotifyInitialStatus | NotifyPeerPatches
+
+// ValidateNotifyWatchOpt reports whether mask is a valid WatchIPNBus
+// subscription mask.
+func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
+	if mask&NotifyRateLimit != 0 {
+		if bad := mask & NotifyRateLimitIncompatibleBits; bad != 0 {
+			return fmt.Errorf("NotifyRateLimit is incompatible with new-style IPN bus subscription bits %v", bad)
+		}
+	}
+	return nil
+}
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
 // (cmd/tailscale, iOS, macOS, Win Tasktray).
@@ -281,6 +398,10 @@ type Notify struct {
 	// the per-field accessors to read them.
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfileView `json:",omitzero"`
 
+	// PeerState, if non-empty, carries WireGuard session states keyed by stable
+	// node ID. Watchers must opt in via [NotifyPeerWireGuardState].
+	PeerState map[tailcfg.StableNodeID]PeerState `json:",omitzero"`
+
 	Engine      *EngineStatus // if non-nil, the new or current wireguard stats
 	BrowseToURL *string       // if non-nil, UI should open a browser right now
 
@@ -335,6 +456,71 @@ type Notify struct {
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
 
+// PeerWireGuardState is the WireGuard session state for a peer.
+//
+// It JSON-marshals as a lowercase string (e.g. "handshake", "established")
+// rather than its integer value, so the wire format does not depend on the
+// numeric constants below.
+type PeerWireGuardState uint8
+
+const (
+	PeerWireGuardStateNone        PeerWireGuardState = 0
+	PeerWireGuardStateHandshake   PeerWireGuardState = 1
+	PeerWireGuardStateEstablished PeerWireGuardState = 2
+	PeerWireGuardStateExpired     PeerWireGuardState = 3
+)
+
+// String returns the lowercase string form of s used by [PeerWireGuardState.MarshalText].
+func (s PeerWireGuardState) String() string {
+	switch s {
+	case PeerWireGuardStateNone:
+		return "none"
+	case PeerWireGuardStateHandshake:
+		return "handshake"
+	case PeerWireGuardStateEstablished:
+		return "established"
+	case PeerWireGuardStateExpired:
+		return "expired"
+	}
+	return fmt.Sprintf("PeerWireGuardState(%d)", uint8(s))
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (s PeerWireGuardState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (s *PeerWireGuardState) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "none":
+		*s = PeerWireGuardStateNone
+	case "handshake":
+		*s = PeerWireGuardStateHandshake
+	case "established":
+		*s = PeerWireGuardStateEstablished
+	case "expired":
+		*s = PeerWireGuardStateExpired
+	default:
+		return fmt.Errorf("unknown PeerWireGuardState %q", b)
+	}
+	return nil
+}
+
+// PeerState is the per-peer WireGuard session state delivered in
+// [Notify.PeerState].
+type PeerState struct {
+	// PeerWireGuardState is the current WireGuard session state for the peer.
+	PeerWireGuardState PeerWireGuardState
+
+	// PeerWireGuardStateAt is the wall-clock time at which the peer entered
+	// [PeerState.PeerWireGuardState], as observed by tailscaled.
+	// It is tracked by [LocalBackend] even when no watchers are subscribed,
+	// so a later subscriber's initial snapshot reflects the true transition
+	// time rather than the subscription time.
+	PeerWireGuardStateAt time.Time
+}
+
 func (n Notify) String() string {
 	var sb strings.Builder
 	sb.WriteString("Notify{")
@@ -355,6 +541,9 @@ func (n Notify) String() string {
 	}
 	if n.PeerChangedPatch != nil {
 		fmt.Fprintf(&sb, "PeerChangedPatch(%d) ", len(n.PeerChangedPatch))
+	}
+	if len(n.PeerState) > 0 {
+		fmt.Fprintf(&sb, "PeerState(%d) ", len(n.PeerState))
 	}
 	if n.Engine != nil {
 		fmt.Fprintf(&sb, "wg=%v ", *n.Engine)

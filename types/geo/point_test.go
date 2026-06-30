@@ -41,7 +41,7 @@ func TestPointZero(t *testing.T) {
 	}
 
 	wantI := uint64(0x00000000)
-	if i, err := zero.MarshalUint64(); err != nil {
+	if i, err := zero.MarshalScalar(); err != nil {
 		t.Errorf("MarshalUint64() err %q, want nil", err)
 	} else if i != wantI {
 		t.Errorf("MarshalUint64 got %v, want %v", i, wantI)
@@ -358,13 +358,13 @@ func TestPoint(t *testing.T) {
 				t.Errorf("UnmarshalBinary: roundtrip failed: %#v != %#v", q, p)
 			}
 
-			i, err := p.MarshalUint64()
+			i, err := p.MarshalScalar()
 			if err != nil {
 				t.Fatalf("MarshalUint64: err %q, expected nil", err)
 			}
 
 			var r geo.Point
-			if err := r.UnmarshalUint64(i); err != nil {
+			if err := r.UnmarshalScalar(i); err != nil {
 				t.Fatalf("UnmarshalUint64: err %r, expected nil", err)
 			}
 			if !q.EqualApprox(r, -1) {
@@ -414,12 +414,12 @@ func TestPointMarshalBinary(t *testing.T) {
 func TestPointMarshalUint64(t *testing.T) {
 	t.Skip("skip")
 	roundtrip := func(p geo.Point) error {
-		i, err := p.MarshalUint64()
+		i, err := p.MarshalScalar()
 		if err != nil {
 			return fmt.Errorf("marshal: %v", err)
 		}
 		var q geo.Point
-		if err := q.UnmarshalUint64(i); err != nil {
+		if err := q.UnmarshalScalar(i); err != nil {
 			return fmt.Errorf("unmarshal: %v", err)
 		}
 		if q != p {

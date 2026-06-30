@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install govulncheck
-        run: ./tool/go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: ./tool/go install golang.org/x/vuln/cmd/govulncheck@0782b76014f15f24e22a438f30f308df42899ba1 # 1.3.0
 
       - name: Scan source code for known vulnerabilities
         run: PATH=$PWD/tool/:$PATH "$(./tool/go env GOPATH)/bin/govulncheck" -test ./...

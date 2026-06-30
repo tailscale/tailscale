@@ -70,7 +70,7 @@ jobs:
         run: go mod download
       - name: Cache Go modules
         if: steps.check-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
         with:
           path: gomodcache # relative to workspace; see env note at top of file
           key: ${{ steps.hash.outputs.key }}
@@ -183,7 +183,7 @@ jobs:
         TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
       working-directory: src
-      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
+      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
@@ -261,6 +261,7 @@ jobs:
         cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
 
     - name: test
+      shell: bash
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
       run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
@@ -268,9 +269,10 @@ jobs:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
     - name: bench all
+      shell: bash
       if: matrix.key == 'win-bench'
       working-directory: src
-      run: ./tool/go test ./... -bench=. -benchtime=1x -run="^$"
+      run: ./tool/go test -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
@@ -343,7 +345,7 @@ jobs:
     needs: gomod-cache
     runs-on: ubuntu-24.04
     container:
-      image: golang:latest
+      image: golang:latest # zizmor: ignore[unpinned-images]
       options: --privileged
     steps:
     - name: checkout

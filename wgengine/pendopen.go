@@ -68,7 +68,6 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 	res = filter.Accept // always
 
 	if pp.IPProto == ipproto.TSMP {
-		res = filter.DropSilently
 		rh, ok := pp.AsTailscaleRejectedHeader()
 		if !ok {
 			return
@@ -77,6 +76,14 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 			e.noteFlowProblemFromPeer(tsRejectFlow(rh), rh.Reason)
 		} else if f := tsRejectFlow(rh); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
+		}
+		switch rh.Reason {
+		case packet.RejectedDueToUnknownAppConnectorTransitIP:
+			// Keep res = filter.Accept, don't drop this packet because it will
+			// be used later for further communication between app connector
+			// and client.
+		default:
+			res = filter.DropSilently
 		}
 		return
 	}

@@ -5,10 +5,13 @@ package conn25
 
 import (
 	"container/list"
+	"context"
 	"sync"
+	"time"
 
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime/mono"
 )
 
 // PacketAction may modify the packet.
@@ -29,6 +32,12 @@ type TupleAndAction struct {
 type FlowData struct {
 	FromTun TupleAndAction
 	FromWG  TupleAndAction
+
+	// OnRemove, if non-nil, is invoked when the flow is removed from the
+	// table for any reason (idle expiration, tuple-collision displacement
+	// in [FlowTable.NewFlow], or capacity eviction). It is called once,
+	// outside the table's mutex, so it may safely acquire other locks.
+	OnRemove func()
 }
 
 // Origin is used to track the direction of a flow.
@@ -48,8 +57,7 @@ const (
 type cachedFlow struct {
 	data FlowData // user-defined tuples and actions for both directions
 
-	// lastSeen time.Time // tracks when the flow was last hit for expiration management
-	// onRemove func()    // fires on removal/expiration (e.g. update watchers, send RST to client)
+	lastSeen mono.Time // tracks when the flow was last hit for expiration management
 }
 
 // FlowTable stores and retrieves [FlowData] that can be looked up
@@ -59,22 +67,81 @@ type cachedFlow struct {
 // of entries is specified in calls to [NewFlowTable]. FlowTable has
 // its own mutex and is safe for concurrent use.
 type FlowTable struct {
+	maxEntries         int
+	idleTimeout        time.Duration
+	sweepInterval      time.Duration
+	maxRemovedPerSweep int
+
 	mu           sync.Mutex
 	fromTunCache map[flowtrack.Tuple]*list.Element
 	fromWGCache  map[flowtrack.Tuple]*list.Element
 	lru          *list.List
-	maxEntries   int
+}
+
+const (
+	// DefaultFlowIdleTimeout is the default idle timeout for a flow.
+	// See also [WithFlowIdleTimeout].
+	DefaultFlowIdleTimeout = 5 * time.Minute
+	// DefaultFlowSweepInterval is the default sweep interval for
+	// automatically removing expired flows. See also [WithFlowSweepInterval].
+	DefaultFlowSweepInterval = 3 * time.Minute
+	// DefaultMaxRemovedFlowsPerSweep is the default maximum number of
+	// flows removed per sweep. It can be used to tune how long the table
+	// mutex is held during sweeps. See also [WithMaxRemovedFlowsPerSweep].
+	DefaultMaxRemovedFlowsPerSweep = 1000
+)
+
+// FlowTableOption configures options for use with [NewFlowTable].
+type FlowTableOption func(ft *FlowTable)
+
+// WithFlowIdleTimeout sets the threshold duration for flow idle time
+// before it is eligible for removal. A flow is considered idle for the
+// time that elapses since its creation or last lookup. A duration of
+// 0 means that expiration is disabled. If WithFlowIdleTimeout is not
+// passed to [NewFlowTable], then [DefaultFlowIdleTimeout] is used.
+func WithFlowIdleTimeout(timeout time.Duration) FlowTableOption {
+	return func(ft *FlowTable) {
+		ft.idleTimeout = timeout
+	}
+}
+
+// WithFlowSweepInterval sets the interval to automatically
+// remove idle flows that exceed the idle timeout. A value of 0
+// disables automatic sweeping. If WithFlowSweepInterval is not
+// passed to [NewFlowTable], then [DefaultFlowSweepInterval] is used.
+func WithFlowSweepInterval(ival time.Duration) FlowTableOption {
+	return func(ft *FlowTable) {
+		ft.sweepInterval = ival
+	}
+}
+
+// WithMaxRemovedFlowsPerSweep sets maximum number of expired
+// flows that can be removed per sweep. A value of 0 means no
+// maximum. If WithMaxRemovedFlowsPerSweep is not passed to
+// [NewFlowTable], then [DefaultMaxRemovedFlowsPerSweep] is used.
+func WithMaxRemovedFlowsPerSweep(maxPer int) FlowTableOption {
+	return func(ft *FlowTable) {
+		ft.maxRemovedPerSweep = maxPer
+	}
 }
 
 // NewFlowTable returns a [FlowTable] with maxEntries maximum entries.
 // A maxEntries of 0 indicates no maximum. See also [FlowTable].
-func NewFlowTable(maxEntries int) *FlowTable {
-	return &FlowTable{
-		fromTunCache: make(map[flowtrack.Tuple]*list.Element, maxEntries),
-		fromWGCache:  make(map[flowtrack.Tuple]*list.Element, maxEntries),
-		lru:          list.New(),
-		maxEntries:   maxEntries,
+func NewFlowTable(maxEntries int, opts ...FlowTableOption) *FlowTable {
+	ft := &FlowTable{
+		maxEntries:         maxEntries,
+		idleTimeout:        DefaultFlowIdleTimeout,
+		sweepInterval:      DefaultFlowSweepInterval,
+		maxRemovedPerSweep: DefaultMaxRemovedFlowsPerSweep,
+		fromTunCache:       make(map[flowtrack.Tuple]*list.Element, maxEntries),
+		fromWGCache:        make(map[flowtrack.Tuple]*list.Element, maxEntries),
+		lru:                list.New(),
 	}
+
+	for _, o := range opts {
+		o(ft)
+	}
+	return ft
 }
 
 // LookupFromTunDevice looks up a [PacketAction] that is valid to run on packets
@@ -123,7 +190,7 @@ func (t *FlowTable) lookup(k flowtrack.Tuple, dir Origin) (PacketAction, bool) {
 	// Support LRU.
 	t.lru.MoveToFront(ele)
 
-	// TODO(mzb): Update flow.lastSeen.
+	flow.lastSeen = mono.Now()
 
 	return action, true
 }
@@ -134,39 +201,103 @@ func (t *FlowTable) lookup(k flowtrack.Tuple, dir Origin) (PacketAction, bool) {
 // would cause the table to exceed its maximum size, the least recently used
 // (looked-up or created) flow is evicted. data is not validated, the caller must
 // supply non-nil packet actions.
-func (t *FlowTable) NewFlow(data FlowData) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+//
+// Any [FlowData.OnRemove] callbacks belonging to displaced or evicted flows are
+// invoked after the table's mutex is released, before NewFlow returns.
+func (t *FlowTable) NewFlow(data FlowData) {
+	var onRemoves []func()
 
+	t.mu.Lock()
 	// If either tuple leads to anything existing, remove it.
-	t.removeFlowLocked(t.fromTunCache[data.FromTun.Tuple])
-	t.removeFlowLocked(t.fromWGCache[data.FromWG.Tuple])
+	onRemoves = append(onRemoves, t.removeFlowLocked(t.fromTunCache[data.FromTun.Tuple]))
+	onRemoves = append(onRemoves, t.removeFlowLocked(t.fromWGCache[data.FromWG.Tuple]))
 
 	flow := &cachedFlow{
-		data: data,
-		// Populate lastSeen
-		// Populate onRemove()
+		data:     data,
+		lastSeen: mono.Now(),
 	}
 
 	ele := t.lru.PushFront(flow)
 	if t.maxEntries > 0 && t.lru.Len() > t.maxEntries {
-		t.removeFlowLocked(t.lru.Back())
+		onRemoves = append(onRemoves, t.removeFlowLocked(t.lru.Back()))
 	}
 
 	t.fromTunCache[data.FromTun.Tuple] = ele
 	t.fromWGCache[data.FromWG.Tuple] = ele
+	t.mu.Unlock()
 
-	return nil
+	for _, onRemove := range onRemoves {
+		if onRemove != nil {
+			onRemove()
+		}
+	}
 }
 
-func (t *FlowTable) removeFlowLocked(ele *list.Element) {
-	if ele == nil {
+// StartExpiredSweeper starts a sweeper that removes idle flows that have
+// not been created or looked up for a duration greater than the configured
+// idle timeout. See [WithFlowIdleTimeout]. The sweep runs at the configured
+// sweep interval. See [WithFlowSweepInterval]. The sweeper stops when ctx
+// is canceled.
+func (t *FlowTable) StartExpiredSweeper(ctx context.Context) {
+	if t.sweepInterval == 0 || t.idleTimeout == 0 {
 		return
+	}
+
+	ticker := time.NewTicker(t.sweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.removeIdle(mono.Now())
+		}
+	}
+}
+
+func (t *FlowTable) removeIdle(now mono.Time) int {
+	if t.idleTimeout == 0 {
+		return 0
+	}
+
+	var onRemoves []func()
+	t.mu.Lock()
+
+	removed := 0
+	for ele := t.lru.Back(); ele != nil; ele = t.lru.Back() {
+		if t.maxRemovedPerSweep > 0 && removed >= t.maxRemovedPerSweep {
+			break
+		}
+		flow := ele.Value.(*cachedFlow)
+		if now.Sub(flow.lastSeen) <= t.idleTimeout {
+			break
+		}
+		onRemoves = append(onRemoves, t.removeFlowLocked(ele))
+		removed++
+	}
+	t.mu.Unlock()
+
+	for _, onRemove := range onRemoves {
+		if onRemove != nil {
+			onRemove()
+		}
+	}
+
+	return removed
+}
+
+// removeFlowLocked detaches the flow at ele from t, and returns the flow's
+// [FlowData.OnRemove] callback, which may be nil. The caller must hold the
+// mutex while calling removeFlowLocked, and release it before invoking the
+// callback.
+func (t *FlowTable) removeFlowLocked(ele *list.Element) func() {
+	if ele == nil {
+		return nil
 	}
 
 	flow := t.lru.Remove(ele).(*cachedFlow)
 	delete(t.fromTunCache, flow.data.FromTun.Tuple)
 	delete(t.fromWGCache, flow.data.FromWG.Tuple)
 
-	// TODO(mzb): run flow.onRemove()
+	return flow.data.OnRemove
 }

@@ -130,7 +130,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +139,7 @@ import (
 	"github.com/benbjohnson/immutable"
 	"golang.org/x/sys/unix"
 
+	"tailscale.com/client/local"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -150,7 +150,6 @@ import (
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -209,6 +208,23 @@ func (s netmapState) updateFromNotify(n ipn.Notify) netmapState {
 	for _, id := range n.PeersRemoved {
 		if s.peersByID != nil {
 			s.peersByID = s.peersByID.Delete(id)
+		}
+	}
+	return s
+}
+
+// processNotify updates the netmap state from an IPN bus Notify. On
+// SelfChange it also refetches DNS via the LocalAPI dns-config
+// endpoint; the bus carries no DNS delta.
+func (s netmapState) processNotify(ctx context.Context, client *local.Client, n ipn.Notify) netmapState {
+	s = s.updateFromNotify(n)
+	if n.SelfChange != nil {
+		dns, err := client.DNSConfig(ctx)
+		if err != nil {
+			log.Printf("error refreshing DNS config from tailscaled: %v", err)
+		} else if dns != nil {
+			s.dnsExtraRecords = views.SliceOf(dns.ExtraRecords)
+			s.certDomains = views.SliceOf(dns.CertDomains)
 		}
 	}
 	return s
@@ -705,7 +721,7 @@ runLoop:
 		case err := <-cfgWatchErrChan:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
-			nmState = nmState.updateFromNotify(n)
+			nmState = nmState.processNotify(ctx, client, n)
 			if state, ok := notifyState(n); ok && state != ipn.Running {
 				// Something's gone wrong and we've left the authenticated state.
 				// Our container image never recovered gracefully from this, and the
@@ -1140,9 +1156,8 @@ func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 	if svcIPs := serviceIPsFromNetMap(nm, dnsFQDN); len(svcIPs) != 0 {
 		return svcIPs, nil
 	}
-
 	// If not found yet, check for a matching 4via6 DNS name.
-	if addr, ok := resolveViaDomain(dnsFQDN); ok {
+	if addr, ok := kubeutils.ResolveViaDomain(dnsFQDN.WithTrailingDot()); ok {
 		prefix := netip.PrefixFrom(addr, addr.BitLen())
 		for nn := range nm.peers() {
 			for _, allowedIP := range nn.AllowedIPs().All() {
@@ -1154,7 +1169,7 @@ func resolveTailnetFQDN(nm netmapState, fqdn string) ([]netip.Prefix, error) {
 		return nil, fmt.Errorf("resolved 4via6 address %v for %q but no peer advertises a route containing it", addr, fqdn)
 	}
 
-	return nil, fmt.Errorf("could not find Tailscale node or service %q; it either does not exist, or not reachable because of ACLs", fqdn)
+	return nil, fmt.Errorf("could not find Tailscale node, service or 4via6 address %q; it either does not exist, or not reachable because of ACLs", fqdn)
 }
 
 // serviceIPsFromNetMap returns all IPs of a Tailscale Service if its FQDN is
@@ -1194,41 +1209,4 @@ func serviceIPsFromNetMap(nm netmapState, fqdn dnsname.FQDN) []netip.Prefix {
 	}
 
 	return prefixes
-}
-
-// resolveViaDomain parses an FQDN as a 4via6 in the format "<ipv4-with-hyphens>-via-<siteID>[.domain]"
-// and returns the IPv6 via address.
-// This borrows heavily from net/dns/resolver.(*Resolver).resolveViaDomain.
-// TODO(beckypauley): consider a refactor of the above to remove duplication.
-func resolveViaDomain(fqdn dnsname.FQDN) (netip.Addr, bool) {
-	// The minimum length of a valid 4via6 FQDN i.e. "via-X.0.0.0.0".
-	const minFQDNLength = 13
-	name := string(fqdn.WithoutTrailingDot())
-	// This is not a  fqdn.
-	if !strings.Contains(name, "-via-") {
-		return netip.Addr{}, false
-	}
-	if len(name) < minFQDNLength {
-		return netip.Addr{}, false // too short to be valid
-	}
-	firstLabel, domain, _ := strings.Cut(name, ".")
-	if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
-		return netip.Addr{}, false
-	}
-	v4hyphens, siteIDStr, ok := strings.Cut(firstLabel, "-via-")
-	if !ok {
-		return netip.Addr{}, false
-	}
-	ip4Str := strings.ReplaceAll(v4hyphens, "-", ".")
-	ip4, err := netip.ParseAddr(ip4Str)
-	if err != nil || !ip4.Is4() {
-		return netip.Addr{}, false
-	}
-	siteID, err := strconv.ParseUint(siteIDStr, 0, 32)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	// MapVia will never error when given an IPv4 netip.Prefix.
-	out, _ := tsaddr.MapVia(uint32(siteID), netip.PrefixFrom(ip4, ip4.BitLen()))
-	return out.Addr(), true
 }

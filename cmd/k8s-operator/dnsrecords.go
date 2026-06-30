@@ -22,6 +22,7 @@ import (
 	"k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/util/mak"
@@ -106,6 +107,7 @@ func (dnsRR *dnsRecordsReconciler) Reconcile(ctx context.Context, req reconcile.
 	if err := dnsRR.maybeProvision(ctx, proxySvc, logger); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		} else {
 			return reconcile.Result{}, err
 		}
@@ -281,19 +283,26 @@ func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, proxySv
 		if err := dnsRR.Get(ctx, parentName, ing); err != nil {
 			return "", err
 		}
+
 		if len(ing.Status.LoadBalancer.Ingress) == 0 {
 			return "", nil
 		}
+
 		return ing.Status.LoadBalancer.Ingress[0].Hostname, nil
 	}
+
 	if isManagedByType(proxySvc, serviceTypeSvc) {
-		svc := new(corev1.Service)
-		if err := dnsRR.Get(ctx, parentName, svc); apierrors.IsNotFound(err) {
-			logger.Infof("[unexpected] parent Service for egress proxy %s not found", proxySvc.Name)
+		var svc corev1.Service
+
+		err := dnsRR.Get(ctx, parentName, &svc)
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Warnf("parent Service for egress proxy %q not found", proxySvc.Name)
 			return "", nil
-		} else if err != nil {
+		case err != nil:
 			return "", err
 		}
+
 		return svc.Annotations[AnnotationTailnetTargetFQDN], nil
 	}
 	return "", nil
@@ -303,28 +312,31 @@ func (dnsRR *dnsRecordsReconciler) fqdnForDNSRecord(ctx context.Context, proxySv
 // ConfigMap. At this point the in-cluster ts.net nameserver is expected to be
 // successfully created together with the ConfigMap.
 func (dnsRR *dnsRecordsReconciler) updateDNSConfig(ctx context.Context, update func(*operatorutils.Records)) error {
-	cm := &corev1.ConfigMap{}
-	err := dnsRR.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: dnsRR.tsNamespace}, cm)
-	if apierrors.IsNotFound(err) {
-		dnsRR.logger.Info("[unexpected] dnsrecords ConfigMap not found in cluster. Not updating DNS records. Please open an issue and attach operator logs.")
+	var cm corev1.ConfigMap
+	err := dnsRR.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: dnsRR.tsNamespace}, &cm)
+	switch {
+	case apierrors.IsNotFound(err):
+		dnsRR.logger.Warn("dnsrecords ConfigMap not found in cluster. Not updating DNS records. Please open an issue and attach operator logs.")
 		return nil
+	case err != nil:
+		return fmt.Errorf("failed to retrieve dnsrecords ConfigMap: %w", err)
 	}
-	if err != nil {
-		return fmt.Errorf("error retrieving dnsrecords ConfigMap: %w", err)
-	}
+
 	dnsRecords := operatorutils.Records{Version: operatorutils.Alpha1Version, IP4: map[string][]string{}}
 	if cm.Data != nil && cm.Data[operatorutils.DNSRecordsCMKey] != "" {
-		if err := json.Unmarshal([]byte(cm.Data[operatorutils.DNSRecordsCMKey]), &dnsRecords); err != nil {
+		if err = json.Unmarshal([]byte(cm.Data[operatorutils.DNSRecordsCMKey]), &dnsRecords); err != nil {
 			return err
 		}
 	}
+
 	update(&dnsRecords)
 	dnsRecordsBs, err := json.Marshal(dnsRecords)
 	if err != nil {
 		return fmt.Errorf("error marshalling DNS records: %w", err)
 	}
+
 	mak.Set(&cm.Data, operatorutils.DNSRecordsCMKey, string(dnsRecordsBs))
-	return dnsRR.Update(ctx, cm)
+	return dnsRR.Update(ctx, &cm)
 }
 
 // isSvcForFQDNEgressProxy returns true if the Service is a headless Service

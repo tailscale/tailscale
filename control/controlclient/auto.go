@@ -380,9 +380,15 @@ func (c *Auto) authRoutine() {
 			}
 			c.mu.Lock()
 			c.urlToVisit = url
-			c.loginGoal = &LoginGoal{
-				flags: LoginDefault,
-				url:   url,
+			// Only store the URL follow-up goal if no concurrent Login() call has
+			// replaced the goal we were processing while our control plane request
+			// was in flight. Otherwise, the intent from the more recent goal gets
+			// lost.
+			if c.loginGoal == goal {
+				c.loginGoal = &LoginGoal{
+					flags: LoginDefault,
+					url:   url,
+				}
 			}
 			c.mu.Unlock()
 
@@ -400,13 +406,25 @@ func (c *Auto) authRoutine() {
 		// success
 		c.direct.health.SetAuthRoutineInError(nil)
 		c.mu.Lock()
-		c.urlToVisit = ""
-		c.loggedIn = true
-		c.loginGoal = nil
+		// Only commit the login success if no concurrent Login()
+		// call has reset the goal and no Logout() has moved on
+		// while our control plane request was in flight. In the
+		// first case, clearing the goal would prevent the next
+		// iteration from picking it up and running with it. In
+		// the second case, we would record that we're loggedIn
+		// even though we're logged out.
+		goalStillCurrentGoal := c.loginGoal == goal
+		if goalStillCurrentGoal {
+			c.urlToVisit = ""
+			c.loggedIn = true
+			c.loginGoal = nil
+		}
 		c.mu.Unlock()
 
-		c.sendStatus("authRoutine-success", nil, "", nil)
-		c.restartMap()
+		if goalStillCurrentGoal {
+			c.sendStatus("authRoutine-success", nil, "", nil)
+			c.restartMap()
+		}
 		bo.Reset()
 	}
 }
@@ -472,13 +490,14 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	ndu, canDelta := c.observer.(NetmapDeltaUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !canDelta {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	ch := make(chan bool, 1)
@@ -508,11 +527,12 @@ func (mrs mapRoutineState) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRu
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	pfu, ok := c.observer.(PacketFilterUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 	if !goodState || !ok {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 	ch := make(chan bool, 1)
 	c.observerQueue.Add(func() {
@@ -536,11 +556,12 @@ func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcf
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	upu, ok := c.observer.(UserProfileUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 	if !goodState || !ok {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 	ch := make(chan bool, 1)
 	c.observerQueue.Add(func() {
@@ -561,13 +582,14 @@ func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPubl
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	dun, ok := c.observer.(patchDiscoKeyer)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !ok {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	c.observerQueue.RunSync(ctx, func() {

@@ -353,6 +353,15 @@ func (t *Tracker) nil() bool {
 	return true
 }
 
+// ProbeLocks acquires and releases the tracker's internal mutex.
+func (t *Tracker) ProbeLocks() {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	t.mu.Unlock()
+}
+
 // Severity represents how serious an error is. Each GUI interprets this severity value in different ways,
 // to surface the error in a more or less visible way. For instance, the macOS GUI could change its menubar
 // icon to display an exclamation mark and present a modal notification for SeverityHigh warnings, but not
