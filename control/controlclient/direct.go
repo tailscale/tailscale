@@ -702,28 +702,13 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
 	if serverKey.IsZero() {
-		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
-		if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
-			c.health.SetUnhealthy(macOSScreenTime, nil)
-		} else {
-			c.health.SetHealthy(macOSScreenTime)
-		}
-		if err != nil {
+		if err := c.loadServerKeys(ctx); err != nil {
 			return regen, opt.URL, nil, err
 		}
-		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
-
 		c.mu.Lock()
-		c.serverLegacyKey = keys.LegacyPublicKey
-		c.serverNoiseKey = keys.PublicKey
+		serverKey = c.serverLegacyKey
+		serverNoiseKey = c.serverNoiseKey
 		c.mu.Unlock()
-		serverKey = keys.LegacyPublicKey
-		serverNoiseKey = keys.PublicKey
-
-		// Proactively shut down our TLS TCP connection.
-		// We're not going to need it and it's nicer to the
-		// server.
-		c.httpc.CloseIdleConnections()
 	}
 
 	if serverNoiseKey.IsZero() {
@@ -1094,6 +1079,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		epTypes = append(epTypes, ep.Type)
 	}
 	c.mu.Unlock()
+
+	if serverNoiseKey.IsZero() {
+		// authRoutine might not have loaded the server's keys yet.
+		// Load them here rather than backing off.
+		if err := c.loadServerKeys(ctx); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		serverNoiseKey = c.serverNoiseKey
+		c.mu.Unlock()
+	}
 
 	if serverNoiseKey.IsZero() {
 		return errors.New("control server is too old; no noise key")
@@ -1528,6 +1524,32 @@ func encode(v any) ([]byte, error) {
 		}
 	}
 	return b, nil
+}
+
+// loadServerKeys fetches the control server's legacy and noise public keys
+// and stores them on c.
+func (c *Direct) loadServerKeys(ctx context.Context) error {
+	keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
+	if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
+		c.health.SetUnhealthy(macOSScreenTime, nil)
+	} else {
+		c.health.SetHealthy(macOSScreenTime)
+	}
+	if err != nil {
+		return err
+	}
+	c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
+
+	c.mu.Lock()
+	c.serverLegacyKey = keys.LegacyPublicKey
+	c.serverNoiseKey = keys.PublicKey
+	c.mu.Unlock()
+
+	// Proactively shut down our TLS TCP connection.
+	// We're not going to need it and it's nicer to the
+	// server.
+	c.httpc.CloseIdleConnections()
+	return nil
 }
 
 func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string) (*tailcfg.OverTLSPublicKeyResponse, error) {
