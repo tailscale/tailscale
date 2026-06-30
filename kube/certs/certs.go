@@ -136,11 +136,10 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			// node's HTTPS endpoint share the same state/renewal lock mechanism,
 			// so we should not run into redundant issuances during concurrent
 			// renewal checks.
-
-			// An issuance holds a shared lock, so we need to avoid a situation
-			// where other services cannot issue certs because a single one is
-			// holding the lock.
-			ctxT, cancel := context.WithTimeout(ctx, time.Second*300)
+			//
+			// Long enough to cover queue contention behind tailscaled's
+			// shared cert mutex; if it fires, something is wedged.
+			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
 			if err != nil {
