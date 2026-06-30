@@ -9,6 +9,7 @@ import (
 	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
+	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -131,6 +132,12 @@ func (v LoginProfileView) LocalUserID() WindowsUserID { return v.ж.LocalUserID 
 // into.
 func (v LoginProfileView) ControlURL() string { return v.ж.ControlURL }
 
+// Created is when this profile was first added to this client. It is
+// stamped once at profile creation and never changes. It is used to sort
+// the profile list with newest first; profiles created before this field
+// existed have a zero value and sort after all stamped profiles.
+func (v LoginProfileView) Created() time.Time { return v.ж.Created }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	ID             ProfileID
@@ -141,6 +148,7 @@ var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	NodeID         tailcfg.StableNodeID
 	LocalUserID    WindowsUserID
 	ControlURL     string
+	Created        time.Time
 }{})
 
 // View returns a read-only view of Prefs.

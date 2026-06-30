@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -19,6 +20,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
@@ -1227,5 +1230,108 @@ func TestDeleteProfileClearsState(t *testing.T) {
 	// Verify profile state is deleted from store.
 	if _, err := store.ReadState(profileKey); err != ipn.ErrStateNotExist {
 		t.Fatalf("ReadState after delete: got err %v, want ErrStateNotExist", err)
+	}
+}
+
+// TestProfileSortOrder verifies that allProfilesFor sorts zero-Created
+// (legacy) profiles before stamped profiles, with stamped profiles
+// ordered oldest-first so the most recently added one lands at the
+// bottom. Name then DomainName break ties within either group.
+func TestProfileSortOrder(t *testing.T) {
+	pm, err := newProfileManagerWithGOOS(new(mem.Store), logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	add := func(id ipn.ProfileID, name, domain string, created time.Time) {
+		pm.knownProfiles[id] = (&ipn.LoginProfile{
+			ID:             id,
+			Name:           name,
+			NetworkProfile: ipn.NetworkProfile{DomainName: domain},
+			Created:        created,
+		}).View()
+	}
+
+	add("a", "alice", "example.com", time.Time{})
+	add("a2", "alice", "acme.com", time.Time{}) // legacy ties alice on Name; DomainName breaks it
+	add("b", "bob", "example.com", time.Time{})
+	add("c", "carol", "example.com", base)
+	add("d", "dave", "example.com", base.Add(time.Minute))
+	add("e", "eve", "example.com", base.Add(time.Minute)) // ties dave on Created; Name breaks it
+	add("e2", "eve", "acme.com", base.Add(time.Minute))   // ties eve on Created+Name; DomainName breaks it
+
+	got := pm.allProfilesFor("")
+	type want struct{ name, domain string }
+	wantOrder := []want{
+		// Legacy first, Name asc then DomainName asc.
+		{"alice", "acme.com"},
+		{"alice", "example.com"},
+		{"bob", "example.com"},
+		// Stamped, oldest first.
+		{"carol", "example.com"},
+		{"dave", "example.com"},
+		{"eve", "acme.com"},
+		{"eve", "example.com"},
+	}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("got %d profiles, want %d", len(got), len(wantOrder))
+	}
+	for i, w := range wantOrder {
+		if got[i].Name() != w.name || got[i].NetworkProfile().DomainName != w.domain {
+			t.Errorf("position %d: got (%q,%q), want (%q,%q) (full: %v)",
+				i, got[i].Name(), got[i].NetworkProfile().DomainName, w.name, w.domain, profileNames(got))
+		}
+	}
+}
+
+func profileNames(ps []ipn.LoginProfileView) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Name()
+	}
+	return out
+}
+
+// TestProfileCreatedStamped verifies that Created is set on profile creation
+// from the injected clock, and is preserved across an update even when the
+// clock advances.
+func TestProfileCreatedStamped(t *testing.T) {
+	pm, err := newProfileManagerWithGOOS(new(mem.Store), logger.Discard, health.NewTracker(eventbustest.NewBus(t)), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	clock := tstest.NewClock(tstest.ClockOpts{Start: start})
+	pm.clock = tstime.DefaultClock{Clock: clock}
+
+	pm.SwitchToNewProfile()
+	p := pm.CurrentPrefs().AsStruct()
+	p.Persist = &persist.Persist{
+		NodeID:         "n1",
+		PrivateNodeKey: key.NewNode(),
+		UserProfile: tailcfg.UserProfile{
+			ID:        1,
+			LoginName: "alice@example.com",
+		},
+	}
+	if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pm.currentProfile.Created(); !got.Equal(start) {
+		t.Errorf("Created = %v after create, want %v", got, start)
+	}
+
+	// Advancing the clock and then performing an unrelated update (e.g.
+	// ProfileName change) must not move Created.
+	clock.Advance(time.Hour)
+	p = pm.CurrentPrefs().AsStruct()
+	p.ProfileName = "Alice"
+	if err := pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pm.currentProfile.Created(); !got.Equal(start) {
+		t.Errorf("Created changed across update: got %v, want %v", got, start)
 	}
 }
