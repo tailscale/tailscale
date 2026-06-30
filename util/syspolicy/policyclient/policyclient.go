@@ -62,10 +62,20 @@ type Client interface {
 	HasAnyOf(keys ...pkey.Key) (bool, error)
 
 	// RegisterChangeCallback registers a callback function that will be called
-	// whenever a policy change is detected. It returns a function to unregister
-	// the callback and an error if the registration fails.
-	RegisterChangeCallback(cb func(PolicyChange)) (unregister func(), err error)
+	// whenever a policy change is detected. If uid is empty, the callback fires
+	// for device-scope policy changes. If uid is non-empty, it fires for changes
+	// to that user's effective policy (device + user policies merged). It returns
+	// a function to unregister the callback and an error if the registration fails.
+	RegisterChangeCallback(uid string, cb func(PolicyChange)) (unregister func(), err error)
+
+	// GetPolicySnapshot returns the effective policy snapshot for the given user ID.
+	// If uid is empty, returns the default-scope policy. Returns nil, nil if policy
+	// snapshots are not supported.
+	GetPolicySnapshot(uid string) (*PolicySnapshot, error)
 }
+
+// PolicySnapshot is an alias for [setting.Snapshot] unless syspolicy is omitted from the build.
+type PolicySnapshot = policySnapshot
 
 // Get returns a non-nil [Client] implementation as a function of the
 // build tags. It returns a no-op implementation if the full syspolicy
@@ -140,6 +150,10 @@ func (NoPolicyClient) HasAnyOf(keys ...pkey.Key) (bool, error) {
 
 func (NoPolicyClient) SetDebugLoggingEnabled(enabled bool) {}
 
-func (NoPolicyClient) RegisterChangeCallback(cb func(PolicyChange)) (unregister func(), err error) {
+func (NoPolicyClient) RegisterChangeCallback(uid string, cb func(PolicyChange)) (unregister func(), err error) {
 	return func() {}, nil
+}
+
+func (NoPolicyClient) GetPolicySnapshot(uid string) (*PolicySnapshot, error) {
+	return nil, nil
 }

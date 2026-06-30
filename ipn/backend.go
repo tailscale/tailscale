@@ -19,6 +19,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/views"
+	"tailscale.com/util/syspolicy/policyclient"
 )
 
 type State int
@@ -173,6 +174,18 @@ const (
 	// not request it.
 	NotifyInProcessNoDisconnect NotifyWatchOpt = 1 << 16
 
+	// NotifySysPolicyChanges, if set, causes the first Notify message, which is sent
+	// immediately, to contain the current effective [setting.Snapshot] in
+	// [Notify.Policy]. [Notify.Policy] is included in subsequent messages whenever
+	// the effective policy changes.
+	//
+	// The snapshot is scoped to the connected user's identity (on Windows,
+	// derived from the named-pipe token's SID).
+	//
+	// The [setting.Snapshot] that is delivered is a full snapshot on every
+	// change.
+	NotifySysPolicyChanges NotifyWatchOpt = 1 << 17
+
 	// NotifyPeerWireGuardState, if set, opts the watcher into
 	// WireGuard session state notifications via [Notify.PeerState].
 	// The first Notify sent to the watcher includes a dump of current
@@ -220,6 +233,7 @@ func (o NotifyWatchOpt) String() string {
 	try(NotifyInitialStatus, "NotifyInitialStatus")
 	try(NotifyPeerPatches, "NotifyPeerPatches")
 	try(NotifyInProcessNoDisconnect, "NotifyInProcessNoDisconnect")
+	try(NotifySysPolicyChanges, "NotifySysPolicyChanges")
 	try(NotifyPeerWireGuardState, "NotifyPeerWireGuardState")
 
 	if mask != o {
@@ -452,6 +466,13 @@ type Notify struct {
 	// SuggestedExitNode, if non-nil, is the node that the backend has determined to
 	// be the best exit node for the current network conditions.
 	SuggestedExitNode *tailcfg.StableNodeID `json:",omitzero"`
+
+	// Policy, if non-nil, is the effective policy snapshot for the
+	// connected user. It is scoped per-user: per-user policy settings
+	// are merged with device-wide settings, with device-wide taking
+	// precedence. Sent initially when [NotifySysPolicyChanges] is set,
+	// and on change thereafter.
+	Policy *policyclient.PolicySnapshot `json:",omitzero"`
 
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }
