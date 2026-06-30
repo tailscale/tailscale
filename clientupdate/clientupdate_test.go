@@ -373,7 +373,7 @@ func TestCheckOutdatedAlpineRepo(t *testing.T) {
 
 			testServ := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, _ *http.Request) {
-					version := trackPackages{
+					version := TrackPackages{
 						MSIsVersion:     tt.latestHTTPVersion,
 						MacZipsVersion:  tt.latestHTTPVersion,
 						TarballsVersion: tt.latestHTTPVersion,

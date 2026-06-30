@@ -148,6 +148,14 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 generate: ## Generate code
 	./tool/go generate ./...
 
+.PHONY: tsapp-build-and-flash-pi
+tsapp-build-and-flash-pi: ## Build a tsapp-pi.arm64 GAF from HEAD and flash a local SD card (macOS auto-detects the disk; pass DISK=/dev/sdX on Linux)
+	cd gokrazy && ../tool/go run build.go --gaf --app=tsapp-pi.arm64
+	./tool/go run --exec=sudo ./cmd/tailscale configure flash-appliance \
+		--variant=pi-arm64 \
+		--gaf=gokrazy/tsapp-pi.arm64.gaf \
+		$(if $(DISK),--disk=$(DISK))
+
 .PHONY: pin-github-actions
 pin-github-actions:
 	./tool/go tool github.com/stacklok/frizbee actions .github/workflows
