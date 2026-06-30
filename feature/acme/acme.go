@@ -31,6 +31,7 @@ import (
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
 
@@ -67,13 +68,21 @@ var errNoExt = errors.New("acme extension not registered on this LocalBackend")
 type extension struct {
 	logf logger.Logf
 
-	// acmeMu serializes ACME operations so concurrent requests for
-	// certs don't slam ACME. The first goroutine through populates the
+	// acmeDomainsMu guards acmeDomainLocks.
+	acmeDomainsMu syncs.Mutex
+	// acmeDomainLocks holds a per-domain mutex serialising ACME
+	// operations for that domain. Different domains run concurrently;
+	// the same domain still queues so the first goroutine fills the
 	// on-disk cache and the rest reuse it.
-	acmeMu syncs.Mutex
+	acmeDomainLocks map[string]*syncs.Mutex
+
+	// acmeAccountMu serialises ACME account setup (key generation, LE
+	// registration) so two first-time issuances don't create separate
+	// accounts.
+	acmeAccountMu syncs.Mutex
 
 	// renewMu guards renewCertAt.
-	// Lock order: acmeMu before renewMu.
+	// Lock order: per-domain ACME lock before renewMu.
 	renewMu     syncs.Mutex
 	renewCertAt map[string]time.Time // lazily initialized under renewMu
 
@@ -111,6 +120,18 @@ type extension struct {
 	// that periodically pokes [LocalBackend.GetCertPEM] so renewals
 	// happen on idle nodes. Non-nil while the loop is running.
 	certRefreshCancel context.CancelFunc
+}
+
+// mutexForDomain returns the mutex for domain, creating it on first use.
+func (e *extension) mutexForDomain(domain string) *syncs.Mutex {
+	e.acmeDomainsMu.Lock()
+	defer e.acmeDomainsMu.Unlock()
+	if m, ok := e.acmeDomainLocks[domain]; ok {
+		return m
+	}
+	m := new(syncs.Mutex)
+	mak.Set(&e.acmeDomainLocks, domain, m)
+	return m
 }
 
 // Go runs f in a new goroutine tracked by e.wg. [extension.Shutdown]
