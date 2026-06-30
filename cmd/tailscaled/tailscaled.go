@@ -183,6 +183,12 @@ var (
 	hookOutboundProxyListen        feature.Hook[func() proxyStartFunc]
 )
 
+// loadSyspolicy, if set, loads a JSON-file-backed syspolicy source after
+// command-line flags are parsed, using the path from --syspolicy-file. It
+// is set when built without ts_omit_syspolicy (see syspolicy.go), and
+// unset otherwise.
+var loadSyspolicy feature.Hook[func()]
+
 // proxyStartFunc is the type of the function returned by
 // outboundProxyListen, to start the servers on the Listeners
 // started by hookOutboundProxyListen.
@@ -293,6 +299,12 @@ store state on filesystem.`)
 		} else {
 			args.statepath = paths.DefaultTailscaledStateFile()
 		}
+	}
+
+	// If syspolicy is built in, load the JSON syspolicy file (if any) now
+	// so its settings are visible before anything queries them.
+	if f, ok := loadSyspolicy.GetOk(); ok {
+		f()
 	}
 
 	if buildfeatures.HasTPM {
