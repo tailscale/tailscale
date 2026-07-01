@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"tailscale.com/types/logger"
@@ -35,6 +36,7 @@ func newTestConfigurator(t *testing.T) *darwinConfigurator {
 		ifName:         "utun99",
 		resolverDir:    resolverDir,
 		resolvConfPath: resolvConf,
+		runScutil:      func(string) (string, error) { return "No such key\n", nil },
 	}
 }
 
@@ -108,6 +110,110 @@ func TestSetDNS(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSetDNSGlobal(t *testing.T) {
+	c := newTestConfigurator(t)
+
+	// Start with split DNS files present, so this test verifies that switching
+	// to a global resolver cleans up stale /etc/resolver state.
+	if err := c.SetDNS(OSConfig{
+		Nameservers:   []netip.Addr{netip.MustParseAddr("100.100.100.100")},
+		SearchDomains: []dnsname.FQDN{"tail1234.ts.net."},
+		MatchDomains:  []dnsname.FQDN{"ts.net."},
+	}); err != nil {
+		t.Fatalf("setting initial split DNS config failed: %v", err)
+	}
+	unmanaged := filepath.Join(c.resolverDir, "other.conf")
+	if err := os.WriteFile(unmanaged, []byte("# not ours\nnameserver 8.8.8.8\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotScripts []string
+	c.runScutil = func(script string) (string, error) {
+		gotScripts = append(gotScripts, script)
+		return "", nil
+	}
+
+	cfg := OSConfig{
+		Nameservers: []netip.Addr{
+			netip.MustParseAddr("100.100.100.100"),
+			netip.MustParseAddr("fd7a:115c:a1e0::53"),
+		},
+		SearchDomains: []dnsname.FQDN{"tail1234.ts.net."},
+	}
+	if err := c.SetDNS(cfg); err != nil {
+		t.Fatalf("SetDNS failed: %v", err)
+	}
+
+	wantScript := strings.Join([]string{
+		"d.init",
+		"d.add SearchOrder # 100000",
+		"d.add ServerAddresses * 100.100.100.100 fd7a:115c:a1e0::53",
+		`d.add SupplementalMatchDomains * ""`,
+		"d.add SearchDomains * tail1234.ts.net",
+		"set " + macOSGlobalDNSKey,
+		"quit",
+		"",
+	}, "\n")
+	if !slices.Equal(gotScripts, []string{wantScript}) {
+		t.Errorf("scutil scripts mismatch:\ngot:\n%s\nwant:\n%s", strings.Join(gotScripts, "\n---\n"), wantScript)
+	}
+
+	files, err := os.ReadDir(c.resolverDir)
+	if err != nil {
+		t.Fatalf("reading resolver directory: %v", err)
+	}
+	var fileNames []string
+	for _, f := range files {
+		fileNames = append(fileNames, f.Name())
+	}
+	if !slices.Equal(fileNames, []string{"other.conf"}) {
+		t.Fatalf("expected only unmanaged resolver file after global DNS config, got %v", fileNames)
+	}
+}
+
+func TestSetDNSSplitRemovesGlobal(t *testing.T) {
+	c := newTestConfigurator(t)
+
+	// Start with global DNS configured, so this test verifies the stale global
+	// dynamic-store key is removed when switching back to split DNS.
+	c.runScutil = func(script string) (string, error) {
+		return "", nil
+	}
+	if err := c.SetDNS(OSConfig{
+		Nameservers: []netip.Addr{netip.MustParseAddr("100.100.100.100")},
+	}); err != nil {
+		t.Fatalf("setting initial global DNS config failed: %v", err)
+	}
+
+	var gotScripts []string
+	c.runScutil = func(script string) (string, error) {
+		gotScripts = append(gotScripts, script)
+		return "", nil
+	}
+
+	cfg := OSConfig{
+		Nameservers:  []netip.Addr{netip.MustParseAddr("100.100.100.100")},
+		MatchDomains: []dnsname.FQDN{"ts.net."},
+	}
+	if err := c.SetDNS(cfg); err != nil {
+		t.Fatalf("SetDNS failed: %v", err)
+	}
+
+	wantScript := "remove " + macOSGlobalDNSKey + "\nquit\n"
+	if !slices.Equal(gotScripts, []string{wantScript}) {
+		t.Errorf("scutil scripts mismatch:\ngot:\n%s\nwant:\n%s", strings.Join(gotScripts, "\n---\n"), wantScript)
+	}
+
+	const wantFile = macResolverFileHeader + "nameserver 100.100.100.100\n"
+	gotFile, err := os.ReadFile(filepath.Join(c.resolverDir, "ts.net"))
+	if err != nil {
+		t.Fatalf("reading split resolver file: %v", err)
+	}
+	if string(gotFile) != wantFile {
+		t.Errorf("split resolver file contents mismatch:\ngot:  %q\nwant: %q", string(gotFile), wantFile)
 	}
 }
 

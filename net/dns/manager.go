@@ -33,6 +33,7 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/version"
 )
 
 var (
@@ -376,8 +377,12 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// This bool is used in a couple of places below to implement this
 	// workaround.
 	isWindows := m.goos == "windows"
-	isApple := (m.goos == "darwin" || m.goos == "ios")
-	if m.os.SupportsSplitDNS() && !isWindows && !isApple {
+	isIOS := m.goos == "ios"
+	supportsSplitDNS := m.os.SupportsSplitDNS()
+	// Sandboxed macOS builds use NetworkExtension DNS settings, not
+	// tailscaled's /etc/resolver configurator, so keep the Apple workaround.
+	appleSplitDNSWorkaround := isIOS || (m.goos == "darwin" && isSandboxedMacOS())
+	if supportsSplitDNS && !isWindows && !appleSplitDNSWorkaround {
 		if srs := toIPsOnly(cfg.singleResolverSet()); len(srs) > 0 {
 			// Split DNS configuration requested, where all split domains
 			// go to the same resolvers. We can let the OS do it.
@@ -393,63 +398,62 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	rcfg.Routes = routes
 	ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 
-	var baseCfg *OSConfig // base config; non-nil if/when known
+	if supportsSplitDNS && !appleSplitDNSWorkaround {
+		ocfg.MatchDomains = cfg.matchDomains()
+		return rcfg, ocfg, nil
+	}
 
-	// Even though Apple devices can do split DNS, they don't provide a way to
+	// Even though iOS devices can do split DNS, they don't provide a way to
 	// selectively answer ExtraRecords, and ignore other DNS traffic. As a
 	// workaround, we read the existing default resolver configuration and use
 	// that as the forwarder for all DNS traffic that quad-100 doesn't handle.
-	if isApple || !m.os.SupportsSplitDNS() {
-		// If the OS can't do native split-dns, read out the underlying
-		// resolver config and blend it into our config.  On apple platforms, [OSConfigurator.GetBaseConfig]
-		// has a tendency to temporarily fail if called immediately following
-		// an interface change.  These failures should be retried if/when the OS
-		// indicates that the DNS configuration has changed via [RecompileDNSConfig].
-		cfg, err := m.os.GetBaseConfig()
-		if err == nil {
-			baseCfg = &cfg
-		} else if (isApple || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
+	//
+	// If the OS can't do native split-DNS, read out the underlying resolver
+	// config and blend it into our config. On iOS, [OSConfigurator.GetBaseConfig]
+	// has a tendency to temporarily fail if called immediately following an
+	// interface change. These failures should be retried if/when the OS indicates
+	// that the DNS configuration has changed via [RecompileDNSConfig].
+	base, err := m.os.GetBaseConfig()
+	if err != nil {
+		if (isIOS || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
 			// Expected when using noopManager (userspace networking) or on
-			// certain iOS/macOS builds. Continue without base config.
-		} else {
-			m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
-			return resolver.Config{}, OSConfig{}, err
+			// certain iOS builds. Continue without base config.
+			m.health.SetHealthy(osConfigurationReadWarnable)
+			ocfg.MatchDomains = cfg.matchDomains()
+			return rcfg, ocfg, nil
 		}
-		m.health.SetHealthy(osConfigurationReadWarnable)
+		m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
+		return resolver.Config{}, OSConfig{}, err
 	}
+	m.health.SetHealthy(osConfigurationReadWarnable)
 
-	if baseCfg == nil {
-		// If there was no base config, then we need to fallback to SplitDNS mode.
-		ocfg.MatchDomains = cfg.matchDomains()
-	} else {
-		// On iOS only (for now), check if all route names point to resources inside the tailnet.
-		// If so, we can set those names as MatchDomains to enable a split DNS configuration
-		// which will help preserve battery life.
-		// Because on iOS MatchDomains must equal SearchDomains, we cannot do this when
-		// we have any Routes outside the tailnet. Otherwise when app connectors are enabled,
-		// a query for 'work-laptop' might lead to search domain expansion, resolving
-		// as 'work-laptop.aws.com' for example.
-		if m.goos == "ios" && rcfg.RoutesRequireNoCustomResolvers() {
-			if !m.disableSplitDNSOptimization() {
-				for r := range rcfg.Routes {
-					ocfg.MatchDomains = append(ocfg.MatchDomains, r)
-				}
-			} else {
-				m.logf("iOS split DNS is disabled by nodeattr")
+	// On iOS only (for now), check if all route names point to resources inside the tailnet.
+	// If so, we can set those names as MatchDomains to enable a split DNS configuration
+	// which will help preserve battery life.
+	// Because on iOS MatchDomains must equal SearchDomains, we cannot do this when
+	// we have any Routes outside the tailnet. Otherwise when app connectors are enabled,
+	// a query for 'work-laptop' might lead to search domain expansion, resolving
+	// as 'work-laptop.aws.com' for example.
+	if isIOS && rcfg.RoutesRequireNoCustomResolvers() {
+		if !m.disableSplitDNSOptimization() {
+			for r := range rcfg.Routes {
+				ocfg.MatchDomains = append(ocfg.MatchDomains, r)
 			}
+		} else {
+			m.logf("iOS split DNS is disabled by nodeattr")
 		}
-		var defaultRoutes []*dnstype.Resolver
-		for _, ip := range baseCfg.Nameservers {
-			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
-		}
-		rcfg.Routes["."] = defaultRoutes
-		// Append base config search domains, but only if not already present.
-		// This prevents duplicates when GetBaseConfig() reads back domains that
-		// Tailscale itself previously wrote to resolv.conf.
-		for _, domain := range baseCfg.SearchDomains {
-			if !slices.Contains(ocfg.SearchDomains, domain) {
-				ocfg.SearchDomains = append(ocfg.SearchDomains, domain)
-			}
+	}
+	var defaultRoutes []*dnstype.Resolver
+	for _, ip := range base.Nameservers {
+		defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
+	}
+	rcfg.Routes["."] = defaultRoutes
+	// Append base config search domains, but only if not already present.
+	// This prevents duplicates when GetBaseConfig() reads back domains that
+	// Tailscale itself previously wrote to resolv.conf.
+	for _, domain := range base.SearchDomains {
+		if !slices.Contains(ocfg.SearchDomains, domain) {
+			ocfg.SearchDomains = append(ocfg.SearchDomains, domain)
 		}
 	}
 
@@ -459,6 +463,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
 }
+
+var isSandboxedMacOS = version.IsSandboxedMacOS
 
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
 // Only safe to use if the resolvers slice has been cleared of

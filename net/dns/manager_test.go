@@ -187,14 +187,15 @@ func TestManager(t *testing.T) {
 	// reasonable to make this unsupported as well, in which case
 	// these tests will need tweaking.
 	tests := []struct {
-		name  string
-		in    Config
-		split bool
-		bs    OSConfig
-		os    OSConfig
-		knobs *controlknobs.Knobs
-		rs    resolver.Config
-		goos  string // empty means "linux"
+		name           string
+		in             Config
+		split          bool
+		bs             OSConfig
+		os             OSConfig
+		knobs          *controlknobs.Knobs
+		rs             resolver.Config
+		goos           string // empty means "linux"
+		sandboxedMacOS bool
 	}{
 		{
 			name: "empty",
@@ -451,6 +452,32 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// Sandboxed macOS app builds use NetworkExtension DNS settings, not
+			// tailscaled's /etc/resolver configurator, so they keep the older
+			// Apple base-config behavior.
+			name: "routes-split-sandboxed-darwin",
+			in: Config{
+				Routes:        upstreams("corp.com", "2.2.2.2"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: fqdns("coffee.shop"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "8.8.8.8",
+					"corp.com.", "2.2.2.2"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
 			name: "routes-multi",
 			in: Config{
 				Routes: upstreams(
@@ -495,25 +522,23 @@ func TestManager(t *testing.T) {
 			goos: "linux",
 		},
 		{
-			// The `routes-multi-split-linux` test case above on Darwin should NOT result in a split
-			// DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
-			name: "routes-multi-does-not-split-on-darwin",
+			// The `routes-multi-split-linux` test case above should match on
+			// macOS, where tailscaled configures split DNS via /etc/resolver.
+			name: "routes-multi-split-darwin",
 			in: Config{
 				Routes: upstreams(
 					"corp.com", "2.2.2.2",
 					"bigco.net", "3.3.3.3"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
-			split: false,
+			split: true,
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("bigco.net", "corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "",
 					"corp.com.", "2.2.2.2",
 					"bigco.net.", "3.3.3.3"),
 			},
@@ -593,10 +618,9 @@ func TestManager(t *testing.T) {
 			goos: "linux",
 		},
 		{
-			// The `magic-split` test case above on Darwin should NOT result in a split DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
-			name: "magic-split-does-not-split-on-darwin",
+			// The `magic-split` test case above should match on macOS, where
+			// tailscaled configures split DNS via /etc/resolver.
+			name: "magic-split-darwin",
 			in: Config{
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
@@ -604,13 +628,13 @@ func TestManager(t *testing.T) {
 				Routes:        upstreams("ts.com", ""),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
-			split: false,
+			split: true,
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("ts.com"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(".", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -698,11 +722,9 @@ func TestManager(t *testing.T) {
 			goos: "linux",
 		},
 		{
-			// The `routes-magic-split-linux` test case above on Darwin should NOT result in a
-			// split DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
-			name: "routes-magic-does-not-split-on-darwin",
+			// The `routes-magic-split-linux` test case above should match on
+			// macOS, where tailscaled configures split DNS via /etc/resolver.
+			name: "routes-magic-split-darwin",
 			in: Config{
 				Routes: upstreams(
 					"corp.com", "2.2.2.2",
@@ -716,12 +738,10 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com", "ts.com"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(
-					".", "",
-					"corp.com.", "2.2.2.2",
-				),
+				Routes: upstreams("corp.com.", "2.2.2.2"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -866,9 +886,9 @@ func TestManager(t *testing.T) {
 			goos: "ios",
 		},
 		{
-			// on darwin, verify that with the same config as in ios-use-split-dns-when-no-custom-resolvers,
-			// MatchDomains are NOT set.
-			name: "darwin-dont-use-split-dns-when-no-custom-resolvers",
+			// macOS should match Linux here. iOS remains special-cased above
+			// for battery-life behavior.
+			name: "darwin-use-split-dns-when-no-custom-resolvers",
 			in: Config{
 				Routes:        upstreams("ts.net", "199.247.155.52", "optimistic-display.ts.net", ""),
 				SearchDomains: fqdns("optimistic-display.ts.net"),
@@ -877,12 +897,10 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("optimistic-display.ts.net"),
+				MatchDomains:  fqdns("optimistic-display.ts.net", "ts.net"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(
-					".", "",
-					"ts.net", "199.247.155.52",
-				),
+				Routes:       upstreams("ts.net", "199.247.155.52"),
 				LocalDomains: fqdns("optimistic-display.ts.net."),
 			},
 			goos: "darwin",
@@ -986,6 +1004,7 @@ func TestManager(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			tstest.Replace(t, &isSandboxedMacOS, func() bool { return test.sandboxedMacOS })
 			f := fakeOSConfigurator{
 				SplitDNS:   test.split,
 				BaseConfig: test.bs,
