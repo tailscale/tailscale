@@ -22,12 +22,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 )
 
@@ -80,13 +82,30 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 	}
 }
 
-// Register the Reconciler onto the given manager.Manager implementation.
+// Register the Reconciler onto the given manager.Manager implementation. It watches PeerRelay resources directly
+// and also watches managed Services so that a LoadBalancer status update (e.g. the cloud finally assigning an
+// external IP) enqueues a reconcile for the owning PeerRelay.
 func (r *Reconciler) Register(mgr manager.Manager) error {
 	return builder.
 		ControllerManagedBy(mgr).
 		For(&tsapi.PeerRelay{}).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(enqueuePeerRelayForService)).
 		Named(reconcilerName).
 		Complete(r)
+}
+
+func enqueuePeerRelayForService(_ context.Context, o client.Object) []reconcile.Request {
+	labels := o.GetLabels()
+	if labels[kubetypes.LabelManaged] != "true" || labels[labelParentType] != parentTypePeerRelay {
+		return nil
+	}
+
+	name := labels[labelParentName]
+	if name == "" {
+		return nil
+	}
+
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
 // Reconcile is invoked when a change occurs to PeerRelay resources within the cluster. On create/update, it ensures
