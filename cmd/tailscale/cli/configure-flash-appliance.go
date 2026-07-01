@@ -18,14 +18,13 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/bradfitz/monogok/disklayout"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate"
 	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/gokrazy/mkfs"
+	"tailscale.com/util/progresstracking"
 	"tailscale.com/util/prompt"
 )
 
@@ -442,60 +441,17 @@ func writeZipMemberAt(f *os.File, zf *zip.File, offset int64) error {
 		return err
 	}
 	total := int64(zf.UncompressedSize64)
-	cw := &countingWriter{w: f}
-	stop := startProgress(zf.Name, total, &cw.count)
+	cw := &progresstracking.CountingWriter{W: f}
+	stop := progresstracking.Ticker(cw.Count, total, func(d, t int64) {
+		pct := 0.0
+		if t > 0 {
+			pct = float64(d) * 100 / float64(t)
+		}
+		fmt.Fprintf(Stderr, "  %s: %s / %s (%.1f%%)\n", zf.Name, humanBytes(d), humanBytes(t), pct)
+	})
 	defer stop()
 	_, err = io.Copy(cw, rc)
 	return err
-}
-
-// countingWriter wraps an io.Writer and tracks total bytes written so
-// the progress goroutine can report it.
-type countingWriter struct {
-	w     io.Writer
-	count atomic.Int64
-}
-
-func (c *countingWriter) Write(b []byte) (int, error) {
-	n, err := c.w.Write(b)
-	if n > 0 {
-		c.count.Add(int64(n))
-	}
-	return n, err
-}
-
-// startProgress spawns a 1 Hz goroutine that prints "<name>: <done> / <total>"
-// to Stderr until the returned stop function is called. The final tick on
-// stop reports the final state, so the caller doesn't need to repeat it.
-func startProgress(name string, total int64, done *atomic.Int64) func() {
-	stop := make(chan struct{})
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
-		report := func() {
-			d := done.Load()
-			pct := 0.0
-			if total > 0 {
-				pct = float64(d) * 100 / float64(total)
-			}
-			fmt.Fprintf(Stderr, "  %s: %s / %s (%.1f%%)\n", name, humanBytes(d), humanBytes(total), pct)
-		}
-		for {
-			select {
-			case <-stop:
-				report()
-				return
-			case <-t.C:
-				report()
-			}
-		}
-	}()
-	return func() {
-		close(stop)
-		<-finished
-	}
 }
 
 // humanBytes returns a friendly approximation of n bytes, e.g. "62.5 GB".
