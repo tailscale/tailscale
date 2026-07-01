@@ -503,11 +503,45 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target
 	handler(c)
 }
 
+// serveConfigFromStoreLocked reads and parses the current profile's persisted
+// serve config directly from the state store, without touching b.serveConfig,
+// b.lastServeConfJSON, the cert refresh loop, or any other in-memory state. It
+// returns an invalid view if there is no current profile, nothing is stored, or
+// the stored config doesn't parse.
+//
+// b.mu must be held.
+func (b *LocalBackend) serveConfigFromStoreLocked() ipn.ServeConfigView {
+	pid := b.pm.CurrentProfile().ID()
+	if pid == "" {
+		return ipn.ServeConfigView{}
+	}
+	confj, err := b.store.ReadState(ipn.ServeConfigKey(pid))
+	if err != nil {
+		return ipn.ServeConfigView{}
+	}
+	var conf ipn.ServeConfig
+	if err := json.Unmarshal(confj, &conf); err != nil {
+		return ipn.ServeConfigView{}
+	}
+	return conf.View()
+}
+
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	// keyed by service name
 	var services map[tailcfg.ServiceName]*tailcfg.VIPService
-	if b.serveConfig.Valid() {
-		for svc, config := range b.serveConfig.Services().All() {
+
+	sc := b.serveConfig
+	if !sc.Valid() && !b.serveConfigLoaded {
+		// We have no valid serve config in memory and reloadServeConfigLocked
+		// hasn't consulted the store yet, so b.serveConfig may be empty even though a config is
+		// persisted. If an inbound c2n GET /vip-services races that first reload
+		// we'd report advertised services with no ports, which control will
+		// caches and make service host restart fail.
+		sc = b.serveConfigFromStoreLocked()
+	}
+
+	if sc.Valid() {
+		for svc, config := range sc.Services().All() {
 			mak.Set(&services, svc, &tailcfg.VIPService{
 				Name:  svc,
 				Ports: config.ServicePortRange(),
@@ -1592,6 +1626,15 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 		b.serveConfig = ipn.ServeConfigView{}
 		return
 	}
+
+	// We're past the gate and committed to consulting the store, so latch
+	// serveConfigLoaded one-way (sync.Once): from here on b.serveConfig
+	// authoritatively reflects the store — including "no config persisted",
+	// which falls through as a ReadState error below — and reload keeps it
+	// fresh, so the report path can trust it and stop reading the store. This
+	// must cover the no-config path too; otherwise nodes that never use serve
+	// would re-read the store on every report.
+	b.serveConfigLoadedOnce.Do(func() { b.serveConfigLoaded = true })
 
 	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID())
 	// TODO(maisem,bradfitz): prevent reading the config from disk

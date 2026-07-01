@@ -1148,6 +1148,154 @@ func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	return b
 }
 
+// TestVIPServicesReportStableAcrossReload checks the invariant the startup-race
+// fix establishes: the VIP services a node reports — the list control fetches via
+// c2n GET /vip-services AND the Hostinfo.ServicesHash derived from it
+// (vipServiceHash) — are identical before the first netmap has loaded serveConfig
+// into memory and after. That stability is the whole point: the node never emits
+// a port-less report for control to cache, so control never sees a
+// port-less<->ported ServicesHash transition. Before the fix the pre-reload
+// report dropped the ports, so the hash changed across reload and these
+// assertions fail.
+//
+// vipServicesFromPrefsLocked + vipServiceHash are exactly the two surfaces that
+// reach control: VIPServices() (the c2n answer) and maybeUpdateHostinfoServicesHashLocked
+// (the Hostinfo hash) both go through them.
+func TestVIPServicesReportStableAcrossReload(t *testing.T) {
+	tcp443 := tailcfg.ProtoPortRange{Proto: 6, Ports: tailcfg.PortRange{First: 443, Last: 443}}
+	served := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}}},
+		},
+	}
+	tests := []struct {
+		name      string
+		advertise []string
+		conf      *ipn.ServeConfig
+		wantPorts bool
+	}{
+		{"served-and-advertised", []string{"svc:abc"}, served, true},
+		// The fix must not be gated on AdvertiseServices: a served-but-not-yet-
+		// advertised service must still report its ports consistently.
+		{"served-not-advertised", nil, served, true},
+		// Legitimately port-less (advertised but nothing served): must stay
+		// consistent across reload, just with no ports.
+		{"advertised-not-served", []string{"svc:abc"}, &ipn.ServeConfig{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestBackend(t)
+			pid := b.pm.CurrentProfile().ID()
+			prefs := (&ipn.Prefs{AdvertiseServices: tt.advertise}).View()
+			if err := b.store.WriteState(ipn.ServeConfigKey(pid), must.Get(json.Marshal(tt.conf))); err != nil {
+				t.Fatal(err)
+			}
+
+			report := func() ([]*tailcfg.VIPService, string) {
+				list := b.vipServicesFromPrefsLocked(prefs)
+				return list, vipServiceHash(b.logf, list)
+			}
+
+			// Pre-reload: serveConfig not loaded, latch unset — the state an
+			// early c2n and the initial Hostinfo hash observe on restart.
+			b.serveConfig = ipn.ServeConfigView{}
+			beforeList, beforeHash := report()
+
+			// The first netmap arrives: reloadServeConfigLocked loads the config
+			// and latches serveConfigLoaded.
+			b.reloadServeConfigLocked(b.pm.CurrentPrefs())
+			afterList, afterHash := report()
+
+			if beforeHash != afterHash {
+				t.Errorf("ServicesHash changed across reload:\n before=%s %+v\n after =%s %+v",
+					beforeHash, beforeList, afterHash, afterList)
+			}
+			if !reflect.DeepEqual(beforeList, afterList) {
+				t.Errorf("VIP services list changed across reload:\n before=%+v\n after =%+v", beforeList, afterList)
+			}
+			gotPorts := len(afterList) == 1 && len(afterList[0].Ports) == 1 && afterList[0].Ports[0] == tcp443
+			if gotPorts != tt.wantPorts {
+				t.Errorf("reported with ports=%v, want %v: %+v", gotPorts, tt.wantPorts, afterList)
+			}
+		})
+	}
+}
+
+// TestVIPServicesC2NReportsPorts drives the real c2n GET /vip-services handler
+// and checks that the response control actually receives carries the service
+// ports — and the same ServicesHash — in every in-memory state the handler can
+// run in: before the first netmap has loaded serveConfig (a restart racing the
+// netmap; the store fallback must kick in) and after (steady state, from memory).
+// Both must equal the canonical answer, so control never sees a
+// port-less<->ported ServicesHash transition. Before the fix the not-yet-loaded
+// state answered port-less.
+func TestVIPServicesC2NReportsPorts(t *testing.T) {
+	conf := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:abc": {TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}}},
+		},
+	}
+
+	// answerC2N runs the real handler against b and returns the decoded response.
+	answerC2N := func(t *testing.T, b *LocalBackend) tailcfg.C2NVIPServicesResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handleC2NVIPServicesGet(b, rec, httptest.NewRequest("GET", "/vip-services", nil))
+		var res tailcfg.C2NVIPServicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatalf("decoding c2n response: %v", err)
+		}
+		return res
+	}
+
+	// newBackend returns a fresh backend with the serve config persisted on disk
+	// (but not yet loaded into memory).
+	newBackend := func(t *testing.T) *LocalBackend {
+		t.Helper()
+		b := newTestBackend(t)
+		if err := b.store.WriteState(ipn.ServeConfigKey(b.pm.CurrentProfile().ID()), must.Get(json.Marshal(conf))); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	// The canonical answer is the steady state, with serveConfig fully loaded.
+	ref := newBackend(t)
+	ref.reloadServeConfigLocked(ref.pm.CurrentPrefs())
+	want := answerC2N(t, ref)
+	if len(want.VIPServices) != 1 || len(want.VIPServices[0].Ports) == 0 {
+		t.Fatalf("reference c2n answer = %+v; want svc:abc with ports", want.VIPServices)
+	}
+
+	tests := []struct {
+		name  string
+		setup func(b *LocalBackend) // arrange the in-memory serveConfig before the c2n
+	}{
+		{
+			// Restart before the first netmap: config on disk, serveConfig empty
+			// in memory, latch unset. The store fallback must kick in.
+			name:  "not-yet-loaded",
+			setup: func(b *LocalBackend) { b.serveConfig = ipn.ServeConfigView{} },
+		},
+		{
+			// Steady state after the first netmap: serveConfig loaded in memory.
+			name:  "already-loaded",
+			setup: func(b *LocalBackend) { b.reloadServeConfigLocked(b.pm.CurrentPrefs()) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBackend(t)
+			tt.setup(b)
+			got := answerC2N(t, b)
+			if got.ServicesHash != want.ServicesHash || !reflect.DeepEqual(got.VIPServices, want.VIPServices) {
+				t.Errorf("c2n answer differs from the canonical (loaded) answer:\n got =%s %+v\n want=%s %+v",
+					got.ServicesHash, got.VIPServices, want.ServicesHash, want.VIPServices)
+			}
+		})
+	}
+}
+
 func TestServeFileOrDirectory(t *testing.T) {
 	td := t.TempDir()
 	writeFile := func(suffix, contents string) {
