@@ -1205,8 +1205,8 @@ github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210 h1:gSw3mUo
 github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210/go.mod h1:vxp6PAfQH5JOeS5GsrHHbsALlo+1ZIELanBwaP89wrc=
 github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a h1:TApskGPim53XY5WRt5hX4DnO8V6CmVoimSklryIoGMM=
 github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a/go.mod h1:+6WyG6kub5/5uPsMdYQuSti8i6F5WuKpFWLQnZt/Mms=
-github.com/tailscale/ts-gokrazy v0.0.0-20260604151927-fc3a567bcf75 h1:qdJT1/hv1Iji8j4mFUt1fvVPl97Oszvp0TUZWhMD5oY=
-github.com/tailscale/ts-gokrazy v0.0.0-20260604151927-fc3a567bcf75/go.mod h1:mu0sethAvP7xItcfBAxMJWiXZ3ZQ5qbKmjPYizOkSHE=
+github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e h1:+ot1gXs22BhqoStjwo2YSoZppGl/xovy31V29trAPeE=
+github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e/go.mod h1:mu0sethAvP7xItcfBAxMJWiXZ3ZQ5qbKmjPYizOkSHE=
 github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 h1:UBPHPtv8+nEAy2PD8RyAhOYvau1ek0HDJqLS/Pysi14=
 github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
 github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 h1:l10Gi6w9jxvinoiq15g8OToDdASBni4CyJOdHY1Hr8M=
