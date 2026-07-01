@@ -23,6 +23,10 @@ spec:
           jsonPath: .status.conditions[?(@.type == "PeerRelayReady")].reason
           name: Status
           type: string
+        - description: Public addresses the peer relay replicas are reachable on.
+          jsonPath: .status.endpoints[*].address
+          name: Endpoints
+          type: string
       name: v1alpha1
       schema:
         openAPIV3Schema:
@@ -177,6 +181,35 @@ spec:
                         pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                   x-kubernetes-list-map-keys:
                     - type
+                  x-kubernetes-list-type: map
+                endpoints:
+                  description: |-
+                    Endpoints lists the public address:port pairs each peer relay replica is reachable on. There is one entry
+                    per replica whose LoadBalancer Service has been assigned a public address; entries appear as the underlying
+                    cloud provisions each Service.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - address
+                      - port
+                      - replica
+                    properties:
+                      address:
+                        description: |-
+                          Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.
+                          Peers reach this relay by connecting to Address:Port over UDP.
+                        type: string
+                      port:
+                        description: Port is the UDP port the peer relay listens on.
+                        type: integer
+                        format: int32
+                      replica:
+                        description: Replica is the zero-based index of the peer relay replica this endpoint targets.
+                        type: integer
+                        format: int32
+                  x-kubernetes-list-map-keys:
+                    - replica
                   x-kubernetes-list-type: map
       served: true
       storage: true
