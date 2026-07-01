@@ -3,7 +3,7 @@
     "Update": {
         "NoPassword": true
     },
-    "SerialConsole": "ttyS0,115200",
+    "SerialConsole": "serial0,115200",
     "GokrazyPackages": [
         "github.com/gokrazy/gokrazy/cmd/dhcp",
         "github.com/gokrazy/gokrazy/cmd/randomd",
@@ -12,13 +12,14 @@
     "Packages": [
         "github.com/gokrazy/serial-busybox",
         "github.com/gokrazy/breakglass",
+        "tailscale.com/cmd/fbstatus",
         "tailscale.com/cmd/tailscale",
         "tailscale.com/cmd/tailscaled"
     ],
     "PackageConfig": {
         "github.com/gokrazy/breakglass": {
             "CommandLineFlags": [
-                "-authorized_keys=ec2"
+                "-authorized_keys=/perm/breakglass.authorized_keys"
             ]
         },
         "tailscale.com/cmd/tailscale": {
