@@ -156,6 +156,12 @@ tsapp-build-and-flash-pi: ## Build a tsapp-pi.arm64 GAF from HEAD and flash a lo
 		--gaf=gokrazy/tsapp-pi.arm64.gaf \
 		$(if $(DISK),--disk=$(DISK))
 
+.PHONY: tsapp-push-pi
+tsapp-push-pi: ## Build a tsapp-pi.arm64 GAF from HEAD and push it to a running Pi over the network (pass PI=<ip>)
+	@[ -n "$(PI)" ] || { echo "usage: make tsapp-push-pi PI=<ip-address>"; exit 1; }
+	cd gokrazy && ../tool/go run build.go --gaf --app=tsapp-pi.arm64
+	./tool/go run ./gokrazy/gafpush --gaf=gokrazy/tsapp-pi.arm64.gaf --pi=$(PI)
+
 .PHONY: pin-github-actions
 pin-github-actions:
 	./tool/go tool github.com/stacklok/frizbee actions .github/workflows
