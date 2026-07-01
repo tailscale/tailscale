@@ -279,7 +279,7 @@ func (e *extension) domainRenewalTimeByARI(b *ipnlocal.LocalBackend, cs certStor
 	if len(blocks) < 1 {
 		return time.Time{}, fmt.Errorf("could not parse certificate chain from certStore, got %d PEM block(s)", len(blocks))
 	}
-	ac, err := acmeClient(cs)
+	ac, err := e.acmeClient(cs)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -305,8 +305,9 @@ func (e *extension) domainRenewalTimeByARI(b *ipnlocal.LocalBackend, cs certStor
 // domain is the resolved cert domain (e.g., "*.node.ts.net" for
 // wildcards). It can be overridden in tests.
 var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
-	e.acmeMu.Lock()
-	defer e.acmeMu.Unlock()
+	dm := e.mutexForDomain(domain)
+	dm.Lock()
+	defer dm.Unlock()
 
 	// In case this method was triggered multiple times in parallel (when
 	// serving incoming requests), check whether one of the other goroutines
@@ -335,7 +336,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		defer e.setCertPending(b, domain, false)
 	}
 
-	ac, err := acmeClient(cs)
+	ac, err := e.acmeClient(cs)
 	if err != nil {
 		return nil, err
 	}
@@ -344,25 +345,9 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		logf("acme: using Directory URL %q", ac.DirectoryURL)
 	}
 
-	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
-	switch {
-	case err == nil:
-		// Great, already registered.
-		logf("already had ACME account.")
-	case err == acme.ErrNoAccount:
-		a, err = ac.Register(ctx, new(acme.Account), acme.AcceptTOS)
-		if err == acme.ErrAccountAlreadyExists {
-			// Potential race. Double check.
-			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("acme.Register: %w", err)
-		}
-		logf("registered ACME account.")
-		traceACME(a)
-	default:
-		return nil, fmt.Errorf("acme.GetReg: %w", err)
-
+	a, err := e.ensureACMEAccount(ctx, ac, logf, traceACME)
+	if err != nil {
+		return nil, err
 	}
 	if a.Status != acme.StatusValid {
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
@@ -408,6 +393,32 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	}
 	issueArgs.challengeType = acmeChallengeDNS01
 	return e.issueACMECert(ctx, b, ac, issueArgs)
+}
+
+// ensureACMEAccount returns a valid ACME account, registering one if
+// needed. Locked so two first-time issuances don't both create one.
+func (e *extension) ensureACMEAccount(ctx context.Context, ac *acme.Client, logf logger.Logf, traceACME func(any)) (*acme.Account, error) {
+	e.acmeAccountMu.Lock()
+	defer e.acmeAccountMu.Unlock()
+	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
+	switch {
+	case err == nil:
+		logf("already had ACME account.")
+		return a, nil
+	case err == acme.ErrNoAccount:
+		a, err = ac.Register(ctx, new(acme.Account), acme.AcceptTOS)
+		if err == acme.ErrAccountAlreadyExists {
+			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("acme.Register: %w", err)
+		}
+		logf("registered ACME account.")
+		traceACME(a)
+		return a, nil
+	default:
+		return nil, fmt.Errorf("acme.GetReg: %w", err)
+	}
 }
 
 type acmeCertIssueArgs struct {
