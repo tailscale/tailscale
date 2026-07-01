@@ -108,7 +108,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210
 	github.com/tailscale/setec v0.0.0-20251203133219-2ab774e4129a
-	github.com/tailscale/ts-gokrazy v0.0.0-20260604151927-fc3a567bcf75
+	github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20260622164646-ae172d45f0f7
