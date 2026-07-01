@@ -18,6 +18,7 @@ import (
 
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/kube/kubeclient"
+	"tailscale.com/util/def"
 )
 
 // settings is all the configuration for containerboot.
@@ -89,47 +90,47 @@ type settings struct {
 
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
-		AuthKey:            defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		ClientID:           defaultEnv("TS_CLIENT_ID", ""),
-		ClientSecret:       defaultEnv("TS_CLIENT_SECRET", ""),
-		IDToken:            defaultEnv("TS_ID_TOKEN", ""),
-		Audience:           defaultEnv("TS_AUDIENCE", ""),
-		Hostname:           defaultEnv("TS_HOSTNAME", ""),
-		Routes:             defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:    defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTargetIP:      defaultEnv("TS_DEST_IP", ""),
-		ProxyTargetDNSName: defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
-		TailnetTargetIP:    defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN:  defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:    defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:          defaultEnv("TS_EXTRA_ARGS", ""),
+		AuthKey:            def.Envs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		ClientID:           def.Env("TS_CLIENT_ID", ""),
+		ClientSecret:       def.Env("TS_CLIENT_SECRET", ""),
+		IDToken:            def.Env("TS_ID_TOKEN", ""),
+		Audience:           def.Env("TS_AUDIENCE", ""),
+		Hostname:           def.Env("TS_HOSTNAME", ""),
+		Routes:             def.EnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:    def.Env("TS_SERVE_CONFIG", ""),
+		ProxyTargetIP:      def.Env("TS_DEST_IP", ""),
+		ProxyTargetDNSName: def.Env("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
+		TailnetTargetIP:    def.Env("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN:  def.Env("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:    def.Env("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:          def.Env("TS_EXTRA_ARGS", ""),
 		InKubernetes:       os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:      defaultBool("TS_USERSPACE", true),
-		StateDir:           defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:          defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		UserspaceMode:      def.EnvBool("TS_USERSPACE", true),
+		StateDir:           def.Env("TS_STATE_DIR", ""),
+		AcceptDNS:          def.EnvBoolPointer("TS_ACCEPT_DNS"),
 		KubeSecret: func() string {
 			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-				return defaultEnv("TS_KUBE_SECRET", "tailscale")
+				return def.Env("TS_KUBE_SECRET", "tailscale")
 			}
-			return defaultEnv("TS_KUBE_SECRET", "")
+			return def.Env("TS_KUBE_SECRET", "")
 		}(),
-		SOCKSProxyAddr:                        defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:                         defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:                                defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:                              defaultBool("TS_AUTH_ONCE", false),
-		Root:                                  defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		SOCKSProxyAddr:                        def.Env("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:                         def.Env("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:                                def.Env("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:                              def.EnvBool("TS_AUTH_ONCE", false),
+		Root:                                  def.Env("TS_TEST_ONLY_ROOT", "/"),
 		TailscaledConfigFilePath:              tailscaledConfigFilePath(),
-		AllowProxyingClusterTrafficViaIngress: defaultBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
-		PodIP:                                 defaultEnv("POD_IP", ""),
-		EnableForwardingOptimizations:         defaultBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
-		HealthCheckAddrPort:                   defaultEnv("TS_HEALTHCHECK_ADDR_PORT", ""),
-		LocalAddrPort:                         defaultEnv("TS_LOCAL_ADDR_PORT", "[::]:9002"),
-		MetricsEnabled:                        defaultBool("TS_ENABLE_METRICS", false),
-		HealthCheckEnabled:                    defaultBool("TS_ENABLE_HEALTH_CHECK", false),
-		DebugAddrPort:                         defaultEnv("TS_DEBUG_ADDR_PORT", ""),
-		EgressProxiesCfgPath:                  defaultEnv("TS_EGRESS_PROXIES_CONFIG_PATH", ""),
-		IngressProxiesCfgPath:                 defaultEnv("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
-		PodUID:                                defaultEnv("POD_UID", ""),
+		AllowProxyingClusterTrafficViaIngress: def.EnvBool("EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS", false),
+		PodIP:                                 def.Env("POD_IP", ""),
+		EnableForwardingOptimizations:         def.EnvBool("TS_EXPERIMENTAL_ENABLE_FORWARDING_OPTIMIZATIONS", false),
+		HealthCheckAddrPort:                   def.Env("TS_HEALTHCHECK_ADDR_PORT", ""),
+		LocalAddrPort:                         def.Env("TS_LOCAL_ADDR_PORT", "[::]:9002"),
+		MetricsEnabled:                        def.EnvBool("TS_ENABLE_METRICS", false),
+		HealthCheckEnabled:                    def.EnvBool("TS_ENABLE_HEALTH_CHECK", false),
+		DebugAddrPort:                         def.Env("TS_DEBUG_ADDR_PORT", ""),
+		EgressProxiesCfgPath:                  def.Env("TS_EGRESS_PROXIES_CONFIG_PATH", ""),
+		IngressProxiesCfgPath:                 def.Env("TS_INGRESS_PROXIES_CONFIG_PATH", ""),
+		PodUID:                                def.Env("POD_UID", ""),
 	}
 
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -153,7 +154,7 @@ func configFromEnv() (*settings, error) {
 
 	// If cert share is enabled, set the replica as read or write. Only 0th
 	// replica should be able to write.
-	isInCertShareMode := defaultBool("TS_EXPERIMENTAL_CERT_SHARE", false)
+	isInCertShareMode := def.EnvBool("TS_EXPERIMENTAL_CERT_SHARE", false)
 	if isInCertShareMode {
 		cfg.CertShareMode = "ro"
 		podName := os.Getenv("POD_NAME")
@@ -452,55 +453,4 @@ func (cfg *settings) localHealthEnabled() bool {
 
 func (cfg *settings) egressSvcsTerminateEPEnabled() bool {
 	return cfg.LocalAddrPort != "" && cfg.EgressProxiesCfgPath != ""
-}
-
-// defaultEnv returns the value of the given envvar name, or defVal if
-// unset.
-func defaultEnv(name, defVal string) string {
-	if v, ok := os.LookupEnv(name); ok {
-		return v
-	}
-	return defVal
-}
-
-// defaultEnvStringPointer returns a pointer to the given envvar value if set, else
-// returns nil. This is useful in cases where we need to distinguish between a
-// variable being set to empty string vs unset.
-func defaultEnvStringPointer(name string) *string {
-	if v, ok := os.LookupEnv(name); ok {
-		return &v
-	}
-	return nil
-}
-
-// defaultEnvBoolPointer returns a pointer to the given envvar value if set, else
-// returns nil. This is useful in cases where we need to distinguish between a
-// variable being explicitly set to false vs unset.
-func defaultEnvBoolPointer(name string) *bool {
-	v := os.Getenv(name)
-	ret, err := strconv.ParseBool(v)
-	if err != nil {
-		return nil
-	}
-	return &ret
-}
-
-func defaultEnvs(names []string, defVal string) string {
-	for _, name := range names {
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-	}
-	return defVal
-}
-
-// defaultBool returns the boolean value of the given envvar name, or
-// defVal if unset or not a bool.
-func defaultBool(name string, defVal bool) bool {
-	v := os.Getenv(name)
-	ret, err := strconv.ParseBool(v)
-	if err != nil {
-		return defVal
-	}
-	return ret
 }
