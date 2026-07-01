@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -269,7 +268,10 @@ func (h *ExtensionHost) init() {
 	// Report active extensions to the log.
 	// TODO(nickkhyl): update client metrics to include the active/failed/skipped extensions.
 	h.mu.Lock()
-	extensionNames := slices.Collect(maps.Keys(h.extensionsByName))
+	var extensionNames []string
+	for _, ext := range h.activeExtensions {
+		extensionNames = append(extensionNames, ext.Name())
+	}
 	h.mu.Unlock()
 	h.logf("active extensions: %v", strings.Join(extensionNames, ", "))
 
