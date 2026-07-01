@@ -1100,6 +1100,14 @@ func (r *ProxyGroupReconciler) findStaticEndpoints(ctx context.Context, existing
 		}
 	}
 
+	// Sort for a deterministic result regardless of node list order. Without
+	// this, the slice can oscillate between reconciles when both addresses are
+	// already known, causing spurious config Secret writes and an infinite
+	// reconcile loop.
+	slices.SortFunc(endpoints, func(a, b netip.AddrPort) int {
+		return a.Compare(b)
+	})
+
 	if len(endpoints) == 0 {
 		return nil, &FindStaticEndpointErr{msg: fmt.Sprintf("failed to find any `status.addresses` of type %q on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass %q", corev1.NodeExternalIP, proxyClass.Name)}
 	}
