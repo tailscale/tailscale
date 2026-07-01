@@ -9,20 +9,26 @@
 package peerrelay
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/tstime"
 )
 
 type (
@@ -33,6 +39,7 @@ type (
 
 		tailscaleNamespace string
 		logger             *zap.SugaredLogger
+		clock              tstime.Clock
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -44,18 +51,32 @@ type (
 		TailscaleNamespace string
 		// The logger to use for this Reconciler.
 		Logger *zap.SugaredLogger
+		// Clock is used to stamp condition transitions. Defaults to a real clock when unset.
+		Clock tstime.Clock
 	}
 )
 
 const reconcilerName = "peerrelay-reconciler"
 
+// Constants for condition reasons.
+const (
+	ReasonEndpointsInvalid = "EndpointsInvalid"
+	ReasonReady            = "PeerRelayReady"
+)
+
 // NewReconciler returns a new instance of the Reconciler type. It watches specifically for changes to PeerRelay
 // custom resources. The ReconcilerOptions can be used to modify the behaviour of the Reconciler.
 func NewReconciler(options ReconcilerOptions) *Reconciler {
+	clock := options.Clock
+	if clock == nil {
+		clock = tstime.DefaultClock{}
+	}
+
 	return &Reconciler{
 		Client:             options.Client,
 		tailscaleNamespace: options.TailscaleNamespace,
 		logger:             options.Logger.Named(reconcilerName),
+		clock:              clock,
 	}
 }
 
@@ -110,7 +131,56 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
+	if err := r.updateEndpoints(ctx, pr); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to update endpoints for PeerRelay %q: %w", pr.Name, err)
+	}
+
 	return reconcile.Result{}, nil
+}
+
+func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay) error {
+	var list corev1.ServiceList
+	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
+		return fmt.Errorf("failed to list Services: %w", err)
+	}
+
+	var (
+		endpoints []tsapi.PeerRelayEndpoint
+		errs      []error
+	)
+
+	for i := range list.Items {
+		endpoint, err := peerRelayEndpoint(&list.Items[i])
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		if endpoint != nil {
+			endpoints = append(endpoints, *endpoint)
+		}
+	}
+
+	slices.SortFunc(endpoints, func(a, b tsapi.PeerRelayEndpoint) int {
+		return cmp.Compare(a.Replica, b.Replica)
+	})
+
+	pr.Status.Endpoints = endpoints
+	if err := errors.Join(errs...); err != nil {
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, err.Error(), r.clock, r.logger)
+		if statusErr := r.Status().Update(ctx, pr); statusErr != nil {
+			return fmt.Errorf("failed to update PeerRelay status: %w", statusErr)
+		}
+
+		return err
+	}
+
+	operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
+	if err := r.Status().Update(ctx, pr); err != nil {
+		return fmt.Errorf("failed to update PeerRelay status: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {

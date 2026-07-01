@@ -47,14 +47,16 @@ func TestReconciler_Reconcile(t *testing.T) {
 	}
 
 	tt := []struct {
-		Name              string
-		Request           reconcile.Request
-		PeerRelay         *tsapi.PeerRelay
-		ExistingResources []client.Object
-		ExpectsError      bool
-		ExpectedServices  []expectedService
-		ExpectFinalizer   bool
-		ExpectPRDeleted   bool
+		Name                string
+		Request             reconcile.Request
+		PeerRelay           *tsapi.PeerRelay
+		ExistingResources   []client.Object
+		ExpectsError        bool
+		ExpectedServices    []expectedService
+		ExpectedEndpoints   []tsapi.PeerRelayEndpoint
+		ExpectedReadyStatus metav1.ConditionStatus // asserted only when non-empty
+		ExpectFinalizer     bool
+		ExpectPRDeleted     bool
 	}{
 		{
 			Name:    "ignores-unknown-peer-relay",
@@ -247,6 +249,78 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			// GCP/Azure-style: the LB reports a plain IPv4 address; we surface it verbatim in status.endpoints.
+			Name:    "endpoints-populated-from-lb-ip",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedServiceWithLB("test", 1, "5.6.7.8", ""),
+			},
+			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+				{Replica: 1, Address: "5.6.7.8", Port: 41641},
+			},
+		},
+		{
+			// Peer relays advertise a raw IP:port to peers, so a hostname-only LB (a misconfigured AWS NLB, for
+			// example) must be rejected outright — no fallback. The reconciler surfaces this as an error and
+			// leaves that replica out of status.endpoints.
+			Name:    "hostname-only-lb-produces-error",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
+			},
+			ExpectedServices:    []expectedService{{Name: "test-0"}},
+			ExpectedEndpoints:   nil,
+			ExpectsError:        true,
+			ExpectedReadyStatus: metav1.ConditionFalse,
+		},
+		{
+			// Mixed batch: one replica has a proper IP, another has only a hostname. The IP-provisioned replica
+			// still shows up in status; the hostname-only one is skipped and drives the error.
+			Name:    "mixed-ip-and-hostname-partial-status-plus-error",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedServiceWithLB("test", 1, "", "test-1.elb.amazonaws.com"),
+			},
+			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+			},
+			ExpectsError:        true,
+			ExpectedReadyStatus: metav1.ConditionFalse,
+		},
+		{
+			// Mid-provisioning: some LBs have addresses, some don't yet. Only the ready ones show up.
+			Name:    "endpoints-partial-when-lb-not-ready",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(3))},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedService("test", 2),
+			},
+			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}, {Name: "test-2"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+			},
+		},
+		{
 			Name:    "deletion",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
@@ -269,7 +343,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().WithScheme(tsapi.GlobalScheme)
+			builder := fake.NewClientBuilder().
+				WithScheme(tsapi.GlobalScheme).
+				WithStatusSubresource(&tsapi.PeerRelay{})
 			if tc.PeerRelay != nil {
 				builder = builder.WithObjects(tc.PeerRelay)
 			}
@@ -335,8 +411,29 @@ func TestReconciler_Reconcile(t *testing.T) {
 					t.Errorf("expected finalizer to be set, got %v", pr.Finalizers)
 				}
 			}
+
+			if !slices.Equal(pr.Status.Endpoints, tc.ExpectedEndpoints) {
+				t.Errorf("expected status.endpoints %v, got %v", tc.ExpectedEndpoints, pr.Status.Endpoints)
+			}
+
+			if tc.ExpectedReadyStatus != "" {
+				got := readyConditionStatus(&pr)
+				if got != tc.ExpectedReadyStatus {
+					t.Errorf("expected PeerRelayReady=%s, got %q", tc.ExpectedReadyStatus, got)
+				}
+			}
 		})
 	}
+}
+
+// readyConditionStatus returns the current status of the PeerRelayReady condition, or the empty string if unset.
+func readyConditionStatus(pr *tsapi.PeerRelay) metav1.ConditionStatus {
+	for _, cond := range pr.Status.Conditions {
+		if cond.Type == string(tsapi.PeerRelayReady) {
+			return cond.Status
+		}
+	}
+	return ""
 }
 
 func assertService(t *testing.T, want expectedService, got *corev1.Service) {
@@ -393,4 +490,10 @@ func managedService(prName string, idx int) *corev1.Service {
 		},
 		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
+}
+
+func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.Service {
+	svc := managedService(prName, idx)
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip, Hostname: hostname}}
+	return svc
 }

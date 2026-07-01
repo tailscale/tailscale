@@ -124,3 +124,25 @@ func replicaIndexFromService(svc *corev1.Service) (int32, bool) {
 
 	return int32(n), true
 }
+
+func peerRelayEndpoint(svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
+	idx, ok := replicaIndexFromService(svc)
+	if !ok {
+		return nil, nil
+	}
+
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.IP != "" {
+			return &tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort}, nil
+		}
+	}
+
+	// An ingress entry with no IP means the LB has been provisioned but assigned only a hostname (e.g. an AWS NLB
+	// missing the ip-address-type/target-type annotations). An empty ingress list means the LB is still
+	// provisioning; wait for the next reconcile.
+	if len(svc.Status.LoadBalancer.Ingress) > 0 {
+		return nil, fmt.Errorf("service %q LoadBalancer ingress has no public IP; peer relays require a public IP (check cloud LoadBalancer annotations)", svc.Name)
+	}
+
+	return nil, nil
+}

@@ -100,6 +100,14 @@ func SetTailnetCondition(tn *tsapi.Tailnet, conditionType tsapi.ConditionType, s
 	tn.Status.Conditions = conds
 }
 
+// SetPeerRelayCondition ensures that PeerRelay status has a condition with the
+// given attributes. LastTransitionTime gets set every time condition's status
+// changes.
+func SetPeerRelayCondition(pr *tsapi.PeerRelay, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(pr.Status.Conditions, conditionType, status, reason, message, pr.Generation, clock, logger)
+	pr.Status.Conditions = conds
+}
+
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {
 	newCondition := metav1.Condition{
 		Type:               string(conditionType),

@@ -561,6 +561,24 @@ _Appears in:_
 | `status` _[PeerRelayStatus](#peerrelaystatus)_ | Status describes the status of the PeerRelay. This is set<br />and managed by the Tailscale operator. |  |  |
 
 
+#### PeerRelayEndpoint
+
+
+
+
+
+
+
+_Appears in:_
+- [PeerRelayStatus](#peerrelaystatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `replica` _integer_ | Replica is the zero-based index of the peer relay replica this endpoint targets. |  |  |
+| `address` _string_ | Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.<br />Peers reach this relay by connecting to Address:Port over UDP. |  |  |
+| `port` _integer_ | Port is the UDP port the peer relay listens on. |  |  |
+
+
 #### PeerRelayList
 
 
@@ -632,6 +650,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
+| `endpoints` _[PeerRelayEndpoint](#peerrelayendpoint) array_ | Endpoints lists the public address:port pairs each peer relay replica is reachable on. There is one entry<br />per replica whose LoadBalancer Service has been assigned a public address; entries appear as the underlying<br />cloud provisions each Service. |  |  |
 
 
 #### Pod

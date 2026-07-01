@@ -19,6 +19,7 @@ var PeerRelayKind = "PeerRelay"
 // +kubebuilder:resource:scope=Cluster,shortName=pr
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=`.status.conditions[?(@.type == "PeerRelayReady")].reason`,description="Status of the deployed PeerRelay resources."
+// +kubebuilder:printcolumn:name="Endpoints",type="string",JSONPath=`.status.endpoints[*].address`,description="Public addresses the peer relay replicas are reachable on."
 
 type PeerRelay struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -103,6 +104,26 @@ type PeerRelayStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions"`
+
+	// Endpoints lists the public address:port pairs each peer relay replica is reachable on. There is one entry
+	// per replica whose LoadBalancer Service has been assigned a public address; entries appear as the underlying
+	// cloud provisions each Service.
+	// +listType=map
+	// +listMapKey=replica
+	// +optional
+	Endpoints []PeerRelayEndpoint `json:"endpoints,omitempty"`
+}
+
+type PeerRelayEndpoint struct {
+	// Replica is the zero-based index of the peer relay replica this endpoint targets.
+	Replica int32 `json:"replica"`
+
+	// Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.
+	// Peers reach this relay by connecting to Address:Port over UDP.
+	Address string `json:"address"`
+
+	// Port is the UDP port the peer relay listens on.
+	Port int32 `json:"port"`
 }
 
 // PeerRelayReady is set to True if the PeerRelay is available for use by operator workloads.
