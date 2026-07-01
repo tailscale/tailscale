@@ -4,12 +4,14 @@
 package magicsock
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
@@ -558,6 +560,42 @@ func Test_endpoint_discoPingTimeout(t *testing.T) {
 					t.Errorf("expected sentPing[txid] to be removed, but it still exists")
 				}
 			})
+		})
+	}
+}
+
+func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
+	directAddr := netip.MustParseAddrPort("192.0.2.1:7")
+	for _, neverDirectUDP := range []bool{false, true} {
+		t.Run(fmt.Sprintf("neverDirectUDP=%v", neverDirectUDP), func(t *testing.T) {
+			prev := envknob.String("TS_DEBUG_NEVER_DIRECT_UDP")
+			if neverDirectUDP {
+				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true")
+			} else {
+				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "")
+			}
+			t.Cleanup(func() { envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", prev) })
+			now := mono.Now()
+			c := &Conn{
+				logf: func(msg string, args ...any) {},
+			}
+			c.discoAtomic.Set(key.NewDisco())
+			de := &endpoint{
+				c:             c,
+				sentPing:      make(map[stun.TxID]sentPing),
+				endpointState: make(map[netip.AddrPort]*endpointState),
+			}
+			de.disco.Store(&endpointDisco{key: key.NewDisco().Public()})
+			de.endpointState[directAddr] = &endpointState{}
+			de.sendDiscoPingsLocked(now, true)
+
+			wantPing := !neverDirectUDP
+			if gotPing := de.lastFullPing == now; gotPing != wantPing {
+				t.Errorf("lastFullPing set = %v, want %v", gotPing, wantPing)
+			}
+			if gotPing := de.endpointState[directAddr].lastPing == now; gotPing != wantPing {
+				t.Errorf("direct endpoint lastPing set = %v, want %v", gotPing, wantPing)
+			}
 		})
 	}
 }

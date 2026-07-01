@@ -1362,8 +1362,12 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 
 }
 
-// sendDiscoPingsLocked starts pinging all of ep's endpoints.
+// sendDiscoPingsLocked starts pinging all of ep's direct endpoints.
+// Sibling of discoverUDPRelayPathsLocked for udprelay.
 func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
+	if debugNeverDirectUDP() {
+		return // skip when direct UDP is disabled
+	}
 	de.lastFullPing = now
 	var sentAny bool
 	for ep, st := range de.endpointState {
