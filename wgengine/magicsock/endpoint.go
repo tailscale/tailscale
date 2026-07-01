@@ -23,6 +23,8 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
@@ -103,7 +105,7 @@ type endpoint struct {
 
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only
-	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
+	capVer          tailcfg.CapabilityVersion
 }
 
 // udpRelayEndpointReady determines whether the given relay [addrQuality] should
@@ -914,7 +916,7 @@ func (de *endpoint) wantUDPRelayPathDiscoveryLocked(now mono.Time) bool {
 		// call into [relayManager] and do some wasted work.
 		return false
 	}
-	if !de.relayCapable {
+	if !capVerIsRelayCapable(de.capVer) {
 		return false
 	}
 	if de.bestAddr.isDirect() && now.Before(de.trustBestAddrUntil) {
@@ -1547,7 +1549,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 
 	de.setEndpointsLocked(n.Endpoints())
 
-	de.relayCapable = capVerIsRelayCapable(n.Cap())
+	de.capVer = n.Cap()
 }
 
 func (de *endpoint) setEndpointsLocked(eps interface {
@@ -2107,4 +2109,46 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	if de.c.relayManager.hasPeerRelayServers.Load() {
 		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
 	}
+}
+
+// maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
+// should send our DiscoKey to the first node address of the [endpoint].
+//
+// The event is suppressed if less than [discoKeyAdvertisementInterval] has
+// passed since the last DiscoKey was sent, or netmap caching is disabled on
+// this node.
+func (de *endpoint) maybeSendTSMPDiscoAdvert(now mono.Time) {
+	if !buildfeatures.HasCacheNetMap ||
+		!envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		return
+	}
+
+	// TSMP disco key advertisement was tied to the netmap caching control knob
+	// as a means to disable TSMP disco key advertisement widely (See #20081).
+	// If the local node (and likely whole tailnet) has netmap caching disabled,
+	// there is no point to disco key advertisement via TSMP.
+	if de.c.controlKnobs == nil || !de.c.controlKnobs.CacheNetworkMaps.Load() {
+		return
+	}
+
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if !de.nodeAddr.IsValid() {
+		return
+	}
+
+	if !capVerIsTSMPDiscoAdvertCapable(de.capVer) {
+		return
+	}
+
+	if !de.lastDiscoKeyAdvertisement.IsZero() && now.Sub(de.lastDiscoKeyAdvertisement) < discoKeyAdvertisementInterval {
+		return
+	}
+
+	de.lastDiscoKeyAdvertisement = now
+	de.c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
+		NodeFirstAddr: de.nodeAddr,
+		NodeID:        de.nodeID,
+	})
 }
