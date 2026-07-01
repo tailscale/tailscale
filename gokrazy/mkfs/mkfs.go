@@ -38,10 +38,19 @@ const gptSecondaryReservedSectors = 34
 
 const sectorSize = 512
 
+// PermFile is a file to include in the /perm partition.
+type PermFile struct {
+	Path    string // path within the filesystem, e.g. "breakglass.authorized_keys"
+	Content []byte
+}
+
 // Perm creates an ext4 filesystem with volume label "PERM" inside the
 // gokrazy /perm partition of f. devsizeBytes is the total disk size
 // that the gokrazy GPT in f was written for; the partition layout is
 // derived from it via [disklayout].
+//
+// If files is non-empty, the listed files are written into the
+// filesystem before flushing to disk.
 //
 // To avoid issuing ext4.Create's hundreds of small scattered writes
 // against slow storage one syscall at a time, the filesystem is first
@@ -56,14 +65,14 @@ const sectorSize = 512
 //
 // f must be open read/write, and on macOS should be the buffered
 // /dev/diskN device rather than the raw /dev/rdiskN alias.
-func Perm(f *os.File, devsizeBytes int64) error {
+func Perm(f *os.File, devsizeBytes int64, files ...PermFile) error {
 	permStart := int64(disklayout.PermStartLBA(disklayout.DefaultBootPartitionStartLBA)) * sectorSize
 	permSize := int64(disklayout.PermSize(disklayout.DefaultBootPartitionStartLBA, uint64(devsizeBytes))-gptSecondaryReservedSectors) * sectorSize
 
 	fmt.Fprintf(os.Stderr, "Formatting /perm as ext4 (PERM): %s filesystem\n", humanBytes(permSize))
 
 	mem := newMemBackend(permSize)
-	if _, err := ext4.Create(mem, permSize, 0, sectorSize, &ext4.Params{
+	fsys, err := ext4.Create(mem, permSize, 0, sectorSize, &ext4.Params{
 		VolumeName: "PERM",
 		// Force 4 KiB blocks. go-diskfs v1.9.3 otherwise defaults to 1
 		// KiB blocks regardless of filesystem size, which makes a 128
@@ -79,8 +88,18 @@ func Perm(f *os.File, devsizeBytes int64) error {
 		Features: []ext4.FeatureOpt{
 			ext4.WithFeatureReservedGDTBlocksForExpansion(false),
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("ext4.Create: %w", err)
+	}
+	for _, pf := range files {
+		w, err := fsys.OpenFile("/"+pf.Path, os.O_CREATE|os.O_RDWR)
+		if err != nil {
+			return fmt.Errorf("create %s in /perm: %w", pf.Path, err)
+		}
+		if _, err := w.Write(pf.Content); err != nil {
+			return fmt.Errorf("write %s in /perm: %w", pf.Path, err)
+		}
 	}
 	return mem.flushTo(f, permStart)
 }
