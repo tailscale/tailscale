@@ -24,6 +24,7 @@ import (
 	"github.com/bradfitz/monogok/disklayout"
 	"github.com/diskfs/go-diskfs/backend"
 	"github.com/diskfs/go-diskfs/filesystem/ext4"
+	"tailscale.com/util/progresstracking"
 )
 
 // gptSecondaryReservedSectors is the number of 512-byte sectors that
@@ -288,39 +289,15 @@ func (m *memBackend) flushTo(f io.WriterAt, baseOffset int64) error {
 	return nil
 }
 
-// startExt4FlushProgress prints "ext4 perm: N MB / M MB (X%)" to
-// os.Stderr roughly once a second, plus a final tick on stop. Returns
-// a function the caller must invoke when the flush is done.
 func startExt4FlushProgress(done *atomic.Int64, total int64) func() {
-	stopCh := make(chan struct{})
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
-		report := func() {
-			d := done.Load()
-			pct := 0.0
-			if total > 0 {
-				pct = float64(d) * 100 / float64(total)
-			}
-			fmt.Fprintf(os.Stderr, "  ext4 perm: %s / %s (%.1f%%)\n",
-				humanBytes(d), humanBytes(total), pct)
+	return progresstracking.Ticker(done.Load, total, func(d, t int64) {
+		pct := 0.0
+		if t > 0 {
+			pct = float64(d) * 100 / float64(t)
 		}
-		for {
-			select {
-			case <-stopCh:
-				report()
-				return
-			case <-t.C:
-				report()
-			}
-		}
-	}()
-	return func() {
-		close(stopCh)
-		<-finished
-	}
+		fmt.Fprintf(os.Stderr, "  ext4 perm: %s / %s (%.1f%%)\n",
+			humanBytes(d), humanBytes(t), pct)
+	})
 }
 
 func humanBytes(n int64) string {

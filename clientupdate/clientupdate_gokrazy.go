@@ -15,9 +15,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/progresstracking"
 )
 
 const (
@@ -50,8 +52,9 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 	tmp.Close()
 	defer os.Remove(tmpName)
 
+	logf("downloading %s", args.URL)
 	if args.AllowUnsigned {
-		if err := downloadUnverified(ctx, args.URL, tmpName); err != nil {
+		if err := downloadUnverified(ctx, logf, args.URL, tmpName); err != nil {
 			return err
 		}
 	} else {
@@ -66,6 +69,8 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 	}
 	defer zr.Close()
 
+	logf("download complete")
+
 	gokClient := gokrazyHTTPClient()
 	for _, part := range []struct {
 		name string
@@ -75,6 +80,7 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 		{"boot.img", "/update/boot"},
 		{"mbr.img", "/update/mbr"},
 	} {
+		logf("writing %s...", part.name)
 		if err := putGokrazyGAFMember(ctx, gokClient, zr.File, part.name, part.path); err != nil {
 			return err
 		}
@@ -94,7 +100,7 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 // downloadUnverified saves the GAF at srcURL to dstPath without verifying
 // a signature. It is used only when args.AllowUnsigned is set, for tests
 // that serve the GAF from a fileserver that does not publish distsign.pub.
-func downloadUnverified(ctx context.Context, srcURL, dstPath string) error {
+func downloadUnverified(ctx context.Context, logf logger.Logf, srcURL, dstPath string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", srcURL, nil)
 	if err != nil {
 		return err
@@ -111,7 +117,13 @@ func downloadUnverified(ctx context.Context, srcURL, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, res.Body); err != nil {
+	total := res.ContentLength
+	pw := progresstracking.NewWriter(io.Discard, total, time.Second, func(done int64) {
+		if total > 0 {
+			logf("downloading: %d / %d MB (%.0f%%)", done>>20, total>>20, float64(done)/float64(total)*100)
+		}
+	})
+	if _, err := io.Copy(f, io.TeeReader(res.Body, pw)); err != nil {
 		f.Close()
 		return err
 	}
