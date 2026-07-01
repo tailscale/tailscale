@@ -29,11 +29,12 @@ import (
 )
 
 var flashApplianceArgs struct {
-	variant string
-	disk    string
-	track   string
-	yes     bool
-	gaf     string
+	variant              string
+	disk                 string
+	track                string
+	yes                  bool
+	gaf                  string
+	addSSHAuthorizedKeys string
 }
 
 func flashApplianceCmd() *ffcli.Command {
@@ -60,6 +61,7 @@ partition. On macOS, 'brew install e2fsprogs' provides it.
 			fs.StringVar(&flashApplianceArgs.track, "track", "", `which track to download from; defaults to "`+clientupdate.CurrentTrack+`"`)
 			fs.BoolVar(&flashApplianceArgs.yes, "yes", false, "skip the destructive-write confirmation prompt")
 			fs.StringVar(&flashApplianceArgs.gaf, "gaf", "", "use a local GAF file instead of downloading (skips signature verification)")
+			fs.StringVar(&flashApplianceArgs.addSSHAuthorizedKeys, "add-ssh-authorized-keys", "", "path to an authorized_keys file to include on the appliance for breakglass SSH access")
 			return fs
 		})(),
 		Exec: runFlashAppliance,
@@ -115,7 +117,19 @@ func runFlashAppliance(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := formatPermExt4(disk.Path); err != nil {
+	var permFiles []mkfs.PermFile
+	if flashApplianceArgs.addSSHAuthorizedKeys != "" {
+		keys, err := os.ReadFile(flashApplianceArgs.addSSHAuthorizedKeys)
+		if err != nil {
+			return fmt.Errorf("reading --add-ssh-authorized-keys: %w", err)
+		}
+		permFiles = append(permFiles, mkfs.PermFile{
+			Path:    "breakglass.authorized_keys",
+			Content: keys,
+		})
+		printf("Including SSH authorized_keys for breakglass access.\n")
+	}
+	if err := formatPermExt4(disk.Path, permFiles); err != nil {
 		return fmt.Errorf("formatting perm: %w", err)
 	}
 
@@ -135,7 +149,7 @@ func runFlashAppliance(ctx context.Context, args []string) error {
 // On macOS we open the buffered /dev/diskN path (not /dev/rdiskN)
 // because go-diskfs writes ext4 metadata in small unaligned chunks
 // that the raw character device rejects.
-func formatPermExt4(diskPath string) error {
+func formatPermExt4(diskPath string, files []mkfs.PermFile) error {
 	f, err := os.OpenFile(diskPath, os.O_RDWR, 0)
 	if err != nil {
 		return err
@@ -146,7 +160,7 @@ func formatPermExt4(diskPath string) error {
 	if err != nil {
 		return fmt.Errorf("sizing %s: %w", diskPath, err)
 	}
-	return mkfs.Perm(f, devsize)
+	return mkfs.Perm(f, devsize, files...)
 }
 
 // flashSuccessHint returns a per-variant next-step hint shown after a

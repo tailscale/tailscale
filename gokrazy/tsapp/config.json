@@ -18,7 +18,7 @@
     "PackageConfig": {
         "github.com/gokrazy/breakglass": {
             "CommandLineFlags": [
-                "-authorized_keys=ec2"
+                "-authorized_keys=/perm/breakglass.authorized_keys"
             ]
         },
         "tailscale.com/cmd/tailscale": {

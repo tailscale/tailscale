@@ -159,6 +159,11 @@
           # qemu and e2fsprogs are needed for natlab
           qemu
           e2fsprogs
+
+          # mtools (mcopy) and dtc are needed by the `tsapp-qemu-pi`
+          # Makefile target that boots the Tailscale appliance under qemu.
+          mtools
+          dtc
         ];
       };
     });

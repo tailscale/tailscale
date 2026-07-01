@@ -30,7 +30,7 @@ var (
 	gaf    = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
 )
 
-// imageSizeBytes is the size of the disk image we ask monogok to
+// baseImageSizeBytes is the size of the disk image we ask monogok to
 // produce (and that the AWS AMI import expects). It has to be large
 // enough to fit gokrazy's standard partition layout (see
 // github.com/bradfitz/monogok/disklayout):
@@ -45,7 +45,25 @@ var (
 // file larger). The same value is passed to monogok via
 // --target_storage_bytes and to mkfs.Perm so the GPT and the ext4
 // inside it agree on the disk's size.
-const imageSizeBytes = 1258299392
+//
+// imageSizeBytesFor may round this up; callers should use that helper
+// instead of this constant.
+const baseImageSizeBytes = 1258299392
+
+// imageSizeBytesFor returns the disk image size to use for app. For Raspberry
+// Pi appliances the size is rounded up to the next power of two because
+// qemu-system-aarch64's raspi3b machine rejects SD card images whose size
+// isn't a power of two.
+func imageSizeBytesFor(app string) int64 {
+	if !strings.HasPrefix(app, "tsapp-pi.") {
+		return baseImageSizeBytes
+	}
+	n := int64(1)
+	for n < baseImageSizeBytes {
+		n <<= 1
+	}
+	return n
+}
 
 var conf gokrazyConfig
 
@@ -135,7 +153,7 @@ func buildImage() error {
 		args = append(args,
 			"overwrite",
 			"--full", filepath.Join(dir, *app+".img"),
-			fmt.Sprintf("--target_storage_bytes=%d", imageSizeBytes),
+			fmt.Sprintf("--target_storage_bytes=%d", imageSizeBytesFor(*app)),
 		)
 	}
 
@@ -156,7 +174,7 @@ func buildImage() error {
 		return fmt.Errorf("open %s: %w", imgPath, err)
 	}
 	defer f.Close()
-	if err := mkfs.Perm(f, imageSizeBytes); err != nil {
+	if err := mkfs.Perm(f, imageSizeBytesFor(*app)); err != nil {
 		return fmt.Errorf("formatting /perm in %s: %v", imgPath, err)
 	}
 	log.Printf("Wrote ext4 /perm filesystem to %s.", imgPath)

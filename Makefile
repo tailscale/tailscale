@@ -154,7 +154,42 @@ tsapp-build-and-flash-pi: ## Build a tsapp-pi.arm64 GAF from HEAD and flash a lo
 	./tool/go run --exec=sudo ./cmd/tailscale configure flash-appliance \
 		--variant=pi-arm64 \
 		--gaf=gokrazy/tsapp-pi.arm64.gaf \
-		$(if $(DISK),--disk=$(DISK))
+		$(if $(DISK),--disk=$(DISK)) \
+		$(if $(wildcard $(HOME)/.ssh/id_ed25519.pub),--add-ssh-authorized-keys=$(HOME)/.ssh/id_ed25519.pub)
+
+.PHONY: tsapp-qemu-pi
+tsapp-qemu-pi: ## Build tsapp-pi.arm64 and boot it under qemu-system-aarch64 with a framebuffer GUI window and working network (requires mtools, dtc, qemu-efi-aarch64)
+	cd gokrazy && ../tool/go run build.go --build --app=tsapp-pi.arm64
+	# Extract the kernel from the FAT boot partition for direct -kernel boot.
+	rm -f gokrazy/tsapp-pi.arm64.vmlinuz
+	mcopy -i gokrazy/tsapp-pi.arm64.img@@4194304 ::vmlinuz gokrazy/tsapp-pi.arm64.vmlinuz
+	# Use the "virt" machine (not raspi3b) because it provides working
+	# PCI e1000 networking and, with UEFI firmware, an EFI framebuffer
+	# via the ramfb device. The raspi3b machine's USB NIC emulation is
+	# too broken for DHCP and its SoC watchdog reboots the guest.
+	#
+	# Find the UEFI firmware. Common paths:
+	#   Debian/Ubuntu: /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+	#   Homebrew:      /opt/homebrew/share/qemu/edk2-aarch64-code.fd
+	#   Fedora:        /usr/share/edk2/aarch64/QEMU_EFI.fd
+	QEMU_EFI=$$(for f in \
+		/usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+		/opt/homebrew/share/qemu/edk2-aarch64-code.fd \
+		/usr/share/edk2/aarch64/QEMU_EFI.fd \
+		$$(dirname $$(which qemu-system-aarch64))/../share/qemu/edk2-aarch64-code.fd; do \
+		[ -f "$$f" ] && echo "$$f" && break; \
+	done) && \
+	[ -n "$$QEMU_EFI" ] || { echo "error: cannot find QEMU EFI firmware (install qemu-efi-aarch64)"; exit 1; } && \
+	qemu-system-aarch64 \
+		-M virt -cpu cortex-a53 -m 1G \
+		-bios "$$QEMU_EFI" \
+		-device ramfb \
+		-device e1000,netdev=net0 -netdev user,id=net0 \
+		-kernel gokrazy/tsapp-pi.arm64.vmlinuz \
+		-append "console=ttyAMA0,115200 nowatchdog gokrazy.log_to_serial=1 root=PARTUUID=60c24cc1-f3f9-427a-8199-dd02023b0001/PARTNROFF=1 ro init=/gokrazy/init rootwait" \
+		-drive file=gokrazy/tsapp-pi.arm64.img,format=raw,if=none,id=disk0 \
+		-device virtio-blk-device,drive=disk0 \
+		-serial mon:stdio
 
 .PHONY: tsapp-push-pi
 tsapp-push-pi: ## Build a tsapp-pi.arm64 GAF from HEAD and push it to a running Pi over the network (pass PI=<ip>)
