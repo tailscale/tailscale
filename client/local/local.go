@@ -280,7 +280,7 @@ func (lc *Client) sendWithHeaders(
 	}
 	if res.StatusCode != wantStatus {
 		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
-		return nil, nil, httpStatusError{bestError(err, slurp), res.StatusCode}
+		return nil, nil, httpStatusError{bestError(err, slurp), res.StatusCode, res.Header}
 	}
 	return slurp, res.Header, nil
 }
@@ -288,6 +288,7 @@ func (lc *Client) sendWithHeaders(
 type httpStatusError struct {
 	error
 	HTTPStatus int
+	Header     http.Header
 }
 
 func (lc *Client) get200(ctx context.Context, path string) ([]byte, error) {

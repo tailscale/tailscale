@@ -6,8 +6,10 @@
 package localapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +41,13 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	}
 	pair, err := h.b.GetCertPEMWithValidity(r.Context(), domain, minValidity)
 	if err != nil {
+		if rl, ok := errors.AsType[*ipnlocal.CertRateLimitedError](err); ok {
+			if rl.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())))
+			}
+			http.Error(w, fmt.Sprint(err), http.StatusTooManyRequests)
+			return
+		}
 		// TODO(bradfitz): 500 is a little lazy here. The errors returned from
 		// GetCertPEM (and everywhere) should carry info to get whether
 		// they're 400 vs 403 vs 500 at minimum. And then we should have helpers
