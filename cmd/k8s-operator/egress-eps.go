@@ -106,16 +106,19 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)
 	for _, pod := range podList.Items {
-		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, lg)
+		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
 			return res, fmt.Errorf("error verifying if Pod is ready to route traffic: %w", err)
 		}
 		if !ready {
 			continue // maybe next time
 		}
-		podIP, err := podIPv4(&pod) // we currently only support IPv4
+		podIP, err := podIPForFamily(&pod, eps.AddressType)
 		if err != nil {
-			return res, fmt.Errorf("error determining IPv4 address for Pod: %w", err)
+			return res, fmt.Errorf("error determining Pod IP for %s EndpointSlice: %w", eps.AddressType, err)
+		}
+		if podIP == "" {
+			continue // Pod doesn't have an IP for this address family
 		}
 		newEndpoints = append(newEndpoints, discoveryv1.Endpoint{
 			Hostname:  (*string)(&pod.UID),
@@ -140,13 +143,16 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	return res, nil
 }
 
-func podIPv4(pod *corev1.Pod) (string, error) {
+func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, error) {
 	for _, ip := range pod.Status.PodIPs {
 		parsed, err := netip.ParseAddr(ip.IP)
 		if err != nil {
 			return "", fmt.Errorf("error parsing IP address %s: %w", ip, err)
 		}
-		if parsed.Is4() {
+		switch {
+		case addrType == discoveryv1.AddressTypeIPv4 && parsed.Is4():
+			return parsed.String(), nil
+		case addrType == discoveryv1.AddressTypeIPv6 && parsed.Is6():
 			return parsed.String(), nil
 		}
 	}
@@ -156,20 +162,19 @@ func podIPv4(pod *corev1.Pod) (string, error) {
 // podIsReadyToRouteTraffic returns true if it appears that the proxy Pod has configured firewall rules to be able to
 // route traffic to the given tailnet service. It retrieves the proxy's state Secret and compares the tailnet service
 // status written there to the desired service configuration.
-func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, lg *zap.SugaredLogger) (bool, error) {
+func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, addrType discoveryv1.AddressType, lg *zap.SugaredLogger) (bool, error) {
 	lg = lg.With("proxy_pod", pod.Name)
 	lg.Debug("checking whether proxy is ready to route to egress service")
 	if !pod.DeletionTimestamp.IsZero() {
 		lg.Debug("proxy Pod is being deleted, ignore")
 		return false, nil
 	}
-
-	podIP, err := podIPv4(&pod)
+	podIP, err := podIPForFamily(&pod, addrType)
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("error determining Pod IP address: %v", err)
 	case podIP == "":
-		lg.Warn("Pod does not have an IPv4 address, and IPv6 is not currently supported")
+		lg.Debugf("Pod does not have an address for family %s", addrType)
 		return false, nil
 	}
 
@@ -199,9 +204,15 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 	if err = json.Unmarshal(svcStatusBS, svcStatus); err != nil {
 		return false, fmt.Errorf("error unmarshalling egress service status: %w", err)
 	}
-
-	if !strings.EqualFold(podIP, svcStatus.PodIPv4) {
-		lg.Infof("proxy's egress service status is for Pod IP %q, current proxy's Pod IP %q, waiting for the proxy to reconfigure...", svcStatus.PodIPv4, podIP)
+	var statusIP string
+	switch addrType {
+	case discoveryv1.AddressTypeIPv4:
+		statusIP = svcStatus.PodIPv4
+	case discoveryv1.AddressTypeIPv6:
+		statusIP = svcStatus.PodIPv6
+	}
+	if !strings.EqualFold(podIP, statusIP) {
+		lg.Infof("proxy's egress service status is for Pod IP %q, current proxy's Pod IP %q, waiting for the proxy to reconfigure...", statusIP, podIP)
 		return false, nil
 	}
 

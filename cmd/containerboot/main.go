@@ -423,7 +423,7 @@ func run() error {
 		mux := http.NewServeMux()
 
 		log.Printf("Running healthcheck endpoint at %s/healthz", cfg.HealthCheckAddrPort)
-		healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, log.Printf)
+		healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, cfg.PodIPv6, log.Printf)
 
 		close := runHTTPServer(mux, cfg.HealthCheckAddrPort)
 		defer close()
@@ -439,7 +439,7 @@ func run() error {
 
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
-			healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, log.Printf)
+			healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, cfg.PodIPv6, log.Printf)
 		}
 
 		if cfg.egressSvcsTerminateEPEnabled() {
@@ -948,6 +948,7 @@ runLoop:
 						stateSecret:  cfg.KubeSecret,
 						netmapChan:   egressSvcsNotify,
 						podIPv4:      cfg.PodIPv4,
+						podIPv6:      cfg.PodIPv6,
 						tailnetAddrs: addrs,
 					}
 					go func() {

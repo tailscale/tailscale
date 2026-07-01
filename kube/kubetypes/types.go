@@ -52,6 +52,8 @@ const (
 
 	// Pod's IPv4 address header key as returned by containerboot health check endpoint.
 	PodIPv4Header string = "Pod-IPv4"
+	// Pod's IPv6 address header key as returned by containerboot health check endpoint.
+	PodIPv6Header string = "Pod-IPv6"
 
 	EgessServicesPreshutdownEP = "/internal-egress-services-preshutdown"
 
