@@ -55,6 +55,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectedServices    []expectedService
 		ExpectedEndpoints   []tsapi.PeerRelayEndpoint
 		ExpectedReadyStatus metav1.ConditionStatus // asserted only when non-empty
+		ExpectedReadyReason string                 // asserted only when non-empty
 		ExpectFinalizer     bool
 		ExpectPRDeleted     bool
 	}{
@@ -265,6 +266,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 				{Replica: 1, Address: "5.6.7.8", Port: 41641},
 			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
 		},
 		{
 			// Peer relays advertise a raw IP:port to peers, so a hostname-only LB (a misconfigured AWS NLB, for
@@ -282,6 +285,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedEndpoints:   nil,
 			ExpectsError:        true,
 			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsInvalid,
 		},
 		{
 			// Mixed batch: one replica has a proper IP, another has only a hostname. The IP-provisioned replica
@@ -302,6 +306,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectsError:        true,
 			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsInvalid,
 		},
 		{
 			// Mid-provisioning: some LBs have addresses, some don't yet. Only the ready ones show up.
@@ -319,6 +324,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 			},
+			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
 			Name:    "deletion",
@@ -416,24 +423,27 @@ func TestReconciler_Reconcile(t *testing.T) {
 				t.Errorf("expected status.endpoints %v, got %v", tc.ExpectedEndpoints, pr.Status.Endpoints)
 			}
 
-			if tc.ExpectedReadyStatus != "" {
-				got := readyConditionStatus(&pr)
-				if got != tc.ExpectedReadyStatus {
-					t.Errorf("expected PeerRelayReady=%s, got %q", tc.ExpectedReadyStatus, got)
+			if tc.ExpectedReadyStatus != "" || tc.ExpectedReadyReason != "" {
+				cond := readyCondition(&pr)
+				if tc.ExpectedReadyStatus != "" && cond.Status != tc.ExpectedReadyStatus {
+					t.Errorf("expected PeerRelayReady status %s, got %q", tc.ExpectedReadyStatus, cond.Status)
+				}
+				if tc.ExpectedReadyReason != "" && cond.Reason != tc.ExpectedReadyReason {
+					t.Errorf("expected PeerRelayReady reason %s, got %q", tc.ExpectedReadyReason, cond.Reason)
 				}
 			}
 		})
 	}
 }
 
-// readyConditionStatus returns the current status of the PeerRelayReady condition, or the empty string if unset.
-func readyConditionStatus(pr *tsapi.PeerRelay) metav1.ConditionStatus {
+func readyCondition(pr *tsapi.PeerRelay) metav1.Condition {
 	for _, cond := range pr.Status.Conditions {
 		if cond.Type == string(tsapi.PeerRelayReady) {
-			return cond.Status
+			return cond
 		}
 	}
-	return ""
+
+	return metav1.Condition{}
 }
 
 func assertService(t *testing.T, want expectedService, got *corev1.Service) {
