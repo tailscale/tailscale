@@ -44,7 +44,7 @@ func TestKeyExtensionWakesUpExpiredClient(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
@@ -170,7 +170,7 @@ func TestKeyExpiredStateMachine(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
@@ -247,7 +247,7 @@ func TestKeyExpiryExtendedUnblocksEngine(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
@@ -330,7 +330,7 @@ func TestKeyExpiryZeroMeansNoExpiry(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
@@ -382,7 +382,7 @@ func TestKeyExpiryWithNetMapUpdate(t *testing.T) {
 	t.Cleanup(b.Shutdown)
 
 	var cc *mockControl
-	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
 		return cc, nil
 	})
