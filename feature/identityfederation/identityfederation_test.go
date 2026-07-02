@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestResolveAuthKey(t *testing.T) {
@@ -158,6 +160,98 @@ func TestParseOptionalAttributes(t *testing.T) {
 			if preauth != tt.wantPreauth {
 				t.Errorf("parseOptionalAttributes() preauth = %v, want %v", preauth, tt.wantPreauth)
 			}
+		})
+	}
+}
+
+func TestExchangeJWTForToken(t *testing.T) {
+	testCases := []struct {
+		name                      string
+		numFailures               int32
+		deadlineFailure           bool
+		retryableServerFailure    bool
+		nonRetryableServerFailure bool
+		wantCalls                 int32
+		wantErr                   string
+	}{
+		{
+			name:            "error-after-deadline-retry-exhaustion",
+			deadlineFailure: true,
+			numFailures:     3,
+			wantCalls:       3,
+			wantErr:         "context deadline exceeded",
+		},
+		{
+			name:                      "non-retryable-server-failure",
+			nonRetryableServerFailure: true,
+			numFailures:               1,
+			wantCalls:                 1,
+			wantErr:                   "token exchange failed with status 400: BadRequest",
+		},
+		{
+			name:                   "success-retryable-server-error",
+			retryableServerFailure: true,
+			numFailures:            2,
+			wantCalls:              3,
+		},
+		{
+			name:        "success-first-try",
+			numFailures: 0,
+			wantCalls:   1,
+		},
+		{
+			name:        "success-after-retries",
+			numFailures: 2,
+			wantCalls:   3,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/oauth/token-exchange") {
+					calls.Add(1)
+					if tt.numFailures != 0 && calls.Load() < tt.numFailures+1 {
+						if tt.deadlineFailure {
+							time.Sleep(10 * time.Millisecond)
+						} else if tt.retryableServerFailure {
+							w.WriteHeader(http.StatusServiceUnavailable)
+							w.Write([]byte("Unavailable"))
+						} else if tt.nonRetryableServerFailure {
+							w.WriteHeader(http.StatusBadRequest)
+							w.Write([]byte("BadRequest"))
+						}
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.Write([]byte(`{"access_token":"access-123","token_type":"Bearer","expires_in":3600}`))
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer srv.Close()
+
+			withForceTimeoutForTest(func() {
+				_, err := exchangeJWTForToken(context.Background(), srv.URL, "client-123", "token")
+
+				if tt.wantErr == "" && err != nil {
+					t.Fatalf("exchangeJWTForToken() error = %v, want no error", err)
+				}
+				if tt.wantErr != "" {
+					if err == nil {
+						t.Fatalf("exchangeJWTForToken() error = nil, want %q", tt.wantErr)
+					}
+
+					if !strings.Contains(err.Error(), tt.wantErr) {
+						t.Fatalf("exchangeJWTForToken() error = %q, want %q", err.Error(), tt.wantErr)
+					}
+				}
+
+				if got := calls.Load(); got != tt.wantCalls {
+					t.Fatalf("exchangeJWTForToken() attempts = %d, want %d", got, tt.wantCalls)
+				}
+			})
 		})
 	}
 }
