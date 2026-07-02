@@ -120,14 +120,17 @@ func (dh *datapathHandler) StartFlowExpirySweepers(ctx context.Context) {
 	go dh.connectorFlowTable.StartExpiredSweeper(ctx)
 }
 
+func isSupportedProtocol(proto ipproto.Proto) bool {
+	return proto == ipproto.TCP || proto == ipproto.UDP || proto == ipproto.ICMPv4 || proto == ipproto.ICMPv6
+}
+
 // HandlePacketFromWireGuard inspects packets coming from WireGuard, and performs
 // appropriate DNAT or SNAT actions for Connectors 2025. Returning [filter.Accept] signals
 // that the packet should pass through subsequent stages of the datapath pipeline.
 // Returning [filter.Drop] signals the packet should be dropped. This method handles all
 // packets coming from WireGuard, on both connectors, and clients of connectors.
 func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
-	// TODO(tailscale/corp#38764): Support other protocols, like ICMP for error messages.
-	if p.IPProto != ipproto.TCP && p.IPProto != ipproto.UDP {
+	if !isSupportedProtocol(p.IPProto) {
 		return filter.Accept
 	}
 
@@ -202,8 +205,7 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 // Returning [filter.Drop] signals the packet should be dropped. This method handles all
 // packets coming from the tun device, on both connectors, and clients of connectors.
 func (dh *datapathHandler) HandlePacketFromTunDevice(p *packet.Parsed) filter.Response {
-	// TODO(tailscale/corp#38764): Support other protocols, like ICMP for error messages.
-	if p.IPProto != ipproto.TCP && p.IPProto != ipproto.UDP {
+	if !isSupportedProtocol(p.IPProto) {
 		return filter.Accept
 	}
 
