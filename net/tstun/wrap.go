@@ -119,20 +119,31 @@ type Wrapper struct {
 	// peerConfig stores the current NAT configuration.
 	peerConfig atomic.Pointer[peerConfigTable]
 
-	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
-	// allocated in wrap() and the underlying arrays should never grow.
-	vectorBuffer [][]byte
-	// bufferConsumedMu protects bufferConsumed from concurrent sends, closes,
-	// and send-after-close (by way of bufferConsumedClosed).
-	bufferConsumedMu sync.Mutex
-	// bufferConsumedClosed is true when bufferConsumed has been closed. This is
-	// read by bufferConsumed writers to prevent send-after-close.
-	bufferConsumedClosed bool
-	// bufferConsumed synchronizes access to vectorBuffer (shared by Read() and
-	// pollVector()).
+	// freeReadBufsMu protects freeReadBufs from concurrent sends, closes, and
+	// send-after-close (by way of freeReadBufsClosed).
+	freeReadBufsMu sync.Mutex
+	// freeReadBufsClosed is true when freeReadBufs has been closed. This is
+	// read by freeReadBufs writers to prevent send-after-close.
+	freeReadBufsClosed bool
+	// freeReadBufs is the pool of read buffers available to pollVector. It is
+	// buffered with a depth controlled by TS_DEBUG_TUN_READ_BUFS (see
+	// numReadBufs), and holds up to that many *readBuf entries.
 	//
-	// Close closes bufferConsumed and sets bufferConsumedClosed to true.
-	bufferConsumed chan struct{}
+	// pollVector receives a *readBuf from this channel, reads a packet vector
+	// from tdev into it, and hands it to Read() via vectorOutbound. Read()
+	// returns the *readBuf to this channel once it has finished consuming the
+	// vector, making it available for another tun read. This decouples tun
+	// reads from downstream consumption: pollVector may have up to len(readBufs)
+	// reads in flight, which keeps the tun read pipeline busy even when
+	// individual batches are small (e.g. under high client concurrency where
+	// segment offload batches are less full).
+	//
+	// Close closes freeReadBufs and sets freeReadBufsClosed to true.
+	freeReadBufs chan *readBuf
+	// readBufs is the backing storage for all read buffers. It is allocated in
+	// wrap() and the underlying arrays should never grow. It is retained for
+	// lifetime ownership and is not otherwise read after init.
+	readBufs []*readBuf
 
 	// closed signals poll (by closing) when the device is closed.
 	closed chan struct{}
@@ -245,6 +256,31 @@ func registerMetrics(reg *usermetric.Registry) *metrics {
 	}
 }
 
+// readBuf is a single reusable batch of packet buffers that pollVector reads a
+// tun packet vector into. There are up to numReadBufs of these, cycled between
+// pollVector and Read() via Wrapper.freeReadBufs.
+type readBuf struct {
+	// data holds the packet buffers. Each slice has cap maxBufferSize and its
+	// underlying array never grows. pollVector resets each entry's length to
+	// its cap before reading, then trims to readOffset+size[i] for the n
+	// packets actually read.
+	data [][]byte
+}
+
+// numReadBufs returns the number of read buffers (batches) that pollVector may
+// have in flight at once, i.e. the depth of the tun read buffer pipeline.
+//
+// It is controlled by the TS_DEBUG_TUN_READ_BUFS environment variable, read
+// once at startup. A value < 1 (including unset) defaults to 1, meaning
+// pollVector reads one batch at a time and waits for Read() to consume it
+// before reading the next.
+func numReadBufs() int {
+	if n, ok := envknob.LookupInt("TS_DEBUG_TUN_READ_BUFS"); ok && n > 1 {
+		return n
+	}
+	return 1
+}
+
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
 type tunInjectedRead struct {
 	// Only one of packet or data should be set, and are read in that order of
@@ -264,6 +300,12 @@ type tunVectorReadResult struct {
 	injected tunInjectedRead
 
 	dataOffset int
+
+	// buf is the pooled read buffer that data was read into, or nil for
+	// injected reads and errors that did not come from pollVector. When
+	// non-nil, Read() must return it to Wrapper.freeReadBufs once it is done
+	// consuming data so pollVector can reuse it for another tun read.
+	buf *readBuf
 }
 
 // Start unblocks any Wrapper.Read calls that have already started
@@ -287,18 +329,13 @@ func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry, bus *eventb
 func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry, bus *eventbus.Bus) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
-		logf:        logf,
-		limitedLogf: logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
-		isTAP:       isTAP,
-		tdev:        tdev,
-		// bufferConsumed is conceptually a condition variable:
-		// a goroutine should not block when setting it, even with no listeners.
-		bufferConsumed: make(chan struct{}, 1),
-		closed:         make(chan struct{}),
-		// vectorOutbound can be unbuffered; the buffer is an optimization.
-		vectorOutbound: make(chan tunVectorReadResult, 1),
-		eventsUpDown:   make(chan tun.Event),
-		eventsOther:    make(chan tun.Event),
+		logf:         logf,
+		limitedLogf:  logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
+		isTAP:        isTAP,
+		tdev:         tdev,
+		closed:       make(chan struct{}),
+		eventsUpDown: make(chan tun.Event),
+		eventsOther:  make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 		startCh:     make(chan struct{}),
@@ -318,15 +355,32 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	w.eventClient = bus.Client("net.tstun")
 	w.discoKeyAdvertisementPub = eventbus.Publish[events.DiscoKeyAdvertisement](w.eventClient)
 
-	w.vectorBuffer = make([][]byte, tdev.BatchSize())
-	for i := range w.vectorBuffer {
-		w.vectorBuffer[i] = make([]byte, maxBufferSize)
+	// Allocate the pool of read buffers. The depth (numReadBufs) controls how
+	// many tun reads pollVector may have in flight at once. freeReadBufs starts
+	// full: every buffer is available for pollVector to read into.
+	batchSize := tdev.BatchSize()
+	nBufs := numReadBufs()
+	// vectorOutbound carries read results from pollVector to Read(). Its
+	// capacity matches the read buffer depth so pollVector can have up to nBufs
+	// reads in flight (queued for Read to consume) without blocking; with a
+	// shallower channel the deeper buffer pool could not actually fill. The
+	// buffer is an optimization over an unbuffered channel.
+	w.vectorOutbound = make(chan tunVectorReadResult, nBufs)
+	w.freeReadBufs = make(chan *readBuf, nBufs)
+	w.readBufs = make([]*readBuf, nBufs)
+	for i := range w.readBufs {
+		rb := &readBuf{
+			data: make([][]byte, batchSize),
+		}
+		for j := range rb.data {
+			rb.data[j] = make([]byte, maxBufferSize)
+		}
+		w.readBufs[i] = rb
+		w.freeReadBufs <- rb
 	}
 	go w.pollVector()
 
 	go w.pumpEvents()
-	// The buffer starts out consumed.
-	w.bufferConsumed <- struct{}{}
 	w.noteActivity()
 
 	return w
@@ -376,10 +430,10 @@ func (t *Wrapper) Close() error {
 			close(t.startCh)
 		}
 		close(t.closed)
-		t.bufferConsumedMu.Lock()
-		t.bufferConsumedClosed = true
-		close(t.bufferConsumed)
-		t.bufferConsumedMu.Unlock()
+		t.freeReadBufsMu.Lock()
+		t.freeReadBufsClosed = true
+		close(t.freeReadBufs)
+		t.freeReadBufsMu.Unlock()
 		t.outboundMu.Lock()
 		t.outboundClosed = true
 		close(t.vectorOutbound)
@@ -463,12 +517,22 @@ func (t *Wrapper) Name() (string, error) {
 
 const ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
 
-// pollVector polls t.tdev.Read(), placing the oldest unconsumed packet vector
-// into t.vectorBuffer. This is needed because t.tdev.Read() in general may
-// block (it does on Windows), so packets may be stuck in t.vectorOutbound if
-// t.Read() called t.tdev.Read() directly.
+// pollVector polls t.tdev.Read(), placing each unconsumed packet vector into a
+// read buffer drawn from t.freeReadBufs and handing it to Read() via
+// t.vectorOutbound. This is needed because t.tdev.Read() in general may block
+// (it does on Windows), so packets may be stuck in t.vectorOutbound if t.Read()
+// called t.tdev.Read() directly.
+//
+// pollVector may have up to len(t.readBufs) reads in flight at once: it reads
+// into a buffer as soon as one is free, rather than waiting for Read() to fully
+// consume the previous vector. Read() returns each buffer to t.freeReadBufs
+// when it is done with it. See the freeReadBufs field docs.
 func (t *Wrapper) pollVector() {
-	sizes := make([]int, len(t.vectorBuffer))
+	// sizes is scratch storage for the tun reader, reused across reads. It is
+	// only ever touched by this goroutine: the reader writes it and we consume
+	// it within the same iteration to trim rb.data, so it need not be
+	// per-buffer.
+	sizes := make([]int, t.tdev.BatchSize())
 	readOffset := PacketStartOffset
 	reader := t.tdev.Read
 	if t.isTAP {
@@ -481,9 +545,21 @@ func (t *Wrapper) pollVector() {
 		}
 	}
 
-	for range t.bufferConsumed {
-		for i := range t.vectorBuffer {
-			t.vectorBuffer[i] = t.vectorBuffer[i][:cap(t.vectorBuffer[i])]
+	for {
+		var rb *readBuf
+		var ok bool
+		select {
+		case <-t.closed:
+			return
+		case rb, ok = <-t.freeReadBufs:
+			if !ok {
+				// freeReadBufs was closed by Close.
+				return
+			}
+		}
+
+		for i := range rb.data {
+			rb.data[i] = rb.data[i][:cap(rb.data[i])]
 		}
 		var n int
 		var err error
@@ -491,9 +567,9 @@ func (t *Wrapper) pollVector() {
 			if t.isClosed() {
 				return
 			}
-			n, err = reader(t.vectorBuffer[:], sizes, readOffset)
+			n, err = reader(rb.data[:], sizes, readOffset)
 			if t.isTAP && TAPDebug {
-				s := fmt.Sprintf("% x", t.vectorBuffer[0][:])
+				s := fmt.Sprintf("% x", rb.data[0][:])
 				for strings.HasSuffix(s, " 00") {
 					s = strings.TrimSuffix(s, " 00")
 				}
@@ -501,24 +577,26 @@ func (t *Wrapper) pollVector() {
 			}
 		}
 		for i := range sizes[:n] {
-			t.vectorBuffer[i] = t.vectorBuffer[i][:readOffset+sizes[i]]
+			rb.data[i] = rb.data[i][:readOffset+sizes[i]]
 		}
 		t.sendVectorOutbound(tunVectorReadResult{
-			data:       t.vectorBuffer[:n],
+			data:       rb.data[:n],
 			dataOffset: PacketStartOffset,
 			err:        err,
+			buf:        rb,
 		})
 	}
 }
 
-// sendBufferConsumed does t.bufferConsumed <- struct{}{}.
-func (t *Wrapper) sendBufferConsumed() {
-	t.bufferConsumedMu.Lock()
-	defer t.bufferConsumedMu.Unlock()
-	if t.bufferConsumedClosed {
+// putReadBuf returns rb to t.freeReadBufs so pollVector can reuse it for another
+// tun read. Read() calls this once it has finished consuming rb's vector.
+func (t *Wrapper) putReadBuf(rb *readBuf) {
+	t.freeReadBufsMu.Lock()
+	defer t.freeReadBufsMu.Unlock()
+	if t.freeReadBufsClosed {
 		return
 	}
-	t.bufferConsumed <- struct{}{}
+	t.freeReadBufs <- rb
 }
 
 // injectOutbound does t.vectorOutbound <- r
@@ -952,8 +1030,8 @@ func (t *Wrapper) IdleDuration() time.Duration {
 
 // ProbeLocks acquires and releases Wrapper's internal mutexes.
 func (t *Wrapper) ProbeLocks() {
-	t.bufferConsumedMu.Lock()
-	t.bufferConsumedMu.Unlock()
+	t.freeReadBufsMu.Lock()
+	t.freeReadBufsMu.Unlock()
 
 	t.outboundMu.Lock()
 	t.outboundMu.Unlock()
@@ -983,6 +1061,12 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		return 0, io.EOF
 	}
 	if res.err != nil && len(res.data) == 0 {
+		// Return the pooled read buffer before bailing so a transient read
+		// error doesn't permanently shrink the pool. res.buf is nil for
+		// injected reads.
+		if res.buf != nil {
+			t.putReadBuf(res.buf)
+		}
 		return 0, res.err
 	}
 	if res.data == nil {
@@ -1031,12 +1115,11 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		buffsGRO.Flush()
 	}
 
-	// t.vectorBuffer has a fixed location in memory.
-	// TODO(raggi): add an explicit field and possibly method to the tunVectorReadResult
-	// to signal when sendBufferConsumed should be called.
-	if &res.data[0] == &t.vectorBuffer[0] {
-		// We are done with t.buffer. Let poll() re-use it.
-		t.sendBufferConsumed()
+	// Return the pooled read buffer to pollVector so it can be reused for
+	// another tun read. res.buf is nil for injected reads (which don't come
+	// from pollVector and aren't backed by the pool).
+	if res.buf != nil {
+		t.putReadBuf(res.buf)
 	}
 
 	t.noteActivity()
