@@ -25,11 +25,14 @@ import (
 // !stack.PacketBuffer.RXChecksumValidated, i.e. it satisfies
 // stack.CapabilityRXChecksumOffload. Other protocols with checksum fields,
 // e.g. ICMP{v6}, are still validated by gVisor regardless of rx checksum
-// offloading capabilities.
+// offloading capabilities. IPv4 fragments cannot have their L4 checksums
+// validated before reassembly, so only their IPv4 header checksum is validated
+// here.
 func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 	var (
 		pn        tcpip.NetworkProtocolNumber
 		csumStart int
+		fragment  bool
 	)
 	buf := p.Buffer()
 
@@ -45,6 +48,11 @@ func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 		if ^tun.Checksum(buf[:csumStart], 0) != 0 {
 			return nil
 		}
+		// Non-first fragments (FragmentOffset != 0) arrive here with
+		// p.IPProto == ipproto.Fragment (set by packet.Parsed.Decode), so
+		// they already skip the L4 checksum check below. We only need to
+		// catch the first fragment, which still has its real IPProto.
+		fragment = header.IPv4(buf).More()
 		pn = header.IPv4ProtocolNumber
 	case 6:
 		if len(buf) < header.IPv6FixedHeaderSize {
@@ -80,7 +88,7 @@ func RXChecksumOffload(p *packet.Parsed) *stack.PacketBuffer {
 		}
 	}
 
-	if p.IPProto == ipproto.TCP || p.IPProto == ipproto.UDP {
+	if !fragment && (p.IPProto == ipproto.TCP || p.IPProto == ipproto.UDP) {
 		lenForPseudo := len(buf) - csumStart
 		csum := tun.PseudoHeaderChecksum(
 			uint8(p.IPProto),

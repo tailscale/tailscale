@@ -62,6 +62,23 @@ func Test_RXChecksumOffload(t *testing.T) {
 	at := 20 + 16
 	tcp4InvalidCsum[at] = ^tcp4InvalidCsum[at]
 
+	tcp4FirstFragment := make([]byte, 20+20+60)
+	copy(tcp4FirstFragment, tcp4[:len(tcp4FirstFragment)])
+	ipv4H = header.IPv4(tcp4FirstFragment)
+	ipv4H.SetTotalLength(uint16(len(tcp4FirstFragment)))
+	ipv4H.SetFlagsFragmentOffset(header.IPv4FlagMoreFragments, 0)
+	ipv4H.SetChecksum(0)
+	ipv4H.SetChecksum(^ipv4H.CalculateChecksum())
+
+	tcp4SecondFragment := make([]byte, 20+40)
+	copy(tcp4SecondFragment, tcp4[:20])
+	copy(tcp4SecondFragment[20:], tcp4[20+80:])
+	ipv4H = header.IPv4(tcp4SecondFragment)
+	ipv4H.SetTotalLength(uint16(len(tcp4SecondFragment)))
+	ipv4H.SetFlagsFragmentOffset(0, 80)
+	ipv4H.SetChecksum(0)
+	ipv4H.SetChecksum(^ipv4H.CalculateChecksum())
+
 	tcp6ExtHeaderInvalidCsum := make([]byte, len(tcp6ExtHeader))
 	copy(tcp6ExtHeaderInvalidCsum, tcp6ExtHeader)
 	at = 40 + 8 + 16
@@ -86,6 +103,16 @@ func Test_RXChecksumOffload(t *testing.T) {
 			"tcp4 packet invalid csum",
 			tcp4InvalidCsum,
 			false,
+		},
+		{
+			"tcp4 first fragment skips L4 csum",
+			tcp4FirstFragment,
+			true,
+		},
+		{
+			"tcp4 second fragment skips L4 csum",
+			tcp4SecondFragment,
+			true,
 		},
 		{
 			"tcp6 with ext header invalid csum",
