@@ -63,6 +63,7 @@ const reconcilerName = "peerrelay-reconciler"
 // Constants for condition reasons.
 const (
 	ReasonEndpointsInvalid = "EndpointsInvalid"
+	ReasonEndpointsPending = "EndpointsPending"
 	ReasonReady            = "PeerRelayReady"
 )
 
@@ -150,14 +151,14 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.updateEndpoints(ctx, pr); err != nil {
+	if err := r.updateEndpoints(ctx, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update endpoints for PeerRelay %q: %w", pr.Name, err)
 	}
 
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay) error {
+func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) error {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
 		return fmt.Errorf("failed to list Services: %w", err)
@@ -185,21 +186,22 @@ func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay) e
 	})
 
 	pr.Status.Endpoints = endpoints
-	if err := errors.Join(errs...); err != nil {
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, err.Error(), r.clock, r.logger)
-		if statusErr := r.Status().Update(ctx, pr); statusErr != nil {
-			return fmt.Errorf("failed to update PeerRelay status: %w", statusErr)
-		}
-
-		return err
+	joined := errors.Join(errs...)
+	switch {
+	case len(errs) > 0:
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, joined.Error(), r.clock, r.logger)
+	case int32(len(endpoints)) < replicas:
+		message := fmt.Sprintf("%d of %d replicas have a public IP", len(endpoints), replicas)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, r.logger)
+	default:
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
 	}
 
-	operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
 	if err := r.Status().Update(ctx, pr); err != nil {
 		return fmt.Errorf("failed to update PeerRelay status: %w", err)
 	}
 
-	return nil
+	return joined
 }
 
 func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
