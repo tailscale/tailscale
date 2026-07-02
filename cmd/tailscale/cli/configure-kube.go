@@ -306,6 +306,11 @@ func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, dns *tailcfg.DNSConfig, ar
 	}
 	ipPrefix := netip.PrefixFrom(ip, ip.BitLen())
 	for _, ps := range st.Peer {
+		if ps.AllowedIPs == nil {
+			// Peer with no addresses visible in the tailnet, e.g. a ProxyGroup
+			// whose backing nodes are offline or not yet approved (#20255).
+			continue
+		}
 		for _, allowedIP := range ps.AllowedIPs.All() {
 			if allowedIP == ipPrefix {
 				return rec.Name, nil

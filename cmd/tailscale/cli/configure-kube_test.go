@@ -7,6 +7,7 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
 
 func TestKubeconfig(t *testing.T) {
@@ -337,5 +342,70 @@ func TestGetInputs(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestNodeOrServiceDNSNameFromArg(t *testing.T) {
+	svcIP := netip.MustParseAddr("100.100.100.100")
+	dnsCfg := &tailcfg.DNSConfig{
+		ExtraRecords: []tailcfg.DNSRecord{
+			{Name: "svc.example.ts.net", Value: svcIP.String()},
+		},
+	}
+
+	peerWithService := &ipnstate.PeerStatus{DNSName: "node-a.example.ts.net."}
+	allowed := views.SliceOf([]netip.Prefix{netip.PrefixFrom(svcIP, svcIP.BitLen())})
+	peerWithService.AllowedIPs = &allowed
+
+	// A peer with no AllowedIPs, as reported for a ProxyGroup whose backing
+	// nodes are offline or not yet approved (issue #20255).
+	peerNoAddrs := &ipnstate.PeerStatus{DNSName: "node-b.example.ts.net."}
+
+	tests := []struct {
+		name    string
+		peers   []*ipnstate.PeerStatus
+		arg     string
+		want    string
+		wantErr string
+	}{
+		{
+			name:    "service_with_no_reachable_peer",
+			peers:   []*ipnstate.PeerStatus{peerNoAddrs},
+			arg:     "svc",
+			wantErr: "not currently reachable",
+		},
+		{
+			name:  "service_advertised_by_peer",
+			peers: []*ipnstate.PeerStatus{peerNoAddrs, peerWithService},
+			arg:   "svc",
+			want:  "svc.example.ts.net",
+		},
+		{
+			name:  "node_dns_name",
+			peers: []*ipnstate.PeerStatus{peerNoAddrs},
+			arg:   "node-b",
+			want:  "node-b.example.ts.net.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{}}
+			for _, ps := range tt.peers {
+				st.Peer[key.NewNode().Public()] = ps
+			}
+			got, err := nodeOrServiceDNSNameFromArg(st, dnsCfg, tt.arg)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
