@@ -69,7 +69,7 @@ type clientOpt struct {
 func MeshKey(k key.DERPMesh) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = k }) }
 
 // IsProber returns a ClientOpt to pass to the DERP server during connect to
-// declare that this client is a a prober.
+// declare that this client is a prober.
 func IsProber(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.IsProber = v }) }
 
 // ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.

@@ -1349,8 +1349,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 			// If we haven't got an error or a successful response,
 			// include all resolvers in the error message so we can
-			// at least see what what servers we're trying to
-			// query.
+			// at least see what servers we're trying to query.
 			var resolverAddrs []string
 			for _, rr := range resolvers {
 				resolverAddrs = append(resolverAddrs, rr.name.Addr)

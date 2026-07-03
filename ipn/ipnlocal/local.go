@@ -784,7 +784,7 @@ func (b *LocalBackend) onHomeDERPUpdate(du magicsock.HomeDERPChanged) {
 // In practice, it is possible that one profile with a homeDERP of 0 (no-derp)
 // got switched before setting any home DERP or that DERP IDs match across
 // DERP maps. Since the risk of this happening is small and the consequences
-// of this is is just a possible less optimal DERP until the next reSTUN,
+// of this is just a possible less optimal DERP until the next reSTUN,
 // accept this possibility.
 func (b *LocalBackend) onHomeDERPUpdateLocked(du magicsock.HomeDERPChanged) {
 	cn := b.currentNode()

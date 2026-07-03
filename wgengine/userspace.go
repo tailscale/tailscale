@@ -1020,7 +1020,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	// We've historically re-set DNS even after just a router change. While
-	// refactoring in tailscale/tailscale#17448 and and
+	// refactoring in tailscale/tailscale#17448 and
 	// tailscale/tailscale#17499, I'm erring on the side of keeping that
 	// historical quirk for now (2025-10-08), lest it's load bearing in
 	// unexpected ways

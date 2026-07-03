@@ -39,7 +39,7 @@ geographic regions to make sure users have low latency to their DERP home.
 Regions generally have multiple nodes per region "meshed" (routing to each
 other) together for redundancy: it allows for cloud failures or upgrades without
 kicking users out to a higher latency region. Instead, clients will reconnect to
-the next node in the region. Each node in the region is required to to be meshed
+the next node in the region. Each node in the region is required to be meshed
 with every other node in the region and forward packets to the other nodes in
 the region. Packets are forwarded only one hop within the region. There is no
 routing between regions. The assumption is that the mesh TCP connections are

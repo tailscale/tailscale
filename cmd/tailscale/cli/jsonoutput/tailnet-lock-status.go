@@ -148,7 +148,7 @@ type tailnetLockEnabledStatusV1 struct {
 	TrustedKeys []tkaKeyV1
 
 	// VisiblePeers describes peers which are visible in the netmap that
-	// have valid Tailnet Lock signatures signatures.
+	// have valid Tailnet Lock signatures.
 	VisiblePeers []tkaTrustedPeerV1
 
 	// FilteredPeers describes peers which were removed from the netmap

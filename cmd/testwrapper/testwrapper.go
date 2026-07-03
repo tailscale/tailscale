@@ -789,7 +789,7 @@ func main() {
 		for tr := range ch {
 			// Go assigns the package name "command-line-arguments" when you
 			// `go test FILE` rather than `go test PKG`. It's more
-			// convenient for us to to specify files in tests, so fix tr.pkg
+			// convenient for us to specify files in tests, so fix tr.pkg
 			// so that subsequent testwrapper attempts run correctly.
 			if tr.pkg == "command-line-arguments" {
 				tr.pkg = packages[0]

@@ -8301,7 +8301,7 @@ func TestDisplayMessageIPNBus(t *testing.T) {
 					if ok {
 						if diff := cmp.Diff(tt.wantWarning, got, cmpopts.IgnoreFields(health.UnhealthyState{}, "ETag")); diff != "" {
 							t.Errorf("unexpected warning details (-want/+got):\n%s", diff)
-							return true // we failed the test so tell the watcher we've seen what we need to to stop it waiting
+							return true // we failed the test so tell the watcher we've seen what we need to stop it waiting
 						}
 					} else {
 						got := slices.Collect(maps.Keys(n.Health.Warnings))

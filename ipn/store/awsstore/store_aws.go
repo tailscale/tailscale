@@ -79,7 +79,7 @@ type awsStore struct {
 //
 // Note that we store the entire store in a single parameter
 // key, therefore if the state is above 8kb, it can cause
-// Tailscaled to only only store new state in-memory and
+// Tailscaled to only store new state in-memory and
 // restarting Tailscaled can fail until you delete your state
 // from the AWS Parameter Store.
 //

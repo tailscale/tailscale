@@ -40,7 +40,7 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	pair, err := h.b.GetCertPEMWithValidity(r.Context(), domain, minValidity)
 	if err != nil {
 		// TODO(bradfitz): 500 is a little lazy here. The errors returned from
-		// GetCertPEM (and everywhere) should carry info info to get whether
+		// GetCertPEM (and everywhere) should carry info to get whether
 		// they're 400 vs 403 vs 500 at minimum. And then we should have helpers
 		// (in tsweb probably) to return an error that looks at the error value
 		// to determine the HTTP status code.
