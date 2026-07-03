@@ -291,23 +291,28 @@ func waitForImportSnapshot(importTaskID string) (snapID string, err error) {
 }
 
 func makeAMI(name, ebsSnapID string) (ami string, err error) {
-	var arch string
+	var arch, bootMode string
 	switch conf.GOARCH() {
 	case "arm64":
-		arch = "arm64"
+		// arm64 instances boot UEFI-only; "uefi-preferred" is rejected.
+		arch, bootMode = "arm64", "uefi"
 	case "amd64":
-		arch = "x86_64"
+		arch, bootMode = "x86_64", "uefi-preferred"
 	default:
 		return "", fmt.Errorf("unknown arch %q", conf.GOARCH())
 	}
 	out, err := exec.Command("aws", "ec2", "register-image",
 		"--name", name,
 		"--architecture", arch,
-		"--root-device-name", "/dev/sda",
+		// register-image defaults to paravirtual; arm64 rejects that
+		// ("supports HVM AMIs only") and amd64 would produce an image that
+		// won't boot on Nitro. Both need HVM.
+		"--virtualization-type", "hvm",
+		"--root-device-name", "/dev/sda1",
 		"--ena-support",
 		"--imds-support", "v2.0",
-		"--boot-mode", "uefi-preferred",
-		"--block-device-mappings", "DeviceName=/dev/sda,Ebs={SnapshotId="+ebsSnapID+"}").CombinedOutput()
+		"--boot-mode", bootMode,
+		"--block-device-mappings", "DeviceName=/dev/sda1,Ebs={SnapshotId="+ebsSnapID+"}").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("register image: %v: %s", err, out)
 	}
