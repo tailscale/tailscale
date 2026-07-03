@@ -223,7 +223,7 @@ func main() {
 	}
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
-	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2)")
+	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2); prefix with 'optional:' to boot unconfigured when the source is absent instead of failing")
 	if buildfeatures.HasTPM {
 		flag.Var(&args.hardwareAttestation, "hardware-attestation", `use hardware-backed keys to bind node identity to this device when supported
 by the OS and hardware. Uses TPM 2.0 on Linux and Windows; SecureEnclave on
@@ -431,11 +431,24 @@ func run() (err error) {
 	// Parse config, if specified, to fail early if it's invalid.
 	var conf *conffile.Config
 	if args.confFile != "" {
-		conf, err = conffile.Load(args.confFile)
-		if err != nil {
+		// An "optional:" prefix (e.g. "optional:vm:user-data") means it's fine
+		// for the config source to be absent: boot unconfigured and let the node
+		// be enrolled interactively instead of failing to start. A config that's
+		// present but invalid still fails, even when optional.
+		path := args.confFile
+		optional := false
+		if p, ok := strings.CutPrefix(path, "optional:"); ok {
+			optional, path = true, p
+		}
+		conf, err = conffile.Load(path)
+		switch {
+		case err == nil:
+			sys.InitialConfig = conf
+		case optional && errors.Is(err, conffile.ErrNoConfig):
+			logf("config: none present at %q; continuing unconfigured", path)
+		default:
 			return fmt.Errorf("error reading config file: %w", err)
 		}
-		sys.InitialConfig = conf
 	}
 
 	var netMon *netmon.Monitor
