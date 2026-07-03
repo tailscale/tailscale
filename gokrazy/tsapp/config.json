@@ -32,6 +32,9 @@
             ]
         },
         "tailscale.com/cmd/tailscaled": {
+            "CommandLineFlags": [
+                "-config=optional:vm:user-data"
+            ],
             "GoBuildTags": [
                 "ts_appliance"
             ]
