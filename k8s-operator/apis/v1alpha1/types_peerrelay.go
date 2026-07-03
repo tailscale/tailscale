@@ -79,6 +79,7 @@ type PeerRelaySpec struct {
 	// https://tailscale.com/kb/1115/high-availability. Defaults to 1.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=1
 	Replicas *int32 `json:"replicas,omitzero"`
 
 	// Tailnet specifies the tailnet this PeerRelay should join. If blank, the default tailnet is used. When set, this
