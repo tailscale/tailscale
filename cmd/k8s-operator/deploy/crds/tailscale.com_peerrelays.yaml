@@ -82,6 +82,7 @@ spec:
                     https://tailscale.com/kb/1115/high-availability. Defaults to 1.
                   type: integer
                   format: int32
+                  default: 1
                   minimum: 0
                 service:
                   description: Service contains configuration values to modify the LoadBalancer service used to expose the peer relay.
