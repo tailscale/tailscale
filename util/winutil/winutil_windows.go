@@ -163,7 +163,7 @@ func getRegStringsInternal(subKey, name string) ([]string, error) {
 	return val, nil
 }
 
-// SetRegStrings sets a MULTI_SZ value in the in the local machine path
+// SetRegStrings sets a MULTI_SZ value in the local machine path
 // to the strings specified by values.
 func SetRegStrings(name string, values []string) error {
 	return setRegStringsInternal(regBase, name, values)
