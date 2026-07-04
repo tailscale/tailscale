@@ -66,7 +66,7 @@ settings.)
 `),
 	FlagSet: upFlagSet,
 	Exec: func(ctx context.Context, args []string) error {
-		return runUp(ctx, "up", args, upArgsGlobal)
+		return runUp(ctx, "up", args, upArgsGlobal, upFlagSet)
 	},
 }
 
@@ -497,7 +497,7 @@ func presentSSHToggleRisk(wantSSH, haveSSH bool, acceptedRisks string) error {
 	return presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, acceptedRisks)
 }
 
-func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retErr error) {
+func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT, flagSet *flag.FlagSet) (retErr error) {
 	var egg bool
 	if len(args) > 0 {
 		egg = fmt.Sprint(args) == "[up down down left right left right b a]"
@@ -570,7 +570,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		goos:          effectiveGOOS(),
 		distro:        distro.Get(),
 		user:          os.Getenv("USER"),
-		flagSet:       upFlagSet,
+		flagSet:       flagSet,
 		upArgs:        upArgs,
 		backendState:  st.BackendState,
 		curExitNodeIP: exitNodeIP(curPrefs, st),
