@@ -18,6 +18,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02
 	github.com/bradfitz/go-tool-cache v0.0.0-20260216153636-9e5201344fe5
 	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
+	github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1

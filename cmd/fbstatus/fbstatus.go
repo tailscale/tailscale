@@ -36,6 +36,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -50,6 +51,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/util/cloudenv"
 )
 
 //go:embed tailscale.png
@@ -93,6 +95,20 @@ const (
 
 var flagFB = flag.String("fb", "/dev/fb0", "framebuffer device to draw to")
 
+// noFramebufferReason reports whether this host lacks a usable Linux
+// framebuffer, along with a short human-readable explanation. If the
+// framebuffer device is missing, or we're running on a cloud (currently
+// only AWS) whose instances don't expose one, we return true.
+func noFramebufferReason(fbPath string) (string, bool) {
+	if cloudenv.Get() == cloudenv.AWS {
+		return "running on AWS (no framebuffer)", true
+	}
+	if _, err := os.Stat(fbPath); err != nil {
+		return fmt.Sprintf("no framebuffer at %s: %v", fbPath, err), true
+	}
+	return "", false
+}
+
 func main() {
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -102,6 +118,19 @@ func main() {
 }
 
 func run() error {
+	// Bail out early on cloud VMs that don't ship a framebuffer. We
+	// still kick off breakglass once DHCP succeeds (otherwise the
+	// appliance is unreachable — breakglass declares DontStartOnBoot
+	// and only runs when fbstatus pokes the supervisor), then exit
+	// 125 so the gokrazy supervisor stops respawning us. See
+	// https://gokrazy.org/development/process-interface/.
+	if reason, ok := noFramebufferReason(*flagFB); ok {
+		log.Printf("%s; starting breakglass after DHCP then exiting 125", reason)
+		startBreakglassAfterDHCP(&uiState{})
+		log.Printf("breakglass started; exiting 125 so gokrazy won't respawn fbstatus")
+		os.Exit(125)
+	}
+
 	if restore, err := claimVTGraphics(); err != nil {
 		log.Printf("could not put VT into graphics mode (fbcon may overdraw): %v", err)
 	} else {
@@ -288,10 +317,16 @@ func startBreakglass() {
 	}
 }
 
-// watchKeyboardForConsole monitors keyboard input devices for Ctrl-Alt-F1/F2.
-// Ctrl-Alt-F2 switches to VT2 (text mode with a busybox shell).
-// Ctrl-Alt-F1 switches back to VT1 (fbstatus graphics mode).
-// This mirrors standard Linux VT switching conventions.
+// watchKeyboardForConsole monitors keyboard input devices for VT-switching
+// accelerators.
+//   - Ctrl-Alt-F2 (or plain Esc — easier to type in NoVNC where the
+//     Ctrl-Alt-Fn sequence doesn't always propagate) switches to VT2, a
+//     text-mode busybox shell. When that shell exits, we switch back
+//     automatically.
+//   - Ctrl-Alt-F1 switches back to VT1 (fbstatus graphics mode).
+//
+// This mirrors standard Linux VT switching conventions plus a NoVNC-
+// friendly shortcut.
 func watchKeyboardForConsole(ctx context.Context, st *uiState) {
 	kbdPath := findKeyboard()
 	if kbdPath == "" {
@@ -313,13 +348,14 @@ func watchKeyboardForConsole(ctx context.Context, st *uiState) {
 	defer ttyFile.Close()
 	ttyFd := int(ttyFile.Fd())
 
-	log.Printf("watching %s for Ctrl-Alt-F1/F2 (VT switching)", kbdPath)
+	log.Printf("watching %s for Ctrl-Alt-F1/F2 and Esc (VT switching)", kbdPath)
 
-	// Linux input_event on arm64: {uint64 sec, uint64 usec, uint16 type, uint16 code, int32 value}
-	// TODO: verify this layout also works on amd64 (e.g. the Proxmox
-	// framebuffer), where it should be the same size and shape.
+	// Linux input_event has the same layout on both arm64 and amd64
+	// (24 bytes: two uint64 timestamps + uint16 type + uint16 code +
+	// int32 value), so this parser handles both the Pi and Proxmox VM.
 	const evSize = 24
 	const evKey = 1  // EV_KEY
+	const keyEsc = 1 // KEY_ESC
 	const keyF1 = 59 // KEY_F1
 	const keyF2 = 60 // KEY_F2
 	const keyLeftCtrl = 29
@@ -330,6 +366,22 @@ func watchKeyboardForConsole(ctx context.Context, st *uiState) {
 
 	buf := make([]byte, evSize)
 	var ctrlHeld, altHeld bool
+
+	switchToFbstatus := func() {
+		st.paused.Store(false)
+		syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtActivate, 1)
+		syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtWaitActive, 1)
+		ioctlSetInt(ttyFile, kdSetMode, kdGraphics)
+		st.render()
+	}
+	switchToShell := func(reason string) {
+		st.paused.Store(true)
+		ioctlSetInt(ttyFile, kdSetMode, kdText)
+		syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtActivate, 2)
+		syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtWaitActive, 2)
+		go ensureShellOnVT2(switchToFbstatus)
+		log.Printf("%s: switched to text console", reason)
+	}
 
 	for ctx.Err() == nil {
 		n, err := kbd.Read(buf)
@@ -360,25 +412,19 @@ func watchKeyboardForConsole(ctx context.Context, st *uiState) {
 			} else if released {
 				altHeld = false
 			}
+		case keyEsc:
+			if pressed && !ctrlHeld && !altHeld {
+				// Bare Esc: NoVNC-friendly shortcut to the shell.
+				switchToShell("Esc")
+			}
 		case keyF1:
 			if pressed && ctrlHeld && altHeld {
-				// Switch to VT1 (fbstatus graphics).
-				st.paused.Store(false)
-				syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtActivate, 1)
-				syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtWaitActive, 1)
-				ioctlSetInt(ttyFile, kdSetMode, kdGraphics)
-				st.render()
+				switchToFbstatus()
 				log.Printf("Ctrl-Alt-F1: switched to fbstatus")
 			}
 		case keyF2:
 			if pressed && ctrlHeld && altHeld {
-				// Switch to VT2 (text console with shell).
-				st.paused.Store(true)
-				ioctlSetInt(ttyFile, kdSetMode, kdText)
-				syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtActivate, 2)
-				syscall.Syscall(syscall.SYS_IOCTL, uintptr(ttyFd), vtWaitActive, 2)
-				go ensureShellOnVT2()
-				log.Printf("Ctrl-Alt-F2: switched to text console")
+				switchToShell("Ctrl-Alt-F2")
 			}
 		}
 	}
@@ -386,15 +432,21 @@ func watchKeyboardForConsole(ctx context.Context, st *uiState) {
 
 // ensureShellOnVT2 spawns a busybox ash shell on /dev/tty2 if one isn't
 // already running. The shell gets the VT2 tty as its controlling terminal
-// so keyboard input on VT2 goes to it.
+// so keyboard input on VT2 goes to it. When the shell exits, onExit is
+// called (typically to switch back to VT1 / fbstatus graphics mode).
 var shellOnVT2Running atomic.Bool
 
-func ensureShellOnVT2() {
+func ensureShellOnVT2(onExit func()) {
 	if !shellOnVT2Running.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		defer shellOnVT2Running.Store(false)
+		defer func() {
+			if onExit != nil {
+				onExit()
+			}
+		}()
 		shell := "/tmp/serial-busybox/ash"
 		if _, err := os.Stat(shell); err != nil {
 			log.Printf("no shell at %s for VT2", shell)
@@ -424,26 +476,32 @@ func ensureShellOnVT2() {
 }
 
 // findKeyboard looks for a keyboard among /dev/input/event* devices by
-// checking for EV_KEY capability with KEY_ESC support.
+// checking that the device's key capability bitmap has KEY_ESC set. The
+// alternative "any non-zero key bitmap" check picks up the ACPI power
+// button (which advertises KEY_POWER but no Esc) and misses the real
+// keyboard on amd64 Proxmox VMs, where the AT keyboard is event1 but
+// event0 is Power Button.
 func findKeyboard() string {
 	matches, _ := filepath.Glob("/dev/input/event*")
 	for _, path := range matches {
-		f, err := os.Open(path)
-		if err != nil {
-			continue
-		}
-		// EVIOCGBIT(EV_KEY) = ioctl to get key capability bitmap
-		// We just try reading an EV_KEY event; if the device has keys it'll work.
-		// Simpler: check /sys/class/input/eventN/device/capabilities/key
 		name := filepath.Base(path)
-		capPath := "/sys/class/input/" + name + "/device/capabilities/key"
-		cap, err := os.ReadFile(capPath)
-		f.Close()
+		capData, err := os.ReadFile("/sys/class/input/" + name + "/device/capabilities/key")
 		if err != nil {
 			continue
 		}
-		// A keyboard has a non-zero key capability bitmap.
-		if strings.TrimSpace(string(cap)) != "0" {
+		fields := strings.Fields(strings.TrimSpace(string(capData)))
+		if len(fields) == 0 {
+			continue
+		}
+		// The kernel prints capability bitmaps as space-separated 64-bit
+		// hex chunks, most-significant chunk first. The last chunk holds
+		// bits 0..63. KEY_ESC = 1, so its bit-mask is 1<<1 == 0x2.
+		low, err := strconv.ParseUint(fields[len(fields)-1], 16, 64)
+		if err != nil {
+			continue
+		}
+		const keyEscBit = 1 << 1
+		if low&keyEscBit != 0 {
 			return path
 		}
 	}

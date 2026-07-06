@@ -99,8 +99,13 @@ func gokrazyUpdateFromURL(ctx context.Context, args GokrazyUpdateArgs) error {
 
 // downloadUnverified saves the GAF at srcURL to dstPath without verifying
 // a signature. It is used only when args.AllowUnsigned is set, for tests
-// that serve the GAF from a fileserver that does not publish distsign.pub.
+// that serve the GAF from a fileserver that does not publish distsign.pub
+// and for the gafpush "sftp the GAF onto the appliance and update from a
+// local path" flow, which uses a "file://" URL.
 func downloadUnverified(ctx context.Context, logf logger.Logf, srcURL, dstPath string) error {
+	if after, ok := strings.CutPrefix(srcURL, "file://"); ok {
+		return copyLocalFile(after, dstPath, logf)
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", srcURL, nil)
 	if err != nil {
 		return err
@@ -128,6 +133,38 @@ func downloadUnverified(ctx context.Context, logf logger.Logf, srcURL, dstPath s
 		return err
 	}
 	return f.Close()
+}
+
+// copyLocalFile copies the GAF at src to dst. Used by the "file://" branch
+// of downloadUnverified. The source file is left in place; callers that
+// staged it (e.g. gafpush) clean up after the update completes.
+func copyLocalFile(src, dst string, logf logger.Logf) error {
+	sf, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sf.Close()
+	df, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	fi, err := sf.Stat()
+	if err != nil {
+		df.Close()
+		return err
+	}
+	total := fi.Size()
+	logf("copying local GAF %s (%d MB)", src, total>>20)
+	pw := progresstracking.NewWriter(io.Discard, total, time.Second, func(done int64) {
+		if total > 0 {
+			logf("copying: %d / %d MB (%.0f%%)", done>>20, total>>20, float64(done)/float64(total)*100)
+		}
+	})
+	if _, err := io.Copy(df, io.TeeReader(sf, pw)); err != nil {
+		df.Close()
+		return err
+	}
+	return df.Close()
 }
 
 func gokrazyHTTPClient() *http.Client {

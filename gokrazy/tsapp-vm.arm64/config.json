@@ -12,6 +12,8 @@
     "Packages": [
         "github.com/gokrazy/serial-busybox",
         "github.com/gokrazy/breakglass",
+        "github.com/bradfitz/qemu-guest-kragent",
+        "tailscale.com/cmd/fbstatus",
         "tailscale.com/cmd/tailscale",
         "tailscale.com/cmd/tailscaled"
     ],

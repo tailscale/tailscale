@@ -6,6 +6,7 @@
 package gokrazydeps
 
 import (
+	_ "github.com/bradfitz/qemu-guest-kragent"
 	_ "github.com/gokrazy/breakglass"
 	_ "github.com/gokrazy/gokrazy/cmd/dhcp"
 	_ "github.com/gokrazy/gokrazy/cmd/ntp"

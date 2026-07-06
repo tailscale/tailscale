@@ -5,17 +5,22 @@
 // Tailscale appliance over the network without moving the SD card.
 //
 // The flow:
-//  1. Start a local HTTP server on an ephemeral port, auto-detecting
-//     the local IP on the same subnet as the target.
-//  2. SSH into the appliance and run: tailscale update --
-//     --gokrazy-update-from-url=http://<local>:<port>/file.gaf --unsigned
-//  3. The appliance downloads the GAF, writes partitions, switches root,
-//     and reboots.
-//  4. Wait for the appliance to come back on SSH.
+//  1. scp the GAF to /perm/gafpush.tmp on the appliance (via
+//     breakglass's SFTP subsystem).
+//  2. SSH into the appliance and run
+//     tailscale update -- --gokrazy-update-from-url=file:///perm/gafpush.tmp --unsigned
+//     which copies the file into a tmp GAF, writes partitions, switches
+//     root, and reboots.
+//  3. Wait for the appliance to come back on SSH; then remove
+//     /perm/gafpush.tmp.
+//
+// This flow is purely one-directional (developer → appliance), so
+// gafpush works from behind NAT, laptop firewalls (e.g. NixOS's default
+// deny-inbound), or when the appliance is on a different subnet.
 //
 // Usage:
 //
-//	gafpush --gaf=path/to/file.gaf --pi=<ip>
+//	gafpush --gaf=path/to/file.gaf --host=<ip-or-name>
 //
 // Or via the Makefile:
 //
@@ -23,12 +28,9 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,13 +38,19 @@ import (
 )
 
 var (
-	gafPath = flag.String("gaf", "", "path to the GAF file to push")
-	piAddr  = flag.String("pi", "", "IP address of the target Pi")
+	gafPath    = flag.String("gaf", "", "path to the GAF file to push")
+	host       = flag.String("host", "", "target hostname or IP (SSH as root)")
+	piAddr     = flag.String("pi", "", "alias for --host, kept for backwards compatibility with the Makefile")
+	remotePath = flag.String("remote-path", "/perm/gafpush.tmp", "where on the appliance to stage the GAF before the update")
 )
 
 func main() {
 	flag.Parse()
-	if *gafPath == "" || *piAddr == "" {
+	target := *host
+	if target == "" {
+		target = *piAddr
+	}
+	if *gafPath == "" || target == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -54,82 +62,74 @@ func main() {
 	absGAF, _ := filepath.Abs(*gafPath)
 	log.Printf("GAF: %s (%.1f MB)", absGAF, float64(fi.Size())/(1<<20))
 
-	localIP, err := findLocalIPFor(*piAddr)
-	if err != nil {
-		log.Fatalf("finding local IP on same subnet as %s: %v", *piAddr, err)
-	}
-
-	// Start HTTP server on an ephemeral port.
-	ln, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
-	if err != nil {
-		log.Fatalf("listen: %v", err)
-	}
-	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	gafURL := fmt.Sprintf("http://%s:%s/%s", localIP, port, filepath.Base(absGAF))
-
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("serving %s to %s", absGAF, r.RemoteAddr)
-			http.ServeFile(w, r, absGAF)
-		}),
-	}
-	go srv.Serve(ln)
-	defer srv.Shutdown(context.Background())
-
-	log.Printf("serving GAF at %s", gafURL)
-	log.Printf("SSHing into %s to trigger update...", *piAddr)
-
-	// SSH into the Pi and run tailscale update with the GAF URL.
-	cmd := exec.Command("ssh",
+	log.Printf("scp'ing GAF to %s:%s ...", target, *remotePath)
+	scp := exec.Command("scp",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=10",
-		"root@"+*piAddr,
+		absGAF, "root@"+target+":"+*remotePath,
+	)
+	scp.Stdout = os.Stdout
+	scp.Stderr = os.Stderr
+	if err := scp.Run(); err != nil {
+		log.Fatalf("scp: %v", err)
+	}
+
+	log.Printf("SSHing into %s to trigger update...", target)
+	fileURL := "file://" + *remotePath
+	sshUpdate := exec.Command("ssh",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=10",
+		"root@"+target,
 		"tailscale", "update", "--",
-		"--gokrazy-update-from-url="+gafURL,
+		"--gokrazy-update-from-url="+fileURL,
 		"--unsigned",
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		// The SSH connection may drop when the Pi reboots, which is expected.
+	sshUpdate.Stdout = os.Stdout
+	sshUpdate.Stderr = os.Stderr
+	if err := sshUpdate.Run(); err != nil {
+		// SSH will drop when the appliance reboots, which is expected.
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 255 {
-			log.Printf("SSH connection closed (Pi is rebooting)")
+			log.Printf("SSH connection closed (appliance is rebooting)")
 		} else {
 			log.Fatalf("ssh: %v", err)
 		}
 	}
 
-	log.Printf("update pushed; Pi should reboot into the new image shortly")
-	log.Printf("waiting for Pi to come back...")
-	waitForPi(*piAddr)
-}
-
-// findLocalIPFor returns our local IP address that's on the same subnet
-// as the given remote IP. It does this by dialing a UDP connection (which
-// doesn't actually send anything) and checking the local address chosen.
-func findLocalIPFor(remoteIP string) (string, error) {
-	conn, err := net.DialTimeout("udp4", net.JoinHostPort(remoteIP, "9"), time.Second)
-	if err != nil {
-		return "", err
+	log.Printf("update pushed; waiting for %s to come back...", target)
+	if !waitForHost(target) {
+		log.Printf("timed out waiting for appliance to come back (may have gotten a new IP); leaving %s in place", *remotePath)
+		return
 	}
-	defer conn.Close()
-	host, _, _ := net.SplitHostPort(conn.LocalAddr().String())
-	return host, nil
+
+	log.Printf("cleaning up staged GAF on %s ...", target)
+	sshRm := exec.Command("ssh",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=10",
+		"root@"+target,
+		"rm", "-f", *remotePath,
+	)
+	sshRm.Stdout = os.Stdout
+	sshRm.Stderr = os.Stderr
+	if err := sshRm.Run(); err != nil {
+		log.Printf("cleanup: %v (staged GAF still at %s)", err, *remotePath)
+	}
 }
 
-// waitForPi polls the Pi's SSH port until it comes back up.
-func waitForPi(addr string) {
+// waitForHost polls the appliance's SSH port until it comes back up.
+// Returns true if it comes back within the deadline.
+func waitForHost(addr string) bool {
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(addr, "22"), 2*time.Second)
 		if err == nil {
 			conn.Close()
-			log.Printf("Pi is back at %s:22", addr)
-			return
+			log.Printf("appliance is back at %s:22", addr)
+			return true
 		}
 		time.Sleep(2 * time.Second)
 	}
-	log.Printf("timed out waiting for Pi to come back (may have gotten a new IP)")
+	return false
 }

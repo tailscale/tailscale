@@ -84,7 +84,11 @@ func runFlashAppliance(ctx context.Context, args []string) error {
 		return err
 	}
 
-	gafPath, gafLabel, variant, cleanup, err := obtainGAF(ctx)
+	gafPath, gafLabel, variant, cleanup, err := obtainGAF(ctx, gafDownloadArgs{
+		localGAF: flashApplianceArgs.gaf,
+		track:    flashApplianceArgs.track,
+		variant:  flashApplianceArgs.variant,
+	})
 	if err != nil {
 		return err
 	}
@@ -229,22 +233,30 @@ func resolveTargetDisk(ctx context.Context, userDisk string) (diskCandidate, err
 	}
 }
 
+// gafDownloadArgs are the inputs to [obtainGAF]. All fields are optional;
+// zero values mean "download the latest and prompt/pick sensible defaults".
+type gafDownloadArgs struct {
+	localGAF string // if set, skip the network and use this local GAF path
+	track    string // release track (empty → clientupdate.CurrentTrack)
+	variant  string // GAF variant key (e.g. "vm-amd64"); empty prompts interactively
+}
+
 // obtainGAF returns a path to a local GAF file the caller can read,
 // along with the appliance variant it corresponds to (empty for the
-// --gaf path). If the caller passed --gaf, the local file is returned
+// --gaf path). If args.localGAF is set, the local file is returned
 // directly. Otherwise the latest appliance GAF is fetched from
 // pkgs.tailscale.com (with signature verification) into a temp file.
 // cleanup removes any temp file it created.
-func obtainGAF(ctx context.Context) (path, label, variant string, cleanup func(), err error) {
+func obtainGAF(ctx context.Context, args gafDownloadArgs) (path, label, variant string, cleanup func(), err error) {
 	cleanup = func() {}
-	if flashApplianceArgs.gaf != "" {
-		// With --gaf there's no manifest to learn the variant from, so
-		// we trust whatever --variant the user passed (may be empty).
-		// rootArchForVariant defaults to arm64 when empty.
-		return flashApplianceArgs.gaf, flashApplianceArgs.gaf, flashApplianceArgs.variant, cleanup, nil
+	if args.localGAF != "" {
+		// With a local GAF there's no manifest to learn the variant
+		// from, so we trust whatever variant the caller passed (may be
+		// empty). rootArchForVariant defaults to arm64 when empty.
+		return args.localGAF, args.localGAF, args.variant, cleanup, nil
 	}
 
-	track := flashApplianceArgs.track
+	track := args.track
 	if track == "" {
 		track = clientupdate.CurrentTrack
 	}
@@ -256,7 +268,7 @@ func obtainGAF(ctx context.Context) (path, label, variant string, cleanup func()
 		return "", "", "", cleanup, fmt.Errorf("no appliance GAFs published on %q track", track)
 	}
 
-	variant, err = pickVariant(latest.GAFs)
+	variant, err = pickVariant(latest.GAFs, args.variant)
 	if err != nil {
 		return "", "", "", cleanup, err
 	}
@@ -284,21 +296,21 @@ func obtainGAF(ctx context.Context) (path, label, variant string, cleanup func()
 	return tmpName, fmt.Sprintf("%s (%s)", gafName, latest.GAFsVersion), variant, cleanup, nil
 }
 
-// pickVariant returns the variant key from gafs the user wants to flash. If
-// --variant was passed, it's validated against the available keys.
-// Otherwise the user is prompted with the variants the server advertises.
-func pickVariant(gafs map[string]string) (string, error) {
+// pickVariant returns the variant key from gafs the user wants. If
+// chosen is non-empty, it's validated against the available keys.
+// Otherwise the caller is prompted to choose one on the next invocation.
+func pickVariant(gafs map[string]string, chosen string) (string, error) {
 	variants := make([]string, 0, len(gafs))
 	for k := range gafs {
 		variants = append(variants, k)
 	}
 	sort.Strings(variants)
 
-	if v := flashApplianceArgs.variant; v != "" {
-		if !slices.Contains(variants, v) {
-			return "", fmt.Errorf("variant %q not published; available: %s", v, strings.Join(variants, ", "))
+	if chosen != "" {
+		if !slices.Contains(variants, chosen) {
+			return "", fmt.Errorf("variant %q not published; available: %s", chosen, strings.Join(variants, ", "))
 		}
-		return v, nil
+		return chosen, nil
 	}
 
 	printf("Available appliance variants:\n")
@@ -335,6 +347,42 @@ func readGAFMember(files []*zip.File, name string, maxBytes int64) ([]byte, erro
 // appliance populates root B on first boot, and the caller formats
 // perm with mkfs.ext4.
 func writeGAFToDisk(files []*zip.File, diskPath string, bootCode []byte, variant string) error {
+	f, err := openBlockDevice(diskPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	devsize, err := blockDeviceSize(f)
+	if err != nil {
+		return fmt.Errorf("sizing %s: %w", diskPath, err)
+	}
+	if devsize <= 0 {
+		return fmt.Errorf("could not determine size of %s", diskPath)
+	}
+
+	if err := writeApplianceImage(f, devsize, files, bootCode, variant); err != nil {
+		return err
+	}
+
+	if err := syncBlockDevice(f); err != nil {
+		return fmt.Errorf("fsync %s: %w", diskPath, err)
+	}
+	if err := rereadPartitionTable(f); err != nil {
+		return fmt.Errorf("reread partition table: %w", err)
+	}
+	return nil
+}
+
+// writeApplianceImage writes the gokrazy install (protective MBR + GPT,
+// boot.img, root.img) to f, whose usable size is devsize bytes. It does
+// not fsync or reread the partition table; those are the caller's
+// responsibility if targeting a block device.
+//
+// f is used for random-access seeks and writes and must already be sized
+// to devsize (a fresh block device, or a regular file that the caller
+// has truncated to devsize).
+func writeApplianceImage(f *os.File, devsize int64, files []*zip.File, bootCode []byte, variant string) error {
 	if len(bootCode) > 446 {
 		return fmt.Errorf("mbr.img is %d bytes; expected at most 446", len(bootCode))
 	}
@@ -353,20 +401,6 @@ func writeGAFToDisk(files []*zip.File, diskPath string, bootCode []byte, variant
 	partUUID, err := partUUIDFromBootImg(bootImg)
 	if err != nil {
 		return fmt.Errorf("locating gokrazy partuuid in boot.img: %w", err)
-	}
-
-	f, err := openBlockDevice(diskPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	devsize, err := blockDeviceSize(f)
-	if err != nil {
-		return fmt.Errorf("sizing %s: %w", diskPath, err)
-	}
-	if devsize <= 0 {
-		return fmt.Errorf("could not determine size of %s", diskPath)
 	}
 
 	printf("Writing protective MBR + GPT (partuuid=%08x, arch=%s)\n", partUUID, rootArchForVariant(variant))
@@ -390,13 +424,6 @@ func writeGAFToDisk(files []*zip.File, diskPath string, bootCode []byte, variant
 		if err := writeZipMemberAt(f, zf, int64(w.offsetLBA)*512); err != nil {
 			return fmt.Errorf("writing %s: %w", w.member, err)
 		}
-	}
-
-	if err := syncBlockDevice(f); err != nil {
-		return fmt.Errorf("fsync %s: %w", diskPath, err)
-	}
-	if err := rereadPartitionTable(f); err != nil {
-		return fmt.Errorf("reread partition table: %w", err)
 	}
 	return nil
 }

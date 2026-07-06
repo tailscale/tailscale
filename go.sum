@@ -213,6 +213,8 @@ github.com/bradfitz/go-tool-cache v0.0.0-20260216153636-9e5201344fe5 h1:0sG3c7af
 github.com/bradfitz/go-tool-cache v0.0.0-20260216153636-9e5201344fe5/go.mod h1:78ZLITnBUCDJeU01+wYYJKaPYYgsDzJPRfxeI8qFh5g=
 github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f h1:voy0korWbg2e1gsJpBZ8/OBhVL8evXeUwbCZcA1PWv8=
 github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f/go.mod h1:TG1HbU9fRVDnNgXncVkKz9GdvjIvqquXjH6QZSEVmY4=
+github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03 h1:V1gD/xbQZtimHXZ0y19oMgTVBIXQyazG/mG9JIflrIY=
+github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03/go.mod h1:DFLM0H5mh/gbb8viqnMwZzZ8TU4o3bbXOa5tyknrOQY=
 github.com/bramvdbogaerde/go-scp v1.4.0 h1:jKMwpwCbcX1KyvDbm/PDJuXcMuNVlLGi0Q0reuzjyKY=
 github.com/bramvdbogaerde/go-scp v1.4.0/go.mod h1:on2aH5AxaFb2G0N5Vsdy6B0Ml7k9HuHSwfo1y0QzAbQ=
 github.com/breml/bidichk v0.2.7 h1:dAkKQPLl/Qrk7hnP6P+E0xOodrq8Us7+U0o4UBOAlQY=

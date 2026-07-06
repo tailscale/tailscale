@@ -33,6 +33,7 @@ services on the host to use Tailscale in more ways.
 			configureKubeconfigCmd(),
 			synologyConfigureCmd(),
 			flashApplianceCmd(),
+			pveApplianceCmd(),
 			ccall(maybeConfigSynologyCertCmd),
 			ccall(maybeSysExtCmd),
 			ccall(maybeVPNConfigCmd),
