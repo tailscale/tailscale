@@ -993,7 +993,7 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 		if isMainContainer(&c) {
 			if debug {
 				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
-					// Serve tailscaled's debug metrics on on
+					// Serve tailscaled's debug metrics on
 					// <pod-ip>:9001/debug/metrics. If we didn't specify Pod IP
 					// here, the proxy would, in some cases, also listen to its
 					// Tailscale IP- we don't want folks to start relying on this

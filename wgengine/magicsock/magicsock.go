@@ -2401,7 +2401,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if isCached {
 			metricCachedPeerContactDERP.Add(1)
 		}
-		// If we did not already have an an endpoint for this peer, even a stale
+		// If we did not already have an endpoint for this peer, even a stale
 		// one, record how long it has been since the endpoint was initialized.
 		if !lastBest.ap.IsValid() {
 			c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=derp",

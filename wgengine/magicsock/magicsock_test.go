@@ -579,7 +579,7 @@ func TestPickDERPFallback(t *testing.T) {
 		}
 	}
 
-	// Test that that the pointer value of c is blended in and
+	// Test that the pointer value of c is blended in and
 	// distribution over nodes works.
 	got := map[int]int{}
 	for range 50 {
@@ -1520,7 +1520,7 @@ func TestDiscoStringLogRace(t *testing.T) {
 	wg.Wait()
 }
 
-// Test32bitAlignment verifies that that the 64-bit atomic mono.Time fields are
+// Test32bitAlignment verifies that the 64-bit atomic mono.Time fields are
 // 64-bit aligned, so that StoreAtomic and LoadAtomic won't panic on 32-bit
 // platforms.
 //

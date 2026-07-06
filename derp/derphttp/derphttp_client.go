@@ -179,7 +179,7 @@ func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf, n
 
 // isStarted reports whether this client has been used yet.
 //
-// If if reports false, it may still have its exported fields configured.
+// If it reports false, it may still have its exported fields configured.
 func (c *Client) isStarted() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

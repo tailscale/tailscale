@@ -1086,7 +1086,7 @@ type NetInfo struct {
 
 	// PreferredDERP is this node's preferred (home) DERP region ID.
 	// This is where the node expects to be contacted to begin a
-	// peer-to-peer connection. The node might be be temporarily
+	// peer-to-peer connection. The node might be temporarily
 	// connected to multiple DERP servers (to speak to other nodes
 	// that are located elsewhere) but PreferredDERP is the region ID
 	// that the node subscribes to traffic at.
@@ -2117,7 +2117,7 @@ type MapResponse struct {
 	PacketFilters map[string][]FilterRule `json:",omitempty"`
 
 	// UserProfiles are the user profiles of nodes in the network.
-	// As as of 1.1.541 (mapver 5), this contains new or updated
+	// As of 1.1.541 (mapver 5), this contains new or updated
 	// user profiles only.
 	UserProfiles []UserProfile `json:",omitempty"`
 

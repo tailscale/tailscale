@@ -119,7 +119,7 @@ func parseProtoPortRange(ipProtoPort string) (*ProtoPortRange, error) {
 }
 
 // ParseHostPortRange parses hostport as HOST:PORTS where HOST is
-// returned unchanged and PORTS is is either "*" or PORTLOW-PORTHIGH ranges.
+// returned unchanged and PORTS is either "*" or PORTLOW-PORTHIGH ranges.
 func ParseHostPortRange(hostport string) (host string, ports PortRange, err error) {
 	hostport = strings.ToLower(hostport)
 	colon := strings.LastIndexByte(hostport, ':')

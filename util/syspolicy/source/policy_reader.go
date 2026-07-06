@@ -91,7 +91,7 @@ func newReader(store Store, origin *setting.Origin) (*Reader, error) {
 }
 
 // GetSettings returns the current [*setting.Snapshot],
-// re-reading it from from the underlying [Store] only if the policy
+// re-reading it from the underlying [Store] only if the policy
 // has changed since it was read last. It never fails and returns
 // the previous version of the policy settings if a read attempt fails.
 func (r *Reader) GetSettings() *setting.Snapshot {

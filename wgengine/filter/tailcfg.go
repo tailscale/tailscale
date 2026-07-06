@@ -131,7 +131,7 @@ var (
 //
 // TODO(bradfitz): make this return an IPSet and plumb that all
 // around, and ultimately use a new version of IPSet.ContainsFunc like
-// Contains16Func that works in [16]byte address, so we we can match
+// Contains16Func that works in [16]byte address, so we can match
 // at runtime without allocating?
 func parseIPSet(arg string) (prefixes []netip.Prefix, peerCap tailcfg.NodeCapability, err error) {
 	if arg == "*" {

@@ -475,7 +475,7 @@ func retrieveClusterDomain(namespace string, logger *zap.SugaredLogger) string {
 }
 
 // clusterDomainFromResolverConf attempts to retrieve cluster domain from the provided resolver config.
-// It expects the first three search domains in the resolver config to be be ['<namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>, ...]
+// It expects the first three search domains in the resolver config to be ['<namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>, ...]
 // If the first three domains match the expected structure, it returns the third.
 // If the domains don't match the expected structure or an error is encountered, it defaults to 'cluster.local' domain.
 func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string, logger *zap.SugaredLogger) string {

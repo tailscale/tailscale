@@ -111,7 +111,7 @@ func (k NLPrivate) SignNKS(sigHash tkatype.NKSSigHash) ([]byte, error) {
 	return ed25519.Sign(ed25519.PrivateKey(k.k[:]), sigHash[:]), nil
 }
 
-// NLPublic is the public portion of a a NLPrivate.
+// NLPublic is the public portion of a NLPrivate.
 type NLPublic struct {
 	k [ed25519.PublicKeySize]byte
 }

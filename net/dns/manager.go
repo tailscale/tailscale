@@ -522,7 +522,7 @@ const (
 	maxReqSizeTCP = 4096
 )
 
-// TrampleDNS is an an event indicating we detected that DNS config was
+// TrampleDNS is an event indicating we detected that DNS config was
 // overwritten by another process.
 type TrampleDNS struct {
 	LastTrample       time.Time

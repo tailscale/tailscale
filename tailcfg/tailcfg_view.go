@@ -777,7 +777,7 @@ func (v NetInfoView) PCP() opt.Bool { return v.ж.PCP }
 
 // PreferredDERP is this node's preferred (home) DERP region ID.
 // This is where the node expects to be contacted to begin a
-// peer-to-peer connection. The node might be be temporarily
+// peer-to-peer connection. The node might be temporarily
 // connected to multiple DERP servers (to speak to other nodes
 // that are located elsewhere) but PreferredDERP is the region ID
 // that the node subscribes to traffic at.
