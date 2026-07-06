@@ -490,7 +490,31 @@ type Notify struct {
 	// and on change thereafter.
 	Policy *policyclient.PolicySnapshot `json:",omitzero"`
 
+	// LoginBeaconRequest, if non-nil, describes a pending LAN login-beacon
+	// (see feature/loginbeacon) that the user should Approve or Ignore.
+	LoginBeaconRequest *LoginBeaconRequest `json:",omitzero"`
+
+	// LoginBeaconApproved, if non-nil, tells the sender that an approver
+	// has accepted its beacon. UIs use it to swap the QR/URL screen for a
+	// "waiting for sign-in" state.
+	LoginBeaconApproved *LoginBeaconApproved `json:",omitzero"`
+
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
+}
+
+// LoginBeaconRequest is the client-facing projection of a MsgBeacon.
+// RequestID and DeviceIDHash are hex-encoded.
+type LoginBeaconRequest struct {
+	RequestID    string `json:"requestID"`
+	Hostname     string `json:"hostname"`
+	DeviceKind   string `json:"deviceKind"`
+	DeviceIDHash string `json:"deviceIDHash"`
+}
+
+// LoginBeaconApproved carries the approver's self-reported hostname. It is
+// untrusted (may be empty or "localhost"); UIs should sanitize for display.
+type LoginBeaconApproved struct {
+	ApproverName string `json:"approverName"`
 }
 
 // PeerWireGuardState is the WireGuard session state for a peer.
