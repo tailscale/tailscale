@@ -550,6 +550,14 @@ func (v HostinfoView) ShareeNode() bool { return v.ж.ShareeNode }
 // indicates that the user has opted out of sending logs and support
 func (v HostinfoView) NoLogsNoSupport() bool { return v.ж.NoLogsNoSupport }
 
+// RemoteConfig is whether the node has both linked
+// feature/remoteconfig into its binary and enabled
+// Prefs.RemoteConfig: it has delegated full remote management of
+// its prefs and LocalAPI to the tailnet admin via the
+// /remoteapi/localapi/* c2n endpoint. See feature/remoteconfig for
+// the trust model.
+func (v HostinfoView) RemoteConfig() bool { return v.ж.RemoteConfig }
+
 // WireIngress indicates that the node would like to be wired up server-side
 // (DNS, etc) to be able to use Tailscale Funnel, even if it's not currently
 // enabled. For example, the user might only use it for intermittent
@@ -649,6 +657,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp       bool
 	ShareeNode      bool
 	NoLogsNoSupport bool
+	RemoteConfig    bool
 	WireIngress     bool
 	IngressEnabled  bool
 	AllowsUpdate    bool

@@ -501,6 +501,10 @@ func (b *LocalBackend) HealthTracker() *health.Tracker { return b.health }
 // Logger returns the logger for the backend.
 func (b *LocalBackend) Logger() logger.Logf { return b.logf }
 
+// BackendLogID returns the backend's log ID, or the zero value if logging is
+// not in use.
+func (b *LocalBackend) BackendLogID() logid.PublicID { return b.backendLogID }
+
 // UserMetricsRegistry returns the usermetrics registry for the backend
 func (b *LocalBackend) UserMetricsRegistry() *usermetric.Registry {
 	return b.sys.UserMetricsRegistry()
@@ -6615,6 +6619,14 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
 	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
 	hi.ShieldsUp = prefs.ShieldsUp()
+	// Only advertise RemoteConfig to control when the feature is both
+	// compiled in (buildfeatures.HasRemoteConfig; a const so the whole
+	// expression dead-code eliminates when ts_omit_remoteconfig is set)
+	// and its init actually ran to wire up the c2n handler. tsnet
+	// builds are the interesting case: they do not import
+	// feature/remoteconfig even though ts_omit_remoteconfig is not
+	// set, so we must not claim RemoteConfig is active there.
+	hi.RemoteConfig = buildfeatures.HasRemoteConfig && prefs.RemoteConfig() && feature.IsRegistered("remoteconfig")
 	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true))
 
 	if buildfeatures.HasAdvertiseRoutes {

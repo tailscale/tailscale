@@ -3409,6 +3409,7 @@ func TestDeps(t *testing.T) {
 		BadDeps: map[string]string{
 			"golang.org/x/crypto/ssh":                       "tsnet should not depend on SSH",
 			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
+			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
 			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",
 			"tailscale.com/ipn/store/awsstore":              "tsnet callers wanting AWS state storage should import awsstore themselves",
 			"tailscale.com/ipn/store/kubestore":             "tsnet callers wanting Kubernetes state storage should import kubestore themselves",

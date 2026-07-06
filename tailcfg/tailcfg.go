@@ -188,7 +188,8 @@ type CapabilityVersion int
 //   - 139: 2026-05-22: Client understands [NodeAttrEmitRuntimeMetrics]
 //   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
-const CurrentCapabilityVersion CapabilityVersion = 141
+//   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
+const CurrentCapabilityVersion CapabilityVersion = 142
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -896,6 +897,15 @@ type Hostinfo struct {
 	ShieldsUp       bool     `json:",omitzero"` // indicates whether the host is blocking incoming connections
 	ShareeNode      bool     `json:",omitzero"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool     `json:",omitzero"` // indicates that the user has opted out of sending logs and support
+
+	// RemoteConfig is whether the node has both linked
+	// feature/remoteconfig into its binary and enabled
+	// Prefs.RemoteConfig: it has delegated full remote management of
+	// its prefs and LocalAPI to the tailnet admin via the
+	// /remoteapi/localapi/* c2n endpoint. See feature/remoteconfig for
+	// the trust model.
+	RemoteConfig bool `json:",omitzero"`
+
 	// WireIngress indicates that the node would like to be wired up server-side
 	// (DNS, etc) to be able to use Tailscale Funnel, even if it's not currently
 	// enabled. For example, the user might only use it for intermittent

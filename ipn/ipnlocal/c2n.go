@@ -83,6 +83,29 @@ func RegisterC2N(pattern string, h func(*LocalBackend, http.ResponseWriter, *htt
 	c2nHandlers[k] = h
 }
 
+// RegisterC2NPrefix registers h as the c2n handler for all paths starting
+// with prefix. prefix must end in "/". Prefix matches are tried after all
+// exact-path handlers registered via [RegisterC2N] fail to match.
+func RegisterC2NPrefix(prefix string, h func(*LocalBackend, http.ResponseWriter, *http.Request)) {
+	if !buildfeatures.HasC2N {
+		return
+	}
+	if prefix == "" || !strings.HasSuffix(prefix, "/") {
+		panic(fmt.Sprintf("c2n: prefix %q must be non-empty and end with /", prefix))
+	}
+	c2nPrefixHandlers = append(c2nPrefixHandlers, c2nPrefixHandler{prefix, h})
+}
+
+// c2nPrefixHandler is a c2n handler that matches all paths starting with prefix.
+type c2nPrefixHandler struct {
+	prefix string
+	h      c2nHandler
+}
+
+// c2nPrefixHandlers are c2n handlers matched by URL path prefix rather than
+// exact path. See [RegisterC2NPrefix].
+var c2nPrefixHandlers []c2nPrefixHandler
+
 type c2nHandler func(*LocalBackend, http.ResponseWriter, *http.Request)
 
 type methodAndPath struct {
@@ -117,6 +140,13 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 	if h, ok := c2nHandlers[methodAndPath{path: r.URL.Path}]; ok {
 		h(b, w, r)
 		return
+	}
+	// Then try prefix matches.
+	for _, ph := range c2nPrefixHandlers {
+		if strings.HasPrefix(r.URL.Path, ph.prefix) {
+			ph.h(b, w, r)
+			return
+		}
 	}
 	if c2nHandlerPaths.Contains(r.URL.Path) {
 		http.Error(w, "bad method", http.StatusMethodNotAllowed)

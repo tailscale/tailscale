@@ -440,6 +440,24 @@ func (v PrefsView) PostureChecking() bool { return v.ж.PostureChecking }
 // Linux-only.
 func (v PrefsView) NetfilterKind() string { return v.ж.NetfilterKind }
 
+// RemoteConfig, if true, delegates full remote control of this node's
+// prefs and LocalAPI to the tailnet admin via the control plane. When
+// enabled, the control server can read and edit any of this node's
+// prefs at any time, and invoke any LocalAPI endpoint on this node,
+// without any further local consent (no CLI or GUI confirmation).
+//
+// This is an alternative to Tailscale's default per-feature double
+// opt-in model, in which both the tailnet admin and the local machine
+// owner must agree to each individual setting change. RemoteConfig is
+// a single client-side "I trust the tailnet admin" switch that hands
+// over full remote management of this node.
+//
+// Only enable this when the tailnet admin owns the machine (e.g. a
+// corporate fleet device) or the local user has explicitly delegated
+// full control to the tailnet admin. Do NOT enable this on personal
+// or BYOD devices where the tailnet admin is not fully trusted.
+func (v PrefsView) RemoteConfig() bool { return v.ж.RemoteConfig }
+
 // DriveShares are the configured DriveShares, stored in increasing order
 // by name.
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
@@ -501,6 +519,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector               AppConnectorPrefs
 	PostureChecking            bool
 	NetfilterKind              string
+	RemoteConfig               bool
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort

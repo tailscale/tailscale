@@ -51,6 +51,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShieldsUp",
 		"ShareeNode",
 		"NoLogsNoSupport",
+		"RemoteConfig",
 		"WireIngress",
 		"IngressEnabled",
 		"AllowsUpdate",

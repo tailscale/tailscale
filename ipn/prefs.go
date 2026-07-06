@@ -277,6 +277,24 @@ type Prefs struct {
 	// Linux-only.
 	NetfilterKind string
 
+	// RemoteConfig, if true, delegates full remote control of this node's
+	// prefs and LocalAPI to the tailnet admin via the control plane. When
+	// enabled, the control server can read and edit any of this node's
+	// prefs at any time, and invoke any LocalAPI endpoint on this node,
+	// without any further local consent (no CLI or GUI confirmation).
+	//
+	// This is an alternative to Tailscale's default per-feature double
+	// opt-in model, in which both the tailnet admin and the local machine
+	// owner must agree to each individual setting change. RemoteConfig is
+	// a single client-side "I trust the tailnet admin" switch that hands
+	// over full remote management of this node.
+	//
+	// Only enable this when the tailnet admin owns the machine (e.g. a
+	// corporate fleet device) or the local user has explicitly delegated
+	// full control to the tailnet admin. Do NOT enable this on personal
+	// or BYOD devices where the tailnet admin is not fully trusted.
+	RemoteConfig bool
+
 	// DriveShares are the configured DriveShares, stored in increasing order
 	// by name.
 	DriveShares []*drive.Share
@@ -367,6 +385,7 @@ type MaskedPrefs struct {
 	AppConnectorSet               bool                `json:",omitempty"`
 	PostureCheckingSet            bool                `json:",omitempty"`
 	NetfilterKindSet              bool                `json:",omitempty"`
+	RemoteConfigSet               bool                `json:",omitempty"`
 	DriveSharesSet                bool                `json:",omitempty"`
 	RelayServerPortSet            bool                `json:",omitempty"`
 	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
@@ -553,6 +572,9 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
+	if p.RemoteConfig {
+		sb.WriteString("remoteconfig=true ")
+	}
 	if buildfeatures.HasUseExitNode {
 		if p.ExitNodeIP.IsValid() {
 			fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
@@ -675,6 +697,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.PostureChecking == p2.PostureChecking &&
 		slices.EqualFunc(p.DriveShares, p2.DriveShares, drive.SharesEqual) &&
 		p.NetfilterKind == p2.NetfilterKind &&
+		p.RemoteConfig == p2.RemoteConfig &&
 		compareUint16Ptrs(p.RelayServerPort, p2.RelayServerPort) &&
 		slices.Equal(p.RelayServerStaticEndpoints, p2.RelayServerStaticEndpoints)
 }

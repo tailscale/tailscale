@@ -67,6 +67,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"RemoteConfig",
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
@@ -522,6 +523,11 @@ func TestPrefsPretty(t *testing.T) {
 			Prefs{ShieldsUp: true},
 			"windows",
 			"Prefs{ra=false dns=false want=false shields=true update=off Persist=nil}",
+		},
+		{
+			Prefs{RemoteConfig: true},
+			"windows",
+			"Prefs{ra=false dns=false want=false remoteconfig=true update=off Persist=nil}",
 		},
 		{
 			Prefs{},

@@ -190,6 +190,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 		return prefs.ForceDaemon
 	case "sync":
 		return prefs.Sync.EqualBool(true)
+	case "remote-config":
+		return prefs.RemoteConfig
 	case "relay-server-port":
 		if prefs.RelayServerPort != nil {
 			return fmt.Sprint(*prefs.RelayServerPort)

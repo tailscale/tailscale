@@ -231,6 +231,11 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"qrcodes":     {Sym: "QRCodes", Desc: "QR codes in tailscale CLI"},
 	"relayserver": {Sym: "RelayServer", Desc: "Relay server"},
+	"remoteconfig": {
+		Sym:  "RemoteConfig",
+		Desc: "Full remote configuration of this node by the tailnet admin, opting out of Tailscale's per-feature double opt-in in favor of a single client-side trust decision",
+		Deps: []FeatureTag{"c2n"},
+	},
 	"resolved": {
 		Sym:  "Resolved",
 		Desc: "Linux systemd-resolved integration",
