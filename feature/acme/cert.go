@@ -27,7 +27,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/acme"
+	xacme "tailscale.com/tempfork/acme"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -49,7 +49,7 @@ var acmeDebug = envknob.RegisterBool("TS_DEBUG_ACME")
 // and an ACME order is actively waiting on that challenge for
 // hi.ServerName.
 func (e *extension) getACMETLSALPNCert(hi *tls.ClientHelloInfo) (cert *tls.Certificate, ok bool) {
-	if hi == nil || hi.ServerName == "" || !slices.Contains(hi.SupportedProtos, acme.ALPNProto) {
+	if hi == nil || hi.ServerName == "" || !slices.Contains(hi.SupportedProtos, xacme.ALPNProto) {
 		return nil, false
 	}
 	cert, ok = e.pendingACMETLSALPNCerts.Load(hi.ServerName)
@@ -62,7 +62,7 @@ func (e *extension) getACMETLSALPNProto(hi *tls.ClientHelloInfo) (proto string, 
 	if _, ok := e.getACMETLSALPNCert(hi); !ok {
 		return "", false
 	}
-	return acme.ALPNProto, true
+	return xacme.ALPNProto, true
 }
 
 // storeACMETLSALPNCert publishes cert to Serve TLS handshakes for domain
@@ -252,7 +252,7 @@ func (e *extension) isBYOFunnelDomain(b *ipnlocal.LocalBackend, domain string) b
 	return b.HasFunnelForHostPort(domain, 443)
 }
 
-func challengeByType(challenges []*acme.Challenge, typ string) *acme.Challenge {
+func challengeByType(challenges []*xacme.Challenge, typ string) *xacme.Challenge {
 	for _, ch := range challenges {
 		if ch.Type == typ {
 			return ch
@@ -349,9 +349,9 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	case err == nil:
 		// Great, already registered.
 		logf("already had ACME account.")
-	case err == acme.ErrNoAccount:
-		a, err = ac.Register(ctx, new(acme.Account), acme.AcceptTOS)
-		if err == acme.ErrAccountAlreadyExists {
+	case err == xacme.ErrNoAccount:
+		a, err = ac.Register(ctx, new(xacme.Account), xacme.AcceptTOS)
+		if err == xacme.ErrAccountAlreadyExists {
 			// Potential race. Double check.
 			a, err = ac.GetReg(ctx, "" /* pre-RFC param */)
 		}
@@ -364,7 +364,7 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		return nil, fmt.Errorf("acme.GetReg: %w", err)
 
 	}
-	if a.Status != acme.StatusValid {
+	if a.Status != xacme.StatusValid {
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
 	}
 
@@ -374,11 +374,11 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	// Note that this order extension will fail renewals if the ACME account key has changed
 	// since the last issuance, see
 	// https://github.com/tailscale/tailscale/issues/18251
-	var opts []acme.OrderOption
+	var opts []xacme.OrderOption
 	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := parseCertificate(previous)
 		if err == nil {
-			opts = append(opts, acme.WithOrderReplacesCert(prevCrt))
+			opts = append(opts, xacme.WithOrderReplacesCert(prevCrt))
 		}
 	}
 
@@ -415,14 +415,14 @@ type acmeCertIssueArgs struct {
 	logf          logger.Logf        // logs ACME progress and failures
 	traceACME     func(any)          // optional hook for logging ACME messages
 	domain        string             // certificate domain being issued
-	opts          []acme.OrderOption // ACME order options
+	opts          []xacme.OrderOption // ACME order options
 	challengeType acmeChallengeType  // challenge type to fulfill
 }
 
 func (args acmeCertIssueArgs) baseDomain() string { return strings.TrimPrefix(args.domain, "*.") }
 func (args acmeCertIssueArgs) isWildcard() bool   { return isWildcardDomain(args.domain) }
 
-func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend, ac *acme.Client, args acmeCertIssueArgs) (ret *ipnlocal.TLSCertKeyPair, err error) {
+func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, args acmeCertIssueArgs) (ret *ipnlocal.TLSCertKeyPair, err error) {
 	if args.traceACME == nil {
 		args.traceACME = func(any) {}
 	}
@@ -451,14 +451,14 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	}
 
 	// For wildcards, we need to authorize both the wildcard and base domain.
-	var authzIDs []acme.AuthzID
+	var authzIDs []xacme.AuthzID
 	if args.isWildcard() {
-		authzIDs = []acme.AuthzID{
+		authzIDs = []xacme.AuthzID{
 			{Type: "dns", Value: args.domain},
 			{Type: "dns", Value: args.baseDomain()},
 		}
 	} else {
-		authzIDs = []acme.AuthzID{{Type: "dns", Value: args.domain}}
+		authzIDs = []xacme.AuthzID{{Type: "dns", Value: args.domain}}
 	}
 	order, err := ac.AuthorizeOrder(ctx, authzIDs, args.opts...)
 	if err != nil {
@@ -504,7 +504,7 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if oe, ok := err.(*acme.OrderError); ok {
+		if oe, ok := err.(*xacme.OrderError); ok {
 			args.logf("acme: WaitOrder: OrderError status %q", oe.Status)
 		} else {
 			args.logf("acme: WaitOrder error: %v", err)
@@ -550,7 +550,7 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 	return &ipnlocal.TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
 }
 
-func fulfillACMEDNS01Challenge(ctx context.Context, b *ipnlocal.LocalBackend, ac *acme.Client, az *acme.Authorization, logf logger.Logf, traceACME func(any)) error {
+func fulfillACMEDNS01Challenge(ctx context.Context, b *ipnlocal.LocalBackend, ac *xacme.Client, az *xacme.Authorization, logf logger.Logf, traceACME func(any)) error {
 	for _, ch := range az.Challenges {
 		if ch.Type != string(acmeChallengeDNS01) {
 			continue

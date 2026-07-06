@@ -31,7 +31,7 @@ import (
 	"tailscale.com/ipn/ipnlocal/ipnlocaltest"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/acme"
+	xacme "tailscale.com/tempfork/acme"
 	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -263,7 +263,7 @@ func TestACMETLSALPNCertHook(t *testing.T) {
 
 	if got, ok := b.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "example.com",
-		SupportedProtos: []string{acme.ALPNProto},
+		SupportedProtos: []string{xacme.ALPNProto},
 	}); !ok || got != cert {
 		t.Fatalf("getACMETLSALPNCert = %v, %v; want stored cert, true", got, ok)
 	}
@@ -275,7 +275,7 @@ func TestACMETLSALPNCertHook(t *testing.T) {
 	}
 	if _, ok := b.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "other.example.com",
-		SupportedProtos: []string{acme.ALPNProto},
+		SupportedProtos: []string{xacme.ALPNProto},
 	}); ok {
 		t.Fatal("getACMETLSALPNCert for other name = ok, want false")
 	}
@@ -283,7 +283,7 @@ func TestACMETLSALPNCertHook(t *testing.T) {
 	otherBackend := ipnlocaltest.NewBackend(t)
 	if _, ok := otherBackend.ForTest().GetACMETLSALPNCert(&tls.ClientHelloInfo{
 		ServerName:      "example.com",
-		SupportedProtos: []string{acme.ALPNProto},
+		SupportedProtos: []string{xacme.ALPNProto},
 	}); ok {
 		t.Fatal("getACMETLSALPNCert on different LocalBackend = ok, want false")
 	}

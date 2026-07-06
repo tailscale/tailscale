@@ -32,7 +32,7 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/bakedroots"
-	"tailscale.com/tempfork/acme"
+	xacme "tailscale.com/tempfork/acme"
 	"tailscale.com/util/testenv"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -354,7 +354,7 @@ func acmeKey(cs certStore) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-func acmeClient(cs certStore) (*acme.Client, error) {
+func acmeClient(cs certStore) (*xacme.Client, error) {
 	key, err := acmeKey(cs)
 	if err != nil {
 		return nil, fmt.Errorf("acmeKey: %w", err)
@@ -362,7 +362,7 @@ func acmeClient(cs certStore) (*acme.Client, error) {
 	// Note: if we add support for additional ACME providers (other than
 	// LetsEncrypt), we should make sure that they support ARI extension (see
 	// shouldStartDomainRenewalARI).
-	return &acme.Client{
+	return &xacme.Client{
 		Key:          key,
 		UserAgent:    "tailscaled/" + version.Long(),
 		DirectoryURL: envknob.String("TS_DEBUG_ACME_DIRECTORY_URL"),
@@ -440,5 +440,5 @@ func validateLeaf(leaf *x509.Certificate, intermediates *x509.CertPool, domain s
 }
 
 func isDefaultDirectoryURL(u string) bool {
-	return u == "" || u == acme.LetsEncryptURL
+	return u == "" || u == xacme.LetsEncryptURL
 }

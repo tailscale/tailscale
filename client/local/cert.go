@@ -19,17 +19,27 @@ import (
 	"go4.org/mem"
 )
 
-// RateLimitedError is returned from cert-fetching methods when the upstream
-// ACME CA reported a rate limit. RetryAfter is the CA's suggested wait, or
-// zero if it gave no hint.
-type RateLimitedError struct {
-	RetryAfter time.Duration
-	Underlying error
+// rateLimitedError is returned from cert-fetching methods when the
+// upstream ACME CA reported a rate limit. Callers should unpack it via
+// [RateLimitRetryAfter].
+type rateLimitedError struct {
+	retryAfter time.Duration
+	underlying error
 }
 
-func (e *RateLimitedError) Error() string { return e.Underlying.Error() }
+func (e rateLimitedError) Error() string { return e.underlying.Error() }
+func (e rateLimitedError) Unwrap() error { return e.underlying }
 
-func (e *RateLimitedError) Unwrap() error { return e.Underlying }
+// RateLimitRetryAfter reports whether err was a rate-limit failure from
+// the upstream ACME CA and, if so, returns the CA's suggested wait
+// (zero if none was provided).
+func RateLimitRetryAfter(err error) (retryAfter time.Duration, ok bool) {
+	var rl rateLimitedError
+	if errors.As(err, &rl) {
+		return rl.retryAfter, true
+	}
+	return 0, false
+}
 
 // retryAfterFromHeader parses a Retry-After header, matching the
 // delta-seconds + HTTP-date pattern in tempfork/acme/http.go.
@@ -75,8 +85,7 @@ func (lc *Client) SetDNS(ctx context.Context, name, value string) error {
 //
 // It returns a cached certificate from disk if it's still valid.
 //
-// On an ACME rate-limit failure the returned error is a
-// [*RateLimitedError].
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
 //
 // Deprecated: use [Client.CertPair].
 func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
@@ -87,8 +96,7 @@ func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err e
 //
 // It returns a cached certificate from disk if it's still valid.
 //
-// On an ACME rate-limit failure the returned error is a
-// [*RateLimitedError].
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
 //
 // API maturity: this is considered a stable API.
 func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
@@ -103,17 +111,16 @@ func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM 
 // least the given duration, if permitted by the CA. If the certificate is
 // valid, but for less than minValidity, it will be synchronously renewed.
 //
-// On an ACME rate-limit failure the returned error is a
-// [*RateLimitedError].
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
 //
 // API maturity: this is considered a stable API.
 func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minValidity time.Duration) (certPEM, keyPEM []byte, err error) {
 	res, err := lc.send(ctx, "GET", fmt.Sprintf("/localapi/v0/cert/%s?type=pair&min_validity=%s", domain, minValidity), 200, nil)
 	if err != nil {
 		if hse, ok := errors.AsType[httpStatusError](err); ok && hse.HTTPStatus == http.StatusTooManyRequests {
-			return nil, nil, &RateLimitedError{
-				RetryAfter: retryAfterFromHeader(hse.Header),
-				Underlying: err,
+			return nil, nil, rateLimitedError{
+				retryAfter: retryAfterFromHeader(hse.Header),
+				underlying: err,
 			}
 		}
 		return nil, nil, err

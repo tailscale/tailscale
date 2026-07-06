@@ -27,19 +27,6 @@ type TLSCertKeyPair struct {
 // support is not compiled into this build.
 var errNoCerts = errors.New("cert support not compiled in this build")
 
-// CertRateLimitedError is returned by [LocalBackend.GetCertPEMWithValidity]
-// when the upstream ACME CA rate-limited the issuance. RetryAfter is the
-// CA's suggested wait, or zero if none was provided. Consumers (LocalAPI
-// handler, external clients) can key off this type instead of the
-// underlying acme.Error, which is an implementation detail of feature/acme.
-type CertRateLimitedError struct {
-	RetryAfter time.Duration
-	Underlying error
-}
-
-func (e *CertRateLimitedError) Error() string { return e.Underlying.Error() }
-func (e *CertRateLimitedError) Unwrap() error { return e.Underlying }
-
 // Hooks installed by the feature/acme package at init time. In builds
 // without ACME support (js or ts_omit_acme), feature/acme is not linked
 // in and these hooks remain unset; the wrapper methods below then
@@ -104,8 +91,9 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 //     config (e.g., "foo.com" when ServeConfig.AllowFunnel has
 //     "foo.com:443").
 //
-// On an ACME rate-limit failure the returned error is a
-// [*CertRateLimitedError]; other errors are returned unchanged.
+// On an ACME rate-limit failure the returned error implements
+// [tsweb.HTTPStatuser] with a 429 + Retry-After response; other errors
+// are returned unchanged.
 func (b *LocalBackend) GetCertPEMWithValidity(ctx context.Context, domain string, minValidity time.Duration) (*TLSCertKeyPair, error) {
 	if f, ok := HookGetCertPEM.GetOk(); ok {
 		return f(ctx, b, domain, minValidity)
