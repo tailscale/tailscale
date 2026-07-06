@@ -202,6 +202,10 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 		return nil
 	}
 
+	if err := esr.ensureEndpointSlices(ctx, svc, clusterIPSvc, lg); err != nil {
+		return err
+	}
+
 	// Update ExternalName Service to point at the ClusterIP Service.
 	clusterDomain := retrieveClusterDomain(esr.tsNamespace, lg)
 	clusterIPSvcFQDN := fmt.Sprintf("%s.%s.svc.%s", clusterIPSvc.Name, clusterIPSvc.Namespace, clusterDomain)
@@ -215,6 +219,32 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	}
 	r = svcConfiguredReason(svc, true, lg)
 	st = metav1.ConditionTrue
+	return nil
+}
+
+// ensureEndpointSlices ensures that an IPv4 EndpointSlice exists for the egress
+// service and that its ports are up to date.
+func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
+	crl := egressSvcEpsLabels(svc, clusterIPSvc)
+	eps := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
+			Namespace: esr.tsNamespace,
+			Labels:    crl,
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports:       epsPortsFromSvc(clusterIPSvc),
+	}
+	if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
+		e.Labels = eps.Labels
+		e.AddressType = eps.AddressType
+		e.Ports = eps.Ports
+		for _, p := range e.Endpoints {
+			p.Conditions.Ready = nil
+		}
+	}); err != nil {
+		return fmt.Errorf("error ensuring EndpointSlice: %w", err)
+	}
 	return nil
 }
 
@@ -314,29 +344,6 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}); err != nil {
 			return nil, false, fmt.Errorf("error ensuring ClusterIP Service: %v", err)
 		}
-	}
-
-	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	// TODO(irbekrm): support IPv6, but need to investigate how kube proxy
-	// sets up Service -> Pod routing when IPv6 is involved.
-	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
-			Namespace: esr.tsNamespace,
-			Labels:    crl,
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Ports:       epsPortsFromSvc(clusterIPSvc),
-	}
-	if eps, err = createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-		e.Labels = eps.Labels
-		e.AddressType = eps.AddressType
-		e.Ports = eps.Ports
-		for _, p := range e.Endpoints {
-			p.Conditions.Ready = nil
-		}
-	}); err != nil {
-		return nil, false, fmt.Errorf("error ensuring EndpointSlice: %w", err)
 	}
 
 	cm, cfgs, err := egressSvcsConfigs(ctx, esr.Client, proxyGroupName, esr.tsNamespace)

@@ -117,6 +117,23 @@ func TestTailscaleEgressServices(t *testing.T) {
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 
+	t.Run("endpointslice_deletion_recovery", func(t *testing.T) {
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		epsName := fmt.Sprintf("%s-ipv4", name)
+		// Delete the EndpointSlice and verify it is recreated.
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      epsName,
+				Namespace: "operator-ns",
+			},
+		}
+		if err := fc.Delete(t.Context(), eps); err != nil {
+			t.Fatalf("error deleting EndpointSlice: %v", err)
+		}
+		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+	})
+
 	t.Run("delete_external_name_service", func(t *testing.T) {
 		name := findGenNameForEgressSvcResources(t, fc, svc)
 		if err := fc.Delete(context.Background(), svc); err != nil {
