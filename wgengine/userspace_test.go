@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
@@ -641,5 +642,42 @@ func TestLinkChangeReapplyPreservesMagicDNSRoutes(t *testing.T) {
 	if !slices.Equal(initial, after) {
 		t.Errorf("resolver LocalDomains changed after linkChange:\n  initial: %s\n  after:   %s",
 			logger.AsJSON(initial), logger.AsJSON(after))
+	}
+}
+
+// TestCloseWaitsForLinkChange tests that Close waits for in-flight
+// linkChangeQueue work to finish before tearing down the subsystems
+// that linkChange uses.
+//
+// See https://github.com/tailscale/tailscale/issues/17641.
+func TestCloseWaitsForLinkChange(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	e.(*userspaceEngine).linkChangeQueue.Add(func() {
+		close(started)
+		<-release
+		close(done)
+	})
+	<-started
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	e.Close()
+	select {
+	case <-done:
+	default:
+		t.Fatal("Close returned with link change work still in flight")
 	}
 }

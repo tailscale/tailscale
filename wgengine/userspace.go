@@ -1222,9 +1222,14 @@ func (e *userspaceEngine) RequestStatus() {
 
 func (e *userspaceEngine) Close() {
 	e.eventClient.Close()
-	// TODO(cmol): Should we wait for it too?
-	// Same question raised in appconnector.go.
-	e.linkChangeQueue.Shutdown()
+	// eventClient.Close waited for the ChangeDelta subscriber, the sole
+	// producer for linkChangeQueue, to return, so no new work can be
+	// queued. Discard queued linkChanges and wait for an in-flight one
+	// to finish before closing the subsystems it uses.
+	// See tailscale/tailscale#17641.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	e.linkChangeQueue.ShutdownAndWait(drainCtx)
 	e.mu.Lock()
 	if e.closing {
 		e.mu.Unlock()
