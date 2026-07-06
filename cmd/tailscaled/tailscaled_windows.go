@@ -42,6 +42,7 @@ import (
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/client/local"
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
 	_ "tailscale.com/ipn/auditlog"
@@ -180,7 +181,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	changes <- svc.Status{State: svc.StartPending}
 	syslogf("Service start pending")
 
-	svcAccepts := svc.AcceptStop | svc.AcceptSessionChange
+	svcAccepts := svc.AcceptStop | svc.AcceptSessionChange | svc.AcceptPowerEvent
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -226,6 +227,20 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 			case svc.SessionChange:
 				syslogf("Service session change notification")
 				handleSessionChange(cmd)
+				changes <- cmd.CurrentStatus
+			case svc.PowerEvent:
+				syslogf("Service power event notification: %v", cmd.EventType)
+				const PBT_APMRESUMEAUTOMATIC = 18
+				if cmd.EventType == PBT_APMRESUMEAUTOMATIC {
+					log.Printf("Received PBT_APMRESUMEAUTOMATIC event, initiating rebind.")
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						if err := (&local.Client{}).DebugAction(ctx, "rebind"); err != nil {
+							log.Printf("Failed to trigger rebind on resume: %v", err)
+						}
+					}()
+				}
 				changes <- cmd.CurrentStatus
 			case cmdUninstallWinTun:
 				syslogf("Stopping tailscaled child process and uninstalling WinTun")
