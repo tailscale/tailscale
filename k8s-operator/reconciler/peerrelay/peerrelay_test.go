@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -26,12 +27,14 @@ import (
 const tailscaleNamespace = "tailscale"
 
 // expectedService describes a Service the reconciler is expected to leave in the cluster. Every named Service must
-// exist after reconcile; the optional fields (Type, Port, Protocol, Selector, Labels, Annotations) are checked only
-// when non-zero. Labels/Annotations are matched as subsets — extra keys on the actual Service are allowed.
+// exist after reconcile; the optional fields (Type, Port, Protocol, NodePort, Selector, Labels, Annotations) are
+// checked only when non-zero. Labels/Annotations are matched as subsets — extra keys on the actual Service are
+// allowed.
 type expectedService struct {
 	Name        string
 	Type        corev1.ServiceType
 	Port        int32
+	NodePort    int32
 	Protocol    corev1.Protocol
 	Selector    map[string]string
 	Labels      map[string]string
@@ -224,9 +227,13 @@ func TestReconciler_Reconcile(t *testing.T) {
 							"tailscale.com/parent-resource-type": "peerrelay",
 							"tailscale.com/parent-resource":      "test",
 							"tailscale.com/peer-relay-replica":   "0",
+							// External label added by some other controller; must survive.
+							"cloud.google.com/backend-config": "attached",
 						},
 						Annotations: map[string]string{
 							"service.beta.kubernetes.io/aws-load-balancer-scheme": "internal",
+							// External annotation the cloud LB controller stamps on the Service; must survive.
+							"cloud.google.com/neg-status": `{"network_endpoint_groups": {}}`,
 						},
 					},
 					Spec: corev1.ServiceSpec{
@@ -243,11 +250,84 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Type:     corev1.ServiceTypeLoadBalancer,
 					Port:     41641,
 					Protocol: corev1.ProtocolUDP,
+					Labels: map[string]string{
+						"tailscale.com/managed":           "true",
+						"cloud.google.com/backend-config": "attached", // external label preserved
+					},
 					Annotations: map[string]string{
-						"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+						"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",                 // drift corrected
+						"cloud.google.com/neg-status":                         `{"network_endpoint_groups": {}}`, // external annotation preserved
 					},
 				},
 			},
+		},
+		{
+			// The cloud LB controller writes its own annotations, kube-proxy assigns a NodePort, and both keep
+			// updating the Service after we create it. Reconcile must not strip external metadata or the assigned
+			// NodePort; if it does we ping-pong with the cloud provider forever.
+			Name:    "preserves-external-additions-on-settled-service",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExistingResources: []client.Object{
+				&corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-0",
+						Namespace: tailscaleNamespace,
+						Labels: map[string]string{
+							"tailscale.com/managed":              "true",
+							"tailscale.com/parent-resource-type": "peerrelay",
+							"tailscale.com/parent-resource":      "test",
+							"tailscale.com/peer-relay-replica":   "0",
+							"cloud.google.com/backend-config":    "attached",
+						},
+						Annotations: map[string]string{
+							"service.beta.kubernetes.io/aws-load-balancer-type":            "external",
+							"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
+							"service.beta.kubernetes.io/aws-load-balancer-scheme":          "internet-facing",
+							"service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "ipv4",
+							"service.beta.kubernetes.io/azure-load-balancer-internal":      "false",
+							"cloud.google.com/neg-status":                                  `{"zones": ["europe-west2-a"]}`,
+						},
+						ResourceVersion: "1",
+					},
+					Spec: corev1.ServiceSpec{
+						Type: corev1.ServiceTypeLoadBalancer,
+						Selector: map[string]string{
+							"statefulset.kubernetes.io/pod-name": "test-0",
+						},
+						Ports: []corev1.ServicePort{
+							{
+								Name:       "peerrelay",
+								Protocol:   corev1.ProtocolUDP,
+								Port:       41641,
+								TargetPort: intstr.FromInt32(41641),
+								NodePort:   31545, // cluster-assigned; must survive.
+							},
+						},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:     "test-0",
+					Type:     corev1.ServiceTypeLoadBalancer,
+					Port:     41641,
+					Protocol: corev1.ProtocolUDP,
+					NodePort: 31545,
+					Labels: map[string]string{
+						"cloud.google.com/backend-config": "attached",
+					},
+					Annotations: map[string]string{
+						"cloud.google.com/neg-status": `{"zones": ["europe-west2-a"]}`,
+					},
+				},
+			},
+			// No LB ingress seeded, so status is still Pending — the point of this case is the *Service* is
+			// unchanged, not the PR status.
+			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
 			// GCP/Azure-style: the LB reports a plain IPv4 address; we surface it verbatim in status.endpoints.
@@ -453,7 +533,7 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		t.Errorf("Service %q: expected type %q, got %q", want.Name, want.Type, got.Spec.Type)
 	}
 
-	if want.Port != 0 || want.Protocol != "" {
+	if want.Port != 0 || want.Protocol != "" || want.NodePort != 0 {
 		if len(got.Spec.Ports) != 1 {
 			t.Fatalf("Service %q: expected exactly one port, got %d", want.Name, len(got.Spec.Ports))
 		}
@@ -462,6 +542,9 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		}
 		if want.Port != 0 && got.Spec.Ports[0].Port != want.Port {
 			t.Errorf("Service %q: expected port %d, got %d", want.Name, want.Port, got.Spec.Ports[0].Port)
+		}
+		if want.NodePort != 0 && got.Spec.Ports[0].NodePort != want.NodePort {
+			t.Errorf("Service %q: expected nodePort %d, got %d", want.Name, want.NodePort, got.Spec.Ports[0].NodePort)
 		}
 	}
 

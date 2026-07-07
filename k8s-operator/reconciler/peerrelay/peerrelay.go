@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
 
 	"go.uber.org/zap"
@@ -130,9 +132,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
-	reconciler.SetFinalizer(pr)
-	if err := r.Update(ctx, pr); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
+	if !slices.Contains(pr.Finalizers, reconciler.FinalizerName) {
+		reconciler.SetFinalizer(pr)
+		if err := r.Update(ctx, pr); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
+		}
 	}
 
 	replicas := int32(1)
@@ -185,6 +189,9 @@ func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, r
 		return cmp.Compare(a.Replica, b.Replica)
 	})
 
+	// Copy here to prevent needless status updates.
+	prevStatus := pr.Status.DeepCopy()
+
 	pr.Status.Endpoints = endpoints
 	joined := errors.Join(errs...)
 	switch {
@@ -195,6 +202,10 @@ func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, r
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, r.logger)
 	default:
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
+	}
+
+	if reflect.DeepEqual(prevStatus, &pr.Status) {
+		return joined
 	}
 
 	if err := r.Status().Update(ctx, pr); err != nil {
@@ -231,14 +242,34 @@ func (r *Reconciler) ensureService(ctx context.Context, desired *corev1.Service)
 		return fmt.Errorf("failed to get Service: %w", err)
 	}
 
-	existing.Labels = desired.Labels
-	existing.Annotations = desired.Annotations
-	existing.OwnerReferences = desired.OwnerReferences
-	existing.Spec.Type = desired.Spec.Type
-	existing.Spec.Selector = desired.Spec.Selector
-	existing.Spec.Ports = desired.Spec.Ports
+	updated := existing.DeepCopy()
+	if updated.Labels == nil && len(desired.Labels) > 0 {
+		updated.Labels = make(map[string]string, len(desired.Labels))
+	}
+	for k, v := range desired.Labels {
+		updated.Labels[k] = v
+	}
 
-	if err = r.Update(ctx, &existing); err != nil {
+	if updated.Annotations == nil && len(desired.Annotations) > 0 {
+		updated.Annotations = make(map[string]string, len(desired.Annotations))
+	}
+	for k, v := range desired.Annotations {
+		updated.Annotations[k] = v
+	}
+
+	updated.Spec.Type = desired.Spec.Type
+	updated.Spec.Selector = desired.Spec.Selector
+	updated.Spec.Ports = desired.Spec.Ports
+
+	if maps.Equal(existing.Labels, updated.Labels) &&
+		maps.Equal(existing.Annotations, updated.Annotations) &&
+		existing.Spec.Type == updated.Spec.Type &&
+		maps.Equal(existing.Spec.Selector, updated.Spec.Selector) &&
+		portsMatch(existing.Spec.Ports, updated.Spec.Ports) {
+		return nil
+	}
+
+	if err = r.Update(ctx, updated); err != nil {
 		return fmt.Errorf("failed to update Service: %w", err)
 	}
 
