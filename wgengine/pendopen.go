@@ -1,11 +1,10 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ts_omit_debug
-
 package wgengine
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"runtime"
@@ -14,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gaissmai/bart"
+	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tstun"
@@ -25,6 +26,15 @@ import (
 type flowtrackTuple = flowtrack.Tuple
 
 const tcpTimeoutBeforeDebug = 5 * time.Second
+
+// trackAllOpenFlows reports whether every outbound TCP SYN should be tracked
+// for connect-failure diagnostics. When false, only SYNs destined for the
+// configured exit-node peer are tracked (the [health.ExitNodeUnreachableWarnable]
+// signal); everything else skips the pendOpen map entirely, so minimal builds
+// pay near-zero cost when no exit node is set.
+var trackAllOpenFlows = sync.OnceValue(func() bool {
+	return buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES")
+})
 
 type pendingOpenFlow struct {
 	timer *time.Timer // until giving up on the flow
@@ -101,6 +111,14 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 	if removed && pp.TCPFlags&packet.TCPRst != 0 {
 		e.logf("open-conn-track: flow TCP %v got RST by peer", f)
 	}
+	// A SYN-ACK (or RST) travelled back through the peer that would forward
+	// this flow. If that peer is the configured exit node, that proves
+	// traffic is currently flowing through it — clear any
+	// [health.ExitNodeUnreachableWarnable] we may have raised. No-op if the
+	// peer isn't the exit node.
+	if pip, ok := e.peerForIP(pp.Src.Addr()); ok {
+		e.magicConn.NoteExitNodeReachabilityResult(pip.Node.Key(), nil)
+	}
 	return
 }
 
@@ -165,6 +183,16 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		return
 	}
 
+	// When full debug tracking is off, we still want to detect exit-node
+	// reachability failures. Track only flows destined via the current
+	// exit-node peer; everything else returns before touching pendOpen.
+	if !trackAllOpenFlows() {
+		pip, ok := e.peerForIP(pp.Dst.Addr())
+		if !ok || !e.magicConn.IsExitNodePeer(pip.Node.Key()) {
+			return
+		}
+	}
+
 	flow := flowtrack.MakeTuple(pp.IPProto, pp.Src, pp.Dst)
 
 	e.mu.Lock()
@@ -205,6 +233,12 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 	n := pip.Node
+	// Report the timeout as an exit-node reachability failure. No-op if n
+	// is not the currently configured exit-node peer. This is the signal
+	// that raises [health.ExitNodeUnreachableWarnable]; any config change
+	// or upstream policy that breaks TCP through the exit node lands here.
+	e.magicConn.NoteExitNodeReachabilityResult(n.Key(),
+		errors.New("TCP connection through exit node timed out"))
 	if !n.IsWireGuardOnly() {
 		if n.DiscoKey().IsZero() {
 			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key().ShortString())

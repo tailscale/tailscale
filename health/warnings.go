@@ -311,3 +311,28 @@ var ipForwardingWarnable = condRegister(func() *Warnable {
 		ImpactsConnectivity: true,
 	}
 })
+
+// ExitNodeUnreachableWarnable is a Warnable that warns the user that connections
+// via the configured exit node are failing. This is a high-severity warning because it indicates
+// that the user is unable to route traffic through their exit node, which can significantly impact connectivity.
+var ExitNodeUnreachableWarnable = condRegister(func() *Warnable {
+	return &Warnable{
+		Code:                tsconst.HealthWarnableExitNodeUnreachable,
+		Title:               "Exit node unreachable",
+		Severity:            SeverityHigh,
+		DependsOn:           []*Warnable{NetworkStatusWarnable},
+		ImpactsConnectivity: true,
+		// Suppresses one-off errors
+		TimeToVisible: 10 * time.Second,
+		Text: func(args Args) string {
+			name := args[ArgExitNodeName]
+			if name == "" {
+				name = "the configured exit node"
+			}
+			if e := args[ArgError]; e != "" {
+				return fmt.Sprintf("Tailscale is unable to route traffic via exit node %q: %s. Connectivity may be affected.", name, e)
+			}
+			return fmt.Sprintf("Tailscale is unable to route traffic via exit node %q. Connectivity may be affected.", name)
+		},
+	}
+})

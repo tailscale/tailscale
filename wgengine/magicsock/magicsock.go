@@ -426,6 +426,19 @@ type Conn struct {
 	// This allows tests to pass when the user's machine is offline,
 	// but allows us to still test network-down behaviour when desired.
 	checkNetworkUpDuringTests bool
+
+	// exitNodeKey points to the NodeKey of the peer currently configured
+	// as the exit node, or is nil if no exit node is configured. Accessed
+	// via atomic ops so the send/receive hot paths can compare against it
+	// without acquiring c.mu. See [Conn.SetExitNodePeer].
+	exitNodeKey atomic.Pointer[key.NodePublic]
+	// exitNodeName is a human-friendly name for the exit node peer, used
+	// in the exit-node health warning. Guarded by c.mu.
+	exitNodeName string
+	// exitNodeUnhealthy tracks whether [health.ExitNodeUnreachableWarnable]
+	// is currently set for the exit-node peer, so send/receive hot paths
+	// only touch the health tracker on state transitions.
+	exitNodeUnhealthy atomic.Bool
 }
 
 // SetDebugLoggingEnabled controls whether spammy debug logging is enabled.

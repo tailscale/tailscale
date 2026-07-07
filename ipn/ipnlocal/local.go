@@ -6157,6 +6157,8 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
+	b.updateExitNodeHealthTargetLocked(nm, prefs)
+
 	b.initPeerAPIListenerLocked()
 	if buildfeatures.HasAppConnectors {
 		go b.goTracker.Go(b.readvertiseAppConnectorRoutes)
@@ -6184,6 +6186,36 @@ func (b *LocalBackend) setDataPlanePeerRoutes() {
 		}
 	}
 	b.e.SetPeerRoutes(native4, native6, routes)
+}
+
+// updateExitNodeHealthTargetLocked informs magicsock which peer (if any) is
+// currently configured as the exit node, so magicsock can raise or clear
+// [health.ExitNodeUnreachableWarnable] based on send outcomes.
+//
+// b.mu must be held.
+func (b *LocalBackend) updateExitNodeHealthTargetLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	ms, ok := b.sys.MagicSock.GetOK()
+	if !ok {
+		return
+	}
+	var (
+		exitKey  key.NodePublic
+		exitName string
+	)
+	if id := prefs.ExitNodeID(); !id.IsZero() && nm != nil {
+		if peer, ok := nm.PeerWithStableID(id); ok {
+			exitKey = peer.Key()
+			exitName = peer.Name()
+			if exitName == "" {
+				if hi := peer.Hostinfo(); hi.Valid() {
+					exitName = hi.Hostname()
+				}
+			} else {
+				exitName, _, _ = strings.Cut(exitName, ".")
+			}
+		}
+	}
+	ms.SetExitNodePeer(exitKey, exitName)
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big

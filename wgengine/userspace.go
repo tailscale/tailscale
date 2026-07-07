@@ -24,7 +24,6 @@ import (
 	"go4.org/mem"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
-	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
@@ -463,16 +462,19 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
-	if buildfeatures.HasDebug && envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
-		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
-			return nil, errors.New("unexpected PreFilterIn already set")
-		}
-		e.tundev.PreFilterPacketInboundFromWireGuard = e.trackOpenPreFilterIn
-		if e.tundev.PostFilterPacketOutboundToWireGuard != nil {
-			return nil, errors.New("unexpected PostFilterOut already set")
-		}
-		e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
+	// Install the connect-tracking filters. They power two things:
+	//   - [health.ExitNodeUnreachableWarnable] (always active when an exit
+	//     node is configured; ~zero cost otherwise).
+	//   - Debug diagnostics for stuck TCP connections (all-flow tracking,
+	//     gated on TS_DEBUG_CONNECT_FAILURES inside the filter functions).
+	if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
+		return nil, errors.New("unexpected PreFilterIn already set")
 	}
+	e.tundev.PreFilterPacketInboundFromWireGuard = e.trackOpenPreFilterIn
+	if e.tundev.PostFilterPacketOutboundToWireGuard != nil {
+		return nil, errors.New("unexpected PostFilterOut already set")
+	}
+	e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
 
 	e.wgLogger = wglog.NewLogger(logf, func(wgString string) (tsString string, ok bool) {
 		fn := e.wgPeerLookup.Load()

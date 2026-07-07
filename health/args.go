@@ -40,4 +40,8 @@ const (
 	// ArgDomains provides a Warnable with a comma-delimited list of domain
 	// names involved in the unhealthy state.
 	ArgDomains Arg = "domains"
+
+	// ArgExitNodeName provides a Warnable with the display name of the exit
+	// node peer involved in the unhealthy state.
+	ArgExitNodeName Arg = "exit-node-name"
 )
