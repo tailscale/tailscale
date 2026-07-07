@@ -181,10 +181,9 @@ type Conn struct {
 	connCtxCancel func()          // closes connCtx
 	donec         <-chan struct{} // connCtx.Done()'s to avoid context.cancelCtx.Done()'s mutex per call
 
-	allocRelayEndpointPub    *eventbus.Publisher[UDPRelayAllocReq]
-	portUpdatePub            *eventbus.Publisher[router.PortUpdate]
-	tsmpDiscoKeyAvailablePub *eventbus.Publisher[NewDiscoKeyAvailable]
-	homeDERPChangedPub       *eventbus.Publisher[HomeDERPChanged]
+	allocRelayEndpointPub *eventbus.Publisher[UDPRelayAllocReq]
+	portUpdatePub         *eventbus.Publisher[router.PortUpdate]
+	homeDERPChangedPub    *eventbus.Publisher[HomeDERPChanged]
 
 	// pconn4 and pconn6 are the underlying UDP sockets used to
 	// send/receive packets for wireguard and other magicsock
@@ -678,7 +677,6 @@ func NewConn(opts Options) (*Conn, error) {
 	c.eventClient = ec
 	c.allocRelayEndpointPub = eventbus.Publish[UDPRelayAllocReq](ec)
 	c.portUpdatePub = eventbus.Publish[router.PortUpdate](ec)
-	c.tsmpDiscoKeyAvailablePub = eventbus.Publish[NewDiscoKeyAvailable](ec)
 	c.homeDERPChangedPub = eventbus.Publish[HomeDERPChanged](ec)
 	eventbus.SubscribeFunc(ec, c.onPortMapChanged)
 	eventbus.SubscribeFunc(ec, c.onUDPRelayAllocResp)
@@ -1254,8 +1252,7 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 
 // RotateDiscoKey generates a new discovery key pair and updates the connection
 // to use it. This invalidates all existing disco sessions and will cause peers
-// to re-establish discovery sessions with the new key. Addtionally, the
-// lastTSMPDiscoAdvertisement on all endpoints is reset to 0.
+// to re-establish discovery sessions with the new key.
 //
 // This is primarily for debugging and testing purposes, a future enhancement
 // should provide a mechanism for seamless rotation by supporting short term use
@@ -1269,11 +1266,6 @@ func (c *Conn) RotateDiscoKey() {
 	newShort := c.discoAtomic.Short()
 	c.discoInfo = make(map[key.DiscoPublic]*discoInfo)
 	connCtx := c.connCtx
-	for _, endpoint := range c.peerMap.byEpAddr {
-		endpoint.ep.mu.Lock()
-		endpoint.ep.lastDiscoKeyAdvertisement = 0
-		endpoint.ep.mu.Unlock()
-	}
 	c.mu.Unlock()
 
 	c.logf("magicsock: rotated disco key from %v to %v", oldShort, newShort)
@@ -2677,8 +2669,6 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		go c.ReSTUN("refresh-for-peering")
 		return
 	}
-
-	c.maybeSendTSMPDiscoAdvert(de)
 
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -4325,6 +4315,8 @@ var (
 	metricTSMPDiscoKeyAdvertisementReceived  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_received")
 	metricTSMPDiscoKeyAdvertisementApplied   = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_applied")
 	metricTSMPDiscoKeyAdvertisementUnchanged = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_unchanged")
+	metricTSMPDiscoKeyAdvertisementSent      = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
+	metricTSMPDiscoKeyAdvertisementError     = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
 
 	// Counters for peer contacts established using cached network map data.
 	metricCachedPeerContactDERP   = clientmetric.NewCounter("magicsock_cached_peer_contact_derp")
@@ -4511,7 +4503,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 
-	c.logf("magicsock: received disco key update %v from %v", discoKey.ShortString(), node.StableID())
+	c.logf("[v1] magicsock: received disco key update %v from %v", discoKey.ShortString(), node.StableID())
 	metricTSMPDiscoKeyAdvertisementReceived.Add(1)
 
 	c.mu.Lock()
@@ -4531,7 +4523,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	// If the key did not change, count it and return.
 	if oldDiscoKey.Compare(discoKey) == 0 {
 		metricTSMPDiscoKeyAdvertisementUnchanged.Add(1)
-		c.logf("magicsock: disco key did not change for node %v", nodeKey.ShortString())
+		c.logf("[v1] magicsock: disco key did not change for node %v", nodeKey.ShortString())
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
@@ -4544,67 +4536,69 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)
 }
 
-// NewDiscoKeyAvailable is an eventbus topic that is emitted when we're sending
-// a packet to a node and observe we haven't told it our current DiscoKey before.
+// PriorityMessageForPeer is a [github.com/tailscale/wireguard-go/device.PeerPriorityMessageFunc]
+// that returns a marshaled plaintext [packet.TSMPDiscoKeyAdvertisement] if
+// nodeKey supports TSMP, otherwise it returns nil.
 //
-// The publisher is magicsock, when we're sending a packet.
-// The subscriber is userspaceEngine, which sends a TSMP packet, also via
-// magicsock. This doesn't recurse infinitely because we only publish it once per
-// DiscoKey.
-// In the common case, a DiscoKey is not rotated within a process generation
-// (as of 2026-01-21), except with debug commands to simulate process restarts.
-//
-// The address is the first node address (tailscale address) of the node. It
-// does not matter if the address is v4/v6, the receiver should handle either.
-//
-// Since we have not yet communicated with the node at the time we are
-// sending this event, the resulting TSMPDiscoKeyAdvertisement will with all
-// likelihood be transmitted via DERP.
-type NewDiscoKeyAvailable struct {
-	NodeFirstAddr netip.Addr
-	NodeID        tailcfg.NodeID
+// This callback must be cheap and must not call back into the
+// [github.com/tailscale/wireguard-go/device.Device]. The returned message must
+// not exceed [github.com/tailscale/wireguard-go/device.MaxPriorityMessageContentSize].
+func (c *Conn) PriorityMessageForPeer(nodeKey key.NodePublic) []byte {
+	disco := c.DiscoPublicKey()
+	if disco.IsZero() {
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+		return nil
+	}
+
+	c.mu.Lock()
+	self := c.self
+	ep, ok := c.peerMap.endpointForNodeKey(nodeKey)
+	c.mu.Unlock()
+	if !ok || !self.Valid() {
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+		return nil
+	}
+
+	// Do not send TSMP messages to peers that only speaks wireguard.
+	// The bool is only written once at creation of the endpoint so it is
+	// not necessary to hold the endpoint lock.
+	if ep.isWireguardOnly {
+		return nil
+	}
+
+	ep.mu.Lock()
+	dst := ep.nodeAddr
+	ep.mu.Unlock()
+
+	// Resolve our own Tailscale address in the same family as dst.
+	src := selfIPMatchingFamily(self, dst)
+	if !src.IsValid() {
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+		return nil
+	}
+
+	tdka := packet.TSMPDiscoKeyAdvertisement{Src: src, Dst: dst, Key: disco}
+	payload, err := tdka.Marshal()
+	if err != nil {
+		metricTSMPDiscoKeyAdvertisementError.Add(1)
+		return nil
+	}
+
+	// The metric is called sent, but since sending the payload is controlled by
+	// wireguard-go, we can only assume it to be sent. Thus this is an estimation
+	// of it being sent based on generation, not the actual time the message has
+	// been sent.
+	metricTSMPDiscoKeyAdvertisementSent.Add(1)
+	return payload
 }
 
-// maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
-// should send our DiscoKey to the first node address of the magicksock endpoint.
-//
-// The event is suppressed if we are communicating over a non-DERP path, or
-// less than [discoKeyAdvertisementInterval] has passed since the last DiscoKey
-// was sent, or netmap caching is disabled on this node.
-//
-// We do not need the Conn to be locked, but the endpoint should be.
-func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
-	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
-		return
+// selfIPMatchingFamily returns self's first single-IP Tailscale address whose
+// family matches want, or the zero Addr. self must be Valid.
+func selfIPMatchingFamily(self tailcfg.NodeView, want netip.Addr) netip.Addr {
+	for _, p := range self.Addresses().All() {
+		if p.IsSingleIP() && p.Addr().BitLen() == want.BitLen() {
+			return p.Addr()
+		}
 	}
-
-	// Disable TSMP disco advert by default, unless network map caching is
-	// enabled for the local node. Caching network maps on the remote node is
-	// what really matters in terms of handling a TSMP disco advert and applying
-	// it in a useful way, but the TSMP disco advert implementation as it exists
-	// here has pathological behaviors. Therefore, it should be disabled for
-	// almost all tailnets, and we lean on the network map caching control knob
-	// for this purpose. See #20081.
-	if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
-		return
-	}
-
-	de.mu.Lock()
-	defer de.mu.Unlock()
-
-	if !de.nodeAddr.IsValid() {
-		return
-	}
-
-	now := mono.Now()
-	if now.Sub(de.lastDiscoKeyAdvertisement) <= discoKeyAdvertisementInterval ||
-		(!de.lastDiscoKeyAdvertisement.IsZero() && !de.bestAddr.isZero()) {
-		return
-	}
-
-	de.lastDiscoKeyAdvertisement = now
-	c.tsmpDiscoKeyAvailablePub.Publish(NewDiscoKeyAvailable{
-		NodeFirstAddr: de.nodeAddr,
-		NodeID:        de.nodeID,
-	})
+	return netip.Addr{}
 }

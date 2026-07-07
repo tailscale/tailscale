@@ -40,11 +40,6 @@ import (
 var mtuProbePingSizesV4 []int
 var mtuProbePingSizesV6 []int
 
-// discoKeyAdvertisementInterval tells how often a disco update via TSMP can
-// happen. The update is triggered via enqueueCallMeMaybe, and thus it will
-// only be sent if the magicsock is in a state to send out CallMeMaybe.
-const discoKeyAdvertisementInterval = time.Minute * 2
-
 func init() {
 	for _, m := range tstun.WireMTUsToProbe {
 		mtuProbePingSizesV4 = append(mtuProbePingSizesV4, pktLenToPingSize(m, false))
@@ -85,7 +80,6 @@ type endpoint struct {
 	lastSendAny               mono.Time      // last time there were outgoing packets sent this peer from any trigger, internal or external to magicsock
 	lastFullPing              mono.Time      // last time we pinged all disco or wireguard only endpoints
 	lastUDPRelayPathDiscovery mono.Time      // last time we ran UDP relay path discovery
-	lastDiscoKeyAdvertisement mono.Time      // last time we sent a TSMPDiscoAdvertisement or not to this endpoint
 	derpAddr                  netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
@@ -102,7 +96,7 @@ type endpoint struct {
 	probeUDPLifetime  *probeUDPLifetime // UDP path lifetime probing; nil if disabled
 
 	expired         bool // whether the node has expired
-	isWireguardOnly bool // whether the endpoint is WireGuard only
+	isWireguardOnly bool // whether the endpoint is WireGuard only. Must not be changed after initializing the endpont.
 	relayCapable    bool // whether the node is capable of speaking via a [tailscale.com/net/udprelay.Server]
 }
 
@@ -1844,8 +1838,6 @@ type addrQuality struct {
 	latency          time.Duration
 	wireMTU          tstun.WireMTU
 }
-
-func (a addrQuality) isZero() bool { return a == addrQuality{} }
 
 func (a addrQuality) String() string {
 	// TODO(jwhited): consider including relayServerDisco
