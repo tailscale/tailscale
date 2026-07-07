@@ -87,6 +87,7 @@ var handler = map[string]LocalAPIHandler{
 	"prefs":                (*Handler).servePrefs,
 	"reload-config":        (*Handler).reloadConfig,
 	"reset-auth":           (*Handler).serveResetAuth,
+	"service-prefs":        (*Handler).serveServicePrefs,
 	"services":             (*Handler).serveServices,
 	"set-expiry-sooner":    (*Handler).serveSetExpirySooner,
 	"shutdown":             (*Handler).serveShutdown,
@@ -1038,6 +1039,46 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
+}
+
+func (h *Handler) serveServicePrefs(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "service-prefs access denied", http.StatusForbidden)
+		return
+	}
+	var out ipn.ServicePrefs
+	switch r.Method {
+	case httpm.GET:
+		var err error
+		if out, err = h.b.ServicePrefs(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+			return
+		}
+	case httpm.POST:
+		if !h.PermitWrite {
+			http.Error(w, "service-prefs write access denied", http.StatusForbidden)
+			return
+		}
+		var req apitype.ServicePrefRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var err error
+		if out, err = h.b.SetServicePref(r.Context(), req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
+			return
+		}
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }
 
 type resJSON struct {

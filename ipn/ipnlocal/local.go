@@ -50,6 +50,7 @@ import (
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnlocal/serviceprefs"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/sockstatlog"
 	"tailscale.com/logpolicy"
@@ -74,6 +75,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -396,6 +398,8 @@ type LocalBackend struct {
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock syncs.Mutex
 	clock       tstime.Clock
+
+	servicePrefsStore lazy.SyncValue[serviceprefs.Store]
 
 	// Last ClientVersion received in MapResponse, guarded by mu.
 	lastClientVersion *tailcfg.ClientVersion
@@ -1451,6 +1455,92 @@ func (b *LocalBackend) Prefs() ipn.PrefsView {
 func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	syncs.RequiresMutex(&b.mu)
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
+}
+
+// servicePrefsRetention is the duration for which service prefs are retained in the store.
+const servicePrefsRetention = 365 * 24 * time.Hour // 1 year
+
+// errNoCurrentProfile is returned when an operation requires a login profile but none is current.
+var errNoCurrentProfile = errors.New("no current profile")
+
+// newServicePrefsStore returns a new [serviceprefs.Store] for the backend. It does not cache the
+// store. Use [LocalBackend.getServicePrefsStore] to get a cached store.
+//
+// Store construction never fails: if the on-disk store can't be created, it falls back to an
+// in-memory store so service prefs degrade to non-persistent rather than being unavailable.
+func (b *LocalBackend) newServicePrefsStore() serviceprefs.Store {
+	root := b.TailscaleVarRoot()
+	if root == "" {
+		// No writable directory when it's either an ephemeral node or a non-file based
+		// [ipn.StateStore] (eg. Kubernetes). Service prefs at the moment are only used
+		// by the desktop clients, so it's fine to return an in-memory store in these
+		// cases, rather than erroring out.
+		//
+		// TODO(waltzofpearls): Implement a [serviceprefs.Store] that uses the [ipn.StateStore]
+		// to persist service prefs, so that service prefs can be persisted across restarts
+		// for cases like Kubernetes.
+		return serviceprefs.NewInMemoryStore(servicePrefsRetention, b.clock)
+	}
+	dir := filepath.Join(root, "service-prefs")
+	store, err := serviceprefs.NewFileStore(context.Background(), dir, servicePrefsRetention, b.clock, b.logf)
+	if err != nil {
+		b.logf("warning: service prefs file store unavailable, falling back to in-memory: %v", err)
+		return serviceprefs.NewInMemoryStore(servicePrefsRetention, b.clock)
+	}
+	return store
+}
+
+// getServicePrefsStore returns a cached [serviceprefs.Store] for the backend, building it on the
+// first call. Building it the first time may block on disk I/O, so a caller holding
+// [LocalBackend.mu] should call this before taking the lock, not while holding it.
+func (b *LocalBackend) getServicePrefsStore() serviceprefs.Store {
+	return b.servicePrefsStore.Get(b.newServicePrefsStore)
+}
+
+// deleteServicePrefsForProfile makes a best effort attempt to delete the stored service prefs
+// for pid. It logs and swallows errors: a service prefs cleanup failure should never block
+// profile deletion or logout. The store is passed in so callers can build it before taking
+// [LocalBackend.mu], keeping disk I/O off the locked path.
+func (b *LocalBackend) deleteServicePrefsForProfile(store serviceprefs.Store, pid ipn.ProfileID) {
+	if err := store.DeleteForProfile(context.Background(), pid); err != nil {
+		b.logf("warning: deleting service prefs for profile %q: %v", pid, err)
+	}
+}
+
+// ServicePrefs returns the service prefs for the current profile. When there is no current profile
+// (e.g. when logged out), it returns an empty map rather than an error.
+func (b *LocalBackend) ServicePrefs(ctx context.Context) (ipn.ServicePrefs, error) {
+	pid := b.CurrentProfile().ID()
+	if pid == "" {
+		return ipn.ServicePrefs{}, nil
+	}
+	return b.getServicePrefsStore().LoadForProfile(ctx, pid)
+}
+
+// SetServicePref merges the non-empty fields from [apitype.ServicePrefRequest] into the saved
+// service prefs, records [ipn.ServicePref.LastUsed], and returns the updated service prefs for
+// the current profile.
+func (b *LocalBackend) SetServicePref(ctx context.Context, req apitype.ServicePrefRequest) (ipn.ServicePrefs, error) {
+	if req.Key == "" {
+		return nil, errors.New("service pref key is required")
+	}
+	pid := b.CurrentProfile().ID()
+	if pid == "" {
+		return nil, errNoCurrentProfile
+	}
+	return b.getServicePrefsStore().UpdateForProfile(ctx, pid, req.Key, func(pref ipn.ServicePref) ipn.ServicePref {
+		if req.Client != "" {
+			pref.Client = req.Client
+		}
+		if req.Username != "" {
+			pref.Username = req.Username
+		}
+		if req.DatabaseName != "" {
+			pref.DatabaseName = req.DatabaseName
+		}
+		pref.LastUsed = b.clock.Now()
+		return pref
+	})
 }
 
 // unsanitizedPersist returns the current PersistView, including any private keys.
@@ -7100,6 +7190,10 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 		return err
 	}
 
+	// Warm the service prefs store before taking b.mu so its first-use disk I/O
+	// stays off the locked path.
+	servicePrefsStore := b.getServicePrefsStore()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -7107,6 +7201,7 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 		b.logf("error deleting profile: %v", err)
 		return err
 	}
+	b.deleteServicePrefsForProfile(servicePrefsStore, profile.ID())
 	return b.resetForProfileChangeLocked()
 }
 
@@ -8361,6 +8456,10 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 // DeleteProfile deletes a profile with the given ID.
 // If the profile is not known, it is a no-op.
 func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
+	// Warm the service prefs store before taking b.mu so its first-use disk I/O
+	// stays off the locked path.
+	servicePrefsStore := b.getServicePrefsStore()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -8377,6 +8476,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 			b.logf("warning: removing profile data for %q: %v", p, err)
 		}
 	}
+	b.deleteServicePrefsForProfile(servicePrefsStore, p)
 	if !needToRestart {
 		return nil
 	}
