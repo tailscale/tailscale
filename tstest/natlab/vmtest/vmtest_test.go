@@ -1165,9 +1165,6 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 	for _, testPingFrom := range []string{"offline", "online"} {
 		t.Run(fmt.Sprintf("ping_from_%s", testPingFrom), func(t *testing.T) {
-			if testPingFrom == "online" {
-				t.Skip("https://github.com/tailscale/tailscale/issues/19843")
-			}
 			env := vmtest.New(t)
 
 			aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1257,7 +1254,6 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 // however not be sent if there is not endpoints on the online node which is
 // possible in the event where a node has registered but not finished STUN.
 func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
-	t.Skip("https://github.com/tailscale/tailscale/issues/19843")
 	env := vmtest.New(t)
 
 	aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1284,6 +1280,7 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
 		"magicsock_cached_peer_contact_derp":   0,
 		"magicsock_cached_peer_contact_direct": 0,
+		"magicsock_tsmp_disco_key_advertisement_sent": 0,
 	})
 	checkInitialMetrics.End(nil)
 
@@ -1319,6 +1316,7 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	checkFinalMetrics.Begin()
 	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
 		"magicsock_cached_peer_contact_direct": 1,
+		"magicsock_tsmp_disco_key_advertisement_sent": 1,
 	})
 	checkFinalMetrics.End(nil)
 }
