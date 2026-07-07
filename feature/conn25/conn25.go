@@ -39,6 +39,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -1089,6 +1090,20 @@ func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) 
 	return bs
 }
 
+var (
+	// metricDNSResponseRewriteErrorServfail increments servfail returns
+	// on an error rewriting response for an app connector domain.
+	metricDNSResponseRewriteErrorServfail = clientmetric.NewCounter(
+		"conn25_map_dns_response_rewrite_error_servfail",
+	)
+
+	// metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail increments servfail returns
+	// on an error rewriting empty answers to an unsupported question type for an app connector domain.
+	metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail = clientmetric.NewCounter(
+		"conn25_map_dns_response_rewrite_unsupported_question_type_error_servfail",
+	)
+)
+
 // mapDNSResponse parses and inspects the DNS response. If the domain
 // is determined to belong to app this node is client for, it assigns addresses
 // for connecting and rewrites the response to contain Magic IPs.
@@ -1096,12 +1111,10 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 	var p dnsmessage.Parser
 	hdr, err := p.Start(buf)
 	if err != nil {
-		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
 	questions, err := p.AllQuestions()
 	if err != nil {
-		c.logf("error parsing dns response: %v", err)
 		return buf
 	}
 	// Any message we are interested in has one question (RFC 9619)
@@ -1139,9 +1152,9 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 	var answers []dnsResponseRewrite
 	var cnameChain map[dnsname.FQDN]dnsname.FQDN
 	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
-		c.logf("mapping dns response for connector domain, unsupported type: %v", question.Type)
 		newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, answers)
 		if err != nil {
+			metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail.Add(1)
 			c.logf("error writing empty response for unsupported type: %v", err)
 			return makeServFail(c.logf, hdr, question)
 		}
@@ -1153,14 +1166,11 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 			break
 		}
 		if err != nil {
-			c.logf("error parsing dns response: %v", err)
 			return makeServFail(c.logf, hdr, question)
 		}
 		// other classes are unsupported, and we checked the question was for ClassINET already
 		if h.Class != dnsmessage.ClassINET {
-			c.logf("unexpected class for connector domain dns response: %v %v", queriedDomain, h.Class)
 			if err := p.SkipAnswer(); err != nil {
-				c.logf("error parsing dns response: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 			continue
@@ -1179,17 +1189,14 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 			// a.example.com A (some magic IP that is associated with 1.1.1.1)
 			r, err := p.CNAMEResource()
 			if err != nil {
-				c.logf("error parsing dns response: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 			src, err := normalizeDNSName(h.Name.String())
 			if err != nil {
-				c.logf("bad dnsname: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 			target, err := normalizeDNSName(r.CNAME.String())
 			if err != nil {
-				c.logf("bad dnsname: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 			mak.Set(&cnameChain, src, target)
@@ -1197,14 +1204,12 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 			if h.Type != question.Type {
 				// would not expect a v4 response to a v6 question or vice versa, don't add a rewrite for this.
 				if err := p.SkipAnswer(); err != nil {
-					c.logf("error parsing dns response: %v", err)
 					return makeServFail(c.logf, hdr, question)
 				}
 				continue
 			}
 			answerDomain, err := normalizeDNSName(h.Name.String())
 			if err != nil {
-				c.logf("bad dnsname: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 			// If answerDomain is not the same domain as the domain that was queried for,
@@ -1229,9 +1234,7 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 					d = target
 				}
 				if !found {
-					c.logf("unexpected domain for connector domain dns response: %v %v", queriedDomain, answerDomain)
 					if err := p.SkipAnswer(); err != nil {
-						c.logf("error parsing dns response: %v", err)
 						return makeServFail(c.logf, hdr, question)
 					}
 					continue
@@ -1241,14 +1244,12 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 			if h.Type == dnsmessage.TypeA {
 				r, err := p.AResource()
 				if err != nil {
-					c.logf("error parsing dns response: %v", err)
 					return makeServFail(c.logf, hdr, question)
 				}
 				dstAddr = netip.AddrFrom4(r.A)
 			} else {
 				r, err := p.AAAAResource()
 				if err != nil {
-					c.logf("error parsing dns response: %v", err)
 					return makeServFail(c.logf, hdr, question)
 				}
 				dstAddr = netip.AddrFrom16(r.AAAA)
@@ -1256,15 +1257,14 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr, ttl: time.Second * time.Duration(h.TTL)})
 		default:
 			// we already checked the question was for a supported type, this answer is unexpected
-			c.logf("unexpected type for connector domain dns response: %v %v", queriedDomain, h.Type)
 			if err := p.SkipAnswer(); err != nil {
-				c.logf("error parsing dns response: %v", err)
 				return makeServFail(c.logf, hdr, question)
 			}
 		}
 	}
 	newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, answers)
 	if err != nil {
+		metricDNSResponseRewriteErrorServfail.Add(1)
 		c.logf("error rewriting dns response: %v", err)
 		return makeServFail(c.logf, hdr, question)
 	}
