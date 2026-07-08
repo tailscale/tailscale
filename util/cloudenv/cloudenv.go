@@ -130,6 +130,32 @@ func readFileTrimmed(name string) string {
 	return strings.TrimSpace(string(v))
 }
 
+// cloudFromSMBIOS reports which cloud we're running in based on the given
+// SMBIOS/DMI identifiers (as exposed by the hardware to the OS), along with
+// whether the caller should probe the metadata server to disambiguate.
+//
+// Any identifier that's unavailable should be passed as the empty string.
+func cloudFromSMBIOS(biosVendor, sysVendor, productName string) (c Cloud, hitMetadata bool) {
+	switch {
+	case biosVendor == "Amazon EC2" || strings.HasSuffix(biosVendor, ".amazon"):
+		return AWS, false
+	case sysVendor == "DigitalOcean":
+		return DigitalOcean, false
+	case sysVendor == "Hetzner":
+		return Hetzner, false
+	// TODO(andrew): "Vultr" is also valid if we need it
+	case productName == "Google Compute Engine":
+		return GCP, false
+	case productName == "Google":
+		// Old GCP VMs, it seems.
+		return "", true
+	case productName == "Virtual Machine", biosVendor == "Microsoft Corporation":
+		// Azure, or maybe all Hyper-V?
+		return "", true
+	}
+	return "", false
+}
+
 func getCloud() Cloud {
 	var hitMetadata bool
 	switch runtime.GOOS {
@@ -137,39 +163,29 @@ func getCloud() Cloud {
 		// Assume these aren't running on a cloud.
 		return ""
 	case "linux":
-		biosVendor := readFileTrimmed("/sys/class/dmi/id/bios_vendor")
-		if biosVendor == "Amazon EC2" || strings.HasSuffix(biosVendor, ".amazon") {
-			return AWS
-		}
-
-		sysVendor := readFileTrimmed("/sys/class/dmi/id/sys_vendor")
-		if sysVendor == "DigitalOcean" {
-			return DigitalOcean
-		}
-		if sysVendor == "Hetzner" {
-			return Hetzner
-		}
-		// TODO(andrew): "Vultr" is also valid if we need it
-
-		prod := readFileTrimmed("/sys/class/dmi/id/product_name")
-		if prod == "Google Compute Engine" {
-			return GCP
-		}
-		if prod == "Google" { // old GCP VMs, it seems
-			hitMetadata = true
-		}
-		if prod == "Virtual Machine" || biosVendor == "Microsoft Corporation" {
-			// Azure, or maybe all Hyper-V?
-			hitMetadata = true
+		var c Cloud
+		c, hitMetadata = cloudFromSMBIOS(
+			readFileTrimmed("/sys/class/dmi/id/bios_vendor"),
+			readFileTrimmed("/sys/class/dmi/id/sys_vendor"),
+			readFileTrimmed("/sys/class/dmi/id/product_name"),
+		)
+		if c != "" {
+			return c
 		}
 
 	default:
-		// TODO(bradfitz): use Win32_SystemEnclosure from WMI or something on
-		// Windows to see if it's a physical machine and skip the cloud check
-		// early. Otherwise use similar clues as Linux about whether we should
-		// burn up to 2 seconds waiting for a metadata server that might not be
-		// there. And for BSDs, look where the /sys stuff is.
-		return ""
+		// On other operating systems (notably Windows and the BSDs) we don't
+		// yet have a cheap, OS-specific way to read the SMBIOS/DMI clues that
+		// the Linux path above uses, so fall back to probing the metadata
+		// server directly. The probe below is OS-independent and detects AWS,
+		// GCP, and Azure. Get caches the result, so this cost is paid at most
+		// once per process.
+		//
+		// TODO: read the SMBIOS clues on these platforms too (Win32_SystemEnclosure
+		// from WMI on Windows, kenv/sysctl on the BSDs) and feed them to
+		// cloudFromSMBIOS, so we can skip this probe on machines that clearly
+		// aren't on a cloud.
+		hitMetadata = true
 	}
 	if !hitMetadata {
 		return ""
