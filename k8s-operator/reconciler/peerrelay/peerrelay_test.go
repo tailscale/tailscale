@@ -364,6 +364,10 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
 				managedServiceWithLB("test", 1, "5.6.7.8", ""),
+				// Seed a StatefulSet with both replicas Ready so the writeStatus precedence path can reach
+				// ReasonReady. Without this the fake client's fresh StatefulSet would have ReadyReplicas=0 and
+				// we'd land in PodsPending instead.
+				managedStatefulSet("test", 2, 2),
 			},
 			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
@@ -372,6 +376,27 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedReadyStatus: metav1.ConditionTrue,
 			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// All LB IPs assigned but pods haven't reported Ready yet
+			Name:    "pods-pending-blocks-ready",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedServiceWithLB("test", 1, "5.6.7.8", ""),
+				managedStatefulSet("test", 2, 1), // only 1 of 2 pods Ready
+			},
+			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+				{Replica: 1, Address: "5.6.7.8", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonPodsPending,
 		},
 		{
 			// Peer relays advertise a raw IP:port to peers, so a hostname-only LB (a misconfigured AWS NLB, for
@@ -466,7 +491,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		t.Run(tc.Name, func(t *testing.T) {
 			builder := fake.NewClientBuilder().
 				WithScheme(tsapi.GlobalScheme).
-				WithStatusSubresource(&tsapi.PeerRelay{})
+				WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{})
 			if tc.PeerRelay != nil {
 				builder = builder.WithObjects(tc.PeerRelay)
 			}
@@ -689,6 +714,31 @@ func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.S
 	svc := managedService(prName, idx)
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip, Hostname: hostname}}
 	return svc
+}
+
+func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {
+	labels := map[string]string{
+		"tailscale.com/managed":              "true",
+		"tailscale.com/parent-resource-type": "peerrelay",
+		"tailscale.com/parent-resource":      prName,
+	}
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      prName,
+			Namespace: tailscaleNamespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    &replicas,
+			ServiceName: prName,
+			Selector:    &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec:       corev1.PodSpec{},
+			},
+		},
+		Status: appsv1.StatefulSetStatus{ReadyReplicas: ready},
+	}
 }
 
 func managedConfigSecret(prName string, idx int) *corev1.Secret {

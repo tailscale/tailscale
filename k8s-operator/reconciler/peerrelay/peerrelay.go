@@ -79,6 +79,7 @@ const reconcilerName = "peerrelay-reconciler"
 const (
 	ReasonEndpointsInvalid = "EndpointsInvalid"
 	ReasonEndpointsPending = "EndpointsPending"
+	ReasonPodsPending      = "PodsPending"
 	ReasonReady            = "PeerRelayReady"
 )
 
@@ -195,7 +196,8 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		}
 	}
 
-	if err := r.ensureStatefulSet(ctx, pr, replicas); err != nil {
+	ss, err := r.ensureStatefulSet(ctx, pr, replicas)
+	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to apply StatefulSet for PeerRelay %q: %w", pr.Name, err)
 	}
 
@@ -207,8 +209,8 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down config Secrets for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.writeEndpointStatus(ctx, pr, endpoints, endpointErrs, replicas); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to update endpoints for PeerRelay %q: %w", pr.Name, err)
+	if err := r.writeStatus(ctx, pr, endpoints, endpointErrs, replicas, ss); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 	}
 
 	return reconcile.Result{}, nil
@@ -243,18 +245,26 @@ func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]
 	return endpoints, errs, nil
 }
 
-func (r *Reconciler) writeEndpointStatus(ctx context.Context, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32) error {
-	// Copy here to prevent needless status updates.
+func (r *Reconciler) writeStatus(ctx context.Context, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32, ss *appsv1.StatefulSet) error {
 	prevStatus := pr.Status.DeepCopy()
 
 	pr.Status.Endpoints = endpoints
 	joined := errors.Join(errs...)
+
+	var readyReplicas int32
+	if ss != nil {
+		readyReplicas = ss.Status.ReadyReplicas
+	}
+
 	switch {
 	case len(errs) > 0:
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, joined.Error(), r.clock, r.logger)
 	case int32(len(endpoints)) < replicas:
 		message := fmt.Sprintf("%d of %d replicas have a public IP", len(endpoints), replicas)
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, r.logger)
+	case readyReplicas < replicas:
+		message := fmt.Sprintf("%d of %d pods are ready", readyReplicas, replicas)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonPodsPending, message, r.clock, r.logger)
 	default:
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
 	}
@@ -442,7 +452,10 @@ func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.Peer
 	return nil
 }
 
-func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) error {
+// ensureStatefulSet creates or reconciles the StatefulSet backing pr and returns its current in-cluster state.
+// The returned StatefulSet's Status is what the API server most recently reported (ReadyReplicas etc.), which
+// writeStatus uses to decide whether the PeerRelay is Ready.
+func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) (*appsv1.StatefulSet, error) {
 	desired := r.peerRelayStatefulSet(pr, replicas)
 
 	var existing appsv1.StatefulSet
@@ -450,12 +463,12 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay,
 	switch {
 	case apierrors.IsNotFound(err):
 		if err = r.Create(ctx, desired); err != nil {
-			return fmt.Errorf("failed to create StatefulSet: %w", err)
+			return nil, fmt.Errorf("failed to create StatefulSet: %w", err)
 		}
 
-		return nil
+		return desired, nil
 	case err != nil:
-		return fmt.Errorf("failed to get StatefulSet: %w", err)
+		return nil, fmt.Errorf("failed to get StatefulSet: %w", err)
 	}
 
 	updated := existing.DeepCopy()
@@ -474,14 +487,14 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay,
 		reflect.DeepEqual(existing.Spec.Replicas, updated.Spec.Replicas) &&
 		reflect.DeepEqual(existing.Spec.Selector, updated.Spec.Selector) &&
 		reflect.DeepEqual(existing.Spec.Template, updated.Spec.Template) {
-		return nil
+		return &existing, nil
 	}
 
 	if err = r.Update(ctx, updated); err != nil {
-		return fmt.Errorf("failed to update StatefulSet: %w", err)
+		return nil, fmt.Errorf("failed to update StatefulSet: %w", err)
 	}
 
-	return nil
+	return updated, nil
 }
 
 func (r *Reconciler) deleteStatefulSet(ctx context.Context, pr *tsapi.PeerRelay) error {
