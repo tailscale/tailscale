@@ -5899,9 +5899,9 @@ func (b *LocalBackend) blockEngineUpdatesLocked(block bool) {
 }
 
 // reconfigAppConnectorLocked updates the app connector state based on the
-// current network map and preferences.
+// self node and preferences.
 // b.mu must be held.
-func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+func (b *LocalBackend) reconfigAppConnectorLocked(selfNode tailcfg.NodeView, prefs ipn.PrefsView) {
 	if !buildfeatures.HasAppConnectors {
 		return
 	}
@@ -5935,11 +5935,11 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 			HasStoredRoutes: shouldStoreRoutes,
 		})
 	}
-	if nm == nil {
+	if !selfNode.Valid() {
 		return
 	}
 
-	attrs, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](nm.SelfNode.CapMap(), appConnectorCapName)
+	attrs, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](selfNode.CapMap(), appConnectorCapName)
 	if err != nil {
 		b.logf("[unexpected] error parsing app connector mapcap: %v", err)
 		return
@@ -5947,7 +5947,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(nm *netmap.NetworkMap, prefs i
 
 	// Geometric cost, assumes that the number of advertised tags is small
 	selfHasTag := func(attrTags []string) bool {
-		return nm.SelfNode.Tags().ContainsFunc(func(tag string) bool {
+		return selfNode.Tags().ContainsFunc(func(tag string) bool {
 			return slices.Contains(attrTags, tag)
 		})
 	}
@@ -6054,7 +6054,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
 	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
 	// If the current node is an app connector, ensure the app connector machine is started
-	b.reconfigAppConnectorLocked(nm, prefs)
+	b.reconfigAppConnectorLocked(nm.SelfNode, prefs)
 
 	if !prefs.WantRunning() {
 		b.logf("[v1] authReconfig: skipping because !WantRunning.")

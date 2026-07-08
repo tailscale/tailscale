@@ -3497,7 +3497,7 @@ func TestCoveredRouteRangeNoDefault(t *testing.T) {
 
 func TestReconfigureAppConnector(t *testing.T) {
 	b := newTestBackend(t)
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 	if b.appConnector != nil {
 		t.Fatal("unexpected app connector")
 	}
@@ -3510,7 +3510,7 @@ func TestReconfigureAppConnector(t *testing.T) {
 		},
 		AppConnectorSet: true,
 	})
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 	if b.appConnector == nil {
 		t.Fatal("expected app connector")
 	}
@@ -3533,7 +3533,7 @@ func TestReconfigureAppConnector(t *testing.T) {
 
 	b.currentNode().SetNetMap(nm)
 
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 	b.appConnector.Wait(context.Background())
 
 	want := []string{"example.com"}
@@ -3553,7 +3553,7 @@ func TestReconfigureAppConnector(t *testing.T) {
 		},
 		AppConnectorSet: true,
 	})
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 	if b.appConnector != nil {
 		t.Fatal("expected no app connector")
 	}
@@ -3585,7 +3585,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 
 	// Smoke check that AdvertiseRoutes doesn't have the test IP.
 	ip := netip.MustParseAddr("1.2.3.4")
@@ -3606,7 +3606,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 
 	// Mimic b.authReconfigure for the app connector bits.
 	b.mu.Lock()
-	b.reconfigAppConnectorLocked(b.NetMap(), b.pm.prefs)
+	b.reconfigAppConnectorLocked(b.currentNode().Self(), b.pm.prefs)
 	b.mu.Unlock()
 	b.readvertiseAppConnectorRoutes()
 
