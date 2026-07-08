@@ -7,12 +7,15 @@ package certs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/types/logger"
@@ -94,6 +97,51 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	return nil
 }
 
+// isTransientCertErr reports whether err represents a failure that did not
+// reach the CA (ctx timeout, LocalAPI socket unreachable). Such errors must
+// not advance the loop's retryCount.
+func isTransientCertErr(err error) bool {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, syscall.ECONNREFUSED),
+		errors.Is(err, syscall.ECONNRESET),
+		errors.Is(err, syscall.EHOSTUNREACH),
+		errors.Is(err, syscall.EPIPE):
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return false
+}
+
+// nextRetryInterval picks the wait until the next CertPair attempt:
+//   - success: reset retryCount, normalInterval.
+//   - transient (never reached the CA): retrySchedule[0], no retryCount advance.
+//   - retryAfter > 0: honour it, retryCount still advances.
+//   - other: advance retryCount, walk retrySchedule.
+func nextRetryInterval(err error, retryCount *int, normalInterval, retryAfter time.Duration) time.Duration {
+	switch {
+	case err == nil:
+		*retryCount = 0
+		return normalInterval
+	case isTransientCertErr(err):
+		return retrySchedule[0]
+	}
+	*retryCount++
+	idx := *retryCount - 1
+	if idx >= len(retrySchedule) {
+		idx = len(retrySchedule) - 1
+	}
+	interval := retrySchedule[idx]
+	if retryAfter > 0 {
+		interval = retryAfter
+	}
+	return interval
+}
+
 // retrySchedule is the wait between successive failed issuance attempts,
 // following LE's recommended schedule.
 // https://letsencrypt.org/docs/integration-guide/#retrying-failures
@@ -108,8 +156,8 @@ var retrySchedule = []time.Duration{
 // - calls localAPI certificate endpoint to ensure that certs are issued for the
 // given domain name
 // - calls localAPI certificate endpoint daily to ensure that certs are renewed
-// - if certificate issuance failed retries after an exponential backoff period
-// starting at 1 minute and capped at 24 hours. Reset the backoff once issuance succeeds.
+// - if certificate issuance failed, retries on the schedule defined by
+// [retrySchedule]; resets to the start once issuance succeeds.
 // Note that renewal check also happens when the node receives an HTTPS request and it is possible that certs get
 // renewed at that point. Renewal here is needed to prevent the shared certs from expiry in edge cases where the 'write'
 // replica does not get any HTTPS requests.
@@ -147,22 +195,9 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
+			retryAfter, _ := local.RateLimitRetryAfter(err)
+			nextInterval := nextRetryInterval(err, &retryCount, normalInterval, retryAfter)
 			if err != nil {
-				cm.logf("error refreshing certificate for %s: %v", domain, err)
-			}
-			var nextInterval time.Duration
-			// TODO(irbekrm): distinguish between LE rate limit errors and other
-			// error types like transient network errors.
-			if err == nil {
-				retryCount = 0
-				nextInterval = normalInterval
-			} else {
-				retryCount++
-				idx := retryCount - 1
-				if idx >= len(retrySchedule) {
-					idx = len(retrySchedule) - 1
-				}
-				nextInterval = retrySchedule[idx]
 				cm.logf("Error refreshing certificate for %s (retry %d): %v. Will retry in %v\n",
 					domain, retryCount, err, nextInterval)
 			}

@@ -5,7 +5,10 @@ package certs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"syscall"
 	"testing"
 	"time"
 
@@ -280,6 +283,60 @@ func TestEnsureCertLoops(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("timed out waiting for goroutine to finish")
 			case <-allDone:
+			}
+		})
+	}
+}
+
+func TestIsTransientCertErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"deadline", context.DeadlineExceeded, true},
+		{"canceled", context.Canceled, true},
+		{"wrapped_deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), true},
+		{"connrefused", fmt.Errorf("dial: %w", syscall.ECONNREFUSED), true},
+		{"connreset", fmt.Errorf("read: %w", syscall.ECONNRESET), true},
+		{"random", errors.New("badNonce"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientCertErr(tt.err); got != tt.want {
+				t.Errorf("isTransientCertErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextRetryInterval(t *testing.T) {
+	const normal = 24 * time.Hour
+	tests := []struct {
+		name         string
+		err          error
+		retryAfter   time.Duration
+		startCount   int
+		wantCount    int
+		wantInterval time.Duration
+	}{
+		{"success", nil, 0, 5, 0, normal},
+		{"transient_no_advance", context.DeadlineExceeded, 0, 3, 3, retrySchedule[0]},
+		{"rate_limit_with_hint", errors.New("rate limited"), 17 * time.Minute, 0, 1, 17 * time.Minute},
+		{"rate_limit_no_hint", errors.New("rate limited"), 0, 0, 1, retrySchedule[0]},
+		{"other_advances", errors.New("badNonce"), 0, 0, 1, retrySchedule[0]},
+		{"other_clamps", errors.New("badNonce"), 0, len(retrySchedule) + 3, len(retrySchedule) + 4, retrySchedule[len(retrySchedule)-1]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := tt.startCount
+			got := nextRetryInterval(tt.err, &c, normal, tt.retryAfter)
+			if c != tt.wantCount {
+				t.Errorf("retryCount = %d, want %d", c, tt.wantCount)
+			}
+			if got != tt.wantInterval {
+				t.Errorf("interval = %v, want %v", got, tt.wantInterval)
 			}
 		})
 	}
