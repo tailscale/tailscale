@@ -845,25 +845,28 @@ type fakeClientProvider struct {
 
 func (p *fakeClientProvider) For(_ string) (tsclient.Client, error) { return p.client, p.err }
 
-// fakeTSClient is a minimal tsclient.Client. Only Keys().CreateAuthKey is expected to be called by these tests;
-// everything else panics. The Keys resource records every CreateAuthKey call so tests can assert what tags were
-// used and how many keys were minted, and returns a canned key value per call.
 type fakeTSClient struct {
-	tsclient.Client // embed for methods we don't implement — calling any of them panics
+	tsclient.Client
 
-	mu       sync.Mutex
-	keyCalls []tailscaleclient.CreateKeyRequest
-	// nextKey is the sequence of keys to return from CreateAuthKey. When empty, "auth-key-N" (N = call index) is
-	// used.
-	nextKey []string
+	mu            sync.Mutex
+	keyCalls      []tailscaleclient.CreateKeyRequest
+	deviceDeletes []string
+	nextKey       []string
 }
 
-func (c *fakeTSClient) Keys() tsclient.KeyResource { return (*fakeKeys)(c) }
+func (c *fakeTSClient) Keys() tsclient.KeyResource       { return (*fakeKeys)(c) }
+func (c *fakeTSClient) Devices() tsclient.DeviceResource { return (*fakeDevices)(c) }
 
 func (c *fakeTSClient) CreateAuthKeyCalls() []tailscaleclient.CreateKeyRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.keyCalls)
+}
+
+func (c *fakeTSClient) DeviceDeletes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.deviceDeletes)
 }
 
 type fakeKeys fakeTSClient
@@ -885,10 +888,24 @@ func (k *fakeKeys) CreateAuthKey(_ context.Context, req tailscaleclient.CreateKe
 
 func (k *fakeKeys) List(_ context.Context, _ bool) ([]tailscaleclient.Key, error) { return nil, nil }
 
-// TestReconciler_AuthKey_Lifecycle covers the three interesting cases:
-//   - Fresh Secret ⇒ mint a new auth key with the right tags and embed it in the config.
-//   - Existing Secret already has an auth key ⇒ reuse it, don't mint.
-//   - PeerRelay declares its own tags ⇒ Tailscale API is called with those tags.
+type fakeDevices fakeTSClient
+
+func (d *fakeDevices) Delete(_ context.Context, id string) error {
+	c := (*fakeTSClient)(d)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deviceDeletes = append(c.deviceDeletes, id)
+	return nil
+}
+
+func (d *fakeDevices) List(_ context.Context, _ ...tailscaleclient.ListDevicesOptions) ([]tailscaleclient.Device, error) {
+	return nil, nil
+}
+
+func (d *fakeDevices) Get(_ context.Context, _ string) (*tailscaleclient.Device, error) {
+	return nil, nil
+}
+
 func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -952,16 +969,17 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
 			t.Fatal(err)
 		}
 
 		if got := len(tsc.CreateAuthKeyCalls()); got != 1 {
 			t.Errorf("expected 1 CreateAuthKey call across two reconciles, got %d", got)
 		}
+
 		conf := readTailscaledConfig(t, fc, "test-0-config")
 		if conf.AuthKey == nil || *conf.AuthKey != "tskey-first" {
 			t.Errorf("expected AuthKey preserved as tskey-first, got %v", conf.AuthKey)
@@ -973,6 +991,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "test"},
 			Spec:       tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
 		}
+
 		fc := fake.NewClientBuilder().
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
@@ -980,6 +999,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Build()
 
 		tsc := &fakeTSClient{}
+
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
@@ -989,7 +1009,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1000,6 +1020,130 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 		gotTags := calls[0].Capabilities.Devices.Create.Tags
 		if !slices.Equal(gotTags, []string{"tag:custom"}) {
 			t.Errorf("expected pr-specific tags, got %v", gotTags)
+		}
+	})
+}
+
+func TestReconciler_DeletesTailnetDevices(t *testing.T) {
+	t.Parallel()
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// stateSecret seeds a Secret shaped like the ones tailscaled writes for each pod: no operator-managed
+	// labels, containing (optionally) a device_id entry.
+	stateSecret := func(name, deviceID string) *corev1.Secret {
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tailscaleNamespace},
+		}
+		if deviceID != "" {
+			s.Data = map[string][]byte{"device_id": []byte(deviceID)}
+		}
+		return s
+	}
+
+	t.Run("full-delete-removes-all-devices-and-state-secrets", func(t *testing.T) {
+		pr := &tsapi.PeerRelay{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "test",
+				Finalizers:        []string{"tailscale.com/finalizer"},
+				DeletionTimestamp: new(metav1.Now()),
+			},
+			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+		}
+
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
+			WithObjects(
+				pr,
+				stateSecret("test-0", "device-aaa"),
+				stateSecret("test-1", ""), // pod never registered — no device_id
+				stateSecret("other-0", "device-should-not-touch"),
+			).
+			Build()
+
+		tsc := &fakeTSClient{}
+		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+			Client:             fc,
+			TailscaleNamespace: tailscaleNamespace,
+			ProxyImage:         testProxyImage,
+			DefaultTags:        []string{"tag:test-peer-relay"},
+			Clients:            &fakeClientProvider{client: tsc},
+			Logger:             logger.Sugar(),
+		})
+
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		if got, want := tsc.DeviceDeletes(), []string{"device-aaa"}; !slices.Equal(got, want) {
+			t.Errorf("expected Devices().Delete calls %v, got %v", want, got)
+		}
+
+		// Our state Secrets should be gone; the unrelated PeerRelay's state Secret should still be present.
+		for _, name := range []string{"test-0", "test-1"} {
+			var s corev1.Secret
+			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
+				t.Errorf("expected state Secret %q gone, got err=%v", name, err)
+			}
+		}
+		var other corev1.Secret
+		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "other-0"}, &other); err != nil {
+			t.Errorf("unexpected: state Secret for other PeerRelay was removed: %v", err)
+		}
+	})
+
+	t.Run("scale-down-removes-devices-for-removed-replicas-only", func(t *testing.T) {
+		pr := &tsapi.PeerRelay{
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
+		}
+
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
+			WithObjects(
+				pr,
+				stateSecret("test-0", "device-still-here"),
+				stateSecret("test-1", "device-scaled-away-1"),
+				stateSecret("test-2", "device-scaled-away-2"),
+			).
+			Build()
+
+		tsc := &fakeTSClient{}
+		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+			Client:             fc,
+			TailscaleNamespace: tailscaleNamespace,
+			ProxyImage:         testProxyImage,
+			DefaultTags:        []string{"tag:test-peer-relay"},
+			Clients:            &fakeClientProvider{client: tsc},
+			Logger:             logger.Sugar(),
+		})
+
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		got := tsc.DeviceDeletes()
+		slices.Sort(got)
+		want := []string{"device-scaled-away-1", "device-scaled-away-2"}
+		if !slices.Equal(got, want) {
+			t.Errorf("expected Devices().Delete calls %v, got %v", want, got)
+		}
+
+		var kept corev1.Secret
+		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "test-0"}, &kept); err != nil {
+			t.Errorf("expected replica 0 state Secret preserved: %v", err)
+		}
+
+		for _, name := range []string{"test-1", "test-2"} {
+			var s corev1.Secret
+			if err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
+				t.Errorf("expected state Secret %q gone after scale-down, got err=%v", name, err)
+			}
 		}
 	})
 }

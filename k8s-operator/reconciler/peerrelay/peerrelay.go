@@ -191,7 +191,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 			endpoint = &ep
 		}
 
-		if err := r.ensureConfigSecret(ctx, pr, i, endpoint); err != nil {
+		if err = r.ensureConfigSecret(ctx, pr, i, endpoint); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply config Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 	}
@@ -201,15 +201,19 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		return reconcile.Result{}, fmt.Errorf("failed to apply StatefulSet for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.deleteServicesFrom(ctx, pr, replicas); err != nil {
+	if err = r.deleteDevicesFrom(ctx, pr, replicas); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down tailnet devices for PeerRelay %q: %w", pr.Name, err)
+	}
+
+	if err = r.deleteServicesFrom(ctx, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.deleteConfigSecretsFrom(ctx, pr, replicas); err != nil {
+	if err = r.deleteConfigSecretsFrom(ctx, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down config Secrets for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.writeStatus(ctx, pr, endpoints, endpointErrs, replicas, ss); err != nil {
+	if err = r.writeStatus(ctx, pr, endpoints, endpointErrs, replicas, ss); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 	}
 
@@ -281,6 +285,10 @@ func (r *Reconciler) writeStatus(ctx context.Context, pr *tsapi.PeerRelay, endpo
 }
 
 func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
+	if err := r.deleteDevicesFrom(ctx, pr, 0); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to delete tailnet devices for PeerRelay %q: %w", pr.Name, err)
+	}
+
 	if err := r.deleteStatefulSet(ctx, pr); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete StatefulSet for PeerRelay %q: %w", pr.Name, err)
 	}
@@ -385,7 +393,7 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay
 			return fmt.Errorf("failed to build config Secret: %w", err)
 		}
 
-		if err := r.Create(ctx, desired); err != nil {
+		if err = r.Create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create config Secret: %w", err)
 		}
 

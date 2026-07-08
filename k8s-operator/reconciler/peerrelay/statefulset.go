@@ -64,11 +64,12 @@ func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpo
 func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32) *appsv1.StatefulSet {
 	labels := peerRelayLabels(pr.Name)
 	return tailscaled.NewStatefulSet(tailscaled.StatefulSetOptions{
-		Name:      pr.Name,
-		Namespace: r.tailscaleNamespace,
-		Labels:    labels,
-		Image:     r.proxyImage,
-		Replicas:  replicas,
+		Name:               pr.Name,
+		Namespace:          r.tailscaleNamespace,
+		Labels:             labels,
+		Image:              r.proxyImage,
+		Replicas:           replicas,
+		ServiceAccountName: "proxies",
 		ConfigSecretNameFunc: func(idx int32) string {
 			return configSecretName(pr.Name, idx)
 		},
