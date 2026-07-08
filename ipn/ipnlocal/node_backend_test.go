@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"tailscale.com/net/routecheck/peernode"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
@@ -270,4 +272,84 @@ var _ RouteCheckReport = *new(routecheckReport)
 
 func (rp routecheckReport) IsReachable(_ tailcfg.NodeID) peernode.Reachability {
 	return peernode.Reachability(rp)
+}
+
+func TestNodeBackendRouteManager(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	mkPeer := func(id tailcfg.NodeID, stableID tailcfg.StableNodeID, addr4 string, extra ...string) tailcfg.NodeView {
+		n := &tailcfg.Node{
+			ID:       id,
+			StableID: stableID,
+			Key:      key.NewNode().Public(),
+			HomeDERP: 1, // required by the route manager's reachability filter
+			Addresses: []netip.Prefix{
+				netip.MustParsePrefix(addr4),
+			},
+		}
+		n.AllowedIPs = append(n.AllowedIPs, n.Addresses...)
+		for _, s := range extra {
+			n.AllowedIPs = append(n.AllowedIPs, netip.MustParsePrefix(s))
+		}
+		return n.View()
+	}
+	wantPeerFor := func(ip string, want tailcfg.NodeView) {
+		t.Helper()
+		got, ok := nb.routeMgr.Outbound().Lookup(netip.MustParseAddr(ip))
+		if !want.Valid() {
+			if ok {
+				t.Errorf("Outbound lookup %s = %v; want no match", ip, got)
+			}
+			return
+		}
+		if !ok || got.Key != want.Key() {
+			t.Errorf("Outbound lookup %s = %v, %v; want %v", ip, got, ok, want.Key())
+		}
+	}
+
+	p1 := mkPeer(1, "stable1", "100.64.0.1/32")
+	p2 := mkPeer(2, "stable2", "100.64.0.2/32", "0.0.0.0/0", "::/0")
+
+	// A full netmap populates the route manager.
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p1, p2}})
+	wantPeerFor("100.64.0.1", p1)
+	wantPeerFor("100.64.0.2", p2)
+	wantPeerFor("8.8.8.8", tailcfg.NodeView{}) // exit node not selected
+
+	// Selecting peer 2 as the exit node resolves its stable ID and
+	// installs its /0 routes.
+	nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "stable2", ExitNodeSelected: true})
+	wantPeerFor("8.8.8.8", p2)
+
+	// A selected exit node that resolves to no current peer must
+	// blackhole internet traffic, not fall back to "no exit node":
+	// the default routes stay in the OS route set with no outbound
+	// peer to carry them.
+	nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "no-such-node", ExitNodeSelected: true})
+	wantPeerFor("8.8.8.8", tailcfg.NodeView{})
+	if !nb.routeMgr.OSRoutes().Get(netip.MustParsePrefix("0.0.0.0/0")) {
+		t.Error("unresolved exit node: OSRoutes missing 0.0.0.0/0 blackhole route")
+	}
+
+	nb.updateRouteManagerPrefs(routePrefs{})
+	wantPeerFor("8.8.8.8", tailcfg.NodeView{})
+	if nb.routeMgr.OSRoutes().Get(netip.MustParsePrefix("0.0.0.0/0")) {
+		t.Error("no exit node: OSRoutes unexpectedly contains 0.0.0.0/0")
+	}
+
+	// Incremental deltas: add peer 3, remove peer 1.
+	p3 := mkPeer(3, "stable3", "100.64.0.3/32")
+	if !nb.UpdateNetmapDelta([]netmap.NodeMutation{
+		netmap.NodeMutationUpsert{Node: p3},
+		netmap.MakeNodeMutationRemove(1),
+	}) {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	wantPeerFor("100.64.0.3", p3)
+	wantPeerFor("100.64.0.1", tailcfg.NodeView{})
+
+	// A full netmap that drops a peer removes it from the route manager.
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p2}})
+	wantPeerFor("100.64.0.3", tailcfg.NodeView{})
+	wantPeerFor("100.64.0.2", p2)
 }

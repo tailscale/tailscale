@@ -19,6 +19,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/routecheck/peernode"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -164,6 +165,13 @@ type nodeBackend struct {
 	// [nodeBackend.AwaitNodeKeyForTest]. It is populated lazily and remains
 	// nil in production, where no test installs a waiter.
 	keyWaitersForTest map[key.NodePublic]chan struct{}
+
+	// routeMgr tracks this node's view of which IPs route to which
+	// peers and publishes lock-free snapshots for the data plane and
+	// the OS router. It is initialized once and immutable, but its
+	// Begin/Commit mutations must be serialized, which we do by only
+	// mutating it with mu held.
+	routeMgr *routemanager.RouteManager
 }
 
 func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
@@ -174,6 +182,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 		ctxCancel:   ctxCancel,
 		eventClient: bus.Client("ipnlocal.nodeBackend"),
 		readyCh:     make(chan struct{}),
+		routeMgr:    routemanager.New(logf),
 	}
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
@@ -757,16 +766,81 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 
 func (nb *nodeBackend) updatePeersLocked() {
 	nm := nb.netMap
+	oldIDs := slices.Collect(maps.Keys(nb.peers))
+
 	if nm == nil {
 		nb.peers = nil
-		return
+	} else {
+		mapx.RepopulateNonzero(&nb.peers, func() {
+			for _, p := range nm.Peers {
+				nb.peers[p.ID()] = p
+			}
+		})
 	}
 
-	mapx.RepopulateNonzero(&nb.peers, func() {
-		for _, p := range nm.Peers {
-			nb.peers[p.ID()] = p
+	// Resync the route manager to the new peer set. Upserts of
+	// unchanged peers are cheap no-ops; this is a full-netmap event,
+	// so O(n) work is expected here.
+	rt := nb.routeMgr.Begin()
+	for _, id := range oldIDs {
+		if _, ok := nb.peers[id]; !ok {
+			rt.RemovePeer(id)
 		}
+	}
+	for _, p := range nb.peers {
+		rt.UpsertPeer(p)
+	}
+	rt.Commit()
+}
+
+// updateRouteManagerPrefs pushes the routing-relevant prefs and the
+// OneCGNAT decision into the route manager. The exit node arrives as
+// a stable ID from prefs and is resolved to the current numeric node
+// ID here; it resolves to zero (no exit node) if that peer is not in
+// the netmap yet, in which case a later netmap update re-runs this.
+// routePrefs is the subset of routing-relevant prefs (and derived
+// state) that [nodeBackend.updateRouteManagerPrefs] pushes into the
+// RouteManager.
+type routePrefs struct {
+	// ExitNodeID is the stable node ID of the selected exit node, or
+	// zero if none is selected.
+	ExitNodeID tailcfg.StableNodeID
+
+	// ExitNodeSelected is whether the prefs select any exit node at
+	// all, even one that doesn't resolve (e.g. an ExitNodeIP that
+	// never resolved to an ExitNodeID); it mirrors
+	// routerConfigLocked's blackhole condition.
+	ExitNodeSelected bool
+
+	// RouteAll is whether advertised subnet routes from peers are
+	// accepted.
+	RouteAll bool
+
+	// OneCGNAT is whether the OS route set should collapse peers'
+	// CGNAT addresses into the single /10 route.
+	OneCGNAT bool
+}
+
+func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	var exitID tailcfg.NodeID
+	if !p.ExitNodeID.IsZero() {
+		// The lookup can miss: the selected exit node may not exist,
+		// or may be a placeholder like MDM's "auto:any" awaiting
+		// resolution. ExitNodeSelected then makes the RouteManager
+		// blackhole internet traffic rather than treat it as "no
+		// exit node"; see [routemanager.Prefs.ExitNodeSelected].
+		exitID = nb.nodeByStableID[p.ExitNodeID]
+	}
+	rt := nb.routeMgr.Begin()
+	rt.SetPrefs(routemanager.Prefs{
+		ExitNodeID:       exitID,
+		ExitNodeSelected: p.ExitNodeSelected,
+		RouteAll:         p.RouteAll,
 	})
+	rt.SetTailnetConfig(routemanager.TailnetConfig{OneCGNAT: p.OneCGNAT})
+	rt.Commit()
 }
 
 // setPacketFilter stores the live packet filter rules and parsed
@@ -810,6 +884,14 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// call (e.g. its endpoints + online status both change)
 	var mutableNodes map[tailcfg.NodeID]*tailcfg.Node
 
+	// Mirror peer add/remove mutations into the route manager.
+	// The Commit is unconditional (even if we panic or return false)
+	// to stay in sync with the peers map, which is likewise mutated
+	// in place as the loop runs. And if we return false, we'll just
+	// get a full netmap soon and reset all our state anyway.
+	rt := nb.routeMgr.Begin()
+	defer rt.Commit()
+
 	for _, m := range muts {
 		switch m := m.(type) {
 		case netmap.NodeMutationUpsert:
@@ -824,6 +906,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			mak.Set(&nb.nodeByWGString, m.Node.Key().WireGuardGoString(), nid)
 			mak.Set(&nb.nodeByStableID, m.Node.StableID(), nid)
 			nb.addNodeNameLocked(m.Node.Name(), nid)
+			rt.UpsertPeer(m.Node)
 			continue
 		case netmap.NodeMutationRemove:
 			nid := m.NodeIDBeingMutated()
@@ -838,6 +921,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				delete(nb.nodeByStableID, old.StableID())
 				nb.removeNodeNameLocked(old.Name())
 				delete(nb.peers, nid)
+				rt.RemovePeer(nid)
 			}
 			continue
 		}

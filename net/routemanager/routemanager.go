@@ -106,9 +106,21 @@ func (p peerView) hasDataPlaneAttrs() bool {
 // Prefs is the subset of ipn.Prefs that affects routing.
 type Prefs struct {
 	// ExitNodeID is the node ID of the peer selected as this
-	// node's exit node, or zero if no exit node is selected.
+	// node's exit node, or zero if no exit node is selected or the
+	// selected exit node does not resolve to a current peer.
 	// (Callers resolve ipn.Prefs's stable node ID to a NodeID.)
 	ExitNodeID tailcfg.NodeID
+
+	// ExitNodeSelected is whether the prefs select any exit node at
+	// all, even one that doesn't resolve to a current peer (in which
+	// case ExitNodeID is zero). When set, the exit routes are always
+	// in the OS route set: with a resolved exit node they carry its
+	// traffic, and without one they blackhole internet traffic
+	// rather than let it escape to the local network, per the
+	// [tailscale.com/ipn.Prefs.ExitNodeID] docs. MDM's "auto:any"
+	// placeholder relies on the blackhole while an exit node is
+	// still being chosen.
+	ExitNodeSelected bool
 
 	// RouteAll is whether advertised subnet routes (non-exit
 	// routes) from peers are accepted.
@@ -899,6 +911,13 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 	var cgnatDirty []netip.Prefix
 	for pfx := range dirty {
 		want, wantOS := rm.desiredFor(pfx)
+		if rm.prefs.ExitNodeSelected && tsaddr.IsExitRoute(pfx) {
+			// The exit routes stay in the OS route set as long as an
+			// exit node is selected, even with no eligible
+			// contributor, to blackhole rather than leak internet
+			// traffic. See [Prefs.ExitNodeSelected].
+			wantOS = true
+		}
 
 		if cur, ok := out.Get(pfx); (want != nil) != ok || (ok && cur != want) {
 			if want != nil {
@@ -983,6 +1002,13 @@ func (rm *RouteManager) rebuildAll(res *Result) {
 
 	for _, pfx := range plain {
 		osr.Insert(pfx)
+	}
+	if rm.prefs.ExitNodeSelected {
+		// Blackhole (or carry) internet traffic while any exit node
+		// is selected, resolved or not. See [Prefs.ExitNodeSelected].
+		for _, pfx := range tsaddr.ExitRoutes() {
+			osr.Insert(pfx)
+		}
 	}
 	if len(rm.ulaPfxs) > 0 {
 		osr.Insert(tsaddr.TailscaleULARange())

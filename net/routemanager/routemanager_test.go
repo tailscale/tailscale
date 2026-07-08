@@ -895,3 +895,48 @@ func TestExtraAllowedIPsPeerLifecycle(t *testing.T) {
 	wantOutbound(t, rm, "fe80::1234", k1, true)
 	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
 }
+
+// Tests that the exit routes stay in the OS route set whenever an
+// exit node is selected, even one that resolves to no current peer
+// (Prefs.ExitNodeSelected with a zero ExitNodeID), so internet
+// traffic is blackholed rather than escaping to the local network.
+// This mirrors the long-standing behavior documented on
+// ipn.Prefs.ExitNodeID and relied on by MDM's "auto:any" placeholder.
+func TestExitNodeBlackhole(t *testing.T) {
+	rm := New(t.Logf)
+	exitPeer := peer1()
+	exitPeer.Routes = tsaddr.ExitRoutes()
+	commit(rm, func(m *Mutation) { m.upsertPeer(exitPeer) })
+
+	// No exit node selected: no default routes, no outbound winner.
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
+	wantOutbound(t, rm, "8.8.8.8", key.NodePublic{}, false)
+
+	// A resolved exit node carries the default routes.
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{ExitNodeID: 1, ExitNodeSelected: true})
+	})
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48", "0.0.0.0/0", "::/0")
+	wantOutbound(t, rm, "8.8.8.8", k1, true)
+
+	// An unresolved exit node (nonexistent, or not yet resolved)
+	// keeps the default routes with no outbound winner: a blackhole.
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{ExitNodeID: 0, ExitNodeSelected: true})
+	})
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48", "0.0.0.0/0", "::/0")
+	wantOutbound(t, rm, "8.8.8.8", key.NodePublic{}, false)
+
+	// Removing the exit-capable peer while still selected keeps the
+	// blackhole in place via the incremental path.
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{ExitNodeID: 1, ExitNodeSelected: true})
+	})
+	commit(rm, func(m *Mutation) { m.RemovePeer(1) })
+	wantOSRoutes(t, rm, "0.0.0.0/0", "::/0")
+	wantOutbound(t, rm, "8.8.8.8", key.NodePublic{}, false)
+
+	// Deselecting the exit node removes the default routes.
+	commit(rm, func(m *Mutation) { m.SetPrefs(Prefs{}) })
+	wantOSRoutes(t, rm)
+}

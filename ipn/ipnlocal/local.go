@@ -6126,6 +6126,12 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
+	cn.updateRouteManagerPrefs(routePrefs{
+		ExitNodeID:       prefs.ExitNodeID(),
+		ExitNodeSelected: prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid(),
+		RouteAll:         flags&netmap.AllowSubnetRoutes != 0,
+		OneCGNAT:         oneCGNATRoute,
+	})
 	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
 
 	// Add these extra Allowed IPs after router configuration, because the expected
