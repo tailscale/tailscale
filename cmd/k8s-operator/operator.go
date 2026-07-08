@@ -374,6 +374,8 @@ func runReconcilers(opts reconcilerOpts) {
 		Client:             mgr.GetClient(),
 		TailscaleNamespace: opts.tailscaleNamespace,
 		ProxyImage:         opts.proxyImage,
+		DefaultTags:        strings.Split(opts.proxyTags, ","),
+		Clients:            clients,
 		Logger:             opts.log,
 	}
 

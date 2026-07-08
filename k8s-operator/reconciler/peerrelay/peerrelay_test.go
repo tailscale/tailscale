@@ -6,10 +6,12 @@
 package peerrelay_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
 	"slices"
+	"sync"
 	"testing"
 
 	"go.uber.org/zap"
@@ -23,9 +25,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	tailscaleclient "tailscale.com/client/tailscale/v2"
+
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
+	"tailscale.com/k8s-operator/tsclient"
 )
 
 const (
@@ -472,6 +477,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Client:             fc,
 				TailscaleNamespace: tailscaleNamespace,
 				ProxyImage:         testProxyImage,
+				DefaultTags:        []string{"tag:test-peer-relay"},
+				Clients:            &fakeClientProvider{client: &fakeTSClient{}},
 				Logger:             logger.Sugar(),
 			})
 
@@ -726,6 +733,8 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		Client:             fc,
 		TailscaleNamespace: tailscaleNamespace,
 		ProxyImage:         testProxyImage,
+		DefaultTags:        []string{"tag:test-peer-relay"},
+		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
 		Logger:             logger.Sugar(),
 	})
 
@@ -775,4 +784,172 @@ func readTailscaledConfig(t *testing.T, fc client.Client, secretName string) ipn
 	}
 
 	return conf
+}
+
+// fakeClientProvider is a peerrelay.ClientProvider that ignores the requested tailnet name and always returns the
+// same client. Used to inject a scripted tsclient into the reconciler.
+type fakeClientProvider struct {
+	client tsclient.Client
+	err    error
+}
+
+func (p *fakeClientProvider) For(_ string) (tsclient.Client, error) { return p.client, p.err }
+
+// fakeTSClient is a minimal tsclient.Client. Only Keys().CreateAuthKey is expected to be called by these tests;
+// everything else panics. The Keys resource records every CreateAuthKey call so tests can assert what tags were
+// used and how many keys were minted, and returns a canned key value per call.
+type fakeTSClient struct {
+	tsclient.Client // embed for methods we don't implement — calling any of them panics
+
+	mu       sync.Mutex
+	keyCalls []tailscaleclient.CreateKeyRequest
+	// nextKey is the sequence of keys to return from CreateAuthKey. When empty, "auth-key-N" (N = call index) is
+	// used.
+	nextKey []string
+}
+
+func (c *fakeTSClient) Keys() tsclient.KeyResource { return (*fakeKeys)(c) }
+
+func (c *fakeTSClient) CreateAuthKeyCalls() []tailscaleclient.CreateKeyRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.keyCalls)
+}
+
+type fakeKeys fakeTSClient
+
+func (k *fakeKeys) CreateAuthKey(_ context.Context, req tailscaleclient.CreateKeyRequest) (*tailscaleclient.Key, error) {
+	c := (*fakeTSClient)(k)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.keyCalls = append(c.keyCalls, req)
+
+	var key string
+	if len(c.nextKey) > 0 {
+		key, c.nextKey = c.nextKey[0], c.nextKey[1:]
+	} else {
+		key = fmt.Sprintf("auth-key-%d", len(c.keyCalls))
+	}
+	return &tailscaleclient.Key{Key: key}, nil
+}
+
+func (k *fakeKeys) List(_ context.Context, _ bool) ([]tailscaleclient.Key, error) { return nil, nil }
+
+// TestReconciler_AuthKey_Lifecycle covers the three interesting cases:
+//   - Fresh Secret ⇒ mint a new auth key with the right tags and embed it in the config.
+//   - Existing Secret already has an auth key ⇒ reuse it, don't mint.
+//   - PeerRelay declares its own tags ⇒ Tailscale API is called with those tags.
+func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
+	t.Parallel()
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("mints-key-on-first-reconcile", func(t *testing.T) {
+		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithStatusSubresource(&tsapi.PeerRelay{}).
+			WithObjects(pr).
+			Build()
+
+		tsc := &fakeTSClient{nextKey: []string{"tskey-abc"}}
+		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+			Client:             fc,
+			TailscaleNamespace: tailscaleNamespace,
+			ProxyImage:         testProxyImage,
+			DefaultTags:        []string{"tag:k8s-peer-relay"},
+			Clients:            &fakeClientProvider{client: tsc},
+			Logger:             logger.Sugar(),
+		})
+
+		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		calls := tsc.CreateAuthKeyCalls()
+		if len(calls) != 1 {
+			t.Fatalf("expected 1 CreateAuthKey call, got %d", len(calls))
+		}
+		gotTags := calls[0].Capabilities.Devices.Create.Tags
+		if !slices.Equal(gotTags, []string{"tag:k8s-peer-relay"}) {
+			t.Errorf("expected default tags, got %v", gotTags)
+		}
+
+		conf := readTailscaledConfig(t, fc, "test-0-config")
+		if conf.AuthKey == nil || *conf.AuthKey != "tskey-abc" {
+			t.Errorf("expected AuthKey=tskey-abc in config, got %v", conf.AuthKey)
+		}
+	})
+
+	t.Run("reuses-existing-key-across-reconciles", func(t *testing.T) {
+		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithStatusSubresource(&tsapi.PeerRelay{}).
+			WithObjects(pr).
+			Build()
+
+		tsc := &fakeTSClient{nextKey: []string{"tskey-first", "tskey-second"}}
+		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+			Client:             fc,
+			TailscaleNamespace: tailscaleNamespace,
+			ProxyImage:         testProxyImage,
+			DefaultTags:        []string{"tag:k8s-peer-relay"},
+			Clients:            &fakeClientProvider{client: tsc},
+			Logger:             logger.Sugar(),
+		})
+
+		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := len(tsc.CreateAuthKeyCalls()); got != 1 {
+			t.Errorf("expected 1 CreateAuthKey call across two reconciles, got %d", got)
+		}
+		conf := readTailscaledConfig(t, fc, "test-0-config")
+		if conf.AuthKey == nil || *conf.AuthKey != "tskey-first" {
+			t.Errorf("expected AuthKey preserved as tskey-first, got %v", conf.AuthKey)
+		}
+	})
+
+	t.Run("uses-peer-relay-specific-tags", func(t *testing.T) {
+		pr := &tsapi.PeerRelay{
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			Spec:       tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
+		}
+		fc := fake.NewClientBuilder().
+			WithScheme(tsapi.GlobalScheme).
+			WithStatusSubresource(&tsapi.PeerRelay{}).
+			WithObjects(pr).
+			Build()
+
+		tsc := &fakeTSClient{}
+		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+			Client:             fc,
+			TailscaleNamespace: tailscaleNamespace,
+			ProxyImage:         testProxyImage,
+			DefaultTags:        []string{"tag:k8s-peer-relay"},
+			Clients:            &fakeClientProvider{client: tsc},
+			Logger:             logger.Sugar(),
+		})
+
+		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		calls := tsc.CreateAuthKeyCalls()
+		if len(calls) != 1 {
+			t.Fatalf("expected 1 CreateAuthKey call, got %d", len(calls))
+		}
+		gotTags := calls[0].Capabilities.Devices.Create.Tags
+		if !slices.Equal(gotTags, []string{"tag:custom"}) {
+			t.Errorf("expected pr-specific tags, got %v", gotTags)
+		}
+	})
 }

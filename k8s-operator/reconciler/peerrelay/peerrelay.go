@@ -45,6 +45,8 @@ type (
 
 		tailscaleNamespace string
 		proxyImage         string
+		defaultTags        []string
+		tsClients          ClientProvider
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
 	}
@@ -58,6 +60,12 @@ type (
 		TailscaleNamespace string
 		// ProxyImage is the container image used for the tailscaled pods that back each peer relay replica.
 		ProxyImage string
+		// DefaultTags is the tag list applied to freshly minted auth keys when a PeerRelay hasn't set its own
+		// spec.tags. Must be non-empty at construction time.
+		DefaultTags []string
+		// Clients resolves the Tailscale API client for a given tailnet name. Used to mint auth keys for each
+		// replica. Blank tailnet returns the operator's default client.
+		Clients ClientProvider
 		// The logger to use for this Reconciler.
 		Logger *zap.SugaredLogger
 		// Clock is used to stamp condition transitions. Defaults to a real clock when unset.
@@ -86,6 +94,8 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		Client:             options.Client,
 		tailscaleNamespace: options.TailscaleNamespace,
 		proxyImage:         options.ProxyImage,
+		defaultTags:        options.DefaultTags,
+		tsClients:          options.Clients,
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
 	}
@@ -204,8 +214,6 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 	return reconcile.Result{}, nil
 }
 
-// readEndpoints lists the LoadBalancer Services owned by pr and returns the sorted set of ready endpoints along
-// with any per-Service errors (e.g. LB assigned only a hostname).
 func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]tsapi.PeerRelayEndpoint, []error, error) {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
@@ -235,9 +243,6 @@ func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]
 	return endpoints, errs, nil
 }
 
-// writeEndpointStatus refreshes pr.Status.Endpoints and pr.Status.Conditions[PeerRelayReady] from the endpoints
-// slice computed by readEndpoints. See the doc comment on the previous updateEndpoints for the three-state Ready
-// semantics; behavior is unchanged, this is just split out so createOrUpdate can consume the endpoints too.
 func (r *Reconciler) writeEndpointStatus(ctx context.Context, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32) error {
 	// Copy here to prevent needless status updates.
 	prevStatus := pr.Status.DeepCopy()
@@ -356,16 +361,21 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay
 }
 
 func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
-	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint)
-	if err != nil {
-		return fmt.Errorf("failed to build config Secret: %w", err)
-	}
-
 	var existing corev1.Secret
-	err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+	err := r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err = r.Create(ctx, desired); err != nil {
+		key, err := r.mintAuthKey(ctx, pr)
+		if err != nil {
+			return err
+		}
+
+		desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, &key)
+		if err != nil {
+			return fmt.Errorf("failed to build config Secret: %w", err)
+		}
+
+		if err := r.Create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create config Secret: %w", err)
 		}
 
@@ -374,13 +384,20 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay
 		return fmt.Errorf("failed to get config Secret: %w", err)
 	}
 
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKeyFromConfigSecret(&existing))
+	if err != nil {
+		return fmt.Errorf("failed to build config Secret: %w", err)
+	}
+
 	updated := existing.DeepCopy()
 	if updated.Labels == nil && len(desired.Labels) > 0 {
 		updated.Labels = make(map[string]string, len(desired.Labels))
 	}
+
 	for k, v := range desired.Labels {
 		updated.Labels[k] = v
 	}
+
 	updated.Data = desired.Data
 
 	if maps.Equal(existing.Labels, updated.Labels) &&
@@ -393,6 +410,15 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay
 	}
 
 	return nil
+}
+
+func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (string, error) {
+	client, err := r.tsClients.For(pr.Spec.Tailnet)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
+	}
+
+	return newAuthKey(ctx, client, r.peerRelayTags(pr))
 }
 
 func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
@@ -439,6 +465,7 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay,
 	for k, v := range desired.Labels {
 		updated.Labels[k] = v
 	}
+
 	updated.Spec.Replicas = desired.Spec.Replicas
 	updated.Spec.Selector = desired.Spec.Selector
 	updated.Spec.Template = desired.Spec.Template

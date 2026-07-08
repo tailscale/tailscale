@@ -29,7 +29,7 @@ func peerRelayHostname(pr *tsapi.PeerRelay, idx int32) string {
 	return fmt.Sprintf("%s-%d", prefix, idx)
 }
 
-func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) ipn.ConfigVAlpha {
+func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint, authKey *string) ipn.ConfigVAlpha {
 	conf := ipn.ConfigVAlpha{
 		Version:         "alpha0",
 		AcceptDNS:       "false",
@@ -37,6 +37,7 @@ func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.P
 		Locked:          "false",
 		Hostname:        new(peerRelayHostname(pr, idx)),
 		RelayServerPort: new(uint16(servicePort)),
+		AuthKey:         authKey,
 	}
 
 	if endpoint != nil {
@@ -50,13 +51,13 @@ func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.P
 	return conf
 }
 
-func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) (*corev1.Secret, error) {
+func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint, authKey *string) (*corev1.Secret, error) {
 	labels := peerRelayServiceLabels(pr.Name, idx)
 	return tailscaled.NewConfigSecret(tailscaled.ConfigSecretOptions{
 		Name:      configSecretName(pr.Name, idx),
 		Namespace: r.tailscaleNamespace,
 		Labels:    labels,
-		Config:    peerRelayTailscaledConfig(pr, idx, endpoint),
+		Config:    peerRelayTailscaledConfig(pr, idx, endpoint, authKey),
 	})
 }
 
