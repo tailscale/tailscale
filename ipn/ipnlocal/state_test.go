@@ -2016,6 +2016,9 @@ func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
 func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
+func (e *mockEngine) SetPeerConfigFunc(func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+}
+func (e *mockEngine) SyncDevicePeer(key.NodePublic) {}
 func (e *mockEngine) PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool) {
 	return key.NodePublic{}, netip.Prefix{}, false
 }
