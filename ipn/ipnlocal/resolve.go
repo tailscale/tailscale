@@ -13,25 +13,38 @@ import (
 	"tailscale.com/wgengine"
 )
 
-// lookupPeerByIP returns the node public key for the peer that owns the
-// given IP address. It is the fast path for [Engine.SetPeerByIPPacketFunc],
-// handling exact-IP matches against node addresses; subnet routes and exit
-// nodes are handled by a BART-based fallback in userspaceEngine that uses
-// the wireguard-filtered peer list (see lastCfgFull).
+// lookupPeerByIP returns the node public key for the peer that should
+// handle traffic to the given IP address. It is installed as the
+// [wgengine.Engine.SetPeerByIPPacketFunc] callback: exact node
+// addresses hit the nodeByAddr fast path, and subnet routes and
+// exit-node default routes fall back to the RouteManager's outbound
+// table, so it stays correct under incremental netmap deltas.
 //
-// It is called by wireguard-go on every outbound packet (not cached), so
-// it must be fast.
+// It is called by wireguard-go on every outbound packet (not cached),
+// so it must be fast.
 func (b *LocalBackend) lookupPeerByIP(ip netip.Addr) (key.NodePublic, bool) {
 	nb := b.currentNode()
-	nid, ok := nb.NodeByAddr(ip)
-	if !ok {
-		return key.NodePublic{}, false
+	if nid, ok := nb.NodeByAddr(ip); ok {
+		peer, ok := nb.NodeByID(nid)
+		if !ok {
+			return key.NodePublic{}, false
+		}
+		return peer.Key(), true
 	}
-	peer, ok := nb.NodeByID(nid)
-	if !ok {
-		return key.NodePublic{}, false
+	if pr, ok := nb.routeMgr.Outbound().Lookup(ip); ok {
+		return pr.Key, true
 	}
-	return peer.Key(), true
+	return key.NodePublic{}, false
+}
+
+// peerAllowedIPs returns the prefixes from which the peer with the
+// given public key is currently allowed to originate traffic, or
+// ok=false if the peer is unknown (or currently routable via no
+// prefix at all). It is installed as the
+// [wgengine.Engine.SetPeerConfigFunc] callback, backing wireguard-go's
+// lazy peer creation and per-delta peer sync.
+func (b *LocalBackend) peerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool) {
+	return b.currentNode().PeerAllowedIPs(k)
 }
 
 // resolveMagicDNS resolves a MagicDNS hostname to the owning node's IP

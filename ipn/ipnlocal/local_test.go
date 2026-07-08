@@ -2751,7 +2751,7 @@ func TestNotifyForSessionUserProfilesDedupResetsOnSelfChange(t *testing.T) {
 // tests LocalBackend.updateNetmapDeltaLocked
 func TestUpdateNetmapDelta(t *testing.T) {
 	b := newTestLocalBackend(t)
-	if b.currentNode().UpdateNetmapDelta(nil) {
+	if _, handled := b.currentNode().UpdateNetmapDelta(nil); handled {
 		t.Errorf("updateNetmapDeltaLocked() = true, want false with nil netmap")
 	}
 
@@ -2790,7 +2790,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		t.Fatal("netmap.MutationsFromMapResponse failed")
 	}
 
-	if !b.currentNode().UpdateNetmapDelta(muts) {
+	if _, handled := b.currentNode().UpdateNetmapDelta(muts); !handled {
 		t.Fatalf("updateNetmapDeltaLocked() = false, want true with new netmap")
 	}
 

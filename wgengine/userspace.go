@@ -122,6 +122,12 @@ type userspaceEngine struct {
 	// for the cold-path control lookups (Ping, TSMP, pendopen, etc).
 	peerForIP atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
 
+	// peerConfigFn, if non-nil, is the live per-peer allowed-IPs
+	// source installed via [userspaceEngine.SetPeerConfigFunc]. When
+	// set, wgdev's PeerLookupFunc queries it directly, so reconfigs
+	// no longer install per-config lookup closures.
+	peerConfigFn atomic.Pointer[func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)]
+
 	lastCfgFull        wgcfg.Config
 	lastRouter         *router.Config
 	lastDNSConfig      dns.ConfigView // or invalid if none
@@ -726,20 +732,84 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	e.peerByIPRoute.Store(rt)
 
 	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d peers)", len(full.Peers))
-	if err := wgcfg.ReconfigDevice(e.wgdev, &full, e.logf); err != nil {
+	if e.peerConfigFn.Load() != nil {
+		// The device has a long-lived PeerLookupFunc backed by the
+		// live config source, so only the peer set needs syncing;
+		// there is no per-config lookup closure to (re)install, and
+		// no removed peer can be resurrected with stale state.
+		//
+		// TODO(bradfitz): remove this O(n peers) sync. It's redundant
+		// with the incremental SyncDevicePeer calls that LocalBackend
+		// makes for exactly the peers whose allowed IPs changed. It
+		// only remains because peer changes still force a full
+		// Reconfig; once that's gated on actual router/DNS changes,
+		// this sync (and full-config peer syncing generally) can go.
+		peers := make(map[device.NoisePublicKey][]netip.Prefix, len(full.Peers))
+		for _, p := range full.Peers {
+			peers[p.PublicKey.Raw32()] = p.AllowedIPs
+		}
+		e.wgdev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+			_, exists := peers[pk]
+			return !exists
+		})
+		// Update AllowedIPs on any already-active peers whose config
+		// may have changed. Peers that don't exist yet will get the
+		// correct AllowedIPs from the device's PeerLookupFunc when
+		// they are lazily created.
+		for pk, allowedIPs := range peers {
+			if peer, ok := e.wgdev.LookupActivePeer(pk); ok {
+				peer.SetAllowedIPs(allowedIPs)
+			}
+		}
+	} else if err := wgcfg.ReconfigDevice(e.wgdev, &full, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err
 	}
 	return nil
 }
 
+// SetPeerConfigFunc implements [Engine.SetPeerConfigFunc]. It stores
+// fn and installs a single wgdev PeerLookupFunc wrapping it, so
+// lazily-created peers always get current allowed IPs and the lookup
+// func never needs to be reinstalled as the peer set changes.
+func (e *userspaceEngine) SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+	if fn == nil {
+		panic("SetPeerConfigFunc: nil fn")
+	}
+	e.peerConfigFn.Store(&fn)
+	e.wgdev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(e.wgdev.Bind(), e.logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
+		return fn(key.NodePublicFromRaw32(mem.B(pubk[:])))
+	}))
+}
+
+// SyncDevicePeer implements [Engine.SyncDevicePeer].
+func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
+	fn := e.peerConfigFn.Load()
+	if fn == nil {
+		return
+	}
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+	allowedIPs, ok := (*fn)(k)
+	if !ok {
+		e.wgdev.RemovePeer(k.Raw32())
+		return
+	}
+	if peer, ok := e.wgdev.LookupActivePeer(k.Raw32()); ok {
+		peer.SetAllowedIPs(allowedIPs)
+	}
+}
+
 // SetPeerByIPPacketFunc installs a callback used by wireguard-go to look up
 // which peer should handle an outbound packet by destination IP.
 //
-// fn is an optional fast path for exact node-address matches (e.g. dst is a
-// Tailscale IP). On miss (or if fn is nil), the engine's own BART table
-// ([userspaceEngine.peerByIPRoute], built from the wireguard-filtered peer
-// list) is consulted to handle subnet routes and exit-node default routes.
+// If fn is non-nil it is authoritative: LocalBackend's implementation
+// consults both the exact node-address fast path and the RouteManager's
+// outbound table (covering subnet routes and exit-node default routes),
+// and stays correct under incremental netmap deltas. The engine's own
+// BART table ([userspaceEngine.peerByIPRoute], rebuilt only on full
+// reconfigs) is used only when no fn is installed (e.g. engines running
+// without a LocalBackend).
 //
 // [NewUserspaceEngine] installs a BART-only default at engine creation time,
 // so callers that don't call SetPeerByIPPacketFunc (e.g. those not running
@@ -750,6 +820,7 @@ func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodeP
 			if pk, ok := fn(dst); ok {
 				return pk.Raw32(), true
 			}
+			return device.NoisePublicKey{}, false
 		}
 		if rt := e.peerByIPRoute.Load(); rt != nil {
 			if pk, ok := rt.Lookup(dst); ok {

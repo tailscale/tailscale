@@ -633,6 +633,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	nb.ready()
 
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
+	e.SetPeerConfigFunc(b.peerAllowedIPs)
 	e.SetPeerForIPFunc(b.peerForIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
 	e.SetNetLogSource(netLogNodeSource{b})
@@ -2462,7 +2463,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// the full-netmap behavior of [tkaFilterNetmapLocked].
 	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
-	cn.UpdateNetmapDelta(muts)
+
+	changedAllowedIPs, _ := cn.UpdateNetmapDelta(muts)
 	if buildfeatures.HasDrive {
 		// Drive's lazy remotes-source caches its rebuild keyed by this
 		// generation, so any delta — peer add/remove, address change,
@@ -2504,20 +2506,27 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 	ms.UpdateNetmapDelta(muts)
 
+	// Sync the WireGuard device for exactly the peers whose allowed
+	// source prefixes changed, as computed by the route manager when
+	// the delta was applied above. Removed peers appear with a nil
+	// value and are removed from the device; SyncDevicePeer reads
+	// the live per-peer config, so only the keys matter here.
+	for k := range changedAllowedIPs {
+		b.e.SyncDevicePeer(k)
+	}
+
 	// Force a full authReconfig + SetSelfNode on any peer add or
-	// remove. netmapDeltaNeedsAuthReconfig only considered
-	// NodeMutationUpsert of already-known NodeIDs whose
-	// peerRouteConfigChanged, so brand-new peers and removes left
-	// e.lastCfgFull and wgdev's PeerLookupFunc closure stale, and
-	// outbound wgdev encryption missed those peers. authReconfig
-	// fixes the wireguard side; SetSelfNode refreshes the engine's
-	// cached self node. PeerForIP / lookupPeerByIP staleness was
-	// addressed separately in d4f2917c1b, which routes those lookups
-	// through nodeBackend's live data, and as part of the broader
-	// netmap.NetworkMap removal effort the engine no longer caches
-	// the netmap at all (see tailscale/corp#43394). As of 2026-06-24
-	// the only remaining staleness this guards against is
-	// e.lastCfgFull and the wgdev peer set.
+	// remove. The WireGuard device itself no longer depends on this:
+	// the SyncDevicePeer calls above keep its peer set delta-correct,
+	// and its lazy peer creation reads live state via
+	// [wgengine.Engine.SetPeerConfigFunc]. What still rides
+	// authReconfig is everything else derived from the full peer set:
+	// OS routes (router.Config), the quad-100 resolver's MagicDNS
+	// hosts map (dnsConfigForNetmap), and tstun's per-peer config
+	// (masquerade addresses and jailed peers, via SetWGConfig). Once
+	// those become delta-aware too, this can be gated on the route
+	// manager's OS-routes changes and the tstun-relevant fields
+	// instead of firing on every peer change.
 	needsAuthReconfig = needsAuthReconfig || peersUpsertedOrRemoved
 	if needsAuthReconfig {
 		if peersUpsertedOrRemoved {
@@ -6126,12 +6135,21 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
-	cn.updateRouteManagerPrefs(routePrefs{
+	// Sync the WireGuard device for any peers whose allowed source
+	// prefixes changed with the new prefs, such as the old and new
+	// exit node when the selection changes. The Reconfig below still
+	// converges every peer via its full device sync, but this
+	// incremental sync is what will remain once the full reconfig is
+	// gated on actual router/DNS changes.
+	changedAllowedIPs := cn.updateRouteManagerPrefs(routePrefs{
 		ExitNodeID:       prefs.ExitNodeID(),
 		ExitNodeSelected: prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid(),
 		RouteAll:         flags&netmap.AllowSubnetRoutes != 0,
 		OneCGNAT:         oneCGNATRoute,
 	})
+	for k := range changedAllowedIPs {
+		b.e.SyncDevicePeer(k)
+	}
 	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
 
 	// Add these extra Allowed IPs after router configuration, because the expected

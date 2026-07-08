@@ -267,6 +267,22 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
+// PeerAllowedIPs returns the prefixes from which the peer with the
+// given public key is currently allowed to originate traffic, or
+// ok=false if the key is unknown or the peer currently contributes no
+// prefixes.
+func (nb *nodeBackend) PeerAllowedIPs(k key.NodePublic) ([]netip.Prefix, bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	id, ok := nb.nodeByKey[k]
+	if !ok {
+		return nil, false
+	}
+	// Holding nb.mu satisfies routeMgr's serialization requirement:
+	// all routeMgr mutations also run under nb.mu.
+	return nb.routeMgr.PeerAllowedIPs(id)
+}
+
 // NodeByWireGuardString returns the node ID of the peer whose
 // [key.NodePublic.WireGuardGoString] form is s (e.g. "peer(IMTB…r7lM)").
 // ok is false if no current peer matches.
@@ -793,11 +809,6 @@ func (nb *nodeBackend) updatePeersLocked() {
 	rt.Commit()
 }
 
-// updateRouteManagerPrefs pushes the routing-relevant prefs and the
-// OneCGNAT decision into the route manager. The exit node arrives as
-// a stable ID from prefs and is resolved to the current numeric node
-// ID here; it resolves to zero (no exit node) if that peer is not in
-// the netmap yet, in which case a later netmap update re-runs this.
 // routePrefs is the subset of routing-relevant prefs (and derived
 // state) that [nodeBackend.updateRouteManagerPrefs] pushes into the
 // RouteManager.
@@ -821,7 +832,13 @@ type routePrefs struct {
 	OneCGNAT bool
 }
 
-func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) {
+// updateRouteManagerPrefs pushes p into the route manager.
+//
+// It returns the peers whose allowed source prefixes changed as a
+// result (for example the old and new exit node when the selection
+// changes), as described by [routemanager.Result.AllowedIPs].
+// In particular, the value for a key will be nil when that peer was removed.
+func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) (changedAllowedIPs map[key.NodePublic][]netip.Prefix) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	var exitID tailcfg.NodeID
@@ -840,7 +857,8 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) {
 		RouteAll:         p.RouteAll,
 	})
 	rt.SetTailnetConfig(routemanager.TailnetConfig{OneCGNAT: p.OneCGNAT})
-	rt.Commit()
+	res := rt.Commit()
+	return res.AllowedIPs
 }
 
 // setPacketFilter stores the live packet filter rules and parsed
@@ -872,11 +890,16 @@ func (nb *nodeBackend) mergeUserProfiles(profiles map[tailcfg.UserID]tailcfg.Use
 	}
 }
 
-func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
+// UpdateNetmapDelta applies the given netmap mutations to the live
+// peer state. It returns the peers whose allowed source prefixes
+// changed (as described by [routemanager.Result.AllowedIPs]) so the
+// caller can sync those peers to the WireGuard device, and reports
+// whether it handled all of the mutations.
+func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (changedAllowedIPs map[key.NodePublic][]netip.Prefix, handled bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	if nb.netMap == nil {
-		return false
+		return nil, false
 	}
 
 	// Locally cloned mutable nodes, to avoid calling AsStruct (clone)
@@ -890,7 +913,10 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// in place as the loop runs. And if we return false, we'll just
 	// get a full netmap soon and reset all our state anyway.
 	rt := nb.routeMgr.Begin()
-	defer rt.Commit()
+	defer func() {
+		res := rt.Commit()
+		changedAllowedIPs = res.AllowedIPs
+	}()
 
 	for _, m := range muts {
 		switch m := m.(type) {
@@ -932,7 +958,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			nv, ok := nb.peers[nid]
 			if !ok {
 				// TODO(bradfitz): unexpected metric?
-				return false
+				return nil, false
 			}
 			n = nv.AsStruct()
 			mak.Set(&mutableNodes, nv.ID(), n)
@@ -943,7 +969,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 		nb.peers[nid] = n.View()
 	}
 	nb.signalKeyWaitersForTestLocked()
-	return true
+	return nil, true
 }
 
 // unlockedNodesPermitted reports whether any peer with theUnsignedPeerAPIOnly bool set true has any of its allowed IPs

@@ -317,15 +317,21 @@ func TestNodeBackendRouteManager(t *testing.T) {
 	wantPeerFor("8.8.8.8", tailcfg.NodeView{}) // exit node not selected
 
 	// Selecting peer 2 as the exit node resolves its stable ID and
-	// installs its /0 routes.
-	nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "stable2", ExitNodeSelected: true})
+	// installs its /0 routes. The commit reports peer 2's allowed
+	// prefixes as changed.
+	if changed := nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "stable2", ExitNodeSelected: true}); len(changed) != 1 || changed[p2.Key()] == nil {
+		t.Errorf("updateRouteManagerPrefs(exit=stable2) changed = %v; want just %v", changed, p2.Key())
+	}
 	wantPeerFor("8.8.8.8", p2)
 
 	// A selected exit node that resolves to no current peer must
 	// blackhole internet traffic, not fall back to "no exit node":
 	// the default routes stay in the OS route set with no outbound
-	// peer to carry them.
-	nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "no-such-node", ExitNodeSelected: true})
+	// peer to carry them. Peer 2's allowed prefixes lose the /0s,
+	// which the commit reports.
+	if changed := nb.updateRouteManagerPrefs(routePrefs{ExitNodeID: "no-such-node", ExitNodeSelected: true}); len(changed) != 1 || changed[p2.Key()] == nil {
+		t.Errorf("updateRouteManagerPrefs(exit=unresolved) changed = %v; want just %v", changed, p2.Key())
+	}
 	wantPeerFor("8.8.8.8", tailcfg.NodeView{})
 	if !nb.routeMgr.OSRoutes().Get(netip.MustParsePrefix("0.0.0.0/0")) {
 		t.Error("unresolved exit node: OSRoutes missing 0.0.0.0/0 blackhole route")
@@ -339,11 +345,18 @@ func TestNodeBackendRouteManager(t *testing.T) {
 
 	// Incremental deltas: add peer 3, remove peer 1.
 	p3 := mkPeer(3, "stable3", "100.64.0.3/32")
-	if !nb.UpdateNetmapDelta([]netmap.NodeMutation{
+	changed, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{
 		netmap.NodeMutationUpsert{Node: p3},
 		netmap.MakeNodeMutationRemove(1),
-	}) {
+	})
+	if !handled {
 		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	if len(changed) != 2 || changed[p3.Key()] == nil {
+		t.Errorf("UpdateNetmapDelta changed = %v; want entries for %v and %v", changed, p3.Key(), p1.Key())
+	}
+	if v, ok := changed[p1.Key()]; !ok || v != nil {
+		t.Errorf("UpdateNetmapDelta changed[%v] = %v, %v; want nil, true for removed peer", p1.Key(), v, ok)
 	}
 	wantPeerFor("100.64.0.3", p3)
 	wantPeerFor("100.64.0.1", tailcfg.NodeView{})
