@@ -57,6 +57,11 @@ type StatefulSetOptions struct {
 	// Replicas is the desired number of pods.
 	Replicas int32
 
+	// ServiceAccountName is the ServiceAccount used by every pod. Must have get/create/patch/update permission on
+	// the per-pod state Secret named after each pod (containerboot's TS_KUBE_SECRET). Defaults to "default" when
+	// unset, which is unlikely to have the needed RBAC.
+	ServiceAccountName string
+
 	// ConfigSecretNameFunc returns the name of the config Secret containing tailscaled config for the given
 	// replica ordinal. Its output is used to build a per-replica volume and mount into the pod at
 	// <ConfigVolumeMountPath>/<Name>-<ordinal>.
@@ -96,7 +101,8 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: opts.Labels},
 				Spec: corev1.PodSpec{
-					Volumes: volumes,
+					ServiceAccountName: opts.ServiceAccountName,
+					Volumes:            volumes,
 					Containers: []corev1.Container{{
 						Name:         containerName,
 						Image:        opts.Image,
@@ -113,6 +119,12 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 								// this directory.
 								Name:  ConfigDirEnvVar,
 								Value: fmt.Sprintf("%s/$(POD_NAME)", ConfigVolumeMountPath),
+							},
+							{
+								// tailscaled persists device/machine keys in this Secret so a pod restart doesn't
+								// force reauth. Naming it after the pod gives each replica its own state.
+								Name:  "TS_KUBE_SECRET",
+								Value: "$(POD_NAME)",
 							},
 						},
 					}},
