@@ -32,3 +32,27 @@ func Duration(s string, def time.Duration) time.Duration {
 	}
 	return v
 }
+
+// Int parses s as an int, returning def when s is empty or invalid.
+func Int(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+// Float64 parses s as a float64, returning def when s is empty or invalid.
+func Float64(s string, def float64) float64 {
+	if s == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}

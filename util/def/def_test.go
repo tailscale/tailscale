@@ -69,6 +69,105 @@ func TestDuration(t *testing.T) {
 	}
 }
 
+func TestInt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		def  int
+		want int
+	}{
+		{name: "empty_42", in: "", def: 42, want: 42},
+		{name: "empty_zero", in: "", def: 0, want: 0},
+		{name: "valid", in: "123", def: 42, want: 123},
+		{name: "valid_zero", in: "0", def: 42, want: 0},
+		{name: "valid_negative", in: "-7", def: 42, want: -7},
+		{name: "invalid_42", in: "soon", def: 42, want: 42},
+		{name: "invalid_zero", in: "soon", def: 0, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := def.Int(tt.in, tt.def); got != tt.want {
+				t.Errorf("Int(%q, %v) = %v; want %v", tt.in, tt.def, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFloat64(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		def  float64
+		want float64
+	}{
+		{name: "empty_one", in: "", def: 1.5, want: 1.5},
+		{name: "empty_zero", in: "", def: 0, want: 0},
+		{name: "valid", in: "3.14", def: 1.5, want: 3.14},
+		{name: "valid_int", in: "42", def: 1.5, want: 42},
+		{name: "valid_negative", in: "-2.5", def: 1.5, want: -2.5},
+		{name: "valid_zero", in: "0", def: 1.5, want: 0},
+		{name: "invalid_one", in: "soon", def: 1.5, want: 1.5},
+		{name: "invalid_zero", in: "soon", def: 0, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := def.Float64(tt.in, tt.def); got != tt.want {
+				t.Errorf("Float64(%q, %v) = %v; want %v", tt.in, tt.def, got, tt.want)
+			}
+		})
+	}
+}
+
+func FuzzInt(f *testing.F) {
+	for _, tc := range []struct {
+		in  string
+		def int
+	}{
+		{in: "", def: 42},
+		{in: "", def: 0},
+		{in: "123", def: 42},
+		{in: "-7", def: 42},
+		{in: "soon", def: 42},
+	} {
+		f.Add(tc.in, int64(tc.def))
+	}
+	f.Fuzz(func(t *testing.T, in string, fallback int64) {
+		defVal := int(fallback)
+		got := def.Int(in, defVal)
+		want, err := strconv.Atoi(in)
+		if in == "" || err != nil {
+			want = defVal
+		}
+		if got != want {
+			t.Fatalf("Int(%q, %v) = %v; want %v", in, defVal, got, want)
+		}
+	})
+}
+
+func FuzzFloat64(f *testing.F) {
+	for _, tc := range []struct {
+		in  string
+		def float64
+	}{
+		{in: "", def: 1.5},
+		{in: "", def: 0},
+		{in: "3.14", def: 1.5},
+		{in: "soon", def: 1.5},
+	} {
+		f.Add(tc.in, tc.def)
+	}
+	f.Fuzz(func(t *testing.T, in string, fallback float64) {
+		got := def.Float64(in, fallback)
+		want, err := strconv.ParseFloat(in, 64)
+		if in == "" || err != nil {
+			want = fallback
+		}
+		if got != want {
+			t.Fatalf("Float64(%q, %v) = %v; want %v", in, fallback, got, want)
+		}
+	})
+}
+
 func FuzzBool(f *testing.F) {
 	for _, tc := range []struct {
 		in  string
