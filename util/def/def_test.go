@@ -4,6 +4,7 @@
 package def_test
 
 import (
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -108,6 +109,9 @@ func TestFloat64(t *testing.T) {
 		{name: "valid_zero", in: "0", def: 1.5, want: 0},
 		{name: "invalid_one", in: "soon", def: 1.5, want: 1.5},
 		{name: "invalid_zero", in: "soon", def: 0, want: 0},
+		{name: "nan", in: "NaN", def: 1.5, want: 1.5},
+		{name: "inf", in: "Inf", def: 1.5, want: 1.5},
+		{name: "neg_inf", in: "-Inf", def: 1.5, want: 1.5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,7 +163,7 @@ func FuzzFloat64(f *testing.F) {
 	f.Fuzz(func(t *testing.T, in string, fallback float64) {
 		got := def.Float64(in, fallback)
 		want, err := strconv.ParseFloat(in, 64)
-		if in == "" || err != nil {
+		if in == "" || err != nil || math.IsNaN(want) || math.IsInf(want, 0) {
 			want = fallback
 		}
 		if got != want {

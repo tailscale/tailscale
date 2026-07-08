@@ -5,6 +5,7 @@
 package def
 
 import (
+	"math"
 	"strconv"
 	"time"
 )
@@ -45,13 +46,17 @@ func Int(s string, def int) int {
 	return v
 }
 
-// Float64 parses s as a float64, returning def when s is empty or invalid.
+// Float64 parses s as a float64, returning def when s is empty, invalid,
+// or parses to a non-finite value (NaN or Inf).
 func Float64(s string, def float64) float64 {
 	if s == "" {
 		return def
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		return def
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return def
 	}
 	return v
