@@ -111,8 +111,8 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 	}
 }
 
-func replicaIndexFromService(svc *corev1.Service) (int32, bool) {
-	raw, ok := svc.Labels[labelReplicaIndex]
+func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
+	raw, ok := labels[labelReplicaIndex]
 	if !ok {
 		return 0, false
 	}
@@ -126,7 +126,7 @@ func replicaIndexFromService(svc *corev1.Service) (int32, bool) {
 }
 
 func peerRelayEndpoint(svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
-	idx, ok := replicaIndexFromService(svc)
+	idx, ok := replicaIndexFromLabels(svc.Labels)
 	if !ok {
 		return nil, nil
 	}

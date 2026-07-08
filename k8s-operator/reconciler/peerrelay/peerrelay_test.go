@@ -6,11 +6,14 @@
 package peerrelay_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/netip"
 	"slices"
 	"testing"
 
 	"go.uber.org/zap"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,16 +23,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
 )
 
-const tailscaleNamespace = "tailscale"
+const (
+	tailscaleNamespace = "tailscale"
+	testProxyImage     = "tailscale/tailscale:test"
+)
 
-// expectedService describes a Service the reconciler is expected to leave in the cluster. Every named Service must
-// exist after reconcile; the optional fields (Type, Port, Protocol, NodePort, Selector, Labels, Annotations) are
-// checked only when non-zero. Labels/Annotations are matched as subsets — extra keys on the actual Service are
-// allowed.
 type expectedService struct {
 	Name        string
 	Type        corev1.ServiceType
@@ -41,6 +44,11 @@ type expectedService struct {
 	Annotations map[string]string
 }
 
+type statefulSetSpec struct {
+	Replicas int32
+	Image    string
+}
+
 func TestReconciler_Reconcile(t *testing.T) {
 	t.Parallel()
 
@@ -50,17 +58,20 @@ func TestReconciler_Reconcile(t *testing.T) {
 	}
 
 	tt := []struct {
-		Name                string
-		Request             reconcile.Request
-		PeerRelay           *tsapi.PeerRelay
-		ExistingResources   []client.Object
-		ExpectsError        bool
-		ExpectedServices    []expectedService
-		ExpectedEndpoints   []tsapi.PeerRelayEndpoint
-		ExpectedReadyStatus metav1.ConditionStatus // asserted only when non-empty
-		ExpectedReadyReason string                 // asserted only when non-empty
-		ExpectFinalizer     bool
-		ExpectPRDeleted     bool
+		Name                  string
+		Request               reconcile.Request
+		PeerRelay             *tsapi.PeerRelay
+		ExistingResources     []client.Object
+		ExpectsError          bool
+		ExpectedServices      []expectedService
+		ExpectedEndpoints     []tsapi.PeerRelayEndpoint
+		ExpectedReadyStatus   metav1.ConditionStatus // asserted only when non-empty
+		ExpectedReadyReason   string                 // asserted only when non-empty
+		ExpectStatefulSetGone bool                   // assert the StatefulSet does not exist
+		ExpectStatefulSetSpec *statefulSetSpec       // asserted only when non-nil
+		ExpectedConfigSecrets []string               // exact set of config Secret names expected; nil == skip check
+		ExpectFinalizer       bool
+		ExpectPRDeleted       bool
 	}{
 		{
 			Name:    "ignores-unknown-peer-relay",
@@ -94,7 +105,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			ExpectFinalizer: true,
+			ExpectFinalizer:       true,
+			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 1, Image: testProxyImage},
+			ExpectedConfigSecrets: []string{"test-0-config"},
 		},
 		{
 			Name:    "multiple-replicas",
@@ -108,6 +121,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				{Name: "test-1", Labels: map[string]string{"tailscale.com/peer-relay-replica": "1"}},
 				{Name: "test-2", Labels: map[string]string{"tailscale.com/peer-relay-replica": "2"}},
 			},
+			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 3, Image: testProxyImage},
+			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config", "test-2-config"},
 		},
 		{
 			Name:    "zero-replicas",
@@ -116,6 +131,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(0))},
 			},
+			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 0, Image: testProxyImage},
+			ExpectedConfigSecrets: []string{},
 		},
 		{
 			Name:    "scale-down",
@@ -134,6 +151,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				{Name: "test-0"},
 				{Name: "test-1"},
 			},
+			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 2, Image: testProxyImage},
+			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config"},
 		},
 		{
 			Name:    "scale-up",
@@ -422,9 +441,19 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedService("test", 0),
 				managedService("test", 1),
 				managedService("other", 0),
+				managedConfigSecret("test", 0),
+				managedConfigSecret("test", 1),
+				&appsv1.StatefulSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test",
+						Namespace: tailscaleNamespace,
+					},
+				},
 			},
-			ExpectedServices: []expectedService{{Name: "other-0"}},
-			ExpectPRDeleted:  true,
+			ExpectedServices:      []expectedService{{Name: "other-0"}},
+			ExpectPRDeleted:       true,
+			ExpectStatefulSetGone: true,
+			ExpectedConfigSecrets: []string{},
 		},
 	}
 
@@ -442,6 +471,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 				Client:             fc,
 				TailscaleNamespace: tailscaleNamespace,
+				ProxyImage:         testProxyImage,
 				Logger:             logger.Sugar(),
 			})
 
@@ -512,7 +542,72 @@ func TestReconciler_Reconcile(t *testing.T) {
 					t.Errorf("expected PeerRelayReady reason %s, got %q", tc.ExpectedReadyReason, cond.Reason)
 				}
 			}
+
+			assertStatefulSet(t, fc, tc.Request.Name, tc.ExpectStatefulSetSpec, tc.ExpectStatefulSetGone)
+			if tc.ExpectedConfigSecrets != nil {
+				assertConfigSecrets(t, fc, tc.Request.Name, tc.ExpectedConfigSecrets)
+			}
 		})
+	}
+}
+
+func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *statefulSetSpec, gone bool) {
+	t.Helper()
+
+	var ss appsv1.StatefulSet
+	err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: prName}, &ss)
+	switch {
+	case gone:
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("expected StatefulSet %q to be absent, got err=%v", prName, err)
+		}
+		return
+	case want == nil:
+		return
+	case err != nil:
+		t.Fatalf("expected StatefulSet %q, got err %v", prName, err)
+	}
+
+	if ss.Spec.Replicas == nil || *ss.Spec.Replicas != want.Replicas {
+		got := "<nil>"
+		if ss.Spec.Replicas != nil {
+			got = fmt.Sprintf("%d", *ss.Spec.Replicas)
+		}
+		t.Errorf("expected StatefulSet replicas=%d, got %s", want.Replicas, got)
+	}
+
+	if want.Image != "" {
+		if len(ss.Spec.Template.Spec.Containers) == 0 {
+			t.Fatalf("StatefulSet template has no containers")
+		}
+		if ss.Spec.Template.Spec.Containers[0].Image != want.Image {
+			t.Errorf("expected container image %q, got %q", want.Image, ss.Spec.Template.Spec.Containers[0].Image)
+		}
+	}
+}
+
+func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []string) {
+	t.Helper()
+
+	var list corev1.SecretList
+	if err := fc.List(t.Context(), &list, client.InNamespace(tailscaleNamespace), client.MatchingLabels(map[string]string{
+		"tailscale.com/parent-resource-type": "peerrelay",
+		"tailscale.com/parent-resource":      prName,
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]string, 0, len(list.Items))
+	for _, s := range list.Items {
+		got = append(got, s.Name)
+	}
+
+	slices.Sort(got)
+	sortedWant := slices.Clone(want)
+	slices.Sort(sortedWant)
+
+	if !slices.Equal(got, sortedWant) {
+		t.Errorf("expected config Secrets %v, got %v", sortedWant, got)
 	}
 }
 
@@ -567,8 +662,6 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 	}
 }
 
-// managedService returns a minimally-populated Service that looks like one the reconciler would have created for
-// the given PeerRelay and replica index. Used to seed pre-existing state for scale-down and delete cases.
 func managedService(prName string, idx int) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -589,4 +682,97 @@ func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.S
 	svc := managedService(prName, idx)
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip, Hostname: hostname}}
 	return svc
+}
+
+func managedConfigSecret(prName string, idx int) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%d-config", prName, idx),
+			Namespace: tailscaleNamespace,
+			Labels: map[string]string{
+				"tailscale.com/managed":              "true",
+				"tailscale.com/parent-resource-type": "peerrelay",
+				"tailscale.com/parent-resource":      prName,
+				"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
+			},
+		},
+	}
+}
+
+func TestReconciler_TailscaledConfig(t *testing.T) {
+	t.Parallel()
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := &tsapi.PeerRelay{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.PeerRelay{}).
+		WithObjects(
+			pr,
+			managedServiceWithLB("test", 0, "1.2.3.4", ""),
+			managedService("test", 1),
+		).
+		Build()
+
+	r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+		Client:             fc,
+		TailscaleNamespace: tailscaleNamespace,
+		ProxyImage:         testProxyImage,
+		Logger:             logger.Sugar(),
+	})
+
+	if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got0 := readTailscaledConfig(t, fc, "test-0-config")
+	if got0.RelayServerPort == nil || *got0.RelayServerPort != 41641 {
+		t.Errorf("replica 0: expected RelayServerPort=41641, got %v", got0.RelayServerPort)
+	}
+	wantEndpoints := []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:41641")}
+	if !slices.Equal(got0.RelayServerStaticEndpoints, wantEndpoints) {
+		t.Errorf("replica 0: expected RelayServerStaticEndpoints=%v, got %v", wantEndpoints, got0.RelayServerStaticEndpoints)
+	}
+	if got0.Hostname == nil || *got0.Hostname != "test-0" {
+		t.Errorf("replica 0: expected hostname=test-0, got %v", got0.Hostname)
+	}
+
+	got1 := readTailscaledConfig(t, fc, "test-1-config")
+	if got1.RelayServerPort == nil || *got1.RelayServerPort != 41641 {
+		t.Errorf("replica 1: expected RelayServerPort=41641, got %v", got1.RelayServerPort)
+	}
+	// Replica 1's LB has not been provisioned yet, so no static endpoints.
+	if len(got1.RelayServerStaticEndpoints) != 0 {
+		t.Errorf("replica 1: expected no RelayServerStaticEndpoints, got %v", got1.RelayServerStaticEndpoints)
+	}
+}
+
+func readTailscaledConfig(t *testing.T, fc client.Client, secretName string) ipn.ConfigVAlpha {
+	t.Helper()
+
+	var secret corev1.Secret
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: secretName}, &secret); err != nil {
+		t.Fatalf("failed to get config Secret %q: %v", secretName, err)
+	}
+
+	if len(secret.Data) != 1 {
+		t.Fatalf("expected exactly one file in config Secret %q, got %d", secretName, len(secret.Data))
+	}
+
+	var conf ipn.ConfigVAlpha
+	for name, body := range secret.Data {
+		if err := json.Unmarshal(body, &conf); err != nil {
+			t.Fatalf("failed to unmarshal config file %q from Secret %q: %v", name, secretName, err)
+		}
+	}
+
+	return conf
 }

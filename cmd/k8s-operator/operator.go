@@ -373,6 +373,7 @@ func runReconcilers(opts reconcilerOpts) {
 	peerRelayOptions := peerrelay.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		TailscaleNamespace: opts.tailscaleNamespace,
+		ProxyImage:         opts.proxyImage,
 		Logger:             opts.log,
 	}
 

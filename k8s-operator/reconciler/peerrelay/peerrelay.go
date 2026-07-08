@@ -9,6 +9,7 @@
 package peerrelay
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"slices"
 
 	"go.uber.org/zap"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +44,7 @@ type (
 		client.Client
 
 		tailscaleNamespace string
+		proxyImage         string
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
 	}
@@ -53,6 +56,8 @@ type (
 		// The namespace the operator is installed in. PeerRelay-managed resources (Services, StatefulSets, etc.)
 		// are created within this namespace.
 		TailscaleNamespace string
+		// ProxyImage is the container image used for the tailscaled pods that back each peer relay replica.
+		ProxyImage string
 		// The logger to use for this Reconciler.
 		Logger *zap.SugaredLogger
 		// Clock is used to stamp condition transitions. Defaults to a real clock when unset.
@@ -80,24 +85,28 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 	return &Reconciler{
 		Client:             options.Client,
 		tailscaleNamespace: options.TailscaleNamespace,
+		proxyImage:         options.ProxyImage,
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
 	}
 }
 
 // Register the Reconciler onto the given manager.Manager implementation. It watches PeerRelay resources directly
-// and also watches managed Services so that a LoadBalancer status update (e.g. the cloud finally assigning an
-// external IP) enqueues a reconcile for the owning PeerRelay.
+// and also watches the child resources it manages (Services, StatefulSets, Secrets) so external drift or cloud
+// controller updates enqueue a reconcile for the owning PeerRelay.
 func (r *Reconciler) Register(mgr manager.Manager) error {
+	enqueue := handler.EnqueueRequestsFromMapFunc(enqueuePeerRelayForChild)
 	return builder.
 		ControllerManagedBy(mgr).
 		For(&tsapi.PeerRelay{}).
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(enqueuePeerRelayForService)).
+		Watches(&corev1.Service{}, enqueue).
+		Watches(&appsv1.StatefulSet{}, enqueue).
+		Watches(&corev1.Secret{}, enqueue).
 		Named(reconcilerName).
 		Complete(r)
 }
 
-func enqueuePeerRelayForService(_ context.Context, o client.Object) []reconcile.Request {
+func enqueuePeerRelayForChild(_ context.Context, o client.Object) []reconcile.Request {
 	labels := o.GetLabels()
 	if labels[kubetypes.LabelManaged] != "true" || labels[labelParentType] != parentTypePeerRelay {
 		return nil
@@ -151,28 +160,62 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		}
 	}
 
+	// Read the LB addresses assigned by the cloud so each pod's config file can advertise its own public endpoint
+	// via RelayServerStaticEndpoints. On first reconcile the LBs aren't provisioned yet — endpointsByReplica ends
+	// up empty and the configs are written without static endpoints; the Watches-triggered reconcile that fires
+	// when the LB IP lands will fill them in.
+	endpoints, endpointErrs, err := r.readEndpoints(ctx, pr)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to read endpoints for PeerRelay %q: %w", pr.Name, err)
+	}
+
+	endpointsByReplica := make(map[int32]tsapi.PeerRelayEndpoint, len(endpoints))
+	for _, ep := range endpoints {
+		endpointsByReplica[ep.Replica] = ep
+	}
+
+	for i := int32(0); i < replicas; i++ {
+		var endpoint *tsapi.PeerRelayEndpoint
+		if ep, ok := endpointsByReplica[i]; ok {
+			endpoint = &ep
+		}
+
+		if err := r.ensureConfigSecret(ctx, pr, i, endpoint); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to apply config Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
+		}
+	}
+
+	if err := r.ensureStatefulSet(ctx, pr, replicas); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to apply StatefulSet for PeerRelay %q: %w", pr.Name, err)
+	}
+
 	if err := r.deleteServicesFrom(ctx, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.updateEndpoints(ctx, pr, replicas); err != nil {
+	if err := r.deleteConfigSecretsFrom(ctx, pr, replicas); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down config Secrets for PeerRelay %q: %w", pr.Name, err)
+	}
+
+	if err := r.writeEndpointStatus(ctx, pr, endpoints, endpointErrs, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update endpoints for PeerRelay %q: %w", pr.Name, err)
 	}
 
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) error {
+// readEndpoints lists the LoadBalancer Services owned by pr and returns the sorted set of ready endpoints along
+// with any per-Service errors (e.g. LB assigned only a hostname).
+func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]tsapi.PeerRelayEndpoint, []error, error) {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
-		return fmt.Errorf("failed to list Services: %w", err)
+		return nil, nil, fmt.Errorf("failed to list Services: %w", err)
 	}
 
 	var (
 		endpoints []tsapi.PeerRelayEndpoint
 		errs      []error
 	)
-
 	for i := range list.Items {
 		endpoint, err := peerRelayEndpoint(&list.Items[i])
 		if err != nil {
@@ -189,6 +232,13 @@ func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, r
 		return cmp.Compare(a.Replica, b.Replica)
 	})
 
+	return endpoints, errs, nil
+}
+
+// writeEndpointStatus refreshes pr.Status.Endpoints and pr.Status.Conditions[PeerRelayReady] from the endpoints
+// slice computed by readEndpoints. See the doc comment on the previous updateEndpoints for the three-state Ready
+// semantics; behavior is unchanged, this is just split out so createOrUpdate can consume the endpoints too.
+func (r *Reconciler) writeEndpointStatus(ctx context.Context, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32) error {
 	// Copy here to prevent needless status updates.
 	prevStatus := pr.Status.DeepCopy()
 
@@ -216,6 +266,14 @@ func (r *Reconciler) updateEndpoints(ctx context.Context, pr *tsapi.PeerRelay, r
 }
 
 func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
+	if err := r.deleteStatefulSet(ctx, pr); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to delete StatefulSet for PeerRelay %q: %w", pr.Name, err)
+	}
+
+	if err := r.deleteConfigSecretsFrom(ctx, pr, 0); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to delete config Secrets for PeerRelay %q: %w", pr.Name, err)
+	}
+
 	if err := r.deleteServicesFrom(ctx, pr, 0); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
@@ -284,7 +342,7 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay
 
 	for i := range list.Items {
 		svc := &list.Items[i]
-		idx, ok := replicaIndexFromService(svc)
+		idx, ok := replicaIndexFromLabels(svc.Labels)
 		if !ok || idx < fromIdx {
 			continue
 		}
@@ -294,5 +352,117 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay
 		}
 	}
 
+	return nil
+}
+
+func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint)
+	if err != nil {
+		return fmt.Errorf("failed to build config Secret: %w", err)
+	}
+
+	var existing corev1.Secret
+	err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err = r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("failed to create config Secret: %w", err)
+		}
+
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to get config Secret: %w", err)
+	}
+
+	updated := existing.DeepCopy()
+	if updated.Labels == nil && len(desired.Labels) > 0 {
+		updated.Labels = make(map[string]string, len(desired.Labels))
+	}
+	for k, v := range desired.Labels {
+		updated.Labels[k] = v
+	}
+	updated.Data = desired.Data
+
+	if maps.Equal(existing.Labels, updated.Labels) &&
+		maps.EqualFunc(existing.Data, updated.Data, bytes.Equal) {
+		return nil
+	}
+
+	if err = r.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update config Secret: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
+	var list corev1.SecretList
+	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
+		return fmt.Errorf("failed to list config Secrets: %w", err)
+	}
+
+	for i := range list.Items {
+		secret := &list.Items[i]
+		idx, ok := replicaIndexFromLabels(secret.Labels)
+		if !ok || idx < fromIdx {
+			continue
+		}
+
+		if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete config Secret %q: %w", secret.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) error {
+	desired := r.peerRelayStatefulSet(pr, replicas)
+
+	var existing appsv1.StatefulSet
+	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err = r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("failed to create StatefulSet: %w", err)
+		}
+
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to get StatefulSet: %w", err)
+	}
+
+	updated := existing.DeepCopy()
+	if updated.Labels == nil && len(desired.Labels) > 0 {
+		updated.Labels = make(map[string]string, len(desired.Labels))
+	}
+	for k, v := range desired.Labels {
+		updated.Labels[k] = v
+	}
+	updated.Spec.Replicas = desired.Spec.Replicas
+	updated.Spec.Selector = desired.Spec.Selector
+	updated.Spec.Template = desired.Spec.Template
+
+	if maps.Equal(existing.Labels, updated.Labels) &&
+		reflect.DeepEqual(existing.Spec.Replicas, updated.Spec.Replicas) &&
+		reflect.DeepEqual(existing.Spec.Selector, updated.Spec.Selector) &&
+		reflect.DeepEqual(existing.Spec.Template, updated.Spec.Template) {
+		return nil
+	}
+
+	if err = r.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update StatefulSet: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) deleteStatefulSet(ctx context.Context, pr *tsapi.PeerRelay) error {
+	ss := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: pr.Name, Namespace: r.tailscaleNamespace},
+	}
+	if err := r.Delete(ctx, ss); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete StatefulSet: %w", err)
+	}
 	return nil
 }
