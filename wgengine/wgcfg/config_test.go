@@ -14,7 +14,7 @@ func TestConfigEqual(t *testing.T) {
 	rt := reflect.TypeFor[Config]()
 	for sf := range rt.Fields() {
 		switch sf.Name {
-		case "Name", "NodeID", "PrivateKey", "MTU", "Addresses", "DNS", "Peers",
+		case "Name", "NodeID", "PrivateKey", "Addresses", "Peers",
 			"NetworkLogging":
 			// These are compared in [Config.Equal].
 		default:

@@ -21,7 +21,6 @@ func (src *Config) Clone() *Config {
 	dst := new(Config)
 	*dst = *src
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
-	dst.DNS = append(src.DNS[:0:0], src.DNS...)
 	if src.Peers != nil {
 		dst.Peers = make([]Peer, len(src.Peers))
 		for i := range dst.Peers {
@@ -35,8 +34,6 @@ func (src *Config) Clone() *Config {
 var _ConfigCloneNeedsRegeneration = Config(struct {
 	PrivateKey     key.NodePrivate
 	Addresses      []netip.Prefix
-	MTU            uint16
-	DNS            []netip.Addr
 	Peers          []Peer
 	NetworkLogging struct {
 		NodeID             logid.PrivateID

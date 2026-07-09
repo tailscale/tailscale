@@ -19,8 +19,6 @@ import (
 type Config struct {
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
-	MTU        uint16
-	DNS        []netip.Addr
 	Peers      []Peer
 
 	// NetworkLogging enables network logging.
@@ -38,10 +36,8 @@ func (c *Config) Equal(o *Config) bool {
 		return c == o
 	}
 	return c.PrivateKey.Equal(o.PrivateKey) &&
-		c.MTU == o.MTU &&
 		c.NetworkLogging == o.NetworkLogging &&
 		slices.Equal(c.Addresses, o.Addresses) &&
-		slices.Equal(c.DNS, o.DNS) &&
 		slices.EqualFunc(c.Peers, o.Peers, Peer.Equal)
 }
 
