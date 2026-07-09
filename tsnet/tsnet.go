@@ -163,6 +163,7 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	_ "tailscale.com/feature/c2n"
+	_ "tailscale.com/feature/condregister/netlog"
 	_ "tailscale.com/feature/condregister/oauthkey"
 	_ "tailscale.com/feature/condregister/portmapper"
 	_ "tailscale.com/feature/condregister/useproxy"

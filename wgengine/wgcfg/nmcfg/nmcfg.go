@@ -15,7 +15,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -51,27 +50,6 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 		PrivateKey: pk,
 		Addresses:  nm.GetAddresses().AsSlice(),
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
-	}
-
-	// Setup log IDs for data plane audit logging.
-	if nm.SelfNode.Valid() {
-		canNetworkLog := nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs)
-		logExitFlowEnabled := nm.SelfNode.HasCap(tailcfg.NodeAttrLogExitFlows)
-		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID() != "" && nm.DomainAuditLogID != "" {
-			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
-			if errNode != nil {
-				logf("[v1] wgcfg: unable to parse node audit log ID: %v", errNode)
-			}
-			domainID, errDomain := logid.ParsePrivateID(nm.DomainAuditLogID)
-			if errDomain != nil {
-				logf("[v1] wgcfg: unable to parse domain audit log ID: %v", errDomain)
-			}
-			if errNode == nil && errDomain == nil {
-				cfg.NetworkLogging.NodeID = nodeID
-				cfg.NetworkLogging.DomainID = domainID
-				cfg.NetworkLogging.LogExitFlowEnabled = logExitFlowEnabled
-			}
-		}
 	}
 
 	var skippedExitNode, skippedSubnetRouter, skippedExpired []tailcfg.NodeView

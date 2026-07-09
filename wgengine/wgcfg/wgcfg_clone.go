@@ -9,7 +9,6 @@ import (
 	"net/netip"
 
 	"tailscale.com/types/key"
-	"tailscale.com/types/logid"
 )
 
 // Clone makes a deep copy of Config.
@@ -32,14 +31,9 @@ func (src *Config) Clone() *Config {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigCloneNeedsRegeneration = Config(struct {
-	PrivateKey     key.NodePrivate
-	Addresses      []netip.Prefix
-	Peers          []Peer
-	NetworkLogging struct {
-		NodeID             logid.PrivateID
-		DomainID           logid.PrivateID
-		LogExitFlowEnabled bool
-	}
+	PrivateKey key.NodePrivate
+	Addresses  []netip.Prefix
+	Peers      []Peer
 }{})
 
 // Clone makes a deep copy of Peer.

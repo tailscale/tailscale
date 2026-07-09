@@ -103,7 +103,6 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -636,7 +635,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
 	e.SetPeerForIPFunc(b.peerForIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
-	e.SetNetLogNodeSource(netLogNodeSource{b})
+	e.SetNetLogSource(netLogNodeSource{b})
 	e.SetWGPeerLookup(b.lookupPeerWireGuardString)
 	b.dialer.SetResolveMagicDNS(b.resolveMagicDNS)
 
@@ -8017,9 +8016,10 @@ func (n noiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return n.lb.DoNoiseRequest(req)
 }
 
-// netLogNodeSource adapts LocalBackend's nodeBackend to [netlog.NodeSource].
-// Each method consults [LocalBackend.currentNode] so that profile rotations
-// are picked up automatically without re-installing the source.
+// netLogNodeSource adapts LocalBackend to [wgengine.NetLogSource].
+// Each method consults [LocalBackend.currentNode] or the current netmap
+// so that profile rotations are picked up automatically without
+// re-installing the source.
 type netLogNodeSource struct {
 	b *LocalBackend
 }
@@ -8048,8 +8048,37 @@ func (s netLogNodeSource) NodeByAddr(addr netip.Addr) (_ tailcfg.NodeView, _ tai
 	return nv, up, true
 }
 
-// Compile-time assertion that netLogNodeSource implements [netlog.NodeSource].
-var _ netlog.NodeSource = netLogNodeSource{}
+// NetLogIDs implements [wgengine.NetLogSource], returning the network
+// flow logging identity from the current netmap. ok is false if the
+// netmap does not enable network flow logging for this node.
+func (s netLogNodeSource) NetLogIDs() (nodeID, domainID logid.PrivateID, logExitFlows bool, ok bool) {
+	nm := s.b.NetMap()
+	if nm == nil || !nm.SelfNode.Valid() {
+		return
+	}
+	if !nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs) {
+		return
+	}
+	if nm.SelfNode.DataPlaneAuditLogID() == "" || nm.DomainAuditLogID == "" {
+		return
+	}
+	nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
+	if errNode != nil {
+		s.b.logf("[v1] netlog: unable to parse node audit log ID: %v", errNode)
+	}
+	domainID, errDomain := logid.ParsePrivateID(nm.DomainAuditLogID)
+	if errDomain != nil {
+		s.b.logf("[v1] netlog: unable to parse domain audit log ID: %v", errDomain)
+	}
+	if errNode != nil || errDomain != nil {
+		return logid.PrivateID{}, logid.PrivateID{}, false, false
+	}
+	return nodeID, domainID, nm.SelfNode.HasCap(tailcfg.NodeAttrLogExitFlows), true
+}
+
+// Compile-time assertion that netLogNodeSource implements
+// [wgengine.NetLogSource].
+var _ wgengine.NetLogSource = netLogNodeSource{}
 
 // lookupPeerWireGuardString returns the Tailscale-conventional short string
 // (e.g. "[IMTBr]") for the peer whose wireguard-go-formatted public key

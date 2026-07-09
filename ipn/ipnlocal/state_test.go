@@ -47,7 +47,6 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
@@ -1989,7 +1988,7 @@ func (e *mockEngine) PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix,
 }
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
-func (e *mockEngine) SetNetLogNodeSource(netlog.NodeSource)                            {}
+func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}
 func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}
 func (e *mockEngine) ProbeLocks()                                                      {}
 

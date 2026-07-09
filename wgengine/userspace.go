@@ -58,17 +58,12 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
-	"tailscale.com/wgengine/netlog"
 	"tailscale.com/wgengine/netstack/gro"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgint"
 	"tailscale.com/wgengine/wglog"
 )
-
-// networkLoggerUploadTimeout is the maximum timeout to wait when
-// shutting down the network logger as it uploads the last network log messages.
-const networkLoggerUploadTimeout = 5 * time.Second
 
 type userspaceEngine struct {
 	// eventBus will eventually become required, but for now may be nil.
@@ -156,13 +151,16 @@ type userspaceEngine struct {
 	// value of the ICMP identifier and sequence number concatenated.
 	icmpEchoResponseCallback map[uint32]func()
 
-	// networkLogger logs statistics about network connections.
-	networkLogger netlog.Logger
+	// netlogger is the network flow logger handle constructed via
+	// [HookNewNetLogger], or nil if the feature/netlog package is not
+	// linked into the binary.
+	netlogger NetLogger
 
-	// netLogSource is the [netlog.NodeSource] installed via
-	// [Engine.SetNetLogNodeSource]; it is read when starting up the network
-	// logger from inside Reconfig. It may be nil if no source was installed.
-	netLogSource syncs.AtomicValue[netlog.NodeSource]
+	// netLogSource is the [NetLogSource] installed via
+	// [Engine.SetNetLogSource]; the netlogger reads it on each
+	// Reconfig via [NetLoggerDeps.Source]. It may be nil if no source
+	// was installed.
+	netLogSource syncs.AtomicValue[NetLogSource]
 
 	// wgPeerLookup is the lookup function installed via
 	// [Engine.SetWGPeerLookup]; it is consulted by [wgLogger] to translate
@@ -453,6 +451,18 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	closePool.add(e.magicConn)
 	e.magicConn.SetNetworkUp(e.netMon.InterfaceState().AnyInterfaceUp())
+
+	if newNetLogger, ok := HookNewNetLogger.GetOk(); ok {
+		e.netlogger = newNetLogger(NetLoggerDeps{
+			Logf:   logf,
+			Tun:    e.tundev,
+			Sock:   e.magicConn,
+			NetMon: e.netMon,
+			Health: e.health,
+			Bus:    e.eventBus,
+			Source: e.netLogSource.Load,
+		})
+	}
 
 	tsTUNDev.SetDiscoKey(e.magicConn.DiscoPublicKey())
 
@@ -758,9 +768,9 @@ func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWi
 	})
 }
 
-// SetNetLogNodeSource installs the [netlog.NodeSource] used by the engine's
-// network logger.
-func (e *userspaceEngine) SetNetLogNodeSource(src netlog.NodeSource) {
+// SetNetLogSource installs the [NetLogSource] consulted by the engine's
+// network flow logger.
+func (e *userspaceEngine) SetNetLogSource(src NetLogSource) {
 	e.netLogSource.Store(src)
 }
 
@@ -864,17 +874,18 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	listenPortChanged := listenPort != e.magicConn.LocalPort()
 	peerMTUChanged := peerMTUEnable != e.magicConn.PeerMTUEnabled()
-	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged {
-		return ErrNoChanges
+
+	// Let the network flow logger react before the early return below,
+	// so that logging identity changes take effect even when nothing
+	// else changed, and before the router is configured, so that a
+	// starting logger captures initial packets.
+	netlogChanged := false
+	if e.netlogger != nil {
+		netlogChanged = e.netlogger.Reconfig(routerCfg, routerChanged)
 	}
-	newLogIDs := cfg.NetworkLogging
-	oldLogIDs := e.lastCfgFull.NetworkLogging
-	netLogIDsNowValid := !newLogIDs.NodeID.IsZero() && !newLogIDs.DomainID.IsZero()
-	netLogIDsWasValid := !oldLogIDs.NodeID.IsZero() && !oldLogIDs.DomainID.IsZero()
-	netLogIDsChanged := netLogIDsNowValid && netLogIDsWasValid && newLogIDs != oldLogIDs
-	netLogRunning := netLogIDsNowValid && !routerCfg.Equal(&router.Config{})
-	if !buildfeatures.HasNetLog || envknob.NoLogsNoSupport() {
-		netLogRunning = false
+
+	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged && !netlogChanged {
+		return ErrNoChanges
 	}
 
 	// TODO(bradfitz,danderson): maybe delete this isDNSIPOverTailscale
@@ -982,36 +993,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
-	// Shutdown the network logger because the IDs changed.
-	// Let it be started back up by subsequent logic.
-	if buildfeatures.HasNetLog && netLogIDsChanged && e.networkLogger.Running() {
-		e.logf("wgengine: Reconfig: shutting down network logger")
-		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-		defer cancel()
-		if err := e.networkLogger.Shutdown(ctx); err != nil {
-			e.logf("wgengine: Reconfig: error shutting down network logger: %v", err)
-		}
-	}
-
-	// Startup the network logger.
-	// Do this before configuring the router so that we capture initial packets.
-	if buildfeatures.HasNetLog && netLogRunning && !e.networkLogger.Running() {
-		nid := cfg.NetworkLogging.NodeID
-		tid := cfg.NetworkLogging.DomainID
-		logExitFlowEnabled := cfg.NetworkLogging.LogExitFlowEnabled
-		e.logf("wgengine: Reconfig: starting up network logger (node:%s tailnet:%s)", nid.Public(), tid.Public())
-		src := e.netLogSource.Load()
-		if src == nil {
-			e.logf("wgengine: Reconfig: no NodeSource installed; network logger not started")
-		} else if err := e.networkLogger.Startup(e.logf, src, nid, tid, e.tundev, e.magicConn, e.netMon, e.health, e.eventBus, logExitFlowEnabled); err != nil {
-			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
-		}
-		e.networkLogger.ReconfigRoutes(routerCfg)
-	}
-
 	if routerChanged {
 		e.logf("wgengine: Reconfig: configuring router")
-		e.networkLogger.ReconfigRoutes(routerCfg)
 		err := e.router.Set(routerCfg)
 		e.health.SetRouterHealth(err)
 		if err != nil {
@@ -1050,16 +1033,11 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
-	// Shutdown the network logger.
-	// Do this after configuring the router so that we capture final packets.
-	// This attempts to flush out any log messages and may block.
-	if !netLogRunning && e.networkLogger.Running() {
-		e.logf("wgengine: Reconfig: shutting down network logger")
-		ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-		defer cancel()
-		if err := e.networkLogger.Shutdown(ctx); err != nil {
-			e.logf("wgengine: Reconfig: error shutting down network logger: %v", err)
-		}
+	// Let the network flow logger finish reacting after the router is
+	// configured, so that a stopping logger captures final packets.
+	// This may block to flush pending log messages.
+	if e.netlogger != nil {
+		e.netlogger.ReconfigDone()
 	}
 
 	if buildfeatures.HasBird && isSubnetRouterChanged && e.birdClient != nil {
@@ -1252,10 +1230,8 @@ func (e *userspaceEngine) Close() {
 	}
 	close(e.waitCh)
 
-	ctx, cancel := context.WithTimeout(context.Background(), networkLoggerUploadTimeout)
-	defer cancel()
-	if err := e.networkLogger.Shutdown(ctx); err != nil {
-		e.logf("wgengine: Close: error shutting down network logger: %v", err)
+	if e.netlogger != nil {
+		e.netlogger.Shutdown()
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"slices"
 
 	"tailscale.com/types/key"
-	"tailscale.com/types/logid"
 )
 
 //go:generate go run tailscale.com/cmd/cloner -type=Config,Peer
@@ -20,15 +19,6 @@ type Config struct {
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
 	Peers      []Peer
-
-	// NetworkLogging enables network logging.
-	// It is disabled if either ID is the zero value.
-	// LogExitFlowEnabled indicates whether or not exit flows should be logged.
-	NetworkLogging struct {
-		NodeID             logid.PrivateID
-		DomainID           logid.PrivateID
-		LogExitFlowEnabled bool
-	}
 }
 
 func (c *Config) Equal(o *Config) bool {
@@ -36,7 +26,6 @@ func (c *Config) Equal(o *Config) bool {
 		return c == o
 	}
 	return c.PrivateKey.Equal(o.PrivateKey) &&
-		c.NetworkLogging == o.NetworkLogging &&
 		slices.Equal(c.Addresses, o.Addresses) &&
 		slices.EqualFunc(c.Peers, o.Peers, Peer.Equal)
 }
