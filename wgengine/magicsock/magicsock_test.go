@@ -33,6 +33,7 @@ import (
 	"unsafe"
 
 	qt "github.com/frankban/quicktest"
+	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
 	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
@@ -54,6 +55,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
@@ -246,6 +248,35 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 
 func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
 	s.tsTun.SetWGConfig(cfg)
+
+	// In production, LocalBackend feeds the tun-layer data plane its
+	// per-peer route attributes from the route manager. Tests that
+	// bypass LocalBackend need to build the table from cfg.Peers here
+	// so that masquerade rewrites and jailed classification work.
+	tbl := &bart.Table[*routemanager.PeerRoute]{}
+	for _, p := range cfg.Peers {
+		pr := &routemanager.PeerRoute{Key: p.PublicKey, Jailed: p.IsJailed}
+		if p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+			pr.MasqAddr4 = *p.V4MasqAddr
+		}
+		if p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
+			pr.MasqAddr6 = *p.V6MasqAddr
+		}
+		for _, pfx := range p.AllowedIPs {
+			tbl.Insert(pfx, pr)
+		}
+	}
+	var native4, native6 netip.Addr
+	for _, pfx := range cfg.Addresses {
+		a := pfx.Addr()
+		switch {
+		case a.Is4() && !native4.IsValid():
+			native4 = a
+		case a.Is6() && !native6.IsValid():
+			native6 = a
+		}
+	}
+	s.tsTun.SetPeerRoutes(native4, native6, tbl)
 
 	// In production, LocalBackend installs a PeerByIPPacketFunc via
 	// Engine.SetPeerByIPPacketFunc. Tests that bypass LocalBackend need

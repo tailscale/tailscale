@@ -9,9 +9,11 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -124,6 +126,17 @@ type Engine interface {
 
 	// SetJailedFilter updates the packet filter for jailed nodes.
 	SetJailedFilter(*filter.Filter)
+
+	// SetPeerRoutes updates the per-peer route attributes used by the
+	// tun-layer data plane for per-packet NAT rewrites and
+	// jailed-filter selection. native4 and native6 are this node's own
+	// Tailscale addresses, and routes maps each peer's addresses and
+	// routed prefixes to its attributes; it is a shared immutable
+	// snapshot from [routemanager.RouteManager.Outbound].
+	//
+	// A nil routes table disables all per-packet peer processing;
+	// callers pass nil when no current peer has any such attributes.
+	SetPeerRoutes(native4, native6 netip.Addr, routes *bart.Table[*routemanager.PeerRoute])
 
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
