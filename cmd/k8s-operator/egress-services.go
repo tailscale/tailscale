@@ -223,28 +223,56 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	return nil
 }
 
-// ensureEndpointSlices ensures that an IPv4 EndpointSlice exists for the egress
-// service and that its ports are up to date.
+// addrTypesForClusterIPSvc returns the EndpointSlice address types (IP families)
+// that the given ClusterIP Service supports, derived from its ClusterIPs.
+// TODO(beckypauley): this could read Spec.IPFamilies directly instead of parsing
+// ClusterIPs to determine the family.
+func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.AddressType, error) {
+	addrTypes := make([]discoveryv1.AddressType, 0, len(clusterIPSvc.Spec.ClusterIPs))
+	for _, clusterIP := range clusterIPSvc.Spec.ClusterIPs {
+		ip, err := netip.ParseAddr(clusterIP)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing ClusterIP %q: %w", clusterIP, err)
+		}
+		addrType := discoveryv1.AddressTypeIPv4
+		if ip.Is6() {
+			addrType = discoveryv1.AddressTypeIPv6
+		}
+		addrTypes = append(addrTypes, addrType)
+	}
+	return addrTypes, nil
+}
+
+// ensureEndpointSlices ensures that EndpointSlices exist for the egress service
+// for each IP family supported by the cluster, and that their ports are up to
+// date.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
-			Namespace: esr.tsNamespace,
-			Labels:    crl,
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Ports:       epsPortsFromSvc(clusterIPSvc),
+	// Only create EndpointSlices for IP families supported by the cluster.
+	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		return err
 	}
-	if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-		e.Labels = eps.Labels
-		e.AddressType = eps.AddressType
-		e.Ports = eps.Ports
-		for _, p := range e.Endpoints {
-			p.Conditions.Ready = nil
+	for _, addrType := range addrTypes {
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+				Namespace: esr.tsNamespace,
+				Labels:    crl,
+			},
+			AddressType: addrType,
+			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
-	}); err != nil {
-		return fmt.Errorf("error ensuring EndpointSlice: %w", err)
+		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
+			e.Labels = eps.Labels
+			e.AddressType = eps.AddressType
+			e.Ports = eps.Ports
+			for _, p := range e.Endpoints {
+				p.Conditions.Ready = nil
+			}
+		}); err != nil {
+			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+		}
 	}
 	return nil
 }
@@ -344,38 +372,6 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 			svc.Spec = clusterIPSvc.Spec
 		}); err != nil {
 			return nil, false, fmt.Errorf("error ensuring ClusterIP Service: %v", err)
-		}
-	}
-
-	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	// Only create EndpointSlices for IP families supported by the cluster.
-	for _, clusterIP := range clusterIPSvc.Spec.ClusterIPs {
-		ip, err := netip.ParseAddr(clusterIP)
-		if err != nil {
-			return nil, false, fmt.Errorf("error parsing ClusterIP %q: %w", clusterIP, err)
-		}
-		addrType := discoveryv1.AddressTypeIPv4
-		if ip.Is6() {
-			addrType = discoveryv1.AddressTypeIPv6
-		}
-		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
-				Namespace: esr.tsNamespace,
-				Labels:    crl,
-			},
-			AddressType: addrType,
-			Ports:       epsPortsFromSvc(clusterIPSvc),
-		}
-		if eps, err = createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-			e.Labels = eps.Labels
-			e.AddressType = eps.AddressType
-			e.Ports = eps.Ports
-			for _, p := range e.Endpoints {
-				p.Conditions.Ready = nil
-			}
-		}); err != nil {
-			return nil, false, fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
 		}
 	}
 

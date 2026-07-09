@@ -228,9 +228,12 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 		lg.Debugf("Pod does not have health check enabled, unable to verify if it is currently routable via Service")
 		return cannotVerify, nil
 	}
-	// Use the Pod's primary IP (PodIPs[0]) - this should be sufficient as it
-	// matches Kubernetes probe behaviour. The primary IP family is determined
-	// by the cluster's IP family configuration.
+	// Use the Pod's primary IP (PodIPs[0]) to identify this Pod in the health check
+	// response. The primary IP family is determined by the cluster's IP family configuration.
+
+	// Note: we do not control which IP family the request uses, so on a dual-stack
+	// cluster either IPv4 or IPv6 could be used. In either case, a matching IP header
+	// comfirms the request reached this Pod.
 	if len(pod.Status.PodIPs) == 0 || pod.Status.PodIPs[0].IP == "" {
 		return podNotReady, nil
 	}

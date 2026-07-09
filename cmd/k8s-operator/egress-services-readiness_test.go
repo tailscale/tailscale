@@ -47,7 +47,14 @@ func TestEgressServiceReadiness(t *testing.T) {
 			},
 		},
 	}
-	fakeClusterIPSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "operator-ns"}}
+	fakeClusterIPSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "operator-ns",
+			Labels:    egressSvcChildResourceLabels(egressSvc),
+		},
+		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1"}},
+	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
@@ -63,6 +70,7 @@ func TestEgressServiceReadiness(t *testing.T) {
 		},
 	}
 	mustCreate(t, fc, egressSvc)
+	mustCreate(t, fc, fakeClusterIPSvc)
 	setClusterNotReady(egressSvc, cl, zl.Sugar())
 	t.Run("endpointslice_does_not_exist", func(t *testing.T) {
 		expectReconciled(t, rec, "dev", "my-app")
@@ -141,7 +149,14 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 			},
 		},
 	}
-	fakeClusterIPSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "operator-ns"}}
+	fakeClusterIPSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "operator-ns",
+			Labels:    egressSvcChildResourceLabels(egressSvc),
+		},
+		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1", "fd00::1"}},
+	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	epsV4 := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
@@ -170,6 +185,7 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		},
 	}
 	mustCreate(t, fc, egressSvc)
+	mustCreate(t, fc, fakeClusterIPSvc)
 	mustCreate(t, fc, epsV4)
 	mustCreate(t, fc, epsV6)
 	mustCreate(t, fc, pg)
@@ -204,6 +220,17 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
 		expectEqual(t, fc, egressSvc)
 	})
+	t.Run("not_ready_when_ipv6_slice_missing", func(t *testing.T) {
+		// Delete the IPv6 EndpointSlice while the ClusterIP Service still
+		// wants an IPv6 family; the Service should report NotReady even though
+		// the IPv4 EndpointSlice is healthy.
+		if err := fc.Delete(t.Context(), epsV6); err != nil {
+			t.Fatalf("error deleting IPv6 EndpointSlice: %v", err)
+		}
+		expectReconciled(t, rec, "dev", "my-app")
+		setClusterNotReady(egressSvc, cl, zl.Sugar())
+		expectEqual(t, fc, egressSvc)
+	})
 }
 
 func TestEgressServiceReadinessIPv6Only(t *testing.T) {
@@ -229,7 +256,14 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 			},
 		},
 	}
-	fakeClusterIPSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "operator-ns"}}
+	fakeClusterIPSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "operator-ns",
+			Labels:    egressSvcChildResourceLabels(egressSvc),
+		},
+		Spec: corev1.ServiceSpec{ClusterIPs: []string{"fd00::1"}},
+	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
@@ -245,6 +279,7 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 		},
 	}
 	mustCreate(t, fc, egressSvc)
+	mustCreate(t, fc, fakeClusterIPSvc)
 	mustCreate(t, fc, eps)
 	mustCreate(t, fc, pg)
 	setPGReady(pg, cl, zl.Sugar())

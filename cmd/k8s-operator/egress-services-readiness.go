@@ -25,6 +25,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/tstime"
+	"tailscale.com/util/set"
 )
 
 const (
@@ -81,10 +82,48 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		return res, err
 	}
 	if len(epsList.Items) == 0 {
-		lg.Infof("EndpointSlice for Service does not yet exist, waiting...")
+		lg.Infof("EndpointSlices for Service do not yet exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
+	}
+	// If an EndpointSlice for an expected family is missing, we mark the Service as NotReady.
+	//
+	// Setting the NotReady condition here is also used for best-effort recovery. The
+	// egress-svcs-reconciler does not watch EndpointSlices, so a deleted EndpointSlice is only
+	// recreated when this status change re-triggers a Service reconcile.
+	//
+	// TODO(beckypauley): refactor so EndpointSlice recovery is not dependent on Service status.
+	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
+	if err != nil {
+		err = fmt.Errorf("error retrieving ClusterIP Service: %w", err)
+		reason = reasonReadinessCheckFailed
+		msg = err.Error()
+		return res, err
+	}
+	if clusterIPSvc == nil {
+		lg.Infof("ClusterIP Service for egress Service does not yet exist, waiting...")
+		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
+		st = metav1.ConditionFalse
+		return res, nil
+	}
+	gotAddrTypes := make(set.Set[discoveryv1.AddressType], len(epsList.Items))
+	for _, eps := range epsList.Items {
+		gotAddrTypes.Add(eps.AddressType)
+	}
+	wantAddrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		reason = reasonReadinessCheckFailed
+		msg = err.Error()
+		return res, err
+	}
+	for _, wantAddrType := range wantAddrTypes {
+		if !gotAddrTypes.Contains(wantAddrType) {
+			lg.Infof("EndpointSlice for %s is missing, waiting...", wantAddrType)
+			reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
+			st = metav1.ConditionFalse
+			return res, nil
+		}
 	}
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{

@@ -679,32 +679,28 @@ func (ep *egressProxy) waitTillSafeToShutdown(ctx context.Context, cfgs egressse
 			continue
 		}
 		svc := s
+		// TODO(beckypauley): In dual-stack clusters, this is a best-effort check as we do not control which IP family is used.
+		// This confirms removal from routing on this node for one family only. The other IP family then relies on the longSleep below.
 		wg.Go(func() {
 			log.Printf("Ensuring that cluster traffic is no longer routed to %q via this Pod...", svc)
-			podIPs := map[string]string{}
-			if ep.podIPv4 != "" {
-				podIPs[kubetypes.PodIPv4Header] = ep.podIPv4
+			podIP, header := ep.podIPv4, kubetypes.PodIPv4Header
+			if podIP == "" {
+				podIP, header = ep.podIPv6, kubetypes.PodIPv6Header
 			}
-			if ep.podIPv6 != "" {
-				podIPs[kubetypes.PodIPv6Header] = ep.podIPv6
+			if ep.podDrained(ctx, svc, hep, podIP, header, hp) {
+				return
 			}
-			for header, ip := range podIPs {
-				for {
-					if ctx.Err() != nil { // kubelet's HTTP request timeout
-						log.Printf("Cluster traffic for %s did not stop being routed to this Pod.", svc)
+			ticker := time.NewTicker(ep.shortSleep)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done(): // kubelet's HTTP request timeout
+					log.Printf("Cluster traffic for %s did not stop being routed to this Pod.", svc)
+					return
+				case <-ticker.C:
+					if ep.podDrained(ctx, svc, hep, podIP, header, hp) {
 						return
 					}
-					found, err := lookupPodRoute(ctx, hep, ip, header, hp, ep.client)
-					if err != nil {
-						log.Printf("unable to reach endpoint %q, assuming the routing rules for this Pod have been deleted: %v", hep, err)
-						break
-					}
-					if !found {
-						log.Printf("service %q is no longer routed through this Pod", svc)
-						break
-					}
-					log.Printf("service %q is still routed through this Pod, waiting...", svc)
-					time.Sleep(ep.shortSleep)
 				}
 			}
 		})
@@ -776,4 +772,18 @@ func (ep *egressProxy) getHEPPings() (int, error) {
 		return 0, nil
 	}
 	return hp, nil
+}
+
+func (ep *egressProxy) podDrained(ctx context.Context, svc, hep, podIP, header string, hp int) bool {
+	found, err := lookupPodRoute(ctx, hep, podIP, header, hp, ep.client)
+	if err != nil {
+		log.Printf("unable to reach endpoint %q, assuming the routing rules for this Pod have been deleted: %v", hep, err)
+		return true
+	}
+	if !found {
+		log.Printf("service %q is no longer routed through this Pod", svc)
+		return true
+	}
+	log.Printf("service %q is still routed through this Pod, waiting...", svc)
+	return false
 }

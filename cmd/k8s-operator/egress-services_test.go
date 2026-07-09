@@ -392,6 +392,50 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
 	})
 
+	t.Run("dual_stack_endpointslice_deletion_recovery", func(t *testing.T) {
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		// Delete both IPv4 and IPv6 EndpointSlices.
+		for _, suffix := range []string{"ipv4", "ipv6"} {
+			epsName := fmt.Sprintf("%s-%s", name, suffix)
+			eps := &discoveryv1.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      epsName,
+					Namespace: "operator-ns",
+				},
+			}
+			if err := fc.Delete(t.Context(), eps); err != nil {
+				t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
+			}
+			expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+		}
+		// Reconcile should recreate both.
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+		clusterSvc := mustGetClusterIPSvc(t, fc, name)
+		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+	})
+
+	t.Run("dual_stack_single_endpointslice_deletion_recovery", func(t *testing.T) {
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		// Delete only the IPv6 EndpointSlice.
+		epsName := fmt.Sprintf("%s-ipv6", name)
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      epsName,
+				Namespace: "operator-ns",
+			},
+		}
+		if err := fc.Delete(t.Context(), eps); err != nil {
+			t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
+		}
+		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+		// Reconcile should recreate the missing IPv6 EndpointSlice while leaving
+		// the IPv4 one untouched.
+		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+		clusterSvc := mustGetClusterIPSvc(t, fc, name)
+		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+	})
+
 	t.Run("delete_dual_stack_service", func(t *testing.T) {
 		name := findGenNameForEgressSvcResources(t, fc, svc)
 		if err := fc.Delete(context.Background(), svc); err != nil {
