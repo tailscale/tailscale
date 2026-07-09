@@ -6155,10 +6155,23 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 	rcfg := b.routerConfigLocked(cfg, prefs, nm)
 
-	// Add these extra Allowed IPs after router configuration, because the expected
-	// extension (features/conn25), does not want these routes installed on the OS.
+	// Push each peer's extra WireGuard-only allowed IPs (the conn25
+	// extension's Transit IPs) into the route manager, which feeds
+	// them to WireGuard via the outbound peer lookup and the per-peer
+	// allowed source prefixes (including for lazily created peers)
+	// while keeping them out of the OS route set, because the
+	// expected extension (features/conn25) does not want these routes
+	// installed on the OS. This runs after routerConfigLocked above
+	// for the same reason: rcfg is derived from cfg.Peers, which must
+	// not yet include the extras.
 	// See also [Hooks.ExtraWireGuardAllowedIPs].
 	if extraAllowedIPsFn, ok := b.extHost.hooks.ExtraWireGuardAllowedIPs.GetOk(); ok {
+		for k := range cn.updateRouteManagerExtras(extraAllowedIPsFn) {
+			b.e.SyncDevicePeer(k)
+		}
+		// Also append the extras to cfg.Peers so the full SyncPeers
+		// in Reconfig below doesn't strip them from active peers.
+		// This loop goes away when cfg.Peers does.
 		for i := range cfg.Peers {
 			extras := extraAllowedIPsFn(cfg.Peers[i].PublicKey)
 			cfg.Peers[i].AllowedIPs = extras.AppendTo(cfg.Peers[i].AllowedIPs)
