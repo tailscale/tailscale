@@ -390,31 +390,31 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 
 	// A brand-new peer is not a disco change.
 	d1 := newDisco()
-	if got := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
 		t.Errorf("SetNetMap(new peer) discoChanged = %v; want none", got)
 	}
 
 	// A changed disco key requires a session reset.
 	d2 := newDisco()
-	if got := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
+	if got, _ := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
 		t.Errorf("SetNetMap(changed disco) discoChanged = %v; want %v", got, nk)
 	}
 
 	// An unchanged disco key does not.
-	if got := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
+	if got, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
 		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
 	}
 
 	// A change already learned via TSMP is suppressed...
 	d3 := newDisco()
 	nb.recordTSMPLearnedDisco(nk, d3)
-	if got := nb.SetNetMap(mkNetMap(d3)); len(got) != 0 {
+	if got, _ := nb.SetNetMap(mkNetMap(d3)); len(got) != 0 {
 		t.Errorf("SetNetMap(TSMP-learned disco) discoChanged = %v; want none", got)
 	}
 
 	// ...but the TSMP entry is consumed, so the next change resets again.
 	d4 := newDisco()
-	if got := nb.SetNetMap(mkNetMap(d4)); !slices.Contains(got, nk) {
+	if got, _ := nb.SetNetMap(mkNetMap(d4)); !slices.Contains(got, nk) {
 		t.Errorf("SetNetMap(after TSMP entry consumed) discoChanged = %v; want %v", got, nk)
 	}
 
@@ -423,7 +423,7 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 	before := metricTSMPLearnedKeyMismatch.Value()
 	nb.recordTSMPLearnedDisco(nk, newDisco())
 	d5 := newDisco()
-	if got := nb.SetNetMap(mkNetMap(d5)); !slices.Contains(got, nk) {
+	if got, _ := nb.SetNetMap(mkNetMap(d5)); !slices.Contains(got, nk) {
 		t.Errorf("SetNetMap(TSMP mismatch) discoChanged = %v; want %v", got, nk)
 	}
 	if delta := metricTSMPLearnedKeyMismatch.Value() - before; delta != 1 {
@@ -436,15 +436,15 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 	nb.recordTSMPLearnedDisco(nk, d6)
 	nb.SetNetMap(&netmap.NetworkMap{})
 	nb.SetNetMap(mkNetMap(d5))
-	if got := nb.SetNetMap(mkNetMap(d6)); !slices.Contains(got, nk) {
+	if got, _ := nb.SetNetMap(mkNetMap(d6)); !slices.Contains(got, nk) {
 		t.Errorf("SetNetMap(after TSMP entry GC) discoChanged = %v; want %v", got, nk)
 	}
 
 	// Transitions to or from a zero disco key never reset.
-	if got := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
+	if got, _ := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
 		t.Errorf("SetNetMap(to zero disco) discoChanged = %v; want none", got)
 	}
-	if got := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+	if got, _ := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
 		t.Errorf("SetNetMap(from zero disco) discoChanged = %v; want none", got)
 	}
 }

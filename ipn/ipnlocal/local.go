@@ -6144,13 +6144,14 @@ func (b *LocalBackend) authReconfigLocked() {
 		return
 	}
 
-	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), version.OS())
+	// Note: b.goos (set only by tests) speaks runtime.GOOS while
+	// version.OS is Tailscale-style ("macOS", "iOS"); they agree for
+	// the values tests pin ("linux", "windows"), which is all the
+	// override needs.
+	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.NetMon.Get(), b.sys.ControlKnobs(), cmp.Or(b.goos, version.OS()))
 	// Sync the WireGuard device for any peers whose allowed source
 	// prefixes changed with the new prefs, such as the old and new
-	// exit node when the selection changes. The Reconfig below still
-	// converges every peer via its full device sync, but this
-	// incremental sync is what will remain once the full reconfig is
-	// gated on actual router/DNS changes.
+	// exit node when the selection changes.
 	changedAllowedIPs := cn.updateRouteManagerPrefs(routePrefs{
 		ExitNodeID:       prefs.ExitNodeID(),
 		ExitNodeSelected: prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid(),
@@ -6168,20 +6169,11 @@ func (b *LocalBackend) authReconfigLocked() {
 	// allowed source prefixes (including for lazily created peers)
 	// while keeping them out of the OS route set, because the
 	// expected extension (features/conn25) does not want these routes
-	// installed on the OS. This runs after routerConfigLocked above
-	// for the same reason: rcfg is derived from cfg.Peers, which must
-	// not yet include the extras.
+	// installed on the OS.
 	// See also [Hooks.ExtraWireGuardAllowedIPs].
 	if extraAllowedIPsFn, ok := b.extHost.hooks.ExtraWireGuardAllowedIPs.GetOk(); ok {
 		for k := range cn.updateRouteManagerExtras(extraAllowedIPsFn) {
 			b.e.SyncDevicePeer(k)
-		}
-		// Also append the extras to cfg.Peers so the full SyncPeers
-		// in Reconfig below doesn't strip them from active peers.
-		// This loop goes away when cfg.Peers does.
-		for i := range cfg.Peers {
-			extras := extraAllowedIPsFn(cfg.Peers[i].PublicKey)
-			cfg.Peers[i].AllowedIPs = extras.AppendTo(cfg.Peers[i].AllowedIPs)
 		}
 	}
 	// The prefs and extras commits above can both change the outbound
@@ -7342,7 +7334,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
-	discoChanged := b.currentNode().SetNetMap(nm)
+	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
 	b.setDataPlanePeerRoutes()
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
@@ -7360,6 +7352,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// each such peer is lazily re-created on demand with current state.
 	for _, k := range discoChanged {
 		b.e.ResetDevicePeer(k)
+	}
+	// Converge the wireguard-go device for peers whose routes changed
+	// (or that were removed) in the full-netmap resync above; peers not
+	// in routeChanged are already up to date.
+	for k := range routeChanged {
+		b.e.SyncDevicePeer(k)
 	}
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)

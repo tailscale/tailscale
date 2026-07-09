@@ -5367,6 +5367,12 @@ func withAddresses(addresses ...netip.Prefix) peerOptFunc {
 	}
 }
 
+func withAllowedIPs(prefixes ...netip.Prefix) peerOptFunc {
+	return func(n *tailcfg.Node) {
+		n.AllowedIPs = append(n.AllowedIPs, prefixes...)
+	}
+}
+
 func deterministicRegionForTest(t testing.TB, want views.Slice[int], use int) selectRegionFunc {
 	t.Helper()
 

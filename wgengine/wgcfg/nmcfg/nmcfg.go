@@ -45,11 +45,16 @@ func cidrIsSubnet(node tailcfg.NodeView, cidr netip.Prefix) bool {
 }
 
 // WGCfg returns the NetworkMaps's WireGuard configuration.
+//
+// The config does not include peers; wireguard-go gets those from the
+// live per-peer config source installed via
+// [tailscale.com/wgengine.Engine.SetPeerConfigFunc], fed by the route
+// manager. WGCfg still walks the peers to log which ones are not
+// routable and why, mirroring the route manager's filtering.
 func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		PrivateKey: pk,
 		Addresses:  nm.GetAddresses().AsSlice(),
-		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
 	var skippedExitNode, skippedSubnetRouter, skippedExpired []tailcfg.NodeView
@@ -69,16 +74,7 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 			continue
 		}
 
-		cfg.Peers = append(cfg.Peers, wgcfg.Peer{
-			PublicKey: peer.Key(),
-			DiscoKey:  peer.DiscoKey(),
-		})
-		cpeer := &cfg.Peers[len(cfg.Peers)-1]
-
 		didExitNodeLog := false
-		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer().Clone()
-		cpeer.V6MasqAddr = peer.SelfNodeV6MasqAddrForThisPeer().Clone()
-		cpeer.IsJailed = peer.IsJailed()
 		for _, allowedIP := range peer.AllowedIPs().All() {
 			if allowedIP.Bits() == 0 && peer.StableID() != exitNode {
 				if didExitNodeLog {
@@ -87,14 +83,11 @@ func WGCfg(pk key.NodePrivate, nm *netmap.NetworkMap, logf logger.Logf, flags ne
 				}
 				didExitNodeLog = true
 				skippedExitNode = append(skippedExitNode, peer)
-				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & netmap.AllowSubnetRoutes) == 0 {
 					skippedSubnetRouter = append(skippedSubnetRouter, peer)
-					continue
 				}
 			}
-			cpeer.AllowedIPs = append(cpeer.AllowedIPs, allowedIP)
 		}
 	}
 

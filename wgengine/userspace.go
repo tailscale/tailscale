@@ -94,8 +94,6 @@ type userspaceEngine struct {
 	// feature/bird package is not linked into the binary.
 	bird Bird
 
-	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
-
 	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
 	// incorrectly sent to us.
@@ -118,7 +116,7 @@ type userspaceEngine struct {
 	// no longer install per-config lookup closures.
 	peerConfigFn atomic.Pointer[func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)]
 
-	lastCfgFull    wgcfg.Config
+	lastCfg        wgcfg.Config
 	lastRouter     *router.Config
 	lastDNSConfig  dns.ConfigView // or invalid if none
 	reconfigureVPN func() error   // or nil
@@ -678,59 +676,6 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 	return filter.Accept
 }
 
-// maybeReconfigWireguardLocked reconfigures wireguard-go with the current
-// full config, installing a PeerLookupFunc for on-demand peer creation.
-//
-// e.wgLock must be held.
-func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
-	if hook := e.testMaybeReconfigHook; hook != nil {
-		hook()
-		return nil
-	}
-
-	full := e.lastCfgFull
-	// The wireguard-go peer set may have changed; drop the cached
-	// peer-string rewrites so the next log line re-resolves them
-	// against the current lookup.
-	e.wgLogger.Invalidate()
-
-	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d peers)", len(full.Peers))
-	if e.peerConfigFn.Load() != nil {
-		// The device has a long-lived PeerLookupFunc backed by the
-		// live config source, so only the peer set needs syncing;
-		// there is no per-config lookup closure to (re)install, and
-		// no removed peer can be resurrected with stale state.
-		//
-		// TODO(bradfitz): remove this O(n peers) sync. It's redundant
-		// with the incremental SyncDevicePeer calls that LocalBackend
-		// makes for exactly the peers whose allowed IPs changed. It
-		// only remains because peer changes still force a full
-		// Reconfig; once that's gated on actual router/DNS changes,
-		// this sync (and full-config peer syncing generally) can go.
-		peers := make(map[device.NoisePublicKey][]netip.Prefix, len(full.Peers))
-		for _, p := range full.Peers {
-			peers[p.PublicKey.Raw32()] = p.AllowedIPs
-		}
-		e.wgdev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
-			_, exists := peers[pk]
-			return !exists
-		})
-		// Update AllowedIPs on any already-active peers whose config
-		// may have changed. Peers that don't exist yet will get the
-		// correct AllowedIPs from the device's PeerLookupFunc when
-		// they are lazily created.
-		for pk, allowedIPs := range peers {
-			if peer, ok := e.wgdev.LookupActivePeer(pk); ok {
-				peer.SetAllowedIPs(allowedIPs)
-			}
-		}
-	} else if err := wgcfg.ReconfigDevice(e.wgdev, &full, e.logf); err != nil {
-		e.logf("wgdev.Reconfig: %v", err)
-		return err
-	}
-	return nil
-}
-
 // SetPeerConfigFunc implements [Engine.SetPeerConfigFunc]. It stores
 // fn and installs a single wgdev PeerLookupFunc wrapping it, so
 // lazily-created peers always get current allowed IPs and the lookup
@@ -753,6 +698,9 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	}
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
+	// The peer set may be about to change; drop the wgLogger's cached
+	// peer-string rewrites so the next log line re-resolves them.
+	e.wgLogger.Invalidate()
 	allowedIPs, ok := (*fn)(k)
 	if !ok {
 		e.wgdev.RemovePeer(k.Raw32())
@@ -767,6 +715,7 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 func (e *userspaceEngine) ResetDevicePeer(k key.NodePublic) {
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
+	e.wgLogger.Invalidate()
 	e.wgdev.RemovePeer(k.Raw32())
 }
 
@@ -878,7 +827,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		birdChanged = e.bird.Reconfig(self)
 	}
 
-	engineChanged := !e.lastCfgFull.Equal(cfg)
+	engineChanged := !e.lastCfg.Equal(cfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
 	dnsChanged := buildfeatures.HasDNS && !e.lastDNSConfig.Equal(dnsCfg.View())
 	if dnsChanged {
@@ -910,7 +859,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
 	}
 
-	if !e.lastCfgFull.PrivateKey.Equal(cfg.PrivateKey) {
+	if !e.lastCfg.PrivateKey.Equal(cfg.PrivateKey) {
 		// Tell magicsock about the new (or initial) private key
 		// (which is needed by DERP) before wgdev gets it, as wgdev
 		// will start trying to handshake, which we want to be able to
@@ -924,16 +873,16 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		}
 	}
 
-	e.lastCfgFull = *cfg.Clone()
+	e.lastCfg = *cfg.Clone()
 
 	e.magicConn.SetPreferredPort(listenPort)
 	e.magicConn.UpdatePMTUD()
 
-	if engineChanged {
-		if err := e.maybeReconfigWireguardLocked(); err != nil {
-			return err
-		}
-	}
+	// Note: no wireguard-go device reconfig happens here. The device
+	// learns its peer set from the live config source installed via
+	// [Engine.SetPeerConfigFunc] (peers are lazily created and synced
+	// per peer by [Engine.SyncDevicePeer]), and its private key is set
+	// above when it changes.
 
 	if routerChanged {
 		e.logf("wgengine: Reconfig: configuring router")

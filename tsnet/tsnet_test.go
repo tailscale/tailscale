@@ -1746,7 +1746,7 @@ func TestFallbackTCPHandler(t *testing.T) {
 // Before aa5da2e5f22a, every peer change rebuilt a full netmap on
 // the engine, so [wgengine.Engine.SetNetworkMap] kept the engine's
 // cached netmap fresh and [wgengine.Engine.Reconfig] kept wgdev and
-// e.lastCfgFull fresh. After that refactor, peer adds and removes
+// e.lastCfg fresh. After that refactor, peer adds and removes
 // ride the delta path and only mutate [nodeBackend]; the engine's
 // cached netmap and wireguard config stayed stale, and
 // [wgengine.Engine.PeerForIP] / [wgengine.Engine.Ping] / wgdev's
@@ -1925,7 +1925,7 @@ func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
 	// outbound wgdev encryption, magicsock transport. The receiving
 	// side (s2's tstun.Wrapper) intercepts TSMP regardless of dst
 	// IP and replies with a pong. So this catches both halves of
-	// the bug: a stale BART / lastCfgFull (PeerForIP / lookupPeerByIP
+	// the bug: a stale BART / lastCfg (PeerForIP / lookupPeerByIP
 	// miss) AND a stale wgdev PeerLookupFunc closure (peer's noise
 	// key not yet registered for outbound encryption).
 	pingCtx, cancelPing := pingTimeout(ctx)

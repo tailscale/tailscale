@@ -11,14 +11,17 @@ import (
 	"tailscale.com/types/key"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Config,Peer
+//go:generate go run tailscale.com/cmd/cloner -type=Config
 
 // Config is a WireGuard configuration.
 // It only supports the set of things Tailscale uses.
+//
+// Peers are not part of the config: wireguard-go learns the peer set
+// and each peer's allowed IPs from the live per-peer config source
+// installed via [tailscale.com/wgengine.Engine.SetPeerConfigFunc].
 type Config struct {
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
-	Peers      []Peer
 }
 
 func (c *Config) Equal(o *Config) bool {
@@ -26,43 +29,5 @@ func (c *Config) Equal(o *Config) bool {
 		return c == o
 	}
 	return c.PrivateKey.Equal(o.PrivateKey) &&
-		slices.Equal(c.Addresses, o.Addresses) &&
-		slices.EqualFunc(c.Peers, o.Peers, Peer.Equal)
-}
-
-type Peer struct {
-	PublicKey           key.NodePublic
-	DiscoKey            key.DiscoPublic // present only so we can handle restarts within wgengine, not passed to WireGuard
-	AllowedIPs          []netip.Prefix
-	V4MasqAddr          *netip.Addr // if non-nil, masquerade IPv4 traffic to this peer using this address
-	V6MasqAddr          *netip.Addr // if non-nil, masquerade IPv6 traffic to this peer using this address
-	IsJailed            bool        // if true, this peer is jailed and cannot initiate connections
-	PersistentKeepalive uint16      // in seconds between keep-alives; 0 to disable
-}
-
-func addrPtrEq(a, b *netip.Addr) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func (p Peer) Equal(o Peer) bool {
-	return p.PublicKey == o.PublicKey &&
-		p.DiscoKey == o.DiscoKey &&
-		slices.Equal(p.AllowedIPs, o.AllowedIPs) &&
-		p.IsJailed == o.IsJailed &&
-		p.PersistentKeepalive == o.PersistentKeepalive &&
-		addrPtrEq(p.V4MasqAddr, o.V4MasqAddr) &&
-		addrPtrEq(p.V6MasqAddr, o.V6MasqAddr)
-}
-
-// PeerWithKey returns the Peer with key k and reports whether it was found.
-func (config Config) PeerWithKey(k key.NodePublic) (Peer, bool) {
-	for _, p := range config.Peers {
-		if p.PublicKey == k {
-			return p, true
-		}
-	}
-	return Peer{}, false
+		slices.Equal(c.Addresses, o.Addresses)
 }

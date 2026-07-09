@@ -1238,10 +1238,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
 	disconnect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: false}, WantRunningSet: true}
 	node1 := buildNetmapWithPeers(
-		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
+		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32")), withAllowedIPs(netip.MustParsePrefix("100.64.1.1/32"))),
 	)
 	node2 := buildNetmapWithPeers(
-		makePeer(2, withName("node-2"), withAddresses(netip.MustParsePrefix("100.64.1.2/32"))),
+		makePeer(2, withName("node-2"), withAddresses(netip.MustParsePrefix("100.64.1.2/32")), withAllowedIPs(netip.MustParsePrefix("100.64.1.2/32"))),
 	)
 	node3 := buildNetmapWithPeers(
 		makePeer(3, withName("node-3"), withAddresses(netip.MustParsePrefix("100.64.1.3/32"))),
@@ -1257,6 +1257,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 		steps         func(*testing.T, *LocalBackend, func() *mockControl)
 		wantState     ipn.State
 		wantCfg       *wgcfg.Config
+		wantPeers     []key.NodePublic
 		wantRouterCfg *router.Config
 		wantDNSCfg    *dns.Config
 	}{
@@ -1301,7 +1302,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// After the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
 			wantRouterCfg: &router.Config{
@@ -1359,7 +1359,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Once the auth is completed, the configs must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers:     []wgcfg.Peer{},
 				Addresses: node2.SelfNode.Addresses().AsSlice(),
 			},
 			wantRouterCfg: &router.Config{
@@ -1409,7 +1408,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// must be updated to reflect the node's netmap.
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
 			wantRouterCfg: &router.Config{
@@ -1434,23 +1432,17 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers: []wgcfg.Peer{
-					{
-						PublicKey: node1.SelfNode.Key(),
-						DiscoKey:  node1.SelfNode.DiscoKey(),
-					},
-					{
-						PublicKey: node2.SelfNode.Key(),
-						DiscoKey:  node2.SelfNode.DiscoKey(),
-					},
-				},
 				Addresses: node3.SelfNode.Addresses().AsSlice(),
+			},
+			wantPeers: []key.NodePublic{
+				node1.SelfNode.Key(),
+				node2.SelfNode.Key(),
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node3.SelfNode.Addresses().AsSlice(),
-				Routes:           routesWithQuad100(),
+				Routes:           routesWithQuad100(netip.MustParsePrefix("100.64.1.1/32"), netip.MustParsePrefix("100.64.1.2/32")),
 			},
 			wantDNSCfg: &dns.Config{
 				AcceptDNS:             true,
@@ -1490,7 +1482,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			// Starting a reauth should leave everything up:
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
 			wantRouterCfg: &router.Config{
@@ -1522,7 +1513,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantState: ipn.Starting,
 			wantCfg: &wgcfg.Config{
-				Peers:     []wgcfg.Peer{},
 				Addresses: node1.SelfNode.Addresses().AsSlice(),
 			},
 			wantRouterCfg: &router.Config{
@@ -1571,13 +1561,12 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				t.Errorf("State: got %v; want %v", gotState, tt.wantState)
 			}
 
-			if engine.Config() != nil {
-				for _, p := range engine.Config().Peers {
-					pKey := p.PublicKey.UntypedHexString()
-					_, err := lb.MagicConn().ParseEndpoint(pKey)
-					if err != nil {
-						t.Errorf("ParseEndpoint(%q) failed: %v", pKey, err)
-					}
+			// Peers are not part of wgcfg.Config; the engine learns
+			// them from the config source installed by LocalBackend
+			// via SetPeerConfigFunc.
+			for _, k := range tt.wantPeers {
+				if _, ok := engine.PeerAllowedIPs(k); !ok {
+					t.Errorf("PeerAllowedIPs(%v) = false; want peer known", k.ShortString())
 				}
 			}
 
@@ -1597,7 +1586,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}
 }
 
-func TestEngineReconfigOnPeerRouteDelta(t *testing.T) {
+// TestPeerConfigUpdatedOnPeerRouteDelta tests that a netmap delta that
+// changes a peer's allowed IPs is visible through the live per-peer
+// config source that LocalBackend installs on the engine.
+func TestPeerConfigUpdatedOnPeerRouteDelta(t *testing.T) {
 	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
 	peerAddr := netip.MustParsePrefix("100.64.1.1/32")
 	vipAddr := netip.MustParsePrefix("100.99.99.99/32")
@@ -1623,20 +1615,13 @@ func TestEngineReconfigOnPeerRouteDelta(t *testing.T) {
 		t.Fatal("UpdateNetmapDelta = false, want true")
 	}
 
-	cfg := engine.Config()
-	if cfg == nil {
-		t.Fatal("engine config is nil")
+	ips, ok := engine.PeerAllowedIPs(replacement.Key)
+	if !ok {
+		t.Fatalf("peer config source missing peer %v", replacement.Key.ShortString())
 	}
-	for _, peer := range cfg.Peers {
-		if peer.PublicKey != replacement.Key {
-			continue
-		}
-		if !slices.Contains(peer.AllowedIPs, vipAddr) {
-			t.Fatalf("peer AllowedIPs = %v; want %v", peer.AllowedIPs, vipAddr)
-		}
-		return
+	if !slices.Contains(ips, vipAddr) {
+		t.Fatalf("peer AllowedIPs = %v; want %v", ips, vipAddr)
 	}
-	t.Fatalf("engine config missing peer %v", replacement.Key.ShortString())
 }
 
 // TestSendPreservesAuthURL tests that wgengine updates arriving in the middle of
@@ -1900,6 +1885,8 @@ type mockEngine struct {
 
 	filter, jailedFilter *filter.Filter
 
+	peerConfigFn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)
+
 	statusCb wgengine.StatusCallback
 }
 
@@ -2005,8 +1992,24 @@ func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
 func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
-func (e *mockEngine) SetPeerConfigFunc(func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+func (e *mockEngine) SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.peerConfigFn = fn
 }
+
+// PeerAllowedIPs looks up a peer's allowed IPs via the live per-peer
+// config source installed by LocalBackend with SetPeerConfigFunc.
+func (e *mockEngine) PeerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool) {
+	e.mu.Lock()
+	fn := e.peerConfigFn
+	e.mu.Unlock()
+	if fn == nil {
+		return nil, false
+	}
+	return fn(k)
+}
+
 func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
 func (e *mockEngine) ResetDevicePeer(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
