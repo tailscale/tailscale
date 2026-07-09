@@ -92,7 +92,9 @@ single AMI supports two ways of joining a tailnet:
   ```
 
   A config present in user-data locks the CLI (`tailscale set`/`up` are
-  rejected) unless it sets `"Locked": false`.
+  rejected) unless it sets `"Locked": false`. Add `"RemoteConfig": true` to
+  hand full remote management of the node to the tailnet admin (see
+  `Prefs.RemoteConfig`) — appropriate for admin-owned fleet devices.
 
 - **Interactive (serial console):** launch the AMI with *no* user-data. The
   `optional:` prefix means the missing config is not an error, so `tailscaled`

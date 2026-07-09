@@ -186,3 +186,28 @@ func TestConfigVAlphaToPrefs(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigVAlphaToPrefsRemoteConfig(t *testing.T) {
+	for name, tt := range map[string]struct {
+		cfg     ConfigVAlpha
+		wantSet bool
+		wantVal bool
+	}{
+		"absent": {ConfigVAlpha{Version: "alpha0"}, false, false},
+		"true":   {ConfigVAlpha{Version: "alpha0", RemoteConfig: "true"}, true, true},
+		"false":  {ConfigVAlpha{Version: "alpha0", RemoteConfig: "false"}, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mp, err := tt.cfg.ToPrefs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mp.RemoteConfigSet != tt.wantSet {
+				t.Errorf("RemoteConfigSet = %v; want %v", mp.RemoteConfigSet, tt.wantSet)
+			}
+			if mp.RemoteConfig != tt.wantVal {
+				t.Errorf("RemoteConfig = %v; want %v", mp.RemoteConfig, tt.wantVal)
+			}
+		})
+	}
+}
