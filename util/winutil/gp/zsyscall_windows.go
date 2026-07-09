@@ -43,6 +43,7 @@ var (
 
 	procImpersonateLoggedOnUser    = modadvapi32.NewProc("ImpersonateLoggedOnUser")
 	procEnterCriticalPolicySection = moduserenv.NewProc("EnterCriticalPolicySection")
+	procGenerateGPNotification     = moduserenv.NewProc("GenerateGPNotification")
 	procLeaveCriticalPolicySection = moduserenv.NewProc("LeaveCriticalPolicySection")
 	procRefreshPolicyEx            = moduserenv.NewProc("RefreshPolicyEx")
 	procRegisterGPNotification     = moduserenv.NewProc("RegisterGPNotification")
@@ -66,6 +67,22 @@ func enterCriticalPolicySection(machine bool) (handle policyLockHandle, err erro
 	handle = policyLockHandle(r0)
 	if int32(handle) == 0 {
 		err = errnoErr(e1)
+	}
+	return
+}
+
+func generateGPNotification(machine bool, mgmtProduct *uint16, mgmtProductOptions uint32) (ret error) {
+	ret = procGenerateGPNotification.Find()
+	if ret != nil {
+		return
+	}
+	var _p0 uint32
+	if machine {
+		_p0 = 1
+	}
+	r0, _, _ := syscall.SyscallN(procGenerateGPNotification.Addr(), uintptr(_p0), uintptr(unsafe.Pointer(mgmtProduct)), uintptr(mgmtProductOptions))
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
 	}
 	return
 }

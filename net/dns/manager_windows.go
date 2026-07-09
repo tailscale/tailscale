@@ -147,7 +147,7 @@ func (m *windowsManager) setSplitDNS(resolvers []netip.Addr, domains []dnsname.F
 		return fmt.Errorf("Split DNS unsupported on this Windows version")
 	}
 
-	defer m.nrptDB.Refresh()
+	defer m.nrptDB.NotifyPolicyChanged()
 	if len(resolvers) == 0 {
 		return m.nrptDB.DelAllRuleKeys()
 	}

@@ -972,3 +972,25 @@ func GUIPathFromReg() (string, error) {
 
 	return regPath, nil
 }
+
+// IsCurrentProcessLocalSystem checks whether the current process is running
+// as LocalSystem.
+func IsCurrentProcessLocalSystem() bool {
+	localSystem, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return false
+	}
+
+	token := windows.GetCurrentProcessToken()
+	// The current process token is a pseudo-handle so we don't need to close it.
+	if ok, err := token.IsMember(localSystem); err != nil || !ok {
+		return false
+	}
+
+	u, err := token.GetTokenUser()
+	if err != nil {
+		return false
+	}
+
+	return u.User.Sid.Equals(localSystem)
+}
