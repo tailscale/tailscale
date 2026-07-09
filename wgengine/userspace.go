@@ -103,10 +103,10 @@ type userspaceEngine struct {
 
 	wgLock sync.Mutex // serializes all wgdev operations; see lock order comment below
 
-	// peerForIP, if non-nil, is the callback installed via
-	// [userspaceEngine.SetPeerForIPFunc]. PeerForIP delegates to it
+	// peerForIPFn, if non-nil, is the callback installed via
+	// [userspaceEngine.SetPeerForIPFunc]. peerForIP delegates to it
 	// for the cold-path control lookups (Ping, TSMP, pendopen, etc).
-	peerForIP atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
+	peerForIPFn atomic.Pointer[func(netip.Addr) (_ PeerForIP, ok bool)]
 
 	// peerConfigFn, if non-nil, is the live per-peer allowed-IPs
 	// source installed via [userspaceEngine.SetPeerConfigFunc]. When
@@ -605,7 +605,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		pkt := packet.TSMPDiscoKeyAdvertisement{
 			Key: update.Key,
 		}
-		peer, ok := e.PeerForIP(update.Src)
+		peer, ok := e.peerForIP(update.Src)
 		if !ok {
 			e.logf("wgengine: no peer found for %v", update.Src)
 			return
@@ -1388,7 +1388,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {
 	res := &ipnstate.PingResult{IP: ip.String()}
-	pip, ok := e.PeerForIP(ip)
+	pip, ok := e.peerForIP(ip)
 	if !ok {
 		e.logf("ping(%v): no matching peer", ip)
 		res.Err = "no matching peer"
@@ -1585,24 +1585,24 @@ func (e *userspaceEngine) ProbeLocks() {
 	e.wgLock.Unlock()
 }
 
-// SetPeerForIPFunc installs the callback used by [userspaceEngine.PeerForIP].
+// SetPeerForIPFunc installs the callback used by [userspaceEngine.peerForIP].
 // See [Engine.SetPeerForIPFunc].
 func (e *userspaceEngine) SetPeerForIPFunc(fn func(netip.Addr) (PeerForIP, bool)) {
 	if fn == nil {
-		e.peerForIP.Store(nil)
+		e.peerForIPFn.Store(nil)
 		return
 	}
-	e.peerForIP.Store(&fn)
+	e.peerForIPFn.Store(&fn)
 }
 
-// PeerForIP returns the node responsible for handling the given IP.
-// It delegates to the callback installed via [SetPeerForIPFunc]; engines
-// without an installed callback return (zero, false).
-func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
+// peerForIP returns the node responsible for handling the given IP.
+// It delegates to the callback installed via [Engine.SetPeerForIPFunc];
+// engines without an installed callback return (zero, false).
+func (e *userspaceEngine) peerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	if !ip.IsValid() {
 		return ret, false
 	}
-	if fn := e.peerForIP.Load(); fn != nil {
+	if fn := e.peerForIPFn.Load(); fn != nil {
 		return (*fn)(ip)
 	}
 	return ret, false

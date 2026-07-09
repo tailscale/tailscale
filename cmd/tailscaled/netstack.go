@@ -44,11 +44,6 @@ func newNetstack(logf logger.Logf, sys *tsd.System, onlyNetstack bool) (tsd.Nets
 	dialer := sys.Dialer.Get() // must be set by caller already
 
 	if onlyNetstack {
-		e := sys.Engine.Get()
-		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-			_, ok := e.PeerForIP(ip)
-			return ok
-		}
 		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 			// Note: don't just return ns.DialContextTCP or we'll return
 			// *gonet.TCPConn(nil) instead of a nil interface which trips up

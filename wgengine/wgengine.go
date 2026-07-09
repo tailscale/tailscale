@@ -98,36 +98,18 @@ type Engine interface {
 	// Unlike Reconfig, it does not return ErrNoChanges.
 	ResetAndStop() (*Status, error)
 
-	// PeerForIP returns the node to which the provided IP routes,
-	// if any. If none is found, (zero, false) is returned.
+	// SetPeerForIPFunc installs the IP-to-node lookup used by the
+	// engine's internal cold paths (Ping, TSMP, pendopen diagnostics).
+	// It parallels [Engine.SetPeerByIPPacketFunc] but returns richer
+	// data (a full NodeView, the matched route prefix, and the IsSelf
+	// flag).
 	//
-	// Despite the name, it can return the self node (with
-	// PeerForIP.IsSelf set). It handles Tailscale IPs, subnet-routed
-	// IPs, and exit-node global internet IPs, returning whichever
-	// node would handle that traffic.
-	//
-	// This is the cold path used by Ping, TSMP, pendopen diagnostics,
-	// and debug endpoints. It uses the same underlying data structures
-	// as the wireguard-go outbound packet path
-	// ([Engine.SetPeerByIPPacketFunc]), but is slower because it
-	// returns richer data (a full NodeView, the matched route prefix,
-	// and the IsSelf flag) requiring extra lookups.
-	//
-	// In production, the lookup is implemented by LocalBackend and
-	// plumbed in via [Engine.SetPeerForIPFunc]; the engine itself holds
-	// no peer-lookup state on this path.
-	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)
-
-	// SetPeerForIPFunc installs a callback used by [Engine.PeerForIP].
-	// It parallels [Engine.SetPeerByIPPacketFunc] but serves the
-	// cold-path control lookups (Ping, TSMP, pendopen diagnostics,
-	// [tsdial.Dialer.UseNetstackForIP], debug endpoints).
-	//
-	// If fn is nil, PeerForIP returns (zero, false) for every IP.
+	// If fn is nil, those lookups fail for every IP.
 	//
 	// LocalBackend installs a func backed by the live nodeBackend for
 	// exact-match and self addresses, with the RouteManager's outbound
-	// table supplying the subnet-route / exit-node fallback.
+	// table supplying the subnet-route / exit-node fallback; the engine
+	// itself holds no peer-lookup state on this path.
 	SetPeerForIPFunc(fn func(netip.Addr) (_ PeerForIP, ok bool))
 
 	// GetFilter returns the current packet filter, if any.

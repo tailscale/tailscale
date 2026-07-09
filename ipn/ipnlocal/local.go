@@ -634,7 +634,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	e.SetPeerByIPPacketFunc(b.lookupPeerByIP)
 	e.SetPeerConfigFunc(b.peerAllowedIPs)
-	e.SetPeerForIPFunc(b.peerForIP)
+	e.SetPeerForIPFunc(b.PeerForIP)
 	e.SetPeerSessionStateFunc(b.onPeerWireGuardState)
 	e.SetNetLogSource(netLogNodeSource{b})
 	e.SetWGPeerLookup(b.lookupPeerWireGuardString)
@@ -8492,7 +8492,7 @@ func (b *LocalBackend) ResetAuth() error {
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {
-	pip, ok := b.e.PeerForIP(ip)
+	pip, ok := b.PeerForIP(ip)
 	if !ok {
 		return nil, fmt.Errorf("no matching peer")
 	}

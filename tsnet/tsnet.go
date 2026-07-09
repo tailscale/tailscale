@@ -886,7 +886,8 @@ func (s *Server) start() (reterr error) {
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-		_, ok := eng.PeerForIP(ip)
+		// s.lb is assigned below, before any dials can happen.
+		_, ok := s.lb.PeerForIP(ip)
 		return ok
 	}
 	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {

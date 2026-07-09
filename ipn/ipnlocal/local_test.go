@@ -9488,14 +9488,13 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 
 	nm := buildNetmapWithPeers(selfNode, exitA, exitB, subnetBig, subnetSmall)
 
-	var eng wgengine.Engine
 	var curLB *LocalBackend
 	var curT *testing.T // active subtest, for test helpers
 
 	wantPeer := func(ip string, n tailcfg.NodeView) {
 		t := curT
 		t.Helper()
-		pip, ok := eng.PeerForIP(netip.MustParseAddr(ip))
+		pip, ok := curLB.PeerForIP(netip.MustParseAddr(ip))
 		if !ok {
 			t.Fatalf("PeerForIP(%s): ok=false, want true", ip)
 		}
@@ -9509,7 +9508,7 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 	wantNotPeer := func(ip string) {
 		t := curT
 		t.Helper()
-		if _, ok := eng.PeerForIP(netip.MustParseAddr(ip)); ok {
+		if _, ok := curLB.PeerForIP(netip.MustParseAddr(ip)); ok {
 			t.Fatalf("PeerForIP(%s): ok=true, want false", ip)
 		}
 	}
@@ -9534,7 +9533,7 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 	wantSelf := func(ip string) {
 		t := curT
 		t.Helper()
-		pip, ok := eng.PeerForIP(netip.MustParseAddr(ip))
+		pip, ok := curLB.PeerForIP(netip.MustParseAddr(ip))
 		if !ok {
 			t.Fatalf("PeerForIP(%s): ok=false, want true", ip)
 		}
@@ -9663,7 +9662,6 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 				LoggedIn: true,
 			})
 
-			eng = lb.sys.Engine.Get()
 			curLB = lb
 			curT = t
 			tt.check()
