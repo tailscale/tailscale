@@ -9489,6 +9489,7 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 	nm := buildNetmapWithPeers(selfNode, exitA, exitB, subnetBig, subnetSmall)
 
 	var eng wgengine.Engine
+	var curLB *LocalBackend
 	var curT *testing.T // active subtest, for test helpers
 
 	wantPeer := func(ip string, n tailcfg.NodeView) {
@@ -9515,19 +9516,19 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 	wantKey := func(ip string, n tailcfg.NodeView) {
 		t := curT
 		t.Helper()
-		pk, _, ok := eng.PeerKeyForIP(netip.MustParseAddr(ip))
+		pr, ok := curLB.currentNode().routeMgr.Outbound().Lookup(netip.MustParseAddr(ip))
 		if !ok {
-			t.Fatalf("PeerKeyForIP(%s): ok=false, want true", ip)
+			t.Fatalf("routeMgr.Outbound().Lookup(%s): ok=false, want true", ip)
 		}
-		if pk != n.Key() {
-			t.Fatalf("PeerKeyForIP(%s): key=%v, want %v", ip, pk, n.Key())
+		if pr.Key != n.Key() {
+			t.Fatalf("routeMgr.Outbound().Lookup(%s): key=%v, want %v", ip, pr.Key, n.Key())
 		}
 	}
 	wantNotKey := func(ip string) {
 		t := curT
 		t.Helper()
-		if _, _, ok := eng.PeerKeyForIP(netip.MustParseAddr(ip)); ok {
-			t.Fatalf("PeerKeyForIP(%s): ok=true, want false", ip)
+		if _, ok := curLB.currentNode().routeMgr.Outbound().Lookup(netip.MustParseAddr(ip)); ok {
+			t.Fatalf("routeMgr.Outbound().Lookup(%s): ok=true, want false", ip)
 		}
 	}
 	wantSelf := func(ip string) {
@@ -9663,6 +9664,7 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 			})
 
 			eng = lb.sys.Engine.Get()
+			curLB = lb
 			curT = t
 			tt.check()
 		})

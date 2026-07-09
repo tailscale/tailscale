@@ -143,11 +143,11 @@ func (b *LocalBackend) peerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) 
 		}
 	}
 
-	pk, route, ok := b.e.PeerKeyForIP(ip)
+	route, pr, ok := nb.routeMgr.Outbound().LookupPrefixLPM(netip.PrefixFrom(ip, ip.BitLen()))
 	if !ok {
 		return wgengine.PeerForIP{}, false
 	}
-	nid, ok := nb.NodeByKey(pk)
+	nid, ok := nb.NodeByKey(pr.Key)
 	if !ok {
 		return wgengine.PeerForIP{}, false
 	}

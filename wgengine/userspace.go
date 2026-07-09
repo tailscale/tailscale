@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
@@ -103,19 +102,6 @@ type userspaceEngine struct {
 	isDNSIPOverTailscale syncs.AtomicValue[func(netip.Addr) bool]
 
 	wgLock sync.Mutex // serializes all wgdev operations; see lock order comment below
-
-	// peerByIPRoute is a longest-prefix-match table built from
-	// lastCfgFull.Peers AllowedIPs. It's the slow path for
-	// SetPeerByIPPacketFunc, used when LocalBackend's exact-IP fast path
-	// (nodeByAddr) misses — i.e. for subnet routes and exit-node default
-	// routes. Built from lastCfgFull (the wireguard-filtered peer list)
-	// rather than the netmap so that exit-node selection is honored: the
-	// netmap has 0.0.0.0/0 in AllowedIPs for every exit-capable peer, but
-	// lastCfgFull only has it for the currently-selected exit node.
-	//
-	// Replaced (not mutated) by maybeReconfigWireguardLocked. Read by
-	// the per-packet wgdev callback without locking.
-	peerByIPRoute atomic.Pointer[bart.Table[key.NodePublic]]
 
 	// peerForIP, if non-nil, is the callback installed via
 	// [userspaceEngine.SetPeerForIPFunc]. PeerForIP delegates to it
@@ -525,16 +511,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	e.logf("Creating WireGuard device...")
 	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
 	closePool.addFunc(e.wgdev.Close)
-
-	// Install a default outbound-packet peer lookup callback. It uses only
-	// the engine's BART table, which is rebuilt from the wireguard-filtered
-	// peer list on every Reconfig. Consumers (e.g. LocalBackend) may later
-	// call SetPeerByIPPacketFunc to additionally install a fast path for
-	// exact node-address matches; the BART remains the slow-path fallback.
-	// Without this default, callers that don't run a LocalBackend would
-	// have no way to route outbound packets to peers, since peers are
-	// created lazily from inbound packets only via SetPeerLookupFunc.
-	e.SetPeerByIPPacketFunc(nil)
 	closePool.addFunc(func() {
 		if err := e.magicConn.Close(); err != nil {
 			e.logf("error closing magicconn: %v", err)
@@ -721,16 +697,6 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked() error {
 	// against the current lookup.
 	e.wgLogger.Invalidate()
 
-	// Rebuild the prefix-match peer routing table from the current
-	// (wireguard-filtered) peer list and publish it atomically.
-	rt := &bart.Table[key.NodePublic]{}
-	for _, p := range full.Peers {
-		for _, pfx := range p.AllowedIPs {
-			rt.Insert(pfx, p.PublicKey)
-		}
-	}
-	e.peerByIPRoute.Store(rt)
-
 	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d peers)", len(full.Peers))
 	if e.peerConfigFn.Load() != nil {
 		// The device has a long-lived PeerLookupFunc backed by the
@@ -803,29 +769,23 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 // SetPeerByIPPacketFunc installs a callback used by wireguard-go to look up
 // which peer should handle an outbound packet by destination IP.
 //
-// If fn is non-nil it is authoritative: LocalBackend's implementation
-// consults both the exact node-address fast path and the RouteManager's
-// outbound table (covering subnet routes and exit-node default routes),
-// and stays correct under incremental netmap deltas. The engine's own
-// BART table ([userspaceEngine.peerByIPRoute], rebuilt only on full
-// reconfigs) is used only when no fn is installed (e.g. engines running
-// without a LocalBackend).
+// LocalBackend's implementation consults both the exact node-address fast
+// path and the RouteManager's outbound table (covering subnet routes and
+// exit-node default routes), and stays correct under incremental netmap
+// deltas.
 //
-// [NewUserspaceEngine] installs a BART-only default at engine creation time,
-// so callers that don't call SetPeerByIPPacketFunc (e.g. those not running
-// a LocalBackend) still get working outbound packet routing.
+// A nil fn uninstalls the callback, reverting the device to its standard
+// WireGuard AllowedIPs trie, which only contains peers that already exist
+// in the device. Callers without a LocalBackend that need outbound packets
+// to lazily create peers must install their own callback.
 func (e *userspaceEngine) SetPeerByIPPacketFunc(fn func(netip.Addr) (_ key.NodePublic, ok bool)) {
+	if fn == nil {
+		e.wgdev.SetPeerByIPPacketFunc(nil)
+		return
+	}
 	e.wgdev.SetPeerByIPPacketFunc(func(_, dst netip.Addr, _ []byte) (device.NoisePublicKey, bool) {
-		if fn != nil {
-			if pk, ok := fn(dst); ok {
-				return pk.Raw32(), true
-			}
-			return device.NoisePublicKey{}, false
-		}
-		if rt := e.peerByIPRoute.Load(); rt != nil {
-			if pk, ok := rt.Lookup(dst); ok {
-				return pk.Raw32(), true
-			}
+		if pk, ok := fn(dst); ok {
+			return pk.Raw32(), true
 		}
 		return device.NoisePublicKey{}, false
 	})
@@ -1633,20 +1593,6 @@ func (e *userspaceEngine) SetPeerForIPFunc(fn func(netip.Addr) (PeerForIP, bool)
 		return
 	}
 	e.peerForIP.Store(&fn)
-}
-
-// PeerKeyForIP looks up ip in the engine's AllowedIPs table
-// ([userspaceEngine.peerByIPRoute]). See [Engine.PeerKeyForIP].
-func (e *userspaceEngine) PeerKeyForIP(ip netip.Addr) (pk key.NodePublic, route netip.Prefix, ok bool) {
-	if !ip.IsValid() {
-		return pk, route, false
-	}
-	rt := e.peerByIPRoute.Load()
-	if rt == nil {
-		return pk, route, false
-	}
-	route, pk, ok = rt.LookupPrefixLPM(netip.PrefixFrom(ip, ip.BitLen()))
-	return pk, route, ok
 }
 
 // PeerForIP returns the node responsible for handling the given IP.

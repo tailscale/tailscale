@@ -82,6 +82,17 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	e1.SetFilter(filter.NewAllowAllForTest(l1))
 	e2.SetFilter(filter.NewAllowAllForTest(l2))
 
+	// There is no LocalBackend in this benchmark, so install trivial
+	// outbound peer lookups; without one, outbound packets can't
+	// lazily create their WireGuard peer.
+	k1pub, k2pub := k1.Public(), k2.Public()
+	e1.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
+		return k2pub, a2.Contains(dst)
+	})
+	e2.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
+		return k1pub, a1.Contains(dst)
+	})
+
 	var wait sync.WaitGroup
 	wait.Add(2)
 
