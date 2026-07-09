@@ -1949,10 +1949,6 @@ func (e *mockEngine) DNSConfig() *dns.Config {
 	return e.dnsCfg
 }
 
-func (e *mockEngine) PeerForIP(netip.Addr) (_ wgengine.PeerForIP, ok bool) {
-	return wgengine.PeerForIP{}, false
-}
-
 func (e *mockEngine) GetFilter() *filter.Filter {
 	e.mu.Lock()
 	defer e.mu.Unlock()

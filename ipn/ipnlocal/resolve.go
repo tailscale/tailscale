@@ -118,13 +118,15 @@ func addrFamilyMatch(ip netip.Addr, network string) bool {
 	return true
 }
 
-// peerForIP returns which peer is responsible for a given IP address.
+// PeerForIP returns which peer is responsible for a given IP address.
 // Despite the name, it can also return the self node (with IsSelf set).
 // It handles both Tailscale IPs (returning the owning peer or self) and
 // non-Tailscale addresses like subnet-routed IPs or exit-node global
 // internet IPs (returning whichever peer would route that traffic).
-// It is installed as the [wgengine.Engine.SetPeerForIPFunc] callback.
-func (b *LocalBackend) peerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) {
+// It is installed as the [wgengine.Engine.SetPeerForIPFunc] callback,
+// serving the engine's internal cold-path lookups (Ping, TSMP, pendopen
+// diagnostics).
+func (b *LocalBackend) PeerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) {
 	nb := b.currentNode()
 
 	if tsaddr.IsTailscaleIP(ip) {

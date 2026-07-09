@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -693,6 +694,12 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	lb, err := ipnlocal.NewLocalBackend(logf, logID, sys, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
+	}
+	if onlyNetstack {
+		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
+			_, ok := lb.PeerForIP(ip)
+			return ok
+		}
 	}
 	lb.SetVarRoot(opts.VarRoot)
 	if logPol != nil {
