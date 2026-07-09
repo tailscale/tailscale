@@ -34,9 +34,7 @@ import (
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/util/zstdframe"
-	"tailscale.com/wgengine"
 )
 
 func eps(s ...string) []netip.AddrPort {
@@ -1946,20 +1944,6 @@ func TestLearnZstdOfKeepAlive(t *testing.T) {
 	}
 	if got, want := sess.ztdDecodesForTest, 1; got != want {
 		t.Fatalf("got %d zstd decodes; want %d", got, want)
-	}
-}
-
-func TestPathDiscokeyerImplementations(t *testing.T) {
-	bus := eventbustest.NewBus(t)
-	ht := health.NewTracker(bus)
-	reg := new(usermetric.Registry)
-	e, err := wgengine.NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(e.Close)
-	if _, ok := e.(patchDiscoKeyer); !ok {
-		t.Error("wgengine.userspaceEngine must implement patchDiscoKeyer")
 	}
 }
 

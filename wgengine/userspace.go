@@ -50,7 +50,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/set"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
@@ -89,8 +88,7 @@ type userspaceEngine struct {
 	birdClient     BIRDClient          // or nil
 	controlKnobs   *controlknobs.Knobs // or nil
 
-	testMaybeReconfigHook func()                        // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
-	testDiscoChangedHook  func(map[key.NodePublic]bool) // for tests; if non-nil, fires after assembling discoChanged map
+	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
 	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
@@ -160,10 +158,6 @@ type userspaceEngine struct {
 	// lookup was installed, in which case peer references are not
 	// rewritten.
 	wgPeerLookup syncs.AtomicValue[func(wgString string) (tsString string, ok bool)]
-
-	// tsmpLearnedDisco tracks per node key if a peer disco key was learned via TSMP.
-	// wgLock must be held when using this map.
-	tsmpLearnedDisco map[key.NodePublic]key.DiscoPublic
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -766,6 +760,13 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	}
 }
 
+// ResetDevicePeer implements [Engine.ResetDevicePeer].
+func (e *userspaceEngine) ResetDevicePeer(k key.NodePublic) {
+	e.wgLock.Lock()
+	defer e.wgLock.Unlock()
+	e.wgdev.RemovePeer(k.Raw32())
+}
+
 // SetPeerByIPPacketFunc installs a callback used by wireguard-go to look up
 // which peer should handle an outbound packet by destination IP.
 //
@@ -851,12 +852,6 @@ func (e *userspaceEngine) ResetAndStop() (*Status, error) {
 	return e.getStatus()
 }
 
-func (e *userspaceEngine) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-	mak.Set(&e.tsmpLearnedDisco, pub, disco)
-}
-
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -870,11 +865,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
 	e.tundev.SetWGConfig(cfg)
-
-	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
-	for _, p := range cfg.Peers {
-		peerSet.Add(p.PublicKey)
-	}
 
 	e.mu.Lock()
 	self := e.selfNode
@@ -928,63 +918,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.isDNSIPOverTailscale.Store(ipset.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
 	}
 
-	// See if any peers have changed disco keys, which means they've restarted.
-	// If so, remove the peer from wireguard-go to flush its session key,
-	// then let the PeerLookupFunc re-create it on demand.
-	discoChanged := make(map[key.NodePublic]bool)
-	if engineChanged {
-		prevEP := make(map[key.NodePublic]key.DiscoPublic)
-		for i := range e.lastCfgFull.Peers {
-			if p := &e.lastCfgFull.Peers[i]; !p.DiscoKey.IsZero() {
-				prevEP[p.PublicKey] = p.DiscoKey
-			}
-		}
-		for i := range cfg.Peers {
-			p := &cfg.Peers[i]
-			if p.DiscoKey.IsZero() {
-				continue
-			}
-
-			pub := p.PublicKey
-
-			if old, ok := prevEP[pub]; ok && old != p.DiscoKey {
-				// If the disco key was learned via TSMP, we do not need to reset the
-				// wireguard config as the new key was received over an existing wireguard
-				// connection.
-				if discoTSMP, okTSMP := e.tsmpLearnedDisco[p.PublicKey]; okTSMP {
-					// Key matches, remove entry from map.
-					delete(e.tsmpLearnedDisco, p.PublicKey)
-					if discoTSMP == p.DiscoKey {
-						e.logf("wgengine: Skipping reconfig (TSMP key): %s changed from %q to %q",
-							pub.ShortString(), old, p.DiscoKey)
-						// Skip session clear.
-						continue
-					}
-
-					// The new disco key does not match what we received via
-					// TSMP for this peer. This is unexpected, though possible
-					// if processing a change in a large netmap ends up taking
-					// longer than the 2 second timeout in
-					// [controlClient.mapRoutineState.UpdateNetmapDelta], or if
-					// the context is cancelled mid update. Log the event, and reset
-					// the connection as it is possibly a stale entry in the map
-					// instead of a TSMP disco key update that led us here.
-					e.logf("wgengine: [unexpected] Reconfig: using TSMP key for %s (control stale): tsmp=%q control=%q old=%q",
-						pub.ShortString(), discoTSMP, p.DiscoKey, old)
-					metricTSMPLearnedKeyMismatch.Add(1)
-				}
-
-				discoChanged[pub] = true
-				e.logf("wgengine: Reconfig: %s changed from %q to %q", pub.ShortString(), old, p.DiscoKey)
-			}
-		}
-	}
-
-	// For tests, what disco connections needs to be changed.
-	if e.testDiscoChangedHook != nil {
-		e.testDiscoChangedHook(discoChanged)
-	}
-
 	if !e.lastCfgFull.PrivateKey.Equal(cfg.PrivateKey) {
 		// Tell magicsock about the new (or initial) private key
 		// (which is needed by DERP) before wgdev gets it, as wgdev
@@ -1007,19 +940,6 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	if engineChanged {
 		if err := e.maybeReconfigWireguardLocked(); err != nil {
 			return err
-		}
-		// Now that we've reconfigured wireguard-go, remove any peers with
-		// changed disco keys to flush their session keys, and let them be
-		// re-created on demand by the PeerLookupFunc.
-		for pub := range discoChanged {
-			e.wgdev.RemovePeer(pub.Raw32())
-		}
-	}
-
-	// Cleanup map of tsmp marks for peers that no longer exists in config.
-	for nodeKey := range e.tsmpLearnedDisco {
-		if !peerSet.Contains(nodeKey) {
-			delete(e.tsmpLearnedDisco, nodeKey)
 		}
 	}
 
@@ -1692,8 +1612,6 @@ var (
 
 	metricTSMPDiscoKeyAdvertisementSent  = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_sent")
 	metricTSMPDiscoKeyAdvertisementError = clientmetric.NewCounter("magicsock_tsmp_disco_key_advertisement_error")
-
-	metricTSMPLearnedKeyMismatch = clientmetric.NewCounter("magicsock_tsmp_learned_key_mismatch")
 )
 
 func (e *userspaceEngine) InstallCaptureHook(cb packet.CaptureCallback) {

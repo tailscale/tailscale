@@ -2014,7 +2014,8 @@ func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, o
 func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
 func (e *mockEngine) SetPeerConfigFunc(func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
 }
-func (e *mockEngine) SyncDevicePeer(key.NodePublic) {}
+func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
+func (e *mockEngine) ResetDevicePeer(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
 func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}

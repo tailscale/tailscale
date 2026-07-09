@@ -362,7 +362,7 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 }
 
 func (ms *mapSession) tryMarkDiscoAsLearnedFromTSMP(res *tailcfg.MapResponse) {
-	dun, ok := ms.netmapUpdater.(patchDiscoKeyer)
+	dun, ok := ms.netmapUpdater.(DiscoKeyUpdater)
 	if !ok {
 		return
 	}

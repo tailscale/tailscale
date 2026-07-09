@@ -575,13 +575,13 @@ func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcf
 	}
 }
 
-var _ patchDiscoKeyer = mapRoutineState{}
+var _ DiscoKeyUpdater = mapRoutineState{}
 
 func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
 	c := mrs.c
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
-	dun, ok := c.observer.(patchDiscoKeyer)
+	dun, ok := c.observer.(DiscoKeyUpdater)
 	mapCtx := c.mapCtx
 	c.mu.Unlock()
 

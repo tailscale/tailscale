@@ -2144,16 +2144,11 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	b.authReconfigLocked()
 }
 
+// PatchDiscoKey records that a peer's new disco key was learned via TSMP,
+// so the netmap update carrying the same change need not reset the peer's
+// WireGuard session. It implements [controlclient.DiscoKeyUpdater].
 func (b *LocalBackend) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
-	// PatchDiscoKey mirrors the implementation of [controlclient.patchDiscoKeyer].
-	// It is implemented here to avoid the dependency edge to controlclient, but must be kept
-	// in sync with the original implementation.
-	type patchDiscoKeyer interface {
-		PatchDiscoKey(key.NodePublic, key.DiscoPublic)
-	}
-	if e, ok := b.e.(patchDiscoKeyer); ok {
-		e.PatchDiscoKey(pub, disco)
-	}
+	b.currentNode().recordTSMPLearnedDisco(pub, disco)
 }
 
 type preferencePolicyInfo struct {
@@ -2436,6 +2431,7 @@ var (
 	_ controlclient.NetmapDeltaUpdater  = (*LocalBackend)(nil)
 	_ controlclient.PacketFilterUpdater = (*LocalBackend)(nil)
 	_ controlclient.UserProfileUpdater  = (*LocalBackend)(nil)
+	_ controlclient.DiscoKeyUpdater     = (*LocalBackend)(nil)
 )
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
@@ -2464,7 +2460,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	muts = b.tkaFilterDeltaMutsLocked(muts)
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 
-	changedAllowedIPs, _ := cn.UpdateNetmapDelta(muts)
+	deltaRes, _ := cn.UpdateNetmapDelta(muts)
 	if buildfeatures.HasDrive {
 		// Drive's lazy remotes-source caches its rebuild keyed by this
 		// generation, so any delta — peer add/remove, address change,
@@ -2511,8 +2507,15 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// the delta was applied above. Removed peers appear with a nil
 	// value and are removed from the device; SyncDevicePeer reads
 	// the live per-peer config, so only the keys matter here.
-	for k := range changedAllowedIPs {
+	for k := range deltaRes.ChangedAllowedIPs {
 		b.e.SyncDevicePeer(k)
+	}
+
+	// Reset the WireGuard session for peers whose disco key changed in
+	// a way that indicates a restart, flushing their dead session keys;
+	// each such peer is lazily re-created on demand with current state.
+	for k := range deltaRes.DiscoChanged {
+		b.e.ResetDevicePeer(k)
 	}
 
 	// Force a full authReconfig + SetSelfNode on any peer add or
@@ -7289,7 +7292,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
-	b.currentNode().SetNetMap(nm)
+	discoChanged := b.currentNode().SetNetMap(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
 			if nm.Cached {
@@ -7300,6 +7303,12 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		} else {
 			ms.SetNetworkMap(tailcfg.NodeView{}, nil)
 		}
+	}
+	// Reset the WireGuard session for peers whose disco key changed in
+	// a way that indicates a restart, flushing their dead session keys;
+	// each such peer is lazily re-created on demand with current state.
+	for _, k := range discoChanged {
+		b.e.ResetDevicePeer(k)
 	}
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
@@ -9174,6 +9183,11 @@ var (
 	metricNetmapDeltaPeerPatched  = clientmetric.NewCounter("localbackend_netmap_delta_peer_patched")
 	metricUpdatePacketFilter      = clientmetric.NewCounter("localbackend_update_packet_filter")
 	metricUpdateUserProfiles      = clientmetric.NewCounter("localbackend_update_user_profiles")
+
+	// metricTSMPLearnedKeyMismatch counts netmap updates carrying a peer
+	// disco key that doesn't match the one previously learned via TSMP
+	// for the same peer. See [nodeBackend.discoChangedLocked].
+	metricTSMPLearnedKeyMismatch = clientmetric.NewCounter("magicsock_tsmp_learned_key_mismatch")
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {

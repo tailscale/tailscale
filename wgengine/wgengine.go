@@ -198,6 +198,16 @@ type Engine interface {
 	// It is a no-op if no config source is installed.
 	SyncDevicePeer(key.NodePublic)
 
+	// ResetDevicePeer removes the peer from the WireGuard device,
+	// discarding any session key material and in-flight handshake
+	// state. If the peer is still known to the config source installed
+	// via [Engine.SetPeerConfigFunc], it is lazily re-created on demand
+	// with fresh state.
+	//
+	// LocalBackend calls it when a peer's disco key changes, which
+	// means the peer restarted and its old sessions are dead.
+	ResetDevicePeer(key.NodePublic)
+
 	// SetNetLogSource installs the [NetLogSource] consulted by the
 	// engine's network flow logger for node lookups and the current
 	// audit logging identity.
