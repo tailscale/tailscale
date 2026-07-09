@@ -15,76 +15,47 @@ import (
 	"tailscale.com/types/key"
 )
 
-func TestReconfigDevice(t *testing.T) {
-	k1, pk1 := newK()
-	ip1 := netip.MustParsePrefix("10.0.0.1/32")
+func TestNewPeerLookupFunc(t *testing.T) {
+	k1, _ := newK()
 
 	k2, _ := newK()
 	ip2 := netip.MustParsePrefix("10.0.0.2/32")
 
 	k3, _ := newK()
-	ip3 := netip.MustParsePrefix("10.0.0.3/32")
-
-	cfg1 := &Config{
-		PrivateKey: pk1,
-		Peers: []Peer{
-			{PublicKey: k2, AllowedIPs: []netip.Prefix{ip2}},
-		},
-	}
 
 	dev := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "test"))
 	defer dev.Close()
 
-	t.Run("initial-config", func(t *testing.T) {
-		if err := ReconfigDevice(dev, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		// Peer should be creatable on demand via LookupPeer.
-		peer := dev.LookupPeer(k2.Raw32())
-		if peer == nil {
+	// peers is the live per-peer config source, standing in for what
+	// LocalBackend provides via wgengine.Engine.SetPeerConfigFunc.
+	peers := map[device.NoisePublicKey][]netip.Prefix{
+		k2.Raw32(): {ip2},
+	}
+	dev.SetPeerLookupFunc(NewPeerLookupFunc(dev.Bind(), t.Logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
+		ips, ok := peers[pubk]
+		return ips, ok
+	}))
+
+	t.Run("lazy-creation", func(t *testing.T) {
+		// A peer known to the config source should be creatable on
+		// demand via LookupPeer.
+		if p := dev.LookupPeer(k2.Raw32()); p == nil {
 			t.Fatal("expected peer k2 to exist via LookupPeer")
 		}
-		// Unknown peer should not be found.
-		peer = dev.LookupPeer(k3.Raw32())
-		if peer != nil {
+		// An unknown peer should not be found.
+		if p := dev.LookupPeer(k3.Raw32()); p != nil {
 			t.Fatal("expected unknown peer k3 to not exist")
 		}
 	})
 
-	t.Run("add-peer", func(t *testing.T) {
-		cfg1.Peers = append(cfg1.Peers, Peer{
-			PublicKey:  k3,
-			AllowedIPs: []netip.Prefix{ip3},
-		})
-		if err := ReconfigDevice(dev, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		// Both peers should now be discoverable.
-		if p := dev.LookupPeer(k2.Raw32()); p == nil {
-			t.Fatal("expected peer k2 to exist")
-		}
-		if p := dev.LookupPeer(k3.Raw32()); p == nil {
-			t.Fatal("expected peer k3 to exist")
-		}
-	})
-
 	t.Run("remove-peer", func(t *testing.T) {
-		cfg2 := &Config{
-			PrivateKey: pk1,
-			Peers: []Peer{
-				{PublicKey: k2, AllowedIPs: []netip.Prefix{ip2}},
-			},
-		}
-		if err := ReconfigDevice(dev, cfg2, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		// k2 should still be discoverable.
-		if p := dev.LookupPeer(k2.Raw32()); p == nil {
-			t.Fatal("expected peer k2 to exist")
-		}
-		// k3 should no longer be discoverable.
-		if p := dev.LookupPeer(k3.Raw32()); p != nil {
-			t.Fatal("expected peer k3 to not exist after removal")
+		delete(peers, k2.Raw32())
+		dev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+			_, ok := peers[pk]
+			return !ok
+		})
+		if p := dev.LookupPeer(k2.Raw32()); p != nil {
+			t.Fatal("expected peer k2 to not exist after removal")
 		}
 	})
 
@@ -94,8 +65,6 @@ func TestReconfigDevice(t *testing.T) {
 			t.Fatal("expected own key to not be a peer")
 		}
 	})
-
-	_ = ip1 // suppress unused
 }
 
 func newK() (key.NodePublic, key.NodePrivate) {

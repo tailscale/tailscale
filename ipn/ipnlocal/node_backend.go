@@ -587,7 +587,7 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	return nm
 }
 
-func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic) {
+func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic, routeChanged map[key.NodePublic][]netip.Prefix) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	nb.netMap = nm
@@ -595,7 +595,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 	nb.updateNodeByKeyLocked()
 	nb.updateNodeByStableIDLocked()
 	nb.updateNodeByNameLocked()
-	discoChanged = nb.updatePeersLocked()
+	discoChanged, routeChanged = nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
 		nb.userProfiles = maps.Clone(nm.UserProfiles)
@@ -608,7 +608,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
-	return discoChanged
+	return discoChanged, routeChanged
 }
 
 // AwaitNodeKeyForTest returns a channel that is closed once a peer with the
@@ -789,7 +789,7 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 	return ip, ok
 }
 
-func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic) {
+func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged map[key.NodePublic][]netip.Prefix) {
 	nm := nb.netMap
 	oldIDs := slices.Collect(maps.Keys(nb.peers))
 
@@ -836,8 +836,8 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic) {
 	for _, p := range nb.peers {
 		rt.UpsertPeer(p)
 	}
-	rt.Commit()
-	return discoChanged
+	res := rt.Commit()
+	return discoChanged, res.AllowedIPs
 }
 
 // recordTSMPLearnedDisco notes that a peer's new disco key was learned via

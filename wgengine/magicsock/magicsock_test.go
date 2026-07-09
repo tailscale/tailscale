@@ -246,24 +246,61 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	}
 }
 
-func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
+// wgPeer is the per-peer configuration a test hands to
+// [magicStack.Reconfig], standing in for what LocalBackend's route
+// manager provides to the engine in production.
+type wgPeer struct {
+	publicKey  key.NodePublic
+	allowedIPs []netip.Prefix
+	jailed     bool
+	masqAddr4  netip.Addr
+	masqAddr6  netip.Addr
+}
+
+// wgPeersOfNetmap converts nm's peers into the per-peer configuration
+// that [magicStack.Reconfig] takes.
+func wgPeersOfNetmap(nm *netmap.NetworkMap) []wgPeer {
+	peers := make([]wgPeer, 0, len(nm.Peers))
+	for _, p := range nm.Peers {
+		peers = append(peers, wgPeer{
+			publicKey:  p.Key(),
+			allowedIPs: p.AllowedIPs().AsSlice(),
+			jailed:     p.IsJailed(),
+			masqAddr4:  p.SelfNodeV4MasqAddrForThisPeer().GetOr(netip.Addr{}),
+			masqAddr6:  p.SelfNodeV6MasqAddrForThisPeer().GetOr(netip.Addr{}),
+		})
+	}
+	return peers
+}
+
+// Reconfig applies cfg and peers to the stack's WireGuard device and
+// tun-layer data plane. In production these flow from LocalBackend
+// (via [tailscale.com/wgengine.Engine.Reconfig] and the live per-peer
+// config source installed with Engine.SetPeerConfigFunc); tests that
+// bypass LocalBackend replicate that wiring here.
+func (s *magicStack) Reconfig(cfg *wgcfg.Config, peers []wgPeer) error {
 	s.tsTun.SetWGConfig(cfg)
 
-	// In production, LocalBackend feeds the tun-layer data plane its
-	// per-peer route attributes from the route manager. Tests that
-	// bypass LocalBackend need to build the table from cfg.Peers here
-	// so that masquerade rewrites and jailed classification work.
+	// Build the tun-layer per-peer route attribute table so that
+	// masquerade rewrites and jailed classification work, and the
+	// destination IP => peer map for outbound packet routing.
 	tbl := &bart.Table[*routemanager.PeerRoute]{}
-	for _, p := range cfg.Peers {
-		pr := &routemanager.PeerRoute{Key: p.PublicKey, Jailed: p.IsJailed}
-		if p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
-			pr.MasqAddr4 = *p.V4MasqAddr
+	byKey := make(map[device.NoisePublicKey]wgPeer, len(peers))
+	ipToPeer := make(map[netip.Addr]device.NoisePublicKey)
+	for _, p := range peers {
+		pr := &routemanager.PeerRoute{
+			Key:       p.publicKey,
+			Jailed:    p.jailed,
+			MasqAddr4: p.masqAddr4,
+			MasqAddr6: p.masqAddr6,
 		}
-		if p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
-			pr.MasqAddr6 = *p.V6MasqAddr
-		}
-		for _, pfx := range p.AllowedIPs {
+		pk := p.publicKey.Raw32()
+		byKey[pk] = p
+		for _, pfx := range p.allowedIPs {
 			tbl.Insert(pfx, pr)
+			if pfx.IsSingleIP() {
+				ipToPeer[pfx.Addr()] = pk
+			}
 		}
 	}
 	var native4, native6 netip.Addr
@@ -278,25 +315,32 @@ func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
 	}
 	s.tsTun.SetPeerRoutes(native4, native6, tbl)
 
-	// In production, LocalBackend installs a PeerByIPPacketFunc via
-	// Engine.SetPeerByIPPacketFunc. Tests that bypass LocalBackend need
-	// to install one here for outbound packet routing.
-	ipToPeer := make(map[netip.Addr]device.NoisePublicKey, len(cfg.Peers))
-	for _, p := range cfg.Peers {
-		pk := p.PublicKey.Raw32()
-		for _, pfx := range p.AllowedIPs {
-			if pfx.IsSingleIP() {
-				ipToPeer[pfx.Addr()] = pk
-			}
-		}
-	}
 	s.dev.SetPeerByIPPacketFunc(func(_, dst netip.Addr, _ []byte) (device.NoisePublicKey, bool) {
 		pk, ok := ipToPeer[dst]
 		return pk, ok
 	})
 
+	// Install the live per-peer config source (peers are created
+	// lazily on first traffic) and converge existing device peers with
+	// it, mirroring what Engine.SyncDevicePeer does per peer.
+	s.dev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(s.conn.Bind(), s.conn.logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
+		p, ok := byKey[pubk]
+		if !ok {
+			return nil, false
+		}
+		return p.allowedIPs, true
+	}))
 	s.dev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey))
-	return wgcfg.ReconfigDevice(s.dev, cfg, s.conn.logf)
+	s.dev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+		_, ok := byKey[pk]
+		return !ok
+	})
+	for pk, p := range byKey {
+		if peer, ok := s.dev.LookupActivePeer(pk); ok {
+			peer.SetAllowedIPs(p.allowedIPs)
+		}
+	}
+	return nil
 }
 
 func (s *magicStack) String() string {
@@ -404,7 +448,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				// blow up. Shouldn't happen anyway.
 				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
 			}
-			if err := m.Reconfig(wg); err != nil {
+			if err := m.Reconfig(wg, wgPeersOfNetmap(nm)); err != nil {
 				if ctx.Err() != nil || errors.Is(err, errConnClosed) {
 					// shutdown race, don't care.
 					return
@@ -1210,30 +1254,28 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	m1cfg := &wgcfg.Config{
 		PrivateKey: m1.privateKey,
 		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
-		Peers: []wgcfg.Peer{
-			{
-				PublicKey:  m2.privateKey.Public(),
-				DiscoKey:   m2.conn.DiscoPublicKey(),
-				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
-			},
+	}
+	m1peers := []wgPeer{
+		{
+			publicKey:  m2.privateKey.Public(),
+			allowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 		},
 	}
 	m2cfg := &wgcfg.Config{
 		PrivateKey: m2.privateKey,
 		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
-		Peers: []wgcfg.Peer{
-			{
-				PublicKey:  m1.privateKey.Public(),
-				DiscoKey:   m1.conn.DiscoPublicKey(),
-				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
-			},
+	}
+	m2peers := []wgPeer{
+		{
+			publicKey:  m1.privateKey.Public(),
+			allowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 		},
 	}
 
-	if err := m1.Reconfig(m1cfg); err != nil {
+	if err := m1.Reconfig(m1cfg, m1peers); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.Reconfig(m2cfg); err != nil {
+	if err := m2.Reconfig(m2cfg, m2peers); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1357,7 +1399,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("no-op-dev1-reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		if err := m1.Reconfig(m1cfg); err != nil {
+		if err := m1.Reconfig(m1cfg, m1peers); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
@@ -2556,7 +2598,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Reconfig(cfg)
+	m.Reconfig(cfg, wgPeersOfNetmap(nm))
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
 	m.tun.Outbound <- pbuf
@@ -2617,7 +2659,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Reconfig(cfg)
+	m.Reconfig(cfg, wgPeersOfNetmap(nm))
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
 	m.tun.Outbound <- pbuf
@@ -2658,7 +2700,7 @@ func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 		t.Fatal(err)
 	}
 	// Apply the wireguard config to the tailscale internal wireguard device.
-	if err := m.Reconfig(cfg); err != nil {
+	if err := m.Reconfig(cfg, wgPeersOfNetmap(nm)); err != nil {
 		t.Fatal(err)
 	}
 }

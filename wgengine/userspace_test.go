@@ -90,7 +90,7 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 
 	routerCfg := &router.Config{}
 
-	for _, nodeHex := range []string{
+	for i, nodeHex := range []string{
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	} {
@@ -102,18 +102,9 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 				},
 			}),
 		}
-		nk, err := key.ParseNodePublicUntyped(mem.S(nodeHex))
-		if err != nil {
-			t.Fatal(err)
-		}
 		cfg := &wgcfg.Config{
-			Peers: []wgcfg.Peer{
-				{
-					PublicKey: nk,
-					AllowedIPs: []netip.Prefix{
-						netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
-					},
-				},
+			Addresses: []netip.Prefix{
+				netip.PrefixFrom(netaddr.IPv4(100, 100, 99, byte(1+i)), 32),
 			},
 		}
 
@@ -156,18 +147,9 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	t.Cleanup(ue.Close)
 
 	startingPort := ue.magicConn.LocalPort()
-	nodeKey, err := key.ParseNodePublicUntyped(mem.S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := &wgcfg.Config{
-		Peers: []wgcfg.Peer{
-			{
-				PublicKey: nodeKey,
-				AllowedIPs: []netip.Prefix{
-					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
-				},
-			},
+		Addresses: []netip.Prefix{
+			netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 		},
 	}
 	routerCfg := &router.Config{}
@@ -238,18 +220,9 @@ func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
 	t.Logf("Info: OS default don't fragment bit(s) setting: %v", osDefaultDF)
 
 	// Build a set of configs to use as we change the peer MTU settings.
-	nodeKey, err := key.ParseNodePublicUntyped(mem.S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := &wgcfg.Config{
-		Peers: []wgcfg.Peer{
-			{
-				PublicKey: nodeKey,
-				AllowedIPs: []netip.Prefix{
-					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
-				},
-			},
+		Addresses: []netip.Prefix{
+			netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 		},
 	}
 	routerCfg := &router.Config{}
@@ -315,14 +288,7 @@ func TestTSMPKeyAdvertisement(t *testing.T) {
 		}).View(),
 	}
 	cfg := &wgcfg.Config{
-		Peers: []wgcfg.Peer{
-			{
-				PublicKey: nodeKey,
-				AllowedIPs: []netip.Prefix{
-					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
-				},
-			},
-		},
+		Addresses: nm.SelfNode.Addresses().AsSlice(),
 	}
 
 	ue.SetSelfNode(nm.SelfNode)

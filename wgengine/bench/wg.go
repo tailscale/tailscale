@@ -83,14 +83,26 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	e2.SetFilter(filter.NewAllowAllForTest(l2))
 
 	// There is no LocalBackend in this benchmark, so install trivial
-	// outbound peer lookups; without one, outbound packets can't
-	// lazily create their WireGuard peer.
+	// outbound peer lookups and per-peer config sources; without them,
+	// outbound packets can't lazily create their WireGuard peer.
 	k1pub, k2pub := k1.Public(), k2.Public()
 	e1.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
 		return k2pub, a2.Contains(dst)
 	})
 	e2.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
 		return k1pub, a1.Contains(dst)
+	})
+	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+		if pubk == k2pub {
+			return []netip.Prefix{a2}, true
+		}
+		return nil, false
+	})
+	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+		if pubk == k1pub {
+			return []netip.Prefix{a1}, true
+		}
+		return nil, false
 	})
 
 	var wait sync.WaitGroup
@@ -107,12 +119,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf("e1 status: %v", *st)
 
 		e2.SetSelfNode(tailcfg.NodeView{})
-
-		p := wgcfg.Peer{
-			PublicKey:  c1.PrivateKey.Public(),
-			AllowedIPs: []netip.Prefix{a1},
-		}
-		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
 		e1waitDoneOnce.Do(wait.Done)
 	})
@@ -128,12 +134,6 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf("e2 status: %v", *st)
 
 		e1.SetSelfNode(tailcfg.NodeView{})
-
-		p := wgcfg.Peer{
-			PublicKey:  c2.PrivateKey.Public(),
-			AllowedIPs: []netip.Prefix{a2},
-		}
-		c1.Peers = []wgcfg.Peer{p}
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))
 		e2waitDoneOnce.Do(wait.Done)
 	})
