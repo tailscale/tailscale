@@ -6150,7 +6150,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	for k := range changedAllowedIPs {
 		b.e.SyncDevicePeer(k)
 	}
-	rcfg := b.routerConfigLocked(cfg, prefs, nm, oneCGNATRoute)
+	rcfg := b.routerConfigLocked(cfg, prefs, nm)
 
 	// Add these extra Allowed IPs after router configuration, because the expected
 	// extension (features/conn25), does not want these routes installed on the OS.
@@ -6487,64 +6487,10 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 	return nil
 }
 
-// peerRoutes returns the routerConfig.Routes to access peers.
-// If there are over cgnatThreshold CGNAT routes, one big CGNAT route
-// is used instead.
-func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int, routeAll bool) (routes []netip.Prefix) {
-	tsULA := tsaddr.TailscaleULARange()
-	cgNAT := tsaddr.CGNATRange()
-	var didULA bool
-	var cgNATIPs []netip.Prefix
-	for _, peer := range peers {
-		for _, aip := range peer.AllowedIPs {
-			aip = unmapIPPrefix(aip)
-
-			// Ensure that we're only accepting properly-masked
-			// prefixes; the control server should be masking
-			// these, so if we get them, skip.
-			if mm := aip.Masked(); aip != mm {
-				// To avoid a DoS where a peer could cause all
-				// reconfigs to fail by sending a bad prefix, we just
-				// skip, but don't error, on an unmasked route.
-				logf("advertised route %s from %s has non-address bits set; expected %s", aip, peer.PublicKey.ShortString(), mm)
-				continue
-			}
-
-			// Only add the Tailscale IPv6 ULA once, if we see anybody using part of it.
-			if aip.Addr().Is6() && aip.IsSingleIP() && tsULA.Contains(aip.Addr()) {
-				if !didULA {
-					didULA = true
-					routes = append(routes, tsULA)
-				}
-				continue
-			}
-			if aip.IsSingleIP() && cgNAT.Contains(aip.Addr()) {
-				cgNATIPs = append(cgNATIPs, aip)
-			} else if routeAll {
-				routes = append(routes, aip)
-			}
-		}
-	}
-	if len(cgNATIPs) > cgnatThreshold {
-		// Probably the hello server. Just append one big route.
-		routes = append(routes, cgNAT)
-	} else {
-		routes = append(routes, cgNATIPs...)
-	}
-
-	tsaddr.SortPrefixes(routes)
-	return routes
-}
-
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 //
 // b.mu must be held.
-func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView, nm *netmap.NetworkMap, oneCGNATRoute bool) *router.Config {
-	singleRouteThreshold := 10_000
-	if oneCGNATRoute {
-		singleRouteThreshold = 1
-	}
-
+func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView, nm *netmap.NetworkMap) *router.Config {
 	netfilterKind := b.capForcedNetfilter // protected by b.mu (hence the Locked suffix)
 
 	if prefs.NetfilterKind() != "" {
@@ -6568,7 +6514,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		SNATSubnetRoutes:    !prefs.NoSNAT(),
 		StatefulFiltering:   doStatefulFiltering,
 		NetfilterMode:       prefs.NetfilterMode(),
-		Routes:              peerRoutes(b.logf, cfg.Peers, singleRouteThreshold, prefs.RouteAll()),
+		Routes:              b.currentNode().osRoutes(),
 		NetfilterKind:       netfilterKind,
 		RemoveCGNATDropRule: nm.HasCap(tailcfg.NodeAttrDisableLinuxCGNATDropRule),
 	}

@@ -861,6 +861,17 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) (changedAllowedIPs 
 	return res.AllowedIPs
 }
 
+// osRoutes returns the sorted set of prefixes that the route manager
+// wants programmed into the OS routing table.
+func (nb *nodeBackend) osRoutes() []netip.Prefix {
+	var routes []netip.Prefix
+	for pfx := range nb.routeMgr.OSRoutes().All() {
+		routes = append(routes, pfx)
+	}
+	tsaddr.SortPrefixes(routes)
+	return routes
+}
+
 // setPacketFilter stores the live packet filter rules and parsed
 // matches. It does not touch the frozen netMap. nb.mu is acquired by
 // this method.

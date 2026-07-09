@@ -189,135 +189,6 @@ func TestShrinkDefaultRoute(t *testing.T) {
 	}
 }
 
-func TestPeerRoutes(t *testing.T) {
-	pp := netip.MustParsePrefix
-	tests := []struct {
-		name  string
-		peers []wgcfg.Peer
-		want  []netip.Prefix
-	}{
-		{
-			name: "small_v4",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("100.101.102.103/32"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("100.101.102.103/32"),
-			},
-		},
-		{
-			name: "big_v4",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("100.101.102.103/32"),
-						pp("100.101.102.104/32"),
-						pp("100.101.102.105/32"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("100.64.0.0/10"),
-			},
-		},
-		{
-			name: "has_1_v6",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("fd7a:115c:a1e0::/48"),
-			},
-		},
-		{
-			name: "has_2_v6",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
-						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b241/128"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("fd7a:115c:a1e0::/48"),
-			},
-		},
-		{
-			name: "big_v4_big_v6",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("100.101.102.103/32"),
-						pp("100.101.102.104/32"),
-						pp("100.101.102.105/32"),
-						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b240/128"),
-						pp("fd7a:115c:a1e0:ab12:4843:cd96:6258:b241/128"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("100.64.0.0/10"),
-				pp("fd7a:115c:a1e0::/48"),
-			},
-		},
-		{
-			name: "output-should-be-sorted",
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("100.64.0.2/32"),
-						pp("10.0.0.0/16"),
-					},
-				},
-				{
-					AllowedIPs: []netip.Prefix{
-						pp("100.64.0.1/32"),
-						pp("10.0.0.0/8"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("10.0.0.0/8"),
-				pp("10.0.0.0/16"),
-				pp("100.64.0.1/32"),
-				pp("100.64.0.2/32"),
-			},
-		},
-		{
-			name: "skip-unmasked-prefixes",
-			peers: []wgcfg.Peer{
-				{
-					PublicKey: key.NewNode().Public(),
-					AllowedIPs: []netip.Prefix{
-						pp("100.64.0.2/32"),
-						pp("10.0.0.100/16"),
-					},
-				},
-			},
-			want: []netip.Prefix{
-				pp("100.64.0.2/32"),
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := peerRoutes(t.Logf, tt.peers, 2, true)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("got = %v; want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestPeerAPIBase(t *testing.T) {
 	tests := []struct {
 		name string
@@ -8773,72 +8644,65 @@ func TestStripKeysFromPrefs(t *testing.T) {
 func TestRouteAllDisabled(t *testing.T) {
 	pp := netip.MustParsePrefix
 
+	peer := &tailcfg.Node{
+		ID:       1,
+		Key:      key.NewNode().Public(),
+		HomeDERP: 1,
+		Addresses: []netip.Prefix{
+			pp("100.80.207.38/32"),
+		},
+		AllowedIPs: []netip.Prefix{
+			pp("100.80.207.38/32"),
+
+			// If one IP in the Tailscale ULA range is added, the
+			// entire range is added to the router config.
+			pp("fd7a:115c:a1e0::2501:9b83/128"),
+
+			// Other single CGNAT IPs (such as VIP service addresses)
+			// are added individually regardless of RouteAll.
+			pp("100.80.207.56/32"),
+			pp("100.80.207.40/32"),
+			pp("100.94.122.93/32"),
+			pp("100.79.141.115/32"),
+
+			// A /28 is a subnet route, added only with RouteAll.
+			pp("100.64.0.0/28"),
+
+			// Single IPs outside the Tailscale CGNAT/ULA ranges are
+			// subnet routes too.
+			pp("192.168.0.45/32"),
+			pp("fd7a:115c:b1e0::2501:9b83/128"),
+			pp("fdf8:f966:e27c:0:5:0:0:10/128"),
+		},
+	}
+
 	tests := []struct {
-		name          string
-		peers         []wgcfg.Peer
-		wantEndpoints []netip.Prefix
-		routeAll      bool
+		name     string
+		routeAll bool
+		want     []netip.Prefix
 	}{
 		{
 			name:     "route_all_disabled",
 			routeAll: false,
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
-						pp("fd7a:115c:a1e0::2501:9b83/128"),
-						pp("100.80.207.38/32"),
-						pp("100.80.207.56/32"),
-						pp("100.80.207.40/32"),
-						pp("100.94.122.93/32"),
-						pp("100.79.141.115/32"),
-
-						// a /28 range will not be added, since this is not a Service IP range (which is always /32, a single IP)
-						pp("100.64.0.0/28"),
-
-						// ips outside the tailscale cgnat/ula range are not added to the router config
-						pp("192.168.0.45/32"),
-						pp("fd7a:115c:b1e0::2501:9b83/128"),
-						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
-					},
-				},
-			},
-			wantEndpoints: []netip.Prefix{
-				pp("100.80.207.38/32"),
-				pp("100.80.207.56/32"),
-				pp("100.80.207.40/32"),
-				pp("100.94.122.93/32"),
+			want: []netip.Prefix{
 				pp("100.79.141.115/32"),
+				pp("100.80.207.38/32"),
+				pp("100.80.207.40/32"),
+				pp("100.80.207.56/32"),
+				pp("100.94.122.93/32"),
 				pp("fd7a:115c:a1e0::/48"),
 			},
 		},
 		{
 			name:     "route_all_enabled",
 			routeAll: true,
-			peers: []wgcfg.Peer{
-				{
-					AllowedIPs: []netip.Prefix{
-						// if one ip in the Tailscale ULA range is added, the entire range is added to the router config
-						pp("fd7a:115c:a1e0::2501:9b83/128"),
-						pp("100.80.207.38/32"),
-						pp("100.80.207.56/32"),
-						pp("100.80.207.40/32"),
-						pp("100.94.122.93/32"),
-						pp("100.79.141.115/32"),
-
-						// ips outside the tailscale cgnat/ula range are not added to the router config
-						pp("192.168.0.45/32"),
-						pp("fd7a:115c:b1e0::2501:9b83/128"),
-						pp("fdf8:f966:e27c:0:5:0:0:10/128"),
-					},
-				},
-			},
-			wantEndpoints: []netip.Prefix{
-				pp("100.80.207.38/32"),
-				pp("100.80.207.56/32"),
-				pp("100.80.207.40/32"),
-				pp("100.94.122.93/32"),
+			want: []netip.Prefix{
+				pp("100.64.0.0/28"),
 				pp("100.79.141.115/32"),
+				pp("100.80.207.38/32"),
+				pp("100.80.207.40/32"),
+				pp("100.80.207.56/32"),
+				pp("100.94.122.93/32"),
 				pp("192.168.0.45/32"),
 				pp("fd7a:115c:a1e0::/48"),
 				pp("fd7a:115c:b1e0::2501:9b83/128"),
@@ -8851,9 +8715,6 @@ func TestRouteAllDisabled(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			prefs := ipn.Prefs{RouteAll: tt.routeAll}
 			lb := newTestLocalBackend(t)
-			cfg := &wgcfg.Config{
-				Peers: tt.peers,
-			}
 			ServiceIPMappings := tailcfg.ServiceIPMappings{
 				"svc:test-service": []netip.Addr{
 					netip.MustParseAddr("100.64.1.2"),
@@ -8876,20 +8737,15 @@ func TestRouteAllDisabled(t *testing.T) {
 						},
 					},
 				}).View(),
+				Peers: []tailcfg.NodeView{peer.View()},
 			}
+			cn := lb.currentNode()
+			cn.SetNetMap(nm)
+			cn.updateRouteManagerPrefs(routePrefs{RouteAll: tt.routeAll})
 
-			rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm, false)
-			for _, p := range rcfg.Routes {
-				found := false
-				for _, r := range tt.wantEndpoints {
-					if p.Addr() == r.Addr() {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("unexpected prefix %q in router config", p.String())
-				}
+			rcfg := lb.routerConfigLocked(&wgcfg.Config{}, prefs.View(), nm)
+			if !slices.Equal(rcfg.Routes, tt.want) {
+				t.Errorf("Routes = %v; want %v", rcfg.Routes, tt.want)
 			}
 		})
 	}
@@ -9323,44 +9179,6 @@ func TestShouldUseOneCGNATRoute(t *testing.T) {
 
 }
 
-func TestPeerRoutesCGNATCollapse(t *testing.T) {
-	pp := netip.MustParsePrefix
-
-	// With cgnatThreshold=1 (oneCGNATRoute), adding a peer should not
-	// change the route list. Both collapse to a single 100.64.0.0/10.
-	twoPeers := []wgcfg.Peer{
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32")}},
-	}
-	threePeers := []wgcfg.Peer{
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32")}},
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.3/32")}},
-	}
-
-	routesTwo := peerRoutes(t.Logf, twoPeers, 1, true)
-	routesThree := peerRoutes(t.Logf, threePeers, 1, true)
-
-	wantCGNAT := []netip.Prefix{pp("100.64.0.0/10")}
-	if !reflect.DeepEqual(routesTwo, wantCGNAT) {
-		t.Errorf("two peers: got %v; want %v", routesTwo, wantCGNAT)
-	}
-	if !reflect.DeepEqual(routesThree, wantCGNAT) {
-		t.Errorf("three peers: got %v; want %v", routesThree, wantCGNAT)
-	}
-
-	// Subnet routes must still appear alongside the collapsed CGNAT route.
-	peersWithSubnet := []wgcfg.Peer{
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.1/32")}},
-		{AllowedIPs: []netip.Prefix{pp("100.64.0.2/32"), pp("10.0.0.0/24")}},
-	}
-	got := peerRoutes(t.Logf, peersWithSubnet, 1, true)
-	want := []netip.Prefix{pp("100.64.0.0/10"), pp("10.0.0.0/24")}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("with subnet: got %v; want %v", got, want)
-	}
-}
-
 func TestResetAuthClearsMachineKey(t *testing.T) {
 	store := new(mem.Store)
 
@@ -9689,16 +9507,23 @@ func TestRouterConfigExitNodeBlackhole(t *testing.T) {
 	hasDefaults := func(routes []netip.Prefix) bool {
 		return slices.Contains(routes, tsaddr.AllIPv4()) && slices.Contains(routes, tsaddr.AllIPv6())
 	}
+	// Push the netmap and prefs into the route manager first, as
+	// authReconfigLocked does before calling routerConfigLocked, now
+	// that the OS routes are derived from the route manager.
+	cn := lb.currentNode()
+	cn.SetNetMap(nm)
 	for _, exitID := range []tailcfg.StableNodeID{"auto:any", "no-such-node"} {
 		prefs := ipn.Prefs{ExitNodeID: exitID}
-		rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm, false)
+		cn.updateRouteManagerPrefs(routePrefs{ExitNodeID: exitID, ExitNodeSelected: true})
+		rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm)
 		if !hasDefaults(rcfg.Routes) {
 			t.Errorf("ExitNodeID=%q: Routes = %v; want blackhole default routes", exitID, rcfg.Routes)
 		}
 	}
 
 	// With no exit node selected, there must be no default routes.
-	rcfg := lb.routerConfigLocked(cfg, new(ipn.Prefs).View(), nm, false)
+	cn.updateRouteManagerPrefs(routePrefs{})
+	rcfg := lb.routerConfigLocked(cfg, new(ipn.Prefs).View(), nm)
 	if hasDefaults(rcfg.Routes) {
 		t.Errorf("no exit node: Routes = %v; want no default routes", rcfg.Routes)
 	}
