@@ -17,6 +17,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -365,4 +366,57 @@ func TestNodeBackendRouteManager(t *testing.T) {
 	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p2}})
 	wantPeerFor("100.64.0.3", tailcfg.NodeView{})
 	wantPeerFor("100.64.0.2", p2)
+}
+
+func TestNodeBackendRouteManagerExtras(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	n := &tailcfg.Node{
+		ID:       1,
+		Key:      key.NewNode().Public(),
+		HomeDERP: 1,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+		},
+	}
+	n.AllowedIPs = n.Addresses
+	p1 := n.View()
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p1}})
+
+	transit := netip.MustParsePrefix("fe80::1234/128")
+	extrasFor := func(k key.NodePublic) views.Slice[netip.Prefix] {
+		if k == p1.Key() {
+			return views.SliceOf([]netip.Prefix{transit})
+		}
+		return views.Slice[netip.Prefix]{}
+	}
+
+	// Installing extras reports the peer's allowed prefixes as
+	// changed and adds the transit IP to the outbound table.
+	changed := nb.updateRouteManagerExtras(extrasFor)
+	if len(changed) != 1 || !slices.Contains(changed[p1.Key()], transit) {
+		t.Errorf("updateRouteManagerExtras changed = %v; want %v including %v", changed, p1.Key(), transit)
+	}
+	if pr, ok := nb.routeMgr.Outbound().Lookup(transit.Addr()); !ok || pr.Key != p1.Key() {
+		t.Errorf("Outbound lookup %v = %v, %v; want %v", transit.Addr(), pr, ok, p1.Key())
+	}
+	if nb.routeMgr.OSRoutes().Get(transit) {
+		t.Errorf("OSRoutes contains %v; extras must not reach the OS route set", transit)
+	}
+
+	// An unchanged hook result is a no-op.
+	if changed := nb.updateRouteManagerExtras(extrasFor); changed != nil {
+		t.Errorf("unchanged extras reported changes: %v", changed)
+	}
+
+	// A hook that no longer returns extras removes them.
+	changed = nb.updateRouteManagerExtras(func(key.NodePublic) views.Slice[netip.Prefix] {
+		return views.Slice[netip.Prefix]{}
+	})
+	if len(changed) != 1 {
+		t.Errorf("clearing extras changed = %v; want just %v", changed, p1.Key())
+	}
+	if _, ok := nb.routeMgr.Outbound().Lookup(transit.Addr()); ok {
+		t.Errorf("Outbound still routes %v after extras cleared", transit.Addr())
+	}
 }

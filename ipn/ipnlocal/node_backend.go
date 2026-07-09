@@ -860,6 +860,28 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) (changedAllowedIPs 
 	return res.AllowedIPs
 }
 
+// updateRouteManagerExtras pushes each peer's extra WireGuard-only
+// allowed IPs into the route manager, obtained by calling fn (the
+// [ipnext.Hooks.ExtraWireGuardAllowedIPs] hook) with each peer's
+// public key.
+//
+// It returns the peers whose allowed source prefixes changed as a
+// result, as described by [routemanager.Result.AllowedIPs].
+func (nb *nodeBackend) updateRouteManagerExtras(fn func(key.NodePublic) views.Slice[netip.Prefix]) (changedAllowedIPs map[key.NodePublic][]netip.Prefix) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	var extras map[tailcfg.NodeID][]netip.Prefix
+	for id, p := range nb.peers {
+		if pfxs := fn(p.Key()); pfxs.Len() > 0 {
+			mak.Set(&extras, id, pfxs.AsSlice())
+		}
+	}
+	rt := nb.routeMgr.Begin()
+	rt.SetExtraAllowedIPs(extras)
+	res := rt.Commit()
+	return res.AllowedIPs
+}
+
 // setPacketFilter stores the live packet filter rules and parsed
 // matches. It does not touch the frozen netMap. nb.mu is acquired by
 // this method.
