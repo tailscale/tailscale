@@ -54,8 +54,10 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/ping"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -244,8 +246,30 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	}
 }
 
-func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
+// Reconfig applies cfg to the stack's device and tun layer. peers,
+// if non-nil, are the tailcfg nodes that cfg was derived from; the
+// tun layer's per-peer data-plane attributes (masquerade addresses,
+// jailed classification) are derived from them with a real
+// [routemanager.RouteManager], exactly as LocalBackend does in
+// production, so this helper cannot drift from the production
+// derivation. Tests whose hand-built configs carry no such
+// attributes may pass nil.
+func (s *magicStack) Reconfig(cfg *wgcfg.Config, peers []tailcfg.NodeView) error {
 	s.tsTun.SetWGConfig(cfg)
+
+	if peers != nil {
+		rm := routemanager.New(nil)
+		mut := rm.Begin()
+		// Mirror the netmap.AllowSubnetRoutes flag the tests pass to
+		// nmcfg.WGCfg.
+		mut.SetPrefs(routemanager.Prefs{RouteAll: true})
+		for _, n := range peers {
+			mut.UpsertPeer(n)
+		}
+		mut.Commit()
+		native4, native6 := tsaddr.FirstTailscaleAddrs(slices.All(cfg.Addresses))
+		s.tsTun.SetPeerRoutes(native4, native6, rm.Outbound())
+	}
 
 	// In production, LocalBackend installs a PeerByIPPacketFunc via
 	// Engine.SetPeerByIPPacketFunc. Tests that bypass LocalBackend need
@@ -373,7 +397,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				// blow up. Shouldn't happen anyway.
 				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
 			}
-			if err := m.Reconfig(wg); err != nil {
+			if err := m.Reconfig(wg, nm.Peers); err != nil {
 				if ctx.Err() != nil || errors.Is(err, errConnClosed) {
 					// shutdown race, don't care.
 					return
@@ -1199,10 +1223,10 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		},
 	}
 
-	if err := m1.Reconfig(m1cfg); err != nil {
+	if err := m1.Reconfig(m1cfg, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m2.Reconfig(m2cfg); err != nil {
+	if err := m2.Reconfig(m2cfg, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1326,7 +1350,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("no-op-dev1-reconfig", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		if err := m1.Reconfig(m1cfg); err != nil {
+		if err := m1.Reconfig(m1cfg, nil); err != nil {
 			t.Fatal(err)
 		}
 		ping1(t)
@@ -2525,7 +2549,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Reconfig(cfg)
+	m.Reconfig(cfg, nm.Peers)
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
 	m.tun.Outbound <- pbuf
@@ -2586,7 +2610,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Reconfig(cfg)
+	m.Reconfig(cfg, nm.Peers)
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
 	m.tun.Outbound <- pbuf
@@ -2627,7 +2651,7 @@ func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 		t.Fatal(err)
 	}
 	// Apply the wireguard config to the tailscale internal wireguard device.
-	if err := m.Reconfig(cfg); err != nil {
+	if err := m.Reconfig(cfg, nm.Peers); err != nil {
 		t.Fatal(err)
 	}
 }

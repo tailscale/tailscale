@@ -7,6 +7,7 @@ package tsaddr
 import (
 	"encoding/binary"
 	"errors"
+	"iter"
 	"net/netip"
 	"slices"
 	"sync"
@@ -316,4 +317,25 @@ func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	ip4a := v4.Addr().As4()
 	copy(a[12:], ip4a[:])
 	return netip.PrefixFrom(netip.AddrFrom16(a), v4.Bits()+64+32), nil
+}
+
+// FirstTailscaleAddrs returns the first Tailscale IPv4 address and
+// the first Tailscale IPv6 address among the addresses of addrs'
+// prefixes, if any. The addrs sequence is typically a node's own
+// address list, either a slice (via [slices.All]) or a view (via
+// [views.Slice.All]).
+func FirstTailscaleAddrs(addrs iter.Seq2[int, netip.Prefix]) (a4, a6 netip.Addr) {
+	for _, pfx := range addrs {
+		a := pfx.Addr()
+		switch {
+		case a.Is4() && !a4.IsValid() && IsTailscaleIP(a):
+			a4 = a
+		case a.Is6() && !a6.IsValid() && IsTailscaleIP(a):
+			a6 = a
+		}
+		if a4.IsValid() && a6.IsValid() {
+			break
+		}
+	}
+	return a4, a6
 }

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -28,6 +27,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime/mono"
@@ -565,31 +565,9 @@ func (pc *peerConfigTable) dnat(p *packet.Parsed) {
 	}
 }
 
-// findV4 returns the first Tailscale IPv4 address in addrs.
-func findV4(addrs []netip.Prefix) netip.Addr {
-	for _, ap := range addrs {
-		a := ap.Addr()
-		if a.Is4() && tsaddr.IsTailscaleIP(a) {
-			return a
-		}
-	}
-	return netip.Addr{}
-}
-
-// findV6 returns the first Tailscale IPv6 address in addrs.
-func findV6(addrs []netip.Prefix) netip.Addr {
-	for _, ap := range addrs {
-		a := ap.Addr()
-		if a.Is6() && tsaddr.IsTailscaleIP(a) {
-			return a
-		}
-	}
-	return netip.Addr{}
-}
-
-// peerConfigTable contains configuration for individual peers and related
-// information necessary to perform peer-specific operations.  It should be
-// treated as immutable.
+// peerConfigTable contains the per-peer route attributes and related
+// information necessary to perform peer-specific operations. It should
+// be treated as immutable.
 //
 // The nil value is a valid configuration.
 type peerConfigTable struct {
@@ -602,57 +580,17 @@ type peerConfigTable struct {
 	// inbound packet is IPv6.
 	nativeAddr4, nativeAddr6 netip.Addr
 
-	// byIP contains configuration for each peer, indexed by a peer's IP
-	// address(es).
-	byIP bart.Table[*peerConfig]
-
-	// masqAddrCounts is a count of peers by MasqueradeAsIP.
-	// TODO? for logging
-	masqAddrCounts map[netip.Addr]int
-}
-
-// peerConfig is the configuration for a single peer.
-type peerConfig struct {
-	// dstMasqAddr{4,6} are the addresses that should be used as the
-	// source address when masquerading packets to this peer (i.e.
-	// SNAT). If an address is not valid, the packet should not be
-	// masqueraded for that address family.
-	dstMasqAddr4 netip.Addr
-	dstMasqAddr6 netip.Addr
-
-	// jailed is whether this peer is "jailed" (i.e. is restricted from being
-	// able to initiate connections to this node). This is the case for shared
-	// nodes.
-	jailed bool
+	// byIP maps a peer's IP addresses and routed prefixes to the
+	// peer's route attributes. It is a shared immutable snapshot
+	// from [routemanager.RouteManager.Outbound].
+	byIP *bart.Table[*routemanager.PeerRoute]
 }
 
 func (c *peerConfigTable) String() string {
 	if c == nil {
 		return "peerConfigTable(nil)"
 	}
-	var b strings.Builder
-	b.WriteString("peerConfigTable{")
-	fmt.Fprintf(&b, "nativeAddr4: %v, ", c.nativeAddr4)
-	fmt.Fprintf(&b, "nativeAddr6: %v, ", c.nativeAddr6)
-
-	// TODO: figure out how to iterate/debug/print c.byIP
-
-	b.WriteString("}")
-
-	return b.String()
-}
-
-func (c *peerConfig) String() string {
-	if c == nil {
-		return "peerConfig(nil)"
-	}
-	var b strings.Builder
-	b.WriteString("peerConfig{")
-	fmt.Fprintf(&b, "dstMasqAddr4: %v, ", c.dstMasqAddr4)
-	fmt.Fprintf(&b, "dstMasqAddr6: %v, ", c.dstMasqAddr6)
-	fmt.Fprintf(&b, "jailed: %v}", c.jailed)
-
-	return b.String()
+	return fmt.Sprintf("peerConfigTable{nativeAddr4: %v, nativeAddr6: %v}", c.nativeAddr4, c.nativeAddr6)
 }
 
 // mapDstIP returns the destination IP to use for a packet to dst.
@@ -675,10 +613,10 @@ func (pc *peerConfigTable) mapDstIP(src, oldDst netip.Addr) netip.Addr {
 		return oldDst
 	}
 
-	if oldDst.Is4() && pc.nativeAddr4.IsValid() && c.dstMasqAddr4 == oldDst {
+	if oldDst.Is4() && pc.nativeAddr4.IsValid() && c.MasqAddr4 == oldDst {
 		return pc.nativeAddr4
 	}
-	if oldDst.Is6() && pc.nativeAddr6.IsValid() && c.dstMasqAddr6 == oldDst {
+	if oldDst.Is6() && pc.nativeAddr6.IsValid() && c.MasqAddr6 == oldDst {
 		return pc.nativeAddr6
 	}
 	return oldDst
@@ -708,103 +646,15 @@ func (pc *peerConfigTable) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 
 	// Perform SNAT based on the address family and whether we have a valid
 	// addr.
-	if oldSrc.Is4() && c.dstMasqAddr4.IsValid() {
-		return c.dstMasqAddr4
+	if oldSrc.Is4() && c.MasqAddr4.IsValid() {
+		return c.MasqAddr4
 	}
-	if oldSrc.Is6() && c.dstMasqAddr6.IsValid() {
-		return c.dstMasqAddr6
+	if oldSrc.Is6() && c.MasqAddr6.IsValid() {
+		return c.MasqAddr6
 	}
 
 	// No SNAT; use old src
 	return oldSrc
-}
-
-// peerConfigTableFromWGConfig generates a peerConfigTable from nm. If NAT is
-// not required, and no additional configuration is present, it returns nil.
-func peerConfigTableFromWGConfig(wcfg *wgcfg.Config) *peerConfigTable {
-	if wcfg == nil {
-		return nil
-	}
-
-	nativeAddr4 := findV4(wcfg.Addresses)
-	nativeAddr6 := findV6(wcfg.Addresses)
-	if !nativeAddr4.IsValid() && !nativeAddr6.IsValid() {
-		return nil
-	}
-
-	ret := &peerConfigTable{
-		nativeAddr4:    nativeAddr4,
-		nativeAddr6:    nativeAddr6,
-		masqAddrCounts: make(map[netip.Addr]int),
-	}
-
-	// When using an exit node that requires masquerading, we need to
-	// fill out the routing table with all peers not just the ones that
-	// require masquerading.
-	exitNodeRequiresMasq := false // true if using an exit node and it requires masquerading
-	for _, p := range wcfg.Peers {
-		isExitNode := slices.Contains(p.AllowedIPs, tsaddr.AllIPv4()) || slices.Contains(p.AllowedIPs, tsaddr.AllIPv6())
-		if isExitNode {
-			hasMasqAddr := false ||
-				(p.V4MasqAddr != nil && p.V4MasqAddr.IsValid()) ||
-				(p.V6MasqAddr != nil && p.V6MasqAddr.IsValid())
-			if hasMasqAddr {
-				exitNodeRequiresMasq = true
-			}
-			break
-		}
-	}
-
-	byIPSize := 0
-	for i := range wcfg.Peers {
-		p := &wcfg.Peers[i]
-
-		// Build a routing table that configures DNAT (i.e. changing
-		// the V4MasqAddr/V6MasqAddr for a given peer to the current
-		// peer's v4/v6 IP).
-		var addrToUse4, addrToUse6 netip.Addr
-		if p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
-			addrToUse4 = *p.V4MasqAddr
-			ret.masqAddrCounts[addrToUse4]++
-		}
-		if p.V6MasqAddr != nil && p.V6MasqAddr.IsValid() {
-			addrToUse6 = *p.V6MasqAddr
-			ret.masqAddrCounts[addrToUse6]++
-		}
-
-		// If the exit node requires masquerading, set the masquerade
-		// addresses to our native addresses.
-		if exitNodeRequiresMasq {
-			if !addrToUse4.IsValid() && nativeAddr4.IsValid() {
-				addrToUse4 = nativeAddr4
-			}
-			if !addrToUse6.IsValid() && nativeAddr6.IsValid() {
-				addrToUse6 = nativeAddr6
-			}
-		}
-
-		if !addrToUse4.IsValid() && !addrToUse6.IsValid() && !p.IsJailed {
-			// NAT not required for this peer.
-			continue
-		}
-
-		// Use the same peer configuration for each address of the peer.
-		pc := &peerConfig{
-			dstMasqAddr4: addrToUse4,
-			dstMasqAddr6: addrToUse6,
-			jailed:       p.IsJailed,
-		}
-
-		// Insert an entry into our routing table for each allowed IP.
-		for _, ip := range p.AllowedIPs {
-			ret.byIP.Insert(ip, pc)
-			byIPSize++
-		}
-	}
-	if byIPSize == 0 && len(ret.masqAddrCounts) == 0 {
-		return nil
-	}
-	return ret
 }
 
 func (pc *peerConfigTable) inboundPacketIsJailed(p *packet.Parsed) bool {
@@ -815,7 +665,7 @@ func (pc *peerConfigTable) inboundPacketIsJailed(p *packet.Parsed) bool {
 	if !ok {
 		return false
 	}
-	return c.jailed
+	return c.Jailed
 }
 
 func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
@@ -826,7 +676,7 @@ func (pc *peerConfigTable) outboundPacketIsJailed(p *packet.Parsed) bool {
 	if !ok {
 		return false
 	}
-	return c.jailed
+	return c.Jailed
 }
 
 // SetIPer is the interface expected to be implemented by the TAP implementation
@@ -836,16 +686,53 @@ type SetIPer interface {
 	SetIP(ipV4, ipV6 netip.Addr) error
 }
 
-// SetWGConfig is called when a new NetworkMap is received.
+// SetWGConfig is called when a new NetworkMap is received. Its only
+// remaining job is updating the TAP device's IP addresses; the
+// per-peer route attributes arrive via [Wrapper.SetPeerRoutes].
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
 	if t.isTAP {
 		if sip, ok := t.tdev.(SetIPer); ok {
-			sip.SetIP(findV4(wcfg.Addresses), findV6(wcfg.Addresses))
+			sip.SetIP(tsaddr.FirstTailscaleAddrs(slices.All(wcfg.Addresses)))
 		}
 	}
-	cfg := peerConfigTableFromWGConfig(wcfg)
+}
+
+// SetPeerRoutes is called whenever this node's Tailscale addresses or
+// the route manager's outbound table change. native4 and native6 are
+// this node's own Tailscale addresses, and routes maps each peer's
+// addresses and routed prefixes to its route attributes.
+//
+// A nil routes table disables all per-packet peer processing (NAT
+// rewrites and jailed-filter selection); callers pass nil when no
+// current peer has any such attributes, which keeps the common
+// per-packet path to a nil check.
+//
+// Unchanged values are a cheap no-op, so callers can call it
+// unconditionally whenever the inputs might have changed: the routes
+// table is an immutable snapshot whose pointer identity means its
+// contents are unchanged.
+func (t *Wrapper) SetPeerRoutes(native4, native6 netip.Addr, routes *bart.Table[*routemanager.PeerRoute]) {
+	var cfg *peerConfigTable
+	if routes != nil && (native4.IsValid() || native6.IsValid()) {
+		if old := t.peerConfig.Load(); old != nil &&
+			old.byIP == routes && old.nativeAddr4 == native4 && old.nativeAddr6 == native6 {
+			return
+		}
+		cfg = &peerConfigTable{
+			nativeAddr4: native4,
+			nativeAddr6: native6,
+			byIP:        routes,
+		}
+	} else if t.peerConfig.Load() == nil {
+		// Uninstalling (cfg stays nil) over an already-nil config;
+		// skip the Swap and its transition logging below.
+		return
+	}
 	old := t.peerConfig.Swap(cfg)
-	if !reflect.DeepEqual(old, cfg) {
+	// Log only on nil-ness or native address transitions; the routes
+	// table changes with every routing update and is too chatty to log.
+	if (old == nil) != (cfg == nil) ||
+		(old != nil && (old.nativeAddr4 != cfg.nativeAddr4 || old.nativeAddr6 != cfg.nativeAddr6)) {
 		t.logf("peer config: %v", cfg)
 	}
 }

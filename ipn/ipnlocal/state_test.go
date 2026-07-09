@@ -17,6 +17,7 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
+	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
@@ -29,6 +30,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
@@ -1959,6 +1961,9 @@ func (e *mockEngine) SetJailedFilter(f *filter.Filter) {
 	e.mu.Lock()
 	e.jailedFilter = f
 	e.mu.Unlock()
+}
+
+func (e *mockEngine) SetPeerRoutes(native4, native6 netip.Addr, routes *bart.Table[*routemanager.PeerRoute]) {
 }
 
 func (e *mockEngine) SetStatusCallback(cb wgengine.StatusCallback) {

@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -1004,6 +1006,10 @@ func (e *userspaceEngine) GetJailedFilter() *filter.Filter {
 
 func (e *userspaceEngine) SetJailedFilter(filt *filter.Filter) {
 	e.tundev.SetJailedFilter(filt)
+}
+
+func (e *userspaceEngine) SetPeerRoutes(native4, native6 netip.Addr, routes *bart.Table[*routemanager.PeerRoute]) {
+	e.tundev.SetPeerRoutes(native4, native6, routes)
 }
 
 func (e *userspaceEngine) SetStatusCallback(cb StatusCallback) {

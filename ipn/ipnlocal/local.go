@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gaissmai/bart"
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
@@ -62,6 +63,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routemanager"
 	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -2516,6 +2518,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	for k := range deltaRes.ChangedAllowedIPs {
 		b.e.SyncDevicePeer(k)
 	}
+	b.setDataPlanePeerRoutes()
 
 	// Reset the WireGuard session for peers whose disco key changed in
 	// a way that indicates a restart, flushing their dead session keys;
@@ -2530,11 +2533,9 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// and its lazy peer creation reads live state via
 	// [wgengine.Engine.SetPeerConfigFunc]. What still rides
 	// authReconfig is everything else derived from the full peer set:
-	// OS routes (router.Config), the quad-100 resolver's MagicDNS
-	// hosts map (dnsConfigForNetmap), and tstun's per-peer config
-	// (masquerade addresses and jailed peers, via SetWGConfig). Once
-	// those become delta-aware too, this can be gated on the route
-	// manager's OS-routes changes and the tstun-relevant fields
+	// OS routes (router.Config) and the quad-100 resolver's MagicDNS
+	// hosts map (dnsConfigForNetmap). Once those become delta-aware
+	// too, this can be gated on the route manager's OS-routes changes
 	// instead of firing on every peer change.
 	needsAuthReconfig = needsAuthReconfig || peersUpsertedOrRemoved
 	if needsAuthReconfig {
@@ -6183,6 +6184,13 @@ func (b *LocalBackend) authReconfigLocked() {
 			cfg.Peers[i].AllowedIPs = extras.AppendTo(cfg.Peers[i].AllowedIPs)
 		}
 	}
+	// The prefs and extras commits above can both change the outbound
+	// table (such as installing the selected exit node's /0 routes),
+	// so refresh the data plane's view of it. This must stay after
+	// updateRouteManagerExtras, so the pushed snapshot includes its
+	// commit, and before the Reconfig below, so packets flowing under
+	// the new config never see a stale peer table.
+	b.setDataPlanePeerRoutes()
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
@@ -6194,6 +6202,29 @@ func (b *LocalBackend) authReconfigLocked() {
 	if buildfeatures.HasAppConnectors {
 		go b.goTracker.Go(b.readvertiseAppConnectorRoutes)
 	}
+}
+
+// setDataPlanePeerRoutes pushes the route manager's outbound table and
+// this node's native Tailscale addresses into the engine's tun-layer
+// data plane, which uses them for per-packet NAT rewrites and
+// jailed-filter selection. It must be called after every route manager
+// commit that can change the outbound table or the set of peers with
+// data-plane attributes: netmap updates (full or delta), prefs changes,
+// and extra-allowed-IP changes.
+//
+// When no current peer is jailed or masqueraded, it installs nil, which
+// keeps the data plane's per-packet fast path to a nil check.
+func (b *LocalBackend) setDataPlanePeerRoutes() {
+	nb := b.currentNode()
+	var native4, native6 netip.Addr
+	var routes *bart.Table[*routemanager.PeerRoute]
+	if nb.routeMgr.HasDataPlaneAttrs() {
+		routes = nb.routeMgr.Outbound()
+		if nm := nb.NetMap(); nm != nil {
+			native4, native6 = tsaddr.FirstTailscaleAddrs(nm.GetAddresses().All())
+		}
+	}
+	b.e.SetPeerRoutes(native4, native6, routes)
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -7312,6 +7343,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
 	discoChanged := b.currentNode().SetNetMap(nm)
+	b.setDataPlanePeerRoutes()
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
 			if nm.Cached {
