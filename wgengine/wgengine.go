@@ -126,17 +126,9 @@ type Engine interface {
 	// If fn is nil, PeerForIP returns (zero, false) for every IP.
 	//
 	// LocalBackend installs a func backed by the live nodeBackend for
-	// exact-match and self addresses, with [Engine.PeerKeyForIP]
-	// supplying the subnet-route / exit-node fallback.
+	// exact-match and self addresses, with the RouteManager's outbound
+	// table supplying the subnet-route / exit-node fallback.
 	SetPeerForIPFunc(fn func(netip.Addr) (_ PeerForIP, ok bool))
-
-	// PeerKeyForIP returns the peer's NodePublic and the matched prefix
-	// for the longest-prefix match of ip in the engine's AllowedIPs
-	// table (the wireguard config most recently installed via
-	// [Engine.Reconfig]). Exit-node selection is honored: an unselected
-	// exit node's 0.0.0.0/0 is not matched. It is the same table the
-	// outbound packet hot path consults via [Engine.SetPeerByIPPacketFunc].
-	PeerKeyForIP(netip.Addr) (_ key.NodePublic, _ netip.Prefix, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
