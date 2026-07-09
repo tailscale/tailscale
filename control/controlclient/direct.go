@@ -286,10 +286,10 @@ type UserProfileUpdater interface {
 	UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool
 }
 
-// patchDiscoKeyer is an optional interface that can be implemented by an [Observer] to be
+// DiscoKeyUpdater is an optional interface that can be implemented by an [Observer] to be
 // notified about node disco keys received out-of-band from control, via
 // existing connection state.
-type patchDiscoKeyer interface {
+type DiscoKeyUpdater interface {
 	// PatchDiscoKey reports to the receiver that the specified disco key
 	// for node was obtained out-of-band from control.
 	PatchDiscoKey(key.NodePublic, key.DiscoPublic)

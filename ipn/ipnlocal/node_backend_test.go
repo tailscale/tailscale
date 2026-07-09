@@ -346,7 +346,7 @@ func TestNodeBackendRouteManager(t *testing.T) {
 
 	// Incremental deltas: add peer 3, remove peer 1.
 	p3 := mkPeer(3, "stable3", "100.64.0.3/32")
-	handled, changed := nb.UpdateNetmapDelta([]netmap.NodeMutation{
+	handled, changed, _ := nb.UpdateNetmapDelta([]netmap.NodeMutation{
 		netmap.NodeMutationUpsert{Node: p3},
 		netmap.MakeNodeMutationRemove(1),
 	})
@@ -418,5 +418,144 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	}
 	if _, ok := nb.routeMgr.Outbound().Lookup(transit.Addr()); ok {
 		t.Errorf("Outbound still routes %v after extras cleared", transit.Addr())
+	}
+}
+
+// TestNodeBackendDiscoChanged exercises the full-netmap disco change
+// detection: a peer whose disco key changes has restarted and needs its
+// WireGuard session reset, unless the new key was already learned over
+// TSMP (that is, over a working WireGuard session with the peer).
+func TestNodeBackendDiscoChanged(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	nk := key.NewNode().Public()
+	mkNetMap := func(disco key.DiscoPublic) *netmap.NetworkMap {
+		n := &tailcfg.Node{
+			ID:       1,
+			Key:      nk,
+			DiscoKey: disco,
+			HomeDERP: 1,
+		}
+		return &netmap.NetworkMap{Peers: []tailcfg.NodeView{n.View()}}
+	}
+	newDisco := func() key.DiscoPublic { return key.NewDisco().Public() }
+
+	// A brand-new peer is not a disco change.
+	d1 := newDisco()
+	if got := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+		t.Errorf("SetNetMap(new peer) discoChanged = %v; want none", got)
+	}
+
+	// A changed disco key requires a session reset.
+	d2 := newDisco()
+	if got := nb.SetNetMap(mkNetMap(d2)); !slices.Contains(got, nk) {
+		t.Errorf("SetNetMap(changed disco) discoChanged = %v; want %v", got, nk)
+	}
+
+	// An unchanged disco key does not.
+	if got := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
+		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
+	}
+
+	// A change already learned via TSMP is suppressed...
+	d3 := newDisco()
+	nb.recordTSMPLearnedDisco(nk, d3)
+	if got := nb.SetNetMap(mkNetMap(d3)); len(got) != 0 {
+		t.Errorf("SetNetMap(TSMP-learned disco) discoChanged = %v; want none", got)
+	}
+
+	// ...but the TSMP entry is consumed, so the next change resets again.
+	d4 := newDisco()
+	if got := nb.SetNetMap(mkNetMap(d4)); !slices.Contains(got, nk) {
+		t.Errorf("SetNetMap(after TSMP entry consumed) discoChanged = %v; want %v", got, nk)
+	}
+
+	// A TSMP-learned key that doesn't match the netmap's new key still
+	// resets the session and bumps the mismatch metric.
+	before := metricTSMPLearnedKeyMismatch.Value()
+	nb.recordTSMPLearnedDisco(nk, newDisco())
+	d5 := newDisco()
+	if got := nb.SetNetMap(mkNetMap(d5)); !slices.Contains(got, nk) {
+		t.Errorf("SetNetMap(TSMP mismatch) discoChanged = %v; want %v", got, nk)
+	}
+	if delta := metricTSMPLearnedKeyMismatch.Value() - before; delta != 1 {
+		t.Errorf("metricTSMPLearnedKeyMismatch delta = %d; want 1", delta)
+	}
+
+	// Removing the peer garbage-collects its TSMP entry: after the peer
+	// comes back, a change to the once-recorded key is a normal reset.
+	d6 := newDisco()
+	nb.recordTSMPLearnedDisco(nk, d6)
+	nb.SetNetMap(&netmap.NetworkMap{})
+	nb.SetNetMap(mkNetMap(d5))
+	if got := nb.SetNetMap(mkNetMap(d6)); !slices.Contains(got, nk) {
+		t.Errorf("SetNetMap(after TSMP entry GC) discoChanged = %v; want %v", got, nk)
+	}
+
+	// Transitions to or from a zero disco key never reset.
+	if got := nb.SetNetMap(mkNetMap(key.DiscoPublic{})); len(got) != 0 {
+		t.Errorf("SetNetMap(to zero disco) discoChanged = %v; want none", got)
+	}
+	if got := nb.SetNetMap(mkNetMap(d1)); len(got) != 0 {
+		t.Errorf("SetNetMap(from zero disco) discoChanged = %v; want none", got)
+	}
+}
+
+// TestNodeBackendDiscoChangedDelta is like TestNodeBackendDiscoChanged
+// but for the incremental path: disco changes arriving as
+// [netmap.NodeMutationUpsert] deltas.
+func TestNodeBackendDiscoChangedDelta(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	mkNode := func(k key.NodePublic, disco key.DiscoPublic) tailcfg.NodeView {
+		return (&tailcfg.Node{ID: 1, Key: k, DiscoKey: disco, HomeDERP: 1}).View()
+	}
+	newDisco := func() key.DiscoPublic { return key.NewDisco().Public() }
+	apply := func(muts ...netmap.NodeMutation) []key.NodePublic {
+		t.Helper()
+		handled, _, discoChanged := nb.UpdateNetmapDelta(muts)
+		if !handled {
+			t.Fatal("UpdateNetmapDelta not handled")
+		}
+		return discoChanged
+	}
+
+	nk := key.NewNode().Public()
+	d1 := newDisco()
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{mkNode(nk, d1)}})
+
+	// An upserted peer with a changed disco key needs a session reset.
+	d2 := newDisco()
+	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk, d2)}); !slices.Contains(got, nk) {
+		t.Errorf("upsert(changed disco) discoChanged = %v; want %v", got, nk)
+	}
+
+	// An unchanged disco key does not.
+	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk, d2)}); len(got) != 0 {
+		t.Errorf("upsert(same disco) discoChanged = %v; want none", got)
+	}
+
+	// A change already learned via TSMP is suppressed.
+	d3 := newDisco()
+	nb.recordTSMPLearnedDisco(nk, d3)
+	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk, d3)}); len(got) != 0 {
+		t.Errorf("upsert(TSMP-learned disco) discoChanged = %v; want none", got)
+	}
+
+	// A node key rotation replaces the WireGuard peer outright, so no
+	// disco-based reset is reported.
+	nk2 := key.NewNode().Public()
+	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())}); len(got) != 0 {
+		t.Errorf("upsert(rotated node key) discoChanged = %v; want none", got)
+	}
+
+	// Removing the peer garbage-collects its TSMP entry: after the peer
+	// comes back, a change to the once-recorded key is a normal reset.
+	d4 := newDisco()
+	nb.recordTSMPLearnedDisco(nk2, d4)
+	apply(netmap.MakeNodeMutationRemove(1))
+	apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())})
+	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, d4)}); !slices.Contains(got, nk2) {
+		t.Errorf("upsert(after TSMP entry GC) discoChanged = %v; want %v", got, nk2)
 	}
 }
