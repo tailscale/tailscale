@@ -6,6 +6,8 @@
 // Package clonerex is an example package for the cloner tool.
 package clonerex
 
+import "maps"
+
 type SliceContainer struct {
 	Slice []*int
 }
@@ -49,9 +51,7 @@ func (m NamedMap) Clone() NamedMap {
 		return nil
 	}
 	m2 := make(NamedMap, len(m))
-	for k, v := range m {
-		m2[k] = v
-	}
+	maps.Copy(m2, m)
 	return m2
 }
 

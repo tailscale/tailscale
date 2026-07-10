@@ -504,8 +504,8 @@ func writeOutput(path string, data []byte) error {
 // isZeroMapResponse reports whether all fields of resp are zero values.
 func isZeroMapResponse(resp *tailcfg.MapResponse) bool {
 	v := reflect.ValueOf(*resp)
-	for i := range v.NumField() {
-		if !v.Field(i).IsZero() {
+	for _, field := range v.Fields() {
+		if !field.IsZero() {
 			return false
 		}
 	}

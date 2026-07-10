@@ -55,7 +55,7 @@ type ServiceMonitorSpec struct {
 	JobLabel string `json:"jobLabel"`
 	// NamespaceSelector selects the namespace of Service(s) that this ServiceMonitor allows to scrape.
 	// https://github.com/prometheus-operator/prometheus-operator/blob/bb4514e0d5d69f20270e29cfd4ad39b87865ccdf/pkg/apis/monitoring/v1/servicemonitor_types.go#L88
-	NamespaceSelector ServiceMonitorNamespaceSelector `json:"namespaceSelector,omitempty"`
+	NamespaceSelector ServiceMonitorNamespaceSelector `json:"namespaceSelector"`
 	// Selector is the label selector for Service(s) that this ServiceMonitor allows to scrape.
 	// https://github.com/prometheus-operator/prometheus-operator/blob/bb4514e0d5d69f20270e29cfd4ad39b87865ccdf/pkg/apis/monitoring/v1/servicemonitor_types.go#L85
 	Selector metav1.LabelSelector `json:"selector"`

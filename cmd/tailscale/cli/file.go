@@ -548,10 +548,7 @@ type slowReader struct {
 
 func (r *slowReader) Read(p []byte) (n int, err error) {
 	const burst = 4 << 10
-	plen := len(p)
-	if plen > burst {
-		plen = burst
-	}
+	plen := min(len(p), burst)
 	if r.rl == nil {
 		r.rl = rate.NewLimiter(rate.Limit(1<<10), burst)
 	}

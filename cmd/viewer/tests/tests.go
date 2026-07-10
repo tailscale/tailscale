@@ -6,6 +6,7 @@ package tests
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
 
 	"golang.org/x/exp/constraints"
@@ -252,9 +253,7 @@ func (m NamedMap) Clone() NamedMap {
 		return nil
 	}
 	m2 := make(NamedMap, len(m))
-	for k, v := range m {
-		m2[k] = v
-	}
+	maps.Copy(m2, m)
 	return m2
 }
 
