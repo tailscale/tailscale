@@ -1679,6 +1679,17 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		// here instead.
 		r.Complete(true) // sends a RST
 		return
+	case ns.isVIPServiceIP(dialIP):
+		// TCP to a VIP service IP on a port the service does not serve. A served
+		// port returns early above (TCPHandlerForDst is non-nil), so reaching here
+		// means this node has no serve handler for this port. Don't fall through
+		// to the isTailscaleIP case below (a VIP is in the Tailscale IP range),
+		// which would rewrite the dial target to 127.0.0.1:<port> and forwardTCP
+		// the connection onto whatever unrelated service happens to be listening
+		// on the host's loopback at that port — reachable via the service IP by
+		// any peer, even one granted access only to the service. Reject with a RST.
+		r.Complete(true) // sends a RST
+		return
 	case isTailscaleIP:
 		dialIP = ipv4Loopback
 	}
