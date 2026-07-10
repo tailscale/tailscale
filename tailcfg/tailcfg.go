@@ -2469,7 +2469,7 @@ type Oauth2Token struct {
 	// If zero, TokenSource implementations will reuse the same
 	// token forever and RefreshToken or equivalent
 	// mechanisms for that TokenSource will not be used.
-	Expiry time.Time `json:"expiry,omitempty"`
+	Expiry time.Time `json:"expiry,omitzero"`
 }
 
 // NodeCapability represents a capability granted to the self node as listed in

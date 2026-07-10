@@ -74,7 +74,7 @@ func parseTrustedCIDRs(raw string) []netip.Prefix {
 		return nil
 	}
 	var prefixes []netip.Prefix
-	for _, s := range strings.Split(raw, ",") {
+	for s := range strings.SplitSeq(raw, ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue

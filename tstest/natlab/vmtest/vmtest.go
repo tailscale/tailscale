@@ -872,7 +872,7 @@ func (e *Env) BringUpMullvadWGServer(n *Node, gw netip.Prefix, listenPort uint16
 		e.t.Fatalf("BringUpMullvadWGServer(%s): %s: %s", n.name, res.Status, body)
 	}
 	var pubB64 string
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if s, ok := strings.CutPrefix(strings.TrimSpace(line), "PUBKEY="); ok {
 			pubB64 = s
 			break
@@ -2046,7 +2046,7 @@ func findKernelPath(goMod string) (string, error) {
 	goModCache := strings.TrimSpace(string(goModCacheB))
 
 	// Parse go.mod to find gokrazy-kernel version.
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "github.com/tailscale/gokrazy-kernel") {
 			parts := strings.Fields(line)

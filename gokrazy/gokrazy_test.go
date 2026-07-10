@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -181,12 +182,7 @@ func (sl *serialLog) lastN(n int) []string {
 func (sl *serialLog) findLine(pred func(string) bool) bool {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
-	for _, line := range sl.lines {
-		if pred(line) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(sl.lines, pred)
 }
 
 // TestBusyboxInTsapp boots the tsapp image in QEMU and verifies that

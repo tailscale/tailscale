@@ -15,7 +15,7 @@ func init() {
 
 func breakTCPConnsDarwin() error {
 	var matched int
-	for fd := 0; fd < 1000; fd++ {
+	for fd := range 1000 {
 		_, err := unix.GetsockoptTCPConnectionInfo(fd, unix.IPPROTO_TCP, unix.TCP_CONNECTION_INFO)
 		if err == nil {
 			matched++

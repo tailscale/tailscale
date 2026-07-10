@@ -428,11 +428,11 @@ func waitForVMIP(t testing.TB, mac string, timeout time.Duration) (string, error
 			var currentIP string
 			for _, line := range lines {
 				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "ip_address=") {
-					currentIP = strings.TrimPrefix(line, "ip_address=")
+				if after, ok := strings.CutPrefix(line, "ip_address="); ok {
+					currentIP = after
 				}
-				if strings.HasPrefix(line, "hw_address=") {
-					hw := strings.TrimPrefix(line, "hw_address=")
+				if after, ok := strings.CutPrefix(line, "hw_address="); ok {
+					hw := after
 					if strings.ToLower(hw) == leaseMAC && currentIP != "" {
 						return currentIP, nil
 					}

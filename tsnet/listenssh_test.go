@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,10 +72,8 @@ func TestListenSSH(t *testing.T) {
 			return err
 		}
 		for _, peer := range st.Peer {
-			for _, ip := range peer.TailscaleIPs {
-				if ip == clientIP {
-					return nil
-				}
+			if slices.Contains(peer.TailscaleIPs, clientIP) {
+				return nil
 			}
 		}
 		return errors.New("clientNode not yet in srvNode's netmap")

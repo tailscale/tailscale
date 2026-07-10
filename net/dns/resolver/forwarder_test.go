@@ -671,10 +671,7 @@ func makeResponseOfSize(tb testing.TB, domain string, targetSize int, includeOPT
 	if includeOPT {
 		baseSize += 11 // OPT record adds ~11 bytes
 	}
-	estimatedRecords := (targetSize - baseSize) / bytesPerRecord
-	if estimatedRecords < 1 {
-		estimatedRecords = 1
-	}
+	estimatedRecords := max((targetSize-baseSize)/bytesPerRecord, 1)
 
 	// Start with estimated records and adjust
 	txtLen := 200
@@ -741,10 +738,7 @@ func makeResponseOfSize(tb testing.TB, domain string, targetSize int, includeOPT
 			// If we need too many records, increase TXT length instead
 			txtLen = 255         // Max single TXT string length
 			bytesPerRecord = 280 // Adjusted estimate
-			estimatedRecords = (targetSize - baseSize) / bytesPerRecord
-			if estimatedRecords < 1 {
-				estimatedRecords = 1
-			}
+			estimatedRecords = max((targetSize-baseSize)/bytesPerRecord, 1)
 		}
 	}
 

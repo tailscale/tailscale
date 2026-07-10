@@ -2123,8 +2123,7 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 
 func TestWatchNotificationsClosesSlowConsumer(t *testing.T) {
 	b := newTestLocalBackend(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	watchAdded := make(chan struct{})
 	firstNotify := make(chan struct{}, 1)

@@ -144,10 +144,7 @@ func (m *memBackend) ReadAt(p []byte, off int64) (int, error) {
 		absOff := off + int64(total)
 		page := absOff / memPageSize
 		within := int(absOff % memPageSize)
-		room := memPageSize - within
-		if room > len(p)-total {
-			room = len(p) - total
-		}
+		room := min(memPageSize-within, len(p)-total)
 		if chunk, ok := m.pages[page]; ok {
 			copy(p[total:total+room], chunk[within:within+room])
 		}
@@ -183,10 +180,7 @@ func (m *memBackend) WriteAt(p []byte, off int64) (int, error) {
 		absOff := off + int64(total)
 		page := absOff / memPageSize
 		within := int(absOff % memPageSize)
-		room := memPageSize - within
-		if room > len(p)-total {
-			room = len(p) - total
-		}
+		room := min(memPageSize-within, len(p)-total)
 		chunk, ok := m.pages[page]
 		if !ok && isAllZero(p[total:total+room]) {
 			// Don't allocate a fresh zero page.

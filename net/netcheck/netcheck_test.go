@@ -512,7 +512,7 @@ func TestRecentReportsRetainFullNetcheck(t *testing.T) {
 	const tick = time.Minute
 	start := time.Unix(1700000000, 0)
 	var lastFull time.Time // zero => first report is full, as in GetReport
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		now = start.Add(time.Duration(i) * tick)
 
 		// Mirror GetReport's full-vs-incremental decision.

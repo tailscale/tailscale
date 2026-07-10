@@ -76,7 +76,7 @@ type ReloadConfigResponse struct {
 type ExitNodeSuggestionResponse struct {
 	ID       tailcfg.StableNodeID
 	Name     string
-	Location tailcfg.LocationView `json:",omitempty"`
+	Location tailcfg.LocationView `json:",omitzero"`
 }
 
 // DNSOSConfig mimics dns.OSConfig without forcing us to import the entire dns package

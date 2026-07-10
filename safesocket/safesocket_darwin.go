@@ -323,11 +323,11 @@ func readMacosSameUserProof() (port int, token string, err error) {
 		subStr := []byte(".tailscale.ipn.macos/sameuserproof-")
 		for bs.Scan() {
 			line := bs.Bytes()
-			i := bytes.Index(line, subStr)
-			if i == -1 {
+			_, after, ok := bytes.Cut(line, subStr)
+			if !ok {
 				continue
 			}
-			f := strings.SplitN(string(line[i+len(subStr):]), "-", 2)
+			f := strings.SplitN(string(after), "-", 2)
 			if len(f) != 2 {
 				continue
 			}

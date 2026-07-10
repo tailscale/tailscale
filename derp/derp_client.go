@@ -167,7 +167,7 @@ type ClientInfo struct {
 	// trusted clients.  It's required to subscribe to the
 	// connection list & forward packets. It's empty for regular
 	// users.
-	MeshKey key.DERPMesh `json:"meshKey,omitempty,omitzero"`
+	MeshKey key.DERPMesh `json:"meshKey,omitzero"`
 
 	// Version is the DERP protocol version that the client was built with.
 	// See the ProtocolVersion const.

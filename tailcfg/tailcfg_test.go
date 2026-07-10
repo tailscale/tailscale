@@ -808,7 +808,7 @@ func FuzzNodeIsRouter(f *testing.F) {
 	decodePrefixes := func(t *testing.T, prefixes string) []netip.Prefix {
 		t.Helper()
 		var out []netip.Prefix
-		for _, p := range strings.Fields(prefixes) {
+		for p := range strings.FieldsSeq(prefixes) {
 			pfx, err := netip.ParsePrefix(p)
 			if err != nil {
 				log.Printf("skipping %q: %v", prefixes, err)
@@ -1076,7 +1076,7 @@ func TestMarshalToRawMessageAndBack(t *testing.T) {
 		Ports    []int            `json:"ports,omitempty"`
 		ToggleOn bool             `json:"toggleOn,omitempty"`
 		Name     string           `json:"name,omitempty"`
-		Groups   inner            `json:"groups,omitempty"`
+		Groups   inner            `json:"groups"`
 		Addrs    []netip.AddrPort `json:"addrs"`
 	}
 	tests := []struct {

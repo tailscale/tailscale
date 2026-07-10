@@ -60,10 +60,7 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 	b.n++
 	// n^2 backoff timer is a little smoother than the
 	// common choice of 2^n.
-	d := time.Duration(b.n*b.n) * 10 * time.Millisecond
-	if d > b.maxBackoff {
-		d = b.maxBackoff
-	}
+	d := min(time.Duration(b.n*b.n)*10*time.Millisecond, b.maxBackoff)
 	// Randomize the delay between 0.5-1.5 x msec, in order
 	// to prevent accidental "thundering herd" problems.
 	d = time.Duration(float64(d) * (rand.Float64() + 0.5))

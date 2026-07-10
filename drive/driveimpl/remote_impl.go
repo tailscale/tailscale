@@ -315,9 +315,7 @@ func (s *userServer) runLoop() {
 			consecutiveFailures = 1
 		}
 		sleepTime := time.Duration(math.Pow(2, consecutiveFailures)) * time.Millisecond
-		if sleepTime > maxSleepTime {
-			sleepTime = maxSleepTime
-		}
+		sleepTime = min(sleepTime, maxSleepTime)
 		s.logf("user server % v stopped with error %v, will try again in %v", s.executable, err, sleepTime)
 		time.Sleep(sleepTime)
 	}

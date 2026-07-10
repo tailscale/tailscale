@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"golang.org/x/mod/modfile"
@@ -26,13 +27,7 @@ func CheckGoModReplaces(args []string, watchedRemotes, allowedReplaceDirs []stri
 	}
 	remoteLoc := args[1]
 
-	watched := false
-	for _, r := range watchedRemotes {
-		if r == remoteLoc {
-			watched = true
-			break
-		}
-	}
+	watched := slices.Contains(watchedRemotes, remoteLoc)
 	if !watched {
 		return nil
 	}
@@ -69,13 +64,7 @@ func checkCommit(sha string, allowedReplaceDirs []string) error {
 		if !modfile.IsDirectoryPath(r.New.Path) {
 			continue
 		}
-		allowed := false
-		for _, a := range allowedReplaceDirs {
-			if a == r.New.Path {
-				allowed = true
-				break
-			}
-		}
+		allowed := slices.Contains(allowedReplaceDirs, r.New.Path)
 		if !allowed {
 			return fmt.Errorf("go.mod contains replace from %v => %v", r.Old.Path, r.New.Path)
 		}
