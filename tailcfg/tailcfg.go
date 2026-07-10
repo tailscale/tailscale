@@ -913,9 +913,15 @@ type Hostinfo struct {
 	// away, even if it's disabled most of the time. As an optimization, this is
 	// only sent if IngressEnabled is false, as IngressEnabled implies that this
 	// option is true.
-	WireIngress     bool           `json:",omitzero"`
-	IngressEnabled  bool           `json:",omitzero"`  // if the node has any funnel endpoint enabled
-	AllowsUpdate    bool           `json:",omitzero"`  // indicates that the node has opted-in to admin-console-drive remote updates
+	WireIngress    bool `json:",omitzero"`
+	IngressEnabled bool `json:",omitzero"` // if the node has any funnel endpoint enabled
+
+	// AllowsUpdate reports that the node has opted in to
+	// admin-console-driven remote updates and that the running binary
+	// includes client update support (the feature/clientupdate package,
+	// which tsnet apps don't include).
+	AllowsUpdate bool `json:",omitzero"`
+
 	Machine         string         `json:",omitzero"`  // the current host's machine type (uname -m)
 	GoArch          string         `json:",omitzero"`  // GOARCH value (of the built binary)
 	GoArchVar       string         `json:",omitzero"`  // GOARM, GOAMD64, etc (of the built binary)

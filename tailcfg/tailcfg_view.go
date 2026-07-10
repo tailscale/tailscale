@@ -570,7 +570,10 @@ func (v HostinfoView) WireIngress() bool { return v.ж.WireIngress }
 // if the node has any funnel endpoint enabled
 func (v HostinfoView) IngressEnabled() bool { return v.ж.IngressEnabled }
 
-// indicates that the node has opted-in to admin-console-drive remote updates
+// AllowsUpdate reports that the node has opted in to
+// admin-console-driven remote updates and that the running binary
+// includes client update support (the feature/clientupdate package,
+// which tsnet apps don't include).
 func (v HostinfoView) AllowsUpdate() bool { return v.ж.AllowsUpdate }
 
 // the current host's machine type (uname -m)

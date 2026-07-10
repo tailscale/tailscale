@@ -6626,7 +6626,9 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// feature/remoteconfig even though ts_omit_remoteconfig is not
 	// set, so we must not claim RemoteConfig is active there.
 	hi.RemoteConfig = buildfeatures.HasRemoteConfig && prefs.RemoteConfig() && feature.IsRegistered("remoteconfig")
-	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true))
+	// Likewise for AllowsUpdate: require the clientupdate feature's init to
+	// have run, not just the build tag being enabled.
+	hi.AllowsUpdate = buildfeatures.HasClientUpdate && (envknob.AllowsRemoteUpdate() || prefs.AutoUpdate().Apply.EqualBool(true)) && feature.IsRegistered("clientupdate")
 
 	if buildfeatures.HasAdvertiseRoutes {
 		b.metrics.advertisedRoutes.Set(float64(tsaddr.WithoutExitRoute(prefs.AdvertiseRoutes()).Len()))

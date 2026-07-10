@@ -36,6 +36,7 @@ import (
 )
 
 func init() {
+	feature.Register("clientupdate")
 	ipnext.RegisterExtension("clientupdate", newExt)
 
 	// C2N
