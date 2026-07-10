@@ -50,6 +50,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/zstdframe"
 	"tailscale.com/version"
@@ -59,9 +60,10 @@ var (
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 
-	// runWindowsServiceTests opts Windows tests into starting tailscaled as a
-	// service instead of a userspace child process. Tests run serially in this mode.
-	runWindowsServiceTests = flag.Bool("run-windows-service-tests", false, "run tailscaled as a Windows service")
+	// runWindowsServiceTests enables the Windows service-mode integration tests
+	// (tailscaled installed as a service). On by default in CI. Tests opt in via
+	// NewTestEnv(t, WindowsServiceMode()) and run serially in this mode.
+	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
 )
 
 // MainError is an error that's set if an error conditions happens outside of a
@@ -540,11 +542,36 @@ func (f ConfigureControl) ModifyTestEnv(te *TestEnv) {
 	f(te.Control)
 }
 
+// windowsServiceOpt is the TestEnvOpt returned by WindowsServiceMode.
+type windowsServiceOpt struct{}
+
+func (windowsServiceOpt) ModifyTestEnv(te *TestEnv) { te.windowsService = true }
+
+// WindowsServiceMode makes NewTestEnv run tailscaled as a Windows service
+// (install-system-daemon) rather than a userspace child process. It's a no-op
+// off Windows. Only tests that pass it run on Windows; all others skip there.
+func WindowsServiceMode() TestEnvOpt { return windowsServiceOpt{} }
+
 // NewTestEnv starts a bunch of services and returns a new test environment.
 // NewTestEnv arranges for the environment's resources to be cleaned up on exit.
 func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
-	if runtime.GOOS == "windows" && !*runWindowsServiceTests {
-		t.Skip("Windows only runs with --run-windows-service-tests (tailscaled as a service)")
+	// Integration tests skip on Windows unless a test opts into service mode
+	// via WindowsServiceMode(); a Windows service is a singleton, so the generic
+	// (often multi-node) tests can't run against it. Pre-scan the opts for the
+	// service marker before starting any servers so a skip leaks nothing.
+	serviceMode := false
+	for _, o := range opts {
+		if _, ok := o.(windowsServiceOpt); ok {
+			serviceMode = true
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if !serviceMode {
+			t.Skip("integration tests skip on Windows unless run in service mode")
+		}
+		if !*runWindowsServiceTests {
+			t.Skip("Windows service tests disabled (--run-windows-service-tests=false)")
+		}
 	}
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
@@ -557,7 +584,6 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	binaries := GetBinaries(t)
 	e := &TestEnv{
 		t:                 t,
-		windowsService:    runtime.GOOS == "windows" && *runWindowsServiceTests,
 		cli:               binaries.Tailscale.Path,
 		daemon:            binaries.Tailscaled.Path,
 		LogCatcher:        logc,

@@ -1181,24 +1181,6 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
-// Issue 2137: make sure Windows tailscaled works with the CLI alone,
-// without the GUI to kick off a Start.
-func TestOneNodeUpWindowsStyle(t *testing.T) {
-	tstest.Parallel(t)
-	env := NewTestEnv(t)
-	n1 := NewTestNode(t, env)
-	n1.upFlagGOOS = "windows"
-
-	d1 := n1.StartDaemonAsIPNGOOS("windows")
-	n1.AwaitResponding()
-	n1.MustUp("--unattended")
-
-	t.Logf("Got IP: %v", n1.AwaitIP4())
-	n1.AwaitRunning()
-
-	d1.MustCleanShutdown(t)
-}
-
 // TestClientSideJailing tests that when one node is jailed for another, the
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.

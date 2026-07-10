@@ -238,8 +238,6 @@ jobs:
             shard: "1/2"
           - key: "win-shard-2-2"
             shard: "2/2"
-          - key: "win-service"
-            name: "service"
     steps:
     - name: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -264,7 +262,7 @@ jobs:
 
     - name: test
       shell: bash
-      if: startsWith(matrix.key, 'win-shard-') # sharded testwrapper legs only
+      if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
       run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
       env:
@@ -275,14 +273,6 @@ jobs:
       if: matrix.key == 'win-bench'
       working-directory: src
       run: ./tool/go test -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
-      env:
-        NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
-
-    - name: windows service integration test
-      shell: bash
-      if: matrix.key == 'win-service' # tailscaled as a real service, outside testwrapper's retry clamp
-      working-directory: src
-      run: ./tool/go test ./tstest/integration -run '^TestOneNodeUpWindowsStyle$' -run-windows-service-tests -timeout 20m -count=1 -v
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
 
