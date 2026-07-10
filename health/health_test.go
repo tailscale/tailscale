@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1124,4 +1125,88 @@ func TestIPForwardingState(t *testing.T) {
 			t.Fatal("expected IP forwarding to be healthy after clearing check")
 		}
 	})
+}
+
+// TestMagicsockReceiveFuncWarnable reproduces the production failure where a
+// magicsock receive func exits and is never restarted: once the func stops
+// accumulating calls, the next self-check flags it as unhealthy. It also
+// verifies the warning impacts connectivity and is surfaced in CurrentState.
+func TestMagicsockReceiveFuncWarnable(t *testing.T) {
+	bus := eventbus.New()
+	tr := NewTracker(bus)
+	defer bus.Close()
+
+	tr.SetIPNState("Running", true)
+	tr.GotStreamedMapResponse()
+
+	// All three receive funcs are running and healthy to start with, as they
+	// would be on a working node.
+	funcs := [...]*ReceiveFuncStats{
+		tr.ReceiveFuncStats(ReceiveIPv4),
+		tr.ReceiveFuncStats(ReceiveIPv6),
+		tr.ReceiveFuncStats(ReceiveDERP),
+	}
+	for i, rf := range funcs {
+		if rf == nil {
+			t.Fatalf("ReceiveFuncStats(%d) = nil", i)
+		}
+	}
+	tick := func() {
+		for _, rf := range funcs {
+			rf.Enter()
+			rf.Exit()
+		}
+		tr.timerSelfCheck()
+	}
+
+	// Two healthy ticks: every func keeps accumulating calls.
+	tick()
+	tick()
+	if tr.IsUnhealthy(magicsockReceiveFuncWarnable) {
+		t.Fatal("receive func flagged unhealthy while all funcs were running")
+	}
+
+	// ReceiveIPv4 exits and is never called again (the production failure),
+	// while the others keep running.
+	rf4 := funcs[0]
+	live := funcs[1:]
+	runLive := func() {
+		for _, rf := range live {
+			rf.Enter()
+			rf.Exit()
+		}
+		tr.timerSelfCheck()
+	}
+
+	// First tick after v4 stopped: its call count no longer advances while
+	// the others do, so it is detected as missing.
+	runLive()
+	if !tr.IsUnhealthy(magicsockReceiveFuncWarnable) {
+		t.Fatal("receive func not flagged unhealthy after ReceiveIPv4 stopped running")
+	}
+
+	if !magicsockReceiveFuncWarnable.ImpactsConnectivity {
+		t.Error("magicsockReceiveFuncWarnable.ImpactsConnectivity = false, want true")
+	}
+
+	st := tr.CurrentState()
+	us, ok := st.Warnings[tsconst.HealthWarnableMagicsockReceiveFuncError]
+	if !ok {
+		t.Fatalf("CurrentState().Warnings missing %q; got %v",
+			tsconst.HealthWarnableMagicsockReceiveFuncError, slices.Collect(maps.Keys(st.Warnings)))
+	}
+	if !us.ImpactsConnectivity {
+		t.Error("UnhealthyState.ImpactsConnectivity = false, want true")
+	}
+	if !strings.Contains(us.Text, "ReceiveIPv4") {
+		t.Errorf("warning text = %q, want it to name ReceiveIPv4", us.Text)
+	}
+
+	// ReceiveIPv4 resuming clears the warning.
+	rf4.Enter()
+	rf4.Exit()
+	runLive()
+	if tr.IsUnhealthy(magicsockReceiveFuncWarnable) {
+		t.Fatal("receive func still flagged unhealthy after ReceiveIPv4 resumed")
+	}
 }

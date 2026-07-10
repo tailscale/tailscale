@@ -256,6 +256,7 @@ var magicsockReceiveFuncWarnable = condRegister(func() *Warnable {
 		Text: func(args Args) string {
 			return fmt.Sprintf("The MagicSock function %s is not running. You might experience connectivity issues.", args[ArgMagicsockFunctionName])
 		},
+		ImpactsConnectivity: true,
 	}
 })
 

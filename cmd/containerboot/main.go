@@ -609,7 +609,7 @@ authLoop:
 		}
 	}
 
-	w, err = client.WatchIPNBus(ctx, containerbootWatchMask)
+	w, err = client.WatchIPNBus(ctx, containerbootWatchMask|ipn.NotifyInitialHealthState)
 	if err != nil {
 		return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 	}
@@ -679,10 +679,8 @@ authLoop:
 			return
 		}
 		minDelay := 2 // 2 seconds
-		nextTick := time.Second * time.Duration(math.Pow(float64(minDelay), float64(failedResolveAttempts)))
-		if nextTick > defaultCheckPeriod {
-			nextTick = defaultCheckPeriod // cap at 10 minutes
-		}
+		// Back off exponentially, capped at defaultCheckPeriod (10 minutes).
+		nextTick := min(time.Second*time.Duration(math.Pow(float64(minDelay), float64(failedResolveAttempts))), defaultCheckPeriod)
 		log.Printf("reconfigureTimer: last DNS resolution attempt failed, next DNS resolution attempt in %v", nextTick)
 		t.Reset(nextTick)
 		failedResolveAttempts++
@@ -732,6 +730,9 @@ runLoop:
 			}
 			if n.InitialStatus != nil || n.SelfChange != nil || len(n.PeersChanged) != 0 || len(n.PeersRemoved) != 0 || len(n.PeerChangedPatch) != 0 {
 				processNetmap = true
+			}
+			if healthCheck != nil && n.Health != nil {
+				healthCheck.SetHealthState(n.Health)
 			}
 		case <-tc:
 			newBackendAddrs, err := resolveDNS(ctx, cfg.ProxyTargetDNSName)
