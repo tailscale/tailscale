@@ -137,6 +137,20 @@ func TestOmitCaptivePortal(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitBird(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_bird,ts_include_cli",
+		OnDep: func(dep string) {
+			switch dep {
+			case "tailscale.com/chirp", "tailscale.com/feature/bird":
+				t.Errorf("unexpected dep with ts_omit_bird: %q", dep)
+			}
+		},
+	}.Check(t)
+}
+
 func TestOmitAuth(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",

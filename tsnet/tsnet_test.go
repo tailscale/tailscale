@@ -3409,6 +3409,8 @@ func TestDeps(t *testing.T) {
 		BadDeps: map[string]string{
 			"golang.org/x/crypto/ssh":                       "tsnet should not depend on SSH",
 			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
+			"tailscale.com/chirp":                           "tsnet should not depend on BIRD integration",
+			"tailscale.com/feature/bird":                    "tsnet should not depend on BIRD integration",
 			"tailscale.com/feature/clientupdate":            "tsnet should not depend on feature/clientupdate",
 			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
 			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",

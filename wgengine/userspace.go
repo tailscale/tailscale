@@ -85,8 +85,12 @@ type userspaceEngine struct {
 	netMon         *netmon.Monitor
 	health         *health.Tracker
 	netMonOwned    bool                // whether we created netMon (and thus need to close it)
-	birdClient     BIRDClient          // or nil
 	controlKnobs   *controlknobs.Knobs // or nil
+
+	// bird is the BIRD integration handle constructed via
+	// [HookNewBird], or nil if [Config.BIRDSocket] was empty or the
+	// feature/bird package is not linked into the binary.
+	bird Bird
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -112,11 +116,10 @@ type userspaceEngine struct {
 	// no longer install per-config lookup closures.
 	peerConfigFn atomic.Pointer[func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)]
 
-	lastCfgFull        wgcfg.Config
-	lastRouter         *router.Config
-	lastDNSConfig      dns.ConfigView // or invalid if none
-	lastIsSubnetRouter bool           // was the node a primary subnet router in the last run.
-	reconfigureVPN     func() error   // or nil
+	lastCfgFull    wgcfg.Config
+	lastRouter     *router.Config
+	lastDNSConfig  dns.ConfigView // or invalid if none
+	reconfigureVPN func() error   // or nil
 
 	// lastAppliedDisableTUNUDPGRO and lastAppliedDisableTUNTCPGRO cache the
 	// controlknobs values that were last applied to the TUN device. They are
@@ -160,13 +163,6 @@ type userspaceEngine struct {
 	wgPeerLookup syncs.AtomicValue[func(wgString string) (tsString string, ok bool)]
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
-}
-
-// BIRDClient handles communication with the BIRD Internet Routing Daemon.
-type BIRDClient interface {
-	EnableProtocol(proto string) error
-	DisableProtocol(proto string) error
-	Close() error
 }
 
 // Config is the engine configuration.
@@ -228,9 +224,10 @@ type Config struct {
 	// Used in "fake" mode for development.
 	RespondToPing bool
 
-	// BIRDClient, if non-nil, will be used to configure BIRD whenever
-	// this node is a primary subnet router.
-	BIRDClient BIRDClient
+	// BIRDSocket, if non-empty, is the path of the BIRD unix socket to
+	// configure whenever this node is a primary subnet router. It
+	// requires the feature/bird package to be linked in.
+	BIRDSocket string
 
 	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
 	SetSubsystem func(any)
@@ -369,17 +366,21 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		router:         rtr,
 		dialer:         conf.Dialer,
 		confListenPort: conf.ListenPort,
-		birdClient:     conf.BIRDClient,
 		controlKnobs:   conf.ControlKnobs,
 		reconfigureVPN: conf.ReconfigureVPN,
 		health:         conf.HealthTracker,
 	}
 
-	if e.birdClient != nil {
-		// Disable the protocol at start time.
-		if err := e.birdClient.DisableProtocol("tailscale"); err != nil {
+	if buildfeatures.HasBird && conf.BIRDSocket != "" {
+		newBird, ok := HookNewBird.GetOk()
+		if !ok {
+			return nil, errors.New("wgengine: Config.BIRDSocket set but the feature/bird package is not linked in")
+		}
+		bird, err := newBird(logf, conf.BIRDSocket)
+		if err != nil {
 			return nil, err
 		}
+		e.bird = bird
 	}
 	e.isLocalAddr.Store(ipset.FalseContainsIPFunc())
 	e.isDNSIPOverTailscale.Store(ipset.FalseContainsIPFunc())
@@ -827,17 +828,6 @@ func peerWireGuardStateFromDevice(state device.PeerSessionState) PeerWireGuardSt
 	}
 }
 
-// hasOverlap checks if there is a IPPrefix which is common amongst the two
-// provided slices.
-func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
-	for _, aip := range aips.All() {
-		if views.SliceContains(rips, aip) {
-			return true
-		}
-	}
-	return false
-}
-
 // ResetAndStop resets the engine to a clean state (like calling Reconfig
 // with all pointers to zero values) and returns the resulting status.
 //
@@ -877,14 +867,14 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	peerMTUEnable := e.magicConn.ShouldPMTUD()
 
-	isSubnetRouter := false
-	if buildfeatures.HasBird && e.birdClient != nil && self.Valid() {
-		isSubnetRouter = hasOverlap(self.PrimaryRoutes(), self.Hostinfo().RoutableIPs())
-		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
-			self.PrimaryRoutes(), self.Hostinfo().RoutableIPs(),
-			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
+	// Let the BIRD integration recompute whether this node is a
+	// primary subnet router, before the early return below so that a
+	// change in that state alone still reaches the protocol toggle in
+	// ReconfigDone at the end.
+	birdChanged := false
+	if e.bird != nil {
+		birdChanged = e.bird.Reconfig(self)
 	}
-	isSubnetRouterChanged := buildfeatures.HasAdvertiseRoutes && isSubnetRouter != e.lastIsSubnetRouter
 
 	engineChanged := !e.lastCfgFull.Equal(cfg)
 	routerChanged := checkchange.Update(&e.lastRouter, routerCfg)
@@ -905,7 +895,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		netlogChanged = e.netlogger.Reconfig(routerCfg, routerChanged)
 	}
 
-	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !isSubnetRouterChanged && !peerMTUChanged && !netlogChanged {
+	if !engineChanged && !routerChanged && !dnsChanged && !listenPortChanged && !birdChanged && !peerMTUChanged && !netlogChanged {
 		return ErrNoChanges
 	}
 
@@ -990,20 +980,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.netlogger.ReconfigDone()
 	}
 
-	if buildfeatures.HasBird && isSubnetRouterChanged && e.birdClient != nil {
-		e.logf("wgengine: Reconfig: configuring BIRD")
-		var err error
-		if isSubnetRouter {
-			err = e.birdClient.EnableProtocol("tailscale")
-		} else {
-			err = e.birdClient.DisableProtocol("tailscale")
-		}
-		if err != nil {
-			// Log but don't fail here.
-			e.logf("wgengine: error configuring BIRD: %v", err)
-		} else {
-			e.lastIsSubnetRouter = isSubnetRouter
-		}
+	// Let the BIRD integration apply any protocol state change now,
+	// after the router is configured.
+	if e.bird != nil {
+		e.bird.ReconfigDone()
 	}
 
 	e.logf("[v1] wgengine: Reconfig done")
@@ -1174,9 +1154,8 @@ func (e *userspaceEngine) Close() {
 	e.router.Close()
 	e.wgdev.Close()
 	e.tundev.Close()
-	if e.birdClient != nil {
-		e.birdClient.DisableProtocol("tailscale")
-		e.birdClient.Close()
+	if e.bird != nil {
+		e.bird.Close()
 	}
 	close(e.waitCh)
 
