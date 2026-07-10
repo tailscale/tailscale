@@ -233,8 +233,7 @@ type Client struct {
 	ForcePreferredDERP int
 
 	// For tests
-	testEnoughRegions      int
-	testCaptivePortalDelay time.Duration
+	testEnoughRegions int
 
 	mu       syncs.Mutex           // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
@@ -255,14 +254,6 @@ func (c *Client) enoughRegions() int {
 		return 100
 	}
 	return 3
-}
-
-func (c *Client) captivePortalDelay() time.Duration {
-	if c.testCaptivePortalDelay > 0 {
-		return c.testCaptivePortalDelay
-	}
-	// Chosen semi-arbitrarily
-	return 200 * time.Millisecond
 }
 
 func (c *Client) logf(format string, a ...any) {
@@ -788,7 +779,15 @@ func (c *Client) SetForcePreferredDERP(region int) {
 	c.ForcePreferredDERP = region
 }
 
-var hookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, rs *reportState, dm *tailcfg.DERPMap, preferredDERP int) (<-chan struct{}, func())]
+// HookStartCaptivePortalDetection, if set, is called by GetReport to
+// asynchronously start captive portal detection during a full (non-incremental)
+// netcheck. It is set at init time by the optional
+// tailscale.com/feature/captiveportal/netcheckhook package.
+//
+// The returned done channel is closed when detection has finished (and
+// setCaptivePortal has been called with the result, if it ran); the returned
+// stop function cancels a detection that has not yet started.
+var HookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, c *Client, dm *tailcfg.DERPMap, preferredDERP int, setCaptivePortal func(bool)) (done <-chan struct{}, stop func())]
 
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
 // Callers are discouraged from passing a ctx with an arbitrary deadline as this
@@ -915,8 +914,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	captivePortalDone := syncs.ClosedChan()
 	captivePortalStop := func() {}
 	if buildfeatures.HasCaptivePortal && !rs.incremental && !onlySTUN {
-		start := hookStartCaptivePortalDetection.Get()
-		captivePortalDone, captivePortalStop = start(ctx, rs, dm, preferredDERP)
+		if start, ok := HookStartCaptivePortalDetection.GetOk(); ok {
+			captivePortalDone, captivePortalStop = start(ctx, c, dm, preferredDERP, func(found bool) {
+				rs.report.CaptivePortal.Set(found)
+			})
+		}
 	}
 
 	wg := syncs.NewWaitGroupChan()

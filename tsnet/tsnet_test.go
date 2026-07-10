@@ -3411,6 +3411,7 @@ func TestDeps(t *testing.T) {
 			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
 			"tailscale.com/chirp":                           "tsnet should not depend on BIRD integration",
 			"tailscale.com/feature/bird":                    "tsnet should not depend on BIRD integration",
+			"tailscale.com/feature/captiveportal":           "tsnet apps don't need captive portal detection; import it explicitly if desired",
 			"tailscale.com/feature/clientupdate":            "tsnet should not depend on feature/clientupdate",
 			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
 			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",

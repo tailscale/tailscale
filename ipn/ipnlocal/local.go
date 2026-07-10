@@ -433,21 +433,6 @@ type LocalBackend struct {
 	// refreshAutoExitNode indicates if the exit node should be recomputed when the next netcheck report is available.
 	refreshAutoExitNode bool // guarded by mu
 
-	// captiveCtx and captiveCancel are used to control captive portal
-	// detection. They are protected by 'mu' and can be changed during the
-	// lifetime of a LocalBackend.
-	//
-	// captiveCtx will always be non-nil, though it might be a canceled
-	// context. captiveCancel is non-nil if checkCaptivePortalLoop is
-	// running, and is set to nil after being canceled.
-	captiveCtx    context.Context
-	captiveCancel context.CancelFunc
-	// needsCaptiveDetection is a channel that is used to signal either
-	// that captive portal detection is required (sending true) or that the
-	// backend is healthy and captive portal detection is not required
-	// (sending false).
-	needsCaptiveDetection chan bool
-
 	// overrideAlwaysOn is whether [pkey.AlwaysOn] is overridden by the user
 	// and should have no impact on the WantRunning state until the policy changes,
 	// or the user re-connects manually, switches to a different profile, etc.
@@ -583,11 +568,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	ctx, cancel := context.WithCancelCause(context.Background())
 	clock := tstime.StdClock{}
 
-	// Until we transition to a Running state, use a canceled context for
-	// our captive portal detection.
-	captiveCtx, captiveCancel := context.WithCancel(ctx)
-	captiveCancel()
-
 	m := metrics{
 		advertisedRoutes: sys.UserMetricsRegistry().NewGauge(
 			"tailscaled_advertised_routes", "Number of advertised network routes (e.g. by a subnet router)"),
@@ -606,27 +586,24 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	b := &LocalBackend{
-		ctx:                   ctx,
-		ctxCancel:             cancel,
-		logf:                  logf,
-		keyLogf:               logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:                   sys,
-		polc:                  sys.PolicyClientOrDefault(),
-		health:                sys.HealthTracker.Get(),
-		metrics:               m,
-		e:                     e,
-		dialer:                dialer,
-		store:                 store,
-		pm:                    pm,
-		backendLogID:          logID,
-		state:                 ipn.NoState,
-		em:                    newExpiryManager(logf, sys.Bus.Get()),
-		loginFlags:            loginFlags,
-		clock:                 clock,
-		captiveCtx:            captiveCtx,
-		captiveCancel:         nil, // so that we start checkCaptivePortalLoop when Running
-		needsCaptiveDetection: make(chan bool),
+		ctx:          ctx,
+		ctxCancel:    cancel,
+		logf:         logf,
+		keyLogf:      logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:    logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:          sys,
+		polc:         sys.PolicyClientOrDefault(),
+		health:       sys.HealthTracker.Get(),
+		metrics:      m,
+		e:            e,
+		dialer:       dialer,
+		store:        store,
+		pm:           pm,
+		backendLogID: logID,
+		state:        ipn.NoState,
+		em:           newExpiryManager(logf, sys.Bus.Get()),
+		loginFlags:   loginFlags,
+		clock:        clock,
 	}
 
 	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
@@ -1241,12 +1218,6 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	}
 }
 
-// Captive portal detection hooks.
-var (
-	hookCaptivePortalHealthChange feature.Hook[func(*LocalBackend, *health.State)]
-	hookCheckCaptivePortalLoop    feature.Hook[func(*LocalBackend, context.Context)]
-)
-
 func (b *LocalBackend) onHealthChange(change health.Change) {
 	if !buildfeatures.HasHealth {
 		return
@@ -1274,10 +1245,6 @@ func (b *LocalBackend) onHealthChange(change health.Change) {
 		b.cc.SetIPForwardingBroken(broken)
 	}
 	b.mu.Unlock()
-
-	if f, ok := hookCaptivePortalHealthChange.GetOk(); ok {
-		f(b, state)
-	}
 }
 
 // GetOrSetCaptureSink returns the current packet capture sink, creating it
@@ -1342,11 +1309,6 @@ func (b *LocalBackend) Shutdown() {
 		return
 	}
 	b.shutdownCalled = true
-
-	if buildfeatures.HasCaptivePortal && b.captiveCancel != nil {
-		b.logf("canceling captive portal context")
-		b.captiveCancel()
-	}
 
 	b.shutdownCertRefreshLoopLocked()
 
@@ -6779,17 +6741,6 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 			b.resetAuthURLLocked()
 		}
 
-		// Start a captive portal detection loop if none has been
-		// started. Create a new context if none is present, since it
-		// can be shut down if we transition away from Running.
-		if buildfeatures.HasCaptivePortal {
-			if b.captiveCancel == nil {
-				captiveCtx, captiveCancel := context.WithCancel(b.ctx)
-				b.captiveCtx, b.captiveCancel = captiveCtx, captiveCancel
-				b.goTracker.Go(func() { hookCheckCaptivePortalLoop.Get()(b, captiveCtx) })
-			}
-		}
-
 		// (Re)evaluate the background TLS cert refresh loop. It runs
 		// only while we're Running and ServeConfig has at least one
 		// HTTPS Web entry, so idle nodes don't hold a timer open.
@@ -6797,16 +6748,6 @@ func (b *LocalBackend) enterStateLocked(newState ipn.State) {
 	} else if oldState == ipn.Running {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
-
-		// Stop any existing captive portal detection loop.
-		if buildfeatures.HasCaptivePortal && b.captiveCancel != nil {
-			b.captiveCancel()
-			b.captiveCancel = nil
-
-			// NOTE: don't set captiveCtx to nil here, to ensure
-			// that we always have a (canceled) context to wait on
-			// in onHealthChange.
-		}
 
 		b.updateCertRefreshLoopLocked()
 	}

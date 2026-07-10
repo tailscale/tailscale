@@ -531,4 +531,8 @@ type NodeBackend interface {
 	// node that the portlist service collection is desirable, should it
 	// choose to report them.
 	CollectServices() bool
+
+	// DERPMap returns the current DERP map from the current netmap,
+	// or nil if there is no netmap.
+	DERPMap() *tailcfg.DERPMap
 }
