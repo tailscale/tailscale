@@ -96,7 +96,7 @@ require (
 	github.com/robert-nix/ansihtml v1.0.1
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/studio-b12/gowebdav v0.9.0
+	github.com/studio-b12/gowebdav v0.13.0
 	github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
 	github.com/tailscale/gliderssh v0.3.4-0.20260603235856-90d7dcbcbf38
