@@ -305,6 +305,12 @@ func (nb *nodeBackend) NodeByWireGuardString(s string) (_ tailcfg.NodeID, ok boo
 func (nb *nodeBackend) NodeByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
+	return nb.nodeByIDLocked(id)
+}
+
+// nodeByIDLocked returns the node (peer or self) with the given node
+// ID. nb.mu must be held.
+func (nb *nodeBackend) nodeByIDLocked(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
 	if nb.netMap != nil {
 		if self := nb.netMap.SelfNode; self.Valid() && self.ID() == id {
 			return self, true
@@ -1126,10 +1132,122 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
 }
 
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, versionOS string) *dns.Config {
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, goos string) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, versionOS)
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, goos)
+}
+
+// magicDNSHostAddrs returns the MagicDNS A/AAAA answer for fqdn from
+// the live node indexes, and whether the name is known. It backs
+// [resolver.MagicDNSHosts.LookupHost], replacing the full
+// dns.Config.Hosts map so that netmap deltas need no per-peer DNS
+// rebuild.
+func (nb *nodeBackend) magicDNSHostAddrs(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {
+	if !buildfeatures.HasDNS {
+		return nil, false
+	}
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	n, ok := nb.nodeByFQDNLocked(fqdn)
+	if !ok || n.Addresses().Len() == 0 {
+		return nil, false
+	}
+	nm := nb.netMap
+	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
+		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
+	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
+	return magicDNSAddrs(n.Addresses(), selfV6Only, wantAAAA), true
+}
+
+// magicDNSPTR returns the MagicDNS name of the node (peer or self)
+// that owns ip, backing [resolver.MagicDNSHosts.LookupPTR].
+func (nb *nodeBackend) magicDNSPTR(ip netip.Addr) (_ dnsname.FQDN, ok bool) {
+	if !buildfeatures.HasDNS {
+		return "", false
+	}
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nid, ok := nb.nodeByAddr[ip]
+	if !ok {
+		return "", false
+	}
+	n, ok := nb.nodeByIDLocked(nid)
+	if !ok {
+		return "", false
+	}
+	fqdn, err := dnsname.ToFQDN(n.Name())
+	if err != nil {
+		return "", false
+	}
+	return fqdn, true
+}
+
+// magicDNSSubdomainHost reports whether fqdn names a node with the
+// [tailcfg.NodeAttrDNSSubdomainResolve] attribute, backing
+// [resolver.MagicDNSHosts.SubdomainHost].
+func (nb *nodeBackend) magicDNSSubdomainHost(fqdn dnsname.FQDN) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	n, ok := nb.nodeByFQDNLocked(fqdn)
+	if !ok {
+		return false
+	}
+	if nm := nb.netMap; nm != nil && nm.SelfNode.Valid() && nm.SelfNode.ID() == n.ID() {
+		return nm.AllCaps.Contains(tailcfg.NodeAttrDNSSubdomainResolve)
+	}
+	return n.CapMap().Contains(tailcfg.NodeAttrDNSSubdomainResolve)
+}
+
+// nodeByFQDNLocked returns the node (peer or self) with the given
+// MagicDNS FQDN. nb.mu must be held.
+func (nb *nodeBackend) nodeByFQDNLocked(fqdn dnsname.FQDN) (_ tailcfg.NodeView, ok bool) {
+	// The resolver already lowercases query names, but lowercase
+	// again (nearly free when already lowercase) so that no other
+	// caller of the [resolver.MagicDNSHosts] hook can miss on case.
+	nid, ok := nb.nodeByName[strings.ToLower(strings.TrimSuffix(string(fqdn), "."))]
+	if !ok {
+		return tailcfg.NodeView{}, false
+	}
+	return nb.nodeByIDLocked(nid)
+}
+
+// magicDNSAddrs returns the MagicDNS answer addresses for a node
+// owning the given addresses: all of its IPv6 addresses if this node
+// (the querier) is IPv6-only, otherwise everything except the node's
+// IPv6 addresses when it also has IPv4, unless wantAAAA. The result
+// may be empty (name exists, no records of the desired family).
+func magicDNSAddrs(addrs views.Slice[netip.Prefix], selfV6Only, wantAAAA bool) (ips []netip.Addr) {
+	var have4 bool
+	for _, addr := range addrs.All() {
+		if addr.Addr().Is4() {
+			have4 = true
+			break
+		}
+	}
+	for _, addr := range addrs.All() {
+		if selfV6Only {
+			if addr.Addr().Is6() {
+				ips = append(ips, addr.Addr())
+			}
+			continue
+		}
+		// If this node has an IPv4 address, then remove peers'
+		// IPv6 addresses for now, as we don't guarantee that
+		// the peer node actually can speak IPv6 correctly.
+		//
+		// https://github.com/tailscale/tailscale/issues/1152
+		// tracks adding the right capability reporting to
+		// enable AAAA in MagicDNS.
+		if addr.Addr().Is6() && have4 && !wantAAAA {
+			continue
+		}
+		ips = append(ips, addr.Addr())
+	}
+	return ips
 }
 
 func (nb *nodeBackend) exitNodeCanProxyDNS(exitNodeID tailcfg.StableNodeID) (dohURL string, ok bool) {
@@ -1234,9 +1352,9 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
 // prefs, client OS version, and cloud hosting environment.
 //
-// The versionOS is a Tailscale-style version ("iOS", "macOS") and not
-// a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, versionOS string) *dns.Config {
+// The goos is runtime.GOOS usually, except in tests, where it may
+// vary to test any OS's behavior from any host.
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, goos string) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -1269,63 +1387,29 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
 
-	// Populate MagicDNS records. We do this unconditionally so that
-	// quad-100 can always respond to MagicDNS queries, even if the OS
-	// isn't configured to make MagicDNS resolution truly
-	// magic. Details in
-	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs views.Slice[netip.Prefix]) {
-		if addrs.Len() == 0 || name == "" {
-			return
-		}
-		fqdn, err := dnsname.ToFQDN(name)
-		if err != nil {
-			return // TODO: propagate error?
-		}
-		var have4 bool
-		for _, addr := range addrs.All() {
-			if addr.Addr().Is4() {
-				have4 = true
-				break
+	// Populate MagicDNS records. The internal quad-100 resolver pulls
+	// per-node records on demand from the live node indexes (see
+	// [nodeBackend.magicDNSHostAddrs]), so quad-100 can always respond
+	// to MagicDNS queries without dcfg.Hosts; details in
+	// https://github.com/tailscale/tailscale/issues/1886. dcfg.Hosts
+	// carries only what must be enumerable in full: control's
+	// DNS.ExtraRecords below, plus every node's records on Windows,
+	// whose hosts-file fallback path (see compileHostEntries in
+	// net/dns) needs the complete set.
+	if goos == "windows" {
+		set := func(name string, addrs views.Slice[netip.Prefix]) {
+			if addrs.Len() == 0 || name == "" {
+				return
 			}
-		}
-		var ips []netip.Addr
-		for _, addr := range addrs.All() {
-			if selfV6Only {
-				if addr.Addr().Is6() {
-					ips = append(ips, addr.Addr())
-				}
-				continue
+			fqdn, err := dnsname.ToFQDN(name)
+			if err != nil {
+				return // TODO: propagate error?
 			}
-			// If this node has an IPv4 address, then
-			// remove peers' IPv6 addresses for now, as we
-			// don't guarantee that the peer node actually
-			// can speak IPv6 correctly.
-			//
-			// https://github.com/tailscale/tailscale/issues/1152
-			// tracks adding the right capability reporting to
-			// enable AAAA in MagicDNS.
-			if addr.Addr().Is6() && have4 && !wantAAAA {
-				continue
-			}
-			ips = append(ips, addr.Addr())
+			dcfg.Hosts[fqdn] = magicDNSAddrs(addrs, selfV6Only, wantAAAA)
 		}
-		dcfg.Hosts[fqdn] = ips
-	}
-	set(nm.SelfName(), nm.GetAddresses())
-	if nm.AllCaps.Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
-		if fqdn, err := dnsname.ToFQDN(nm.SelfName()); err == nil {
-			dcfg.SubdomainHosts.Make()
-			dcfg.SubdomainHosts.Add(fqdn)
-		}
-	}
-	for _, peer := range peers {
-		set(peer.Name(), peer.Addresses())
-		if peer.CapMap().Contains(tailcfg.NodeAttrDNSSubdomainResolve) {
-			if fqdn, err := dnsname.ToFQDN(peer.Name()); err == nil {
-				dcfg.SubdomainHosts.Make()
-				dcfg.SubdomainHosts.Add(fqdn)
-			}
+		set(nm.SelfName(), nm.GetAddresses())
+		for _, peer := range peers {
+			set(peer.Name(), peer.Addresses())
 		}
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
@@ -1363,6 +1447,14 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		for _, dom := range magicDNSRootDomains(nm) {
 			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
 		}
+	} else {
+		// Without MagicDNS domain routing, no Routes entry covers the
+		// node records served on demand via [magicDNSHosts]. Tell
+		// dns.Manager they exist, so it keeps quad-100 in the OS
+		// resolver path and the names still resolve, as they did when
+		// they were listed in dcfg.Hosts. Any netmap with a self node
+		// has such records.
+		dcfg.MagicDNSHostsUnrouted = nm.SelfNode.Valid()
 	}
 
 	addDefault := func(resolvers []*dnstype.Resolver) {

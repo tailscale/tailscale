@@ -18,6 +18,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -558,4 +559,83 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	if _, ok := nb.routeMgr.Outbound().Lookup(transit.Addr()); ok {
 		t.Errorf("Outbound still routes %v after extras cleared", transit.Addr())
 	}
+}
+
+// Tests the live MagicDNS lookup methods backing
+// [resolver.MagicDNSHosts]: forward, reverse, and subdomain-cap
+// lookups must serve from the node indexes and stay correct across
+// netmap deltas without any full Hosts map rebuild.
+func TestNodeBackendMagicDNSHosts(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	self := &tailcfg.Node{
+		ID:        1,
+		Name:      "self.example.ts.net.",
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+	}
+	p1 := &tailcfg.Node{
+		ID:   2,
+		Key:  key.NewNode().Public(),
+		Name: "p1.example.ts.net.",
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.2/32"),
+			netip.MustParsePrefix("fd7a:115c:a1e0::2/128"),
+		},
+		CapMap: tailcfg.NodeCapMap{tailcfg.NodeAttrDNSSubdomainResolve: nil},
+	}
+	nb.SetNetMap(&netmap.NetworkMap{
+		SelfNode: self.View(),
+		Peers:    []tailcfg.NodeView{p1.View()},
+	})
+
+	wantHost := func(fqdn dnsname.FQDN, want ...netip.Addr) {
+		t.Helper()
+		ips, ok := nb.magicDNSHostAddrs(fqdn)
+		if len(want) == 0 {
+			if ok {
+				t.Errorf("magicDNSHostAddrs(%q) = %v; want no match", fqdn, ips)
+			}
+			return
+		}
+		if !ok || !slices.Equal(ips, want) {
+			t.Errorf("magicDNSHostAddrs(%q) = %v, %v; want %v", fqdn, ips, ok, want)
+		}
+	}
+
+	// The self node has IPv4, so the peer's IPv6 address is
+	// filtered out (issue 1152).
+	wantHost("p1.example.ts.net.", netip.MustParseAddr("100.64.0.2"))
+	wantHost("self.example.ts.net.", netip.MustParseAddr("100.64.0.1"))
+	wantHost("unknown.example.ts.net.")
+
+	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); !ok || fqdn != "p1.example.ts.net." {
+		t.Errorf("magicDNSPTR(100.64.0.2) = %q, %v; want p1's name", fqdn, ok)
+	}
+	if got, want := nb.magicDNSSubdomainHost("p1.example.ts.net."), true; got != want {
+		t.Errorf("magicDNSSubdomainHost(p1) = %v; want %v", got, want)
+	}
+	if got, want := nb.magicDNSSubdomainHost("self.example.ts.net."), false; got != want {
+		t.Errorf("magicDNSSubdomainHost(self) = %v; want %v", got, want)
+	}
+
+	// Removing the peer via a delta drops its records.
+	if _, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{netmap.MakeNodeMutationRemove(2)}); !handled {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	wantHost("p1.example.ts.net.")
+	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); ok {
+		t.Errorf("magicDNSPTR(100.64.0.2) after removal = %q; want no match", fqdn)
+	}
+
+	// Adding a peer via a delta serves it immediately.
+	p3 := &tailcfg.Node{
+		ID:        3,
+		Key:       key.NewNode().Public(),
+		Name:      "p3.example.ts.net.",
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
+	}
+	if _, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: p3.View()}}); !handled {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	wantHost("p3.example.ts.net.", netip.MustParseAddr("100.64.0.3"))
 }

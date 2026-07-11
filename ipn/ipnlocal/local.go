@@ -228,6 +228,7 @@ type LocalBackend struct {
 	keyLogf     logger.Logf             // for printing list of peers on change
 	statsLogf   logger.Logf             // for printing peers stats on change
 	sys         *tsd.System
+	goos        string // runtime.GOOS usually, except in tests
 	eventClient *eventbus.Client
 	appcTask    execqueue.ExecQueue // handles updates from appc
 
@@ -639,6 +640,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	e.SetNetLogSource(netLogNodeSource{b})
 	e.SetWGPeerLookup(b.lookupPeerWireGuardString)
 	b.dialer.SetResolveMagicDNS(b.resolveMagicDNS)
+	if buildfeatures.HasDNS {
+		if dm, ok := sys.DNSManager.GetOK(); ok {
+			dm.Resolver().SetMagicDNSHosts(magicDNSHosts{b})
+		}
+	}
 
 	if sys.InitialConfig != nil {
 		if err := b.initPrefsFromConfig(sys.InitialConfig); err != nil {
@@ -6095,7 +6101,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	hasPAC := b.interfaceState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(tailcfg.NodeAttrDisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, version.OS())
+	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, cmp.Or(b.goos, runtime.GOOS))
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm.SelfNode, prefs)
 

@@ -42,8 +42,6 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
-	"tailscale.com/util/mak"
-	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -1251,23 +1249,6 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	routesWithQuad100 := func(extra ...netip.Prefix) []netip.Prefix {
 		return append(extra, netip.MustParsePrefix("100.100.100.100/32"))
 	}
-	hostsFor := func(nm *netmap.NetworkMap) map[dnsname.FQDN][]netip.Addr {
-		var hosts map[dnsname.FQDN][]netip.Addr
-		appendNode := func(n tailcfg.NodeView) {
-			addrs := make([]netip.Addr, 0, n.Addresses().Len())
-			for _, addr := range n.Addresses().All() {
-				addrs = append(addrs, addr.Addr())
-			}
-			mak.Set(&hosts, must.Get(dnsname.ToFQDN(n.Name())), addrs)
-		}
-		if nm != nil && nm.SelfNode.Valid() {
-			appendNode(nm.SelfNode)
-		}
-		for _, n := range nm.Peers {
-			appendNode(n)
-		}
-		return hosts
-	}
 
 	tests := []struct {
 		name          string
@@ -1328,9 +1309,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node1),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1385,9 +1367,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node2),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1434,9 +1417,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node1),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1467,9 +1451,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node3),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1513,9 +1498,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node1),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1544,9 +1530,10 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 				Routes:           routesWithQuad100(),
 			},
 			wantDNSCfg: &dns.Config{
-				AcceptDNS: true,
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:     hostsFor(node1),
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 		{
@@ -1572,6 +1559,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, enableLogging)
+			lb.goos = "linux" // so the expectations below are the same on every host OS
 
 			if tt.steps != nil {
 				tt.steps(t, lb, cc)

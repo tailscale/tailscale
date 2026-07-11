@@ -229,6 +229,53 @@ type Resolver struct {
 	hostToIP       map[dnsname.FQDN][]netip.Addr
 	ipToHost       map[netip.Addr]dnsname.FQDN
 	subdomainHosts set.Set[dnsname.FQDN]
+	magicHosts     MagicDNSHosts // or nil if none installed
+}
+
+// MagicDNSHosts is a live source of MagicDNS host records, installed
+// via [Resolver.SetMagicDNSHosts].
+//
+// It replaces the per-node entries of [Config.Hosts]: instead of the
+// caller pushing a full snapshot of every node's name and addresses
+// into the resolver on every (possibly incremental) netmap change,
+// the resolver pulls the answer for one name on demand from the
+// caller's live indexes. [Config.Hosts] remains for control's
+// DNS.ExtraRecords entries, which are few, and is consulted first.
+//
+// Implementations must be safe for concurrent use and cheap: the
+// methods are called on the DNS query serving path. Name lookups are
+// case-insensitive: the resolver passes lowercase names, but
+// implementations must not rely on that.
+type MagicDNSHosts interface {
+	// LookupHost returns the IPs to answer for the node with the
+	// given MagicDNS FQDN, and whether the name is known. It returns
+	// all answerable IPs regardless of record type; the resolver
+	// filters them by the query's type, and a known name with no IPs
+	// of the query's family is "name exists, no records", not
+	// NXDOMAIN.
+	LookupHost(dnsname.FQDN) (ips []netip.Addr, ok bool)
+
+	// LookupPTR returns the MagicDNS FQDN of the node that owns
+	// the given Tailscale IP, and whether the IP is known.
+	LookupPTR(netip.Addr) (_ dnsname.FQDN, ok bool)
+
+	// SubdomainHost reports whether fqdn names a node with the
+	// [tailcfg.NodeAttrDNSSubdomainResolve] attribute, whose
+	// subdomains all resolve to the node's own addresses.
+	SubdomainHost(dnsname.FQDN) bool
+}
+
+// SetMagicDNSHosts installs the live MagicDNS host source consulted
+// by forward and reverse MagicDNS lookups that miss [Config.Hosts].
+// It is expected to be called once, before the resolver serves
+// queries.
+func (r *Resolver) SetMagicDNSHosts(h MagicDNSHosts) {
+	if !buildfeatures.HasDNS {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.magicHosts = h
 }
 
 type ForwardLinkSelector interface {
@@ -682,13 +729,21 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 	hosts := r.hostToIP
 	localDomains := r.localDomains
 	subdomainHosts := r.subdomainHosts
+	magicHosts := r.magicHosts
 	r.mu.Unlock()
 
 	addrs, found := hosts[domain]
+	if !found && magicHosts != nil {
+		addrs, found = magicHosts.LookupHost(domain)
+	}
 	if !found {
 		for parent := domain.Parent(); parent != ""; parent = parent.Parent() {
 			if subdomainHosts.Contains(parent) {
 				addrs, found = hosts[parent]
+				break
+			}
+			if magicHosts != nil && magicHosts.SubdomainHost(parent) {
+				addrs, found = magicHosts.LookupHost(parent)
 				break
 			}
 		}
@@ -865,6 +920,9 @@ func (r *Resolver) fqdnForIPLocked(ip netip.Addr, name dnsname.FQDN) (dnsname.FQ
 	}
 
 	ret, ok := r.ipToHost[ip]
+	if !ok && r.magicHosts != nil {
+		ret, ok = r.magicHosts.LookupPTR(ip)
+	}
 	if !ok {
 		for _, suffix := range r.localDomains {
 			if suffix.Contains(name) {

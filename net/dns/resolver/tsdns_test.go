@@ -476,6 +476,111 @@ func TestResolveLocalSubdomain(t *testing.T) {
 	}
 }
 
+// fakeMagicDNSHosts is a MagicDNSHosts for tests, serving from fixed maps.
+type fakeMagicDNSHosts struct {
+	hosts     map[dnsname.FQDN][]netip.Addr
+	subdomain set.Set[dnsname.FQDN]
+	ptr       map[netip.Addr]dnsname.FQDN
+}
+
+func (f fakeMagicDNSHosts) LookupHost(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {
+	ips, ok = f.hosts[fqdn]
+	return ips, ok
+}
+
+func (f fakeMagicDNSHosts) LookupPTR(ip netip.Addr) (_ dnsname.FQDN, ok bool) {
+	name, ok := f.ptr[ip]
+	return name, ok
+}
+
+func (f fakeMagicDNSHosts) SubdomainHost(fqdn dnsname.FQDN) bool {
+	return f.subdomain.Contains(fqdn)
+}
+
+// Tests forward, subdomain, and reverse resolution served on demand
+// via the MagicDNSHosts hook, and that entries pushed via Config.Hosts
+// take precedence over the hook.
+func TestResolveLocalMagicDNSHosts(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	r.SetConfig(Config{
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"extra.ipn.dev.": {netip.MustParseAddr("100.100.1.1")},
+			"both.ipn.dev.":  {netip.MustParseAddr("100.100.2.2")},
+		},
+		LocalDomains: []dnsname.FQDN{"ipn.dev.", "64.100.in-addr.arpa."},
+	})
+	node4 := netip.MustParseAddr("100.64.0.7")
+	node6 := netip.MustParseAddr("fd7a:115c:a1e0::7")
+	r.SetMagicDNSHosts(fakeMagicDNSHosts{
+		hosts: map[dnsname.FQDN][]netip.Addr{
+			"node.ipn.dev.":   {node4, node6},
+			"v4only.ipn.dev.": {node4},
+			"subber.ipn.dev.": {node4},
+			"both.ipn.dev.":   {netip.MustParseAddr("100.100.9.9")}, // masked by Config.Hosts
+		},
+		subdomain: set.Of[dnsname.FQDN]("subber.ipn.dev."),
+		ptr:       map[netip.Addr]dnsname.FQDN{node4: "node.ipn.dev."},
+	})
+
+	tests := []struct {
+		name  string
+		qname dnsname.FQDN
+		qtype dns.Type
+		ip    netip.Addr
+		code  dns.RCode
+	}{
+		{"hook-ipv4", "node.ipn.dev.", dns.TypeA, node4, dns.RCodeSuccess},
+		{"hook-ipv6", "node.ipn.dev.", dns.TypeAAAA, node6, dns.RCodeSuccess},
+		// A known name with no records of the queried family is
+		// "name exists, no records", not NXDOMAIN.
+		{"hook-no-ipv6", "v4only.ipn.dev.", dns.TypeAAAA, netip.Addr{}, dns.RCodeSuccess},
+		{"hook-nxdomain", "gone.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
+		{"hook-foreign", "google.com.", dns.TypeA, netip.Addr{}, dns.RCodeRefused},
+		{"hook-subdomain", "foo.subber.ipn.dev.", dns.TypeA, node4, dns.RCodeSuccess},
+		{"hook-subdomain-deep", "bar.foo.subber.ipn.dev.", dns.TypeA, node4, dns.RCodeSuccess},
+		{"hook-subdomain-no-cap", "foo.node.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
+		// Config.Hosts entries (control's ExtraRecords) are
+		// consulted before the hook.
+		{"config-hosts", "extra.ipn.dev.", dns.TypeA, netip.MustParseAddr("100.100.1.1"), dns.RCodeSuccess},
+		{"config-hosts-precedence", "both.ipn.dev.", dns.TypeA, netip.MustParseAddr("100.100.2.2"), dns.RCodeSuccess},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, code := r.resolveLocal(tt.qname, tt.qtype)
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
+			if ip != tt.ip {
+				t.Errorf("ip = %v; want %v", ip, tt.ip)
+			}
+		})
+	}
+
+	revTests := []struct {
+		name string
+		q    dnsname.FQDN
+		want dnsname.FQDN
+		code dns.RCode
+	}{
+		{"hook-ptr", "7.0.64.100.in-addr.arpa.", "node.ipn.dev.", dns.RCodeSuccess},
+		{"hook-ptr-nxdomain", "8.0.64.100.in-addr.arpa.", "", dns.RCodeNameError},
+		{"hook-ptr-foreign", "5.4.3.2.in-addr.arpa.", "", dns.RCodeRefused},
+	}
+	for _, tt := range revTests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, code := r.resolveLocalReverse(tt.q)
+			if code != tt.code {
+				t.Errorf("code = %v; want %v", code, tt.code)
+			}
+			if name != tt.want {
+				t.Errorf("name = %v; want %v", name, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveLocalReverse(t *testing.T) {
 	r := newResolver(t)
 	defer r.Close()
