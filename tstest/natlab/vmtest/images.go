@@ -19,14 +19,32 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
+// LinuxFamily classifies a Linux distro by the conventions that affect how we
+// provision it via cloud-init (default network manager, MAC/LSM, etc). It is
+// only meaningful for Linux cloud images, which must declare one; the zero
+// value means "undeclared".
+type LinuxFamily string
+
+const (
+	// LinuxDebian covers Debian and Ubuntu cloud images: systemd-networkd for
+	// networking and AppArmor as the LSM.
+	LinuxDebian LinuxFamily = "debian"
+
+	// LinuxRHEL covers Fedora, CentOS Stream, Rocky, and AlmaLinux cloud
+	// images: NetworkManager + systemd-resolved for networking and SELinux
+	// enforcing.
+	LinuxRHEL LinuxFamily = "rhel"
+)
+
 // OSImage describes a VM operating system image.
 type OSImage struct {
 	Name      string
-	URL       string // download URL for the cloud image
-	SHA256    string // expected SHA256 hash of the image (of the final qcow2, after any decompression)
-	MemoryMB  int    // RAM for the VM
-	IsGokrazy bool   // true for gokrazy images (different QEMU setup)
-	IsMacOS   bool   // true for macOS images (launched via tailmac, not QEMU)
+	URL       string      // download URL for the cloud image
+	SHA256    string      // expected SHA256 hash of the image (of the final qcow2, after any decompression)
+	MemoryMB  int         // RAM for the VM
+	Family    LinuxFamily // Linux distro family (affects cloud-init user-data); empty means Debian-like
+	IsGokrazy bool        // true for gokrazy images (different QEMU setup)
+	IsMacOS   bool        // true for macOS images (launched via tailmac, not QEMU)
 }
 
 // GOOS returns the Go OS name for this image.
@@ -51,6 +69,14 @@ func (img OSImage) GOARCH() string {
 	return "amd64"
 }
 
+// isLinuxCloudImage reports whether the image is a Linux distro cloud image
+// (Ubuntu, Debian, Fedora, ...), as opposed to gokrazy or a non-Linux OS.
+// These are the images provisioned via generateLinuxUserData and are the ones
+// that must declare a LinuxFamily.
+func (img OSImage) isLinuxCloudImage() bool {
+	return img.GOOS() == "linux" && !img.IsGokrazy
+}
+
 var (
 	// Gokrazy is a minimal Tailscale appliance image built from the gokrazy/natlabapp directory.
 	Gokrazy = OSImage{
@@ -64,6 +90,7 @@ var (
 		Name:     "ubuntu-24.04",
 		URL:      "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
 		MemoryMB: 1024,
+		Family:   LinuxDebian,
 	}
 
 	// Debian12 is Debian 12 (Bookworm) generic cloud image.
@@ -71,6 +98,7 @@ var (
 		Name:     "debian-12",
 		URL:      "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
 		MemoryMB: 1024,
+		Family:   LinuxDebian,
 	}
 
 	// FreeBSD150 is FreeBSD 15.0-RELEASE with BASIC-CLOUDINIT (nuageinit) support.
@@ -79,6 +107,15 @@ var (
 		Name:     "freebsd-15.0",
 		URL:      "https://download.freebsd.org/releases/VM-IMAGES/15.0-RELEASE/amd64/Latest/FreeBSD-15.0-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz",
 		MemoryMB: 1024,
+	}
+
+	// Fedora43 is the Fedora 43 Cloud Base image: NetworkManager +
+	// systemd-resolved, SELinux enforcing, hence LinuxRHEL.
+	Fedora43 = OSImage{
+		Name:     "fedora-43",
+		URL:      "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
+		MemoryMB: 1024,
+		Family:   LinuxRHEL,
 	}
 
 	// MacOS is a macOS VM launched via tailmac (Apple Virtualization.framework).
@@ -96,7 +133,7 @@ var (
 // uses a separate snapshot pipeline). It is intended for tooling such as
 // a CI prep step that wants to warm the image cache.
 func CloudImages() []OSImage {
-	return []OSImage{Ubuntu2404, Debian12, FreeBSD150}
+	return []OSImage{Ubuntu2404, Debian12, FreeBSD150, Fedora43}
 }
 
 // EnsureImage downloads img to the local cache if not already present.
