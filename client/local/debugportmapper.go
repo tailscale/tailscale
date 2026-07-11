@@ -50,6 +50,9 @@ type DebugPortmapOpts struct {
 // process.
 //
 // opts can be nil; if so, default values will be used.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DebugPortmap(ctx context.Context, opts *DebugPortmapOpts) (io.ReadCloser, error) {
 	vals := make(url.Values)
 	if opts == nil {

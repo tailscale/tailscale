@@ -130,7 +130,8 @@ type Prefs struct {
 	ExitNodeAllowLANAccess bool
 
 	// CorpDNS specifies whether to install the Tailscale network's
-	// DNS configuration, if it exists.
+	// DNS configuration, if it exists. It is the internal name for
+	// the "tailscale set --accept-dns=" flag.
 	CorpDNS bool
 
 	// RunSSH bool is whether this node should run an SSH
