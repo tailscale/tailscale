@@ -61,13 +61,14 @@ func (src *Config) Clone() *Config {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigCloneNeedsRegeneration = Config(struct {
-	AcceptDNS        bool
-	DefaultResolvers []*dnstype.Resolver
-	Routes           map[dnsname.FQDN][]*dnstype.Resolver
-	SearchDomains    []dnsname.FQDN
-	Hosts            map[dnsname.FQDN][]netip.Addr
-	SubdomainHosts   set.Set[dnsname.FQDN]
-	OnlyIPv6         bool
+	AcceptDNS             bool
+	DefaultResolvers      []*dnstype.Resolver
+	Routes                map[dnsname.FQDN][]*dnstype.Resolver
+	SearchDomains         []dnsname.FQDN
+	Hosts                 map[dnsname.FQDN][]netip.Addr
+	SubdomainHosts        set.Set[dnsname.FQDN]
+	OnlyIPv6              bool
+	MagicDNSHostsUnrouted bool
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.

@@ -72,6 +72,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		},
 		{
 			name: "self_name_and_peers",
+			os:   "windows", // the full Hosts map is built only for the Windows hosts-file path
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "myname.net.",
@@ -108,6 +109,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		},
 		{
 			name: "subdomain_resolve_capability",
+			os:   "windows", // the full Hosts map is built only for the Windows hosts-file path
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "myname.net.",
@@ -136,7 +138,6 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					"peer-with-cap.net.":    ips("100.102.0.1"),
 					"peer-without-cap.net.": ips("100.102.0.2"),
 				},
-				SubdomainHosts: set.Of[dnsname.FQDN]("myname.net.", "peer-with-cap.net."),
 			},
 		},
 		{
@@ -144,6 +145,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			// should get IPv6 records for all its peers,
 			// even if they have IPv4.
 			name: "v6_only_self",
+			os:   "windows", // the full Hosts map is built only for the Windows hosts-file path
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "myname.net.",
@@ -198,9 +200,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netip.Addr{
-					"myname.net.": ips("100.101.101.101"),
-					"foo.com.":    ips("1.2.3.4"),
-					"bar.com.":    ips("1::6"),
+					"foo.com.": ips("1.2.3.4"),
+					"bar.com.": ips("1::6"),
 				},
 			},
 		},
@@ -425,23 +426,21 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				AcceptDNS: true,
-				Hosts: map[dnsname.FQDN][]netip.Addr{
-					"a.":  ips("100.101.101.101"),
-					"p1.": ips("100.102.0.1"),
-				},
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					dnsname.FQDN("example.com."): {
 						{Addr: "tailscale-app:app1"},
 					},
 				},
+				MagicDNSHostsUnrouted: true,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			verOS := cmp.Or(tt.os, "linux")
+			goos := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, verOS)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")

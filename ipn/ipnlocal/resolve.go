@@ -7,9 +7,12 @@ import (
 	"net/netip"
 	"strings"
 
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine"
 )
 
@@ -71,6 +74,37 @@ func (b *LocalBackend) resolveMagicDNS(hostname, network string) (_ netip.Addr, 
 	}
 	return netip.Addr{}, false
 }
+
+// magicDNSHosts implements [resolver.MagicDNSHosts] on top of the
+// current nodeBackend's live node indexes, so the quad-100 resolver
+// pulls each MagicDNS answer on demand rather than LocalBackend
+// pushing a Hosts map of every node into it on every netmap change.
+// It is installed once at LocalBackend construction; going through
+// currentNode makes profile switches take effect immediately.
+type magicDNSHosts struct{ b *LocalBackend }
+
+func (m magicDNSHosts) LookupHost(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {
+	if !buildfeatures.HasDNS {
+		return nil, false
+	}
+	return m.b.currentNode().magicDNSHostAddrs(fqdn)
+}
+
+func (m magicDNSHosts) LookupPTR(ip netip.Addr) (_ dnsname.FQDN, ok bool) {
+	if !buildfeatures.HasDNS {
+		return "", false
+	}
+	return m.b.currentNode().magicDNSPTR(ip)
+}
+
+func (m magicDNSHosts) SubdomainHost(fqdn dnsname.FQDN) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	return m.b.currentNode().magicDNSSubdomainHost(fqdn)
+}
+
+var _ resolver.MagicDNSHosts = magicDNSHosts{}
 
 // nodeAddrForNetwork returns the best address from n for the given
 // network ("tcp", "tcp4", "tcp6", "udp", "udp4", "udp6"). For
