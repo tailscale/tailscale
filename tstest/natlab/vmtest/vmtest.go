@@ -591,6 +591,13 @@ func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 // for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
 func (e *Env) Start() {
 	t := e.t
+
+	// Give bring-up (image build, boot, agent wait) a generous budget measured
+	// from now. We deliberately do NOT derive this from the test deadline: on
+	// CI, per-test timeouts can be tight (a few minutes), and reserving headroom
+	// under the deadline was observed to steal time bring-up legitimately needs,
+	// failing slow-but-healthy runs. If bring-up genuinely exceeds this, the
+	// `go test -timeout` panic is an acceptable (if blunt) backstop.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 	e.ctx = ctx
@@ -633,7 +640,14 @@ func (e *Env) Start() {
 	// Boot all nodes in parallel. Each platform handles its own
 	// dependencies (image prep, binary compilation, socket setup)
 	// via sync.Once, so independent work overlaps naturally.
+	//
+	// Under TCG, concurrent boots oversubscribe the host CPUs and a heavy
+	// guest can starve its siblings past the stuck-detector; serialize boots
+	// there so each clears that gate before the next starts. KVM stays parallel.
 	var bootEg errgroup.Group
+	if !hardwareAccelAvailable() {
+		bootEg.SetLimit(1)
+	}
 	for _, n := range e.nodes {
 		bootEg.Go(func() error {
 			return n.platform().boot(ctx, e, n)
