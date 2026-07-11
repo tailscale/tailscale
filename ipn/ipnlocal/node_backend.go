@@ -128,6 +128,12 @@ type nodeBackend struct {
 	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
 	nodeByWGString map[string]tailcfg.NodeID
 
+	// nodeByStableID is an index of peer stable node ID to node ID.
+	// Unlike nodeByAddr and nodeByKey, it covers only peers, not the
+	// self node.
+	// It is mutated in place (with mu held) and must not escape the [nodeBackend].
+	nodeByStableID map[tailcfg.StableNodeID]tailcfg.NodeID
+
 	// nodeByName maps MagicDNS hostnames (lowercase, no trailing dot) to
 	// node IDs. Both the FQDN and the short name (suffix stripped) are
 	// keys. It is used by the tsdial MagicDNS resolution callback.
@@ -277,10 +283,9 @@ func (nb *nodeBackend) NodeByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool)
 func (nb *nodeBackend) PeerByStableID(id tailcfg.StableNodeID) (_ tailcfg.NodeView, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	for _, n := range nb.peers {
-		if n.StableID() == id {
-			return n, true
-		}
+	if nid, ok := nb.nodeByStableID[id]; ok {
+		n, ok := nb.peers[nid]
+		return n, ok
 	}
 	return tailcfg.NodeView{}, false
 }
@@ -555,6 +560,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) {
 	nb.netMap = nm
 	nb.updateNodeByAddrLocked()
 	nb.updateNodeByKeyLocked()
+	nb.updateNodeByStableIDLocked()
 	nb.updateNodeByNameLocked()
 	nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
@@ -654,6 +660,20 @@ func (nb *nodeBackend) updateNodeByKeyLocked() {
 		}
 		for _, p := range nm.Peers {
 			nb.nodeByWGString[p.Key().WireGuardGoString()] = p.ID()
+		}
+	})
+}
+
+func (nb *nodeBackend) updateNodeByStableIDLocked() {
+	nm := nb.netMap
+	if nm == nil {
+		nb.nodeByStableID = nil
+		return
+	}
+
+	mapx.RepopulateNonzero(&nb.nodeByStableID, func() {
+		for _, p := range nm.Peers {
+			nb.nodeByStableID[p.StableID()] = p.ID()
 		}
 	})
 }
@@ -802,6 +822,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			}
 			mak.Set(&nb.nodeByKey, m.Node.Key(), nid)
 			mak.Set(&nb.nodeByWGString, m.Node.Key().WireGuardGoString(), nid)
+			mak.Set(&nb.nodeByStableID, m.Node.StableID(), nid)
 			nb.addNodeNameLocked(m.Node.Name(), nid)
 			continue
 		case netmap.NodeMutationRemove:
@@ -814,6 +835,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				}
 				delete(nb.nodeByKey, old.Key())
 				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
+				delete(nb.nodeByStableID, old.StableID())
 				nb.removeNodeNameLocked(old.Name())
 				delete(nb.peers, nid)
 			}
