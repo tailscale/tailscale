@@ -1150,14 +1150,28 @@ func (b *LocalBackend) shouldPauseControlClientLocked(prefs ipn.PrefsView) bool 
 	return false
 }
 
-// DisconnectControl shuts down control client. This can be run before node shutdown to force control to consider this ndoe
-// inactive. This can be used to ensure that nodes that are HA subnet router or app connector replicas are shutting
-// down, clients switch over to other replicas whilst the existing connections are kept alive for some period of time.
+// DisconnectControl shuts down the control client. This can be run before
+// node shutdown to force control to consider this node inactive. This can
+// be used to ensure that nodes that are HA subnet router or app connector
+// replicas are shutting down, clients switch over to other replicas whilst
+// the existing connections are kept alive for some period of time.
+//
+// Shutdown of the detached client is synchronous: it cancels the client's
+// in-flight requests and waits for its goroutines to exit, but it does not
+// wait for pending updates to be delivered.
 func (b *LocalBackend) DisconnectControl() {
 	b.mu.Lock()
 	cc := b.resetControlClientLocked()
 	b.mu.Unlock()
 
+	// The Shutdown call must not run while b.mu is held, per the deadlock
+	// history in tailscale/tailscale#18052: controlclient.Auto's
+	// goroutines deliver callbacks into LocalBackend through an execqueue
+	// whose RunSync holds the queue mutex while the callback acquires
+	// b.mu, and Auto.Shutdown acquires that same queue mutex, so calling
+	// it with b.mu held inverts the lock order. A previous attempt to
+	// shut the client down synchronously inside resetControlClientLocked
+	// with b.mu held (#18127) deadlocked and was reverted (#18149).
 	if cc != nil {
 		cc.Shutdown()
 	}
@@ -3003,6 +3017,23 @@ func (b *LocalBackend) controlDebugFlags() []string {
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
 	defer b.CheckDeadlocks()()
+
+	// Shut down the previous control client, if any, before starting a
+	// new one, so the old client can't race with the new one. Without
+	// this, an in-flight lite map update carrying stale Hostinfo (notably
+	// RequestTags) could be processed by the control plane after the new
+	// client's requests, which made retagging with "tailscale up
+	// --advertise-tags" intermittently look like an invalid tag
+	// transition and log the node out (tailscale/tailscale#20365).
+	//
+	// TODO(bradfitz,nickkhyl): this is still racy if Start is called
+	// concurrently: whichever call loses the race to reacquire b.mu
+	// below then detaches the winner's new control client in startLocked
+	// and shuts it down in a goroutine, without the ordering guarantee
+	// that this call provides. This is a workaround until #18052 is
+	// properly fixed and a control client can be shut down synchronously
+	// with b.mu held.
+	b.DisconnectControl()
 
 	b.mu.Lock()
 	defer b.mu.Unlock()

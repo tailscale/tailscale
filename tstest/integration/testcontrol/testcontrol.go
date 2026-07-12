@@ -70,6 +70,29 @@ type Server struct {
 	// belong to the same user.
 	AllNodesSameUser bool
 
+	// TagOwners, if non-nil, enables modeling of the production control
+	// server's tag transition handling. Map keys are tags (e.g. "tag:foo")
+	// and values are the tags whose nodes are allowed to assign the key's
+	// tag. A node registering with Hostinfo.RequestTags gets those tags
+	// (signup-time ownership checks are not modeled). A later non-streaming
+	// map request whose Hostinfo.RequestTags differ from both the node's
+	// stored Hostinfo's RequestTags and its current tags is treated as a
+	// tag transition request: if the node's current tags own each requested
+	// tag, the node is retagged; otherwise its node key is expired to force
+	// reauthentication, as the production control server does.
+	//
+	// If nil, RequestTags in map requests are ignored.
+	TagOwners map[string][]string
+
+	// HoldMapRequest, if non-nil, is called with each incoming MapRequest
+	// before the server starts processing it. It may block to delay
+	// processing, letting tests control the order in which concurrent map
+	// requests are handled. If it returns a non-nil func, the server calls
+	// it when it finishes handling the request. For streaming requests
+	// that is when the poll ends, so returning a done func is mostly
+	// useful for non-streaming requests.
+	HoldMapRequest func(*tailcfg.MapRequest) (done func())
+
 	// AllOnline, if true, marks every peer entry in MapResponses as
 	// Online=true. This is a coarse stand-in for the per-node
 	// online/offline tracking that production control servers do based
@@ -1027,6 +1050,11 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			CapMap:            capMap,
 			Capabilities:      slices.Collect(maps.Keys(capMap)),
 		}
+		if s.TagOwners != nil && req.Hostinfo != nil {
+			// Trust the requested tags at signup; ownership checks
+			// against the registering user are not modeled.
+			node.Tags = slices.Clone(req.Hostinfo.RequestTags)
+		}
 		if s.MagicDNSDomain != "" {
 			node.Name = node.Name + "." + s.MagicDNSDomain + "."
 		}
@@ -1258,6 +1286,71 @@ func (s *Server) incrInServeMap(delta int) {
 	s.inServeMap += delta
 }
 
+// handleTagTransitionLocked models the production control server's handling
+// of tag changes requested via Hostinfo.RequestTags in non-streaming map
+// requests (see updateTags in the control server). A request whose
+// RequestTags differ from both the node's stored Hostinfo's RequestTags and
+// the node's current tags is a tag transition request. If the transition is
+// permitted by s.TagOwners, the node is retagged; otherwise its node key is
+// expired to force reauthentication.
+//
+// hi is the Hostinfo from the incoming request; node.Hostinfo is the
+// previously stored one. s.mu must be held.
+func (s *Server) handleTagTransitionLocked(node *tailcfg.Node, hi tailcfg.HostinfoView) {
+	var oldReqTags []string
+	if node.Hostinfo.Valid() {
+		oldReqTags = node.Hostinfo.RequestTags().AsSlice()
+	}
+	newReqTags := hi.RequestTags().AsSlice()
+	if tagsEqualAnyOrder(oldReqTags, newReqTags) || tagsEqualAnyOrder(newReqTags, node.Tags) {
+		return
+	}
+	if s.validTagTransition(node.Tags, newReqTags) {
+		s.logf("testcontrol: retagging node %v: %v -> %v", node.ID, node.Tags, newReqTags)
+		node.Tags = newReqTags
+	} else {
+		s.logf("testcontrol: invalid tag transition %v -> %v for node %v; expiring its node key", node.Tags, newReqTags, node.ID)
+		node.KeyExpiry = time.Now().Add(-time.Minute)
+	}
+}
+
+// validTagTransition reports whether a node currently tagged cur may retag
+// itself as want, per s.TagOwners: every requested tag must be owned by one
+// of the node's current tags. An untagged node may claim any defined tag,
+// standing in for the production server's checks against the requesting
+// user, which this server doesn't model. Removing all tags is not allowed,
+// matching the production server.
+func (s *Server) validTagTransition(cur, want []string) bool {
+	if len(want) == 0 {
+		return len(cur) == 0
+	}
+	for _, tag := range want {
+		owners, ok := s.TagOwners[tag]
+		if !ok {
+			return false
+		}
+		if len(cur) == 0 {
+			continue
+		}
+		owned := slices.ContainsFunc(cur, func(c string) bool { return slices.Contains(owners, c) })
+		if !owned {
+			return false
+		}
+	}
+	return true
+}
+
+// tagsEqualAnyOrder reports whether a and b contain the same tags, ignoring order.
+func tagsEqualAnyOrder(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := slices.Clone(a), slices.Clone(b)
+	slices.Sort(as)
+	slices.Sort(bs)
+	return slices.Equal(as, bs)
+}
+
 // InServeMap returns the number of clients currently in a MapRequest HTTP handler.
 func (s *Server) InServeMap() int {
 	s.mu.Lock()
@@ -1288,6 +1381,12 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		s.onMapRequest(req.NodeKey)
 	}
 	s.mu.Unlock()
+
+	if s.HoldMapRequest != nil {
+		if done := s.HoldMapRequest(req); done != nil {
+			defer done()
+		}
+	}
 
 	if s.AltMapStream != nil {
 		// The caller takes over the stream entirely; it must handle
@@ -1320,6 +1419,16 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	streamingNonUpdate := req.Stream && req.Version >= 68
 	var peersToUpdate []tailcfg.NodeID
 	if !req.ReadOnly && !streamingNonUpdate {
+		if ctx.Err() != nil {
+			// The client canceled the request (say, its control client
+			// was shut down mid-request when "tailscale up" or a
+			// profile switch created a new one), so its contents may
+			// predate newer requests that were already processed.
+			// Don't apply its Hostinfo/endpoints; they may be stale.
+			s.logf("testcontrol: dropping canceled map update from %v", req.NodeKey.ShortString())
+			http.Error(w, "request canceled", 400)
+			return
+		}
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		var hi tailcfg.HostinfoView
 		var newDERP int
@@ -1339,6 +1448,9 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 			live.DiscoKey = req.DiscoKey
 			live.Cap = req.Version
 			if hi.Valid() {
+				if s.TagOwners != nil {
+					s.handleTagTransitionLocked(live, hi)
+				}
 				live.Hostinfo = hi
 				if newDERP != 0 {
 					live.HomeDERP = newDERP

@@ -532,6 +532,138 @@ func TestOneNodeUpAuth(t *testing.T) {
 	}
 }
 
+// TestRetagStaleMapRequestRace reproduces tailscale/tailscale#20365: a node
+// tagged tag:tag1, where tag:tag1 owns tag:tag2, is retagged with "tailscale
+// up --advertise-tags=tag:tag2". This should always succeed, but sometimes
+// the machine is logged out instead.
+//
+// The cause is a race: "tailscale up" makes LocalBackend.Start shut down the
+// old control client asynchronously while the new one starts, so a lite map
+// update carrying the old Hostinfo.RequestTags can still be in flight when
+// the new client's requests retag the node. If control processes the stale
+// update after the tag transition, it looks like a request to change the
+// node's tags from tag:tag2 back to tag:tag1. That fails the tag ownership
+// check (tag:tag2 doesn't own tag:tag1), and control expires the node's key
+// to force reauthentication, logging the machine out.
+//
+// The test recreates that interleaving deterministically: it triggers a lite
+// map update carrying the old tags (any routine hostinfo change does that),
+// holds it at the server, retags the node, and only then lets the held
+// update be processed.
+func TestRetagStaleMapRequestRace(t *testing.T) {
+	tstest.Parallel(t)
+
+	var (
+		holdStale    atomic.Bool
+		staleHeld    = make(chan struct{}, 1)
+		staleRelease = make(chan struct{})
+		staleDone    = make(chan struct{}, 1)
+	)
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
+		control.TagOwners = map[string][]string{
+			"tag:tag1": nil,
+			"tag:tag2": {"tag:tag1"},
+		}
+		control.HoldMapRequest = func(req *tailcfg.MapRequest) (done func()) {
+			if req.Stream || req.Hostinfo == nil || !holdStale.Load() {
+				return nil
+			}
+			if !slices.Equal(req.Hostinfo.RequestTags, []string{"tag:tag1"}) {
+				return nil
+			}
+			select {
+			case staleHeld <- struct{}{}:
+			default:
+			}
+			<-staleRelease
+			return func() {
+				select {
+				case staleDone <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}))
+
+	n1 := NewTestNode(t, env)
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n1.AwaitResponding()
+	n1.MustUp("--advertise-tags=tag:tag1")
+	n1.AwaitRunning()
+
+	nodes := env.Control.AllNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	origKey := nodes[0].Key
+	if got, want := nodes[0].Tags, []string{"tag:tag1"}; !slices.Equal(got, want) {
+		t.Fatalf("node tags = %v; want %v", got, want)
+	}
+
+	// Make the current control client send a lite map update carrying the
+	// old RequestTags, as any routine hostinfo change does. Control holds
+	// it (per HoldMapRequest above) so that it's still outstanding when
+	// the node is retagged below. Shutting down that control client
+	// cancels the request but can't unsend it; control still has it.
+	holdStale.Store(true)
+	if out, err := n1.Tailscale("set", "--hostname=retag-race-test").CombinedOutput(); err != nil {
+		t.Fatalf("tailscale set: %v, %s", err, out)
+	}
+	select {
+	case <-staleHeld:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the stale map update to reach control")
+	}
+
+	// Retag the node while the stale update is still outstanding. This
+	// doesn't block on the held update: the new control client's requests
+	// are processed while it is held.
+	n1.MustUp("--advertise-tags=tag:tag2")
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		n := env.Control.Node(origKey)
+		if n == nil {
+			return fmt.Errorf("node %v not found in control", origKey.ShortString())
+		}
+		if !slices.Equal(n.Tags, []string{"tag:tag2"}) {
+			return fmt.Errorf("node tags = %v; want [tag:tag2]", n.Tags)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Let control process the stale update, now that the retag has been
+	// committed, and wait for it to finish.
+	close(staleRelease)
+	select {
+	case <-staleDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for control to process the stale map update")
+	}
+
+	// The retag should stick, and the machine should stay logged in with
+	// the same node key. With the bug present, control instead expires the
+	// node key when it processes the stale update.
+	n := env.Control.Node(origKey)
+	if n == nil {
+		t.Fatalf("node %v disappeared from control", origKey.ShortString())
+	}
+	if !n.KeyExpiry.IsZero() {
+		t.Fatalf("control expired the node key after processing a stale map update; the machine was logged out (issue 20365)")
+	}
+	if got, want := n.Tags, []string{"tag:tag2"}; !slices.Equal(got, want) {
+		t.Fatalf("node tags = %v; want %v", got, want)
+	}
+	st := n1.MustStatus()
+	if st.BackendState != "Running" {
+		t.Errorf("BackendState = %q; want Running", st.BackendState)
+	}
+	if st.Self.PublicKey != origKey {
+		t.Errorf("node key changed from %v to %v; the machine was logged out and re-registered", origKey.ShortString(), st.Self.PublicKey.ShortString())
+	}
+}
+
 // Returns true if the error returned by [exec.Run] fails with a non-zero
 // exit code, false otherwise.
 func isNonZeroExitCode(err error) bool {
