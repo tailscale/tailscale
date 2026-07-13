@@ -1419,6 +1419,10 @@ var (
 	metricDNSFwdDoHErrorTransport = clientmetric.NewCounter("dns_query_fwd_doh_error_transport")
 	metricDNSFwdDoHErrorBody      = clientmetric.NewCounter("dns_query_fwd_doh_error_body")
 
+	// metricDNSFwdDoHAutoResolve counts DoH queries whose server hostname
+	// was resolved at dial time (no publicdns match, no BootstrapResolution).
+	metricDNSFwdDoHAutoResolve = clientmetric.NewCounter("dns_query_fwd_doh_auto_resolve")
+
 	metricDNSResolveLocal             = clientmetric.NewCounter("dns_resolve_local")
 	metricDNSResolveLocalErrorOnion   = clientmetric.NewCounter("dns_resolve_local_error_onion")
 	metricDNSResolveLocalErrorMissing = clientmetric.NewCounter("dns_resolve_local_error_missing")
