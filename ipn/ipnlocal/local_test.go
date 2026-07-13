@@ -9668,3 +9668,38 @@ func TestEnginePeerForIPAdjustsForPrefs(t *testing.T) {
 		})
 	}
 }
+
+// Tests that selecting an exit node that doesn't resolve to any
+// current peer (a nonexistent node, or MDM's "auto:any" placeholder
+// before it is resolved) still installs the blackhole default routes,
+// so internet traffic is dropped rather than escaping to the local
+// network. That behavior is documented on [ipn.Prefs.ExitNodeID] and
+// must survive the migration of OS route computation to
+// net/routemanager.
+func TestRouterConfigExitNodeBlackhole(t *testing.T) {
+	lb := newTestLocalBackend(t)
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name:      "test-node",
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+		}).View(),
+	}
+	cfg := &wgcfg.Config{} // no peer carries the default routes
+
+	hasDefaults := func(routes []netip.Prefix) bool {
+		return slices.Contains(routes, tsaddr.AllIPv4()) && slices.Contains(routes, tsaddr.AllIPv6())
+	}
+	for _, exitID := range []tailcfg.StableNodeID{"auto:any", "no-such-node"} {
+		prefs := ipn.Prefs{ExitNodeID: exitID}
+		rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm, false)
+		if !hasDefaults(rcfg.Routes) {
+			t.Errorf("ExitNodeID=%q: Routes = %v; want blackhole default routes", exitID, rcfg.Routes)
+		}
+	}
+
+	// With no exit node selected, there must be no default routes.
+	rcfg := lb.routerConfigLocked(cfg, new(ipn.Prefs).View(), nm, false)
+	if hasDefaults(rcfg.Routes) {
+		t.Errorf("no exit node: Routes = %v; want no default routes", rcfg.Routes)
+	}
+}
