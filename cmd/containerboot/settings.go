@@ -89,24 +89,24 @@ type settings struct {
 
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
-		AuthKey:            defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		ClientID:           defaultEnv("TS_CLIENT_ID", ""),
-		ClientSecret:       defaultEnv("TS_CLIENT_SECRET", ""),
-		IDToken:            defaultEnv("TS_ID_TOKEN", ""),
-		Audience:           defaultEnv("TS_AUDIENCE", ""),
-		Hostname:           defaultEnv("TS_HOSTNAME", ""),
-		Routes:             defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:    defaultEnv("TS_SERVE_CONFIG", ""),
-		ProxyTargetIP:      defaultEnv("TS_DEST_IP", ""),
-		ProxyTargetDNSName: defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
-		TailnetTargetIP:    defaultEnv("TS_TAILNET_TARGET_IP", ""),
-		TailnetTargetFQDN:  defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
-		DaemonExtraArgs:    defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:          defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:       os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:      defaultBool("TS_USERSPACE", true),
-		StateDir:           defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:          defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		AuthKey:                               defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY", "TS_AUTHKEY_FILE", "TS_AUTH_KEY_FILE"}, ""),
+		ClientID:                              defaultEnv("TS_CLIENT_ID", ""),
+		ClientSecret:                          defaultEnv("TS_CLIENT_SECRET", ""),
+		IDToken:                               defaultEnv("TS_ID_TOKEN", ""),
+		Audience:                              defaultEnv("TS_AUDIENCE", ""),
+		Hostname:                              defaultEnv("TS_HOSTNAME", ""),
+		Routes:                                defaultEnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:                       defaultEnv("TS_SERVE_CONFIG", ""),
+		ProxyTargetIP:                         defaultEnv("TS_DEST_IP", ""),
+		ProxyTargetDNSName:                    defaultEnv("TS_EXPERIMENTAL_DEST_DNS_NAME", ""),
+		TailnetTargetIP:                       defaultEnv("TS_TAILNET_TARGET_IP", ""),
+		TailnetTargetFQDN:                     defaultEnv("TS_TAILNET_TARGET_FQDN", ""),
+		DaemonExtraArgs:                       defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:                             defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:                          os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:                         defaultBool("TS_USERSPACE", true),
+		StateDir:                              defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:                             defaultEnvBoolPointer("TS_ACCEPT_DNS"),
 		KubeSecret: func() string {
 			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
 				return defaultEnv("TS_KUBE_SECRET", "tailscale")
@@ -485,9 +485,21 @@ func defaultEnvBoolPointer(name string) *bool {
 	return &ret
 }
 
+// defaultEnvs returns the value of the first envvar in names that is set,
+// or defVal if none are set. If the envvar ends with "_FILE", it reads the
+// value from the file specified by the envvar.
 func defaultEnvs(names []string, defVal string) string {
 	for _, name := range names {
-		if v, ok := os.LookupEnv(name); ok {
+		if strings.HasSuffix(name, "_FILE") {
+			if filepath, ok := os.LookupEnv(name); ok {
+				data, err := os.ReadFile(filepath)
+				if err != nil {
+					log.Printf("error reading env var %s from file %s: %v", name, filepath, err)
+					continue
+				}
+				return strings.TrimSpace(string(data))
+			}
+		} else if v, ok := os.LookupEnv(name); ok {
 			return v
 		}
 	}
