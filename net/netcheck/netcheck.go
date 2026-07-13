@@ -1026,7 +1026,7 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	report := rs.report.Clone()
 	rs.mu.Unlock()
 
-	c.addReportHistoryAndSetPreferredDERP(rs, report, dm.View())
+	c.addReportHistoryAndSetPreferredDERP(rs, report, dm.View(), c.timeNow())
 	c.logConciseReport(report, dm)
 
 	return report
@@ -1381,7 +1381,7 @@ func (c *Client) addReportAndPruneExpired(now time.Time, r *Report) {
 
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
 // and mutates r.PreferredDERP to contain the best recent one.
-func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report, dm tailcfg.DERPMapView) {
+func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report, dm tailcfg.DERPMapView, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1392,7 +1392,6 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 
 	// Add report to history, enforce retention window, then take the best (lowest)
 	// latency seen per region across what remains.
-	now := c.timeNow()
 	c.addReportAndPruneExpired(now, r)
 	bestRecent := c.bestRecentLatencyLocked()
 
@@ -1517,10 +1516,8 @@ func (c *Client) RecentRegionLatency() map[int]time.Duration {
 // r.PreferredDERP from that history.
 func (c *Client) AddReportHistoryForTest(dm *tailcfg.DERPMap, r *Report, now time.Time) {
 	testenv.AssertInTest()
-	defer func(prev func() time.Time) { c.TimeNow = prev }(c.TimeNow)
-	c.TimeNow = func() time.Time { return now }
 	rs := &reportState{c: c, start: now}
-	c.addReportHistoryAndSetPreferredDERP(rs, r, dm.View())
+	c.addReportHistoryAndSetPreferredDERP(rs, r, dm.View(), now)
 }
 
 func updateLatency(m map[int]time.Duration, regionID int, d time.Duration) {

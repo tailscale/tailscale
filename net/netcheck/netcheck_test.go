@@ -468,7 +468,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			for _, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
 				rs.start = fakeTime.Add(-100 * time.Millisecond)
-				c.addReportHistoryAndSetPreferredDERP(rs, s.r, dm.View())
+				c.addReportHistoryAndSetPreferredDERP(rs, s.r, dm.View(), fakeTime)
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
 			if got, want := len(c.prev), tt.wantPrevLen; got != want {
@@ -522,7 +522,7 @@ func TestRecentReportsRetainFullNetcheck(t *testing.T) {
 			regions = allRegions
 			lastFull = now
 		}
-		c.addReportHistoryAndSetPreferredDERP(&reportState{c: c, start: now}, mkReport(regions), dm.View())
+		c.addReportHistoryAndSetPreferredDERP(&reportState{c: c, start: now}, mkReport(regions), dm.View(), now)
 
 		// Recent latency must always cover every region, which is only
 		// possible while a full report remains in c.prev.
