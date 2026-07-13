@@ -814,6 +814,15 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		return h, r.URL.Path, true
 	}
 	pth := path.Clean(r.URL.Path)
+	// A well-formed origin-form request path is absolute. Malformed request
+	// targets — "*" (e.g. "GET *") and "" (e.g. "CONNECT" authority-form),
+	// clean to "*" and "." respectively. Those are path.Dir fixed points that
+	// never equal "/" and match no mount, so without this guard the loop below
+	// would spin forever on one CPU core (a remote DoS via serve, or via funnel
+	// from the internet).
+	if !strings.HasPrefix(pth, "/") {
+		return z, "", false
+	}
 	for {
 		withSlash := pth + "/"
 		if h, ok := wsc.Handlers().GetOk(withSlash); ok {
@@ -825,7 +834,13 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if pth == "/" {
 			return z, "", false
 		}
-		pth = path.Dir(pth)
+		// Belt-and-suspenders with the absolute-path check above: stop if
+		// path.Dir stops shrinking rather than assuming it always reaches "/".
+		if parent := path.Dir(pth); parent != pth {
+			pth = parent
+		} else {
+			return z, "", false
+		}
 	}
 }
 
