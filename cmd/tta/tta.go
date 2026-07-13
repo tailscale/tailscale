@@ -198,6 +198,9 @@ func main() {
 		if r.URL.Query().Get("accept-routes") == "true" {
 			args = append(args, "--accept-routes")
 		}
+		if r.URL.Query().Get("ssh") == "true" {
+			args = append(args, "--ssh")
+		}
 		serveCmd(w, "tailscale", args...)
 	})
 	ttaMux.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) {
