@@ -37,7 +37,7 @@ const (
 	containerName = "tailscaled"
 )
 
-// StatefulSetOptions describes a StatefulSet of tailscaled pods. The zero value is not valid — Name, Namespace,
+// StatefulSetOptions describes a StatefulSet of tailscaled pods. The zero value is not valid , Name, Namespace,
 // Image, Labels, and ConfigSecretNameFunc must be set.
 type StatefulSetOptions struct {
 	// Name is the StatefulSet's metadata name; pods will be named <Name>-<ordinal>.
@@ -47,7 +47,7 @@ type StatefulSetOptions struct {
 	Namespace string
 
 	// Labels are applied to the StatefulSet, its pod template, and used as the label selector. Callers must
-	// include enough labels to uniquely identify the workload — typically at least tailscale.com/parent-resource
+	// include enough labels to uniquely identify the workload , typically at least tailscale.com/parent-resource
 	// and tailscale.com/parent-resource-type.
 	Labels map[string]string
 

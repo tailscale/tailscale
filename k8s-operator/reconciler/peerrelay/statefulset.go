@@ -6,11 +6,13 @@
 package peerrelay
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -61,9 +63,9 @@ func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpo
 	})
 }
 
-func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32) *appsv1.StatefulSet {
+func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32, pc *tsapi.ProxyClass) *appsv1.StatefulSet {
 	labels := peerRelayLabels(pr.Name)
-	return tailscaled.NewStatefulSet(tailscaled.StatefulSetOptions{
+	ss := tailscaled.NewStatefulSet(tailscaled.StatefulSetOptions{
 		Name:               pr.Name,
 		Namespace:          r.tailscaleNamespace,
 		Labels:             labels,
@@ -74,4 +76,24 @@ func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32) *
 			return configSecretName(pr.Name, idx)
 		},
 	})
+
+	return tailscaled.ApplyProxyClass(ss, pc, managedLabelKeys, nil)
+}
+
+var managedLabelKeys = []string{
+	"tailscale.com/managed",
+	labelParentType,
+	labelParentName,
+}
+
+func (r *Reconciler) getProxyClass(ctx context.Context, pr *tsapi.PeerRelay) (*tsapi.ProxyClass, error) {
+	if pr.Spec.ProxyClass == "" {
+		return nil, nil
+	}
+
+	var pc tsapi.ProxyClass
+	if err := r.Get(ctx, types.NamespacedName{Name: pr.Spec.ProxyClass}, &pc); err != nil {
+		return nil, fmt.Errorf("failed to get ProxyClass %q: %w", pr.Spec.ProxyClass, err)
+	}
+	return &pc, nil
 }

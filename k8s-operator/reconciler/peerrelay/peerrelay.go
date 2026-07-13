@@ -102,9 +102,10 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 	}
 }
 
-// Register the Reconciler onto the given manager.Manager implementation. It watches PeerRelay resources directly
-// and also watches the child resources it manages (Services, StatefulSets, Secrets) so external drift or cloud
-// controller updates enqueue a reconcile for the owning PeerRelay.
+// Register the Reconciler onto the given manager.Manager implementation. It watches PeerRelay resources directly,
+// the child resources it manages (Services, StatefulSets, Secrets) so external drift or cloud controller updates
+// enqueue a reconcile for the owning PeerRelay, and ProxyClass so config changes propagate to referring
+// PeerRelays.
 func (r *Reconciler) Register(mgr manager.Manager) error {
 	enqueue := handler.EnqueueRequestsFromMapFunc(enqueuePeerRelayForChild)
 	return builder.
@@ -113,8 +114,30 @@ func (r *Reconciler) Register(mgr manager.Manager) error {
 		Watches(&corev1.Service{}, enqueue).
 		Watches(&appsv1.StatefulSet{}, enqueue).
 		Watches(&corev1.Secret{}, enqueue).
+		Watches(&tsapi.ProxyClass{}, handler.EnqueueRequestsFromMapFunc(r.enqueuePeerRelaysForProxyClass)).
 		Named(reconcilerName).
 		Complete(r)
+}
+
+func (r *Reconciler) enqueuePeerRelaysForProxyClass(ctx context.Context, o client.Object) []reconcile.Request {
+	pc, ok := o.(*tsapi.ProxyClass)
+	if !ok {
+		return nil
+	}
+
+	var list tsapi.PeerRelayList
+	if err := r.List(ctx, &list); err != nil {
+		r.logger.Errorf("failed to list PeerRelays for ProxyClass %q change: %v", pc.Name, err)
+		return nil
+	}
+
+	var reqs []reconcile.Request
+	for _, pr := range list.Items {
+		if pr.Spec.ProxyClass == pc.Name {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: pr.Name}})
+		}
+	}
+	return reqs
 }
 
 func enqueuePeerRelayForChild(_ context.Context, o client.Object) []reconcile.Request {
@@ -172,7 +195,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 	}
 
 	// Read the LB addresses assigned by the cloud so each pod's config file can advertise its own public endpoint
-	// via RelayServerStaticEndpoints. On first reconcile the LBs aren't provisioned yet — endpointsByReplica ends
+	// via RelayServerStaticEndpoints. On first reconcile the LBs aren't provisioned yet , endpointsByReplica ends
 	// up empty and the configs are written without static endpoints; the Watches-triggered reconcile that fires
 	// when the LB IP lands will fill them in.
 	endpoints, endpointErrs, err := r.readEndpoints(ctx, pr)
@@ -460,14 +483,16 @@ func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.Peer
 	return nil
 }
 
-// ensureStatefulSet creates or reconciles the StatefulSet backing pr and returns its current in-cluster state.
-// The returned StatefulSet's Status is what the API server most recently reported (ReadyReplicas etc.), which
-// writeStatus uses to decide whether the PeerRelay is Ready.
 func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) (*appsv1.StatefulSet, error) {
-	desired := r.peerRelayStatefulSet(pr, replicas)
+	pc, err := r.getProxyClass(ctx, pr)
+	if err != nil {
+		return nil, err
+	}
+
+	desired := r.peerRelayStatefulSet(pr, replicas, pc)
 
 	var existing appsv1.StatefulSet
-	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+	err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		if err = r.Create(ctx, desired); err != nil {
