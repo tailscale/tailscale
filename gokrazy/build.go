@@ -24,11 +24,33 @@ import (
 )
 
 var (
-	app    = flag.String("app", "tsapp", "appliance name; one of the subdirectories of gokrazy/")
-	bucket = flag.String("bucket", "tskrazy-import", "S3 bucket to upload disk image to while making AMI")
-	build  = flag.Bool("build", false, "if true, just build locally and stop, without uploading")
-	gaf    = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
+	app     = flag.String("app", "tsapp", "appliance name; one of the subdirectories of gokrazy/")
+	bucket  = flag.String("bucket", "tskrazy-import", "S3 bucket to upload disk image to while making AMI")
+	build   = flag.Bool("build", false, "if true, just build locally and stop, without uploading")
+	gaf     = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
+	jsonOut = flag.Bool("json", false, "emit one machine-readable JSON result line to stdout")
+	region  = flag.String("region", "", "AWS region for import+register; default us-east-1 (honors $AWS_REGION)")
 )
+
+// awsRegion is the resolved AWS region used for every aws invocation. Set once
+// in main from resolveRegion.
+var awsRegion string
+
+// result is the machine-readable output printed to stdout when --json is set.
+// Fields are populated as the run progresses; per docs/cli.md, existing fields
+// keep their meaning and consumers must tolerate new ones.
+type result struct {
+	App      string `json:"app"`
+	Arch     string `json:"arch"`
+	Name     string `json:"name,omitempty"`
+	Image    string `json:"image,omitempty"`
+	GAF      string `json:"gaf,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
+	AMI      string `json:"ami,omitempty"`
+}
+
+var res result
 
 // baseImageSizeBytes is the size of the disk image we ask monogok to
 // produce (and that the AWS AMI import expects). It has to be large
@@ -105,11 +127,16 @@ func main() {
 		log.Fatalf("config.json GOARCH %q must be amd64 or arm64", conf.GOARCH())
 	}
 
+	awsRegion = resolveRegion(*region, os.Getenv("AWS_REGION"))
+	res.App = *app
+	res.Arch = awsArch(conf.GOARCH())
+
 	if err := buildImage(); err != nil {
 		log.Fatalf("build image: %v", err)
 	}
 	if *build || *gaf {
 		log.Printf("built. stopping.")
+		emitJSON()
 		return
 	}
 
@@ -126,12 +153,53 @@ func main() {
 		log.Fatalf("waitForImportSnapshot(%v): %v", importTask, err)
 	}
 	log.Printf("snap ID: %v", snapID)
+	res.Snapshot = snapID
+	res.Region = awsRegion
 
-	ami, err := makeAMI(fmt.Sprintf(*app+"-%d", time.Now().Unix()), snapID)
+	res.Name = amiName(*app)
+	ami, err := makeAMI(res.Name, snapID)
 	if err != nil {
 		log.Fatalf("makeAMI: %v", err)
 	}
 	log.Printf("made AMI: %v", ami)
+	res.AMI = ami
+	emitJSON()
+}
+
+// awsArch maps a Go GOARCH to the AWS EC2 --architecture value.
+func awsArch(goarch string) string {
+	switch goarch {
+	case "arm64":
+		return "arm64"
+	case "amd64":
+		return "x86_64"
+	}
+	return ""
+}
+
+// resolveRegion picks the AWS region: an explicit --region wins, then
+// $AWS_REGION, then us-east-1 (where the Marketplace Catalog API and its
+// source AMI live).
+func resolveRegion(flagVal, env string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if env != "" {
+		return env
+	}
+	return "us-east-1"
+}
+
+// emitJSON writes the result as one JSON line to stdout when --json is set.
+// Everything else in this program goes to stderr, so stdout is a clean data
+// channel for scripts.
+func emitJSON() {
+	if !*jsonOut {
+		return
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(&res); err != nil {
+		log.Fatalf("encoding json result: %v", err)
+	}
 }
 
 func buildImage() error {
@@ -159,12 +227,13 @@ func buildImage() error {
 
 	cmd := exec.Command("go", args...)
 	cmd.Dir = filepath.Join(dir, *app)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 	if *gaf {
+		res.GAF = filepath.Join(dir, *app+".gaf")
 		return nil
 	}
 
@@ -178,18 +247,55 @@ func buildImage() error {
 		return fmt.Errorf("formatting /perm in %s: %v", imgPath, err)
 	}
 	log.Printf("Wrote ext4 /perm filesystem to %s.", imgPath)
+	res.Image = imgPath
 	return nil
 }
 
+// amiName returns a deterministic AMI name derived from git: on a tagged commit
+// it's <app>-<tag> (releases); otherwise <app>-<git describe>-<unixtime> for
+// ad-hoc builds. If git is unavailable it falls back to <app>-<unixtime>.
+func amiName(app string) string {
+	exact, _ := gitOutput("describe", "--exact-match", "--tags", "HEAD")
+	describe, _ := gitOutput("describe", "--tags", "--always", "--dirty")
+	return amiNameFrom(app, exact, describe, time.Now().Unix())
+}
+
+// amiNameFrom is the pure decision behind amiName, split out for testing.
+func amiNameFrom(app, exactTag, describe string, now int64) string {
+	if exactTag != "" {
+		return app + "-" + exactTag
+	}
+	if describe != "" {
+		return fmt.Sprintf("%s-%s-%d", app, describe, now)
+	}
+	return fmt.Sprintf("%s-%d", app, now)
+}
+
+// gitOutput runs git with args and returns trimmed stdout, or an error (e.g. no
+// git, not a repo, or the ref doesn't match).
+func gitOutput(args ...string) (string, error) {
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// awsCmd builds an aws command with the resolved --region prepended so every
+// call targets the same region deterministically.
+func awsCmd(args ...string) *exec.Cmd {
+	return exec.Command("aws", append([]string{"--region", awsRegion}, args...)...)
+}
+
 func copyToS3() error {
-	cmd := exec.Command("aws", "s3", "cp", *app+".img", "s3://"+*bucket+"/")
-	cmd.Stdout = os.Stdout
+	cmd := awsCmd("s3", "cp", *app+".img", "s3://"+*bucket+"/")
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func startImportSnapshot() (importTaskID string, err error) {
-	out, err := exec.Command("aws", "ec2", "import-snapshot", "--disk-container", "Url=s3://"+*bucket+"/"+*app+".img").CombinedOutput()
+	out, err := awsCmd("ec2", "import-snapshot", "--disk-container", "Url=s3://"+*bucket+"/"+*app+".img").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("import snapshot: %v: %s", err, out)
 	}
@@ -240,7 +346,7 @@ func startImportSnapshot() (importTaskID string, err error) {
 
 func waitForImportSnapshot(importTaskID string) (snapID string, err error) {
 	for {
-		out, err := exec.Command("aws", "ec2", "describe-import-snapshot-tasks", "--import-task-ids", importTaskID).CombinedOutput()
+		out, err := awsCmd("ec2", "describe-import-snapshot-tasks", "--import-task-ids", importTaskID).CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("describe import snapshot tasks: %v: %s", err, out)
 		}
@@ -301,7 +407,7 @@ func makeAMI(name, ebsSnapID string) (ami string, err error) {
 	default:
 		return "", fmt.Errorf("unknown arch %q", conf.GOARCH())
 	}
-	out, err := exec.Command("aws", "ec2", "register-image",
+	out, err := awsCmd("ec2", "register-image",
 		"--name", name,
 		"--architecture", arch,
 		// register-image defaults to paravirtual; arm64 rejects that

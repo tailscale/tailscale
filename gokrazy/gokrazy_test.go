@@ -96,6 +96,43 @@ func TestTsappConfigs(t *testing.T) {
 	}
 }
 
+func TestResolveRegion(t *testing.T) {
+	tests := []struct {
+		name, flag, env, want string
+	}{
+		{"default", "", "", "us-east-1"},
+		{"env", "", "eu-west-1", "eu-west-1"},
+		{"flag", "ap-south-1", "", "ap-south-1"},
+		{"flag-beats-env", "ap-south-1", "eu-west-1", "ap-south-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveRegion(tt.flag, tt.env); got != tt.want {
+				t.Errorf("resolveRegion(%q, %q) = %q; want %q", tt.flag, tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAMINameFrom(t *testing.T) {
+	const now = 1720000000
+	tests := []struct {
+		name, exactTag, describe, want string
+	}{
+		{"tagged-release", "v1.2.3", "v1.2.3", "tsapp-v1.2.3"},
+		{"adhoc-describe", "", "v1.2.3-4-gabc1234", "tsapp-v1.2.3-4-gabc1234-1720000000"},
+		{"adhoc-dirty", "", "v1.2.3-dirty", "tsapp-v1.2.3-dirty-1720000000"},
+		{"no-git", "", "", "tsapp-1720000000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := amiNameFrom("tsapp", tt.exactTag, tt.describe, now); got != tt.want {
+				t.Errorf("amiNameFrom = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func findKernelPath(t *testing.T) string {
 	t.Helper()
 	goModPath := filepath.Join("..", "go.mod")
