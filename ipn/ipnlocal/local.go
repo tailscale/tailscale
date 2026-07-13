@@ -3178,6 +3178,15 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	if envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
 		if nm, ok := b.loadDiskCacheLocked(); ok {
 			logf("loaded netmap from disk cache; %d peers", len(nm.Peers))
+
+			// A connected controlclient updates controlknobs in response to non
+			// keep-alive map responses, so do the same upon loading a netamp from
+			// the cache. The validity check here should not be necessary, as the
+			// cache won't store or vend a netmap without a valid self node, but
+			// we'll do it anyway as a defensive measure.
+			if self := nm.SelfNode; self.Valid() {
+				b.sys.ControlKnobs().UpdateFromNodeAttributes(self.CapMap().AsMap())
+			}
 			b.setControlClientStatusLocked(nil, controlclient.Status{
 				NetMap:   nm,
 				LoggedIn: true, // sure
