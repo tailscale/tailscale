@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -726,6 +727,11 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	// so just remove it from both got and want.
 	got.SetResourceVersion("")
 	want.SetResourceVersion("")
+	// Normalize away TypeMeta: recent controller-runtime versions populate
+	// Kind/APIVersion on objects returned from Get, others strip it.
+	// Clearing both sides keeps the comparison stable across versions.
+	got.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
+	want.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
 	for _, modifier := range modifiers {
 		modifier(want)
 		modifier(got)
