@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
@@ -224,6 +226,84 @@ func TestGetKnownDoHClientForProvider(t *testing.T) {
 	}
 	defer res.Body.Close()
 	t.Logf("Got: %+v", res)
+}
+
+// TestControlDPremiumDoHLive exercises the real DoH dial path against Control D's
+// live infrastructure for a premium resolver, to confirm end-to-end that we use
+// reachable DoH endpoints (see ESC-30: we previously synthesized per-resolver
+// IPv6 addresses that only speak plaintext DNS on port 53 and refuse :443).
+//
+// It is disabled by default and only runs when TS_TEST_CONTROLD_RESOLVER_ID is
+// set to a Control D premium resolver ID (the path component of a
+// https://dns.controld.com/<id> DoH URL). For example:
+//
+//	TS_TEST_CONTROLD_RESOLVER_ID=abc123 go test ./net/dns/resolver/ \
+//	    -run TestControlDPremiumDoHLive -v
+//
+// To reproduce the pre-fix failure, temporarily revert DoHIPsOfBase to return
+// the controlDv6Gen-synthesized addresses: on an IPv6-only network this test
+// then fails with a connection error instead of a successful response.
+func TestControlDPremiumDoHLive(t *testing.T) {
+	id := os.Getenv("TS_TEST_CONTROLD_RESOLVER_ID")
+	if id == "" {
+		t.Skip("set TS_TEST_CONTROLD_RESOLVER_ID=<premium resolver id> to run")
+	}
+
+	logf := tstest.WhileTestRunningLogger(t)
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialer tsdial.Dialer
+	dialer.SetNetMon(netMon)
+	dialer.SetBus(bus)
+	fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+
+	urlBase := "https://dns.controld.com/" + id
+	c, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatalf("no known DoH client for %q", urlBase)
+	}
+	t.Logf("dialing DoH IPs: %v", publicdns.DoHIPsOfBase(urlBase))
+
+	// Build an A query for example.com.
+	builder := dns.NewBuilder(nil, dns.Header{RecursionDesired: true})
+	builder.StartQuestions()
+	if err := builder.Question(dns.Question{
+		Name:  dns.MustNewName("example.com."),
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	res, err := fwd.sendDoH(ctx, urlBase, c, query)
+	if err != nil {
+		t.Fatalf("sendDoH: %v", err)
+	}
+	if rcode := getRCode(res); rcode != dns.RCodeSuccess {
+		t.Fatalf("got rcode %v, want success", rcode)
+	}
+
+	var p dns.Parser
+	if _, err := p.Start(res); err != nil {
+		t.Fatalf("parsing response: %v", err)
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		t.Fatalf("skipping questions: %v", err)
+	}
+	if _, err := p.AnswerHeader(); err != nil {
+		t.Fatalf("no answers returned: %v", err)
+	}
+	t.Logf("ControlD premium DoH query for example.com succeeded (%d bytes)", len(res))
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {

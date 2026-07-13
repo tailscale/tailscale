@@ -7,15 +7,12 @@ package publicdns
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"math/big"
 	"net/netip"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -62,6 +59,11 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 
 	// Control D DoH URLs are of the form "https://dns.controld.com/8yezwenugs"
 	// where the path component is represented by 8 bytes (7-14) of the IPv6 address in base36
+	//
+	// TODO(#20433): the ID-encoded addresses in this /48 are legacy port-53-only
+	// endpoints and refuse DoH on :443, so upgrading them to DoH is wrong. Only the
+	// shared anycast addresses (e.g. freedns.controld.com/pN) actually serve DoH.
+	// Distinguish the two rather than mapping the whole range.
 	if controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) {
 		path := big.NewInt(0).SetBytes(ip.AsSlice()[6:14]).Text(36)
 		return controlDBase + path, true, true
@@ -126,15 +128,12 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 			}
 		}
 	}
-	if pathStr, ok := strings.CutPrefix(dohBase, controlDBase); ok {
-		if i := strings.IndexFunc(pathStr, isSlashOrQuestionMark); i != -1 {
-			pathStr = pathStr[:i]
-		}
+	if strings.HasPrefix(dohBase, controlDBase) {
 		return []netip.Addr{
 			controlDv4One,
 			controlDv4Two,
-			controlDv6Gen(controlDv6RangeA.Addr(), pathStr),
-			controlDv6Gen(controlDv6RangeB.Addr(), pathStr),
+			controlDv6One,
+			controlDv6Two,
 		}
 	}
 	return nil
@@ -330,6 +329,8 @@ var (
 	controlDv6RangeB = netip.MustParsePrefix("2606:1a40:1::/48")
 	controlDv4One    = netip.MustParseAddr("76.76.2.22")
 	controlDv4Two    = netip.MustParseAddr("76.76.10.22")
+	controlDv6One    = netip.MustParseAddr("2606:1a40::22")
+	controlDv6Two    = netip.MustParseAddr("2606:1a40:1::22")
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -341,23 +342,6 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 	a := ip.As16()
 	copy(a[16-len(id):], id)
 	return netip.AddrFrom16(a)
-}
-
-// controlDv6Gen generates a Control D IPv6 address from provided ip and id.
-//
-// The id is taken from the DoH query path component and represents a unique resolver configuration.
-// e.g. https://dns.controld.com/hyq3ipr2ct
-func controlDv6Gen(ip netip.Addr, id string) netip.Addr {
-	b := make([]byte, 8)
-	decoded, err := strconv.ParseUint(id, 36, 64)
-	if err != nil {
-		log.Printf("controlDv6Gen: failed to parse id %q: %v", id, err)
-	}
-	binary.BigEndian.PutUint64(b, decoded)
-	a := ip.AsSlice()
-	copy(a[6:14], b)
-	addr, _ := netip.AddrFromSlice(a)
-	return addr
 }
 
 // IPIsDoHOnlyServer reports whether ip is a DNS server that should only use
