@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"errors"
+	"math"
 	"net/netip"
 
 	"go4.org/netipx"
@@ -139,4 +140,38 @@ func (ipp *ippool) reconfig(ipSet *netipx.IPSet) *ippool {
 		newPool.inUse = ipp.inUse
 	}
 	return newPool
+}
+
+// inUseCount returns the number of addresses currently handed out from the
+// pool. It is safe to call on a nil or uninitialized pool, returning 0.
+func (ipp *ippool) inUseCount() int64 {
+	if ipp == nil || ipp.inUse == nil {
+		return 0
+	}
+	return int64(ipp.inUse.Len())
+}
+
+// capacity returns the total number of addresses defined by the pool's ipSet.
+// It is safe to call on a nil or uninitialized pool, returning 0. The count is
+// clamped to [math.MaxInt64] because an IP pool (particularly IPv6) can define
+// far more addresses than fit in an int64.
+func (ipp *ippool) capacity() int64 {
+	if ipp == nil || ipp.ipSet == nil {
+		return 0
+	}
+	var count int64
+	for _, pfx := range ipp.ipSet.Prefixes() {
+		bits := pfx.Addr().BitLen() - pfx.Bits()
+		// 1<<bits can exceed an int64 (e.g. a /64 IPv6 pool), so clamp.
+		if bits >= 63 {
+			return math.MaxInt64
+		}
+		addend := int64(1) << bits
+		if count > math.MaxInt64-addend {
+			// Summing multiple large prefixes would overflow.
+			return math.MaxInt64
+		}
+		count += addend
+	}
+	return count
 }
