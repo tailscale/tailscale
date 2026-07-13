@@ -165,6 +165,20 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 	// traffic goes through the vnet NICs. The debug NIC is only for SSH.
 	ud.WriteString("  - \"route delete default 10.0.2.2 2>/dev/null || true\"\n")
 
+	// Grow the TCP socket buffer limits before the binary downloads
+	// below. FreeBSD's defaults start receive windows at 64 kB and
+	// autoscale in slow 16 kB steps, which caps a transfer at roughly
+	// 64kB per round trip. On an oversubscribed CI runner, where
+	// scheduling delay inflates the effective RTT of the userspace vnet
+	// data path to tens or hundreds of milliseconds, that works out to
+	// a few hundred kB/s and made the multi-megabyte binary fetches (and
+	// so the whole test) time out.
+	ud.WriteString("  - \"sysctl kern.ipc.maxsockbuf=16777216\"\n")
+	ud.WriteString("  - \"sysctl net.inet.tcp.recvspace=4194304\"\n")
+	ud.WriteString("  - \"sysctl net.inet.tcp.sendspace=1048576\"\n")
+	ud.WriteString("  - \"sysctl net.inet.tcp.recvbuf_max=16777216\"\n")
+	ud.WriteString("  - \"sysctl net.inet.tcp.sendbuf_max=16777216\"\n")
+
 	// Download binaries from the files.tailscale VIP (52.52.0.6).
 	// FreeBSD's fetch(1) is part of the base system (no curl needed).
 	// Retry in a loop since the file server may not be ready immediately.

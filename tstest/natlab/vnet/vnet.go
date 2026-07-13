@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -154,7 +155,43 @@ func (n *network) initStack() error {
 	if tcpipErr != nil {
 		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
 	}
-	n.linkEP = channel.New(512, 1500, tcpip.LinkAddress(n.mac.HWAddr()))
+	// Raise the TCP buffer limits (defaults: 1 MB send, 1 MB receive)
+	// so that netstack-terminated connections (the fake control plane,
+	// DERP, log catcher, file servers) can keep a large window's worth
+	// of data in flight. In slow environments (oversubscribed CI
+	// runners) the effective RTT of the userspace data path reaches
+	// tens or hundreds of milliseconds, and throughput is capped at
+	// window/RTT.
+	//
+	// The send buffer default deliberately stays at 1 MB: the send
+	// buffer caps how much un-ACKed data one connection can burst into
+	// the QEMU socket and the guest's virtio RX ring. Bursting more
+	// than the downstream path can buffer mass-drops segments, and
+	// netstack's loss recovery handles wide holes so poorly (one or two
+	// segments per 200 ms RTO, for minutes) that transfers effectively
+	// wedge. 1 MB of in-flight data fits within the socket buffer plus
+	// the (enlarged, see qemu.go) virtio ring, and still allows 10 MB/s
+	// at a 100 ms effective RTT.
+	sndBufOpt := tcpip.TCPSendBufferSizeRangeOption{Min: 4 << 10, Default: 1 << 20, Max: 4 << 20}
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &sndBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption send buf: %v", err)
+	}
+	rcvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption recv buf: %v", err)
+	}
+	// Enable receive buffer moderation (auto-tuning) so idle
+	// connections don't hold the full 4 MB.
+	modRcvBufOpt := tcpip.TCPModerateReceiveBufferOption(true)
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &modRcvBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption moderate recv buf: %v", err)
+	}
+	// The queue is sized to hold a full TCP send buffer's worth of
+	// 1500-byte frames (see the send buffer sizing above) so that a
+	// burst from one netstack connection can't overflow it; overflow
+	// here is silent packet loss. It's a channel of pointers, so the
+	// memory cost of the headroom is trivial.
+	n.linkEP = channel.New(4096, 1500, tcpip.LinkAddress(n.mac.HWAddr()))
 	if tcpipProblem := n.ns.CreateNIC(nicID, n.linkEP); tcpipProblem != nil {
 		return fmt.Errorf("CreateNIC: %v", tcpipProblem)
 	}
@@ -280,7 +317,12 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 	// where the primary MAC may be on a different network).
 	mac := node.macForNet(n)
 	if nw, ok := n.writers.Load(mac); ok {
-		nw.write(resPkt)
+		// conditionedWrite (rather than nw.write) so that the network's
+		// simulated latency and packet loss also apply to traffic
+		// originating from the router's own netstack (the fake control
+		// plane, DERP, DNS, file servers, etc), not just to forwarded
+		// node-to-node traffic.
+		n.conditionedWrite(nw, resPkt)
 	} else {
 		n.logf("gvisor write: no writeFunc for %v (node %v on net %v)", mac, node, n.mac)
 	}
@@ -294,6 +336,32 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 		return netip.AddrFrom16(s.As16()).Unmap()
 	}
 	return netip.Addr{}
+}
+
+// debugSampleTCPInfo periodically logs the TCP sender state (cwnd, RTO,
+// RTT, congestion state) of ep plus stack-wide TCP counters, for
+// debugging vnet throughput. Enabled by VNET_TCP_DEBUG=1. It returns
+// when the endpoint leaves the established state.
+func (n *network) debugSampleTCPInfo(ep tcpip.Endpoint) {
+	st := n.ns.Stats().TCP
+	for {
+		time.Sleep(500 * time.Millisecond)
+		var info tcpip.TCPInfoOption
+		if err := ep.GetSockOpt(&info); err != nil {
+			log.Printf("tcpdebug: GetSockOpt: %v", err)
+			return
+		}
+		log.Printf("tcpdebug: state=%v cc=%v cwnd=%v ssthresh=%v rtt=%v rttvar=%v rto=%v reorderSeen=%v | stack: retrans=%v rtoTimeouts=%v fastRetrans=%v fastRecovery=%v sackRecovery=%v spuriousRecovery=%v sendErrs=%v qDrops=%v",
+			info.State, info.CcState, info.SndCwnd, info.SndSsthresh,
+			info.RTT.Round(time.Microsecond), info.RTTVar.Round(time.Microsecond), info.RTO,
+			info.ReorderSeen,
+			st.Retransmits.Value(), st.Timeouts.Value(), st.FastRetransmit.Value(),
+			st.FastRecovery.Value(), st.SACKRecovery.Value(), st.SpuriousRecovery.Value(),
+			st.SegmentSendErrors.Value(), n.ns.Stats().DroppedPackets.Value())
+		if info.State != tcpip.EndpointState(tcp.StateEstablished) {
+			return
+		}
+	}
 }
 
 func stringifyTEI(tei stack.TransportEndpointID) string {
@@ -447,6 +515,9 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		if os.Getenv("VNET_TCP_DEBUG") == "1" {
+			go n.debugSampleTCPInfo(ep)
+		}
 		hs := &http.Server{Handler: n.s.fileServerHandler()}
 		n.s.wg.Go(func() {
 			hs.Serve(netutil.NewOneConnListener(tc, nil))
@@ -865,9 +936,13 @@ type Server struct {
 	fakeACME   *fakeACMEServer
 	pcapWriter *pcapWriter
 
-	// writeMu serializes all writes to VM clients.
-	writeMu sync.Mutex
-	scratch []byte
+	// vmWriteState holds per-VM-connection write state, serializing
+	// writes of length-prefixed frames so concurrent writers can't
+	// interleave them mid-frame. It is deliberately per-connection
+	// rather than one global lock: a VM that is slow to drain its
+	// socket (common on contended CI hosts) must not stall writes to
+	// every other VM on the server.
+	vmWriteState syncs.Map[*net.UnixConn, *vmWriteState]
 
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
@@ -1184,22 +1259,31 @@ const (
 	ProtocolUnixDGRAM // for macOS Virtualization.Framework and VZFileHandleNetworkDeviceAttachment
 )
 
-func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID int) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+// vmWriteState is a VM connection's write serialization state.
+// See the Server.vmWriteState field comment.
+type vmWriteState struct {
+	mu      sync.Mutex
+	scratch []byte // length-prefixed frame being written; owned by mu
+}
 
+func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID int) {
 	if ethPkt == nil {
 		return
 	}
 	switch c.proto() {
 	case ProtocolQEMU:
-		s.scratch = binary.BigEndian.AppendUint32(s.scratch[:0], uint32(len(ethPkt)))
-		s.scratch = append(s.scratch, ethPkt...)
-		if _, err := c.uc.Write(s.scratch); err != nil {
+		ws, _ := s.vmWriteState.LoadOrInit(c.uc, func() *vmWriteState { return new(vmWriteState) })
+		ws.mu.Lock()
+		ws.scratch = binary.BigEndian.AppendUint32(ws.scratch[:0], uint32(len(ethPkt)))
+		ws.scratch = append(ws.scratch, ethPkt...)
+		_, err := c.uc.Write(ws.scratch)
+		ws.mu.Unlock()
+		if err != nil {
 			s.logf("Write pkt: %v", err)
 		}
 
 	case ProtocolUnixDGRAM:
+		// Datagram writes are atomic; no locking needed.
 		if _, err := c.uc.WriteToUnix(ethPkt, c.raddr); err != nil {
 			s.logf("Write pkt : %v", err)
 			return
@@ -1256,6 +1340,15 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 	})
 	s.logf("Got conn %T %p", uc, uc)
 	defer uc.Close()
+
+	// Enlarge the socket buffers (best effort; the kernel caps these at
+	// net.core.{w,r}mem_max). The write buffer sits between vnet and a
+	// QEMU process that may be slow to drain on a contended host; the
+	// deeper it is, the more of a TCP flow's in-flight data queues here
+	// (lossless backpressure) instead of overrunning the guest's virtio
+	// RX ring and getting dropped.
+	uc.SetWriteBuffer(4 << 20)
+	uc.SetReadBuffer(4 << 20)
 
 	buf := make([]byte, 16<<10)
 	didReg := map[MAC]bool{}

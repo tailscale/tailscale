@@ -39,10 +39,14 @@ func (p *pcapWriter) WritePacket(ci gopacket.CaptureInfo, data []byte) error {
 	if p.w == nil {
 		return io.ErrClosedPipe
 	}
+	// Flush per packet so the file is readable if the process dies
+	// mid-test, but don't fsync: an fsync per packet serializes every
+	// packet behind a disk write and caps vnet TCP throughput at a few
+	// hundred kB/s (each data segment pays a couple of milliseconds
+	// before the receiver can ACK it).
 	return do(
 		func() error { return p.w.WritePacket(ci, data) },
 		p.w.Flush,
-		p.f.Sync,
 	)
 }
 

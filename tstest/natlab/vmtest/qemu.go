@@ -28,6 +28,9 @@ import (
 // platforms (macOS, etc.) TCG is used, which allows the tests to run
 // without a same-architecture hypervisor at the cost of speed.
 func qemuAccelArgs() []string {
+	if os.Getenv("VMTEST_NO_KVM") == "1" {
+		return nil
+	}
 	if runtime.GOOS == "linux" {
 		if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil {
 			f.Close()
@@ -133,12 +136,13 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	}
 
 	// Add network devices — one per NIC.
+	// rx_queue_size=1024: see the comment in startCloudQEMU.
 	for i := range n.vnetNode.NumNICs() {
 		mac := n.vnetNode.NICMac(i)
 		netdevID := fmt.Sprintf("net%d", i)
 		args = append(args,
 			"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
-			"-device", fmt.Sprintf("virtio-net-device,netdev=%s,mac=%s", netdevID, mac),
+			"-device", fmt.Sprintf("virtio-net-device,netdev=%s,mac=%s,rx_queue_size=1024", netdevID, mac),
 		)
 	}
 
@@ -180,12 +184,15 @@ func (e *Env) startCloudQEMU(n *Node) error {
 	// Add network devices — one per NIC.
 	// romfile="" disables the iPXE option ROM entirely, saving ~5s per NIC at boot
 	// and avoiding "duplicate fw_cfg file name" errors with multiple NICs.
+	// rx_queue_size=1024 (up from the 256 default) gives the guest 4x the
+	// virtio RX ring capacity, absorbing vnet bursts that would otherwise be
+	// dropped while the guest is descheduled on a contended host.
 	for i := range n.vnetNode.NumNICs() {
 		mac := n.vnetNode.NICMac(i)
 		netdevID := fmt.Sprintf("net%d", i)
 		args = append(args,
 			"-netdev", fmt.Sprintf("stream,id=%s,addr.type=unix,addr.path=%s", netdevID, e.sockAddr),
-			"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s,romfile=", netdevID, mac),
+			"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s,romfile=,rx_queue_size=1024", netdevID, mac),
 		)
 	}
 

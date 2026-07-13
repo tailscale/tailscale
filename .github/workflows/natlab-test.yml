@@ -102,7 +102,7 @@ jobs:
         # single-test-per-matrix-job model. They stay runnable locally.
         run: |
           set -euo pipefail
-          exclude='^(TestGrid)$'
+          exclude='^(TestGrid|TestVnetPerf.*)$'
           tmp=$(mktemp)
           for pkg_dir in tstest/natlab/vmtest tstest/integration/nat; do
             pkg="./${pkg_dir}/"
