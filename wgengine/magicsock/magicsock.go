@@ -2223,11 +2223,20 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 	case c.peerMap.knownPeerDiscoKey(sender):
 		di = c.discoInfoForKnownPeerLocked(sender)
 	default:
-		metricRecvDiscoBadPeer.Add(1)
-		if debugDisco() {
-			c.logf("magicsock: disco: ignoring disco-looking frame, don't know of key %v", sender.ShortString())
+		if !derpNodeSrc.IsZero() {
+			// The node key is unambiguous since the disco message arrived via
+			// DERP. Trust that it's the node's new disco key.
+			di = c.handleDiscoKeyUpdateLocked(derpNodeSrc, sender)
+			if di == nil {
+				return
+			}
+		} else {
+			metricRecvDiscoBadPeer.Add(1)
+			if debugDisco() {
+				c.logf("magicsock: disco: ignoring disco-looking frame, don't know of key %v", sender.ShortString())
+			}
+			return
 		}
-		return
 	}
 
 	isDERP := src.ap.Addr() == tailcfg.DerpMagicIPAddr
@@ -3275,7 +3284,7 @@ func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPer
 		ep.nodeAddr = n.Addresses().At(0).Addr()
 	}
 	ep.initFakeUDPAddr()
-	ep.updateDiscoKey(n.DiscoKey())
+	ep.updateDiscoKey(n.DiscoKey(), controlDiscoKeySource)
 
 	if debugPeerMap() {
 		c.logEndpointCreated(n)
@@ -4490,6 +4499,20 @@ func (c *Conn) PeerRelays() set.Set[netip.Addr] {
 	return servers
 }
 
+func (c *Conn) handleDiscoKeyUpdateLocked(nk key.NodePublic, newDisco key.DiscoPublic) *discoInfo {
+	ep, ok := c.peerMap.endpointForNodeKey(nk)
+	if !ok {
+		return nil
+	}
+	ep.mu.Lock()
+	ep.lastUDPRelayPathDiscovery = 0
+	ep.lastFullPing = 0
+	ep.mu.Unlock()
+	ep.updateDiscoKey(newDisco, derpDiscoKeySource)
+	c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+	return c.discoInfoForKnownPeerLocked(newDisco)
+}
+
 // HandleDiscoKeyAdvertisement processes a TSMP disco key update.
 // The update may be solicited (in response to a request) or unsolicited.
 // node is the Tailscale tailcfg.NodeView of the peer that sent the update.
@@ -4519,7 +4542,7 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
-	ep.updateDiscoKey(discoKey)
+	ep.updateDiscoKey(discoKey, controlDiscoKeySource)
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)
@@ -4555,6 +4578,7 @@ type NewDiscoKeyAvailable struct {
 //
 // We do not need the Conn to be locked, but the endpoint should be.
 func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
+	return
 	if !buildfeatures.HasCacheNetMap || !envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
 		return
 	}

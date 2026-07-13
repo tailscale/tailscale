@@ -377,11 +377,19 @@ func (de *endpoint) setProbeUDPLifetimeConfigLocked(desired *ProbeUDPLifetimeCon
 	p.resetCycleEndpointLocked()
 }
 
+type discoKeySource int
+
+const (
+	derpDiscoKeySource discoKeySource = iota
+	controlDiscoKeySource
+)
+
 // endpointDisco is the current disco key and short string for an endpoint. This
 // structure is immutable.
 type endpointDisco struct {
-	key   key.DiscoPublic // for discovery messages.
-	short string          // ShortString of discoKey.
+	key    key.DiscoPublic // for discovery messages.
+	short  string          // ShortString of discoKey.
+	source discoKeySource
 }
 
 type sentPing struct {
@@ -1484,14 +1492,23 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 
 // updateDiscoKey replaces the disco key for de. If the key is a zero value key,
 // set the key to nil.
-func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
+func (de *endpoint) updateDiscoKey(key key.DiscoPublic, source discoKeySource) {
 	if key.IsZero() {
 		de.disco.Store(nil)
 	} else {
-		de.disco.Store(&endpointDisco{
-			key:   key,
-			short: key.ShortString(),
-		})
+		for {
+			prev := de.disco.Load()
+			if prev != nil && prev.source == derpDiscoKeySource && source == controlDiscoKeySource {
+				return
+			}
+			if de.disco.CompareAndSwap(prev, &endpointDisco{
+				key:    key,
+				short:  key.ShortString(),
+				source: source,
+			}) {
+				return
+			}
+		}
 	}
 }
 
@@ -1521,7 +1538,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		key := n.DiscoKey()
-		de.updateDiscoKey(key)
+		de.updateDiscoKey(key, controlDiscoKeySource)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",
