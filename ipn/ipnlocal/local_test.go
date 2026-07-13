@@ -506,7 +506,9 @@ func TestLoadCachedNetMap(t *testing.T) {
 			Addresses: []netip.Prefix{
 				netip.MustParsePrefix("100.2.3.4/32"),
 			},
+			CapMap: tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil},
 		}).View(),
+		AllCaps: set.Of(nodecap.CacheNetworkMaps),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
 			tailcfg.UserID(1): (&tailcfg.UserProfile{
 				ID:          1,
@@ -558,6 +560,9 @@ func TestLoadCachedNetMap(t *testing.T) {
 	t.Cleanup(e.Close)
 	sys.Set(e)
 	sys.Set(new(mem.Store))
+	if sys.ControlKnobs().CacheNetworkMaps.Load() {
+		t.Error("Control knobs unexpectedly already set")
+	}
 
 	logf := tstest.WhileTestRunningLogger(t)
 	clb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
@@ -585,6 +590,11 @@ func TestLoadCachedNetMap(t *testing.T) {
 		cmpopts.EquateComparable(key.NodePublic{}, key.MachinePublic{}),
 	); diff != "" {
 		t.Error(diff)
+	}
+
+	// Check that the controlknobs got updated from the cached map.
+	if !sys.ControlKnobs().CacheNetworkMaps.Load() {
+		t.Error("Control knobs were not properly updated from the cache")
 	}
 }
 
