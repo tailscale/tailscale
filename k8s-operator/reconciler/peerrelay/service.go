@@ -147,10 +147,6 @@ func peerRelayEndpoint(svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
 	return nil, nil
 }
 
-// portsMatch reports whether two port lists agree on the fields the reconciler declares — Name, Protocol, Port,
-// and TargetPort. NodePort is deliberately ignored: kube-controller-manager assigns it on our behalf and
-// preserves it across Updates that send NodePort=0, so comparing it here would flag a spurious diff on every
-// reconcile of a settled Service.
 func portsMatch(a, b []corev1.ServicePort) bool {
 	if len(a) != len(b) {
 		return false

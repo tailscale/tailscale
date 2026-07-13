@@ -18,6 +18,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -348,7 +349,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			// No LB ingress seeded, so status is still Pending — the point of this case is the *Service* is
+			// No LB ingress seeded, so status is still Pending , the point of this case is the *Service* is
 			// unchanged, not the PR status.
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
@@ -400,7 +401,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		},
 		{
 			// Peer relays advertise a raw IP:port to peers, so a hostname-only LB (a misconfigured AWS NLB, for
-			// example) must be rejected outright — no fallback. The reconciler surfaces this as an error and
+			// example) must be rejected outright , no fallback. The reconciler surfaces this as an error and
 			// leaves that replica out of status.endpoints.
 			Name:    "hostname-only-lb-produces-error",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
@@ -1060,7 +1061,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			WithObjects(
 				pr,
 				stateSecret("test-0", "device-aaa"),
-				stateSecret("test-1", ""), // pod never registered — no device_id
+				stateSecret("test-1", ""), // pod never registered , no device_id
 				stateSecret("other-0", "device-should-not-touch"),
 			).
 			Build()
@@ -1141,9 +1142,111 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 
 		for _, name := range []string{"test-1", "test-2"} {
 			var s corev1.Secret
-			if err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
+			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
 				t.Errorf("expected state Secret %q gone after scale-down, got err=%v", name, err)
 			}
 		}
 	})
+}
+
+func TestReconciler_AppliesProxyClass(t *testing.T) {
+	t.Parallel()
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := &tsapi.PeerRelay{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec:       tsapi.PeerRelaySpec{ProxyClass: "custom"},
+	}
+
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom"},
+		Spec: tsapi.ProxyClassSpec{
+			StatefulSet: &tsapi.StatefulSet{
+				Labels: tsapi.Labels{
+					"team":                          "networking",
+					"tailscale.com/parent-resource": "hijack-attempt", // must NOT overwrite reconciler-managed value
+				},
+				Annotations: map[string]string{"observability.example.com/scrape": "true"},
+				Pod: &tsapi.Pod{
+					NodeSelector: map[string]string{"pool": "peer-relays"},
+					TailscaleContainer: &tsapi.Container{
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+							Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+						},
+						Env: []tsapi.Env{{Name: "TS_DEBUG_FIREWALL_MODE", Value: "auto"}},
+					},
+				},
+			},
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
+		WithObjects(pr, pc).
+		Build()
+
+	r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+		Client:             fc,
+		TailscaleNamespace: tailscaleNamespace,
+		ProxyImage:         testProxyImage,
+		DefaultTags:        []string{"tag:test-peer-relay"},
+		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+		Logger:             logger.Sugar(),
+	})
+
+	if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var ss appsv1.StatefulSet
+	if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "test"}, &ss); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ss.Labels["team"]; got != "networking" {
+		t.Errorf("expected StatefulSet label team=networking, got %q", got)
+	}
+
+	if got := ss.Labels["tailscale.com/parent-resource"]; got != "test" {
+		t.Errorf("expected reconciler-managed parent-resource label preserved as %q, got %q", "test", got)
+	}
+
+	if got := ss.Annotations["observability.example.com/scrape"]; got != "true" {
+		t.Errorf("expected StatefulSet annotation scrape=true, got %q", got)
+	}
+
+	if got := ss.Spec.Template.Spec.NodeSelector["pool"]; got != "peer-relays" {
+		t.Errorf("expected Pod nodeSelector pool=peer-relays, got %q", got)
+	}
+
+	if len(ss.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(ss.Spec.Template.Spec.Containers))
+	}
+
+	c := ss.Spec.Template.Spec.Containers[0]
+	if got, want := c.Resources.Requests[corev1.ResourceCPU], resource.MustParse("100m"); !got.Equal(want) {
+		t.Errorf("expected container CPU request %s, got %s", want.String(), got.String())
+	}
+
+	if got, want := c.Resources.Limits[corev1.ResourceMemory], resource.MustParse("256Mi"); !got.Equal(want) {
+		t.Errorf("expected container memory limit %s, got %s", want.String(), got.String())
+	}
+
+	var foundEnv bool
+	for _, e := range c.Env {
+		if e.Name == "TS_DEBUG_FIREWALL_MODE" && e.Value == "auto" {
+			foundEnv = true
+			break
+		}
+	}
+
+	if !foundEnv {
+		t.Errorf("expected TS_DEBUG_FIREWALL_MODE=auto env, container env is %+v", c.Env)
+	}
 }
