@@ -108,9 +108,9 @@ jobs:
             pkg="./${pkg_dir}/"
             for f in "${pkg_dir}"/*_test.go; do
               [ -e "$f" ] || continue
-              grep -hE '^func Test[A-Z][A-Za-z0-9_]*\(t \*testing\.T\)' "$f" \
+              { grep -hE '^func Test[A-Z][A-Za-z0-9_]*\(t \*testing\.T\)' "$f" || true; } \
                 | sed -E 's/^func (Test[A-Za-z0-9_]+).*/\1/' \
-                | grep -vE "$exclude" \
+                | { grep -vE "$exclude" || true; } \
                 | while read -r t; do
                     jq -nc --arg pkg "$pkg" --arg test "$t" \
                       '{pkg: $pkg, test: $test}' >> "$tmp"
