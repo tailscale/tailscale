@@ -17,11 +17,11 @@ import (
 )
 
 // TestTailscaleSSH exercises the Tailscale SSH server ("tailscale up --ssh",
-// not a system sshd) on both Ubuntu and gokrazy nodes, with an Ubuntu node
+// not a system sshd) on Ubuntu, FreeBSD, and gokrazy nodes, with an Ubuntu node
 // as the SSH client.
 //
-// On Ubuntu it tests logging in as both root and a non-root user, which
-// exercises the incubator's su-based login path.
+// On Ubuntu and FreeBSD it tests logging in as both root and a non-root user,
+// which exercises the incubator's su-based login path.
 //
 // On gokrazy it exercises the gokrazy special cases in the SSH code:
 // util/osuser hard-codes the login shell to /tmp/serial-busybox/ash and
@@ -33,14 +33,20 @@ func TestTailscaleSSH(t *testing.T) {
 	client := sshTestNode(env, "client", vmtest.Ubuntu2404)
 	ubuntu := sshTestNode(env, "ubuntu", vmtest.Ubuntu2404, vmtest.TailscaleSSH())
 	gokrazy := sshTestNode(env, "gokrazy", vmtest.Gokrazy, vmtest.TailscaleSSH())
+	freebsd := sshTestNode(env, "freebsd", vmtest.FreeBSD150, vmtest.TailscaleSSH())
 	env.Start()
 
 	if out, err := env.SSHExec(ubuntu, "useradd -m -s /bin/bash tsuser"); err != nil {
 		t.Fatalf("useradd: %v\n%s", err, out)
 	}
 
+	if out, err := env.SSHExec(freebsd, "pw useradd tsuser -m"); err != nil {
+		t.Fatalf("pw useradd: %v\n%s", err, out)
+	}
+
 	ubuntuIP := tailscaleIP4(t, env, ubuntu)
 	gokrazyIP := tailscaleIP4(t, env, gokrazy)
+	freebsdIP := tailscaleIP4(t, env, freebsd)
 
 	// ssh runs cmd as user on the node at ip over Tailscale SSH, from the
 	// client node, returning the combined output and the ssh client's exit
@@ -93,6 +99,7 @@ func TestTailscaleSSH(t *testing.T) {
 	}
 	waitSSH("ubuntu", "root", ubuntuIP)
 	waitSSH("gokrazy", "root", gokrazyIP)
+	waitSSH("freebsd", "root", freebsdIP)
 
 	check := func(desc, user string, ip netip.Addr, cmd, want string) {
 		t.Helper()
@@ -109,9 +116,17 @@ func TestTailscaleSSH(t *testing.T) {
 	check("ubuntu root login", "root", ubuntuIP, "id -un && pwd", "root\n/root")
 	check("ubuntu non-root login", "tsuser", ubuntuIP, "id -un && pwd", "tsuser\n/home/tsuser")
 
+	check("freebsd root login", "root", freebsdIP, "id -un && pwd", "root\n/root")
+	check("freebsd non-root login", "tsuser", freebsdIP, "id -un && pwd", "tsuser\n/home/tsuser")
+
 	// A nonexistent user is rejected on Ubuntu...
 	if out, code := ssh("nosuchuser", ubuntuIP, "true"); code == 0 {
 		t.Errorf("ubuntu nonexistent user: ssh succeeded, want failure:\n%s", out)
+	}
+
+	// and rejected on FreeBSD...
+	if out, code := ssh("nosuchuser", freebsdIP, "true"); code == 0 {
+		t.Errorf("freebsd nonexistent user: ssh succeeded, want failure:\n%s", out)
 	}
 
 	// ... but on gokrazy any username works and becomes root, via the

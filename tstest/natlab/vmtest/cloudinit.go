@@ -157,6 +157,15 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 
 	ud.WriteString("runcmd:\n")
 
+	// Enable root SSH login for debugging via the debug NIC.
+	ud.WriteString("  - \"echo 'PermitRootLogin yes' >>/etc/ssh/sshd_config\"\n")
+	ud.WriteString("  - \"echo 'PubkeyAuthentication yes' >>/etc/ssh/sshd_config\"\n")
+	// Also inject the host's SSH key if available.
+	if pubkey, err := os.ReadFile("/tmp/vmtest_key.pub"); err == nil {
+		ud.WriteString("  - \"mkdir -p /root/.ssh && chmod 700 /root/.ssh\"\n")
+		fmt.Fprintf(&ud, "  - \"echo '%s' >/root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys\"\n", strings.TrimSpace(string(pubkey)))
+	}
+
 	// /usr/local/bin may not exist on a fresh FreeBSD cloud image (it's
 	// created when the first package is installed).
 	ud.WriteString("  - \"mkdir -p /usr/local/bin\"\n")
