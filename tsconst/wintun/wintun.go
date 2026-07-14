@@ -1,10 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package wintun holds the pinned wintun.dll release the Tailscale Windows
-// client is built and tested against. It is the single source of truth for the
-// version, download URL, hash, and zip layout, so nothing has to copy these
-// strings (see tailscale/tailscale and tailscale/corp build + test code).
+// Package wintun is the single source of truth for the pinned wintun.dll release
+// the Tailscale Windows client is built and tested against.
 package wintun
 
 const (
@@ -16,9 +14,7 @@ const (
 	SHA256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
 )
 
-// DLLZipPath returns the path within the release zip of the wintun.dll for the
-// given GOARCH (e.g. "amd64", "arm64", "386"). The zip lays DLLs out by wintun's
-// own arch names, which match GOARCH except that 386 is named "x86".
+// DLLZipPath returns the path of the wintun.dll for goArch within the release zip.
 func DLLZipPath(goArch string) string {
 	arch := goArch
 	if goArch == "386" {

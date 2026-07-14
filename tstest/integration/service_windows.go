@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,31 +26,28 @@ import (
 	"tailscale.com/tsconst/wintun"
 )
 
-// serviceName is the Windows service tailscaled installs itself as
-// (see cmd/tailscaled/install_windows.go).
+// serviceName is the Windows service tailscaled installs itself as.
 const serviceName = "Tailscale"
 
-// startWindowsServiceDaemon installs and starts tailscaled as a LocalSystem
-// Windows service (the mode a customer runs), stages wintun.dll next to the
-// binary, delivers the harness environment via tailscaled-env.txt, and waits
-// for the LocalAPI. It fails the test on error.
+// startWindowsServiceDaemon installs and starts tailscaled as a Windows service.
 func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	t := n.env.t
 	t.Helper()
 
-	// install-system-daemon fails if the service exists; clear any leftover
-	// service and stale global state from a prior crashed run first.
-	n.uninstallService()
-	n.cleanupServiceState()
+	// A pre-existing Tailscale service means this isn't a disposable/CI machine;
+	// fail rather than uninstall it. Stale state is wiped below, not fatal.
+	if serviceExists(t) {
+		t.Fatal("existing Tailscale service found; run only on a disposable/CI machine")
+	}
 
+	n.cleanupServiceState()
 	stageWintun(t, filepath.Dir(n.env.daemon))
 	n.writeServiceEnvFile()
 
 	if out, err := exec.CommandContext(t.Context(), n.env.daemon, "install-system-daemon").CombinedOutput(); err != nil {
 		t.Fatalf("install-system-daemon: %v\n%s", err, out)
 	}
-	// Teardown (LIFO): stop, uninstall, then wipe global state so the next
-	// serialized test starts clean.
+	// Teardown (LIFO): stop, uninstall, then wipe state for the next test.
 	t.Cleanup(func() {
 		n.stopService()
 		n.uninstallService()
@@ -61,12 +59,11 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	return &Daemon{svc: n}
 }
 
-// startService starts the installed Tailscale service and waits for the SCM to
-// report it Running.
+// startService starts the service and waits for the SCM to report it Running.
 func (n *TestNode) startService() {
 	t := n.env.t
 	t.Helper()
-	m := n.connectSCM()
+	m := connectSCM(t)
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
 	if err != nil {
@@ -79,13 +76,12 @@ func (n *TestNode) startService() {
 	n.waitServiceState(s, svc.Running, 60*time.Second)
 }
 
-// stopService requests a stop and waits until the service is actually Stopped,
-// failing the test if it doesn't stop in time (a stuck stop is a real bug, not
-// something to race past).
+// stopService requests a stop and waits until the service is Stopped, failing
+// the test if it doesn't stop in time.
 func (n *TestNode) stopService() {
 	t := n.env.t
 	t.Helper()
-	m := n.connectSCM()
+	m := connectSCM(t)
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
 	if err != nil {
@@ -105,19 +101,15 @@ func (n *TestNode) stopService() {
 	n.waitServiceState(s, svc.Stopped, 60*time.Second)
 }
 
-// uninstallService removes the Tailscale service via tailscaled's
-// uninstall-system-daemon subcommand and waits until it's gone. A service that
-// isn't installed is fine (the prelude calls this to clear leftovers); any
-// other failure fails the test, since a lingering service breaks the next
-// install.
+// uninstallService removes the service via tailscaled's uninstall-system-daemon
+// and waits until it's gone; a missing service is fine.
 func (n *TestNode) uninstallService() {
 	t := n.env.t
 	t.Helper()
-	if !n.serviceExists() {
+	if !serviceExists(t) {
 		return
 	}
-	// Not t.Context(): this also runs from t.Cleanup, where the test's context
-	// is already canceled.
+	// Not t.Context(): this also runs from t.Cleanup, where it's canceled.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, n.env.daemon, "uninstall-system-daemon").CombinedOutput(); err != nil {
@@ -126,13 +118,12 @@ func (n *TestNode) uninstallService() {
 	n.waitServiceGone(30 * time.Second)
 }
 
-// writeServiceEnvFile writes the harness environment a service can't inherit
-// (the SCM starts it without the test process's environment) to the file
-// tailscaled reads at startup: %ProgramData%\Tailscale\tailscaled-env.txt.
+// writeServiceEnvFile writes the harness env to the file tailscaled reads at
+// startup, since a service doesn't inherit the test process's environment.
 func (n *TestNode) writeServiceEnvFile() {
 	t := n.env.t
 	t.Helper()
-	dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+	dir := serviceStateDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("creating %s: %v", dir, err)
 	}
@@ -141,23 +132,26 @@ func (n *TestNode) writeServiceEnvFile() {
 	if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
 		t.Fatalf("writing %s: %v", dst, err)
 	}
-	// Removed with the rest of the state dir in cleanupServiceState.
 }
 
-// cleanupServiceState removes the global state directory the service writes
-// (%ProgramData%\Tailscale), so a subsequent serialized test doesn't inherit a
-// prior node's identity or state. Called only after the service is stopped.
+// cleanupServiceState removes the service's global state dir so the next test
+// doesn't inherit a prior node's identity; call only after the service stops.
 func (n *TestNode) cleanupServiceState() {
 	t := n.env.t
 	t.Helper()
-	dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+	dir := serviceStateDir()
 	if err := os.RemoveAll(dir); err != nil {
 		t.Logf("removing %s: %v", dir, err)
 	}
 }
 
-// waitServiceReady polls the LocalAPI until BackendState is neither "" nor
-// NoState, guarding the post-start race (tailscale/tailscale#8695).
+// serviceStateDir is the global state dir a Tailscale service uses.
+func serviceStateDir() string {
+	return filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+}
+
+// waitServiceReady polls the LocalAPI until BackendState leaves NoState,
+// guarding the post-start race (tailscale/tailscale#8695).
 func (n *TestNode) waitServiceReady(timeout time.Duration) {
 	t := n.env.t
 	t.Helper()
@@ -192,14 +186,13 @@ func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time
 	t.Fatalf("service %q did not reach state %d within %v", serviceName, want, timeout)
 }
 
-// waitServiceGone polls until the service no longer exists, so a fresh
-// install-system-daemon won't collide with a leftover.
+// waitServiceGone polls until the service no longer exists.
 func (n *TestNode) waitServiceGone(timeout time.Duration) {
 	t := n.env.t
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !n.serviceExists() {
+		if !serviceExists(t) {
 			return
 		}
 		time.Sleep(time.Second)
@@ -208,10 +201,9 @@ func (n *TestNode) waitServiceGone(timeout time.Duration) {
 }
 
 // serviceExists reports whether the Tailscale service is currently installed.
-func (n *TestNode) serviceExists() bool {
-	t := n.env.t
+func serviceExists(t testing.TB) bool {
 	t.Helper()
-	m := n.connectSCM()
+	m := connectSCM(t)
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
 	if err != nil {
@@ -222,8 +214,7 @@ func (n *TestNode) serviceExists() bool {
 }
 
 // connectSCM connects to the Windows service manager, failing the test on error.
-func (n *TestNode) connectSCM() *mgr.Mgr {
-	t := n.env.t
+func connectSCM(t testing.TB) *mgr.Mgr {
 	t.Helper()
 	m, err := mgr.Connect()
 	if err != nil {
@@ -232,10 +223,8 @@ func (n *TestNode) connectSCM() *mgr.Mgr {
 	return m
 }
 
-// stageWintun makes a verified wintun.dll a sibling of tailscaled.exe in dir;
-// tailscaled loads it from the directory of its own executable (see
-// fullyQualifiedWintunPath in cmd/tailscaled/tailscaled_windows.go), so the
-// adapter only comes up if the DLL is next to the binary.
+// stageWintun downloads and verifies wintun.dll into dir; tailscaled loads it
+// from its executable's dir (cmd/tailscaled.fullyQualifiedWintunPath).
 func stageWintun(t testing.TB, dir string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), "GET", wintun.URL, nil)
@@ -261,7 +250,7 @@ func stageWintun(t testing.TB, dir string) {
 	if err != nil {
 		t.Fatalf("opening wintun zip: %v", err)
 	}
-	member := wintun.DLLZipPath("amd64")
+	member := wintun.DLLZipPath(runtime.GOARCH)
 	f, err := zr.Open(member)
 	if err != nil {
 		t.Fatalf("wintun zip missing %q: %v", member, err)

@@ -5,9 +5,8 @@
 
 package integration
 
-// The Windows service backend only compiles and runs on Windows. These stubs
-// let the package build on other platforms; they're never called, because
-// windowsService is only set when runtime.GOOS == "windows".
+// Non-Windows stubs for the Windows service backend; never called, since
+// windowsService is only set on Windows.
 
 func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	n.env.t.Fatal("Windows service daemon is only supported on Windows")

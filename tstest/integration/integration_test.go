@@ -58,10 +58,9 @@ func TestMain(m *testing.M) {
 	// Have to disable UPnP which hits the network, otherwise it fails due to HTTP proxy.
 	os.Setenv("TS_DISABLE_UPNP", "true")
 	flag.Parse()
-	if *runWindowsServiceTests {
-		// The Windows service is a singleton (one service, one pipe, one state
-		// dir), so tests against it must run serially. envknob.Setenv refreshes
-		// the already-registered TS_SERIAL_TESTS that tstest.Parallel reads.
+	if *runWindowsServiceTests && runtime.GOOS == "windows" {
+		// On Windows the service is a singleton, so its tests run serially.
+		// envknob.Setenv refreshes the TS_SERIAL_TESTS that tstest.Parallel reads.
 		envknob.Setenv("TS_SERIAL_TESTS", "true")
 	}
 	v := m.Run()
@@ -1179,6 +1178,24 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	}
 
 	d2.MustCleanShutdown(t)
+}
+
+// Issue 2137: make sure Windows tailscaled works with the CLI alone,
+// without the GUI to kick off a Start.
+func TestOneNodeUpWindowsStyle(t *testing.T) {
+	tstest.Parallel(t)
+	env := NewTestEnv(t, canRunAsServiceOnWindows())
+	n1 := NewTestNode(t, env)
+	n1.upFlagGOOS = "windows"
+
+	d1 := n1.StartDaemonAsIPNGOOS("windows")
+	n1.AwaitResponding()
+	n1.MustUp("--unattended")
+
+	t.Logf("Got IP: %v", n1.AwaitIP4())
+	n1.AwaitRunning()
+
+	d1.MustCleanShutdown(t)
 }
 
 // TestClientSideJailing tests that when one node is jailed for another, the

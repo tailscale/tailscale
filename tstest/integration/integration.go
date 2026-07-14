@@ -60,9 +60,8 @@ var (
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 
-	// runWindowsServiceTests enables the Windows service-mode integration tests
-	// (tailscaled installed as a service). On by default in CI. Tests opt in via
-	// NewTestEnv(t, WindowsServiceMode()) and run serially in this mode.
+	// runWindowsServiceTests enables the Windows service-mode integration tests.
+	// On by default in CI; tests opt in via NewTestEnv(t, canRunAsServiceOnWindows()).
 	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
 )
 
@@ -542,32 +541,36 @@ func (f ConfigureControl) ModifyTestEnv(te *TestEnv) {
 	f(te.Control)
 }
 
-// windowsServiceOpt is the TestEnvOpt returned by WindowsServiceMode.
-type windowsServiceOpt struct{}
+// canRunAsServiceOnWindowsOpt is the TestEnvOpt returned by canRunAsServiceOnWindows.
+type canRunAsServiceOnWindowsOpt struct{}
 
-func (windowsServiceOpt) ModifyTestEnv(te *TestEnv) { te.windowsService = true }
+func (canRunAsServiceOnWindowsOpt) ModifyTestEnv(te *TestEnv) {
+	// Only run as a service on Windows; on other platforms the test runs
+	// the normal userspace daemon with a faked Windows GOOS, as it always has.
+	if runtime.GOOS == "windows" {
+		te.windowsService = true
+	}
+}
 
-// WindowsServiceMode makes NewTestEnv run tailscaled as a Windows service
-// (install-system-daemon) rather than a userspace child process. It's a no-op
-// off Windows. Only tests that pass it run on Windows; all others skip there.
-func WindowsServiceMode() TestEnvOpt { return windowsServiceOpt{} }
+// canRunAsServiceOnWindows enables the test to run on Windows.
+// TODO(#20464): remove this and explicitly skip tests that need more work
+// before they can run on Windows, instead of requiring tests to opt in with this option.
+func canRunAsServiceOnWindows() TestEnvOpt { return canRunAsServiceOnWindowsOpt{} }
 
 // NewTestEnv starts a bunch of services and returns a new test environment.
 // NewTestEnv arranges for the environment's resources to be cleaned up on exit.
 func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
-	// Integration tests skip on Windows unless a test opts into service mode
-	// via WindowsServiceMode(); a Windows service is a singleton, so the generic
-	// (often multi-node) tests can't run against it. Pre-scan the opts for the
-	// service marker before starting any servers so a skip leaks nothing.
-	serviceMode := false
+	// Integration tests skip on Windows unless a test opts in via canRunAsServiceOnWindows.
+	// Pre-scan the opts before starting any servers so a skip leaks nothing.
+	canRunAsService := false
 	for _, o := range opts {
-		if _, ok := o.(windowsServiceOpt); ok {
-			serviceMode = true
+		if _, ok := o.(canRunAsServiceOnWindowsOpt); ok {
+			canRunAsService = true
 		}
 	}
 	if runtime.GOOS == "windows" {
-		if !serviceMode {
-			t.Skip("integration tests skip on Windows unless run in service mode")
+		if !canRunAsService {
+			t.Skip("integration tests skip on Windows unless the test calls canRunAsServiceOnWindows")
 		}
 		if !*runWindowsServiceTests {
 			t.Skip("Windows service tests disabled (--run-windows-service-tests=false)")
@@ -857,12 +860,8 @@ func (n *TestNode) awaitTailscaledRunnable() error {
 	return nil
 }
 
-// daemonEnv returns the environment tailscaled is started with, shared by the
-// userspace child-process path (StartDaemonAsIPNGOOS) and the Windows service
-// path (which writes it to tailscaled-env.txt, since a service doesn't inherit
-// the test process's environment). ipnGOOS is the OS tailscaled should believe
-// it's running as. It does not include TS_PARENT_DEATH_FD, which is specific to
-// the child-process path.
+// daemonEnv returns the extra environment variables to use when starting tailscaled.
+// The ipnGOOS argument overrides [envknob.GOOS].
 func (n *TestNode) daemonEnv(ipnGOOS string) []string {
 	env := []string{
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
@@ -909,8 +908,7 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	}
 
 	if n.env.windowsService {
-		// Service mode has no stderr pipe; keep a parser so other helpers
-		// that reference it don't dereference nil.
+		// TODO(#20443): plumb service logs here so races/panics/DEBUG-ADDR are seen in service mode.
 		n.tailscaledParser = &nodeOutputParser{n: n}
 		return n.startWindowsServiceDaemon()
 	}
