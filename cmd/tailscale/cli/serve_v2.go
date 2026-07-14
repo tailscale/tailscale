@@ -1101,16 +1101,19 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
-
-		tlsStatus := "TLS over TCP"
+		var annotations []string
 		if tcpHandler.TerminateTLS != "" {
-			tlsStatus = "TLS terminated"
+			annotations = append(annotations, "TLS terminated")
 		}
 		if ver := tcpHandler.ProxyProtocol; ver != 0 {
-			tlsStatus = fmt.Sprintf("%s, PROXY protocol v%d", tlsStatus, ver)
+			annotations = append(annotations, fmt.Sprintf("PROXY protocol v%d", ver))
 		}
 
-		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
+		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d", host, srvPort))
+		if len(annotations) != 0 {
+			output.WriteString(fmt.Sprintf(" (%s)", strings.Join(annotations, ", ")))
+		}
+		output.WriteString("\n")
 		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))

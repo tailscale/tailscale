@@ -1603,7 +1603,7 @@ func TestMessageForPort(t *testing.T) {
 			expected: strings.Join([]string{
 				msgServeAvailable,
 				"",
-				"|-- tcp://foo.test.ts.net:2200 (TLS over TCP)",
+				"|-- tcp://foo.test.ts.net:2200",
 				"|-- tcp://100.101.101.101:2200",
 				"|-- tcp://[fd7a:115c:a1e0:ab12:4843:cd96:6565:6565]:2200",
 				"|--> tcp://localhost:3000",
