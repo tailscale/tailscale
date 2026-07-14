@@ -450,6 +450,55 @@ func TestCached(t *testing.T) {}
 	}
 }
 
+// TestMaxRetryTime verifies the suite-wide retry deadline
+// (TS_TESTWRAPPER_MAX_RETRY_TIME) is a hard backstop: when the remaining time
+// is smaller than a single attempt's timeout, testwrapper skips the retry
+// entirely — even below minRetries — and reports the test as a permanent
+// failure. Because computePerAttemptTimeout floors each attempt at 30s, any
+// deadline under 30s deterministically cuts off the first retry with no timing
+// race.
+func TestMaxRetryTime(t *testing.T) {
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "maxretrytime_test.go")
+	code := []byte(`package maxretrytime_test
+
+import "testing"
+
+func TestAlwaysFail(t *testing.T) {
+	t.Fatal("always fails")
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	cmd := cmdTestwrapper(t, "-v", testfile)
+	cmd.Env = append(cmd.Env, "TS_TESTWRAPPER_MAX_RETRY_TIME=1ms")
+	out, err := cmd.CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s: expected exit code 1, got %v; output:\n%s", testfile, err, out)
+	}
+	if !bytes.Contains(out, []byte("permanent test failures JSON:")) {
+		t.Errorf("missing permanent test failures JSON line in output:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("would exceed the remaining max retry time")) {
+		t.Errorf("missing retry-deadline skip message in output:\n%s", out)
+	}
+	// The deadline overrides minRetries, so no retry attempt should run: the
+	// test executes exactly once (the first pass).
+	if got := bytes.Count(out, []byte("[retry ")); got != 0 {
+		t.Errorf("expected no retry attempts, but %d were made; output:\n%s", got, out)
+	}
+	if runs := bytes.Count(out, []byte("=== RUN   TestAlwaysFail")); runs != 1 {
+		t.Errorf("expected TestAlwaysFail to run exactly once, ran %d times; output:\n%s", runs, out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
 func errExitCode(err error) (int, bool) {
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode(), true

@@ -71,6 +71,11 @@ var (
 	// minRetries is the minimum number of retry attempts we make for a failed
 	// test, regardless of perTestBudget. Override via TS_TESTWRAPPER_MIN_RETRIES.
 	minRetries = envInt("TS_TESTWRAPPER_MIN_RETRIES", 2)
+	// maxRetryTime is the maximum wall-clock time we are willing to spend on the
+	// whole retry phase. It ensures a run with many flakes or real failures
+	// doesn't block for an unreasonable amount of time. Override via
+	// TS_TESTWRAPPER_MAX_RETRY_TIME (a time.Duration string).
+	maxRetryTime = envDuration("TS_TESTWRAPPER_MAX_RETRY_TIME", 10*time.Minute)
 )
 
 func envDuration(key string, def time.Duration) time.Duration {
@@ -572,7 +577,7 @@ func computePerAttemptTimeout(firstFail time.Duration) time.Duration {
 }
 
 // retryFailedTest runs the per-test retry loop for ft. It updates ft in place.
-func retryFailedTest(ctx context.Context, ft *failedTest, goTestArgs, testArgs []string) {
+func retryFailedTest(ctx context.Context, ft *failedTest, goTestArgs, testArgs []string, deadline time.Time) {
 	perAttempt := computePerAttemptTimeout(ft.firstFailDuration)
 	for {
 		if ft.everPassed {
@@ -582,6 +587,14 @@ func retryFailedTest(ctx context.Context, ft *failedTest, goTestArgs, testArgs [
 			return
 		}
 		if ft.attempts >= minRetries && ft.totalRetryElapsed >= perTestBudget {
+			return
+		}
+		if remaining := time.Until(deadline); remaining < perAttempt {
+			// perAttempt represents a reasonable guess of how long the test might take
+			// to run, so don't even attempt to retry a test that is likely to take us
+			// past our overall deadline.
+			log.Printf("testwrapper: not retrying %s.%s because its timeout (%.1fs) would exceed the remaining max retry time (%.1fs)",
+				ft.pkg, ft.testName, perAttempt.Seconds(), remaining.Seconds())
 			return
 		}
 
@@ -845,9 +858,10 @@ func main() {
 
 	// Second pass: retry each failed test serially with its per-test budget.
 	if len(failed) > 0 {
+		deadline := time.Now().Add(maxRetryTime)
 		fmt.Printf("\n\nRetrying %d failed test(s) to detect flakiness...\n\n", len(failed))
 		for _, ft := range failed {
-			retryFailedTest(ctx, ft, goTestArgs, testArgs)
+			retryFailedTest(ctx, ft, goTestArgs, testArgs, deadline)
 		}
 	}
 
