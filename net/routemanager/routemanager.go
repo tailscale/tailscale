@@ -324,16 +324,21 @@ type Result struct {
 	Outbound *bart.Table[*PeerRoute]
 	OSRoutes *bart.Lite
 
-	// AllowedIPs maps the public key of each peer whose allowed
-	// source prefixes changed in this commit to its new sorted
-	// prefix list, as [RouteManager.PeerAllowedIPs] would now
-	// return it. A nil value means the peer no longer has any
-	// allowed prefixes, because it was removed or now contributes
-	// nothing. When a peer's key changes, the old key maps to nil
-	// and the new key to the peer's prefixes. The map is nil when
-	// no peer's allowed prefixes changed.
-	AllowedIPs map[key.NodePublic][]netip.Prefix
+	// AllowedIPs describes the peers whose allowed source prefixes
+	// changed in this commit. The map is nil when no peer's allowed
+	// prefixes changed.
+	AllowedIPs PeersWithRouteChanges
 }
+
+// PeersWithRouteChanges maps the public key of each peer whose
+// allowed source prefixes changed to its new sorted prefix list, as
+// [RouteManager.PeerAllowedIPs] would now return it.
+//
+// A nil value means the peer no longer has any allowed prefixes,
+// because it was removed or now contributes nothing; consumers
+// should treat such peers as deleted. When a peer's key changes, the
+// old key maps to nil and the new key to the peer's prefixes.
+type PeersWithRouteChanges map[key.NodePublic][]netip.Prefix
 
 type opKind uint8
 

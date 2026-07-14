@@ -655,7 +655,7 @@ func TestUpsertPeerNodeViewIneligible(t *testing.T) {
 // "no allowed prefixes").
 func wantChangedAllowedIPs(t *testing.T, res Result, want map[key.NodePublic][]string) {
 	t.Helper()
-	wantMap := make(map[key.NodePublic][]netip.Prefix)
+	wantMap := make(PeersWithRouteChanges)
 	for k, ss := range want {
 		var pfxs []netip.Prefix
 		for _, s := range ss {

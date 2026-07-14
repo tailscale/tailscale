@@ -918,10 +918,9 @@ type routePrefs struct {
 // updateRouteManagerPrefs pushes p into the route manager.
 //
 // It returns the peers whose allowed source prefixes changed as a
-// result (for example the old and new exit node when the selection
-// changes), as described by [routemanager.Result.AllowedIPs].
-// In particular, the value for a key will be nil when that peer was removed.
-func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) (changedAllowedIPs map[key.NodePublic][]netip.Prefix) {
+// result, for example the old and new exit node when the selection
+// changes.
+func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) routemanager.PeersWithRouteChanges {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	var exitID tailcfg.NodeID
@@ -950,8 +949,8 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) (changedAllowedIPs 
 // public key.
 //
 // It returns the peers whose allowed source prefixes changed as a
-// result, as described by [routemanager.Result.AllowedIPs].
-func (nb *nodeBackend) updateRouteManagerExtras(fn func(key.NodePublic) views.Slice[netip.Prefix]) (changedAllowedIPs map[key.NodePublic][]netip.Prefix) {
+// result.
+func (nb *nodeBackend) updateRouteManagerExtras(fn func(key.NodePublic) views.Slice[netip.Prefix]) routemanager.PeersWithRouteChanges {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	var extras map[tailcfg.NodeID][]netip.Prefix
@@ -1010,11 +1009,8 @@ func (nb *nodeBackend) mergeUserProfiles(profiles map[tailcfg.UserID]tailcfg.Use
 // delta mutations that the caller must propagate.
 type netmapDeltaResult struct {
 	// ChangedAllowedIPs are the peers whose allowed source prefixes
-	// changed, as described by [routemanager.Result.AllowedIPs]; the
-	// caller syncs those peers to the WireGuard device. In
-	// particular, the value for a key will be nil when that peer was
-	// removed.
-	ChangedAllowedIPs map[key.NodePublic][]netip.Prefix
+	// changed; the caller syncs those peers to the WireGuard device.
+	ChangedAllowedIPs routemanager.PeersWithRouteChanges
 
 	// DiscoChanged is the set of peers whose disco key changed in a
 	// way that requires a WireGuard session reset (see
