@@ -1154,10 +1154,15 @@ func (nb *nodeBackend) magicDNSHostAddrs(fqdn dnsname.FQDN) (ips []netip.Addr, o
 		return nil, false
 	}
 	nm := nb.netMap
-	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
-		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
-	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
-	return magicDNSAddrs(n.Addresses(), selfV6Only, wantAAAA), true
+	var flags magicDNSAddrsFlags
+	if nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
+		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4) {
+		flags |= selfV6Only
+	}
+	if nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA) {
+		flags |= wantAAAA
+	}
+	return magicDNSAddrs(n.Addresses(), flags), true
 }
 
 // magicDNSPTR returns the MagicDNS name of the node (peer or self)
@@ -1215,12 +1220,22 @@ func (nb *nodeBackend) nodeByFQDNLocked(fqdn dnsname.FQDN) (_ tailcfg.NodeView, 
 	return nb.nodeByIDLocked(nid)
 }
 
+// magicDNSAddrsFlags is a bitmask of flags for magicDNSAddrs.
+type magicDNSAddrsFlags uint8
+
+const (
+	selfV6Only magicDNSAddrsFlags = 1 << iota // the querying node has only IPv6 addresses
+	wantAAAA                                  // include IPv6 addresses even for nodes that also have IPv4
+)
+
 // magicDNSAddrs returns the MagicDNS answer addresses for a node
 // owning the given addresses: all of its IPv6 addresses if this node
 // (the querier) is IPv6-only, otherwise everything except the node's
 // IPv6 addresses when it also has IPv4, unless wantAAAA. The result
 // may be empty (name exists, no records of the desired family).
-func magicDNSAddrs(addrs views.Slice[netip.Prefix], selfV6Only, wantAAAA bool) (ips []netip.Addr) {
+func magicDNSAddrs(addrs views.Slice[netip.Prefix], flags magicDNSAddrsFlags) (ips []netip.Addr) {
+	wantAAAA := flags&wantAAAA != 0
+	selfV6Only := flags&selfV6Only != 0
 	var have4 bool
 	for _, addr := range addrs.All() {
 		if addr.Addr().Is4() {
@@ -1380,12 +1395,16 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		Hosts:     map[dnsname.FQDN][]netip.Addr{},
 	}
 
-	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
-		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4)
-	dcfg.OnlyIPv6 = selfV6Only
-
-	wantAAAA := nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA)
+	var addrFlags magicDNSAddrsFlags
+	if nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs6) &&
+		!nm.GetAddresses().ContainsFunc(tsaddr.PrefixIs4) {
+		// We only have IPv6 addresses ourselves.
+		addrFlags |= selfV6Only
+		dcfg.OnlyIPv6 = true
+	}
+	if nm.AllCaps.Contains(tailcfg.NodeAttrMagicDNSPeerAAAA) {
+		addrFlags |= wantAAAA
+	}
 
 	// Populate MagicDNS records. The internal quad-100 resolver pulls
 	// per-node records on demand from the live node indexes (see
@@ -1405,7 +1424,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			if err != nil {
 				return // TODO: propagate error?
 			}
-			dcfg.Hosts[fqdn] = magicDNSAddrs(addrs, selfV6Only, wantAAAA)
+			dcfg.Hosts[fqdn] = magicDNSAddrs(addrs, addrFlags)
 		}
 		set(nm.SelfName(), nm.GetAddresses())
 		for _, peer := range peers {
