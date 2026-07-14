@@ -16,127 +16,162 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 )
 
-// TestTailscaleSSH exercises the Tailscale SSH server ("tailscale up --ssh",
-// not a system sshd) on Ubuntu, FreeBSD, and gokrazy nodes, with an Ubuntu node
-// as the SSH client.
-//
-// On Ubuntu and FreeBSD it tests logging in as both root and a non-root user,
-// which exercises the incubator's su-based login path.
-//
-// On gokrazy it exercises the gokrazy special cases in the SSH code:
-// util/osuser hard-codes the login shell to /tmp/serial-busybox/ash and
-// falls back to a synthesized root user (uid 0, home dir "/") when user
-// lookup fails, since gokrazy has no user database; and the incubator's
-// findSU refuses to use su on gokrazy, so sessions are handled in-process.
-func TestTailscaleSSH(t *testing.T) {
-	env := vmtest.New(t)
-	client := sshTestNode(env, "client", vmtest.Ubuntu2404)
-	ubuntu := sshTestNode(env, "ubuntu", vmtest.Ubuntu2404, vmtest.TailscaleSSH())
-	gokrazy := sshTestNode(env, "gokrazy", vmtest.Gokrazy, vmtest.TailscaleSSH())
-	freebsd := sshTestNode(env, "freebsd", vmtest.FreeBSD150, vmtest.TailscaleSSH())
-	env.Start()
+// TestTailscaleSSH_Ubuntu exercises the Tailscale SSH server ("tailscale up
+// --ssh", not a system sshd) on an Ubuntu node, with an Ubuntu node as the SSH
+// client. It tests logging in as both root and a non-root user, which
+// exercises the incubator's su-based login path.
+func TestTailscaleSSH_Ubuntu(t *testing.T) {
+	testSuite := newTestSuite(t, "ubuntu", vmtest.Ubuntu2404)
 
-	if out, err := env.SSHExec(ubuntu, "useradd -m -s /bin/bash tsuser"); err != nil {
+	ubuntu := testSuite.server
+
+	if out, err := testSuite.env.SSHExec(ubuntu, "useradd -m -s /bin/bash tsuser"); err != nil {
 		t.Fatalf("useradd: %v\n%s", err, out)
 	}
 
-	if out, err := env.SSHExec(freebsd, "pw useradd tsuser -m"); err != nil {
+	testSuite.waitSSH(t, "ubuntu", "root")
+
+	testSuite.check(t, "ubuntu root login", "root", "id -un && pwd", "root\n/root")
+	testSuite.check(t, "ubuntu non-root login", "tsuser", "id -un && pwd", "tsuser\n/home/tsuser")
+
+	if out, code := testSuite.ssh(t, "nosuchuser", "true"); code == 0 {
+		t.Errorf("ubuntu nonexistent user: ssh succeeded, want failure:\n%s", out)
+	}
+}
+
+// TestTailscaleSSH_FreeBSD exercises the Tailscale SSH server ("tailscale up
+// --ssh", not a system sshd) on a FreeBSD node, with an Ubuntu node as the SSH
+// client. It tests logging in as both root and a non-root user, which
+// exercises the incubator's su-based login path.
+func TestTailscaleSSH_FreeBSD(t *testing.T) {
+	testSuite := newTestSuite(t, "freebsd", vmtest.FreeBSD150)
+
+	freebsd := testSuite.server
+
+	if out, err := testSuite.env.SSHExec(freebsd, "pw useradd tsuser -m"); err != nil {
 		t.Fatalf("pw useradd: %v\n%s", err, out)
 	}
 
-	ubuntuIP := tailscaleIP4(t, env, ubuntu)
-	gokrazyIP := tailscaleIP4(t, env, gokrazy)
-	freebsdIP := tailscaleIP4(t, env, freebsd)
+	testSuite.waitSSH(t, "freebsd", "root")
 
-	// ssh runs cmd as user on the node at ip over Tailscale SSH, from the
-	// client node, returning the combined output and the ssh client's exit
-	// code. The command run via Env.SSHExec always exits 0 so that its
-	// transport-error (exit 255) retry loop doesn't kick in when a
-	// Tailscale SSH connection is expected to fail.
-	const exitMarker = "tailscale-ssh-exit="
-	ssh := func(user string, ip netip.Addr, cmd string) (string, int) {
-		t.Helper()
-		inner := "ssh" +
-			" -o StrictHostKeyChecking=no" +
-			" -o UserKnownHostsFile=/dev/null" +
-			" -o BatchMode=yes" +
-			" -o ConnectTimeout=10" +
-			" -o LogLevel=ERROR" +
-			" " + user + "@" + ip.String() +
-			" " + shell.Quote(cmd)
-		out, err := env.SSHExec(client, inner+" 2>&1; echo "+exitMarker+"$?")
-		if err != nil {
-			t.Fatalf("ssh %s@%s: %v\n%s", user, ip, err, out)
-		}
-		i := strings.LastIndex(out, exitMarker)
-		if i == -1 {
-			t.Fatalf("ssh %s@%s: no exit marker in output:\n%s", user, ip, out)
-		}
-		code, err := strconv.Atoi(strings.TrimSpace(out[i+len(exitMarker):]))
-		if err != nil {
-			t.Fatalf("ssh %s@%s: bad exit marker in output:\n%s", user, ip, out)
-		}
-		return strings.TrimSpace(out[:i]), code
-	}
+	testSuite.check(t, "freebsd root login", "root", "id -un && pwd", "root\n/root")
+	testSuite.check(t, "freebsd non-root login", "tsuser", "id -un && pwd", "tsuser\n/home/tsuser")
 
-	// waitSSH waits for the node's Tailscale SSH server to accept a
-	// connection; the first one can race tailscaled's SSH server startup
-	// and WireGuard path setup.
-	waitSSH := func(name, user string, ip netip.Addr) {
-		t.Helper()
-		deadline := time.Now().Add(2 * time.Minute)
-		for {
-			out, code := ssh(user, ip, "echo ok")
-			if code == 0 && strings.Contains(out, "ok") {
-				t.Logf("[%s] Tailscale SSH up as %s@%s", name, user, ip)
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("[%s] Tailscale SSH as %s@%s never came up; last output (exit %d):\n%s", name, user, ip, code, out)
-			}
-			time.Sleep(2 * time.Second)
-		}
-	}
-	waitSSH("ubuntu", "root", ubuntuIP)
-	waitSSH("gokrazy", "root", gokrazyIP)
-	waitSSH("freebsd", "root", freebsdIP)
-
-	check := func(desc, user string, ip netip.Addr, cmd, want string) {
-		t.Helper()
-		out, code := ssh(user, ip, cmd)
-		if code != 0 {
-			t.Errorf("%s: ssh %s@%s %q exited %d:\n%s", desc, user, ip, cmd, code, out)
-			return
-		}
-		if out != want {
-			t.Errorf("%s: ssh %s@%s %q = %q, want %q", desc, user, ip, cmd, out, want)
-		}
-	}
-
-	check("ubuntu root login", "root", ubuntuIP, "id -un && pwd", "root\n/root")
-	check("ubuntu non-root login", "tsuser", ubuntuIP, "id -un && pwd", "tsuser\n/home/tsuser")
-
-	check("freebsd root login", "root", freebsdIP, "id -un && pwd", "root\n/root")
-	check("freebsd non-root login", "tsuser", freebsdIP, "id -un && pwd", "tsuser\n/home/tsuser")
-
-	// A nonexistent user is rejected on Ubuntu...
-	if out, code := ssh("nosuchuser", ubuntuIP, "true"); code == 0 {
-		t.Errorf("ubuntu nonexistent user: ssh succeeded, want failure:\n%s", out)
-	}
-
-	// and rejected on FreeBSD...
-	if out, code := ssh("nosuchuser", freebsdIP, "true"); code == 0 {
+	if out, code := testSuite.ssh(t, "nosuchuser", "true"); code == 0 {
 		t.Errorf("freebsd nonexistent user: ssh succeeded, want failure:\n%s", out)
 	}
+}
 
-	// ... but on gokrazy any username works and becomes root, via the
-	// synthesized-user fallback in util/osuser (uid 0, home dir "/").
-	// $0 is the login shell the session ran the command with, which on
-	// gokrazy is hard-coded rather than looked up with getent. These
-	// sessions also implicitly exercise the incubator's su-less
-	// in-process path, since gokrazy has no su.
-	check("gokrazy root login shell", "root", gokrazyIP, "echo $0", "/tmp/serial-busybox/ash")
-	check("gokrazy nonexistent user maps to root", "nosuchuser", gokrazyIP, "pwd", "/")
+// TestTailscaleSSH_Gokrazy exercises the gokrazy-specific cases in the
+// Tailscale SSH server ("tailscale up --ssh", not a system sshd), with an
+// Ubuntu node as the SSH client. util/osuser hard-codes the login shell to
+// /tmp/serial-busybox/ash and falls back to a synthesized root user (uid 0,
+// home dir "/") when user lookup fails, since gokrazy has no user database;
+// and the incubator's findSU refuses to use su on gokrazy, so sessions are
+// handled in-process.
+func TestTailscaleSSH_Gokrazy(t *testing.T) {
+	testSuite := newTestSuite(t, "gokrazy", vmtest.Gokrazy)
+
+	testSuite.waitSSH(t, "gokrazy", "root")
+
+	// $0 is the login shell the session ran the command with, which on gokrazy
+	// is hard-coded rather than looked up with getent. These sessions also
+	// implicitly exercise the incubator's su-less in-process path, since
+	// gokrazy has no su.
+	testSuite.check(t, "gokrazy root login shell", "root", "echo $0", "/tmp/serial-busybox/ash")
+	testSuite.check(t, "gokrazy nonexistent user maps to root", "nosuchuser", "pwd", "/")
+}
+
+// ssh runs cmd as user on the node at ip over Tailscale SSH, from the
+// client node, returning the combined output and the ssh client's exit
+// code. The command run via Env.SSHExec always exits 0 so that its
+// transport-error (exit 255) retry loop doesn't kick in when a
+// Tailscale SSH connection is expected to fail.
+const exitMarker = "tailscale-ssh-exit="
+
+type sshTest struct {
+	client   *vmtest.Node
+	server   *vmtest.Node
+	serverIP netip.Addr
+	env      *vmtest.Env
+}
+
+// ssh runs a command as the specified user on the [sshTest.server] via its
+// debug SSH NIC.
+func (st *sshTest) ssh(t *testing.T, user string, cmd string) (string, int) {
+	t.Helper()
+
+	inner := "ssh" +
+		" -o StrictHostKeyChecking=no" +
+		" -o UserKnownHostsFile=/dev/null" +
+		" -o BatchMode=yes" +
+		" -o ConnectTimeout=10" +
+		" -o LogLevel=ERROR" +
+		" " + user + "@" + st.serverIP.String() +
+		" " + shell.Quote(cmd)
+	out, err := st.env.SSHExec(st.client, inner+" 2>&1; echo "+exitMarker+"$?")
+	if err != nil {
+		t.Fatalf("ssh %s@%s: %v\n%s", user, st.serverIP, err, out)
+	}
+	i := strings.LastIndex(out, exitMarker)
+	if i == -1 {
+		t.Fatalf("ssh %s@%s: no exit marker in output:\n%s", user, st.serverIP, out)
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(out[i+len(exitMarker):]))
+	if err != nil {
+		t.Fatalf("ssh %s@%s: bad exit marker in output:\n%s", user, st.serverIP, out)
+	}
+	return strings.TrimSpace(out[:i]), code
+}
+
+// waitSSH waits for the node's Tailscale SSH server to accept a
+// connection; the first one can race tailscaled's SSH server startup
+// and WireGuard path setup.
+func (st *sshTest) waitSSH(t *testing.T, name, user string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		out, code := st.ssh(t, user, "echo ok")
+		if code == 0 && strings.Contains(out, "ok") {
+			t.Logf("[%s] Tailscale SSH up as %s@%s", name, user, st.serverIP)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("[%s] Tailscale SSH as %s@%s never came up; last output (exit %d):\n%s", name, user, st.serverIP, code, out)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// check attempts to execute a command as specified user on the server, failing
+// if the output isn't what is expected.
+func (st *sshTest) check(t *testing.T, desc, user string, cmd, want string) {
+	t.Helper()
+	out, code := st.ssh(t, user, cmd)
+	if code != 0 {
+		t.Errorf("%s: ssh %s@%s %q exited %d:\n%s", desc, user, st.serverIP, cmd, code, out)
+		return
+	}
+	if out != want {
+		t.Errorf("%s: ssh %s@%s %q = %q, want %q", desc, user, st.serverIP, cmd, out, want)
+	}
+}
+
+func newTestSuite(t *testing.T, serverName string, serverOS vmtest.OSImage) *sshTest {
+	t.Helper()
+	env := vmtest.New(t)
+	client := sshTestNode(env, "client", vmtest.Ubuntu2404)
+	server := sshTestNode(env, serverName, serverOS, vmtest.TailscaleSSH())
+	env.Start()
+
+	serverIP := tailscaleIP4(t, env, server)
+
+	return &sshTest{
+		client:   client,
+		server:   server,
+		serverIP: serverIP,
+		env:      env,
+	}
 }
 
 // sshTestNode adds a node named name running img behind its own
