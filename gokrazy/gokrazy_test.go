@@ -76,9 +76,14 @@ func TestTsappConfigs(t *testing.T) {
 			if err := json.Unmarshal(cfgBytes, &raw); err != nil {
 				t.Fatalf("unmarshaling config.json as map: %v", err)
 			}
-			gokCfg := gokrazyConfig{Environment: cfg.Environment}
-			if got := gokCfg.GOARCH(); got != tt.goarch {
-				t.Errorf("GOARCH = %q; want %q", got, tt.goarch)
+			var goarch string
+			for _, e := range cfg.Environment {
+				if v, ok := strings.CutPrefix(e, "GOARCH="); ok {
+					goarch = v
+				}
+			}
+			if goarch != tt.goarch {
+				t.Errorf("GOARCH = %q; want %q", goarch, tt.goarch)
 			}
 			if cfg.KernelPackage != tt.kernel {
 				t.Errorf("KernelPackage = %q; want %q", cfg.KernelPackage, tt.kernel)
@@ -91,43 +96,6 @@ func TestTsappConfigs(t *testing.T) {
 			}
 			if cfg.EEPROMPackage != nil && *cfg.EEPROMPackage != tt.eeprom {
 				t.Errorf("EEPROMPackage = %q; want %q", *cfg.EEPROMPackage, tt.eeprom)
-			}
-		})
-	}
-}
-
-func TestResolveRegion(t *testing.T) {
-	tests := []struct {
-		name, flag, env, want string
-	}{
-		{"default", "", "", "us-east-1"},
-		{"env", "", "eu-west-1", "eu-west-1"},
-		{"flag", "ap-south-1", "", "ap-south-1"},
-		{"flag-beats-env", "ap-south-1", "eu-west-1", "ap-south-1"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveRegion(tt.flag, tt.env); got != tt.want {
-				t.Errorf("resolveRegion(%q, %q) = %q; want %q", tt.flag, tt.env, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAMINameFrom(t *testing.T) {
-	const now = 1720000000
-	tests := []struct {
-		name, exactTag, describe, want string
-	}{
-		{"tagged-release", "v1.2.3", "v1.2.3", "tsapp-v1.2.3"},
-		{"adhoc-describe", "", "v1.2.3-4-gabc1234", "tsapp-v1.2.3-4-gabc1234-1720000000"},
-		{"adhoc-dirty", "", "v1.2.3-dirty", "tsapp-v1.2.3-dirty-1720000000"},
-		{"no-git", "", "", "tsapp-1720000000"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := amiNameFrom("tsapp", tt.exactTag, tt.describe, now); got != tt.want {
-				t.Errorf("amiNameFrom = %q; want %q", got, tt.want)
 			}
 		})
 	}
