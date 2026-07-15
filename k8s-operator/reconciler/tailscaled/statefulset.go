@@ -175,3 +175,31 @@ func NewConfigSecret(opts ConfigSecretOptions) (*corev1.Secret, error) {
 		},
 	}, nil
 }
+
+// StateSecretOptions describes a per-pod tailscaled state Secret. Name must match the pod name (the value
+// containerboot reads from TS_KUBE_SECRET) so that tailscaled can locate it at runtime.
+type StateSecretOptions struct {
+	Name      string
+	Namespace string
+	Labels    map[string]string
+}
+
+// NewStateSecret returns an empty *corev1.Secret to be pre-created for tailscaled's kube state store. Pre-creating it
+// (rather than letting containerboot create it on first run) lets callers stamp ownership labels so cleanup can select
+// state Secrets by label rather than by pod-name convention. The tailscale.com/secret-type=state label is stamped on
+// automatically alongside any caller-provided labels; tailscaled populates the Data on first run.
+func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
+	labels := make(map[string]string, len(opts.Labels)+1)
+	for k, v := range opts.Labels {
+		labels[k] = v
+	}
+	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.Name,
+			Namespace: opts.Namespace,
+			Labels:    labels,
+		},
+	}
+}

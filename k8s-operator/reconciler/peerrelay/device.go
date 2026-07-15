@@ -9,8 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,28 +30,19 @@ func (r *Reconciler) deleteDevicesFrom(ctx context.Context, pr *tsapi.PeerRelay,
 		return fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
 	}
 
+	labels := peerRelayLabels(pr.Name)
+	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
+
 	var list corev1.SecretList
-	if err = r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace)); err != nil {
-		return fmt.Errorf("failed to list Secrets: %w", err)
+	if err = r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(labels)); err != nil {
+		return fmt.Errorf("failed to list state Secrets: %w", err)
 	}
 
-	prefix := pr.Name + "-"
 	var errs []error
 	for i := range list.Items {
 		s := &list.Items[i]
-
-		if s.Labels[kubetypes.LabelSecretType] == kubetypes.LabelSecretTypeConfig {
-			continue
-		}
-		if !strings.HasPrefix(s.Name, prefix) {
-			continue
-		}
-
-		ordinal, err := strconv.ParseInt(s.Name[len(prefix):], 10, 32)
-		if err != nil {
-			continue
-		}
-		if int32(ordinal) < fromIdx {
+		idx, ok := replicaIndexFromLabels(s.Labels)
+		if !ok || idx < fromIdx {
 			continue
 		}
 

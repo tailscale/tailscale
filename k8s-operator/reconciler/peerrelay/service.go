@@ -76,6 +76,10 @@ func peerRelayServiceLabels(prName string, idx int32) map[string]string {
 	return labels
 }
 
+func stateSecretName(prName string, idx int32) string {
+	return fmt.Sprintf("%s-%d", prName, idx)
+}
+
 func peerRelayServiceAnnotations(pr *tsapi.PeerRelay) map[string]string {
 	annotations := make(map[string]string, len(cloudAnnotations))
 

@@ -90,6 +90,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectStatefulSetGone bool                   // assert the StatefulSet does not exist
 		ExpectStatefulSetSpec *statefulSetSpec       // asserted only when non-nil
 		ExpectedConfigSecrets []string               // exact set of config Secret names expected; nil == skip check
+		ExpectedStateSecrets  []string               // exact set of state Secret names expected; nil == skip check
 		ExpectFinalizer       bool
 		ExpectPRDeleted       bool
 	}{
@@ -128,6 +129,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectFinalizer:       true,
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 1, Image: testProxyImage},
 			ExpectedConfigSecrets: []string{"test-0-config"},
+			ExpectedStateSecrets:  []string{"test-0"},
 		},
 		{
 			Name:    "multiple-replicas",
@@ -143,6 +145,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 3, Image: testProxyImage},
 			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config", "test-2-config"},
+			ExpectedStateSecrets:  []string{"test-0", "test-1", "test-2"},
 		},
 		{
 			Name:    "zero-replicas",
@@ -153,6 +156,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 0, Image: testProxyImage},
 			ExpectedConfigSecrets: []string{},
+			ExpectedStateSecrets:  []string{},
 		},
 		{
 			Name:    "scale-down",
@@ -173,6 +177,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 2, Image: testProxyImage},
 			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config"},
+			ExpectedStateSecrets:  []string{"test-0", "test-1"},
 		},
 		{
 			Name:    "scale-up",
@@ -553,6 +558,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectPRDeleted:       true,
 			ExpectStatefulSetGone: true,
 			ExpectedConfigSecrets: []string{},
+			ExpectedStateSecrets:  []string{},
 		},
 	}
 
@@ -649,6 +655,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 			if tc.ExpectedConfigSecrets != nil {
 				assertConfigSecrets(t, fc, tc.Request.Name, tc.ExpectedConfigSecrets)
 			}
+			if tc.ExpectedStateSecrets != nil {
+				assertStateSecrets(t, fc, tc.Request.Name, tc.ExpectedStateSecrets)
+			}
 		})
 	}
 }
@@ -690,11 +699,22 @@ func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *stat
 
 func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []string) {
 	t.Helper()
+	assertSecretsForType(t, fc, prName, "config", "config Secrets", want)
+}
+
+func assertStateSecrets(t *testing.T, fc client.Client, prName string, want []string) {
+	t.Helper()
+	assertSecretsForType(t, fc, prName, "state", "state Secrets", want)
+}
+
+func assertSecretsForType(t *testing.T, fc client.Client, prName, secretType, label string, want []string) {
+	t.Helper()
 
 	var list corev1.SecretList
 	if err := fc.List(t.Context(), &list, client.InNamespace(tailscaleNamespace), client.MatchingLabels(map[string]string{
 		"tailscale.com/parent-resource-type": "peerrelay",
 		"tailscale.com/parent-resource":      prName,
+		"tailscale.com/secret-type":          secretType,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -709,7 +729,7 @@ func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []s
 	slices.Sort(sortedWant)
 
 	if !slices.Equal(got, sortedWant) {
-		t.Errorf("expected config Secrets %v, got %v", sortedWant, got)
+		t.Errorf("expected %s %v, got %v", label, sortedWant, got)
 	}
 }
 
@@ -1108,11 +1128,19 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// stateSecret seeds a Secret shaped like the ones tailscaled writes for each pod: no operator-managed
-	// labels, containing (optionally) a device_id entry.
-	stateSecret := func(name, deviceID string) *corev1.Secret {
+	// stateSecret seeds a Secret shaped like the ones the reconciler pre-creates: parent-resource labels + the
+	// tailscale.com/secret-type=state marker, containing (optionally) a device_id entry as if tailscaled had
+	// written it.
+	stateSecret := func(prName, name string, idx int32, deviceID string) *corev1.Secret {
+		labels := map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource-type": "peerrelay",
+			"tailscale.com/parent-resource":      prName,
+			"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
+			"tailscale.com/secret-type":          "state",
+		}
 		s := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tailscaleNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tailscaleNamespace, Labels: labels},
 		}
 		if deviceID != "" {
 			s.Data = map[string][]byte{"device_id": []byte(deviceID)}
@@ -1135,9 +1163,9 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
-				stateSecret("test-0", "device-aaa"),
-				stateSecret("test-1", ""), // pod never registered , no device_id
-				stateSecret("other-0", "device-should-not-touch"),
+				stateSecret("test", "test-0", 0, "device-aaa"),
+				stateSecret("test", "test-1", 1, ""), // pod never registered , no device_id
+				stateSecret("other", "other-0", 0, "device-should-not-touch"),
 			).
 			Build()
 
@@ -1184,9 +1212,9 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
-				stateSecret("test-0", "device-still-here"),
-				stateSecret("test-1", "device-scaled-away-1"),
-				stateSecret("test-2", "device-scaled-away-2"),
+				stateSecret("test", "test-0", 0, "device-still-here"),
+				stateSecret("test", "test-1", 1, "device-scaled-away-1"),
+				stateSecret("test", "test-2", 2, "device-scaled-away-2"),
 			).
 			Build()
 
