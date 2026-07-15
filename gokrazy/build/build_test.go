@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,49 @@ func TestBuildCapturesError(t *testing.T) {
 	}
 	if b.Result().Error == "" {
 		t.Error("Result.Error is empty; want the failure reason")
+	}
+}
+
+// TestStepOrderingGuards checks the AWS steps refuse to run before their
+// predecessor and say which step to call first. The guards fire before
+// any AWS client is constructed, so this needs no credentials.
+func TestStepOrderingGuards(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "app"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app", "config.json"),
+		[]byte(`{"Environment":["GOARCH=amd64"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	newB := func() *Builder {
+		b, err := New(Config{App: "app", Dir: dir, Bucket: "b", Region: "us-east-1", Stderr: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		call    func(*Builder) error
+		wantSub string
+	}{
+		{"upload-before-build", func(b *Builder) error { _, err := b.UploadToS3(ctx); return err }, "BuildImage first"},
+		{"import-before-upload", func(b *Builder) error { _, err := b.ImportSnapshot(ctx); return err }, "UploadToS3 first"},
+		{"register-before-import", func(b *Builder) error { _, err := b.RegisterAMI(ctx); return err }, "ImportSnapshot first"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call(newB())
+			if err == nil {
+				t.Fatal("out-of-order call succeeded; want error")
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("error = %q; want it to mention %q", err, tt.wantSub)
+			}
+		})
 	}
 }
 

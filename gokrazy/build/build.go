@@ -52,6 +52,7 @@ type Result struct {
 	Name     string `json:"name,omitempty"`
 	Image    string `json:"image,omitempty"`
 	GAF      string `json:"gaf,omitempty"`
+	S3       string `json:"s3,omitempty"` // s3:// URI of the uploaded image
 	Region   string `json:"region,omitempty"`
 	Snapshot string `json:"snapshot,omitempty"`
 	AMI      string `json:"ami,omitempty"`
@@ -63,7 +64,7 @@ type Result struct {
 // Config configures a [Builder]. Only App is required; New fills in the
 // rest with defaults. It holds build inputs only; what to produce is
 // chosen by which build method you call ([Builder.BuildImage],
-// [Builder.BuildGAF], or [Builder.BuildAMI]).
+// [Builder.BuildGAF], or [Builder.BuildAndImportAMI]).
 type Config struct {
 	// App is the appliance name, e.g. "tsapp". It must be a
 	// subdirectory of Dir containing a config.json.
@@ -71,11 +72,12 @@ type Config struct {
 	// Dir is the directory holding the appliance subdirectories.
 	// Empty means the current working directory.
 	Dir string
-	// Bucket is the S3 bucket that BuildAMI uploads the disk image to
-	// while registering the AMI. Unused by BuildImage and BuildGAF.
+	// Bucket is the S3 bucket that BuildAndImportAMI uploads the disk
+	// image to while registering the AMI. Unused by BuildImage and
+	// BuildGAF.
 	Bucket string
-	// Region is the AWS region BuildAMI imports and registers in. Empty
-	// means ResolveRegion("", $AWS_REGION).
+	// Region is the AWS region BuildAndImportAMI imports and registers
+	// in. Empty means ResolveRegion("", $AWS_REGION).
 	Region string
 
 	// Logf receives human-readable progress. If nil, log.Printf is used.
@@ -88,6 +90,12 @@ type Config struct {
 
 // Builder builds one appliance image, GAF, or AMI per its Config.
 // Create one with [New]; it is not safe for concurrent use.
+//
+// The build steps are stateful and ordered: each records its output into
+// the Result (read with [Builder.Result]) and the AWS steps verify their
+// predecessor ran — by checking the Result field it populated — erroring
+// clearly if called out of order. The order is BuildImage → UploadToS3 →
+// ImportSnapshot → RegisterAMI.
 type Builder struct {
 	Config
 
@@ -138,8 +146,7 @@ func (c *gokrazyConfig) GOARCH() string {
 	return ""
 }
 
-// New validates cfg, fills in defaults, reads and parses
-// <Dir>/<App>/config.json, and validates its GOARCH.
+// New validates cfg, applies defaults, and loads <Dir>/<App>/config.json.
 func New(cfg Config) (*Builder, error) {
 	if cfg.App == "" || strings.Contains(cfg.App, "/") {
 		return nil, fmt.Errorf("App must be a non-empty name such as 'tsapp' or 'natlabapp'; got %q", cfg.App)
@@ -178,13 +185,12 @@ func New(cfg Config) (*Builder, error) {
 	return b, nil
 }
 
-// Result returns the current result. It is fully populated after a
-// successful Build; individual steps fill in their fields as they run,
-// and Result.Error records the error that ended a failed run.
+// Result returns the result so far: each step fills its fields as it
+// runs, and Result.Error holds the error that ended a failed run.
 func (b *Builder) Result() Result { return b.res }
 
-// fail records err in the result and returns it, so callers that read
-// Result() after a failed step (e.g. to emit --json) see why it failed.
+// fail records err in Result.Error so a caller reading Result() after a
+// failed step (e.g. to emit --json) still sees why it failed.
 func (b *Builder) fail(err error) error {
 	b.res.Error = err.Error()
 	return err
@@ -199,36 +205,38 @@ func (b *Builder) logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 
-// BuildImage runs monogok to produce a full disk image (.img) and
-// formats its ext4 /perm filesystem. It returns the image path and sets
-// Result.Image. This is the local artifact that BuildAMI publishes and
-// that flash-appliance tooling writes to disk.
-func (b *Builder) BuildImage(ctx context.Context) (string, error) {
+// BuildImage runs monogok to produce a full disk image (.img) with a
+// formatted ext4 /perm, returning its path (also in Result.Image). It's
+// the artifact BuildAndImportAMI publishes and flash-appliance flashes.
+func (b *Builder) BuildImage(ctx context.Context) (imagePath string, err error) {
 	if err := b.buildImage(ctx, false); err != nil {
 		return "", b.fail(fmt.Errorf("build image: %w", err))
 	}
 	return b.res.Image, nil
 }
 
-// BuildGAF runs monogok to produce a gokrazy archive format file (.gaf),
-// the OTA update artifact. It returns the GAF path and sets Result.GAF.
-// A GAF is an update archive, not a full disk, so it cannot be turned
-// into an AMI.
-func (b *Builder) BuildGAF(ctx context.Context) (string, error) {
+// BuildGAF runs monogok to produce a GAF (gokrazy archive format) OTA
+// update file, returning its path (also in Result.GAF). A GAF is an
+// update archive, not a full disk, so it can't be turned into an AMI.
+func (b *Builder) BuildGAF(ctx context.Context) (gafPath string, err error) {
 	if err := b.buildImage(ctx, true); err != nil {
 		return "", b.fail(fmt.Errorf("build GAF: %w", err))
 	}
 	return b.res.GAF, nil
 }
 
-// BuildAMI builds a full disk image and publishes it as an AWS AMI:
-// upload to S3, import an EBS snapshot, and register the image. It
-// returns the populated Result. Config.Bucket and Config.Region select
-// where the AMI is built.
-func (b *Builder) BuildAMI(ctx context.Context) (Result, error) {
-	// Verify AWS auth before the slow image build so a logged-out user
+// BuildAndImportAMI runs the whole pipeline (build image, upload, import
+// snapshot, register AMI) and returns the populated Result.
+//
+// It's a convenience orchestrator over the public steps; a caller that
+// needs to interleave its own work (Marketplace publishing, multi-region
+// registration) can call [Builder.CheckAWSAuth], [Builder.BuildImage],
+// [Builder.UploadToS3], [Builder.ImportSnapshot], and [Builder.RegisterAMI]
+// directly in that order.
+func (b *Builder) BuildAndImportAMI(ctx context.Context) (Result, error) {
+	// Preflight auth before the slow image build so a logged-out user
 	// fails in seconds, not minutes.
-	if err := b.checkAWSAuth(ctx); err != nil {
+	if err := b.CheckAWSAuth(ctx); err != nil {
 		return b.res, b.fail(err)
 	}
 
@@ -238,28 +246,26 @@ func (b *Builder) BuildAMI(ctx context.Context) (Result, error) {
 	}
 
 	b.logf("[2/4] uploading to s3://%s/%s.img", b.Bucket, b.App)
-	if err := b.uploadToS3(ctx); err != nil {
+	if _, err := b.UploadToS3(ctx); err != nil {
 		return b.res, b.fail(fmt.Errorf("copy to S3: %w", err))
 	}
 
 	b.logf("[3/4] importing EBS snapshot")
-	snapID, err := b.importSnapshot(ctx)
-	if err != nil {
+	if _, err := b.ImportSnapshot(ctx); err != nil {
 		return b.res, b.fail(fmt.Errorf("import snapshot: %w", err))
 	}
-	b.logf("snap ID: %v", snapID)
+	b.logf("snap ID: %v", b.res.Snapshot)
 
 	b.logf("[4/4] registering AMI")
-	if err := b.registerAMI(ctx, snapID); err != nil {
+	if _, err := b.RegisterAMI(ctx); err != nil {
 		return b.res, b.fail(fmt.Errorf("register AMI: %w", err))
 	}
 	b.logf("made AMI: %v", b.res.AMI)
 	return b.res, nil
 }
 
-// awsClients lazily loads AWS config (via the SDK default credential
-// chain, honoring the resolved region) and constructs the S3 and EC2
-// clients, caching them on b.
+// awsClients lazily builds and caches the S3 and EC2 clients from the
+// SDK default credential chain and resolved region.
 func (b *Builder) awsClients(ctx context.Context) (*s3.Client, *ec2.Client, error) {
 	if b.s3c != nil && b.ec2c != nil {
 		return b.s3c, b.ec2c, nil
@@ -273,13 +279,11 @@ func (b *Builder) awsClients(ctx context.Context) (*s3.Client, *ec2.Client, erro
 	return b.s3c, b.ec2c, nil
 }
 
-// checkAWSAuth verifies the caller has usable AWS credentials by making
-// an sts:GetCallerIdentity call. It runs as a preflight before the slow
-// image build so a missing or expired login fails early with an
-// actionable message instead of deep in the pipeline. On success it logs
-// the account/identity so the user can confirm they're publishing to the
-// right account.
-func (b *Builder) checkAWSAuth(ctx context.Context) error {
+// CheckAWSAuth verifies usable AWS credentials via sts:GetCallerIdentity.
+// BuildAndImportAMI runs it as a preflight so a missing or expired login
+// fails early and actionably instead of deep in the pipeline; it also logs
+// the account so the user can confirm they're publishing to the right one.
+func (b *Builder) CheckAWSAuth(ctx context.Context) error {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(b.Region))
 	if err != nil {
 		return fmt.Errorf("loading AWS config (check AWS_PROFILE / ~/.aws, or run `aws sso login`): %w", err)
@@ -341,17 +345,21 @@ func (b *Builder) buildImage(ctx context.Context, gaf bool) error {
 	return nil
 }
 
-// uploadToS3 uploads the built .img to s3://<Bucket>/<App>.img using a
-// concurrent multipart upload, showing progress on b.Stderr.
-func (b *Builder) uploadToS3(ctx context.Context) error {
+// UploadToS3 uploads the built image to s3://<Bucket>/<App>.img (a
+// concurrent multipart upload, progress on b.Stderr) and returns the URI
+// (also in Result.S3). Requires BuildImage first.
+func (b *Builder) UploadToS3(ctx context.Context) (s3URI string, err error) {
+	if b.res.Image == "" {
+		return "", fmt.Errorf("UploadToS3: no image built yet; call BuildImage first")
+	}
 	s3c, _, err := b.awsClients(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	imgPath := filepath.Join(b.Dir, b.App+".img")
 	f, err := os.Open(imgPath)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", imgPath, err)
+		return "", fmt.Errorf("open %s: %w", imgPath, err)
 	}
 	defer f.Close()
 
@@ -373,15 +381,19 @@ func (b *Builder) uploadToS3(ctx context.Context) error {
 		Body:   pr,
 	})
 	if err != nil {
-		return fmt.Errorf("uploading %s: %w", imgPath, err)
+		return "", fmt.Errorf("uploading %s: %w", imgPath, err)
 	}
-	return nil
+	b.res.S3 = "s3://" + b.Bucket + "/" + b.App + ".img"
+	return b.res.S3, nil
 }
 
-// importSnapshot starts an EC2 import-snapshot task from the uploaded
-// image and waits for it to complete, returning the EBS snapshot ID. It
-// sets res.Snapshot and res.Region.
-func (b *Builder) importSnapshot(ctx context.Context) (string, error) {
+// ImportSnapshot imports the uploaded image as an EBS snapshot, waiting
+// for completion, and returns the snapshot ID (also in Result.Snapshot,
+// region in Result.Region). Requires UploadToS3 first.
+func (b *Builder) ImportSnapshot(ctx context.Context) (snapshotID string, err error) {
+	if b.res.S3 == "" {
+		return "", fmt.Errorf("ImportSnapshot: image not uploaded yet; call UploadToS3 first")
+	}
 	taskID, err := b.startImportSnapshot(ctx)
 	if err != nil {
 		return "", err
@@ -513,9 +525,13 @@ func importFailed(status string) bool {
 	return strings.Contains(strings.ToLower(status), "error")
 }
 
-// registerAMI registers an AMI from the given EBS snapshot. The AMI name
-// is derived from git via AMIName. It sets res.Name and res.AMI.
-func (b *Builder) registerAMI(ctx context.Context, ebsSnapID string) error {
+// RegisterAMI registers an AMI from the imported snapshot, naming it via
+// AMIName, and returns the AMI ID (also in Result.AMI, name in
+// Result.Name). Requires ImportSnapshot first.
+func (b *Builder) RegisterAMI(ctx context.Context) (amiID string, err error) {
+	if b.res.Snapshot == "" {
+		return "", fmt.Errorf("RegisterAMI: no snapshot imported yet; call ImportSnapshot first")
+	}
 	b.res.Name = AMIName(b.App, b.Dir)
 
 	var arch, bootMode string
@@ -526,11 +542,11 @@ func (b *Builder) registerAMI(ctx context.Context, ebsSnapID string) error {
 	case "amd64":
 		arch, bootMode = "x86_64", "uefi-preferred"
 	default:
-		return fmt.Errorf("unknown arch %q", b.conf.GOARCH())
+		return "", fmt.Errorf("unknown arch %q", b.conf.GOARCH())
 	}
 	_, ec2c, err := b.awsClients(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	out, err := ec2c.RegisterImage(ctx, &ec2.RegisterImageInput{
 		Name:         aws.String(b.res.Name),
@@ -545,17 +561,17 @@ func (b *Builder) registerAMI(ctx context.Context, ebsSnapID string) error {
 		BootMode:           ec2types.BootModeValues(bootMode),
 		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
 			DeviceName: aws.String("/dev/sda1"),
-			Ebs:        &ec2types.EbsBlockDevice{SnapshotId: aws.String(ebsSnapID)},
+			Ebs:        &ec2types.EbsBlockDevice{SnapshotId: aws.String(b.res.Snapshot)},
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("register image: %w", err)
+		return "", fmt.Errorf("register image: %w", err)
 	}
 	if aws.ToString(out.ImageId) == "" {
-		return fmt.Errorf("empty image ID in register-image response")
+		return "", fmt.Errorf("empty image ID in register-image response")
 	}
 	b.res.AMI = *out.ImageId
-	return nil
+	return b.res.AMI, nil
 }
 
 // imageSizeBytesFor returns the disk image size to use for app. For Raspberry
@@ -598,12 +614,10 @@ func isTerminal(w io.Writer) bool {
 	return ok && isatty.IsTerminal(f.Fd())
 }
 
-// progressReader wraps an io.Reader and reports how many bytes have been
-// read against total (which may be -1 if unknown). On a terminal it
-// repaints a single live line on b.Stderr showing percent, bytes, and a
-// smoothed rate; otherwise it emits a log line each time another 10% is
-// done. A background goroutine drives the display; call done() to stop it
-// and print the final state.
+// progressReader reports read progress against total (-1 if unknown): a
+// live repainted line on a terminal, else a log line per 10%. It exists
+// because the S3 uploader gives no progress callback of its own, so we
+// count bytes as they pass through Read.
 type progressReader struct {
 	r     io.Reader
 	b     *Builder
@@ -617,8 +631,8 @@ type progressReader struct {
 	wg          sync.WaitGroup
 }
 
-// newProgressReader wraps r and starts displaying progress. total is the
-// expected size in bytes, or -1 if unknown.
+// newProgressReader wraps r and starts a goroutine displaying progress;
+// total is the expected size in bytes, or -1 if unknown. Call done().
 func (b *Builder) newProgressReader(r io.Reader, verb string, total int64) *progressReader {
 	pr := &progressReader{
 		r:           r,
@@ -742,10 +756,9 @@ func ResolveRegion(flagVal, env string) string {
 	return "us-east-1"
 }
 
-// AMIName returns a deterministic AMI name derived from git, running git
-// in dir: on a tagged commit it's <app>-<tag> (releases); otherwise
-// <app>-<git describe>-<unixtime> for ad-hoc builds. If git is
-// unavailable it falls back to <app>-<unixtime>.
+// AMIName derives a deterministic AMI name from git in dir: <app>-<tag>
+// on a tagged commit (releases), else a unixtime-suffixed ad-hoc name so
+// repeated dev builds don't collide.
 func AMIName(app, dir string) string {
 	exact, _ := gitOutput(dir, "describe", "--exact-match", "--tags", "HEAD")
 	describe, _ := gitOutput(dir, "describe", "--tags", "--always", "--dirty")

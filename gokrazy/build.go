@@ -33,46 +33,42 @@ var (
 
 func main() {
 	flag.Parse()
-	ctx := context.Background()
 
+	res, err := run(context.Background())
+
+	// With --json, print one machine-readable result line to stdout,
+	// including any error, so consumers see the outcome on stdout rather
+	// than only via the exit code. All logs/progress go to stderr.
+	if *jsonOut {
+		if encErr := json.NewEncoder(os.Stdout).Encode(&res); encErr != nil {
+			log.Fatalf("encoding json result: %v", encErr)
+		}
+	}
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+}
+
+// run builds the appliance and returns the machine-readable result. The
+// artifact is a CLI choice mapped to the matching Builder method: --gaf →
+// GAF, --build → local image only, otherwise the full AMI pipeline.
+func run(ctx context.Context) (build.Result, error) {
 	b, err := build.New(build.Config{
 		App:    *app,
 		Bucket: *bucket,
 		Region: build.ResolveRegion(*region, os.Getenv("AWS_REGION")),
 	})
 	if err != nil {
-		emitJSON(build.Result{App: *app, Error: err.Error()})
-		log.Fatalf("%v", err)
+		return build.Result{App: *app, Error: err.Error()}, err
 	}
 
-	// Which artifact to build is a CLI choice, mapped here to the
-	// matching Builder method: --gaf → GAF, --build → local image only,
-	// otherwise the full AMI pipeline.
-	var buildErr error
 	switch {
 	case *gaf:
-		_, buildErr = b.BuildGAF(ctx)
+		_, err = b.BuildGAF(ctx)
 	case *buildLocal:
-		_, buildErr = b.BuildImage(ctx)
+		_, err = b.BuildImage(ctx)
 	default:
-		_, buildErr = b.BuildAMI(ctx)
+		_, err = b.BuildAndImportAMI(ctx)
 	}
-
-	// With --json, print one machine-readable result line to stdout,
-	// including any error, so consumers see the outcome on stdout rather
-	// than only via the exit code. All logs/progress go to stderr.
-	emitJSON(b.Result())
-	if buildErr != nil {
-		log.Fatalf("%v", buildErr)
-	}
-}
-
-// emitJSON writes res as one JSON line to stdout when --json is set.
-func emitJSON(res build.Result) {
-	if !*jsonOut {
-		return
-	}
-	if err := json.NewEncoder(os.Stdout).Encode(&res); err != nil {
-		log.Fatalf("encoding json result: %v", err)
-	}
+	return b.Result(), err
 }
