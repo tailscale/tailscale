@@ -146,9 +146,19 @@ func TestResolversWithDelays(t *testing.T) {
 			want: o("https://dns.nextdns.io/c3a884"),
 		},
 		{
-			name: "controld-ipv6-expand",
+			// ID-encoded Control D addresses are legacy port-53-only
+			// endpoints (see #20433); they must not be upgraded to DoH and
+			// instead pass through as ordinary port-53 resolvers.
+			name: "controld-ipv6-id-encoded-not-doh",
 			in:   q("2606:1a40:0:6:7b5b:5949:35ad:0"),
-			want: o("https://dns.controld.com/hyq3ipr2ct"),
+			want: o("2606:1a40:0:6:7b5b:5949:35ad:0"),
+		},
+		{
+			// The free anycast resolvers (freedns.controld.com/pN) do serve
+			// DoH and are upgraded.
+			name: "controld-free-anycast-doh",
+			in:   q("2606:1a40::1"),
+			want: o("https://freedns.controld.com/p1", "2606:1a40::1+0.5s"),
 		},
 		{
 			name: "controld-doh-input",
