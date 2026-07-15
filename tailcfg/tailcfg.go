@@ -189,7 +189,8 @@ type CapabilityVersion int
 //   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
 //   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
-const CurrentCapabilityVersion CapabilityVersion = 142
+//   - 143: 2026-07-13: Client understands [NodeAttrLogUploadAuth] for authenticated log uploads
+const CurrentCapabilityVersion CapabilityVersion = 143
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2658,6 +2659,13 @@ const (
 
 	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
 	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
+
+	// NodeAttrLogUploadAuth specifies the HTTP Authorization token
+	// to use when uploading logs. The CapMap value is a JSON string containing
+	// the token. Control pushes a refreshed token via netmap CapMap updates before
+	// the previous token expires. The client caches the latest value and
+	// do not fetch refreshes themselves.
+	NodeAttrLogUploadAuth NodeCapability = "log-upload-auth"
 
 	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
 	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"

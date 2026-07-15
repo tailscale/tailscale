@@ -38,6 +38,7 @@ import (
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/eventbus"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/truncate"
 	"tailscale.com/util/zstdframe"
@@ -162,6 +163,11 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 // Zero-valued fields are omitted when an entry is uploaded. [UploadLogs] fills
 // in any fields the caller leaves zero from its [Config] (e.g. ClientTime and
 // ProcID), so most callers can leave this empty.
+//
+// AuthID is used only while an entry is buffered.
+// [Logger] writes it into each entry from [Logger.SetAuthID] and
+// strips it before the HTTP POST so it never appears
+// in the payload the log server receives.
 type Logtail struct {
 	// ClientTime is the time the entry was generated. If zero, [UploadLogs]
 	// fills it with the current time unless Config.SkipClientTime is set.
@@ -171,6 +177,9 @@ type Logtail struct {
 	// ProcSeq is an ephemeral per-process sequence number; see
 	// Config.IncludeProcSequence.
 	ProcSeq uint64 `json:"proc_seq,omitzero"`
+	// AuthID is an opaque authentication ID (see [Logger.SetAuthID]).
+	// It is stripped before upload and is not part of the log payload.
+	AuthID string `json:"auth_id,omitzero"`
 }
 
 // LogEntry is a single log entry to be uploaded via [UploadLogs].
@@ -244,7 +253,9 @@ func UploadLogs[T any](ctx context.Context, conf Config, entries iter.Seq[LogEnt
 		}
 		// upload is synchronous, so it is safe to reuse body's backing array
 		// for the next batch once upload returns.
-		if _, err := lg.upload(ctx, out, origlen); err != nil {
+		// UploadLogs does not use auth IDs; callers that need authenticated
+		// uploads should use [Logger] with [Logger.SetAuthID].
+		if _, err := lg.upload(ctx, out, origlen, ""); err != nil {
 			return err
 		}
 		body = body[:len("[")]
@@ -326,6 +337,28 @@ type Logger struct {
 	// Disable kill switch, which takes precedence. Toggled by SetEnabled.
 	disabled atomic.Bool
 
+	// authID is the current authentication ID to stamp onto new log entries
+	// (see [Logger.SetAuthID]). Empty string means unauthenticated.
+	authID atomic.Value // string
+
+	// authTokens maps authID to a function that returns the Authorization
+	// token to use when uploading a batch for that authID.
+	// Guarded by authTokensMu.
+	authTokensMu sync.Mutex
+	authTokens   map[string]func() string
+
+	// linePending is a line from Buffer.TryReadLine that was pulled into a
+	// drain but belongs to the next upload batch (different auth_id).
+	//
+	// It aliases the buffer's returned slice. Buffer documents that the
+	// slice is only valid until the next TryReadLine; that is safe here
+	// because nextDrainLine is the sole TryReadLine call site, and it
+	// always returns a non-nil linePending (clearing the field) before
+	// calling TryReadLine again. Owned by the uploading goroutine.
+	linePending []byte           // owned by [Logger.uploading] goroutine for use by [Logger.drainPending]
+	lineBuf     bytes.Buffer     // owned by [Logger.uploading] goroutine for use by [Logger.appendEntry]
+	lineDec     jsontext.Decoder // owned by [Logger.uploading] goroutine for use by [Logger.appendEntry]
+
 	writeLock    sync.Mutex // guards procSequence, flushTimer, buffer.Write calls
 	procSequence uint64
 	flushTimer   tstime.TimerController // used when flushDelay is >0
@@ -367,6 +400,56 @@ func (lg *Logger) SetNetMon(lm *netmon.Monitor) {
 // SetSockstatsLabel sets the label used in sockstat logs to identify network traffic from this logger.
 func (lg *Logger) SetSockstatsLabel(label sockstats.Label) {
 	lg.sockstatsLabel.Store(label)
+}
+
+// SetAuthID specifies an arbitrary authentication ID
+// (e.g., "nodeid:456") to annotate every subsequent log entry.
+// This is deliberately an opaque ID to allow the application-layer
+// decide how to associate particular authentication tokens
+// to authentication IDs (see [Logger.RegisterAuthToken]).
+//
+// This ID is not uploaded as part of the log entry payload,
+// but used at the moment of uploading to determine
+// the authentication token to use when uploading.
+//
+// It is safe to concurrently call this method with other Logger methods.
+func (lg *Logger) SetAuthID(id string) {
+	lg.authID.Store(id)
+}
+
+// getAuthID returns the auth ID set by [Logger.SetAuthID].
+func (lg *Logger) getAuthID() string {
+	v, _ := lg.authID.Load().(string)
+	return v
+}
+
+// RegisterAuthToken registers a dynamically-derived authToken to be called
+// for uploading logs for a particular authID (see [Logger.SetAuthID]),
+// replacing any previously registered authToken for the given authID.
+// If authToken is nil or returns an empty string, then no authorization
+// token is specified when uploading logs. It is permitted to register
+// an authToken for an empty authID.
+//
+// It is safe to concurrently call this method with other Logger methods.
+func (lg *Logger) RegisterAuthToken(authID string, authToken func() string) {
+	lg.authTokensMu.Lock()
+	defer lg.authTokensMu.Unlock()
+	if authToken != nil {
+		mak.Set(&lg.authTokens, authID, authToken)
+	} else {
+		delete(lg.authTokens, authID)
+	}
+}
+
+// lookupAuthToken returns the Authorization token for authID, or "" if none.
+func (lg *Logger) lookupAuthToken(authID string) string {
+	lg.authTokensMu.Lock()
+	fn := lg.authTokens[authID]
+	lg.authTokensMu.Unlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
 }
 
 // PrivateID returns the logger's private log ID.
@@ -438,8 +521,14 @@ func (lg *Logger) drainBlock() (shuttingDown bool) {
 
 // drainPending drains and encodes a batch of logs from the buffer for upload.
 // If no logs are available, drainPending blocks until logs are available.
+//
+// Every entry in the returned batch shares the same authID (the value of
+// /logtail/auth_id when the entry was written). Entries with a different
+// auth_id are held for a subsequent batch. Auth IDs are stripped from the
+// body so they are never uploaded.
+//
 // The returned buffer is only valid until the next call to drainPending.
-func (lg *Logger) drainPending() (b []byte) {
+func (lg *Logger) drainPending() (b []byte, authID string) {
 	b = lg.drainBuf[:0]
 	b = append(b, '[')
 	defer func() {
@@ -459,21 +548,25 @@ func (lg *Logger) drainPending() (b []byte) {
 		// that is up to maxSize if we happen to encounter one.
 		maxLen /= lowMemRatio
 	}
+	var batchAuthID string
+	var haveBatchAuthID bool
 	for len(b) < maxLen {
-		line, err := lg.buffer.TryReadLine()
+		line, err := lg.nextDrainLine()
 		switch {
 		case err == io.EOF:
-			return b
+			return b, batchAuthID
 		case err != nil:
+			// Synthesized error entries inherit the batch authID if any so far,
+			// otherwise an empty authID (unauthenticated).
 			b = append(b, '{')
-			b = lg.appendMetadata(b, false, true, 0, 0, "reading ringbuffer: "+err.Error(), nil, 0)
+			b = lg.appendMetadata(b, false, true, 0, 0, "", "reading ringbuffer: "+err.Error(), nil, 0)
 			b = bytes.TrimRight(b, ",")
 			b = append(b, '}')
-			return b
+			return b, batchAuthID
 		case line == nil:
 			// If we read at least some log entries, return immediately.
 			if len(b) > len("[") {
-				return b
+				return b, batchAuthID
 			}
 
 			// We're about to block. If we're holding on to too much memory
@@ -484,22 +577,37 @@ func (lg *Logger) drainPending() (b []byte) {
 			}
 
 			if shuttingDown := lg.drainBlock(); shuttingDown {
-				return b
+				return b, batchAuthID
 			}
 			continue
 		}
 
-		switch {
-		case len(line) == 0:
+		if len(line) == 0 {
 			continue
-		case line[0] == '{' && jsontext.Value(line).IsValid():
-			// This is already a valid JSON object, so just append it.
-			// This may exceed maxLen, but should be no larger than maxSize
-			// so long as logic writing into the buffer enforces the limit.
-			b = append(b, line...)
-		default:
-			// This is probably a log added to stderr by filch
-			// outside of the logtail logger. Encode it.
+		}
+
+		// This may exceed maxLen, but should be no larger than maxSize
+		// so long as logic writing into the buffer enforces the limit.
+		next, entryAuthID, valid := lg.appendEntry(b, line)
+		if !valid {
+			// Non-JSON (or otherwise unparseable) line.
+			// Typically raw stderr captured by filch outside logtail.
+			// There is no right auth ID to use, so use the current
+			// SetAuthID as a chronologically likely guess.
+			entryAuthID = lg.getAuthID()
+		}
+		if haveBatchAuthID && entryAuthID != batchAuthID {
+			// Different auth ID: hold this line for the next batch.
+			// Leave b unchanged (do not assign next).
+			// See [Logger.linePending] for why it is safe not to copy the line.
+			lg.linePending = line
+			return b, batchAuthID
+		}
+
+		b = next
+		if !valid {
+			// Commit the RAW line only after the auth batch check so we
+			// do not print/encode twice when the line is held for later.
 			if !lg.explainedRaw {
 				fmt.Fprintf(lg.stderr, "RAW-STDERR: ***\n")
 				fmt.Fprintf(lg.stderr, "RAW-STDERR: *** Lines prefixed with RAW-STDERR below bypassed logtail and probably come from a previous run of the program\n")
@@ -507,15 +615,102 @@ func (lg *Logger) drainPending() (b []byte) {
 				fmt.Fprintf(lg.stderr, "RAW-STDERR:\n")
 				lg.explainedRaw = true
 			}
-			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", b)
+			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", line)
 			// Do not add a client time, as it could be really old.
 			// Do not include instance key or ID either,
 			// since this came from a different instance.
-			b = lg.appendText(b, line, true, 0, 0, 0)
+			// Do not stamp auth_id into the body since the batch's
+			// Authorization header carries entryAuthID from getAuthID above.
+			b = lg.appendText(b, line, true, 0, 0, "", 0)
+		}
+		if !haveBatchAuthID {
+			batchAuthID = entryAuthID
+			haveBatchAuthID = true
 		}
 		b = append(b, ',')
 	}
-	return b
+	return b, batchAuthID
+}
+
+// nextDrainLine returns the next line to drain: either a previously held
+// pending line, or a fresh line from the buffer.
+//
+// See [Logger.linePending] for the lifetime invariant with TryReadLine.
+func (lg *Logger) nextDrainLine() ([]byte, error) {
+	if line := lg.linePending; line != nil {
+		lg.linePending = nil
+		return line, nil
+	}
+	return lg.buffer.TryReadLine()
+}
+
+// appendEntry appends a JSON log entry in src to dst if it is valid.
+// If /logtail/auth_id is populated, it extracts it out of the log entry.
+// If valid is false, then out is identical to dst.
+func (lg *Logger) appendEntry(dst, src []byte) (out []byte, authID string, valid bool) {
+	lg.lineBuf = *bytes.NewBuffer(src)
+	defer func() { lg.lineBuf = bytes.Buffer{} }() // avoid pinning src
+	dec := &lg.lineDec
+	dec.Reset(&lg.lineBuf)
+
+	// Scan through the JSON entry, identifying the offsets
+	// for the /logtail/auth_id field, so that we can strip it out later.
+	var startAuthIDOffset, endAuthIDOffset int64
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '{' {
+		return dst, "", false
+	}
+	for dec.PeekKind() != '}' {
+		switch tok, err := dec.ReadToken(); {
+		case err != nil:
+			return dst, "", false
+		case tok.String() == "logtail":
+			if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '{' {
+				return dst, "", false
+			}
+			for dec.PeekKind() != '}' {
+				startOffset := dec.InputOffset()
+				switch tok, err := dec.ReadToken(); {
+				case err != nil:
+					return dst, "", false
+				case tok.String() == "auth_id":
+					tok, err := dec.ReadToken()
+					if err != nil || tok.Kind() != '"' {
+						return dst, "", false
+					}
+					authID = tok.String()
+					startAuthIDOffset = startOffset
+					endAuthIDOffset = dec.InputOffset()
+
+					// If this is the first member and there is a following member,
+					// then we need to strip the subsequent comma.
+					// We check n == 2 since we already read one member.
+					if _, n := dec.StackIndex(dec.StackDepth()); n == 2 && dec.PeekKind() != '}' {
+						endAuthIDOffset += int64(len(dec.UnreadBuffer()) - len(bytes.TrimLeft(dec.UnreadBuffer(), " \n\r\t")) + len(","))
+					}
+				default:
+					if err := dec.SkipValue(); err != nil {
+						return dst, "", false
+					}
+				}
+			}
+			if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '}' {
+				return dst, "", false
+			}
+		default:
+			if err := dec.SkipValue(); err != nil {
+				return dst, "", false
+			}
+		}
+	}
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '}' {
+		return dst, "", false
+	}
+	if _, err := dec.ReadValue(); err != io.EOF {
+		return dst, "", false // implies trailing data after JSON object
+	}
+
+	// Append the log entry, stripping out /logtail/auth_id field if present.
+	return append(append(dst, src[:startAuthIDOffset]...), src[endAuthIDOffset:]...), authID, true
 }
 
 // This is the goroutine that repeatedly uploads logs in the background.
@@ -523,7 +718,7 @@ func (lg *Logger) uploading(ctx context.Context) {
 	defer close(lg.shutdownDone)
 
 	for {
-		body := lg.drainPending()
+		body, authID := lg.drainPending()
 		origlen := -1 // sentinel value: uncompressed
 		// Don't attempt to compress tiny bodies; not worth the CPU cycles.
 		if lg.compressLogs && len(body) > 256 {
@@ -543,7 +738,7 @@ func (lg *Logger) uploading(ctx context.Context) {
 		var numFailures int
 		var firstFailure time.Time
 		for len(body) > 0 && ctx.Err() == nil {
-			retryAfter, err := lg.upload(ctx, body, origlen)
+			retryAfter, err := lg.upload(ctx, body, origlen, authID)
 			if err != nil {
 				numFailures++
 				firstFailure = lg.clock.Now()
@@ -638,7 +833,10 @@ func (lg *Logger) awaitInternetUp(ctx context.Context) {
 // upload uploads body to the log server.
 // origlen indicates the pre-compression body length.
 // origlen of -1 indicates that the body is not compressed.
-func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAfter time.Duration, err error) {
+// authID is the authentication ID shared by every entry in body
+// (already stripped from the JSON); when a non-empty token is registered,
+// then the request includes an Authorization: Bearer header.
+func (lg *Logger) upload(ctx context.Context, body []byte, origlen int, authID string) (retryAfter time.Duration, err error) {
 	lg.uploadCalls.Add(1)
 	startUpload := time.Now()
 
@@ -657,6 +855,13 @@ func (lg *Logger) upload(ctx context.Context, body []byte, origlen int) (retryAf
 	if origlen != -1 {
 		req.Header.Add("Content-Encoding", "zstd")
 		req.Header.Add("Orig-Content-Length", strconv.Itoa(origlen))
+	}
+	if token := lg.lookupAuthToken(authID); token != "" {
+		// TODO: If authID is non-empty, but the token is empty,
+		// then it implies that we might have just logged in as a node,
+		// but not yet received a full netmap with the token.
+		// Perhaps wait a bit before checking again?
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if runtime.GOOS == "js" {
 		// We once advertised we'd accept optional client certs (for internal use)
@@ -803,9 +1008,8 @@ func (lg *Logger) sendLocked(jsonBlob []byte) (int, error) {
 // appendMetadata appends optional "logtail", "metrics", and "v" JSON members.
 // This assumes dst is already within a JSON object.
 // Each member is comma-terminated.
-func (lg *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, procID uint32, procSequence uint64, errDetail string, errData jsontext.Value, level int) []byte {
-	// Append optional logtail metadata.
-	if !skipClientTime || procID != 0 || procSequence != 0 || errDetail != "" || errData != nil {
+func (lg *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, procID uint32, procSequence uint64, authID, errDetail string, errData jsontext.Value, level int) []byte {
+	if !skipClientTime || procID != 0 || procSequence != 0 || errDetail != "" || errData != nil || authID != "" {
 		dst = append(dst, `"logtail":{`...)
 		if !skipClientTime {
 			dst = append(dst, `"client_time":"`...)
@@ -820,6 +1024,11 @@ func (lg *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, p
 		if procSequence != 0 {
 			dst = append(dst, `"proc_seq":`...)
 			dst = strconv.AppendUint(dst, procSequence, 10)
+			dst = append(dst, ',')
+		}
+		if authID != "" {
+			dst = append(dst, `"auth_id":`...)
+			dst, _ = jsontext.AppendQuote(dst, authID)
 			dst = append(dst, ',')
 		}
 		if errDetail != "" || errData != nil {
@@ -863,10 +1072,10 @@ func (lg *Logger) appendMetadata(dst []byte, skipClientTime, skipMetrics bool, p
 }
 
 // appendText appends a raw text message in the Tailscale JSON log entry format.
-func (lg *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32, procSequence uint64, level int) []byte {
+func (lg *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32, procSequence uint64, authID string, level int) []byte {
 	dst = slices.Grow(dst, len(src))
 	dst = append(dst, '{')
-	dst = lg.appendMetadata(dst, skipClientTime, false, procID, procSequence, "", nil, level)
+	dst = lg.appendMetadata(dst, skipClientTime, false, procID, procSequence, authID, "", nil, level)
 	if len(src) == 0 {
 		dst = bytes.TrimRight(dst, ",")
 		return append(dst, "}\n"...)
@@ -905,7 +1114,7 @@ func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 		lg.procSequence++
 	}
 	if len(src) == 0 || src[0] != '{' {
-		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, level)
+		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, lg.getAuthID(), level)
 	}
 
 	// Check whether the input is a valid JSON object and
@@ -953,7 +1162,7 @@ func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 
 	// Treat invalid JSON as a raw text message.
 	if !validJSON {
-		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, level)
+		return lg.appendText(dst, src, lg.skipClientTime, lg.procID, lg.procSequence, lg.getAuthID(), level)
 	}
 
 	// Check whether the JSON payload is too large.
@@ -967,7 +1176,7 @@ func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 		errData := appendTruncatedString(nil, src, maxLen/len(`\uffff`)) // escaping could increase size
 
 		dst = append(dst, '{')
-		dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, errDetail, errData, level)
+		dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, lg.getAuthID(), errDetail, errData, level)
 		dst = bytes.TrimRight(dst, ",")
 		return append(dst, "}\n"...)
 	}
@@ -984,7 +1193,7 @@ func (lg *Logger) appendTextOrJSONLocked(dst, src []byte, level int) []byte {
 	}
 	dst = slices.Grow(dst, len(src))
 	dst = append(dst, '{')
-	dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, errDetail, errData, level)
+	dst = lg.appendMetadata(dst, lg.skipClientTime, true, lg.procID, lg.procSequence, lg.getAuthID(), errDetail, errData, level)
 	if logtailValLength > 0 {
 		// Exclude original logtail member from the message.
 		dst = appendWithoutNewline(dst, src[len("{"):logtailKeyOffset])

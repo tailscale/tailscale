@@ -586,6 +586,146 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestAppendEntry(t *testing.T) {
+	var lg Logger
+
+	tests := []struct {
+		in         string
+		want       string
+		wantAuthID string
+		wantValid  bool
+	}{
+		{``, ``, ``, false},
+		{`fizz`, ``, ``, false},
+		{` {} `, ` {} `, ``, true},
+		{` { "logtail": {} } `, ` { "logtail": {} } `, ``, true},
+		{` { "logtail": { "auth_id" : "foo" } } `, ` { "logtail": { } } `, `foo`, true},
+		{` { "logtail": { "before" : "value" , "auth_id" : "foo" } } `, ` { "logtail": { "before" : "value" } } `, `foo`, true},
+		{` { "logtail": { "auth_id" : "foo"   ,  "after" : "value" } } `, ` { "logtail": {  "after" : "value" } } `, `foo`, true},
+		{`{"logtail":{"auth_id":"foo","after":"value"}}`, `{"logtail":{"after":"value"}}`, `foo`, true},
+		{` { "logtail": { "before" : "value" , "auth_id" : "foo" , "after" : "value" } , "fizz":"buzz"} `, ` { "logtail": { "before" : "value" , "after" : "value" } , "fizz":"buzz"} `, `foo`, true},
+	}
+	for _, tt := range tests {
+		got, gotAuthID, gotValid := lg.appendEntry(nil, []byte(tt.in))
+		if string(got) != tt.want || gotAuthID != tt.wantAuthID || gotValid != tt.wantValid {
+			t.Errorf("appendEntry(%q) = (%q, %q, %v), want (%q, %q, %v)", tt.in, got, gotAuthID, gotValid, tt.want, tt.wantAuthID, tt.wantValid)
+		}
+	}
+
+}
+
+func TestDrainPendingBatchesByAuthID(t *testing.T) {
+	buf := NewMemoryBuffer(100)
+	lg := &Logger{
+		clock:  tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 0)}),
+		buffer: buf,
+	}
+	lg.SetAuthID("auth-a")
+	must.Get(lg.Write([]byte("a1")))
+	must.Get(lg.Write([]byte("a2")))
+	lg.SetAuthID("auth-b")
+	must.Get(lg.Write([]byte("b1")))
+
+	body1, id1 := lg.drainPending()
+	if id1 != "auth-a" {
+		t.Errorf("first batch authID = %q; want auth-a", id1)
+	}
+	if strings.Contains(string(body1), "auth_id") {
+		t.Errorf("first batch still has auth_id: %s", body1)
+	}
+	if !strings.Contains(string(body1), "a1") || !strings.Contains(string(body1), "a2") {
+		t.Errorf("first batch missing a-entries: %s", body1)
+	}
+	if strings.Contains(string(body1), "b1") {
+		t.Errorf("first batch leaked b-entry: %s", body1)
+	}
+
+	body2, id2 := lg.drainPending()
+	if id2 != "auth-b" {
+		t.Errorf("second batch authID = %q; want auth-b", id2)
+	}
+	if !strings.Contains(string(body2), "b1") {
+		t.Errorf("second batch missing b1: %s", body2)
+	}
+	if strings.Contains(string(body2), "auth_id") {
+		t.Errorf("second batch still has auth_id: %s", body2)
+	}
+}
+
+func TestUploadAuthorizationHeader(t *testing.T) { synctest.Test(t, synctestUploadAuthorizationHeader) }
+
+func synctestUploadAuthorizationHeader(t *testing.T) {
+	type capture struct {
+		auth string
+		body []byte
+	}
+	uploaded := make(chan capture, 8)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		uploaded <- capture{auth: r.Header.Get("Authorization"), body: body}
+	})
+	ln := memnet.Listen("logtail-test:0")
+	httpsrv := &http.Server{Handler: handler}
+	go httpsrv.Serve(ln)
+	t.Cleanup(func() {
+		httpsrv.Close()
+		ln.Close()
+	})
+
+	// Disable startup banner so it doesn't consume a capture.
+	envknob.Setenv("TS_DEBUG_LOGTAIL", "")
+	logger := NewLogger(Config{
+		BaseURL: "http://" + ln.Addr().String(),
+		HTTPC:   &http.Client{Transport: &http.Transport{DialContext: ln.Dial}},
+		Bus:     eventbustest.NewBus(t),
+	}, t.Logf)
+
+	const authID = "nodeid:8"
+	const token = "test-jwt-token"
+	logger.SetAuthID(authID)
+	logger.RegisterAuthToken(authID, func() string { return token })
+	io.WriteString(logger, "authed log")
+
+	got := <-uploaded
+	if want := "Bearer " + token; got.auth != want {
+		t.Errorf("Authorization = %q; want %q", got.auth, want)
+	}
+	if strings.Contains(string(got.body), "auth_id") {
+		t.Errorf("uploaded body still has auth_id: %s", got.body)
+	}
+	if !strings.Contains(string(got.body), "authed log") {
+		t.Errorf("uploaded body missing text: %s", got.body)
+	}
+
+	// Empty token: no Authorization header.
+	logger.SetAuthID("other")
+	logger.RegisterAuthToken("other", func() string { return "" })
+	io.WriteString(logger, "no auth")
+	got = <-uploaded
+	if got.auth != "" {
+		t.Errorf("expected no Authorization, got %q", got.auth)
+	}
+
+	if err := logger.Shutdown(context.Background()); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRegisterAuthTokenNilClears(t *testing.T) {
+	lg := &Logger{}
+	lg.RegisterAuthToken("id", func() string { return "tok" })
+	if got := lg.lookupAuthToken("id"); got != "tok" {
+		t.Errorf("got %q; want tok", got)
+	}
+	lg.RegisterAuthToken("id", nil)
+	if got := lg.lookupAuthToken("id"); got != "" {
+		t.Errorf("after nil register got %q; want empty", got)
+	}
+}
+
 func TestNewLoggerDisabled(t *testing.T) { synctest.Test(t, synctestNewLoggerDisabled) }
 
 func synctestNewLoggerDisabled(t *testing.T) {
@@ -676,6 +816,7 @@ func TestAppendMetadata(t *testing.T) {
 		skipMetrics    bool
 		procID         uint32
 		procSeq        uint64
+		authID         string
 		errDetail      string
 		errData        jsontext.Value
 		level          int
@@ -689,15 +830,17 @@ func TestAppendMetadata(t *testing.T) {
 		{skipClientTime: true, skipMetrics: true, procSeq: 2, want: `"logtail":{"proc_seq":2},`},
 		{skipClientTime: true, skipMetrics: true, procID: 1, procSeq: 2, want: `"logtail":{"proc_id":1,"proc_seq":2},`},
 		{skipMetrics: true, procID: 1, procSeq: 2, want: `"logtail":{"client_time":"2000-01-01T00:00:00Z","proc_id":1,"proc_seq":2},`},
+		{skipClientTime: true, skipMetrics: true, authID: "nodeid:abc", want: `"logtail":{"auth_id":"nodeid:abc"},`},
+		{skipClientTime: true, skipMetrics: true, authID: `quote"and\slash`, want: `"logtail":{"auth_id":"quote\"and\\slash"},`},
 		{skipClientTime: true, skipMetrics: true, errDetail: "error", want: `"logtail":{"error":{"detail":"error"}},`},
 		{skipClientTime: true, skipMetrics: true, errData: jsontext.Value("null"), want: `"logtail":{"error":{"bad_data":null}},`},
 		{skipClientTime: true, skipMetrics: true, level: 5, want: `"v":5,`},
-		{procID: 1, procSeq: 2, errDetail: "error", errData: jsontext.Value(`["something","bad","happened"]`), level: 2,
-			want: `"logtail":{"client_time":"2000-01-01T00:00:00Z","proc_id":1,"proc_seq":2,"error":{"detail":"error","bad_data":["something","bad","happened"]}},"metrics":"metrics","v":2,`},
+		{procID: 1, procSeq: 2, authID: "nodeid:xyz", errDetail: "error", errData: jsontext.Value(`["something","bad","happened"]`), level: 2,
+			want: `"logtail":{"client_time":"2000-01-01T00:00:00Z","proc_id":1,"proc_seq":2,"auth_id":"nodeid:xyz","error":{"detail":"error","bad_data":["something","bad","happened"]}},"metrics":"metrics","v":2,`},
 	} {
-		got := string(lg.appendMetadata(nil, tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.errDetail, tt.errData, tt.level))
+		got := string(lg.appendMetadata(nil, tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.authID, tt.errDetail, tt.errData, tt.level))
 		if got != tt.want {
-			t.Errorf("appendMetadata(%v, %v, %v, %v, %v, %v, %v):\n\tgot  %s\n\twant %s", tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.errDetail, tt.errData, tt.level, got, tt.want)
+			t.Errorf("appendMetadata(%v, %v, %v, %v, %q, %v, %v, %v):\n\tgot  %s\n\twant %s", tt.skipClientTime, tt.skipMetrics, tt.procID, tt.procSeq, tt.authID, tt.errDetail, tt.errData, tt.level, got, tt.want)
 		}
 		gotObj := "{" + strings.TrimSuffix(got, ",") + "}"
 		if !jsontext.Value(gotObj).IsValid() {
@@ -717,23 +860,26 @@ func TestAppendText(t *testing.T) {
 		skipClientTime bool
 		procID         uint32
 		procSeq        uint64
+		authID         string
 		level          int
 		want           string
 	}{
 		{want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics"}`},
 		{skipClientTime: true, want: `{"metrics":"metrics"}`},
 		{skipClientTime: true, procID: 1, procSeq: 2, want: `{"logtail":{"proc_id":1,"proc_seq":2},"metrics":"metrics"}`},
+		{skipClientTime: true, authID: "nodeid:abc", want: `{"logtail":{"auth_id":"nodeid:abc"},"metrics":"metrics"}`},
 		{text: "fizz buzz", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"fizz buzz"}`},
+		{text: "fizz buzz", authID: "nodeid:xyz", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","auth_id":"nodeid:xyz"},"metrics":"metrics","text":"fizz buzz"}`},
 		{text: "\b\f\n\r\t\"\\", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"\b\f\n\r\t\"\\"}`},
 		{text: "x" + strings.Repeat("😐", maxSize), want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"x` + strings.Repeat("😐", 1023) + `…+1044484"}`},
 	} {
-		got := string(lg.appendText(nil, []byte(tt.text), tt.skipClientTime, tt.procID, tt.procSeq, tt.level))
+		got := string(lg.appendText(nil, []byte(tt.text), tt.skipClientTime, tt.procID, tt.procSeq, tt.authID, tt.level))
 		if !strings.HasSuffix(got, "\n") {
 			t.Errorf("`%s` does not end with a newline", got)
 		}
 		got = got[:len(got)-1]
 		if got != tt.want {
-			t.Errorf("appendText(%v, %v, %v, %v, %v):\n\tgot  %s\n\twant %s", tt.text[:min(len(tt.text), 256)], tt.skipClientTime, tt.procID, tt.procSeq, tt.level, got, tt.want)
+			t.Errorf("appendText(%v, %v, %v, %v, %q, %v):\n\tgot  %s\n\twant %s", tt.text[:min(len(tt.text), 256)], tt.skipClientTime, tt.procID, tt.procSeq, tt.authID, tt.level, got, tt.want)
 		}
 		if !jsontext.Value(got).IsValid() {
 			t.Errorf("`%s`.IsValid() = false, want true", got)
@@ -748,14 +894,17 @@ func TestAppendTextOrJSON(t *testing.T) {
 	lg.lowMem = true
 
 	for _, tt := range []struct {
-		in    string
-		level int
-		want  string
+		in     string
+		authID string
+		level  int
+		want   string
 	}{
 		{want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics"}`},
 		{in: "[]", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"[]"}`},
 		{level: 1, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","v":1}`},
 		{in: `{}`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"}}`},
+		{in: `{}`, authID: "nodeid:abc", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","auth_id":"nodeid:abc"}}`},
+		{in: "hello", authID: "nodeid:abc", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","auth_id":"nodeid:abc"},"metrics":"metrics","text":"hello"}`},
 		{in: `{}{}`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"{}{}"}`},
 		{in: "{\n\"fizz\"\n:\n\"buzz\"\n}", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"fizz":"buzz"}`},
 		{in: `{ "logtail" : "duplicate" }`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","error":{"detail":"duplicate logtail member","bad_data":"duplicate"}}}`},
@@ -764,6 +913,7 @@ func TestAppendTextOrJSON(t *testing.T) {
 		{in: `{ "fizz" : "buzz" , "logtail" : "duplicate" , "wizz" : "wuzz" }`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","error":{"detail":"duplicate logtail member","bad_data":"duplicate"}}, "fizz" : "buzz" , "wizz" : "wuzz"}`},
 		{in: `{"long":"` + strings.Repeat("a", maxSize) + `"}`, want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z","error":{"detail":"entry too large: 262155 bytes","bad_data":"{\"long\":\"` + strings.Repeat("a", 43681) + `…+218465"}}}`},
 	} {
+		lg.SetAuthID(tt.authID)
 		got := string(lg.appendTextOrJSONLocked(nil, []byte(tt.in), tt.level))
 		if !strings.HasSuffix(got, "\n") {
 			t.Errorf("`%s` does not end with a newline", got)
@@ -786,7 +936,7 @@ func TestAppendTextAllocs(t *testing.T) {
 	procID := uint32(0x24d32ee9)
 	procSequence := uint64(0x12346)
 	must.Do(tstest.MinAllocsPerRun(t, 0, func() {
-		sink = lg.appendText(sink[:0], inBuf, false, procID, procSequence, 0)
+		sink = lg.appendText(sink[:0], inBuf, false, procID, procSequence, "", 0)
 	}))
 }
 

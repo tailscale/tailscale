@@ -935,6 +935,10 @@ func (s *Server) start() (reterr error) {
 	}
 	lb.SetTCPHandlerForFunnelFlow(s.getTCPHandlerForFunnelFlow)
 	lb.SetVarRoot(s.rootPath)
+	if s.logtail != nil {
+		lb.SetLogUploader(s.logtail)
+		lb.SetLogFlusher(s.logtail.StartFlush)
+	}
 	s.logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
 	if err := ns.Start(lb); err != nil {

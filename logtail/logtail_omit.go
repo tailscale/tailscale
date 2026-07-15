@@ -24,6 +24,7 @@ type Logtail struct {
 	ClientTime time.Time `json:"client_time,omitzero"`
 	ProcID     uint32    `json:"proc_id,omitzero"`
 	ProcSeq    uint64    `json:"proc_seq,omitzero"`
+	AuthID     string    `json:"auth_id,omitzero"`
 }
 
 type LogEntry[T any] struct {
@@ -55,6 +56,9 @@ func (l *Logger) SetSockstatsLabel(label any) {}
 
 func (l *Logger) PrivateID() logid.PrivateID { return logid.PrivateID{} }
 func (l *Logger) StartFlush()                {}
+
+func (*Logger) SetAuthID(id string)                                  {}
+func (*Logger) RegisterAuthToken(authID string, authToken func() string) {}
 
 func RegisterLogTap(dst chan<- string) (unregister func()) {
 	return func() {}
