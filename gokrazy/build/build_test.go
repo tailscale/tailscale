@@ -92,3 +92,65 @@ func TestAMINameFrom(t *testing.T) {
 		})
 	}
 }
+
+func TestImportFailed(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{"active", false},
+		{"completed", false},
+		{"", false},
+		{"deleting", true},
+		{"deleted", true},
+		{"error", true},
+		{"some-error-state", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			if got := importFailed(tt.status); got != tt.want {
+				t.Errorf("importFailed(%q) = %v; want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProgressLine(t *testing.T) {
+	tests := []struct {
+		name       string
+		verb       string
+		cur, total int64
+		rate       float64
+		want       string
+	}{
+		{"known-with-rate", "uploading", 512 << 20, 1 << 30, 64 << 20, "uploading: 50.0% (512.00MiB / 1.00GiB) 64.00MiB/s"},
+		{"known-no-rate", "uploading", 1 << 20, 4 << 20, 0, "uploading: 25.0% (1.00MiB / 4.00MiB)"},
+		{"unknown-total", "uploading", 3 << 20, -1, 1 << 20, "uploading: 3.00MiB 1.00MiB/s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := progressLine(tt.verb, tt.cur, tt.total, tt.rate); got != tt.want {
+				t.Errorf("progressLine = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	tests := []struct {
+		n    float64
+		want string
+	}{
+		{512, "512B"},
+		{1 << 10, "1.00KiB"},
+		{1 << 20, "1.00MiB"},
+		{1536 << 20, "1.50GiB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := humanBytes(tt.n); got != tt.want {
+				t.Errorf("humanBytes(%v) = %q; want %q", tt.n, got, tt.want)
+			}
+		})
+	}
+}

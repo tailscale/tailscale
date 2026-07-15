@@ -51,8 +51,14 @@ For UTM, see the [UTM instructions](UTM.md).
 
 ### Build an AMI
 
-`go run build.go --bucket=your-S3-temp-bucket` to build an AMI. Make
-sure your "aws" command is in your path and has access.
+`go run build.go --bucket=your-S3-temp-bucket` to build an AMI.
+
+Credentials come from the AWS SDK's default chain, so authenticate any way it
+recognizes: `aws sso login`, `aws configure`, an `AWS_PROFILE`,
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars, or
+`aws-vault exec <profile> -- go run build.go --bucket=...` (aws-vault injects
+temporary credentials as env vars). If no credentials are found the build stops
+with a message telling you how to log in.
 
 ### Creating an instance
 

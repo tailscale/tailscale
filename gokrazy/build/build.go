@@ -7,9 +7,11 @@
 // It is the reusable core behind the gokrazy/build.go command: a
 // [Builder] runs monogok to produce a disk image (or GAF), formats the
 // ext4 /perm filesystem via gokrazy/mkfs, and can then upload the image
-// to S3 and register an AMI by shelling out to the "aws" CLI. Callers
-// that only want the image (e.g. flash-appliance tooling) can call
-// [Builder.BuildImage] alone.
+// to S3 and register an AMI using the AWS SDK for Go v2. Credentials are
+// resolved via the SDK's default chain (the same sources the "aws" CLI
+// uses: env vars, ~/.aws, SSO cache, IMDS). Callers that only want the
+// image (e.g. flash-appliance tooling) can call [Builder.BuildImage]
+// alone.
 //
 // Tracking issue is https://github.com/tailscale/tailscale/issues/1866
 package build
@@ -24,10 +26,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/mattn/go-isatty"
 	"tailscale.com/gokrazy/mkfs"
+	tsrate "tailscale.com/tstime/rate"
 	"tailscale.com/types/logger"
 )
 
@@ -68,7 +80,7 @@ type Config struct {
 
 	// Logf receives human-readable progress. If nil, log.Printf is used.
 	Logf logger.Logf
-	// Stderr receives the output of subprocesses (monogok, aws). If nil,
+	// Stderr receives the output of subprocesses (monogok). If nil,
 	// os.Stderr is used. Keeping this off stdout lets callers reserve
 	// stdout for machine-readable output.
 	Stderr io.Writer
@@ -81,6 +93,11 @@ type Builder struct {
 
 	conf gokrazyConfig // parsed <Dir>/<App>/config.json
 	res  Result
+
+	// s3c and ec2c are lazily created by awsClients on first use and
+	// cached; they're nil until then.
+	s3c  *s3.Client
+	ec2c *ec2.Client
 }
 
 // baseImageSizeBytes is the size of the disk image we ask monogok to
@@ -209,24 +226,70 @@ func (b *Builder) BuildGAF(ctx context.Context) (string, error) {
 // returns the populated Result. Config.Bucket and Config.Region select
 // where the AMI is built.
 func (b *Builder) BuildAMI(ctx context.Context) (Result, error) {
+	// Verify AWS auth before the slow image build so a logged-out user
+	// fails in seconds, not minutes.
+	if err := b.checkAWSAuth(ctx); err != nil {
+		return b.res, b.fail(err)
+	}
+
+	b.logf("[1/4] building image (%s)", b.App)
 	if _, err := b.BuildImage(ctx); err != nil {
 		return b.res, err // BuildImage already wrapped+recorded it
 	}
 
+	b.logf("[2/4] uploading to s3://%s/%s.img", b.Bucket, b.App)
 	if err := b.uploadToS3(ctx); err != nil {
 		return b.res, b.fail(fmt.Errorf("copy to S3: %w", err))
 	}
+
+	b.logf("[3/4] importing EBS snapshot")
 	snapID, err := b.importSnapshot(ctx)
 	if err != nil {
 		return b.res, b.fail(fmt.Errorf("import snapshot: %w", err))
 	}
 	b.logf("snap ID: %v", snapID)
 
+	b.logf("[4/4] registering AMI")
 	if err := b.registerAMI(ctx, snapID); err != nil {
 		return b.res, b.fail(fmt.Errorf("register AMI: %w", err))
 	}
 	b.logf("made AMI: %v", b.res.AMI)
 	return b.res, nil
+}
+
+// awsClients lazily loads AWS config (via the SDK default credential
+// chain, honoring the resolved region) and constructs the S3 and EC2
+// clients, caching them on b.
+func (b *Builder) awsClients(ctx context.Context) (*s3.Client, *ec2.Client, error) {
+	if b.s3c != nil && b.ec2c != nil {
+		return b.s3c, b.ec2c, nil
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(b.Region))
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading AWS config (check AWS_PROFILE / ~/.aws, or run `aws sso login`): %w", err)
+	}
+	b.s3c = s3.NewFromConfig(cfg)
+	b.ec2c = ec2.NewFromConfig(cfg)
+	return b.s3c, b.ec2c, nil
+}
+
+// checkAWSAuth verifies the caller has usable AWS credentials by making
+// an sts:GetCallerIdentity call. It runs as a preflight before the slow
+// image build so a missing or expired login fails early with an
+// actionable message instead of deep in the pipeline. On success it logs
+// the account/identity so the user can confirm they're publishing to the
+// right account.
+func (b *Builder) checkAWSAuth(ctx context.Context) error {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(b.Region))
+	if err != nil {
+		return fmt.Errorf("loading AWS config (check AWS_PROFILE / ~/.aws, or run `aws sso login`): %w", err)
+	}
+	out, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return fmt.Errorf("AWS credentials invalid or expired — run `aws sso login` or `aws configure`, or set AWS_PROFILE / AWS_ACCESS_KEY_ID: %w", err)
+	}
+	b.logf("AWS account %s (%s), region %s", aws.ToString(out.Account), aws.ToString(out.Arn), b.Region)
+	return nil
 }
 
 // buildImage runs monogok to produce the disk image (or GAF when gaf is
@@ -278,13 +341,41 @@ func (b *Builder) buildImage(ctx context.Context, gaf bool) error {
 	return nil
 }
 
-// uploadToS3 uploads the built .img to s3://<Bucket>/.
+// uploadToS3 uploads the built .img to s3://<Bucket>/<App>.img using a
+// concurrent multipart upload, showing progress on b.Stderr.
 func (b *Builder) uploadToS3(ctx context.Context) error {
-	cmd := b.awsCmd(ctx, "s3", "cp", b.App+".img", "s3://"+b.Bucket+"/")
-	cmd.Dir = b.Dir
-	cmd.Stdout = b.Stderr
-	cmd.Stderr = b.Stderr
-	return cmd.Run()
+	s3c, _, err := b.awsClients(ctx)
+	if err != nil {
+		return err
+	}
+	imgPath := filepath.Join(b.Dir, b.App+".img")
+	f, err := os.Open(imgPath)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", imgPath, err)
+	}
+	defer f.Close()
+
+	var size int64 = -1
+	if fi, err := f.Stat(); err == nil {
+		size = fi.Size()
+	}
+
+	pr := b.newProgressReader(f, "uploading", size)
+	defer pr.done()
+
+	up := manager.NewUploader(s3c, func(u *manager.Uploader) {
+		u.PartSize = 16 * 1024 * 1024 // 16 MiB parts
+		u.Concurrency = 8             // upload up to 8 parts at once
+	})
+	_, err = up.Upload(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(b.Bucket),
+		Key:    aws.String(b.App + ".img"),
+		Body:   pr,
+	})
+	if err != nil {
+		return fmt.Errorf("uploading %s: %w", imgPath, err)
+	}
+	return nil
 }
 
 // importSnapshot starts an EC2 import-snapshot task from the uploaded
@@ -305,30 +396,22 @@ func (b *Builder) importSnapshot(ctx context.Context) (string, error) {
 }
 
 func (b *Builder) startImportSnapshot(ctx context.Context) (importTaskID string, err error) {
-	out, err := b.awsCmd(ctx, "ec2", "import-snapshot", "--disk-container", "Url=s3://"+b.Bucket+"/"+b.App+".img").CombinedOutput()
+	_, ec2c, err := b.awsClients(ctx)
 	if err != nil {
-		return "", fmt.Errorf("import snapshot: %v: %s", err, out)
+		return "", err
 	}
-	var resp struct {
-		ImportTaskID string `json:"ImportTaskId"`
+	out, err := ec2c.ImportSnapshot(ctx, &ec2.ImportSnapshotInput{
+		DiskContainer: &ec2types.SnapshotDiskContainer{
+			Url: aws.String("s3://" + b.Bucket + "/" + b.App + ".img"),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("import snapshot: %w", err)
 	}
-	/*
-		{
-			"ImportTaskId": "import-snap-0d2d72622b4359567",
-			"SnapshotTaskDetail": {
-				"DiskImageSize": 0.0,
-				"Progress": "0",
-				"Status": "active",
-				"StatusMessage": "pending",
-				"Url": "s3://tskrazy-import/tskrazy.img"
-			},
-			"Tags": []
-		}
-	*/
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
+	if out.ImportTaskId == nil {
+		return "", fmt.Errorf("import snapshot: empty ImportTaskId in response")
 	}
-	return resp.ImportTaskID, nil
+	return *out.ImportTaskId, nil
 }
 
 /*
@@ -355,51 +438,56 @@ func (b *Builder) startImportSnapshot(ctx context.Context) (importTaskID string,
 */
 
 func (b *Builder) waitForImportSnapshot(ctx context.Context, importTaskID string) (snapID string, err error) {
+	_, ec2c, err := b.awsClients(ctx)
+	if err != nil {
+		return "", err
+	}
 	interactive := isTerminal(b.Stderr)
 	var lastPhase string // last (status/message) reported in non-interactive mode
 	for {
-		out, err := b.awsCmd(ctx, "ec2", "describe-import-snapshot-tasks", "--import-task-ids", importTaskID).CombinedOutput()
+		out, err := ec2c.DescribeImportSnapshotTasks(ctx, &ec2.DescribeImportSnapshotTasksInput{
+			ImportTaskIds: []string{importTaskID},
+		})
 		if err != nil {
-			return "", fmt.Errorf("describe import snapshot tasks: %v: %s", err, out)
+			return "", fmt.Errorf("describe import snapshot tasks: %w", err)
 		}
 
-		var resp struct {
-			ImportSnapshotTasks []struct {
-				SnapshotTaskDetail struct {
-					SnapshotID    string `json:"SnapshotId"`
-					Status        string `json:"Status"`
-					StatusMessage string `json:"StatusMessage"`
-					Progress      string `json:"Progress"`
-				} `json:"SnapshotTaskDetail"`
-			} `json:"ImportSnapshotTasks"`
+		var status, statusMessage, progress string
+		if len(out.ImportSnapshotTasks) > 0 {
+			if d := out.ImportSnapshotTasks[0].SnapshotTaskDetail; d != nil {
+				snapID = aws.ToString(d.SnapshotId)
+				status = aws.ToString(d.Status)
+				statusMessage = aws.ToString(d.StatusMessage)
+				progress = aws.ToString(d.Progress)
+			}
 		}
-		if err := json.Unmarshal(out, &resp); err != nil {
-			return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
-		}
-		var d struct {
-			SnapshotID    string `json:"SnapshotId"`
-			Status        string `json:"Status"`
-			StatusMessage string `json:"StatusMessage"`
-			Progress      string `json:"Progress"`
-		}
-		if len(resp.ImportSnapshotTasks) > 0 {
-			d = resp.ImportSnapshotTasks[0].SnapshotTaskDetail
-		}
-		if d.Status == "completed" {
+		if status == "completed" {
 			if interactive {
 				fmt.Fprintln(b.Stderr) // move off the live progress line
 			}
-			return d.SnapshotID, nil
+			return snapID, nil
+		}
+		// A failed import stays out of "completed" forever; stop instead of
+		// polling until the context is cancelled.
+		if importFailed(status) {
+			if interactive {
+				fmt.Fprintln(b.Stderr)
+			}
+			msg := statusMessage
+			if msg == "" {
+				msg = status
+			}
+			return "", fmt.Errorf("import snapshot task %s failed: %s", importTaskID, msg)
 		}
 
 		if interactive {
 			// Repaint one line in place each poll.
-			fmt.Fprintf(b.Stderr, "\r\x1b[K%s", importProgressLine(d.Status, d.StatusMessage, d.Progress))
-		} else if phase := d.Status + "/" + d.StatusMessage; phase != lastPhase {
-			// Non-interactive (CI, pipe): one line per phase change only,
-			// not a fresh line every poll.
+			fmt.Fprintf(b.Stderr, "\r\x1b[K%s", importProgressLine(status, statusMessage, progress))
+		} else if phase := status + "/" + statusMessage; phase != lastPhase {
+			// Non-interactive (pipe/redirect): one line per phase change
+			// only, not a fresh line every poll.
 			lastPhase = phase
-			b.logf("%s", importProgressLine(d.Status, d.StatusMessage, d.Progress))
+			b.logf("%s", importProgressLine(status, statusMessage, progress))
 		}
 
 		select {
@@ -411,6 +499,18 @@ func (b *Builder) waitForImportSnapshot(ctx context.Context, importTaskID string
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// importFailed reports whether an import-snapshot task Status is a
+// terminal failure state (as opposed to "active"/"completed"). AWS uses
+// "deleting"/"deleted" when an import is cancelled or fails, and may
+// report "error"; treat any status mentioning "error" as failed too.
+func importFailed(status string) bool {
+	switch status {
+	case "deleting", "deleted", "error":
+		return true
+	}
+	return strings.Contains(strings.ToLower(status), "error")
 }
 
 // registerAMI registers an AMI from the given EBS snapshot. The AMI name
@@ -428,44 +528,34 @@ func (b *Builder) registerAMI(ctx context.Context, ebsSnapID string) error {
 	default:
 		return fmt.Errorf("unknown arch %q", b.conf.GOARCH())
 	}
-	out, err := b.awsCmd(ctx, "ec2", "register-image",
-		"--name", b.res.Name,
-		"--architecture", arch,
+	_, ec2c, err := b.awsClients(ctx)
+	if err != nil {
+		return err
+	}
+	out, err := ec2c.RegisterImage(ctx, &ec2.RegisterImageInput{
+		Name:         aws.String(b.res.Name),
+		Architecture: ec2types.ArchitectureValues(arch),
 		// register-image defaults to paravirtual; arm64 rejects that
 		// ("supports HVM AMIs only") and amd64 would produce an image that
 		// won't boot on Nitro. Both need HVM.
-		"--virtualization-type", "hvm",
-		"--root-device-name", "/dev/sda1",
-		"--ena-support",
-		"--imds-support", "v2.0",
-		"--boot-mode", bootMode,
-		"--block-device-mappings", "DeviceName=/dev/sda1,Ebs={SnapshotId="+ebsSnapID+"}").CombinedOutput()
+		VirtualizationType: aws.String("hvm"),
+		RootDeviceName:     aws.String("/dev/sda1"),
+		EnaSupport:         aws.Bool(true),
+		ImdsSupport:        ec2types.ImdsSupportValuesV20,
+		BootMode:           ec2types.BootModeValues(bootMode),
+		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
+			DeviceName: aws.String("/dev/sda1"),
+			Ebs:        &ec2types.EbsBlockDevice{SnapshotId: aws.String(ebsSnapID)},
+		}},
+	})
 	if err != nil {
-		return fmt.Errorf("register image: %v: %s", err, out)
+		return fmt.Errorf("register image: %w", err)
 	}
-	/*
-		On success:
-		{
-		    "ImageId": "ami-052e1538166886ad2"
-		}
-	*/
-	var resp struct {
-		ImageID string `json:"ImageId"`
+	if aws.ToString(out.ImageId) == "" {
+		return fmt.Errorf("empty image ID in register-image response")
 	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return fmt.Errorf("unmarshal response: %v: %s", err, out)
-	}
-	if resp.ImageID == "" {
-		return fmt.Errorf("empty image ID in response: %s", out)
-	}
-	b.res.AMI = resp.ImageID
+	b.res.AMI = *out.ImageId
 	return nil
-}
-
-// awsCmd builds an aws command with the resolved --region prepended so
-// every call targets the same region deterministically.
-func (b *Builder) awsCmd(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "aws", append([]string{"--region", b.Region}, args...)...)
 }
 
 // imageSizeBytesFor returns the disk image size to use for app. For Raspberry
@@ -506,6 +596,126 @@ func importProgressLine(status, statusMessage, progress string) string {
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	return ok && isatty.IsTerminal(f.Fd())
+}
+
+// progressReader wraps an io.Reader and reports how many bytes have been
+// read against total (which may be -1 if unknown). On a terminal it
+// repaints a single live line on b.Stderr showing percent, bytes, and a
+// smoothed rate; otherwise it emits a log line each time another 10% is
+// done. A background goroutine drives the display; call done() to stop it
+// and print the final state.
+type progressReader struct {
+	r     io.Reader
+	b     *Builder
+	verb  string // e.g. "uploading"
+	total int64  // -1 if unknown
+
+	read atomic.Int64 // cumulative bytes read so far
+
+	interactive bool
+	stop        chan struct{}
+	wg          sync.WaitGroup
+}
+
+// newProgressReader wraps r and starts displaying progress. total is the
+// expected size in bytes, or -1 if unknown.
+func (b *Builder) newProgressReader(r io.Reader, verb string, total int64) *progressReader {
+	pr := &progressReader{
+		r:           r,
+		b:           b,
+		verb:        verb,
+		total:       total,
+		interactive: isTerminal(b.Stderr),
+		stop:        make(chan struct{}),
+	}
+	pr.wg.Add(1)
+	go pr.run()
+	return pr
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	pr.read.Add(int64(n))
+	return n, err
+}
+
+func (pr *progressReader) run() {
+	defer pr.wg.Done()
+	var rate tsrate.Value
+	rate.HalfLife = 5 * time.Second
+	var prev int64
+	interval := time.Second
+	if !pr.interactive {
+		interval = 2 * time.Second
+	}
+	tc := time.NewTicker(interval)
+	defer tc.Stop()
+
+	lastBucket := -1 // last 10%-bucket logged in non-interactive mode
+	for {
+		select {
+		case <-pr.stop:
+			return
+		case <-tc.C:
+			cur := pr.read.Load()
+			rate.Add(float64(max(cur-prev, 0)))
+			prev = cur
+			if pr.interactive {
+				fmt.Fprintf(pr.b.Stderr, "\r\x1b[K%s", progressLine(pr.verb, cur, pr.total, rate.Rate()))
+			} else if pr.total > 0 {
+				if bucket := int(cur * 10 / pr.total); bucket > lastBucket {
+					lastBucket = bucket
+					pr.b.logf("%s", progressLine(pr.verb, cur, pr.total, rate.Rate()))
+				}
+			}
+		}
+	}
+}
+
+// done stops the background display and prints a final line.
+func (pr *progressReader) done() {
+	close(pr.stop)
+	pr.wg.Wait()
+	cur := pr.read.Load()
+	if pr.interactive {
+		fmt.Fprintf(pr.b.Stderr, "\r\x1b[K%s\n", progressLine(pr.verb, cur, pr.total, 0))
+	} else {
+		pr.b.logf("%s: done (%s)", pr.verb, humanBytes(float64(cur)))
+	}
+}
+
+// progressLine formats a one-line byte-progress status. rate is bytes/sec
+// (0 to omit). total may be -1 (unknown), in which case percent is omitted.
+func progressLine(verb string, cur, total int64, rate float64) string {
+	if total > 0 {
+		pct := 100 * float64(cur) / float64(total)
+		s := fmt.Sprintf("%s: %.1f%% (%s / %s)", verb, pct, humanBytes(float64(cur)), humanBytes(float64(total)))
+		if rate > 0 {
+			s += fmt.Sprintf(" %s/s", humanBytes(rate))
+		}
+		return s
+	}
+	s := fmt.Sprintf("%s: %s", verb, humanBytes(float64(cur)))
+	if rate > 0 {
+		s += fmt.Sprintf(" %s/s", humanBytes(rate))
+	}
+	return s
+}
+
+// humanBytes formats n bytes with an IEC (binary) unit.
+func humanBytes(n float64) string {
+	switch {
+	case n < 1<<10:
+		return fmt.Sprintf("%.0fB", n)
+	case n < 1<<20:
+		return fmt.Sprintf("%.2fKiB", n/(1<<10))
+	case n < 1<<30:
+		return fmt.Sprintf("%.2fMiB", n/(1<<20))
+	case n < 1<<40:
+		return fmt.Sprintf("%.2fGiB", n/(1<<30))
+	default:
+		return fmt.Sprintf("%.2fTiB", n/(1<<40))
+	}
 }
 
 // awsArch maps a Go GOARCH to the AWS EC2 --architecture value.
