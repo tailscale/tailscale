@@ -81,7 +81,6 @@ import (
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/filter/filtertype"
 	"tailscale.com/wgengine/wgcfg"
-	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -246,6 +245,17 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 	}
 }
 
+// wgCfgOf builds a test node's wgcfg.Config from its netmap the same
+// way ipnlocal.authReconfigLocked does in production: just the private
+// key and self addresses. Peers ride the per-peer config source
+// instead; see [magicStack.Reconfig].
+func wgCfgOf(pk key.NodePrivate, nm *netmap.NetworkMap) *wgcfg.Config {
+	return &wgcfg.Config{
+		PrivateKey: pk,
+		Addresses:  nm.GetAddresses().AsSlice(),
+	}
+}
+
 // Reconfig applies cfg and peers to the stack's WireGuard device and
 // tun-layer data plane. In production these flow from LocalBackend
 // (via [tailscale.com/wgengine.Engine.Reconfig] and the live per-peer
@@ -259,8 +269,8 @@ func (s *magicStack) Reconfig(cfg *wgcfg.Config, peers []tailcfg.NodeView) error
 
 	rm := routemanager.New(nil)
 	mut := rm.Begin()
-	// Mirror the netmap.AllowSubnetRoutes flag the tests pass to
-	// nmcfg.WGCfg.
+	// Tests want subnet routes accepted, matching what production
+	// gets from Prefs.RouteAll.
 	mut.SetPrefs(routemanager.Prefs{RouteAll: true})
 	// idByKey stands in for nodeBackend's public-key-to-node-ID
 	// index, which LocalBackend uses to serve the engine's per-peer
@@ -412,12 +422,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		for i, m := range ms {
 			nm := buildNetmapLocked(i)
 			m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
-			wg, err := nmcfg.WGCfg(ms[i].privateKey, nm, logf, 0, "")
-			if err != nil {
-				// We're too far from the *testing.T to be graceful,
-				// blow up. Shouldn't happen anyway.
-				panic(fmt.Sprintf("failed to construct wgcfg from netmap: %v", err))
-			}
+			wg := wgCfgOf(ms[i].privateKey, nm)
 			if err := m.Reconfig(wg, nm.Peers); err != nil {
 				if ctx.Err() != nil || errors.Is(err, errConnClosed) {
 					// shutdown race, don't care.
@@ -2568,10 +2573,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 	}
 	m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
 
-	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := wgCfgOf(m.privateKey, nm)
 	m.Reconfig(cfg, nm.Peers)
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
@@ -2629,10 +2631,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 	}
 	m.conn.SetNetworkMap(nm.SelfNode, nm.Peers)
 
-	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := wgCfgOf(m.privateKey, nm)
 	m.Reconfig(cfg, nm.Peers)
 
 	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
@@ -2669,10 +2668,7 @@ func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 	m.conn.noV6.Store(true)
 
 	// Turn the network map into a wireguard config (for the tailscale internal wireguard device).
-	cfg, err := nmcfg.WGCfg(m.privateKey, nm, t.Logf, netmap.AllowSubnetRoutes, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := wgCfgOf(m.privateKey, nm)
 	// Apply the wireguard config to the tailscale internal wireguard device.
 	if err := m.Reconfig(cfg, nm.Peers); err != nil {
 		t.Fatal(err)

@@ -107,7 +107,6 @@ import (
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
-	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
 
 var controlDebugFlags = getControlDebugFlags()
@@ -2502,8 +2501,8 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	needsAuthReconfig = needsAuthReconfig || peersUpsertedOrRemoved
 	if needsAuthReconfig {
 		if peersUpsertedOrRemoved {
-			if nm := cn.netMapWithPeers(); nm != nil {
-				b.e.SetSelfNode(nm.SelfNode)
+			if self := cn.Self(); self.Valid() {
+				b.e.SetSelfNode(self)
 			}
 		}
 		b.authReconfigLocked()
@@ -6054,7 +6053,10 @@ func (b *LocalBackend) authReconfigLocked() {
 
 	cn := b.currentNode()
 
-	nm := cn.netMapWithPeers()
+	// Note this netmap does not have its Peers populated. Nothing
+	// below needs them; per-peer work rides the incremental route
+	// manager and engine paths instead.
+	nm := cn.NetMap()
 	if nm == nil {
 		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
 		return
@@ -6100,10 +6102,12 @@ func (b *LocalBackend) authReconfigLocked() {
 		priv = key.NodePrivate{}
 	}
 
-	cfg, err := nmcfg.WGCfg(priv, nm, b.logf, flags, prefs.ExitNodeID())
-	if err != nil {
-		b.logf("wgcfg: %v", err)
-		return
+	// The config carries no peers; wireguard-go gets those from the
+	// live per-peer config source installed via
+	// [wgengine.Engine.SetPeerConfigFunc], fed by the route manager.
+	cfg := &wgcfg.Config{
+		PrivateKey: priv,
+		Addresses:  nm.GetAddresses().AsSlice(),
 	}
 
 	// Note: b.goos (set only by tests) speaks runtime.GOOS while
@@ -6146,7 +6150,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	// the new config never see a stale peer table.
 	b.setDataPlanePeerRoutes()
 
-	err = b.e.Reconfig(cfg, rcfg, dcfg)
+	err := b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
