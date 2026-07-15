@@ -525,6 +525,10 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 	ht := health.NewTracker(bus)
 	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
 	router.(*linuxRouter).nfr = fake.nfr
+	// Don't consult the live /proc for the tun's IPv6 state in tests; the
+	// fake netfilter runner's HasIPV6 (noV6) is the authoritative v6 signal
+	// here. See #20447.
+	router.(*linuxRouter).interfaceV6Usable = func() bool { return true }
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}
@@ -1614,6 +1618,9 @@ func TestSetSkipsNetfilterAddonsWhenSetupFails(t *testing.T) {
 	}
 	lr := r.(*linuxRouter)
 	lr.nfr = nfr
+	// Keep the fake netfilter runner's HasIPV6 the sole v6 signal; don't
+	// consult the live /proc for the tun's IPv6 state. See #20447.
+	lr.interfaceV6Usable = func() bool { return true }
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1661,6 +1668,9 @@ func newTestLinuxRouter(t *testing.T) (*linuxRouter, *fakeOS) {
 	}
 	lr := r.(*linuxRouter)
 	lr.nfr = fake.nfr
+	// Keep the fake netfilter runner's HasIPV6 (noV6) the sole v6 signal;
+	// don't consult the live /proc for the tun's IPv6 state. See #20447.
+	lr.interfaceV6Usable = func() bool { return true }
 	if err := lr.Up(); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -1931,5 +1941,59 @@ func TestSetSkipsV6OrphansWhenV6Unavailable(t *testing.T) {
 	}
 	if !slices.Contains(fake.ips, "fd7a:115c:a1e0::99/128 dev tailscale0") {
 		t.Errorf("v6 orphan should be left alone when v6 is unavailable; ips=%q", fake.ips)
+	}
+}
+
+// TestSetSkipsV6WhenInterfaceV6Unusable verifies that when global IPv6 is
+// available (the netfilter runner reports HasIPV6) but the kernel has not
+// enabled IPv6 on the tunnel interface itself -- e.g. the tun MTU is below the
+// 1280-byte IPv6 minimum -- Set skips the v6 address rather than failing. This
+// is the #20447 scenario: historically the v6 addAddress errored, aborting the
+// whole router pass, which in turn suppressed DNS configuration.
+func TestSetSkipsV6WhenInterfaceV6Unusable(t *testing.T) {
+	lr, fake := newTestLinuxRouter(t)
+	// Global v6 is fine (fake nfr HasIPV6 defaults true), but the tun
+	// interface has no usable v6.
+	lr.interfaceV6Usable = func() bool { return false }
+
+	cfg := &Config{
+		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
+		NetfilterMode: netfilterOff,
+	}
+	if err := lr.Set(cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// The v4 address is programmed; the v6 address is skipped rather than
+	// attempted (which would have errored on a v6-less interface).
+	if !slices.Contains(fake.ips, "100.64.0.1/32 dev tailscale0") {
+		t.Errorf("v4 address was not programmed; ips=%q", fake.ips)
+	}
+	if slices.Contains(fake.ips, "fd7a:115c:a1e0::1/128 dev tailscale0") {
+		t.Errorf("v6 address should be skipped when the interface has no usable v6; ips=%q", fake.ips)
+	}
+}
+
+// TestSetSnapshotsV6Usable verifies that a single Set consults the
+// per-interface IPv6 check (which reads /proc) once, rather than once per
+// address and route, even though many getV6Available calls happen within it.
+func TestSetSnapshotsV6Usable(t *testing.T) {
+	lr, _ := newTestLinuxRouter(t)
+	var calls int
+	lr.interfaceV6Usable = func() bool {
+		calls++
+		return true
+	}
+
+	cfg := &Config{
+		LocalAddrs:    mustCIDRs("100.64.0.1/32", "fd7a:115c:a1e0::1/128"),
+		Routes:        mustCIDRs("10.0.0.0/8", "fd00::/8"),
+		NetfilterMode: netfilterOff,
+	}
+	if err := lr.Set(cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", calls)
 	}
 }

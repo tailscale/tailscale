@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,8 +75,20 @@ type linuxRouter struct {
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
-	v6Available     bool     // whether the kernel supports IPv6
 	fwmaskWorksLazy opt.Bool // whether we can use 'ip rule...fwmark <mark>/<mask>'; set lazily
+
+	// interfaceV6Usable reports whether the kernel has IPv6 enabled on the
+	// tunnel interface specifically (distinct from global IPv6 support,
+	// which the netfilter runner tracks). Always set: the constructor wires
+	// it to interfaceV6UsableForTun; tests override it. See #20447.
+	interfaceV6Usable func() bool
+
+	// interfaceV6UsableMemo memoizes interfaceV6Usable for the duration of a
+	// single Set, so its many getV6Available calls don't each hit /proc. It's
+	// an atomic tri-state (see the memoV6 constants) because getV6Available is
+	// also reached, without holding mu, from the onIPRuleDeleted timer's
+	// justAddIPRules; the unset value there means "read live". See #20447.
+	interfaceV6UsableMemo atomic.Int32
 
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
@@ -124,6 +137,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		ipPolicyPrefBase: 5200,
 	}
+	r.interfaceV6Usable = func() bool { return interfaceV6UsableForTun(r.tunname) }
 	ec := bus.Client("router-linux")
 	r.rulesAddedPub = eventbus.Publish[AddIPRules](ec)
 	eventbus.SubscribeFunc(ec, func(rs netmon.RuleDeleted) {
@@ -171,8 +185,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		r.ipPolicyPrefBase = 1300
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
-
-	r.v6Available = linuxfw.CheckIPv6(r.logf) == nil
 
 	r.fixupWSLMTU()
 
@@ -421,6 +433,11 @@ func (r *linuxRouter) setupNetfilterLocked(kind string) error {
 func (r *linuxRouter) Set(cfg *router.Config) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Memoize the tun's IPv6 usability for the duration of this Set so the
+	// per-address/route getV6Available calls don't each re-read /proc.
+	// snapshotV6Usable runs now; the closure it returns (trailing ()) is
+	// deferred to clear the memo on return.
+	defer r.snapshotV6Usable()()
 	var errs []error
 	if cfg == nil {
 		cfg = &shutdownConfig
@@ -893,11 +910,72 @@ func (r *linuxRouter) getV6FilteringAvailable() bool {
 // getV6Available reports whether the router can manage IPv6. r.nfr can be nil if
 // setupNetfilterLocked failed earlier in Set (which continues on error), so
 // treat a nil runner as no IPv6 rather than dereferencing it.
+//
+// It requires both global IPv6 support (the netfilter runner) and IPv6 on the
+// tun interface itself, which can differ: the kernel may refuse IPv6 on the tun
+// while global IPv6 is fine. The per-interface check consults /proc, so within
+// a single Set (which calls this once per address and route) the result is
+// snapshotted by snapshotV6Usable rather than re-read each time. See #20447.
 func (r *linuxRouter) getV6Available() bool {
 	if r.nfr == nil {
 		return false
 	}
-	return r.nfr.HasIPV6()
+	switch memoV6(r.interfaceV6UsableMemo.Load()) {
+	case memoV6Usable:
+		return r.nfr.HasIPV6()
+	case memoV6Unusable:
+		return false
+	default: // memoV6Unset: no snapshot active, read live.
+		return r.nfr.HasIPV6() && r.interfaceV6Usable()
+	}
+}
+
+// memoV6 is the state of a linuxRouter.interfaceV6UsableMemo snapshot.
+type memoV6 int32
+
+const (
+	memoV6Unset    memoV6 = iota // no snapshot active; read live
+	memoV6Usable                 // snapshot: IPv6 usable on the tun interface
+	memoV6Unusable               // snapshot: IPv6 not usable on the tun interface
+)
+
+// snapshotV6Usable memoizes interfaceV6Usable for the duration of a Set, so
+// its many getV6Available calls don't each hit /proc. It returns a function
+// that clears the snapshot, intended to be deferred. The snapshot is taken
+// once: an IPv6-enabled flip concurrent with a single Set is rare and, since a
+// stray v6 operation is no longer fatal, harmless until the next Set. See
+// #20447.
+func (r *linuxRouter) snapshotV6Usable() func() {
+	m := memoV6Unusable
+	if r.interfaceV6Usable() {
+		m = memoV6Usable
+	}
+	r.interfaceV6UsableMemo.Store(int32(m))
+	return func() { r.interfaceV6UsableMemo.Store(int32(memoV6Unset)) }
+}
+
+// interfaceV6UsableForTun reports whether the kernel has IPv6 enabled on the
+// named interface. The kernel creates /proc/sys/net/ipv6/conf/<iface>/ only
+// once IPv6 is up on the interface (e.g. an MTU below the 1280-byte IPv6
+// minimum removes it entirely), and disable_ipv6 within it reflects whether
+// IPv6 has since been turned off explicitly.
+func interfaceV6UsableForTun(tunname string) bool {
+	if tunname == "" {
+		return false
+	}
+	bs, err := os.ReadFile(filepath.Join("/proc/sys/net/ipv6/conf", tunname, "disable_ipv6"))
+	if err != nil {
+		// A missing directory/knob means IPv6 isn't up on the interface, so
+		// it's unavailable. Any other error (e.g. EACCES) means the knob
+		// exists but we couldn't read it; assume IPv6 is usable rather than
+		// skipping it on a transient error.
+		return !os.IsNotExist(err)
+	}
+	disabled, err := strconv.ParseBool(strings.TrimSpace(string(bs)))
+	if err != nil {
+		return true // unparseable; assume usable
+	}
+	return !disabled
 }
 
 // addAddress adds an IP/mask to the tunnel interface. Fails if the
