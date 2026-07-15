@@ -28,7 +28,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -58,8 +57,7 @@ const (
 	reasonProxyGroupTailnetUnavailable = "ProxyGroupTailnetUnavailable"
 
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
-	optimisticLockErrorMsg  = "the object has been modified; please apply your changes to the latest version and try again"
-	staticEndpointsMaxAddrs = 2
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 
 	// The minimum tailcfg.CapabilityVersion that deployed clients are expected
 	// to support to be compatible with the current ProxyGroup controller.
@@ -499,128 +497,11 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	return nil
 }
 
-// getServicePortsForProxyGroups returns a map of ProxyGroup Service names to their NodePorts,
-// and a set of all allocated NodePorts for quick occupancy checking.
-func getServicePortsForProxyGroups(ctx context.Context, c client.Client, namespace string, portRanges tsapi.PortRanges) (map[string]uint16, set.Set[uint16], error) {
-	svcs := new(corev1.ServiceList)
-	matchingLabels := client.MatchingLabels(map[string]string{
-		LabelParentType: "proxygroup",
-	})
-
-	err := c.List(ctx, svcs, matchingLabels, client.InNamespace(namespace))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list ProxyGroup Services: %w", err)
-	}
-
-	svcToNodePorts := map[string]uint16{}
-	usedPorts := set.Set[uint16]{}
-	for _, svc := range svcs.Items {
-		if len(svc.Spec.Ports) == 1 && svc.Spec.Ports[0].NodePort != 0 {
-			p := uint16(svc.Spec.Ports[0].NodePort)
-			if portRanges.Contains(p) {
-				svcToNodePorts[svc.Name] = p
-				usedPorts.Add(p)
-			}
-		}
-	}
-
-	return svcToNodePorts, usedPorts, nil
-}
-
-type allocatePortsErr struct {
-	msg string
-}
-
-func (e *allocatePortsErr) Error() string {
-	return e.msg
-}
-
-func (r *ProxyGroupReconciler) allocatePorts(ctx context.Context, pg *tsapi.ProxyGroup, proxyClassName string, portRanges tsapi.PortRanges) (map[string]uint16, error) {
-	replicaCount := int(pgReplicas(pg))
-	svcToNodePorts, usedPorts, err := getServicePortsForProxyGroups(ctx, r.Client, r.tsNamespace, portRanges)
-	if err != nil {
-		return nil, &allocatePortsErr{msg: fmt.Sprintf("failed to find ports for existing ProxyGroup NodePort Services: %s", err.Error())}
-	}
-
-	replicasAllocated := 0
-	for i := range pgReplicas(pg) {
-		if _, ok := svcToNodePorts[pgNodePortServiceName(pg.Name, i)]; !ok {
-			svcToNodePorts[pgNodePortServiceName(pg.Name, i)] = 0
-		} else {
-			replicasAllocated++
-		}
-	}
-
-	for replica, port := range svcToNodePorts {
-		if port == 0 {
-			for p := range portRanges.All() {
-				if !usedPorts.Contains(p) {
-					svcToNodePorts[replica] = p
-					usedPorts.Add(p)
-					replicasAllocated++
-					break
-				}
-			}
-		}
-	}
-
-	if replicasAllocated < replicaCount {
-		return nil, &allocatePortsErr{msg: fmt.Sprintf("not enough available ports to allocate all replicas (needed %d, got %d). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass %q must have bigger range allocated", replicaCount, usedPorts.Len(), proxyClassName)}
-	}
-
-	return svcToNodePorts, nil
-}
-
 func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) (map[string]uint16, *uint16, error) {
-	// NOTE: (ChaosInTheCRD) we want the same TargetPort for every static endpoint NodePort Service for the ProxyGroup
-	tailscaledPort := getRandomPort()
-	svcs := []*corev1.Service{}
-	for i := range pgReplicas(pg) {
-		nodePortSvcName := pgNodePortServiceName(pg.Name, i)
-
-		svc := &corev1.Service{}
-		err := r.Get(ctx, types.NamespacedName{Name: nodePortSvcName, Namespace: r.tsNamespace}, svc)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return nil, nil, fmt.Errorf("error getting Kubernetes Service %q: %w", nodePortSvcName, err)
-		}
-		if apierrors.IsNotFound(err) {
-			svcs = append(svcs, pgNodePortService(pg, nodePortSvcName, r.tsNamespace))
-		} else {
-			// NOTE: if we can we want to recover the random port used for tailscaled,
-			// as well as the NodePort previously used for that Service
-			if len(svc.Spec.Ports) == 1 {
-				if svc.Spec.Ports[0].Port != 0 {
-					tailscaledPort = uint16(svc.Spec.Ports[0].Port)
-				}
-			}
-			svcs = append(svcs, svc)
-		}
+	makeService := func(replica int32, name, namespace string) *corev1.Service {
+		return pgNodePortService(pg, name, namespace)
 	}
-
-	svcToNodePorts, err := r.allocatePorts(ctx, pg, pc.Name, pc.Spec.StaticEndpoints.NodePort.Ports)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to allocate NodePorts to ProxyGroup Services: %w", err)
-	}
-
-	for _, svc := range svcs {
-		// NOTE: we know that every service is going to have 1 port here
-		svc.Spec.Ports[0].Port = int32(tailscaledPort)
-		svc.Spec.Ports[0].TargetPort = intstr.FromInt(int(tailscaledPort))
-		svc.Spec.Ports[0].NodePort = int32(svcToNodePorts[svc.Name])
-
-		_, err = createOrUpdate(ctx, r.Client, r.tsNamespace, svc, func(s *corev1.Service) {
-			s.ObjectMeta.Labels = svc.ObjectMeta.Labels
-			s.ObjectMeta.Annotations = svc.ObjectMeta.Annotations
-			s.ObjectMeta.OwnerReferences = svc.ObjectMeta.OwnerReferences
-			s.Spec.Selector = svc.Spec.Selector
-			s.Spec.Ports = svc.Spec.Ports
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("error creating/updating Kubernetes NodePort Service %q: %w", svc.Name, err)
-		}
-	}
-
-	return svcToNodePorts, new(tailscaledPort), nil
+	return ensureNodePortServices(ctx, r.Client, r.tsNamespace, proxyTypeProxyGroup, pg.Name, pgReplicas(pg), pc.Name, pc.Spec.StaticEndpoints.NodePort.Ports, makeService)
 }
 
 // cleanupDanglingResources ensures we don't leak config secrets, state secrets, and
@@ -666,13 +547,8 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 
 	// If the ProxyClass has its StaticEndpoints config removed, we want to remove all of the NodePort Services
 	if pc != nil && pc.Spec.StaticEndpoints == nil {
-		labels := map[string]string{
-			kubetypes.LabelManaged: "true",
-			LabelParentType:        proxyTypeProxyGroup,
-			LabelParentName:        pg.Name,
-		}
-		if err := r.DeleteAllOf(ctx, &corev1.Service{}, client.InNamespace(r.tsNamespace), client.MatchingLabels(labels)); err != nil {
-			return fmt.Errorf("error deleting Kubernetes Services for static endpoints: %w", err)
+		if err := deleteNodePortServices(ctx, r.Client, r.tsNamespace, proxyTypeProxyGroup, pg.Name); err != nil {
+			return err
 		}
 	}
 
@@ -767,7 +643,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				return nil, fmt.Errorf("could not find configured NodePort for ProxyGroup replica %q", replicaName)
 			}
 
-			endpoints[nodePortSvcName], err = r.findStaticEndpoints(ctx, existingCfgSecret, proxyClass, port, logger)
+			endpoints[nodePortSvcName], err = findStaticEndpoints(ctx, r.Client, existingCfgSecret, proxyClass, port, logger)
 			if err != nil {
 				return nil, fmt.Errorf("could not find static endpoints for replica %q: %w", replicaName, err)
 			}
@@ -1021,125 +897,6 @@ func (r *ProxyGroupReconciler) shouldReissueAuthKey(ctx context.Context, tsClien
 	}
 
 	return true, nil
-}
-
-type FindStaticEndpointErr struct {
-	msg string
-}
-
-func (e *FindStaticEndpointErr) Error() string {
-	return e.msg
-}
-
-// findStaticEndpoints returns up to two `netip.AddrPort` entries, derived from the ExternalIPs of Nodes that
-// match the `proxyClass`'s selector within the StaticEndpoints configuration. The port is set to the replica's NodePort Service Port.
-func (r *ProxyGroupReconciler) findStaticEndpoints(ctx context.Context, existingCfgSecret *corev1.Secret, proxyClass *tsapi.ProxyClass, port uint16, logger *zap.SugaredLogger) ([]netip.AddrPort, error) {
-	var currAddrs []netip.AddrPort
-	if existingCfgSecret != nil {
-		oldConfB := existingCfgSecret.Data[tsoperator.TailscaledConfigFileName(106)]
-		if len(oldConfB) > 0 {
-			var oldConf ipn.ConfigVAlpha
-			if err := json.Unmarshal(oldConfB, &oldConf); err == nil {
-				currAddrs = oldConf.StaticEndpoints
-			} else {
-				logger.Debugf("failed to unmarshal tailscaled config from secret %q: %v", existingCfgSecret.Name, err)
-			}
-		} else {
-			logger.Debugf("failed to get tailscaled config from secret %q: empty data", existingCfgSecret.Name)
-		}
-	}
-
-	nodes := new(corev1.NodeList)
-	selectors := client.MatchingLabels(proxyClass.Spec.StaticEndpoints.NodePort.Selector)
-
-	err := r.List(ctx, nodes, selectors)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes: %w", err)
-	}
-
-	if len(nodes.Items) == 0 {
-		return nil, &FindStaticEndpointErr{msg: fmt.Sprintf("failed to match nodes to configured Selectors on `spec.staticEndpoints.nodePort.selectors` field for ProxyClass %q", proxyClass.Name)}
-	}
-
-	endpoints := []netip.AddrPort{}
-
-	// NOTE(ChaosInTheCRD): Setting a hard limit of two static endpoints.
-	newAddrs := []netip.AddrPort{}
-	for _, n := range nodes.Items {
-		for _, a := range n.Status.Addresses {
-			if a.Type == corev1.NodeExternalIP {
-				addr := getStaticEndpointAddress(&a, port)
-				if addr == nil {
-					logger.Debugf("failed to parse %q address on node %q: %q", corev1.NodeExternalIP, n.Name, a.Address)
-					continue
-				}
-
-				// we want to add the currently used IPs first before
-				// adding new ones.
-				if currAddrs != nil && slices.Contains(currAddrs, *addr) {
-					endpoints = append(endpoints, *addr)
-				} else {
-					newAddrs = append(newAddrs, *addr)
-				}
-			}
-
-			if len(endpoints) == 2 {
-				break
-			}
-		}
-	}
-
-	// if the 2 endpoints limit hasn't been reached, we
-	// can start adding newIPs.
-	if len(endpoints) < 2 {
-		for _, a := range newAddrs {
-			endpoints = append(endpoints, a)
-			if len(endpoints) == 2 {
-				break
-			}
-		}
-	}
-
-	if len(endpoints) == 0 {
-		return nil, &FindStaticEndpointErr{msg: fmt.Sprintf("failed to find any `status.addresses` of type %q on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass %q", corev1.NodeExternalIP, proxyClass.Name)}
-	}
-
-	// If we ended up selecting the same set of addresses already in use, keep
-	// the existing order. nodes.Items from r.List is not guaranteed to be in
-	// a stable order across calls, so without this the slice can permute on
-	// each reconcile, making the marshalled config Secret differ byte-for-byte
-	// even though nothing has effectively changed. That trips the DeepEqual
-	// check on the config Secret, which writes the Secret, which fires a
-	// watch event, which re-enqueues the ProxyGroup, and so on.
-	if len(currAddrs) > 0 && sameAddrPortSet(endpoints, currAddrs) {
-		return currAddrs, nil
-	}
-
-	return endpoints, nil
-}
-
-// sameAddrPortSet reports whether a and b contain the same AddrPorts,
-// ignoring order. Both slices are assumed to be free of duplicates, which
-// holds for callers in this package.
-func sameAddrPortSet(a, b []netip.AddrPort) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for _, x := range a {
-		if !slices.Contains(b, x) {
-			return false
-		}
-	}
-	return true
-}
-
-func getStaticEndpointAddress(a *corev1.NodeAddress, port uint16) *netip.AddrPort {
-	addr, err := netip.ParseAddr(a.Address)
-	if err != nil {
-		return nil
-	}
-
-	return new(netip.AddrPortFrom(addr, port))
 }
 
 // ensureStateAddedForProxyGroup ensures the gauge metric for the ProxyGroup resource is updated when the ProxyGroup

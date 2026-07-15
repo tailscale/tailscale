@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"os"
 	"path"
 	"slices"
@@ -156,6 +157,11 @@ type tailscaleSTSConfig struct {
 
 	// Tailnet specifies the Tailnet resource to use for producing auth keys.
 	Tailnet string
+
+	// StaticEndpoints contains static endpoint addresses (node ExternalIP:port)
+	// keyed by replica ordinal, to be advertised in each replica's tailscaled
+	// config. Populated by reconcilers that support ProxyClass static endpoints.
+	StaticEndpoints map[int32][]netip.AddrPort
 }
 
 type connector struct {
@@ -428,7 +434,7 @@ func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient 
 			}
 		}
 
-		configs, err := tailscaledConfig(stsC, tsClient.LoginURL(), authKey, orig, hostname)
+		configs, err := tailscaledConfig(stsC, tsClient.LoginURL(), authKey, orig, hostname, i)
 		if err != nil {
 			return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 		}
@@ -1051,7 +1057,7 @@ func isMainContainer(c *corev1.Container) bool {
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy
 // state and auth key and returns tailscaled config files for currently supported proxy versions.
-func tailscaledConfig(stsC *tailscaleSTSConfig, loginUrl string, newAuthkey string, oldSecret *corev1.Secret, hostname string) (tailscaledConfigs, error) {
+func tailscaledConfig(stsC *tailscaleSTSConfig, loginUrl string, newAuthkey string, oldSecret *corev1.Secret, hostname string, replicaIdx int32) (tailscaledConfigs, error) {
 	conf := &ipn.ConfigVAlpha{
 		Version:             "alpha0",
 		AcceptDNS:           "false",
@@ -1078,6 +1084,12 @@ func tailscaledConfig(stsC *tailscaleSTSConfig, loginUrl string, newAuthkey stri
 	}
 	if shouldAcceptRoutes(stsC.ProxyClass) {
 		conf.AcceptRoutes = "true"
+	}
+
+	if len(stsC.StaticEndpoints) > 0 {
+		if eps, ok := stsC.StaticEndpoints[replicaIdx]; ok && len(eps) > 0 {
+			conf.StaticEndpoints = eps
+		}
 	}
 
 	if newAuthkey != "" {

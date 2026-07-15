@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -224,6 +225,24 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		}
 	}
 
+	// If the Connector's ProxyClass configures static endpoints, provision
+	// NodePort Services and discover node ExternalIPs to advertise as
+	// static endpoints in the tailscaled config.
+	var pc *tsapi.ProxyClass
+	if proxyClass != "" {
+		pc = new(tsapi.ProxyClass)
+		if err := a.Get(ctx, types.NamespacedName{Name: proxyClass}, pc); err != nil {
+			return fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+	}
+	if pc != nil && pc.Spec.StaticEndpoints != nil {
+		staticEndpoints, err := a.provisionStaticEndpoints(ctx, logger, cn, pc, replicas)
+		if err != nil {
+			return err
+		}
+		sts.StaticEndpoints = staticEndpoints
+	}
+
 	a.mu.Lock()
 	if cn.Spec.ExitNode {
 		a.exitNodes.Add(cn.UID)
@@ -279,12 +298,126 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 	return nil
 }
 
+// provisionStaticEndpoints creates NodePort Services for each Connector replica
+// and discovers static endpoint addresses from node ExternalIPs. Returns a map
+// of replica ordinal to static endpoint addresses suitable for tailscaled config.
+func (a *ConnectorReconciler) provisionStaticEndpoints(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector, pc *tsapi.ProxyClass, replicas int32) (map[int32][]netip.AddrPort, error) {
+	crl := childResourceLabels(cn.Name, a.tsnamespace, "connector")
+	// Connector NodePort Services select pods by the 'app' label (Connector UID),
+	// since Connector StatefulSet names are generated and not deterministic.
+	selector := map[string]string{"app": string(cn.UID)}
+	makeService := func(replica int32, name, namespace string) *corev1.Service {
+		return &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+				Labels:    crl,
+			},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{
+					{
+						Name:     staticEndpointPortName,
+						Protocol: corev1.ProtocolUDP,
+					},
+				},
+				Selector: selector,
+			},
+		}
+	}
+
+	svcToNodePorts, _, err := ensureNodePortServices(ctx, a.Client, a.tsnamespace, proxyTypeConnector, cn.Name, replicas, pc.Name, pc.Spec.StaticEndpoints.NodePort.Ports, makeService)
+	if err != nil {
+		return nil, fmt.Errorf("error provisioning static endpoint NodePort Services: %w", err)
+	}
+
+	// Clean up NodePort Services for replicas that no longer exist.
+	if err := a.cleanupExcessNodePortServices(ctx, cn, replicas); err != nil {
+		return nil, fmt.Errorf("error cleaning up excess NodePort Services: %w", err)
+	}
+
+	endpointsByReplica := make(map[int32][]netip.AddrPort, replicas)
+	for i := range replicas {
+		svcName := nodePortServiceName(cn.Name, i)
+		port, ok := svcToNodePorts[svcName]
+		if !ok {
+			return nil, fmt.Errorf("could not find configured NodePort for Connector replica %d", i)
+		}
+
+		// For Connectors, the config secret is created by Provision() later,
+		// so we pass nil for the existing secret — findStaticEndpoints will
+		// just discover fresh endpoints.
+		eps, err := findStaticEndpoints(ctx, a.Client, nil, pc, port, logger)
+		if err != nil {
+			return nil, fmt.Errorf("could not find static endpoints for replica %d: %w", i, err)
+		}
+		endpointsByReplica[i] = eps
+	}
+
+	return endpointsByReplica, nil
+}
+
+// cleanupExcessNodePortServices removes NodePort Services for replicas beyond
+// the current replica count (e.g. when scaling down).
+func (a *ConnectorReconciler) cleanupExcessNodePortServices(ctx context.Context, cn *tsapi.Connector, replicas int32) error {
+	svcs := new(corev1.ServiceList)
+	if err := a.List(ctx, svcs, client.InNamespace(a.tsnamespace), client.MatchingLabels(map[string]string{
+		kubetypes.LabelManaged: "true",
+		LabelParentType:        proxyTypeConnector,
+		LabelParentName:        cn.Name,
+	})); err != nil {
+		return fmt.Errorf("error listing NodePort Services: %w", err)
+	}
+	for _, svc := range svcs.Items {
+		// Parse the ordinal from the service name: <name>-<i>-nodeport
+		parts := strings.Split(svc.Name, "-")
+		if len(parts) < 3 {
+			continue
+		}
+		ordinalStr := parts[len(parts)-2]
+		ordinal, err := strconv.Atoi(ordinalStr)
+		if err != nil {
+			continue
+		}
+		if int32(ordinal) >= replicas {
+			if err := a.Delete(ctx, &svc); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("error deleting excess NodePort Service %q: %w", svc.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// maybeDeleteStaticEndpointServices removes all NodePort Services for a Connector.
+// Called when the Connector is deleted or when staticEndpoints is removed from
+// the referenced ProxyClass.
+func (a *ConnectorReconciler) maybeDeleteStaticEndpointServices(ctx context.Context, cn *tsapi.Connector) error {
+	var pc *tsapi.ProxyClass
+	if cn.Spec.ProxyClass != "" {
+		pc = new(tsapi.ProxyClass)
+		if err := a.Get(ctx, types.NamespacedName{Name: cn.Spec.ProxyClass}, pc); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get ProxyClass: %w", err)
+		}
+	}
+	// Delete NodePort Services if the ProxyClass no longer has staticEndpoints
+	// or if the Connector is being deleted.
+	if pc == nil || pc.Spec.StaticEndpoints == nil || !cn.DeletionTimestamp.IsZero() {
+		return deleteNodePortServices(ctx, a.Client, a.tsnamespace, proxyTypeConnector, cn.Name)
+	}
+	return nil
+}
+
 func (a *ConnectorReconciler) maybeCleanupConnector(ctx context.Context, logger *zap.SugaredLogger, cn *tsapi.Connector) (bool, error) {
 	if done, err := a.ssr.Cleanup(ctx, cn.Spec.Tailnet, logger, childResourceLabels(cn.Name, a.tsnamespace, "connector"), proxyTypeConnector); err != nil {
 		return false, fmt.Errorf("failed to cleanup Connector resources: %w", err)
 	} else if !done {
 		logger.Debugf("Connector cleanup not done yet, waiting for next reconcile")
 		return false, nil
+	}
+
+	// Clean up any static endpoint NodePort Services.
+	if err := a.maybeDeleteStaticEndpointServices(ctx, cn); err != nil {
+		return false, fmt.Errorf("failed to cleanup static endpoint Services: %w", err)
 	}
 
 	// Unlike most log entries in the reconcile loop, this will get printed

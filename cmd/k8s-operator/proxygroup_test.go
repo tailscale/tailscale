@@ -214,7 +214,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 						},
 					},
 					expectedIPs:       []netip.Addr{},
-					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to ProxyGroup Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
+					expectedEvents:    []string{"Warning ProxyGroupCreationFailed error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"default-pc\" must have bigger range allocated"},
 					expectedErr:       "",
 					expectStatefulSet: false,
 				},
@@ -875,9 +875,8 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 		Build()
 
 	zl, _ := zap.NewDevelopment()
-	r := &ProxyGroupReconciler{Client: fc}
 
-	got, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got, err := findStaticEndpoints(t.Context(), fc, existingSecret, pc, port, zl.Sugar())
 	if err != nil {
 		t.Fatalf("findStaticEndpoints: %v", err)
 	}
@@ -886,7 +885,7 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 	}
 
 	// Repeat to confirm the result is stable across calls.
-	got2, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got2, err := findStaticEndpoints(t.Context(), fc, existingSecret, pc, port, zl.Sugar())
 	if err != nil {
 		t.Fatalf("findStaticEndpoints (2nd call): %v", err)
 	}

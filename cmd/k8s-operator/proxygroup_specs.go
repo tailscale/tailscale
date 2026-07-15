@@ -35,8 +35,10 @@ const (
 	authAPIServerProxySAName = "kube-apiserver-auth-proxy"
 )
 
+// pgNodePortServiceName is kept for backwards compatibility with existing
+// callers. It delegates to the shared nodePortServiceName.
 func pgNodePortServiceName(proxyGroupName string, replica int32) string {
-	return fmt.Sprintf("%s-%d-nodeport", proxyGroupName, replica)
+	return nodePortServiceName(proxyGroupName, replica)
 }
 
 func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *corev1.Service {
