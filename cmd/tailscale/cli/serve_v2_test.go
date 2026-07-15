@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		name         string
 		steps        []step
 		initialState fakeLocalServeClient // use the zero value for empty config
+		skipOn       []string             // platforms on which to skip; GOOS values
 	}
 
 	// creaet a temporary directory for path-based destinations
@@ -495,6 +497,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 				},
 			}},
+			skipOn: []string{"windows"},
 		},
 		{
 			name: "tls_terminated_tcp_unix_socket",
@@ -509,6 +512,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 				},
 			}},
+			skipOn: []string{"windows"},
 		},
 		{
 			name: "tcp_unix_socket_off",
@@ -528,6 +532,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 					want:    &ipn.ServeConfig{},
 				},
 			},
+			skipOn: []string{"windows"},
 		},
 		{
 			name: "tcp_unix_socket_proxy_protocol_rejected",
@@ -535,6 +540,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 				command: cmd("serve --tcp=3128 --proxy-protocol=1 --bg unix:/var/run/app.sock"),
 				wantErr: anyErr(),
 			}},
+			skipOn: []string{"windows"},
 		},
 		{
 			name: "tcp_off",
@@ -1046,6 +1052,9 @@ func TestServeDevConfigMutations(t *testing.T) {
 
 	for _, group := range groups {
 		t.Run(group.name, func(t *testing.T) {
+			if slices.Contains(group.skipOn, runtime.GOOS) {
+				t.Skip("skipping on", runtime.GOOS)
+			}
 			lc := group.initialState
 			for i, st := range group.steps {
 				var stderr bytes.Buffer
@@ -2628,6 +2637,10 @@ func TestRunServeSetConfig(t *testing.T) {
 	})
 
 	t.Run("http_over_unix_roundtrip", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("skipping on windows")
+		}
+
 		// set-config: apply HTTP-over-unix declarative config; then get-config
 		// should reproduce a target of "http://unix:/var/run/app.sock" without
 		// mangling it through host:port parsing.
@@ -2662,6 +2675,10 @@ func TestRunServeSetConfig(t *testing.T) {
 	})
 
 	t.Run("https_over_unix_roundtrip", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("skipping on windows")
+		}
+
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
 		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
