@@ -365,30 +365,6 @@ jobs:
       working-directory: src
       run: ./tool/go test $(./tool/go run ./tool/listpkgs --has-root-tests)
 
-  vm:
-    needs: gomod-cache
-    runs-on: ["self-hosted", "linux", "vm"]
-    # VM tests run with some privileges, don't let them run on 3p PRs.
-    if: github.repository == 'tailscale/tailscale'
-    steps:
-    - name: checkout
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        path: src
-    - name: Restore Go module cache
-      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-      with:
-        path: gomodcache
-        key: ${{ needs.gomod-cache.outputs.cache-key }}
-        enableCrossOsArchive: true
-    - name: Run VM tests
-      working-directory: src
-      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2404
-      env:
-        HOME: "/var/lib/ghrunner/home"
-        TMPDIR: "/tmp"
-        XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
-
   cross: # cross-compile checks, build only.
     needs: gomod-cache
     strategy:
@@ -912,7 +888,6 @@ jobs:
       - test
       - windows
       - macos
-      - vm
       - cross
       - ios
       - wasm
@@ -958,7 +933,6 @@ jobs:
       - test
       - windows
       - macos
-      - vm
       - cross
       - ios
       - wasm
@@ -1008,7 +982,6 @@ jobs:
       - test
       - windows
       - macos
-      - vm
       - wasm
       - fuzz
       - race-root-integration

@@ -97,6 +97,9 @@ type Env struct {
 	selfSignedDERPCertPinning bool // serve test DERP map with sha256-raw cert pins
 	fakeACME                  bool // point tailscaled at vnet's fake ACME server
 
+	controlDNSDomain string             // MagicDNS domain for the test control server (see ControlDNS)
+	controlDNS       *tailcfg.DNSConfig // DNS config for the test control server (see ControlDNS)
+
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
 	gokrazyOnce   sync.Once
@@ -403,6 +406,16 @@ func FakeACME() EnvOption {
 	return envOptFunc(func(e *Env) { e.fakeACME = true })
 }
 
+// ControlDNS returns an [EnvOption] that makes the test control server send
+// the given DNS configuration in MapResponses, with node names placed under
+// the given MagicDNS domain (e.g. "tailnet.test").
+func ControlDNS(magicDNSDomain string, cfg *tailcfg.DNSConfig) EnvOption {
+	return envOptFunc(func(e *Env) {
+		e.controlDNSDomain = magicDNSDomain
+		e.controlDNS = cfg
+	})
+}
+
 // AddNetwork creates a new virtual network. Arguments follow the same pattern as
 // vnet.Config.AddNetwork (string IPs, NAT types, NetworkService values).
 func (e *Env) AddNetwork(opts ...any) *vnet.Network {
@@ -430,6 +443,7 @@ type Node struct {
 	joinTailnet      bool
 	runSSH           bool // true to enable the node's Tailscale SSH server
 	noAgent          bool // true to skip TTA agent setup (e.g. macOS VMs without TTA)
+	systemdUnit      bool // true to run tailscaled via the stock systemd unit (Linux cloud VMs only)
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
@@ -463,6 +477,8 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			n.runSSH = true
 		case nodeOptNoAgent:
 			n.noAgent = true
+		case nodeOptSystemdUnit:
+			n.systemdUnit = true
 		case nodeOptAdvertiseRoutes:
 			n.advertiseRoutes = string(o)
 		case nodeOptSNATSubnetRoutes:
@@ -480,6 +496,10 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			Key:   "TS_DEBUG_ACME_DIRECTORY_URL",
 			Value: "http://acme.example/directory",
 		})
+	}
+
+	if n.systemdUnit && (n.os.IsGokrazy || n.os.GOOS() != "linux") {
+		e.t.Fatalf("SystemdUnit is only supported on Linux cloud VMs; node %s is %s", name, n.os.Name)
 	}
 
 	// macOS VMs require a macOS arm64 host (Apple Virtualization.framework via
@@ -520,6 +540,7 @@ type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
 type nodeOptTailscaleSSH struct{}
 type nodeOptNoAgent struct{}
+type nodeOptSystemdUnit struct{}
 type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
@@ -541,6 +562,14 @@ func TailscaleSSH() nodeOptTailscaleSSH { return nodeOptTailscaleSSH{} }
 // have a test agent, so agent-dependent operations (Status, ExecOnNode, etc.)
 // won't work. Useful for VMs that just need to boot and respond to ICMP.
 func NoAgent() nodeOptNoAgent { return nodeOptNoAgent{} }
+
+// SystemdUnit returns a NodeOption that makes the node run tailscaled via the
+// stock systemd unit that Linux packages ship (cmd/tailscaled/tailscaled.service
+// with cmd/tailscaled/tailscaled.defaults as its EnvironmentFile), instead of
+// launching tailscaled directly as a background process. This exercises the
+// unit's sandboxing directives and its Type=notify readiness handshake.
+// It is only supported on Linux cloud VMs (e.g. Ubuntu, Debian).
+func SystemdUnit() nodeOptSystemdUnit { return nodeOptSystemdUnit{} }
 
 // AdvertiseRoutes returns a NodeOption that configures the node to advertise
 // the given routes (comma-separated CIDRs) when joining the tailnet.
@@ -1641,6 +1670,11 @@ func (e *Env) initVnet() {
 		}
 		if e.selfSignedDERPCertPinning {
 			e.server.ControlServer().DERPMap = e.buildSelfSignedDERPMap()
+		}
+		if e.controlDNS != nil {
+			cs := e.server.ControlServer()
+			cs.MagicDNSDomain = e.controlDNSDomain
+			cs.DNSConfig = e.controlDNS.Clone()
 		}
 		if e.fakeACME {
 			cs := e.server.ControlServer()

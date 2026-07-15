@@ -6,6 +6,7 @@ package vmtest
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -110,6 +111,10 @@ func (e *Env) generateLinuxUserData(n *Node) string {
 		ud.WriteString(fmt.Sprintf("    ssh_authorized_keys:\n      - %s\n", strings.TrimSpace(string(pubkey))))
 	}
 
+	if n.systemdUnit {
+		e.writeSystemdUnitFiles(&ud, n)
+	}
+
 	ud.WriteString("runcmd:\n")
 
 	// Remove the default route from the debug NIC (enp0s4) so traffic goes through vnet.
@@ -130,12 +135,21 @@ func (e *Env) generateLinuxUserData(n *Node) string {
 		ud.WriteString("  - [\"sysctl\", \"-w\", \"net.ipv6.conf.all.forwarding=1\"]\n")
 	}
 
-	// Start tailscaled in the background. --statedir provides a VarRoot so
-	// features like Taildrop (which needs a place to stash incoming files)
-	// have a directory to work with.
-	ud.WriteString("  - [\"mkdir\", \"-p\", \"/var/lib/tailscale\"]\n")
-	fmt.Fprintf(&ud, "  - [\"/bin/sh\", \"-c\", \"%s/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"]\n", tailscaledEnvPrefix(n))
-	ud.WriteString("  - [\"sleep\", \"2\"]\n")
+	// Start tailscaled, either via the stock systemd unit or directly in
+	// the background. --statedir provides a VarRoot so features like
+	// Taildrop (which needs a place to stash incoming files) have a
+	// directory to work with.
+	if n.systemdUnit {
+		// The unit's ExecStart runs /usr/sbin/tailscaled.
+		ud.WriteString("  - [\"cp\", \"/usr/local/bin/tailscaled\", \"/usr/sbin/tailscaled\"]\n")
+		ud.WriteString("  - [\"systemctl\", \"daemon-reload\"]\n")
+		// Type=notify makes this block until tailscaled reports readiness.
+		ud.WriteString("  - [\"systemctl\", \"start\", \"tailscaled.service\"]\n")
+	} else {
+		ud.WriteString("  - [\"mkdir\", \"-p\", \"/var/lib/tailscale\"]\n")
+		fmt.Fprintf(&ud, "  - [\"/bin/sh\", \"-c\", \"%s/usr/local/bin/tailscaled --state=mem: --statedir=/var/lib/tailscale &\"]\n", tailscaledEnvPrefix(n))
+		ud.WriteString("  - [\"sleep\", \"2\"]\n")
+	}
 
 	// Start tta (Tailscale Test Agent).
 	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"/usr/local/bin/tta &\"]\n")
@@ -223,6 +237,40 @@ func (e *Env) generateFreeBSDUserData(n *Node) string {
 	ud.WriteString("  - \"export PATH=/usr/local/bin:$PATH && /usr/local/bin/tta </dev/null >/var/log/tta.log 2>&1 &\"\n")
 
 	return ud.String()
+}
+
+// writeSystemdUnitFiles appends a cloud-init write_files section that
+// installs the stock tailscaled systemd unit from the source tree, along
+// with the packaging's /etc/default/tailscaled EnvironmentFile (plus any
+// per-node TailscaledEnv variables). File contents are base64-encoded to
+// sidestep YAML quoting.
+func (e *Env) writeSystemdUnitFiles(ud *strings.Builder, n *Node) {
+	modRoot, err := findModRoot()
+	if err != nil {
+		e.t.Fatalf("finding module root for tailscaled.service: %v", err)
+	}
+	unit, err := os.ReadFile(filepath.Join(modRoot, "cmd/tailscaled/tailscaled.service"))
+	if err != nil {
+		e.t.Fatalf("reading tailscaled.service: %v", err)
+	}
+	defaults, err := os.ReadFile(filepath.Join(modRoot, "cmd/tailscaled/tailscaled.defaults"))
+	if err != nil {
+		e.t.Fatalf("reading tailscaled.defaults: %v", err)
+	}
+	var envFile strings.Builder
+	envFile.Write(defaults)
+	for _, env := range n.vnetNode.Env() {
+		fmt.Fprintf(&envFile, "%s=%q\n", env.Key, env.Value)
+	}
+
+	ud.WriteString("write_files:\n")
+	writeFile := func(path string, content []byte) {
+		fmt.Fprintf(ud, "  - path: %s\n", path)
+		fmt.Fprintf(ud, "    encoding: b64\n")
+		fmt.Fprintf(ud, "    content: %s\n", base64.StdEncoding.EncodeToString(content))
+	}
+	writeFile("/etc/systemd/system/tailscaled.service", unit)
+	writeFile("/etc/default/tailscaled", []byte(envFile.String()))
 }
 
 func tailscaledEnvPrefix(n *Node) string {
