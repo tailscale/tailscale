@@ -15,8 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
+	"net/netip"
 	"reflect"
 	"slices"
+	"time"
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
@@ -47,6 +50,7 @@ type (
 		proxyImage         string
 		defaultTags        []string
 		tsClients          ClientProvider
+		resolver           func(ctx context.Context, network, host string) ([]netip.Addr, error)
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
 	}
@@ -66,6 +70,10 @@ type (
 		// Clients resolves the Tailscale API client for a given tailnet name. Used to mint auth keys for each
 		// replica. Blank tailnet returns the operator's default client.
 		Clients ClientProvider
+		// Resolver is used to convert LoadBalancer Service hostnames to concrete IPs when the cloud
+		// controller doesn't populate Ingress[].IP directly (e.g. AWS NLBs). Defaults to a resolver backed by
+		// net.DefaultResolver when unset.
+		Resolver func(ctx context.Context, network string, host string) ([]netip.Addr, error)
 		// The logger to use for this Reconciler.
 		Logger *zap.SugaredLogger
 		// Clock is used to stamp condition transitions. Defaults to a real clock when unset.
@@ -91,12 +99,18 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		clock = tstime.DefaultClock{}
 	}
 
+	resolver := options.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver.LookupNetIP
+	}
+
 	return &Reconciler{
 		Client:             options.Client,
 		tailscaleNamespace: options.TailscaleNamespace,
 		proxyImage:         options.ProxyImage,
 		defaultTags:        options.DefaultTags,
 		tsClients:          options.Clients,
+		resolver:           resolver,
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
 	}
@@ -240,7 +254,21 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 	}
 
+	if !peerRelayReady(pr) {
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	return reconcile.Result{}, nil
+}
+
+func peerRelayReady(pr *tsapi.PeerRelay) bool {
+	for _, c := range pr.Status.Conditions {
+		if c.Type == string(tsapi.PeerRelayReady) {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+
+	return false
 }
 
 func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]tsapi.PeerRelayEndpoint, []error, error) {
@@ -254,7 +282,7 @@ func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]
 		errs      []error
 	)
 	for i := range list.Items {
-		endpoint, err := peerRelayEndpoint(&list.Items[i])
+		endpoint, err := r.peerRelayEndpoint(ctx, &list.Items[i])
 		if err != nil {
 			errs = append(errs, err)
 			continue

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"sync"
@@ -38,6 +39,19 @@ const (
 	tailscaleNamespace = "tailscale"
 	testProxyImage     = "tailscale/tailscale:test"
 )
+
+func testResolver(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+	r := map[string][]netip.Addr{
+		"test-0.elb.amazonaws.com": {netip.MustParseAddr("203.0.113.10")},
+		"test-1.elb.amazonaws.com": {netip.MustParseAddr("203.0.113.11")},
+	}
+
+	if addrs, ok := r[host]; ok {
+		return addrs, nil
+	}
+
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
 
 type expectedService struct {
 	Name        string
@@ -400,10 +414,59 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason: peerrelay.ReasonPodsPending,
 		},
 		{
-			// Peer relays advertise a raw IP:port to peers, so a hostname-only LB (a misconfigured AWS NLB, for
-			// example) must be rejected outright , no fallback. The reconciler surfaces this as an error and
-			// leaves that replica out of status.endpoints.
-			Name:    "hostname-only-lb-produces-error",
+			// Hostname-only LBs (AWS NLBs) no longer produce a hard error, the reconciler resolves the hostname
+			// to a stable IP and advertises that instead. Here the resolver returns a canned address for the AWS
+			// hostname; the endpoint should reflect the resolved IP. The eip-allocations annotation is what
+			// signals to the reconciler that hostname resolution is safe — this is our AWS opt-in contract.
+			Name:    "hostname-only-lb-is-resolved-to-ip",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{eipAllocationsAnnotation: "eipalloc-aaaa"},
+					},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.10", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// Unresolvable hostname (e.g. NXDOMAIN during LB provisioning) stays in Pending — no hard error,
+			// reconciler will retry when the hostname comes online. Service still carries the eip-allocations
+			// annotation so we know the resolution path was attempted (and not just skipped for being non-AWS).
+			Name:    "unresolvable-hostname-stays-pending",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{eipAllocationsAnnotation: "eipalloc-aaaa"},
+					},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "unresolvable.example.invalid"),
+			},
+			ExpectedServices:    []expectedService{{Name: "test-0"}},
+			ExpectedEndpoints:   nil,
+			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
+		},
+		{
+			// A hostname-only Service without the EIP annotation is a Service whose backing LB has unstable IPs
+			// (unmanaged AWS NLB, most third-party providers). The reconciler refuses to resolve — advertising a
+			// transient IP would leave peers connecting to a dead endpoint if AWS shifts the underlying A records.
+			// Users get an explicit "pending" state and either add the annotation or accept the LB isn't usable.
+			Name:    "hostname-without-eip-annotation-stays-pending",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
@@ -413,30 +476,35 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices:    []expectedService{{Name: "test-0"}},
 			ExpectedEndpoints:   nil,
-			ExpectsError:        true,
 			ExpectedReadyStatus: metav1.ConditionFalse,
-			ExpectedReadyReason: peerrelay.ReasonEndpointsInvalid,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
-			// Mixed batch: one replica has a proper IP, another has only a hostname. The IP-provisioned replica
-			// still shows up in status; the hostname-only one is skipped and drives the error.
-			Name:    "mixed-ip-and-hostname-partial-status-plus-error",
+			// Mixed batch: one replica has a direct IP, another has only a hostname that resolves (with EIP
+			// annotation propagated from the PeerRelay spec). Both should end up in status.endpoints.
+			Name:    "mixed-ip-and-resolved-hostname",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas: new(int32(2)),
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{eipAllocationsAnnotation: "eipalloc-bbbb"},
+					},
+				},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
 				managedServiceWithLB("test", 1, "", "test-1.elb.amazonaws.com"),
+				managedStatefulSet("test", 2, 2),
 			},
 			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+				{Replica: 1, Address: "203.0.113.11", Port: 41641},
 			},
-			ExpectsError:        true,
-			ExpectedReadyStatus: metav1.ConditionFalse,
-			ExpectedReadyReason: peerrelay.ReasonEndpointsInvalid,
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
 		},
 		{
 			// Mid-provisioning: some LBs have addresses, some don't yet. Only the ready ones show up.
@@ -505,6 +573,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				ProxyImage:         testProxyImage,
 				DefaultTags:        []string{"tag:test-peer-relay"},
 				Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+				Resolver:           testResolver,
 				Logger:             logger.Sugar(),
 			})
 
@@ -717,6 +786,8 @@ func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.S
 	return svc
 }
 
+const eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
+
 func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {
 	labels := map[string]string{
 		"tailscale.com/managed":              "true",
@@ -786,6 +857,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
 		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
 
@@ -930,6 +1002,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
 			Clients:            &fakeClientProvider{client: tsc},
+			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
 
@@ -967,6 +1040,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
 			Clients:            &fakeClientProvider{client: tsc},
+			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
 
@@ -1007,6 +1081,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:k8s-peer-relay"},
 			Clients:            &fakeClientProvider{client: tsc},
+			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
 
@@ -1073,6 +1148,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:test-peer-relay"},
 			Clients:            &fakeClientProvider{client: tsc},
+			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
 
@@ -1121,6 +1197,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			ProxyImage:         testProxyImage,
 			DefaultTags:        []string{"tag:test-peer-relay"},
 			Clients:            &fakeClientProvider{client: tsc},
+			Resolver:           testResolver,
 			Logger:             logger.Sugar(),
 		})
 
@@ -1197,6 +1274,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
 		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
 

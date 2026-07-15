@@ -6,9 +6,13 @@
 package peerrelay
 
 import (
+	"context"
 	"fmt"
 	"maps"
+	"net/netip"
+	"slices"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,6 +45,8 @@ const (
 	// servicePort is the UDP port that each peer relay container will listen on and that the LoadBalancer Service
 	// exposes externally.
 	servicePort = 41641
+
+	annotationEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 )
 
 // cloudAnnotations are the cloud-provider-specific annotations applied to every generated LoadBalancer Service to
@@ -125,7 +131,7 @@ func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
 	return int32(n), true
 }
 
-func peerRelayEndpoint(svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
+func (r *Reconciler) peerRelayEndpoint(ctx context.Context, svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
 	idx, ok := replicaIndexFromLabels(svc.Labels)
 	if !ok {
 		return nil, nil
@@ -137,11 +143,30 @@ func peerRelayEndpoint(svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
 		}
 	}
 
-	// An ingress entry with no IP means the LB has been provisioned but assigned only a hostname (e.g. an AWS NLB
-	// missing the ip-address-type/target-type annotations). An empty ingress list means the LB is still
-	// provisioning; wait for the next reconcile.
-	if len(svc.Status.LoadBalancer.Ingress) > 0 {
-		return nil, fmt.Errorf("service %q LoadBalancer ingress has no public IP; peer relays require a public IP (check cloud LoadBalancer annotations)", svc.Name)
+	// Just return nil if we're not dealing with AWS fun.
+	if _, ok = svc.Annotations[annotationEIPAllocations]; !ok {
+		return nil, nil
+	}
+
+	// If we were not able to obtain an IP address, we fall back to an IPv4 lookup. This is specifically for the case
+	// of AWS where NLB-backed Service resources are only ever given hostnames. We expect users to also provide
+	// an annotation with their elastic IP allocations so that there is only ever 1 IP address behind the hostname, so
+	// we perform a lookup so that the user doesn't also need to provide that IP address.
+	for _, ing := range svc.Status.LoadBalancer.Ingress {
+		if ing.Hostname == "" {
+			continue
+		}
+
+		resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		addrs, err := r.resolver(resolveCtx, "ip4", ing.Hostname)
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+
+		slices.SortFunc(addrs, netip.Addr.Compare)
+		return &tsapi.PeerRelayEndpoint{Replica: idx, Address: addrs[0].String(), Port: servicePort}, nil
 	}
 
 	return nil, nil
@@ -159,5 +184,6 @@ func portsMatch(a, b []corev1.ServicePort) bool {
 			return false
 		}
 	}
+
 	return true
 }
