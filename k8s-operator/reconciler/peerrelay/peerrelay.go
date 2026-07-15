@@ -36,6 +36,7 @@ import (
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 )
@@ -226,6 +227,10 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 		var endpoint *tsapi.PeerRelayEndpoint
 		if ep, ok := endpointsByReplica[i]; ok {
 			endpoint = &ep
+		}
+
+		if err = r.ensureStateSecret(ctx, pr, i); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to apply state Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 
 		if err = r.ensureConfigSecret(ctx, pr, i, endpoint); err != nil {
@@ -490,9 +495,51 @@ func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (stri
 	return newAuthKey(ctx, client, r.peerRelayTags(pr))
 }
 
+func (r *Reconciler) ensureStateSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32) error {
+	desired := tailscaled.NewStateSecret(tailscaled.StateSecretOptions{
+		Name:      stateSecretName(pr.Name, idx),
+		Namespace: r.tailscaleNamespace,
+		Labels:    peerRelayServiceLabels(pr.Name, idx),
+	})
+
+	var existing corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err = r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("failed to create state Secret: %w", err)
+		}
+
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to get state Secret: %w", err)
+	}
+
+	updated := existing.DeepCopy()
+	if updated.Labels == nil {
+		updated.Labels = make(map[string]string, len(desired.Labels))
+	}
+	for k, v := range desired.Labels {
+		updated.Labels[k] = v
+	}
+
+	if maps.Equal(existing.Labels, updated.Labels) {
+		return nil
+	}
+
+	if err = r.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update state Secret: %w", err)
+	}
+
+	return nil
+}
+
 func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
+	labels := peerRelayLabels(pr.Name)
+	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeConfig
+
 	var list corev1.SecretList
-	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
+	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
