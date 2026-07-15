@@ -199,7 +199,8 @@ type CapabilityVersion int
 //   - 148: 2026-09-15: Client understands [Node.StableTailnetID]
 //   - 149: 2026-10-07: Sentinel version to request the server send back [NodeAttrCacheNetworkMaps] set to enabled
 //   - 150: 2026-10-13: Client handles app connectors with "mode": "magicip" as conn25.
-const CurrentCapabilityVersion CapabilityVersion = 150
+//   - 151: 2026-11-13: Client understands [nodecap.LogUploadAuth] for authenticated log uploads
+const CurrentCapabilityVersion CapabilityVersion = 151
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
