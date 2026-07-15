@@ -345,6 +345,30 @@ func (nb *nodeBackend) Peers() []tailcfg.NodeView {
 	return slicesx.MapValues(nb.peers)
 }
 
+// PeerByID returns the current state of the peer (not self) node with
+// the given ID, or ok=false if it is not a current peer.
+func (nb *nodeBackend) PeerByID(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	n, ok := nb.peers[id]
+	return n, ok
+}
+
+// peerDiscoKeys returns the disco public keys of all current peers,
+// keyed by their node public keys. Peers without a disco key are
+// omitted.
+func (nb *nodeBackend) peerDiscoKeys() map[key.NodePublic]key.DiscoPublic {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	m := make(map[key.NodePublic]key.DiscoPublic, len(nb.peers))
+	for _, p := range nb.peers {
+		if dk := p.DiscoKey(); !dk.IsZero() {
+			m[p.Key()] = dk
+		}
+	}
+	return m
+}
+
 func (nb *nodeBackend) PeersForTest() []tailcfg.NodeView {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
@@ -363,28 +387,22 @@ func (nb *nodeBackend) CollectServices() bool {
 
 // AppendMatchingPeers returns base with all peers that match pred appended.
 //
-// It acquires b.mu to read the netmap but releases it before calling pred.
+// It acquires nb.mu to snapshot the peers but releases it before
+// calling pred.
 func (nb *nodeBackend) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
-	var peers []tailcfg.NodeView
-
 	nb.mu.Lock()
-	if nb.netMap != nil {
-		// All fields on b.netMap are immutable, so this is
-		// safe to copy and use outside the lock.
-		peers = nb.netMap.Peers
-	}
+	peers := slicesx.MapValues(nb.peers)
 	nb.mu.Unlock()
+
+	// Sort by node ID for deterministic results; the map iteration
+	// above is randomly ordered.
+	slices.SortFunc(peers, func(a, b tailcfg.NodeView) int {
+		return cmp.Compare(a.ID(), b.ID())
+	})
 
 	ret := base
 	for _, peer := range peers {
-		// The peers in b.netMap don't contain updates made via
-		// UpdateNetmapDelta. So only use PeerView in b.netMap for its NodeID,
-		// and then look up the latest copy in b.peers which is updated in
-		// response to UpdateNetmapDelta edits.
-		nb.mu.Lock()
-		peer, ok := nb.peers[peer.ID()]
-		nb.mu.Unlock()
-		if ok && pred(peer) {
+		if pred(peer) {
 			ret = append(ret, peer)
 		}
 	}

@@ -4710,19 +4710,18 @@ func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer tai
 	var zero tailcfg.NodeView
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	// PeerByTailscaleIP needs an up-to-date Peers slice.
-	nm := b.NetMapWithPeers()
-	if nm == nil {
-		return zero, "", errors.New("no netmap")
+	cn := b.currentNode()
+	var ok bool
+	if nid, addrOK := cn.NodeByAddr(ip); addrOK {
+		peer, ok = cn.PeerByID(nid)
 	}
-	peer, ok := nm.PeerByTailscaleIP(ip)
 	if !ok {
 		return zero, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
 	}
 	if peer.Expired() {
 		return zero, "", errors.New("peer's node key has expired")
 	}
-	base := peerAPIBase(nm, peer)
+	base := peerAPIBase(cn.NetMap(), peer)
 	if base == "" {
 		return zero, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID(), ip)
 	}
@@ -7968,22 +7967,12 @@ func (b *LocalBackend) DebugPeerRelayServers() set.Set[netip.Addr] {
 }
 
 // DebugPeerDiscoKeys returns the disco public keys this node has learned for
-// each of its peers from the most recent network map. Intended for tests
+// each of its current peers. Intended for tests
 // (the production [ipnstate.PeerStatus] purposefully does not surface disco
 // keys; surfacing them via the [ipnstate.Status] API would also pollute
 // every PeerStatus consumer with a non-comparable struct field).
 func (b *LocalBackend) DebugPeerDiscoKeys() map[key.NodePublic]key.DiscoPublic {
-	nm := b.currentNode().NetMap()
-	if nm == nil {
-		return nil
-	}
-	m := make(map[key.NodePublic]key.DiscoPublic, len(nm.Peers))
-	for _, p := range nm.Peers {
-		if dk := p.DiscoKey(); !dk.IsZero() {
-			m[p.Key()] = dk
-		}
-	}
-	return m
+	return b.currentNode().peerDiscoKeys()
 }
 
 // ControlKnobs returns the node's control knobs.
