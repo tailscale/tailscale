@@ -823,7 +823,10 @@ func (v TCPPortHandlerView) HTTPS() bool { return v.ж.HTTPS }
 // It is mutually exclusive with TCPForward.
 func (v TCPPortHandlerView) HTTP() bool { return v.ж.HTTP }
 
-// TCPForward is the IP:port to forward TCP connections to.
+// TCPForward is the address to forward TCP connections to.
+// It is either a host:port (e.g. "127.0.0.1:3128", "localhost:5432")
+// or a Unix socket path prefixed with "unix:"
+// (e.g. "unix:/var/run/app.sock" or "unix:relative.sock").
 // Whether or not TLS is terminated by tailscaled depends on
 // TerminateTLS.
 //
