@@ -430,29 +430,41 @@ type Hooks struct {
 	// See [filter.Filter] for details on how these hooks are invoked.
 	Filter FilterHooks
 
-	// ExtraWireGuardAllowedIPs is called with each peer's public key
-	// from the initial [wgcfg.Config], and returns a view of prefixes to
-	// append to each peer's AllowedIPs.
+	// ExtraWireGuardAllowedIPs is called with a sequence of peers whose
+	// extra AllowedIPs the caller wants (re)computed, and returns
+	// prefixes to append to those peers' AllowedIPs, keyed by node ID.
 	//
-	// The extra AllowedIPs are added after the [router.Config] is generated, but
-	// before the WireGuard config is sent to the engine, so the extra IPs are
-	// given to WireGuard, but not the OS routing table.
+	// The sequence is not necessarily all peers: callers may pass any
+	// subset (such as only the peers changed by a netmap delta), and
+	// the returned map's meaning is scoped to the peers presented. A
+	// peer absent from the returned map has no extra AllowedIPs. As of
+	// 2026-07-15 the only caller passes all current peers on each
+	// reconfig, but extensions must not rely on that.
 	//
-	// The prefixes returned from the hook should not contain duplicates, either
-	// internally, or with netmap peer prefixes. Returned prefixes should only
+	// An extension with nothing to add should return nil without
+	// iterating peers; that keeps steady-state netmap deltas free of
+	// per-peer work when the extension is idle. The peers sequence is
+	// only valid during the call.
+	//
+	// The extra AllowedIPs are given to WireGuard, but not the OS
+	// routing table.
+	//
+	// The returned prefixes should not contain duplicates, either
+	// internally, or with netmap peer prefixes. They should only
 	// contain host routes, and not contain default or subnet routes.
-	// Subsequent calls that return an unchanged set of prefixes for a given peer,
-	// should return the prefixes in the same order for that peer,
-	// to prevent configuration churn.
+	// Subsequent calls that return an unchanged set of prefixes for a
+	// given peer should return the prefixes in the same order for that
+	// peer, to prevent configuration churn.
 	//
-	// The returned slice should not be mutated by the extension after it is returned.
+	// The returned map and slices should not be mutated by the
+	// extension after they are returned.
 	//
 	// The hook is called with LocalBackend's mutex locked.
 	//
 	// TODO(#17858): This hook may not be needed and can possibly be replaced by
 	// new hooks that fit into the new architecture that make use of new
 	// WireGuard APIs.
-	ExtraWireGuardAllowedIPs feature.Hook[func(key.NodePublic) views.Slice[netip.Prefix]]
+	ExtraWireGuardAllowedIPs feature.Hook[func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix]
 
 	// ExtraRouterConfigRoutes returns a view of prefixes to append to [router.Config.Routes].
 	//

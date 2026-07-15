@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"errors"
+	"iter"
 	"maps"
 	"net/netip"
 	"slices"
@@ -17,7 +18,6 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
@@ -524,11 +524,14 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p1}})
 
 	transit := netip.MustParsePrefix("fe80::1234/128")
-	extrasFor := func(k key.NodePublic) views.Slice[netip.Prefix] {
-		if k == p1.Key() {
-			return views.SliceOf([]netip.Prefix{transit})
+	extrasFor := func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+		var extras map[tailcfg.NodeID][]netip.Prefix
+		for id, k := range peers {
+			if k == p1.Key() {
+				mak.Set(&extras, id, []netip.Prefix{transit})
+			}
 		}
-		return views.Slice[netip.Prefix]{}
+		return extras
 	}
 
 	// Installing extras reports the peer's allowed prefixes as
@@ -550,8 +553,8 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 	}
 
 	// A hook that no longer returns extras removes them.
-	changed = nb.updateRouteManagerExtras(func(key.NodePublic) views.Slice[netip.Prefix] {
-		return views.Slice[netip.Prefix]{}
+	changed = nb.updateRouteManagerExtras(func(iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
+		return nil
 	})
 	if len(changed) != 1 {
 		t.Errorf("clearing extras changed = %v; want just %v", changed, p1.Key())

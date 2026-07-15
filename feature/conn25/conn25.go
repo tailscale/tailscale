@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -267,11 +268,17 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	})
 
 	// Tell WireGuard what Transit IPs belong to which connector peers.
-	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(k key.NodePublic) views.Slice[netip.Prefix] {
+	e.host.Hooks().ExtraWireGuardAllowedIPs.Set(func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix {
 		if !e.conn25.isConfigured() {
-			return views.Slice[netip.Prefix]{}
+			return nil
 		}
-		return e.extraWireGuardAllowedIPs(k)
+		var extras map[tailcfg.NodeID][]netip.Prefix
+		for id, k := range peers {
+			if pfxs := e.extraWireGuardAllowedIPs(k); pfxs.Len() > 0 {
+				mak.Set(&extras, id, pfxs.AsSlice())
+			}
+		}
+		return extras
 	})
 
 	return nil

@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"cmp"
 	"context"
+	"iter"
 	"maps"
 	"net/netip"
 	"slices"
@@ -943,22 +944,23 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) routemanager.PeersW
 	return res.AllowedIPs
 }
 
-// updateRouteManagerExtras pushes each peer's extra WireGuard-only
-// allowed IPs into the route manager, obtained by calling fn (the
-// [ipnext.Hooks.ExtraWireGuardAllowedIPs] hook) with each peer's
-// public key.
+// updateRouteManagerExtras pushes extra WireGuard-only allowed IPs
+// into the route manager, obtained by calling fn (the
+// [ipnext.Hooks.ExtraWireGuardAllowedIPs] hook) with a sequence of
+// the current peers.
 //
 // It returns the peers whose allowed source prefixes changed as a
 // result.
-func (nb *nodeBackend) updateRouteManagerExtras(fn func(key.NodePublic) views.Slice[netip.Prefix]) routemanager.PeersWithRouteChanges {
+func (nb *nodeBackend) updateRouteManagerExtras(fn func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix) routemanager.PeersWithRouteChanges {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	var extras map[tailcfg.NodeID][]netip.Prefix
-	for id, p := range nb.peers {
-		if pfxs := fn(p.Key()); pfxs.Len() > 0 {
-			mak.Set(&extras, id, pfxs.AsSlice())
+	extras := fn(func(yield func(tailcfg.NodeID, key.NodePublic) bool) {
+		for id, p := range nb.peers {
+			if !yield(id, p.Key()) {
+				return
+			}
 		}
-	}
+	})
 	rt := nb.routeMgr.Begin()
 	rt.SetExtraAllowedIPs(extras)
 	res := rt.Commit()
