@@ -190,6 +190,13 @@ const (
 	// LogExitFlows enables exit node destinations in network flow logs.
 	LogExitFlows Cap = "log-exit-flows"
 
+	// LogUploadAuth specifies the HTTP Authorization token
+	// to use when uploading logs. The CapMap value is a JSON string containing
+	// the token. Control pushes a refreshed token via netmap CapMap updates before
+	// the previous token expires. The client caches the latest value and
+	// does not fetch refreshes itself.
+	LogUploadAuth Cap = "log-upload-auth"
+
 	// AutoExitNode permits the automatic exit nodes feature.
 	AutoExitNode Cap = "auto-exit-node"
 
