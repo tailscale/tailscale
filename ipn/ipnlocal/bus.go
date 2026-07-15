@@ -26,8 +26,7 @@ import (
 // other geese where this is false.
 const goosGetsLegacyNetmapNotify = runtime.GOOS == "windows" ||
 	runtime.GOOS == "darwin" ||
-	runtime.GOOS == "ios" ||
-	runtime.GOOS == "android"
+	runtime.GOOS == "ios"
 
 type rateLimitingBusSender struct {
 	fn              func(*ipn.Notify) (keepGoing bool)
