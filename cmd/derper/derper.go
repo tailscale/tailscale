@@ -354,15 +354,7 @@ func main() {
 			log.Fatalf("derper: can not start cert provider: %v", err)
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
-		getCert := httpsrv.TLSConfig.GetCertificate
-		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			cert, err := getCert(hi)
-			if err != nil {
-				return nil, err
-			}
-			cert.Certificate = append(cert.Certificate, s.MetaCert())
-			return cert, nil
-		}
+		s.ModifyTLSConfigToAddMetaCert(httpsrv.TLSConfig)
 		// Disable TLS 1.0 and 1.1, which are obsolete and have security issues.
 		httpsrv.TLSConfig.MinVersion = tls.VersionTLS12
 		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

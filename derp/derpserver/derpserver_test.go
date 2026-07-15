@@ -5,8 +5,10 @@ package derpserver
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/binary"
@@ -357,6 +359,70 @@ func TestMetaCert(t *testing.T) {
 
 	if id := cert.Extensions[0].Id; !id.Equal(oidExtensionBasicConstraints) {
 		t.Errorf("extension ID = %v; want %v", id, oidExtensionBasicConstraints)
+	}
+}
+
+// TestModifyTLSConfigToAddMetaCert verifies that the wrapped GetCertificate
+// appends the meta cert to a copy of the provider's chain without mutating
+// the shared *tls.Certificate returned by the underlying provider (issue
+// 20352). Cert providers such as autocert cache and return the same
+// *tls.Certificate for concurrent handshakes, so appending to its
+// Certificate slice in place is both a data race and unbounded growth of
+// the served chain.
+func TestModifyTLSConfigToAddMetaCert(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+
+	// Give the shared chain slice spare capacity so that a regression to a
+	// plain append (rather than a copy into a freshly allocated slice)
+	// writes into the shared backing array. Concurrent goroutines doing so
+	// is a write-write race caught by the race detector, and the write
+	// itself is caught by the backing-array check after wg.Wait below.
+	chain := make([][]byte, 1, 2)
+	chain[0] = []byte{1, 2, 3}
+	shared := &tls.Certificate{
+		Certificate: chain,
+	}
+	c := &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return shared, nil
+		},
+	}
+	s.ModifyTLSConfigToAddMetaCert(c)
+
+	var wg sync.WaitGroup
+	// The goroutine count and iteration count are arbitrary: correctness is
+	// checked deterministically by the assertions below; the concurrency
+	// exists only to give the race detector overlapping calls to observe.
+	for range 10 {
+		wg.Go(func() {
+			for range 10 {
+				cert, err := c.GetCertificate(&tls.ClientHelloInfo{})
+				if err != nil {
+					t.Errorf("GetCertificate: %v", err)
+					return
+				}
+				if len(cert.Certificate) != 2 {
+					t.Errorf("chain length = %d; want 2", len(cert.Certificate))
+					return
+				}
+				if !bytes.Equal(cert.Certificate[0], []byte{1, 2, 3}) {
+					t.Errorf("chain[0] = %v; want provider's leaf cert %v", cert.Certificate[0], []byte{1, 2, 3})
+					return
+				}
+				if !bytes.Equal(cert.Certificate[1], s.MetaCert()) {
+					t.Errorf("chain[1] = %v; want meta cert", cert.Certificate[1])
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	if len(shared.Certificate) != 1 {
+		t.Errorf("shared cert chain length = %d; want 1 (must not be mutated)", len(shared.Certificate))
+	}
+	if got := chain[:cap(chain)][1]; got != nil {
+		t.Errorf("shared cert backing array was written: %v", got)
 	}
 }
 

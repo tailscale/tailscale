@@ -719,7 +719,9 @@ func (s *Server) initMetacert() {
 func (s *Server) MetaCert() []byte { return s.metaCert }
 
 // ModifyTLSConfigToAddMetaCert modifies c.GetCertificate to make
-// it append s.MetaCert to the returned certificates.
+// it append s.MetaCert to the returned certificates. The certificate
+// returned by the underlying GetCertificate is not mutated; a copy
+// with the meta cert appended is returned instead.
 //
 // It panics if c or c.GetCertificate is nil.
 func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
@@ -732,8 +734,19 @@ func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
 		if err != nil {
 			return nil, err
 		}
-		cert.Certificate = append(cert.Certificate, s.MetaCert())
-		return cert, nil
+		if cert == nil {
+			// Underlying GetCertificate returned (nil, nil) to signal
+			// fallback to Config.Certificates et al. Pass that through.
+			return nil, nil
+		}
+		// Don't mutate the *tls.Certificate pointed to by cert: the
+		// underlying GetCertificate implementation may return a shared
+		// cached value. Return a shallow copy with the meta cert
+		// appended to a freshly allocated chain slice.
+		certCopy := *cert
+		chain := cert.Certificate
+		certCopy.Certificate = append(chain[:len(chain):len(chain)], s.MetaCert())
+		return &certCopy, nil
 	}
 }
 
