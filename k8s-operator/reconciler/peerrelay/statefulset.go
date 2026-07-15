@@ -16,7 +16,9 @@ import (
 
 	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
+	"tailscale.com/kube/kubetypes"
 )
 
 func configSecretName(prName string, idx int32) string {
@@ -81,9 +83,9 @@ func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32, p
 }
 
 var managedLabelKeys = []string{
-	"tailscale.com/managed",
-	labelParentType,
-	labelParentName,
+	kubetypes.LabelManaged,
+	reconciler.LabelParentType,
+	reconciler.LabelParentName,
 }
 
 func (r *Reconciler) getProxyClass(ctx context.Context, pr *tsapi.PeerRelay) (*tsapi.ProxyClass, error) {

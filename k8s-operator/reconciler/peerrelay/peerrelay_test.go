@@ -929,7 +929,7 @@ func readTailscaledConfig(t *testing.T, fc client.Client, secretName string) ipn
 	return conf
 }
 
-// fakeClientProvider is a peerrelay.ClientProvider that ignores the requested tailnet name and always returns the
+// fakeClientProvider is a tailscaled.ClientProvider that ignores the requested tailnet name and always returns the
 // same client. Used to inject a scripted tsclient into the reconciler.
 type fakeClientProvider struct {
 	client tsclient.Client

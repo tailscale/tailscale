@@ -19,23 +19,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
-	"tailscale.com/kube/kubetypes"
+	"tailscale.com/k8s-operator/reconciler"
 )
 
 const (
-	// labelParentType identifies which Tailscale CRD owns a managed resource. It mirrors the
-	// "tailscale.com/parent-resource-type" label used by other reconcilers.
-	labelParentType = "tailscale.com/parent-resource-type"
-
-	// labelParentName identifies the name of the owning Tailscale CRD. It mirrors the
-	// "tailscale.com/parent-resource" label used by other reconcilers.
-	labelParentName = "tailscale.com/parent-resource"
-
 	// labelReplicaIndex stores the replica index of a managed Service so it can be matched back to a specific
 	// peer relay instance.
 	labelReplicaIndex = "tailscale.com/peer-relay-replica"
 
-	// parentTypePeerRelay is the value used for labelParentType on PeerRelay-managed resources.
+	// parentTypePeerRelay is the value used for reconciler.LabelParentType on PeerRelay-managed resources.
 	parentTypePeerRelay = "peerrelay"
 
 	// servicePortName names the UDP port exposed by each Service. Mostly cosmetic, but Kubernetes requires a name
@@ -63,11 +55,7 @@ var cloudAnnotations = map[string]string{
 }
 
 func peerRelayLabels(prName string) map[string]string {
-	return map[string]string{
-		kubetypes.LabelManaged: "true",
-		labelParentType:        parentTypePeerRelay,
-		labelParentName:        prName,
-	}
+	return reconciler.Labels(parentTypePeerRelay, prName, "")
 }
 
 func peerRelayServiceLabels(prName string, idx int32) map[string]string {
