@@ -522,8 +522,10 @@ github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7/go.mod h1:NtMkrFeD
 github.com/gokrazy/internal v0.0.0-20200407075822-660ad467b7c9/go.mod h1:LA5TQy7LcvYGQOy75tkrYkFUhbV2nl5qEBP47PSi2JA=
 github.com/gokrazy/internal v0.0.0-20251208203110-3c1aa9087c82 h1:4ghNfD9NaZLpFrqQiBF6mPVFeMYXJSky38ubVA4ic2E=
 github.com/gokrazy/internal v0.0.0-20251208203110-3c1aa9087c82/go.mod h1:dQY4EMkD4L5ZjYJ0SPtpgYbV7MIUMCxNIXiOfnZ6jP4=
-github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a h1:fa11POmSLo6fkkcqc+RUIyiqGJzBAOHEe/CCHAA/NGc=
-github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a/go.mod h1:WWx72LXHEesuJxbopusRfSoKJQ6ffdwkT0DZditdrLo=
+github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b h1:H9m4mwDqTyQG0AKVviBQp09T3OrY1X3tHNyrJCbqJfY=
+github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b/go.mod h1:bcNzFtcy9x+l7l4KUqOkVFyIqrtWn8U92Jo9ZEOckbw=
+github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1 h1:MYq3OcTlEz46i/DZxG3c6ePjE6Te/024cPW2VHTBVAs=
+github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1/go.mod h1:WWx72LXHEesuJxbopusRfSoKJQ6ffdwkT0DZditdrLo=
 github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de h1:RSLWj1Ska9s4cl+n/bC5LY4s8vLr+tZoO2vMm/wGP64=
 github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de/go.mod h1:p5uBeUWKZVv3KJWWD6s9MpAjPjGJUe2CmKDML+5pm6U=
 github.com/gokrazy/rpi-eeprom v0.0.0-20260518070910-95f7328a8228 h1:sLyorzF3zTdEiTvTUpctCIf14tZQFXTfayWBhn9QPG4=
@@ -1193,8 +1195,6 @@ github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 h1:Gzfnfk2TWrk8
 github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55/go.mod h1:4k4QO+dQ3R5FofL+SanAUZe+/QfeK0+OIuwDIRu2vSg=
 github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41 h1:/V2rCMMWcsjYaYO2MeovLw+ClP63OtXgCF2Y1eb8+Ns=
 github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41/go.mod h1:/roCdA6gg6lQyw/Oz6gIIGu3ggJKYhF+WC/AQReE5XQ=
-github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e h1:tyUUgeRPGHjCZWycRnhdx8Lx9DRkjl3WsVUxYMrVBOw=
-github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e/go.mod h1:7Mth+m9bq2IHusSsexMNyupHWPL8RxwOuSvBlSGtgDY=
 github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869 h1:SRL6irQkKGQKKLzvQP/ke/2ZuB7Py5+XuqtOgSj+iMM=
 github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869/go.mod h1:ikbF+YT089eInTp9f2vmvy4+ZVnW5hzX1q2WknxSprQ=
 github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd h1:Rf9uhF1+VJ7ZHqxrG8pJ6YacmHvVCmByDmGbAWCc/gA=

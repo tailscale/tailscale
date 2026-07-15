@@ -106,7 +106,7 @@ func findKernelPath(goMod string) (string, error) {
 		return "", err
 	}
 	for _, r := range mf.Require {
-		if r.Mod.Path == "github.com/tailscale/gokrazy-kernel" {
+		if r.Mod.Path == "github.com/gokrazy/kernel.amd64" {
 			return strings.TrimSpace(string(goModB)) + "/" + r.Mod.String() + "/vmlinuz", nil
 		}
 	}

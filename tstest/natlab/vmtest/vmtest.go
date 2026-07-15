@@ -2071,17 +2071,17 @@ func findKernelPath(goMod string) (string, error) {
 	}
 	goModCache := strings.TrimSpace(string(goModCacheB))
 
-	// Parse go.mod to find gokrazy-kernel version.
+	// Parse go.mod to find kernel version.
 	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "github.com/tailscale/gokrazy-kernel") {
+		if strings.HasPrefix(line, "github.com/gokrazy/kernel.amd64") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				return filepath.Join(goModCache, parts[0]+"@"+parts[1], "vmlinuz"), nil
 			}
 		}
 	}
-	return "", fmt.Errorf("gokrazy-kernel not found in %s", goMod)
+	return "", fmt.Errorf("kernel.amd64 not found in %s", goMod)
 }
 
 // PingRoute describes what connection type was used to transfer a Disco ping.

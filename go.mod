@@ -52,7 +52,8 @@ require (
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
 	github.com/gokrazy/firmware v0.0.0-20260522070551-527ce0ed43cf
 	github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7
-	github.com/gokrazy/kernel.arm64 v0.0.0-20260403054012-807489e0272a
+	github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b
+	github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1
 	github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de
 	github.com/gokrazy/rpi-eeprom v0.0.0-20260518070910-95f7328a8228
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
@@ -102,7 +103,6 @@ require (
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
 	github.com/tailscale/gliderssh v0.3.4-0.20260603235856-90d7dcbcbf38
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
-	github.com/tailscale/gokrazy-kernel v0.0.0-20240728225134-3d23beabda2e
 	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/tailscale/mkctr v0.0.0-20260107121656-ea857e3e500b

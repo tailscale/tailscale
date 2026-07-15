@@ -37,8 +37,8 @@ func TestTsappConfigs(t *testing.T) {
 			name:     "tsapp",
 			app:      "tsapp",
 			goarch:   "amd64",
-			kernel:   "github.com/tailscale/gokrazy-kernel",
-			firmware: "github.com/tailscale/gokrazy-kernel",
+			kernel:   "github.com/gokrazy/kernel.amd64",
+			firmware: "github.com/gokrazy/kernel.amd64",
 		},
 		{
 			name:     "tsapp-vm-arm64",
@@ -117,11 +117,11 @@ func findKernelPath(t *testing.T) string {
 		t.Fatalf("go env GOMODCACHE: %v", err)
 	}
 	for _, r := range mf.Require {
-		if r.Mod.Path == "github.com/tailscale/gokrazy-kernel" {
+		if r.Mod.Path == "github.com/gokrazy/kernel.amd64" {
 			return strings.TrimSpace(string(goModB)) + "/" + r.Mod.String() + "/vmlinuz"
 		}
 	}
-	t.Fatal("failed to find gokrazy-kernel in go.mod")
+	t.Fatal("failed to find kernel.amd64 in go.mod")
 	return ""
 }
 
