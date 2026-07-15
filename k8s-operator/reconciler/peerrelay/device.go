@@ -17,6 +17,7 @@ import (
 	tailscaleclient "tailscale.com/client/tailscale/v2"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/kube/kubetypes"
 )
 
@@ -46,7 +47,7 @@ func (r *Reconciler) deleteDevicesFrom(ctx context.Context, pr *tsapi.PeerRelay,
 			continue
 		}
 
-		if deviceID := string(s.Data[kubetypes.KeyDeviceID]); deviceID != "" {
+		if deviceID := tailscaled.DeviceIDFromStateSecret(s); deviceID != "" {
 			if err = tsc.Devices().Delete(ctx, deviceID); err != nil && !tailscaleclient.IsNotFound(err) {
 				errs = append(errs, fmt.Errorf("failed to delete tailnet device %q: %w", deviceID, err))
 				continue

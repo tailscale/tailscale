@@ -203,3 +203,9 @@ func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
 		},
 	}
 }
+
+// DeviceIDFromStateSecret returns the tailnet device ID that tailscaled recorded in secret, or "" if none. secret
+// should be a state Secret populated by containerboot; the device ID is the value stored under kubetypes.KeyDeviceID.
+func DeviceIDFromStateSecret(secret *corev1.Secret) string {
+	return string(secret.Data[kubetypes.KeyDeviceID])
+}

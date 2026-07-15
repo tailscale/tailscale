@@ -50,7 +50,7 @@ type (
 		tailscaleNamespace string
 		proxyImage         string
 		defaultTags        []string
-		tsClients          ClientProvider
+		tsClients          tailscaled.ClientProvider
 		resolver           func(ctx context.Context, network, host string) ([]netip.Addr, error)
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
@@ -70,7 +70,7 @@ type (
 		DefaultTags []string
 		// Clients resolves the Tailscale API client for a given tailnet name. Used to mint auth keys for each
 		// replica. Blank tailnet returns the operator's default client.
-		Clients ClientProvider
+		Clients tailscaled.ClientProvider
 		// Resolver is used to convert LoadBalancer Service hostnames to concrete IPs when the cloud
 		// controller doesn't populate Ingress[].IP directly (e.g. AWS NLBs). Defaults to a resolver backed by
 		// net.DefaultResolver when unset.
@@ -122,7 +122,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 // enqueue a reconcile for the owning PeerRelay, and ProxyClass so config changes propagate to referring
 // PeerRelays.
 func (r *Reconciler) Register(mgr manager.Manager) error {
-	enqueue := handler.EnqueueRequestsFromMapFunc(enqueuePeerRelayForChild)
+	enqueue := handler.EnqueueRequestsFromMapFunc(reconciler.EnqueueForChild(parentTypePeerRelay))
 	return builder.
 		ControllerManagedBy(mgr).
 		For(&tsapi.PeerRelay{}).
@@ -153,20 +153,6 @@ func (r *Reconciler) enqueuePeerRelaysForProxyClass(ctx context.Context, o clien
 		}
 	}
 	return reqs
-}
-
-func enqueuePeerRelayForChild(_ context.Context, o client.Object) []reconcile.Request {
-	labels := o.GetLabels()
-	if labels[kubetypes.LabelManaged] != "true" || labels[labelParentType] != parentTypePeerRelay {
-		return nil
-	}
-
-	name := labels[labelParentName]
-	if name == "" {
-		return nil
-	}
-
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
 // Reconcile is invoked when a change occurs to PeerRelay resources within the cluster. On create/update, it ensures
@@ -458,7 +444,7 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay
 		return fmt.Errorf("failed to get config Secret: %w", err)
 	}
 
-	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKeyFromConfigSecret(&existing))
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, tailscaled.AuthKeyFromConfigSecret(&existing))
 	if err != nil {
 		return fmt.Errorf("failed to build config Secret: %w", err)
 	}
@@ -492,7 +478,7 @@ func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (stri
 		return "", fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
 	}
 
-	return newAuthKey(ctx, client, r.peerRelayTags(pr))
+	return tailscaled.NewAuthKey(ctx, client, r.peerRelayTags(pr))
 }
 
 func (r *Reconciler) ensureStateSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32) error {
