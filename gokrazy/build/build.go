@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"tailscale.com/gokrazy/mkfs"
 	"tailscale.com/types/logger"
 )
@@ -354,6 +355,8 @@ func (b *Builder) startImportSnapshot(ctx context.Context) (importTaskID string,
 */
 
 func (b *Builder) waitForImportSnapshot(ctx context.Context, importTaskID string) (snapID string, err error) {
+	interactive := isTerminal(b.Stderr)
+	var lastPhase string // last (status/message) reported in non-interactive mode
 	for {
 		out, err := b.awsCmd(ctx, "ec2", "describe-import-snapshot-tasks", "--import-task-ids", importTaskID).CombinedOutput()
 		if err != nil {
@@ -363,47 +366,47 @@ func (b *Builder) waitForImportSnapshot(ctx context.Context, importTaskID string
 		var resp struct {
 			ImportSnapshotTasks []struct {
 				SnapshotTaskDetail struct {
-					SnapshotID string `json:"SnapshotId"`
-					Status     string `json:"Status"`
+					SnapshotID    string `json:"SnapshotId"`
+					Status        string `json:"Status"`
+					StatusMessage string `json:"StatusMessage"`
+					Progress      string `json:"Progress"`
 				} `json:"SnapshotTaskDetail"`
 			} `json:"ImportSnapshotTasks"`
 		}
 		if err := json.Unmarshal(out, &resp); err != nil {
 			return "", fmt.Errorf("unmarshal response: %v: %s", err, out)
 		}
-		if len(resp.ImportSnapshotTasks) > 0 {
-			first := &resp.ImportSnapshotTasks[0]
-			if first.SnapshotTaskDetail.Status == "completed" {
-				return first.SnapshotTaskDetail.SnapshotID, nil
-			}
+		var d struct {
+			SnapshotID    string `json:"SnapshotId"`
+			Status        string `json:"Status"`
+			StatusMessage string `json:"StatusMessage"`
+			Progress      string `json:"Progress"`
 		}
-		b.logf("Still waiting; got: %s", out)
+		if len(resp.ImportSnapshotTasks) > 0 {
+			d = resp.ImportSnapshotTasks[0].SnapshotTaskDetail
+		}
+		if d.Status == "completed" {
+			if interactive {
+				fmt.Fprintln(b.Stderr) // move off the live progress line
+			}
+			return d.SnapshotID, nil
+		}
 
-		// TODO(bradfitz): percentage bar?
-		// Looks like:
-		/* 2024/05/14 13:03:21 Still waiting; got: {
-		    "ImportSnapshotTasks": [
-		        {
-		            "ImportTaskId": "import-snap-0232251d0fbcb33fd",
-		            "SnapshotTaskDetail": {
-		                "DiskImageSize": 1258299392.0,
-		                "Format": "RAW",
-		                "Progress": "32",
-		                "Status": "active",
-		                "StatusMessage": "validated",
-		                "Url": "s3://tskrazy-import/tskrazy.img",
-		                "UserBucket": {
-		                    "S3Bucket": "tskrazy-import",
-		                    "S3Key": "tskrazy.img"
-		                }
-		            },
-		            "Tags": []
-		        }
-		    ]
-		}*/
+		if interactive {
+			// Repaint one line in place each poll.
+			fmt.Fprintf(b.Stderr, "\r\x1b[K%s", importProgressLine(d.Status, d.StatusMessage, d.Progress))
+		} else if phase := d.Status + "/" + d.StatusMessage; phase != lastPhase {
+			// Non-interactive (CI, pipe): one line per phase change only,
+			// not a fresh line every poll.
+			lastPhase = phase
+			b.logf("%s", importProgressLine(d.Status, d.StatusMessage, d.Progress))
+		}
 
 		select {
 		case <-ctx.Done():
+			if interactive {
+				fmt.Fprintln(b.Stderr)
+			}
 			return "", ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
@@ -478,6 +481,31 @@ func imageSizeBytesFor(app string) int64 {
 		n <<= 1
 	}
 	return n
+}
+
+// importProgressLine formats a one-line status for an in-progress EC2
+// import-snapshot task from its Status, StatusMessage, and Progress (a
+// percentage string like "32") fields, any of which may be empty early on.
+func importProgressLine(status, statusMessage, progress string) string {
+	msg := statusMessage
+	if msg == "" {
+		msg = status
+	}
+	if msg == "" {
+		msg = "pending"
+	}
+	if progress == "" {
+		return "importing snapshot: " + msg
+	}
+	return fmt.Sprintf("importing snapshot: %s%% (%s)", progress, msg)
+}
+
+// isTerminal reports whether w writes to an interactive terminal, so
+// callers can show a live-updating progress line instead of a stream of
+// separate log lines.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && isatty.IsTerminal(f.Fd())
 }
 
 // awsArch maps a Go GOARCH to the AWS EC2 --architecture value.

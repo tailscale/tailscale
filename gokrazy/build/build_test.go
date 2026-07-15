@@ -54,6 +54,26 @@ func TestBuildCapturesError(t *testing.T) {
 	}
 }
 
+func TestImportProgressLine(t *testing.T) {
+	tests := []struct {
+		name, status, statusMessage, progress, want string
+	}{
+		{"early-empty", "", "", "", "importing snapshot: pending"},
+		{"status-only", "active", "", "", "importing snapshot: active"},
+		{"message-no-progress", "active", "pending", "", "importing snapshot: pending"},
+		{"full", "active", "validated", "32", "importing snapshot: 32% (validated)"},
+		{"message-beats-status", "active", "converting", "80", "importing snapshot: 80% (converting)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := importProgressLine(tt.status, tt.statusMessage, tt.progress); got != tt.want {
+				t.Errorf("importProgressLine(%q, %q, %q) = %q; want %q",
+					tt.status, tt.statusMessage, tt.progress, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAMINameFrom(t *testing.T) {
 	const now = 1720000000
 	tests := []struct {
