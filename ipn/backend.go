@@ -339,10 +339,10 @@ type Notify struct {
 	//   - On the initial Notify if the watcher requested
 	//     [NotifyInitialNetMap] (any platform).
 	//   - On subsequent Notify messages, only when tailscaled is running
-	//     on Windows, macOS, or iOS. On Linux and other platforms it is
-	//     always nil after the initial notify.
+	//     on Windows. On all other platforms it is always nil after the
+	//     initial notify.
 	//
-	// Deprecated: this field is only populated on Windows, macOS, and iOS and
+	// Deprecated: this field is only populated on Windows and
 	// is slated for removal in favor of [Notify.InitialStatus] +
 	// [Notify.SelfChange] / [Notify.PeerChanges], etc, as this field
 	// doesn't scale.

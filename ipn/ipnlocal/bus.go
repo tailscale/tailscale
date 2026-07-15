@@ -24,9 +24,7 @@ import (
 // runtime.GOOS is a compile-time constant, so the producer-side code that
 // builds and ships NetMap on the bus is dead-code-eliminated on Linux and
 // other geese where this is false.
-const goosGetsLegacyNetmapNotify = runtime.GOOS == "windows" ||
-	runtime.GOOS == "darwin" ||
-	runtime.GOOS == "ios"
+const goosGetsLegacyNetmapNotify = runtime.GOOS == "windows"
 
 type rateLimitingBusSender struct {
 	fn              func(*ipn.Notify) (keepGoing bool)
