@@ -62,6 +62,11 @@ type NodeSource interface {
 	// its owning user profile.
 	// ok is false if no node is known to own addr.
 	NodeByAddr(addr netip.Addr) (node tailcfg.NodeView, user tailcfg.UserProfileView, ok bool)
+
+	// LogUploadAuth returns the opaque auth ID and a token function for
+	// authenticated log uploads. authID is empty when not in a tailnet
+	// context; authToken may be nil.
+	LogUploadAuth() (authID string, authToken func() string)
 }
 
 // Logger logs statistics about every connection.
@@ -164,6 +169,14 @@ func (nl *Logger) Startup(logf logger.Logf, source NodeSource, nodeLogID, domain
 		IncludeProcSequence: true,
 	}, logf)
 	logger.SetSockstatsLabel(sockstats.LabelNetlogLogger)
+
+	// Network flow logging is always tied to a single tailnet+node for the
+	// lifetime of this logger instance. Register auth once at construction;
+	// there is no need to clear it (the logger is shut down on identity change).
+	if authID, authToken := source.LogUploadAuth(); authID != "" {
+		logger.SetAuthID(authID)
+		logger.RegisterAuthToken(authID, authToken)
+	}
 
 	// Register the connection tracker into the TUN device.
 	tun = cmp.Or[Device](tun, noopDevice{})
