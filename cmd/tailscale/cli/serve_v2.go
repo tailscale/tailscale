@@ -686,7 +686,7 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 
 		if serviceConfig.Tun {
 			mak.Set(&sdf.Endpoints, &tailcfg.ProtoPortRange{Ports: tailcfg.PortRangeAny}, &conffile.Target{
-				Protocol:         conffile.ProtoTUN,
+				Front:            conffile.ProtoTUN,
 				Destination:      "",
 				DestinationPorts: tailcfg.PortRange{},
 			})
@@ -696,11 +696,11 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 			sniName := fmt.Sprintf("%s.%s", svcName.WithoutPrefix(), magicDNSSuffix)
 			ppr := tailcfg.ProtoPortRange{Proto: int(ipproto.TCP), Ports: tailcfg.PortRange{First: port, Last: port}}
 			if config.TCPForward != "" {
-				var proto conffile.ServiceProtocol
+				var front conffile.ServiceProtocol
 				if config.TerminateTLS != "" {
-					proto = conffile.ProtoTLSTerminatedTCP
+					front = conffile.ProtoTLSTerminatedTCP
 				} else {
-					proto = conffile.ProtoTCP
+					front = conffile.ProtoTCP
 				}
 				destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
 				if err != nil {
@@ -711,7 +711,8 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 					return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
 				}
 				mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-					Protocol:         proto,
+					Front:            front,
+					Backend:          conffile.ProtoTCP,
 					Destination:      destHost,
 					DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
 				})
@@ -725,20 +726,58 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				if !ok {
 					return nil, fmt.Errorf("service %q: root handler not set", svcName)
 				}
+				// The config file format maps a single endpoint per port, so it
+				// can only represent the root ("/") mount. Fail loudly rather
+				// than silently dropping additional mounts on export.
+				if len(handlers.Handlers) > 1 {
+					var mounts []string
+					for m := range handlers.Handlers {
+						if m != "/" {
+							mounts = append(mounts, m)
+						}
+					}
+					sort.Strings(mounts)
+					return nil, fmt.Errorf("service %q: port %d serves mount points (%s) that the config file format cannot represent; only the root \"/\" mount is supported", svcName, port, strings.Join(mounts, ", "))
+				}
+				// Front is the listener protocol that tailscaled terminates,
+				// derived from the TCP port handler. It is independent of the
+				// backend proxy scheme (Backend); recording only the backend
+				// scheme dropped the HTTPS listener (see #18381).
+				front := conffile.ProtoHTTP
+				if config.HTTPS {
+					front = conffile.ProtoHTTPS
+				}
 				if defaultHandler.Path != "" {
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ProtoFile,
+						Front:            front,
+						Backend:          conffile.ProtoFile,
 						Destination:      defaultHandler.Path,
 						DestinationPorts: tailcfg.PortRange{},
 					})
 				} else if defaultHandler.Proxy != "" {
-					proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
+					proxy := defaultHandler.Proxy
+					// The config file format can only express http/https/
+					// https+insecure web back-ends with an explicit host:port.
+					// Unix sockets (stored as "unix:<path>", no "://"), portless
+					// remote hosts, and any other scheme have no faithful
+					// representation, so fail loudly rather than emitting a
+					// config that would not round-trip (or that MarshalJSON
+					// would later reject).
+					if strings.HasPrefix(proxy, "unix:") {
+						return nil, fmt.Errorf("service %q: unix socket proxy targets cannot be represented in the config file format", svcName)
+					}
+					backend, rest, ok := strings.Cut(proxy, "://")
 					if !ok {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
+						return nil, fmt.Errorf("service %q: proxy handler %q is not representable in the config file format", svcName, proxy)
+					}
+					switch conffile.ServiceProtocol(backend) {
+					case conffile.ProtoHTTP, conffile.ProtoHTTPS, conffile.ProtoHTTPSInsecure:
+					default:
+						return nil, fmt.Errorf("service %q: proxy scheme %q is not representable in the config file format", svcName, backend)
 					}
 					host, portStr, err := net.SplitHostPort(rest)
 					if err != nil {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
+						return nil, fmt.Errorf("service %q: proxy handler %q is not representable in the config file format (need host:port): %w", svcName, proxy, err)
 					}
 
 					port, err := strconv.ParseUint(portStr, 10, 16)
@@ -747,10 +786,24 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 					}
 
 					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ServiceProtocol(proto),
+						Front:            front,
+						Backend:          conffile.ServiceProtocol(backend),
 						Destination:      host,
 						DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
 					})
+				} else {
+					// The config file format can only express path (file) and
+					// proxy targets. A Text or Redirect root handler has no
+					// representable endpoint, so fail loudly rather than
+					// silently dropping it on export.
+					switch {
+					case defaultHandler.Text != "":
+						return nil, fmt.Errorf("service %q: text handlers cannot be represented in the config file format", svcName)
+					case defaultHandler.Redirect != "":
+						return nil, fmt.Errorf("service %q: redirect handlers cannot be represented in the config file format", svcName)
+					default:
+						return nil, fmt.Errorf("service %q: root handler has no path or proxy target to export", svcName)
+					}
 				}
 			}
 		}
@@ -759,45 +812,65 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	}
 
 	var j []byte
+	// skippedErr is set (for --all) when one or more services could not be
+	// represented; the partial config is still written, but the command exits
+	// nonzero so the gap is not silently ignored by a backup script.
+	var skippedErr error
 
 	if e.allServices && forSingleService {
 		return errors.New("cannot specify both --all and --service")
 	} else if e.allServices {
 		var scf conffile.ServicesConfigFile
-		scf.Version = "0.0.1"
+		var skipped []string
 		for svcName, serviceConfig := range sc.Services {
 			sdf, err := handleService(svcName, serviceConfig)
 			if err != nil {
-				return err
+				// For a bulk export, skip the unrepresentable service and warn
+				// rather than aborting the whole backup; the nonzero exit below
+				// signals that the result is incomplete.
+				fmt.Fprintf(e.stderr(), "Warning: skipping service %s: %v\n", svcName, err)
+				skipped = append(skipped, svcName.String())
+				continue
 			}
 			mak.Set(&scf.Services, svcName, sdf)
 		}
+		// The format changed meaning in 0.0.2 (see conffile), so every export is
+		// stamped 0.0.2; an older client then rejects it with a clear version
+		// error instead of misreading it.
+		scf.Version = conffile.ConfigVersionV2
 		j, err = json.MarshalIndent(scf, "", "  ")
 		if err != nil {
 			return err
 		}
+		if len(skipped) > 0 {
+			sort.Strings(skipped)
+			skippedErr = fmt.Errorf("%d service(s) could not be represented and were skipped: %s", len(skipped), strings.Join(skipped, ", "))
+		}
 	} else if forSingleService {
 		serviceConfig, ok := sc.Services[e.service]
 		if !ok {
-			j = []byte("{}")
-		} else {
-			sdf, err := handleService(e.service, serviceConfig)
-			if err != nil {
-				return err
-			}
-			sdf.Version = "0.0.1"
-			j, err = json.MarshalIndent(sdf, "", "  ")
-			if err != nil {
-				return err
-			}
+			// Emitting "{}" here produces a file that set-config later rejects
+			// for lacking a "version" field; fail with a clear message instead.
+			return fmt.Errorf("service %q is not configured on this node", e.service)
+		}
+		sdf, err := handleService(e.service, serviceConfig)
+		if err != nil {
+			return err
+		}
+		sdf.Version = conffile.ConfigVersionV2
+		j, err = json.MarshalIndent(sdf, "", "  ")
+		if err != nil {
+			return err
 		}
 	} else {
 		return errors.New("must specify either --service=svc:<service-name> or --all")
 	}
 
 	j = append(j, '\n')
-	_, err = e.stdout().Write(j)
-	return err
+	if _, err = e.stdout().Write(j); err != nil {
+		return err
+	}
+	return skippedErr
 }
 
 // serveConfigDocsURL documents the Services configuration file format that set-config prefers
@@ -848,9 +921,12 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	if forSingleService {
 		forService = e.service.String()
 	}
-	scf, err := conffile.LoadServicesConfig(filename, forService)
+	scf, warnings, err := conffile.LoadServicesConfig(filename, forService)
 	if err != nil {
 		return fmt.Errorf("could not read config from file %q: %w", filename, err)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(e.stderr(), "Warning: %s\n", w)
 	}
 
 	st, err := e.getLocalClientStatusWithoutPeers(ctx)
@@ -900,7 +976,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	// scf.Services is nil for the legacy format, making this loop a no-op then.
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
-			if ep.Protocol == conffile.ProtoTUN {
+			if ep.Front == conffile.ProtoTUN {
 				err := e.setServe(sc, name.String(), serveTypeTUN, 0, "", "", false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
 					return err
@@ -912,20 +988,28 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			if ppr.Proto != int(ipproto.TCP) {
 				return fmt.Errorf("service %q: source ports must be TCP", name)
 			}
-			serveType, _ := serveTypeFromConfString(ep.Protocol)
+			// The front-end (listener) protocol selects the serve type;
+			// the back-end protocol is preserved in the target URL passed to
+			// setServe so a TLS listener can still proxy to a plain-HTTP backend
+			// (and vice versa). See #18381.
+			serveType, ok := serveTypeFromConfString(ep.Front)
+			if !ok {
+				return fmt.Errorf("service %q: unsupported front-end protocol %q", name, ep.Front)
+			}
 			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
 				var target string
-				if ep.Protocol == conffile.ProtoFile {
+				if ep.Backend == conffile.ProtoFile {
 					target = ep.Destination
 				} else {
 					// map source port range 1-1 to destination port range
 					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
 					portStr := fmt.Sprint(destPort)
-					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
+					target = fmt.Sprintf("%s://%s", ep.Backend, net.JoinHostPort(ep.Destination, portStr))
 				}
 				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
-					return fmt.Errorf("service %q: %w", name, err)
+					return fmt.Errorf("service %q port %d (front %s, backend %s -> %s): %w",
+						name, port, ep.Front, ep.Backend, target, err)
 				}
 			}
 		}

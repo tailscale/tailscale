@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/views"
@@ -2538,7 +2539,7 @@ func TestRunServeSetConfig(t *testing.T) {
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
 		e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
-		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:443":"https://localhost:8000"}}}}`)
+		path := writeTmpServeConfig(t, `{"version":"0.0.2","services":{"svc:foo":{"endpoints":{"tcp:443":"https://localhost:8000"}}}}`)
 
 		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
 			t.Fatal(err)
@@ -2561,7 +2562,7 @@ func TestRunServeSetConfig(t *testing.T) {
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
 		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
-		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"https://localhost:8000"}}`)
+		path := writeTmpServeConfig(t, `{"version":"0.0.2","endpoints":{"tcp:443":"https://localhost:8000"}}`)
 
 		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
 			t.Fatal(err)
@@ -2573,4 +2574,408 @@ func TestRunServeSetConfig(t *testing.T) {
 			t.Errorf("new format must not warn; stderr:\n%s", stderr.String())
 		}
 	})
+}
+
+// TestServeGetConfigMissingService verifies that get-config for a single
+// service that isn't configured on the node fails with a clear error rather
+// than emitting "{}", which set-config would later reject for lacking a
+// "version" field.
+func TestServeGetConfigMissingService(t *testing.T) {
+	lc := &fakeLocalServeClient{
+		config: &ipn.ServeConfig{},
+		prefs:  &ipn.Prefs{},
+	}
+	var stdout bytes.Buffer
+	e := &serveEnv{lc: lc, service: tailcfg.ServiceName("svc:missing"), testStdout: &stdout}
+
+	err := e.runServeGetConfig(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("runServeGetConfig returned nil error; want error. stdout=%q", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "svc:missing") {
+		t.Errorf("error = %q; want it to name the missing service", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("expected no stdout output on error; got %q", stdout.String())
+	}
+}
+
+// TestServeConfigRoundTripFrontProto verifies that get-config / set-config
+// preserve the front-end (listener) protocol of a Service web handler. A
+// service fronted by HTTPS that proxies to a plain-HTTP backend must round-trip
+// as HTTPS rather than collapsing to HTTP. Regression test for #18381.
+func TestServeConfigRoundTripFrontProto(t *testing.T) {
+	const svc = tailcfg.ServiceName("svc:awesome")
+	const sni = "awesome.test.ts.net"
+
+	tests := []struct {
+		name         string
+		https        bool     // front-end is HTTPS (else HTTP)
+		port         uint16   // service port
+		proxy        string   // backend proxy stored in the handler
+		wantContains []string // substrings expected in the exported endpoint JSON
+		wantVersion  string   // expected "version" in the exported config
+	}{
+		{
+			// The #18381 case: HTTPS listener, plain-HTTP backend. Exported as
+			// the shorthand string with the front-end scheme; stays version V1.
+			name:         "https-front-http-backend",
+			https:        true,
+			port:         443,
+			proxy:        "http://127.0.0.1:30123",
+			wantContains: []string{`"tcp:443": "https://127.0.0.1:30123"`},
+			wantVersion:  "0.0.2", // always V2 now
+		},
+		{
+			name:         "http-front-http-backend",
+			https:        false,
+			port:         80,
+			proxy:        "http://127.0.0.1:30123",
+			wantContains: []string{`"tcp:80": "http://127.0.0.1:30123"`},
+			wantVersion:  "0.0.2", // always V2 now
+		},
+		{
+			// HTTPS listener proxying to a TLS backend: the backend scheme
+			// differs from the front-end default, so it round-trips via the
+			// object form rather than being downgraded to plain HTTP. The object
+			// form bumps the file to version V2.
+			name:         "https-front-https-backend",
+			https:        true,
+			port:         443,
+			proxy:        "https://127.0.0.1:8443",
+			wantContains: []string{`"front": "https"`, `"backend": "https://127.0.0.1:8443"`},
+			wantVersion:  "0.0.2",
+		},
+		{
+			// HTTPS listener proxying to a TLS backend with an untrusted cert.
+			// This is a shorthand, so it stays version V1.
+			name:         "https-front-https-insecure-backend",
+			https:        true,
+			port:         443,
+			proxy:        "https+insecure://127.0.0.1:8443",
+			wantContains: []string{`"tcp:443": "https+insecure://127.0.0.1:8443"`},
+			wantVersion:  "0.0.2", // always V2 now
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			webKey := ipn.HostPort(fmt.Sprintf("%s:%d", sni, tt.port))
+			initial := &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					svc: {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							tt.port: {HTTP: !tt.https, HTTPS: tt.https},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							webKey: {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Proxy: tt.proxy},
+							}},
+						},
+					},
+				},
+			}
+
+			lc := &fakeLocalServeClient{
+				config: initial,
+				prefs:  &ipn.Prefs{AdvertiseServices: []string{svc.String()}},
+			}
+
+			// Export with get-config --all.
+			var stdout bytes.Buffer
+			getEnv := &serveEnv{lc: lc, allServices: true, testStdout: &stdout}
+			if err := getEnv.runServeGetConfig(context.Background(), nil); err != nil {
+				t.Fatalf("runServeGetConfig: %v", err)
+			}
+			got := stdout.String()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Fatalf("exported config = %s\nwant substring %q", got, want)
+				}
+			}
+			if wantVer := fmt.Sprintf("%q: %q", "version", tt.wantVersion); !strings.Contains(got, wantVer) {
+				t.Fatalf("exported config = %s\nwant %s", got, wantVer)
+			}
+
+			// Round-trip it back through set-config --all.
+			dir := t.TempDir()
+			file := filepath.Join(dir, "services.json")
+			if err := os.WriteFile(file, stdout.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// SetServeConfig replaces lc.config; start from a clean slate so the
+			// resulting config reflects only the import.
+			lc.config = &ipn.ServeConfig{}
+			setEnv := &serveEnv{lc: lc, allServices: true}
+			if err := setEnv.runServeSetConfig(context.Background(), []string{file}); err != nil {
+				t.Fatalf("runServeSetConfig: %v", err)
+			}
+
+			svcCfg := lc.config.Services[svc]
+			if svcCfg == nil {
+				t.Fatalf("service %q missing after import; config=%+v", svc, lc.config)
+			}
+			th := svcCfg.TCP[tt.port]
+			if th == nil {
+				t.Fatalf("no TCP handler on port %d after import; config=%+v", tt.port, svcCfg)
+			}
+			if th.HTTPS != tt.https || th.HTTP != !tt.https {
+				t.Errorf("after round-trip port %d: HTTP=%v HTTPS=%v; want HTTP=%v HTTPS=%v",
+					tt.port, th.HTTP, th.HTTPS, !tt.https, tt.https)
+			}
+			// The backend proxy must round-trip losslessly, preserving its
+			// scheme (http / https / https+insecure).
+			if h := svcCfg.Web[webKey].Handlers["/"]; h.Proxy != tt.proxy {
+				t.Errorf("after round-trip: backend proxy = %q; want %q", h.Proxy, tt.proxy)
+			}
+		})
+	}
+}
+
+// TestServeTypeFromConfString locks the front-end-protocol -> serveType mapping
+// that runServeSetConfig relies on. The ok=false cases cover the branch that
+// rejects an unmapped front protocol (serve_v2.go) instead of silently applying
+// the zero serveType. Every protocol accepted by conffile.validFront must map
+// here with ok=true, or that "unsupported front-end protocol" guard would
+// reject a config the parser considers valid.
+func TestServeTypeFromConfString(t *testing.T) {
+	tests := []struct {
+		in     conffile.ServiceProtocol
+		want   serveType
+		wantOk bool
+	}{
+		{conffile.ProtoHTTP, serveTypeHTTP, true},
+		{conffile.ProtoHTTPS, serveTypeHTTPS, true},
+		{conffile.ProtoHTTPSInsecure, serveTypeHTTPS, true},
+		{conffile.ProtoFile, serveTypeHTTPS, true},
+		{conffile.ProtoTCP, serveTypeTCP, true},
+		{conffile.ProtoTLSTerminatedTCP, serveTypeTLSTerminatedTCP, true},
+		{conffile.ProtoTUN, serveTypeTUN, true},
+		{conffile.ServiceProtocol("bogus"), -1, false},
+		{conffile.ServiceProtocol(""), -1, false},
+	}
+	for _, tt := range tests {
+		got, ok := serveTypeFromConfString(tt.in)
+		if got != tt.want || ok != tt.wantOk {
+			t.Errorf("serveTypeFromConfString(%q) = (%v, %v); want (%v, %v)",
+				tt.in, got, ok, tt.want, tt.wantOk)
+		}
+	}
+}
+
+// TestServeSetConfigRejectsBadFront verifies that a Service endpoint with an
+// unknown front-end protocol is rejected rather than silently misapplied. The
+// object form is parsed by conffile, so the rejection currently happens at
+// parse time; the explicit serveTypeFromConfString guard in runServeSetConfig
+// is defense-in-depth for that same invariant.
+func TestServeSetConfigRejectsBadFront(t *testing.T) {
+	const config = `{
+		"version": "0.0.1",
+		"services": {
+			"svc:awesome": {
+				"endpoints": {
+					"tcp:443": {"front": "bogus", "backend": "http://127.0.0.1:80"}
+				}
+			}
+		}
+	}`
+	dir := t.TempDir()
+	file := filepath.Join(dir, "services.json")
+	if err := os.WriteFile(file, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}, prefs: &ipn.Prefs{}}
+	setEnv := &serveEnv{lc: lc, allServices: true}
+	err := setEnv.runServeSetConfig(context.Background(), []string{file})
+	if err == nil {
+		t.Fatal("runServeSetConfig succeeded; want error for bogus front protocol")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Errorf("error = %v; want it to mention the bad protocol %q", err, "bogus")
+	}
+}
+
+// TestServeSetConfigV2Object verifies that set-config applies a version "0.0.2"
+// file written in the object form, preserving a TLS back-end behind an HTTPS
+// listener (the combination the shorthand string cannot express).
+func TestServeSetConfigV2Object(t *testing.T) {
+	const config = `{
+		"version": "0.0.2",
+		"services": {
+			"svc:awesome": {
+				"endpoints": {
+					"tcp:443": {"front": "https", "backend": "https://127.0.0.1:8443"}
+				}
+			}
+		}
+	}`
+	file := filepath.Join(t.TempDir(), "services.json")
+	if err := os.WriteFile(file, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}, prefs: &ipn.Prefs{}}
+	setEnv := &serveEnv{lc: lc, allServices: true}
+	if err := setEnv.runServeSetConfig(context.Background(), []string{file}); err != nil {
+		t.Fatalf("runServeSetConfig: %v", err)
+	}
+	svcCfg := lc.config.Services["svc:awesome"]
+	if svcCfg == nil {
+		t.Fatalf("service not applied; config=%+v", lc.config)
+	}
+	if th := svcCfg.TCP[443]; th == nil || !th.HTTPS {
+		t.Errorf("port 443: want HTTPS listener; got %+v", th)
+	}
+	if h := svcCfg.Web[ipn.HostPort("awesome.test.ts.net:443")].Handlers["/"]; h.Proxy != "https://127.0.0.1:8443" {
+		t.Errorf("backend proxy = %q; want %q", h.Proxy, "https://127.0.0.1:8443")
+	}
+}
+
+// TestServeGetConfigRejectsNonRootMount verifies that get-config fails loudly
+// when a service has handlers on a mount other than "/", which the per-port
+// config file format cannot represent, rather than silently dropping them.
+func TestServeGetConfigRejectsNonRootMount(t *testing.T) {
+	const svc = tailcfg.ServiceName("svc:awesome")
+	cfg := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			svc: {
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"awesome.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/":    {Proxy: "http://127.0.0.1:3000"},
+						"/api": {Proxy: "http://127.0.0.1:3001"},
+					}},
+				},
+			},
+		},
+	}
+	lc := &fakeLocalServeClient{config: cfg, prefs: &ipn.Prefs{AdvertiseServices: []string{svc.String()}}}
+	var stdout bytes.Buffer
+	e := &serveEnv{lc: lc, service: svc, testStdout: &stdout}
+	err := e.runServeGetConfig(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("runServeGetConfig succeeded; want error for non-root mount. stdout=%q", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "/api") {
+		t.Errorf("error = %v; want it to name the /api mount", err)
+	}
+}
+
+// TestServeGetConfigAllSkipsUnrepresentable verifies that get-config --all skips
+// a service it can't represent (warning to stderr, nonzero exit) while still
+// exporting the others, so one bad service doesn't block backing up the rest.
+func TestServeGetConfigAllSkipsUnrepresentable(t *testing.T) {
+	good := tailcfg.ServiceName("svc:good")
+	bad := tailcfg.ServiceName("svc:bad")
+	cfg := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			good: {
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"good.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "http://127.0.0.1:3000"},
+					}},
+				},
+			},
+			bad: { // non-root mount -> unrepresentable
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"bad.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/":    {Proxy: "http://127.0.0.1:3000"},
+						"/api": {Proxy: "http://127.0.0.1:3001"},
+					}},
+				},
+			},
+		},
+	}
+	lc := &fakeLocalServeClient{config: cfg, prefs: &ipn.Prefs{AdvertiseServices: []string{good.String(), bad.String()}}}
+	var stdout, stderr bytes.Buffer
+	e := &serveEnv{lc: lc, allServices: true, testStdout: &stdout, testStderr: &stderr}
+	err := e.runServeGetConfig(context.Background(), nil)
+	if err == nil {
+		t.Fatal("runServeGetConfig --all succeeded; want nonzero exit when a service is skipped")
+	}
+	if out := stdout.String(); !strings.Contains(out, "svc:good") || strings.Contains(out, "svc:bad") {
+		t.Errorf("exported config = %s\nwant it to include svc:good and omit svc:bad", out)
+	}
+	if !strings.Contains(stderr.String(), "svc:bad") {
+		t.Errorf("stderr = %q; want a warning naming the skipped svc:bad", stderr.String())
+	}
+}
+
+// TestServeSetConfigWarnsOnLegacyHTTPS verifies that reading an "https://"
+// shorthand from a 0.0.1 file preserves its legacy TLS-back-end meaning and
+// warns, rather than silently switching it to a plain-HTTP back-end.
+func TestServeSetConfigWarnsOnLegacyHTTPS(t *testing.T) {
+	const config = `{"version":"0.0.1","services":{"svc:web":{"endpoints":{"tcp:443":"https://127.0.0.1:8443"}}}}`
+	file := filepath.Join(t.TempDir(), "services.json")
+	if err := os.WriteFile(file, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}, prefs: &ipn.Prefs{}}
+	var stderr bytes.Buffer
+	e := &serveEnv{lc: lc, allServices: true, testStderr: &stderr}
+	if err := e.runServeSetConfig(context.Background(), []string{file}); err != nil {
+		t.Fatalf("runServeSetConfig: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "https://") {
+		t.Errorf("stderr = %q; want a migration warning about the https:// shorthand", stderr.String())
+	}
+	svcCfg := lc.config.Services["svc:web"]
+	if svcCfg == nil {
+		t.Fatalf("service not applied; config=%+v", lc.config)
+	}
+	if h := svcCfg.Web[ipn.HostPort("web.test.ts.net:443")].Handlers["/"]; h.Proxy != "http://127.0.0.1:8443" {
+		t.Errorf("backend proxy = %q; want %q (0.0.1 https:// read with the fixed plain-HTTP meaning)", h.Proxy, "http://127.0.0.1:8443")
+	}
+}
+
+// TestServeGetConfigRejectsUnrepresentableHandler verifies that get-config
+// fails loudly when a service root handler has no representation in the config
+// file format (Text/Redirect), rather than silently emitting an endpoint-less
+// service that would lose the handler on round-trip.
+func TestServeGetConfigRejectsUnrepresentableHandler(t *testing.T) {
+	const svc = tailcfg.ServiceName("svc:awesome")
+	const sni = "awesome.test.ts.net"
+	webKey := ipn.HostPort(fmt.Sprintf("%s:443", sni))
+
+	tests := []struct {
+		name     string
+		handler  *ipn.HTTPHandler
+		wantText string
+	}{
+		{"text", &ipn.HTTPHandler{Text: "hello"}, "text"},
+		{"redirect", &ipn.HTTPHandler{Redirect: "https://elsewhere.test.ts.net/"}, "redirect"},
+		{"unix-proxy", &ipn.HTTPHandler{Proxy: "unix:/run/app.sock"}, "unix"},
+		{"unsupported-scheme-proxy", &ipn.HTTPHandler{Proxy: "tcp://127.0.0.1:22"}, "scheme"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lc := &fakeLocalServeClient{
+				config: &ipn.ServeConfig{
+					Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+						svc: {
+							TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+							Web: map[ipn.HostPort]*ipn.WebServerConfig{
+								webKey: {Handlers: map[string]*ipn.HTTPHandler{"/": tt.handler}},
+							},
+						},
+					},
+				},
+				prefs: &ipn.Prefs{AdvertiseServices: []string{svc.String()}},
+			}
+			// Use a single-service export: --all now skips an unrepresentable
+			// service with a stderr warning, whereas --service surfaces the
+			// specific reason as an error (see TestServeGetConfigAllSkips* for
+			// the --all path).
+			var stdout bytes.Buffer
+			getEnv := &serveEnv{lc: lc, service: svc, testStdout: &stdout}
+			err := getEnv.runServeGetConfig(context.Background(), nil)
+			if err == nil {
+				t.Fatalf("runServeGetConfig succeeded; want error for %s handler. output=%s", tt.name, stdout.String())
+			}
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Errorf("error = %v; want it to mention %q", err, tt.wantText)
+			}
+		})
+	}
 }
