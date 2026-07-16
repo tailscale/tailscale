@@ -91,6 +91,10 @@ self: {
       "--statedir=/var/lib/${meta.stateDir}"
       "--socket=${meta.socketPath}"
     ]
+    ++ optional (cfg.proxy == "socks" || cfg.proxy == "both")
+    "--socks5-server=${cfg.proxyListenAddress}"
+    ++ optional (cfg.proxy == "http" || cfg.proxy == "both")
+    "--outbound-http-proxy-listen=${cfg.proxyListenAddress}"
     ++ cfg.extraDaemonFlags;
 
   # Build auth key query parameters string.
@@ -315,6 +319,42 @@ self: {
       '';
     };
 
+  # Whether an instance runs a proxy (null and "off" both mean disabled).
+  proxyEnabled = cfg: cfg.proxy != null && cfg.proxy != "off";
+
+  # All enabled instances running a proxy, as {instance,proxy,address} records.
+  proxyList = let
+    entry = enabled: name: cfg:
+      optional (enabled && proxyEnabled cfg) {
+        instance = name;
+        inherit (cfg) proxy;
+        address = cfg.proxyListenAddress;
+      };
+  in
+    entry singularCfg.enable "default" singularCfg
+    ++ concatMap (n: entry pluralCfg.${n}.enable n pluralCfg.${n})
+    (attrNames pluralCfg);
+
+  proxyListJson = pkgs.writeText "tailscale-proxies.json" (builtins.toJSON proxyList);
+
+  # `tailscale-proxies [--json]`: list active proxy addresses across instances.
+  proxyListPkg = pkgs.writeShellScriptBin "tailscale-proxies" ''
+    if [ "$1" = "--json" ]; then
+      cat ${proxyListJson}
+      echo
+      exit 0
+    fi
+    ${pkgs.util-linux}/bin/column -t <<'EOF'
+    INSTANCE PROXY ADDRESS
+    ${concatStringsSep "\n" (map (p: "${p.instance} ${p.proxy} ${p.address}") proxyList)}
+    EOF
+    cat <<'EOF'
+
+    # SOCKS5: socks5://ADDRESS   HTTP: http://ADDRESS
+    # e.g. curl --proxy socks5://localhost:1055 https://host.your-tailnet.ts.net
+    EOF
+  '';
+
   # Generate the JSON config file for tailscale serve set-config --all.
   # Prepends "svc:" to each service name and omits `advertised` when null
   # to match the Go opt.Bool semantics (unset = advertised by default).
@@ -426,7 +466,30 @@ in {
               }
             ]
             else []
-        ) (builtins.attrNames pluralCfg);
+        ) (builtins.attrNames pluralCfg)
+        ++ (let
+          addrOf = enabled: c:
+            optional
+            (enabled
+              && proxyEnabled c
+              && !(lib.hasSuffix ":0" c.proxyListenAddress))
+            c.proxyListenAddress;
+          proxyAddrs =
+            addrOf singularCfg.enable singularCfg
+            ++ concatMap (n: addrOf pluralCfg.${n}.enable pluralCfg.${n})
+            (attrNames pluralCfg);
+          dupes = lib.unique (lib.filter (
+            a: lib.count (x: x == a) proxyAddrs > 1
+          ) proxyAddrs);
+        in [
+          {
+            assertion = proxyAddrs == lib.unique proxyAddrs;
+            message = ''
+              Multiple Tailscale instances share a proxy listen address: ${concatStringsSep ", " dupes}.
+              Each instance with a proxy enabled needs a unique `proxyListenAddress`.
+            '';
+          }
+        ]);
 
       # ── Systemd services (singular + plural merged) ──
       systemd.services = mkMerge [
@@ -448,6 +511,7 @@ in {
               ([cfg.package] ++ attrValues (mkCliWrapper name cfg))
           )
           pluralCfg))
+        (mkIf (proxyList != []) [proxyListPkg])
       ];
 
       # ── DHCP exclusion (TUN mode only) ──
