@@ -4,6 +4,7 @@
 package wgengine
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/netip"
@@ -113,6 +114,72 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// failingRouter is a router.Router whose Set always fails, used to verify that
+// DNS configuration is still attempted when router configuration fails.
+type failingRouter struct {
+	err error
+}
+
+func (failingRouter) Up() error                  { return nil }
+func (r failingRouter) Set(*router.Config) error { return r.err }
+func (failingRouter) Close() error               { return nil }
+
+// recordingOSConfigurator is a dns.OSConfigurator that records whether SetDNS
+// was called.
+type recordingOSConfigurator struct {
+	setDNSCalled bool
+}
+
+func (c *recordingOSConfigurator) SetDNS(dns.OSConfig) error { c.setDNSCalled = true; return nil }
+func (c *recordingOSConfigurator) SupportsSplitDNS() bool    { return false }
+func (c *recordingOSConfigurator) Close() error              { return nil }
+func (c *recordingOSConfigurator) GetBaseConfig() (dns.OSConfig, error) {
+	return dns.OSConfig{}, dns.ErrGetBaseConfigNotSupported
+}
+
+// TestUserspaceEngineReconfigDNSAfterRouterError verifies that a router.Set
+// failure does not prevent DNS from being configured. Historically Reconfig
+// returned on router error before dns.Set ran, so MagicDNS was never
+// configured on hosts where router config failed on every reconfig. See
+// tailscale/tailscale#20447.
+func TestUserspaceEngineReconfigDNSAfterRouterError(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	ue := e.(*userspaceEngine)
+
+	routerErr := fmt.Errorf("router boom")
+	ue.router = failingRouter{err: routerErr}
+
+	osCfg := &recordingOSConfigurator{}
+	ue.dns = dns.NewManager(t.Logf, osCfg, ht, ue.dialer, nil, nil, runtime.GOOS, bus)
+
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{{ID: 1, Key: nkFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")}}),
+	}
+	cfg := &wgcfg.Config{
+		Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32)},
+	}
+	e.SetSelfNode(nm.SelfNode)
+
+	err = e.Reconfig(cfg, &router.Config{}, &dns.Config{})
+
+	if !osCfg.setDNSCalled {
+		t.Error("SetDNS was not called after router.Set failed; DNS config must be independent of router success")
+	}
+	if err == nil {
+		t.Error("Reconfig returned nil; want the router error to be surfaced")
+	} else if !errors.Is(err, routerErr) {
+		t.Errorf("Reconfig error = %v; want it to wrap the router error %v", err, routerErr)
 	}
 }
 
