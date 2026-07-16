@@ -1272,6 +1272,101 @@ func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 
 }
 
+func TestMapDNSResponsePreservesTTL(t *testing.T) {
+	configuredDomain := "example.com"
+	domainName := configuredDomain + "."
+	dnsMessageName := dnsmessage.MustNewName(domainName)
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:connector"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
+	}, nil)
+	cfg := mustConfig(t, sn)
+
+	const wantTTL uint32 = 300
+
+	for _, tt := range []struct {
+		name  string
+		toMap []byte
+	}{
+		{
+			name: "typeA",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{{
+					Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: wantTTL},
+					Body:   &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+				}},
+				nil,
+			),
+		},
+		{
+			name: "typeAAAA",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{{
+					Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: wantTTL},
+					Body:   &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+				}},
+				nil,
+			),
+		},
+		{
+			// Use the TTL in the A record, not the CNAME.
+			name: "typeA-cname-chain",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: wantTTL + 999},
+						Body:   &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("cdn.example.net.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("cdn.example.net."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: wantTTL},
+						Body:   &dnsmessage.AResource{A: netip.MustParseAddr("1.2.3.4").As4()},
+					},
+				},
+				nil,
+			),
+		},
+		{
+			// Use the TTL in the AAAA record, not the CNAME.
+			name: "typeAAAA-cname-chain",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: wantTTL + 999},
+						Body:   &dnsmessage.CNAMEResource{CNAME: dnsmessage.MustNewName("cdn.example.net.")},
+					},
+					{
+						Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("cdn.example.net."), Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: wantTTL},
+						Body:   &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+					},
+				},
+				nil,
+			),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(logger.Discard)
+			c.reconfig(cfg)
+			answers, _ := parseResponse(t, c.mapDNSResponse(tt.toMap))
+			if len(answers) != 1 {
+				t.Fatalf("got %d answers, want 1", len(answers))
+			}
+			if got := answers[0].Header.TTL; got != wantTTL {
+				t.Fatalf("rewritten answer TTL = %d, want %d", got, wantTTL)
+			}
+		})
+	}
+}
+
 func TestNormalizedDNSNames(t *testing.T) {
 	tests := []struct {
 		name   string
