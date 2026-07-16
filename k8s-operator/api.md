@@ -561,6 +561,39 @@ _Appears in:_
 | `status` _[PeerRelayStatus](#peerrelaystatus)_ | Status describes the status of the PeerRelay. This is set<br />and managed by the Tailscale operator. |  |  |
 
 
+#### PeerRelayAWS
+
+
+
+PeerRelayAWS contains AWS-specific configuration for a PeerRelay.
+
+
+
+_Appears in:_
+- [PeerRelaySpec](#peerrelayspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `elasticIPs` _[PeerRelayAWSElasticIP](#peerrelayawselasticip) array_ | ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load<br />Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair<br />per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica<br />has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.<br />When set, the reconciler stamps<br />service.beta.kubernetes.io/aws-load-balancer-eip-allocations and<br />service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in<br />spec.service.annotations. |  | MinItems: 1 <br /> |
+
+
+#### PeerRelayAWSElasticIP
+
+
+
+PeerRelayAWSElasticIP pairs an EIP allocation with the subnet in the same AZ.
+
+
+
+_Appears in:_
+- [PeerRelayAWS](#peerrelayaws)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `allocationID` _string_ | AllocationID is the AWS EIP allocation ID (e.g. eipalloc-0123abcd) whose public IP this replica is reachable<br />on. Stamped as service.beta.kubernetes.io/aws-load-balancer-eip-allocations on the replica's Service. |  | Pattern: `^eipalloc-[0-9a-f]+$` <br /> |
+| `subnetID` _string_ | SubnetID is the AWS subnet in the same availability zone as AllocationID (e.g. subnet-0123abcd). Stamped as<br />service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service so the NLB is provisioned in<br />the same AZ as the EIP. |  | Pattern: `^subnet-[0-9a-f]+$` <br /> |
+
+
 #### PeerRelayEndpoint
 
 
@@ -634,6 +667,7 @@ _Appears in:_
 | `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for peer relays.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. | 1 | Minimum: 0 <br /> |
 | `tailnet` _string_ | Tailnet specifies the tailnet this PeerRelay should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 | `service` _[PeerRelayService](#peerrelayservice)_ | Service contains configuration values to modify the LoadBalancer service used to expose the peer relay. |  |  |
+| `aws` _[PeerRelayAWS](#peerrelayaws)_ | AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful<br />when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any<br />aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations. |  |  |
 
 
 #### PeerRelayStatus

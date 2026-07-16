@@ -45,6 +45,7 @@ type PeerRelayList struct {
 	Items []PeerRelay `json:"items"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.aws) || !has(self.aws.elasticIPs) || self.aws.elasticIPs.size() >= self.replicas",message="spec.aws.elasticIPs must contain at least one entry per replica"
 type PeerRelaySpec struct {
 	// Tags that the Tailscale node will be tagged with.
 	// Defaults to [tag:k8s].
@@ -91,6 +92,12 @@ type PeerRelaySpec struct {
 	// Service contains configuration values to modify the LoadBalancer service used to expose the peer relay.
 	// +optional
 	Service *PeerRelayService `json:"service,omitzero"`
+
+	// AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful
+	// when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any
+	// aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.
+	// +optional
+	AWS *PeerRelayAWS `json:"aws,omitzero"`
 }
 
 type PeerRelayService struct {
@@ -98,6 +105,36 @@ type PeerRelayService struct {
 	// cloud providers to ensure IP addresses rather than DNS names are ignored.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// PeerRelayAWS contains AWS-specific configuration for a PeerRelay.
+type PeerRelayAWS struct {
+	// ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load
+	// Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair
+	// per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica
+	// has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.
+	//
+	// When set, the reconciler stamps
+	// service.beta.kubernetes.io/aws-load-balancer-eip-allocations and
+	// service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in
+	// spec.service.annotations.
+	// +listType=atomic
+	// +kubebuilder:validation:MinItems=1
+	ElasticIPs []PeerRelayAWSElasticIP `json:"elasticIPs"`
+}
+
+// PeerRelayAWSElasticIP pairs an EIP allocation with the subnet in the same AZ.
+type PeerRelayAWSElasticIP struct {
+	// AllocationID is the AWS EIP allocation ID (e.g. eipalloc-0123abcd) whose public IP this replica is reachable
+	// on. Stamped as service.beta.kubernetes.io/aws-load-balancer-eip-allocations on the replica's Service.
+	// +kubebuilder:validation:Pattern=`^eipalloc-[0-9a-f]+$`
+	AllocationID string `json:"allocationID"`
+
+	// SubnetID is the AWS subnet in the same availability zone as AllocationID (e.g. subnet-0123abcd). Stamped as
+	// service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service so the NLB is provisioned in
+	// the same AZ as the EIP.
+	// +kubebuilder:validation:Pattern=`^subnet-[0-9a-f]+$`
+	SubnetID string `json:"subnetID"`
 }
 
 type PeerRelayStatus struct {

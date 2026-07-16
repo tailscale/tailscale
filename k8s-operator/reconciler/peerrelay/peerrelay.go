@@ -89,6 +89,7 @@ const (
 	ReasonEndpointsInvalid = "EndpointsInvalid"
 	ReasonEndpointsPending = "EndpointsPending"
 	ReasonPodsPending      = "PodsPending"
+	ReasonAWSConfigInvalid = "AWSConfigInvalid"
 	ReasonReady            = "PeerRelayReady"
 )
 
@@ -186,6 +187,19 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 	replicas := int32(1)
 	if pr.Spec.Replicas != nil {
 		replicas = *pr.Spec.Replicas
+	}
+
+	// Belt-and-braces: CEL on the CRD enforces this at admission, but we also validate here to guard against older
+	// clusters without CEL, resources created before the CRD schema landed, or hand-edited status paths. If the user
+	// hasn't supplied enough EIPs for the requested replica count we refuse to touch existing state and surface the
+	// condition so they can fix the spec.
+	if pr.Spec.AWS != nil && int32(len(pr.Spec.AWS.ElasticIPs)) < replicas {
+		message := fmt.Sprintf("spec.aws.elasticIPs has %d entries but spec.replicas is %d", len(pr.Spec.AWS.ElasticIPs), replicas)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonAWSConfigInvalid, message, r.clock, r.logger)
+		if err := r.Status().Update(ctx, pr); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
+		}
+		return reconcile.Result{}, nil
 	}
 
 	for i := int32(0); i < replicas; i++ {
