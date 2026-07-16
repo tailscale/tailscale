@@ -71,6 +71,38 @@ in {
       '';
     };
 
+    proxy = mkOption {
+      type = types.nullOr (types.enum ["off" "socks" "http" "both"]);
+      default = null;
+      example = "socks";
+      description = ''
+        Run an outbound proxy for accessing the tailnet without a TUN
+        interface (the usual access method in userspace networking mode,
+        also works in tun mode).
+
+        `null` or `"off"` disables it. `"socks"` runs a SOCKS5 server,
+        `"http"` an outbound HTTP proxy, `"both"` runs both on the same
+        `proxyListenAddress` (tailscaled routes SOCKS-looking connections
+        to SOCKS and the rest to HTTP).
+
+        Run `tailscale-proxies` on the host to list the active proxy
+        addresses across all instances.
+
+        See <https://tailscale.com/kb/1112/userspace-networking>
+      '';
+    };
+
+    proxyListenAddress = mkOption {
+      type = types.str;
+      default = "localhost:1055";
+      example = "0.0.0.0:1055";
+      description = ''
+        `[ip]:port` the proxy binds to. Both proxies share this address
+        when `proxy = "both"`. Defaults to localhost to keep it off the
+        wire. Must be unique across enabled instances.
+      '';
+    };
+
     permitCertUid = mkOption {
       type = types.nullOr types.nonEmptyStr;
       default = null;
