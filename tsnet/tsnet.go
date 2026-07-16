@@ -158,6 +158,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/client/local"
 	"tailscale.com/control/controlclient"
@@ -306,6 +307,10 @@ type Server struct {
 	//
 	// This field must be set before calling Start.
 	Tun tun.Device
+
+	// WGDeviceOptions are options passed to the underlying wireguard-go Device.
+	// Use device.OptionPools to share buffer pools across multiple Servers.
+	WGDeviceOptions []device.DeviceOption
 
 	initOnce            sync.Once
 	initErr             error
@@ -846,16 +851,17 @@ func (s *Server) start() (reterr error) {
 	s.dialer = &tsdial.Dialer{Logf: tsLogf} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
 	eng, err := wgengine.NewUserspaceEngine(tsLogf, wgengine.Config{
-		Tun:           s.Tun,
-		EventBus:      sys.Bus.Get(),
-		ListenPort:    s.Port,
-		NetMon:        s.netMon,
-		Dialer:        s.dialer,
-		SetSubsystem:  sys.Set,
-		ControlKnobs:  sys.ControlKnobs(),
-		HealthTracker: sys.HealthTracker.Get(),
-		ExtraRootCAs:  sys.ExtraRootCAs,
-		Metrics:       sys.UserMetricsRegistry(),
+		Tun:             s.Tun,
+		EventBus:        sys.Bus.Get(),
+		ListenPort:      s.Port,
+		NetMon:          s.netMon,
+		Dialer:          s.dialer,
+		SetSubsystem:    sys.Set,
+		ControlKnobs:    sys.ControlKnobs(),
+		HealthTracker:   sys.HealthTracker.Get(),
+		ExtraRootCAs:    sys.ExtraRootCAs,
+		Metrics:         sys.UserMetricsRegistry(),
+		WGDeviceOptions: s.WGDeviceOptions,
 	})
 	if err != nil {
 		return err

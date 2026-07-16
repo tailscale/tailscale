@@ -14,8 +14,8 @@ import (
 )
 
 // NewDevice returns a wireguard-go Device configured for Tailscale use.
-func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device.Device {
-	return device.NewDevice(tunDev, bind, logger)
+func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger, opts ...device.DeviceOption) *device.Device {
+	return device.NewDevice(tunDev, bind, logger, opts...)
 }
 
 // ReconfigDevice replaces the existing device configuration with cfg.

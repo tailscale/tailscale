@@ -275,6 +275,10 @@ type Config struct {
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
 	OnDERPRecv func(regionID int, src key.NodePublic, pkt []byte) (handled bool)
+
+	// WGDeviceOptions, if non-nil, are passed to wireguard-go's NewDevice.
+	// Use device.OptionPools to share buffer pools across multiple Devices.
+	WGDeviceOptions []device.DeviceOption
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -507,7 +511,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	// wgdev takes ownership of tundev, will close it when closed.
 	e.logf("Creating WireGuard device...")
-	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
+	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger, conf.WGDeviceOptions...)
 	closePool.addFunc(e.wgdev.Close)
 
 	// Install a default outbound-packet peer lookup callback. It uses only
