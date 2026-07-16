@@ -59,6 +59,49 @@ spec:
                 https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
               type: object
               properties:
+                aws:
+                  description: |-
+                    AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful
+                    when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any
+                    aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.
+                  type: object
+                  required:
+                    - elasticIPs
+                  properties:
+                    elasticIPs:
+                      description: |-
+                        ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load
+                        Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair
+                        per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica
+                        has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.
+
+                        When set, the reconciler stamps
+                        service.beta.kubernetes.io/aws-load-balancer-eip-allocations and
+                        service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in
+                        spec.service.annotations.
+                      type: array
+                      minItems: 1
+                      items:
+                        description: PeerRelayAWSElasticIP pairs an EIP allocation with the subnet in the same AZ.
+                        type: object
+                        required:
+                          - allocationID
+                          - subnetID
+                        properties:
+                          allocationID:
+                            description: |-
+                              AllocationID is the AWS EIP allocation ID (e.g. eipalloc-0123abcd) whose public IP this replica is reachable
+                              on. Stamped as service.beta.kubernetes.io/aws-load-balancer-eip-allocations on the replica's Service.
+                            type: string
+                            pattern: ^eipalloc-[0-9a-f]+$
+                          subnetID:
+                            description: |-
+                              SubnetID is the AWS subnet in the same availability zone as AllocationID (e.g. subnet-0123abcd). Stamped as
+                              service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service so the NLB is provisioned in
+                              the same AZ as the EIP.
+                            type: string
+                            pattern: ^subnet-[0-9a-f]+$
+                      x-kubernetes-list-type: atomic
                 hostnamePrefix:
                   description: |-
                     HostnamePrefix specifies the hostname prefix for each
@@ -119,6 +162,9 @@ spec:
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: PeerRelay tailnet is immutable
+              x-kubernetes-validations:
+                - rule: '!has(self.aws) || !has(self.aws.elasticIPs) || self.aws.elasticIPs.size() >= self.replicas'
+                  message: spec.aws.elasticIPs must contain at least one entry per replica
             status:
               description: |-
                 Status describes the status of the PeerRelay. This is set

@@ -39,6 +39,7 @@ const (
 	servicePort = 41641
 
 	annotationEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
+	annotationSubnets        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
 )
 
 // cloudAnnotations are the cloud-provider-specific annotations applied to every generated LoadBalancer Service to
@@ -68,7 +69,7 @@ func stateSecretName(prName string, idx int32) string {
 	return fmt.Sprintf("%s-%d", prName, idx)
 }
 
-func peerRelayServiceAnnotations(pr *tsapi.PeerRelay) map[string]string {
+func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]string {
 	annotations := make(map[string]string, len(cloudAnnotations))
 
 	if pr.Spec.Service != nil {
@@ -76,6 +77,14 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay) map[string]string {
 	}
 
 	maps.Copy(annotations, cloudAnnotations)
+
+	// Per-replica AWS pinning always wins over anything in spec.service.annotations or the cloud defaults so users
+	// can rely on spec.aws.elasticIPs being the single source of truth for each replica's EIP + subnet.
+	if pr.Spec.AWS != nil && int(idx) < len(pr.Spec.AWS.ElasticIPs) {
+		eip := pr.Spec.AWS.ElasticIPs[idx]
+		annotations[annotationEIPAllocations] = eip.AllocationID
+		annotations[annotationSubnets] = eip.SubnetID
+	}
 
 	return annotations
 }
@@ -88,7 +97,7 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 			Name:        name,
 			Namespace:   r.tailscaleNamespace,
 			Labels:      peerRelayServiceLabels(pr.Name, idx),
-			Annotations: peerRelayServiceAnnotations(pr),
+			Annotations: peerRelayServiceAnnotations(pr, idx),
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeLoadBalancer,

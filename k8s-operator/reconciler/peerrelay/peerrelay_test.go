@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -89,8 +90,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectedReadyReason   string                 // asserted only when non-empty
 		ExpectStatefulSetGone bool                   // assert the StatefulSet does not exist
 		ExpectStatefulSetSpec *statefulSetSpec       // asserted only when non-nil
-		ExpectedConfigSecrets []string               // exact set of config Secret names expected; nil == skip check
-		ExpectedStateSecrets  []string               // exact set of state Secret names expected; nil == skip check
 		ExpectFinalizer       bool
 		ExpectPRDeleted       bool
 	}{
@@ -128,8 +127,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectFinalizer:       true,
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 1, Image: testProxyImage},
-			ExpectedConfigSecrets: []string{"test-0-config"},
-			ExpectedStateSecrets:  []string{"test-0"},
 		},
 		{
 			Name:    "multiple-replicas",
@@ -144,8 +141,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 				{Name: "test-2", Labels: map[string]string{"tailscale.com/peer-relay-replica": "2"}},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 3, Image: testProxyImage},
-			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config", "test-2-config"},
-			ExpectedStateSecrets:  []string{"test-0", "test-1", "test-2"},
 		},
 		{
 			Name:    "zero-replicas",
@@ -155,8 +150,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(0))},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 0, Image: testProxyImage},
-			ExpectedConfigSecrets: []string{},
-			ExpectedStateSecrets:  []string{},
 		},
 		{
 			Name:    "scale-down",
@@ -176,8 +169,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 				{Name: "test-1"},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 2, Image: testProxyImage},
-			ExpectedConfigSecrets: []string{"test-0-config", "test-1-config"},
-			ExpectedStateSecrets:  []string{"test-0", "test-1"},
 		},
 		{
 			Name:    "scale-up",
@@ -462,7 +453,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 0, "", "unresolvable.example.invalid"),
 			},
 			ExpectedServices:    []expectedService{{Name: "test-0"}},
-			ExpectedEndpoints:   nil,
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
@@ -480,7 +470,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
 			},
 			ExpectedServices:    []expectedService{{Name: "test-0"}},
-			ExpectedEndpoints:   nil,
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
@@ -531,6 +520,92 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
+			// spec.aws.elasticIPs fans out per-replica: each Service gets its OWN eip-allocations + subnets
+			// annotations from the array. This is the HA path on AWS where every replica needs a distinct EIP.
+			Name:    "aws-elasticips-fan-out-per-replica",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas: new(int32(2)),
+					AWS: &tsapi.PeerRelayAWS{
+						ElasticIPs: []tsapi.PeerRelayAWSElasticIP{
+							{AllocationID: "eipalloc-aaaa", SubnetID: "subnet-aaaa"},
+							{AllocationID: "eipalloc-bbbb", SubnetID: "subnet-bbbb"},
+						},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "test-0",
+					Annotations: map[string]string{
+						eipAllocationsAnnotation: "eipalloc-aaaa",
+						subnetsAnnotation:        "subnet-aaaa",
+					},
+				},
+				{
+					Name: "test-1",
+					Annotations: map[string]string{
+						eipAllocationsAnnotation: "eipalloc-bbbb",
+						subnetsAnnotation:        "subnet-bbbb",
+					},
+				},
+			},
+			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 2, Image: testProxyImage},
+		},
+		{
+			// spec.aws.elasticIPs wins over any conflicting eip-allocations / subnets in spec.service.annotations.
+			// Users get a single source of truth: whatever they put in per-replica config is what lands on the Service.
+			Name:    "aws-elasticips-override-shared-annotations",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{
+							eipAllocationsAnnotation: "eipalloc-shared-wrong",
+							subnetsAnnotation:        "subnet-shared-wrong",
+						},
+					},
+					AWS: &tsapi.PeerRelayAWS{
+						ElasticIPs: []tsapi.PeerRelayAWSElasticIP{
+							{AllocationID: "eipalloc-perreplica", SubnetID: "subnet-perreplica"},
+						},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "test-0",
+					Annotations: map[string]string{
+						eipAllocationsAnnotation: "eipalloc-perreplica",
+						subnetsAnnotation:        "subnet-perreplica",
+					},
+				},
+			},
+		},
+		{
+			// Length mismatch trips the belt-and-braces check: reconciler refuses to create Services and surfaces
+			// AWSConfigInvalid so the user can fix the spec. Nothing is created, existing state is preserved.
+			Name:    "aws-elasticips-insufficient",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas: new(int32(2)),
+					AWS: &tsapi.PeerRelayAWS{
+						ElasticIPs: []tsapi.PeerRelayAWSElasticIP{
+							{AllocationID: "eipalloc-aaaa", SubnetID: "subnet-aaaa"},
+						},
+					},
+				},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonAWSConfigInvalid,
+		},
+		{
 			Name:    "deletion",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
@@ -557,8 +632,6 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedServices:      []expectedService{{Name: "other-0"}},
 			ExpectPRDeleted:       true,
 			ExpectStatefulSetGone: true,
-			ExpectedConfigSecrets: []string{},
-			ExpectedStateSecrets:  []string{},
 		},
 	}
 
@@ -652,12 +725,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 			}
 
 			assertStatefulSet(t, fc, tc.Request.Name, tc.ExpectStatefulSetSpec, tc.ExpectStatefulSetGone)
-			if tc.ExpectedConfigSecrets != nil {
-				assertConfigSecrets(t, fc, tc.Request.Name, tc.ExpectedConfigSecrets)
-			}
-			if tc.ExpectedStateSecrets != nil {
-				assertStateSecrets(t, fc, tc.Request.Name, tc.ExpectedStateSecrets)
-			}
+			configSecrets, stateSecrets := childSecretsFromServices(tc.Request.Name, tc.ExpectedServices)
+			assertConfigSecrets(t, fc, tc.Request.Name, configSecrets)
+			assertStateSecrets(t, fc, tc.Request.Name, stateSecrets)
 		})
 	}
 }
@@ -705,6 +775,21 @@ func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []s
 func assertStateSecrets(t *testing.T, fc client.Client, prName string, want []string) {
 	t.Helper()
 	assertSecretsForType(t, fc, prName, "state", "state Secrets", want)
+}
+
+// childSecretsFromServices derives the expected config and state Secret names for the PeerRelay named prName from the
+// list of expected Services. Because the reconciler creates one config Secret (named <svc>-config) and one state
+// Secret (named <svc>) per Service, spelling those out separately in every test case is redundant.
+func childSecretsFromServices(prName string, services []expectedService) (configs, states []string) {
+	prefix := prName + "-"
+	for _, s := range services {
+		if !strings.HasPrefix(s.Name, prefix) {
+			continue
+		}
+		configs = append(configs, s.Name+"-config")
+		states = append(states, s.Name)
+	}
+	return configs, states
 }
 
 func assertSecretsForType(t *testing.T, fc client.Client, prName, secretType, label string, want []string) {
@@ -806,7 +891,10 @@ func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.S
 	return svc
 }
 
-const eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
+const (
+	eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
+	subnetsAnnotation        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
+)
 
 func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {
 	labels := map[string]string{
