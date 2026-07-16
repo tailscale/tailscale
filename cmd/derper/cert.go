@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -158,10 +159,9 @@ func (m *manualCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certif
 
 	// Return a shallow copy of the cert with a capacity-clamped chain
 	// so callers can never mutate the manager's long-lived certificate.
-	certCopy := new(tls.Certificate)
-	*certCopy = *m.cert
-	certCopy.Certificate = certCopy.Certificate[:len(certCopy.Certificate):len(certCopy.Certificate)]
-	return certCopy, nil
+	certCopy := *m.cert
+	certCopy.Certificate = slices.Clip(certCopy.Certificate)
+	return &certCopy, nil
 }
 
 func (m *manualCertManager) HTTPHandler(fallback http.Handler) http.Handler {

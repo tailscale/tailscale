@@ -744,8 +744,7 @@ func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
 		// cached value. Return a shallow copy with the meta cert
 		// appended to a freshly allocated chain slice.
 		certCopy := *cert
-		chain := cert.Certificate
-		certCopy.Certificate = append(chain[:len(chain):len(chain)], s.MetaCert())
+		certCopy.Certificate = append(slices.Clip(cert.Certificate), s.MetaCert())
 		return &certCopy, nil
 	}
 }
