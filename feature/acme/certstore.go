@@ -187,6 +187,25 @@ type TLSCertKeyReader interface {
 	ReadTLSCertAndKey(domain string) ([]byte, []byte, error)
 }
 
+// ARIReplacesAllower is optionally implemented by state stores to opt
+// out of the ARI "replaces" hint on a per-domain basis at renewal time.
+// When implemented and returning false, the renewal path submits a plain
+// newOrder instead of claiming renewal exemption via "replaces".
+//
+// Used by the k8s cert-share store to prevent submitting a "replaces"
+// claim that Let's Encrypt would reject because the current ACME
+// account did not issue the previous cert (which can happen when a
+// shared per-tailnet account key is adopted after a cert was already
+// issued by a per-pod account). See #18251.
+type ARIReplacesAllower interface {
+	// ShouldUseARIReplacesForRenewal reports whether the renewal order
+	// for domain should carry the ARI "replaces" hint. It is advisory:
+	// a non-nil error means eligibility could not be determined, not
+	// that the hint should be skipped, and callers fail open (use the
+	// hint) in that case.
+	ShouldUseARIReplacesForRenewal(domain string) (bool, error)
+}
+
 func (s certStateStore) Read(domain string, now time.Time) (*ipnlocal.TLSCertKeyPair, error) {
 	// If we're using a store that supports atomic reads, use that
 	if kr, ok := s.StateStore.(TLSCertKeyReader); ok {
@@ -213,6 +232,16 @@ func (s certStateStore) Read(domain string, now time.Time) (*ipnlocal.TLSCertKey
 		return nil, errCertExpired
 	}
 	return &ipnlocal.TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
+}
+
+// ShouldUseARIReplacesForRenewal delegates to the underlying state store
+// if it implements [ARIReplacesAllower]. Stores that don't opt in default
+// to true (attempt "replaces"), preserving the pre-hook behaviour.
+func (s certStateStore) ShouldUseARIReplacesForRenewal(domain string) (bool, error) {
+	if a, ok := s.StateStore.(ARIReplacesAllower); ok {
+		return a.ShouldUseARIReplacesForRenewal(domain)
+	}
+	return true, nil
 }
 
 func (s certStateStore) WriteCert(domain string, cert []byte) error {

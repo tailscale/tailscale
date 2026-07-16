@@ -56,6 +56,7 @@ const (
 	reasonProxyGroupCreating           = "ProxyGroupCreating"
 	reasonProxyGroupInvalid            = "ProxyGroupInvalid"
 	reasonProxyGroupTailnetUnavailable = "ProxyGroupTailnetUnavailable"
+	reasonACMEAccountsPendingDeletion  = "ACMEAccountsPendingDeletion"
 
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
 	optimisticLockErrorMsg  = "the object has been modified; please apply your changes to the latest version and try again"
@@ -102,6 +103,14 @@ type ProxyGroupReconciler struct {
 	apiServerProxyGroups set.Slice[types.UID]     // for kube-apiserver proxygroups gauge
 	authKeyRateLimits    map[string]*rate.Limiter // per-ProxyGroup rate limiters for auth key re-issuance.
 	authKeyReissuing     map[string]bool
+
+	// sharedACMEAccountKey is the operator-wide default for the
+	// shared-ACME-account feature. When true, every ProxyGroup uses the
+	// shared per-tailnet account key unless the ProxyGroup explicitly
+	// opts out via tailscale.com/share-acme-account=false. When false,
+	// only ProxyGroups annotated with tailscale.com/share-acme-account=true
+	// use it.
+	sharedACMEAccountKey bool
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -354,7 +363,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 		}
 	}
 
-	role := pgRole(pg, r.tsNamespace)
+	role := pgRole(pg, r.tsNamespace, r.sharedACMEAccountEnabledFor(pg))
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = role.ObjectMeta.Annotations
@@ -394,13 +403,36 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 		}); err != nil {
 			return r.notReadyErrf(pg, logger, "error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
+
+		// Ensure the shared ACME accounts Secret exists (with finalizer)
+		// when this ProxyGroup opts into the feature. Proxy pods
+		// populate its fields on first cert issuance. See #18251.
+		if r.sharedACMEAccountEnabledFor(pg) {
+			acmeSecret := pgACMEAccountSecret(r.tsNamespace)
+			if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, acmeSecret, func(existing *corev1.Secret) {
+				if !existing.DeletionTimestamp.IsZero() {
+					// Deletion can't be undone; warn so the account keys
+					// get backed up before the finalizer is removed.
+					msg := fmt.Sprintf("shared ACME accounts Secret %q is marked for deletion but retained by the %q finalizer. Its data remains readable until the finalizer is removed - back it up first to preserve the ACME account keys.", existing.Name, kubetypes.ACMEAccountsFinalizer)
+					r.recorder.Event(existing, corev1.EventTypeWarning, reasonACMEAccountsPendingDeletion, msg)
+					logger.Warn(msg)
+					return
+				}
+				existing.Labels = acmeSecret.Labels
+				if !slices.Contains(existing.Finalizers, kubetypes.ACMEAccountsFinalizer) {
+					existing.Finalizers = append(existing.Finalizers, kubetypes.ACMEAccountsFinalizer)
+				}
+			}); err != nil {
+				return r.notReadyErrf(pg, logger, "error provisioning shared ACME accounts Secret %q: %w", acmeSecret.Name, err)
+			}
+		}
 	}
 
 	defaultImage := r.tsProxyImage
 	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
 		defaultImage = r.k8sProxyImage
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass)
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass, r.sharedACMEAccountEnabledFor(pg))
 	if err != nil {
 		return r.notReadyErrf(pg, logger, "error generating StatefulSet spec: %w", err)
 	}
@@ -1345,6 +1377,25 @@ func notReady(reason, msg string) (map[string][]netip.AddrPort, *notReadyReason,
 		reason:  reason,
 		message: msg,
 	}, nil
+}
+
+// sharedACMEAccountEnabledFor reports whether the shared-ACME-account
+// feature should be applied to pg. The per-PG
+// tailscale.com/share-acme-account annotation wins when set; otherwise
+// the operator's OPERATOR_SHARED_ACME_ACCOUNT_KEY setting is the default
+// for every ProxyGroup.
+func (r *ProxyGroupReconciler) sharedACMEAccountEnabledFor(pg *tsapi.ProxyGroup) bool {
+	return sharedACMEAccountEnabled(pg, r.sharedACMEAccountKey)
+}
+
+// sharedACMEAccountEnabled reports whether pg should use the shared ACME
+// account, with the tailscale.com/share-acme-account annotation overriding
+// the operator-wide default.
+func sharedACMEAccountEnabled(pg *tsapi.ProxyGroup, operatorDefault bool) bool {
+	if v, ok := pg.Annotations[AnnotationShareACMEAccount]; ok {
+		return v == "true"
+	}
+	return operatorDefault
 }
 
 func (r *ProxyGroupReconciler) notReadyErrf(pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, format string, a ...any) (map[string][]netip.AddrPort, *notReadyReason, error) {

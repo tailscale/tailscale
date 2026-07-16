@@ -124,6 +124,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.uid
+            - name: OPERATOR_SHARED_ACME_ACCOUNT_KEY
+              value: {{ .Values.operatorConfig.sharedACMEAccountKey | quote }}
             {{- with .Values.operatorConfig.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -360,17 +360,30 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 		return nil, fmt.Errorf("unexpected ACME account status %q", a.Status)
 	}
 
-	// If we have a previous cert, include it in the order. Assuming we're
-	// within the ARI renewal window this should exclude us from LE rate
-	// limits.
-	// Note that this order extension will fail renewals if the ACME account key has changed
-	// since the last issuance, see
-	// https://github.com/tailscale/tailscale/issues/18251
+	// If we have a previous cert, include it in the order via the ARI
+	// "replaces" extension so LE classifies the new cert as a renewal
+	// and exempts it from the per-registered-domain rate limit. Stores
+	// that can tell the current ACME account did not issue the previous
+	// cert opt out via [ARIReplacesAllower]; see #18251.
 	var opts []xacme.OrderOption
 	if previous != nil && !envknob.Bool("TS_DEBUG_ACME_FORCE_RENEWAL") {
 		prevCrt, err := parseCertificate(previous)
 		if err == nil {
-			opts = append(opts, xacme.WithOrderReplacesCert(prevCrt))
+			useReplaces := true
+			if a, ok := cs.(ARIReplacesAllower); ok {
+				if allowed, err := a.ShouldUseARIReplacesForRenewal(domain); err != nil {
+					// Fail open: an error means we couldn't check
+					// eligibility, not that the account is misaligned.
+					logf("acme: failed to check ARI 'replaces' eligibility for %q, defaulting to use it: %v", domain, err)
+				} else {
+					useReplaces = allowed
+				}
+			}
+			if useReplaces {
+				opts = append(opts, xacme.WithOrderReplacesCert(prevCrt))
+			} else {
+				logf("account key mismatch for previous cert; skipping ARI 'replaces' hint")
+			}
 		}
 	}
 
