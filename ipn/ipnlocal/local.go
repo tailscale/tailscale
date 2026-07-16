@@ -6296,6 +6296,9 @@ func (b *LocalBackend) ProfileMkdirAll(id ipn.ProfileID, subs ...string) (string
 	return b.profileMkdirAllLocked(id, subs...)
 }
 
+// ProfileDataDir is the directory name, under the Tailscale var root, that holds per-profile data.
+const ProfileDataDir = "profile-data"
+
 // profileDataPathLocked returns a path of a profile-specific (sub)directory
 // inside the writable storage area for the given profile ID. It does not
 // create or verify the existence of the path in the filesystem.
@@ -6310,7 +6313,7 @@ func (b *LocalBackend) profileDataPathLocked(id ipn.ProfileID, subs ...string) s
 	if vr == "" {
 		return ""
 	}
-	return filepath.Join(append([]string{vr, "profile-data", string(id)}, subs...)...)
+	return filepath.Join(append([]string{vr, ProfileDataDir, string(id)}, subs...)...)
 }
 
 // profileMkdirAllLocked implements ProfileMkdirAll.

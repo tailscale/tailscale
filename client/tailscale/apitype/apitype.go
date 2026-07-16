@@ -104,3 +104,20 @@ type OptionalFeatures struct {
 	// are not guaranteed to be present.)
 	Features map[string]bool
 }
+
+// ServiceClientPrefRequest is the body POSTed to the LocalAPI endpoint /localapi/v0/prefs/service-clients.
+// Empty values for Client, Username, and DatabaseName mean "don't change this value".
+type ServiceClientPrefRequest struct {
+	// Key is the identifier for the service client pref. Required. Format is "<serviceName>:<port>"
+	// where serviceName is a [tailcfg.ServiceName], e.g. "svc:my-db:5432".
+	Key string
+
+	// Client is the name of the client that the user picked in the service launch. Optional.
+	Client string `json:",omitzero"`
+
+	// Username is the username that the user entered in the service launch. Optional.
+	Username string `json:",omitzero"`
+
+	// DatabaseName is the database name that the user entered in the service launch. Optional.
+	DatabaseName string `json:",omitzero"`
+}

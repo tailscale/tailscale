@@ -229,8 +229,9 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc: "Linux NetworkManager integration",
 		Deps: []FeatureTag{"dbus"},
 	},
-	"qrcodes":     {Sym: "QRCodes", Desc: "QR codes in tailscale CLI"},
-	"relayserver": {Sym: "RelayServer", Desc: "Relay server"},
+	"serviceclientprefs": {Sym: "ServiceClientPrefs", Desc: "Desktop client service launch preferences"},
+	"qrcodes":            {Sym: "QRCodes", Desc: "QR codes in tailscale CLI"},
+	"relayserver":        {Sym: "RelayServer", Desc: "Relay server"},
 	"remoteconfig": {
 		Sym:  "RemoteConfig",
 		Desc: "Full remote configuration of this node by the tailnet admin, opting out of Tailscale's per-feature double opt-in in favor of a single client-side trust decision",
