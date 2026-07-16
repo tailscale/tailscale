@@ -629,7 +629,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 		name            string
 		initialOnline   bool
 		initialLastSeen time.Time
-		updateDiscoKey  bool
+		updateDiscoKey  func() key.DiscoPublic
 		updateOnline    bool
 		updateLastSeen  time.Time
 		wantUpdate      bool
@@ -639,7 +639,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "newer_key_not_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
-			updateDiscoKey:  true,
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    false,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      true,
@@ -649,7 +649,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "newer_key_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
-			updateDiscoKey:  true,
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    true,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      true,
@@ -659,7 +659,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "older_key_not_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
-			updateDiscoKey:  true,
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    false,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      false,
@@ -669,7 +669,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "older_key_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
-			updateDiscoKey:  true,
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    true,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      true,
@@ -679,7 +679,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "same_newer_key_not_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
-			updateDiscoKey:  false,
+			updateDiscoKey:  nil,
 			updateOnline:    false,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      false,
@@ -689,7 +689,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "same_newer_key_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
-			updateDiscoKey:  false,
+			updateDiscoKey:  nil,
 			updateOnline:    true,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      false,
@@ -699,7 +699,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "same_older_key_not_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
-			updateDiscoKey:  false,
+			updateDiscoKey:  nil,
 			updateOnline:    false,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      false,
@@ -709,7 +709,7 @@ func TestUpdateDiscoForNode(t *testing.T) {
 			name:            "same_older_key_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
-			updateDiscoKey:  false,
+			updateDiscoKey:  nil,
 			updateOnline:    true,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      true,
@@ -718,11 +718,22 @@ func TestUpdateDiscoForNode(t *testing.T) {
 		{
 			name:           "no_initial_last_seen",
 			initialOnline:  false,
-			updateDiscoKey: true,
+			updateDiscoKey: key.NewDisco().Public,
 			updateOnline:   false,
 			updateLastSeen: time.Now(),
 			wantUpdate:     true,
 			wantKeyChanged: true,
+		},
+		{
+			name:          "zero_key",
+			initialOnline: false,
+			updateDiscoKey: func() key.DiscoPublic {
+				return key.DiscoPublic{}
+			},
+			updateOnline:   false,
+			updateLastSeen: time.Now(),
+			wantUpdate:     false,
+			wantKeyChanged: false,
 		},
 	}
 
@@ -755,8 +766,8 @@ func TestUpdateDiscoForNode(t *testing.T) {
 				}
 
 				newKey := oldKey.Public()
-				if tt.updateDiscoKey {
-					newKey = key.NewDisco().Public()
+				if tt.updateDiscoKey != nil {
+					newKey = tt.updateDiscoKey()
 				}
 				ms.updateDiscoForNode(node.ID, node.Key, newKey, tt.updateLastSeen, tt.updateOnline)
 

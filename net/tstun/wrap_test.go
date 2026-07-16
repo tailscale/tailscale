@@ -1213,3 +1213,26 @@ func TestSetPeerRoutesFastPath(t *testing.T) {
 		t.Fatalf("peerConfig after second uninstall = %v; want nil", got)
 	}
 }
+
+// Drop empty TSMPDiscoAdvert packets inbound via wireguard.
+func TestFilterDropEmptyTSMPDiscoAdvertInbound(t *testing.T) {
+	var memLog tstest.MemLogger
+	tw := &Wrapper{logf: memLog.Logf, limitedLogf: memLog.Logf}
+	ipHdr := packet.IP4Header{
+		IPProto: ipproto.TSMP,
+		Src:     netaddr.IPv4(1, 2, 3, 4),
+		Dst:     netaddr.IPv4(5, 6, 7, 8),
+	}
+	tsmpPayload := make([]byte, 33)
+	tsmpPayload[0] = byte(packet.TSMPTypeDiscoAdvertisement)
+	pkt := make([]byte, ipHdr.Len()+len(tsmpPayload))
+	ipHdr.Marshal(pkt)
+	copy(pkt[ipHdr.Len():], tsmpPayload)
+
+	pp := new(packet.Parsed)
+	pp.Decode(pkt)
+	got, _ := tw.filterPacketInboundFromWireGuard(pp, nil, nil, nil)
+	if got != filter.DropSilently {
+		t.Errorf("got %v; want DropSilently", got)
+	}
+}
