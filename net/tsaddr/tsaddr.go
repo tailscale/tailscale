@@ -70,6 +70,7 @@ const (
 // IsTailscaleIP reports whether IP is an IP address in a range that
 // Tailscale assigns from.
 func IsTailscaleIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
 	if ip.Is4() {
 		return IsTailscaleIPv4(ip)
 	}
@@ -78,6 +79,7 @@ func IsTailscaleIP(ip netip.Addr) bool {
 
 // IsTailscaleIPv4 reports whether an IPv4 IP is an IP address that
 // Tailscale assigns from.
+// It will always return false if ip is an "IPv4-mapped IPv6 address".
 func IsTailscaleIPv4(ip netip.Addr) bool {
 	return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
 }
