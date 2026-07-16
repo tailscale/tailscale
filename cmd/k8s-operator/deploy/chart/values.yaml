@@ -87,6 +87,13 @@ operatorConfig:
   # - name: EXTRA_VAR2
   #   value: "value2"
 
+  # Default for the tailscale.com/share-acme-account annotation on new
+  # ProxyGroups. When true, the operator provisions a shared per-tailnet
+  # ACME account key Secret and configures proxies to use it, preserving
+  # Let's Encrypt's ARI "replaces" renewal exemption across pod restarts
+  # and ProxyGroup recreation. See #18251.
+  sharedACMEAccountKey: false
+
 # In the case that you already have a tailscale ingressclass in your cluster (or vcluster), you can disable the creation here
 ingressClass:
   # Allows for customization of the ingress class name used by the operator to identify ingresses to reconcile. This does
