@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -491,13 +493,13 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	// netmon.ChangeDelta to handle it. See tailscale/corp#43882.
 	wantAddrs := set.SetOf(cfg.LocalAddrs)
 	if r.lastScanAddrs == nil || !r.lastScanAddrs.Equal(wantAddrs) {
-		if kernelAddrs, err := r.tailscaleInterfaceAddrs(); err != nil {
+		if ifaceAddrs, err := r.tailscaleInterfaceAddrs(); err != nil {
 			r.logf("router: enumerating interface addresses failed, skipping orphan cleanup: %v", err)
 		} else {
 			r.lastScanAddrs = wantAddrs
-			orphaned := orphanedAddrs(kernelAddrs, cfg.LocalAddrs)
-			removed := make([]netip.Prefix, 0, len(orphaned))
-			for _, p := range orphaned {
+			kernelAddrs := r.deletableAddrs(ifaceAddrs)
+			var removed []netip.Prefix
+			for p := range orphanedAddrs(kernelAddrs, cfg.LocalAddrs) {
 				if prevAddrs[p] {
 					continue // an address we were tracking; cidrDiff already handled it
 				}
@@ -1012,37 +1014,45 @@ func (r *linuxRouter) addAddress(addr netip.Prefix) error {
 	return nil
 }
 
-// delAddress removes an IP/mask from the tunnel interface. Fails if
-// the address is not assigned to the interface, or if the removal
-// fails.
+// delAddress removes an IP/mask from the tunnel interface. It attempts both the
+// loopback-rule teardown and the address deletion even if the former fails, so a
+// missing firewall rule can't leak the address; errors from both are joined.
 func (r *linuxRouter) delAddress(addr netip.Prefix) error {
-	if !r.getV6Available() && addr.Addr().Is6() {
-		return nil
-	}
+	var errs []error
 	if err := r.delLoopbackRule(addr.Addr()); err != nil {
-		return err
+		errs = append(errs, err)
 	}
+	if err := r.delAddrRaw(addr); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// delAddrRaw deletes addr from the tunnel interface without the loopback-rule
+// teardown that [linuxRouter.delAddress] does.
+func (r *linuxRouter) delAddrRaw(addr netip.Prefix) error {
 	if r.useIPCommand() {
 		if err := r.cmd.run("ip", "addr", "del", addr.String(), "dev", r.tunname); err != nil {
 			return fmt.Errorf("deleting address %q from tunnel interface: %w", addr, err)
 		}
-	} else {
-		link, err := r.link()
-		if err != nil {
-			return fmt.Errorf("deleting address %v, %w", addr, err)
-		}
-		if err := netlink.AddrDel(link, nlAddrOfPrefix(addr)); err != nil {
-			return fmt.Errorf("deleting address %v from tunnel interface: %w", addr, err)
-		}
+		return nil
+	}
+	link, err := r.link()
+	if err != nil {
+		return fmt.Errorf("deleting address %v, %w", addr, err)
+	}
+	if err := netlink.AddrDel(link, nlAddrOfPrefix(addr)); err != nil {
+		return fmt.Errorf("deleting address %v from tunnel interface: %w", addr, err)
 	}
 	return nil
 }
 
-// reconcilableTailscaleIP reports whether ip, found on the tunnel interface, is
-// a Tailscale-range address the router can actually delete. delAddress no-ops on
-// IPv6 when IPv6 is unavailable, so excluding those avoids treating a no-op
-// "deletion" as success.
-func (r *linuxRouter) reconcilableTailscaleIP(ip netip.Addr) bool {
+// isDeletableAddr reports whether ip, found on the tunnel interface, is a
+// Tailscale-range address the live router should delete. It excludes IPv6 when
+// IPv6 is unavailable so the Set-time sweep doesn't churn on addresses this
+// instance couldn't have installed; the teardown path uses [tailscaleAddrs]
+// instead and removes every Tailscale-range address.
+func (r *linuxRouter) isDeletableAddr(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !tsaddr.IsTailscaleIP(ip) {
 		return false
@@ -1050,11 +1060,34 @@ func (r *linuxRouter) reconcilableTailscaleIP(ip netip.Addr) bool {
 	return !ip.Is6() || r.getV6Available()
 }
 
-// tailscaleInterfaceAddrs returns the addresses on the tunnel interface that are
-// within Tailscale's ranges and that the router can act on (see
-// reconcilableTailscaleIP); all others are excluded so they're never candidates
-// for removal. It's a filtered subset, and errors if the interface can't be read.
-func (r *linuxRouter) tailscaleInterfaceAddrs() ([]netip.Prefix, error) {
+// tailscaleAddrs yields only the Tailscale-range addresses from addrs, per
+// [tsaddr.IsTailscaleIP].
+func tailscaleAddrs(addrs iter.Seq[netip.Prefix]) iter.Seq[netip.Prefix] {
+	return func(yield func(netip.Prefix) bool) {
+		for p := range addrs {
+			if tsaddr.IsTailscaleIP(p.Addr()) && !yield(p) {
+				return
+			}
+		}
+	}
+}
+
+// deletableAddrs yields the addresses from addrs the live router should delete,
+// per [linuxRouter.isDeletableAddr].
+func (r *linuxRouter) deletableAddrs(addrs iter.Seq[netip.Prefix]) iter.Seq[netip.Prefix] {
+	return func(yield func(netip.Prefix) bool) {
+		for p := range addrs {
+			if r.isDeletableAddr(p.Addr()) && !yield(p) {
+				return
+			}
+		}
+	}
+}
+
+// tailscaleInterfaceAddrs yields the addresses on the tunnel interface,
+// preserving each kernel prefix length so a later delete matches. It errors if
+// the interface can't be read.
+func (r *linuxRouter) tailscaleInterfaceAddrs() (iter.Seq[netip.Prefix], error) {
 	if r.useIPCommand() {
 		return r.tailscaleInterfaceAddrsIPCommand()
 	}
@@ -1071,22 +1104,17 @@ func (r *linuxRouter) tailscaleInterfaceAddrs() ([]netip.Prefix, error) {
 		if a.IPNet == nil {
 			continue
 		}
-		pfx, ok := netipx.FromStdIPNet(a.IPNet)
-		if !ok {
-			continue
-		}
-		// Preserve the kernel's prefix length so a later delete matches.
-		if r.reconcilableTailscaleIP(pfx.Addr()) {
+		if pfx, ok := netipx.FromStdIPNet(a.IPNet); ok {
 			ret = append(ret, pfx)
 		}
 	}
-	return ret, nil
+	return slices.Values(ret), nil
 }
 
 // tailscaleInterfaceAddrsIPCommand is the "ip" command implementation of
-// tailscaleInterfaceAddrs, used in tests and when TS_DEBUG_USE_IP_COMMAND is
-// set.
-func (r *linuxRouter) tailscaleInterfaceAddrsIPCommand() ([]netip.Prefix, error) {
+// [linuxRouter.tailscaleInterfaceAddrs], used in tests and when
+// TS_DEBUG_USE_IP_COMMAND is set.
+func (r *linuxRouter) tailscaleInterfaceAddrsIPCommand() (iter.Seq[netip.Prefix], error) {
 	out, err := r.cmd.output("ip", "-oneline", "addr", "show", "dev", r.tunname)
 	if err != nil {
 		return nil, err
@@ -1104,24 +1132,24 @@ func (r *linuxRouter) tailscaleInterfaceAddrsIPCommand() ([]netip.Prefix, error)
 			if err != nil {
 				break
 			}
-			if r.reconcilableTailscaleIP(p.Addr()) {
-				ret = append(ret, p)
-			}
+			ret = append(ret, p)
 			break
 		}
 	}
-	return ret, nil
+	return slices.Values(ret), nil
 }
 
-// orphanedAddrs returns the addresses in kernelAddrs that are not in desired,
+// orphanedAddrs yields the addresses in kernelAddrs that are not in desired,
 // i.e. the stale addresses left on the interface that the sweep should remove.
-func orphanedAddrs(kernelAddrs, desired []netip.Prefix) []netip.Prefix {
-	if len(kernelAddrs) == 0 {
-		return nil
+func orphanedAddrs(kernelAddrs iter.Seq[netip.Prefix], desired []netip.Prefix) iter.Seq[netip.Prefix] {
+	want := set.SetOf(desired)
+	return func(yield func(netip.Prefix) bool) {
+		for p := range kernelAddrs {
+			if !want.Contains(p) && !yield(p) {
+				return
+			}
+		}
 	}
-	s := set.SetOf(kernelAddrs)
-	s.DeleteSlice(desired)
-	return s.Slice()
 }
 
 // addLoopbackRule adds a firewall rule to permit loopback traffic to
@@ -1910,9 +1938,48 @@ func platformCanNetfilter() bool {
 // The function calls cleanUp for both iptables and nftables since which ever
 // netfilter runner is used, the cleanUp function for the other one doesn't do anything.
 func cleanUp(logf logger.Logf, interfaceName string) {
-	if interfaceName != "userspace-networking" && platformCanNetfilter() {
+	if interfaceName == "userspace-networking" {
+		return
+	}
+	if platformCanNetfilter() {
 		linuxfw.IPTablesCleanUp(logf)
 		linuxfw.NfTablesCleanUp(logf)
+	}
+	removeOrphanedAddrsForCleanup(logf, osCommandRunner{ambientCapNetAdmin: useAmbientCaps()}, interfaceName)
+}
+
+// removeOrphanedAddrsForCleanup removes every Tailscale-range address from
+// interfaceName. On the teardown path (tailscaled --cleanup, and the cleanup at
+// daemon start) there is no desired config or running router, so every such
+// address is an orphan. Best-effort: failures are logged, not returned.
+func removeOrphanedAddrsForCleanup(logf logger.Logf, cmd commandRunner, interfaceName string) {
+	// A minimal router suffices: delAddress reaches delLoopbackRule, which
+	// returns early because netfilterMode is netfilterOff (the zero value), so
+	// the nil nfr/netMon/health are never dereferenced. logf is wrapped to match
+	// the live router's "router: " prefix.
+	r := &linuxRouter{
+		logf:    logger.WithPrefix(logf, "router: "),
+		tunname: interfaceName,
+		cmd:     cmd,
+	}
+	ifaceAddrs, err := r.tailscaleInterfaceAddrs()
+	if err != nil {
+		r.logf("enumerating %s addresses for cleanup failed: %v", interfaceName, err)
+		return
+	}
+	// Unlike the live sweep's deletableAddrs, tailscaleAddrs keeps IPv6 too: a
+	// previous instance may have left a ULA orphan even though this process never
+	// brought IPv6 up. delAddress is idempotent, so a no-op v6 delete is harmless.
+	var removed []netip.Prefix
+	for p := range tailscaleAddrs(ifaceAddrs) {
+		if err := r.delAddress(p); err != nil {
+			r.logf("removing stale address %v from %s during cleanup failed: %v", p, interfaceName, err)
+			continue
+		}
+		removed = append(removed, p)
+	}
+	if len(removed) > 0 {
+		r.logf("removed %d stale Tailscale address(es) from %s during cleanup: %v", len(removed), interfaceName, removed)
 	}
 }
 

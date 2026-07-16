@@ -1177,13 +1177,18 @@ func (o *fakeOS) run(args ...string) error {
 func (o *fakeOS) output(args ...string) ([]byte, error) {
 	got := strings.Join(args, " ")
 
-	if got == "ip -oneline addr show dev tailscale0" {
-		// Render o.ips (entries look like "<cidr> dev tailscale0") in a
-		// simplified `ip -oneline addr show` format that exposes the family token
-		// the parser keys off of.
+	if dev, ok := strings.CutPrefix(got, "ip -oneline addr show dev "); ok {
+		// Render o.ips (entries look like "<cidr> dev <ifname>") in a simplified
+		// `ip -oneline addr show` format that exposes the family token the parser
+		// keys off of. Only addresses on the requested device are returned, so the
+		// fake models a real multi-interface host: `show dev tailscale0` never
+		// reports an address that lives on eth0.
 		var ret []string
 		for _, e := range o.ips {
-			cidr, _, _ := strings.Cut(e, " ")
+			cidr, rest, _ := strings.Cut(e, " ")
+			if rest != "dev "+dev {
+				continue // address is on a different interface
+			}
 			p, err := netip.ParsePrefix(cidr)
 			if err != nil {
 				continue
@@ -1192,7 +1197,7 @@ func (o *fakeOS) output(args ...string) ([]byte, error) {
 			if p.Addr().Is6() {
 				fam = "inet6"
 			}
-			ret = append(ret, fmt.Sprintf("3: tailscale0    %s %s scope global tailscale0", fam, cidr))
+			ret = append(ret, fmt.Sprintf("3: %s    %s %s scope global %s", dev, fam, cidr, dev))
 		}
 		return []byte(strings.Join(ret, "\n")), nil
 	}
@@ -1855,10 +1860,15 @@ func TestSetOrphanScanNotRetriedOnDuplicateLocalAddrs(t *testing.T) {
 func TestSetKeepsNonTailscaleAddrs(t *testing.T) {
 	lr, fake := newTestLinuxRouter(t)
 
-	fake.ips = []string{
-		"192.168.1.5/24 dev tailscale0", // non-Tailscale v4
-		"fe80::1/64 dev tailscale0",     // link-local v6
+	keep := []string{
+		"192.168.1.5/24 dev tailscale0",        // non-Tailscale v4
+		"fe80::1/64 dev tailscale0",            // link-local v6
+		"100.115.92.5/32 dev tailscale0",       // ChromeOS VM range: in CGNAT, not a Tailscale IP
+		"100.63.0.1/32 dev tailscale0",         // just below CGNAT 100.64.0.0/10
+		"100.128.0.1/32 dev tailscale0",        // just above CGNAT
+		"fd7a:115c:a1e1::1/128 dev tailscale0", // adjacent to the Tailscale ULA /48, not in it
 	}
+	fake.ips = append([]string(nil), keep...)
 	slices.Sort(fake.ips)
 
 	cfg := &Config{
@@ -1869,35 +1879,32 @@ func TestSetKeepsNonTailscaleAddrs(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	for _, keep := range []string{
-		"192.168.1.5/24 dev tailscale0",
-		"fe80::1/64 dev tailscale0",
-	} {
-		if !slices.Contains(fake.ips, keep) {
-			t.Errorf("non-Tailscale addr %q was wrongly removed; ips=%q", keep, fake.ips)
+	for _, k := range keep {
+		if !slices.Contains(fake.ips, k) {
+			t.Errorf("non-Tailscale addr %q was wrongly removed; ips=%q", k, fake.ips)
 		}
 	}
 }
 
 func TestOrphanedAddrs(t *testing.T) {
 	p := netip.MustParsePrefix
-	// orphanedAddrs returns set-iteration order, so compare as sets.
-	got := set.SetOf(orphanedAddrs(
-		[]netip.Prefix{p("100.64.0.1/32"), p("100.64.0.99/32"), p("fd7a:115c:a1e0::99/128")},
+	// orphanedAddrs yields in kernelAddrs order, but compare as sets to be safe.
+	got := set.SetOf(slices.Collect(orphanedAddrs(
+		slices.Values([]netip.Prefix{p("100.64.0.1/32"), p("100.64.0.99/32"), p("fd7a:115c:a1e0::99/128")}),
 		[]netip.Prefix{p("100.64.0.1/32")},
-	))
+	)))
 	want := set.SetOf([]netip.Prefix{p("100.64.0.99/32"), p("fd7a:115c:a1e0::99/128")})
 	if !got.Equal(want) {
 		t.Errorf("orphanedAddrs = %v; want %v", got.Slice(), want.Slice())
 	}
-	if orphanedAddrs(nil, []netip.Prefix{p("100.64.0.1/32")}) != nil {
-		t.Error("orphanedAddrs(nil, ...) should be nil")
+	if got := slices.Collect(orphanedAddrs(slices.Values([]netip.Prefix(nil)), []netip.Prefix{p("100.64.0.1/32")})); got != nil {
+		t.Errorf("orphanedAddrs(nil, ...) = %v; want nil", got)
 	}
 }
 
 // TestGetV6AvailableNilNFR verifies the v6-availability checks don't panic when
 // r.nfr is nil, which happens if setupNetfilterLocked failed earlier in Set.
-// The orphan sweep reaches getV6Available via reconcilableTailscaleIP, so this
+// The orphan sweep reaches getV6Available via isDeletableAddr, so this
 // must not deref a nil runner.
 func TestGetV6AvailableNilNFR(t *testing.T) {
 	r := &linuxRouter{} // nfr left nil
@@ -1907,8 +1914,8 @@ func TestGetV6AvailableNilNFR(t *testing.T) {
 	if r.getV6FilteringAvailable() {
 		t.Error("getV6FilteringAvailable() = true with nil nfr; want false")
 	}
-	if r.reconcilableTailscaleIP(netip.MustParseAddr("fd7a:115c:a1e0::99")) {
-		t.Error("reconcilableTailscaleIP(v6) = true with nil nfr; want false")
+	if r.isDeletableAddr(netip.MustParseAddr("fd7a:115c:a1e0::99")) {
+		t.Error("isDeletableAddr(v6) = true with nil nfr; want false")
 	}
 }
 
@@ -1995,5 +2002,113 @@ func TestSetSnapshotsV6Usable(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("interfaceV6Usable called %d times during one Set; want 1 (snapshotted)", calls)
+	}
+}
+
+// TestCleanUpRemovesAllTailscaleAddrs verifies the teardown path removes every
+// Tailscale-range address (IPv4 CGNAT and IPv6 ULA) while leaving non-Tailscale
+// addresses alone.
+func TestCleanUpRemovesAllTailscaleAddrs(t *testing.T) {
+	fake := NewFakeOS(t)
+	fake.ips = []string{
+		"100.64.0.1/32 dev tailscale0",         // CGNAT v4
+		"fd7a:115c:a1e0::1/128 dev tailscale0", // ULA v6
+		"192.168.1.5/24 dev tailscale0",        // non-Tailscale, leave alone
+		"fe80::1/64 dev tailscale0",            // link-local v6, leave alone
+	}
+	slices.Sort(fake.ips)
+
+	removeOrphanedAddrsForCleanup(t.Logf, fake, "tailscale0")
+
+	for _, gone := range []string{
+		"100.64.0.1/32 dev tailscale0",
+		"fd7a:115c:a1e0::1/128 dev tailscale0",
+	} {
+		if slices.Contains(fake.ips, gone) {
+			t.Errorf("Tailscale addr %q was not removed during cleanup; ips=%q", gone, fake.ips)
+		}
+	}
+	for _, keep := range []string{
+		"192.168.1.5/24 dev tailscale0",
+		"fe80::1/64 dev tailscale0",
+	} {
+		if !slices.Contains(fake.ips, keep) {
+			t.Errorf("non-Tailscale addr %q was wrongly removed during cleanup; ips=%q", keep, fake.ips)
+		}
+	}
+}
+
+// TestCleanUpRemovesV6OrphanWithoutNetfilter is the teardown counterpart to
+// TestSetSkipsV6OrphansWhenV6Unavailable: with a nil netfilter runner (so
+// getV6Available is false), cleanup must still remove an IPv6 ULA orphan.
+func TestCleanUpRemovesV6OrphanWithoutNetfilter(t *testing.T) {
+	fake := NewFakeOS(t)
+	fake.ips = []string{
+		"fd7a:115c:a1e0::99/128 dev tailscale0", // ULA v6 orphan
+	}
+
+	removeOrphanedAddrsForCleanup(t.Logf, fake, "tailscale0")
+
+	if slices.Contains(fake.ips, "fd7a:115c:a1e0::99/128 dev tailscale0") {
+		t.Errorf("v6 orphan was not removed during cleanup; ips=%q", fake.ips)
+	}
+}
+
+// TestCleanUpKeepsNearRangeAddrs verifies the teardown sweep removes real
+// Tailscale orphans while leaving addresses at the edges of Tailscale's ranges
+// untouched. In particular the ChromeOS VM range is inside CGNAT 100.64.0.0/10
+// but excluded by tsaddr.IsTailscaleIP, so a naive CGNAT-prefix check would
+// wrongly delete it.
+func TestCleanUpKeepsNearRangeAddrs(t *testing.T) {
+	fake := NewFakeOS(t)
+	remove := []string{
+		"100.64.0.99/32 dev tailscale0",         // CGNAT v4 orphan
+		"fd7a:115c:a1e0::99/128 dev tailscale0", // Tailscale ULA v6 orphan
+	}
+	keep := []string{
+		"100.115.92.5/32 dev tailscale0",       // ChromeOS VM range: in CGNAT, not a Tailscale IP
+		"100.63.0.1/32 dev tailscale0",         // just below CGNAT
+		"100.128.0.1/32 dev tailscale0",        // just above CGNAT
+		"fd7a:115c:a1e1::1/128 dev tailscale0", // adjacent to the Tailscale ULA /48
+		"192.168.1.5/24 dev tailscale0",        // non-Tailscale v4
+		"fe80::1/64 dev tailscale0",            // link-local v6
+	}
+	fake.ips = append(append([]string(nil), remove...), keep...)
+	slices.Sort(fake.ips)
+
+	removeOrphanedAddrsForCleanup(t.Logf, fake, "tailscale0")
+
+	for _, r := range remove {
+		if slices.Contains(fake.ips, r) {
+			t.Errorf("orphan %q was not removed during cleanup; ips=%q", r, fake.ips)
+		}
+	}
+	for _, k := range keep {
+		if !slices.Contains(fake.ips, k) {
+			t.Errorf("near-range non-Tailscale addr %q was wrongly removed during cleanup; ips=%q", k, fake.ips)
+		}
+	}
+}
+
+// TestCleanUpOnlyTouchesTunInterface guards that the sweep is scoped to the
+// tunnel interface. 100.64.0.0/10 is shared ISP CGNAT space, so a host may carry
+// a non-Tailscale CGNAT address on its WAN/other interface; the sweep enumerates
+// and deletes only on tailscale0, so such an address on eth0 must never be
+// touched even though it's in the CGNAT range.
+func TestCleanUpOnlyTouchesTunInterface(t *testing.T) {
+	fake := NewFakeOS(t)
+	fake.ips = []string{
+		"100.64.0.99/32 dev tailscale0", // our orphan on the tun -> removed
+		"100.64.0.5/32 dev eth0",        // someone else's CGNAT on WAN -> must survive
+	}
+	slices.Sort(fake.ips)
+
+	removeOrphanedAddrsForCleanup(t.Logf, fake, "tailscale0")
+
+	if slices.Contains(fake.ips, "100.64.0.99/32 dev tailscale0") {
+		t.Errorf("tailscale0 orphan was not removed; ips=%q", fake.ips)
+	}
+	if !slices.Contains(fake.ips, "100.64.0.5/32 dev eth0") {
+		t.Errorf("non-Tailscale CGNAT addr on eth0 was wrongly removed; ips=%q", fake.ips)
 	}
 }
