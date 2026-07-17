@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,6 +40,8 @@ import (
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 type (
@@ -54,6 +57,10 @@ type (
 		resolver           func(ctx context.Context, network, host string) ([]netip.Addr, error)
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
+
+		// Metrics related fields
+		mu         sync.Mutex
+		peerRelays set.Slice[types.UID]
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -91,6 +98,12 @@ const (
 	ReasonPodsPending      = "PodsPending"
 	ReasonAWSConfigInvalid = "AWSConfigInvalid"
 	ReasonReady            = "PeerRelayReady"
+)
+
+var (
+	// gaugePeerRelayResources tracks the overall number of PeerRelay resources currently managed by this operator
+	// instance.
+	gaugePeerRelayResources = clientmetric.NewGauge(kubetypes.MetricPeerRelayCount)
 )
 
 // NewReconciler returns a new instance of the Reconciler type. It watches specifically for changes to PeerRelay
@@ -160,29 +173,42 @@ func (r *Reconciler) enqueuePeerRelaysForProxyClass(ctx context.Context, o clien
 // one LoadBalancer Service exists per replica. On delete, all managed Services are removed before the finalizer is
 // released.
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	logger := r.logger.With("PeerRelay", req.Name)
+	logger.Debug("starting reconcile")
+	defer logger.Debug("reconcile finished")
+
 	var pr tsapi.PeerRelay
 	err := r.Get(ctx, req.NamespacedName, &pr)
 	switch {
 	case apierrors.IsNotFound(err):
+		logger.Debug("PeerRelay not found, assuming it was deleted")
 		return reconcile.Result{}, nil
 	case err != nil:
 		return reconcile.Result{}, fmt.Errorf("failed to get PeerRelay %q: %w", req.NamespacedName, err)
 	}
 
 	if !pr.DeletionTimestamp.IsZero() {
-		return r.delete(ctx, &pr)
+		return r.delete(ctx, logger, &pr)
 	}
 
-	return r.createOrUpdate(ctx, &pr)
+	return r.createOrUpdate(ctx, logger, &pr)
 }
 
-func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
+func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {
 	if !slices.Contains(pr.Finalizers, reconciler.FinalizerName) {
 		reconciler.SetFinalizer(pr)
 		if err := r.Update(ctx, pr); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
 		}
 	}
+
+	r.mu.Lock()
+	if !r.peerRelays.Contains(pr.UID) {
+		r.peerRelays.Add(pr.UID)
+		logger.Infof("now managing PeerRelay %q", pr.Name)
+	}
+	r.mu.Unlock()
+	gaugePeerRelayResources.Set(int64(r.peerRelays.Len()))
 
 	replicas := int32(1)
 	if pr.Spec.Replicas != nil {
@@ -195,7 +221,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 	// condition so they can fix the spec.
 	if pr.Spec.AWS != nil && int32(len(pr.Spec.AWS.ElasticIPs)) < replicas {
 		message := fmt.Sprintf("spec.aws.elasticIPs has %d entries but spec.replicas is %d", len(pr.Spec.AWS.ElasticIPs), replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonAWSConfigInvalid, message, r.clock, r.logger)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonAWSConfigInvalid, message, r.clock, logger)
 		if err := r.Status().Update(ctx, pr); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 		}
@@ -204,7 +230,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 
 	for i := int32(0); i < replicas; i++ {
 		desired := r.peerRelayService(pr, i)
-		if err := r.ensureService(ctx, desired); err != nil {
+		if err := r.ensureService(ctx, logger, desired); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply Service %q: %w", desired.Name, err)
 		}
 	}
@@ -229,33 +255,33 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, pr *tsapi.PeerRelay) (r
 			endpoint = &ep
 		}
 
-		if err = r.ensureStateSecret(ctx, pr, i); err != nil {
+		if err = r.ensureStateSecret(ctx, logger, pr, i); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply state Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 
-		if err = r.ensureConfigSecret(ctx, pr, i, endpoint); err != nil {
+		if err = r.ensureConfigSecret(ctx, logger, pr, i, endpoint); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply config Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 	}
 
-	ss, err := r.ensureStatefulSet(ctx, pr, replicas)
+	ss, err := r.ensureStatefulSet(ctx, logger, pr, replicas)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to apply StatefulSet for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err = r.deleteDevicesFrom(ctx, pr, replicas); err != nil {
+	if err = r.deleteDevicesFrom(ctx, logger, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down tailnet devices for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err = r.deleteServicesFrom(ctx, pr, replicas); err != nil {
+	if err = r.deleteServicesFrom(ctx, logger, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err = r.deleteConfigSecretsFrom(ctx, pr, replicas); err != nil {
+	if err = r.deleteConfigSecretsFrom(ctx, logger, pr, replicas); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down config Secrets for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err = r.writeStatus(ctx, pr, endpoints, endpointErrs, replicas, ss); err != nil {
+	if err = r.writeStatus(ctx, logger, pr, endpoints, endpointErrs, replicas, ss); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 	}
 
@@ -305,7 +331,7 @@ func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]
 	return endpoints, errs, nil
 }
 
-func (r *Reconciler) writeStatus(ctx context.Context, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32, ss *appsv1.StatefulSet) error {
+func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32, ss *appsv1.StatefulSet) error {
 	prevStatus := pr.Status.DeepCopy()
 
 	pr.Status.Endpoints = endpoints
@@ -318,15 +344,15 @@ func (r *Reconciler) writeStatus(ctx context.Context, pr *tsapi.PeerRelay, endpo
 
 	switch {
 	case len(errs) > 0:
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, joined.Error(), r.clock, r.logger)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, joined.Error(), r.clock, logger)
 	case int32(len(endpoints)) < replicas:
 		message := fmt.Sprintf("%d of %d replicas have a public IP", len(endpoints), replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, r.logger)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, logger)
 	case readyReplicas < replicas:
 		message := fmt.Sprintf("%d of %d pods are ready", readyReplicas, replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonPodsPending, message, r.clock, r.logger)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonPodsPending, message, r.clock, logger)
 	default:
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, r.logger)
+		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, logger)
 	}
 
 	if reflect.DeepEqual(prevStatus, &pr.Status) {
@@ -340,20 +366,22 @@ func (r *Reconciler) writeStatus(ctx context.Context, pr *tsapi.PeerRelay, endpo
 	return joined
 }
 
-func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile.Result, error) {
-	if err := r.deleteDevicesFrom(ctx, pr, 0); err != nil {
+func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {
+	logger.Infof("deleting PeerRelay %q", pr.Name)
+
+	if err := r.deleteDevicesFrom(ctx, logger, pr, 0); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete tailnet devices for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.deleteStatefulSet(ctx, pr); err != nil {
+	if err := r.deleteStatefulSet(ctx, logger, pr); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete StatefulSet for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.deleteConfigSecretsFrom(ctx, pr, 0); err != nil {
+	if err := r.deleteConfigSecretsFrom(ctx, logger, pr, 0); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete config Secrets for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := r.deleteServicesFrom(ctx, pr, 0); err != nil {
+	if err := r.deleteServicesFrom(ctx, logger, pr, 0); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
@@ -362,14 +390,20 @@ func (r *Reconciler) delete(ctx context.Context, pr *tsapi.PeerRelay) (reconcile
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from PeerRelay %q: %w", pr.Name, err)
 	}
 
+	r.mu.Lock()
+	r.peerRelays.Remove(pr.UID)
+	r.mu.Unlock()
+	gaugePeerRelayResources.Set(int64(r.peerRelays.Len()))
+
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) ensureService(ctx context.Context, desired *corev1.Service) error {
+func (r *Reconciler) ensureService(ctx context.Context, logger *zap.SugaredLogger, desired *corev1.Service) error {
 	var existing corev1.Service
 	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
+		logger.Debugf("creating Service %q", desired.Name)
 		if err = r.Create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create Service: %w", err)
 		}
@@ -413,7 +447,7 @@ func (r *Reconciler) ensureService(ctx context.Context, desired *corev1.Service)
 	return nil
 }
 
-func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
+func (r *Reconciler) deleteServicesFrom(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, fromIdx int32) error {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
 		return fmt.Errorf("failed to list Services: %w", err)
@@ -426,6 +460,7 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay
 			continue
 		}
 
+		logger.Debugf("deleting Service %q", svc.Name)
 		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete Service %q: %w", svc.Name, err)
 		}
@@ -434,7 +469,7 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, pr *tsapi.PeerRelay
 	return nil
 }
 
-func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
+func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
 	var existing corev1.Secret
 	err := r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, &existing)
 	switch {
@@ -449,6 +484,7 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, pr *tsapi.PeerRelay
 			return fmt.Errorf("failed to build config Secret: %w", err)
 		}
 
+		logger.Debugf("creating config Secret %q", desired.Name)
 		if err = r.Create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create config Secret: %w", err)
 		}
@@ -495,7 +531,7 @@ func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (stri
 	return tailscaled.NewAuthKey(ctx, client, r.peerRelayTags(pr))
 }
 
-func (r *Reconciler) ensureStateSecret(ctx context.Context, pr *tsapi.PeerRelay, idx int32) error {
+func (r *Reconciler) ensureStateSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32) error {
 	desired := tailscaled.NewStateSecret(tailscaled.StateSecretOptions{
 		Name:      stateSecretName(pr.Name, idx),
 		Namespace: r.tailscaleNamespace,
@@ -506,6 +542,7 @@ func (r *Reconciler) ensureStateSecret(ctx context.Context, pr *tsapi.PeerRelay,
 	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
+		logger.Debugf("creating state Secret %q", desired.Name)
 		if err = r.Create(ctx, desired); err != nil {
 			return fmt.Errorf("failed to create state Secret: %w", err)
 		}
@@ -534,7 +571,7 @@ func (r *Reconciler) ensureStateSecret(ctx context.Context, pr *tsapi.PeerRelay,
 	return nil
 }
 
-func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
+func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, fromIdx int32) error {
 	labels := peerRelayLabels(pr.Name)
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeConfig
 
@@ -550,6 +587,7 @@ func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.Peer
 			continue
 		}
 
+		logger.Debugf("deleting config Secret %q", secret.Name)
 		if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete config Secret %q: %w", secret.Name, err)
 		}
@@ -558,7 +596,7 @@ func (r *Reconciler) deleteConfigSecretsFrom(ctx context.Context, pr *tsapi.Peer
 	return nil
 }
 
-func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay, replicas int32) (*appsv1.StatefulSet, error) {
+func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, replicas int32) (*appsv1.StatefulSet, error) {
 	pc, err := r.getProxyClass(ctx, pr)
 	if err != nil {
 		return nil, err
@@ -570,6 +608,7 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay,
 	err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
+		logger.Debugf("creating StatefulSet %q", desired.Name)
 		if err = r.Create(ctx, desired); err != nil {
 			return nil, fmt.Errorf("failed to create StatefulSet: %w", err)
 		}
@@ -605,10 +644,11 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, pr *tsapi.PeerRelay,
 	return updated, nil
 }
 
-func (r *Reconciler) deleteStatefulSet(ctx context.Context, pr *tsapi.PeerRelay) error {
+func (r *Reconciler) deleteStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) error {
 	ss := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: pr.Name, Namespace: r.tailscaleNamespace},
 	}
+	logger.Debugf("deleting StatefulSet %q", ss.Name)
 	if err := r.Delete(ctx, ss); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete StatefulSet: %w", err)
 	}

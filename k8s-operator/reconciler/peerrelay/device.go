@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,7 +22,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 )
 
-func (r *Reconciler) deleteDevicesFrom(ctx context.Context, pr *tsapi.PeerRelay, fromIdx int32) error {
+func (r *Reconciler) deleteDevicesFrom(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, fromIdx int32) error {
 	if r.tsClients == nil {
 		return nil
 	}
@@ -48,12 +49,14 @@ func (r *Reconciler) deleteDevicesFrom(ctx context.Context, pr *tsapi.PeerRelay,
 		}
 
 		if deviceID := tailscaled.DeviceIDFromStateSecret(s); deviceID != "" {
+			logger.Debugf("deleting tailnet device %q", deviceID)
 			if err = tsc.Devices().Delete(ctx, deviceID); err != nil && !tailscaleclient.IsNotFound(err) {
 				errs = append(errs, fmt.Errorf("failed to delete tailnet device %q: %w", deviceID, err))
 				continue
 			}
 		}
 
+		logger.Debugf("deleting state Secret %q", s.Name)
 		if err = r.Delete(ctx, s); err != nil && !apierrors.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("failed to delete state Secret %q: %w", s.Name, err))
 		}
