@@ -534,7 +534,6 @@ main() {
 	[ "$VERSION" != "" ] && OSVERSION="$OSVERSION $VERSION"
 
 	# Prepare package name with optional version
-	PACKAGE_NAME="tailscale"
 	if [ -n "$TAILSCALE_VERSION" ]; then
 		echo "Installing Tailscale $TAILSCALE_VERSION for $OSVERSION, using method $PACKAGETYPE"
 	else
