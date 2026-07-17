@@ -8,7 +8,9 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/netipx"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tstun"
@@ -123,12 +125,14 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 				return netip.Addr{}, nil
 			}
 			dph := newDatapathHandler(mock, t.Logf)
+			tun := newFakeTUN(t)
+			defer tun.Close()
 
 			tt.p.IPProto = ipproto.UDP
 			tt.p.IPVersion = 4
 			tt.p.StuffForTesting(40)
 
-			if want, got := tt.expectedFilterResponse, dph.HandlePacketFromTunDevice(tt.p); want != got {
+			if want, got := tt.expectedFilterResponse, dph.HandlePacketFromTunDevice(tt.p, tun); want != got {
 				t.Errorf("unexpected filter response: want %v, got %v", want, got)
 			}
 			if want, got := tt.expectedSrc, tt.p.Src; want != got {
@@ -136,6 +140,95 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 			}
 			if want, got := tt.expectedDst, tt.p.Dst; want != got {
 				t.Errorf("unexpected packet dst: want %v, got %v", want, got)
+			}
+		})
+	}
+}
+
+// TestUnmappedMagicIPICMPUnreachable verifies that a packet to a Magic IP with
+// no active Transit IP mapping is dropped and an ICMP host-unreachable error is
+// injected back toward the local host, sourced from the Magic IP and addressed
+// to the original sender.
+func TestUnmappedMagicIPICMPUnreachable(t *testing.T) {
+	const clientPort, serverPort = 1234, 80
+
+	tests := []struct {
+		name        string
+		clientSrcIP netip.Addr
+		magicIP     netip.Addr
+		wantProto   ipproto.Proto
+	}{
+		{
+			name:        "ipv4",
+			clientSrcIP: netip.MustParseAddr("100.70.0.1"),
+			magicIP:     netip.MustParseAddr("10.64.0.2"),
+			wantProto:   ipproto.ICMPv4,
+		},
+		{
+			name:        "ipv6",
+			clientSrcIP: netip.MustParseAddr("fd7a:115c:a1e0::1"),
+			magicIP:     netip.MustParseAddr("fd7a:115c:a1e0::2"),
+			wantProto:   ipproto.ICMPv6,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &testConn25{}
+			mock.clientTransitIPForMagicIPFn = func(netip.Addr) (netip.Addr, error) {
+				return netip.Addr{}, ErrUnmappedMagicIP
+			}
+			dph := newDatapathHandler(mock, t.Logf)
+			chtun, tun := newChannelTUN(t)
+			defer tun.Close()
+
+			var raw []byte
+			if tt.magicIP.Is6() {
+				raw = packet.Generate(packet.UDP6Header{
+					IP6Header: packet.IP6Header{Src: tt.clientSrcIP, Dst: tt.magicIP},
+					SrcPort:   clientPort,
+					DstPort:   serverPort,
+				}, []byte("hello"))
+			} else {
+				raw = packet.Generate(packet.UDP4Header{
+					IP4Header: packet.IP4Header{Src: tt.clientSrcIP, Dst: tt.magicIP},
+					SrcPort:   clientPort,
+					DstPort:   serverPort,
+				}, []byte("x"))
+			}
+			var p packet.Parsed
+			p.Decode(raw)
+
+			// HandlePacketFromTunDevice blocks until the injected packet is
+			// read, so drain the channel TUN concurrently.
+			gotInboundPacketChan := make(chan []byte, 1)
+			go func() { gotInboundPacketChan <- <-chtun.Inbound }()
+
+			if got, want := dph.HandlePacketFromTunDevice(&p, tun), filter.Drop; got != want {
+				t.Fatalf("unexpected filter response: got %v, want %v", got, want)
+			}
+
+			var injected packet.Parsed
+			select {
+			case b := <-gotInboundPacketChan:
+				injected.Decode(b)
+			case <-time.After(1 * time.Second):
+				t.Fatal("timed out waiting for injected ICMP packet")
+			}
+
+			if !injected.IsError() {
+				t.Errorf("injected packet is not an ICMP error")
+			}
+			if got := injected.IPProto; got != tt.wantProto {
+				t.Errorf("injected packet proto: got %v, want %v", got, tt.wantProto)
+			}
+			// The error should appear to come from the unreachable Magic IP,
+			// addressed back to the original sender.
+			if got, want := injected.Src.Addr(), tt.magicIP; got != want {
+				t.Errorf("injected packet src: got %v, want %v", got, want)
+			}
+			if got, want := injected.Dst.Addr(), tt.clientSrcIP; got != want {
+				t.Errorf("injected packet dst: got %v, want %v", got, want)
 			}
 		})
 	}
@@ -172,6 +265,40 @@ func newFakeTUN(t *testing.T) *tstun.Wrapper {
 	// Start the TUN device.
 	tun.Start()
 	return tun
+}
+
+// newChannelTUN is like newFakeTUN, but backed by a channel-based TUN device
+// whose Inbound queue captures packets injected toward the local host (e.g. via
+// InjectInboundCopy), so tests can observe them.
+func newChannelTUN(t *testing.T) (*tuntest.ChannelTUN, *tstun.Wrapper) {
+	t.Helper()
+
+	chtun := tuntest.NewChannelTUN()
+	reg := new(usermetric.Registry)
+	bus := eventbustest.NewBus(t)
+	tun := tstun.Wrap(t.Logf, chtun.TUN(), reg, bus)
+
+	protos := views.SliceOf([]ipproto.Proto{
+		ipproto.TCP,
+		ipproto.UDP,
+		ipproto.ICMPv4,
+		ipproto.ICMPv6,
+	})
+	allIPs := netip.MustParsePrefix("0.0.0.0/0")
+	matches := []filter.Match{
+		{
+			IPProto: protos,
+			Srcs:    []netip.Prefix{allIPs},
+			Dsts:    []filtertype.NetPortRange{{Net: allIPs, Ports: filtertype.AllPorts}},
+		},
+	}
+	var sb netipx.IPSetBuilder
+	sb.AddPrefix(allIPs)
+	ipSet, _ := sb.IPSet()
+	tun.SetFilter(filter.New(matches, nil, ipSet, ipSet, nil, t.Logf))
+
+	tun.Start()
+	return chtun, tun
 }
 
 func TestHandlePacketFromWireGuard(t *testing.T) {
@@ -325,6 +452,8 @@ func TestClientFlowCache(t *testing.T) {
 		return transitIP, nil
 	}
 	dph := newDatapathHandler(mock, t.Logf)
+	tun := newFakeTUN(t)
+	defer tun.Close()
 
 	outgoing := packet.Parsed{
 		IPProto:   ipproto.UDP,
@@ -335,7 +464,7 @@ func TestClientFlowCache(t *testing.T) {
 	outgoing.StuffForTesting(40)
 
 	o1 := outgoing
-	if dph.HandlePacketFromTunDevice(&o1) != filter.Accept {
+	if dph.HandlePacketFromTunDevice(&o1, tun) != filter.Accept {
 		t.Errorf("first call to HandlePacketFromTunDevice was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(transitIP, serverPort), o1.Dst; want != got {
@@ -343,7 +472,7 @@ func TestClientFlowCache(t *testing.T) {
 	}
 	// The second call should use the cache.
 	o2 := outgoing
-	if dph.HandlePacketFromTunDevice(&o2) != filter.Accept {
+	if dph.HandlePacketFromTunDevice(&o2, tun) != filter.Accept {
 		t.Errorf("second call to HandlePacketFromTunDevice was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(transitIP, serverPort), o2.Dst; want != got {
@@ -359,9 +488,6 @@ func TestClientFlowCache(t *testing.T) {
 		Dst:       netip.AddrPortFrom(clientSrcIP, clientPort),
 	}
 	incoming.StuffForTesting(40)
-
-	tun := newFakeTUN(t)
-	defer tun.Close()
 
 	if dph.HandlePacketFromWireGuard(incoming, tun) != filter.Accept {
 		t.Errorf("call to HandlePacketFromWireGuard was not accepted")
@@ -428,7 +554,7 @@ func TestConnectorFlowCache(t *testing.T) {
 	}
 	incoming.StuffForTesting(40)
 
-	if dph.HandlePacketFromTunDevice(incoming) != filter.Accept {
+	if dph.HandlePacketFromTunDevice(incoming, tun) != filter.Accept {
 		t.Errorf("call to HandlePacketFromTunDevice was not accepted")
 	}
 	if want, got := netip.AddrPortFrom(transitIP, serverPort), incoming.Src; want != got {
