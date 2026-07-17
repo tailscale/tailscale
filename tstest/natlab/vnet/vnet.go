@@ -60,6 +60,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/client/local"
 	"tailscale.com/derp/derpserver"
+	"tailscale.com/disco"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/netx"
 	"tailscale.com/net/stun"
@@ -686,6 +687,7 @@ type network struct {
 	blackholeControl bool                 // blackhole control connectivity
 	latency          time.Duration        // latency applied to interface writes
 	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	packetFaults     *packetFaultEngine   // deterministic runtime packet drops
 	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC       map[MAC]*node
 	logf             func(format string, args ...any)
@@ -1543,6 +1545,9 @@ func (n *network) writeEth(res []byte) bool {
 }
 
 func (n *network) conditionedWrite(nw networkWriter, packet []byte) {
+	if n.packetFaults != nil && n.packetFaults.active() && n.packetFaults.drop(n.packetDirection(packet), packet) {
+		return
+	}
 	if n.lossRate > 0 && rand.Float64() < n.lossRate {
 		// packet lost
 		return
@@ -1557,6 +1562,200 @@ func (n *network) conditionedWrite(nw networkWriter, packet []byte) {
 	} else {
 		nw.write(packet)
 	}
+}
+
+type packetFaultEngine struct {
+	rules atomic.Pointer[packetFaultRuleSet]
+}
+
+func (e *packetFaultEngine) active() bool {
+	set := e.rules.Load()
+	return set != nil && len(set.rules) != 0
+}
+
+type packetFaultRuleSet struct {
+	rules []*packetFaultRuleState
+}
+
+type packetFaultRuleState struct {
+	rule   PacketFaultRule
+	hits   atomic.Uint64
+	events chan PacketFaultEvent
+}
+
+func (e *packetFaultEngine) setRules(rules []PacketFaultRule) []*PacketFaultRuleHandle {
+	set := &packetFaultRuleSet{rules: make([]*packetFaultRuleState, len(rules))}
+	handles := make([]*PacketFaultRuleHandle, len(rules))
+	for i, rule := range rules {
+		state := &packetFaultRuleState{
+			rule:   rule,
+			events: make(chan PacketFaultEvent, 64),
+		}
+		set.rules[i] = state
+		handles[i] = &PacketFaultRuleHandle{state: state}
+	}
+	e.rules.Store(set)
+	return handles
+}
+
+func (e *packetFaultEngine) drop(direction PacketDirection, raw []byte) bool {
+	return e.dropLayer(direction, raw, layers.LayerTypeEthernet)
+}
+
+func (e *packetFaultEngine) dropIP(direction PacketDirection, raw []byte) bool {
+	if !e.active() || len(raw) == 0 {
+		return false
+	}
+	layerType := layers.LayerTypeIPv4
+	if raw[0]>>4 == 6 {
+		layerType = layers.LayerTypeIPv6
+	}
+	return e.dropLayer(direction, raw, layerType)
+}
+
+func (e *packetFaultEngine) dropLayer(direction PacketDirection, raw []byte, firstLayer gopacket.Decoder) bool {
+	set := e.rules.Load()
+	if set == nil || len(set.rules) == 0 {
+		return false
+	}
+	pkt, ok := parsePacketFaultEnvelope(direction, raw, firstLayer)
+	if !ok {
+		return false
+	}
+	return e.dropEnvelope(pkt)
+}
+
+func (e *packetFaultEngine) dropEnvelope(pkt packetFaultEnvelope) bool {
+	set := e.rules.Load()
+	if set == nil || len(set.rules) == 0 {
+		return false
+	}
+	drop := false
+	for _, state := range set.rules {
+		if !state.rule.matches(pkt) {
+			continue
+		}
+		occurrence := state.hits.Add(1)
+		dropped := state.rule.drops(occurrence)
+		drop = drop || dropped
+		select {
+		case state.events <- PacketFaultEvent{Occurrence: occurrence, Dropped: dropped}:
+		default:
+		}
+	}
+	return drop
+}
+
+func packetFaultIPHeaderLength(family PacketFamily) int {
+	if family == PacketFamilyIPv6 {
+		return 40
+	}
+	return 20
+}
+
+type packetFaultEnvelope struct {
+	direction      PacketDirection
+	family         PacketFamily
+	protocol       PacketProtocol
+	src, dst       netip.AddrPort
+	class          PacketClass
+	datagramLength int
+}
+
+func parsePacketFaultEnvelope(direction PacketDirection, raw []byte, firstLayer gopacket.Decoder) (packetFaultEnvelope, bool) {
+	packet := gopacket.NewPacket(raw, firstLayer, gopacket.Lazy)
+	var p packetFaultEnvelope
+	p.direction = direction
+	if ip4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
+		src, okSrc := netip.AddrFromSlice(ip4.SrcIP)
+		dst, okDst := netip.AddrFromSlice(ip4.DstIP)
+		if !okSrc || !okDst {
+			return packetFaultEnvelope{}, false
+		}
+		p.family = PacketFamilyIPv4
+		p.src = netip.AddrPortFrom(src.Unmap(), 0)
+		p.dst = netip.AddrPortFrom(dst.Unmap(), 0)
+		p.datagramLength = int(ip4.Length)
+	} else if ip6, ok := packet.Layer(layers.LayerTypeIPv6).(*layers.IPv6); ok {
+		src, okSrc := netip.AddrFromSlice(ip6.SrcIP)
+		dst, okDst := netip.AddrFromSlice(ip6.DstIP)
+		if !okSrc || !okDst {
+			return packetFaultEnvelope{}, false
+		}
+		p.family = PacketFamilyIPv6
+		p.src = netip.AddrPortFrom(src, 0)
+		p.dst = netip.AddrPortFrom(dst, 0)
+		p.datagramLength = 40 + int(ip6.Length)
+	} else {
+		return packetFaultEnvelope{}, false
+	}
+
+	if udp, ok := packet.Layer(layers.LayerTypeUDP).(*layers.UDP); ok {
+		p.protocol = PacketProtocolUDP
+		p.src = netip.AddrPortFrom(p.src.Addr(), uint16(udp.SrcPort))
+		p.dst = netip.AddrPortFrom(p.dst.Addr(), uint16(udp.DstPort))
+		switch {
+		case disco.LooksLikeDiscoWrapper(udp.Payload):
+			p.class = PacketClassDisco
+		case stun.Is(udp.Payload):
+			p.class = PacketClassSTUN
+		default:
+			p.class = PacketClassNonDiscoUDP
+		}
+	} else if tcp, ok := packet.Layer(layers.LayerTypeTCP).(*layers.TCP); ok {
+		p.protocol = PacketProtocolTCP
+		p.src = netip.AddrPortFrom(p.src.Addr(), uint16(tcp.SrcPort))
+		p.dst = netip.AddrPortFrom(p.dst.Addr(), uint16(tcp.DstPort))
+	} else {
+		return packetFaultEnvelope{}, false
+	}
+	return p, true
+}
+
+func (n *network) packetDirection(raw []byte) PacketDirection {
+	packet := gopacket.NewPacket(raw, layers.LayerTypeEthernet, gopacket.Lazy)
+	flow, ok := flow(packet)
+	if !ok {
+		return PacketDirectionAny
+	}
+	// Prefer the source for LAN-to-LAN traffic: the packet is outbound from
+	// its originating node even though its destination is also on the LAN.
+	if n.isLANAddr(flow.src) {
+		return PacketDirectionOutbound
+	}
+	if n.isLANAddr(flow.dst) {
+		return PacketDirectionInbound
+	}
+	return PacketDirectionAny
+}
+
+func (n *network) isLANAddr(addr netip.Addr) bool {
+	if addr.Is4() {
+		return n.lanIP4.IsValid() && n.lanIP4.Contains(addr)
+	}
+	return addr.Is6() && n.wanIP6.IsValid() && n.wanIP6.Contains(addr)
+}
+
+func (r PacketFaultRule) matches(p packetFaultEnvelope) bool {
+	return (r.Direction == PacketDirectionAny || r.Direction == p.direction) &&
+		(r.Family == PacketFamilyAny || r.Family == p.family) &&
+		(r.Protocol == PacketProtocolAny || r.Protocol == p.protocol) &&
+		(!r.SrcAddr.IsValid() || r.SrcAddr == p.src.Addr()) &&
+		(r.SrcPort == 0 || r.SrcPort == p.src.Port()) &&
+		(!r.DstAddr.IsValid() || r.DstAddr == p.dst.Addr()) &&
+		(r.DstPort == 0 || r.DstPort == p.dst.Port()) &&
+		(r.Class == PacketClassAny || r.Class == p.class) &&
+		(r.Length == 0 || r.Length == p.datagramLength)
+}
+
+func (r PacketFaultRule) drops(occurrence uint64) bool {
+	if r.DropOccurrence != 0 {
+		return occurrence == r.DropOccurrence
+	}
+	if r.DropFirst == 0 && r.DropEvery == 0 {
+		return true
+	}
+	return occurrence <= r.DropFirst || r.DropEvery != 0 && occurrence%r.DropEvery == 0
 }
 
 var (
@@ -1980,6 +2179,9 @@ func (n *network) handleTCPPacketForRouter(tcp *layers.TCP, flow ipSrcDst) {
 		n.logf("serializing TCP packet: %v", err)
 		return
 	}
+	if n.packetFaults != nil && n.packetFaults.dropIP(PacketDirectionOutbound, buf) {
+		return
+	}
 	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
 		Timestamp:      time.Now(),
 		CaptureLength:  len(buf),
@@ -2077,6 +2279,9 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		buf, err = n.serializedUDPPacket(src, dst, udp.Payload, nil)
 		if err != nil {
 			n.logf("serializing UDP packet: %v", err)
+			return
+		}
+		if n.packetFaults != nil && n.packetFaults.dropIP(PacketDirectionOutbound, buf) {
 			return
 		}
 		n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{

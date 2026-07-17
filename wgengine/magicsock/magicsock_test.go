@@ -62,6 +62,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
+	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -178,10 +179,14 @@ type magicStack struct {
 // before anything interesting happens.
 func newMagicStack(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap) *magicStack {
 	privateKey := key.NewNode()
-	return newMagicStackWithKey(t, logf, ln, derpMap, privateKey)
+	return newMagicStackWithKeyAndKnobs(t, logf, ln, derpMap, privateKey, nil)
 }
 
 func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
+	return newMagicStackWithKeyAndKnobs(t, logf, ln, derpMap, privateKey, nil)
+}
+
+func newMagicStackWithKeyAndKnobs(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate, knobs *controlknobs.Knobs) *magicStack {
 	t.Helper()
 
 	bus := eventbustest.NewBus(t)
@@ -200,6 +205,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 		Metrics:                &reg,
 		Logf:                   logf,
 		HealthTracker:          ht,
+		ControlKnobs:           knobs,
 		DisablePortMapper:      true,
 		TestOnlyPacketListener: ln,
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
@@ -1060,6 +1066,212 @@ type devices struct {
 
 	stun   nettype.PacketListener
 	stunIP netip.Addr
+}
+
+type directDiscoDropper struct {
+	faultNetwork *vnet.Network
+	localAddr    netip.Addr
+}
+
+func (d *directDiscoDropper) drop(p *natlab.Packet) *natlab.Packet {
+	direction := vnet.PacketDirectionInbound
+	if p.Src.Addr() == d.localAddr {
+		direction = vnet.PacketDirectionOutbound
+	}
+	if d.faultNetwork.ShouldDropUDPPacket(direction, p.Src, p.Dst, p.Payload) {
+		return nil
+	}
+	return p
+}
+
+func (d *directDiscoDropper) HandleIn(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	return d.drop(p)
+}
+
+func (d *directDiscoDropper) HandleOut(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	return d.drop(p)
+}
+
+func (d *directDiscoDropper) HandleForward(p *natlab.Packet, _, _ *natlab.Interface) *natlab.Packet {
+	return d.drop(p)
+}
+
+func directHealthSnapshot(t *testing.T, src, dst *magicStack) (trusted, selected bool, state directPathHealthState) {
+	t.Helper()
+	src.conn.mu.Lock()
+	de, ok := src.conn.peerMap.endpointForNodeKey(dst.Public())
+	src.conn.mu.Unlock()
+	if !ok {
+		t.Fatal("peer endpoint missing")
+	}
+	de.mu.Lock()
+	de.syncDirectPathHealthModeLocked()
+	trusted = mono.Now().Before(de.trustBestAddrUntil)
+	selected = de.bestAddr.ap.IsValid()
+	if selected {
+		if st := de.endpointState[de.bestAddr.ap]; st != nil && st.directPathHealth != nil {
+			state = st.directPathHealth.state
+		}
+	}
+	de.mu.Unlock()
+	return
+}
+
+func waitDirectHealth(t *testing.T, src, dst *magicStack) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		trusted, selected, state := directHealthSnapshot(t, src, dst)
+		if trusted && selected && state == directPathHealthy {
+			return
+		}
+	}
+	trusted, selected, state := directHealthSnapshot(t, src, dst)
+	t.Fatalf("direct path not established: trusted=%v selected=%v state=%v", trusted, selected, state)
+}
+
+func TestDirectPathHealthWireGuardBlackholeFallbackAndRecovery(t *testing.T) {
+	tstest.ResourceCheck(t)
+	dropper := new(directDiscoDropper)
+	mstun := &natlab.Machine{Name: "stun"}
+	m1Machine := &natlab.Machine{Name: "m1", PacketHandler: dropper}
+	m2Machine := &natlab.Machine{Name: "m2"}
+	inet := natlab.NewInternet()
+	sif := mstun.Attach("eth0", inet)
+	m1if := m1Machine.Attach("eth0", inet)
+	m2Machine.Attach("eth0", inet)
+	dropper.localAddr = m1if.V4()
+	var faultConfig vnet.Config
+	dropper.faultNetwork = faultConfig.AddNetwork("192.0.2.1/24")
+
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, mstun, sif.V4())
+	defer cleanup()
+	knobs := new(controlknobs.Knobs)
+	m1 := newMagicStackWithKeyAndKnobs(t, logger.WithPrefix(t.Logf, "m1: "), m1Machine, derpMap, key.NewNode(), knobs)
+	defer m1.Close()
+	m2 := newMagicStack(t, logger.WithPrefix(t.Logf, "m2: "), m2Machine, derpMap)
+	defer m2.Close()
+	cleanup = meshStacks(t.Logf, nil, m1, m2)
+	defer cleanup()
+
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		if p := m1.Status().Peer[m2.Public()]; p == nil || !p.InMagicSock {
+			return errors.New("m1 peer not ready")
+		}
+		if p := m2.Status().Peer[m1.Public()]; p == nil || !p.InMagicSock {
+			return errors.New("m2 peer not ready")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stopPinger := newPinger(t, t.Logf, m1, m2)
+	mustDirect(t, t.Logf, m1, m2)
+	knobs.UpdateFromNodeAttributes(tailcfg.NodeCapMap{tailcfg.NodeAttrMagicsockPathHealthEnforce: nil})
+	trafficCtx, stopTraffic := context.WithCancel(context.Background())
+	defer stopTraffic()
+	go func() {
+		for trafficCtx.Err() == nil {
+			pkt := tuntest.Ping(m2.IP(), m1.IP())
+			select {
+			case m1.tun.Outbound <- pkt:
+			case <-trafficCtx.Done():
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	waitDirectHealth(t, m1, m2)
+	stopPinger()
+	trusted, selected, state := directHealthSnapshot(t, m1, m2)
+	if !trusted || !selected || state != directPathHealthy {
+		t.Fatalf("direct path not established: trusted=%v selected=%v state=%v", trusted, selected, state)
+	}
+
+	m1.conn.mu.Lock()
+	de, ok := m1.conn.peerMap.endpointForNodeKey(m2.Public())
+	m1.conn.mu.Unlock()
+	if !ok {
+		t.Fatal("peer endpoint missing before blackhole")
+	}
+	de.mu.Lock()
+	trustDeadline := de.trustBestAddrUntil
+	de.mu.Unlock()
+	blackholeMono := mono.Now()
+	blackholeAt := time.Now()
+	de.mu.Lock()
+	directAddr := de.bestAddr.ap
+	de.mu.Unlock()
+	faultHandles := dropper.faultNetwork.SetPacketFaultRules(vnet.PacketFaultRule{
+		Protocol: vnet.PacketProtocolUDP,
+		SrcAddr:  dropper.localAddr,
+		DstAddr:  directAddr.Addr(),
+		DstPort:  directAddr.Port(),
+	})
+	mirrored := false
+	cleared := false
+	relayDelivered := false
+	var received atomic.Int64
+	receiveDone := make(chan struct{})
+	go func() {
+		defer close(receiveDone)
+		for {
+			select {
+			case <-m2.tun.Inbound:
+				received.Add(1)
+			case <-trafficCtx.Done():
+				return
+			}
+		}
+	}()
+	var receivedAtMirror int64
+	for time.Since(blackholeAt) < 15*time.Second {
+		trusted, selected, _ = directHealthSnapshot(t, m1, m2)
+		if !trusted && !mirrored {
+			mirrored = true
+			receivedAtMirror = received.Load()
+		}
+		if mirrored && received.Load() > receivedAtMirror {
+			relayDelivered = true
+		}
+		if !selected {
+			cleared = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopTraffic()
+	<-receiveDone
+	if !mirrored || !cleared || !relayDelivered {
+		t.Fatalf("blackhole fallback incomplete after %v: mirrored=%v cleared=%v relay-delivered=%v", time.Since(blackholeAt), mirrored, cleared, relayDelivered)
+	}
+	if delay := trustDeadline.Sub(blackholeMono); delay > 7500*time.Millisecond {
+		t.Fatalf("direct+DERP trust deadline was %v after blackhole; want <=7.5s", delay)
+	}
+
+	recoverAt := time.Now()
+	if got := faultHandles[0].Hits(); got == 0 {
+		t.Fatal("runtime direct-underlay fault rule had no hits")
+	}
+	dropper.faultNetwork.SetPacketFaultRules()
+	m1.conn.mu.Lock()
+	de, ok = m1.conn.peerMap.endpointForNodeKey(m2.Public())
+	m1.conn.mu.Unlock()
+	if !ok {
+		t.Fatal("peer endpoint missing before recovery")
+	}
+	de.mu.Lock()
+	for ap := range de.endpointState {
+		de.startDiscoPingLocked(epAddr{ap: ap}, mono.Now(), pingHeartbeat, 0, nil)
+	}
+	de.mu.Unlock()
+	for time.Since(recoverAt) < 6*time.Second {
+		trusted, selected, state = directHealthSnapshot(t, m1, m2)
+		if trusted && selected && state == directPathHealthy {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("direct path did not recover within 6s: trusted=%v selected=%v state=%v", trusted, selected, state)
 }
 
 // newPinger starts continuously sending test packets from srcM to

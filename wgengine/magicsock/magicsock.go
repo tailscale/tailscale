@@ -1919,6 +1919,19 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		//  See http://go/corp/29422 & http://go/corp/30042
 		return &lazyEndpoint{c: c, maybeEP: ep, src: src}, size, isGeneveEncap, true
 	}
+	if !src.vni.IsSet() && c.controlKnobs.PathHealthMode() != controlknobs.PathHealthOff {
+		ep.mu.Lock()
+		st := ep.endpointState[src.ap]
+		needsEvidence := st != nil && st.directPathHealth != nil && st.directPathHealth.state != directPathHealthy
+		var generation uint32
+		if needsEvidence {
+			generation = st.directPathHealth.generation
+		}
+		ep.mu.Unlock()
+		if needsEvidence {
+			return &lazyEndpoint{c: c, maybeEP: ep, src: src, pathHealthEvidence: true, pathHealthGeneration: generation}, size, isGeneveEncap, true
+		}
+	}
 	return ep, size, isGeneveEncap, true
 }
 
@@ -4182,6 +4195,11 @@ var (
 	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")
 	metricUpdateEndpoints = clientmetric.NewCounter("magicsock_update_endpoints")
 
+	metricPathHealthHealthyToSuspect     = clientmetric.NewCounter("magicsock_path_health_healthy_to_suspect")
+	metricPathHealthSuspectToHealthy     = clientmetric.NewCounter("magicsock_path_health_suspect_to_healthy")
+	metricPathHealthSuspectToUnreachable = clientmetric.NewCounter("magicsock_path_health_suspect_to_unreachable")
+	metricPathHealthShadowDisagreement   = clientmetric.NewCounter("magicsock_path_health_shadow_disagreement")
+
 	// Sends (data or disco)
 	metricSendDERPQueued      = clientmetric.NewCounter("magicsock_send_derp_queued")
 	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
@@ -4389,9 +4407,11 @@ func (c *Conn) GetDERPRegionLatency() map[int]time.Duration {
 // relays versus direct connections, as peer relay connections do not upsert
 // into [peerMap] around disco packet reception, but direct connections do.
 type lazyEndpoint struct {
-	c       *Conn
-	maybeEP *endpoint // or nil if unknown
-	src     epAddr
+	c                    *Conn
+	maybeEP              *endpoint // or nil if unknown
+	src                  epAddr
+	pathHealthEvidence   bool
+	pathHealthGeneration uint32
 }
 
 var _ conn.InitiationAwareEndpoint = (*lazyEndpoint)(nil)
@@ -4450,6 +4470,11 @@ func (le *lazyEndpoint) DstToBytes() []byte {
 func (le *lazyEndpoint) FromPeer(peerPublicKey [32]byte) {
 	pubKey := key.NodePublicFromRaw32(mem.B(peerPublicKey[:]))
 	if le.maybeEP != nil && pubKey.Compare(le.maybeEP.publicKey) == 0 {
+		if le.pathHealthEvidence {
+			le.maybeEP.mu.Lock()
+			le.maybeEP.noteAuthenticatedDirectRecvLocked(le.src, le.pathHealthGeneration, mono.Now())
+			le.maybeEP.mu.Unlock()
+		}
 		return
 	}
 	le.c.mu.Lock()
@@ -4519,7 +4544,10 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
+	ep.mu.Lock()
 	ep.updateDiscoKey(discoKey)
+	ep.invalidateDirectPathHealthLocked()
+	ep.mu.Unlock()
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)

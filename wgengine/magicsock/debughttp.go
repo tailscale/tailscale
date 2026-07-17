@@ -139,6 +139,7 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 
 	now := time.Now()
 	mnow := mono.Now()
+	mode := ep.pathHealthMode()
 	fmtMono := func(m mono.Time) string {
 		if m == 0 {
 			return "-"
@@ -148,6 +149,7 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 
 	fmt.Fprintf(w, "<p>Best: <b>%+v</b>, %v ago (for %v)</p>\n", ep.bestAddr, fmtMono(ep.bestAddrAt), ep.trustBestAddrUntil.Sub(mnow).Round(time.Millisecond))
 	fmt.Fprintf(w, "<p>heartbeating: %v</p>\n", ep.heartBeatTimer != nil)
+	fmt.Fprintf(w, "<p>direct-path-health-mode: %v; sending: %s</p>\n", mode, map[bool]string{true: "direct-only", false: "direct+DERP"}[mnow.Before(ep.trustBestAddrUntil)])
 	fmt.Fprintf(w, "<p>lastSend: %v ago</p>\n", fmtMono(ep.lastSendExt))
 	fmt.Fprintf(w, "<p>lastFullPing: %v ago</p>\n", fmtMono(ep.lastFullPing))
 
@@ -165,6 +167,12 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 			fmt.Fprintf(w, "<li>%s: ...<ul>", ipp)
 		}
 		fmt.Fprintf(w, "<li>lastPing: %v ago</li>\n", fmtMono(s.lastPing))
+		if h := s.directPathHealth; h != nil {
+			fmt.Fprintf(w, "<li>direct-path-health: %s (misses=%d, generation=%d, selected=%v, authenticated-direct=%v ago)</li>\n",
+				h.state, h.misses, h.generation, ipp == ep.bestAddr.ap, fmtMono(h.lastAuthenticatedRecv))
+		} else {
+			fmt.Fprintf(w, "<li>direct-path-health: unmaterialized (selected=%v)</li>\n", ipp == ep.bestAddr.ap)
+		}
 		if s.lastGotPing.IsZero() {
 			fmt.Fprintf(w, "<li>disco-learned-at: -</li>\n")
 		} else {

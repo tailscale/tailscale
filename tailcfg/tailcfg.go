@@ -189,7 +189,8 @@ type CapabilityVersion int
 //   - 140: 2026-05-27: Client understands [NodeAttrDisableUDPGRO], [NodeAttrDisableUDPGSO], [NodeAttrDisableTUNUDPGRO], [NodeAttrDisableTUNTCPGRO]
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
 //   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
-const CurrentCapabilityVersion CapabilityVersion = 142
+//   - 143: 2026-07-16: Client understands [NodeAttrMagicsockPathHealthShadow] and [NodeAttrMagicsockPathHealthEnforce]
+const CurrentCapabilityVersion CapabilityVersion = 143
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2610,6 +2611,14 @@ const (
 	// NodeAttrSilentDisco makes the client suppress disco heartbeats to its
 	// peers.
 	NodeAttrSilentDisco NodeCapability = "silent-disco"
+
+	// NodeAttrMagicsockPathHealthShadow makes magicsock evaluate the multi-probe
+	// direct path health policy for observability without changing path decisions.
+	NodeAttrMagicsockPathHealthShadow NodeCapability = "magicsock-path-health-shadow"
+
+	// NodeAttrMagicsockPathHealthEnforce makes magicsock use the multi-probe
+	// direct path health policy when deciding when to retire a direct endpoint.
+	NodeAttrMagicsockPathHealthEnforce NodeCapability = "magicsock-path-health-enforce"
 
 	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
 	// rather than a /32 per peer. At most one of this or

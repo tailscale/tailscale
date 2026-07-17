@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/packet"
@@ -88,12 +89,16 @@ type endpoint struct {
 	lastDiscoKeyAdvertisement mono.Time      // last time we sent a TSMPDiscoAdvertisement or not to this endpoint
 	derpAddr                  netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
-	bestAddrAt         mono.Time   // time best address re-confirmed
-	trustBestAddrUntil mono.Time   // time when bestAddr expires
-	sentPing           map[stun.TxID]sentPing
-	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
-	isCallMeMaybeEP    map[netip.AddrPort]bool
+	bestAddr                   addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
+	bestAddrAt                 mono.Time   // time best address re-confirmed
+	trustBestAddrUntil         mono.Time   // time when bestAddr expires
+	directPathHealthGeneration uint32      // next materialized direct candidate generation
+	directPathHealthEpoch      uint64      // last observed control-knob transition epoch
+	directPathHealthCount      uint8       // number of candidates with active health state
+	latePathHealthPong         latePathHealthPong
+	sentPing                   map[stun.TxID]sentPing
+	endpointState              map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
+	isCallMeMaybeEP            map[netip.AddrPort]bool
 
 	// The following fields are related to the new "silent disco"
 	// implementation that's a WIP as of 2022-10-20.
@@ -136,7 +141,8 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 }
 
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
-	if v.epAddr != de.bestAddr.epAddr {
+	changed := v.epAddr != de.bestAddr.epAddr
+	if changed {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
 
 		// Reaching here, if we are upgrading from an invalid (missing) address
@@ -154,6 +160,9 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 		}
 	}
 	de.bestAddr = v
+	if changed {
+		de.rebalanceDirectPathHealthLocked()
+	}
 }
 
 const (
@@ -385,12 +394,20 @@ type endpointDisco struct {
 }
 
 type sentPing struct {
-	to      epAddr
-	at      mono.Time
-	timer   *time.Timer // timeout timer
-	purpose discoPingPurpose
-	size    int                    // size of the disco message
-	resCB   *pingResultAndCallback // or nil for internal use
+	to                         epAddr
+	at                         mono.Time
+	timer                      *time.Timer // timeout timer
+	purpose                    discoPingPurpose
+	size                       int                    // size of the disco message
+	resCB                      *pingResultAndCallback // or nil for internal use
+	directPathHealthGeneration uint32                 // non-zero only for logical direct base health probes
+	directPathHealthOnly       bool                   // true for the extra liveness-only discovery probe
+}
+
+type latePathHealthPong struct {
+	txid  stun.TxID
+	sp    sentPing
+	until mono.Time
 }
 
 // endpointState is some state and history for a specific endpoint of
@@ -418,6 +435,10 @@ type endpointState struct {
 	// was advertised last via a call-me-maybe disco message.
 	callMeMaybeTime time.Time
 
+	// directPathHealth is allocated only for candidates inside the bounded
+	// health budget. It has no timers or goroutines of its own.
+	directPathHealth *directPathHealth
+
 	recentPongs []pongReply // ring buffer up to pongHistoryCount entries
 	recentPong  uint16      // index into recentPongs of most recent; older before, wrapped
 
@@ -425,11 +446,16 @@ type endpointState struct {
 }
 
 // clear removes all derived / probed state from an endpointState.
-func (s *endpointState) clear() {
+func (s *endpointState) clear(nextGeneration func() uint32) {
+	h := s.directPathHealth
 	*s = endpointState{
 		index:       s.index,
 		lastGotPing: s.lastGotPing,
 	}
+	if h != nil {
+		h.materialize(nextGeneration())
+	}
+	s.directPathHealth = h
 }
 
 // pongHistoryCount is how many pongReply values we keep per endpointState
@@ -496,6 +522,9 @@ func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 		What: "deleteEndpointLocked-" + why,
 		From: ep,
 	})
+	if st := de.endpointState[ep]; st != nil && st.directPathHealth != nil && de.directPathHealthCount > 0 {
+		de.directPathHealthCount--
+	}
 	delete(de.endpointState, ep)
 	asEpAddr := epAddr{ap: ep}
 	if de.bestAddr.epAddr == asEpAddr {
@@ -535,7 +564,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		// kick off discovery disco pings every trustUDPAddrDuration and mirror
 		// to DERP.
 		de.mu.Lock()
-		if de.heartbeatDisabled && de.bestAddr.epAddr == src {
+		if de.heartbeatDisabled && de.pathHealthMode() != controlknobs.PathHealthEnforce && de.bestAddr.epAddr == src {
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 		}
 		de.mu.Unlock()
@@ -827,7 +856,7 @@ func (de *endpoint) heartbeat() {
 	}
 	de.heartBeatTimer = nil
 
-	if de.heartbeatDisabled {
+	if de.heartbeatDisabled && de.pathHealthMode() != controlknobs.PathHealthEnforce {
 		// If control override to disable heartBeatTimer set, return early.
 		return
 	}
@@ -964,7 +993,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 
 func (de *endpoint) noteTxActivityExtTriggerLocked(now mono.Time) {
 	de.lastSendExt = now
-	if de.heartBeatTimer == nil && !de.heartbeatDisabled {
+	if de.heartBeatTimer == nil && (!de.heartbeatDisabled || de.pathHealthMode() == controlknobs.PathHealthEnforce) {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
 }
@@ -1191,9 +1220,30 @@ func (de *endpoint) discoPingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	bestUntrusted := mono.Now().After(de.trustBestAddrUntil)
-	if sp.to == de.bestAddr.epAddr && bestUntrusted {
-		de.clearBestAddrLocked()
+	now := mono.Now()
+	bestUntrusted := now.After(de.trustBestAddrUntil)
+	healthDecision := de.reduceDirectPathHealthLocked(sp, discoPingTimedOut, now, false)
+	legacyClearBest := sp.to == de.bestAddr.epAddr && bestUntrusted
+	healthClearBest := legacyClearBest && healthDecision.clearCandidate
+	mode := de.c.controlKnobs.PathHealthMode()
+	if mode == controlknobs.PathHealthShadow && sp.directPathHealthGeneration != 0 && legacyClearBest != healthClearBest {
+		metricPathHealthShadowDisagreement.Add(1)
+	}
+	clearBest := legacyClearBest
+	if mode == controlknobs.PathHealthEnforce {
+		if st := de.endpointState[sp.to.ap]; st != nil && st.directPathHealth != nil {
+			// Once a selected candidate is governed by health, generation-zero
+			// legacy/PMTU probes must never bypass its multi-probe threshold.
+			clearBest = healthClearBest
+		}
+	}
+	if clearBest {
+		if mode == controlknobs.PathHealthEnforce && healthDecision.clearCandidate {
+			de.latePathHealthPong = latePathHealthPong{txid: txid, sp: sp, until: now.Add(pingTimeoutDuration)}
+		}
+		if !de.selectHealthyAlternativeLocked(sp.to.ap) {
+			de.clearBestAddrLocked()
+		}
 	}
 	if debugDisco() || !de.bestAddr.ap.IsValid() || bestUntrusted {
 		de.c.dlogf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort())
@@ -1323,17 +1373,9 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 	// to a non DERP address, then probe the MTU. Otherwise just send the
 	// one specified ping.
 
-	// Default to sending a single ping of the specified size
-	sizes := []int{size}
-	if de.c.PeerMTUEnabled() {
-		isDerp := ep.ap.Addr() == tailcfg.DerpMagicIPAddr
-		if !isDerp && ((purpose == pingDiscovery) || (purpose == pingCLI && size == 0)) {
-			de.c.dlogf("[v1] magicsock: starting MTU probe")
-			sizes = mtuProbePingSizesV4
-			if ep.ap.Addr().Is6() {
-				sizes = mtuProbePingSizesV6
-			}
-		}
+	sizes, mtuProbe := discoPingSizes(ep, purpose, size, de.c.PeerMTUEnabled(), de.pathHealthMode())
+	if mtuProbe {
+		de.c.dlogf("[v1] magicsock: starting MTU probe")
 	}
 
 	logLevel := discoLog
@@ -1344,15 +1386,17 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		de.noteTxActivityExtTriggerLocked(now)
 	}
 	de.lastSendAny = now
-	for _, s := range sizes {
+	for i, s := range sizes {
 		txid := stun.NewTxID()
 		de.sentPing[txid] = sentPing{
-			to:      ep,
-			at:      now,
-			timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
-			purpose: purpose,
-			resCB:   resCB,
-			size:    s,
+			to:                         ep,
+			at:                         now,
+			timer:                      time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
+			purpose:                    purpose,
+			resCB:                      resCB,
+			size:                       s,
+			directPathHealthGeneration: de.directPathHealthProbeGenerationLocked(ep, purpose, i),
+			directPathHealthOnly:       purpose == pingDiscovery && de.pathHealthMode() != controlknobs.PathHealthOff && i == 0 && s == 0,
 		}
 		if purpose == pingHeartbeatForUDPLifetime && de.probeUDPLifetime != nil {
 			de.probeUDPLifetime.lastTxID = txid
@@ -1360,6 +1404,24 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		go de.sendDiscoPing(ep, epDisco.key, txid, s, logLevel)
 	}
 
+}
+
+func discoPingSizes(ep epAddr, purpose discoPingPurpose, size int, peerMTUEnabled bool, pathHealthMode controlknobs.PathHealthMode) (sizes []int, mtuProbe bool) {
+	if !peerMTUEnabled || ep.ap.Addr() == tailcfg.DerpMagicIPAddr ||
+		(purpose != pingDiscovery && (purpose != pingCLI || size != 0)) {
+		if !peerMTUEnabled && purpose == pingDiscovery && pathHealthMode != controlknobs.PathHealthOff && ep.isDirect() {
+			return []int{0, 0}, false
+		}
+		return []int{size}, false
+	}
+	probes := mtuProbePingSizesV4
+	if ep.ap.Addr().Is6() {
+		probes = mtuProbePingSizesV6
+	}
+	if purpose == pingDiscovery && pathHealthMode != controlknobs.PathHealthOff {
+		return append([]int{0}, probes...), true
+	}
+	return probes, true
 }
 
 // sendDiscoPingsLocked starts pinging all of ep's direct endpoints.
@@ -1522,6 +1584,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		key := n.DiscoKey()
 		de.updateDiscoKey(key)
+		de.invalidateDirectPathHealthLocked()
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-resetLocked",
@@ -1574,7 +1637,9 @@ func (de *endpoint) setEndpointsLocked(eps interface {
 		if st, ok := de.endpointState[ipp]; ok {
 			st.index = int16(i)
 		} else {
-			de.endpointState[ipp] = &endpointState{index: int16(i)}
+			st := &endpointState{index: int16(i)}
+			de.materializeDirectPathHealthLocked(&st.directPathHealth)
+			de.endpointState[ipp] = st
 			newIpps = append(newIpps, ipp)
 		}
 	}
@@ -1593,6 +1658,7 @@ func (de *endpoint) setEndpointsLocked(eps interface {
 			de.deleteEndpointLocked("updateFromNode", ep)
 		}
 	}
+	de.rebalanceDirectPathHealthLocked()
 }
 
 // addCandidateEndpoint adds ep as an endpoint to which we should send
@@ -1621,10 +1687,14 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 
 	// Newly discovered endpoint. Exciting!
 	de.c.dlogf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort(), de.publicKey.ShortString())
-	de.endpointState[ep] = &endpointState{
+	st := &endpointState{
 		lastGotPing:     time.Now(),
 		lastGotPingTxID: forRxPingTxID,
+		index:           indexSentinelDeleted,
 	}
+	de.materializeDirectPathHealthLocked(&st.directPathHealth)
+	de.endpointState[ep] = st
+	de.rebalanceDirectPathHealthLocked()
 
 	// If for some reason this gets very large, do some cleanup.
 	if size := len(de.endpointState); size > 100 {
@@ -1656,11 +1726,19 @@ func (de *endpoint) noteBadEndpoint(udpAddr epAddr) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
+	if de.pathHealthMode() == controlknobs.PathHealthEnforce && udpAddr.isDirect() {
+		if st := de.endpointState[udpAddr.ap]; st != nil && st.directPathHealth != nil {
+			st.directPathHealth.state = directPathSuspect
+			de.trustBestAddrUntil = 0
+			de.sendDiscoPingsLocked(mono.Now(), true)
+			return
+		}
+	}
 	de.clearBestAddrLocked()
 
 	if !udpAddr.vni.IsSet() {
 		if st, ok := de.endpointState[udpAddr.ap]; ok {
-			st.clear()
+			st.clear(de.nextDirectPathHealthGenerationLocked)
 		}
 	}
 }
@@ -1675,7 +1753,7 @@ func (de *endpoint) noteConnectivityChange() {
 	de.clearBestAddrLocked()
 
 	for k := range de.endpointState {
-		de.endpointState[k].clear()
+		de.endpointState[k].clear(de.nextDirectPathHealthGenerationLocked)
 	}
 }
 
@@ -1727,13 +1805,38 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 
 	isDerp := src.ap.Addr() == tailcfg.DerpMagicIPAddr
 
+	now := mono.Now()
 	sp, ok := de.sentPing[m.TxID]
+	late := false
+	if !ok && de.pathHealthMode() == controlknobs.PathHealthEnforce {
+		de.syncDirectPathHealthModeLocked()
+		lp := de.latePathHealthPong
+		st := de.endpointState[lp.sp.to.ap]
+		if lp.txid == m.TxID && now.Before(lp.until) && st != nil && st.directPathHealth != nil && st.directPathHealth.generation == lp.sp.directPathHealthGeneration {
+			sp, ok, late = lp.sp, true, true
+			de.latePathHealthPong = latePathHealthPong{}
+		}
+	}
 	if !ok {
 		// This is not a pong for a ping we sent.
 		return false
 	}
 	knownTxID = true // for naked returns below
-	de.removeSentDiscoPingLocked(m.TxID, sp, discoPongReceived)
+	exactSource := src == sp.to
+	de.reduceDirectPathHealthLocked(sp, discoPongReceived, now, src.isDirect() && exactSource)
+	if !late {
+		de.removeSentDiscoPingLocked(m.TxID, sp, discoPongReceived)
+	}
+	if de.pathHealthMode() == controlknobs.PathHealthEnforce && sp.directPathHealthGeneration != 0 && !exactSource {
+		return true
+	}
+	if sp.directPathHealthOnly {
+		if de.pathHealthMode() == controlknobs.PathHealthEnforce && exactSource && de.bestAddr.epAddr == sp.to {
+			de.bestAddrAt = now
+			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		}
+		return true
+	}
 
 	pktLen := int(pingSizeToPktLen(sp.size, src))
 	if sp.size != 0 {
@@ -1744,7 +1847,6 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 		}
 	}
 
-	now := mono.Now()
 	latency := now.Sub(sp.at)
 
 	if !isDerp && !src.vni.IsSet() {
@@ -1968,7 +2070,9 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		if es, ok := de.endpointState[ep]; ok {
 			es.callMeMaybeTime = now
 		} else {
-			de.endpointState[ep] = &endpointState{callMeMaybeTime: now}
+			st := &endpointState{callMeMaybeTime: now, index: indexSentinelDeleted}
+			de.materializeDirectPathHealthLocked(&st.directPathHealth)
+			de.endpointState[ep] = st
 			newEPs = append(newEPs, ep)
 		}
 	}
@@ -1990,6 +2094,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 				}
 			}))
 	}
+	de.rebalanceDirectPathHealthLocked()
 
 	// Delete any prior CallMeMaybe endpoints that weren't included
 	// in this message.
@@ -2084,6 +2189,7 @@ func (de *endpoint) resetLocked() {
 	de.lastSendExt = 0
 	de.lastFullPing = 0
 	de.clearBestAddrLocked()
+	de.resetDirectPathHealthLocked()
 	for _, es := range de.endpointState {
 		es.lastPing = 0
 	}

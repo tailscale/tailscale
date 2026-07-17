@@ -11,10 +11,13 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
+	"tailscale.com/disco"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
@@ -392,6 +395,9 @@ type Network struct {
 	latency  time.Duration // latency applied to interface writes
 	lossRate float64       // chance of packet loss (0.0 to 1.0)
 
+	packetFaultMu sync.Mutex
+	packetFaults  *packetFaultEngine
+
 	// ...
 	err error // carried error
 }
@@ -409,6 +415,146 @@ func (n *Network) SetPacketLoss(rate float64) {
 		rate = 1
 	}
 	n.lossRate = rate
+}
+
+// PacketDirection identifies which way an IP datagram is travelling relative
+// to a network. The zero value matches either direction.
+type PacketDirection uint8
+
+const (
+	PacketDirectionAny PacketDirection = iota
+	PacketDirectionInbound
+	PacketDirectionOutbound
+)
+
+// PacketFamily identifies an IP address family. The zero value matches either
+// IPv4 or IPv6.
+type PacketFamily uint8
+
+const (
+	PacketFamilyAny PacketFamily = iota
+	PacketFamilyIPv4
+	PacketFamilyIPv6
+)
+
+// PacketProtocol identifies an IP transport protocol. The zero value matches
+// any protocol understood by the fault engine.
+type PacketProtocol uint8
+
+const (
+	PacketProtocolAny PacketProtocol = iota
+	PacketProtocolUDP
+	PacketProtocolTCP
+)
+
+// PacketClass identifies plaintext UDP envelope contents. Classification never
+// decrypts payloads. NonDiscoUDP excludes both disco wrappers and STUN packets.
+// The zero value matches any packet class (including TCP).
+type PacketClass uint8
+
+const (
+	PacketClassAny PacketClass = iota
+	PacketClassDisco
+	PacketClassSTUN
+	PacketClassNonDiscoUDP
+)
+
+// PacketFaultRule selects packets to drop. Invalid addresses and zero ports are
+// wildcards. Length is the complete IP datagram length (IP header plus its
+// payload); zero is a wildcard.
+//
+// Occurrences count only packets matching all selectors. DropOccurrence drops
+// exactly that occurrence. Otherwise DropFirst drops the first N occurrences
+// and DropEvery drops each Nth occurrence. If all three are zero, every match
+// is dropped. When combined, DropFirst and DropEvery are ORed.
+type PacketFaultRule struct {
+	Direction PacketDirection
+	Family    PacketFamily
+	Protocol  PacketProtocol
+	SrcAddr   netip.Addr
+	SrcPort   uint16
+	DstAddr   netip.Addr
+	DstPort   uint16
+	Class     PacketClass
+	Length    int
+
+	DropFirst      uint64
+	DropEvery      uint64
+	DropOccurrence uint64
+}
+
+// PacketFaultEvent reports one occurrence of a matching rule.
+type PacketFaultEvent struct {
+	Occurrence uint64
+	Dropped    bool
+}
+
+// PacketFaultRuleHandle provides race-safe observations of an installed rule.
+// A handle remains valid after a later SetPacketFaultRules call replaces it.
+type PacketFaultRuleHandle struct {
+	state *packetFaultRuleState
+}
+
+// Hits returns the number of packets that matched the rule's selectors.
+func (h *PacketFaultRuleHandle) Hits() uint64 {
+	if h == nil || h.state == nil {
+		return 0
+	}
+	return h.state.hits.Load()
+}
+
+// Events returns a channel notified when the rule matches. Notifications are
+// buffered so packet delivery does not require a simultaneous receiver. Each
+// rule retains the first 64 unread notifications; Hits is authoritative after
+// that. The channel is not closed when the rule is replaced.
+func (h *PacketFaultRuleHandle) Events() <-chan PacketFaultEvent {
+	if h == nil || h.state == nil {
+		return nil
+	}
+	return h.state.events
+}
+
+// SetPacketFaultRules atomically replaces the network's deterministic packet
+// fault rules and returns handles for observing the new rules. Passing no rules
+// disables deterministic faults. It is safe to call while packets are flowing.
+func (n *Network) SetPacketFaultRules(rules ...PacketFaultRule) []*PacketFaultRuleHandle {
+	return n.packetFaultEngine().setRules(rules)
+}
+
+// ShouldDropUDPPacket applies the network's deterministic fault rules to one
+// UDP packet and reports whether it should be dropped. It is intended for
+// process-level network adapters that feed real packet traffic through the same
+// runtime rule set as the virtual router.
+func (n *Network) ShouldDropUDPPacket(direction PacketDirection, src, dst netip.AddrPort, payload []byte) bool {
+	class := PacketClassNonDiscoUDP
+	switch {
+	case disco.LooksLikeDiscoWrapper(payload):
+		class = PacketClassDisco
+	case stun.Is(payload):
+		class = PacketClassSTUN
+	}
+	family := PacketFamilyIPv4
+	if src.Addr().Is6() {
+		family = PacketFamilyIPv6
+	}
+	return n.packetFaultEngine().dropEnvelope(packetFaultEnvelope{
+		direction:      direction,
+		family:         family,
+		protocol:       PacketProtocolUDP,
+		src:            src,
+		dst:            dst,
+		class:          class,
+		datagramLength: packetFaultIPHeaderLength(family) + 8 + len(payload),
+	})
+}
+
+func (n *Network) packetFaultEngine() *packetFaultEngine {
+	n.packetFaultMu.Lock()
+	defer n.packetFaultMu.Unlock()
+	if n.packetFaults == nil {
+		n.packetFaults = new(packetFaultEngine)
+	}
+	return n.packetFaults
 }
 
 // SetBlackholedIPv4 sets whether the network should blackhole all IPv4 traffic
@@ -498,21 +644,22 @@ func (s *Server) initFromConfig(c *Config) error {
 			conf.lanIP4 = netip.MustParsePrefix("192.168.0.0/24")
 		}
 		n := &network{
-			num:        conf.num,
-			s:          s,
-			mac:        conf.mac,
-			portmap:    conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
-			wanIP6:     conf.wanIP6,
-			v4:         conf.lanIP4.IsValid(),
-			v6:         conf.wanIP6.IsValid(),
-			wanIP4:     conf.wanIP4,
-			lanIP4:     conf.lanIP4,
-			breakWAN4:  conf.breakWAN4,
-			latency:    conf.latency,
-			lossRate:   conf.lossRate,
-			nodesByIP4: map[netip.Addr]*node{},
-			nodesByMAC: map[MAC]*node{},
-			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
+			num:          conf.num,
+			s:            s,
+			mac:          conf.mac,
+			portmap:      conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
+			wanIP6:       conf.wanIP6,
+			v4:           conf.lanIP4.IsValid(),
+			v6:           conf.wanIP6.IsValid(),
+			wanIP4:       conf.wanIP4,
+			lanIP4:       conf.lanIP4,
+			breakWAN4:    conf.breakWAN4,
+			latency:      conf.latency,
+			lossRate:     conf.lossRate,
+			packetFaults: conf.packetFaultEngine(),
+			nodesByIP4:   map[netip.Addr]*node{},
+			nodesByMAC:   map[MAC]*node{},
+			logf:         logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),
 		}
 		netOfConf[conf] = n
 		s.networks.Add(n)

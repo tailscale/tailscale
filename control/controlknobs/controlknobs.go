@@ -140,6 +140,33 @@ type Knobs struct {
 	// maps and use them to establish peer connectivity on start, if doing so
 	// is supported by the client and storage is available.
 	CacheNetworkMaps atomic.Bool
+
+	// MagicsockPathHealthState atomically packs the direct path health mode in
+	// the low bits and its transition epoch in the high bits.
+	MagicsockPathHealthMode atomic.Uint64
+}
+
+// PathHealthMode controls whether magicsock's direct path health policy is
+// disabled, evaluated only for observability, or enforced.
+type PathHealthMode uint32
+
+const (
+	PathHealthOff PathHealthMode = iota
+	PathHealthShadow
+	PathHealthEnforce
+)
+
+func (m PathHealthMode) String() string {
+	switch m {
+	case PathHealthOff:
+		return "off"
+	case PathHealthShadow:
+		return "shadow"
+	case PathHealthEnforce:
+		return "enforce"
+	default:
+		return fmt.Sprintf("PathHealthMode(%d)", m)
+	}
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -176,7 +203,15 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
 		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
 		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
+		pathHealthShadow                     = has(tailcfg.NodeAttrMagicsockPathHealthShadow)
+		pathHealthEnforce                    = has(tailcfg.NodeAttrMagicsockPathHealthEnforce)
 	)
+	pathHealthMode := PathHealthOff
+	if pathHealthEnforce {
+		pathHealthMode = PathHealthEnforce
+	} else if pathHealthShadow {
+		pathHealthMode = PathHealthShadow
+	}
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
 		oneCGNAT.Set(true)
@@ -210,6 +245,16 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
 	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 	k.CacheNetworkMaps.Store(cacheNetworkMaps)
+	for {
+		old := k.MagicsockPathHealthMode.Load()
+		oldMode, epoch := unpackPathHealthState(old)
+		if oldMode == pathHealthMode {
+			break
+		}
+		if k.MagicsockPathHealthMode.CompareAndSwap(old, packPathHealthState(pathHealthMode, epoch+1)) {
+			break
+		}
+	}
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -224,6 +269,15 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		switch v := fv.Addr().Interface().(type) {
 		case *atomic.Bool:
 			ret[sf.Name] = v.Load()
+		case *atomic.Uint32:
+			ret[sf.Name] = v.Load()
+		case *atomic.Uint64:
+			if sf.Name == "MagicsockPathHealthMode" {
+				mode, _ := unpackPathHealthState(v.Load())
+				ret[sf.Name] = uint32(mode)
+			} else {
+				ret[sf.Name] = v.Load()
+			}
 		case *syncs.AtomicValue[opt.Bool]:
 			ret[sf.Name] = v.Load()
 		default:
@@ -231,6 +285,30 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		}
 	}
 	return ret
+}
+
+// PathHealthMode returns the current magicsock direct path health mode.
+func (k *Knobs) PathHealthMode() PathHealthMode {
+	mode, _ := k.PathHealthState()
+	return mode
+}
+
+// PathHealthState atomically returns the current mode and transition epoch.
+func (k *Knobs) PathHealthState() (mode PathHealthMode, epoch uint64) {
+	if k == nil {
+		return PathHealthOff, 0
+	}
+	return unpackPathHealthState(k.MagicsockPathHealthMode.Load())
+}
+
+const pathHealthModeBits = 2
+
+func packPathHealthState(mode PathHealthMode, epoch uint64) uint64 {
+	return epoch<<pathHealthModeBits | uint64(mode)
+}
+
+func unpackPathHealthState(state uint64) (PathHealthMode, uint64) {
+	return PathHealthMode(state & (1<<pathHealthModeBits - 1)), state >> pathHealthModeBits
 }
 
 // ShouldForceRegisterMagicDNSIPv4Only reports the value of
