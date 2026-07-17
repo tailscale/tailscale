@@ -4,6 +4,7 @@
 package feature
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,21 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 )
+
+// HookRegisterLogSinkFlags is a hook for the syslog feature to register
+// its flags (such as tailscaled's --syslog) with the process's default
+// flag set. If set, tailscaled calls it before flag parsing.
+var HookRegisterLogSinkFlags Hook[func()]
+
+// HookLogSink is a hook for the syslog feature to redirect the process's
+// logs to an alternate sink. If set, tailscaled calls it once early in
+// main, after flag parsing; on that first call, if the user requested an
+// alternate sink, it points the standard library's default logger at that
+// sink. It returns the sink, or nil if logs are not being redirected.
+// Later callers (such as logpolicy, which otherwise writes its console
+// copy of logs to stderr) use the returned writer to send their logs to
+// the same place.
+var HookLogSink Hook[func() io.Writer]
 
 // HookCanAutoUpdate is a hook for the clientupdate package
 // to conditionally initialize.
