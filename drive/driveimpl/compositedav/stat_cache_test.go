@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"testing"
@@ -209,5 +210,53 @@ func TestParentChildRelationship(t *testing.T) {
 				log.Printf("got\n%s", got.Raw)
 			}
 		})
+	}
+}
+
+// TestUnicodeNormalizationInsensitivity verifies that cache lookups treat
+// canonically equivalent names as the same key. A parent directory listing
+// caches children under the names from the server's hrefs (often NFC), while
+// macOS WebDAV clients request the same files using NFD names. Without
+// normalization, the depth 0 lookup would miss and get would wrongly infer
+// notFound from the cached parent.
+func TestUnicodeNormalizationInsensitivity(t *testing.T) {
+	// Make sure we don't leak goroutines
+	tstest.ResourceCheck(t)
+
+	c := &StatCache{TTL: 24 * time.Hour} // don't expire
+	defer c.stop()
+
+	const (
+		nfcParent = "\u30ae\u30bf\u30fc"           // ギター in NFC: ギ is the single code point U+30AE
+		nfdParent = "\u30ad\u3099\u30bf\u30fc"     // same name in NFD: キ U+30AD plus combining voiced mark U+3099
+		nfcChild  = "\u30c6\u30ba\u30c8.wav"       // テズト.wav in NFC: ズ is the single code point U+30BA
+		nfdChild  = "\u30c6\u30b9\u3099\u30c8.wav" // same name in NFD: ス U+30B9 plus combining voiced mark U+3099
+	)
+	nfcParentPath := "/" + nfcParent
+	nfdParentPath := "/" + nfdParent
+	nfcChildPath := nfcParentPath + "/" + nfcChild
+	nfdChildPath := nfdParentPath + "/" + nfdChild
+
+	// The hrefs in a real PROPFIND response contain the percent-encoded UTF-8
+	// bytes of the names as they appear on the server's disk, here NFC.
+	unicodeParentResponse := strings.ReplaceAll(parentResponse, "/parent%20with%20spaces/", "/"+url.PathEscape(nfcParent)+"/")
+	unicodeChildResponse := strings.ReplaceAll(childResponse, "/parent%20with%20spaces/child.txt", "/"+url.PathEscape(nfcParent)+"/"+url.PathEscape(nfcChild))
+	unicodeFullParent := []byte(
+		strings.ReplaceAll(
+			fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">%s%s</D:multistatus>`, unicodeParentResponse, unicodeChildResponse),
+			"\n", ""))
+	unicodeFullChild := []byte(
+		strings.ReplaceAll(
+			fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">%s</D:multistatus>`, unicodeChildResponse),
+			"\n", ""))
+
+	c.set(nfcParentPath, 1, newCacheEntry(http.StatusMultiStatus, unicodeFullParent))
+
+	want := newCacheEntry(http.StatusMultiStatus, unicodeFullChild)
+	for _, childPath := range []string{nfcChildPath, nfdChildPath} {
+		got := c.get(childPath, 0)
+		if diff := cmp.Diff(got, want); diff != "" {
+			t.Errorf("get(%q): unexpected cached value; (-got+want):%v", childPath, diff)
+		}
 	}
 }
