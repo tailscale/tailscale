@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -963,13 +964,20 @@ func interfaceV6UsableForTun(tunname string) bool {
 	if tunname == "" {
 		return false
 	}
-	bs, err := os.ReadFile(filepath.Join("/proc/sys/net/ipv6/conf", tunname, "disable_ipv6"))
+	// Open under conf/ with os.OpenInRoot so a "../" or symlink in tunname can't
+	// escape the directory.
+	f, err := os.OpenInRoot("/proc/sys/net/ipv6/conf", filepath.Join(tunname, "disable_ipv6"))
 	if err != nil {
-		// A missing directory/knob means IPv6 isn't up on the interface, so
-		// it's unavailable. Any other error (e.g. EACCES) means the knob
-		// exists but we couldn't read it; assume IPv6 is usable rather than
-		// skipping it on a transient error.
+		// A missing directory/knob means IPv6 isn't up on the interface, so it's
+		// unavailable. Any other error (e.g. EACCES, or tunname escaping the
+		// root) means we couldn't read the knob; assume IPv6 is usable rather
+		// than skipping it on a transient or defensive error.
 		return !os.IsNotExist(err)
+	}
+	defer f.Close()
+	bs, err := io.ReadAll(f)
+	if err != nil {
+		return true // couldn't read; assume usable
 	}
 	disabled, err := strconv.ParseBool(strings.TrimSpace(string(bs)))
 	if err != nil {
