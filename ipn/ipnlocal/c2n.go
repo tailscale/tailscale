@@ -11,7 +11,6 @@ import (
 	"path"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/def"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/set"
@@ -277,7 +277,7 @@ func handleC2NDebugComponentLogging(b *LocalBackend, w http.ResponseWriter, r *h
 		return
 	}
 	component := r.FormValue("component")
-	secs, _ := strconv.Atoi(r.FormValue("secs"))
+	secs := def.Int(r.FormValue("secs"), 0)
 	if secs == 0 {
 		secs -= 1
 	}

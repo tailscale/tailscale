@@ -17,7 +17,6 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/def"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
 )
@@ -81,7 +81,7 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	component := r.FormValue("component")
-	secs, _ := strconv.Atoi(r.FormValue("secs"))
+	secs := def.Int(r.FormValue("secs"), 0)
 	err := h.b.SetComponentDebugLogging(component, h.clock.Now().Add(time.Duration(secs)*time.Second))
 	var res struct {
 		Error string

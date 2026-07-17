@@ -10,13 +10,14 @@ import (
 	"net/http"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
+
+	"tailscale.com/util/def"
 )
 
 func init() {
 	c2nLogHeap = func(w http.ResponseWriter, r *http.Request) {
 		// Support same optional gc parameter as net/http/pprof:
-		if gc, _ := strconv.Atoi(r.FormValue("gc")); gc > 0 {
+		if gc := def.Int(r.FormValue("gc"), 0); gc > 0 {
 			runtime.GC()
 		}
 		pprof.WriteHeapProfile(w)
@@ -29,11 +30,11 @@ func init() {
 			http.Error(w, "Unknown profile", http.StatusNotFound)
 			return
 		}
-		gc, _ := strconv.Atoi(r.FormValue("gc"))
+		gc := def.Int(r.FormValue("gc"), 0)
 		if profile == "heap" && gc > 0 {
 			runtime.GC()
 		}
-		debug, _ := strconv.Atoi(r.FormValue("debug"))
+		debug := def.Int(r.FormValue("debug"), 0)
 		if debug != 0 {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		} else {
