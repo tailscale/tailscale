@@ -1236,3 +1236,36 @@ func TestFilterDropEmptyTSMPDiscoAdvertInbound(t *testing.T) {
 		t.Errorf("got %v; want DropSilently", got)
 	}
 }
+
+// Drop TSMP packets from ourselves.
+func TestFilterDropTSMP(t *testing.T) {
+	var memLog tstest.MemLogger
+	tw := &Wrapper{logf: memLog.Logf, limitedLogf: memLog.Logf}
+	ipHdr := packet.IP4Header{
+		IPProto: ipproto.TSMP,
+		Src:     netaddr.IPv4(1, 2, 3, 4),
+		Dst:     netaddr.IPv4(5, 6, 7, 8),
+	}
+	tsmpPayload := make([]byte, 33)
+	tsmpPayload[0] = byte(packet.TSMPTypeDiscoAdvertisement)
+	pkt := make([]byte, ipHdr.Len()+len(tsmpPayload))
+	ipHdr.Marshal(pkt)
+	copy(pkt[ipHdr.Len():], tsmpPayload)
+
+	wantMetric := metricPacketOutDropTSMP.Value() + 1
+
+	pp := new(packet.Parsed)
+	pp.Decode(pkt)
+	got, _ := tw.filterPacketOutboundToWireGuard(pp, nil, nil)
+	if got != filter.DropSilently {
+		t.Errorf("got %v; want DropSilently", got)
+	}
+	if got, want := memLog.String(), "[unexpected] received TSMP out packet over tstun; dropping\n"; got != want {
+		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
+	}
+
+	if metricPacketOutDropTSMP.Value() != wantMetric {
+		t.Errorf("expected metric\n got: %d\nwant: %d\n",
+			metricPacketOutDropTSMP.Value(), wantMetric)
+	}
+}

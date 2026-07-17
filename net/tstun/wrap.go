@@ -761,6 +761,14 @@ func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed, pc *peerConf
 		}
 	}
 
+	// TSMP traffic should only originate from tailscaled, not from the host
+	// itself.
+	if p.IPProto == ipproto.TSMP {
+		t.limitedLogf("[unexpected] received TSMP out packet over tstun; dropping")
+		metricPacketOutDropTSMP.Add(1)
+		return filter.DropSilently, gro
+	}
+
 	// Issue 1526 workaround: if we sent disco packets over
 	// Tailscale from ourselves, then drop them, as that shouldn't
 	// happen unless a networking stack is confused, as it seems
@@ -1507,6 +1515,7 @@ var (
 	metricPacketOutDrop          = clientmetric.NewCounter("tstun_out_to_wg_drop")
 	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
+	metricPacketOutDropTSMP      = clientmetric.NewCounter("tstun_out_to_wg_drop_tsmp")
 )
 
 func (t *Wrapper) InstallCaptureHook(cb packet.CaptureCallback) {
