@@ -1,10 +1,11 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package def parses strings with fallback default values.
+// Package def parses strings and environment variables with fallback default values.
 package def
 
 import (
+	"os"
 	"strconv"
 	"time"
 )
@@ -31,4 +32,14 @@ func Duration(s string, def time.Duration) time.Duration {
 		return def
 	}
 	return v
+}
+
+// LookupEnv retrieves the value of the environment variable named by the key.
+// If the variable is present in the environment the value (which may be
+// empty) is returned. Otherwise, it returns def.
+func LookupEnv(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
 }

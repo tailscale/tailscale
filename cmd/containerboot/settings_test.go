@@ -7,6 +7,7 @@ package main
 
 import (
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 )
@@ -223,6 +224,78 @@ func TestValidateAuthMethods(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvEmptyDefaults(t *testing.T) {
+	tests := []struct {
+		env  string
+		get  func(*settings) string
+		want string
+	}{
+		{
+			env:  "TS_SOCKET",
+			get:  func(c *settings) string { return c.Socket },
+			want: "/tmp/tailscaled.sock",
+		},
+		{
+			env:  "TS_LOCAL_ADDR_PORT",
+			get:  func(c *settings) string { return c.LocalAddrPort },
+			want: "[::]:9002",
+		},
+		{
+			env:  "TS_TEST_ONLY_ROOT",
+			get:  func(c *settings) string { return c.Root },
+			want: "/",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			t.Setenv(tt.env, "")
+			cfg, err := configFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := tt.get(cfg); got != tt.want {
+				t.Errorf(`%s set to empty "": got %q, want default %q`, tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvKubeSecret(t *testing.T) {
+	tests := []struct {
+		name         string
+		inKubernetes bool
+		unset        bool
+		value        string
+		want         string
+	}{
+		{name: "in_kubernetes_unset", inKubernetes: true, unset: true, want: "tailscale"},
+		{name: "in_kubernetes_empty", inKubernetes: true, value: "", want: ""},
+		{name: "in_kubernetes_set", inKubernetes: true, value: "custom", want: "custom"},
+		{name: "not_in_kubernetes_unset", inKubernetes: false, unset: true, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// t.Setenv registers a t.Cleanup to restore the original value, so
+			// route the unset cases through it rather than a bare os.Unsetenv.
+			t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
+			if !tt.inKubernetes {
+				os.Unsetenv("KUBERNETES_SERVICE_HOST")
+			}
+			t.Setenv("TS_KUBE_SECRET", tt.value)
+			if tt.unset {
+				os.Unsetenv("TS_KUBE_SECRET")
+			}
+			cfg, err := configFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.KubeSecret != tt.want {
+				t.Errorf("KubeSecret = %q, want %q", cfg.KubeSecret, tt.want)
 			}
 		})
 	}
