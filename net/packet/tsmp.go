@@ -66,16 +66,16 @@ func (rh TailscaleRejectedHeader) String() string {
 type TSMPType uint8
 
 const (
-	// TSMPTypeRejectedConn is the type byte for a TailscaleRejectedHeader.
+	// TSMPTypeRejectedConn is the type byte for a [TailscaleRejectedHeader].
 	TSMPTypeRejectedConn TSMPType = '!'
 
-	// TSMPTypePing is the type byte for a TailscalePingRequest.
+	// TSMPTypePing is the type byte for a [TSMPPingRequest].
 	TSMPTypePing TSMPType = 'p'
 
-	// TSMPTypePong is the type byte for a TailscalePongResponse.
+	// TSMPTypePong is the type byte for a [TSMPPongReply].
 	TSMPTypePong TSMPType = 'o'
 
-	// TSPMTypeDiscoAdvertisement is the type byte for sending disco keys
+	// TSMPTypeDiscoAdvertisement is the type byte for a [TSMPDiscoKeyAdvertisement].
 	TSMPTypeDiscoAdvertisement TSMPType = 'a'
 )
 
