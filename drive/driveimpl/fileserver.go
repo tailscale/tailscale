@@ -102,7 +102,7 @@ func (s *FileServer) ClearSharesLocked() {
 // has been called first.
 func (s *FileServer) AddShareLocked(share, path string) {
 	s.shareHandlers[share] = &webdav.Handler{
-		FileSystem: &birthTimingFS{webdav.Dir(path)},
+		FileSystem: &birthTimingFS{&normalizingFS{webdav.Dir(path)}},
 		LockSystem: webdav.NewMemLS(),
 	}
 }
