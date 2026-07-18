@@ -884,12 +884,15 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// per peer by [Engine.SyncDevicePeer]), and its private key is set
 	// above when it changes.
 
+	// A router.Set error is recorded but must not abort the reconfig: DNS
+	// configuration below must be attempted independently. See #20447.
+	var routerErr error
 	if routerChanged {
 		e.logf("wgengine: Reconfig: configuring router")
-		err := e.router.Set(routerCfg)
-		e.health.SetRouterHealth(err)
-		if err != nil {
-			return err
+		routerErr = e.router.Set(routerCfg)
+		e.health.SetRouterHealth(routerErr)
+		if routerErr != nil {
+			e.logf("wgengine: Reconfig: router config failed (%v); continuing to DNS config so name resolution still works", routerErr)
 		}
 	}
 
@@ -902,6 +905,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// TODO(bradfitz): try to do the "configuring DNS" part below only if
 	// dnsChanged, not routerChanged. The "resolver.ShouldUseRoutes" part
 	// probably needs to keep happening for both.
+	var dnsErr, vpnErr error
 	if buildfeatures.HasDNS && (routerChanged || dnsChanged) {
 		if resolver.ShouldUseRoutes(e.controlKnobs) {
 			e.logf("wgengine: Reconfig: user dialer")
@@ -914,31 +918,32 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		// DNS managers refuse to apply settings if the device has no
 		// assigned address.
 		e.logf("wgengine: Reconfig: configuring DNS")
-		err := e.dns.Set(*dnsCfg)
-		e.health.SetDNSHealth(err)
-		if err != nil {
-			return err
-		}
-		if err := e.reconfigureVPNIfNecessary(); err != nil {
-			return err
+		dnsErr = e.dns.Set(*dnsCfg)
+		e.health.SetDNSHealth(dnsErr)
+		if dnsErr == nil {
+			vpnErr = e.reconfigureVPNIfNecessary()
 		}
 	}
 
-	// Let the network flow logger finish reacting after the router is
-	// configured, so that a stopping logger captures final packets.
+	// Let the network flow logger finish reacting, pairing the Reconfig
+	// call near the top of this function. This runs regardless of router
+	// or DNS errors above: skipping it would leave a stopping logger
+	// running until the next successful reconfig.
 	// This may block to flush pending log messages.
 	if e.netlogger != nil {
 		e.netlogger.ReconfigDone()
 	}
 
-	// Let the BIRD integration apply any protocol state change now,
-	// after the router is configured.
+	// Let the BIRD integration apply any protocol state change computed by
+	// its Reconfig call above. As with the netlogger, this runs even if
+	// router/DNS config failed, so BIRD's protocol state still tracks the
+	// primary-subnet-router transition.
 	if e.bird != nil {
 		e.bird.ReconfigDone()
 	}
 
 	e.logf("[v1] wgengine: Reconfig done")
-	return nil
+	return errors.Join(routerErr, dnsErr, vpnErr)
 }
 
 func (e *userspaceEngine) GetFilter() *filter.Filter {

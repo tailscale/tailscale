@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 		name         string
 		steps        []step
 		initialState fakeLocalServeClient // use the zero value for empty config
+		skipOn       []string             // platforms on which to skip; GOOS values
 	}
 
 	// creaet a temporary directory for path-based destinations
@@ -482,6 +484,63 @@ func TestServeDevConfigMutations(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "tcp_unix_socket",
+			steps: []step{{
+				command: cmd("serve --tcp=3128 --bg unix:/var/run/app.sock"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						3128: {
+							TCPForward: "unix:/var/run/app.sock",
+						},
+					},
+				},
+			}},
+			skipOn: []string{"windows"},
+		},
+		{
+			name: "tls_terminated_tcp_unix_socket",
+			steps: []step{{
+				command: cmd("serve --tls-terminated-tcp=443 --bg unix:/var/run/app.sock"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{
+						443: {
+							TCPForward:   "unix:/var/run/app.sock",
+							TerminateTLS: "foo.test.ts.net",
+						},
+					},
+				},
+			}},
+			skipOn: []string{"windows"},
+		},
+		{
+			name: "tcp_unix_socket_off",
+			steps: []step{
+				{
+					command: cmd("serve --tcp=3128 --bg unix:/var/run/app.sock"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							3128: {
+								TCPForward: "unix:/var/run/app.sock",
+							},
+						},
+					},
+				},
+				{
+					command: cmd("serve --tcp=3128 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+			skipOn: []string{"windows"},
+		},
+		{
+			name: "tcp_unix_socket_proxy_protocol_rejected",
+			steps: []step{{
+				command: cmd("serve --tcp=3128 --proxy-protocol=1 --bg unix:/var/run/app.sock"),
+				wantErr: anyErr(),
+			}},
+			skipOn: []string{"windows"},
 		},
 		{
 			name: "tcp_off",
@@ -993,6 +1052,9 @@ func TestServeDevConfigMutations(t *testing.T) {
 
 	for _, group := range groups {
 		t.Run(group.name, func(t *testing.T) {
+			if slices.Contains(group.skipOn, runtime.GOOS) {
+				t.Skip("skipping on", runtime.GOOS)
+			}
 			lc := group.initialState
 			for i, st := range group.steps {
 				var stderr bytes.Buffer
@@ -2571,6 +2633,68 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 		if stderr.Len() != 0 {
 			t.Errorf("new format must not warn; stderr:\n%s", stderr.String())
+		}
+	})
+
+	t.Run("http_over_unix_roundtrip", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("skipping on windows")
+		}
+
+		// set-config: apply HTTP-over-unix declarative config; then get-config
+		// should reproduce a target of "http://unix:/var/run/app.sock" without
+		// mangling it through host:port parsing.
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"http://unix:/var/run/app.sock"}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatalf("set-config: %v", err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil {
+			t.Fatalf("svc:foo not applied; got %+v", lc.config.Services)
+		}
+		if got := svc.Web["foo.test.ts.net:443"].Handlers["/"].Proxy; got != "unix:/var/run/app.sock" {
+			t.Errorf("Handler Proxy = %q, want %q", got, "unix:/var/run/app.sock")
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		}
+
+		// Round-trip through get-config.
+		var gotStdout, gotStderr bytes.Buffer
+		g := &serveEnv{lc: lc, service: fooSvc, testStdout: &gotStdout, testStderr: &gotStderr}
+		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
+			t.Fatalf("get-config: %v", err)
+		}
+		if !strings.Contains(gotStdout.String(), `"tcp:443": "http://unix:/var/run/app.sock"`) {
+			t.Errorf("get-config output missing http-over-unix target:\n%s", gotStdout.String())
+		}
+	})
+
+	t.Run("https_over_unix_roundtrip", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("skipping on windows")
+		}
+
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"https://unix:/var/run/app.sock"}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatalf("set-config: %v", err)
+		}
+
+		var gotStdout, gotStderr bytes.Buffer
+		g := &serveEnv{lc: lc, service: fooSvc, testStdout: &gotStdout, testStderr: &gotStderr}
+		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
+			t.Fatalf("get-config: %v", err)
+		}
+		if !strings.Contains(gotStdout.String(), `"tcp:443": "https://unix:/var/run/app.sock"`) {
+			t.Errorf("get-config output missing https-over-unix target:\n%s", gotStdout.String())
 		}
 	})
 }

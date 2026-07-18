@@ -154,19 +154,20 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/deephash"
+	"tailscale.com/util/def"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/linuxfw"
 )
 
 func newNetfilterRunner(logf logger.Logf) (linuxfw.NetfilterRunner, error) {
-	if defaultBool("TS_TEST_FAKE_NETFILTER", false) {
+	if def.Bool(os.Getenv("TS_TEST_FAKE_NETFILTER"), false) {
 		return linuxfw.NewFakeIPTablesRunner(), nil
 	}
 	return linuxfw.New(logf, "")
 }
 
 func getAutoAdvertiseBool() bool {
-	return defaultBool("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", true)
+	return def.Bool(os.Getenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT"), true)
 }
 
 const containerbootWatchMask = ipn.NotifyInitialStatus |

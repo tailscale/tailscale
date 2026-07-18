@@ -605,7 +605,7 @@ func (m *UDPRelayEndpoint) decode(b []byte) error {
 	b = b[8:]
 	m.SteadyStateLifetime = time.Duration(binary.BigEndian.Uint64(b[:8]))
 	b = b[8:]
-	m.AddrPorts = make([]netip.AddrPort, 0, len(b)-udpRelayEndpointLenMinusAddrPorts/epLength)
+	m.AddrPorts = make([]netip.AddrPort, 0, len(b)/epLength)
 	for len(b) > 0 {
 		var a [16]byte
 		copy(a[:], b)

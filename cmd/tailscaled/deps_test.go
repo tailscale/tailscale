@@ -33,6 +33,21 @@ func TestOmitSSH(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitSyslog(t *testing.T) {
+	const msg = "unexpected syslog usage with ts_omit_syslog"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		// Tailscale SSH's incubator also uses log/syslog, so omit
+		// SSH too to lock down the standard library package.
+		Tags: "ts_omit_syslog,ts_omit_ssh,ts_include_cli",
+		BadDeps: map[string]string{
+			"log/syslog":                   msg,
+			"tailscale.com/feature/syslog": msg,
+		},
+	}.Check(t)
+}
+
 func TestOmitSyspolicy(t *testing.T) {
 	const msg = "unexpected syspolicy usage with ts_omit_syspolicy"
 	deptest.DepChecker{

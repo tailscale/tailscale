@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"math/big"
 	"net/netip"
 	"slices"
 	"sort"
@@ -57,17 +56,15 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 		return sb.String(), true, true
 	}
 
-	// Control D DoH URLs are of the form "https://dns.controld.com/8yezwenugs"
-	// where the path component is represented by 8 bytes (7-14) of the IPv6 address in base36
+	// Control D's free anycast resolvers (freedns.controld.com/pN) are the only
+	// Control D addresses that serve DoH; they're registered as exact entries in
+	// dohOfIP (see populate) and are handled by the lookup above.
 	//
-	// TODO(#20433): the ID-encoded addresses in this /48 are legacy port-53-only
-	// endpoints and refuse DoH on :443, so upgrading them to DoH is wrong. Only the
-	// shared anycast addresses (e.g. freedns.controld.com/pN) actually serve DoH.
-	// Distinguish the two rather than mapping the whole range.
-	if controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) {
-		path := big.NewInt(0).SetBytes(ip.AsSlice()[6:14]).Text(36)
-		return controlDBase + path, true, true
-	}
+	// The ID-encoded addresses in the 2606:1a40::/48 ranges (customer resolver ID
+	// base36-encoded into the address) are legacy plaintext-DNS (port 53) endpoints
+	// that refuse DoH on :443, so we deliberately don't upgrade them to DoH here:
+	// they fall through and are used as ordinary port-53 resolvers. Premium DoH is
+	// only reachable via the dns.controld.com/<id> URL path (see DoHIPsOfBase).
 
 	return "", false, false
 }

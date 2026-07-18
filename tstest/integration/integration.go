@@ -40,6 +40,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/net/stun/stuntest"
+	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -49,6 +50,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/cibuild"
 	"tailscale.com/util/rands"
 	"tailscale.com/util/zstdframe"
 	"tailscale.com/version"
@@ -57,6 +59,10 @@ import (
 var (
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
+
+	// runWindowsServiceTests enables the Windows service-mode integration tests.
+	// On by default in CI; tests opt in via NewTestEnv(t, canRunAsServiceOnWindows()).
+	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
 )
 
 // MainError is an error that's set if an error conditions happens outside of a
@@ -98,7 +104,7 @@ type BinaryInfo struct {
 // was cleaned up.
 func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 	ret := b
-	ret.Path = filepath.Join(dir, path.Base(b.Path))
+	ret.Path = filepath.Join(dir, filepath.Base(b.Path))
 
 	switch runtime.GOOS {
 	case "linux":
@@ -496,6 +502,7 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type TestEnv struct {
 	t                      testing.TB
 	tunMode                bool
+	windowsService         bool // run tailscaled as a Windows service
 	cli                    string
 	daemon                 string
 	loopbackPort           *int
@@ -534,11 +541,40 @@ func (f ConfigureControl) ModifyTestEnv(te *TestEnv) {
 	f(te.Control)
 }
 
+// canRunAsServiceOnWindowsOpt is the TestEnvOpt returned by canRunAsServiceOnWindows.
+type canRunAsServiceOnWindowsOpt struct{}
+
+func (canRunAsServiceOnWindowsOpt) ModifyTestEnv(te *TestEnv) {
+	// Only run as a service on Windows; on other platforms the test runs
+	// the normal userspace daemon with a faked Windows GOOS, as it always has.
+	if runtime.GOOS == "windows" {
+		te.windowsService = true
+	}
+}
+
+// canRunAsServiceOnWindows enables the test to run on Windows.
+// TODO(#20464): remove this and explicitly skip tests that need more work
+// before they can run on Windows, instead of requiring tests to opt in with this option.
+func canRunAsServiceOnWindows() TestEnvOpt { return canRunAsServiceOnWindowsOpt{} }
+
 // NewTestEnv starts a bunch of services and returns a new test environment.
 // NewTestEnv arranges for the environment's resources to be cleaned up on exit.
 func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
+	// Integration tests skip on Windows unless a test opts in via canRunAsServiceOnWindows.
+	// Pre-scan the opts before starting any servers so a skip leaks nothing.
+	canRunAsService := false
+	for _, o := range opts {
+		if _, ok := o.(canRunAsServiceOnWindowsOpt); ok {
+			canRunAsService = true
+		}
+	}
 	if runtime.GOOS == "windows" {
-		t.Skip("not tested/working on Windows yet")
+		if !canRunAsService {
+			t.Skip("integration tests skip on Windows unless the test calls canRunAsServiceOnWindows")
+		}
+		if !*runWindowsServiceTests {
+			t.Skip("Windows service tests disabled (--run-windows-service-tests=false)")
+		}
 	}
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
@@ -608,11 +644,18 @@ func NewTestNode(t *testing.T, env *TestEnv) *TestNode {
 		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
 		t.Cleanup(func() { os.Remove(sockFile) })
 	}
+	stateFile := filepath.Join(dir, "tailscaled.state") // matches what cmd/tailscaled uses
+	if env.windowsService {
+		// A LocalSystem service ignores --socket/--statedir and uses the
+		// default pipe and state path; point the harness at those.
+		sockFile = paths.DefaultTailscaledSocket()
+		stateFile = paths.DefaultTailscaledStateFile()
+	}
 	n := &TestNode{
 		env:       env,
 		dir:       dir,
 		sockFile:  sockFile,
-		stateFile: filepath.Join(dir, "tailscaled.state"), // matches what cmd/tailscaled uses
+		stateFile: stateFile,
 	}
 
 	// Look for a data race or panic.
@@ -775,9 +818,17 @@ func (op *nodeOutputParser) parseLinesLocked() {
 
 type Daemon struct {
 	Process *os.Process
+
+	// svc is set when the daemon is a Windows service (no owned Process);
+	// MustCleanShutdown then stops it via the SCM.
+	svc *TestNode
 }
 
 func (d *Daemon) MustCleanShutdown(t testing.TB) {
+	if d.svc != nil {
+		d.svc.stopService()
+		return
+	}
 	d.Process.Signal(os.Interrupt)
 	ps, err := d.Process.Wait()
 	if err != nil {
@@ -809,6 +860,40 @@ func (n *TestNode) awaitTailscaledRunnable() error {
 	return nil
 }
 
+// daemonEnv returns the extra environment variables to use when starting tailscaled.
+// The ipnGOOS argument overrides [envknob.GOOS].
+func (n *TestNode) daemonEnv(ipnGOOS string) []string {
+	env := []string{
+		"TS_DEBUG_PERMIT_HTTP_C2N=1",
+		"TS_LOG_TARGET=" + n.env.LogCatcherServer.URL,
+		"HTTP_PROXY=" + n.env.TrafficTrapServer.URL,
+		"HTTPS_PROXY=" + n.env.TrafficTrapServer.URL,
+		"TS_DEBUG_FAKE_GOOS=" + ipnGOOS,
+		"TS_LOGS_DIR=" + n.dir,
+		"TS_NETCHECK_GENERATE_204_URL=" + n.env.ControlServer.URL + "/generate_204",
+		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
+		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
+		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
+		"TS_DEBUG_LOG_RATE=all",
+	}
+	if n.allowUpdates {
+		env = append(env, "TS_TEST_ALLOW_AUTO_UPDATE=1")
+	}
+	if n.env.loopbackPort != nil {
+		env = append(env, "TS_DEBUG_NETSTACK_LOOPBACK_PORT="+strconv.Itoa(*n.env.loopbackPort))
+	}
+	if n.env.neverDirectUDP {
+		env = append(env, "TS_DEBUG_NEVER_DIRECT_UDP=1")
+	}
+	if n.env.relayServerUseLoopback {
+		env = append(env, "TS_DEBUG_RELAY_SERVER_ADDRS=::1,127.0.0.1")
+	}
+	if version.IsRace() {
+		env = append(env, "GORACE=halt_on_error=1")
+	}
+	return env
+}
+
 // StartDaemon starts the node's tailscaled, failing if it fails to start.
 // StartDaemon ensures that the process will exit when the test completes.
 func (n *TestNode) StartDaemon() *Daemon {
@@ -820,6 +905,12 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 
 	if err := n.awaitTailscaledRunnable(); err != nil {
 		t.Fatalf("awaitTailscaledRunnable: %v", err)
+	}
+
+	if n.env.windowsService {
+		// TODO(#20443): plumb service logs here so races/panics/DEBUG-ADDR are seen in service mode.
+		n.tailscaledParser = &nodeOutputParser{n: n}
+		return n.startWindowsServiceDaemon()
 	}
 
 	cmd := exec.Command(n.env.daemon)
@@ -843,34 +934,7 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if n.encryptState {
 		cmd.Args = append(cmd.Args, "--encrypt-state")
 	}
-	cmd.Env = append(os.Environ(),
-		"TS_DEBUG_PERMIT_HTTP_C2N=1",
-		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
-		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
-		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
-		"TS_DEBUG_FAKE_GOOS="+ipnGOOS,
-		"TS_LOGS_DIR="+t.TempDir(),
-		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
-		"TS_ASSUME_NETWORK_UP_FOR_TEST=1", // don't pause control client in airplane mode (no wifi, etc)
-		"TS_PANIC_IF_HIT_MAIN_CONTROL=1",
-		"TS_DISABLE_PORTMAPPER=1", // shouldn't be needed; test is all localhost
-		"TS_DEBUG_LOG_RATE=all",
-	)
-	if n.allowUpdates {
-		cmd.Env = append(cmd.Env, "TS_TEST_ALLOW_AUTO_UPDATE=1")
-	}
-	if n.env.loopbackPort != nil {
-		cmd.Env = append(cmd.Env, "TS_DEBUG_NETSTACK_LOOPBACK_PORT="+strconv.Itoa(*n.env.loopbackPort))
-	}
-	if n.env.neverDirectUDP {
-		cmd.Env = append(cmd.Env, "TS_DEBUG_NEVER_DIRECT_UDP=1")
-	}
-	if n.env.relayServerUseLoopback {
-		cmd.Env = append(cmd.Env, "TS_DEBUG_RELAY_SERVER_ADDRS=::1,127.0.0.1")
-	}
-	if version.IsRace() {
-		cmd.Env = append(cmd.Env, "GORACE=halt_on_error=1")
-	}
+	cmd.Env = append(os.Environ(), n.daemonEnv(ipnGOOS)...)
 	n.tailscaledParser = &nodeOutputParser{n: n}
 	cmd.Stderr = n.tailscaledParser
 	if *verboseTailscaled {

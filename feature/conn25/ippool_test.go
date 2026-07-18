@@ -5,6 +5,7 @@ package conn25
 
 import (
 	"errors"
+	"math"
 	"net/netip"
 	"testing"
 
@@ -196,4 +197,86 @@ func TestIPPoolReconfig(t *testing.T) {
 	// returning addresses from the new ranges works as normal
 	ipp.returnAddr(netip.MustParseAddr("192.168.0.9"))
 	expectAddrNext(t, ipp, "192.168.0.9")
+}
+
+func TestIPPoolCapacity(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		want   int64
+	}{
+		{"ipv4-slash-30", "100.64.0.0/30", 4},
+		{"ipv4-slash-24", "100.64.0.0/24", 256},
+		{"ipv4-single", "100.64.0.1/32", 1},
+		{"ipv6-slash-120", "fd7a::/120", 256},
+		// 2^62 is the largest power of two below math.MaxInt64; not clamped.
+		{"ipv6-slash-66-not-clamped", "fd7a::/66", 1 << 62},
+		// 2^63 overflows int64, so it clamps.
+		{"ipv6-slash-65-clamps", "fd7a::/65", math.MaxInt64},
+		{"ipv6-slash-64-clamps", "fd7a::/64", math.MaxInt64},
+		{"ipv6-default-clamps", "::/0", math.MaxInt64},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipp := newIPPool(mustIPSetFromPrefix(tt.prefix))
+			if got := ipp.capacity(); got != tt.want {
+				t.Errorf("capacity(%s) = %d, want %d", tt.prefix, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("multi-prefix-sum-overflows-clamps", func(t *testing.T) {
+		b := &netipx.IPSetBuilder{}
+		b.AddPrefix(netip.MustParsePrefix("fd7a::/66"))            // 2^62 +
+		b.AddPrefix(netip.MustParsePrefix("fd7a:0:0:0:8000::/66")) // 2^62 = 2^63 (1 more than MaxInt64)
+		set, err := b.IPSet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := newIPPool(set).capacity(); got != math.MaxInt64 {
+			t.Errorf("capacity() = %d, want %d", got, int64(math.MaxInt64))
+		}
+	})
+
+	t.Run("nil-and-uninitialized", func(t *testing.T) {
+		var nilPool *ippool
+		if got := nilPool.capacity(); got != 0 {
+			t.Errorf("nil pool capacity() = %d, want 0", got)
+		}
+		// newIPPool(nil) returns a non-nil pool with a nil ipSet.
+		if got := newIPPool(nil).capacity(); got != 0 {
+			t.Errorf("uninitialized pool capacity() = %d, want 0", got)
+		}
+	})
+}
+
+func TestIPPoolInUseCount(t *testing.T) {
+	t.Run("counts-handed-out", func(t *testing.T) {
+		ipp := newIPPool(mustIPSetFromPrefix("100.64.0.0/29")) // 8 addresses
+		if got := ipp.inUseCount(); got != 0 {
+			t.Fatalf("fresh pool inUseCount() = %d, want 0", got)
+		}
+		a1 := must.Get(ipp.next())
+		must.Get(ipp.next())
+		if got := ipp.inUseCount(); got != 2 {
+			t.Fatalf("after 2 next() inUseCount() = %d, want 2", got)
+		}
+		if err := ipp.returnAddr(a1); err != nil {
+			t.Fatal(err)
+		}
+		if got := ipp.inUseCount(); got != 1 {
+			t.Fatalf("after returnAddr inUseCount() = %d, want 1", got)
+		}
+	})
+
+	t.Run("nil-and-uninitialized", func(t *testing.T) {
+		var nilPool *ippool
+		if got := nilPool.inUseCount(); got != 0 {
+			t.Errorf("nil pool inUseCount() = %d, want 0", got)
+		}
+		// newIPPool(nil) returns a non-nil pool with a nil inUse set.
+		if got := newIPPool(nil).inUseCount(); got != 0 {
+			t.Errorf("uninitialized pool inUseCount() = %d, want 0", got)
+		}
+	})
 }

@@ -7,9 +7,11 @@ package appctype
 
 import (
 	"net/netip"
+	"time"
 
 	"go4.org/netipx"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/dnsname"
 )
 
 // ConfigID is an opaque identifier for a configuration.
@@ -112,4 +114,82 @@ type Conn25PoolsAttr struct {
 	V4TransitIPPool []netipx.IPRange `json:"v4TransitIPPool,omitempty"`
 	V6MagicIPPool   []netipx.IPRange `json:"v6MagicIPPool,omitempty"`
 	V6TransitIPPool []netipx.IPRange `json:"v6TransitIPPool,omitempty"`
+}
+
+// Conn25ActiveState holds the active client and connector state.
+type Conn25ActiveState struct {
+	Configured bool                 `json:"configured"`
+	Client     Conn25ClientState    `json:"client,omitzero"`
+	Connector  Conn25ConnectorState `json:"connector,omitzero"`
+}
+
+// Conn25ClientState holds the active client state.
+type Conn25ClientState struct {
+	Apps        []Conn25ClientAppState  `json:"apps,omitempty"`
+	IPPoolStats Conn25ClientIPPoolStats `json:"ipPoolStats,omitzero"`
+}
+
+// Conn25ClientIPPoolStats holds the in-use and total capacity counts for the
+// client's magic and transit IP pools, split by address family. If a count
+// exceeds [math.MaxInt64], that maximum is used instead.
+type Conn25ClientIPPoolStats struct {
+	IPv4MagicIPsInUse      int64 `json:"ipv4MagicIPsInUse"`
+	IPv4MagicIPsCapacity   int64 `json:"ipv4MagicIPsCapacity"`
+	IPv6MagicIPsInUse      int64 `json:"ipv6MagicIPsInUse"`
+	IPv6MagicIPsCapacity   int64 `json:"ipv6MagicIPsCapacity"`
+	IPv4TransitIPsInUse    int64 `json:"ipv4TransitIPsInUse"`
+	IPv4TransitIPsCapacity int64 `json:"ipv4TransitIPsCapacity"`
+	IPv6TransitIPsInUse    int64 `json:"ipv6TransitIPsInUse"`
+	IPv6TransitIPsCapacity int64 `json:"ipv6TransitIPsCapacity"`
+}
+
+// Conn25ClientAppState holds the active client state for a single app,
+// grouped by domain.
+type Conn25ClientAppState struct {
+	App     string                    `json:"app,omitempty"`
+	Domains []Conn25ClientDomainState `json:"domains,omitempty"`
+}
+
+// Conn25ClientDomainState holds the address mappings the client has allocated
+// for a single domain.
+type Conn25ClientDomainState struct {
+	Domain    dnsname.FQDN               `json:"domain"`
+	Addresses []Conn25ClientAddressState `json:"addresses,omitempty"`
+}
+
+// Conn25ClientAddressState describes a single address mapping the client has
+// allocated: the destination it resolves to, the magic and transit IPs handed
+// out for it, its active flow count, and when the mapping expires.
+type Conn25ClientAddressState struct {
+	ActiveFlowCount int       `json:"activeFlowCount"`
+	DestinationIP   string    `json:"destinationIP,omitempty"`
+	MagicIP         string    `json:"magicIP,omitempty"`
+	TransitIP       string    `json:"transitIP,omitempty"`
+	ExpiresAt       time.Time `json:"expiresAt,omitzero"`
+}
+
+// Conn25ConnectorState holds the active connector state.
+type Conn25ConnectorState struct {
+	Peers []Conn25ConnectorPeerState `json:"peers,omitempty"`
+}
+
+// Conn25ConnectorPeerState holds the active connector state for a single peer
+// (client) that has registered addresses with the connector, grouped by app.
+type Conn25ConnectorPeerState struct {
+	ClientIP string                    `json:"clientIP,omitempty"`
+	Apps     []Conn25ConnectorAppState `json:"apps,omitempty"`
+}
+
+// Conn25ConnectorAppState holds the address mappings a peer has registered
+// with the connector for a single app.
+type Conn25ConnectorAppState struct {
+	App       string                        `json:"app,omitempty"`
+	Addresses []Conn25ConnectorAddressState `json:"addresses,omitempty"`
+}
+
+// Conn25ConnectorAddressState describes a single transit-to-destination IP
+// mapping the connector routes on behalf of a peer.
+type Conn25ConnectorAddressState struct {
+	DestinationIP string `json:"destinationIP,omitempty"`
+	TransitIP     string `json:"transitIP,omitempty"`
 }

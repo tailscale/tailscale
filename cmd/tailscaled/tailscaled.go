@@ -233,6 +233,9 @@ store state on filesystem.`)
 	if f, ok := hookRegisterOutboundProxyFlags.GetOk(); ok {
 		f()
 	}
+	if f, ok := feature.HookRegisterLogSinkFlags.GetOk(); ok {
+		f()
+	}
 
 	if runtime.GOOS == "plan9" && os.Getenv("_NETSHELL_CHILD_") != "" {
 		os.Args = []string{"tailscaled", "be-child", "plan9-netshell"}
@@ -259,6 +262,10 @@ store state on filesystem.`)
 		if runtime.GOOS != "windows" || (flag.Arg(0) != "/subproc" && flag.Arg(0) != "/firewall") {
 			log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
 		}
+	}
+
+	if f, ok := feature.HookLogSink.GetOk(); ok {
+		f() // redirects the default logger (e.g. to syslog) if requested by flags
 	}
 
 	if fd, ok := envknob.LookupInt("TS_PARENT_DEATH_FD"); ok && fd > 2 {

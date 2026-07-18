@@ -200,6 +200,11 @@ func (ms *mapSession) Close() {
 var ErrChangeQueueClosed = errors.New("change queue closed")
 
 func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, discoKey key.DiscoPublic, lastSeen time.Time, online bool) error {
+	if discoKey.IsZero() {
+		ms.logf("[v1] controlclient: received zero disco key update from nodeID %v", id)
+		return nil
+	}
+
 	ms.cqmu.Lock()
 
 	if ms.changeQueueClosed {

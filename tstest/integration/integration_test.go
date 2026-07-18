@@ -35,6 +35,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/client/local"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/clientupdate"
 	"tailscale.com/health"
@@ -57,6 +58,11 @@ func TestMain(m *testing.M) {
 	// Have to disable UPnP which hits the network, otherwise it fails due to HTTP proxy.
 	os.Setenv("TS_DISABLE_UPNP", "true")
 	flag.Parse()
+	if *runWindowsServiceTests && runtime.GOOS == "windows" {
+		// On Windows the service is a singleton, so its tests run serially.
+		// envknob.Setenv refreshes the TS_SERIAL_TESTS that tstest.Parallel reads.
+		envknob.Setenv("TS_SERIAL_TESTS", "true")
+	}
 	v := m.Run()
 	if v != 0 {
 		os.Exit(v)
@@ -1310,7 +1316,7 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
 	tstest.Parallel(t)
-	env := NewTestEnv(t)
+	env := NewTestEnv(t, canRunAsServiceOnWindows())
 	n1 := NewTestNode(t, env)
 	n1.upFlagGOOS = "windows"
 

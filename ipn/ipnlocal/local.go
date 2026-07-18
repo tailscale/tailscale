@@ -9136,7 +9136,7 @@ func (b *LocalBackend) srcIPHasCapForFilter(srcIP netip.Addr, cap tailcfg.NodeCa
 	if !ok {
 		return false
 	}
-	return n.HasCap(cap)
+	return !n.UnsignedPeerAPIOnly() && n.HasCap(cap)
 }
 
 // maybeUsernameOf returns the actor's username if the actor

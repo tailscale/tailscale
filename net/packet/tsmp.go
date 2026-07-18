@@ -63,19 +63,20 @@ func (rh TailscaleRejectedHeader) String() string {
 	return fmt.Sprintf("TSMP-reject-flow{%s %s > %s}: %s", rh.Proto, rh.Src, rh.Dst, rh.Reason)
 }
 
+// TSMPType is the type byte of a TSMP message. It follows the IPv4 or IPv6 header.
 type TSMPType uint8
 
 const (
-	// TSMPTypeRejectedConn is the type byte for a TailscaleRejectedHeader.
+	// TSMPTypeRejectedConn is the type byte for a [TailscaleRejectedHeader].
 	TSMPTypeRejectedConn TSMPType = '!'
 
-	// TSMPTypePing is the type byte for a TailscalePingRequest.
+	// TSMPTypePing is the type byte for a [TSMPPingRequest].
 	TSMPTypePing TSMPType = 'p'
 
-	// TSMPTypePong is the type byte for a TailscalePongResponse.
+	// TSMPTypePong is the type byte for a [TSMPPongReply].
 	TSMPTypePong TSMPType = 'o'
 
-	// TSPMTypeDiscoAdvertisement is the type byte for sending disco keys
+	// TSMPTypeDiscoAdvertisement is the type byte for a [TSMPDiscoKeyAdvertisement].
 	TSMPTypeDiscoAdvertisement TSMPType = 'a'
 )
 

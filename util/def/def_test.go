@@ -4,12 +4,39 @@
 package def_test
 
 import (
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"tailscale.com/util/def"
 )
+
+func TestLookupEnv(t *testing.T) {
+	const key = "TS_DEF_TEST_LOOKUPENV"
+	tests := []struct {
+		name  string
+		unset bool
+		value string
+		def   string
+		want  string
+	}{
+		{name: "unset", unset: true, def: "fallback", want: "fallback"},
+		{name: "set", value: "value", def: "fallback", want: "value"},
+		{name: "empty", value: "", def: "fallback", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(key, tt.value)
+			if tt.unset {
+				os.Unsetenv(key)
+			}
+			if got := def.LookupEnv(key, tt.def); got != tt.want {
+				t.Errorf("LookupEnv(%q, %q) = %q; want %q", key, tt.def, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestBool(t *testing.T) {
 	tests := []struct {

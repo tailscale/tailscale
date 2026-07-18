@@ -31,6 +31,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
@@ -84,6 +85,7 @@ func init() {
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
 	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
+	localapi.Register("conn25-state", serveStateGet)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
@@ -1067,9 +1069,9 @@ func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcf
 }
 
 type dnsResponseRewrite struct {
-	domain dnsname.FQDN
-	dst    netip.Addr
-	ttl    time.Duration
+	domain     dnsname.FQDN
+	dst        netip.Addr
+	ttlSeconds uint32
 }
 
 func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
@@ -1261,7 +1263,7 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 				}
 				dstAddr = netip.AddrFrom16(r.AAAA)
 			}
-			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr, ttl: time.Second * time.Duration(h.TTL)})
+			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr, ttlSeconds: h.TTL})
 		default:
 			// we already checked the question was for a supported type, this answer is unexpected
 			if err := p.SkipAnswer(); err != nil {
@@ -1295,7 +1297,7 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 
 	// make an answer for each rewrite
 	for _, rw := range answers {
-		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, rw.ttl)
+		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second)
 		if err != nil {
 			return nil, err
 		}
@@ -1307,12 +1309,12 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 			return nil, err
 		}
 		if rw.dst.Is4() {
-			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 0}
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
 			if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
 				return nil, err
 			}
 		} else if rw.dst.Is6() {
-			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: 0}
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
 			if err := b.AAAAResource(rhdr, dnsmessage.AAAAResource{AAAA: as.magic.As16()}); err != nil {
 				return nil, err
 			}

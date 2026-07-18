@@ -8037,6 +8037,76 @@ func TestSrcCapPacketFilter(t *testing.T) {
 	}
 }
 
+func TestSrcCapPacketFilterUnsignedPeer(t *testing.T) {
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		return newClient(tb, opts)
+	})
+	if err := lb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("(*LocalBackend).Start(): %v", err)
+	}
+
+	var signedKey, unsignedKey key.NodePublic
+	must.Do(signedKey.UnmarshalText([]byte("nodekey:5c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf261")))
+	must.Do(unsignedKey.UnmarshalText([]byte("nodekey:6c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf262")))
+
+	controlClient := lb.cc.(*mockControl)
+	controlClient.send(sendOpt{nm: &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			// A normal (signed) peer holding cap-X: it should be accepted.
+			(&tailcfg.Node{
+				Addresses: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+				ID:        2,
+				Key:       signedKey,
+				CapMap:    tailcfg.NodeCapMap{"cap-X": nil},
+			}).View(),
+			// An unsigned peer that control has also granted cap-X: it must be
+			// dropped despite holding the capability, because tailnet lock does
+			// not trust it.
+			(&tailcfg.Node{
+				Addresses:           []netip.Prefix{netip.MustParsePrefix("3.3.3.3/32")},
+				ID:                  3,
+				Key:                 unsignedKey,
+				UnsignedPeerAPIOnly: true,
+				CapMap:              tailcfg.NodeCapMap{"cap-X": nil},
+			}).View(),
+		},
+		PacketFilter: []filtertype.Match{{
+			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
+			SrcCaps: []tailcfg.NodeCapability{"cap-X"},
+			Dsts: []filtertype.NetPortRange{{
+				Net: netip.MustParsePrefix("1.1.1.1/32"),
+				Ports: filtertype.PortRange{
+					First: 22,
+					Last:  22,
+				},
+			}},
+		}},
+	}})
+
+	f := lb.ForTest().GetFilter()
+
+	// The signed peer with the capability is accepted
+	if res := f.Check(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP); res != filter.Accept {
+		t.Errorf("Check(signed 2.2.2.2, ...) = %s, want %s", res, filter.Accept)
+	}
+
+	// The unsigned peer with the same capability is dropped
+	if res := f.Check(netip.MustParseAddr("3.3.3.3"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP); !res.IsDrop() {
+		t.Errorf("Check(unsigned 3.3.3.3, ...) = %s, want drop", res)
+	}
+
+	// Directly exercise the runtime capability test used by the filter
+	if lb.srcIPHasCapForFilter(netip.MustParseAddr("3.3.3.3"), "cap-X") {
+		t.Error("srcIPHasCapForFilter returned true for UnsignedPeerAPIOnly peer")
+	}
+	if !lb.srcIPHasCapForFilter(netip.MustParseAddr("2.2.2.2"), "cap-X") {
+		t.Error("srcIPHasCapForFilter returned false for signed peer with cap")
+	}
+}
+
 func TestDisplayMessages(t *testing.T) {
 	b := newTestLocalBackend(t)
 

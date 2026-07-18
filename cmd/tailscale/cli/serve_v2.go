@@ -702,19 +702,26 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				} else {
 					proto = conffile.ProtoTCP
 				}
-				destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
-				if err != nil {
-					return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
+				if strings.HasPrefix(config.TCPForward, "unix:") {
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:    proto,
+						Destination: config.TCPForward,
+					})
+				} else {
+					destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
+					if err != nil {
+						return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
+					}
+					destPort, err := strconv.ParseUint(destPortStr, 10, 16)
+					if err != nil {
+						return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
+					}
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:         proto,
+						Destination:      destHost,
+						DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
+					})
 				}
-				destPort, err := strconv.ParseUint(destPortStr, 10, 16)
-				if err != nil {
-					return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
-				}
-				mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-					Protocol:         proto,
-					Destination:      destHost,
-					DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
-				})
 			} else if config.HTTP || config.HTTPS {
 				webKey := ipn.HostPort(net.JoinHostPort(sniName, strconv.FormatUint(uint64(port), 10)))
 				handlers, ok := serviceConfig.Web[webKey]
@@ -732,25 +739,38 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 						DestinationPorts: tailcfg.PortRange{},
 					})
 				} else if defaultHandler.Proxy != "" {
-					proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
-					if !ok {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
-					}
-					host, portStr, err := net.SplitHostPort(rest)
-					if err != nil {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
-					}
+					if strings.HasPrefix(defaultHandler.Proxy, "unix:") {
+						// HTTP over unix socket: h.Proxy is "unix:/path" without "://".
+						// The inbound protocol is HTTP(S); infer from useTLS.
+						httpProto := conffile.ProtoHTTP
+						if config.HTTPS {
+							httpProto = conffile.ProtoHTTPS
+						}
+						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+							Protocol:    httpProto,
+							Destination: defaultHandler.Proxy,
+						})
+					} else {
+						proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
+						if !ok {
+							return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
+						}
+						host, portStr, err := net.SplitHostPort(rest)
+						if err != nil {
+							return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
+						}
 
-					port, err := strconv.ParseUint(portStr, 10, 16)
-					if err != nil {
-						return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
-					}
+						port, err := strconv.ParseUint(portStr, 10, 16)
+						if err != nil {
+							return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
+						}
 
-					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ServiceProtocol(proto),
-						Destination:      host,
-						DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
-					})
+						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+							Protocol:         conffile.ServiceProtocol(proto),
+							Destination:      host,
+							DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
+						})
+					}
 				}
 			}
 		}
@@ -916,6 +936,10 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
 				var target string
 				if ep.Protocol == conffile.ProtoFile {
+					target = ep.Destination
+				} else if strings.HasPrefix(ep.Destination, "unix:") {
+					// Unix socket target: pass "unix:/path" through to setServe.
+					// Supported for HTTP(S), TCP, and TLS-terminated-TCP inbound.
 					target = ep.Destination
 				} else {
 					// map source port range 1-1 to destination port range
@@ -1118,7 +1142,11 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
 		}
-		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
+		if strings.HasPrefix(tcpHandler.TCPForward, "unix:") {
+			output.WriteString(fmt.Sprintf("|--> %s\n\n", tcpHandler.TCPForward))
+		} else {
+			output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
+		}
 	}
 
 	if !forService && !e.bg.Value {
@@ -1181,8 +1209,8 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 		return nil
 	}
 
-	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") {
-		// local path or text target, nothing to check
+	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") || strings.HasPrefix(target, "unix:") {
+		// local path, text target, or unix socket, nothing to check
 		return nil
 	}
 
@@ -1275,14 +1303,28 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	svcName := tailcfg.AsServiceName(dnsName)
 
-	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
+	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp", "unix"}, "tcp")
 	if err != nil {
 		return fmt.Errorf("unable to expand target: %v", err)
 	}
 
-	dstURL, err := url.Parse(targetURL)
-	if err != nil {
-		return fmt.Errorf("invalid TCP target %q: %v", target, err)
+	// For unix: targets, store the full "unix:/path" string as the forward address.
+	// For tcp: targets, extract the host:port from the parsed URL.
+	var fwdAddr string
+	if strings.HasPrefix(targetURL, "unix:") {
+		if proxyProtocol != 0 {
+			return fmt.Errorf("PROXY protocol is not supported with unix socket targets")
+		}
+		fwdAddr = targetURL
+	} else {
+		dstURL, err := url.Parse(targetURL)
+		if err != nil {
+			return fmt.Errorf("invalid TCP target %q: %v", target, err)
+		}
+		if dstURL.Port() == "" {
+			return fmt.Errorf("TCP target %q must include a port", target)
+		}
+		fwdAddr = dstURL.Host
 	}
 
 	if sc.IsServingWeb(srcPort, svcName) {
@@ -1291,17 +1333,17 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
-		sc.SetTCPForwardingForService(srcPort, dstURL.Host, terminateTLS, svcName, proxyProtocol, mds)
+		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
 		return nil
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if svcName != "" {
-		sc.SetTCPForwardingForService(srcPort, dstURL.Host, terminateTLS, svcName, proxyProtocol, mds)
+		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
 		return nil
 	}
 
-	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, proxyProtocol, dnsName)
+	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, proxyProtocol, dnsName)
 	return nil
 }
 

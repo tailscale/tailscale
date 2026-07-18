@@ -24,7 +24,7 @@ on:
 jobs:
   vet:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Check out code

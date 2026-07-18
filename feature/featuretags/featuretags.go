@@ -267,6 +267,10 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "Synology",
 		Desc: "Synology NAS integration (applies to Linux builds only)",
 	},
+	"syslog": {
+		Sym:  "Syslog",
+		Desc: "tailscaled --syslog flag support to send logs to the system syslog daemon",
+	},
 	"syspolicy": {Sym: "SystemPolicy", Desc: "System policy configuration (MDM) support"},
 	"systray": {
 		Sym:  "SysTray",

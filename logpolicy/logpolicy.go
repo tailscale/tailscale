@@ -546,7 +546,18 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 		// anyway, no need to add one.
 		lflags = 0
 	}
-	console := log.New(stderrWriter{}, "", lflags)
+	var conWriter io.Writer = stderrWriter{}
+	if buildfeatures.HasSyslog {
+		if f, ok := feature.HookLogSink.GetOk(); ok {
+			if w := f(); w != nil {
+				// Logs are being redirected elsewhere (e.g. to syslog,
+				// which records its own timestamps).
+				conWriter = w
+				lflags = 0
+			}
+		}
+	}
+	console := log.New(conWriter, "", lflags)
 
 	var earlyErrBuf bytes.Buffer
 	earlyLogf := func(format string, a ...any) {
