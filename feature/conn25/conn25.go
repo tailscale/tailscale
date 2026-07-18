@@ -28,6 +28,7 @@ import (
 	"tailscale.com/appc"
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
+	"tailscale.com/feature/appconnectors/appchealth"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
@@ -122,6 +123,15 @@ type extension struct {
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
+
+	// The following are accessed only from the extension's hooks, which the
+	// host invokes synchronously (never concurrently), so they need no lock.
+
+	// acceptDNS is the last-seen accept-DNS pref, updated by profileStateChange.
+	acceptDNS bool
+	// dnsHealth is the edge-trigger state for the app connector DNS health
+	// warning (see conn25_health.go).
+	dnsHealth appchealth.State
 }
 
 // Name implements [ipnext.Extension].
@@ -233,6 +243,9 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	// Manage how we react profile state changes, which include
 	// prefs changes.
 	e.host.Hooks().ProfileStateChange.Add(e.profileStateChange)
+
+	// Clear the app connector DNS health warning when the node goes down.
+	e.host.Hooks().BackendStateChange.Add(e.onBackendStateChange)
 
 	// Allow the client to send packets with Transit IP destinations
 	// in the link-local space.
@@ -387,6 +400,7 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 		return
 	}
 	e.conn25.reconfig(cfg)
+	e.updateDNSHealth()
 }
 
 // profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
@@ -394,6 +408,8 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 	// TODO(mzb): Handle node changes. Wipe out all config?
 	// We'll need to look at the ordering of this hook and onSelfChange.
 	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
+	e.acceptDNS = prefs.Valid() && prefs.CorpDNS()
+	e.updateDNSHealth()
 }
 
 func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {

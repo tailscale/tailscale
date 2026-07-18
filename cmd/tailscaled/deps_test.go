@@ -92,6 +92,22 @@ func TestOmitReflectThings(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitAppConnectors(t *testing.T) {
+	// The shared appchealth package (with the app connector DNS health
+	// warnable) is imported by both app connector features, so it drops out
+	// only when both are omitted.
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_appconnectors,ts_omit_conn25,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/appconnectors":            "unexpected appconnectors dep with ts_omit_appconnectors",
+			"tailscale.com/feature/conn25":                   "unexpected conn25 dep with ts_omit_conn25",
+			"tailscale.com/feature/appconnectors/appchealth": "unexpected appchealth dep with app connectors omitted",
+		},
+	}.Check(t)
+}
+
 func TestOmitDrive(t *testing.T) {
 	deptest.DepChecker{
 		GOOS:   "linux",
