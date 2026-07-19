@@ -130,26 +130,38 @@ func readFileTrimmed(name string) string {
 	return strings.TrimSpace(string(v))
 }
 
-// cloudFromSMBIOS reports which cloud we're running in based on the given
-// SMBIOS/DMI identifiers (as exposed by the hardware to the OS), along with
-// whether the caller should probe the metadata server to disambiguate.
+// cloudFromSMBIOS reports which cloud we're running in, based on the
+// SMBIOS/DMI identifiers exposed by the hardware to the OS. It fetches each
+// identifier by calling read with its DMI name ("bios_vendor", "sys_vendor",
+// or "product_name"), reading only as many as needed to decide; read should
+// return the empty string for identifiers that are unavailable.
 //
-// Any identifier that's unavailable should be passed as the empty string.
-func cloudFromSMBIOS(biosVendor, sysVendor, productName string) (c Cloud, hitMetadata bool) {
-	switch {
-	case biosVendor == "Amazon EC2" || strings.HasSuffix(biosVendor, ".amazon"):
+// If c is empty and probeMetadata is true, the identifiers alone were
+// inconclusive and the caller should probe the well-known metadata server to
+// determine the cloud.
+func cloudFromSMBIOS(read func(dmiName string) string) (c Cloud, probeMetadata bool) {
+	biosVendor := read("bios_vendor")
+	if biosVendor == "Amazon EC2" || strings.HasSuffix(biosVendor, ".amazon") {
 		return AWS, false
-	case sysVendor == "DigitalOcean":
+	}
+	switch read("sys_vendor") {
+	case "DigitalOcean":
 		return DigitalOcean, false
-	case sysVendor == "Hetzner":
+	case "Hetzner":
 		return Hetzner, false
+	}
 	// TODO(andrew): "Vultr" is also valid if we need it
-	case productName == "Google Compute Engine":
+	switch read("product_name") {
+	case "Google Compute Engine":
 		return GCP, false
-	case productName == "Google":
+	case "Google":
 		// Old GCP VMs, it seems.
 		return "", true
-	case productName == "Virtual Machine", biosVendor == "Microsoft Corporation":
+	case "Virtual Machine":
+		// Azure, or maybe all Hyper-V?
+		return "", true
+	}
+	if biosVendor == "Microsoft Corporation" {
 		// Azure, or maybe all Hyper-V?
 		return "", true
 	}
@@ -157,18 +169,16 @@ func cloudFromSMBIOS(biosVendor, sysVendor, productName string) (c Cloud, hitMet
 }
 
 func getCloud() Cloud {
-	var hitMetadata bool
+	var probeMetadata bool
 	switch runtime.GOOS {
 	case "android", "ios", "darwin":
 		// Assume these aren't running on a cloud.
 		return ""
 	case "linux":
 		var c Cloud
-		c, hitMetadata = cloudFromSMBIOS(
-			readFileTrimmed("/sys/class/dmi/id/bios_vendor"),
-			readFileTrimmed("/sys/class/dmi/id/sys_vendor"),
-			readFileTrimmed("/sys/class/dmi/id/product_name"),
-		)
+		c, probeMetadata = cloudFromSMBIOS(func(dmiName string) string {
+			return readFileTrimmed("/sys/class/dmi/id/" + dmiName)
+		})
 		if c != "" {
 			return c
 		}
@@ -185,9 +195,9 @@ func getCloud() Cloud {
 		// from WMI on Windows, kenv/sysctl on the BSDs) and feed them to
 		// cloudFromSMBIOS, so we can skip this probe on machines that clearly
 		// aren't on a cloud.
-		hitMetadata = true
+		probeMetadata = true
 	}
-	if !hitMetadata {
+	if !probeMetadata {
 		return ""
 	}
 

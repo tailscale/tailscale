@@ -6,6 +6,7 @@ package cloudenv
 import (
 	"flag"
 	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -30,31 +31,57 @@ func TestGetDigitalOceanResolver(t *testing.T) {
 
 func TestCloudFromSMBIOS(t *testing.T) {
 	tests := []struct {
-		name         string
-		biosVendor   string
-		sysVendor    string
-		productName  string
-		wantCloud    Cloud
-		wantMetadata bool
+		name        string
+		biosVendor  string
+		sysVendor   string
+		productName string
+		wantCloud   Cloud
+		wantProbe   bool
+		wantReads   []string // identifiers read, in order
 	}{
-		{name: "empty"},
-		{name: "aws", biosVendor: "Amazon EC2", wantCloud: AWS},
-		{name: "aws-suffix", biosVendor: "1.0-1.amazon", wantCloud: AWS},
-		{name: "digitalocean", sysVendor: "DigitalOcean", wantCloud: DigitalOcean},
-		{name: "hetzner", sysVendor: "Hetzner", wantCloud: Hetzner},
-		{name: "gcp", productName: "Google Compute Engine", wantCloud: GCP},
-		{name: "gcp-old", productName: "Google", wantMetadata: true},
-		{name: "azure-product", productName: "Virtual Machine", wantMetadata: true},
-		{name: "azure-bios", biosVendor: "Microsoft Corporation", wantMetadata: true},
-		{name: "unknown", biosVendor: "SeaBIOS", sysVendor: "QEMU", productName: "Standard PC"},
+		{name: "empty", wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
+		{name: "aws", biosVendor: "Amazon EC2", wantCloud: AWS,
+			wantReads: []string{"bios_vendor"}},
+		{name: "aws-suffix", biosVendor: "1.0-1.amazon", wantCloud: AWS,
+			wantReads: []string{"bios_vendor"}},
+		{name: "digitalocean", sysVendor: "DigitalOcean", wantCloud: DigitalOcean,
+			wantReads: []string{"bios_vendor", "sys_vendor"}},
+		{name: "hetzner", sysVendor: "Hetzner", wantCloud: Hetzner,
+			wantReads: []string{"bios_vendor", "sys_vendor"}},
+		{name: "gcp", productName: "Google Compute Engine", wantCloud: GCP,
+			wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
+		{name: "gcp-old", productName: "Google", wantProbe: true,
+			wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
+		{name: "azure-product", productName: "Virtual Machine", wantProbe: true,
+			wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
+		{name: "azure-bios", biosVendor: "Microsoft Corporation", wantProbe: true,
+			wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
+		{name: "unknown", biosVendor: "SeaBIOS", sysVendor: "QEMU", productName: "Standard PC",
+			wantReads: []string{"bios_vendor", "sys_vendor", "product_name"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCloud, gotMetadata := cloudFromSMBIOS(tt.biosVendor, tt.sysVendor, tt.productName)
-			if gotCloud != tt.wantCloud || gotMetadata != tt.wantMetadata {
+			var reads []string
+			gotCloud, gotProbe := cloudFromSMBIOS(func(dmiName string) string {
+				reads = append(reads, dmiName)
+				switch dmiName {
+				case "bios_vendor":
+					return tt.biosVendor
+				case "sys_vendor":
+					return tt.sysVendor
+				case "product_name":
+					return tt.productName
+				}
+				t.Errorf("read of unknown DMI identifier %q", dmiName)
+				return ""
+			})
+			if gotCloud != tt.wantCloud || gotProbe != tt.wantProbe {
 				t.Errorf("cloudFromSMBIOS(%q, %q, %q) = (%q, %v); want (%q, %v)",
 					tt.biosVendor, tt.sysVendor, tt.productName,
-					gotCloud, gotMetadata, tt.wantCloud, tt.wantMetadata)
+					gotCloud, gotProbe, tt.wantCloud, tt.wantProbe)
+			}
+			if !slices.Equal(reads, tt.wantReads) {
+				t.Errorf("read %q; want %q", reads, tt.wantReads)
 			}
 		})
 	}
