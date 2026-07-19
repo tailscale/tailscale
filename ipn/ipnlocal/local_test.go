@@ -42,6 +42,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnauth"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal/netmapcache"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netcheck"
@@ -2483,6 +2484,77 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 	}
 	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
 	nw.check()
+}
+
+// TestReconfiguredHook verifies that the [ipnext.Hooks.Reconfigured] hook fires
+// with a valid snapshot when a reconfig is applied, and does not fire when
+// authReconfigLocked returns early before reaching the engine (e.g. !WantRunning).
+func TestReconfiguredHook(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	var got []ipnext.ReconfigView
+	b.extHost.Hooks().Reconfigured.Add(func(rv ipnext.ReconfigView) {
+		got = append(got, rv)
+	})
+
+	// A self node and WantRunning prefs with a valid Persist are the minimum
+	// needed for authReconfigLocked to compute a config and call Reconfig.
+	nodeKey := key.NewNode()
+	if err := b.pm.SetPrefs((&ipn.Prefs{
+		WantRunning: true,
+		CorpDNS:     true,
+		Persist: &persist.Persist{
+			PrivateNodeKey: nodeKey,
+			NodeID:         "n1",
+			UserProfile:    tailcfg.UserProfile{ID: 10, LoginName: "self@example.com"},
+		},
+	}).View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatalf("SetPrefs: %v", err)
+	}
+	nm := &netmap.NetworkMap{
+		NodeKey: nodeKey.Public(),
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Key:       nodeKey.Public(),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+	}
+	b.mu.Lock()
+	b.setNetMapLocked(nm)
+	b.mu.Unlock()
+
+	// First reconfig applies a change, so the hook fires exactly once.
+	b.authReconfig()
+	if len(got) != 1 {
+		t.Fatalf("after first reconfig: hook fired %d times; want 1", len(got))
+	}
+	rv := got[0]
+	if !rv.Self.Valid() || rv.Self.StableID() != nm.SelfNode.StableID() {
+		t.Errorf("ReconfigView.Self = %v; want self node %v", rv.Self, nm.SelfNode)
+	}
+	if !rv.Prefs.Valid() || !rv.Prefs.WantRunning() {
+		t.Errorf("ReconfigView.Prefs = %v; want valid prefs with WantRunning", rv.Prefs)
+	}
+	if !rv.DNS.Valid() {
+		t.Errorf("ReconfigView.DNS is not valid; want the applied dns.Config")
+	}
+
+	// When WantRunning is false, authReconfigLocked returns early before
+	// touching the engine, so the hook must not fire.
+	got = nil
+	b.mu.Lock()
+	stopped := b.pm.CurrentPrefs().AsStruct()
+	stopped.WantRunning = false
+	if err := b.pm.setPrefsNoPermCheck(stopped.View()); err != nil {
+		b.mu.Unlock()
+		t.Fatalf("setPrefsNoPermCheck: %v", err)
+	}
+	b.authReconfigLocked()
+	b.mu.Unlock()
+	if len(got) != 0 {
+		t.Fatalf("after !WantRunning reconfig: hook fired %d times; want 0", len(got))
+	}
 }
 
 // TestNotifyForSessionUserProfilesGating verifies that

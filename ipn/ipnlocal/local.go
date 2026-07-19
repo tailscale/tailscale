@@ -6155,6 +6155,20 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
+	// Notify extensions of the config that was just applied. This fires only
+	// when the engine accepted a change (not on ErrNoChanges), with b.mu held.
+	// See [ipnext.Hooks.Reconfigured].
+	if hooks := b.extHost.Hooks().Reconfigured; len(hooks) > 0 {
+		rv := ipnext.ReconfigView{
+			Self:  nm.SelfNode,
+			Prefs: prefs,
+			DNS:   dcfg.View(),
+		}
+		for _, f := range hooks {
+			f(rv)
+		}
+	}
+
 	b.initPeerAPIListenerLocked()
 	if buildfeatures.HasAppConnectors {
 		go b.goTracker.Go(b.readvertiseAppConnectorRoutes)

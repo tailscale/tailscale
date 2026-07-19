@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
@@ -356,6 +357,28 @@ type ProfileResolver func(ProfileStore) ipn.LoginProfileView
 // returns "" if the profile is new and has not been persisted yet.
 type ProfileStateChangeCallback func(_ ipn.LoginProfileView, _ ipn.PrefsView, sameNode bool)
 
+// ReconfigView is a read-only snapshot of the state applied by a single
+// LocalBackend reconfiguration, passed to [Hooks.Reconfigured] callbacks.
+//
+// It is only valid for the duration of the callback and must not be retained.
+// All fields are read-only; do not mutate anything reachable through them.
+//
+// Kept intentionally minimal; add fields only as consumers need them.
+type ReconfigView struct {
+	// Self is the self node as of this reconfig. It may be invalid.
+	Self tailcfg.NodeView
+
+	// Prefs are the current profile's prefs as of this reconfig.
+	//
+	// Unlike the prefs passed to [ProfileStateChangeCallback], these are not
+	// stripped of private keys, so callbacks must not log or persist them.
+	Prefs ipn.PrefsView
+
+	// DNS is the [dns.Config] that was just applied to the engine. It aliases
+	// the engine's live config, so it must be treated as strictly read-only.
+	DNS dns.ConfigView
+}
+
 // NewControlClientCallback is a function to be called when a new [controlclient.Client]
 // is created and before it is first used. The specified profile represents the node
 // for which the cc is created and is always valid. Its [ipn.LoginProfileView.ID]
@@ -413,6 +436,18 @@ type Hooks struct {
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]
+
+	// Reconfigured is called (with LocalBackend.mu held) once per applied
+	// reconfig — after the engine accepts a changed configuration — with a
+	// read-only [ReconfigView] snapshot of the self node, prefs, and applied
+	// dns.Config.
+	//
+	// It fires only when the reconfig actually changed engine state, not on a
+	// no-op reconfig. Callbacks run under LocalBackend.mu and must be cheap and
+	// non-blocking, the same contract as the other b.mu-held hooks in this
+	// struct. The [ReconfigView] and everything reachable through it are
+	// read-only and valid only for the duration of the call.
+	Reconfigured feature.Hooks[func(ReconfigView)]
 
 	// MutateNotifyLocked is called to optionally mutate the provided Notify
 	// before sending it to the IPN bus. It is called with LocalBackend.mu held.
