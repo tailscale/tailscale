@@ -28,7 +28,7 @@ type Logtail struct {
 
 type LogEntry[T any] struct {
 	Logtail Logtail `json:"logtail,omitzero"`
-	Value   T       `json:",inline"`
+	Value   T       `json:",inline,embed"` // both options; see the non-omit variant in logtail.go
 }
 
 func UploadLogs[T any](ctx context.Context, conf Config, entries iter.Seq[LogEntry[T]]) error {

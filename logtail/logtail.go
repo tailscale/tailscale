@@ -186,7 +186,14 @@ type Logtail struct {
 // differently-shaped payloads in a single upload.
 type LogEntry[T any] struct {
 	Logtail Logtail `json:"logtail,omitzero"`
-	Value   T       `json:",inline"`
+	// The `inline` tag option was renamed to `embed` in Go 1.27's
+	// encoding/json/v2, but the pinned go-json-experiment module
+	// (used on older Go versions) only knows `inline`. Each
+	// implementation ignores the option it doesn't know, so specify
+	// both until we require Go 1.27 and drop `inline`.
+	//
+	//lint:ignore SA5008 staticcheck doesn't know Go 1.27's `embed` option yet
+	Value T `json:",inline,embed"`
 }
 
 // UploadLogs uploads entries to the log server described by conf and returns
