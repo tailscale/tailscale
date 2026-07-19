@@ -131,10 +131,24 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return true
 	}
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		return ns.DialContextTCP(ctx, dst)
+		// Note: don't just return ns.DialContextTCP or we'll return
+		// *gonet.TCPConn(nil) instead of a nil interface which trips up
+		// callers.
+		tcpConn, err := ns.DialContextTCP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return tcpConn, nil
 	}
 	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		return ns.DialContextUDP(ctx, dst)
+		// Note: don't just return ns.DialContextUDP or we'll return
+		// *gonet.UDPConn(nil) instead of a nil interface which trips up
+		// callers.
+		udpConn, err := ns.DialContextUDP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return udpConn, nil
 	}
 	sys.NetstackRouter.Set(true)
 	sys.Tun.Get().Start()
