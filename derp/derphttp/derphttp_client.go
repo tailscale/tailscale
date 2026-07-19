@@ -60,6 +60,7 @@ type Client struct {
 	DNSCache      *dnscache.Resolver // optional; nil means no caching
 	MeshKey       key.DERPMesh       // optional; for trusted clients
 	IsProber      bool               // optional; for probers to optional declare themselves as such
+	AppName       string             // optional; opaque app name to advertise to the server for stats
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
@@ -413,6 +414,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			derp.MeshKey(c.MeshKey),
 			derp.CanAckPings(c.canAckPings),
 			derp.IsProber(c.IsProber),
+			derp.AppName(c.AppName),
 		)
 		if err != nil {
 			return nil, 0, err
@@ -558,6 +560,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		derp.ServerPublicKey(serverPub),
 		derp.CanAckPings(c.canAckPings),
 		derp.IsProber(c.IsProber),
+		derp.AppName(c.AppName),
 	)
 	if err != nil {
 		return nil, 0, err

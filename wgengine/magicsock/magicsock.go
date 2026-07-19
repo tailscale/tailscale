@@ -170,6 +170,7 @@ type Conn struct {
 	health                 *health.Tracker                        // or nil
 	extraRootCAs           *x509.CertPool                         // additional trusted root CAs; or nil
 	controlKnobs           *controlknobs.Knobs                    // or nil
+	derpAppName            string                                 // or empty, see Options.DERPAppName
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -489,6 +490,10 @@ type Options struct {
 	// for TLS connections to DERP servers.
 	ExtraRootCAs *x509.CertPool
 
+	// DERPAppName, if non-empty, is an opaque app name string to
+	// advertise to DERP servers for stats purposes.
+	DERPAppName string
+
 	// Metrics specifies the metrics registry to record metrics to.
 	Metrics *usermetric.Registry
 
@@ -705,6 +710,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.netMon = opts.NetMon
 	c.health = opts.HealthTracker
 	c.extraRootCAs = opts.ExtraRootCAs
+	c.derpAppName = opts.DERPAppName
 	c.getPeerByKey = opts.PeerByKeyFunc
 
 	if err := c.rebind(keepCurrentPort); err != nil {

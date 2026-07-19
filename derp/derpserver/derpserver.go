@@ -141,6 +141,12 @@ type Server struct {
 	debug       bool
 	localClient local.Client
 
+	// onClientInfoForTest, if non-nil, is called with each connecting
+	// client's key and ClientInfo. It is set (before the server accepts
+	// any connections) via forTest.SetOnClientInfo and is nil outside
+	// of tests.
+	onClientInfoForTest func(key.NodePublic, derp.ClientInfo)
+
 	// Counters:
 	packetsSent, bytesSent     expvar.Int
 	packetsRecv, bytesRecv     expvar.Int
@@ -1060,6 +1066,9 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 	}
 	if s.debug {
 		c.debug = true
+	}
+	if f := s.onClientInfoForTest; f != nil {
+		f(clientKey, c.info)
 	}
 
 	s.registerClient(c)
