@@ -1268,6 +1268,9 @@ func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion
 }
 
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
+	c.mu.Lock()
+	forcePreferredDERP := c.ForcePreferredDERP
+	c.mu.Unlock()
 	c.logf("[v1] report: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		fmt.Fprintf(w, "udp=%v", r.UDP)
 		if !r.IPv4 {
@@ -1296,8 +1299,8 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		if r.CaptivePortal != "" {
 			fmt.Fprintf(w, " captiveportal=%v", r.CaptivePortal)
 		}
-		if c.ForcePreferredDERP != 0 {
-			fmt.Fprintf(w, " force=%v", c.ForcePreferredDERP)
+		if forcePreferredDERP != 0 {
+			fmt.Fprintf(w, " force=%v", forcePreferredDERP)
 		}
 		fmt.Fprintf(w, " derp=%v", r.PreferredDERP)
 		if r.PreferredDERP != 0 {
