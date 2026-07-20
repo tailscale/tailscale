@@ -62,10 +62,11 @@ var (
 	configPath  = flag.String("c", "", "config file path")
 	certMode    = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt, gcp")
 	certDir     = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store ACME (e.g. LetsEncrypt) certs, if addr's port is :443")
-	hostname    = flag.String("hostname", "derp.tailscale.com", "TLS host name for certs, if addr's port is :443. When --certmode=manual, this can be an IP address to avoid SNI checks")
+	hostname    = flag.String("hostname", "derp.tailscale.com", "TLS host name for certs, if addr's port is :443. It can be an IP address when --certmode=manual (to avoid SNI checks) or when --acme-ip-certs is set (to run an IP-only server with no hostname cert)")
 	acmeEABKid  = flag.String("acme-eab-kid", "", "ACME External Account Binding (EAB) Key ID (required for --certmode=gcp)")
 	acmeEABKey  = flag.String("acme-eab-key", "", "ACME External Account Binding (EAB) HMAC key, base64-encoded (required for --certmode=gcp)")
 	acmeEmail   = flag.String("acme-email", "", "ACME account contact email address (required for --certmode=gcp, optional for letsencrypt)")
+	acmeIPCerts = flag.Bool("acme-ip-certs", false, "whether to serve LetsEncrypt certs for the server's IP addresses: when a client connects by IP address (sending no TLS SNI, or an IP address SNI matching the connection's destination IP), get and serve a LetsEncrypt cert for that IP, using the short-lived (~6 day) ACME certificate profile. This works for both IPv4 and IPv6 with no per-address configuration. It requires --certmode=letsencrypt and the ACME server must be able to reach port 80 at each such IP for the HTTP-01 challenge.")
 	runSTUN     = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 	flagHome    = flag.String("home", "", "what to serve at the root path. It may be left empty (the default, for a default homepage), \"blank\" for a blank page, or a URL to redirect to")
@@ -349,7 +350,7 @@ func main() {
 	if serveTLS {
 		log.Printf("derper: serving on %s with TLS", *addr)
 		var certManager certProvider
-		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname, *acmeEABKid, *acmeEABKey, *acmeEmail)
+		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname, *acmeIPCerts, *acmeEABKid, *acmeEABKey, *acmeEmail)
 		if err != nil {
 			log.Fatalf("derper: can not start cert provider: %v", err)
 		}

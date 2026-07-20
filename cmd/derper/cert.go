@@ -44,12 +44,26 @@ type certProvider interface {
 	HTTPHandler(fallback http.Handler) http.Handler
 }
 
-func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (certProvider, error) {
+func certProviderByCertMode(mode, dir, hostname string, ipCerts bool, eabKID, eabKey, email string) (certProvider, error) {
 	if dir == "" {
 		return nil, errors.New("missing required --certdir flag")
 	}
+	if ipCerts && mode != "letsencrypt" {
+		return nil, errors.New("--acme-ip-certs requires --certmode=letsencrypt")
+	}
 	switch mode {
 	case "letsencrypt", "gcp":
+		if net.ParseIP(hostname) != nil {
+			if mode == "gcp" {
+				return nil, errors.New("--certmode=gcp requires --hostname to be a DNS name, not an IP address")
+			}
+			if !ipCerts {
+				return nil, errors.New("--hostname is an IP address; use --certmode=manual for a self-signed cert, or set --acme-ip-certs to get LetsEncrypt IP address certs")
+			}
+			// IP-only server: certs are issued on demand per
+			// connection, so there is no hostname cert provider.
+			return newIPCertManager(dir, email, "", nil)
+		}
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(hostname),
@@ -81,6 +95,9 @@ func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (
 			certManager.Email = email
 		} else if hostname == "derp.tailscale.com" {
 			certManager.Email = "security@tailscale.com"
+		}
+		if ipCerts {
+			return newIPCertManager(dir, email, "", certManager)
 		}
 		return certManager, nil
 	case "manual":
