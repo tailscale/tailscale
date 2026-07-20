@@ -11,6 +11,7 @@ package peerrelay
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -93,10 +94,11 @@ const (
 
 // Constants for condition reasons.
 const (
-	ReasonEndpointsPending = "EndpointsPending"
-	ReasonPodsPending      = "PodsPending"
-	ReasonAWSConfigInvalid = "AWSConfigInvalid"
-	ReasonReady            = "PeerRelayReady"
+	ReasonEndpointsPending   = "EndpointsPending"
+	ReasonPodsPending        = "PodsPending"
+	ReasonAWSConfigInvalid   = "AWSConfigInvalid"
+	ReasonTailnetUnavailable = "TailnetUnavailable"
+	ReasonReady              = "PeerRelayReady"
 )
 
 var (
@@ -186,11 +188,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("failed to get PeerRelay %q: %w", req.NamespacedName, err)
 	}
 
+	if r.tsClients != nil {
+		if _, err = r.tsClients.For(pr.Spec.Tailnet); err != nil {
+			return r.reportTailnetUnavailable(ctx, logger, &pr, err)
+		}
+	}
+
 	if !pr.DeletionTimestamp.IsZero() {
 		return r.delete(ctx, logger, &pr)
 	}
 
 	return r.createOrUpdate(ctx, logger, &pr)
+}
+
+func (r *Reconciler) reportTailnetUnavailable(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, tsErr error) (reconcile.Result, error) {
+	operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonTailnetUnavailable, tsErr.Error(), r.clock, logger)
+	if err := r.Status().Update(ctx, pr); err != nil {
+		return reconcile.Result{}, errors.Join(tsErr, fmt.Errorf("failed to update PeerRelay status: %w", err))
+	}
+
+	return reconcile.Result{}, tsErr
 }
 
 func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {

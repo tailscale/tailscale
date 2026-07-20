@@ -8,6 +8,7 @@ package peerrelay_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -1345,6 +1346,64 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReconciler_TailnetUnavailable(t *testing.T) {
+	t.Parallel()
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pr := &tsapi.PeerRelay{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec:       tsapi.PeerRelaySpec{Tailnet: "missing"},
+	}
+
+	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(&tsapi.PeerRelay{}).
+		WithObjects(pr).
+		Build()
+
+	r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
+		Client:             fc,
+		TailscaleNamespace: tailscaleNamespace,
+		ProxyImage:         testProxyImage,
+		DefaultTags:        []string{"tag:test-peer-relay"},
+		Clients:            &fakeClientProvider{err: errors.New("tailnet missing: not ready")},
+		Resolver:           testResolver,
+		Logger:             logger.Sugar(),
+	})
+
+	if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err == nil {
+		t.Fatal("expected reconcile to return the tailnet resolver error, got nil")
+	}
+
+	var got tsapi.PeerRelay
+	if err = fc.Get(t.Context(), types.NamespacedName{Name: "test"}, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	cond := readyCondition(&got)
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected PeerRelayReady=False, got %q", cond.Status)
+	}
+	if cond.Reason != peerrelay.ReasonTailnetUnavailable {
+		t.Errorf("expected reason=%s, got %q", peerrelay.ReasonTailnetUnavailable, cond.Reason)
+	}
+	if !strings.Contains(cond.Message, "not ready") {
+		t.Errorf("expected condition message to include resolver error, got %q", cond.Message)
+	}
+
+	var svcs corev1.ServiceList
+	if err = fc.List(t.Context(), &svcs, client.InNamespace(tailscaleNamespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs.Items) != 0 {
+		t.Errorf("expected no Services created while tailnet is unavailable, got %d", len(svcs.Items))
+	}
 }
 
 func TestReconciler_AppliesProxyClass(t *testing.T) {
