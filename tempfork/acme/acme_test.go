@@ -9,13 +9,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -23,7 +23,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +263,57 @@ func TestAuthorizeValid(t *testing.T) {
 	_, err := client.Authorize(context.Background(), "example.com")
 	if err != nil {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAuthorizeUnsupported(t *testing.T) {
+	const (
+		nonce       = "https://example.com/acme/new-nonce"
+		reg         = "https://example.com/acme/new-acct"
+		order       = "https://example.com/acme/new-order"
+		revoke      = "https://example.com/acme/revoke-cert"
+		keychange   = "https://example.com/acme/key-change"
+		metaTerms   = "https://example.com/acme/terms/2017-5-30"
+		metaWebsite = "https://www.example.com/"
+		metaCAA     = "example.com"
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Replay-Nonce", "nonce")
+		if r.Method == http.MethodHead {
+			return
+		}
+		switch r.URL.Path {
+		case "/": // Directory
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+                "newNonce": %q,
+                "newAccount": %q,
+                "newOrder": %q,
+                "revokeCert": %q,
+                "keyChange": %q,
+                "meta": {
+                    "termsOfService": %q,
+                    "website": %q,
+                    "caaIdentities": [%q],
+                    "externalAccountRequired": true
+                }
+            }`, nonce, reg, order, revoke, keychange, metaTerms, metaWebsite, metaCAA)
+			w.WriteHeader(http.StatusOK)
+		case "/acme/new-authz":
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer ts.Close()
+	client := &Client{Key: testKey, DirectoryURL: ts.URL}
+	dir, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir.AuthzURL != "" {
+		t.Fatalf("expected AuthzURL to be empty, got %q", dir.AuthzURL)
+	}
+	if _, err := client.Authorize(context.Background(), "example.com"); !errors.Is(err, errPreAuthorizationNotSupported) {
+		t.Errorf("expected err to indicate pre-authorization is unsupported, got %+v", err)
 	}
 }
 
@@ -755,71 +805,6 @@ func TestLinkHeader(t *testing.T) {
 	}
 }
 
-func TestTLSSNI01ChallengeCert(t *testing.T) {
-	const (
-		token = "evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA"
-		// echo -n <token.testKeyECThumbprint> | shasum -a 256
-		san = "dbbd5eefe7b4d06eb9d1d9f5acb4c7cd.a27d320e4b30332f0b6cb441734ad7b0.acme.invalid"
-	)
-
-	tlscert, name, err := newTestClient().TLSSNI01ChallengeCert(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if n := len(tlscert.Certificate); n != 1 {
-		t.Fatalf("len(tlscert.Certificate) = %d; want 1", n)
-	}
-	cert, err := x509.ParseCertificate(tlscert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != san {
-		t.Fatalf("cert.DNSNames = %v; want %q", cert.DNSNames, san)
-	}
-	if cert.DNSNames[0] != name {
-		t.Errorf("cert.DNSNames[0] != name: %q vs %q", cert.DNSNames[0], name)
-	}
-	if cn := cert.Subject.CommonName; cn != san {
-		t.Errorf("cert.Subject.CommonName = %q; want %q", cn, san)
-	}
-}
-
-func TestTLSSNI02ChallengeCert(t *testing.T) {
-	const (
-		token = "evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA"
-		// echo -n evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA | shasum -a 256
-		sanA = "7ea0aaa69214e71e02cebb18bb867736.09b730209baabf60e43d4999979ff139.token.acme.invalid"
-		// echo -n <token.testKeyECThumbprint> | shasum -a 256
-		sanB = "dbbd5eefe7b4d06eb9d1d9f5acb4c7cd.a27d320e4b30332f0b6cb441734ad7b0.ka.acme.invalid"
-	)
-
-	tlscert, name, err := newTestClient().TLSSNI02ChallengeCert(token)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if n := len(tlscert.Certificate); n != 1 {
-		t.Fatalf("len(tlscert.Certificate) = %d; want 1", n)
-	}
-	cert, err := x509.ParseCertificate(tlscert.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{sanA, sanB}
-	if !reflect.DeepEqual(cert.DNSNames, names) {
-		t.Fatalf("cert.DNSNames = %v;\nwant %v", cert.DNSNames, names)
-	}
-	sort.Strings(cert.DNSNames)
-	i := sort.SearchStrings(cert.DNSNames, name)
-	if i >= len(cert.DNSNames) || cert.DNSNames[i] != name {
-		t.Errorf("%v doesn't have %q", cert.DNSNames, name)
-	}
-	if cn := cert.Subject.CommonName; cn != sanA {
-		t.Errorf("CommonName = %q; want %q", cn, sanA)
-	}
-}
-
 func TestTLSALPN01ChallengeCert(t *testing.T) {
 	const (
 		token   = "evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA"
@@ -876,6 +861,7 @@ func TestTLSChallengeCertOpt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	domain := "example.com"
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{Organization: []string{"Test"}},
@@ -884,52 +870,43 @@ func TestTLSChallengeCertOpt(t *testing.T) {
 	opts := []CertOption{WithKey(key), WithTemplate(tmpl)}
 
 	client := newTestClient()
-	cert1, _, err := client.TLSSNI01ChallengeCert("token", opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert2, _, err := client.TLSSNI02ChallengeCert("token", opts...)
+	cert, err := client.TLSALPN01ChallengeCert("token", domain, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for i, tlscert := range []tls.Certificate{cert1, cert2} {
-		// verify generated cert private key
-		tlskey, ok := tlscert.PrivateKey.(*rsa.PrivateKey)
-		if !ok {
-			t.Errorf("%d: tlscert.PrivateKey is %T; want *rsa.PrivateKey", i, tlscert.PrivateKey)
-			continue
-		}
-		if tlskey.D.Cmp(key.D) != 0 {
-			t.Errorf("%d: tlskey.D = %v; want %v", i, tlskey.D, key.D)
-		}
-		// verify generated cert public key
-		x509Cert, err := x509.ParseCertificate(tlscert.Certificate[0])
-		if err != nil {
-			t.Errorf("%d: %v", i, err)
-			continue
-		}
-		tlspub, ok := x509Cert.PublicKey.(*rsa.PublicKey)
-		if !ok {
-			t.Errorf("%d: x509Cert.PublicKey is %T; want *rsa.PublicKey", i, x509Cert.PublicKey)
-			continue
-		}
-		if tlspub.N.Cmp(key.N) != 0 {
-			t.Errorf("%d: tlspub.N = %v; want %v", i, tlspub.N, key.N)
-		}
-		// verify template option
-		sn := big.NewInt(2)
-		if x509Cert.SerialNumber.Cmp(sn) != 0 {
-			t.Errorf("%d: SerialNumber = %v; want %v", i, x509Cert.SerialNumber, sn)
-		}
-		org := []string{"Test"}
-		if !reflect.DeepEqual(x509Cert.Subject.Organization, org) {
-			t.Errorf("%d: Subject.Organization = %+v; want %+v", i, x509Cert.Subject.Organization, org)
-		}
-		for _, v := range x509Cert.DNSNames {
-			if !strings.HasSuffix(v, ".acme.invalid") {
-				t.Errorf("%d: invalid DNSNames element: %q", i, v)
-			}
+	// verify generated cert private key
+	tlskey, ok := cert.PrivateKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("tlscert.PrivateKey is %T; want *rsa.PrivateKey", cert.PrivateKey)
+	}
+	if tlskey.D.Cmp(key.D) != 0 {
+		t.Errorf("tlskey.D = %v; want %v", tlskey.D, key.D)
+	}
+	// verify generated cert public key
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlspub, ok := x509Cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("x509Cert.PublicKey is %T; want *rsa.PublicKey", x509Cert.PublicKey)
+	}
+	if tlspub.N.Cmp(key.N) != 0 {
+		t.Errorf("tlspub.N = %v; want %v", tlspub.N, key.N)
+	}
+	// verify template option
+	sn := big.NewInt(2)
+	if x509Cert.SerialNumber.Cmp(sn) != 0 {
+		t.Errorf("SerialNumber = %v; want %v", x509Cert.SerialNumber, sn)
+	}
+	org := []string{"Test"}
+	if !reflect.DeepEqual(x509Cert.Subject.Organization, org) {
+		t.Errorf("Subject.Organization = %+v; want %+v", x509Cert.Subject.Organization, org)
+	}
+	for _, v := range x509Cert.DNSNames {
+		if v != domain {
+			t.Errorf("invalid DNSNames element: %q", v)
 		}
 	}
 }
