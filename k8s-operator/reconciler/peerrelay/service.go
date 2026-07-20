@@ -66,8 +66,12 @@ func peerRelayServiceLabels(prName string, idx int32) map[string]string {
 	return labels
 }
 
-func stateSecretName(prName string, idx int32) string {
-	return fmt.Sprintf("%s-%d", prName, idx)
+func resourceName(prName string) string {
+	return "peerrelay-" + prName
+}
+
+func replicaName(prName string, idx int32) string {
+	return fmt.Sprintf("%s-%d", resourceName(prName), idx)
 }
 
 func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]string {
@@ -91,7 +95,7 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]stri
 }
 
 func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Service {
-	name := fmt.Sprintf("%s-%d", pr.Name, idx)
+	name := replicaName(pr.Name, idx)
 
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{

@@ -107,11 +107,11 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name:     "test-0",
+					Name:     "peerrelay-test-0",
 					Type:     corev1.ServiceTypeLoadBalancer,
 					Port:     41641,
 					Protocol: corev1.ProtocolUDP,
-					Selector: map[string]string{"statefulset.kubernetes.io/pod-name": "test-0"},
+					Selector: map[string]string{"statefulset.kubernetes.io/pod-name": "peerrelay-test-0"},
 					Labels: map[string]string{
 						"tailscale.com/managed":              "true",
 						"tailscale.com/parent-resource-type": "peerrelay",
@@ -138,9 +138,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 			},
 			ExpectedServices: []expectedService{
-				{Name: "test-0", Labels: map[string]string{"tailscale.com/peer-relay-replica": "0"}},
-				{Name: "test-1", Labels: map[string]string{"tailscale.com/peer-relay-replica": "1"}},
-				{Name: "test-2", Labels: map[string]string{"tailscale.com/peer-relay-replica": "2"}},
+				{Name: "peerrelay-test-0", Labels: map[string]string{"tailscale.com/peer-relay-replica": "0"}},
+				{Name: "peerrelay-test-1", Labels: map[string]string{"tailscale.com/peer-relay-replica": "1"}},
+				{Name: "peerrelay-test-2", Labels: map[string]string{"tailscale.com/peer-relay-replica": "2"}},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 3, Image: testProxyImage},
 		},
@@ -167,8 +167,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedService("test", 3),
 			},
 			ExpectedServices: []expectedService{
-				{Name: "test-0"},
-				{Name: "test-1"},
+				{Name: "peerrelay-test-0"},
+				{Name: "peerrelay-test-1"},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 2, Image: testProxyImage},
 		},
@@ -183,9 +183,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedService("test", 0),
 			},
 			ExpectedServices: []expectedService{
-				{Name: "test-0"},
-				{Name: "test-1"},
-				{Name: "test-2"},
+				{Name: "peerrelay-test-0"},
+				{Name: "peerrelay-test-1"},
+				{Name: "peerrelay-test-2"},
 			},
 		},
 		{
@@ -200,8 +200,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedService("other", 5),
 			},
 			ExpectedServices: []expectedService{
-				{Name: "other-5"},
-				{Name: "test-0"},
+				{Name: "peerrelay-other-5"},
+				{Name: "peerrelay-test-0"},
 			},
 		},
 		{
@@ -215,7 +215,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name: "test-0",
+					Name: "peerrelay-test-0",
 					Annotations: map[string]string{
 						"example.com/custom": "value",
 						"service.beta.kubernetes.io/aws-load-balancer-type":       "external",
@@ -239,7 +239,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name: "test-0",
+					Name: "peerrelay-test-0",
 					Annotations: map[string]string{
 						"service.beta.kubernetes.io/aws-load-balancer-scheme":     "internet-facing",
 						"service.beta.kubernetes.io/azure-load-balancer-internal": "false",
@@ -261,7 +261,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExistingResources: []client.Object{
 				&corev1.Service{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-0",
+						Name:      "peerrelay-test-0",
 						Namespace: tailscaleNamespace,
 						Labels: map[string]string{
 							"tailscale.com/managed":              "true",
@@ -283,7 +283,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name:     "test-0",
+					Name:     "peerrelay-test-0",
 					Type:     corev1.ServiceTypeLoadBalancer,
 					Port:     41641,
 					Protocol: corev1.ProtocolUDP,
@@ -315,7 +315,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				// we'd land in PodsPending instead.
 				managedStatefulSet("test", 2, 2),
 			},
-			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 				{Replica: 1, Address: "5.6.7.8", Port: 41641},
@@ -336,7 +336,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 1, "5.6.7.8", ""),
 				managedStatefulSet("test", 2, 1), // only 1 of 2 pods Ready
 			},
-			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 				{Replica: 1, Address: "5.6.7.8", Port: 41641},
@@ -363,7 +363,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
 				managedStatefulSet("test", 1, 1),
 			},
-			ExpectedServices: []expectedService{{Name: "test-0"}},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "203.0.113.10", Port: 41641},
 			},
@@ -387,7 +387,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "unresolvable.example.invalid"),
 			},
-			ExpectedServices:    []expectedService{{Name: "test-0"}},
+			ExpectedServices:    []expectedService{{Name: "peerrelay-test-0"}},
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
@@ -404,7 +404,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
 			},
-			ExpectedServices:    []expectedService{{Name: "test-0"}},
+			ExpectedServices:    []expectedService{{Name: "peerrelay-test-0"}},
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
@@ -427,7 +427,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 1, "", "test-1.elb.amazonaws.com"),
 				managedStatefulSet("test", 2, 2),
 			},
-			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 				{Replica: 1, Address: "203.0.113.11", Port: 41641},
@@ -447,7 +447,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
 				managedService("test", 2),
 			},
-			ExpectedServices: []expectedService{{Name: "test-0"}, {Name: "test-1"}, {Name: "test-2"}},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}, {Name: "peerrelay-test-2"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "1.2.3.4", Port: 41641},
 			},
@@ -473,14 +473,14 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name: "test-0",
+					Name: "peerrelay-test-0",
 					Annotations: map[string]string{
 						eipAllocationsAnnotation: "eipalloc-aaaa",
 						subnetsAnnotation:        "subnet-aaaa",
 					},
 				},
 				{
-					Name: "test-1",
+					Name: "peerrelay-test-1",
 					Annotations: map[string]string{
 						eipAllocationsAnnotation: "eipalloc-bbbb",
 						subnetsAnnotation:        "subnet-bbbb",
@@ -512,7 +512,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name: "test-0",
+					Name: "peerrelay-test-0",
 					Annotations: map[string]string{
 						eipAllocationsAnnotation: "eipalloc-perreplica",
 						subnetsAnnotation:        "subnet-perreplica",
@@ -529,7 +529,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExistingResources: []client.Object{
 				&corev1.Service{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-0",
+						Name:      "peerrelay-test-0",
 						Namespace: tailscaleNamespace,
 						Labels: map[string]string{
 							"tailscale.com/managed":              "true",
@@ -549,7 +549,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedServices: []expectedService{
 				{
-					Name:              "test-0",
+					Name:              "peerrelay-test-0",
 					AbsentAnnotations: []string{eipAllocationsAnnotation, subnetsAnnotation},
 				},
 			},
@@ -598,7 +598,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			ExpectedServices:      []expectedService{{Name: "other-0"}},
+			ExpectedServices:      []expectedService{{Name: "peerrelay-other-0"}},
 			ExpectPRDeleted:       true,
 			ExpectStatefulSetGone: true,
 		},
@@ -705,8 +705,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *statefulSetSpec, gone bool) {
 	t.Helper()
 
+	stsName := "peerrelay-" + prName
 	var ss appsv1.StatefulSet
-	err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: prName}, &ss)
+	err := fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: stsName}, &ss)
 	switch {
 	case gone:
 		if !apierrors.IsNotFound(err) {
@@ -751,7 +752,7 @@ func assertStateSecrets(t *testing.T, fc client.Client, prName string, want []st
 // list of expected Services. Because the reconciler creates one config Secret (named <svc>-config) and one state
 // Secret (named <svc>) per Service, spelling those out separately in every test case is redundant.
 func childSecretsFromServices(prName string, services []expectedService) (configs, states []string) {
-	prefix := prName + "-"
+	prefix := "peerrelay-" + prName + "-"
 	for _, s := range services {
 		if !strings.HasPrefix(s.Name, prefix) {
 			continue
@@ -854,7 +855,7 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 func managedService(prName string, idx int) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%d", prName, idx),
+			Name:      fmt.Sprintf("peerrelay-%s-%d", prName, idx),
 			Namespace: tailscaleNamespace,
 			Labels: map[string]string{
 				"tailscale.com/managed":              "true",
@@ -884,15 +885,16 @@ func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSe
 		"tailscale.com/parent-resource-type": "peerrelay",
 		"tailscale.com/parent-resource":      prName,
 	}
+	stsName := "peerrelay-" + prName
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      prName,
+			Name:      stsName,
 			Namespace: tailscaleNamespace,
 			Labels:    labels,
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    &replicas,
-			ServiceName: prName,
+			ServiceName: stsName,
 			Selector:    &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -906,7 +908,7 @@ func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSe
 func managedConfigSecret(prName string, idx int) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%d-config", prName, idx),
+			Name:      fmt.Sprintf("peerrelay-%s-%d-config", prName, idx),
 			Namespace: tailscaleNamespace,
 			Labels: map[string]string{
 				"tailscale.com/managed":              "true",
@@ -955,7 +957,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got0 := readTailscaledConfig(t, fc, "test-0-config")
+	got0 := readTailscaledConfig(t, fc, "peerrelay-test-0-config")
 	if got0.RelayServerPort == nil || *got0.RelayServerPort != 41641 {
 		t.Errorf("replica 0: expected RelayServerPort=41641, got %v", got0.RelayServerPort)
 	}
@@ -967,7 +969,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		t.Errorf("replica 0: expected hostname=test-0, got %v", got0.Hostname)
 	}
 
-	got1 := readTailscaledConfig(t, fc, "test-1-config")
+	got1 := readTailscaledConfig(t, fc, "peerrelay-test-1-config")
 	if got1.RelayServerPort == nil || *got1.RelayServerPort != 41641 {
 		t.Errorf("replica 1: expected RelayServerPort=41641, got %v", got1.RelayServerPort)
 	}
@@ -1130,7 +1132,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			t.Errorf("expected default tags, got %v", gotTags)
 		}
 
-		conf := readTailscaledConfig(t, fc, "test-0-config")
+		conf := readTailscaledConfig(t, fc, "peerrelay-test-0-config")
 		if conf.AuthKey == nil || *conf.AuthKey != "tskey-abc" {
 			t.Errorf("expected AuthKey=tskey-abc in config, got %v", conf.AuthKey)
 		}
@@ -1166,7 +1168,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			t.Errorf("expected 1 CreateAuthKey call across two reconciles, got %d", got)
 		}
 
-		conf := readTailscaledConfig(t, fc, "test-0-config")
+		conf := readTailscaledConfig(t, fc, "peerrelay-test-0-config")
 		if conf.AuthKey == nil || *conf.AuthKey != "tskey-first" {
 			t.Errorf("expected AuthKey preserved as tskey-first, got %v", conf.AuthKey)
 		}
@@ -1254,9 +1256,9 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
-				stateSecret("test", "test-0", 0, "device-aaa"),
-				stateSecret("test", "test-1", 1, ""), // pod never registered , no device_id
-				stateSecret("other", "other-0", 0, "device-should-not-touch"),
+				stateSecret("test", "peerrelay-test-0", 0, "device-aaa"),
+				stateSecret("test", "peerrelay-test-1", 1, ""), // pod never registered , no device_id
+				stateSecret("other", "peerrelay-other-0", 0, "device-should-not-touch"),
 			).
 			Build()
 
@@ -1280,14 +1282,14 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 		}
 
 		// Our state Secrets should be gone; the unrelated PeerRelay's state Secret should still be present.
-		for _, name := range []string{"test-0", "test-1"} {
+		for _, name := range []string{"peerrelay-test-0", "peerrelay-test-1"} {
 			var s corev1.Secret
 			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
 				t.Errorf("expected state Secret %q gone, got err=%v", name, err)
 			}
 		}
 		var other corev1.Secret
-		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "other-0"}, &other); err != nil {
+		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "peerrelay-other-0"}, &other); err != nil {
 			t.Errorf("unexpected: state Secret for other PeerRelay was removed: %v", err)
 		}
 	})
@@ -1303,9 +1305,9 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
 				pr,
-				stateSecret("test", "test-0", 0, "device-still-here"),
-				stateSecret("test", "test-1", 1, "device-scaled-away-1"),
-				stateSecret("test", "test-2", 2, "device-scaled-away-2"),
+				stateSecret("test", "peerrelay-test-0", 0, "device-still-here"),
+				stateSecret("test", "peerrelay-test-1", 1, "device-scaled-away-1"),
+				stateSecret("test", "peerrelay-test-2", 2, "device-scaled-away-2"),
 			).
 			Build()
 
@@ -1332,11 +1334,11 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 		}
 
 		var kept corev1.Secret
-		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "test-0"}, &kept); err != nil {
+		if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "peerrelay-test-0"}, &kept); err != nil {
 			t.Errorf("expected replica 0 state Secret preserved: %v", err)
 		}
 
-		for _, name := range []string{"test-1", "test-2"} {
+		for _, name := range []string{"peerrelay-test-1", "peerrelay-test-2"} {
 			var s corev1.Secret
 			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
 				t.Errorf("expected state Secret %q gone after scale-down, got err=%v", name, err)
@@ -1402,7 +1404,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 	}
 
 	var ss appsv1.StatefulSet
-	if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "test"}, &ss); err != nil {
+	if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: "peerrelay-test"}, &ss); err != nil {
 		t.Fatal(err)
 	}
 

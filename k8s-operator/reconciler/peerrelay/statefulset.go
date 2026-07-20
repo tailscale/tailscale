@@ -22,7 +22,7 @@ import (
 )
 
 func configSecretName(prName string, idx int32) string {
-	return fmt.Sprintf("%s-%d-config", prName, idx)
+	return replicaName(prName, idx) + "-config"
 }
 
 func peerRelayHostname(pr *tsapi.PeerRelay, idx int32) string {
@@ -68,7 +68,7 @@ func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpo
 func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32, pc *tsapi.ProxyClass) *appsv1.StatefulSet {
 	labels := peerRelayLabels(pr.Name)
 	ss := tailscaled.NewStatefulSet(tailscaled.StatefulSetOptions{
-		Name:               pr.Name,
+		Name:               resourceName(pr.Name),
 		Namespace:          r.tailscaleNamespace,
 		Labels:             labels,
 		Image:              r.proxyImage,

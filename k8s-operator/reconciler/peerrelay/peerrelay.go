@@ -484,7 +484,7 @@ func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (stri
 
 func (r *Reconciler) ensureStateSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32) error {
 	desired := tailscaled.NewStateSecret(tailscaled.StateSecretOptions{
-		Name:      stateSecretName(pr.Name, idx),
+		Name:      replicaName(pr.Name, idx),
 		Namespace: r.tailscaleNamespace,
 		Labels:    peerRelayServiceLabels(pr.Name, idx),
 	})
@@ -545,7 +545,7 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredL
 
 func (r *Reconciler) deleteStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) error {
 	ss := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: pr.Name, Namespace: r.tailscaleNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: resourceName(pr.Name), Namespace: r.tailscaleNamespace},
 	}
 	logger.Debugf("deleting StatefulSet %q", ss.Name)
 	if err := r.Delete(ctx, ss); err != nil && !apierrors.IsNotFound(err) {
