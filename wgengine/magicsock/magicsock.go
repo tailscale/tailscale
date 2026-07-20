@@ -4526,6 +4526,9 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 	c.discoInfoForKnownPeerLocked(discoKey)
 	ep.updateDiscoKey(discoKey)
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
+	if !oldDiscoKey.IsZero() && !c.peerMap.knownPeerDiscoKey(oldDiscoKey) {
+		delete(c.discoInfo, oldDiscoKey)
+	}
 	c.logf("magicsock: updated disco key for peer %v to %v", nodeKey.ShortString(), discoKey.ShortString())
 	metricTSMPDiscoKeyAdvertisementApplied.Add(1)
 }
