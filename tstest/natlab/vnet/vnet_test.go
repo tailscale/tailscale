@@ -86,6 +86,27 @@ func TestPacketSideEffects(t *testing.T) {
 					),
 				},
 				{
+					// The secondary DNS server answers its own zone. A test that
+					// routes a domain here and gets this answer has proven the
+					// split-DNS route was honored.
+					name: "split-dns-answers-own-zone",
+					pkt:  mkDNSReqTo(FakeSplitDNSIPv4(), SplitDNSName),
+					check: all(
+						numPkts(1),
+						pktSubstr("IP="+SplitDNSAddr),
+					),
+				},
+				{
+					// The default DNS server must NOT answer the split zone;
+					// that's what makes the answer above meaningful.
+					name: "default-dns-does-not-answer-split-zone",
+					pkt:  mkDNSReqTo(FakeDNSIPv4(), SplitDNSName),
+					check: all(
+						numPkts(1),
+						noPktSubstr("IP="+SplitDNSAddr),
+					),
+				},
+				{
 					name: "syslog-v4",
 					pkt:  mkSyslogPacket(clientIPv4(1), "<6>2024-08-30T10:36:06-07:00 natlabapp tailscaled[1]: 2024/08/30 10:36:06 some-message"),
 					check: all(
@@ -289,6 +310,38 @@ func mkAllNodesPing(srcMAC MAC, srcIP netip.Addr) []byte {
 	return mkEth(macAllNodes, srcMAC, ethType6, mustPacket(ip, icmp))
 }
 
+// mkDNSReqTo builds an A-record query for name over IPv4, sent to the given DNS
+// server address. It's like mkDNSReq but lets a test aim at the secondary
+// (split-DNS) server and ask for an arbitrary name.
+func mkDNSReqTo(dst netip.Addr, name string) []byte {
+	eth := &layers.Ethernet{
+		SrcMAC:       nodeMac(1).HWAddr(),
+		DstMAC:       routerMac(1).HWAddr(),
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip := &layers.IPv4{
+		Version:  4,
+		Protocol: layers.IPProtocolUDP,
+		SrcIP:    clientIPv4(1).AsSlice(),
+		TTL:      64,
+		DstIP:    dst.AsSlice(),
+	}
+	udp := &layers.UDP{
+		SrcPort: 12345,
+		DstPort: 53,
+	}
+	udp.SetNetworkLayerForChecksum(ip)
+	dns := &layers.DNS{
+		ID: 790,
+		Questions: []layers.DNSQuestion{{
+			Name:  []byte(name),
+			Type:  layers.DNSTypeA,
+			Class: layers.DNSClassIN,
+		}},
+	}
+	return mustPacket(eth, ip, udp, dns)
+}
+
 // mkDNSReq makes a DNS request to "control.tailscale" using the source IPs as
 // defined in this test file.
 //
@@ -473,6 +526,21 @@ func pktSubstr(sub string) func(*sideEffects) error {
 			}
 		}
 		return fmt.Errorf("packet summary with substring %q not found", sub)
+	}
+}
+
+// noPktSubstr returns a side effect checker func that checks that no received
+// packet's summary contains the given substring. It's the counterpart to
+// pktSubstr, for asserting an answer was *not* given.
+func noPktSubstr(sub string) func(*sideEffects) error {
+	return func(se *sideEffects) error {
+		for _, pkt := range se.got {
+			pkt := gopacket.NewPacket(pkt.eth, layers.LayerTypeEthernet, gopacket.Lazy)
+			if got := pkt.String(); strings.Contains(got, sub) {
+				return fmt.Errorf("packet summary unexpectedly contains %q: %s", sub, got)
+			}
+		}
+		return nil
 	}
 }
 

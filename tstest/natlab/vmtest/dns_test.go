@@ -6,6 +6,7 @@ package vmtest_test
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +162,425 @@ func (dt *dnsTester) wantNXDOMAIN(name string) {
 		return nil
 	}); err != nil {
 		dt.t.Fatal(err)
+	}
+}
+
+// TestSplitDNS runs the split-DNS checks against the systemd-resolved backend,
+// which Ubuntu uses by default.
+func TestSplitDNS(t *testing.T) {
+	testSplitDNS(t, vmtest.DNSDefault, "systemd-resolved")
+}
+
+// TestSplitDNSDirect runs the same checks against the "direct" backend, which
+// tailscaled uses when it has to write /etc/resolv.conf itself.
+func TestSplitDNSDirect(t *testing.T) {
+	testSplitDNS(t, vmtest.DNSDirect, "direct")
+}
+
+// testSplitDNS checks that a node resolves each kind of name via the right
+// resolver: see the checks table below, which has a row per kind. The mixed
+// routes leave no single resolver set to hand the OS, so quad-100 does the
+// forwarding; [TestSplitDNSOSForwarded] covers the other arrangement.
+//
+// dnsMode picks the DNS backend; wantBackend is asserted so a pass can't come
+// from the wrong one.
+func testSplitDNS(t *testing.T, dnsMode vmtest.DNSMode, wantBackend string) {
+	t.Helper()
+
+	// vnet's second DNS server is the *only* thing serving fwdName, so an
+	// answer means the query was forwarded there.
+	const (
+		fwdDomain = vnet.SplitDNSDomain
+		fwdName   = vnet.SplitDNSName
+		fwdIP     = vnet.SplitDNSAddr
+	)
+	fwdResolver := vnet.FakeSplitDNSIPv4()
+
+	// A route with no resolvers, plus an extra record for a name in it. localIP
+	// is never connected to, only resolved; it's outside the 100.64.x.y block
+	// testcontrol assigns nodes, so an answer can only have come from the extra
+	// record.
+	const (
+		localDomain = "local.example"
+		localName   = "host." + localDomain
+		localIP     = "100.99.99.99"
+	)
+
+	// The peer's node name becomes its guest hostname, and control appends the
+	// tailnet's MagicDNS domain, so its name is predictable.
+	const (
+		magicDNSDomain = "tailnet.test"
+		peerNodeName   = "peer"
+		wantPeerName   = peerNodeName + "." + magicDNSDomain
+	)
+
+	env := vmtest.New(t,
+		vmtest.SameTailnetUser(), // so the peer is visible and its MagicDNS name resolves
+		vmtest.ControlDNS(magicDNSDomain, &tailcfg.DNSConfig{
+			Proxied: true, // turn on MagicDNS, so the peer's tailnet name resolves
+			// Search domains, so the bare name "host" also resolves as
+			// host.local.example.
+			Domains: []string{localDomain},
+			// These routes don't share a resolver set, so quad-100 does the
+			// forwarding. Proxied also adds a nil-resolver route per MagicDNS
+			// root domain, so the sets differ regardless.
+			Routes: map[string][]*dnstype.Resolver{
+				fwdDomain:   {{Addr: fwdResolver.String()}}, // forward here
+				localDomain: nil,                            // answer locally
+			},
+			ExtraRecords: []tailcfg.DNSRecord{
+				{Name: localName, Type: "A", Value: localIP}, // the local answer
+			},
+		}))
+
+	// Two nodes: client is the one we run lookups on; peer exists only so
+	// there's a tailnet name to look up. Nothing runs on peer.
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	client := env.AddNode("client", lan,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.WithDNSMode(dnsMode))
+	peer := env.AddNode(peerNodeName, lan,
+		vmtest.OS(vmtest.Ubuntu2404))
+
+	env.Start()
+
+	// The peer's lookup and expected answer. Checking the name against what
+	// control should have assigned, rather than trusting whatever it reports,
+	// means a MagicDNS naming change fails here instead of quietly resolving
+	// some other name and passing.
+	peerSt := env.Status(peer)
+	peerName := strings.TrimSuffix(peerSt.Self.DNSName, ".")
+	if peerName != wantPeerName {
+		t.Fatalf("peer DNSName = %q, want %q", peerName, wantPeerName)
+	}
+	var peerIP string // IPv4, since the lookups below ask for A records only
+	for _, a := range peerSt.Self.TailscaleIPs {
+		if a.Is4() {
+			peerIP = a.String()
+			break
+		}
+	}
+	if peerIP == "" {
+		t.Fatalf("peer has no IPv4 TailscaleIP in status (got %v)", peerSt.Self.TailscaleIPs)
+	}
+
+	env.AssertDNSBackend(client, wantBackend)
+
+	// The OS was pointed at quad-100 and *not* handed the split resolver, i.e.
+	// quad-100 is doing the forwarding.
+	assertResolverState(t, env, client,
+		[]string{"100.100.100.100"},
+		[]string{fwdResolver.String()})
+
+	// "getent ahostsv4" (A only) rather than "getent hosts":
+	// dualstack-web.example.com has both A and AAAA, and "hosts" can return
+	// either family.
+	checks := []struct {
+		name string // what to look up on the client
+		want string // the answer proving it was resolved by the right thing
+		what string // which of the four cases this is, for failure messages
+	}{
+		{
+			name: fwdName,
+			want: fwdIP,
+			what: "forwarded: routed domain went to its designated resolver",
+		},
+		{
+			name: localName,
+			want: localIP,
+			what: "local: empty-resolver route answered by quad-100",
+		},
+		// Same answer, but looked up as a bare name to check the search domain.
+		{
+			name: "host",
+			want: localIP,
+			what: "local: bare name completed by the " + localDomain + " search domain",
+		},
+		// quad-100 answers tailnet names from the netmap.
+		{
+			name: peerName,
+			want: peerIP,
+			what: "magicdns: peer's tailnet name resolved to its tailnet IP",
+		},
+		// No route covers this, so it must still reach the normal DNS server
+		// (here vnet's default one, standing in for the internet).
+		{
+			name: "dualstack-web.example.com",
+			want: "5.0.0.100",
+			what: "default: unrouted name still resolved normally",
+		},
+	}
+
+	for _, c := range checks {
+		// Retry: tailscaled applies DNS config to the OS resolver
+		// asynchronously after coming up.
+		if err := tstest.WaitFor(30*time.Second, func() error {
+			out, err := env.SSHExec(client, "getent ahostsv4 "+c.name)
+			if err != nil {
+				return fmt.Errorf("getent ahostsv4 %s (%s): %v (%s)", c.name, c.what, err, strings.TrimSpace(out))
+			}
+			if !strings.Contains(out, c.want) {
+				return fmt.Errorf("getent ahostsv4 %s (%s) = %q, want it to contain %s", c.name, c.what, strings.TrimSpace(out), c.want)
+			}
+			return nil
+		}); err != nil {
+			out, _ := env.SSHExec(client, "resolvectl status; cat /etc/resolv.conf")
+			t.Fatalf("%v\nclient resolver state:\n%s", err, out)
+		}
+	}
+}
+
+// TestSplitDNSOSForwarded checks the other way tailscaled can implement a routed
+// domain: handing the OS resolver the domain's resolver directly, with quad-100
+// out of the query path. It does that only when every route shares one resolver
+// set, hence the single route and no MagicDNS here.
+//
+// There is no "direct" variant. That backend only rewrites resolv.conf, so it
+// reports SupportsSplitDNS() == false and always forwards via quad-100, which
+// [TestSplitDNSDirect] covers.
+func TestSplitDNSOSForwarded(t *testing.T) {
+	// Only vnet's second DNS server answers fwdName, so an answer means the query
+	// got there.
+	const (
+		fwdDomain = vnet.SplitDNSDomain
+		fwdName   = vnet.SplitDNSName
+		fwdIP     = vnet.SplitDNSAddr
+	)
+	fwdResolver := vnet.FakeSplitDNSIPv4()
+
+	// systemd-resolved sends match-domain queries out the link it programmed them
+	// on -- the Tailscale interface -- so the split resolver has to be reachable
+	// over the tailnet, as it would be in a real deployment. Advertise a route
+	// covering it from a second node.
+	fwdResolverRoute := netip.PrefixFrom(fwdResolver, 32).String()
+
+	env := vmtest.New(t,
+		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
+			Routes: map[string][]*dnstype.Resolver{
+				fwdDomain: {{Addr: fwdResolver.String()}},
+			},
+		}))
+
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	client := env.AddNode("client", lan,
+		vmtest.OS(vmtest.Ubuntu2404))
+	// This node exists only to make fwdResolver routable over the tailnet; no
+	// DNS server runs on it. vnet answers the queries once they're on the wire.
+	resolverRouter := env.AddNode("resolver-router", lan,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.AdvertiseRoutes(fwdResolverRoute))
+
+	env.Start()
+
+	// ApproveRoutes also turns on accept-routes on the other nodes, so the
+	// client installs the route to fwdResolver.
+	env.ApproveRoutes(resolverRouter, fwdResolverRoute)
+
+	env.AssertDNSBackend(client, "systemd-resolved")
+
+	// This is what separates this test from [testSplitDNS]: systemd-resolved holds
+	// the split resolver itself and quad-100 is absent. The lookup below would
+	// pass either way.
+	assertResolverState(t, env, client,
+		[]string{fwdResolver.String(), "~" + fwdDomain},
+		[]string{"100.100.100.100"})
+
+	// The route from resolverRouter is what makes the lookup below work: with the
+	// split resolver on tailscale0, resolved sends the query out that link, and
+	// without a route there it times out rather than falling back to the LAN.
+	// Assert the route landed, so a lookup failure points here instead of at the
+	// resolver config. Retried because the client installs it asynchronously
+	// after ApproveRoutes.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		cmd := "ip route get " + fwdResolver.String()
+		out, err := env.SSHExec(client, cmd)
+		if err != nil {
+			return fmt.Errorf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, "dev tailscale0") {
+			return fmt.Errorf("%s = %q, want it to go via tailscale0", cmd, strings.TrimSpace(out))
+		}
+		return nil
+	}); err != nil {
+		out, _ := env.SSHExec(client, "ip route; tailscale status")
+		t.Fatalf("%v\nclient routes:\n%s", err, out)
+	}
+
+	// And it works end to end.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := env.SSHExec(client, "getent ahostsv4 "+fwdName)
+		if err != nil {
+			return fmt.Errorf("getent ahostsv4 %s: %v (%s)", fwdName, err, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, fwdIP) {
+			return fmt.Errorf("getent ahostsv4 %s = %q, want it to contain %s", fwdName, strings.TrimSpace(out), fwdIP)
+		}
+		return nil
+	}); err != nil {
+		out, _ := env.SSHExec(client, "resolvectl status; cat /etc/resolv.conf; ip route")
+		t.Fatalf("%v\nclient resolver state:\n%s", err, out)
+	}
+}
+
+// TestSplitDNSNoMagicDNS covers split DNS on a tailnet with MagicDNS turned off,
+// the one combination the tests above leave out. [testSplitDNS] has mixed
+// resolver sets but MagicDNS on; [TestSplitDNSOSForwarded] has MagicDNS off but
+// a single resolver set. Both conditions together take a distinct path through
+// compileConfig: with no MagicDNS route to scope to, tailscaled reads the OS's
+// base resolver config to use as quad-100's fallback.
+//
+// systemd-resolved has no base config to give -- it answers
+// ErrGetBaseConfigNotSupported -- so this exercises what tailscaled does when
+// that read fails. The lookups matter less than the resolver state assertion:
+// if applying the config fails, tailscaled leaves whatever it installed last in
+// place, so the failure shows up as stale OS resolver state rather than as an
+// error the guest can see.
+func TestSplitDNSNoMagicDNS(t *testing.T) {
+	// Only vnet's second DNS server answers fwdName, so an answer means the
+	// query was forwarded there.
+	const (
+		fwdDomain = vnet.SplitDNSDomain
+		fwdName   = vnet.SplitDNSName
+		fwdIP     = vnet.SplitDNSAddr
+	)
+	fwdResolver := vnet.FakeSplitDNSIPv4()
+
+	// A second route with a different resolver, so no single resolver set can
+	// be handed to the OS. Nothing is ever looked up in it; with MagicDNS off
+	// there is no nil-resolver root domain route to force the split, so this
+	// route is what does it.
+	const otherDomain = "other.example"
+	otherResolver := "10.0.0.2"
+
+	// An extra record, and a search domain so the bare name resolves too.
+	// localIP is outside the 100.64.x.y block testcontrol assigns nodes, so an
+	// answer can only have come from the extra record.
+	const (
+		localDomain = "local.example"
+		localName   = "host." + localDomain
+		localIP     = "100.99.99.99"
+	)
+
+	env := vmtest.New(t,
+		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
+			// Proxied is deliberately absent: MagicDNS off. That is what
+			// separates this test from [testSplitDNS].
+			Domains: []string{localDomain},
+			Routes: map[string][]*dnstype.Resolver{
+				fwdDomain:   {{Addr: fwdResolver.String()}},
+				otherDomain: {{Addr: otherResolver}},
+				localDomain: nil,
+			},
+			ExtraRecords: []tailcfg.DNSRecord{
+				{Name: localName, Type: "A", Value: localIP},
+			},
+		}))
+
+	client := env.AddNode("client",
+		env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT),
+		vmtest.OS(vmtest.Ubuntu2404))
+
+	env.Start()
+
+	env.AssertDNSBackend(client, "systemd-resolved")
+
+	// The OS points at quad-100 for the routed domains and was not handed the
+	// split resolvers. A failed config apply leaves stale state here, which is
+	// the symptom this test is really after.
+	//
+	// localDomain has no "~": it's a search domain (see Domains above), which
+	// resolved lists bare, unlike the routing-only domains.
+	assertResolverState(t, env, client,
+		[]string{"100.100.100.100", "~" + fwdDomain, "~" + otherDomain, localDomain},
+		[]string{fwdResolver.String(), otherResolver})
+
+	checks := []struct {
+		name string // what to look up on the client
+		want string // the answer proving the right resolver handled it
+		what string // for failure messages
+	}{
+		{
+			name: fwdName,
+			want: fwdIP,
+			what: "forwarded: routed domain went to its designated resolver",
+		},
+		{
+			name: localName,
+			want: localIP,
+			what: "local: empty-resolver route answered by quad-100",
+		},
+		{
+			name: "host",
+			want: localIP,
+			what: "local: bare name completed by the " + localDomain + " search domain",
+		},
+		{
+			name: "dualstack-web.example.com",
+			want: "5.0.0.100",
+			what: "default: unrouted name still resolved normally",
+		},
+	}
+
+	for _, c := range checks {
+		// Retry: tailscaled applies DNS config to the OS resolver
+		// asynchronously after coming up.
+		if err := tstest.WaitFor(30*time.Second, func() error {
+			out, err := env.SSHExec(client, "getent ahostsv4 "+c.name)
+			if err != nil {
+				return fmt.Errorf("getent ahostsv4 %s (%s): %v (%s)", c.name, c.what, err, strings.TrimSpace(out))
+			}
+			if !strings.Contains(out, c.want) {
+				return fmt.Errorf("getent ahostsv4 %s (%s) = %q, want it to contain %s", c.name, c.what, strings.TrimSpace(out), c.want)
+			}
+			return nil
+		}); err != nil {
+			out, _ := env.SSHExec(client, "resolvectl status; cat /etc/resolv.conf")
+			t.Fatalf("%v\nclient resolver state:\n%s", err, out)
+		}
+	}
+}
+
+// assertResolverState fails the test unless the node's OS resolver state has
+// every string in want and none in notWant, retrying while tailscaled applies
+// its config asynchronously. notWant matters because the two split-DNS
+// arrangements answer queries identically: the resolver that is *absent*
+// identifies which one ran.
+//
+// It reads both resolvectl and resolv.conf because the backends record state in
+// different places: systemd-resolved keeps servers and domains per-link, with
+// resolv.conf just the 127.0.0.53 stub, while the direct backend writes
+// resolv.conf itself and leaves resolved masked.
+//
+// Each want and notWant is matched as a whitespace-separated token, so pass
+// exactly what appears in the output: a bare resolver address, or a routing-only
+// ("match") domain with resolvectl's "~" prefix and no trailing dot. The
+// resolvectl queries are scoped to tailscale0, so a match can't come from
+// another link.
+func assertResolverState(t *testing.T, env *vmtest.Env, n *vmtest.Node, want, notWant []string) {
+	t.Helper()
+	// Keep resolvectl's stderr: it's how resolved being absent (expected under
+	// the direct backend) or broken (not) shows up in the failure dump.
+	const cmd = "resolvectl dns tailscale0 2>&1; resolvectl domain tailscale0 2>&1; cat /etc/resolv.conf 2>&1"
+	var last string
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := env.SSHExec(n, cmd)
+		last = out
+		if err != nil {
+			return fmt.Errorf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
+		}
+		got := strings.Fields(out)
+		for _, w := range want {
+			if !slices.Contains(got, w) {
+				return fmt.Errorf("resolver state is missing %q", w)
+			}
+		}
+		for _, w := range notWant {
+			if slices.Contains(got, w) {
+				return fmt.Errorf("resolver state unexpectedly has %q", w)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("%v\nwant all of %q and none of %q in resolver state:\n%s", err, want, notWant, last)
 	}
 }
