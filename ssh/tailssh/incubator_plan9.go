@@ -10,7 +10,6 @@
 package tailssh
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -42,10 +40,16 @@ func init() {
 // If ss.srv.tailscaledPath is empty, this method is equivalent to
 // exec.CommandContext.
 //
+// It also returns forwardedEnv, the client-forwarded environment variables
+// accepted by the acceptEnv policy. These may contain secrets, so the caller
+// must pass them to the child via its environment (cmd.Env) rather than on the
+// command line. See incubator.go's newIncubatorCommand for the
+// full rationale.
+//
 // The returned Cmd.Env is guaranteed to be nil; the caller populates it.
-func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err error) {
+func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forwardedEnv []string, err error) {
 	defer func() {
-		if cmd.Env != nil {
+		if cmd != nil && cmd.Env != nil {
 			panic("internal error")
 		}
 	}()
@@ -64,12 +68,12 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 		if isSFTP {
 			// SFTP relies on the embedded Go-based SFTP server in tailscaled,
 			// so without tailscaled, we can't serve SFTP.
-			return nil, errors.New("no tailscaled found on path, can't serve SFTP")
+			return nil, nil, errors.New("no tailscaled found on path, can't serve SFTP")
 		}
 
 		loginShell := ss.conn.localUser.LoginShell()
 		logf("directly running /bin/rc -c %q", ss.RawCommand())
-		return exec.CommandContext(ss.ctx, loginShell, "-c", ss.RawCommand()), nil
+		return exec.CommandContext(ss.ctx, loginShell, "-c", ss.RawCommand()), nil, nil
 	}
 
 	lu := ss.conn.localUser
@@ -121,19 +125,20 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, err 
 	if allowSendEnv {
 		env, err := filterEnv(ss.conn.acceptEnv, ss.Session.Environ())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if len(env) > 0 {
-			encoded, err := json.Marshal(env)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encode environment: %w", err)
-			}
-			incubatorArgs = append(incubatorArgs, fmt.Sprintf("--encoded-env=%q", encoded))
+			// The accepted environment may contain secrets, in both the
+			// values and the key names, so neither is placed on the argv;
+			// doing so would leak them via /proc/<pid>/cmdline. The values
+			// travel via the child's environment (cmd.Env, see launchProcess),
+			// and the key names via the allowedEnvKeysEnv environment variable.
+			forwardedEnv = env
 		}
 	}
 
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), nil
+	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), forwardedEnv, nil
 }
 
 var debugTest atomic.Bool
@@ -166,7 +171,6 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
-	encodedEnv         string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -185,37 +189,22 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
-	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "JSON encoded array of environment variables in '['key=value']' format")
 	flags.Parse(args)
 	return ia, nil
 }
 
 func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
-	environ := os.Environ()
 	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
-	allowListKeys := "SSH_AUTH_SOCK"
+	allowListKeys := []string{"SSH_AUTH_SOCK"}
 
-	if ia.encodedEnv != "" {
-		unquoted, err := strconv.Unquote(ia.encodedEnv)
-		if err != nil {
-			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
-		}
+	// The parent forwards the accepted env var names via allowedEnvKeysEnv
+	// rather than on the argv, to keep them out of /proc/<pid>/cmdline. Strip
+	// that bookkeeping variable from the environment we hand to the user's
+	// process, and use its value to extend the allowlist.
+	environ, keys := stripAllowedEnvKeys(os.Environ())
+	allowListKeys = append(allowListKeys, keys...)
 
-		var extraEnviron []string
-
-		err = json.Unmarshal([]byte(unquoted), &extraEnviron)
-		if err != nil {
-			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
-		}
-
-		environ = append(environ, extraEnviron...)
-
-		for _, v := range extraEnviron {
-			allowListKeys = fmt.Sprintf("%s,%s", allowListKeys, strings.Split(v, "=")[0])
-		}
-	}
-
-	return environ, allowListKeys, nil
+	return environ, strings.Join(allowListKeys, ","), nil
 }
 
 func beNetshell(args []string) error {
@@ -346,7 +335,8 @@ func newCommand(cmdPath string, cmdEnviron []string, cmdArgs []string) *exec.Cmd
 // It sets ss.cmd, stdin, stdout, and stderr.
 func (ss *sshSession) launchProcess() error {
 	var err error
-	ss.cmd, err = ss.newIncubatorCommand(ss.logf)
+	var forwardedEnv []string
+	ss.cmd, forwardedEnv, err = ss.newIncubatorCommand(ss.logf)
 	if err != nil {
 		return err
 	}
@@ -369,6 +359,11 @@ func (ss *sshSession) launchProcess() error {
 	if ss.agentListener != nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
 	}
+
+	// Client-forwarded environment variables travel via the environment
+	// (not the argv) to keep their values and names out of process listings
+	// and logs.
+	cmd.Env = append(cmd.Env, forwardedEnvAndKeys(forwardedEnv)...)
 
 	return ss.startWithStdPipes()
 }
@@ -416,6 +411,10 @@ func acceptEnvPair(kv string) bool {
 	if !ok {
 		return false
 	}
-	_ = k
-	return true // permit anything on plan9 during bringup, for debugging at least
+	// Never forward names reserved for our own parent->child bookkeeping,
+	// even during bringup, so a client cannot spoof the incubator's env.
+	if reservedEnvKey(k) {
+		return false
+	}
+	return true // permit anything else on plan9 during bringup, for debugging at least
 }

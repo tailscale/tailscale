@@ -5,6 +5,8 @@ package tailssh
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -204,6 +206,31 @@ func TestFilterEnv(t *testing.T) {
 			environ:          []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "DYLD_LIBRARY_PATH=/tmp", "TERM=xterm"},
 			expectedFiltered: []string{"TERM=xterm"},
 		},
+		{
+			// A client must not be able to forward the parent->child
+			// bookkeeping variable, even under a wildcard policy: doing so
+			// would let it spoof the incubator's "su -w" allowlist.
+			name:             "reserved-bookkeeping-key-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{allowedEnvKeysEnv + "=EVIL1,EVIL2", "SAFE=ok"},
+			expectedFiltered: []string{"SAFE=ok"},
+		},
+		{
+			// A forwarded key containing the "," allowlist separator must be
+			// rejected, since it would otherwise inject extra "su -w" entries.
+			name:             "comma-in-key-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"A,B=x", "GOOD=1"},
+			expectedFiltered: []string{"GOOD=1"},
+		},
+		{
+			// Even an explicit (non-wildcard) allowlist entry cannot override
+			// the reserved-key rejection.
+			name:             "reserved-key-rejected-explicit-match",
+			acceptEnv:        []string{allowedEnvKeysEnv},
+			environ:          []string{allowedEnvKeysEnv + "=EVIL", "TERM=xterm"},
+			expectedFiltered: nil,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -219,6 +246,57 @@ func TestFilterEnv(t *testing.T) {
 
 			if diff := cmp.Diff(tc.expectedFiltered, filtered); diff != "" {
 				t.Errorf("unexpected filter result (-got,+want): \n%s", diff)
+			}
+		})
+	}
+}
+
+func TestStripAllowedEnvKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		environ  []string
+		wantEnv  []string
+		wantKeys []string
+	}{
+		{
+			name:     "unset",
+			environ:  []string{"PATH=/bin", "HOME=/home/alice"},
+			wantEnv:  []string{"PATH=/bin", "HOME=/home/alice"},
+			wantKeys: nil,
+		},
+		{
+			name:     "single",
+			environ:  []string{"PATH=/bin", allowedEnvKeysEnv + "=FOO,BAR", "FOO=1", "BAR=2"},
+			wantEnv:  []string{"PATH=/bin", "FOO=1", "BAR=2"},
+			wantKeys: []string{"FOO", "BAR"},
+		},
+		{
+			name:     "prefix-not-stripped",
+			environ:  []string{allowedEnvKeysEnv + "_EXTRA=keep", "PATH=/bin"},
+			wantEnv:  []string{allowedEnvKeysEnv + "_EXTRA=keep", "PATH=/bin"},
+			wantKeys: nil,
+		},
+		{
+			name:     "empty-value-yields-no-keys",
+			environ:  []string{allowedEnvKeysEnv + "=", "PATH=/bin"},
+			wantEnv:  []string{"PATH=/bin"},
+			wantKeys: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotEnv, gotKeys := stripAllowedEnvKeys(slices.Clone(tc.environ))
+			// No occurrence of the bookkeeping var may remain.
+			for _, kv := range gotEnv {
+				if k, _, _ := strings.Cut(kv, "="); k == allowedEnvKeysEnv {
+					t.Errorf("%s survived stripping: env = %q", allowedEnvKeysEnv, gotEnv)
+				}
+			}
+			if diff := cmp.Diff(tc.wantEnv, gotEnv); diff != "" {
+				t.Errorf("env (-want,+got):\n%s", diff)
+			}
+			if !slices.Equal(gotKeys, tc.wantKeys) {
+				t.Errorf("keys = %q, want %q", gotKeys, tc.wantKeys)
 			}
 		})
 	}

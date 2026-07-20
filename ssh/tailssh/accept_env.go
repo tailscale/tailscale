@@ -20,6 +20,56 @@ func isDangerousEnvVar(name string) bool {
 	return strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_")
 }
 
+// allowedEnvKeysEnv is the name of the environment variable used to pass the
+// comma-separated list of client-forwarded environment variable names from the
+// parent (tailscaled) to the incubator child. The names are passed via the
+// environment rather than on the argv so they never appear in the child's
+// /proc/<pid>/cmdline (visible to other local users) or in process logs. The
+// incubator strips this variable from the environment before handing off to the
+// user's process (see stripAllowedEnvKeys).
+//
+// Because the child reads this back out of its own environment (which also
+// contains the client-forwarded variables) a client that could forward a
+// variable of this exact name, or a key containing the "," separator, could
+// spoof or widen the reconstructed "su -w" allowlist. filterEnv rejects both,
+// so this name is reserved and never client-controllable.
+const allowedEnvKeysEnv = "TS_SSH_ALLOWED_ENV_KEYS"
+
+// reservedEnvKey reports whether name must never be accepted from the client as
+// a forwarded environment variable, independent of the acceptEnv policy. A key
+// is reserved if it collides with the allowedEnvKeysEnv bookkeeping variable or
+// if it contains the "," character used to separate key names within that
+// variable (which would let a client inject additional entries into the
+// incubator's "su -w" allowlist). An empty key name is likewise rejected as
+// malformed.
+func reservedEnvKey(name string) bool {
+	return name == "" || name == allowedEnvKeysEnv || strings.Contains(name, ",")
+}
+
+// stripAllowedEnvKeys removes every occurrence of the allowedEnvKeysEnv
+// bookkeeping variable from environ and returns the remaining environment along
+// with the key names that variable carried (its comma-separated value, empty
+// entries skipped). It filters environ in place (via slices.DeleteFunc), so the
+// caller must pass a slice it owns, such as a fresh os.Environ(). It is the
+// child-side counterpart to forwardedEnvAndKeys and is shared by the
+// platform-specific forwardedEnviron implementations so the stripping and
+// allowlist reconstruction behave identically everywhere.
+func stripAllowedEnvKeys(environ []string) (env, keys []string) {
+	env = slices.DeleteFunc(environ, func(kv string) bool {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k != allowedEnvKeysEnv {
+			return false
+		}
+		for _, ek := range strings.Split(v, ",") {
+			if ek != "" {
+				keys = append(keys, ek)
+			}
+		}
+		return true
+	})
+	return env, keys
+}
+
 // filterEnv filters a passed in environ string slice (a slice with strings
 // representing environment variables in the form "key=value") based on
 // the supplied slice of acceptEnv values.
@@ -50,6 +100,13 @@ func filterEnv(acceptEnv []string, environ []string) ([]string, error) {
 		// Always reject dangerous environment variables that could
 		// enable privilege escalation, regardless of acceptEnv policy.
 		if isDangerousEnvVar(variableName) {
+			continue
+		}
+
+		// Always reject names reserved for our own parent->child bookkeeping
+		// (see reservedEnvKey), regardless of acceptEnv policy, so a client
+		// cannot spoof or widen the incubator's "su -w" allowlist.
+		if reservedEnvKey(variableName) {
 			continue
 		}
 

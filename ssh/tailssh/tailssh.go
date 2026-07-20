@@ -777,6 +777,28 @@ type sshSession struct {
 	exitHandled chan struct{}
 }
 
+// forwardedEnvAndKeys returns the environment entries the parent should append
+// to the incubator child's cmd.Env for the given client-forwarded "KEY=VALUE"
+// pairs: the pairs themselves, plus an allowedEnvKeysEnv entry naming their
+// keys. Both the values and the key names travel via the environment (never the
+// argv) so they stay out of /proc/<pid>/cmdline and process logs. Returns nil
+// when there are no forwarded variables, so no bookkeeping entry is added.
+func forwardedEnvAndKeys(forwardedEnv []string) []string {
+	if len(forwardedEnv) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(forwardedEnv))
+	for _, kv := range forwardedEnv {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			keys = append(keys, k)
+		}
+	}
+	out := make([]string, 0, len(forwardedEnv)+1)
+	out = append(out, forwardedEnv...)
+	out = append(out, allowedEnvKeysEnv+"="+strings.Join(keys, ","))
+	return out
+}
+
 func (ss *sshSession) vlogf(format string, args ...any) {
 	if sshVerboseLogging() {
 		ss.logf(format, args...)

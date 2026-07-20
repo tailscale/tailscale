@@ -40,15 +40,12 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/memnet"
-	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
 	testssh "tailscale.com/tempfork/sshtest/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineiter"
 	"tailscale.com/util/must"
@@ -375,18 +372,6 @@ func TestEvalSSHPolicy(t *testing.T) {
 	}
 }
 
-// localState implements ipnLocalBackend for testing.
-type localState struct {
-	sshEnabled   bool
-	matchingRule *tailcfg.SSHRule
-	varRoot      string // if empty, TailscaleVarRoot returns ""
-
-	// serverActions is a map of the action name to the action.
-	// It is served for paths like https://unused/ssh-action/<action-name>.
-	// The action name is the last part of the action URL.
-	serverActions map[string]*tailcfg.SSHAction
-}
-
 var currentUser = func() string {
 	// Prefer user.Current because the USER env var is not set in
 	// some environments (e.g. the golang:latest container used by CI).
@@ -395,74 +380,6 @@ var currentUser = func() string {
 	}
 	return os.Getenv("USER")
 }()
-
-func (ts *localState) Dialer() *tsdial.Dialer {
-	return &tsdial.Dialer{}
-}
-
-func (ts *localState) ShouldRunSSH() bool {
-	return ts.sshEnabled
-}
-
-func (ts *localState) NetMap() *netmap.NetworkMap {
-	var policy *tailcfg.SSHPolicy
-	if ts.matchingRule != nil {
-		policy = &tailcfg.SSHPolicy{
-			Rules: []*tailcfg.SSHRule{
-				ts.matchingRule,
-			},
-		}
-	}
-
-	return &netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{
-			ID: 1,
-		}).View(),
-		SSHPolicy: policy,
-	}
-}
-
-func (ts *localState) NetMapNoPeers() *netmap.NetworkMap { return ts.NetMap() }
-
-func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
-	if proto != "tcp" {
-		return tailcfg.NodeView{}, tailcfg.UserProfile{}, false
-	}
-
-	return (&tailcfg.Node{
-			ID:       2,
-			StableID: "peer-id",
-		}).View(), tailcfg.UserProfile{
-			LoginName: "peer",
-		}, true
-
-}
-
-func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) {
-	rec := httptest.NewRecorder()
-	k, ok := strings.CutPrefix(req.URL.Path, "/ssh-action/")
-	if !ok {
-		rec.WriteHeader(http.StatusNotFound)
-	}
-	a, ok := ts.serverActions[k]
-	if !ok {
-		rec.WriteHeader(http.StatusNotFound)
-		return rec.Result(), nil
-	}
-	rec.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(rec).Encode(a); err != nil {
-		return nil, err
-	}
-	return rec.Result(), nil
-}
-
-func (ts *localState) TailscaleVarRoot() string {
-	return ts.varRoot
-}
-
-func (ts *localState) NodeKey() key.NodePublic {
-	return key.NewNode().Public()
-}
 
 func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 	return &tailcfg.SSHRule{
@@ -1417,4 +1334,52 @@ func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// TestForwardedEnvKeysRoundTrip verifies that the client-forwarded env var
+// names travel from parent to incubator child via the allowedEnvKeysEnv
+// environment variable (never the argv), and that forwardedEnviron strips that
+// bookkeeping variable back out while reconstructing the allowlist. This is the
+// unit-level counterpart to the end-to-end coverage in TestIntegrationSSH.
+func TestForwardedEnvKeysRoundTrip(t *testing.T) {
+	forwarded := []string{"GIT_ENV_VAR=working1", "EXACT_MATCH=working2", "TESTING=working3"}
+
+	// Parent side: forwardedEnvAndKeys returns the values plus a single
+	// allowedEnvKeysEnv entry naming their keys, and nothing else.
+	got := forwardedEnvAndKeys(forwarded)
+	want := append(slices.Clone(forwarded), allowedEnvKeysEnv+"=GIT_ENV_VAR,EXACT_MATCH,TESTING")
+	if !slices.Equal(got, want) {
+		t.Fatalf("forwardedEnvAndKeys:\n got %q\nwant %q", got, want)
+	}
+
+	// With no forwarded vars, no bookkeeping entry is added.
+	if got := forwardedEnvAndKeys(nil); got != nil {
+		t.Fatalf("forwardedEnvAndKeys(nil) = %q, want nil", got)
+	}
+
+	// Child side: forwardedEnviron reads the keys from allowedEnvKeysEnv,
+	// removes that variable from the returned environment, and includes the
+	// keys (plus SSH_AUTH_SOCK) in the allowlist.
+	t.Setenv(allowedEnvKeysEnv, "GIT_ENV_VAR,EXACT_MATCH,TESTING")
+	t.Setenv("GIT_ENV_VAR", "working1")
+	env, allowedKeys, err := incubatorArgs{}.forwardedEnviron()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, allowedEnvKeysEnv+"=") {
+			t.Errorf("%s leaked into child environment: %q", allowedEnvKeysEnv, kv)
+		}
+	}
+	if !slices.Contains(env, "GIT_ENV_VAR=working1") {
+		t.Errorf("forwarded value GIT_ENV_VAR missing from child environment")
+	}
+	for _, k := range []string{"SSH_AUTH_SOCK", "GIT_ENV_VAR", "EXACT_MATCH", "TESTING"} {
+		if !slices.Contains(allowedKeys, k) {
+			t.Errorf("allowlist %q missing key %q", allowedKeys, k)
+		}
+	}
+	if slices.Contains(allowedKeys, allowedEnvKeysEnv) {
+		t.Errorf("allowlist %q must not contain the bookkeeping var name", allowedKeys)
+	}
 }
