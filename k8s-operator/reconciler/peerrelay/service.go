@@ -94,6 +94,10 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 	name := fmt.Sprintf("%s-%d", pr.Name, idx)
 
 	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Service",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
 			Namespace:   r.tailscaleNamespace,
@@ -178,20 +182,4 @@ func (r *Reconciler) peerRelayEndpoint(ctx context.Context, logger *zap.SugaredL
 	}
 
 	return nil
-}
-
-func portsMatch(a, b []corev1.ServicePort) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Name != b[i].Name ||
-			a[i].Protocol != b[i].Protocol ||
-			a[i].Port != b[i].Port ||
-			a[i].TargetPort != b[i].TargetPort {
-			return false
-		}
-	}
-
-	return true
 }

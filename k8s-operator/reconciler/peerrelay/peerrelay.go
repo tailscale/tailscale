@@ -9,11 +9,9 @@
 package peerrelay
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"fmt"
-	"maps"
 	"net"
 	"net/netip"
 	"reflect"
@@ -88,7 +86,10 @@ type (
 	}
 )
 
-const reconcilerName = "peerrelay-reconciler"
+const (
+	reconcilerName                   = "peerrelay-reconciler"
+	fieldOwner     client.FieldOwner = "peerrelay-reconciler"
+)
 
 // Constants for condition reasons.
 const (
@@ -398,75 +399,10 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 }
 
 func (r *Reconciler) ensureService(ctx context.Context, logger *zap.SugaredLogger, desired *corev1.Service) error {
-	var existing corev1.Service
-	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
-	switch {
-	case apierrors.IsNotFound(err):
-		logger.Debugf("creating Service %q", desired.Name)
-		if err = r.Create(ctx, desired); err != nil {
-			return fmt.Errorf("failed to create Service: %w", err)
-		}
-
-		return nil
-	case err != nil:
-		return fmt.Errorf("failed to get Service: %w", err)
+	logger.Debugf("applying Service %q", desired.Name)
+	if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return fmt.Errorf("failed to apply Service: %w", err)
 	}
-
-	updated := existing.DeepCopy()
-	if updated.Labels == nil && len(desired.Labels) > 0 {
-		updated.Labels = make(map[string]string, len(desired.Labels))
-	}
-	for k, v := range desired.Labels {
-		updated.Labels[k] = v
-	}
-
-	// The AWS EIP/subnet annotations are the only pair the reconciler toggles on and off between reconciles (via
-	// spec.aws.elasticIPs). Drop them if the current desired set doesn't include them so users clearing the field
-	// aren't left with stale annotations pinning the Service to a stale Elastic IP. cloudAnnotations keys are
-	// always present in desired, so they never need pruning; keys the user drops from spec.service.annotations are
-	// out of scope for reconciler-driven cleanup (we don't track prior state) and stay on the Service.
-	for _, k := range []string{annotationEIPAllocations, annotationSubnets} {
-		if _, keep := desired.Annotations[k]; !keep {
-			delete(updated.Annotations, k)
-		}
-	}
-	if updated.Annotations == nil && len(desired.Annotations) > 0 {
-		updated.Annotations = make(map[string]string, len(desired.Annotations))
-	}
-	for k, v := range desired.Annotations {
-		updated.Annotations[k] = v
-	}
-
-	updated.Spec.Type = desired.Spec.Type
-	updated.Spec.Selector = desired.Spec.Selector
-	updated.Spec.Ports = slices.Clone(desired.Spec.Ports)
-
-	// Preserve NodePorts that may have been assigned by kube.
-	for i := range updated.Spec.Ports {
-		if updated.Spec.Ports[i].NodePort != 0 {
-			continue
-		}
-
-		for _, ep := range existing.Spec.Ports {
-			if ep.Name == updated.Spec.Ports[i].Name {
-				updated.Spec.Ports[i].NodePort = ep.NodePort
-				break
-			}
-		}
-	}
-
-	if maps.Equal(existing.Labels, updated.Labels) &&
-		maps.Equal(existing.Annotations, updated.Annotations) &&
-		existing.Spec.Type == updated.Spec.Type &&
-		maps.Equal(existing.Spec.Selector, updated.Spec.Selector) &&
-		portsMatch(existing.Spec.Ports, updated.Spec.Ports) {
-		return nil
-	}
-
-	if err = r.Update(ctx, updated); err != nil {
-		return fmt.Errorf("failed to update Service: %w", err)
-	}
-
 	return nil
 }
 
@@ -493,56 +429,48 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, logger *zap.Sugared
 }
 
 func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
+	authKey, err := r.reuseOrMintAuthKey(ctx, pr, idx)
+	if err != nil {
+		return err
+	}
+
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKey)
+	if err != nil {
+		return fmt.Errorf("failed to build config Secret: %w", err)
+	}
+
+	logger.Debugf("applying config Secret %q", desired.Name)
+	if err = r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return fmt.Errorf("failed to apply config Secret: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) reuseOrMintAuthKey(ctx context.Context, pr *tsapi.PeerRelay, idx int32) (*string, error) {
 	var existing corev1.Secret
 	err := r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		key, err := r.mintAuthKey(ctx, pr)
 		if err != nil {
-			return err
+			return nil, err
 		}
-
-		desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, &key)
-		if err != nil {
-			return fmt.Errorf("failed to build config Secret: %w", err)
-		}
-
-		logger.Debugf("creating config Secret %q", desired.Name)
-		if err = r.Create(ctx, desired); err != nil {
-			return fmt.Errorf("failed to create config Secret: %w", err)
-		}
-
-		return nil
+		return &key, nil
 	case err != nil:
-		return fmt.Errorf("failed to get config Secret: %w", err)
+		return nil, fmt.Errorf("failed to get config Secret: %w", err)
 	}
 
-	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, tailscaled.AuthKeyFromConfigSecret(&existing))
+	if existingKey := tailscaled.AuthKeyFromConfigSecret(&existing); existingKey != nil {
+		return existingKey, nil
+	}
+
+	key, err := r.mintAuthKey(ctx, pr)
 	if err != nil {
-		return fmt.Errorf("failed to build config Secret: %w", err)
+		return nil, err
 	}
 
-	updated := existing.DeepCopy()
-	if updated.Labels == nil && len(desired.Labels) > 0 {
-		updated.Labels = make(map[string]string, len(desired.Labels))
-	}
-
-	for k, v := range desired.Labels {
-		updated.Labels[k] = v
-	}
-
-	updated.Data = desired.Data
-
-	if maps.Equal(existing.Labels, updated.Labels) &&
-		maps.EqualFunc(existing.Data, updated.Data, bytes.Equal) {
-		return nil
-	}
-
-	if err = r.Update(ctx, updated); err != nil {
-		return fmt.Errorf("failed to update config Secret: %w", err)
-	}
-
-	return nil
+	return &key, nil
 }
 
 func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (string, error) {
@@ -561,34 +489,9 @@ func (r *Reconciler) ensureStateSecret(ctx context.Context, logger *zap.SugaredL
 		Labels:    peerRelayServiceLabels(pr.Name, idx),
 	})
 
-	var existing corev1.Secret
-	err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
-	switch {
-	case apierrors.IsNotFound(err):
-		logger.Debugf("creating state Secret %q", desired.Name)
-		if err = r.Create(ctx, desired); err != nil {
-			return fmt.Errorf("failed to create state Secret: %w", err)
-		}
-
-		return nil
-	case err != nil:
-		return fmt.Errorf("failed to get state Secret: %w", err)
-	}
-
-	updated := existing.DeepCopy()
-	if updated.Labels == nil {
-		updated.Labels = make(map[string]string, len(desired.Labels))
-	}
-	for k, v := range desired.Labels {
-		updated.Labels[k] = v
-	}
-
-	if maps.Equal(existing.Labels, updated.Labels) {
-		return nil
-	}
-
-	if err = r.Update(ctx, updated); err != nil {
-		return fmt.Errorf("failed to update state Secret: %w", err)
+	logger.Debugf("applying state Secret %q", desired.Name)
+	if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return fmt.Errorf("failed to apply state Secret: %w", err)
 	}
 
 	return nil
@@ -627,44 +530,17 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredL
 
 	desired := r.peerRelayStatefulSet(pr, replicas, pc)
 
-	var existing appsv1.StatefulSet
-	err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
-	switch {
-	case apierrors.IsNotFound(err):
-		logger.Debugf("creating StatefulSet %q", desired.Name)
-		if err = r.Create(ctx, desired); err != nil {
-			return nil, fmt.Errorf("failed to create StatefulSet: %w", err)
-		}
+	logger.Debugf("applying StatefulSet %q", desired.Name)
+	if err = r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return nil, fmt.Errorf("failed to apply StatefulSet: %w", err)
+	}
 
-		return desired, nil
-	case err != nil:
+	var current appsv1.StatefulSet
+	if err = r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &current); err != nil {
 		return nil, fmt.Errorf("failed to get StatefulSet: %w", err)
 	}
 
-	updated := existing.DeepCopy()
-	if updated.Labels == nil && len(desired.Labels) > 0 {
-		updated.Labels = make(map[string]string, len(desired.Labels))
-	}
-	for k, v := range desired.Labels {
-		updated.Labels[k] = v
-	}
-
-	updated.Spec.Replicas = desired.Spec.Replicas
-	updated.Spec.Selector = desired.Spec.Selector
-	updated.Spec.Template = desired.Spec.Template
-
-	if maps.Equal(existing.Labels, updated.Labels) &&
-		reflect.DeepEqual(existing.Spec.Replicas, updated.Spec.Replicas) &&
-		reflect.DeepEqual(existing.Spec.Selector, updated.Spec.Selector) &&
-		reflect.DeepEqual(existing.Spec.Template, updated.Spec.Template) {
-		return &existing, nil
-	}
-
-	if err = r.Update(ctx, updated); err != nil {
-		return nil, fmt.Errorf("failed to update StatefulSet: %w", err)
-	}
-
-	return updated, nil
+	return &current, nil
 }
 
 func (r *Reconciler) deleteStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) error {

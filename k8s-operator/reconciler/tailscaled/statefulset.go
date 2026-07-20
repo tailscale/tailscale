@@ -89,6 +89,10 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 	}
 
 	return &appsv1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "StatefulSet",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.Name,
 			Namespace: opts.Namespace,
@@ -165,6 +169,10 @@ func NewConfigSecret(opts ConfigSecretOptions) (*corev1.Secret, error) {
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeConfig
 
 	return &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.Name,
 			Namespace: opts.Namespace,
@@ -196,6 +204,10 @@ func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
 
 	return &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.Name,
 			Namespace: opts.Namespace,

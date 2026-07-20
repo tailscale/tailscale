@@ -23,9 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tailscaleclient "tailscale.com/client/tailscale/v2"
@@ -248,6 +248,10 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			// The reconciler applies via server-side apply, so a drifted Service (wrong Spec.Type, wrong Ports)
+			// is restored on reconcile. Kubernetes owns the merge with fields belonging to other managers
+			// (cloud LB controller annotations, kube-proxy's NodePort) and preserves them — that contract is
+			// exercised in e2e tests where a real API server is available; here we only verify the drift is fixed.
 			Name:    "drift-corrected",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
@@ -264,13 +268,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 							"tailscale.com/parent-resource-type": "peerrelay",
 							"tailscale.com/parent-resource":      "test",
 							"tailscale.com/peer-relay-replica":   "0",
-							// External label added by some other controller; must survive.
-							"cloud.google.com/backend-config": "attached",
 						},
 						Annotations: map[string]string{
 							"service.beta.kubernetes.io/aws-load-balancer-scheme": "internal",
-							// External annotation the cloud LB controller stamps on the Service; must survive.
-							"cloud.google.com/neg-status": `{"network_endpoint_groups": {}}`,
 						},
 					},
 					Spec: corev1.ServiceSpec{
@@ -288,81 +288,14 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Port:     41641,
 					Protocol: corev1.ProtocolUDP,
 					Labels: map[string]string{
-						"tailscale.com/managed":           "true",
-						"cloud.google.com/backend-config": "attached", // external label preserved
+						"tailscale.com/managed": "true",
 					},
 					Annotations: map[string]string{
-						"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",                 // drift corrected
-						"cloud.google.com/neg-status":                         `{"network_endpoint_groups": {}}`, // external annotation preserved
+						"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing", // drift corrected
 					},
 				},
 			},
-		},
-		{
-			// The cloud LB controller writes its own annotations, kube-proxy assigns a NodePort, and both keep
-			// updating the Service after we create it. Reconcile must not strip external metadata or the assigned
-			// NodePort; if it does we ping-pong with the cloud provider forever.
-			Name:    "preserves-external-additions-on-settled-service",
-			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
-			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-			},
-			ExistingResources: []client.Object{
-				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-0",
-						Namespace: tailscaleNamespace,
-						Labels: map[string]string{
-							"tailscale.com/managed":              "true",
-							"tailscale.com/parent-resource-type": "peerrelay",
-							"tailscale.com/parent-resource":      "test",
-							"tailscale.com/peer-relay-replica":   "0",
-							"cloud.google.com/backend-config":    "attached",
-						},
-						Annotations: map[string]string{
-							"service.beta.kubernetes.io/aws-load-balancer-type":            "external",
-							"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
-							"service.beta.kubernetes.io/aws-load-balancer-scheme":          "internet-facing",
-							"service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "ipv4",
-							"service.beta.kubernetes.io/azure-load-balancer-internal":      "false",
-							"cloud.google.com/neg-status":                                  `{"zones": ["europe-west2-a"]}`,
-						},
-						ResourceVersion: "1",
-					},
-					Spec: corev1.ServiceSpec{
-						Type: corev1.ServiceTypeLoadBalancer,
-						Selector: map[string]string{
-							"statefulset.kubernetes.io/pod-name": "test-0",
-						},
-						Ports: []corev1.ServicePort{
-							{
-								Name:       "peerrelay",
-								Protocol:   corev1.ProtocolUDP,
-								Port:       41641,
-								TargetPort: intstr.FromInt32(41641),
-								NodePort:   31545, // cluster-assigned; must survive.
-							},
-						},
-					},
-				},
-			},
-			ExpectedServices: []expectedService{
-				{
-					Name:     "test-0",
-					Type:     corev1.ServiceTypeLoadBalancer,
-					Port:     41641,
-					Protocol: corev1.ProtocolUDP,
-					NodePort: 31545,
-					Labels: map[string]string{
-						"cloud.google.com/backend-config": "attached",
-					},
-					Annotations: map[string]string{
-						"cloud.google.com/neg-status": `{"zones": ["europe-west2-a"]}`,
-					},
-				},
-			},
-			// No LB ingress seeded, so status is still Pending , the point of this case is the *Service* is
-			// unchanged, not the PR status.
+			// No LB ingress seeded, so the PeerRelayReady condition stays Pending.
 			ExpectedReadyStatus: metav1.ConditionFalse,
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
@@ -673,9 +606,10 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			builder := fake.NewClientBuilder().
+			builder := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 				WithScheme(tsapi.GlobalScheme).
-				WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{})
+				WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
+				WithInterceptorFuncs(applyPatchInterceptor())
 			if tc.PeerRelay != nil {
 				builder = builder.WithObjects(tc.PeerRelay)
 			}
@@ -997,7 +931,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 	}
 
-	fc := fake.NewClientBuilder().
+	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 		WithScheme(tsapi.GlobalScheme).
 		WithStatusSubresource(&tsapi.PeerRelay{}).
 		WithObjects(
@@ -1065,8 +999,29 @@ func readTailscaledConfig(t *testing.T, fc client.Client, secretName string) ipn
 	return conf
 }
 
-// fakeClientProvider is a tailscaled.ClientProvider that ignores the requested tailnet name and always returns the
-// same client. Used to inject a scripted tsclient into the reconciler.
+func applyPatchInterceptor() interceptor.Funcs {
+	return interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if patch.Type() != types.ApplyPatchType {
+				return cl.Patch(ctx, obj, patch, opts...)
+			}
+
+			key := client.ObjectKeyFromObject(obj)
+			existing := obj.DeepCopyObject().(client.Object)
+			if err := cl.Get(ctx, key, existing); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return err
+				}
+
+				return cl.Create(ctx, obj)
+			}
+
+			obj.SetResourceVersion(existing.GetResourceVersion())
+			return cl.Update(ctx, obj)
+		},
+	}
+}
+
 type fakeClientProvider struct {
 	client tsclient.Client
 	err    error
@@ -1145,7 +1100,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 
 	t.Run("mints-key-on-first-reconcile", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
-		fc := fake.NewClientBuilder().
+		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
@@ -1183,7 +1138,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 
 	t.Run("reuses-existing-key-across-reconciles", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
-		fc := fake.NewClientBuilder().
+		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
@@ -1223,7 +1178,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Spec:       tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
 		}
 
-		fc := fake.NewClientBuilder().
+		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
 			WithObjects(pr).
@@ -1294,7 +1249,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 		}
 
-		fc := fake.NewClientBuilder().
+		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
@@ -1343,7 +1298,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
 		}
 
-		fc := fake.NewClientBuilder().
+		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 			WithObjects(
@@ -1426,7 +1381,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 		},
 	}
 
-	fc := fake.NewClientBuilder().
+	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 		WithScheme(tsapi.GlobalScheme).
 		WithStatusSubresource(&tsapi.PeerRelay{}, &appsv1.StatefulSet{}).
 		WithObjects(pr, pc).
