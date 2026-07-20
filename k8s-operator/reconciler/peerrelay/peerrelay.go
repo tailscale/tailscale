@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -93,7 +92,6 @@ const reconcilerName = "peerrelay-reconciler"
 
 // Constants for condition reasons.
 const (
-	ReasonEndpointsInvalid = "EndpointsInvalid"
 	ReasonEndpointsPending = "EndpointsPending"
 	ReasonPodsPending      = "PodsPending"
 	ReasonAWSConfigInvalid = "AWSConfigInvalid"
@@ -239,7 +237,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 	// via RelayServerStaticEndpoints. On first reconcile the LBs aren't provisioned yet , endpointsByReplica ends
 	// up empty and the configs are written without static endpoints; the Watches-triggered reconcile that fires
 	// when the LB IP lands will fill them in.
-	endpoints, endpointErrs, err := r.readEndpoints(ctx, pr)
+	endpoints, err := r.readEndpoints(ctx, logger, pr)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to read endpoints for PeerRelay %q: %w", pr.Name, err)
 	}
@@ -281,7 +279,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		return reconcile.Result{}, fmt.Errorf("failed to clean up scaled-down config Secrets for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err = r.writeStatus(ctx, logger, pr, endpoints, endpointErrs, replicas, ss); err != nil {
+	if err = r.writeStatus(ctx, logger, pr, endpoints, replicas, ss); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 	}
 
@@ -302,24 +300,28 @@ func peerRelayReady(pr *tsapi.PeerRelay) bool {
 	return false
 }
 
-func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]tsapi.PeerRelayEndpoint, []error, error) {
+func (r *Reconciler) readEndpoints(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) ([]tsapi.PeerRelayEndpoint, error) {
 	var list corev1.ServiceList
 	if err := r.List(ctx, &list, client.InNamespace(r.tailscaleNamespace), client.MatchingLabels(peerRelayLabels(pr.Name))); err != nil {
-		return nil, nil, fmt.Errorf("failed to list Services: %w", err)
+		return nil, fmt.Errorf("failed to list Services: %w", err)
 	}
 
-	var (
-		endpoints []tsapi.PeerRelayEndpoint
-		errs      []error
-	)
+	prevByReplica := make(map[int32]tsapi.PeerRelayEndpoint, len(pr.Status.Endpoints))
+	for _, ep := range pr.Status.Endpoints {
+		prevByReplica[ep.Replica] = ep
+	}
+
+	var endpoints []tsapi.PeerRelayEndpoint
 	for i := range list.Items {
-		endpoint, err := r.peerRelayEndpoint(ctx, &list.Items[i])
-		if err != nil {
-			errs = append(errs, err)
-			continue
+		svc := &list.Items[i]
+		var prev *tsapi.PeerRelayEndpoint
+		if idx, ok := replicaIndexFromLabels(svc.Labels); ok {
+			if ep, ok := prevByReplica[idx]; ok {
+				prev = &ep
+			}
 		}
 
-		if endpoint != nil {
+		if endpoint := r.peerRelayEndpoint(ctx, logger, svc, prev); endpoint != nil {
 			endpoints = append(endpoints, *endpoint)
 		}
 	}
@@ -328,14 +330,13 @@ func (r *Reconciler) readEndpoints(ctx context.Context, pr *tsapi.PeerRelay) ([]
 		return cmp.Compare(a.Replica, b.Replica)
 	})
 
-	return endpoints, errs, nil
+	return endpoints, nil
 }
 
-func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, errs []error, replicas int32, ss *appsv1.StatefulSet) error {
+func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, endpoints []tsapi.PeerRelayEndpoint, replicas int32, ss *appsv1.StatefulSet) error {
 	prevStatus := pr.Status.DeepCopy()
 
 	pr.Status.Endpoints = endpoints
-	joined := errors.Join(errs...)
 
 	var readyReplicas int32
 	if ss != nil {
@@ -343,8 +344,6 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 	}
 
 	switch {
-	case len(errs) > 0:
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsInvalid, joined.Error(), r.clock, logger)
 	case int32(len(endpoints)) < replicas:
 		message := fmt.Sprintf("%d of %d replicas have a public IP", len(endpoints), replicas)
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, logger)
@@ -356,14 +355,14 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 	}
 
 	if reflect.DeepEqual(prevStatus, &pr.Status) {
-		return joined
+		return nil
 	}
 
 	if err := r.Status().Update(ctx, pr); err != nil {
 		return fmt.Errorf("failed to update PeerRelay status: %w", err)
 	}
 
-	return joined
+	return nil
 }
 
 func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {
@@ -421,6 +420,16 @@ func (r *Reconciler) ensureService(ctx context.Context, logger *zap.SugaredLogge
 		updated.Labels[k] = v
 	}
 
+	// The AWS EIP/subnet annotations are the only pair the reconciler toggles on and off between reconciles (via
+	// spec.aws.elasticIPs). Drop them if the current desired set doesn't include them so users clearing the field
+	// aren't left with stale annotations pinning the Service to a stale Elastic IP. cloudAnnotations keys are
+	// always present in desired, so they never need pruning; keys the user drops from spec.service.annotations are
+	// out of scope for reconciler-driven cleanup (we don't track prior state) and stay on the Service.
+	for _, k := range []string{annotationEIPAllocations, annotationSubnets} {
+		if _, keep := desired.Annotations[k]; !keep {
+			delete(updated.Annotations, k)
+		}
+	}
 	if updated.Annotations == nil && len(desired.Annotations) > 0 {
 		updated.Annotations = make(map[string]string, len(desired.Annotations))
 	}
@@ -430,7 +439,21 @@ func (r *Reconciler) ensureService(ctx context.Context, logger *zap.SugaredLogge
 
 	updated.Spec.Type = desired.Spec.Type
 	updated.Spec.Selector = desired.Spec.Selector
-	updated.Spec.Ports = desired.Spec.Ports
+	updated.Spec.Ports = slices.Clone(desired.Spec.Ports)
+
+	// Preserve NodePorts that may have been assigned by kube.
+	for i := range updated.Spec.Ports {
+		if updated.Spec.Ports[i].NodePort != 0 {
+			continue
+		}
+
+		for _, ep := range existing.Spec.Ports {
+			if ep.Name == updated.Spec.Ports[i].Name {
+				updated.Spec.Ports[i].NodePort = ep.NodePort
+				break
+			}
+		}
+	}
 
 	if maps.Equal(existing.Labels, updated.Labels) &&
 		maps.Equal(existing.Annotations, updated.Annotations) &&

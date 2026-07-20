@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -132,21 +133,21 @@ func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
 	return int32(n), true
 }
 
-func (r *Reconciler) peerRelayEndpoint(ctx context.Context, svc *corev1.Service) (*tsapi.PeerRelayEndpoint, error) {
+func (r *Reconciler) peerRelayEndpoint(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service, prev *tsapi.PeerRelayEndpoint) *tsapi.PeerRelayEndpoint {
 	idx, ok := replicaIndexFromLabels(svc.Labels)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP != "" {
-			return &tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort}, nil
+			return &tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort}
 		}
 	}
 
 	// Just return nil if we're not dealing with AWS fun.
 	if _, ok = svc.Annotations[annotationEIPAllocations]; !ok {
-		return nil, nil
+		return nil
 	}
 
 	// If we were not able to obtain an IP address, we fall back to an IPv4 lookup. This is specifically for the case
@@ -163,14 +164,20 @@ func (r *Reconciler) peerRelayEndpoint(ctx context.Context, svc *corev1.Service)
 
 		addrs, err := r.resolver(resolveCtx, "ip4", ing.Hostname)
 		if err != nil || len(addrs) == 0 {
+			logger.Warnf("failed to resolve LoadBalancer hostname %q for Service %q: %v", ing.Hostname, svc.Name, err)
+			// Preserve the previously-known endpoint (if any) so that a failure here doesn't erase status.endpoints.
+			if prev != nil {
+				return prev
+			}
+
 			continue
 		}
 
 		slices.SortFunc(addrs, netip.Addr.Compare)
-		return &tsapi.PeerRelayEndpoint{Replica: idx, Address: addrs[0].String(), Port: servicePort}, nil
+		return &tsapi.PeerRelayEndpoint{Replica: idx, Address: addrs[0].String(), Port: servicePort}
 	}
 
-	return nil, nil
+	return nil
 }
 
 func portsMatch(a, b []corev1.ServicePort) bool {

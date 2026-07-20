@@ -55,14 +55,16 @@ func testResolver(_ context.Context, _ string, host string) ([]netip.Addr, error
 }
 
 type expectedService struct {
-	Name        string
-	Type        corev1.ServiceType
-	Port        int32
-	NodePort    int32
-	Protocol    corev1.Protocol
-	Selector    map[string]string
-	Labels      map[string]string
-	Annotations map[string]string
+	Name              string
+	Type              corev1.ServiceType
+	Port              int32
+	NodePort          int32
+	Protocol          corev1.Protocol
+	Selector          map[string]string
+	Labels            map[string]string
+	Annotations       map[string]string
+	AbsentLabels      []string
+	AbsentAnnotations []string
 }
 
 type statefulSetSpec struct {
@@ -586,6 +588,40 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			Name:    "aws-elasticips-clears-eip-annotations",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExistingResources: []client.Object{
+				&corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-0",
+						Namespace: tailscaleNamespace,
+						Labels: map[string]string{
+							"tailscale.com/managed":              "true",
+							"tailscale.com/parent-resource-type": "peerrelay",
+							"tailscale.com/parent-resource":      "test",
+							"tailscale.com/peer-relay-replica":   "0",
+						},
+						Annotations: map[string]string{
+							eipAllocationsAnnotation: "eipalloc-stale",
+							subnetsAnnotation:        "subnet-stale",
+						},
+					},
+					Spec: corev1.ServiceSpec{
+						Type: corev1.ServiceTypeLoadBalancer,
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:              "test-0",
+					AbsentAnnotations: []string{eipAllocationsAnnotation, subnetsAnnotation},
+				},
+			},
+		},
+		{
 			// Length mismatch trips the belt-and-braces check: reconciler refuses to create Services and surfaces
 			// AWSConfigInvalid so the user can fix the spec. Nothing is created, existing state is preserved.
 			Name:    "aws-elasticips-insufficient",
@@ -862,9 +898,21 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		}
 	}
 
+	for _, k := range want.AbsentLabels {
+		if v, ok := got.Labels[k]; ok {
+			t.Errorf("Service %q: expected label %q to be absent, got %q", want.Name, k, v)
+		}
+	}
+
 	for k, v := range want.Annotations {
 		if gotV := got.Annotations[k]; gotV != v {
 			t.Errorf("Service %q: expected annotation %q=%q, got %q", want.Name, k, v, gotV)
+		}
+	}
+
+	for _, k := range want.AbsentAnnotations {
+		if v, ok := got.Annotations[k]; ok {
+			t.Errorf("Service %q: expected annotation %q to be absent, got %q", want.Name, k, v)
 		}
 	}
 }
