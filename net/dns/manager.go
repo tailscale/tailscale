@@ -38,9 +38,6 @@ import (
 
 var (
 	errFullQueue = errors.New("request queue full")
-	// ErrNoDNSConfig is returned by RecompileDNSConfig when the Manager
-	// has no existing DNS configuration.
-	ErrNoDNSConfig = errors.New("no DNS configuration")
 )
 
 // maxActiveQueries returns the maximal number of DNS requests that can
@@ -142,29 +139,6 @@ func (m *Manager) ProbeLocks() {
 	}
 }
 
-// RecompileDNSConfig recompiles the last attempted DNS configuration, which has
-// the side effect of re-querying the OS's interface nameservers.  This should be used
-// on platforms where the interface nameservers can change.  Darwin, for example,
-// where the nameservers aren't always available when we process a major interface
-// change event, or platforms where the nameservers may change while tunnel is up.
-//
-// This should be called if it is determined that [OSConfigurator.GetBaseConfig] may
-// give a better or different result than when [Manager.Set] was last called.  The
-// logic for making that determination is up to the caller.
-//
-// It returns [ErrNoDNSConfig] if [Manager.Set] has never been called.
-func (m *Manager) RecompileDNSConfig() error {
-	if !buildfeatures.HasDNS {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.config != nil {
-		return m.setLocked(*m.config)
-	}
-	return ErrNoDNSConfig
-}
-
 func (m *Manager) Set(cfg Config) error {
 	if !buildfeatures.HasDNS {
 		return nil
@@ -193,12 +167,6 @@ func (m *Manager) setLocked(cfg Config) error {
 	}))
 
 	rcfg, ocfg, err := m.compileConfig(cfg)
-	if err != nil {
-		// On a compilation failure, set m.config set for later reuse by
-		// [Manager.RecompileDNSConfig] and return the error.
-		m.config = &cfg
-		return err
-	}
 
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		rcfg.WriteToBufioWriter(w)
@@ -215,10 +183,12 @@ func (m *Manager) setLocked(cfg Config) error {
 		return err
 	}
 
-	m.health.SetHealthy(osConfigurationSetWarnable)
+	if err == nil {
+		m.health.SetHealthy(osConfigurationSetWarnable)
+	}
 	m.config = &cfg
 
-	return nil
+	return err
 }
 
 func (m *Manager) setDNSLocked(ocfg OSConfig) error {
@@ -411,8 +381,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// If the OS can't do native split-DNS, read out the underlying resolver
 	// config and blend it into our config. On iOS, [OSConfigurator.GetBaseConfig]
 	// has a tendency to temporarily fail if called immediately following an
-	// interface change. These failures should be retried if/when the OS indicates
-	// that the DNS configuration has changed via [RecompileDNSConfig].
+	// interface change.  Errors here indicate that this operation should be
+	// retried.
 	base, err := m.os.GetBaseConfig()
 	if err != nil {
 		if (isIOS || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
@@ -422,8 +392,23 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			ocfg.MatchDomains = cfg.matchDomains()
 			return rcfg, ocfg, nil
 		}
+		// We couldn't read the OS's base resolver config. This happens
+		// transiently on Apple platforms right after a link change, before
+		// the OS has populated the new interface's resolvers.
+		//
+		// Rather than abort the whole apply, we apply the rest of the config
+		// (MagicDNS hosts and the tailnet split routes) but with NO default
+		// ("." ) resolver. Aborting would leave the forwarder's previous "."
+		// route in place, pointing at the prior network's now-unreachable
+		// resolver, which black-holes all non-tailnet DNS until something
+		// re-drives the config. With no default resolver, queries we don't
+		// otherwise handle fail fast with SERVFAIL (the client retries)
+		// instead of being sent to a dead or incorrect upstream.  We return the
+		// error here so that the caller knows to retry.
 		m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
-		return resolver.Config{}, OSConfig{}, err
+		m.logf("dns: GetBaseConfig failed (%v); applying config with no default resolver rather than retaining the previous one", err)
+		delete(rcfg.Routes, ".")
+		return rcfg, ocfg, err
 	}
 	m.health.SetHealthy(osConfigurationReadWarnable)
 

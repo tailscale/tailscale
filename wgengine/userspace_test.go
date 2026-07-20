@@ -4,6 +4,7 @@
 package wgengine
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -521,6 +522,225 @@ func TestLinkChangeReapplyPreservesMagicDNSRoutes(t *testing.T) {
 	if !slices.Equal(initial, after) {
 		t.Errorf("resolver LocalDomains changed after linkChange:\n  initial: %s\n  after:   %s",
 			logger.AsJSON(initial), logger.AsJSON(after))
+	}
+}
+
+// retryDNSOSConfigurator is a dns.OSConfigurator (SplitDNS=false) whose
+// GetBaseConfig can be made to fail a settable number of times and to return a
+// settable nameserver. It simulates the transient "no resolvers found" failure
+// that can occur right after a link change while the OS is still bringing the
+// new interface up.
+type retryDNSOSConfigurator struct {
+	mu            sync.Mutex
+	failsLeft     int
+	baseNS        netip.Addr
+	getBaseCnt    int
+	firstCallCh   chan struct{} // closed on first GetBaseConfig call after notifyFirstCall
+	firstCallDone bool
+}
+
+func (c *retryDNSOSConfigurator) SetDNS(dns.OSConfig) error { return nil }
+func (c *retryDNSOSConfigurator) SupportsSplitDNS() bool    { return false }
+func (c *retryDNSOSConfigurator) Close() error              { return nil }
+
+func (c *retryDNSOSConfigurator) GetBaseConfig() (dns.OSConfig, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getBaseCnt++
+	if c.firstCallCh != nil && !c.firstCallDone {
+		c.firstCallDone = true
+		close(c.firstCallCh)
+	}
+	if c.failsLeft > 0 {
+		c.failsLeft--
+		return dns.OSConfig{}, fmt.Errorf("getDNSServers failed: Fallthrough, no resolvers found")
+	}
+	return dns.OSConfig{Nameservers: []netip.Addr{c.baseNS}}, nil
+}
+
+// arm updates the nameserver GetBaseConfig will return and how many upcoming
+// calls should fail first.
+func (c *retryDNSOSConfigurator) arm(baseNS netip.Addr, fails int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseNS = baseNS
+	c.failsLeft = fails
+}
+
+func (c *retryDNSOSConfigurator) calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.getBaseCnt
+}
+
+// notifyFirstCall returns a channel that is closed the first time
+// GetBaseConfig is called after this method returns.
+func (c *retryDNSOSConfigurator) notifyFirstCall() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ch := make(chan struct{})
+	c.firstCallCh = ch
+	c.firstCallDone = false
+	return ch
+}
+
+// splitDNSConfig is a DNS config with a route that has upstream resolvers,
+// which forces net/dns.Manager.compileConfig down the path that reads
+// GetBaseConfig to build the "." (default) route.
+func splitDNSConfig() *dns.Config {
+	return &dns.Config{
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+			"ts.net.": {{Addr: "1.2.3.4"}},
+		},
+		SearchDomains: []dnsname.FQDN{"ts.net."},
+	}
+}
+
+// TestLinkChangeDNSReapplyRetry is a regression test for the bug where a
+// transient GetBaseConfig failure during the major-link-change DNS reapply
+// left the forwarder pointed at the previous network's resolver until the
+// tunnel was toggled. The reapply must retry until it succeeds and installs
+// the new base resolver.
+func TestLinkChangeDNSReapplyRetry(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "android", "darwin", "ios", "openbsd":
+	default:
+		t.Skipf("linkChange DNS reapply path not exercised on %s", runtime.GOOS)
+	}
+
+	oldNS := netip.MustParseAddr("192.168.0.1")
+	newNS := netip.MustParseAddr("10.0.1.1")
+	// Initially healthy so the first Reconfig installs the old network's
+	// resolver as the "." route.
+	osCfg := &retryDNSOSConfigurator{baseNS: oldNS}
+
+	bus := eventbustest.NewBus(t)
+	e, err := NewUserspaceEngine(t.Logf, Config{
+		HealthTracker: health.NewTracker(bus),
+		Metrics:       new(usermetric.Registry),
+		EventBus:      bus,
+		DNS:           osCfg,
+		RespondToPing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	var (
+		mu   sync.Mutex
+		last resolver.Config
+	)
+	e.(*userspaceEngine).dns.Resolver().TestOnlySetHook(func(cfg resolver.Config) {
+		mu.Lock()
+		defer mu.Unlock()
+		last = cfg
+	})
+	defaultRoute := func() []*dnstype.Resolver {
+		mu.Lock()
+		defer mu.Unlock()
+		return last.Routes["."]
+	}
+
+	if err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, splitDNSConfig()); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if got := defaultRoute(); len(got) != 1 || got[0].Addr != oldNS.String() {
+		t.Fatalf("initial default route = %v; want [%s]", got, oldNS)
+	}
+
+	// Simulate a network transition: the new network's resolver is newNS,
+	// but GetBaseConfig fails transiently the first couple of times (as it
+	// does on Apple platforms right after a link change).
+	osCfg.arm(newNS, 2)
+
+	cd, err := netmon.NewChangeDelta(nil, &netmon.State{HaveV4: true}, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cd.RebindLikelyRequired = true
+	e.(*userspaceEngine).linkChange(cd)
+
+	// The inline reapply fails, and so does the first retry; the retry loop
+	// must keep going until GetBaseConfig succeeds and the "." route points
+	// at the new base nameserver rather than staying stuck at oldNS.
+	wantAddr := newNS.String()
+	deadline := time.Now().Add(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		routes := defaultRoute()
+		if len(routes) == 1 && routes[0].Addr == wantAddr {
+			break // recovered
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("default route never updated to %q; got %v (GetBaseConfig calls=%d)",
+				wantAddr, routes, osCfg.calls())
+		}
+	}
+}
+
+// TestLinkChangeDNSReapplyRetryStopsOnClose verifies that the background DNS
+// reapply retry loop exits promptly when the engine is closed, rather than
+// spinning or calling into a torn-down dns.Manager.
+func TestLinkChangeDNSReapplyRetryStopsOnClose(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "android", "darwin", "ios", "openbsd":
+	default:
+		t.Skipf("linkChange DNS reapply path not exercised on %s", runtime.GOOS)
+	}
+
+	osCfg := &retryDNSOSConfigurator{baseNS: netip.MustParseAddr("192.168.0.1")}
+	started := osCfg.notifyFirstCall() // closed when the first GetBaseConfig call is made
+
+	bus := eventbustest.NewBus(t)
+	e, err := NewUserspaceEngine(t.Logf, Config{
+		HealthTracker: health.NewTracker(bus),
+		Metrics:       new(usermetric.Registry),
+		EventBus:      bus,
+		DNS:           osCfg,
+		RespondToPing: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.Reconfig(&wgcfg.Config{}, &router.Config{}, splitDNSConfig()); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+
+	// Make GetBaseConfig fail forever so the retry loop never succeeds on
+	// its own; only Close should stop it.
+	osCfg.arm(netip.MustParseAddr("10.0.1.1"), 1<<30)
+
+	cd, err := netmon.NewChangeDelta(nil, &netmon.State{HaveV4: true}, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cd.RebindLikelyRequired = true
+	e.(*userspaceEngine).linkChange(cd) // starts a retry loop that will keep failing
+
+	// wait for retry loop to have made its first call
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for first GetBaseConfig call in retry loop")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		e.Close()
+		close(done)
+	}()
+
+	ctx, cancel = context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("Close hung, likely blocked by the DNS reapply retry loop")
 	}
 }
 

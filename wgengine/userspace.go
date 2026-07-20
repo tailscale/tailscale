@@ -47,6 +47,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/checkchange"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -75,7 +76,9 @@ type userspaceEngine struct {
 	logf           logger.Logf
 	wgLogger       *wglog.Logger // a wireguard-go logging wrapper
 	reqCh          chan struct{}
-	waitCh         chan struct{} // chan is closed when first Close call completes; contrast with closing bool
+	waitCh         chan struct{}      // chan is closed when first Close call completes; contrast with closing bool
+	ctx            context.Context    // canceled by Close; used to interrupt background retries (e.g. DNS reapply)
+	ctxCancel      context.CancelFunc // cancels ctx
 	timeNow        func() mono.Time
 	tundev         *tstun.Wrapper
 	wgdev          *device.Device
@@ -135,6 +138,9 @@ type userspaceEngine struct {
 	statusCallback StatusCallback
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
+
+	linkChangeGen      uint64         // bumped on every major-link-change that triggers a DNS reconfiguration
+	dnsConfigurationWG sync.WaitGroup // tracks background DNS reapply retries; awaited by Close after ctxCancel
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
 	// pong callbacks. The map key is a random slice of bytes.
@@ -361,12 +367,15 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		rtr = router.ConsolidatingRoutes(logf, rtr)
 	}
 
+	ctx, ctxCancel := context.WithCancel(context.Background())
 	e := &userspaceEngine{
 		eventBus:       conf.EventBus,
 		timeNow:        mono.Now,
 		logf:           logf,
 		reqCh:          make(chan struct{}, 1),
 		waitCh:         make(chan struct{}),
+		ctx:            ctx,
+		ctxCancel:      ctxCancel,
 		tundev:         tsTUNDev,
 		router:         rtr,
 		dialer:         conf.Dialer,
@@ -986,6 +995,10 @@ func (e *userspaceEngine) getStatusCallback() StatusCallback {
 
 var ErrEngineClosing = errors.New("engine closing; no status")
 
+// errDNSReapplyRetry is a non-nil sentinel passed to backoff.BackOff to make
+// it sleep between DNS reapply retries. It is never returned to callers.
+var errDNSReapplyRetry = errors.New("dns reapply retry")
+
 func (e *userspaceEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	e.wgLock.Lock()
 	dev := e.wgdev
@@ -1112,6 +1125,12 @@ func (e *userspaceEngine) Close() {
 	e.closing = true
 	e.mu.Unlock()
 
+	// Cancel any background work (e.g. the DNS reapply retry loop) and wait
+	// for it to finish before tearing down the subsystems it uses, so it
+	// can't call into e.dns after e.dns.Down below.
+	e.ctxCancel()
+	e.dnsConfigurationWG.Wait()
+
 	e.magicConn.Close()
 	if e.netMonOwned {
 		e.netMon.Close()
@@ -1164,25 +1183,22 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	// are not currently on) breaks DNS resolution system-wide.  There are notable
 	// timing issues here with Darwin's network stack.  It is not guaranteed that
 	// the forward resolver will be available immediately after the interface
-	// comes up.  We leave it to the network extension to also poke magicDNS directly
-	// via [dns.Manager.RecompileDNSConfig] when it detects any change in the
-	// nameservers.
-	//
+	// comes up.
+
 	// TODO: On Android, Darwin-tailscaled, and openbsd, why do we need this?
 	if delta.RebindLikelyRequired && up {
 		switch runtime.GOOS {
 		case "linux", "android", "ios", "darwin", "openbsd":
-			e.wgLock.Lock()
-			dnsCfg := e.lastDNSConfig
-			e.wgLock.Unlock()
-			if dnsCfg.Valid() {
-				if err := e.dns.Set(*dnsCfg.AsStruct()); err != nil {
-					e.logf("wgengine: error setting DNS config after major link change: %v", err)
-				} else if err := e.reconfigureVPNIfNecessary(); err != nil {
-					e.logf("wgengine: error reconfiguring VPN after major link change: %v", err)
-				} else {
-					e.logf("wgengine: set DNS config again after major link change")
-				}
+			// Bump the generation first so any retry loop from a prior
+			// link change exits, then attempt the reapply once inline
+			// (the common case where the OS is already settled). If it
+			// fails, kick off a background retry.
+			gen := e.nextLinkChangeGen()
+			if err := e.reconfigureDNSOnLinkChange(); err != nil {
+				e.logf("dns: error setting DNS config after major link change: %v.  Will retry.", err)
+				e.retryDNSReconfiguration(gen)
+			} else {
+				e.logf("dns: set DNS config again after major link change")
 			}
 		}
 	}
@@ -1204,6 +1220,69 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 		}
 		e.magicConn.ReSTUN(why)
 	}
+}
+
+// nextLinkChangeGen bumps and returns the DNS-reapply generation counter. A
+// background retry loop started for a given generation exits once a newer
+// generation is observed, ensuring only the most recent link change's retry
+// stays active. See linkChange and retryDNSReapply.
+func (e *userspaceEngine) nextLinkChangeGen() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.linkChangeGen++
+	return e.linkChangeGen
+}
+
+func (e *userspaceEngine) reconfigureDNSOnLinkChange() error {
+	e.wgLock.Lock()
+	dnsCfg := e.lastDNSConfig
+	e.wgLock.Unlock()
+	if !dnsCfg.Valid() {
+		return nil
+	}
+	if err := e.dns.Set(*dnsCfg.AsStruct()); err != nil {
+		return err
+	}
+	return e.reconfigureVPNIfNecessary()
+}
+
+// retryDNSReconfiguration retries reconfigureDNSOnLinkChange in the background until it
+// succeeds, the engine closes, or a newer link change supersedes gen (see
+// linkChangeGen). It runs detached from the linkChangeQueue so it never
+// blocks Close's drain of that queue.
+//
+// The reapply can fail transiently right after a link change because the OS
+// hasn't finished bringing the new interface (and its resolvers) up. On the
+// affected platforms (notably Apple netext, where MagicDNS is ~always the
+// default resolver), a failure leaves the forwarder pointed at the previous
+// network's resolver, breaking DNS system-wide until something else re-drives
+// the config. Retrying closes that gap.
+func (e *userspaceEngine) retryDNSReconfiguration(gen uint64) {
+	e.dnsConfigurationWG.Add(1)
+	go func() {
+		defer e.dnsConfigurationWG.Done()
+		bo := backoff.NewBackoff("dns-reapply", e.logf, 5*time.Second)
+		for {
+			// Sleep before retrying; the first inline attempt already
+			// failed by the time we get here. BackOff returns immediately
+			// if the engine's ctx is canceled.
+			bo.BackOff(e.ctx, errDNSReapplyRetry)
+
+			e.mu.Lock()
+			superseded := e.linkChangeGen != gen
+			e.mu.Unlock()
+			if e.ctx.Err() != nil || superseded {
+				return
+			}
+
+			if err := e.reconfigureDNSOnLinkChange(); err != nil {
+				e.logf("dns: error setting DNS config on retry: %v.  Retrying again.", err)
+				continue
+			}
+			e.logf("dns: set DNS config after major link change (on retry)")
+			return
+		}
+	}()
 }
 
 func (e *userspaceEngine) SetSelfNode(self tailcfg.NodeView) {
