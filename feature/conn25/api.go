@@ -51,6 +51,31 @@ func serveLocalAPIStateGet(h *localapi.Handler, w http.ResponseWriter, r *http.R
 	}
 }
 
+// serveC2NStateGet serves the C2N endpoint /conn25/state.
+// See also [*Conn25.GetActiveState].
+func serveC2NStateGet(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Request) {
+	// TODO(tailscale/corp#39033): Remove for alpha release.
+	if !envknob.UseWIPCode() && !testenv.InTest() {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+
+	logf := b.Logger()
+	logf("c2n: GET /conn25/state received")
+
+	ext, ok := ipnlocal.GetExt[*extension](b)
+	if !ok {
+		http.Error(w, "miswired", http.StatusInternalServerError)
+		return
+	}
+	state := ext.conn25.GetActiveState()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(state); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // GetActiveState returns active state for the client and the connector,
 // including IP pool usage, address mappings, domains, and active flow counts.
 func (c *Conn25) GetActiveState() appctype.Conn25ActiveState {
