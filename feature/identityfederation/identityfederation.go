@@ -9,16 +9,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
 	"tailscale.com/feature"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/util/backoff"
+	"tailscale.com/util/testenv"
 	"tailscale.com/wif"
 )
 
@@ -26,6 +30,17 @@ func init() {
 	feature.Register("identityfederation")
 	tailscale.HookResolveAuthKeyViaWIF.Set(resolveAuthKey)
 	tailscale.HookExchangeJWTForTokenViaWIF.Set(exchangeJWTForToken)
+}
+
+var forceTimeout atomic.Bool
+
+// withForceTimeoutForTest sets a mock timeout for testing purposes, runs the given function,
+// and then clears the mock timeout.
+func withForceTimeoutForTest(fn func()) {
+	testenv.AssertInTest()
+	defer forceTimeout.Store(false)
+	forceTimeout.Store(true)
+	fn()
 }
 
 // resolveAuthKey uses OIDC identity federation to exchange the provided ID token and client ID for an authkey.
@@ -118,21 +133,49 @@ func parseOptionalAttributes(clientID string) (strippedID string, ephemeral bool
 
 // exchangeJWTForToken exchanges a JWT for a Tailscale access token.
 func exchangeJWTForToken(ctx context.Context, baseURL, clientID, idToken string) (string, error) {
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
-
-	token, err := (&oauth2.Config{
-		Endpoint: oauth2.Endpoint{
-			TokenURL: fmt.Sprintf("%s/api/v2/oauth/token-exchange", baseURL),
-		},
-	}).Exchange(ctx, "", oauth2.SetAuthURLParam("client_id", clientID), oauth2.SetAuthURLParam("jwt", idToken))
-	if err != nil {
-		// Try to extract more detailed error message
-		if retrieveErr, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
-			return "", fmt.Errorf("token exchange failed with status %d: %s", retrieveErr.Response.StatusCode, string(retrieveErr.Body))
-		}
-		return "", fmt.Errorf("unexpected token exchange request error: %w", err)
+	var token *oauth2.Token
+	var err error
+	exchangeMaxBackoff := 30 * time.Second
+	exchangeHTTPClientTimeout := 15 * time.Second
+	if testenv.InTest() && forceTimeout.Load() {
+		exchangeHTTPClientTimeout = 5 * time.Millisecond
+		exchangeMaxBackoff = 0 * time.Second
 	}
 
-	return token.AccessToken, nil
+	bo := backoff.NewBackoff("exchange-jwt", log.Printf, exchangeMaxBackoff)
+	retries := 3
+
+	for i := range retries {
+		httpClient := &http.Client{Timeout: exchangeHTTPClientTimeout}
+		reqCtx := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+
+		token, err = (&oauth2.Config{
+			Endpoint: oauth2.Endpoint{
+				TokenURL:  fmt.Sprintf("%s/api/v2/oauth/token-exchange", baseURL),
+				AuthStyle: oauth2.AuthStyleInParams,
+			},
+		}).Exchange(reqCtx, "", oauth2.SetAuthURLParam("client_id", clientID), oauth2.SetAuthURLParam("jwt", idToken))
+		if err == nil {
+			return token.AccessToken, nil
+		}
+
+		// Try to extract more detailed error message
+		if retrieveErr, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
+			statusCode := retrieveErr.Response.StatusCode
+			if (statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError) && i < retries-1 {
+				bo.BackOff(reqCtx, err)
+				continue
+			}
+
+			return "", fmt.Errorf("token exchange failed with status %d: %s", retrieveErr.Response.StatusCode, string(retrieveErr.Body))
+		}
+
+		// Retry as this might be a transient error
+		if errors.Is(err, context.DeadlineExceeded) && i < retries-1 {
+			bo.BackOff(reqCtx, err)
+			continue
+		}
+	}
+
+	return "", fmt.Errorf("unexpected token exchange request error: %w", err)
 }
