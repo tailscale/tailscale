@@ -22,6 +22,19 @@ func InTest() bool {
 	})
 }
 
+// Verbose reports whether the test binary is running with verbose
+// output (the -test.v flag), like testing.Verbose but without
+// importing the testing package.
+func Verbose() bool {
+	f := flag.Lookup("test.v")
+	if f == nil {
+		return false
+	}
+	// The flag's String value is "false" when off, and "true" or
+	// "test2json" when on.
+	return f.Value.String() != "false"
+}
+
 // TB is testing.TB, to avoid importing "testing" in non-test code.
 type TB interface {
 	ArtifactDir() string

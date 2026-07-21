@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"testing"
 
 	"go4.org/mem"
 	"tailscale.com/types/logger"
@@ -17,7 +16,7 @@ import (
 )
 
 type testLogWriter struct {
-	t *testing.T
+	t testenv.TB
 }
 
 func (w *testLogWriter) Write(b []byte) (int, error) {
@@ -26,12 +25,12 @@ func (w *testLogWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func FixLogs(t *testing.T) {
+func FixLogs(t testenv.TB) {
 	log.SetFlags(log.Ltime | log.Lshortfile)
 	log.SetOutput(&testLogWriter{t})
 }
 
-func UnfixLogs(t *testing.T) {
+func UnfixLogs(t testenv.TB) {
 	defer log.SetOutput(os.Stderr)
 }
 

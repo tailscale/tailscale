@@ -6,8 +6,9 @@ package tstest
 import (
 	"fmt"
 	"runtime"
-	"testing"
 	"time"
+
+	"tailscale.com/util/testenv"
 )
 
 // MinAllocsPerRun asserts that f can run with no more than target allocations.
@@ -16,7 +17,7 @@ import (
 //
 // MinAllocsPerRun sets GOMAXPROCS to 1 during its measurement and restores
 // it before returning.
-func MinAllocsPerRun(t *testing.T, target uint64, f func()) error {
+func MinAllocsPerRun(t testenv.TB, target uint64, f func()) error {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 
 	var memstats runtime.MemStats
