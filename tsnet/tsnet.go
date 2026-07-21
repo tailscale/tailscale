@@ -1007,7 +1007,10 @@ func (s *Server) resolveAuthKey() (string, error) {
 		if authKey == "" {
 			clientSecret = s.getClientSecret()
 		}
-		authKey, err = resolveViaOAuth(s.shutdownCtx, clientSecret, s.AdvertiseTags)
+		authKey, err = resolveViaOAuth(s.shutdownCtx, tailscale.ResolveAuthKeyArgs{
+			AuthKey: clientSecret,
+			Tags:    s.AdvertiseTags,
+		})
 		if err != nil {
 			return "", err
 		}
@@ -1033,7 +1036,13 @@ func (s *Server) resolveAuthKey() (string, error) {
 				return "", fmt.Errorf("audience for workload identity federation found, but client ID is empty")
 			}
 		}
-		authKey, err = resolveViaWIF(s.shutdownCtx, s.getControlURL(), clientID, idToken, audience, s.AdvertiseTags)
+		authKey, err = resolveViaWIF(s.shutdownCtx, tailscale.ResolveAuthKeyWIFArgs{
+			BaseURL:  s.getControlURL(),
+			ClientID: clientID,
+			IDToken:  idToken,
+			Audience: audience,
+			Tags:     s.AdvertiseTags,
+		})
 		if err != nil {
 			return "", err
 		}

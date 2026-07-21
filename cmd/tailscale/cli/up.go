@@ -653,7 +653,10 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				}
 			}
 
-			authKey, err = f(ctx, clientSecret, prefs.AdvertiseTags)
+			authKey, err = f(ctx, tailscale.ResolveAuthKeyArgs{
+				AuthKey: clientSecret,
+				Tags:    prefs.AdvertiseTags,
+			})
 			if err != nil {
 				return err
 			}
@@ -666,7 +669,13 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				return err
 			}
 
-			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, upArgs.audience, prefs.AdvertiseTags)
+			authKey, err = f(ctx, tailscale.ResolveAuthKeyWIFArgs{
+				BaseURL:  prefs.ControlURL,
+				ClientID: upArgs.clientID,
+				IDToken:  idToken,
+				Audience: upArgs.audience,
+				Tags:     prefs.AdvertiseTags,
+			})
 			if err != nil {
 				return err
 			}

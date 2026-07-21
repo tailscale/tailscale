@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"tailscale.com/internal/client/tailscale"
 )
 
 func TestResolveAuthKey(t *testing.T) {
@@ -70,7 +72,13 @@ func TestResolveAuthKey(t *testing.T) {
 			srv := mockedControlServer(t)
 			defer srv.Close()
 
-			authKey, err := resolveAuthKey(context.Background(), srv.URL, tt.clientID, tt.idToken, tt.audience, tt.tags)
+			authKey, err := resolveAuthKey(context.Background(), tailscale.ResolveAuthKeyWIFArgs{
+				BaseURL:  srv.URL,
+				ClientID: tt.clientID,
+				IDToken:  tt.idToken,
+				Audience: tt.audience,
+				Tags:     tt.tags,
+			})
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Errorf("resolveAuthKey() error = nil, want %q", tt.wantErr)
