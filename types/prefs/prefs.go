@@ -52,7 +52,15 @@ type serializable[T any] struct {
 	// when the preference has not been configured.
 	Default T `json:",omitzero"`
 	// Metadata is any additional type-agnostic preference metadata to be serialized.
-	Metadata metadata `json:",inline"`
+	//
+	// The `inline` tag option was renamed to `embed` in Go 1.27's
+	// encoding/json/v2, but the pinned go-json-experiment module
+	// (used on older Go versions) only knows `inline`. Each
+	// implementation ignores the option it doesn't know, so specify
+	// both until we require Go 1.27 and drop `inline`.
+	//
+	//lint:ignore SA5008 staticcheck doesn't know Go 1.27's `embed` option yet
+	Metadata metadata `json:",inline,embed"`
 }
 
 // preference is an embeddable type that provides a common implementation for
@@ -165,12 +173,18 @@ var (
 
 // MarshalJSONTo implements [jsonv2.MarshalerTo].
 func (p preference[T]) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonv2.MarshalEncode(out, &p.s)
+	// Pin v2 semantics so the wire format (notably the handling of
+	// the `inline` and `omitzero` tag options in [serializable])
+	// stays the same even when this method is reached via
+	// encoding/json v1, which as of Go 1.27 dispatches here with v1
+	// options that would otherwise leak into this call.
+	return jsonv2.MarshalEncode(out, &p.s, jsonv2.DefaultOptionsV2())
 }
 
 // UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
 func (p *preference[T]) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	return jsonv2.UnmarshalDecode(in, &p.s)
+	// Pin v2 semantics; see MarshalJSONTo.
+	return jsonv2.UnmarshalDecode(in, &p.s, jsonv2.DefaultOptionsV2())
 }
 
 // MarshalJSON implements [json.Marshaler].

@@ -1,0 +1,264 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.0
+  name: peerrelays.tailscale.com
+spec:
+  group: tailscale.com
+  names:
+    kind: PeerRelay
+    listKind: PeerRelayList
+    plural: peerrelays
+    shortNames:
+      - pr
+    singular: peerrelay
+  scope: Cluster
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+        - description: Status of the deployed PeerRelay resources.
+          jsonPath: .status.conditions[?(@.type == "PeerRelayReady")].reason
+          name: Status
+          type: string
+        - description: Public addresses the peer relay replicas are reachable on.
+          jsonPath: .status.endpoints[*].address
+          name: Endpoints
+          type: string
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - metadata
+            - spec
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: |-
+                Spec describes the desired state of the PeerRelay.
+                More info:
+                https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+              type: object
+              properties:
+                aws:
+                  description: |-
+                    AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful
+                    when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any
+                    aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.
+                  type: object
+                  required:
+                    - elasticIPs
+                  properties:
+                    elasticIPs:
+                      description: |-
+                        ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load
+                        Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair
+                        per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica
+                        has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.
+
+                        When set, the reconciler stamps
+                        service.beta.kubernetes.io/aws-load-balancer-eip-allocations and
+                        service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in
+                        spec.service.annotations.
+                      type: array
+                      minItems: 1
+                      items:
+                        description: PeerRelayAWSElasticIP pairs an EIP allocation with the subnet in the same AZ.
+                        type: object
+                        required:
+                          - allocationID
+                          - subnetID
+                        properties:
+                          allocationID:
+                            description: |-
+                              AllocationID is the AWS EIP allocation ID (e.g. eipalloc-0123abcd) whose public IP this replica is reachable
+                              on. Stamped as service.beta.kubernetes.io/aws-load-balancer-eip-allocations on the replica's Service.
+                            type: string
+                            pattern: ^eipalloc-[0-9a-f]+$
+                          subnetID:
+                            description: |-
+                              SubnetID is the AWS subnet in the same availability zone as AllocationID (e.g. subnet-0123abcd). Stamped as
+                              service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service so the NLB is provisioned in
+                              the same AZ as the EIP.
+                            type: string
+                            pattern: ^subnet-[0-9a-f]+$
+                      x-kubernetes-list-type: atomic
+                hostnamePrefix:
+                  description: |-
+                    HostnamePrefix specifies the hostname prefix for each
+                    replica. Each device will have the integer number
+                    from its StatefulSet pod appended to this prefix to form the full hostname.
+                    HostnamePrefix can contain lower case letters, numbers and dashes, it
+                    must not start with a dash and must be between 1 and 62 characters long.
+                  type: string
+                  pattern: ^[a-z0-9][a-z0-9-]{0,61}$
+                proxyClass:
+                  description: |-
+                    ProxyClass is the name of the ProxyClass custom resource that
+                    contains configuration options that should be applied to the
+                    resources created for this PeerRelay. If unset, the operator will
+                    create resources with the default configuration.
+                  type: string
+                replicas:
+                  description: |-
+                    Replicas specifies how many devices to create. Set this to enable
+                    high availability for peer relays.
+                    https://tailscale.com/kb/1115/high-availability. Defaults to 1.
+                  type: integer
+                  format: int32
+                  default: 1
+                  minimum: 0
+                service:
+                  description: Service contains configuration values to modify the LoadBalancer service used to expose the peer relay.
+                  type: object
+                  properties:
+                    annotations:
+                      description: |-
+                        Annotations to apply to the LoadBalancer service. Any annotations that conflict with those used by known
+                        cloud providers to ensure IP addresses rather than DNS names are ignored.
+                      type: object
+                      additionalProperties:
+                        type: string
+                tags:
+                  description: |-
+                    Tags that the Tailscale node will be tagged with.
+                    Defaults to [tag:k8s].
+                    To autoapprove the device defined by a PeerRelay,
+                    you can configure Tailscale ACLs to give these tags the necessary
+                    permissions.
+                    See https://tailscale.com/kb/1337/acl-syntax#autoapprovers.
+                    If you specify custom tags here, you must also make the operator an owner of these tags.
+                    See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
+                    Tags cannot be changed once a PeerRelay node has been created.
+                    Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                tailnet:
+                  description: |-
+                    Tailnet specifies the tailnet this PeerRelay should join. If blank, the default tailnet is used. When set, this
+                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: PeerRelay tailnet is immutable
+              x-kubernetes-validations:
+                - rule: '!has(self.aws) || !has(self.aws.elasticIPs) || self.aws.elasticIPs.size() >= self.replicas'
+                  message: spec.aws.elasticIPs must contain at least one entry per replica
+            status:
+              description: |-
+                Status describes the status of the PeerRelay. This is set
+                and managed by the Tailscale operator.
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        type: string
+                        format: date-time
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type: string
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                endpoints:
+                  description: |-
+                    Endpoints lists the public address:port pairs each peer relay replica is reachable on. There is one entry
+                    per replica whose LoadBalancer Service has been assigned a public address; entries appear as the underlying
+                    cloud provisions each Service.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - address
+                      - port
+                      - replica
+                    properties:
+                      address:
+                        description: |-
+                          Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.
+                          Peers reach this relay by connecting to Address:Port over UDP.
+                        type: string
+                      port:
+                        description: Port is the UDP port the peer relay listens on.
+                        type: integer
+                        format: int32
+                      replica:
+                        description: Replica is the zero-based index of the peer relay replica this endpoint targets.
+                        type: integer
+                        format: int32
+                  x-kubernetes-list-map-keys:
+                    - replica
+                  x-kubernetes-list-type: map
+      served: true
+      storage: true
+      subresources:
+        status: {}

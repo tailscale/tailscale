@@ -207,11 +207,11 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Intercept packets from the tun device and from WireGuard
 	// to perform DNAT and SNAT.
-	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, _ *tstun.Wrapper) filter.Response {
+	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {
 			return filter.Accept
 		}
-		return dph.HandlePacketFromTunDevice(p)
+		return dph.HandlePacketFromTunDevice(p, tun)
 	}
 	tun.PostFilterPacketInboundFromWireGuardAppConnector = func(p *packet.Parsed, tun *tstun.Wrapper) filter.Response {
 		if !e.conn25.isConfigured() {

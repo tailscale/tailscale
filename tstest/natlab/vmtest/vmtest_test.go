@@ -84,6 +84,28 @@ func TestSubnetRouterFreeBSD(t *testing.T) {
 	testSubnetRouterForOS(t, vmtest.FreeBSD150)
 }
 
+func TestSubnetRouterFedora(t *testing.T) {
+	testSubnetRouterForOS(t, vmtest.Fedora43)
+}
+
+// TestFedoraDNSDirect verifies that provisioning a Fedora node with
+// WithDNSMode(DNSDirect) — which masks systemd-resolved — makes tailscaled
+// select the "direct" DNS backend instead of the image default
+// ("systemd-resolved"). This is what lets one distro image cover multiple DNS
+// backends, so adding a distro isn't "basically equivalent" to the others.
+func TestFedoraDNSDirect(t *testing.T) {
+	env := vmtest.New(t)
+
+	net := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	node := env.AddNode("fedora", net,
+		vmtest.OS(vmtest.Fedora43),
+		vmtest.WithDNSMode(vmtest.DNSDirect))
+
+	env.Start()
+
+	env.AssertDNSBackend(node, "direct")
+}
+
 func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 	t.Helper()
 	env := vmtest.New(t)
@@ -106,6 +128,14 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 	httpStep := env.AddStep("HTTP GET through subnet router")
 
 	env.Start()
+
+	// Log which DNS backend the (Linux) subnet router selected. This is the
+	// whole point of testing multiple distros: they should exercise different
+	// DNS managers. Once we've confirmed the expected value per distro, this
+	// can become an AssertDNSBackend. FreeBSD has no Linux DNS gauge, so skip.
+	if srOS.GOOS() == "linux" {
+		t.Logf("subnet-router (%s) DNS backend: %s", srOS.Name, env.DNSBackend(sr))
+	}
 
 	approveStep.Begin()
 	env.ApproveRoutes(sr, "10.0.0.0/24")

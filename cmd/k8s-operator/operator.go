@@ -55,6 +55,7 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	apiproxy "tailscale.com/k8s-operator/api-proxy"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/peerrelay"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/k8s-operator/tsclient"
@@ -367,6 +368,19 @@ func runReconcilers(opts reconcilerOpts) {
 
 	if err = proxygrouppolicy.NewReconciler(proxyGroupPolicyOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not register proxygrouppolicy reconciler: %v", err)
+	}
+
+	peerRelayOptions := peerrelay.ReconcilerOptions{
+		Client:             mgr.GetClient(),
+		TailscaleNamespace: opts.tailscaleNamespace,
+		ProxyImage:         opts.proxyImage,
+		DefaultTags:        strings.Split(opts.proxyTags, ","),
+		Clients:            clients,
+		Logger:             opts.log,
+	}
+
+	if err = peerrelay.NewReconciler(peerRelayOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register peerrelay reconciler: %v", err)
 	}
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)

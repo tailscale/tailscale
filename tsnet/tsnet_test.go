@@ -2560,6 +2560,10 @@ type chanTUN struct {
 	Outbound chan []byte // packets to read from TUN
 	closed   chan struct{}
 	events   chan tun.Event
+
+	// wmu serializes Write and Close so a Write can't send on
+	// Inbound while Close is closing it.
+	wmu sync.Mutex
 }
 
 func newChanTUN() *chanTUN {
@@ -2576,6 +2580,8 @@ func newChanTUN() *chanTUN {
 func (t *chanTUN) File() *os.File { panic("not implemented") }
 
 func (t *chanTUN) Close() error {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
 	select {
 	case <-t.closed:
 	default:
@@ -2596,14 +2602,19 @@ func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 }
 
 func (t *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	select {
+	case <-t.closed:
+		return 0, errors.New("closed")
+	default:
+	}
 	for _, buf := range bufs {
 		pkt := buf[offset:]
 		if len(pkt) == 0 {
 			continue
 		}
 		select {
-		case <-t.closed:
-			return 0, errors.New("closed")
 		case t.Inbound <- slices.Clone(pkt):
 		default:
 			// Drop the packet if the channel is full, like a real

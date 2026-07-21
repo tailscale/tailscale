@@ -28,16 +28,30 @@ import (
 // platforms (macOS, etc.) TCG is used, which allows the tests to run
 // without a same-architecture hypervisor at the cost of speed.
 func qemuAccelArgs() []string {
+	if hardwareAccelAvailable() {
+		return []string{"-enable-kvm", "-cpu", "host"}
+	}
+	return nil
+}
+
+// hardwareAccelAvailable reports whether hardware-accelerated virtualisation
+// (KVM) is usable. When false, VMs run under TCG software emulation, which is
+// dramatically slower and, when several VMs boot concurrently, prone to CPU
+// starvation — a heavy guest (e.g. Fedora) can monopolize host cores and stall
+// its lighter siblings' emulation threads. Callers use this to relax timeouts
+// tuned for KVM's near-native boot speed. VMTEST_NO_KVM=1 forces TCG, for
+// reproducing slow-host behavior.
+func hardwareAccelAvailable() bool {
 	if os.Getenv("VMTEST_NO_KVM") == "1" {
-		return nil
+		return false
 	}
 	if runtime.GOOS == "linux" {
 		if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err == nil {
 			f.Close()
-			return []string{"-enable-kvm", "-cpu", "host"}
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // gokrazyPlatform boots gokrazy (Linux) VMs via QEMU.
@@ -179,6 +193,10 @@ func (e *Env) startCloudQEMU(n *Node) error {
 		"-smbios", "type=1,serial=ds=nocloud",
 		"-serial", "file:" + logPath,
 		"-qmp", "unix:" + qmpSock + ",server,nowait",
+		// Feed host entropy to the guest so early boot doesn't block in
+		// getrandom() waiting for the CRNG to seed. Cheap and worth it on any
+		// backend; the stall is especially likely under TCG.
+		"-device", "virtio-rng-pci",
 	}
 
 	// Add network devices — one per NIC.
@@ -250,12 +268,28 @@ func (r *qemuRun) kill() {
 // VM console output goes to logPath (via QEMU's -serial or -chardev).
 // QEMU's own stdout/stderr go to logPath.qemu for diagnostics.
 func (e *Env) launchQEMU(name, logPath string, args []string) error {
-	// stuckTimeout is generous: a healthy VM prints SeaBIOS/kernel
-	// output within ~1-2s on KVM, but slow shared CI hardware can lag.
-	// Setting it too low risks killing a healthy-but-slow VM; setting it
-	// too high masks the wedge case we want to recover from.
-	const stuckTimeout = 45 * time.Second
+	// stuckTimeout is generous: a healthy VM prints SeaBIOS/kernel output
+	// within ~1-2s on KVM, but slow CI hardware can lag. Under TCG a heavy
+	// concurrent guest can starve its siblings, so give them much longer to
+	// emit a first console byte before we kill and retry.
+	stuckTimeout := 45 * time.Second
+	if !hardwareAccelAvailable() {
+		stuckTimeout = 4 * time.Minute
+	}
 	const maxAttempts = 3
+
+	// Dump the VM's console tail and QEMU's own stderr on test failure.
+	// Registered before the boot loop so it fires even when the node never
+	// boots (all attempts fail below), not just after a successful launch.
+	// The console log is empty when the guest never produced output (e.g. QEMU
+	// exited before the kernel ran); in that case the .qemu file holds the only
+	// diagnostic — KVM errors, "kvm not available", CPU model mismatch, etc.
+	e.t.Cleanup(func() {
+		if e.t.Failed() {
+			dumpLogTail(e.t, name, "console", logPath)
+			dumpLogTail(e.t, name, "qemu stderr", logPath+".qemu")
+		}
+	})
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -276,18 +310,7 @@ func (e *Env) launchQEMU(name, logPath string, args []string) error {
 			if e.ctx != nil {
 				go e.tailLogFile(e.ctx, name, logPath)
 			}
-			e.t.Cleanup(func() {
-				run.kill()
-				// Dump tail of VM log and QEMU's own stderr on failure.
-				// The console log (logPath) is empty when the guest never
-				// produced output (e.g. QEMU exited before the kernel ran);
-				// in that case the .qemu file holds the only diagnostic —
-				// KVM errors, "kvm not available", CPU model mismatch, etc.
-				if e.t.Failed() {
-					dumpLogTail(e.t, name, "console", logPath)
-					dumpLogTail(e.t, name, "qemu stderr", logPath+".qemu")
-				}
-			})
+			e.t.Cleanup(run.kill)
 			return nil
 		}
 		lastErr = fmt.Errorf("QEMU for %s produced no console output in %v", name, stuckTimeout)

@@ -103,7 +103,7 @@ require (
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
-	github.com/tailscale/golang-x-crypto v0.0.0-20250404221719-a5573b049869
+	github.com/tailscale/golang-x-crypto v0.0.0-20260720153645-2ba0bf7866ed
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	github.com/tailscale/mkctr v0.0.0-20260107121656-ea857e3e500b
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7

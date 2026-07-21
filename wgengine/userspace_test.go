@@ -4,9 +4,13 @@
 package wgengine
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"runtime"
@@ -19,12 +23,15 @@ import (
 	"go4.org/mem"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/derp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
@@ -551,5 +558,88 @@ func TestCloseWaitsForLinkChange(t *testing.T) {
 	case <-done:
 	default:
 		t.Fatal("Close returned with link change work still in flight")
+	}
+}
+
+// TestDERPAppNamePlumbing tests that Config.DERPAppName makes it all
+// the way from the engine config to the ClientInfo received by an
+// in-process DERP server.
+func TestDERPAppNamePlumbing(t *testing.T) {
+	const appName = "app-name-plumbing-test"
+
+	priv := key.NewNode()
+	infoCh := make(chan derp.ClientInfo, 1)
+
+	derpSrv := derpserver.New(key.NewNode(), t.Logf)
+	derpSrv.ForTest().SetOnClientInfo(func(k key.NodePublic, info derp.ClientInfo) {
+		if k != priv.Public() {
+			return
+		}
+		select {
+		case infoCh <- info:
+		default:
+		}
+	})
+	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(derpSrv))
+	httpsrv.Config.ErrorLog = logger.StdLogger(t.Logf)
+	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
+	httpsrv.StartTLS()
+	t.Cleanup(func() {
+		httpsrv.CloseClientConnections()
+		httpsrv.Close()
+		derpSrv.Close()
+	})
+
+	stunAddr, stunCleanup := stuntest.Serve(t)
+	t.Cleanup(stunCleanup)
+
+	derpMap := &tailcfg.DERPMap{
+		Regions: map[int]*tailcfg.DERPRegion{
+			1: {
+				RegionID:   1,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{{
+					Name:             "t1",
+					RegionID:         1,
+					HostName:         "test-node.unused",
+					IPv4:             "127.0.0.1",
+					IPv6:             "none",
+					STUNPort:         stunAddr.Port,
+					DERPPort:         httpsrv.Listener.Addr().(*net.TCPAddr).Port,
+					InsecureForTests: true,
+				}},
+			},
+		},
+	}
+
+	bus := eventbustest.NewBus(t)
+	noopDNS, err := dns.NewNoopManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewUserspaceEngine(t.Logf, Config{
+		HealthTracker: health.NewTracker(bus),
+		Metrics:       new(usermetric.Registry),
+		EventBus:      bus,
+		DNS:           noopDNS,
+		DERPAppName:   appName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	if err := e.Reconfig(&wgcfg.Config{PrivateKey: priv}, &router.Config{}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	e.(*userspaceEngine).magicConn.SetDERPMap(derpMap)
+
+	select {
+	case info := <-infoCh:
+		if info.AppName != appName {
+			t.Fatalf("ClientInfo.AppName = %q; want %q", info.AppName, appName)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for engine to connect to the test DERP server")
 	}
 }

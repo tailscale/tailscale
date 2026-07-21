@@ -294,6 +294,9 @@ func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
 // In any given notification, any or all of these may be nil, meaning
 // that they have not changed.
 // They are JSON-encoded on the wire, despite the lack of struct tags.
+//
+// API maturity: this type is not considered a stable API and is
+// subject to change between releases.
 type Notify struct {
 	_       structs.Incomparable
 	Version string // version number of IPN backend

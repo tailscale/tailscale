@@ -99,6 +99,61 @@ func TestRFC_Discover(t *testing.T) {
 	if !dir.ExternalAccountRequired {
 		t.Error("dir.Meta.ExternalAccountRequired is false")
 	}
+	if dir.Profiles != nil {
+		t.Errorf("dir.Profiles is expected to be nil, got %+v", dir.Profiles)
+	}
+}
+
+func TestDiscover_WithProfiles(t *testing.T) {
+	const (
+		nonce       = "https://example.com/acme/new-nonce"
+		reg         = "https://example.com/acme/new-acct"
+		order       = "https://example.com/acme/new-order"
+		authz       = "https://example.com/acme/new-authz"
+		revoke      = "https://example.com/acme/revoke-cert"
+		keychange   = "https://example.com/acme/key-change"
+		metaTerms   = "https://example.com/acme/terms/2017-5-30"
+		metaWebsite = "https://www.example.com/"
+		metaCAA     = "example.com"
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"newNonce": %q,
+			"newAccount": %q,
+			"newOrder": %q,
+			"newAuthz": %q,
+			"revokeCert": %q,
+			"keyChange": %q,
+			"meta": {
+				"termsOfService": %q,
+				"website": %q,
+				"caaIdentities": [%q],
+				"externalAccountRequired": true,
+                "profiles": {
+                    "default": "Your favorite default profile",
+                    "tlsserver": "New and improved",
+                    "client": "For all your mutual TLS needs"
+                }
+			}
+		}`, nonce, reg, order, authz, revoke, keychange, metaTerms, metaWebsite, metaCAA)
+	}))
+	defer ts.Close()
+	c := &Client{DirectoryURL: ts.URL}
+	dir, err := c.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := Profiles(map[string]string{"default": "Your favorite default profile", "tlsserver": "New and improved", "client": "For all your mutual TLS needs"})
+	if dir.Profiles == nil {
+		t.Errorf("expected directory to be %+v; got nil", expected)
+	}
+
+	for key, value := range dir.Profiles {
+		if expValue := expected.GetDescription(key); value != expValue {
+			t.Errorf("expected key %+q to have description %+q; got %+q", key, expected, value)
+		}
+	}
 }
 
 func TestRFC_popNonce(t *testing.T) {
@@ -235,6 +290,27 @@ func (s *acmeServer) start() {
 				"revokeCert": %q,
 				"keyChange": %q,
 				"meta": {"termsOfService": %q}
+				}`,
+				s.url("/acme/new-nonce"),
+				s.url("/acme/new-account"),
+				s.url("/acme/new-order"),
+				s.url("/acme/new-authz"),
+				s.url("/acme/revoke-cert"),
+				s.url("/acme/key-change"),
+				s.url("/terms"),
+			)
+			return
+		}
+
+		if r.URL.Path == "/directory-with-profiles" {
+			fmt.Fprintf(w, `{
+				"newNonce": %q,
+				"newAccount": %q,
+				"newOrder": %q,
+				"newAuthz": %q,
+				"revokeCert": %q,
+				"keyChange": %q,
+                "meta": {"termsOfService": %q, "profiles": {"default": "Default", "server": "Server", "client": "Client"}}
 				}`,
 				s.url("/acme/new-nonce"),
 				s.url("/acme/new-account"),
@@ -795,6 +871,51 @@ func TestRFC_AuthorizeOrder(t *testing.T) {
 	}
 }
 
+func TestRFC_AuthorizeOrder_WithOrderProfile(t *testing.T) {
+	s := newACMEServer()
+	s.handle("/acme/new-account", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", s.url("/accounts/1"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "valid"}`))
+	})
+	s.handle("/acme/new-order", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", s.url("/orders/1"))
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{
+			"status": "pending",
+			"expires": "2019-09-01T00:00:00Z",
+			"notBefore": "2019-08-31T00:00:00Z",
+			"notAfter": "2019-09-02T00:00:00Z",
+			"identifiers": [{"type":"dns", "value":"example.org"}],
+			"authorizations": [%q]
+		}`, s.url("/authz/1"))
+	})
+	s.start()
+	defer s.close()
+
+	cl := &Client{Key: testKeyEC, DirectoryURL: s.url("/directory-with-profiles")}
+	o, err := cl.AuthorizeOrder(context.Background(), DomainIDs("example.org"),
+		WithOrderNotBefore(time.Date(2019, 8, 31, 0, 0, 0, 0, time.UTC)),
+		WithOrderNotAfter(time.Date(2019, 9, 2, 0, 0, 0, 0, time.UTC)),
+		WithOrderProfile("server"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	okOrder := &Order{
+		URI:         s.url("/orders/1"),
+		Status:      StatusPending,
+		Expires:     time.Date(2019, 9, 1, 0, 0, 0, 0, time.UTC),
+		NotBefore:   time.Date(2019, 8, 31, 0, 0, 0, 0, time.UTC),
+		NotAfter:    time.Date(2019, 9, 2, 0, 0, 0, 0, time.UTC),
+		Identifiers: []AuthzID{{Type: "dns", Value: "example.org"}},
+		AuthzURLs:   []string{s.url("/authz/1")},
+	}
+	if !reflect.DeepEqual(o, okOrder) {
+		t.Errorf("AuthorizeOrder = %+v; want %+v", o, okOrder)
+	}
+}
+
 func TestRFC_GetOrder(t *testing.T) {
 	s := newACMEServer()
 	s.handle("/acme/new-account", func(w http.ResponseWriter, r *http.Request) {
@@ -892,11 +1013,17 @@ func TestRFC_WaitOrderError(t *testing.T) {
 	s.handle("/orders/1", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", s.url("/orders/1"))
 		w.WriteHeader(http.StatusOK)
-		s := StatusPending
 		if count > 0 {
-			s = StatusInvalid
+			// https://www.rfc-editor.org/rfc/rfc8555#section-7.3.3
+			errorData := `{
+				"type": "urn:ietf:params:acme:error:userActionRequired",
+				"detail": "Terms of service have changed",
+				"instance": "https://example.com/acme/agreement/?token=W8Ih3PswD-8"
+			}`
+			fmt.Fprintf(w, `{"status": %q, "error": %s}`, StatusInvalid, errorData)
+		} else {
+			fmt.Fprintf(w, `{"status": %q}`, StatusPending)
 		}
-		fmt.Fprintf(w, `{"status": %q}`, s)
 		count++
 	})
 	s.start()
@@ -916,6 +1043,13 @@ func TestRFC_WaitOrderError(t *testing.T) {
 	}
 	if e.Status != StatusInvalid {
 		t.Errorf("e.Status = %q; want %q", e.Status, StatusInvalid)
+	}
+	if e.Problem == nil {
+		t.Errorf("e.Problem = nil")
+	}
+	expectedProbType := "urn:ietf:params:acme:error:userActionRequired"
+	if e.Problem.ProblemType != expectedProbType {
+		t.Errorf("e.Problem.ProblemType = %q; want %q", e.Problem.ProblemType, expectedProbType)
 	}
 }
 

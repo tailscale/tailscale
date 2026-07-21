@@ -291,7 +291,8 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
 // CorpDNS specifies whether to install the Tailscale network's
-// DNS configuration, if it exists.
+// DNS configuration, if it exists. It is the internal name for
+// the "tailscale set --accept-dns=" flag.
 func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
 
 // RunSSH bool is whether this node should run an SSH

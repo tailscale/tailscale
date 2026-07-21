@@ -210,6 +210,11 @@ type Config struct {
 	// connections (e.g. DERP). Passed through to magicsock.
 	ExtraRootCAs *x509.CertPool
 
+	// DERPAppName, if non-empty, is an opaque app name string to
+	// advertise to DERP servers for stats purposes. It is passed
+	// through to magicsock.
+	DERPAppName string
+
 	// ControlKnobs is the set of control plane-provied knobs
 	// to use.
 	// If nil, defaults are used.
@@ -425,6 +430,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		NetMon:         e.netMon,
 		HealthTracker:  e.health,
 		ExtraRootCAs:   conf.ExtraRootCAs,
+		DERPAppName:    conf.DERPAppName,
 		Metrics:        conf.Metrics,
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,

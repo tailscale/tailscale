@@ -35,6 +35,12 @@ func TestUsedConsistently(t *testing.T) {
 	cmd.Dir = rootDir
 	matches, _ := cmd.Output()
 	for fn := range strings.SplitSeq(strings.TrimSpace(string(matches)), "\n") {
+		if strings.HasPrefix(fn, "tempfork/") {
+			// Files under tempfork are vendored copies of upstream
+			// code that we want to keep as close to upstream as
+			// possible, so don't hold them to this rule.
+			continue
+		}
 		switch fn {
 		case "util/httpm/httpm.go", "util/httpm/httpm_test.go":
 			continue

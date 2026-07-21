@@ -45,7 +45,14 @@ func TestSyncedToUpstream(t *testing.T) {
 		}
 		for _, de := range ents {
 			name := de.Name()
-			if name == "sync_to_upstream_test.go" {
+			switch name {
+			case "sync_to_upstream_test.go":
+				continue
+			case "pebble_test.go":
+				// We don't vendor upstream's pebble_test.go: its
+				// TestWithPebble downloads the Pebble module from
+				// outside our go.mod, then builds and runs its
+				// binaries during tests.
 				continue
 			}
 			if !strings.HasSuffix(name, ".go") {

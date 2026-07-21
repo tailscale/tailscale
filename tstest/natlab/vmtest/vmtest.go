@@ -447,7 +447,8 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
-	sshPort          int // host port for SSH debug access (cloud VMs only)
+	sshPort          int     // host port for SSH debug access (cloud VMs only)
+	dnsMode          DNSMode // desired Linux DNS backend to provision; "" means the image default
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the
@@ -486,6 +487,13 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			n.snatSubnetRoutes = &v
 		case nodeOptWebServer:
 			n.webServerPort = int(o)
+		case nodeOptDNSMode:
+			switch DNSMode(o) {
+			case DNSDefault, DNSDirect:
+			default:
+				e.t.Fatalf("AddNode(%q): unsupported DNSMode %q", name, DNSMode(o))
+			}
+			n.dnsMode = DNSMode(o)
 		default:
 			// Pass through to vnet (TailscaledEnv, NodeOption, MAC, etc.)
 			vnetOpts = append(vnetOpts, o)
@@ -507,6 +515,12 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 	// rest of the setup only to fail later.
 	if n.os.IsMacOS && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
 		e.t.Skipf("macOS VM tests require a macOS arm64 host (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
+
+	// Linux cloud images must declare a family; it drives distro-specific
+	// cloud-init provisioning. gokrazy and non-Linux images don't use that path.
+	if n.os.isLinuxCloudImage() && n.os.Family == "" {
+		e.t.Fatalf("AddNode(%q): Linux cloud image %q has no LinuxFamily set", name, n.os.Name)
 	}
 
 	n.vnetNode = e.cfg.AddNode(vnetOpts...)
@@ -544,6 +558,28 @@ type nodeOptSystemdUnit struct{}
 type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
+type nodeOptDNSMode DNSMode
+
+// DNSMode is a provisioning directive, not a DNS-backend name: it says what, if
+// anything, to do to the guest's DNS before tailscaled starts, letting one
+// distro image cover multiple backends. DNSDefault leaves DNS untouched (the
+// resulting backend is image-dependent); the other modes provision the guest to
+// force a specific backend, and are named to match the mode strings in
+// net/dns/manager_linux.go so the result can be checked with
+// [Env.AssertDNSBackend].
+type DNSMode string
+
+const (
+	// DNSDefault leaves the image's DNS configuration untouched, so the backend
+	// is whatever the image runs by default (typically systemd-resolved on
+	// modern distros). It has no [Env.AssertDNSBackend] counterpart because the
+	// result isn't forced.
+	DNSDefault DNSMode = ""
+
+	// DNSDirect masks systemd-resolved and installs a plain /etc/resolv.conf
+	// so tailscaled selects the "direct" manager (rewrites resolv.conf itself).
+	DNSDirect DNSMode = "direct"
+)
 
 // OS returns a NodeOption that sets the node's operating system image.
 func OS(img OSImage) nodeOptOS { return nodeOptOS(img) }
@@ -587,10 +623,22 @@ func SNATSubnetRoutes(v bool) nodeOptSNATSubnetRoutes { return nodeOptSNATSubnet
 // The webserver responds with "Hello world I am <nodename> from <sourceIP>" on all requests.
 func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 
+// WithDNSMode returns a NodeOption that provisions the (Linux) node so
+// tailscaled selects the given DNS backend. Only meaningful for Linux cloud
+// images; ignored for gokrazy/macOS. See [DNSMode].
+func WithDNSMode(m DNSMode) nodeOptDNSMode { return nodeOptDNSMode(m) }
+
 // Start initializes the virtual network, boots all VMs in parallel, and waits
 // for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
 func (e *Env) Start() {
 	t := e.t
+
+	// Give bring-up (image build, boot, agent wait) a generous budget measured
+	// from now. We deliberately do NOT derive this from the test deadline: on
+	// CI, per-test timeouts can be tight (a few minutes), and reserving headroom
+	// under the deadline was observed to steal time bring-up legitimately needs,
+	// failing slow-but-healthy runs. If bring-up genuinely exceeds this, the
+	// `go test -timeout` panic is an acceptable (if blunt) backstop.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 	e.ctx = ctx
@@ -633,7 +681,14 @@ func (e *Env) Start() {
 	// Boot all nodes in parallel. Each platform handles its own
 	// dependencies (image prep, binary compilation, socket setup)
 	// via sync.Once, so independent work overlaps naturally.
+	//
+	// Under TCG, concurrent boots oversubscribe the host CPUs and a heavy
+	// guest can starve its siblings past the stuck-detector; serialize boots
+	// there so each clears that gate before the next starts. KVM stays parallel.
 	var bootEg errgroup.Group
+	if !hardwareAccelAvailable() {
+		bootEg.SetLimit(1)
+	}
 	for _, n := range e.nodes {
 		bootEg.Go(func() error {
 			return n.platform().boot(ctx, e, n)
@@ -997,6 +1052,41 @@ func (e *Env) ClientMetrics(n *Node) ClientMetrics {
 		}
 	}
 	return out
+}
+
+// dnsBackendMetricPrefix is the prefix of the clientmetric gauge that
+// tailscaled sets to 1 for the Linux DNS mode it selected. See
+// net/dns/manager_linux.go.
+const dnsBackendMetricPrefix = "dns_manager_linux_mode_"
+
+// DNSBackend returns the Linux DNS backend ("mode") the node's tailscaled
+// selected (e.g. "systemd-resolved", "direct"). tailscaled sets a single gauge
+// named dns_manager_linux_mode_<mode> to 1 for its selected mode (see
+// net/dns/manager_linux.go); this finds that gauge and returns <mode>. It fails
+// the test if none is set (non-Linux node, or DNS not yet configured).
+func (e *Env) DNSBackend(n *Node) string {
+	e.t.Helper()
+	for name, m := range e.ClientMetrics(n) {
+		mode, ok := strings.CutPrefix(name, dnsBackendMetricPrefix)
+		if !ok || m.Value != 1 {
+			continue
+		}
+		// tailscaled sanitizes "-" to "_" when forming the metric name;
+		// reverse it so we return net/dns's spelling ("systemd-resolved").
+		return strings.ReplaceAll(mode, "_", "-")
+	}
+	e.t.Fatalf("Node %q: no %s* gauge set (non-Linux node, or DNS not yet configured)", n.Name(), dnsBackendMetricPrefix)
+	return ""
+}
+
+// AssertDNSBackend fails the test unless the node's selected Linux DNS backend
+// matches want (see [Env.DNSBackend] for the mode strings). Use it in distro
+// tests to prove the node exercises the intended DNS manager.
+func (e *Env) AssertDNSBackend(n *Node, want string) {
+	e.t.Helper()
+	if got := e.DNSBackend(n); got != want {
+		e.t.Fatalf("Node %q: DNS backend = %q, want %q", n.Name(), got, want)
+	}
 }
 
 // ClientMetrics is a view of the client metrics exported by a node.
