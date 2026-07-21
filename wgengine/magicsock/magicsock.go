@@ -2965,6 +2965,11 @@ func nodeHasCap(filt *filter.Filter, src, dst tailcfg.NodeView, cap tailcfg.Peer
 		!dst.Valid() {
 		return false
 	}
+	if src.UnsignedPeerAPIOnly() {
+		// Unsigned peers aren't covered by tailnet lock and must never hold
+		// peer capabilities such as relay allocation/target.
+		return false
+	}
 	for _, srcPrefix := range src.Addresses().All() {
 		if !srcPrefix.IsSingleIP() {
 			continue

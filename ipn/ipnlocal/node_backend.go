@@ -418,7 +418,24 @@ func (nb *nodeBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 	return nb.peerCapsLocked(src)
 }
 
+// srcIsUnsignedPeerLocked reports whether src is an address of a peer with
+// UnsignedPeerAPIOnly set. Such peers are not covered by tailnet lock and must
+// never be granted peer capabilities.
+//
+// nb.mu must be held before calling.
+func (nb *nodeBackend) srcIsUnsignedPeerLocked(src netip.Addr) bool {
+	id, ok := nb.nodeByAddr[src]
+	if !ok {
+		return false
+	}
+	n, ok := nb.nodeByIDLocked(id)
+	return ok && n.UnsignedPeerAPIOnly()
+}
+
 func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
+	if nb.srcIsUnsignedPeerLocked(src) {
+		return nil
+	}
 	if nb.netMap == nil {
 		return nil
 	}
@@ -447,6 +464,9 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
+	if nb.srcIsUnsignedPeerLocked(src) {
+		return nil
+	}
 	if nb.netMap == nil {
 		return nil
 	}
@@ -464,6 +484,9 @@ func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
 func (nb *nodeBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
+	if nb.srcIsUnsignedPeerLocked(src) {
+		return nil
+	}
 	if nb.netMap == nil {
 		return nil
 	}

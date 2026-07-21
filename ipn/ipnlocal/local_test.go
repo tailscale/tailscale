@@ -8107,6 +8107,95 @@ func TestSrcCapPacketFilterUnsignedPeer(t *testing.T) {
 	}
 }
 
+// TestCapsGrantPacketFilterUnsignedPeer verifies that a CapGrant-style packet filter match
+// (Srcs + Caps, no Dsts) whose broad Srcs covers an unsigned peer's AllowedIPs does NOT cause
+// the packet filter to be discarded: a grant alone permits no traffic, so legitimate rules for
+// signed peers must keep working.
+func TestCapsGrantPacketFilterUnsignedPeer(t *testing.T) {
+	lb := newLocalBackendWithTestControl(t, false, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
+		return newClient(tb, opts)
+	})
+	if err := lb.Start(ipn.Options{}); err != nil {
+		t.Fatalf("(*LocalBackend).Start(): %v", err)
+	}
+
+	var signedKey, unsignedKey key.NodePublic
+	must.Do(signedKey.UnmarshalText([]byte("nodekey:5c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf261")))
+	must.Do(unsignedKey.UnmarshalText([]byte("nodekey:6c8f86d5fc70d924e55f02446165a5dae8f822994ad26bcf4b08fd841f9bf262")))
+
+	controlClient := lb.cc.(*mockControl)
+	// Send a netmap with:
+	//  - a broad CapGrant-style match (Srcs 0.0.0.0/0) covering both peers
+	//  - a legitimate traffic rule for the signed peer
+	controlClient.send(sendOpt{nm: &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{netip.MustParsePrefix("1.1.1.1/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				Addresses:  []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+				ID:         2,
+				Key:        signedKey,
+			}).View(),
+			(&tailcfg.Node{
+				Addresses:           []netip.Prefix{netip.MustParsePrefix("3.3.3.3/32")},
+				AllowedIPs:          []netip.Prefix{netip.MustParsePrefix("3.3.3.3/32")},
+				ID:                  3,
+				Key:                 unsignedKey,
+				UnsignedPeerAPIOnly: true,
+			}).View(),
+		},
+		PacketFilter: []filtertype.Match{
+			{
+				// Broad grant covering both peers: must NOT trigger vetting
+				Srcs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")},
+				Caps: []filtertype.CapMatch{{
+					Dst: netip.MustParsePrefix("1.1.1.1/32"),
+					Cap: "cap-X",
+				}},
+			},
+			{
+				// Legitimate traffic rule for the signed peer
+				IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
+				Srcs:    []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+				Dsts: []filtertype.NetPortRange{{
+					Net:   netip.MustParsePrefix("1.1.1.1/32"),
+					Ports: filtertype.PortRange{First: 22, Last: 22},
+				}},
+			},
+		},
+	}})
+
+	f := lb.ForTest().GetFilter()
+
+	// The filter must be installed, not discarded: the signed peer's legitimate traffic rule accepts traffic
+	if res := f.Check(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP); res != filter.Accept {
+		t.Errorf("Check(signed 2.2.2.2, ...) = %s, want %s (filter must not be discarded for a caps-only grant)", res, filter.Accept)
+	}
+
+	// The unsigned peer has no traffic rule, so its packets are dropped
+	if res := f.Check(netip.MustParseAddr("3.3.3.3"), netip.MustParseAddr("1.1.1.1"), 22, ipproto.TCP); !res.IsDrop() {
+		t.Errorf("Check(unsigned 3.3.3.3, ...) = %s, want drop", res)
+	}
+
+	// The unsigned peer is denied the granted capability at resolution time
+	if caps := lb.PeerCapsForIP(netip.MustParseAddr("3.3.3.3"), netip.MustParseAddr("1.1.1.1")); len(caps) != 0 {
+		t.Errorf("PeerCapsForIP(unsigned src) = %v, want empty", caps)
+	}
+	if caps := lb.PeerCaps(netip.MustParseAddr("3.3.3.3")); len(caps) != 0 {
+		t.Errorf("PeerCaps(unsigned src) = %v, want empty", caps)
+	}
+
+	// The signed peer keeps its grant: legitimate functionality is unaffected
+	if caps := lb.PeerCapsForIP(netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("1.1.1.1")); !caps.HasCapability("cap-X") {
+		t.Errorf("PeerCapsForIP(signed src) missing cap-X: %v", caps)
+	}
+	if caps := lb.PeerCaps(netip.MustParseAddr("2.2.2.2")); !caps.HasCapability("cap-X") {
+		t.Errorf("PeerCaps(signed src) missing cap-X: %v", caps)
+	}
+}
+
 func TestDisplayMessages(t *testing.T) {
 	b := newTestLocalBackend(t)
 

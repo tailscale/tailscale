@@ -406,6 +406,12 @@ func upgradeNode(n *tailcfg.Node) {
 	if n.AllowedIPs == nil {
 		n.AllowedIPs = slices.Clone(n.Addresses)
 	}
+	// Unsigned peers aren't covered by tailnet lock, so a (possibly malicious)
+	// control server must not grant them network access via advertised routes.
+	// Strip any AllowedIPs beyond their own addresses.
+	if n.UnsignedPeerAPIOnly && !slices.Equal(n.AllowedIPs, n.Addresses) {
+		n.AllowedIPs = slices.Clone(n.Addresses)
+	}
 }
 
 func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {

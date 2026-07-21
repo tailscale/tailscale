@@ -1547,6 +1547,24 @@ func TestUpgradeNode(t *testing.T) {
 			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
 			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
 		},
+		{
+			// An unsigned peer is not covered by tailnet lock and must not carry advertised routes
+			name: "unsigned-peer-strips-extra-allowed-ips",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}, UnsignedPeerAPIOnly: true},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+		},
+		{
+			// An unsigned peer whose AllowedIPs already equal its Addresses is left untouched
+			name: "unsigned-peer-allowed-ips-equal-addresses",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+		},
+		{
+			// A signed peer keeps its advertised routes: the strip only applies to unsigned peers
+			name: "signed-peer-keeps-extra-allowed-ips",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -3821,6 +3821,9 @@ func Test_nodeHasCap(t *testing.T) {
 	nodeDOnlyIPv6 := nodeCOnlyIPv4.Clone()
 	nodeDOnlyIPv6.Addresses[0] = netip.MustParsePrefix("::2/128")
 
+	nodeCUnsigned := nodeCOnlyIPv4.Clone()
+	nodeCUnsigned.UnsignedPeerAPIOnly = true
+
 	tests := []struct {
 		name string
 		filt *filter.Filter
@@ -3934,6 +3937,24 @@ func Test_nodeHasCap(t *testing.T) {
 			}, nil, nil, nil, nil, nil),
 			src:  nodeCOnlyIPv4.View(),
 			dst:  tailcfg.NodeView{},
+			cap:  tailcfg.PeerCapabilityRelayTarget,
+			want: false,
+		},
+		{
+			name: "unsigned-src",
+			filt: filter.New([]filtertype.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("2.2.2.2/32")},
+					Caps: []filtertype.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("1.1.1.1/32"),
+							Cap: tailcfg.PeerCapabilityRelayTarget,
+						},
+					},
+				},
+			}, nil, nil, nil, nil, nil),
+			src:  nodeCUnsigned.View(),
+			dst:  nodeAOnlyIPv4.View(),
 			cap:  tailcfg.PeerCapabilityRelayTarget,
 			want: false,
 		},
