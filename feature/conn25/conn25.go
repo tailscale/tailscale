@@ -85,7 +85,7 @@ func init() {
 	})
 	ipnlocal.RegisterPeerAPIHandler("/v0/connector/transit-ip", handleConnectorTransitIP)
 	ipnlocal.HookReplyToDNSQueries.Add(handleHookReplyToDNSQueries)
-	localapi.Register("conn25-state", serveStateGet)
+	localapi.Register("conn25-state", serveLocalAPIStateGet)
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {

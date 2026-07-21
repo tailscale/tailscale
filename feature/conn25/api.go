@@ -22,9 +22,9 @@ import (
 	"tailscale.com/util/testenv"
 )
 
-// serveStateGet serves the localapi endpoint /conn25-state.
+// serveLocalAPIStateGet serves the localapi endpoint /conn25-state.
 // See also [*Conn25.GetActiveState].
-func serveStateGet(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
+func serveLocalAPIStateGet(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 	// TODO(tailscale/corp#39033): Remove for alpha release.
 	if !envknob.UseWIPCode() && !testenv.InTest() {
 		w.WriteHeader(http.StatusNotImplemented)
