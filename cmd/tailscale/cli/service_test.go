@@ -355,17 +355,3 @@ func TestServiceListerFromContextDefault(t *testing.T) {
 		t.Errorf("serviceListerFromContext default = %v, want &localClient", got)
 	}
 }
-
-// TestServiceCmdWIPGate verifies the service command is only registered when
-// work-in-progress code is enabled.
-func TestServiceCmdWIPGate(t *testing.T) {
-	t.Setenv("TAILSCALE_USE_WIP_CODE", "")
-	if cmd := serviceCmd(); cmd != nil {
-		t.Errorf("serviceCmd() = %v, want nil when WIP code is disabled", cmd)
-	}
-
-	t.Setenv("TAILSCALE_USE_WIP_CODE", "1")
-	if cmd := serviceCmd(); cmd == nil {
-		t.Error("serviceCmd() = nil, want non-nil when WIP code is enabled")
-	}
-}

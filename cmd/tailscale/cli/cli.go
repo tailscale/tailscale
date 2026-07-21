@@ -292,7 +292,7 @@ change in the future.
 			sshCmd,
 			nilOrCall(maybeFunnelCmd),
 			nilOrCall(maybeServeCmd),
-			serviceCmd(),
+			serviceCmd,
 			versionCmd,
 			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),

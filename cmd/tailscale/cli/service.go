@@ -14,7 +14,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
@@ -51,40 +50,32 @@ func serviceListerFromContext(ctx context.Context) serviceLister {
 
 const serviceListUsage = "tailscale service list"
 
-func serviceCmd() *ffcli.Command {
-	// The service commands are still in development and gated behind the
-	// work-in-progress knob. When it's off, serviceCmd returns nil and is
-	// filtered out of the root command's subcommands by nonNilCmds.
-	if !envknob.UseWIPCode() {
-		return nil
-	}
-	return &ffcli.Command{
-		Name:       "service",
-		ShortHelp:  "Interact with Tailscale Services",
-		ShortUsage: "tailscale service",
-		LongHelp: strings.TrimSpace(`
+var serviceCmd = &ffcli.Command{
+	Name:       "service",
+	ShortHelp:  "Interact with Tailscale Services",
+	ShortUsage: "tailscale service",
+	LongHelp: strings.TrimSpace(`
 The 'tailscale service' command groups subcommands for Tailscale Services.
 
 A Tailscale Service is a virtual service with its own IP addresses. Which
 Services this node can reach is determined by the tailnet's ACLs. Use the 'list'
 subcommand to see the Services currently available to this node.
 `),
-		UsageFunc: usageFuncNoDefaultValues,
-		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
-		Subcommands: []*ffcli.Command{
-			{
-				Name:       "list",
-				ShortUsage: serviceListUsage,
-				ShortHelp:  "List the Tailscale Services your node can access",
-				Exec:       runServiceList,
-				FlagSet: func() *flag.FlagSet {
-					fs := newFlagSet("list")
-					fs.BoolVar(&serviceListArgs.json, "json", false, "output in JSON format")
-					return fs
-				}(),
-			},
+	UsageFunc: usageFuncNoDefaultValues,
+	Exec:      func(context.Context, []string) error { return flag.ErrHelp },
+	Subcommands: []*ffcli.Command{
+		{
+			Name:       "list",
+			ShortUsage: serviceListUsage,
+			ShortHelp:  "List the Tailscale Services your node can access",
+			Exec:       runServiceList,
+			FlagSet: func() *flag.FlagSet {
+				fs := newFlagSet("list")
+				fs.BoolVar(&serviceListArgs.json, "json", false, "output in JSON format")
+				return fs
+			}(),
 		},
-	}
+	},
 }
 
 var serviceListArgs struct {
