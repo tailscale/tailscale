@@ -16,6 +16,7 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/appc"
+	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -1545,7 +1546,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 
-	if buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
+	if (envknob.UseWIPCode() || testenv.InTest()) && buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
 		// Add split DNS routes for conn25
 		if appRoutes := appc.AppDNSRoutes(nm.HasCap, nm.SelfNode); appRoutes != nil {
 			addSplitDNSRoutes(appRoutes)
