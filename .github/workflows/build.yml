@@ -1,0 +1,129 @@
+# Build Tailscale binaries for Linux and Windows
+#
+# This workflow compiles Tailscale CLI and daemon binaries for Linux (amd64)
+# and Windows (amd64), then uploads them as build artifacts.
+#
+# Triggered on:
+#   - push to main and release-branch/*
+#   - pull requests (to verify compilation)
+#   - manual workflow_dispatch
+#
+# Official releases are built by Tailscale's internal CI; this workflow
+# provides a convenient build-and-archive flow for development and testing.
+
+name: build
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: version
+        run: |
+          eval "$(GOOS=linux GOARCH=amd64 ./build_dist.sh shellvars)"
+          echo "long=${VERSION_LONG}" >> "$GITHUB_OUTPUT"
+          echo "short=${VERSION_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "git_hash=${VERSION_GIT_HASH}" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------------
+      # Linux amd64
+      # ----------------------------------------------------------------
+      - name: Build Linux amd64
+        run: |
+          mkdir -p dist/linux
+          GOOS=linux GOARCH=amd64 ./build_dist.sh --strip \
+            -o dist/linux/tailscale ./cmd/tailscale
+          GOOS=linux GOARCH=amd64 ./build_dist.sh --strip \
+            -o dist/linux/tailscaled ./cmd/tailscaled
+
+      - name: Package Linux amd64
+        run: |
+          tar czf "dist/tailscale_${{ steps.version.outputs.long }}_linux_amd64.tar.gz" \
+            -C dist/linux tailscale tailscaled
+
+      - name: Verify Linux binaries
+        run: |
+          ./dist/linux/tailscale version
+          file dist/linux/tailscale | grep -q "ELF.*x86-64" && echo "OK: Linux ELF"
+
+      # ----------------------------------------------------------------
+      # Windows amd64
+      # ----------------------------------------------------------------
+      - name: Build Windows amd64 (CLI)
+        run: |
+          mkdir -p dist/windows
+          GOOS=windows GOARCH=amd64 ./build_dist.sh --strip \
+            -o dist/windows/tailscale.exe ./cmd/tailscale
+          GOOS=windows GOARCH=amd64 ./build_dist.sh --strip \
+            -o dist/windows/tailscaled.exe ./cmd/tailscaled
+
+      - name: Build Windows amd64 (systray GUI)
+        run: |
+          # windowsgui is a pseudo-GOOS handled by gocross (./tool/go).
+          # It produces a PE32+ GUI subsystem binary (no console window).
+          export TS_USE_GOCROSS=1
+          GOOS=windowsgui GOARCH=amd64 ./tool/go build -trimpath \
+            -o dist/windows/tailscale-ipn.exe ./cmd/systray
+
+      - name: Download wintun.dll
+        run: |
+          curl -sL -o /tmp/wintun.zip "https://www.wintun.net/builds/wintun-0.14.1.zip"
+          unzip -o /tmp/wintun.zip wintun/bin/amd64/wintun.dll -d /tmp/
+          cp /tmp/wintun/bin/amd64/wintun.dll dist/windows/
+
+      - name: Package Windows amd64
+        run: |
+          cd dist/windows
+          zip -q "../tailscale_${{ steps.version.outputs.long }}_windows_amd64.zip" \
+            tailscale.exe tailscaled.exe tailscale-ipn.exe wintun.dll
+
+      - name: Verify Windows binaries
+        run: |
+          file dist/windows/tailscale.exe | grep -q "PE32+.*console" && echo "OK: tailscale.exe (console)"
+          file dist/windows/tailscaled.exe | grep -q "PE32+.*console" && echo "OK: tailscaled.exe (console)"
+          file dist/windows/tailscale-ipn.exe | grep -q "PE32+.*GUI" && echo "OK: tailscale-ipn.exe (GUI)"
+          file dist/windows/wintun.dll | grep -q "PE32+.*DLL" && echo "OK: wintun.dll (DLL)"
+
+      # ----------------------------------------------------------------
+      # Upload artifacts
+      # ----------------------------------------------------------------
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: tailscale-linux-amd64
+          path: dist/tailscale_${{ steps.version.outputs.long }}_linux_amd64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: tailscale-windows-amd64
+          path: dist/tailscale_${{ steps.version.outputs.long }}_windows_amd64.zip
+          if-no-files-found: error
