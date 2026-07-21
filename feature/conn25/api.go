@@ -22,7 +22,7 @@ import (
 	"tailscale.com/util/testenv"
 )
 
-// serveLocalAPIStateGet serves the localapi endpoint /conn25-state.
+// serveLocalAPIStateGet serves the localapi endpoint /conn25/state.
 // See also [*Conn25.GetActiveState].
 func serveLocalAPIStateGet(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 	// TODO(tailscale/corp#39033): Remove for alpha release.
@@ -31,7 +31,7 @@ func serveLocalAPIStateGet(h *localapi.Handler, w http.ResponseWriter, r *http.R
 		return
 	}
 	if !h.PermitRead {
-		http.Error(w, "conn25-state access denied", http.StatusForbidden)
+		http.Error(w, "conn25/state access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != httpm.GET {
