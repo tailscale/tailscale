@@ -143,19 +143,26 @@ func main() {
 			log.Printf("Using cigocached at %s", *srvURL)
 		}
 		c.remote = &cachers.HTTPClient{
-			BaseURL:        *srvURL,
-			Disk:           c.disk,
-			HTTPClient:     httpClient(srvHost, *srvHostDial),
-			AccessToken:    *token,
-			Verbose:        *verbose,
-			BestEffortHTTP: true,
+			BaseURL:               *srvURL,
+			Disk:                  c.disk,
+			HTTPClient:            httpClient(srvHost, *srvHostDial),
+			AccessToken:           *token,
+			Verbose:               *verbose,
+			BestEffortHTTP:        true,
+			AsyncPutTimeout:       10 * time.Second, // Generous enough to allow for big objects ~100MiB.
+			AsyncPutMaxConcurrent: 10,
 		}
 	}
 	var p *cacheproc.Process
 	p = &cacheproc.Process{
 		Close: func() error {
+			if c.remote != nil {
+				if !c.remote.Shutdown() {
+					log.Printf("cigocacher: timed out waiting for background PUTs to drain")
+				}
+			}
 			if c.verbose {
-				log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
+				log.Printf("cigocacher: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
 					p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
 			}
 			return c.close()
