@@ -88,6 +88,13 @@ func (e *extension) getCertPEMWithValidity(ctx context.Context, b *ipnlocal.Loca
 		return getCertForTest(domain)
 	}
 
+	// Trim a trailing dot from the domain (e.g. from an SNI ServerName of
+	// "host.ts.net.") before lookup. Per RFC 6066 §3 the SNI HostName has
+	// no trailing dot, but some clients send a fully-qualified name with
+	// one, and cert store names have no trailing dot. See
+	// https://github.com/tailscale/tailscale/issues/10233.
+	domain = strings.TrimSuffix(domain, ".")
+
 	if !validLookingCertDomain(domain) {
 		return nil, errors.New("invalid domain")
 	}

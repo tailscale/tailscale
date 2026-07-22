@@ -806,6 +806,81 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 	}
 }
 
+// TestGetCertPEMWithValidityTrimsTrailingDot verifies that an SNI
+// ServerName with a trailing dot (e.g. "example.com.") resolves to the
+// same cached certificate as the dotless form. Per RFC 6066 §3 the SNI
+// HostName carries no trailing dot, but some clients send an FQDN with
+// one; the cert store keys certs by the dotless domain, so the trailing
+// dot must be trimmed before lookup. See tailscale/tailscale#10233.
+func TestGetCertPEMWithValidityTrimsTrailingDot(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const testDomain = "example.com"
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+
+	// Set up netmap with CertDomains so resolveCertDomain works. Note
+	// CertDomains holds the dotless domain, matching what control sends.
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS: tailcfg.DNSConfig{
+			CertDomains: []string{testDomain},
+		},
+	})
+
+	certDirPath, err := certDir(b)
+	if err != nil {
+		t.Fatalf("certDir error: %v", err)
+	}
+	if _, err := e.getCertStore(b); err != nil {
+		t.Fatalf("getCertStore error: %v", err)
+	}
+	testRoot, err := certTestFS.ReadFile("testdata/rootCA.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(testRoot) {
+		t.Fatal("Unable to add test CA to the cert pool")
+	}
+	testX509Roots = roots
+	defer func() { testX509Roots = nil }()
+
+	// Store a valid, unexpired cached cert under the dotless domain.
+	os.MkdirAll(certDirPath, 0755)
+	if err := os.WriteFile(filepath.Join(certDirPath, "example.com.crt"),
+		must.Get(certTestFS.ReadFile("testdata/example.com.pem")), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(certDirPath, "example.com.key"),
+		must.Get(certTestFS.ReadFile("testdata/example.com-key.pem")), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A time at which the stored cert is valid and does not need renewal.
+	b.ForTest().SetClock(tstest.NewClock(tstest.ClockOpts{
+		Start: time.Date(2023, time.February, 20, 0, 0, 0, 0, time.UTC),
+	}))
+
+	// Fail loudly if issuance/renewal is attempted: a trailing-dot lookup
+	// must hit the cached cert, not trigger a fresh ACME order.
+	orig := getCertPEM
+	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+		t.Errorf("unexpected getCertPEM call for domain %q; trailing-dot lookup should have hit the cache", domain)
+		return nil, nil
+	}
+	t.Cleanup(func() { getCertPEM = orig })
+
+	pair, err := b.GetCertPEMWithValidity(context.Background(), testDomain+".", 0)
+	if err != nil {
+		t.Fatalf("GetCertPEMWithValidity(%q) error = %v, want cached cert", testDomain+".", err)
+	}
+	if pair == nil || !pair.Cached {
+		t.Fatalf("GetCertPEMWithValidity(%q) = %+v, want cached cert", testDomain+".", pair)
+	}
+}
+
 func TestCertPendingWarnable(t *testing.T) {
 	b := ipnlocaltest.NewBackend(t)
 	e := extOf(t, b)
