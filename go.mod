@@ -51,7 +51,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
 	github.com/gokrazy/firmware v0.0.0-20260522070551-527ce0ed43cf
-	github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7
+	github.com/gokrazy/gokrazy v0.0.0-20260703061218-a4a45a20149d
 	github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b
 	github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1
 	github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de
@@ -91,7 +91,7 @@ require (
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/errors v0.9.1
-	github.com/pkg/sftp v1.13.6
+	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.69.0
 	github.com/prometheus/prometheus v0.49.2-0.20240125131847-c3b8ef1694ff
@@ -99,6 +99,7 @@ require (
 	github.com/safchain/ethtool v0.3.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/studio-b12/gowebdav v0.13.0
+	github.com/tailscale/breakglass v0.0.0-20260722122039-c96872d90f73
 	github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d
 	github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
@@ -153,6 +154,7 @@ require (
 )
 
 require (
+	github.com/antihax/optional v1.0.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/google/go-github/v82 v82.0.0 // indirect
@@ -179,7 +181,7 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/beevik/ntp v0.3.0 // indirect
+	github.com/beevik/ntp v1.5.0 // indirect
 	github.com/benbjohnson/immutable v0.4.3
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
@@ -215,8 +217,8 @@ require (
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/goccy/go-yaml v1.12.0 // indirect
-	github.com/gokrazy/gokapi v0.0.0-20250222071133-506fdb322775 // indirect
-	github.com/gokrazy/internal v0.0.0-20251208203110-3c1aa9087c82 // indirect
+	github.com/gokrazy/gokapi v0.0.0-20251205165548-0927bab199d4 // indirect
+	github.com/gokrazy/internal v0.0.0-20260625065634-6994f9152c44 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/golangci/plugin-module-register v0.1.1 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
