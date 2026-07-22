@@ -79,10 +79,10 @@ require (
 	github.com/jsimonetti/rtnetlink v1.4.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/kdomanski/iso9660 v0.4.0
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.19.1
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a
-	github.com/mattn/go-colorable v0.1.14
-	github.com/mattn/go-isatty v0.0.22
+	github.com/mattn/go-colorable v0.1.15
+	github.com/mattn/go-isatty v0.0.23
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
 	github.com/mdlayher/sdnotify v1.0.0
