@@ -119,6 +119,9 @@ type Direct struct {
 	connectionHandleForTest string      // sent in MapRequest.ConnectionHandleForTest
 	streamingMapSession     *mapSession // the one streaming mapSession instance
 
+	hardwareAttestationMu         syncs.Mutex
+	hardwareAttestationSignFailed bool // guarded by hardwareAttestationMu
+
 	controlClientID int64 // Random ID used to differentiate clients for consumers of messages.
 }
 
@@ -1144,19 +1147,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// the key & signature in the map request.
 	if buildfeatures.HasTPM {
 		if k := persist.AsStruct().AttestationKey; k != nil && !k.IsZero() {
-			hwPub := key.HardwareAttestationPublicFromPlatformKey(k)
-			request.HardwareAttestationKey = hwPub
-
-			t := c.clock.Now()
-			msg := fmt.Sprintf("%d|%s", t.Unix(), nodeKey.String())
-			digest := sha256.Sum256([]byte(msg))
-			sig, err := k.Sign(nil, digest[:], crypto.SHA256)
-			if err != nil {
-				c.logf("failed to sign node key with hardware attestation key: %v", err)
-			} else {
-				request.HardwareAttestationKeySignature = sig
-				request.HardwareAttestationKeySignatureTimestamp = t
-			}
+			c.addHardwareAttestation(request, k, nodeKey)
 		}
 	}
 
@@ -1399,6 +1390,34 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return ctx.Err()
 	}
 	return nil
+}
+
+// addHardwareAttestation signs request with k. If signing fails, it does not
+// try k again for the lifetime of c. Some hardware signers require interactive
+// authorization, so retrying on every map request can repeatedly prompt the
+// user. A newly-created Direct will try the signer again.
+func (c *Direct) addHardwareAttestation(request *tailcfg.MapRequest, k key.HardwareAttestationKey, nodeKey key.NodePublic) {
+	c.hardwareAttestationMu.Lock()
+	defer c.hardwareAttestationMu.Unlock()
+
+	if c.hardwareAttestationSignFailed {
+		return
+	}
+
+	hwPub := key.HardwareAttestationPublicFromPlatformKey(k)
+	request.HardwareAttestationKey = hwPub
+
+	t := c.clock.Now()
+	msg := fmt.Sprintf("%d|%s", t.Unix(), nodeKey.String())
+	digest := sha256.Sum256([]byte(msg))
+	sig, err := k.Sign(nil, digest[:], crypto.SHA256)
+	if err != nil {
+		c.hardwareAttestationSignFailed = true
+		c.logf("failed to sign node key with hardware attestation key; not retrying until the control client restarts: %v", err)
+		return
+	}
+	request.HardwareAttestationKeySignature = sig
+	request.HardwareAttestationKeySignatureTimestamp = t
 }
 
 // NetmapFromMapResponseForDebug returns a NetworkMap from the given MapResponse.
