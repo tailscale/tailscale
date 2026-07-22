@@ -119,4 +119,28 @@ func TestIPForwardingEnabledLinux(t *testing.T) {
 	if got {
 		t.Errorf("got true; want false")
 	}
+
+	// The global keys and the per-interface keys for each interface on
+	// the machine should all be readable without error, whatever their
+	// values.
+	for _, p := range []protocol{ipv4, ipv6} {
+		on, err := ipForwardingEnabledLinux(p, "")
+		if err != nil {
+			t.Errorf("global (proto %v): %v", p, err)
+		}
+		t.Logf("global (proto %v) = %v", p, on)
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range ifaces {
+		for _, p := range []protocol{ipv4, ipv6} {
+			on, err := ipForwardingEnabledLinux(p, iface.Name)
+			if err != nil {
+				t.Errorf("%s (proto %v): %v", iface.Name, p, err)
+			}
+			t.Logf("%s (proto %v) = %v", iface.Name, p, on)
+		}
+	}
 }
