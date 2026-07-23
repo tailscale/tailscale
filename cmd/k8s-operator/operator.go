@@ -70,6 +70,11 @@ import (
 // Generate Connector and ProxyClass CustomResourceDefinition yamls from their Go types.
 //go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen crd schemapatch:manifests=./deploy/crds output:dir=./deploy/crds paths=../../k8s-operator/apis/...
 
+// Add nullable: true to optional object/array fields in the generated CRD schemas so that
+// server-side apply (e.g. ArgoCD, Flux) can send null for unset siblings of embedded corev1
+// types like Affinity without being rejected by schema validation. Must run after controller-gen.
+//go:generate go run tailscale.com/cmd/k8s-operator/generate crdnullable
+
 // Generate static manifests for deploying Tailscale operator on Kubernetes from the operator's Helm chart.
 //go:generate go run tailscale.com/cmd/k8s-operator/generate staticmanifests
 

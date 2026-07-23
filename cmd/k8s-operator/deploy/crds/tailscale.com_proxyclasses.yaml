@@ -112,6 +112,9 @@ spec:
                             type: string
                             maxLength: 63
                             pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                          nullable: true
+                      nullable: true
+                  nullable: true
                   x-kubernetes-validations:
                     - rule: '!(has(self.serviceMonitor) && self.serviceMonitor.enable  && !self.enable)'
                       message: ServiceMonitor can only be enabled if metrics are enabled
@@ -134,6 +137,7 @@ spec:
                       type: object
                       additionalProperties:
                         type: string
+                      nullable: true
                     labels:
                       description: |-
                         Labels that will be added to the StatefulSet created for the proxy.
@@ -148,6 +152,7 @@ spec:
                         type: string
                         maxLength: 63
                         pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                      nullable: true
                     pod:
                       description: Configuration for the proxy Pod.
                       type: object
@@ -219,7 +224,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchFields:
                                             description: A list of node selector requirements by node's fields.
                                             type: array
@@ -251,13 +258,16 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
                                       weight:
                                         description: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the affinity requirements specified by this field are not met at
@@ -310,7 +320,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchFields:
                                             description: A list of node selector requirements by node's fields.
                                             type: array
@@ -342,10 +354,14 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
                                       x-kubernetes-list-type: atomic
                                   x-kubernetes-map-type: atomic
+                                  nullable: true
+                              nullable: true
                             podAffinity:
                               description: Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
                               type: object
@@ -411,7 +427,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -420,7 +438,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           matchLabelKeys:
                                             description: |-
                                               MatchLabelKeys is a set of pod label keys to select which pods will
@@ -435,6 +455,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           mismatchLabelKeys:
                                             description: |-
                                               MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -449,6 +470,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           namespaceSelector:
                                             description: |-
                                               A label query over the set of namespaces that the term applies to.
@@ -488,7 +510,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -497,7 +521,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           namespaces:
                                             description: |-
                                               namespaces specifies a static list of namespace names that the term applies to.
@@ -508,6 +534,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           topologyKey:
                                             description: |-
                                               This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -523,6 +550,7 @@ spec:
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the affinity requirements specified by this field are not met at
@@ -581,7 +609,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -590,7 +620,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       matchLabelKeys:
                                         description: |-
                                           MatchLabelKeys is a set of pod label keys to select which pods will
@@ -605,6 +637,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       mismatchLabelKeys:
                                         description: |-
                                           MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -619,6 +652,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       namespaceSelector:
                                         description: |-
                                           A label query over the set of namespaces that the term applies to.
@@ -658,7 +692,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -667,7 +703,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       namespaces:
                                         description: |-
                                           namespaces specifies a static list of namespace names that the term applies to.
@@ -678,6 +716,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       topologyKey:
                                         description: |-
                                           This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -687,6 +726,8 @@ spec:
                                           Empty topologyKey is not allowed.
                                         type: string
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
+                              nullable: true
                             podAntiAffinity:
                               description: Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
                               type: object
@@ -752,7 +793,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -761,7 +804,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           matchLabelKeys:
                                             description: |-
                                               MatchLabelKeys is a set of pod label keys to select which pods will
@@ -776,6 +821,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           mismatchLabelKeys:
                                             description: |-
                                               MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -790,6 +836,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           namespaceSelector:
                                             description: |-
                                               A label query over the set of namespaces that the term applies to.
@@ -829,7 +876,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -838,7 +887,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           namespaces:
                                             description: |-
                                               namespaces specifies a static list of namespace names that the term applies to.
@@ -849,6 +900,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           topologyKey:
                                             description: |-
                                               This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -864,6 +916,7 @@ spec:
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the anti-affinity requirements specified by this field are not met at
@@ -922,7 +975,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -931,7 +986,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       matchLabelKeys:
                                         description: |-
                                           MatchLabelKeys is a set of pod label keys to select which pods will
@@ -946,6 +1003,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       mismatchLabelKeys:
                                         description: |-
                                           MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -960,6 +1018,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       namespaceSelector:
                                         description: |-
                                           A label query over the set of namespaces that the term applies to.
@@ -999,7 +1058,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -1008,7 +1069,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       namespaces:
                                         description: |-
                                           namespaces specifies a static list of namespace names that the term applies to.
@@ -1019,6 +1082,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       topologyKey:
                                         description: |-
                                           This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -1028,6 +1092,9 @@ spec:
                                           Empty topologyKey is not allowed.
                                         type: string
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
+                              nullable: true
+                          nullable: true
                         annotations:
                           description: |-
                             Annotations that will be added to the proxy Pod.
@@ -1038,6 +1105,7 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                          nullable: true
                         dnsConfig:
                           description: |-
                             DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.
@@ -1054,6 +1122,7 @@ spec:
                               items:
                                 type: string
                               x-kubernetes-list-type: atomic
+                              nullable: true
                             options:
                               description: |-
                                 A list of DNS resolver options.
@@ -1074,6 +1143,7 @@ spec:
                                     description: Value is this DNS resolver option's value.
                                     type: string
                               x-kubernetes-list-type: atomic
+                              nullable: true
                             searches:
                               description: |-
                                 A list of DNS search domains for host-name lookup.
@@ -1083,6 +1153,8 @@ spec:
                               items:
                                 type: string
                               x-kubernetes-list-type: atomic
+                              nullable: true
+                          nullable: true
                         dnsPolicy:
                           description: |-
                             DNSPolicy defines how DNS will be configured for the proxy Pod.
@@ -1094,6 +1166,7 @@ spec:
                             - ClusterFirst
                             - Default
                             - None
+                          nullable: true
                         imagePullSecrets:
                           description: |-
                             Proxy Pod's image pull Secrets.
@@ -1115,6 +1188,7 @@ spec:
                                 type: string
                                 default: ""
                             x-kubernetes-map-type: atomic
+                          nullable: true
                         labels:
                           description: |-
                             Labels that will be added to the proxy Pod.
@@ -1127,6 +1201,7 @@ spec:
                             type: string
                             maxLength: 63
                             pattern: ^(([a-zA-Z0-9][-._a-zA-Z0-9]*)?[a-zA-Z0-9])?$
+                          nullable: true
                         nodeName:
                           description: |-
                             Proxy Pod's node name.
@@ -1141,6 +1216,7 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                          nullable: true
                         priorityClassName:
                           description: |-
                             PriorityClassName for the proxy Pod.
@@ -1178,6 +1254,7 @@ spec:
                                       RuntimeDefault - the container runtime's default profile.
                                       Unconfined - no AppArmor enforcement.
                                   type: string
+                              nullable: true
                             fsGroup:
                               description: |-
                                 A special supplemental group that applies to all containers in a pod.
@@ -1279,6 +1356,7 @@ spec:
                                 user:
                                   description: User is a SELinux user label that applies to the container.
                                   type: string
+                              nullable: true
                             seccompProfile:
                               description: |-
                                 The seccomp options to use by the containers in this pod.
@@ -1303,6 +1381,7 @@ spec:
                                     RuntimeDefault - the container runtime default profile should be used.
                                     Unconfined - no profile should be applied.
                                   type: string
+                              nullable: true
                             supplementalGroups:
                               description: |-
                                 A list of groups applied to the first process run in each container, in
@@ -1319,6 +1398,7 @@ spec:
                                 type: integer
                                 format: int64
                               x-kubernetes-list-type: atomic
+                              nullable: true
                             supplementalGroupsPolicy:
                               description: |-
                                 Defines how supplemental groups of the first container processes are calculated.
@@ -1347,6 +1427,7 @@ spec:
                                     description: Value of a property to set
                                     type: string
                               x-kubernetes-list-type: atomic
+                              nullable: true
                             windowsOptions:
                               description: |-
                                 The Windows specific settings applied to all containers.
@@ -1378,6 +1459,8 @@ spec:
                                     May also be set in PodSecurityContext. If set in both SecurityContext and
                                     PodSecurityContext, the value specified in SecurityContext takes precedence.
                                   type: string
+                              nullable: true
+                          nullable: true
                         tailscaleContainer:
                           description: Configuration for the proxy container running tailscale.
                           type: object
@@ -1401,6 +1484,7 @@ spec:
                                     mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
                                     this setting will default to false, and no requests will be proxied.
                                   type: boolean
+                              nullable: true
                             env:
                               description: |-
                                 List of environment variables to set in the container.
@@ -1431,6 +1515,7 @@ spec:
                                       be expanded, regardless of whether the variable exists or not. Defaults
                                       to "".
                                     type: string
+                              nullable: true
                             image:
                               description: |-
                                 Container image name. By default images are pulled from docker.io/tailscale,
@@ -1500,6 +1585,7 @@ spec:
                                   x-kubernetes-list-map-keys:
                                     - name
                                   x-kubernetes-list-type: map
+                                  nullable: true
                                 limits:
                                   description: |-
                                     Limits describes the maximum amount of compute resources allowed.
@@ -1511,6 +1597,7 @@ spec:
                                       - type: integer
                                       - type: string
                                     x-kubernetes-int-or-string: true
+                                  nullable: true
                                 requests:
                                   description: |-
                                     Requests describes the minimum amount of compute resources required.
@@ -1524,6 +1611,8 @@ spec:
                                       - type: integer
                                       - type: string
                                     x-kubernetes-int-or-string: true
+                                  nullable: true
+                              nullable: true
                             securityContext:
                               description: |-
                                 Container security context.
@@ -1570,6 +1659,7 @@ spec:
                                           RuntimeDefault - the container runtime's default profile.
                                           Unconfined - no AppArmor enforcement.
                                       type: string
+                                  nullable: true
                                 capabilities:
                                   description: |-
                                     The capabilities to add/drop when running containers.
@@ -1584,6 +1674,7 @@ spec:
                                         description: Capability represent POSIX capabilities type
                                         type: string
                                       x-kubernetes-list-type: atomic
+                                      nullable: true
                                     drop:
                                       description: Removed capabilities
                                       type: array
@@ -1591,6 +1682,8 @@ spec:
                                         description: Capability represent POSIX capabilities type
                                         type: string
                                       x-kubernetes-list-type: atomic
+                                      nullable: true
+                                  nullable: true
                                 privileged:
                                   description: |-
                                     Run container in privileged mode.
@@ -1660,6 +1753,7 @@ spec:
                                     user:
                                       description: User is a SELinux user label that applies to the container.
                                       type: string
+                                  nullable: true
                                 seccompProfile:
                                   description: |-
                                     The seccomp options to use by this container. If seccomp options are
@@ -1686,6 +1780,7 @@ spec:
                                         RuntimeDefault - the container runtime default profile should be used.
                                         Unconfined - no profile should be applied.
                                       type: string
+                                  nullable: true
                                 windowsOptions:
                                   description: |-
                                     The Windows specific settings applied to all containers.
@@ -1717,6 +1812,9 @@ spec:
                                         May also be set in PodSecurityContext. If set in both SecurityContext and
                                         PodSecurityContext, the value specified in SecurityContext takes precedence.
                                       type: string
+                                  nullable: true
+                              nullable: true
+                          nullable: true
                         tailscaleInitContainer:
                           description: |-
                             Configuration for the proxy init container that enables forwarding.
@@ -1742,6 +1840,7 @@ spec:
                                     mux pattern /debug/ will be forwarded to the "debug" port. In 1.82.x,
                                     this setting will default to false, and no requests will be proxied.
                                   type: boolean
+                              nullable: true
                             env:
                               description: |-
                                 List of environment variables to set in the container.
@@ -1772,6 +1871,7 @@ spec:
                                       be expanded, regardless of whether the variable exists or not. Defaults
                                       to "".
                                     type: string
+                              nullable: true
                             image:
                               description: |-
                                 Container image name. By default images are pulled from docker.io/tailscale,
@@ -1841,6 +1941,7 @@ spec:
                                   x-kubernetes-list-map-keys:
                                     - name
                                   x-kubernetes-list-type: map
+                                  nullable: true
                                 limits:
                                   description: |-
                                     Limits describes the maximum amount of compute resources allowed.
@@ -1852,6 +1953,7 @@ spec:
                                       - type: integer
                                       - type: string
                                     x-kubernetes-int-or-string: true
+                                  nullable: true
                                 requests:
                                   description: |-
                                     Requests describes the minimum amount of compute resources required.
@@ -1865,6 +1967,8 @@ spec:
                                       - type: integer
                                       - type: string
                                     x-kubernetes-int-or-string: true
+                                  nullable: true
+                              nullable: true
                             securityContext:
                               description: |-
                                 Container security context.
@@ -1911,6 +2015,7 @@ spec:
                                           RuntimeDefault - the container runtime's default profile.
                                           Unconfined - no AppArmor enforcement.
                                       type: string
+                                  nullable: true
                                 capabilities:
                                   description: |-
                                     The capabilities to add/drop when running containers.
@@ -1925,6 +2030,7 @@ spec:
                                         description: Capability represent POSIX capabilities type
                                         type: string
                                       x-kubernetes-list-type: atomic
+                                      nullable: true
                                     drop:
                                       description: Removed capabilities
                                       type: array
@@ -1932,6 +2038,8 @@ spec:
                                         description: Capability represent POSIX capabilities type
                                         type: string
                                       x-kubernetes-list-type: atomic
+                                      nullable: true
+                                  nullable: true
                                 privileged:
                                   description: |-
                                     Run container in privileged mode.
@@ -2001,6 +2109,7 @@ spec:
                                     user:
                                       description: User is a SELinux user label that applies to the container.
                                       type: string
+                                  nullable: true
                                 seccompProfile:
                                   description: |-
                                     The seccomp options to use by this container. If seccomp options are
@@ -2027,6 +2136,7 @@ spec:
                                         RuntimeDefault - the container runtime default profile should be used.
                                         Unconfined - no profile should be applied.
                                       type: string
+                                  nullable: true
                                 windowsOptions:
                                   description: |-
                                     The Windows specific settings applied to all containers.
@@ -2058,6 +2168,9 @@ spec:
                                         May also be set in PodSecurityContext. If set in both SecurityContext and
                                         PodSecurityContext, the value specified in SecurityContext takes precedence.
                                       type: string
+                                  nullable: true
+                              nullable: true
+                          nullable: true
                         tolerations:
                           description: |-
                             Proxy Pod's tolerations.
@@ -2101,6 +2214,7 @@ spec:
                                   Value is the taint value the toleration matches to.
                                   If the operator is Exists, the value should be empty, otherwise just a regular string.
                                 type: string
+                          nullable: true
                         topologySpreadConstraints:
                           description: |-
                             Proxy Pod's topology spread constraints.
@@ -2152,7 +2266,9 @@ spec:
                                           items:
                                             type: string
                                           x-kubernetes-list-type: atomic
+                                          nullable: true
                                     x-kubernetes-list-type: atomic
+                                    nullable: true
                                   matchLabels:
                                     description: |-
                                       matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -2161,7 +2277,9 @@ spec:
                                     type: object
                                     additionalProperties:
                                       type: string
+                                    nullable: true
                                 x-kubernetes-map-type: atomic
+                                nullable: true
                               matchLabelKeys:
                                 description: |-
                                   MatchLabelKeys is a set of pod label keys to select the pods over which
@@ -2178,6 +2296,7 @@ spec:
                                 items:
                                   type: string
                                 x-kubernetes-list-type: atomic
+                                nullable: true
                               maxSkew:
                                 description: |-
                                   MaxSkew describes the degree to which pods may be unevenly distributed.
@@ -2275,6 +2394,9 @@ spec:
                                   won't make it *more* imbalanced.
                                   It's a required field.
                                 type: string
+                          nullable: true
+                      nullable: true
+                  nullable: true
                 staticEndpoints:
                   description: |-
                     Configuration for 'static endpoints' on proxies in order to facilitate
@@ -2320,6 +2442,8 @@ spec:
                           type: object
                           additionalProperties:
                             type: string
+                          nullable: true
+                  nullable: true
                 tailscale:
                   description: |-
                     TailscaleConfig contains options to configure the tailscale-specific
@@ -2335,6 +2459,7 @@ spec:
                         https://tailscale.com/kb/1019/subnets#use-your-subnet-routes-from-other-devices
                         Defaults to false.
                       type: boolean
+                  nullable: true
                 useLetsEncryptStagingEnvironment:
                   description: |-
                     Set UseLetsEncryptStagingEnvironment to true to issue TLS

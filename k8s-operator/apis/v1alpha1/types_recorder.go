@@ -96,6 +96,7 @@ type RecorderStatefulSet struct {
 	// to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Labels map[string]string `json:"labels,omitempty"`
 
 	// Annotations that will be added to the StatefulSet created for the Recorder.
@@ -103,10 +104,12 @@ type RecorderStatefulSet struct {
 	// applied to the StatefulSet by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// Configuration for pods created by the Recorder's StatefulSet.
 	// +optional
+	// +nullable
 	Pod RecorderPod `json:"pod,omitempty"`
 }
 
@@ -115,46 +118,54 @@ type RecorderPod struct {
 	// will be merged with the default labels applied to the Pod by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Annotations that will be added to Recorder Pods. Any annotations
+	// Annotations that will be added to Recorder Pods. Any annotations
 	// specified here will be merged with the default annotations applied to
 	// the Pod by the operator.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// Affinity rules for Recorder Pods. By default, the operator does not
 	// apply any affinity rules.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
 	// +optional
+	// +nullable
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 
 	// Configuration for the Recorder container running tailscale.
 	// +optional
+	// +nullable
 	Container RecorderContainer `json:"container,omitempty"`
 
 	// Security context for Recorder Pods. By default, the operator does not
 	// apply any Pod security context.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
 	// +optional
+	// +nullable
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 
 	// Image pull Secrets for Recorder Pods.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
 	// +optional
+	// +nullable
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	// Node selector rules for Recorder Pods. By default, the operator does
 	// not apply any node selector rules.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
+	// +nullable
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations for Recorder Pods. By default, the operator does not apply
 	// any tolerations.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
+	// +nullable
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// Config for the ServiceAccount to create for the Recorder's StatefulSet.
@@ -162,6 +173,7 @@ type RecorderPod struct {
 	// name as the Recorder resource.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#service-account
 	// +optional
+	// +nullable
 	ServiceAccount RecorderServiceAccount `json:"serviceAccount,omitempty"`
 }
 
@@ -185,6 +197,7 @@ type RecorderServiceAccount struct {
 	// For example:
 	// eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/<role-name>
 	// +optional
+	// +nullable
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
@@ -197,6 +210,7 @@ type RecorderContainer struct {
 	// variables (i.e TS_USERSPACE) is not recommended and might break in
 	// the future.
 	// +optional
+	// +nullable
 	Env []Env `json:"env,omitempty"`
 
 	// Container image name including tag. Defaults to docker.io/tailscale/tsrecorder
@@ -217,12 +231,14 @@ type RecorderContainer struct {
 	// amount of resources required wil depend on the volume of recordings sent.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
 	// +optional
+	// +nullable
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// Container security context. By default, the operator does not apply any
 	// container security context.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
+	// +nullable
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 }
 
@@ -230,6 +246,7 @@ type Storage struct {
 	// Configure an S3-compatible API for storage. Required if the UI is not
 	// enabled, to ensure that recordings are accessible.
 	// +optional
+	// +nullable
 	S3 *S3 `json:"s3,omitempty"`
 }
 

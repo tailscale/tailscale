@@ -168,7 +168,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchFields:
                                             description: A list of node selector requirements by node's fields.
                                             type: array
@@ -200,13 +202,16 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
                                       weight:
                                         description: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the affinity requirements specified by this field are not met at
@@ -259,7 +264,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchFields:
                                             description: A list of node selector requirements by node's fields.
                                             type: array
@@ -291,10 +298,14 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
                                       x-kubernetes-list-type: atomic
                                   x-kubernetes-map-type: atomic
+                                  nullable: true
+                              nullable: true
                             podAffinity:
                               description: Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
                               type: object
@@ -360,7 +371,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -369,7 +382,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           matchLabelKeys:
                                             description: |-
                                               MatchLabelKeys is a set of pod label keys to select which pods will
@@ -384,6 +399,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           mismatchLabelKeys:
                                             description: |-
                                               MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -398,6 +414,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           namespaceSelector:
                                             description: |-
                                               A label query over the set of namespaces that the term applies to.
@@ -437,7 +454,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -446,7 +465,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           namespaces:
                                             description: |-
                                               namespaces specifies a static list of namespace names that the term applies to.
@@ -457,6 +478,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           topologyKey:
                                             description: |-
                                               This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -472,6 +494,7 @@ spec:
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the affinity requirements specified by this field are not met at
@@ -530,7 +553,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -539,7 +564,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       matchLabelKeys:
                                         description: |-
                                           MatchLabelKeys is a set of pod label keys to select which pods will
@@ -554,6 +581,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       mismatchLabelKeys:
                                         description: |-
                                           MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -568,6 +596,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       namespaceSelector:
                                         description: |-
                                           A label query over the set of namespaces that the term applies to.
@@ -607,7 +636,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -616,7 +647,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       namespaces:
                                         description: |-
                                           namespaces specifies a static list of namespace names that the term applies to.
@@ -627,6 +660,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       topologyKey:
                                         description: |-
                                           This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -636,6 +670,8 @@ spec:
                                           Empty topologyKey is not allowed.
                                         type: string
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
+                              nullable: true
                             podAntiAffinity:
                               description: Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
                               type: object
@@ -701,7 +737,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -710,7 +748,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           matchLabelKeys:
                                             description: |-
                                               MatchLabelKeys is a set of pod label keys to select which pods will
@@ -725,6 +765,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           mismatchLabelKeys:
                                             description: |-
                                               MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -739,6 +780,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           namespaceSelector:
                                             description: |-
                                               A label query over the set of namespaces that the term applies to.
@@ -778,7 +820,9 @@ spec:
                                                       items:
                                                         type: string
                                                       x-kubernetes-list-type: atomic
+                                                      nullable: true
                                                 x-kubernetes-list-type: atomic
+                                                nullable: true
                                               matchLabels:
                                                 description: |-
                                                   matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -787,7 +831,9 @@ spec:
                                                 type: object
                                                 additionalProperties:
                                                   type: string
+                                                nullable: true
                                             x-kubernetes-map-type: atomic
+                                            nullable: true
                                           namespaces:
                                             description: |-
                                               namespaces specifies a static list of namespace names that the term applies to.
@@ -798,6 +844,7 @@ spec:
                                             items:
                                               type: string
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           topologyKey:
                                             description: |-
                                               This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -813,6 +860,7 @@ spec:
                                         type: integer
                                         format: int32
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
                                 requiredDuringSchedulingIgnoredDuringExecution:
                                   description: |-
                                     If the anti-affinity requirements specified by this field are not met at
@@ -871,7 +919,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -880,7 +930,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       matchLabelKeys:
                                         description: |-
                                           MatchLabelKeys is a set of pod label keys to select which pods will
@@ -895,6 +947,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       mismatchLabelKeys:
                                         description: |-
                                           MismatchLabelKeys is a set of pod label keys to select which pods will
@@ -909,6 +962,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       namespaceSelector:
                                         description: |-
                                           A label query over the set of namespaces that the term applies to.
@@ -948,7 +1002,9 @@ spec:
                                                   items:
                                                     type: string
                                                   x-kubernetes-list-type: atomic
+                                                  nullable: true
                                             x-kubernetes-list-type: atomic
+                                            nullable: true
                                           matchLabels:
                                             description: |-
                                               matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
@@ -957,7 +1013,9 @@ spec:
                                             type: object
                                             additionalProperties:
                                               type: string
+                                            nullable: true
                                         x-kubernetes-map-type: atomic
+                                        nullable: true
                                       namespaces:
                                         description: |-
                                           namespaces specifies a static list of namespace names that the term applies to.
@@ -968,6 +1026,7 @@ spec:
                                         items:
                                           type: string
                                         x-kubernetes-list-type: atomic
+                                        nullable: true
                                       topologyKey:
                                         description: |-
                                           This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching
@@ -977,11 +1036,15 @@ spec:
                                           Empty topologyKey is not allowed.
                                         type: string
                                   x-kubernetes-list-type: atomic
+                                  nullable: true
+                              nullable: true
+                          nullable: true
                         nodeSelector:
                           description: If specified, applies node selector rules to the pods deployed by the DNSConfig resource.
                           type: object
                           additionalProperties:
                             type: string
+                          nullable: true
                         tolerations:
                           description: If specified, applies tolerations to the pods deployed by the DNSConfig resource.
                           type: array
@@ -1021,6 +1084,7 @@ spec:
                                   Value is the taint value the toleration matches to.
                                   If the operator is Exists, the value should be empty, otherwise just a regular string.
                                 type: string
+                          nullable: true
                     replicas:
                       description: Replicas specifies how many Pods to create. Defaults to 1.
                       type: integer

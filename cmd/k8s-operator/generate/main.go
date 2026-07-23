@@ -43,7 +43,7 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatalf("usage ./generate [staticmanifests|helmcrd]")
+		log.Fatalf("usage ./generate [staticmanifests|helmcrd|crdnullable]")
 	}
 	gitOut, err := exec.Command("git", "rev-parse", "--show-toplevel").CombinedOutput()
 	if err != nil {
@@ -52,6 +52,12 @@ func main() {
 
 	repoRoot := strings.TrimSpace(string(gitOut))
 	switch os.Args[1] {
+	case "crdnullable": // add nullable: true to optional object/array fields for SSA compatibility
+		log.Print("Adding nullable markers to CRD schemas")
+		if err := addNullableToCRDs(repoRoot); err != nil {
+			log.Fatalf("error adding nullable markers to CRDs: %v", err)
+		}
+		return
 	case "helmcrd": // insert CRDs to Helm templates behind a installCRDs=true conditional check
 		log.Print("Adding CRDs to Helm templates")
 		if err := generate(repoRoot); err != nil {
@@ -60,7 +66,7 @@ func main() {
 		return
 	case "staticmanifests": // generate static manifests from Helm templates (including the CRD)
 	default:
-		log.Fatalf("unknown option %s, known options are 'staticmanifests', 'helmcrd'", os.Args[1])
+		log.Fatalf("unknown option %s, known options are 'staticmanifests', 'helmcrd', 'crdnullable'", os.Args[1])
 	}
 	log.Printf("Inserting CRDs Helm templates")
 	if err := generate(repoRoot); err != nil {

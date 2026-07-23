@@ -58,6 +58,7 @@ type ProxyClassSpec struct {
 	// Kubernetes operator deploys a StatefulSet for each of the user
 	// configured proxies (Tailscale Ingress, Tailscale Service, Connector).
 	// +optional
+	// +nullable
 	StatefulSet *StatefulSet `json:"statefulSet"`
 	// Configuration for proxy metrics. Metrics are currently not supported
 	// for egress proxies and for Ingress proxies that have been configured
@@ -66,10 +67,12 @@ type ProxyClassSpec struct {
 	// and will likely change in breaking ways in the future - we only
 	// recommend that you use those for debugging purposes.
 	// +optional
+	// +nullable
 	Metrics *Metrics `json:"metrics,omitempty"`
 	// TailscaleConfig contains options to configure the tailscale-specific
 	// parameters of proxies.
 	// +optional
+	// +nullable
 	TailscaleConfig *TailscaleConfig `json:"tailscale,omitempty"`
 	// Set UseLetsEncryptStagingEnvironment to true to issue TLS
 	// certificates for any HTTPS endpoints exposed to the tailnet from
@@ -90,6 +93,7 @@ type ProxyClassSpec struct {
 	// direct connections from other devices on the tailnet.
 	// See https://tailscale.com/kb/1445/kubernetes-operator-customization#static-endpoints.
 	// +optional
+	// +nullable
 	StaticEndpoints *StaticEndpointsConfig `json:"staticEndpoints,omitempty"`
 }
 
@@ -225,6 +229,7 @@ type StatefulSet struct {
 	// Label keys and values must be valid Kubernetes label keys and values.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Labels Labels `json:"labels,omitempty"`
 	// Annotations that will be added to the StatefulSet created for the proxy.
 	// Any Annotations specified here will be merged with the default annotations
@@ -234,9 +239,11 @@ type StatefulSet struct {
 	// Annotations must be valid Kubernetes annotations.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// Configuration for the proxy Pod.
 	// +optional
+	// +nullable
 	Pod *Pod `json:"pod,omitempty"`
 }
 
@@ -247,6 +254,7 @@ type Pod struct {
 	// Label keys and values must be valid Kubernetes label keys and values.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Labels Labels `json:"labels,omitempty"`
 	// Annotations that will be added to the proxy Pod.
 	// Any annotations specified here will be merged with the default
@@ -254,28 +262,34 @@ type Pod struct {
 	// Annotations must be valid Kubernetes annotations.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// Proxy Pod's affinity rules.
 	// By default, the Tailscale Kubernetes operator does not apply any affinity rules.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#affinity
 	// +optional
+	// +nullable
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 	// Configuration for the proxy container running tailscale.
 	// +optional
+	// +nullable
 	TailscaleContainer *Container `json:"tailscaleContainer,omitempty"`
 	// Configuration for the proxy init container that enables forwarding.
 	// Not valid to apply to ProxyGroups of type "kube-apiserver".
 	// +optional
+	// +nullable
 	TailscaleInitContainer *Container `json:"tailscaleInitContainer,omitempty"`
 	// Proxy Pod's security context.
 	// By default Tailscale Kubernetes operator does not apply any Pod
 	// security context.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-2
 	// +optional
+	// +nullable
 	SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
 	// Proxy Pod's image pull Secrets.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
 	// +optional
+	// +nullable
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// Proxy Pod's node name.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
@@ -286,17 +300,20 @@ type Pod struct {
 	// selector.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
+	// +nullable
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	// Proxy Pod's tolerations.
 	// By default Tailscale Kubernetes operator does not apply any
 	// tolerations.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling
 	// +optional
+	// +nullable
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 	// Proxy Pod's topology spread constraints.
 	// By default Tailscale Kubernetes operator does not apply any topology spread constraints.
 	// https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
 	// +optional
+	// +nullable
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 	// PriorityClassName for the proxy Pod.
 	// By default Tailscale Kubernetes operator does not apply any priority class.
@@ -308,11 +325,13 @@ type Pod struct {
 	// https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy
 	// +kubebuilder:validation:Enum=ClusterFirstWithHostNet;ClusterFirst;Default;None
 	// +optional
+	// +nullable
 	DNSPolicy *corev1.DNSPolicy `json:"dnsPolicy,omitempty"`
 	// DNSConfig defines DNS parameters for the proxy Pod in addition to those generated from DNSPolicy.
 	// When DNSPolicy is set to "None", DNSConfig must be specified.
 	// https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
 	// +optional
+	// +nullable
 	DNSConfig *corev1.PodDNSConfig `json:"dnsConfig,omitempty"`
 }
 
@@ -337,6 +356,7 @@ type Metrics struct {
 	// ts_proxy_parent_namespace: namespace of the parent resource (if the parent resource is not cluster scoped)
 	// job: ts_<proxy type>_[<parent namespace>]_<parent_name>
 	// +optional
+	// +nullable
 	ServiceMonitor *ServiceMonitor `json:"serviceMonitor"`
 }
 
@@ -347,6 +367,7 @@ type ServiceMonitor struct {
 	// Labels must be valid Kubernetes labels.
 	// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 	// +optional
+	// +nullable
 	Labels Labels `json:"labels"`
 }
 
@@ -380,6 +401,7 @@ type Container struct {
 	// variables (i.e TS_USERSPACE) is not recommended and might break in
 	// the future.
 	// +optional
+	// +nullable
 	Env []Env `json:"env,omitempty"`
 	// Container image name. By default images are pulled from docker.io/tailscale,
 	// but the official images are also available at ghcr.io/tailscale.
@@ -411,6 +433,7 @@ type Container struct {
 	// cluster size.
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources
 	// +optional
+	// +nullable
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	// Container security context.
 	// Security context specified here will override the security context set by the operator.
@@ -421,10 +444,12 @@ type Container struct {
 	// by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752
 	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context
 	// +optional
+	// +nullable
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 	// Configuration for enabling extra debug information in the container.
 	// Not recommended for production use.
 	// +optional
+	// +nullable
 	Debug *Debug `json:"debug,omitempty"`
 }
 
