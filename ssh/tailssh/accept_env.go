@@ -13,11 +13,12 @@ import (
 // is unconditionally prohibited from being forwarded, regardless of
 // acceptEnv policy. This prevents privilege escalation via dynamic
 // linker environment variables (e.g. LD_PRELOAD, LD_LIBRARY_PATH,
-// DYLD_INSERT_LIBRARIES) even when a wildcard acceptEnv pattern like
-// "*" is configured.
+// DYLD_INSERT_LIBRARIES) or leaking of secrets (e.g. GOTRACEBACK)
+// even when a wildcard acceptEnv pattern like "*" is configured.
 func isDangerousEnvVar(name string) bool {
 	upper := strings.ToUpper(name)
-	return strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_")
+	return strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_") ||
+		upper == "GOTRACEBACK"
 }
 
 // allowedEnvKeysEnv is the name of the environment variable used to pass the
@@ -60,7 +61,7 @@ func stripAllowedEnvKeys(environ []string) (env, keys []string) {
 		if !ok || k != allowedEnvKeysEnv {
 			return false
 		}
-		for _, ek := range strings.Split(v, ",") {
+		for ek := range strings.SplitSeq(v, ",") {
 			if ek != "" {
 				keys = append(keys, ek)
 			}

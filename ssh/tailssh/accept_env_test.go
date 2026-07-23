@@ -231,6 +231,14 @@ func TestFilterEnv(t *testing.T) {
 			environ:          []string{allowedEnvKeysEnv + "=EVIL", "TERM=xterm"},
 			expectedFiltered: nil,
 		},
+		{
+			// GOTRACEBACK controls crash tracebacks/core dumps of the
+			// privileged incubator child, which could leak secrets
+			name:             "gotraceback-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"GOTRACEBACK=crash", "TERM=xterm"},
+			expectedFiltered: []string{"TERM=xterm"},
+		},
 	}
 
 	for _, tc := range testCases {

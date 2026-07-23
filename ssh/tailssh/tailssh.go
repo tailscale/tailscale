@@ -799,6 +799,28 @@ func forwardedEnvAndKeys(forwardedEnv []string) []string {
 	return out
 }
 
+// appendForwardedEnv appends client-forwarded pairs to env without replacing
+// existing keys: env belongs to the still-privileged incubator child, so a
+// forwarded PATH, HOME or SSH_AUTH_SOCK must not override the server's values.
+func appendForwardedEnv(env, forwardedEnv []string) []string {
+	seen := make(map[string]bool, len(env))
+	for _, kv := range env {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			seen[k] = true
+		}
+	}
+	var accepted []string
+	for _, kv := range forwardedEnv {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || seen[k] {
+			continue
+		}
+		seen[k] = true
+		accepted = append(accepted, kv)
+	}
+	return append(env, forwardedEnvAndKeys(accepted)...)
+}
+
 func (ss *sshSession) vlogf(format string, args ...any) {
 	if sshVerboseLogging() {
 		ss.logf(format, args...)

@@ -13,6 +13,7 @@ package tailssh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -118,6 +119,9 @@ func tryExecInDir(ctx context.Context, dir string) error {
 // secrets, so the caller must pass them to the child via its environment
 // (cmd.Env) rather than on the command line, where they would leak via
 // /proc/<pid>/cmdline and the session-start argv log.
+//
+// The returned Cmd.Env is guaranteed to be nil; the caller must populate it,
+// typically by passing the returned forwardedEnv to incubatorEnv.
 func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forwardedEnv []string, err error) {
 	defer func() {
 		if cmd != nil && cmd.Env != nil {
@@ -291,6 +295,10 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
+	// DEPRECATED: encodedEnv is deprecated and must not be used by new code.
+	// It is parsed only so this child keeps working when exec'd by an
+	// outdated parent tailscaled that still passes it.
+	encodedEnv string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -314,6 +322,8 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
+	// DEPRECATED: retained for version-skew compatibility only. DO NOT USE.
+	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "deprecated; do not use")
 	flags.Parse(args)
 
 	for g := range strings.SplitSeq(groups, ",") {
@@ -327,19 +337,17 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	return ia, nil
 }
 
-// forwardedEnviron returns the current environment, which already includes any
-// client-forwarded environment variables injected by the parent, with the
-// allowedEnvKeysEnv bookkeeping variable removed.
-//
-// It also returns allowedExtraKeys, containing the env keys that the parent
-// forwarded (named in the allowedEnvKeysEnv environment variable), plus
-// SSH_AUTH_SOCK.
+// forwardedEnviron returns the environment to hand to the user's process:
+// the current environment (which already includes any client-forwarded
+// variables injected by the parent, plus any from the deprecated
+// --encoded-env flag) with the allowedEnvKeysEnv bookkeeping variable
+// removed. It also returns allowedExtraKeys for the "su -w" allowlist: the
+// forwarded key names, plus SSH_AUTH_SOCK.
 func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string, err error) {
-	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
-	// TODO(bradfitz,percy): why is this listed specially? If the parent wanted to included
-	// it, couldn't it have just passed it to the incubator in endodedEnv?
-	// If it didn't, no reason for us to pass it to "su -w ..." if it's not in our env
-	// anyway? (Surely we don't want to inherit the tailscaled parent SSH_AUTH_SOCK, if any)
+	// SSH_AUTH_SOCK is allowlisted here rather than named by the parent
+	// because old parents set it without naming any keys. It can only be
+	// present if the parent enabled agent forwarding: the child's
+	// environment is built by incubatorEnv, never from the parent's os.Environ.
 	allowedExtraKeys = []string{"SSH_AUTH_SOCK"}
 
 	// The parent forwards the accepted env var names via allowedEnvKeysEnv
@@ -348,6 +356,23 @@ func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string, err 
 	// process, and use its value to build the allowlist.
 	env, keys := stripAllowedEnvKeys(os.Environ())
 	allowedExtraKeys = append(allowedExtraKeys, keys...)
+
+	if ia.encodedEnv != "" { // Legacy path for an outdated parent tailscaled
+		unquoted, err := strconv.Unquote(ia.encodedEnv)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+		var extraEnviron []string
+		if err := json.Unmarshal([]byte(unquoted), &extraEnviron); err != nil {
+			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+		env = append(env, extraEnviron...)
+		for _, kv := range extraEnviron {
+			if k, _, ok := strings.Cut(kv, "="); ok {
+				allowedExtraKeys = append(allowedExtraKeys, k)
+			}
+		}
+	}
 
 	return env, allowedExtraKeys, nil
 }
@@ -372,6 +397,10 @@ func beIncubator(args []string) error {
 	ia, err := parseIncubatorArgs(args)
 	if err != nil {
 		return err
+	}
+	if ia.encodedEnv != "" {
+		log.Printf("WARNING: tailscaled be-child: accepted SSH environment variables were passed via the deprecated --encoded-env flag; " +
+			"the running tailscaled is outdated. Update tailscaled to the latest version and restart for the latest security fixes.")
 	}
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
@@ -826,11 +855,9 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 //
 // Ordering is security-relevant: server-derived variables are set first, then
 // the client's TERM/LANG/LC_* (via acceptEnvPair), the connection metadata, the
-// optional agent socket, and finally the acceptEnv-forwarded variables. Because
-// the forwarded variables are appended, a client-forwarded value for a key that
-// the server also sets (e.g. via a permissive acceptEnv policy) appears as a
-// later duplicate. Callers that add security-critical keys must ensure they
-// cannot be overridden by a later duplicate for the target execution path.
+// optional agent socket, and finally the acceptEnv-forwarded variables. The
+// forwarded variables never replace a server-set key; colliding pairs are
+// dropped (see appendForwardedEnv).
 //
 // forwardedEnv holds the acceptEnv-accepted "KEY=VALUE" pairs, whose values may
 // be secret; they are carried here (never on the argv) so they are not logged
@@ -855,7 +882,7 @@ func (ss *sshSession) incubatorEnv(forwardedEnv []string) []string {
 		env = append(env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
 	}
 
-	env = append(env, forwardedEnvAndKeys(forwardedEnv)...)
+	env = appendForwardedEnv(env, forwardedEnv)
 	return env
 }
 
@@ -1136,7 +1163,7 @@ func updateStringInSlice(ss []string, a, b string) {
 // AcceptEnv.
 func acceptEnvPair(kv string) bool {
 	k, _, ok := strings.Cut(kv, "=")
-	if !ok {
+	if !ok || isDangerousEnvVar(k) || reservedEnvKey(k) {
 		return false
 	}
 	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")

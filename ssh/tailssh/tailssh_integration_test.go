@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/set"
 )
@@ -187,6 +189,65 @@ func TestIntegrationSSH(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestIntegrationAcceptEnvSecretNotLogged is the end-to-end regression test
+// for the acceptEnv secret leak: a forwarded secret must reach the session
+// environment, but its value must NOT appear on any process command line
+// nor in the server or incubator logs.
+func TestIntegrationAcceptEnvSecretNotLogged(t *testing.T) {
+	for _, forceV1Behavior := range []bool{false, true} {
+		name := "v2"
+		if forceV1Behavior {
+			name = "v1"
+		}
+		t.Run(name, func(t *testing.T) {
+			canary := fmt.Sprintf("e2e-canary-%d", time.Now().UnixNano())
+
+			var logBuf lockedBuffer
+			addr := testServerWithOpts(t, testServerOpts{
+				username:        "testuser",
+				forceV1Behavior: forceV1Behavior,
+				allowSendEnv:    true,
+				logf:            log.New(&logBuf, "", 0).Printf,
+			})
+			cl, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { cl.Close() })
+
+			s := testSessionFor(t, cl, map[string]string{"GIT_E2E_CANARY": canary})
+
+			// Prove delivery, and keep the session alive while we scan /proc
+			if err := s.Start("env; sleep 5"); err != nil {
+				t.Fatalf("unable to start command: %s", err)
+			}
+			if got := s.read(); !strings.Contains(got, "GIT_E2E_CANARY="+canary) {
+				t.Fatalf("forwarded secret not delivered to session env; got %q", got)
+			}
+			if runtime.GOOS == "linux" {
+				if path := findInProcCmdlines(canary); path != "" {
+					t.Errorf("secret value visible on command line at %s", path)
+				}
+			}
+			s.Close()
+
+			// The parent's session logs include the session-start argv log
+			if got := logBuf.String(); strings.Contains(got, canary) {
+				t.Errorf("secret value present in server logs: %q", got)
+			} else if strings.Contains(got, "GIT_E2E_CANARY") {
+				t.Errorf("forwarded key name present in server logs: %q", got)
+			}
+
+			// The incubator child writes its debug log in debugTest mode
+			if b, err := os.ReadFile("/tmp/tailscalessh.log"); err == nil && bytes.Contains(b, []byte(canary)) {
+				t.Errorf("secret value present in incubator debug log")
+			}
+		})
 	}
 }
 
@@ -663,6 +724,36 @@ func fallbackToSUAvailable() bool {
 	return err == nil
 }
 
+// lockedBuffer is a goroutine-safe bytes.Buffer for capturing server logs.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// findInProcCmdlines returns the path of the first /proc/<pid>/cmdline
+// containing s, or "" if none. Linux only.
+func findInProcCmdlines(s string) string {
+	paths, _ := filepath.Glob("/proc/[0-9]*/cmdline")
+	for _, p := range paths {
+		if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), s) {
+			return p
+		}
+	}
+	return ""
+}
+
 type session struct {
 	*ssh.Session
 
@@ -779,10 +870,15 @@ type testServerOpts struct {
 	allowSendEnv              bool
 	allowLocalPortForwarding  bool
 	allowRemotePortForwarding bool
+	logf                      logger.Logf // defaults to log.Printf
 }
 
 func testServerWithOpts(t *testing.T, opts testServerOpts) string {
 	t.Helper()
+	logf := opts.logf
+	if logf == nil {
+		logf = log.Printf
+	}
 	srv := &server{
 		lb: &testBackend{
 			localUser:                 opts.username,
@@ -791,7 +887,7 @@ func testServerWithOpts(t *testing.T, opts testServerOpts) string {
 			allowLocalPortForwarding:  opts.allowLocalPortForwarding,
 			allowRemotePortForwarding: opts.allowRemotePortForwarding,
 		},
-		logf:           log.Printf,
+		logf:           logf,
 		tailscaledPath: os.Getenv("TAILSCALED_PATH"),
 		timeNow:        time.Now,
 	}

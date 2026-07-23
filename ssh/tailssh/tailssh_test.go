@@ -1383,3 +1383,30 @@ func TestForwardedEnvKeysRoundTrip(t *testing.T) {
 		t.Errorf("allowlist %q must not contain the bookkeeping var name", allowedKeys)
 	}
 }
+
+// TestAppendForwardedEnv verifies that client-forwarded pairs are appended
+// without replacing existing keys, and that only delivered keys are named
+// in the allowedEnvKeysEnv bookkeeping entry.
+func TestAppendForwardedEnv(t *testing.T) {
+	base := []string{"PATH=/server/bin", "HOME=/home/u", "SSH_AUTH_SOCK=/server/sock"}
+	got := appendForwardedEnv(slices.Clone(base), []string{
+		"PATH=/client/evil",
+		"HOME=/tmp/evil",
+		"SSH_AUTH_SOCK=/client/sock",
+		"TOKEN=secret",
+		"TOKEN=secret-dup", // duplicate within the forwarded set: first wins
+	})
+	want := []string{
+		"PATH=/server/bin", "HOME=/home/u", "SSH_AUTH_SOCK=/server/sock",
+		"TOKEN=secret",
+		allowedEnvKeysEnv + "=TOKEN",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("appendForwardedEnv:\n got %q\nwant %q", got, want)
+	}
+
+	// With no forwarded vars the environment is unchanged
+	if got := appendForwardedEnv(slices.Clone(base), nil); !slices.Equal(got, base) {
+		t.Errorf("appendForwardedEnv(nil) = %q, want %q", got, base)
+	}
+}

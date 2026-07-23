@@ -178,15 +178,21 @@ func TestForwardedEnvKeysSpoofRejected(t *testing.T) {
 	}
 }
 
-// TestIncubatorEnvOrdering pins the current environment precedence: server-set
-// variables come first, then client TERM/LANG/LC_*, then connection metadata,
-// and finally the acceptEnv-forwarded pairs (appended last). This documents the
-// ordering so any future change that alters which value wins on a duplicate key
-// is caught by review.
-func TestIncubatorEnvOrdering(t *testing.T) {
+// TestIncubatorEnvNoReplace pins the collision rule for incubatorEnv: a
+// client-forwarded variable whose key collides with a server-set value (PATH,
+// HOME, USER, SHELL, SSH_CLIENT, ...) is dropped. Dropped keys are also
+// omitted from the allowedEnvKeysEnv bookkeeping entry.
+func TestIncubatorEnvNoReplace(t *testing.T) {
 	ss := newTestSession(t,
-		[]string{"FORWARDED"},
-		[]string{"TERM=xterm", "FORWARDED=fromclient"},
+		[]string{"*"},
+		[]string{
+			"PATH=/client/evil",
+			"HOME=/tmp/evil",
+			"USER=root",
+			"SHELL=/bin/evil",
+			"SSH_CLIENT=198.51.100.9 1 2",
+			"GIT_TOKEN=fromclient",
+		},
 	)
 	_, forwardedEnv, err := ss.newIncubatorCommand(logger.Discard)
 	if err != nil {
@@ -194,23 +200,32 @@ func TestIncubatorEnvOrdering(t *testing.T) {
 	}
 	env := ss.incubatorEnv(forwardedEnv)
 
-	idx := func(prefix string) int {
-		return slices.IndexFunc(env, func(kv string) bool {
-			return strings.HasPrefix(kv, prefix)
-		})
+	// Each server-set key appears exactly once, with the server's value
+	for _, key := range []string{"PATH", "HOME", "USER", "SHELL", "SSH_CLIENT", "SSH_CONNECTION"} {
+		var vals []string
+		for _, kv := range env {
+			if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+				vals = append(vals, v)
+			}
+		}
+		if len(vals) != 1 {
+			t.Errorf("%s appears %d times in env (values %q); want exactly one server-set value", key, len(vals), vals)
+			continue
+		}
+		if strings.Contains(vals[0], "evil") || vals[0] == "root" || strings.HasPrefix(vals[0], "198.51.100.9") {
+			t.Errorf("%s overridden by client value %q", key, vals[0])
+		}
 	}
 
-	// Server-set vars (from envForUser) come before client-provided ones.
-	if got := idx("PATH="); got == -1 {
-		t.Fatalf("expected server-set PATH in env; got %q", env)
+	// Non-colliding forwarded vars are still delivered, and only delivered
+	// names appear in the bookkeeping entry.
+	if !slices.Contains(env, "GIT_TOKEN=fromclient") {
+		t.Errorf("non-colliding forwarded var missing from env: %q", env)
 	}
-	pathIdx, termIdx, fwdIdx := idx("PATH="), idx("TERM="), idx("FORWARDED=")
-	if !(pathIdx < termIdx && termIdx < fwdIdx) {
-		t.Errorf("unexpected env ordering: PATH=%d TERM=%d FORWARDED=%d in %q", pathIdx, termIdx, fwdIdx, env)
-	}
-	// The forwarded value is present (appended last).
-	if !slices.Contains(env, "FORWARDED=fromclient") {
-		t.Errorf("forwarded value missing from env: %q", env)
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == allowedEnvKeysEnv && v != "GIT_TOKEN" {
+			t.Errorf("%s=%q, want only GIT_TOKEN (dropped collisions must not be named)", allowedEnvKeysEnv, v)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@
 package tailssh
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -46,7 +48,9 @@ func init() {
 // command line. See incubator.go's newIncubatorCommand for the
 // full rationale.
 //
-// The returned Cmd.Env is guaranteed to be nil; the caller populates it.
+// The returned Cmd.Env is guaranteed to be nil; the caller must populate it,
+// typically by passing the returned forwardedEnv to the shared
+// appendForwardedEnv helper.
 func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forwardedEnv []string, err error) {
 	defer func() {
 		if cmd != nil && cmd.Env != nil {
@@ -171,6 +175,10 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
+	// DEPRECATESD: encodedEnv is deprecated and must not be used by new code.
+	// It is parsed only so this child keeps working when exec'd by an
+	// outdated parent tailscaled that still passes it.
+	encodedEnv string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -189,12 +197,15 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
+	// DEPRECATED: retained for version-skew compatibility only. DO NOT USE.
+	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "deprecated; do not use")
 	flags.Parse(args)
 	return ia, nil
 }
 
 func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
-	// pass through SSH_AUTH_SOCK environment variable to support ssh agent forwarding
+	// SSH_AUTH_SOCK is allowlisted here rather than named by the parent
+	// because old parents set it without naming any keys.
 	allowListKeys := []string{"SSH_AUTH_SOCK"}
 
 	// The parent forwards the accepted env var names via allowedEnvKeysEnv
@@ -203,6 +214,23 @@ func (ia incubatorArgs) forwardedEnviron() ([]string, string, error) {
 	// process, and use its value to extend the allowlist.
 	environ, keys := stripAllowedEnvKeys(os.Environ())
 	allowListKeys = append(allowListKeys, keys...)
+
+	if ia.encodedEnv != "" { // Legacy path for an outdated parent tailscaled
+		unquoted, err := strconv.Unquote(ia.encodedEnv)
+		if err != nil {
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+		var extraEnviron []string
+		if err := json.Unmarshal([]byte(unquoted), &extraEnviron); err != nil {
+			return nil, "", fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+		}
+		environ = append(environ, extraEnviron...)
+		for _, kv := range extraEnviron {
+			if k, _, ok := strings.Cut(kv, "="); ok {
+				allowListKeys = append(allowListKeys, k)
+			}
+		}
+	}
 
 	return environ, strings.Join(allowListKeys, ","), nil
 }
@@ -232,6 +260,10 @@ func beIncubator(args []string) error {
 	ia, err := parseIncubatorArgs(args)
 	if err != nil {
 		return err
+	}
+	if ia.encodedEnv != "" {
+		log.Printf("WARNING: tailscaled be-child: accepted SSH environment variables were passed via the deprecated --encoded-env flag; " +
+			"the running tailscaled is outdated. Update tailscaled to the latest version and restart for the latest security fixes.")
 	}
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
@@ -363,7 +395,7 @@ func (ss *sshSession) launchProcess() error {
 	// Client-forwarded environment variables travel via the environment
 	// (not the argv) to keep their values and names out of process listings
 	// and logs.
-	cmd.Env = append(cmd.Env, forwardedEnvAndKeys(forwardedEnv)...)
+	cmd.Env = appendForwardedEnv(cmd.Env, forwardedEnv)
 
 	return ss.startWithStdPipes()
 }
@@ -411,9 +443,9 @@ func acceptEnvPair(kv string) bool {
 	if !ok {
 		return false
 	}
-	// Never forward names reserved for our own parent->child bookkeeping,
+	// Never forward names reserved for our own parent->child bookkeeping or unsafe for the child,
 	// even during bringup, so a client cannot spoof the incubator's env.
-	if reservedEnvKey(k) {
+	if reservedEnvKey(k) || isDangerousEnvVar(k) {
 		return false
 	}
 	return true // permit anything else on plan9 during bringup, for debugging at least
