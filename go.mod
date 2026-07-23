@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.75.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.45.0
 	github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02
-	github.com/bradfitz/go-tool-cache v0.0.0-20260722201841-0bb331e19f64
+	github.com/bradfitz/go-tool-cache v0.0.0-20260723163732-0b25549eea9b
 	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
 	github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03
 	github.com/bramvdbogaerde/go-scp v1.4.0
