@@ -24,6 +24,7 @@ func TestProxy(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestProxy requires a working tailnet client")
 	}
+	t.Parallel()
 
 	// Create role and role binding to allow a group we'll impersonate to do stuff.
 	createAndCleanup(t, kubeClient, &rbacv1.Role{
