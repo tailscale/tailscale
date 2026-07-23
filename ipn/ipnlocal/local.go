@@ -6500,6 +6500,36 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 	return nil
 }
 
+// carveIgnoredRoutes returns routes with any ignored subnets carved out.
+func carveIgnoredRoutes(routes, ignored []netip.Prefix) []netip.Prefix {
+	if len(ignored) == 0 {
+		return routes
+	}
+
+	var ret []netip.Prefix
+	for _, r := range routes {
+		var b netipx.IPSetBuilder
+		b.AddPrefix(r)
+
+		for _, ig := range ignored {
+			if r.Overlaps(ig) {
+				b.RemovePrefix(ig)
+			}
+		}
+
+		set, err := b.IPSet()
+		if err != nil {
+			// Should not happen normally, just pass route without changes
+			ret = append(ret, r)
+			continue
+		}
+
+		ret = append(ret, set.Prefixes()...)
+	}
+
+	return ret
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 //
 // b.mu must be held.
@@ -6607,6 +6637,9 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 	if extensionRoutesFx, ok := b.extHost.hooks.ExtraRouterConfigRoutes.GetOk(); ok {
 		rs.Routes = extensionRoutesFx().AppendTo(rs.Routes)
 	}
+
+	// Carve out routes that overlap with user-specified ignored subnets.
+	rs.Routes = carveIgnoredRoutes(rs.Routes, prefs.IgnoredRoutes().AsSlice())
 
 	return rs
 }
