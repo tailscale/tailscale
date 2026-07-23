@@ -429,8 +429,58 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Hosts:     map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					dnsname.FQDN("example.com."): {
-						{Addr: "tailscale-app:app1"},
+						{Addr: "tailscale-app:app1", UseWithExitNode: true},
 					},
+				},
+				MagicDNSHostsUnrouted: true,
+			},
+		},
+		{
+			name: "conn25-split-dns-with-exit-node",
+			nm: &netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					Name:      "a",
+					Addresses: ipps("100.101.101.101"),
+					CapMap: tailcfg.NodeCapMap{
+						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
+						},
+					},
+				}).View(),
+				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					StableID:  "exit",
+					Name:      "p1",
+					Cap:       26, // can proxy DNS over DoH
+					Addresses: ipps("100.102.0.1"),
+					Tags:      []string{"tag:woo"},
+					Hostinfo: (&tailcfg.Hostinfo{
+						Services: []tailcfg.Service{
+							{
+								Proto: tailcfg.PeerAPI4,
+								Port:  1234,
+							},
+						},
+					}).View(),
+				},
+			}),
+			prefs: &ipn.Prefs{
+				CorpDNS:    true,
+				ExitNodeID: "exit",
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+					dnsname.FQDN("example.com."): {
+						{Addr: "tailscale-app:app1", UseWithExitNode: true},
+					},
+				},
+				DefaultResolvers: []*dnstype.Resolver{
+					{Addr: "http://100.102.0.1:1234/dns-query"},
 				},
 				MagicDNSHostsUnrouted: true,
 			},

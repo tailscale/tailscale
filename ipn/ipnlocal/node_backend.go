@@ -1536,6 +1536,15 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
+	// conn25 split DNS routes are calculated from the domains in the SelfNode.CapMap
+	// section of the netmap, so need to be assembled separately.
+	// TODO(tailscale/corp#37125): make this a hook the extension can add
+	// to reduce dependency from ipnlocal to appc.
+	var conn25AppRoutes map[string][]*dnstype.Resolver
+	if (envknob.UseWIPCode() || testenv.InTest()) && buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
+		conn25AppRoutes = appc.AppDNSRoutes(nm.HasCap, nm.SelfNode)
+	}
+
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with UseWithExitNode set, in which case we use that.
@@ -1551,6 +1560,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			}
 
 			addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
+			addSplitDNSRoutes(useWithExitNodeRoutes(conn25AppRoutes))
 			return dcfg
 		}
 	}
@@ -1568,13 +1578,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
-
-	if (envknob.UseWIPCode() || testenv.InTest()) && buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
-		// Add split DNS routes for conn25
-		if appRoutes := appc.AppDNSRoutes(nm.HasCap, nm.SelfNode); appRoutes != nil {
-			addSplitDNSRoutes(appRoutes)
-		}
-	}
+	addSplitDNSRoutes(conn25AppRoutes)
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See

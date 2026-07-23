@@ -80,7 +80,7 @@ func AppDNSRoutes(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeV
 	}
 	m := make(map[string][]*dnstype.Resolver, len(appNamesByDomain))
 	for domain, appName := range appNamesByDomain {
-		m[domain] = []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName)}}
+		m[domain] = []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName), UseWithExitNode: true}}
 	}
 	return m
 }

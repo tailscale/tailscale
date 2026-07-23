@@ -37,7 +37,7 @@ func TestAppDNSRoutes(t *testing.T) {
 	appSixBytes := getBytesForAttr("app6", []string{"*.Example.com", "EXAMPLE.com", "EXAMPLE.COM"}, []string{"tag:one"})
 
 	resolver := func(appName string) []*dnstype.Resolver {
-		return []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName)}}
+		return []*dnstype.Resolver{{Addr: fmt.Sprintf("%s:%s", DNSAddrScheme, appName), UseWithExitNode: true}}
 	}
 
 	for _, tt := range []struct {
