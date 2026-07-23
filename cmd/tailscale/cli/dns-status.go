@@ -13,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+
+	"tailscale.com/cmd/tailscale/jsonoutput"
 	"tailscale.com/types/dnstype"
 )
 

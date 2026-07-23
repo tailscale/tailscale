@@ -10,11 +10,11 @@ import (
 	"os"
 	"os/exec"
 
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/jsonoutput"
 )
 
-func ExampleDNSQueryResult() {
-	cmd := exec.Command("tailscale", "dns", "query", "--json", "hello.ts.net")
+func ExampleDNSStatusResult() {
+	cmd := exec.Command("tailscale", "dns", "status", "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		if err, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -23,9 +23,9 @@ func ExampleDNSQueryResult() {
 		panic(err)
 	}
 
-	var dnsQuery jsonoutput.DNSQueryResult
-	if err := json.Unmarshal(out, &dnsQuery); err != nil {
+	var dnsStatus jsonoutput.DNSStatusResult
+	if err := json.Unmarshal(out, &dnsStatus); err != nil {
 		panic(err)
 	}
-	fmt.Printf("{type: %s, name: %q}\n", dnsQuery.QueryType, dnsQuery.Name)
+	fmt.Printf("{accept-dns: %t, resolvers: %q}\n", dnsStatus.TailscaleDNS, dnsStatus.Resolvers)
 }

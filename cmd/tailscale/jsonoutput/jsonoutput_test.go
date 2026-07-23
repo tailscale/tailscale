@@ -11,7 +11,7 @@ import (
 	gcmp "github.com/google/go-cmp/cmp"
 	"github.com/kballard/go-shellquote"
 
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/jsonoutput"
 )
 
 func TestSchemaVersion(t *testing.T) {
