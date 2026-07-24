@@ -1779,8 +1779,9 @@ func (e *Env) initVnet() {
 				e.server.ControlServer().SSHPolicy = &tailcfg.SSHPolicy{
 					Rules: []*tailcfg.SSHRule{{
 						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-						SSHUsers:   map[string]string{"*": "="},
-						Action:     &tailcfg.SSHAction{Accept: true},
+						// Allow permissive login + root login by default
+						SSHUsers: map[string]string{"*": "=", "root": "root"},
+						Action:   &tailcfg.SSHAction{Accept: true},
 					}},
 				}
 				break
