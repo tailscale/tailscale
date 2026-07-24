@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -47,6 +46,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
+	"tailscale.com/version/distro"
 )
 
 var (
@@ -63,8 +63,6 @@ var (
 	// hookSSHLoginSuccess is called after successful SSH authentication.
 	// It is set by platform-specific code (e.g., auditd_linux.go).
 	hookSSHLoginSuccess feature.Hook[func(logf logger.Logf, c *conn)]
-
-	uidRegex = regexp.MustCompile("^[0-9]+$")
 )
 
 const (
@@ -341,10 +339,6 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 
 	if c.insecureSkipTailscaleAuth {
 		return &ssh.Permissions{}, nil
-	}
-
-	if uidRegex.MatchString(cm.User()) {
-		return nil, c.errBanner(fmt.Sprintf("rejecting username %q. Usernames that consist of only digits are not allowed as they are ambiguous with numerical UIDs", cm.User()), nil)
 	}
 
 	if err := c.setInfo(cm); err != nil {
@@ -1261,6 +1255,22 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 		v = ruleSSHUsers["*"]
 	}
 	if v == "=" {
+		// Skip lookup for gokrazy as we intentionally fall back to a synthesized
+		// root user there when user lookup fails.
+		if distro.Get() == distro.Gokrazy {
+			return reqSSHUser
+		}
+
+		// Immediately look up user information for purposes of generating
+		// hold and delegate URL (if necessary).
+		lu, err := userLookup(reqSSHUser)
+		if err != nil {
+			return ""
+		}
+		// Don't match as root for autogroup:nonroot
+		if lu.Uid == "0" || lu.Username == "root" {
+			return ""
+		}
 		return reqSSHUser
 	}
 	return v
