@@ -698,6 +698,15 @@ func (s *Server) SetMasqueradeAddresses(pairs []MasqueradePair) {
 	s.updateLocked("SetMasqueradeAddresses", s.nodeIDsLocked(0))
 }
 
+// SetSSHPolicy sets the SSH policy sent in MapResponses and notifies all
+// connected nodes so they pick up the change.
+func (s *Server) SetSSHPolicy(policy *tailcfg.SSHPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SSHPolicy = policy
+	s.updateLocked("SetSSHPolicy", s.nodeIDsLocked(0))
+}
+
 // SetNodeCapMap overrides the capability map the specified client receives.
 func (s *Server) SetNodeCapMap(nodeKey key.NodePublic, capMap tailcfg.NodeCapMap) {
 	s.mu.Lock()
