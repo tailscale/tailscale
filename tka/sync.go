@@ -260,16 +260,22 @@ func (a *Authority) MissingAUMs(storage Chonk, remoteOffer SyncOffer) ([]AUM, er
 	panic("unreachable")
 }
 
-// seedNode is an authority-chonk pair that can be seeded by [SeedAUMs].
-type seedNode struct {
+// SeedNode is an authority-chonk pair that can be seeded by [SeedAUMs].
+type SeedNode struct {
 	authority *Authority
 	storage   Chonk
 }
 
 // CreateSeedNode creates a node for use with [SeedAUMs].
-func CreateSeedNode(t testenv.TB, authority *Authority, storage Chonk) seedNode {
+func CreateSeedNode(t testenv.TB, authority *Authority, storage Chonk) SeedNode {
 	t.Helper()
-	return seedNode{authority, storage}
+	return SeedNode{authority, storage}
+}
+
+type SeedAUMConfig struct {
+	Count  int
+	Signer Signer
+	Nodes  []SeedNode
 }
 
 // SeedAUMs generates many AUMs by repeatedly adding and removing keys
@@ -279,20 +285,20 @@ func CreateSeedNode(t testenv.TB, authority *Authority, storage Chonk) seedNode 
 // than one, you can build up a long sync history.
 //
 // This is only for use in testing.
-func SeedAUMs(t testenv.TB, count int, signer Signer, nodes ...seedNode) {
+func SeedAUMs(t testenv.TB, config SeedAUMConfig) {
 	t.Helper()
 
-	if len(nodes) == 0 {
+	if len(config.Nodes) == 0 {
 		panic("called SeedAUMs without any nodes")
 	}
-	primaryNode := nodes[0]
+	primaryNode := config.Nodes[0]
 
 	// The key that we'll repeatedly add/remove in the TKA.
 	key := Key{Kind: Key25519, Public: []byte{1, 1, 1}, Votes: 1}
 
-	for i := 0; i < count/2; i++ {
+	for i := 0; i < config.Count/2; i++ {
 		for _, action := range []string{"add", "remove"} {
-			updater := primaryNode.authority.NewUpdater(signer)
+			updater := primaryNode.authority.NewUpdater(config.Signer)
 			if action == "add" {
 				if err := updater.AddKey(key); err != nil {
 					t.Fatalf("error from updater.AddKey: %v")
@@ -307,7 +313,7 @@ func SeedAUMs(t testenv.TB, count int, signer Signer, nodes ...seedNode) {
 				t.Fatalf("error from authority.Finalize: %v", err)
 			}
 
-			for _, n := range nodes {
+			for _, n := range config.Nodes {
 				if err := n.authority.Inform(n.storage, aum); err != nil {
 					t.Fatalf("error from authority.Inform: %v", err)
 				}

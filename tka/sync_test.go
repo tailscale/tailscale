@@ -462,7 +462,11 @@ func TestSyncFromFarBehind(t *testing.T) {
 	// 1. Generate enough history to trigger checkpoints.
 	persistentNode := CreateSeedNode(t, persistentAuthority, persistentStorage)
 	compactingNode := CreateSeedNode(t, compactingAuthority, compactingStorage)
-	SeedAUMs(t, checkpointEvery*2, signer1, persistentNode, compactingNode)
+	SeedAUMs(t, SeedAUMConfig{
+		Count:  checkpointEvery * 2,
+		Signer: signer1,
+		Nodes:  []SeedNode{persistentNode, compactingNode},
+	})
 
 	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
 
@@ -483,7 +487,10 @@ func TestSyncFromFarBehind(t *testing.T) {
 	//
 	// If you keep increasing this number, eventually the sync will fail because you
 	// hit the hard-coded limits on iteration during the sync process.
-	SeedAUMs(t, compactingSize()-persistentSize()+800, signer1, persistentNode)
+	SeedAUMs(t, SeedAUMConfig{
+		Count:  compactingSize() - persistentSize() + 800,
+		Signer: signer1, Nodes: []SeedNode{persistentNode},
+	})
 
 	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
 
@@ -550,7 +557,11 @@ func TestSyncFromFarBehindFork(t *testing.T) {
 	// 1. Generate enough history to trigger checkpoints.
 	persistentNode := CreateSeedNode(t, persistentAuthority, persistentStorage)
 	compactingNode := CreateSeedNode(t, compactingAuthority, compactingStorage)
-	SeedAUMs(t, checkpointEvery*2, winningSigner, persistentNode, compactingNode)
+	SeedAUMs(t, SeedAUMConfig{
+		Count:  checkpointEvery * 2,
+		Signer: winningSigner,
+		Nodes:  []SeedNode{persistentNode, compactingNode},
+	})
 
 	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
 
@@ -567,7 +578,11 @@ func TestSyncFromFarBehindFork(t *testing.T) {
 
 	// 2. Advance the node state slightly beyond the control plane, using the
 	// losing signer.
-	SeedAUMs(t, 1, losingSigner, compactingNode)
+	SeedAUMs(t, SeedAUMConfig{
+		Count:  1,
+		Signer: losingSigner,
+		Nodes:  []SeedNode{compactingNode},
+	})
 
 	// 3. Advance the control plane far beyond the node, using the winning signer.
 	//
@@ -578,7 +593,11 @@ func TestSyncFromFarBehindFork(t *testing.T) {
 	//
 	// If you keep increasing this number, eventually the sync will fail because you
 	// hit the hard-coded limits on iteration during the sync process.
-	SeedAUMs(t, compactingSize()-persistentSize()+800, winningSigner, persistentNode)
+	SeedAUMs(t, SeedAUMConfig{
+		Count:  compactingSize() - persistentSize() + 800,
+		Signer: winningSigner,
+		Nodes:  []SeedNode{persistentNode},
+	})
 
 	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
 
