@@ -150,6 +150,21 @@ func (c Config) hasHostsWithoutSplitDNSRoutes() bool {
 	return false
 }
 
+// hostsWithoutSplitDNSRoutes returns the Host FQDNs in c not covered by any
+// SplitDNS route suffix. Only meaningful when MagicDNSHostsUnrouted is false.
+func (c Config) hostsWithoutSplitDNSRoutes() []dnsname.FQDN {
+	var ret []dnsname.FQDN
+	for host := range c.Hosts {
+		if !c.hasSplitDNSRouteForHost(host) {
+			ret = append(ret, host)
+		}
+	}
+	sort.Slice(ret, func(i, j int) bool {
+		return ret[i].WithTrailingDot() < ret[j].WithTrailingDot()
+	})
+	return ret
+}
+
 // hasSplitDNSRouteForHost reports whether c contains a SplitDNS route
 // that contains hosts.
 func (c Config) hasSplitDNSRouteForHost(host dnsname.FQDN) bool {

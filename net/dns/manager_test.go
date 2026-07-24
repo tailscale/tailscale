@@ -465,13 +465,15 @@ func TestManager(t *testing.T) {
 				Nameservers:   mustIPs("8.8.8.8"),
 				SearchDomains: fqdns("coffee.shop"),
 			},
+			// quad-100 scoped to match domains; public names fall through to
+			// the OS resolver rather than a "." route.
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
-				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "8.8.8.8",
 					"corp.com.", "2.2.2.2"),
 			},
 			goos:           "darwin",
