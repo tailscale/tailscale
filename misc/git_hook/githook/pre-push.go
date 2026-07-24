@@ -14,34 +14,49 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-// CheckGoModReplaces reads pushes from stdin and, for pushes to a
-// remote URL in watchedRemotes, rejects any commit whose go.mod has a
-// directory-path replace that is not in allowedReplaceDirs. args is
-// the pre-push hook's argv (remoteName, remoteLoc).
+// PrePushConfig configures CheckPrePush.
+type PrePushConfig struct {
+	// WatchedRemotes are the remote URLs whose pushes are subject to
+	// the go.mod replace check.
+	WatchedRemotes []string
+
+	// AllowedReplaceDirs are the directory-path go.mod replace targets
+	// that are permitted in pushed commits.
+	AllowedReplaceDirs []string
+
+	// MaxBlobSize, if positive, is the largest new or changed blob in
+	// bytes allowed in a push to any remote. Pushes adding larger
+	// blobs are rejected unless the TS_SKIP_LARGE_FILE_CHECK
+	// environment variable is set to a non-empty value.
+	MaxBlobSize int64
+}
+
+// CheckPrePush reads pushes from stdin and validates them per cfg.
+// args is the pre-push hook's argv (remoteName, remoteLoc).
 //
 // Intended as a pre-push hook.
 // https://git-scm.com/docs/githooks#_pre_push
-func CheckGoModReplaces(args []string, watchedRemotes, allowedReplaceDirs []string) error {
+func CheckPrePush(args []string, cfg PrePushConfig) error {
 	if len(args) < 2 {
 		return fmt.Errorf("pre-push: expected 2 args, got %d", len(args))
 	}
-	remoteLoc := args[1]
-
-	watched := slices.Contains(watchedRemotes, remoteLoc)
-	if !watched {
-		return nil
-	}
+	remoteName, remoteLoc := args[0], args[1]
 
 	pushes, err := readPushes()
 	if err != nil {
 		return fmt.Errorf("reading pushes: %w", err)
 	}
+	watched := slices.Contains(cfg.WatchedRemotes, remoteLoc)
 	for _, p := range pushes {
-		if p.isDoNotMergeRef() {
-			continue
+		if watched && !p.isDoNotMergeRef() {
+			if err := checkCommit(p.localSHA, cfg.AllowedReplaceDirs); err != nil {
+				return fmt.Errorf("not allowing push of %v to %v: %v", p.localSHA, p.remoteRef, err)
+			}
 		}
-		if err := checkCommit(p.localSHA, allowedReplaceDirs); err != nil {
-			return fmt.Errorf("not allowing push of %v to %v: %v", p.localSHA, p.remoteRef, err)
+		if cfg.MaxBlobSize > 0 {
+			if err := checkLargeBlobs(remoteName, p, cfg.MaxBlobSize); err != nil {
+				return fmt.Errorf("not allowing push of %v to %v: %v", p.localSHA, p.remoteRef, err)
+			}
 		}
 	}
 	return nil
