@@ -1169,6 +1169,11 @@ func TestAcceptEnvPair(t *testing.T) {
 		{"LC_FOO=x", true},
 		{"LD_PRELOAD=naah", false},
 		{"TERM=screen-256color", true},
+		{"=orphan", false},
+		// Structurally invalid names are rejected even when they otherwise
+		// look acceptable; see validEnvName.
+		{"LC_,INJECT=x", false},
+		{"LC_ SPACE=x", false},
 	}
 	for _, tt := range tests {
 		if got := acceptEnvPair(tt.in); got != tt.want {
@@ -1334,79 +1339,4 @@ func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// TestForwardedEnvKeysRoundTrip verifies that the client-forwarded env var
-// names travel from parent to incubator child via the allowedEnvKeysEnv
-// environment variable (never the argv), and that forwardedEnviron strips that
-// bookkeeping variable back out while reconstructing the allowlist. This is the
-// unit-level counterpart to the end-to-end coverage in TestIntegrationSSH.
-func TestForwardedEnvKeysRoundTrip(t *testing.T) {
-	forwarded := []string{"GIT_ENV_VAR=working1", "EXACT_MATCH=working2", "TESTING=working3"}
-
-	// Parent side: forwardedEnvAndKeys returns the values plus a single
-	// allowedEnvKeysEnv entry naming their keys, and nothing else.
-	got := forwardedEnvAndKeys(forwarded)
-	want := append(slices.Clone(forwarded), allowedEnvKeysEnv+"=GIT_ENV_VAR,EXACT_MATCH,TESTING")
-	if !slices.Equal(got, want) {
-		t.Fatalf("forwardedEnvAndKeys:\n got %q\nwant %q", got, want)
-	}
-
-	// With no forwarded vars, no bookkeeping entry is added.
-	if got := forwardedEnvAndKeys(nil); got != nil {
-		t.Fatalf("forwardedEnvAndKeys(nil) = %q, want nil", got)
-	}
-
-	// Child side: forwardedEnviron reads the keys from allowedEnvKeysEnv,
-	// removes that variable from the returned environment, and includes the
-	// keys (plus SSH_AUTH_SOCK) in the allowlist.
-	t.Setenv(allowedEnvKeysEnv, "GIT_ENV_VAR,EXACT_MATCH,TESTING")
-	t.Setenv("GIT_ENV_VAR", "working1")
-	env, allowedKeys, err := incubatorArgs{}.forwardedEnviron()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, kv := range env {
-		if strings.HasPrefix(kv, allowedEnvKeysEnv+"=") {
-			t.Errorf("%s leaked into child environment: %q", allowedEnvKeysEnv, kv)
-		}
-	}
-	if !slices.Contains(env, "GIT_ENV_VAR=working1") {
-		t.Errorf("forwarded value GIT_ENV_VAR missing from child environment")
-	}
-	for _, k := range []string{"SSH_AUTH_SOCK", "GIT_ENV_VAR", "EXACT_MATCH", "TESTING"} {
-		if !slices.Contains(allowedKeys, k) {
-			t.Errorf("allowlist %q missing key %q", allowedKeys, k)
-		}
-	}
-	if slices.Contains(allowedKeys, allowedEnvKeysEnv) {
-		t.Errorf("allowlist %q must not contain the bookkeeping var name", allowedKeys)
-	}
-}
-
-// TestAppendForwardedEnv verifies that client-forwarded pairs are appended
-// without replacing existing keys, and that only delivered keys are named
-// in the allowedEnvKeysEnv bookkeeping entry.
-func TestAppendForwardedEnv(t *testing.T) {
-	base := []string{"PATH=/server/bin", "HOME=/home/u", "SSH_AUTH_SOCK=/server/sock"}
-	got := appendForwardedEnv(slices.Clone(base), []string{
-		"PATH=/client/evil",
-		"HOME=/tmp/evil",
-		"SSH_AUTH_SOCK=/client/sock",
-		"TOKEN=secret",
-		"TOKEN=secret-dup", // duplicate within the forwarded set: first wins
-	})
-	want := []string{
-		"PATH=/server/bin", "HOME=/home/u", "SSH_AUTH_SOCK=/server/sock",
-		"TOKEN=secret",
-		allowedEnvKeysEnv + "=TOKEN",
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("appendForwardedEnv:\n got %q\nwant %q", got, want)
-	}
-
-	// With no forwarded vars the environment is unchanged
-	if got := appendForwardedEnv(slices.Clone(base), nil); !slices.Equal(got, base) {
-		t.Errorf("appendForwardedEnv(nil) = %q, want %q", got, base)
-	}
 }

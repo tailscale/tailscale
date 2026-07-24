@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -194,8 +195,9 @@ func TestIntegrationSSH(t *testing.T) {
 
 // TestIntegrationAcceptEnvSecretNotLogged is the end-to-end regression test
 // for the acceptEnv secret leak: a forwarded secret must reach the session
-// environment, but its value must NOT appear on any process command line
-// nor in the server or incubator logs.
+// environment, but its value must NOT appear on any process command line, in
+// the environment of any privileged process, nor in the server or incubator
+// logs.
 func TestIntegrationAcceptEnvSecretNotLogged(t *testing.T) {
 	for _, forceV1Behavior := range []bool{false, true} {
 		name := "v2"
@@ -232,6 +234,25 @@ func TestIntegrationAcceptEnvSecretNotLogged(t *testing.T) {
 			if runtime.GOOS == "linux" {
 				if path := findInProcCmdlines(canary); path != "" {
 					t.Errorf("secret value visible on command line at %s", path)
+				}
+				// The forwarded variables travel over a pipe precisely so
+				// that they do not sit in the environment of a process that
+				// still holds privileges: the incubator itself, and the PAM
+				// stack it runs, must never see them.
+				//
+				// su and login are the unavoidable exceptions. Both are
+				// handed the variables in their own environment (su also
+				// needs them named in -w) so that they can pass them through
+				// to the user's shell, and both are still root when they do.
+				// Their /proc/<pid>/environ is root-only, so this is not a
+				// cross-user leak, but it is the reason the unconditional
+				// isDangerousEnvVar rejections still matter.
+				for _, p := range findInRootProcEnvirons(canary) {
+					switch p.comm {
+					case "su", "login":
+						continue
+					}
+					t.Errorf("secret value present in the environment of privileged process %s (%s): %s", p.pid, p.comm, p.cmdline)
 				}
 			}
 			s.Close()
@@ -740,6 +761,41 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// findInRootProcEnvirons returns the root-owned processes whose environment
+// contains s. Linux only, and best effort: entries we cannot stat or read are
+// skipped.
+func findInRootProcEnvirons(s string) []procInfo {
+	var found []procInfo
+	paths, _ := filepath.Glob("/proc/[0-9]*/environ")
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != 0 {
+			continue
+		}
+		if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), s) {
+			dir := filepath.Dir(p)
+			comm, _ := os.ReadFile(filepath.Join(dir, "comm"))
+			cmdline, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
+			found = append(found, procInfo{
+				pid:     filepath.Base(dir),
+				comm:    strings.TrimSpace(string(comm)),
+				cmdline: strings.ReplaceAll(string(cmdline), "\x00", " "),
+			})
+		}
+	}
+	return found
+}
+
+type procInfo struct {
+	pid     string
+	comm    string
+	cmdline string
 }
 
 // findInProcCmdlines returns the path of the first /proc/<pid>/cmdline

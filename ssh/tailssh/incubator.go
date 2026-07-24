@@ -13,7 +13,6 @@ package tailssh
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -114,18 +113,30 @@ func tryExecInDir(ctx context.Context, dir string) error {
 // behavior of SSHD when by falling back to the root directory if it cannot run
 // a command in the user’s home directory.
 //
-// It also returns forwardedEnv, the set of client-forwarded "KEY=VALUE"
-// environment variables accepted by the acceptEnv policy. These may contain
-// secrets, so the caller must pass them to the child via its environment
-// (cmd.Env) rather than on the command line, where they would leak via
-// /proc/<pid>/cmdline and the session-start argv log.
+// If the acceptEnv policy accepted any client-supplied environment variables,
+// they are passed to the child over a pipe rather than on the argv or in the
+// child's environment (see forwardedEnvPayload for why); the read end is
+// returned as envFile and is already installed as cmd.ExtraFiles[0], with the
+// matching --env-fd flag on the argv. The caller owns envFile and must close
+// it once cmd has been started. envFile is nil when nothing is forwarded.
 //
 // The returned Cmd.Env is guaranteed to be nil; the caller must populate it,
-// typically by passing the returned forwardedEnv to incubatorEnv.
-func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forwardedEnv []string, err error) {
+// typically from incubatorEnv.
+func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, envFile *os.File, err error) {
 	defer func() {
-		if cmd != nil && cmd.Env != nil {
+		if cmd == nil {
+			return
+		}
+		if cmd.Env != nil {
 			panic("internal error")
+		}
+		// The --env-fd flag and the extra file must stay in lockstep: a flag
+		// without the descriptor makes the child block reading a fd it was
+		// never given, and a descriptor without the flag silently drops the
+		// forwarded environment.
+		if hasFlag := slices.Contains(cmd.Args, "--env-fd="+strconv.Itoa(incubatorEnvFD)); hasFlag != (envFile != nil) ||
+			hasFlag != (len(cmd.ExtraFiles) == 1) {
+			panic("internal error: --env-fd and ExtraFiles out of sync")
 		}
 	}()
 
@@ -243,19 +254,28 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 
 		if len(env) > 0 {
 			// The accepted environment may contain secrets, in both the
-			// values and the key names, so neither is placed on the
-			// incubator's command line; doing so would leak them via
-			// /proc/<pid>/cmdline to any local user. The values travel via the
-			// child's environment (cmd.Env, see incubatorEnv), and the key
-			// names travel via the allowedEnvKeysEnv environment variable.
-			forwardedEnv = env
+			// values and the key names, so none of it goes on the incubator's
+			// command line (where it would be visible to any local user via
+			// /proc/<pid>/cmdline and logged in the session-start argv) nor in
+			// the incubator's own environment (which the incubator, its PAM
+			// stack and the su or login it execs all run with, as root). Only
+			// the file descriptor number travels on the argv.
+			envFile, err = forwardedEnvFile(logf, ss.conn.acceptEnv, env)
+			if err != nil {
+				return nil, nil, err
+			}
+			incubatorArgs = append(incubatorArgs, "--env-fd="+strconv.Itoa(incubatorEnvFD))
 		}
 	}
 
 	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 	// The incubator will chdir into the home directory after it drops privileges.
 	cmd.Dir = "/"
-	return cmd, forwardedEnv, nil
+	if envFile != nil {
+		// os/exec maps ExtraFiles[0] to fd incubatorEnvFD in the child.
+		cmd.ExtraFiles = []*os.File{envFile}
+	}
+	return cmd, envFile, nil
 }
 
 var (
@@ -295,10 +315,22 @@ type incubatorArgs struct {
 	forceV1Behavior    bool
 	debugTest          bool
 	isSELinuxEnforcing bool
+
+	// envFD is the file descriptor from which to read the client-forwarded
+	// environment: a JSON forwardedEnvPayload written by the parent. It is 0
+	// (never a valid value, that is stdin) when the parent forwarded nothing.
+	// Only the descriptor number travels on the argv; see forwardedEnvPayload.
+	envFD int
+
 	// DEPRECATED: encodedEnv is deprecated and must not be used by new code.
 	// It is parsed only so this child keeps working when exec'd by an
 	// outdated parent tailscaled that still passes it.
 	encodedEnv string
+
+	// forwardedEnv holds the client-forwarded "KEY=VALUE" pairs this incubator
+	// has accepted, as populated by loadForwardedEnv. It is not set by
+	// parseIncubatorArgs.
+	forwardedEnv []string
 }
 
 func parseIncubatorArgs(args []string) (incubatorArgs, error) {
@@ -322,6 +354,7 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	flags.BoolVar(&ia.forceV1Behavior, "force-v1-behavior", false, "allow falling back to the su command if login is unavailable")
 	flags.BoolVar(&ia.debugTest, "debug-test", false, "should debug in test mode")
 	flags.BoolVar(&ia.isSELinuxEnforcing, "is-selinux-enforcing", false, "whether SELinux is in enforcing mode")
+	flags.IntVar(&ia.envFD, "env-fd", 0, "file descriptor to read the client-forwarded environment from, if any")
 	// DEPRECATED: retained for version-skew compatibility only. DO NOT USE.
 	flags.StringVar(&ia.encodedEnv, "encoded-env", "", "deprecated; do not use")
 	flags.Parse(args)
@@ -337,44 +370,68 @@ func parseIncubatorArgs(args []string) (incubatorArgs, error) {
 	return ia, nil
 }
 
-// forwardedEnviron returns the environment to hand to the user's process:
-// the current environment (which already includes any client-forwarded
-// variables injected by the parent, plus any from the deprecated
-// --encoded-env flag) with the allowedEnvKeysEnv bookkeeping variable
-// removed. It also returns allowedExtraKeys for the "su -w" allowlist: the
-// forwarded key names, plus SSH_AUTH_SOCK.
-func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string, err error) {
-	// SSH_AUTH_SOCK is allowlisted here rather than named by the parent
-	// because old parents set it without naming any keys. It can only be
-	// present if the parent enabled agent forwarding: the child's
-	// environment is built by incubatorEnv, never from the parent's os.Environ.
-	allowedExtraKeys = []string{"SSH_AUTH_SOCK"}
-
-	// The parent forwards the accepted env var names via allowedEnvKeysEnv
-	// rather than on the argv, to keep them out of /proc/<pid>/cmdline. Strip
-	// that bookkeeping variable from the environment we hand to the user's
-	// process, and use its value to build the allowlist.
-	env, keys := stripAllowedEnvKeys(os.Environ())
-	allowedExtraKeys = append(allowedExtraKeys, keys...)
-
-	if ia.encodedEnv != "" { // Legacy path for an outdated parent tailscaled
-		unquoted, err := strconv.Unquote(ia.encodedEnv)
+// loadForwardedEnv reads the client-forwarded environment the parent sent,
+// from the --env-fd pipe and/or the deprecated --encoded-env flag, filters it
+// (see receiveForwardedEnv and parseLegacyEncodedEnv) and stores the result in
+// ia.forwardedEnv.
+//
+// It must be called exactly once, before the first call to forwardedEnviron,
+// because reading the pipe drains it. The descriptor is closed before
+// returning so that it is not inherited by the user's process.
+//
+// Any error is fatal to the session: an incubator that cannot tell what it was
+// asked to forward must not guess.
+func (ia *incubatorArgs) loadForwardedEnv() error {
+	if fd := ia.envFD; fd != 0 {
+		if fd < 3 {
+			// 0, 1 and 2 are the session's stdio; the parent always passes
+			// the pipe as the first extra file.
+			return fmt.Errorf("invalid --env-fd %d", fd)
+		}
+		f := os.NewFile(uintptr(fd), "ssh-forwarded-env")
+		if f == nil {
+			return fmt.Errorf("invalid --env-fd %d", fd)
+		}
+		defer f.Close()
+		env, err := receiveForwardedEnv(f)
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
+			return err
 		}
-		var extraEnviron []string
-		if err := json.Unmarshal([]byte(unquoted), &extraEnviron); err != nil {
-			return nil, nil, fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
-		}
-		env = append(env, extraEnviron...)
-		for _, kv := range extraEnviron {
-			if k, _, ok := strings.Cut(kv, "="); ok {
-				allowedExtraKeys = append(allowedExtraKeys, k)
-			}
-		}
+		ia.forwardedEnv = env
 	}
 
-	return env, allowedExtraKeys, nil
+	if ia.encodedEnv != "" { // Legacy path for an outdated parent tailscaled.
+		env, err := parseLegacyEncodedEnv(ia.encodedEnv)
+		if err != nil {
+			return err
+		}
+		ia.forwardedEnv = append(ia.forwardedEnv, env...)
+	}
+
+	return nil
+}
+
+// forwardedEnviron returns the environment to hand to the user's process: this
+// incubator's own environment, which the parent built and which holds nothing
+// the client supplied beyond TERM/LANG/LC_*, plus the client-forwarded
+// variables read by loadForwardedEnv. Forwarded variables never replace a
+// value already in the environment; see mergeForwardedEnv.
+//
+// It also returns allowedExtraKeys for the "su -w" allowlist: the names of the
+// forwarded variables that survived, plus SSH_AUTH_SOCK.
+//
+// Note that su's interface puts that allowlist on su's own command line, so
+// the names (never the values) of forwarded variables remain visible in
+// /proc/<pid>/cmdline for as long as su runs. That is inherent to using su;
+// the other two paths (login and handleSSHInProcess) do not have it.
+func (ia incubatorArgs) forwardedEnviron() (env, allowedExtraKeys []string) {
+	env, keys := mergeForwardedEnv(os.Environ(), ia.forwardedEnv)
+
+	// SSH_AUTH_SOCK is allowlisted unconditionally rather than named by the
+	// parent. It is only present if the parent enabled agent forwarding: the
+	// child's environment is built by incubatorEnv, never inherited from
+	// tailscaled's own environment.
+	return env, append([]string{"SSH_AUTH_SOCK"}, keys...)
 }
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -401,6 +458,11 @@ func beIncubator(args []string) error {
 	if ia.encodedEnv != "" {
 		log.Printf("WARNING: tailscaled be-child: accepted SSH environment variables were passed via the deprecated --encoded-env flag; " +
 			"the running tailscaled is outdated. Update tailscaled to the latest version and restart for the latest security fixes.")
+	}
+	// Drain and validate the forwarded environment before anything else uses
+	// it; the pipe can only be read once.
+	if err := ia.loadForwardedEnv(); err != nil {
+		return err
 	}
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
@@ -558,10 +620,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	loginArgs := ia.loginArgs(loginCmdPath)
 	dlogf("logging in with %+v", loginArgs)
 
-	environ, _, err := ia.forwardedEnviron()
-	if err != nil {
-		return err
-	}
+	environ, _ := ia.forwardedEnviron()
 
 	// If Exec works, the Go code will not proceed past this:
 	err = unix.Exec(loginCmdPath, loginArgs, environ)
@@ -597,10 +656,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		defer sessionCloser()
 	}
 
-	environ, allowListEnvKeys, err := ia.forwardedEnviron()
-	if err != nil {
-		return false, err
-	}
+	environ, allowListEnvKeys := ia.forwardedEnviron()
 
 	loginArgs := []string{
 		su,
@@ -645,10 +701,7 @@ func findSU(dlogf logger.Logf, ia incubatorArgs) string {
 		return ""
 	}
 
-	_, allowListEnvKeys, err := ia.forwardedEnviron()
-	if err != nil {
-		return ""
-	}
+	_, allowListEnvKeys := ia.forwardedEnviron()
 
 	// First try to execute su -w <allow listed env> -l <user> -c true
 	// to make sure su supports the necessary arguments.
@@ -681,15 +734,12 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
-	environ, _, err := ia.forwardedEnviron()
-	if err != nil {
-		return err
-	}
+	environ, _ := ia.forwardedEnviron()
 
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
 	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
-	err = cmd.Run()
+	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
 		ps := ee.ProcessState
 		code := ps.ExitCode()
@@ -851,20 +901,18 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
 	return nil
 }
 
-// incubatorEnv builds the environment (cmd.Env) for the incubator child.
+// incubatorEnv builds the environment (cmd.Env) for the incubator child: the
+// server-derived variables, the client's TERM/LANG/LC_* (via acceptEnvPair),
+// the connection metadata and the optional agent socket.
 //
-// Ordering is security-relevant: server-derived variables are set first, then
-// the client's TERM/LANG/LC_* (via acceptEnvPair), the connection metadata, the
-// optional agent socket, and finally the acceptEnv-forwarded variables. The
-// forwarded variables never replace a server-set key; colliding pairs are
-// dropped (see appendForwardedEnv).
-//
-// forwardedEnv holds the acceptEnv-accepted "KEY=VALUE" pairs, whose values may
-// be secret; they are carried here (never on the argv) so they are not logged
-// or exposed via /proc/<pid>/cmdline. Their key names are carried alongside
-// them via the allowedEnvKeysEnv variable so the incubator can rebuild the
-// "su -w" allowlist without them ever touching the argv. See forwardedEnvAndKeys.
-func (ss *sshSession) incubatorEnv(forwardedEnv []string) []string {
+// The acceptEnv-forwarded variables are deliberately not here. This is the
+// environment of a process that is still root, so anything the client can
+// place in it is an injection surface for the incubator itself, for the PAM
+// stack it runs and for the su or login it execs. Those variables travel over
+// a pipe that only the incubator reads, and it merges them into the
+// environment of the user's process after it has dropped privileges. See
+// forwardedEnvPayload and forwardedEnviron.
+func (ss *sshSession) incubatorEnv() []string {
 	env := envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
@@ -882,7 +930,6 @@ func (ss *sshSession) incubatorEnv(forwardedEnv []string) []string {
 		env = append(env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
 	}
 
-	env = appendForwardedEnv(env, forwardedEnv)
 	return env
 }
 
@@ -893,14 +940,20 @@ func (ss *sshSession) incubatorEnv(forwardedEnv []string) []string {
 // It sets ss.cmd, stdin, stdout, and stderr.
 func (ss *sshSession) launchProcess() error {
 	var err error
-	var forwardedEnv []string
-	ss.cmd, forwardedEnv, err = ss.newIncubatorCommand(ss.logf)
+	var envFile *os.File
+	ss.cmd, envFile, err = ss.newIncubatorCommand(ss.logf)
 	if err != nil {
 		return err
 	}
+	if envFile != nil {
+		// The child receives its own descriptor for the forwarded environment
+		// pipe when it starts, so our copy is no longer needed once we return,
+		// whether or not the start succeeded.
+		defer envFile.Close()
+	}
 
 	cmd := ss.cmd
-	cmd.Env = ss.incubatorEnv(forwardedEnv)
+	cmd.Env = ss.incubatorEnv()
 
 	ptyReq, winCh, isPty := ss.Pty()
 	if !isPty {
@@ -1163,7 +1216,7 @@ func updateStringInSlice(ss []string, a, b string) {
 // AcceptEnv.
 func acceptEnvPair(kv string) bool {
 	k, _, ok := strings.Cut(kv, "=")
-	if !ok || isDangerousEnvVar(k) || reservedEnvKey(k) {
+	if !ok || !validEnvName(k) || isDangerousEnvVar(k) {
 		return false
 	}
 	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
