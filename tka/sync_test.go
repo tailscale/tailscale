@@ -7,8 +7,11 @@ import (
 	"bytes"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/tstest"
+	"tailscale.com/util/must"
 )
 
 // getSyncOffer returns a SyncOffer for the given Chonk.
@@ -352,5 +355,182 @@ func TestSyncSimpleE2E(t *testing.T) {
 
 	if cHash, nHash := control.Head(), node.Head(); cHash != nHash {
 		t.Errorf("node & control are not synced: c=%x, n=%x", cHash, nHash)
+	}
+}
+
+// TestSyncFromFarBehind checks that nodes with compacted state can still find
+// a common ancestor when the remote is significantly ahead.
+//
+// We simulate a node that has compacted its early history and is now ~500 AUMs
+// behind the control plane, a distance that previously caused exponential sampling
+// in SyncOffer to skip the node's entire local history.
+//
+// Regression test for http://go/corp/40404
+func TestSyncFromFarBehind(t *testing.T) {
+	pub1, priv1 := testingKey25519(t, 1)
+	signer1 := signer25519(priv1)
+
+	key1 := Key{Kind: Key25519, Public: pub1, Votes: 2}
+
+	// Setup: persistentAuthority (control plane) vs compactingAuthority (client node).
+	state := State{
+		Keys:              []Key{key1},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}
+
+	persistentStorage, compactingStorage := ChonkMem(), ChonkMem()
+	persistentSize := func() int { return len(must.Get(persistentStorage.AllAUMs())) }
+	compactingSize := func() int { return len(must.Get(compactingStorage.AllAUMs())) }
+
+	// Backdate the clock on the compactingStorage so all AUMs will be old enough
+	// to be considered for compacting.
+	clock := tstest.NewClock(tstest.ClockOpts{
+		Start: time.Now().Add(-(CompactionDefaults.MinAge + 24*time.Hour)),
+	})
+	compactingStorage.SetClock(clock)
+
+	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, signer1))
+	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
+
+	// 1. Generate enough history to trigger checkpoints.
+	persistentNode := CreateSeedNode(t, persistentAuthority, persistentStorage)
+	compactingNode := CreateSeedNode(t, compactingAuthority, compactingStorage)
+	SeedAUMs(t, checkpointEvery*2, signer1, persistentNode, compactingNode)
+
+	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 2. Compact the node state.
+	//
+	// It now has a different 'oldestAncestor' than the control plane.
+	beforeCompacting := compactingSize()
+	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
+	afterCompacting := compactingSize()
+
+	if beforeCompacting == afterCompacting {
+		t.Errorf("expected Compact to reduce the number of AUMs, but unchanged: size = %d", afterCompacting)
+	}
+
+	// 3. Advance the control plane far beyond the node.
+	//
+	// As of 2026-04-17, the largest TKA has ~750 AUMs.
+	//
+	// If you keep increasing this number, eventually the sync will fail because you
+	// hit the hard-coded limits on iteration during the sync process.
+	SeedAUMs(t, compactingSize()-persistentSize()+800, signer1, persistentNode)
+
+	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 4. Verify Intersection.
+	// The node should find an intersection even with a 500-AUM gap.
+	persistentOffer := must.Get(persistentAuthority.SyncOffer(persistentStorage))
+	compactingOffer := must.Get(compactingAuthority.SyncOffer(compactingStorage))
+
+	if _, err := compactingAuthority.MissingAUMs(compactingStorage, persistentOffer); err != nil {
+		t.Errorf("node failed to find intersection with far-ahead control plane: %v", err)
+	}
+
+	// 5. Check that the persistent authority can find an intersection with the
+	// compacting authority, and has missing AUMs to send it.
+	missing, err := persistentAuthority.MissingAUMs(persistentStorage, compactingOffer)
+	if len(missing) == 0 {
+		t.Errorf("control plane did not find any missing AUMs for node")
+	}
+	if err != nil {
+		t.Errorf("control plane failed to find missing AUMs for node: %v", err)
+	}
+}
+
+// TestSyncFromFarBehindFork checks that nodes with compacted state that have
+// also branched from the active chain can still find a common ancestor when
+// the remote is significantly ahead of the inersection point.
+//
+// We simulate a node that has compacted its early history and is now ~500 AUMs
+// behind the control plane, plus a few AUMs extra, a distance that previously
+// caused exponential sampling in SyncOffer to skip the node's entire local history.
+//
+// Regression test for http://go/corp/40404
+func TestSyncFromFarBehindFork(t *testing.T) {
+	// Set up two signing keys. They have a different number of votes, so if there's
+	// a fork, the chain with the winning key will take precedence.
+	majorityPub, majorityPriv := testingKey25519(t, 1)
+	losingPub, losingPriv := testingKey25519(t, 2)
+	winningSigner := signer25519(majorityPriv)
+	losingSigner := signer25519(losingPriv)
+
+	losingKey := Key{Kind: Key25519, Public: majorityPub, Votes: 1}
+	winningKey := Key{Kind: Key25519, Public: losingPub, Votes: 2}
+
+	// Setup: persistentAuthority (control plane) vs compactingAuthority (client node).
+	state := State{
+		Keys:              []Key{losingKey, winningKey},
+		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}
+
+	persistentStorage, compactingStorage := ChonkMem(), ChonkMem()
+	persistentSize := func() int { return len(must.Get(persistentStorage.AllAUMs())) }
+	compactingSize := func() int { return len(must.Get(compactingStorage.AllAUMs())) }
+
+	// Backdate the clock on the compactingStorage so all AUMs will be old enough
+	// to be considered for compacting.
+	clock := tstest.NewClock(tstest.ClockOpts{
+		Start: time.Now().Add(-(CompactionDefaults.MinAge + 24*time.Hour)),
+	})
+	compactingStorage.SetClock(clock)
+
+	persistentAuthority, genesisAUM := must.Get2(Create(persistentStorage, state, winningSigner))
+	compactingAuthority := must.Get(Bootstrap(compactingStorage, genesisAUM))
+
+	// 1. Generate enough history to trigger checkpoints.
+	persistentNode := CreateSeedNode(t, persistentAuthority, persistentStorage)
+	compactingNode := CreateSeedNode(t, compactingAuthority, compactingStorage)
+	SeedAUMs(t, checkpointEvery*2, winningSigner, persistentNode, compactingNode)
+
+	t.Logf("genesis and first batch of AUMs: persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 2. Compact the node state.
+	//
+	// It now has a different 'oldestAncestor' than the control plane.
+	beforeCompacting := compactingSize()
+	must.Do(compactingAuthority.Compact(compactingStorage, CompactionDefaults))
+	afterCompacting := compactingSize()
+
+	if beforeCompacting == afterCompacting {
+		t.Errorf("expected Compact to reduce the number of AUMs, but unchanged: size = %d", afterCompacting)
+	}
+
+	// 2. Advance the node state slightly beyond the control plane, using the
+	// losing signer.
+	SeedAUMs(t, 1, losingSigner, compactingNode)
+
+	// 3. Advance the control plane far beyond the node, using the winning signer.
+	//
+	// Now the node is forked from the control plane state, and the control plane's
+	// chain will win because its chain was signed by a key with more votes.
+	//
+	// As of 2026-04-17, the largest TKA has ~750 AUMs.
+	//
+	// If you keep increasing this number, eventually the sync will fail because you
+	// hit the hard-coded limits on iteration during the sync process.
+	SeedAUMs(t, compactingSize()-persistentSize()+800, winningSigner, persistentNode)
+
+	t.Logf("post-compacting and extra AUMs:  persistent = %d, compacting = %d", persistentSize(), compactingSize())
+
+	// 4. Verify Intersection.
+	// The node should find an intersection even with a 500-AUM gap.
+	persistentOffer := must.Get(persistentAuthority.SyncOffer(persistentStorage))
+	compactingOffer := must.Get(compactingAuthority.SyncOffer(compactingStorage))
+
+	if _, err := compactingAuthority.MissingAUMs(compactingStorage, persistentOffer); err != nil {
+		t.Errorf("node failed to find intersection with far-ahead control plane: %v", err)
+	}
+
+	// 5. Check that the persistent authority can find an intersection with the
+	// compacting authority, and has missing AUMs to send it.
+	missing, err := persistentAuthority.MissingAUMs(persistentStorage, compactingOffer)
+	if len(missing) == 0 {
+		t.Errorf("control plane did not find any missing AUMs for node")
+	}
+	if err != nil {
+		t.Errorf("control plane failed to find missing AUMs for node: %v", err)
 	}
 }
