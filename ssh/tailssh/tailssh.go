@@ -1169,6 +1169,16 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 		v = ruleSSHUsers["*"]
 	}
 	if v == "=" {
+		// Immediately look up user information for purposes of generating
+		// hold and delegate URL (if necessary).
+		lu, err := userLookup(reqSSHUser)
+		if err != nil {
+			return ""
+		}
+		// Don't match as root for autogroup:nonroot
+		if lu.Uid == "0" || lu.Username == "root" {
+			return ""
+		}
 		return reqSSHUser
 	}
 	return v

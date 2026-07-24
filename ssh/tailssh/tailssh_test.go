@@ -6,6 +6,7 @@
 package tailssh
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -60,6 +61,10 @@ import (
 
 func TestMatchRule(t *testing.T) {
 	someAction := new(tailcfg.SSHAction)
+	// nonRootUser is a real non-root user in the local passwd database,
+	// used by the "ssh-user-equal" case because mapLocalUser now does a
+	// userLookup (via getent) when the mapped value is "=" and rejects root.
+	nonRootUser := aNonRootUser(t)
 	tests := []struct {
 		name          string
 		rule          *tailcfg.SSHRule
@@ -221,8 +226,8 @@ func TestMatchRule(t *testing.T) {
 					"*": "=",
 				},
 			},
-			ci:       &sshConnInfo{sshUser: "alice"},
-			wantUser: "alice",
+			ci:       &sshConnInfo{sshUser: nonRootUser},
+			wantUser: nonRootUser,
 		},
 	}
 	for _, tt := range tests {
@@ -394,6 +399,39 @@ var (
 	testSignerOnce sync.Once
 )
 
+// aNonRootUser returns the username of a non-root user that exists in the
+// local passwd database (verified via userLookup, which uses getent on
+// Linux). It prefers the current user, falling back to reading /etc/passwd
+// for a real non-root account when the tests are run as root (e.g. in CI).
+// It skips the test if no such user can be found.
+func aNonRootUser(t *testing.T) string {
+	t.Helper()
+	if u, err := userLookup(currentUser); err == nil && u.Uid != "0" && u.Username != "root" {
+		return currentUser
+	}
+	f, err := os.Open("/etc/passwd")
+	if err != nil {
+		t.Skipf("can't find a non-root user: %v", err)
+	}
+	defer f.Close()
+	scan := bufio.NewScanner(f)
+	for scan.Scan() {
+		fields := strings.Split(scan.Text(), ":")
+		if len(fields) < 3 {
+			continue
+		}
+		name, uid := fields[0], fields[2]
+		if uid == "0" || name == "root" {
+			continue
+		}
+		if _, err := userLookup(name); err == nil {
+			return name
+		}
+	}
+	t.Skip("can't find a non-root user in /etc/passwd")
+	return ""
+}
+
 func (ts *localState) Dialer() *tsdial.Dialer {
 	return &tsdial.Dialer{}
 }
@@ -479,6 +517,7 @@ func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
 	return &tailcfg.SSHRule{
 		SSHUsers: map[string]string{
 			"alice": currentUser,
+			"*":     "=",
 		},
 		Action: action,
 		Principals: []*tailcfg.SSHPrincipal{
@@ -811,6 +850,11 @@ func TestSSHAuthFlow(t *testing.T) {
 		Reject:  true,
 		Message: "Go Away!",
 	})
+	autogroupNonrootRule := newSSHRule(&tailcfg.SSHAction{
+		Accept:  true,
+		Message: "autogroup:nonroot",
+	})
+	autogroupNonrootRule.SSHUsers = map[string]string{"*": "="}
 
 	tests := []struct {
 		name         string
@@ -836,6 +880,66 @@ func TestSSHAuthFlow(t *testing.T) {
 			},
 			authErr:     true,
 			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "alice"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-numeric-username",
+			sshUser: "321",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: bobRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "321"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-root-uid",
+			sshUser: "0",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "0"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-root-uid-leading-space",
+			sshUser: " 0",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user " 0"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-root-uid-force-password-auth",
+			sshUser: "0+password",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "0"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-double-zero-force-password-auth",
+			sshUser: "00+password",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "00"` + "\n"},
+		},
+		{
+			name:    "user-mismatch-leading-plus",
+			sshUser: "+0",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "+0"` + "\n"},
 		},
 		{
 			name: "accept",
