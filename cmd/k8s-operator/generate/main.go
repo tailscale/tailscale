@@ -20,27 +20,12 @@ import (
 )
 
 const (
-	operatorDeploymentFilesPath         = "cmd/k8s-operator/deploy"
-	connectorCRDPath                    = operatorDeploymentFilesPath + "/crds/tailscale.com_connectors.yaml"
-	proxyClassCRDPath                   = operatorDeploymentFilesPath + "/crds/tailscale.com_proxyclasses.yaml"
-	dnsConfigCRDPath                    = operatorDeploymentFilesPath + "/crds/tailscale.com_dnsconfigs.yaml"
-	recorderCRDPath                     = operatorDeploymentFilesPath + "/crds/tailscale.com_recorders.yaml"
-	proxyGroupCRDPath                   = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygroups.yaml"
-	tailnetCRDPath                      = operatorDeploymentFilesPath + "/crds/tailscale.com_tailnets.yaml"
-	proxyGroupPolicyCRDPath             = operatorDeploymentFilesPath + "/crds/tailscale.com_proxygrouppolicies.yaml"
-	peerRelayCRDPath                    = operatorDeploymentFilesPath + "/crds/tailscale.com_peerrelays.yaml"
-	helmTemplatesPath                   = operatorDeploymentFilesPath + "/chart/templates"
-	connectorCRDHelmTemplatePath        = helmTemplatesPath + "/connector.yaml"
-	proxyClassCRDHelmTemplatePath       = helmTemplatesPath + "/proxyclass.yaml"
-	dnsConfigCRDHelmTemplatePath        = helmTemplatesPath + "/dnsconfig.yaml"
-	recorderCRDHelmTemplatePath         = helmTemplatesPath + "/recorder.yaml"
-	proxyGroupCRDHelmTemplatePath       = helmTemplatesPath + "/proxygroup.yaml"
-	tailnetCRDHelmTemplatePath          = helmTemplatesPath + "/tailnet.yaml"
-	proxyGroupPolicyCRDHelmTemplatePath = helmTemplatesPath + "/proxygrouppolicy.yaml"
-	peerRelayCRDHelmTemplatePath        = helmTemplatesPath + "/peerrelay.yaml"
-
-	helmConditionalStart = "{{ if .Values.installCRDs -}}\n"
-	helmConditionalEnd   = "{{- end -}}"
+	operatorDeploymentFilesPath = "cmd/k8s-operator/deploy"
+	crdsPath                    = operatorDeploymentFilesPath + "/crds"
+	helmTemplatesPath           = operatorDeploymentFilesPath + "/chart/templates"
+	crdFilePrefix               = "tailscale.com_"
+	helmConditionalStart        = "{{ if .Values.installCRDs -}}\n"
+	helmConditionalEnd          = "{{- end -}}"
 )
 
 func main() {
@@ -126,65 +111,69 @@ func main() {
 	}
 }
 
-// generate places tailscale.com CRDs (currently Connector, ProxyClass, DNSConfig, Recorder) into
-// the Helm chart templates behind .Values.installCRDs=true condition (true by
-// default).
-func generate(baseDir string) error {
-	addCRDToHelm := func(crdPath, crdTemplatePath string) error {
-		chartBytes, err := os.ReadFile(filepath.Join(baseDir, crdPath))
-		if err != nil {
-			return fmt.Errorf("error reading CRD contents: %w", err)
-		}
-		// Place a new temporary Helm template file with the templated CRD
-		// contents into Helm templates.
-		file, err := os.Create(filepath.Join(baseDir, crdTemplatePath))
-		if err != nil {
-			return fmt.Errorf("error creating CRD template file: %w", err)
-		}
-		if _, err := file.Write([]byte(helmConditionalStart)); err != nil {
-			return fmt.Errorf("error writing helm if statement start: %w", err)
-		}
-		if _, err := file.Write(chartBytes); err != nil {
-			return fmt.Errorf("error writing chart bytes: %w", err)
-		}
-		if _, err := file.Write([]byte(helmConditionalEnd)); err != nil {
-			return fmt.Errorf("error writing helm if-statement end: %w", err)
-		}
-		return file.Close()
+// crdFiles returns the base filenames of every CRD manifest under crdsPath.
+// It errors when none are found: an empty result would silently produce a
+// chart with no CRDs, which is never intentional.
+func crdFiles(baseDir string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(baseDir, crdsPath))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", crdsPath, err)
 	}
-	for _, crd := range []struct {
-		crdPath, templatePath string
-	}{
-		{connectorCRDPath, connectorCRDHelmTemplatePath},
-		{proxyClassCRDPath, proxyClassCRDHelmTemplatePath},
-		{dnsConfigCRDPath, dnsConfigCRDHelmTemplatePath},
-		{recorderCRDPath, recorderCRDHelmTemplatePath},
-		{proxyGroupCRDPath, proxyGroupCRDHelmTemplatePath},
-		{tailnetCRDPath, tailnetCRDHelmTemplatePath},
-		{proxyGroupPolicyCRDPath, proxyGroupPolicyCRDHelmTemplatePath},
-		{peerRelayCRDPath, peerRelayCRDHelmTemplatePath},
-	} {
-		if err := addCRDToHelm(crd.crdPath, crd.templatePath); err != nil {
-			return fmt.Errorf("error adding %s CRD to Helm templates: %w", crd.crdPath, err)
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, crdFilePrefix) || !strings.HasSuffix(name, ".yaml") {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no %s*.yaml files found in %s; run controller-gen to regenerate", crdFilePrefix, crdsPath)
+	}
+	return names, nil
+}
+
+// generate places every tailscale.com CRD manifest found under crdsPath into
+// the Helm chart templates behind a .Values.installCRDs=true condition (true
+// by default). The generated template file uses the same base filename as the
+// source CRD so no new CRD requires a code change here.
+func generate(baseDir string) error {
+	files, err := crdFiles(baseDir)
+	if err != nil {
+		return err
+	}
+	for _, name := range files {
+		src, err := os.ReadFile(filepath.Join(baseDir, crdsPath, name))
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		var buf bytes.Buffer
+		buf.WriteString(helmConditionalStart)
+		buf.Write(src)
+		buf.WriteString(helmConditionalEnd)
+		dst := filepath.Join(baseDir, helmTemplatesPath, name)
+		if err := os.WriteFile(dst, buf.Bytes(), 0o664); err != nil {
+			return fmt.Errorf("writing %s: %w", dst, err)
 		}
 	}
 	return nil
 }
 
+// cleanup removes every CRD template file previously written by generate.
+// It globs helmTemplatesPath rather than re-reading crdsPath so a CRD deleted
+// between generate and cleanup is still tidied up.
 func cleanup(baseDir string) error {
-	log.Print("Cleaning up CRD from Helm templates")
-	for _, path := range []string{
-		connectorCRDHelmTemplatePath,
-		proxyClassCRDHelmTemplatePath,
-		dnsConfigCRDHelmTemplatePath,
-		recorderCRDHelmTemplatePath,
-		proxyGroupCRDHelmTemplatePath,
-		tailnetCRDHelmTemplatePath,
-		proxyGroupPolicyCRDHelmTemplatePath,
-		peerRelayCRDHelmTemplatePath,
-	} {
-		if err := os.Remove(filepath.Join(baseDir, path)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("error cleaning up %s: %w", path, err)
+	log.Print("Cleaning up CRDs from Helm templates")
+	matches, err := filepath.Glob(filepath.Join(baseDir, helmTemplatesPath, crdFilePrefix+"*.yaml"))
+	if err != nil {
+		return fmt.Errorf("globbing Helm templates: %w", err)
+	}
+	for _, p := range matches {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing %s: %w", p, err)
 		}
 	}
 	return nil
