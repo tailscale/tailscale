@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/creachadair/mds/shell"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
 )
@@ -37,6 +39,8 @@ func TestTailscaleSSH_Ubuntu(t *testing.T) {
 	if out, code := testSuite.ssh(t, "nosuchuser", "true"); code == 0 {
 		t.Errorf("ubuntu nonexistent user: ssh succeeded, want failure:\n%s", out)
 	}
+
+	testSuite.checkAutogroupNonroot(t, "ubuntu")
 }
 
 // TestTailscaleSSH_FreeBSD exercises the Tailscale SSH server ("tailscale up
@@ -60,6 +64,8 @@ func TestTailscaleSSH_FreeBSD(t *testing.T) {
 	if out, code := testSuite.ssh(t, "nosuchuser", "true"); code == 0 {
 		t.Errorf("freebsd nonexistent user: ssh succeeded, want failure:\n%s", out)
 	}
+
+	testSuite.checkAutogroupNonroot(t, "freebsd")
 }
 
 // TestTailscaleSSH_Gokrazy exercises the gokrazy-specific cases in the
@@ -154,6 +160,34 @@ func (st *sshTest) check(t *testing.T, desc, user string, cmd, want string) {
 	}
 	if out != want {
 		t.Errorf("%s: ssh %s@%s %q = %q, want %q", desc, user, st.serverIP, cmd, out, want)
+	}
+}
+
+// checkAutogroupNonroot adjusts the server's SSH policy to be equivalent to "autogroup:nonroot"
+// and verifies that attempting to SSH as root fails.
+func (st *sshTest) checkAutogroupNonroot(t *testing.T, name string) {
+	t.Helper()
+	orignalSSHPolicy := st.env.ControlServer().SSHPolicy
+	defer func() {
+		st.env.ControlServer().SetSSHPolicy(orignalSSHPolicy)
+	}()
+
+	st.env.ControlServer().SetSSHPolicy(&tailcfg.SSHPolicy{
+		Rules: []*tailcfg.SSHRule{{
+			Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+			SSHUsers:   map[string]string{"*": "="},
+			Action:     &tailcfg.SSHAction{Accept: true},
+		}},
+	})
+
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		_, code := st.ssh(t, "root", "true")
+		if code == 0 {
+			return fmt.Errorf("root SSH still succeeds")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("%s: root SSH still succeeds after policy update to autogroup:nonroot-only; policy may not have propagated", name)
 	}
 }
 
