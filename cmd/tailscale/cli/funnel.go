@@ -15,7 +15,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
-	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 )
 
 func init() {
@@ -137,7 +137,7 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 //
 // verifyFunnelEnabled may refresh the local state and modify the st input.
 func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, port uint16) error {
-	enableErr := e.enableFeatureInteractive(ctx, "funnel", tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel)
+	enableErr := e.enableFeatureInteractive(ctx, "funnel", nodecap.HTTPS, nodecap.Funnel)
 	st, statusErr := e.getLocalClientStatusWithoutPeers(ctx) // get updated status; interactive flow may block
 	switch {
 	case statusErr != nil:

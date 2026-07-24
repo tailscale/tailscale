@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/opt"
@@ -139,11 +140,11 @@ func TestAppDNSRoutes(t *testing.T) {
 			selfNode := &tailcfg.Node{}
 			if tt.config != nil {
 				selfNode.CapMap = tailcfg.NodeCapMap{
-					tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): tt.config,
+					nodecap.Cap(AppConnectorsExperimentalAttrName): tt.config,
 				}
 			}
 			selfView := selfNode.View()
-			got := AppDNSRoutes(func(_ tailcfg.NodeCapability) bool {
+			got := AppDNSRoutes(func(_ nodecap.Cap) bool {
 				return tt.hasCap
 			}, selfView)
 			if diff := cmp.Diff(tt.want, got); diff != "" {

@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
@@ -155,7 +156,7 @@ func TestHandlePeerAPI(t *testing.T) {
 				},
 			}
 			if tt.debugCap {
-				selfNode.CapMap = tailcfg.NodeCapMap{tailcfg.CapabilityDebug: nil}
+				selfNode.CapMap = tailcfg.NodeCapMap{nodecap.Debug: nil}
 			}
 			var e peerAPITestEnv
 			lb := newTestLocalBackend(t)

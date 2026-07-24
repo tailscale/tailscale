@@ -44,6 +44,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/lazy"
@@ -672,7 +673,7 @@ func (s *idpServer) serveUserInfo(w http.ResponseWriter, r *http.Request) {
 	// TODO(maisem): not sure if this is the right thing to do
 	ui.UserName, _, _ = strings.Cut(ar.remoteUser.UserProfile.LoginName, "@")
 
-	rules, err := tailcfg.UnmarshalCapJSON[capRule](ar.remoteUser.CapMap, tailcfg.PeerCapabilityTsIDP)
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](ar.remoteUser.CapMap, peercap.TsIDP)
 	if err != nil {
 		http.Error(w, "tsidp: failed to unmarshal capability: %v", http.StatusBadRequest)
 		return
@@ -964,7 +965,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 		tsClaims.Issuer = s.loopbackURL
 	}
 
-	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, tailcfg.PeerCapabilityTsIDP)
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, peercap.TsIDP)
 	if err != nil {
 		log.Printf("tsidp: failed to unmarshal capability: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)

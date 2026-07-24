@@ -32,6 +32,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
@@ -191,7 +192,7 @@ func TestWhoIsArgTypes(t *testing.T) {
 					return match()
 				},
 				peerCaps: map[netip.Addr]tailcfg.PeerCapMap{
-					netip.MustParseAddr("100.101.102.103"): map[tailcfg.PeerCapability][]tailcfg.RawMessage{
+					netip.MustParseAddr("100.101.102.103"): map[peercap.Cap][]tailcfg.RawMessage{
 						"foo": {`"bar"`},
 					},
 				},

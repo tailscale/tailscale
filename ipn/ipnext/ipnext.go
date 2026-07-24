@@ -18,6 +18,7 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -526,7 +527,7 @@ type NodeBackend interface {
 	PeerCaps(src netip.Addr) tailcfg.PeerCapMap
 
 	// PeerHasCap reports whether the peer has the specified peer capability.
-	PeerHasCap(peer tailcfg.NodeView, cap tailcfg.PeerCapability) bool
+	PeerHasCap(peer tailcfg.NodeView, cap peercap.Cap) bool
 
 	// PeerAPIBase returns the "http://ip:port" URL base to reach peer's
 	// PeerAPI, or the empty string if the peer is invalid or doesn't support

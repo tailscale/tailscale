@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/views"
 )
@@ -56,7 +58,7 @@ type CapMatch struct {
 
 	// Cap is the capability that's granted if the destination IP addresses
 	// matches Dst.
-	Cap tailcfg.PeerCapability
+	Cap peercap.Cap
 
 	// Values are the raw JSON values of the capability.
 	// See tailcfg.PeerCapability and tailcfg.PeerCapMap for details.
@@ -84,7 +86,7 @@ type Match struct {
 	// has one of these capabilities, it's also permitted. The peers are only
 	// looked up by their self address (Node.Addresses) and not by subnet routes
 	// they advertise.
-	SrcCaps []tailcfg.NodeCapability
+	SrcCaps []nodecap.Cap
 
 	Dsts []NetPortRange // optional, if source matches
 	Caps []CapMatch     // optional, if source match

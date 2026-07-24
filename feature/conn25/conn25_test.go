@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
@@ -457,10 +458,10 @@ func TestReserveIPs(t *testing.T) {
 func TestReconfig(t *testing.T) {
 	rawCfg := `{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`
 	capMap := tailcfg.NodeCapMap{
-		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+		nodecap.Cap(AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 			tailcfg.RawMessage(rawCfg),
 		},
-		tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): []tailcfg.RawMessage{
+		nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): []tailcfg.RawMessage{
 			tailcfg.RawMessage("{}"),
 		},
 	}
@@ -648,8 +649,8 @@ func TestConfigFromNodeView(t *testing.T) {
 				poolsCfg = getRawMessages(t, tt.poolsCfg)
 			}
 			capMap := tailcfg.NodeCapMap{
-				tailcfg.NodeCapability(AppConnectorsExperimentalAttrName):        appCfg,
-				tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): poolsCfg,
+				nodecap.Cap(AppConnectorsExperimentalAttrName):        appCfg,
+				nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): poolsCfg,
 			}
 			sn := (&tailcfg.Node{
 				CapMap: capMap,
@@ -792,8 +793,8 @@ func makeSelfNode(t *testing.T, attrs []appctype.Conn25Attr, pools appctype.Conn
 		t.Fatalf("unexpected error marshaling pools in test setup: %v", err)
 	}
 	capMap := tailcfg.NodeCapMap{
-		tailcfg.NodeCapability(AppConnectorsExperimentalAttrName):        cfg,
-		tailcfg.NodeCapability(AppConnectorsExperimentalIPPoolsAttrName): {tailcfg.RawMessage(poolsBytes)},
+		nodecap.Cap(AppConnectorsExperimentalAttrName):        cfg,
+		nodecap.Cap(AppConnectorsExperimentalIPPoolsAttrName): {tailcfg.RawMessage(poolsBytes)},
 	}
 
 	return (&tailcfg.Node{

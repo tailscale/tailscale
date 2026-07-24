@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/events"
@@ -1367,12 +1368,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 		// DefaultAutoUpdate in its CapMap and deprecated top-level field forms.
 		if self := resp.Node; self != nil {
-			for _, v := range self.CapMap[tailcfg.NodeAttrDefaultAutoUpdate] {
+			for _, v := range self.CapMap[nodecap.DefaultAutoUpdate] {
 				switch v {
 				case "true", "false":
 					c.autoUpdatePub.Publish(AutoUpdate{c.controlClientID, v == "true"})
 				default:
-					c.logf("netmap: [unexpected] unknown %s in CapMap: %q", tailcfg.NodeAttrDefaultAutoUpdate, v)
+					c.logf("netmap: [unexpected] unknown %s in CapMap: %q", nodecap.DefaultAutoUpdate, v)
 				}
 			}
 		}

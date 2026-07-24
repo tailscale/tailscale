@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
@@ -672,7 +673,7 @@ func TestUpdateNetMapCache(t *testing.T) {
 
 	// Now enable the netmap caching attribute, and send another update.
 	// After doing so, the cache should have real data in it.
-	testMap.AllCaps = set.Of(tailcfg.NodeAttrCacheNetworkMaps)
+	testMap.AllCaps = set.Of(nodecap.CacheNetworkMaps)
 
 	clb.mu.Lock()
 	clb.setNetMapLocked(testMap)
@@ -1803,7 +1804,7 @@ func TestStatusPeerCapabilities(t *testing.T) {
 	tests := []struct {
 		name                     string
 		peers                    []tailcfg.NodeView
-		expectedPeerCapabilities map[tailcfg.StableNodeID][]tailcfg.NodeCapability
+		expectedPeerCapabilities map[tailcfg.StableNodeID][]nodecap.Cap
 		expectedPeerCapMap       map[tailcfg.StableNodeID]tailcfg.NodeCapMap
 	}{
 		{
@@ -1815,9 +1816,9 @@ func TestStatusPeerCapabilities(t *testing.T) {
 					Key:             makeNodeKeyFromID(1),
 					IsWireGuardOnly: true,
 					Hostinfo:        (&tailcfg.Hostinfo{}).View(),
-					Capabilities:    []tailcfg.NodeCapability{tailcfg.CapabilitySSH},
-					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-						tailcfg.CapabilitySSH: nil,
+					Capabilities:    []nodecap.Cap{nodecap.SSH},
+					CapMap: (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+						nodecap.SSH: nil,
 					}),
 				}).View(),
 				(&tailcfg.Node{
@@ -1825,9 +1826,9 @@ func TestStatusPeerCapabilities(t *testing.T) {
 					StableID:     "bar",
 					Key:          makeNodeKeyFromID(2),
 					Hostinfo:     (&tailcfg.Hostinfo{}).View(),
-					Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilityAdmin},
-					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-						tailcfg.CapabilityAdmin: {`{"test": "true}`},
+					Capabilities: []nodecap.Cap{nodecap.Admin},
+					CapMap: (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+						nodecap.Admin: {`{"test": "true}`},
 					}),
 				}).View(),
 				(&tailcfg.Node{
@@ -1835,26 +1836,26 @@ func TestStatusPeerCapabilities(t *testing.T) {
 					StableID:     "baz",
 					Key:          makeNodeKeyFromID(3),
 					Hostinfo:     (&tailcfg.Hostinfo{}).View(),
-					Capabilities: []tailcfg.NodeCapability{tailcfg.CapabilityOwner},
-					CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-						tailcfg.CapabilityOwner: nil,
+					Capabilities: []nodecap.Cap{nodecap.Owner},
+					CapMap: (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+						nodecap.Owner: nil,
 					}),
 				}).View(),
 			},
-			expectedPeerCapabilities: map[tailcfg.StableNodeID][]tailcfg.NodeCapability{
-				tailcfg.StableNodeID("foo"): {tailcfg.CapabilitySSH},
-				tailcfg.StableNodeID("bar"): {tailcfg.CapabilityAdmin},
-				tailcfg.StableNodeID("baz"): {tailcfg.CapabilityOwner},
+			expectedPeerCapabilities: map[tailcfg.StableNodeID][]nodecap.Cap{
+				tailcfg.StableNodeID("foo"): {nodecap.SSH},
+				tailcfg.StableNodeID("bar"): {nodecap.Admin},
+				tailcfg.StableNodeID("baz"): {nodecap.Owner},
 			},
 			expectedPeerCapMap: map[tailcfg.StableNodeID]tailcfg.NodeCapMap{
-				tailcfg.StableNodeID("foo"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-					tailcfg.CapabilitySSH: nil,
+				tailcfg.StableNodeID("foo"): (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+					nodecap.SSH: nil,
 				}),
-				tailcfg.StableNodeID("bar"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-					tailcfg.CapabilityAdmin: {`{"test": "true}`},
+				tailcfg.StableNodeID("bar"): (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+					nodecap.Admin: {`{"test": "true}`},
 				}),
-				tailcfg.StableNodeID("baz"): (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
-					tailcfg.CapabilityOwner: nil,
+				tailcfg.StableNodeID("baz"): (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
+					nodecap.Owner: nil,
 				}),
 			},
 		},
@@ -3395,7 +3396,7 @@ func TestReconfigureAppConnector(t *testing.T) {
 		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
 			Tags: []string{"tag:example"},
-			CapMap: (tailcfg.NodeCapMap)(map[tailcfg.NodeCapability][]tailcfg.RawMessage{
+			CapMap: (tailcfg.NodeCapMap)(map[nodecap.Cap][]tailcfg.RawMessage{
 				"tailscale.com/app-connectors": {tailcfg.RawMessage(appCfg)},
 			}),
 		}).View(),
@@ -4753,7 +4754,7 @@ func TestTCPHandlerForDstWithVIPService(t *testing.T) {
 			SelfNode: (&tailcfg.Node{
 				Name: "example.ts.net",
 				CapMap: tailcfg.NodeCapMap{
-					tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
+					nodecap.ServiceHost: []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)},
 				},
 			}).View(),
 			UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{
@@ -5133,7 +5134,7 @@ func TestDriveManageShares(t *testing.T) {
 			if !tt.disabled {
 				nm := new(*b.currentNode().NetMap())
 				self := nm.SelfNode.AsStruct()
-				self.CapMap = tailcfg.NodeCapMap{tailcfg.NodeAttrsTaildriveShare: nil}
+				self.CapMap = tailcfg.NodeCapMap{nodecap.TaildriveShare: nil}
 				nm.SelfNode = self.View()
 				b.currentNode().SetNetMap(nm)
 				b.sys.Set(driveimpl.NewFileSystemForRemote(b.logf))
@@ -5339,7 +5340,7 @@ func withExitRoutes() peerOptFunc {
 
 func withSuggest() peerOptFunc {
 	return func(n *tailcfg.Node) {
-		mak.Set(&n.CapMap, tailcfg.NodeAttrSuggestExitNode, []tailcfg.RawMessage{})
+		mak.Set(&n.CapMap, nodecap.SuggestExitNode, []tailcfg.RawMessage{})
 	}
 }
 
@@ -6173,7 +6174,7 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 			netip.MustParsePrefix("fe70::1/128"),
 		},
 		CapMap: tailcfg.NodeCapMap{
-			tailcfg.NodeAttrTrafficSteering: []tailcfg.RawMessage{},
+			nodecap.TrafficSteering: []tailcfg.RawMessage{},
 		},
 	}
 
@@ -8014,7 +8015,7 @@ func TestSrcCapPacketFilter(t *testing.T) {
 		},
 		PacketFilter: []filtertype.Match{{
 			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
-			SrcCaps: []tailcfg.NodeCapability{"cap-X"}, // cap in packet filter rule
+			SrcCaps: []nodecap.Cap{"cap-X"}, // cap in packet filter rule
 			Dsts: []filtertype.NetPortRange{{
 				Net: netip.MustParsePrefix("1.1.1.1/32"),
 				Ports: filtertype.PortRange{
@@ -8075,7 +8076,7 @@ func TestSrcCapPacketFilterUnsignedPeer(t *testing.T) {
 		},
 		PacketFilter: []filtertype.Match{{
 			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
-			SrcCaps: []tailcfg.NodeCapability{"cap-X"},
+			SrcCaps: []nodecap.Cap{"cap-X"},
 			Dsts: []filtertype.NetPortRange{{
 				Net: netip.MustParsePrefix("1.1.1.1/32"),
 				Ports: filtertype.PortRange{
@@ -8897,7 +8898,7 @@ func TestRouteAllDisabled(t *testing.T) {
 						pp("100.64.1.1/32"),
 					},
 					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeAttrServiceHost: []tailcfg.RawMessage{
+						nodecap.ServiceHost: []tailcfg.RawMessage{
 							tailcfg.RawMessage(svcIPMapJSON),
 						},
 					},

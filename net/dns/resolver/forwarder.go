@@ -908,7 +908,7 @@ func ShouldUseRoutes(knobs *controlknobs.Knobs) bool {
 	switch runtime.GOOS {
 	case "android", "ios":
 		// On mobile platforms with lower memory limits (e.g., 50MB on iOS),
-		// this behavior is still gated by the "user-dial-routes" nodeAttr.
+		// this behavior is still gated by the "user-dial-routes" nodecap.
 		return knobs != nil && knobs.UserDialUseRoutes.Load()
 	default:
 		// On all other platforms, it is the default behavior,

@@ -16,6 +16,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
@@ -43,8 +44,8 @@ func IsEnabled(self tailcfg.NodeView) bool {
 		return false
 	}
 	// TODO(sfllaw): We intend to eventually enable this behaviour by default.
-	return self.HasCap(tailcfg.NodeAttrClientSideReachability) &&
-		self.HasCap(tailcfg.NodeAttrClientSideReachabilityRouteCheck)
+	return self.HasCap(nodecap.ClientSideReachability) &&
+		self.HasCap(nodecap.ClientSideReachabilityRouteCheck)
 }
 
 // Client generates Reports describing the result of both passive and active

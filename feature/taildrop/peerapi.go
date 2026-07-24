@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httphdr"
@@ -33,7 +33,7 @@ func canPutFile(h ipnlocal.PeerAPIHandler) bool {
 		// Unsigned peers can't send files.
 		return false
 	}
-	return h.IsSelfUntagged() || h.PeerCaps().HasCapability(tailcfg.PeerCapabilityFileSharingSend)
+	return h.IsSelfUntagged() || h.PeerCaps().HasCapability(peercap.FileSharingSend)
 }
 
 func handlePeerPut(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {

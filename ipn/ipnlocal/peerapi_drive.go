@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"tailscale.com/drive"
-	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/util/httpm"
 )
 
@@ -34,7 +34,7 @@ func handleServeDrive(hi PeerAPIHandler, w http.ResponseWriter, r *http.Request)
 	}
 
 	capsMap := h.PeerCaps()
-	driveCaps, ok := capsMap[tailcfg.PeerCapabilityTaildrive]
+	driveCaps, ok := capsMap[peercap.Taildrive]
 	if !ok {
 		h.logf("taildrive: not permitted")
 		http.Error(w, "taildrive not permitted", http.StatusForbidden)

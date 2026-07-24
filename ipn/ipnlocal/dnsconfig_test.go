@@ -14,6 +14,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/netmap"
@@ -115,14 +116,14 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					Name:      "myname.net.",
 					Addresses: ipps("100.101.101.101"),
 				}).View(),
-				AllCaps: set.SetOf([]tailcfg.NodeCapability{tailcfg.NodeAttrDNSSubdomainResolve}),
+				AllCaps: set.SetOf([]nodecap.Cap{nodecap.DNSSubdomainResolve}),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
 					ID:        1,
 					Name:      "peer-with-cap.net.",
 					Addresses: ipps("100.102.0.1"),
-					CapMap:    tailcfg.NodeCapMap{tailcfg.NodeAttrDNSSubdomainResolve: nil},
+					CapMap:    tailcfg.NodeCapMap{nodecap.DNSSubdomainResolve: nil},
 				},
 				{
 					ID:        2,
@@ -397,12 +398,12 @@ func TestDNSConfigForNetmap(t *testing.T) {
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
 					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
+						nodecap.Cap(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
 							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
 						},
 					},
 				}).View(),
-				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+				AllCaps: set.Of(nodecap.Cap(appc.AppConnectorsExperimentalAttrName)),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{

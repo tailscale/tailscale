@@ -51,6 +51,8 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsconst"
 	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
@@ -2481,7 +2483,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			// unexpected
 			return
 		}
-		if !nodeHasCap(c.filt, peer, c.self, tailcfg.PeerCapabilityRelay) {
+		if !nodeHasCap(c.filt, peer, c.self, peercap.Relay) {
 			return
 		}
 		// [Conn.mu] must not be held while publishing, or [Conn.onUDPRelayAllocResp]
@@ -2934,7 +2936,7 @@ func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView,
 			// compiled [tailcfg.CurrentCapabilityVersion]) forward.
 			continue
 		}
-		if !nodeHasCap(filt, maybeCandidate, self, tailcfg.PeerCapabilityRelayTarget) {
+		if !nodeHasCap(filt, maybeCandidate, self, peercap.RelayTarget) {
 			continue
 		}
 		relayServers.Add(candidatePeerRelay{
@@ -2949,7 +2951,7 @@ func (c *Conn) updateRelayServersSet(filt *filter.Filter, self tailcfg.NodeView,
 }
 
 // nodeHasCap returns true if src has cap on dst, otherwise it returns false.
-func nodeHasCap(filt *filter.Filter, src, dst tailcfg.NodeView, cap tailcfg.PeerCapability) bool {
+func nodeHasCap(filt *filter.Filter, src, dst tailcfg.NodeView, cap peercap.Cap) bool {
 	if filt == nil ||
 		!src.Valid() ||
 		!dst.Valid() {
@@ -3025,8 +3027,8 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	peersChanged, selfWasValid := c.updateNodes(self, peers)
 
 	relayClientEnabled := self.Valid() &&
-		!self.HasCap(tailcfg.NodeAttrDisableRelayClient) &&
-		!self.HasCap(tailcfg.NodeAttrOnlyTCP443)
+		!self.HasCap(nodecap.DisableRelayClient) &&
+		!self.HasCap(nodecap.OnlyTCP443)
 
 	udpOffloadKnobsChanged := false
 	var curGRO, curGSO bool
@@ -3391,7 +3393,7 @@ func (c *Conn) relayCandidateLocked(p tailcfg.NodeView) (ok bool, cp candidatePe
 	if !capVerIsRelayCapable(p.Cap()) {
 		return false, candidatePeerRelay{}
 	}
-	if !nodeHasCap(c.filt, p, c.self, tailcfg.PeerCapabilityRelayTarget) {
+	if !nodeHasCap(c.filt, p, c.self, peercap.RelayTarget) {
 		return false, candidatePeerRelay{}
 	}
 	return true, candidatePeerRelay{

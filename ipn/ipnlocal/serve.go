@@ -40,6 +40,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -92,7 +93,7 @@ type serveHTTPContext struct {
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
 	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
-	AppCapabilities views.Slice[tailcfg.PeerCapability]
+	AppCapabilities views.Slice[peercap.Cap]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -1137,7 +1138,7 @@ func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error 
 		return nil
 	}
 
-	peerCapsFiltered := make(map[tailcfg.PeerCapability][]tailcfg.RawMessage, acceptCaps.Len())
+	peerCapsFiltered := make(map[peercap.Cap][]tailcfg.RawMessage, acceptCaps.Len())
 	for _, cap := range acceptCaps.AsSlice() {
 		if peerCaps.HasCapability(cap) {
 			peerCapsFiltered[cap] = peerCaps[cap]

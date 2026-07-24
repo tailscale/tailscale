@@ -60,6 +60,8 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
 	"tailscale.com/tstime/mono"
@@ -3829,7 +3831,7 @@ func Test_nodeHasCap(t *testing.T) {
 		filt *filter.Filter
 		src  tailcfg.NodeView
 		dst  tailcfg.NodeView
-		cap  tailcfg.PeerCapability
+		cap  peercap.Cap
 		want bool
 	}{
 		{
@@ -3840,14 +3842,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeCOnlyIPv4.View(),
 			dst:  nodeAOnlyIPv4.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: true,
 		},
 		{
@@ -3858,14 +3860,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("::1/128"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeDOnlyIPv6.View(),
 			dst:  nodeBOnlyIPv6.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: true,
 		},
 		{
@@ -3876,14 +3878,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("::3/128"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeDOnlyIPv6.View(),
 			dst:  nodeBOnlyIPv6.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: false,
 		},
 		{
@@ -3894,14 +3896,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("::1/128"),
-							Cap: tailcfg.PeerCapabilityIngress,
+							Cap: peercap.Ingress,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeDOnlyIPv6.View(),
 			dst:  nodeBOnlyIPv6.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: false,
 		},
 		{
@@ -3912,14 +3914,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  tailcfg.NodeView{},
 			dst:  nodeAOnlyIPv4.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: false,
 		},
 		{
@@ -3930,14 +3932,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeCOnlyIPv4.View(),
 			dst:  tailcfg.NodeView{},
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: false,
 		},
 		{
@@ -3948,14 +3950,14 @@ func Test_nodeHasCap(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: netip.MustParsePrefix("1.1.1.1/32"),
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
 			}, nil, nil, nil, nil, nil),
 			src:  nodeCUnsigned.View(),
 			dst:  nodeAOnlyIPv4.View(),
-			cap:  tailcfg.PeerCapabilityRelayTarget,
+			cap:  peercap.RelayTarget,
 			want: false,
 		},
 	}
@@ -4004,11 +4006,11 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 
 	selfNodeNodeAttrDisableRelayClient := selfNode.Clone()
 	selfNodeNodeAttrDisableRelayClient.CapMap = make(tailcfg.NodeCapMap)
-	selfNodeNodeAttrDisableRelayClient.CapMap[tailcfg.NodeAttrDisableRelayClient] = nil
+	selfNodeNodeAttrDisableRelayClient.CapMap[nodecap.DisableRelayClient] = nil
 
 	selfNodeNodeAttrOnlyTCP443 := selfNode.Clone()
 	selfNodeNodeAttrOnlyTCP443.CapMap = make(tailcfg.NodeCapMap)
-	selfNodeNodeAttrOnlyTCP443.CapMap[tailcfg.NodeAttrOnlyTCP443] = nil
+	selfNodeNodeAttrOnlyTCP443.CapMap[nodecap.OnlyTCP443] = nil
 
 	tests := []struct {
 		name                   string
@@ -4026,7 +4028,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: selfNode.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
@@ -4050,7 +4052,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: selfNodeNodeAttrDisableRelayClient.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
@@ -4068,7 +4070,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: selfNodeNodeAttrOnlyTCP443.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
@@ -4086,7 +4088,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: selfNode.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},
@@ -4110,7 +4112,7 @@ func TestConn_SetNetworkMap_updateRelayServersSet(t *testing.T) {
 					Caps: []filtertype.CapMatch{
 						{
 							Dst: selfNode.Addresses[0],
-							Cap: tailcfg.PeerCapabilityRelayTarget,
+							Cap: peercap.RelayTarget,
 						},
 					},
 				},

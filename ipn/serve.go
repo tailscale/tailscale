@@ -17,6 +17,8 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -171,7 +173,7 @@ type HTTPHandler struct {
 
 	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
 
-	AcceptAppCaps []tailcfg.PeerCapability `json:",omitempty"` // peer capabilities to forward in grant header, e.g. example.com/cap/mon
+	AcceptAppCaps []peercap.Cap `json:",omitempty"` // peer capabilities to forward in grant header, e.g. example.com/cap/mon
 
 	// Redirect, if not empty, is the target URL to redirect requests to.
 	// By default, we redirect with HTTP 302 (Found) status.
@@ -652,10 +654,10 @@ func CheckFunnelAccess(port uint16, node *ipnstate.PeerStatus) error {
 // NodeCanFunnel returns an error if the given node is not configured to allow
 // for Tailscale Funnel usage.
 func NodeCanFunnel(node *ipnstate.PeerStatus) error {
-	if !node.HasCap(tailcfg.CapabilityHTTPS) {
+	if !node.HasCap(nodecap.HTTPS) {
 		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
 	}
-	if !node.HasCap(tailcfg.NodeAttrFunnel) {
+	if !node.HasCap(nodecap.Funnel) {
 		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/s/no-funnel.")
 	}
 	return nil
@@ -682,14 +684,14 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 			return "", deny("")
 		}
 		u.RawQuery = ""
-		if u.String() != string(tailcfg.CapabilityFunnelPorts) {
+		if u.String() != string(nodecap.FunnelPorts) {
 			return "", deny("")
 		}
 		return portsStr, nil
 	}
 	for attr := range node.CapMap {
 		attr := string(attr)
-		if !strings.HasPrefix(attr, string(tailcfg.CapabilityFunnelPorts)) {
+		if !strings.HasPrefix(attr, string(nodecap.FunnelPorts)) {
 			continue
 		}
 		var err error
@@ -702,7 +704,7 @@ func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 	if portsStr == "" {
 		for attr := range node.CapMap {
 			attr := string(attr)
-			if !strings.HasPrefix(attr, string(tailcfg.CapabilityFunnelPorts)) {
+			if !strings.HasPrefix(attr, string(nodecap.FunnelPorts)) {
 				continue
 			}
 			var err error

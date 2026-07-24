@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/opt"
 )
 
@@ -158,38 +159,38 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	}
 	has := capMap.Contains
 	var (
-		disableUPnP                          = has(tailcfg.NodeAttrDisableUPnP)
-		randomizeClientPort                  = has(tailcfg.NodeAttrRandomizeClientPort)
-		disableDeltaUpdates                  = has(tailcfg.NodeAttrDisableDeltaUpdates)
+		disableUPnP                          = has(nodecap.DisableUPnP)
+		randomizeClientPort                  = has(nodecap.RandomizeClientPort)
+		disableDeltaUpdates                  = has(nodecap.DisableDeltaUpdates)
 		oneCGNAT                             opt.Bool
-		forceBackgroundSTUN                  = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
-		peerMTUEnable                        = has(tailcfg.NodeAttrPeerMTUEnable)
-		dnsForwarderDisableTCPRetries        = has(tailcfg.NodeAttrDNSForwarderDisableTCPRetries)
-		silentDisco                          = has(tailcfg.NodeAttrSilentDisco)
-		forceIPTables                        = has(tailcfg.NodeAttrLinuxMustUseIPTables)
-		forceNfTables                        = has(tailcfg.NodeAttrLinuxMustUseNfTables)
-		probeUDPLifetime                     = has(tailcfg.NodeAttrProbeUDPLifetime)
-		appCStoreRoutes                      = has(tailcfg.NodeAttrStoreAppCRoutes)
-		userDialUseRoutes                    = has(tailcfg.NodeAttrUserDialUseRoutes)
-		disableSplitDNSWhenNoCustomResolvers = has(tailcfg.NodeAttrDisableSplitDNSWhenNoCustomResolvers)
-		disableLocalDNSOverrideViaNRPT       = has(tailcfg.NodeAttrDisableLocalDNSOverrideViaNRPT)
-		disableCaptivePortalDetection        = has(tailcfg.NodeAttrDisableCaptivePortalDetection)
-		disableSkipStatusQueue               = has(tailcfg.NodeAttrDisableSkipStatusQueue)
-		disableHostsFileUpdates              = has(tailcfg.NodeAttrDisableHostsFileUpdates)
-		forceRegisterMagicDNSIPv4Only        = has(tailcfg.NodeAttrForceRegisterMagicDNSIPv4Only)
-		emitRuntimeMetrics                   = has(tailcfg.NodeAttrEmitRuntimeMetrics)
-		disableUDPGRO                        = has(tailcfg.NodeAttrDisableUDPGRO)
-		disableUDPGSO                        = has(tailcfg.NodeAttrDisableUDPGSO)
-		disableTUNUDPGRO                     = has(tailcfg.NodeAttrDisableTUNUDPGRO)
-		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
-		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
-		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
-		scopeQuad100OnMacOS                  = has(tailcfg.NodeAttrScopeQuad100OnMacOS)
+		forceBackgroundSTUN                  = has(nodecap.DebugForceBackgroundSTUN)
+		peerMTUEnable                        = has(nodecap.PeerMTUEnable)
+		dnsForwarderDisableTCPRetries        = has(nodecap.DNSForwarderDisableTCPRetries)
+		silentDisco                          = has(nodecap.SilentDisco)
+		forceIPTables                        = has(nodecap.LinuxMustUseIPTables)
+		forceNfTables                        = has(nodecap.LinuxMustUseNfTables)
+		probeUDPLifetime                     = has(nodecap.ProbeUDPLifetime)
+		appCStoreRoutes                      = has(nodecap.StoreAppCRoutes)
+		userDialUseRoutes                    = has(nodecap.UserDialUseRoutes)
+		disableSplitDNSWhenNoCustomResolvers = has(nodecap.DisableSplitDNSWhenNoCustomResolvers)
+		disableLocalDNSOverrideViaNRPT       = has(nodecap.DisableLocalDNSOverrideViaNRPT)
+		disableCaptivePortalDetection        = has(nodecap.DisableCaptivePortalDetection)
+		disableSkipStatusQueue               = has(nodecap.DisableSkipStatusQueue)
+		disableHostsFileUpdates              = has(nodecap.DisableHostsFileUpdates)
+		forceRegisterMagicDNSIPv4Only        = has(nodecap.ForceRegisterMagicDNSIPv4Only)
+		emitRuntimeMetrics                   = has(nodecap.EmitRuntimeMetrics)
+		disableUDPGRO                        = has(nodecap.DisableUDPGRO)
+		disableUDPGSO                        = has(nodecap.DisableUDPGSO)
+		disableTUNUDPGRO                     = has(nodecap.DisableTUNUDPGRO)
+		disableTUNTCPGRO                     = has(nodecap.DisableTUNTCPGRO)
+		neverGSOEqualTail                    = has(nodecap.NeverGSOEqualTail)
+		cacheNetworkMaps                     = has(nodecap.CacheNetworkMaps)
+		scopeQuad100OnMacOS                  = has(nodecap.ScopeQuad100OnMacOS)
 	)
 
-	if has(tailcfg.NodeAttrOneCGNATEnable) {
+	if has(nodecap.OneCGNATEnable) {
 		oneCGNAT.Set(true)
-	} else if has(tailcfg.NodeAttrOneCGNATDisable) {
+	} else if has(nodecap.OneCGNATDisable) {
 		oneCGNAT.Set(false)
 	}
 

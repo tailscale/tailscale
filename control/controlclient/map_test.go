@@ -24,6 +24,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/dnstype"
@@ -1250,38 +1251,38 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "patch-capmap-add-value-to-existing-key",
-			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
-			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: []tailcfg.RawMessage{"true"}}},
-			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: []tailcfg.RawMessage{"true"}}},
+			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
+			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: []tailcfg.RawMessage{"true"}}},
+			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: []tailcfg.RawMessage{"true"}}},
 		},
 		{
 			name: "patch-capmap-add-new-key",
-			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
-			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil, tailcfg.CapabilityDebug: nil}},
-			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil, tailcfg.CapabilityDebug: nil}},
+			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
+			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil, nodecap.Debug: nil}},
+			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil, nodecap.Debug: nil}},
 		},
 		{
 			name: "patch-capmap-remove-key",
-			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
+			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
 			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{}},
 			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{}},
 		},
 		{
 			name: "patch-capmap-remove-as-nil",
-			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
+			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
 			b:    &tailcfg.Node{ID: 1},
 			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{}},
 		},
 		{
 			name: "patch-capmap-add-key-to-empty-map",
 			a:    &tailcfg.Node{ID: 1},
-			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
-			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
+			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
+			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
 		},
 		{
 			name:      "patch-capmap-no-change",
-			a:         &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
-			b:         &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
+			a:         &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
+			b:         &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{nodecap.Admin: nil}},
 			wantEqual: true,
 		},
 	}
