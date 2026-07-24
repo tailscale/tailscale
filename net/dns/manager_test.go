@@ -452,9 +452,13 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
-			// Sandboxed macOS app builds use NetworkExtension DNS settings, not
-			// tailscaled's /etc/resolver configurator, so they keep the older
-			// Apple base-config behavior.
+			// Sandboxed macOS app builds use NetworkExtension DNS settings
+			// rather than tailscaled's /etc/resolver configurator, so split
+			// traffic stays pointed at quad-100 instead of handing 2.2.2.2 to
+			// the OS directly (it may only be reachable via the tunnel). But
+			// quad-100 is still scoped to the match domains, so public names
+			// fall through to the OS resolver -- e.g. a DoH profile -- rather
+			// than being shadowed by a "." route. tailscale/corp#45534.
 			name: "routes-split-sandboxed-darwin",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2"),
@@ -467,12 +471,88 @@ func TestManager(t *testing.T) {
 			},
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
-				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "8.8.8.8",
 					"corp.com.", "2.2.2.2"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
+			// An ExtraRecord that dnsConfigForNetmap has paired with an
+			// authoritative (resolver-less) route is scoped like any other
+			// split domain, on every platform. Nothing here is Apple-specific:
+			// the darwin and linux variants below must agree.
+			name: "extra-record-routed-scopes-quad100",
+			in: Config{
+				Hosts:         hosts("extra.example.com.", "100.64.0.9"),
+				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", ""),
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers: mustIPs("8.8.8.8"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("corp.ts.net", "extra.example.com"),
+			},
+			rs: resolver.Config{
+				Hosts:        hosts("extra.example.com.", "100.64.0.9"),
+				LocalDomains: fqdns("corp.ts.net.", "extra.example.com."),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
+			name: "extra-record-routed-scopes-quad100-linux",
+			in: Config{
+				Hosts:         hosts("extra.example.com.", "100.64.0.9"),
+				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", ""),
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers: mustIPs("8.8.8.8"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("corp.ts.net", "extra.example.com"),
+			},
+			rs: resolver.Config{
+				Hosts:        hosts("extra.example.com.", "100.64.0.9"),
+				LocalDomains: fqdns("corp.ts.net.", "extra.example.com."),
+			},
+		},
+		{
+			// MagicDNS names exist but MagicDNS domain routing is off, so no
+			// route suffix covers them and there is nothing to scope to.
+			// quad-100 must stay primary or those names stop resolving --
+			// requiresPrimaryResolver. The DoH profile is still shadowed here;
+			// that is the cost of serving unrouted names.
+			name: "unrouted-magicdns-hosts-keep-quad100-primary",
+			in: Config{
+				Routes:                upstreams("corp.ts.net.", "1.2.3.4"),
+				SearchDomains:         fqdns("corp.ts.net"),
+				MagicDNSHostsUnrouted: true,
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers: mustIPs("192.168.1.1"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "192.168.1.1",
+					"corp.ts.net.", "1.2.3.4"),
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,

@@ -320,6 +320,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			routes[suffix] = resolvers
 		}
 	}
+	// LocalDomains is an unordered suffix set, but it comes out of map
+	// iteration; sort it so equal configs compare and log equal.
+	slices.Sort(rcfg.LocalDomains)
 
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
@@ -379,10 +382,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	isWindows := m.goos == "windows"
 	isIOS := m.goos == "ios"
 	supportsSplitDNS := m.os.SupportsSplitDNS()
-	// Sandboxed macOS builds use NetworkExtension DNS settings, not
-	// tailscaled's /etc/resolver configurator, so keep the Apple workaround.
-	appleSplitDNSWorkaround := isIOS || (m.goos == "darwin" && isSandboxedMacOS())
-	if supportsSplitDNS && !isWindows && !appleSplitDNSWorkaround {
+	isSandboxedApple := isIOS || (m.goos == "darwin" && isSandboxedMacOS())
+	// Apple platforms keep split-domain traffic pointed at quad-100 rather than
+	// handing the upstream resolvers to the OS directly, because those resolvers
+	// may only be reachable through the tunnel.
+	if supportsSplitDNS && !isWindows && !isSandboxedApple {
 		if srs := toIPsOnly(cfg.singleResolverSet()); len(srs) > 0 {
 			// Split DNS configuration requested, where all split domains
 			// go to the same resolvers. We can let the OS do it.
@@ -398,7 +402,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	rcfg.Routes = routes
 	ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 
-	if supportsSplitDNS && !appleSplitDNSWorkaround {
+	if supportsSplitDNS && !isIOS && !cfg.requiresPrimaryResolver() {
 		ocfg.MatchDomains = cfg.matchDomains()
 		return rcfg, ocfg, nil
 	}
