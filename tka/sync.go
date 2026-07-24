@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"tailscale.com/util/testenv"
 )
 
 // ErrNoIntersection is returned when a shared AUM could
@@ -256,4 +258,60 @@ func (a *Authority) MissingAUMs(storage Chonk, remoteOffer SyncOffer) ([]AUM, er
 	}
 
 	panic("unreachable")
+}
+
+// seedNode is an authority-chonk pair that can be seeded by [SeedAUMs].
+type seedNode struct {
+	authority *Authority
+	storage   Chonk
+}
+
+// CreateSeedNode creates a node for use with [SeedAUMs].
+func CreateSeedNode(t testenv.TB, authority *Authority, storage Chonk) seedNode {
+	t.Helper()
+	return seedNode{authority, storage}
+}
+
+// SeedAUMs generates many AUMs by repeatedly adding and removing keys
+// from the TKA.
+//
+// The AUMs are written to all the supplied nodes, so if you pass more
+// than one, you can build up a long sync history.
+//
+// This is only for use in testing.
+func SeedAUMs(t testenv.TB, count int, signer Signer, nodes ...seedNode) {
+	t.Helper()
+
+	if len(nodes) == 0 {
+		panic("called SeedAUMs without any nodes")
+	}
+	primaryNode := nodes[0]
+
+	// The key that we'll repeatedly add/remove in the TKA.
+	key := Key{Kind: Key25519, Public: []byte{1, 1, 1}, Votes: 1}
+
+	for i := 0; i < count/2; i++ {
+		for _, action := range []string{"add", "remove"} {
+			updater := primaryNode.authority.NewUpdater(signer)
+			if action == "add" {
+				if err := updater.AddKey(key); err != nil {
+					t.Fatalf("error from updater.AddKey: %v")
+				}
+			} else {
+				if err := updater.RemoveKey(key.MustID()); err != nil {
+					t.Fatalf("error from updater.RemoveKey: %v")
+				}
+			}
+			aum, err := updater.Finalize(primaryNode.storage)
+			if err != nil {
+				t.Fatalf("error from authority.Finalize: %v", err)
+			}
+
+			for _, n := range nodes {
+				if err := n.authority.Inform(n.storage, aum); err != nil {
+					t.Fatalf("error from authority.Inform: %v", err)
+				}
+			}
+		}
+	}
 }
