@@ -477,6 +477,18 @@ func (c *Direct) Close() error {
 	return nil
 }
 
+// takeNoiseClient removes and returns the current Noise client without closing
+// it. A concurrent getNoiseClient still creating a client is safe:
+// ts2021.NewClient does not dial, so it has no connection to the old path.
+func (c *Direct) takeNoiseClient() *ts2021.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	nc := c.noiseClient
+	c.noiseClient = nil
+	return nc
+}
+
 // SetHostinfo clones the provided Hostinfo and remembers it for the
 // next update. It reports whether the Hostinfo has changed.
 func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
