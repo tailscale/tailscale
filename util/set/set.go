@@ -10,6 +10,8 @@ import (
 	"maps"
 	"reflect"
 	"sort"
+
+	"tailscale.com/types/views"
 )
 
 // Set is a set of T.
@@ -24,6 +26,13 @@ func SetOf[T comparable](slice []T) Set[T] {
 func Of[T comparable](slice ...T) Set[T] {
 	s := make(Set[T])
 	s.AddSlice(slice)
+	return s
+}
+
+// OfSliceView returns a new set constructed from the elements in v.
+func OfSliceView[T comparable](v views.Slice[T]) Set[T] {
+	s := make(Set[T], v.Len())
+	s.AddSliceView(v)
 	return s
 }
 
@@ -52,6 +61,13 @@ func (s Set[T]) AddSeq(es iter.Seq[T]) {
 // AddSlice adds each element of es to s.
 func (s Set[T]) AddSlice(es []T) {
 	for _, e := range es {
+		s.Add(e)
+	}
+}
+
+// AddSliceView adds each element of v to s.
+func (s Set[T]) AddSliceView(v views.Slice[T]) {
+	for _, e := range v.All() {
 		s.Add(e)
 	}
 }
