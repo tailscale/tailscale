@@ -570,6 +570,13 @@ func (v HostinfoView) WireIngress() bool { return v.ж.WireIngress }
 // if the node has any funnel endpoint enabled
 func (v HostinfoView) IngressEnabled() bool { return v.ж.IngressEnabled }
 
+// FunnelAuthEnabled reports whether the node has any Funnel endpoint that
+// requires visitors to authenticate with Login With Tailscale
+// (ipn.HTTPHandler.Auth). It is sent to control so the admin console can
+// show each funnel's posture (authenticated vs. public). It is only
+// meaningful when IngressEnabled is true.
+func (v HostinfoView) FunnelAuthEnabled() bool { return v.ж.FunnelAuthEnabled }
+
 // AllowsUpdate reports that the node has opted in to
 // admin-console-driven remote updates and that the running binary
 // includes client update support (the feature/clientupdate package,
@@ -641,49 +648,50 @@ func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
-	IPNVersion      string
-	FrontendLogID   string
-	BackendLogID    string
-	OS              string
-	OSVersion       string
-	Container       opt.Bool
-	Env             string
-	Distro          string
-	DistroVersion   string
-	DistroCodeName  string
-	App             string
-	Desktop         opt.Bool
-	Package         string
-	DeviceModel     string
-	PushDeviceToken string
-	Hostname        string
-	ShieldsUp       bool
-	ShareeNode      bool
-	NoLogsNoSupport bool
-	RemoteConfig    bool
-	WireIngress     bool
-	IngressEnabled  bool
-	AllowsUpdate    bool
-	Machine         string
-	GoArch          string
-	GoArchVar       string
-	GoVersion       string
-	RoutableIPs     []netip.Prefix
-	RequestTags     []string
-	WoLMACs         []string
-	Services        []Service
-	NetInfo         *NetInfo
-	SSH_HostKeys    []string
-	Cloud           string
-	Userspace       opt.Bool
-	UserspaceRouter opt.Bool
-	AppConnector    opt.Bool
-	ServicesHash    string
-	PeerRelay       bool
-	ExitNodeID      StableNodeID
-	Location        *Location
-	TPM             *TPMInfo
-	StateEncrypted  opt.Bool
+	IPNVersion        string
+	FrontendLogID     string
+	BackendLogID      string
+	OS                string
+	OSVersion         string
+	Container         opt.Bool
+	Env               string
+	Distro            string
+	DistroVersion     string
+	DistroCodeName    string
+	App               string
+	Desktop           opt.Bool
+	Package           string
+	DeviceModel       string
+	PushDeviceToken   string
+	Hostname          string
+	ShieldsUp         bool
+	ShareeNode        bool
+	NoLogsNoSupport   bool
+	RemoteConfig      bool
+	WireIngress       bool
+	IngressEnabled    bool
+	FunnelAuthEnabled bool
+	AllowsUpdate      bool
+	Machine           string
+	GoArch            string
+	GoArchVar         string
+	GoVersion         string
+	RoutableIPs       []netip.Prefix
+	RequestTags       []string
+	WoLMACs           []string
+	Services          []Service
+	NetInfo           *NetInfo
+	SSH_HostKeys      []string
+	Cloud             string
+	Userspace         opt.Bool
+	UserspaceRouter   opt.Bool
+	AppConnector      opt.Bool
+	ServicesHash      string
+	PeerRelay         bool
+	ExitNodeID        StableNodeID
+	Location          *Location
+	TPM               *TPMInfo
+	StateEncrypted    opt.Bool
 }{})
 
 // View returns a read-only view of NetInfo.

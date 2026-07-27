@@ -7782,6 +7782,7 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 		sc                *ipn.ServeConfig
 		wantIngress       bool
 		wantWireIngress   bool
+		wantFunnelAuth    bool
 		wantControlUpdate bool
 	}{
 		{
@@ -7802,6 +7803,24 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 			},
 			wantIngress:       true,
 			wantWireIngress:   false, // implied by wantIngress
+			wantControlUpdate: true,
+		},
+		{
+			name: "empty_hostinfo_funnel_auth_enabled",
+			hi:   &tailcfg.Hostinfo{},
+			sc: &ipn.ServeConfig{
+				AllowFunnel: map[ipn.HostPort]bool{
+					"tailnet.xyz:443": true,
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"tailnet.xyz:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "http://127.0.0.1:3000", Auth: &ipn.FunnelAuth{Provider: "tailscale"}},
+					}},
+				},
+			},
+			wantIngress:       true,
+			wantWireIngress:   false, // implied by wantIngress
+			wantFunnelAuth:    true,
 			wantControlUpdate: true,
 		},
 		{
@@ -7955,6 +7974,9 @@ func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 				}
 				if tt.hi.WireIngress != tt.wantWireIngress {
 					t.Errorf("WireIngress = %v, want %v", tt.hi.WireIngress, tt.wantWireIngress)
+				}
+				if tt.hi.FunnelAuthEnabled != tt.wantFunnelAuth {
+					t.Errorf("FunnelAuthEnabled = %v, want %v", tt.hi.FunnelAuthEnabled, tt.wantFunnelAuth)
 				}
 				b.mu.Lock()
 				svcHash := vipServiceHash(b.logf, b.vipServicesFromPrefsLocked(prefs))

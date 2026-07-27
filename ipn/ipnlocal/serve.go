@@ -1631,6 +1631,14 @@ func (b *LocalBackend) hasIngressEnabledLocked() bool {
 	return b.serveConfig.Valid() && b.serveConfig.IsFunnelOn()
 }
 
+// hasFunnelAuthEnabledLocked reports whether any funnel-enabled endpoint
+// requires authentication. This bool is sent to control (in
+// Hostinfo.FunnelAuthEnabled) so the admin console can show each funnel's
+// posture (authenticated vs. public).
+func (b *LocalBackend) hasFunnelAuthEnabledLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.HasFunnelAuth()
+}
+
 // shouldWireInactiveIngressLocked reports whether the node is in a state where funnel is not actively enabled, but it
 // seems that it is intended to be used with funnel.
 func (b *LocalBackend) shouldWireInactiveIngressLocked() bool {
@@ -1769,6 +1777,14 @@ func maybeUpdateHostinfoFunnelLocked(b *LocalBackend, hi *tailcfg.Hostinfo, pref
 	if ie := b.hasIngressEnabledLocked(); hi.IngressEnabled != ie {
 		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
 		hi.IngressEnabled = ie
+		changed = true
+	}
+	// The Hostinfo.FunnelAuthEnabled field tells control whether any funnel
+	// endpoint requires authentication, so the admin console can show the
+	// funnel's posture (authenticated vs. public).
+	if fa := b.hasFunnelAuthEnabledLocked(); hi.FunnelAuthEnabled != fa {
+		b.logf("Hostinfo.FunnelAuthEnabled changed to %v", fa)
+		hi.FunnelAuthEnabled = fa
 		changed = true
 	}
 	// The Hostinfo.WireIngress field tells control whether the user intends

@@ -190,7 +190,8 @@ type CapabilityVersion int
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
 //   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
 //   - 143: 2026-07-22: Client correctly ignores conn25 node attributes when not enabled by environment variable
-const CurrentCapabilityVersion CapabilityVersion = 143
+//   - 144: 2026-07-27: Client sends Hostinfo.FunnelAuthEnabled to report authenticated Funnel posture (tailscale/corp#38806)
+const CurrentCapabilityVersion CapabilityVersion = 144
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -916,6 +917,13 @@ type Hostinfo struct {
 	// option is true.
 	WireIngress    bool `json:",omitzero"`
 	IngressEnabled bool `json:",omitzero"` // if the node has any funnel endpoint enabled
+
+	// FunnelAuthEnabled reports whether the node has any Funnel endpoint that
+	// requires visitors to authenticate with Login With Tailscale
+	// (ipn.HTTPHandler.Auth). It is sent to control so the admin console can
+	// show each funnel's posture (authenticated vs. public). It is only
+	// meaningful when IngressEnabled is true.
+	FunnelAuthEnabled bool `json:",omitzero"`
 
 	// AllowsUpdate reports that the node has opted in to
 	// admin-console-driven remote updates and that the running binary

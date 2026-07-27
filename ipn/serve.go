@@ -661,6 +661,40 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 	return false
 }
 
+// HasFunnelAuth reports whether any funnel-enabled web handler on this node
+// requires visitors to authenticate with Login With Tailscale (HTTPHandler.Auth
+// is set). It is used to report the node's authenticated-Funnel posture to
+// control (Hostinfo.FunnelAuthEnabled).
+func (v ServeConfigView) HasFunnelAuth() bool { return v.ж.HasFunnelAuth() }
+
+// HasFunnelAuth reports whether any funnel-enabled web handler requires
+// authentication. See [ServeConfigView.HasFunnelAuth].
+func (sc *ServeConfig) HasFunnelAuth() bool {
+	if sc == nil {
+		return false
+	}
+	for hp, on := range sc.AllowFunnel {
+		if !on {
+			continue
+		}
+		wsc, ok := sc.Web[hp]
+		if !ok {
+			continue
+		}
+		for _, h := range wsc.Handlers {
+			if h != nil && h.Auth != nil {
+				return true
+			}
+		}
+	}
+	for _, conf := range sc.Foreground {
+		if conf.HasFunnelAuth() {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckFunnelAccess checks whether Funnel access is allowed for the given node
 // and port.
 // It checks:

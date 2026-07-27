@@ -66,6 +66,66 @@ func TestFunnelAuthJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHasFunnelAuth(t *testing.T) {
+	authed := func() *HTTPHandler {
+		return &HTTPHandler{Proxy: "http://127.0.0.1:3000", Auth: &FunnelAuth{Provider: "tailscale"}}
+	}
+	tests := []struct {
+		name string
+		sc   *ServeConfig
+		want bool
+	}{
+		{name: "nil", sc: nil, want: false},
+		{name: "empty", sc: &ServeConfig{}, want: false},
+		{
+			name: "funnel on but no auth",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": true},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}}},
+			},
+			want: false,
+		},
+		{
+			name: "auth but funnel off",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": false},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+			},
+			want: false,
+		},
+		{
+			name: "auth and funnel on",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": true},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+			},
+			want: true,
+		},
+		{
+			name: "auth in foreground config",
+			sc: &ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"sess": {
+						AllowFunnel: map[HostPort]bool{"h:443": true},
+						Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sc.HasFunnelAuth(); got != tt.want {
+				t.Errorf("HasFunnelAuth() = %v; want %v", got, tt.want)
+			}
+			if got := tt.sc.View().HasFunnelAuth(); got != tt.want {
+				t.Errorf("View().HasFunnelAuth() = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCheckFunnelAccess(t *testing.T) {
 	caps := func(c ...tailcfg.NodeCapability) []tailcfg.NodeCapability { return c }
 	const portAttr tailcfg.NodeCapability = "https://tailscale.com/cap/funnel-ports?ports=443,8080-8090,8443,"
