@@ -18,7 +18,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/peterbourgon/ff/v3/ffcli"
 
-	"tailscale.com/cmd/tailscale/cli/jsonoutput"
+	"tailscale.com/cmd/tailscale/jsonoutput"
 	"tailscale.com/cmd/tailscale/tsroutecheckjsonv0"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tstime"
