@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=LoginProfile,Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=LoginProfile,Prefs,ServeConfig,ServiceConfig,TCPPortHandler,HTTPHandler,FunnelAuth,WebServerConfig
 
 // View returns a read-only view of LoginProfile.
 func (p *LoginProfile) View() LoginProfileView {
@@ -945,6 +945,14 @@ func (v HTTPHandlerView) AcceptAppCaps() views.Slice[tailcfg.PeerCapability] {
 //   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
 func (v HTTPHandlerView) Redirect() string { return v.ж.Redirect }
 
+// Auth, if non-nil, configures authentication for Funnel requests to
+// this handler. Visitors from the public internet are redirected to
+// Login With Tailscale and admitted only with a valid session,
+// optionally filtered by Auth.Allow. Nil means unauthenticated
+// (the default; today's behavior). It has no effect on requests
+// arriving over the tailnet.
+func (v HTTPHandlerView) Auth() FunnelAuthView { return v.ж.Auth.View() }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Path          string
@@ -952,6 +960,96 @@ var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Text          string
 	AcceptAppCaps []tailcfg.PeerCapability
 	Redirect      string
+	Auth          *FunnelAuth
+}{})
+
+// View returns a read-only view of FunnelAuth.
+func (p *FunnelAuth) View() FunnelAuthView {
+	return FunnelAuthView{ж: p}
+}
+
+// FunnelAuthView provides a read-only view over FunnelAuth.
+//
+// Its methods should only be called if `Valid()` returns true.
+type FunnelAuthView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *FunnelAuth
+}
+
+// Valid reports whether v's underlying value is non-nil.
+func (v FunnelAuthView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v FunnelAuthView) AsStruct() *FunnelAuth {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+// MarshalJSON implements [jsonv1.Marshaler].
+func (v FunnelAuthView) MarshalJSON() ([]byte, error) {
+	return jsonv1.Marshal(v.ж)
+}
+
+// MarshalJSONTo implements [jsonv2.MarshalerTo].
+func (v FunnelAuthView) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, v.ж)
+}
+
+// UnmarshalJSON implements [jsonv1.Unmarshaler].
+func (v *FunnelAuthView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x FunnelAuth
+	if err := jsonv1.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// UnmarshalJSONFrom implements [jsonv2.UnmarshalerFrom].
+func (v *FunnelAuthView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x FunnelAuth
+	if err := jsonv2.UnmarshalDecode(dec, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Provider is the identity provider. v1 supports only "tailscale".
+func (v FunnelAuthView) Provider() string { return v.ж.Provider }
+
+// Allow is an optional allowlist. Empty = any Tailscale user.
+// Each entry is one of:
+//
+//	"alice@example.com"   exact email
+//	"*@example.com"       email domain (requires a verified email)
+//	"tailnet:example.com" a specific tailnet
+func (v FunnelAuthView) Allow() views.Slice[string] { return views.SliceOf(v.ж.Allow) }
+
+// SessionTTL is how long a browser session cookie is valid.
+// Zero means a default of 12 hours.
+func (v FunnelAuthView) SessionTTL() time.Duration { return v.ж.SessionTTL }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _FunnelAuthViewNeedsRegeneration = FunnelAuth(struct {
+	Provider   string
+	Allow      []string
+	SessionTTL time.Duration
 }{})
 
 // View returns a read-only view of WebServerConfig.

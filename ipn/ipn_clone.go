@@ -239,6 +239,7 @@ func (src *HTTPHandler) Clone() *HTTPHandler {
 	dst := new(HTTPHandler)
 	*dst = *src
 	dst.AcceptAppCaps = append(src.AcceptAppCaps[:0:0], src.AcceptAppCaps...)
+	dst.Auth = src.Auth.Clone()
 	return dst
 }
 
@@ -249,6 +250,26 @@ var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
 	Text          string
 	AcceptAppCaps []tailcfg.PeerCapability
 	Redirect      string
+	Auth          *FunnelAuth
+}{})
+
+// Clone makes a deep copy of FunnelAuth.
+// The result aliases no memory with the original.
+func (src *FunnelAuth) Clone() *FunnelAuth {
+	if src == nil {
+		return nil
+	}
+	dst := new(FunnelAuth)
+	*dst = *src
+	dst.Allow = append(src.Allow[:0:0], src.Allow...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _FunnelAuthCloneNeedsRegeneration = FunnelAuth(struct {
+	Provider   string
+	Allow      []string
+	SessionTTL time.Duration
 }{})
 
 // Clone makes a deep copy of WebServerConfig.
