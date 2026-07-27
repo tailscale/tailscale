@@ -6,15 +6,19 @@
 package tailssh
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os/exec"
 	"os/user"
+	"strings"
 	"testing"
+	"time"
 
 	gliderssh "github.com/tailscale/gliderssh"
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -30,10 +34,21 @@ import (
 // the system ssh client.
 type testSSHHarness struct {
 	user    *user.User
+	addr    string // host:port of the local listener
 	execSSH func(args ...string) *exec.Cmd
 }
 
 func newTestSSHHarness(t *testing.T) *testSSHHarness {
+	t.Helper()
+	return newTestSSHHarnessWithShell(t, "")
+}
+
+// newTestSSHHarnessWithShell is newTestSSHHarness with the session
+// user's login shell pinned to shell (empty = the real login shell).
+// Tests that depend on exact process/fd structure use /bin/sh: some
+// real login shells (fish) fork -c commands and stay resident, which
+// hides pipe EOFs and changes who the direct child is.
+func newTestSSHHarnessWithShell(t *testing.T, shell string) *testSSHHarness {
 	t.Helper()
 	logf := tstest.WhileTestRunningLogger(t)
 	sys := tsd.NewSystem()
@@ -64,6 +79,9 @@ func newTestSSHHarness(t *testing.T) *testSSHHarness {
 	um, err := userLookup(u.Username)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if shell != "" {
+		um.loginShellCached = shell
 	}
 	sc.localUser = um
 	sc.info = &sshConnInfo{
@@ -111,7 +129,76 @@ func newTestSSHHarness(t *testing.T) *testSSHHarness {
 		return cmd
 	}
 
-	return &testSSHHarness{user: u, execSSH: execSSH}
+	return &testSSHHarness{user: u, addr: ln.Addr().String(), execSSH: execSSH}
+}
+
+// gatedWriter blocks its first Write until gate is closed, then
+// writes everything to buf. Plugged in as the SSH client's stderr
+// sink it stops the client from consuming extended data, which stops
+// window adjustments, which exhausts the server's 2 MiB send window:
+// real-network backpressure, produced deterministically.
+type gatedWriter struct {
+	gate <-chan struct{}
+	buf  bytes.Buffer
+}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	<-w.gate
+	return w.buf.Write(p)
+}
+
+// TestStderrTailNotTruncated asserts the full stderr stream reaches
+// the client when the process exits while stderr is still in flight.
+// The client withholds window credit (gatedWriter) so the server's
+// stderr copier is stuck mid-backlog when the process exits and the
+// stdout pipe EOFs. A CHANNEL_EOF sent at stdout-EOF, while stderr is
+// still draining, makes every later stderr write fail and silently
+// drops the tail; CHANNEL_EOF must wait for both streams.
+func TestStderrTailNotTruncated(t *testing.T) {
+	h := newTestSSHHarnessWithShell(t, "/bin/sh")
+
+	cl, err := ssh.Dial("tcp", h.addr, &ssh.ClientConfig{
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	s, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	gate := make(chan struct{})
+	stderr := &gatedWriter{gate: gate}
+	var stdout bytes.Buffer
+	s.Stdout = &stdout
+	s.Stderr = stderr
+
+	// 33 * 64 KiB = the client's 2 MiB channel window plus one pipe
+	// buffer: enough that the window runs dry and the final stderr
+	// chunks (and TAIL) are still server-side when the shell exits,
+	// yet little enough that the shell doesn't block before exiting.
+	const cmd = `dd if=/dev/zero bs=65536 count=33 1>&2 2>/dev/null; echo TAIL >&2; exit 7`
+
+	// Release the client's stderr sink only after the exit (and, with
+	// the bug, the premature CHANNEL_EOF) has happened server-side.
+	timer := time.AfterFunc(750*time.Millisecond, func() { close(gate) })
+	defer timer.Stop()
+
+	err = s.Run(cmd)
+	var ee *ssh.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("want *ssh.ExitError, got %T: %v", err, err)
+	}
+	if got := ee.ExitStatus(); got != 7 {
+		t.Errorf("exit status = %d, want 7", got)
+	}
+	if got := stderr.buf.String(); !strings.Contains(got, "TAIL") {
+		t.Errorf("stderr tail dropped: got %d of %d bytes, missing final TAIL marker", len(got), 33*65536+len("TAIL\n"))
+	}
 }
 
 // TestExitCodePassthrough is the in-process, fast-feedback companion
