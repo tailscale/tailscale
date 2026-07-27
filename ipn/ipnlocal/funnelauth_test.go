@@ -10,13 +10,19 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/types/key"
 )
 
@@ -312,6 +318,259 @@ func TestFunnelRequestURLPinsHost(t *testing.T) {
 	got2 := funnelAuthAppendLoopParam("https://blog.ts.net/page?x=1", "blog.ts.net")
 	if !strings.HasPrefix(got2, "https://blog.ts.net/page") {
 		t.Errorf("same-host URL not preserved: %q", got2)
+	}
+}
+
+// Manual end-to-end verification (requires a dev control plane seeded with the
+// "tailscale-funnel" OIDC client and the oidc-authorization-flow feature flag;
+// see the cross-repo contract). The automated tests above cover the node-side
+// gate, cookie, JWKS/JWT verification, and allowlist in isolation; a full
+// browser round trip needs the corp side live:
+//
+//  1. On a funnel-capable node: `tailscale funnel --auth 3000` (serve any local
+//     app on :3000). Confirm status shows "auth: Login With Tailscale".
+//  2. From a browser with no Tailscale installed, open https://<node>.ts.net/.
+//     Expect a 302 to control's /a/oauth_authorize, sign in, and land back on
+//     the app; the URL briefly carries ts_funnel_authed=1.
+//  3. Confirm the backend app receives Tailscale-User-Login / -Email headers.
+//  4. Reload: no re-auth (the ts_funnel_session cookie is reused). Open a fresh
+//     browser / clear cookies: re-auth is required (stateless session).
+//  5. `tailscale funnel --auth --allow=you@example.com 3000`: allowed user still
+//     works; a different Tailscale account gets a clean 403.
+//  6. Visit https://<node>.ts.net/.well-known/tailscale/funnel-auth/logout: the
+//     session cookie is cleared and the next request re-authenticates.
+//  7. Regression: `tailscale funnel 3000` (no --auth) serves with no redirect;
+//     a raw-TCP funnel (`tailscale funnel --tcp=...`) is unaffected.
+
+// funnelReq builds a Funnel request to the given path for host example.ts.net,
+// with an optional session cookie value.
+func funnelReq(t *testing.T, path, cookie string) *http.Request {
+	t.Helper()
+	u, err := url.Parse("https://example.ts.net" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &http.Request{
+		Method: "GET",
+		URL:    u,
+		Host:   "example.ts.net",
+		Header: make(http.Header),
+		TLS:    &tls.ConnectionState{ServerName: "example.ts.net"},
+	}
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: funnelSessionCookieName, Value: cookie})
+	}
+	req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+		Funnel:   &funnelFlow{Host: "example.ts.net"},
+		SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+		DestPort: 443,
+	}))
+	return req
+}
+
+// TestFunnelGateEndToEnd exercises the security-critical gate paths through
+// serveWebHandler: unauthenticated bounce, valid-session admission, reserved
+// path interception (vs. app routes), allowlist rejection, and the
+// redirect-loop guard.
+func TestFunnelGateEndToEnd(t *testing.T) {
+	backendHit := false
+	testServ := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHit = true
+		w.Header().Set("X-Backend", "1")
+		w.Header().Set("Echo-User-Login", r.Header.Get("Tailscale-User-Login"))
+		w.Header().Set("Echo-User-Email", r.Header.Get("Tailscale-User-Email"))
+	}))
+	defer testServ.Close()
+
+	b := newTestBackend(t)
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {
+					Proxy: testServ.URL,
+					Auth:  &ipn.FunnelAuth{Provider: "tailscale", Allow: []string{"alice@example.com"}},
+				},
+				// An app route that lives under the reserved prefix must never
+				// be reachable; the interceptor owns the whole prefix.
+				funnelAuthReservedPrefix + "sneaky": {Proxy: testServ.URL},
+			}},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{"example.ts.net:443": true},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := b.funnelAuthKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mint := func(sess *funnelAuthSession) string {
+		v, err := keys.sealFunnelSession(sess)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	now := time.Now()
+
+	t.Run("no session bounces to control authorize", func(t *testing.T) {
+		backendHit = false
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, "/private", ""))
+		res := w.Result()
+		if res.StatusCode != http.StatusFound {
+			t.Fatalf("status = %d; want 302", res.StatusCode)
+		}
+		loc := res.Header.Get("Location")
+		if !strings.Contains(loc, "/a/oauth_authorize") ||
+			!strings.Contains(loc, "client_id=tailscale-funnel") ||
+			!strings.Contains(loc, "code_challenge_method=S256") {
+			t.Errorf("unexpected authorize redirect: %s", loc)
+		}
+		if backendHit {
+			t.Error("backend must not be hit for an unauthenticated request")
+		}
+		// A state cookie must be set to carry CSRF.
+		if len(res.Cookies()) == 0 {
+			t.Error("expected a state cookie to be set")
+		}
+	})
+
+	t.Run("valid allowed session is admitted and identity forwarded", func(t *testing.T) {
+		backendHit = false
+		tok := mint(&funnelAuthSession{
+			Sub: "u1", Email: "alice@example.com", EmailVerified: true,
+			Name: "Alice", FQDN: "example.ts.net", Expiry: now.Add(time.Hour).Unix(),
+		})
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, "/private", tok))
+		res := w.Result()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d; want 200", res.StatusCode)
+		}
+		if !backendHit {
+			t.Error("backend should have been reached for a valid session")
+		}
+		if got := res.Header.Get("Echo-User-Login"); got != "alice@example.com" {
+			t.Errorf("forwarded Tailscale-User-Login = %q; want alice@example.com", got)
+		}
+		if got := res.Header.Get("Echo-User-Email"); got != "alice@example.com" {
+			t.Errorf("forwarded Tailscale-User-Email = %q; want alice@example.com", got)
+		}
+	})
+
+	t.Run("valid session not on allowlist is 403", func(t *testing.T) {
+		backendHit = false
+		tok := mint(&funnelAuthSession{
+			Sub: "u2", Email: "mallory@evil.com", EmailVerified: true,
+			FQDN: "example.ts.net", Expiry: now.Add(time.Hour).Unix(),
+		})
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, "/private", tok))
+		if w.Result().StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d; want 403", w.Result().StatusCode)
+		}
+		if backendHit {
+			t.Error("backend must not be reached for a disallowed user")
+		}
+	})
+
+	t.Run("expired session bounces", func(t *testing.T) {
+		tok := mint(&funnelAuthSession{
+			Sub: "u1", Email: "alice@example.com", EmailVerified: true,
+			FQDN: "example.ts.net", Expiry: now.Add(-time.Hour).Unix(),
+		})
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, "/private", tok))
+		if w.Result().StatusCode != http.StatusFound {
+			t.Fatalf("status = %d; want 302 (re-auth)", w.Result().StatusCode)
+		}
+	})
+
+	t.Run("reserved logout path is intercepted, not proxied", func(t *testing.T) {
+		backendHit = false
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, funnelAuthLogoutPath, ""))
+		res := w.Result()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("logout status = %d; want 200", res.StatusCode)
+		}
+		if backendHit {
+			t.Error("logout must be handled by the node, not proxied to the app")
+		}
+		// Logout must clear the session cookie.
+		var cleared bool
+		for _, c := range res.Cookies() {
+			if c.Name == funnelSessionCookieName && c.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		if !cleared {
+			t.Error("logout did not clear the session cookie")
+		}
+	})
+
+	t.Run("unknown reserved path is 404, never proxied", func(t *testing.T) {
+		backendHit = false
+		w := httptest.NewRecorder()
+		b.serveWebHandler(w, funnelReq(t, funnelAuthReservedPrefix+"sneaky", ""))
+		if w.Result().StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d; want 404 for reserved-prefix app route", w.Result().StatusCode)
+		}
+		if backendHit {
+			t.Error("an app route under the reserved prefix must not be reachable")
+		}
+	})
+
+	t.Run("redirect loop guard returns error, not another bounce", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		// Came back from a login (loop param set) but still no cookie.
+		b.serveWebHandler(w, funnelReq(t, "/private?"+funnelAuthLoopParam+"=1", ""))
+		if w.Result().StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d; want 403 (loop guard)", w.Result().StatusCode)
+		}
+	})
+}
+
+// TestFunnelUnauthenticatedUnchanged verifies that a Funnel handler without
+// Auth is served exactly as before (no gate, no redirect, backend reached).
+func TestFunnelUnauthenticatedUnchanged(t *testing.T) {
+	backendHit := false
+	testServ := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHit = true
+		// The funnel request header must still be set; the auth identity
+		// headers must not be present for unauthenticated funnel.
+		w.Header().Set("Echo-Funnel", r.Header.Get("Tailscale-Funnel-Request"))
+		w.Header().Set("Echo-User-Login", r.Header.Get("Tailscale-User-Login"))
+	}))
+	defer testServ.Close()
+
+	b := newTestBackend(t)
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {Proxy: testServ.URL}, // no Auth
+			}},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{"example.ts.net:443": true},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	b.serveWebHandler(w, funnelReq(t, "/anything", ""))
+	res := w.Result()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", res.StatusCode)
+	}
+	if !backendHit {
+		t.Fatal("backend should be reached directly for unauthenticated funnel")
+	}
+	if got := res.Header.Get("Echo-Funnel"); got != "?1" {
+		t.Errorf("Tailscale-Funnel-Request = %q; want ?1", got)
+	}
+	if got := res.Header.Get("Echo-User-Login"); got != "" {
+		t.Errorf("unauthenticated funnel unexpectedly forwarded identity: %q", got)
 	}
 }
 

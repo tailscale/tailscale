@@ -808,9 +808,9 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 	return <-errc
 }
 
-func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
-	var z ipn.HTTPHandlerView // zero value
-
+// webServerConfigForRequest resolves the WebServerConfigView serving r's host
+// and port, applying the same hostname normalization getServeHandler uses.
+func (b *LocalBackend) webServerConfigForRequest(r *http.Request) (wsc ipn.WebServerConfigView, ok bool) {
 	hostname := r.Host
 	if r.TLS == nil {
 		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
@@ -823,13 +823,31 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	} else {
 		hostname = r.TLS.ServerName
 	}
-
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
 	if !ok {
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
-		return z, "", false
+		return wsc, false
 	}
-	wsc, ok := b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
+	return b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
+}
+
+// funnelHostHasAuth reports whether any handler on wsc has authenticated Funnel
+// configured. When true, the whole /.well-known/tailscale/funnel-auth/ prefix
+// is owned by the node for that host and must never fall through to an app
+// route, even one whose own handler has no Auth.
+func funnelHostHasAuth(wsc ipn.WebServerConfigView) (auth ipn.FunnelAuthView, ok bool) {
+	for _, h := range wsc.Handlers().All() {
+		if a := h.Auth(); a.Valid() {
+			return a, true
+		}
+	}
+	return auth, false
+}
+
+func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
+	var z ipn.HTTPHandlerView // zero value
+
+	wsc, ok := b.webServerConfigForRequest(r)
 	if !ok {
 		return z, "", false
 	}
@@ -1192,26 +1210,41 @@ func parseRedirectWithCode(redirect string) (code int, url string) {
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
+	// Authenticated Funnel: reserved-path interception. If this is a Funnel
+	// request to a host that has any Auth-configured handler, the whole
+	// /.well-known/tailscale/funnel-auth/ prefix belongs to the node. Handling
+	// it here — before mount-point matching — means the OIDC callback and
+	// logout endpoints can never be shadowed by, and a reserved-prefix app
+	// route can never leak to, the backend. Unauthenticated funnel and tailnet
+	// traffic are wholly unaffected.
+	funnelReq := false
+	if sctx, ok := serveHTTPContextKey.ValueOk(r.Context()); ok && sctx.Funnel != nil {
+		funnelReq = true
+		if wsc, ok := b.webServerConfigForRequest(r); ok {
+			if auth, ok := funnelHostHasAuth(wsc); ok {
+				if b.handleFunnelAuthReserved(w, r, auth) {
+					return
+				}
+			}
+		}
+	}
+
 	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	// Authenticated Funnel gate. Only for Funnel requests to a handler with
-	// Auth configured; unauthenticated funnel and tailnet traffic are wholly
-	// unaffected (byte-for-byte identical to before). The reserved
-	// /.well-known/tailscale/funnel-auth/* endpoints are handled here, before
-	// any user mount point, so they can never be shadowed by an app route.
-	if sctx, ok := serveHTTPContextKey.ValueOk(r.Context()); ok && sctx.Funnel != nil {
+
+	// Authenticated Funnel gate, per matched mount point (Auth is per-mount,
+	// spec §6.3). Runs only for Funnel requests to a handler with Auth set.
+	if funnelReq {
 		if auth := h.Auth(); auth.Valid() {
-			if b.handleFunnelAuthReserved(w, r, auth) {
-				return
-			}
 			if !b.funnelAuthGate(w, r, auth) {
 				return
 			}
 		}
 	}
+
 	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, s)
