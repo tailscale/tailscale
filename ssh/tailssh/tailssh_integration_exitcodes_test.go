@@ -18,6 +18,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,5 +422,69 @@ func TestLocalUnixForwardingHalfClose(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatalf("timed out waiting for response after half-close; bicopy may be tearing down the channel prematurely")
+	}
+}
+
+// TestIntegrationSIGHUP asserts session teardown delivers SIGHUP (not
+// SIGKILL): a bash trap writes a marker file, then we tear down and
+// check the file appeared.
+func TestIntegrationSIGHUP(t *testing.T) {
+	debugTest.Store(true)
+	t.Cleanup(func() { debugTest.Store(false) })
+
+	// t.TempDir creates /tmp/<TestName>/NNN, both root-owned, with the
+	// parent at 0700 and the leaf at 0755. The incubator drops
+	// privileges before running the trap, so the > redirect needs the
+	// dropped-privilege shell to traverse the parent and write the
+	// leaf. Open both up; cleanup still runs via t.TempDir.
+	markerDir := t.TempDir()
+	if err := os.Chmod(filepath.Dir(markerDir), 0o755); err != nil {
+		t.Fatalf("chmod parent: %v", err)
+	}
+	if err := os.Chmod(markerDir, 0o777); err != nil {
+		t.Fatalf("chmod marker dir: %v", err)
+	}
+	readyFile := filepath.Join(markerDir, "ready")
+	markerFile := filepath.Join(markerDir, "sighup-received")
+
+	cl := testClient(t, false, false)
+	s, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Touch readyFile after installing the trap so the test can wait
+	// on a real condition (trap installed) instead of guessing with a
+	// wall-clock sleep.
+	cmd := fmt.Sprintf(
+		`trap 'echo received > %s; exit 0' HUP; : > %s; sleep 30`,
+		markerFile, readyFile,
+	)
+	if err := s.Start(cmd); err != nil {
+		t.Fatalf("failed to start command: %v", err)
+	}
+
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		_, err := os.Stat(readyFile)
+		return err
+	}); err != nil {
+		t.Fatalf("trap never installed: %v", err)
+	}
+
+	s.Close()
+	cl.Close()
+
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		_, err := os.Stat(markerFile)
+		return err
+	}); err != nil {
+		t.Fatalf("process did not receive SIGHUP: %v", err)
+	}
+	data, err := os.ReadFile(markerFile)
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "received" {
+		t.Fatalf("marker content = %q, want %q", got, "received")
 	}
 }
