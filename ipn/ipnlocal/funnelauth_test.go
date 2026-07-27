@@ -6,6 +6,14 @@
 package ipnlocal
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +180,138 @@ func TestFunnelAuthAllowed(t *testing.T) {
 					tt.allow, tt.email, tt.emailVerified, tt.tailnet, got, tt.want)
 			}
 		})
+	}
+}
+
+// signTestRS256JWT builds a compact RS256 JWS over claims signed by priv,
+// with the given kid.
+func signTestRS256JWT(t *testing.T, priv *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	b64 := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+	hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": kid})
+	payload, _ := json.Marshal(claims)
+	signing := b64(hdr) + "." + b64(payload)
+	sum := sha256.Sum256([]byte(signing))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signing + "." + b64(sig)
+}
+
+// jwksJSONForKey returns a JWKS document containing priv's public key.
+func jwksJSONForKey(t *testing.T, priv *rsa.PrivateKey, kid string) []byte {
+	t.Helper()
+	pub := priv.Public().(*rsa.PublicKey)
+	eb := big.NewInt(int64(pub.E)).Bytes()
+	doc := map[string]any{
+		"keys": []map[string]string{{
+			"kty": "RSA",
+			"kid": kid,
+			"alg": "RS256",
+			"use": "sig",
+			"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+			"e":   base64.RawURLEncoding.EncodeToString(eb),
+		}},
+	}
+	b, _ := json.Marshal(doc)
+	return b
+}
+
+func TestParseJWKSAndVerifyRS256JWT(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const kid = "test-key-1"
+	keys, err := parseJWKS(jwksJSONForKey(t, priv, kid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := keys[kid]; !ok {
+		t.Fatalf("parsed JWKS missing kid %q", kid)
+	}
+
+	keyFn := func(k string) (*rsa.PublicKey, error) {
+		pk, ok := keys[k]
+		if !ok {
+			t.Fatalf("unknown kid %q", k)
+		}
+		return pk, nil
+	}
+
+	tok := signTestRS256JWT(t, priv, kid, map[string]any{"sub": "u1", "email": "a@b.com"})
+	_, payload, err := verifyRS256JWT(tok, keyFn)
+	if err != nil {
+		t.Fatalf("verify valid token: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["sub"] != "u1" {
+		t.Errorf("sub = %v; want u1", got["sub"])
+	}
+
+	// Tampered payload must fail signature verification.
+	parts := strings.Split(tok, ".")
+	badPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"attacker"}`))
+	tampered := parts[0] + "." + badPayload + "." + parts[2]
+	if _, _, err := verifyRS256JWT(tampered, keyFn); err == nil {
+		t.Error("expected tampered token to fail verification")
+	}
+
+	// A token signed by a different key must fail.
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	tokOther := signTestRS256JWT(t, other, kid, map[string]any{"sub": "u1"})
+	if _, _, err := verifyRS256JWT(tokOther, keyFn); err == nil {
+		t.Error("expected token signed by wrong key to fail verification")
+	}
+
+	// A non-RS256 alg must be rejected (algorithm-confusion guard).
+	noneHdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","kid":"test-key-1"}`))
+	noneTok := noneHdr + "." + base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"x"}`)) + "."
+	if _, _, err := verifyRS256JWT(noneTok, keyFn); err == nil {
+		t.Error("expected alg=none token to be rejected")
+	}
+}
+
+func TestAudienceClaimUnmarshal(t *testing.T) {
+	var a audienceClaim
+	if err := json.Unmarshal([]byte(`"one.ts.net"`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if !a.contains("one.ts.net") || a.contains("other") {
+		t.Errorf("string aud parsed wrong: %v", a)
+	}
+	var b audienceClaim
+	if err := json.Unmarshal([]byte(`["a.ts.net","b.ts.net"]`), &b); err != nil {
+		t.Fatal(err)
+	}
+	if !b.contains("a.ts.net") || !b.contains("b.ts.net") {
+		t.Errorf("array aud parsed wrong: %v", b)
+	}
+}
+
+func TestFunnelPKCEChallenge(t *testing.T) {
+	// Known RFC 7636 appendix B test vector.
+	const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	const wantChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	if got := funnelPKCEChallenge(verifier); got != wantChallenge {
+		t.Errorf("funnelPKCEChallenge = %q; want %q", got, wantChallenge)
+	}
+}
+
+func TestFunnelRequestURLPinsHost(t *testing.T) {
+	// funnelAuthAppendLoopParam must always re-pin to the funnel FQDN so a
+	// tampered original URL cannot become an open redirect off this node.
+	got := funnelAuthAppendLoopParam("https://evil.example.com/phish", "blog.ts.net")
+	if !strings.HasPrefix(got, "https://blog.ts.net/") {
+		t.Errorf("loop param URL = %q; want it pinned to blog.ts.net", got)
+	}
+	got2 := funnelAuthAppendLoopParam("https://blog.ts.net/page?x=1", "blog.ts.net")
+	if !strings.HasPrefix(got2, "https://blog.ts.net/page") {
+		t.Errorf("same-host URL not preserved: %q", got2)
 	}
 }
 

@@ -239,6 +239,7 @@ type LocalBackend struct {
 	e                        wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	store                    ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
 	dialer                   *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
+	funnelJWKS               funnelJWKSCache // control's JWKS for authenticated Funnel id_token verification
 	pushDeviceToken          syncs.AtomicValue[string]
 	backendLogID             logid.PublicID // or zero value if logging not in use
 	unregisterSysPolicyWatch func()
@@ -466,6 +467,18 @@ type LocalBackend struct {
 	// It is used to prevent goroutines from piling up to do the same
 	// work of [LocalBackend.authReconfigLocked].
 	existsPendingAuthReconfig atomic.Bool
+}
+
+// funnelJWKSCache caches the raw JWKS JSON that control publishes for
+// verifying authenticated-Funnel id_tokens. The cached value is the raw bytes
+// (rather than a parsed jose type) so this struct uses only stdlib field types
+// and the ts_omit_serve build, which excludes the serve/funnel-auth code, still
+// compiles. The parsing and use live in funnelauth_gate.go.
+type funnelJWKSCache struct {
+	mu      sync.Mutex
+	raw     []byte    // raw JWKS JSON, or nil if never fetched
+	fetched time.Time // when raw was fetched
+	url     string    // JWKS URL raw was fetched from
 }
 
 // SetHardwareAttested enables hardware attestation key signatures in map

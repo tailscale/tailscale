@@ -93,6 +93,13 @@ type serveHTTPContext struct {
 	Funnel *funnelFlow
 	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
 	AppCapabilities views.Slice[tailcfg.PeerCapability]
+
+	// FunnelAuthSession, if non-nil, is the authenticated visitor identity
+	// for an authenticated Funnel request. It is set by funnelAuthGate once a
+	// request passes the session check, and read by addTailscaleIdentityHeaders
+	// to forward the visitor's identity to the backend. Nil for
+	// unauthenticated funnel and for tailnet traffic.
+	FunnelAuthSession *funnelAuthSession
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -1078,6 +1085,7 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
 	r.Out.Header.Del("Tailscale-User-Login")
+	r.Out.Header.Del("Tailscale-User-Email")
 	r.Out.Header.Del("Tailscale-User-Name")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
 	r.Out.Header.Del("Tailscale-Funnel-Request")
@@ -1089,6 +1097,19 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	}
 	if c.Funnel != nil {
 		r.Out.Header.Set("Tailscale-Funnel-Request", "?1")
+		// For authenticated Funnel, forward the verified visitor identity so
+		// the backend app knows who is calling. Only set when a session
+		// passed the gate; unauthenticated Funnel forwards nothing here.
+		if s := c.FunnelAuthSession; s != nil {
+			if s.Email != "" {
+				r.Out.Header.Set("Tailscale-User-Login", encTailscaleHeaderValue(s.Email))
+				r.Out.Header.Set("Tailscale-User-Email", encTailscaleHeaderValue(s.Email))
+			}
+			if s.Name != "" {
+				r.Out.Header.Set("Tailscale-User-Name", encTailscaleHeaderValue(s.Name))
+			}
+			r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
+		}
 		return
 	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
@@ -1175,6 +1196,21 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		http.NotFound(w, r)
 		return
+	}
+	// Authenticated Funnel gate. Only for Funnel requests to a handler with
+	// Auth configured; unauthenticated funnel and tailnet traffic are wholly
+	// unaffected (byte-for-byte identical to before). The reserved
+	// /.well-known/tailscale/funnel-auth/* endpoints are handled here, before
+	// any user mount point, so they can never be shadowed by an app route.
+	if sctx, ok := serveHTTPContextKey.ValueOk(r.Context()); ok && sctx.Funnel != nil {
+		if auth := h.Auth(); auth.Valid() {
+			if b.handleFunnelAuthReserved(w, r, auth) {
+				return
+			}
+			if !b.funnelAuthGate(w, r, auth) {
+				return
+			}
+		}
 	}
 	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
