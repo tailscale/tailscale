@@ -91,6 +91,9 @@ func (v PersistView) PrivateNodeKey() key.NodePrivate { return v.ж.PrivateNodeK
 // needed to request key rotation
 func (v PersistView) OldPrivateNodeKey() key.NodePrivate   { return v.ж.OldPrivateNodeKey }
 func (v PersistView) UserProfile() tailcfg.UserProfileView { return v.ж.UserProfile.View() }
+
+// NetworkLockKey is the node's Tailnet Lock private key.
+// "Network Lock" was the pre-release name for Tailnet Lock.
 func (v PersistView) NetworkLockKey() key.NLPrivate        { return v.ж.NetworkLockKey }
 func (v PersistView) NodeID() tailcfg.StableNodeID         { return v.ж.NodeID }
 func (v PersistView) AttestationKey() tailcfg.StableNodeID { panic("unsupported") }
