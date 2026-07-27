@@ -24,9 +24,13 @@ type Persist struct {
 	PrivateNodeKey    key.NodePrivate
 	OldPrivateNodeKey key.NodePrivate // needed to request key rotation
 	UserProfile       tailcfg.UserProfile
-	NetworkLockKey    key.NLPrivate
-	NodeID            tailcfg.StableNodeID
-	AttestationKey    key.HardwareAttestationKey `json:",omitzero"`
+
+	// NetworkLockKey is the node's Tailnet Lock private key.
+	// "Network Lock" was the pre-release name for Tailnet Lock.
+	NetworkLockKey key.NLPrivate
+
+	NodeID         tailcfg.StableNodeID
+	AttestationKey key.HardwareAttestationKey `json:",omitzero"`
 
 	// DisallowedTKAStateIDs stores the tka.State.StateID values which
 	// this node will not operate tailnet lock on. This is used to
