@@ -601,7 +601,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		return false, nil
 	}
 
-	su := findSU(dlogf, ia)
+	su, cmdFlag := findSU(dlogf, ia)
 	if su == "" {
 		return false, nil
 	}
@@ -623,8 +623,9 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		ia.localUser,
 	}
 	if ia.cmd != "" {
-		// Note - unlike the login command, su allows using both -l and -c.
-		loginArgs = append(loginArgs, "-c", ia.cmd)
+		// Note - unlike the login command, su allows using both -l and the
+		// command flag. findSU picked which one this su understands.
+		loginArgs = append(loginArgs, cmdFlag, ia.cmd)
 	}
 
 	dlogf("logging in with %+v", loginArgs)
@@ -636,49 +637,58 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	return true, err
 }
 
-// findSU attempts to find an su command which supports the -l and -c flags.
-// This actually calls the su command, which can cause side effects like
-// triggering pam_mkhomedir. If a suitable su is not available, this returns
-// "".
-func findSU(dlogf logger.Logf, ia incubatorArgs) string {
+// findSU attempts to find an su command which supports the -l flag and a way
+// to pass a command. This actually calls the su command, which can cause side
+// effects like triggering pam_mkhomedir. If a suitable su is not available,
+// this returns "".
+//
+// It also reports which flag to pass the command with. --session-command is
+// preferred over -c: -c runs the command in a new session (setsid), which puts
+// the user's shell outside the incubator's process group, so
+// terminateSession's kill(-pgid) never reaches it. --session-command does the
+// same thing without the setsid, but is util-linux-specific (BusyBox rejects
+// it), so an su that doesn't take it falls back to -c and keeps the
+// pre-existing teardown reach.
+func findSU(dlogf logger.Logf, ia incubatorArgs) (su, cmdFlag string) {
 	// Currently, we only support falling back to su on Linux. This
 	// potentially could work on BSDs as well, but requires testing.
 	if runtime.GOOS != linux {
-		return ""
+		return "", ""
 	}
 
 	// gokrazy doesn't include su. And, if someone installs a breakglass/
 	// debugging package on gokrazy, we don't want to use its su.
 	if distro.Get() == distro.Gokrazy {
-		return ""
+		return "", ""
 	}
 
 	su, err := exec.LookPath("su")
 	if err != nil {
 		dlogf("can't find su command: %v", err)
-		return ""
+		return "", ""
 	}
 
 	_, allowListEnvKeys, err := ia.forwardedEnviron()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	// First try to execute su -w <allow listed env> -l <user> -c true
-	// to make sure su supports the necessary arguments.
-	err = exec.Command(
-		su,
-		"-w", strings.Join(allowListEnvKeys, ","),
-		"-l",
-		ia.localUser,
-		"-c", "true",
-	).Run()
-	if err != nil {
-		dlogf("su check failed: %s", err)
-		return ""
+	// Try to execute su -w <allow listed env> -l <user> <cmdFlag> true to
+	// make sure su supports the necessary arguments.
+	for _, cmdFlag := range []string{"--session-command", "-c"} {
+		err = exec.Command(
+			su,
+			"-w", strings.Join(allowListEnvKeys, ","),
+			"-l",
+			ia.localUser,
+			cmdFlag, "true",
+		).Run()
+		if err == nil {
+			return su, cmdFlag
+		}
+		dlogf("su check with %s failed: %s", cmdFlag, err)
 	}
-
-	return su
+	return "", ""
 }
 
 // handleSSHInProcess is a last resort if we couldn't use login or su. It
