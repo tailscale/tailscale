@@ -150,19 +150,17 @@ func (c Config) hasHostsWithoutSplitDNSRoutes() bool {
 	return false
 }
 
-// hostsWithoutSplitDNSRoutes returns the Host FQDNs in c not covered by any
-// SplitDNS route suffix. Only meaningful when MagicDNSHostsUnrouted is false.
-func (c Config) hostsWithoutSplitDNSRoutes() []dnsname.FQDN {
-	var ret []dnsname.FQDN
-	for host := range c.Hosts {
-		if !c.hasSplitDNSRouteForHost(host) {
-			ret = append(ret, host)
-		}
-	}
-	sort.Slice(ret, func(i, j int) bool {
-		return ret[i].WithTrailingDot() < ret[j].WithTrailingDot()
-	})
-	return ret
+// requiresPrimaryResolver reports whether c can only be served correctly with
+// quad-100 installed as the OS's primary (catch-all) resolver, rather than
+// scoped to a set of match domains.
+//
+// That's the case when c has names quad-100 must answer that no route suffix
+// covers, so there is no suffix to scope to. dnsConfigForNetmap pairs every
+// ExtraRecord it emits with a route, so in practice this is the
+// MagicDNS-names-present but MagicDNS-domain-routing-off case
+// (MagicDNSHostsUnrouted).
+func (c Config) requiresPrimaryResolver() bool {
+	return c.hasHostsWithoutSplitDNSRoutes()
 }
 
 // hasSplitDNSRouteForHost reports whether c contains a SplitDNS route
