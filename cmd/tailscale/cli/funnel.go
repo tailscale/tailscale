@@ -12,11 +12,99 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 )
+
+// funnelAuthFromFlags builds the FunnelAuth config for a funnel HTTP handler
+// from the --auth, --allow, and --auth-session-ttl CLI flags. It returns nil
+// (unauthenticated, today's default behavior) when auth is false, and
+// validates each allowlist entry. Callers use it both to validate flags early
+// and to build the config that is stored on the handler.
+func funnelAuthFromFlags(auth bool, allow string, ttl time.Duration) (*ipn.FunnelAuth, error) {
+	if !auth {
+		return nil, nil
+	}
+	if ttl < 0 {
+		return nil, fmt.Errorf("invalid --auth-session-ttl %v: must not be negative", ttl)
+	}
+	allowList, err := parseFunnelAllow(allow)
+	if err != nil {
+		return nil, err
+	}
+	return &ipn.FunnelAuth{
+		Provider:   "tailscale",
+		Allow:      allowList,
+		SessionTTL: ttl,
+	}, nil
+}
+
+// parseFunnelAllow parses and validates a comma-separated --allow allowlist.
+// Valid entry forms (see ipn.FunnelAuth.Allow):
+//
+//	alice@example.com    exact email address
+//	*@example.com        email domain (matched only for verified emails)
+//	tailnet:example.com  a specific tailnet
+//
+// It returns nil for an empty list (meaning: any authenticated Tailscale user).
+func parseFunnelAllow(allow string) ([]string, error) {
+	allow = strings.TrimSpace(allow)
+	if allow == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, raw := range strings.Split(allow, ",") {
+		e := strings.TrimSpace(raw)
+		if e == "" {
+			continue
+		}
+		if err := validateFunnelAllowEntry(e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// funnelAuthPostureLine returns a human-readable one-line description of a
+// funnel handler's authentication posture, for status output.
+func funnelAuthPostureLine(auth *ipn.FunnelAuth) string {
+	if auth == nil {
+		return "auth: public (no authentication; open to the entire internet)"
+	}
+	if len(auth.Allow) == 0 {
+		return "auth: Login With Tailscale (any Tailscale user)"
+	}
+	return fmt.Sprintf("auth: Login With Tailscale (allow: %s)", strings.Join(auth.Allow, ", "))
+}
+
+// validateFunnelAllowEntry reports whether a single --allow entry is well
+// formed.
+func validateFunnelAllowEntry(e string) error {
+	switch {
+	case strings.HasPrefix(e, "tailnet:"):
+		if strings.TrimPrefix(e, "tailnet:") == "" {
+			return fmt.Errorf("invalid allow entry %q: tailnet must not be empty", e)
+		}
+		return nil
+	case strings.HasPrefix(e, "*@"):
+		dom := strings.TrimPrefix(e, "*@")
+		if dom == "" || !strings.Contains(dom, ".") || strings.Contains(dom, "@") {
+			return fmt.Errorf("invalid allow entry %q: expected a domain like *@example.com", e)
+		}
+		return nil
+	default:
+		// Exact email: require a single "@" with non-empty local and domain.
+		at := strings.IndexByte(e, '@')
+		if at <= 0 || at == len(e)-1 || strings.Count(e, "@") != 1 {
+			return fmt.Errorf("invalid allow entry %q: expected alice@example.com, *@example.com, or tailnet:example.com", e)
+		}
+		return nil
+	}
+}
 
 func init() {
 	maybeFunnelCmd = funnelCmd
