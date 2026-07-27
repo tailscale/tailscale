@@ -205,11 +205,14 @@ func TestProberConcurrency(t *testing.T) {
 	p.Run("foo", time.Second, nil, pfunc)
 	waitActiveProbes(t, p, clk, 1)
 
-	for range 50 {
-		clk.Advance(time.Second)
-	}
-
+	// The fake ticker drops ticks when the probe loop goroutine isn't
+	// already blocked on its channel (buffer of one, non-blocking send),
+	// so advancing the clock in a tight loop doesn't guarantee that the
+	// loop observes enough ticks to start three concurrent probe runs.
+	// Instead, advance the clock inside the polling loop so ticks keep
+	// firing until all three probe goroutines have started.
 	if err := tstest.WaitFor(convergenceTimeout, func() error {
+		clk.Advance(time.Second)
 		if got, want := ran.Load(), int64(3); got != want {
 			return fmt.Errorf("expected %d probes to run concurrently, got %d", want, got)
 		}
