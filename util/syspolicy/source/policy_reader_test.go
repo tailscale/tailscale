@@ -5,6 +5,7 @@ package source
 
 import (
 	"cmp"
+	"sync"
 	"testing"
 	"time"
 
@@ -241,6 +242,39 @@ func TestReaderLifecycle(t *testing.T) {
 
 			<-reader.Done()
 		})
+	}
+}
+
+// TestReaderCloseReloadRace is a regression test for tailscale/corp#45548,
+// where [Reader.Close] set r.store to nil without holding r.mu while a
+// concurrent [Reader.reload] read r.store under r.mu, causing a data race
+// and a potential nil interface method call panic.
+func TestReaderCloseReloadRace(t *testing.T) {
+	setting.SetDefinitionsForTest(t, setting.NewDefinition("StringValue", setting.DeviceSetting, setting.StringValue))
+	origin := setting.NewNamedOrigin("Test", setting.DeviceScope)
+	for range 100 {
+		store := NewTestStoreOf(t, TestSettingOf("StringValue", "S1"))
+		reader, err := newReader(store, origin)
+		if err != nil {
+			t.Fatalf("newReader failed: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range 4 {
+			wg.Go(func() {
+				<-start
+				for range 10 {
+					reader.ReadSettings()
+				}
+			})
+		}
+		wg.Go(func() {
+			<-start
+			reader.Close()
+		})
+		close(start)
+		wg.Wait()
 	}
 }
 
