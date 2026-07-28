@@ -10,12 +10,54 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"go4.org/mem"
 )
+
+// rateLimitedError is returned from cert-fetching methods when the
+// upstream ACME CA reported a rate limit. Callers should unpack it via
+// [RateLimitRetryAfter].
+type rateLimitedError struct {
+	retryAfter time.Duration
+	underlying error
+}
+
+func (e rateLimitedError) Error() string { return e.underlying.Error() }
+func (e rateLimitedError) Unwrap() error { return e.underlying }
+
+// RateLimitRetryAfter reports whether err was a rate-limit failure from
+// the upstream ACME CA and, if so, returns the CA's suggested wait
+// (zero if none was provided).
+func RateLimitRetryAfter(err error) (retryAfter time.Duration, ok bool) {
+	var rl rateLimitedError
+	if errors.As(err, &rl) {
+		return rl.retryAfter, true
+	}
+	return 0, false
+}
+
+// retryAfterFromHeader parses a Retry-After header, matching the
+// delta-seconds + HTTP-date pattern in tempfork/acme/http.go.
+func retryAfterFromHeader(h http.Header) time.Duration {
+	v := h.Get("Retry-After")
+	if i, err := strconv.Atoi(v); err == nil {
+		return time.Duration(i) * time.Second
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return 0
+	}
+	d := time.Until(t)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
 
 // SetDNS adds a DNS TXT record for the given domain name, containing
 // the provided TXT value. The intended use case is answering
@@ -43,6 +85,8 @@ func (lc *Client) SetDNS(ctx context.Context, name, value string) error {
 //
 // It returns a cached certificate from disk if it's still valid.
 //
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
+//
 // Deprecated: use [Client.CertPair].
 func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
 	return defaultClient.CertPair(ctx, domain)
@@ -51,6 +95,8 @@ func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err e
 // CertPair returns a cert and private key for the provided DNS domain.
 //
 // It returns a cached certificate from disk if it's still valid.
+//
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
 //
 // API maturity: this is considered a stable API.
 func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
@@ -65,10 +111,18 @@ func (lc *Client) CertPair(ctx context.Context, domain string) (certPEM, keyPEM 
 // least the given duration, if permitted by the CA. If the certificate is
 // valid, but for less than minValidity, it will be synchronously renewed.
 //
+// Rate-limit failures can be identified via [RateLimitRetryAfter].
+//
 // API maturity: this is considered a stable API.
 func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minValidity time.Duration) (certPEM, keyPEM []byte, err error) {
 	res, err := lc.send(ctx, "GET", fmt.Sprintf("/localapi/v0/cert/%s?type=pair&min_validity=%s", domain, minValidity), 200, nil)
 	if err != nil {
+		if hse, ok := errors.AsType[httpStatusError](err); ok && hse.HTTPStatus == http.StatusTooManyRequests {
+			return nil, nil, rateLimitedError{
+				retryAfter: retryAfterFromHeader(hse.Header),
+				underlying: err,
+			}
+		}
 		return nil, nil, err
 	}
 	// with ?type=pair, the response PEM is first the one private

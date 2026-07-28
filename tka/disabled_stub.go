@@ -8,6 +8,7 @@ package tka
 import (
 	"crypto/ed25519"
 	"errors"
+	"time"
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -158,3 +159,8 @@ func SignByCredential(privKey []byte, wrapped *NodeKeySignature, nodeKey key.Nod
 }
 
 func (s NodeKeySignature) String() string { return "" }
+
+type CompactionOptions struct {
+	MinChain int
+	MinAge   time.Duration
+}

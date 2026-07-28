@@ -69,6 +69,11 @@ func (menu *Menu) Run(client *local.Client) {
 	go menu.lc.SetGauge(menu.bgCtx, "systray_running", 1)
 	defer menu.lc.SetGauge(menu.bgCtx, "systray_running", 0)
 
+	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
+	// This value will get overwritten later as the client status changes.
+	// This must be called before systray.Run.
+	systray.SetTitle("tailscale")
+
 	systray.Run(menu.onReady, menu.onExit)
 }
 
@@ -171,10 +176,6 @@ tailscale systray
 See https://tailscale.com/kb/1597/linux-systray for more information.`)
 	}
 	setAppIcon(disconnected)
-
-	// set initial title, which is used by the systray package as the ID of the StatusNotifierItem.
-	// This value will get overwritten later as the client status changes.
-	systray.SetTitle("tailscale")
 
 	menu.rebuild()
 
@@ -292,21 +293,23 @@ func (menu *Menu) rebuild() {
 		accounts := systray.AddMenuItem(account, "")
 		setRemoteIcon(accounts, menu.curProfile.UserProfile.ProfilePicURL)
 		time.Sleep(newMenuDelay)
-		for _, profile := range menu.allProfiles {
-			title := profileTitle(profile)
-			var item *systray.MenuItem
-			if profile.ID == menu.curProfile.ID {
-				item = accounts.AddSubMenuItemCheckbox(title, "", true)
-			} else {
-				item = accounts.AddSubMenuItem(title, "")
-			}
-			setRemoteIcon(item, profile.UserProfile.ProfilePicURL)
-			onClick(ctx, item, func(ctx context.Context) {
-				select {
-				case <-ctx.Done():
-				case menu.accountsCh <- profile.ID:
+		if len(menu.allProfiles) > 1 {
+			for _, profile := range menu.allProfiles {
+				title := profileTitle(profile)
+				var item *systray.MenuItem
+				if profile.ID == menu.curProfile.ID {
+					item = accounts.AddSubMenuItemCheckbox(title, "", true)
+				} else {
+					item = accounts.AddSubMenuItem(title, "")
 				}
-			})
+				setRemoteIcon(item, profile.UserProfile.ProfilePicURL)
+				onClick(ctx, item, func(ctx context.Context) {
+					select {
+					case <-ctx.Done():
+					case menu.accountsCh <- profile.ID:
+					}
+				})
+			}
 		}
 	}
 
@@ -352,16 +355,27 @@ func (menu *Menu) rebuild() {
 
 // profileTitle returns the title string for a profile menu item.
 func profileTitle(profile ipn.LoginProfile) string {
-	title := profile.Name
+	tailnet := ""
 	if profile.NetworkProfile.DomainName != "" {
-		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-			// windows and mac don't support multi-line menu
-			title += " (" + profile.NetworkProfile.DisplayNameOrDefault() + ")"
-		} else {
-			title += "\n" + profile.NetworkProfile.DisplayNameOrDefault()
-		}
+		tailnet = profile.NetworkProfile.DisplayNameOrDefault()
 	}
-	return title
+	// windows and mac don't support multi-line menu items.
+	multiline := runtime.GOOS != "windows" && runtime.GOOS != "darwin"
+
+	return formatProfileTitle(profile.Name, tailnet, multiline)
+}
+
+// formatProfileTitle builds a profile menu label from a login name and an
+// optional tailnet name. The tailnet portion is omitted when it matches the
+// login name, so single-user tailnets don't show the same string twice.
+func formatProfileTitle(name, tailnet string, multiline bool) string {
+	if tailnet == "" || strings.EqualFold(name, tailnet) {
+		return name
+	}
+	if multiline {
+		return name + "\n" + tailnet
+	}
+	return name + " (" + tailnet + ")"
 }
 
 var (
@@ -621,11 +635,9 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 				title += strings.Split(sugg.Name, ".")[0]
 			}
 			menu.exitNodes.AddSeparator()
-			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", false)
+			active := recommendedIsActive(status, sugg.ID, sugg.Location.CountryCode(), sugg.Location.City())
+			rm := menu.exitNodes.AddSubMenuItemCheckbox(title, "", active)
 			setExitNodeOnClick(rm, sugg.ID)
-			if status.ExitNodeStatus != nil && sugg.ID == status.ExitNodeStatus.ID {
-				rm.Check()
-			}
 		}
 	}
 
@@ -647,12 +659,10 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			if !ps.Online {
 				name += " (offline)"
 			}
-			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", false)
+			active := status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID
+			sm := menu.exitNodes.AddSubMenuItemCheckbox(name, "", active)
 			if !ps.Online {
 				sm.Disable()
-			}
-			if status.ExitNodeStatus != nil && ps.ID == status.ExitNodeStatus.ID {
-				sm.Check()
 			}
 			setExitNodeOnClick(sm, ps.ID)
 		}
@@ -741,6 +751,30 @@ func (mc *mvCountry) sortedCities() []*mvCity {
 		return stringsx.CompareFold(a.name, b.name)
 	})
 	return cities
+}
+
+// recommendedIsActive reports whether the suggested exit node corresponds to
+// the currently active exit node in status.
+func recommendedIsActive(status *ipnstate.Status, suggID tailcfg.StableNodeID, suggCountry, suggCity string) bool {
+	if status == nil || status.ExitNodeStatus == nil || status.ExitNodeStatus.ID.IsZero() {
+		return false
+	}
+	if suggID == status.ExitNodeStatus.ID {
+		return true
+	}
+	if suggCountry == "" || suggCity == "" {
+		return false
+	}
+	for _, p := range status.Peer {
+		if p.ID != status.ExitNodeStatus.ID {
+			continue
+		}
+		if loc := p.Location; loc != nil && loc.CountryCode == suggCountry && loc.City == suggCity {
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 // countryFlag takes a 2-character ASCII string and returns the corresponding emoji flag.

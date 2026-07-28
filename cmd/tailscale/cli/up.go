@@ -110,15 +110,15 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.Var(notFalseVar{}, "host-routes", hidden+"install host routes to other Tailscale nodes (must be true as of Tailscale 1.67+)")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
-	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
+	upf.BoolVar(&upArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "allow direct access to the local network when routing traffic via an exit node")
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
-	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
+	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request (e.g. \"tag:eng,tag:montreal,tag:ssh\"); the \"tag:\" prefix is optional and added automatically when omitted (e.g. \"eng,montreal,ssh\")")
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseConnector, "advertise-connector", false, "advertise this node as an app connector")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, hidden+"allow management plane to gather device posture information")
+	upf.BoolVar(&upArgs.postureChecking, "report-posture", false, "allow management plane to gather device posture information")
 
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
@@ -309,9 +309,15 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	var tags []string
 	if upArgs.advertiseTags != "" {
 		tags = strings.Split(upArgs.advertiseTags, ",")
-		for _, tag := range tags {
-			err := tailcfg.CheckTag(tag)
-			if err != nil {
+		for i, tag := range tags {
+			// Allow users to omit the "tag:" prefix; if the tag has no
+			// colon at all, add it for them. Tags with a colon must be
+			// fully qualified ("tag:foo") and are validated as-is.
+			if !strings.Contains(tag, ":") {
+				tag = "tag:" + tag
+				tags[i] = tag
+			}
+			if err := tailcfg.CheckTag(tag); err != nil {
 				return nil, fmt.Errorf("tag: %q: %s", tag, err)
 			}
 		}
@@ -599,6 +605,11 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
+	if !buildfeatures.HasIPNBus {
+		fmt.Fprintln(Stderr, "binary built with ts_omit_ipnbus; not waiting for completion")
+		return nil
+	}
+
 	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
 	// or we could miss IPN notifications.
 	//
@@ -642,7 +653,10 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				}
 			}
 
-			authKey, err = f(ctx, clientSecret, prefs.AdvertiseTags)
+			authKey, err = f(ctx, tailscale.ResolveAuthKeyArgs{
+				AuthKey: clientSecret,
+				Tags:    prefs.AdvertiseTags,
+			})
 			if err != nil {
 				return err
 			}
@@ -655,7 +669,13 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 				return err
 			}
 
-			authKey, err = f(ctx, prefs.ControlURL, upArgs.clientID, idToken, upArgs.audience, prefs.AdvertiseTags)
+			authKey, err = f(ctx, tailscale.ResolveAuthKeyWIFArgs{
+				BaseURL:  prefs.ControlURL,
+				ClientID: upArgs.clientID,
+				IDToken:  idToken,
+				Audience: upArgs.audience,
+				Tags:     prefs.AdvertiseTags,
+			})
 			if err != nil {
 				return err
 			}
@@ -721,7 +741,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if s := n.State; s != nil {
 				ipnIsRunning = *s == ipn.Running
 			}
-			if n.NetMap != nil && n.NetMap.NodeKey != origNodeKey {
+			if n.SelfChange != nil && n.SelfChange.Key != origNodeKey {
 				waitingForKeyChange = false
 			}
 			if ipnIsRunning && !waitingForKeyChange {
@@ -906,6 +926,7 @@ func init() {
 	addPrefFlagMapping("auto-update", "AutoUpdate.Apply")
 	addPrefFlagMapping("advertise-connector", "AppConnector")
 	addPrefFlagMapping("report-posture", "PostureChecking")
+	addPrefFlagMapping("remote-config", "RemoteConfig")
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
 	addPrefFlagMapping("sync", "Sync")
 	addPrefFlagMapping("relay-server-static-endpoints", "RelayServerStaticEndpoints")

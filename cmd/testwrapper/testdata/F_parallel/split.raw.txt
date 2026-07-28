@@ -1,0 +1,57 @@
+=== RUN   TestParA
+=== PAUSE TestParA
+=== RUN   TestParB
+=== PAUSE TestParB
+=== CONT  TestParA
+=== CONT  TestParB
+--- PASS: TestParA (0.00s)
+==================
+WARNING: DATA RACE
+Read at 0x0000007f02b0 by goroutine 8:
+  racesurvey/F_parallel.TestParB()
+      /tmp/racesurvey/F_parallel/f_test.go:17 +0x3b
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+
+Previous write at 0x0000007f02b0 by goroutine 7:
+  racesurvey/F_parallel.TestParA()
+      /tmp/racesurvey/F_parallel/f_test.go:10 +0x53
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+
+Goroutine 8 (running) created at:
+  testing.(*T).Run()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0xb12
+  testing.runTests.func1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.runTests()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2583 +0x9e9
+  testing.(*M).Run()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:48 +0x164
+
+Goroutine 7 (running) created at:
+  testing.(*T).Run()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0xb12
+  testing.runTests.func1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2585 +0x84
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.runTests()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2583 +0x9e9
+  testing.(*M).Run()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2443 +0xf4b
+  main.main()
+      _testmain.go:48 +0x164
+==================
+=== NAME  TestParB
+    testing.go:1712: race detected during execution of test
+--- FAIL: TestParB (0.00s)
+FAIL

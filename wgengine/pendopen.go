@@ -68,7 +68,6 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 	res = filter.Accept // always
 
 	if pp.IPProto == ipproto.TSMP {
-		res = filter.DropSilently
 		rh, ok := pp.AsTailscaleRejectedHeader()
 		if !ok {
 			return
@@ -77,6 +76,14 @@ func (e *userspaceEngine) trackOpenPreFilterIn(pp *packet.Parsed, t *tstun.Wrapp
 			e.noteFlowProblemFromPeer(tsRejectFlow(rh), rh.Reason)
 		} else if f := tsRejectFlow(rh); e.removeFlow(f) {
 			e.logf("open-conn-track: flow %v %v > %v rejected due to %v", rh.Proto, rh.Src, rh.Dst, rh.Reason)
+		}
+		switch rh.Reason {
+		case packet.RejectedDueToUnknownAppConnectorTransitIP:
+			// Keep res = filter.Accept, don't drop this packet because it will
+			// be used later for further communication between app connector
+			// and client.
+		default:
+			res = filter.DropSilently
 		}
 		return
 	}
@@ -131,14 +138,14 @@ func (e *userspaceEngine) isOSNetworkProbe(dst netip.AddrPort) bool {
 	// iOS had log spam like:
 	// open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
 	if runtime.GOOS == "ios" && dst.Port() == 443 && appleIPRange.Contains(dst.Addr()) {
-		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+		if _, ok := e.peerForIP(dst.Addr()); !ok {
 			return true
 		}
 	}
 	// NetworkManager; https://github.com/tailscale/tailscale/issues/13687
 	// open-conn-track: timeout opening (TCP 100.96.229.119:42798 => 185.125.190.49:80); no associated peer node
 	if runtime.GOOS == "linux" && dst.Port() == 80 && canonicalIPs()(dst.Addr()) {
-		if _, ok := e.PeerForIP(dst.Addr()); !ok {
+		if _, ok := e.peerForIP(dst.Addr()); !ok {
 			return true
 		}
 	}
@@ -192,7 +199,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	}
 
 	// Diagnose why it might've timed out.
-	pip, ok := e.PeerForIP(flow.DstAddr())
+	pip, ok := e.peerForIP(flow.DstAddr())
 	if !ok {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
 		return

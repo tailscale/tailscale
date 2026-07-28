@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,12 +190,41 @@ func TestGetServeHandler(t *testing.T) {
 			path: "/foo/../../../../../../../../etc/passwd",
 			want: "/",
 		},
+		// Malformed request targets that net/http hands the handler verbatim.
+		// These clean to a path.Dir fixed point ("*" or ".") that never reaches
+		// "/", and once spun the getServeHandler loop below forever (a remote
+		// serve/funnel DoS). They must resolve to not-found, not hang.
+		{
+			name: "asterisk", // "GET *"
+			conf: conf1,
+			path: "*",
+			want: "",
+		},
+		{
+			name: "empty", // "CONNECT" authority-form sets URL.Path to ""
+			conf: conf1,
+			path: "",
+			want: "",
+		},
+		{
+			name: "dot",
+			conf: conf1,
+			path: ".",
+			want: "",
+		},
+		{
+			name: "asterisk-subpath",
+			conf: conf1,
+			path: "*/foo",
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &LocalBackend{
 				serveConfig: tt.conf.View(),
 				logf:        t.Logf,
+				health:      health.NewTracker(eventbustest.NewBus(t)),
 			}
 			req := &http.Request{
 				URL: &url.URL{
@@ -206,6 +237,9 @@ func TestGetServeHandler(t *testing.T) {
 				DestPort: port,
 			}))
 
+			// A malformed target like "*" or "" once spun getServeHandler's
+			// path-walk loop forever; a regression would hang here until the
+			// package test timeout fires.
 			h, got, ok := b.getServeHandler(req)
 			if (got != "") != ok {
 				t.Fatalf("got ok=%v, but got mountPoint=%q", ok, got)
@@ -619,49 +653,49 @@ func TestServeHTTPProxyPath(t *testing.T) {
 		wantRequestPath string
 	}{
 		{
-			name:            "/foo -> /foo, with mount point and path /foo",
+			name:            "foo-to-foo-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo",
 		},
 		{
-			name:            "/foo/ -> /foo/, with mount point and path /foo",
+			name:            "foo-slash-to-foo-slash-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/",
 			wantRequestPath: "/foo/",
 		},
 		{
-			name:            "/foo -> /foo/, with mount point and path /foo/",
+			name:            "foo-to-foo-slash-mount-foo-slash",
 			mountPoint:      "/foo/",
 			proxyPath:       "/foo/",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo/",
 		},
 		{
-			name:            "/-> /, with mount point and path /",
+			name:            "root-to-root-mount-root",
 			mountPoint:      "/",
 			proxyPath:       "/",
 			requestPath:     "/",
 			wantRequestPath: "/",
 		},
 		{
-			name:            "/foo -> /foo, with mount point and path /",
+			name:            "foo-to-foo-mount-root",
 			mountPoint:      "/",
 			proxyPath:       "/",
 			requestPath:     "/foo",
 			wantRequestPath: "/foo",
 		},
 		{
-			name:            "/foo/bar -> /foo/bar, with mount point and path /foo",
+			name:            "foo-bar-to-foo-bar-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/bar",
 			wantRequestPath: "/foo/bar",
 		},
 		{
-			name:            "/foo/bar/baz -> /foo/bar/baz, with mount point and path /foo",
+			name:            "foo-bar-baz-to-foo-bar-baz-mount-foo",
 			mountPoint:      "/foo",
 			proxyPath:       "/foo",
 			requestPath:     "/foo/bar/baz",
@@ -1191,7 +1225,9 @@ func TestServeFileOrDirectory(t *testing.T) {
 		}
 	}
 
-	b := &LocalBackend{}
+	b := &LocalBackend{
+		health: health.NewTracker(eventbustest.NewBus(t)),
+	}
 
 	tests := []struct {
 		req   string
@@ -1358,6 +1394,227 @@ func TestServeGRPCProxy(t *testing.T) {
 	}
 }
 
+// TestServeProxyHTTP2PreservesContentType is a repro for tailscale/tailscale#19866.
+// A client POSTs over HTTP/2 to a serve listener configured to reverse-proxy to a
+// plaintext HTTP/1.1 backend; the test asserts the backend sees the Content-Type
+// header that the client sent.
+func TestServeProxyHTTP2PreservesContentType(t *testing.T) {
+	var (
+		gotHeader http.Header
+		gotMethod string
+		gotProto  string
+		gotBody   string
+	)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Clone()
+		gotMethod = r.Method
+		gotProto = r.Proto
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+	backendURL := must.Get(url.Parse(backend.URL))
+
+	lb := newTestBackend(t)
+	rp := &reverseProxy{
+		logf:    t.Logf,
+		url:     backendURL,
+		backend: backend.URL,
+		lb:      lb,
+	}
+
+	// Mirror serveWebHandler's behavior for a mount of "/" with a non-"/" path:
+	// it wraps the proxy in http.StripPrefix("", rp). That's a no-op for "/mcp"
+	// but worth exercising in case StripPrefix interacts weirdly with HTTP/2.
+	frontHandler := http.StripPrefix("", http.HandlerFunc(rp.ServeHTTP))
+	front := httptest.NewUnstartedServer(frontHandler)
+	front.EnableHTTP2 = true
+	front.StartTLS()
+	defer front.Close()
+
+	const reqBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+
+	type variant struct {
+		name           string
+		http1Only      bool
+		contentType    string
+		setAccept      bool
+		setContentLen  bool // if false, body is a Reader with unknown length (chunked)
+		dropContentLen bool
+		emptyBody      bool
+	}
+	variants := []variant{
+		{name: "baseline_http2", contentType: "application/json", setAccept: true, setContentLen: true},
+		{name: "http1_baseline", http1Only: true, contentType: "application/json", setAccept: true, setContentLen: true},
+		{name: "no_accept", contentType: "application/json", setContentLen: true},
+		{name: "charset_param", contentType: "application/json; charset=utf-8", setAccept: true, setContentLen: true},
+		{name: "chunked", contentType: "application/json", setAccept: true, setContentLen: false},
+		{name: "drop_content_length", contentType: "application/json", setAccept: true, dropContentLen: true},
+		{name: "empty_body", contentType: "application/json", setAccept: true, emptyBody: true},
+	}
+
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			gotHeader = nil
+			gotMethod = ""
+			gotProto = ""
+			gotBody = ""
+
+			var body io.Reader
+			switch {
+			case v.emptyBody:
+				body = http.NoBody
+			case v.setContentLen:
+				body = strings.NewReader(reqBody)
+			default:
+				// io.Reader that isn't a *bytes.Reader / *strings.Reader / *bytes.Buffer
+				// so net/http does not auto-set Content-Length.
+				body = struct{ io.Reader }{strings.NewReader(reqBody)}
+			}
+
+			url := front.URL + "/mcp"
+			req, err := http.NewRequest("POST", url, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", v.contentType)
+			if v.setAccept {
+				req.Header.Set("Accept", "application/json, text/event-stream")
+			}
+			if v.dropContentLen {
+				req.ContentLength = -1
+			}
+
+			client := front.Client()
+			if v.http1Only {
+				// Force the client onto HTTP/1.1 by removing h2 from ALPN.
+				tr := client.Transport.(*http.Transport).Clone()
+				if tr.TLSClientConfig != nil {
+					tr.TLSClientConfig = tr.TLSClientConfig.Clone()
+					tr.TLSClientConfig.NextProtos = []string{"http/1.1"}
+				}
+				tr.ForceAttemptHTTP2 = false
+				client = &http.Client{Transport: tr}
+			}
+
+			res, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			io.Copy(io.Discard, res.Body)
+
+			wantProtoMajor := 2
+			if v.http1Only {
+				wantProtoMajor = 1
+			}
+			if res.ProtoMajor != wantProtoMajor {
+				t.Fatalf("front-end proto = %s, want HTTP/%d.x", res.Proto, wantProtoMajor)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("backend returned status %d, want 200", res.StatusCode)
+			}
+			if gotMethod != "POST" {
+				t.Errorf("backend method = %q, want POST", gotMethod)
+			}
+			t.Logf("backend saw proto=%q content-length=%q transfer-encoding=%v body=%q",
+				gotProto, gotHeader.Get("Content-Length"), gotHeader.Values("Transfer-Encoding"), gotBody)
+			if got, want := gotHeader.Get("Content-Type"), v.contentType; got != want {
+				t.Errorf("Content-Type at backend = %q, want %q (full headers: %v)", got, want, gotHeader)
+			}
+		})
+	}
+}
+
+// TestServeWebHandlerHTTP2PreservesContentType drives the full
+// b.serveWebHandler entry point (the actual production code path) via a real
+// HTTP/2 TLS frontend, with serveHTTPContext.Funnel set to mimic a funnel
+// request. Repro probe for tailscale/tailscale#19866.
+func TestServeWebHandlerHTTP2PreservesContentType(t *testing.T) {
+	var gotHeader http.Header
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	b := newTestBackend(t)
+
+	front := httptest.NewUnstartedServer(http.HandlerFunc(b.serveWebHandler))
+	front.EnableHTTP2 = true
+	realFrontAddr := front.Listener.Addr().String()
+	_, portStr, _ := net.SplitHostPort(realFrontAddr)
+	p, _ := strconv.ParseUint(portStr, 10, 16)
+	frontPort := uint16(p)
+	front.Config.BaseContext = func(_ net.Listener) context.Context {
+		return serveHTTPContextKey.WithValue(context.Background(), &serveHTTPContext{
+			Funnel:   &funnelFlow{Host: "example.ts.net"},
+			SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+			DestPort: frontPort,
+		})
+	}
+	front.StartTLS()
+	defer front.Close()
+
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(net.JoinHostPort("example.ts.net", portStr)): {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {Proxy: backend.URL},
+			}},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Custom client: dial example.ts.net:PORT to the real httptest address,
+	// skip cert verification, and send SNI "example.ts.net" so the serveConfig
+	// host lookup works.
+	tr := front.Client().Transport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", realFrontAddr)
+	}
+	tr.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "example.ts.net",
+		NextProtos:         []string{"h2", "http/1.1"},
+	}
+	tr.ForceAttemptHTTP2 = true
+	client := &http.Client{Transport: tr}
+
+	const reqBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	url := "https://example.ts.net:" + portStr + "/mcp"
+	req, err := http.NewRequest("POST", url, strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	if res.ProtoMajor != 2 {
+		t.Fatalf("front-end proto = %s, want HTTP/2", res.Proto)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200; body=%q", res.StatusCode, body)
+	}
+	t.Logf("backend headers (full): %v", gotHeader)
+	if got, want := gotHeader.Get("Content-Type"), "application/json"; got != want {
+		t.Errorf("Content-Type at backend = %q, want %q", got, want)
+	}
+	if got := gotHeader.Get("Tailscale-Funnel-Request"); got != "?1" {
+		t.Errorf("Tailscale-Funnel-Request = %q, want %q (sanity check)", got, "?1")
+	}
+}
+
 func TestServeHTTPRedirect(t *testing.T) {
 	b := newTestBackend(t)
 
@@ -1457,7 +1714,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 		wantError          bool
 	}{
 		{
-			name:        "empty existing config",
+			name:        "empty-existing-config",
 			description: "should be able to update with empty existing config",
 			existing:    &ipn.ServeConfig{},
 			incoming: &ipn.ServeConfig{
@@ -1468,7 +1725,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "no existing config",
+			name:        "no-existing-config",
 			description: "should be able to update with no existing config",
 			existing:    nil,
 			incoming: &ipn.ServeConfig{
@@ -1479,7 +1736,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "empty incoming config",
+			name:        "empty-incoming-config",
 			description: "wiping config should work",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1490,7 +1747,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "no incoming config",
+			name:        "no-incoming-config",
 			description: "missing incoming config should not result in an error",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1501,7 +1758,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "non-overlapping update",
+			name:        "non-overlapping-update",
 			description: "non-overlapping update should work",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1516,7 +1773,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "overwriting background port",
+			name:        "overwriting-background-port",
 			description: "should be able to overwrite a background port",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1535,7 +1792,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "broken existing config",
+			name:        "broken-existing-config",
 			description: "broken existing config should not prevent new config updates",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1573,7 +1830,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "services same port as background",
+			name:        "services-same-port-as-background",
 			description: "services should be able to use the same port as background listeners",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1592,7 +1849,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:        "services tun mode",
+			name:        "services-tun-mode",
 			description: "TUN mode should be mutually exclusive with TCP or web handlers for new Services",
 			existing:    &ipn.ServeConfig{},
 			incoming: &ipn.ServeConfig{
@@ -1608,7 +1865,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "new foreground listener",
+			name:        "new-foreground-listener",
 			description: "new foreground listeners must be on open ports",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1627,7 +1884,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "new background listener",
+			name:        "new-background-listener",
 			description: "new background listers cannot overwrite foreground listeners",
 			existing: &ipn.ServeConfig{
 				Foreground: map[string]*ipn.ServeConfig{
@@ -1646,7 +1903,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "serve type overwrite",
+			name:        "serve-type-overwrite",
 			description: "incoming configuration cannot change the serve type in use by a port",
 			existing: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
@@ -1665,7 +1922,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "serve type overwrite services",
+			name:        "serve-type-overwrite-services",
 			description: "incoming Services configuration cannot change the serve type in use by a port",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
@@ -1692,7 +1949,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "tun mode with handlers",
+			name:        "tun-mode-with-handlers",
 			description: "Services cannot enable TUN mode if L4 or L7 handlers already exist",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
@@ -1720,7 +1977,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "handlers with tun mode",
+			name:        "handlers-with-tun-mode",
 			description: "Services cannot add L4 or L7 handlers if TUN mode is already enabled",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{

@@ -62,10 +62,11 @@ var (
 	configPath  = flag.String("c", "", "config file path")
 	certMode    = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt, gcp")
 	certDir     = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store ACME (e.g. LetsEncrypt) certs, if addr's port is :443")
-	hostname    = flag.String("hostname", "derp.tailscale.com", "TLS host name for certs, if addr's port is :443. When --certmode=manual, this can be an IP address to avoid SNI checks")
+	hostname    = flag.String("hostname", "derp.tailscale.com", "TLS host name for certs, if addr's port is :443. It can be an IP address when --certmode=manual (to avoid SNI checks) or when --acme-ip-certs is set (to run an IP-only server with no hostname cert)")
 	acmeEABKid  = flag.String("acme-eab-kid", "", "ACME External Account Binding (EAB) Key ID (required for --certmode=gcp)")
 	acmeEABKey  = flag.String("acme-eab-key", "", "ACME External Account Binding (EAB) HMAC key, base64-encoded (required for --certmode=gcp)")
 	acmeEmail   = flag.String("acme-email", "", "ACME account contact email address (required for --certmode=gcp, optional for letsencrypt)")
+	acmeIPCerts = flag.Bool("acme-ip-certs", false, "whether to serve LetsEncrypt certs for the server's IP addresses: when a client connects by IP address (sending no TLS SNI, or an IP address SNI matching the connection's destination IP), get and serve a LetsEncrypt cert for that IP, using the short-lived (~6 day) ACME certificate profile. This works for both IPv4 and IPv6 with no per-address configuration. It requires --certmode=letsencrypt and the ACME server must be able to reach port 80 at each such IP for the HTTP-01 challenge.")
 	runSTUN     = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 	runDERP     = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 	flagHome    = flag.String("home", "", "what to serve at the root path. It may be left empty (the default, for a default homepage), \"blank\" for a blank page, or a URL to redirect to")
@@ -86,6 +87,8 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	rateConfigPath = flag.String("rate-config", "", "if non-empty, path to JSON rate limit config file. Rate limiting is experimental and subject to change. Configuration is reloaded on SIGHUP.")
 
 	// tcpKeepAlive is intentionally long, to reduce battery cost. There is an L7 keepalive on a higher frequency schedule.
 	tcpKeepAlive = flag.Duration("tcp-keepalive-time", 10*time.Minute, "TCP keepalive time")
@@ -192,6 +195,12 @@ func main() {
 	s.SetVerifyClientURL(*verifyClientURL)
 	s.SetVerifyClientURLFailOpen(*verifyFailOpen)
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	if *rateConfigPath != "" {
+		if err := s.LoadAndApplyRateConfig(*rateConfigPath); err != nil {
+			log.Fatalf("derper: loading rate config: %v", err)
+		}
+		go watchRateConfig(ctx, s, *rateConfigPath)
+	}
 
 	var meshKey string
 	if *dev {
@@ -244,7 +253,7 @@ func main() {
 	if err := startMesh(s); err != nil {
 		log.Fatalf("startMesh: %v", err)
 	}
-	expvar.Publish("derp", s.ExpVar())
+	expvar.Publish("derp", s.ExpVar(*rateConfigPath != ""))
 
 	handleHome, ok := getHomeHandler(*flagHome)
 	if !ok {
@@ -254,7 +263,7 @@ func main() {
 	mux := http.NewServeMux()
 	if *runDERP {
 		derpHandler := derpserver.Handler(s)
-		derpHandler = addWebSocketSupport(s, derpHandler)
+		derpHandler = derpserver.AddWebSocketSupport(s, derpHandler)
 		mux.Handle("/derp", derpHandler)
 	} else {
 		mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -341,20 +350,12 @@ func main() {
 	if serveTLS {
 		log.Printf("derper: serving on %s with TLS", *addr)
 		var certManager certProvider
-		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname, *acmeEABKid, *acmeEABKey, *acmeEmail)
+		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname, *acmeIPCerts, *acmeEABKid, *acmeEABKey, *acmeEmail)
 		if err != nil {
 			log.Fatalf("derper: can not start cert provider: %v", err)
 		}
 		httpsrv.TLSConfig = certManager.TLSConfig()
-		getCert := httpsrv.TLSConfig.GetCertificate
-		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			cert, err := getCert(hi)
-			if err != nil {
-				return nil, err
-			}
-			cert.Certificate = append(cert.Certificate, s.MetaCert())
-			return cert, nil
-		}
+		s.ModifyTLSConfigToAddMetaCert(httpsrv.TLSConfig)
 		// Disable TLS 1.0 and 1.1, which are obsolete and have security issues.
 		httpsrv.TLSConfig.MinVersion = tls.VersionTLS12
 		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +424,27 @@ func main() {
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
+	}
+}
+
+// watchRateConfig listens for SIGHUP signals and reloads the rate config
+// file on each signal, applying it to the server. It returns when ctx is done.
+func watchRateConfig(ctx context.Context, s *derpserver.Server, path string) {
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	defer signal.Stop(sighup)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sighup:
+			log.Printf("derper: received SIGHUP, reloading rate config from %s", path)
+			if err := s.LoadAndApplyRateConfig(path); err != nil {
+				log.Printf("derper: rate config reload failed: %v", err)
+				continue
+			}
+			log.Printf("derper: rate config reloaded successfully")
+		}
 	}
 }
 

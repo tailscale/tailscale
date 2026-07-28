@@ -47,7 +47,7 @@ func TestDownload(t *testing.T) {
 	// ensure that the test returns an appropriate number of Result structs
 	expectedLen := int(DefaultDuration.Seconds()) + 1
 
-	t.Run("download test", func(t *testing.T) {
+	t.Run("download-test", func(t *testing.T) {
 		// conduct a download test
 		results, err := RunClient(Download, DefaultDuration, serverIP)
 
@@ -65,7 +65,7 @@ func TestDownload(t *testing.T) {
 		}
 	})
 
-	t.Run("upload test", func(t *testing.T) {
+	t.Run("upload-test", func(t *testing.T) {
 		// conduct an upload test
 		results, err := RunClient(Upload, DefaultDuration, serverIP)
 

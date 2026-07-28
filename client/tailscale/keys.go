@@ -22,7 +22,7 @@ type Key struct {
 
 // KeyCapabilities are the capabilities of a Key.
 type KeyCapabilities struct {
-	Devices KeyDeviceCapabilities `json:"devices,omitempty"`
+	Devices KeyDeviceCapabilities `json:"devices"`
 }
 
 // KeyDeviceCapabilities are the device-related capabilities of a Key.

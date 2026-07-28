@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/cmd/cloner/clonerex"
 )
 
@@ -154,6 +155,74 @@ func TestMapWithPointers(t *testing.T) {
 	}
 }
 
+func TestNamedMapContainer(t *testing.T) {
+	orig := &clonerex.NamedMapContainer{
+		Attrs: clonerex.NamedMap{
+			"str":  "hello",
+			"num":  int64(42),
+			"bool": true,
+		},
+	}
+
+	cloned := orig.Clone()
+	if !reflect.DeepEqual(orig, cloned) {
+		t.Errorf("Clone() = %v, want %v", cloned, orig)
+	}
+
+	// Mutate the cloned map to verify no aliasing.
+	cloned.Attrs["str"] = "modified"
+	if orig.Attrs["str"] == "modified" {
+		t.Errorf("Clone() aliased memory in Attrs: original was modified")
+	}
+
+	// Verify nil handling.
+	nilContainer := &clonerex.NamedMapContainer{}
+	nilClone := nilContainer.Clone()
+	if !reflect.DeepEqual(nilContainer, nilClone) {
+		t.Errorf("Clone() of nil Attrs = %v, want %v", nilClone, nilContainer)
+	}
+}
+
+func TestMapSlicePointerContainer(t *testing.T) {
+	num := 42
+	orig := &clonerex.MapSlicePointerContainer{
+		Routes: map[string][]*clonerex.SliceContainer{
+			"route1": {
+				{Slice: []*int{&num}},
+				{Slice: []*int{&num, &num}},
+			},
+			"route2": {
+				{Slice: []*int{&num}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+	if !reflect.DeepEqual(orig, cloned) {
+		t.Errorf("Clone() = %v, want %v", cloned, orig)
+	}
+
+	// Mutate cloned.Routes pointer values
+	*cloned.Routes["route1"][0].Slice[0] = 999
+	if *orig.Routes["route1"][0].Slice[0] == 999 {
+		t.Errorf("Clone() aliased memory in Routes: original was modified")
+	}
+}
+
+func TestMapSlicePointerContainerNilValue(t *testing.T) {
+	num := 7
+	orig := &clonerex.MapSlicePointerContainer{
+		Routes: map[string][]*clonerex.SliceContainer{
+			"nil-value": nil,
+			"non-nil":   {{Slice: []*int{&num}}},
+		},
+	}
+	cloned := orig.Clone()
+	if diff := cmp.Diff(orig.Routes, cloned.Routes); diff != "" {
+		t.Errorf("Clone() Routes mismatch (-orig +cloned):\n%s", diff)
+	}
+}
+
 func TestDeeplyNestedMap(t *testing.T) {
 	num := 123
 	orig := &clonerex.DeeplyNestedMap{
@@ -212,5 +281,15 @@ func TestDeeplyNestedMap(t *testing.T) {
 	cloned.FourLevels["l1a"]["l2a"]["l3a"]["l4c"] = &clonerex.SliceContainer{Slice: []*int{&newNum}}
 	if _, exists := orig.FourLevels["l1a"]["l2a"]["l3a"]["l4c"]; exists {
 		t.Errorf("Clone() aliased FourLevels map: new nested key appeared in original")
+	}
+}
+
+func TestMapWithNamedSliceValues(t *testing.T) {
+	orig := &clonerex.MapWithNamedSliceValues{
+		M: map[string]clonerex.NamedSlice{"k": {"foo", "bar"}},
+	}
+	cloned := orig.Clone()
+	if diff := cmp.Diff(orig, cloned); diff != "" {
+		t.Errorf("Clone() mismatch (-orig +cloned):\n%s", diff)
 	}
 }

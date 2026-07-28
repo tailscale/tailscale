@@ -30,7 +30,7 @@ func Test_listCerts(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "normal response",
+			name: "normal-response",
 			caller: fakeAPICaller{
 				Data: json.RawMessage(`{
 "certificates" : [
@@ -117,12 +117,12 @@ func Test_listCerts(t *testing.T) {
 			},
 		},
 		{
-			name:    "call error",
+			name:    "call-error",
 			caller:  fakeAPICaller{nil, fmt.Errorf("caller failed")},
 			wantErr: true,
 		},
 		{
-			name:    "payload decode error",
+			name:    "payload-decode-error",
 			caller:  fakeAPICaller{json.RawMessage("This isn't JSON!"), nil},
 			wantErr: true,
 		},

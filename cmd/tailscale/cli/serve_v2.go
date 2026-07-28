@@ -702,19 +702,26 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 				} else {
 					proto = conffile.ProtoTCP
 				}
-				destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
-				if err != nil {
-					return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
+				if strings.HasPrefix(config.TCPForward, "unix:") {
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:    proto,
+						Destination: config.TCPForward,
+					})
+				} else {
+					destHost, destPortStr, err := net.SplitHostPort(config.TCPForward)
+					if err != nil {
+						return nil, fmt.Errorf("parse TCPForward=%q: %w", config.TCPForward, err)
+					}
+					destPort, err := strconv.ParseUint(destPortStr, 10, 16)
+					if err != nil {
+						return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
+					}
+					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+						Protocol:         proto,
+						Destination:      destHost,
+						DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
+					})
 				}
-				destPort, err := strconv.ParseUint(destPortStr, 10, 16)
-				if err != nil {
-					return nil, fmt.Errorf("parse port %q: %w", destPortStr, err)
-				}
-				mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-					Protocol:         proto,
-					Destination:      destHost,
-					DestinationPorts: tailcfg.PortRange{First: uint16(destPort), Last: uint16(destPort)},
-				})
 			} else if config.HTTP || config.HTTPS {
 				webKey := ipn.HostPort(net.JoinHostPort(sniName, strconv.FormatUint(uint64(port), 10)))
 				handlers, ok := serviceConfig.Web[webKey]
@@ -732,25 +739,38 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 						DestinationPorts: tailcfg.PortRange{},
 					})
 				} else if defaultHandler.Proxy != "" {
-					proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
-					if !ok {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
-					}
-					host, portStr, err := net.SplitHostPort(rest)
-					if err != nil {
-						return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
-					}
+					if strings.HasPrefix(defaultHandler.Proxy, "unix:") {
+						// HTTP over unix socket: h.Proxy is "unix:/path" without "://".
+						// The inbound protocol is HTTP(S); infer from useTLS.
+						httpProto := conffile.ProtoHTTP
+						if config.HTTPS {
+							httpProto = conffile.ProtoHTTPS
+						}
+						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+							Protocol:    httpProto,
+							Destination: defaultHandler.Proxy,
+						})
+					} else {
+						proto, rest, ok := strings.Cut(defaultHandler.Proxy, "://")
+						if !ok {
+							return nil, fmt.Errorf("service %q: invalid proxy handler %q", svcName, defaultHandler.Proxy)
+						}
+						host, portStr, err := net.SplitHostPort(rest)
+						if err != nil {
+							return nil, fmt.Errorf("service %q: invalid proxy handler %q: %w", svcName, defaultHandler.Proxy, err)
+						}
 
-					port, err := strconv.ParseUint(portStr, 10, 16)
-					if err != nil {
-						return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
-					}
+						port, err := strconv.ParseUint(portStr, 10, 16)
+						if err != nil {
+							return nil, fmt.Errorf("service %q: parse port %q: %w", svcName, portStr, err)
+						}
 
-					mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
-						Protocol:         conffile.ServiceProtocol(proto),
-						Destination:      host,
-						DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
-					})
+						mak.Set(&sdf.Endpoints, &ppr, &conffile.Target{
+							Protocol:         conffile.ServiceProtocol(proto),
+							Destination:      host,
+							DestinationPorts: tailcfg.PortRange{First: uint16(port), Last: uint16(port)},
+						})
+					}
 				}
 			}
 		}
@@ -800,24 +820,57 @@ func (e *serveEnv) runServeGetConfig(ctx context.Context, args []string) (err er
 	return err
 }
 
+// serveConfigDocsURL documents the Services configuration file format that set-config prefers
+const serveConfigDocsURL = "https://tailscale.com/kb/1589/tailscale-services-configuration-file"
+
+const serveLegacyFormatWarning = "Warning: %q is in the legacy raw serve config format " +
+	"(as emitted by `tailscale serve status --json`), which is deprecated for set-config. " +
+	"Applying its services only. To migrate, run `tailscale serve get-config` to save your " +
+	"configuration in the supported format; see %s\n"
+
+const serveLegacyDroppedWarning = "Warning: ignoring node-level fields not supported by set-config: %s\n"
+
+// legacyNodeLevelFields returns the names of the populated top-level fields in
+// sc, other than Services, that set-config does not apply (it is services-only).
+func legacyNodeLevelFields(sc *ipn.ServeConfig) []string {
+	rest := sc.Clone()
+	rest.Services = nil
+	b, err := json.Marshal(rest)
+	if err != nil {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	fields := make([]string, 0, len(m))
+	for k := range m {
+		fields = append(fields, k)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
 func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err error) {
 	if len(args) != 1 {
 		return errors.New("must specify filename")
 	}
+	filename := args[0]
 	forSingleService := e.service.Validate() == nil
-
-	var scf *conffile.ServicesConfigFile
 	if e.allServices && forSingleService {
 		return errors.New("cannot specify both --all and --service")
-	} else if e.allServices {
-		scf, err = conffile.LoadServicesConfig(args[0], "")
-	} else if forSingleService {
-		scf, err = conffile.LoadServicesConfig(args[0], e.service.String())
-	} else {
+	}
+	if !e.allServices && !forSingleService {
 		return errors.New("must specify either --service=svc:<service-name> or --all")
 	}
+
+	forService := ""
+	if forSingleService {
+		forService = e.service.String()
+	}
+	scf, err := conffile.LoadServicesConfig(filename, forService)
 	if err != nil {
-		return fmt.Errorf("could not read config from file %q: %w", args[0], err)
+		return fmt.Errorf("could not read config from file %q: %w", filename, err)
 	}
 
 	st, err := e.getLocalClientStatusWithoutPeers(ctx)
@@ -842,6 +895,29 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	}
 	advertisedServices := set.Set[string]{}
 
+	if scf.Version == conffile.LegacyVersion {
+		// Legacy raw ipn.ServeConfig (e.g. "tailscale serve status --json"
+		// output). Deprecated for set-config; apply only its services-oriented
+		// content, with a migration warning to stderr (never stdout, which
+		// callers may pipe).
+		legacy := scf.Legacy
+		fmt.Fprintf(e.stderr(), serveLegacyFormatWarning, filename, serveConfigDocsURL)
+		if dropped := legacyNodeLevelFields(legacy); len(dropped) > 0 {
+			fmt.Fprintf(e.stderr(), serveLegacyDroppedWarning, strings.Join(dropped, ", "))
+		}
+		for name, svcCfg := range legacy.Services {
+			if forSingleService && name != e.service {
+				continue
+			}
+			mak.Set(&sc.Services, name, svcCfg.Clone())
+			advertisedServices.Add(name.String())
+		}
+		if forSingleService && sc.Services[e.service] == nil {
+			return fmt.Errorf("service %q not found in %q", e.service, filename)
+		}
+	}
+
+	// scf.Services is nil for the legacy format, making this loop a no-op then.
 	for name, details := range scf.Services {
 		for ppr, ep := range details.Endpoints {
 			if ep.Protocol == conffile.ProtoTUN {
@@ -860,6 +936,10 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 			for port := ppr.Ports.First; port <= ppr.Ports.Last; port++ {
 				var target string
 				if ep.Protocol == conffile.ProtoFile {
+					target = ep.Destination
+				} else if strings.HasPrefix(ep.Destination, "unix:") {
+					// Unix socket target: pass "unix:/path" through to setServe.
+					// Supported for HTTP(S), TCP, and TLS-terminated-TCP inbound.
 					target = ep.Destination
 				} else {
 					// map source port range 1-1 to destination port range
@@ -1045,21 +1125,28 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
 	} else if tcpHandler != nil {
-
-		tlsStatus := "TLS over TCP"
+		var annotations []string
 		if tcpHandler.TerminateTLS != "" {
-			tlsStatus = "TLS terminated"
+			annotations = append(annotations, "TLS terminated")
 		}
 		if ver := tcpHandler.ProxyProtocol; ver != 0 {
-			tlsStatus = fmt.Sprintf("%s, PROXY protocol v%d", tlsStatus, ver)
+			annotations = append(annotations, fmt.Sprintf("PROXY protocol v%d", ver))
 		}
 
-		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d (%s)\n", host, srvPort, tlsStatus))
+		output.WriteString(fmt.Sprintf("|-- tcp://%s:%d", host, srvPort))
+		if len(annotations) != 0 {
+			output.WriteString(fmt.Sprintf(" (%s)", strings.Join(annotations, ", ")))
+		}
+		output.WriteString("\n")
 		for _, a := range ips {
 			ipp := net.JoinHostPort(a.String(), strconv.Itoa(int(srvPort)))
 			output.WriteString(fmt.Sprintf("|-- tcp://%s\n", ipp))
 		}
-		output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
+		if strings.HasPrefix(tcpHandler.TCPForward, "unix:") {
+			output.WriteString(fmt.Sprintf("|--> %s\n\n", tcpHandler.TCPForward))
+		} else {
+			output.WriteString(fmt.Sprintf("|--> tcp://%s\n\n", tcpHandler.TCPForward))
+		}
 	}
 
 	if !forService && !e.bg.Value {
@@ -1122,8 +1209,8 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 		return nil
 	}
 
-	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") {
-		// local path or text target, nothing to check
+	if filepath.IsAbs(target) || strings.HasPrefix(target, "text:") || strings.HasPrefix(target, "unix:") {
+		// local path, text target, or unix socket, nothing to check
 		return nil
 	}
 
@@ -1216,14 +1303,28 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	svcName := tailcfg.AsServiceName(dnsName)
 
-	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp"}, "tcp")
+	targetURL, err := ipn.ExpandProxyTargetValue(target, []string{"tcp", "unix"}, "tcp")
 	if err != nil {
 		return fmt.Errorf("unable to expand target: %v", err)
 	}
 
-	dstURL, err := url.Parse(targetURL)
-	if err != nil {
-		return fmt.Errorf("invalid TCP target %q: %v", target, err)
+	// For unix: targets, store the full "unix:/path" string as the forward address.
+	// For tcp: targets, extract the host:port from the parsed URL.
+	var fwdAddr string
+	if strings.HasPrefix(targetURL, "unix:") {
+		if proxyProtocol != 0 {
+			return fmt.Errorf("PROXY protocol is not supported with unix socket targets")
+		}
+		fwdAddr = targetURL
+	} else {
+		dstURL, err := url.Parse(targetURL)
+		if err != nil {
+			return fmt.Errorf("invalid TCP target %q: %v", target, err)
+		}
+		if dstURL.Port() == "" {
+			return fmt.Errorf("TCP target %q must include a port", target)
+		}
+		fwdAddr = dstURL.Host
 	}
 
 	if sc.IsServingWeb(srcPort, svcName) {
@@ -1232,17 +1333,17 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if svcName := tailcfg.AsServiceName(dnsName); svcName != "" {
-		sc.SetTCPForwardingForService(srcPort, dstURL.Host, terminateTLS, svcName, proxyProtocol, mds)
+		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
 		return nil
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
 	if svcName != "" {
-		sc.SetTCPForwardingForService(srcPort, dstURL.Host, terminateTLS, svcName, proxyProtocol, mds)
+		sc.SetTCPForwardingForService(srcPort, fwdAddr, terminateTLS, svcName, proxyProtocol, mds)
 		return nil
 	}
 
-	sc.SetTCPForwarding(srcPort, dstURL.Host, terminateTLS, proxyProtocol, dnsName)
+	sc.SetTCPForwarding(srcPort, fwdAddr, terminateTLS, proxyProtocol, dnsName)
 	return nil
 }
 

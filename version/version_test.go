@@ -6,6 +6,8 @@ package version_test
 import (
 	"bytes"
 	"os"
+	"path"
+	"runtime/debug"
 	"testing"
 
 	ts "tailscale.com"
@@ -47,5 +49,23 @@ func TestShortAllocs(t *testing.T) {
 	}))
 	if allocs > 0 {
 		t.Errorf("allocs = %v; want 0", allocs)
+	}
+}
+
+func BenchmarkCmdName(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = version.CmdName()
+	}
+}
+
+func BenchmarkReadBuildInfo(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			b.Fatal("ReadBuildInfo failed")
+		}
+		_ = path.Base(info.Path)
 	}
 }

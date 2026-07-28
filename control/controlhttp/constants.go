@@ -4,6 +4,7 @@
 package controlhttp
 
 import (
+	"crypto/x509"
 	"net/http"
 	"net/url"
 	"sync/atomic"
@@ -84,6 +85,9 @@ type Dialer struct {
 
 	// HealthTracker, if non-nil, is the health tracker to use.
 	HealthTracker *health.Tracker
+
+	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs for TLS.
+	ExtraRootCAs *x509.CertPool
 
 	// DialPlan, if set, contains instructions from the control server on
 	// how to connect to it. If present, we will try the methods in this

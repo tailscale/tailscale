@@ -42,10 +42,7 @@ func (d *DirFile) Readdir(count int) ([]fs.FileInfo, error) {
 		return result, nil
 	}
 
-	n := len(d.children)
-	if count < n {
-		n = count
-	}
+	n := min(count, len(d.children))
 	result := d.children[:n]
 	d.children = d.children[n:]
 	if len(d.children) == 0 {

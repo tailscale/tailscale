@@ -126,8 +126,6 @@ func TestAddAndDeleteBase(t *testing.T) {
 
 	// Check that the rules were created.
 	tsRulesV4 := []fakeRule{ // table/chain/rule
-		{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}},
-		{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
 	}
 
@@ -369,6 +367,8 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 	preroutingArgs := []string{
 		"-m", "conntrack",
 		"--ctstate", "ESTABLISHED,RELATED",
+		"-m", "connmark",
+		"!", "--mark", "0x0/0xff0000",
 		"-j", "CONNMARK",
 		"--restore-mark",
 		"--nfmask", "0xff0000",
@@ -503,4 +503,90 @@ func TestAddAndDelConnmarkSaveRule(t *testing.T) {
 			t.Errorf("IPv4 OUTPUT connmark rule still exists after deletion")
 		}
 	})
+}
+
+func TestAddAndDelCGNATRules(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	tunname := "tun0"
+
+	// We need the chains to exist so we can add rules into them.
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		mode      CGNATMode
+		wantRules []fakeRule
+	}{
+		{
+			CGNATModeDrop, []fakeRule{
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"}},
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}},
+			},
+		},
+		{
+			CGNATModeReturn, []fakeRule{
+				{"filter", "ts-input", []string{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "RETURN"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		if err := iptr.AddExternalCGNATRules(tt.mode, tunname); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tr := range tt.wantRules {
+			if exists, err := iptr.ipt4.Exists(tr.table, tr.chain, tr.args...); err != nil {
+				t.Fatalf("mode %q: error checking for rule: %v", tt.mode, err)
+			} else if !exists {
+				t.Errorf("mode %q: rule %s/%s/%s doesn't exist", tt.mode, tr.table, tr.chain, strings.Join(tr.args, " "))
+			}
+		}
+
+		if err := iptr.DelExternalCGNATRules(tt.mode, tunname); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, tr := range tt.wantRules {
+			if exists, err := iptr.ipt4.Exists(tr.table, tr.chain, tr.args...); err != nil {
+				t.Fatalf("mode %q: error checking for rule: %v", tt.mode, err)
+			} else if exists {
+				t.Errorf("mode %q: rule %s/%s/%s not deleted", tt.mode, tr.table, tr.chain, strings.Join(tr.args, " "))
+			}
+		}
+	}
+}
+
+// TestDelLoopbackRuleMissing verifies DelLoopbackRule is a no-op (not an error)
+// when the rule is absent, so removing an address whose loopback rule was never
+// added in this instance -- e.g. one left on the interface by a previous
+// tailscaled -- isn't blocked. See tailscale/tailscale#19974.
+func TestDelLoopbackRuleMissing(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	if err := iptr.AddChains(); err != nil {
+		t.Fatal(err)
+	}
+	defer iptr.DelChains()
+
+	addr := netip.MustParseAddr("100.64.0.99")
+	rule := []string{"-i", "lo", "-s", addr.String(), "-j", "ACCEPT"}
+
+	// No AddLoopbackRule for addr, so its rule is absent. Delete must not error.
+	if err := iptr.DelLoopbackRule(addr); err != nil {
+		t.Fatalf("DelLoopbackRule with no rule present: %v", err)
+	}
+
+	// And it still deletes the rule when present.
+	if err := iptr.AddLoopbackRule(addr); err != nil {
+		t.Fatal(err)
+	}
+	if err := iptr.DelLoopbackRule(addr); err != nil {
+		t.Fatalf("DelLoopbackRule with rule present: %v", err)
+	}
+	if exists, err := iptr.ipt4.Exists("filter", "ts-input", rule...); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Error("loopback rule still present after DelLoopbackRule")
+	}
 }

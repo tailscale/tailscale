@@ -736,6 +736,7 @@ func TestRateLogger(t *testing.T) {
 }
 
 func TestRouteStoreMetrics(t *testing.T) {
+	clientmetric.ResetForTest(t)
 	metricStoreRoutes(1, 1)
 	metricStoreRoutes(1, 1)         // the 1 buckets value should be 2
 	metricStoreRoutes(5, 5)         // the 5 buckets value should be 1

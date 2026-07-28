@@ -22,6 +22,7 @@ import (
 
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/util/set"
+	"tailscale.com/util/testenv"
 )
 
 var (
@@ -450,6 +451,24 @@ func (b *deltaEncBuf) writeHexVarint(v int64) {
 	hexBuf := b.buf.Bytes()[oldLen : oldLen+hexLen]
 	hex.Encode(hexBuf, b.scratch[:n])
 	b.buf.Write(hexBuf)
+}
+
+// ResetForTest resets all client metric values to zero.
+// It panics if not in a test or if called from a parallel test.
+func ResetForTest(t testenv.TB) {
+	if !testenv.InTest() {
+		panic("clientmetric.ResetForTest called outside a test")
+	}
+	if testenv.InParallelTest(t) {
+		panic("clientmetric.ResetForTest called from a parallel test")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, m := range metrics {
+		if m.v != nil {
+			atomic.StoreInt64(m.v, 0)
+		}
+	}
 }
 
 var TestHooks testHooks

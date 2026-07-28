@@ -1,0 +1,167 @@
+<!doctype html>
+<!--
+  Copyright (c) Tailscale Inc & contributors
+  SPDX-License-Identifier: BSD-3-Clause
+
+  Fixture page for tailscale.com/tstest/integration/jswasmtest.
+
+  It imports the built pkg.js (served by the Go harness at /_pkg/) and
+  dispatches into one of two flows based on URL query parameters, then
+  reports back via window.tsTest so the Go-side chromedp driver only
+  has to poll one flag (window.tsTest.done) and then read static fields.
+
+  createIPN flow (no query params): just instantiate via createIPN with
+  a junk auth key and report the IPN object's method types. Used by
+  TestCreateIPN.
+
+  fetch flow (?mode=fetch&controlURL=...&authKey=...&peerURL=...&hostname=...):
+  call createIPN with the given controlURL+authKey, wait for the IPN to
+  reach BackendState=Running, then ipn.fetch(peerURL) and report the
+  response status + body. Used by TestFetchTailnetPeer.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>@tailscale/connect jswasmtest</title>
+</head>
+<body>
+  <div id="status">loading...</div>
+  <script type="module">
+    const tsTest = {
+      mode: null,
+      imported: false,
+      importErrors: [],
+      runtimeErrors: [],
+      panics: [],
+      exports: null,
+
+      // createIPN flow:
+      ipnMethods: null,
+      instantiateError: null,
+
+      // Fetch flow:
+      states: [],
+      browseURLs: [],
+      runError: null,
+      fetchResult: null,
+      fetchError: null,
+
+      done: false,
+    };
+    window.tsTest = tsTest;
+
+    window.addEventListener("error", (e) => {
+      tsTest.runtimeErrors.push(String(e.error || e.message));
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      tsTest.runtimeErrors.push(String(e.reason));
+    });
+
+    const setStatus = (s) => { document.getElementById("status").textContent = s; };
+
+    const params = new URLSearchParams(window.location.search);
+    tsTest.mode = params.get("mode") || "createIPN";
+
+    try {
+      const mod = await import("/_pkg/pkg.js");
+      tsTest.imported = true;
+      tsTest.exports = {
+        createIPN: typeof mod.createIPN,
+        runSSHSession: typeof mod.runSSHSession,
+      };
+      setStatus("imported");
+
+      if (tsTest.mode === "createIPN") {
+        // createIPN with a junk auth key just to verify the WASM loads and
+        // newIPN returns an object with the documented methods. We never
+        // call ipn.run(), so no control-plane traffic is attempted.
+        try {
+          const ipn = await mod.createIPN({
+            authKey: "tskey-pkgtest-not-real",
+            wasmURL: "/_pkg/main.wasm",
+            panicHandler: (err) => { tsTest.panics.push(String(err)); },
+          });
+          tsTest.ipnMethods = {
+            run: typeof ipn.run,
+            login: typeof ipn.login,
+            logout: typeof ipn.logout,
+            ssh: typeof ipn.ssh,
+            fetch: typeof ipn.fetch,
+          };
+          setStatus("instantiated");
+        } catch (err) {
+          tsTest.instantiateError = String(err);
+          setStatus("instantiate failed");
+        }
+      } else if (tsTest.mode === "fetch") {
+        const controlURL = params.get("controlURL");
+        const authKey = params.get("authKey");
+        const peerURL = params.get("peerURL");
+        const hostname = params.get("hostname") || "browser-pkgtest";
+
+        const ipn = await mod.createIPN({
+          authKey,
+          controlURL,
+          hostname,
+          wasmURL: "/_pkg/main.wasm",
+          panicHandler: (err) => { tsTest.panics.push(String(err)); },
+        });
+        setStatus("instantiated");
+
+        // Wait for the IPN to reach "Running" via the notifyState callback,
+        // then fetch the peer URL through ipn.fetch (which dials via the
+        // tailnet, not the browser).
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const settle = (err) => {
+            if (settled) return;
+            settled = true;
+            if (err) reject(err); else resolve();
+          };
+          ipn.run({
+            notifyState: (state) => {
+              tsTest.states.push(state);
+              setStatus("state: " + state);
+              // LocalBackend.Start does not auto-call Login on a fresh
+              // profile (no node key, no config file). Match what
+              // tsnet.Server.Up does: when state is NeedsLogin and we
+              // were given an auth key, kick off StartLoginInteractive
+              // so the auth key gets used.
+              if (state === "NeedsLogin") ipn.login();
+              if (state === "Running") settle();
+            },
+            notifyNetMap: () => {},
+            notifyBrowseToURL: (url) => { tsTest.browseURLs.push(url); },
+            notifyPanicRecover: (err) => { settle(new Error("panic: " + err)); },
+          });
+        });
+
+        try {
+          const resp = await ipn.fetch(peerURL);
+          const body = await resp.text();
+          tsTest.fetchResult = { status: resp.status, body };
+          setStatus("fetched");
+        } catch (err) {
+          tsTest.fetchError = String(err);
+          setStatus("fetch failed");
+        }
+      } else {
+        tsTest.instantiateError = "unknown mode: " + tsTest.mode;
+      }
+    } catch (err) {
+      if (!tsTest.imported) {
+        tsTest.importErrors.push(String(err));
+        setStatus("import failed");
+      } else if (tsTest.mode === "fetch") {
+        tsTest.runError = String(err);
+        setStatus("run failed");
+      } else {
+        tsTest.instantiateError = String(err);
+        setStatus("instantiate failed");
+      }
+    } finally {
+      tsTest.done = true;
+    }
+  </script>
+</body>
+</html>

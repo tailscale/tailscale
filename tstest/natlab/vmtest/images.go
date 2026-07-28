@@ -1,0 +1,276 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+package vmtest
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/ulikunitz/xz"
+)
+
+// LinuxFamily classifies a Linux distro by the conventions that affect how we
+// provision it via cloud-init (default network manager, MAC/LSM, etc). It is
+// only meaningful for Linux cloud images, which must declare one; the zero
+// value means "undeclared".
+type LinuxFamily string
+
+const (
+	// LinuxDebian covers Debian and Ubuntu cloud images: systemd-networkd for
+	// networking and AppArmor as the LSM.
+	LinuxDebian LinuxFamily = "debian"
+
+	// LinuxRHEL covers Fedora, CentOS Stream, Rocky, and AlmaLinux cloud
+	// images: NetworkManager + systemd-resolved for networking and SELinux
+	// enforcing.
+	LinuxRHEL LinuxFamily = "rhel"
+)
+
+// OSImage describes a VM operating system image.
+type OSImage struct {
+	Name      string
+	URL       string      // download URL for the cloud image
+	SHA256    string      // expected SHA256 hash of the image (of the final qcow2, after any decompression)
+	MemoryMB  int         // RAM for the VM
+	Family    LinuxFamily // Linux distro family (affects cloud-init user-data); empty means Debian-like
+	IsGokrazy bool        // true for gokrazy images (different QEMU setup)
+	IsMacOS   bool        // true for macOS images (launched via tailmac, not QEMU)
+}
+
+// GOOS returns the Go OS name for this image.
+func (img OSImage) GOOS() string {
+	if img.IsMacOS {
+		return "darwin"
+	}
+	if img.IsGokrazy {
+		return "linux"
+	}
+	if strings.HasPrefix(img.Name, "freebsd") {
+		return "freebsd"
+	}
+	return "linux"
+}
+
+// GOARCH returns the Go architecture name for this image.
+func (img OSImage) GOARCH() string {
+	if img.IsMacOS {
+		return "arm64"
+	}
+	return "amd64"
+}
+
+// isLinuxCloudImage reports whether the image is a Linux distro cloud image
+// (Ubuntu, Debian, Fedora, ...), as opposed to gokrazy or a non-Linux OS.
+// These are the images provisioned via generateLinuxUserData and are the ones
+// that must declare a LinuxFamily.
+func (img OSImage) isLinuxCloudImage() bool {
+	return img.GOOS() == "linux" && !img.IsGokrazy
+}
+
+var (
+	// Gokrazy is a minimal Tailscale appliance image built from the gokrazy/natlabapp directory.
+	Gokrazy = OSImage{
+		Name:      "gokrazy",
+		IsGokrazy: true,
+		MemoryMB:  384,
+	}
+
+	// Ubuntu2404 is Ubuntu 24.04 LTS (Noble Numbat) cloud image.
+	Ubuntu2404 = OSImage{
+		Name:     "ubuntu-24.04",
+		URL:      "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
+		MemoryMB: 1024,
+		Family:   LinuxDebian,
+	}
+
+	// Debian12 is Debian 12 (Bookworm) generic cloud image.
+	Debian12 = OSImage{
+		Name:     "debian-12",
+		URL:      "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+		MemoryMB: 1024,
+		Family:   LinuxDebian,
+	}
+
+	// FreeBSD150 is FreeBSD 15.0-RELEASE with BASIC-CLOUDINIT (nuageinit) support.
+	// The image is distributed as xz-compressed qcow2.
+	FreeBSD150 = OSImage{
+		Name:     "freebsd-15.0",
+		URL:      "https://download.freebsd.org/releases/VM-IMAGES/15.0-RELEASE/amd64/Latest/FreeBSD-15.0-RELEASE-amd64-BASIC-CLOUDINIT-ufs.qcow2.xz",
+		MemoryMB: 1024,
+	}
+
+	// Fedora43 is the Fedora 43 Cloud Base image: NetworkManager +
+	// systemd-resolved, SELinux enforcing, hence LinuxRHEL.
+	Fedora43 = OSImage{
+		Name:     "fedora-43",
+		URL:      "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
+		MemoryMB: 1024,
+		Family:   LinuxRHEL,
+	}
+
+	// MacOS is a macOS VM launched via tailmac (Apple Virtualization.framework).
+	// Uses a Tart pre-built base image (ghcr.io/cirruslabs/macos-tahoe-base)
+	// which is automatically pulled on first use. Only runs on macOS arm64 hosts.
+	MacOS = OSImage{
+		Name:     "macos",
+		IsMacOS:  true,
+		MemoryMB: 4096,
+	}
+)
+
+// CloudImages returns the set of QEMU-bootable cloud OS images natlab can
+// use for vmtests, excluding gokrazy (built from source) and macOS (which
+// uses a separate snapshot pipeline). It is intended for tooling such as
+// a CI prep step that wants to warm the image cache.
+func CloudImages() []OSImage {
+	return []OSImage{Ubuntu2404, Debian12, FreeBSD150, Fedora43}
+}
+
+// EnsureImage downloads img to the local cache if not already present.
+// It is intended for tooling that wants to warm the image cache before
+// running natlab vmtests (e.g. a CI prep step). The test framework also
+// calls into the package-internal equivalent on demand.
+func EnsureImage(ctx context.Context, img OSImage) error {
+	return ensureImage(ctx, img)
+}
+
+// imageCacheDir returns the directory for cached VM images.
+func imageCacheDir() string {
+	if d := os.Getenv("VMTEST_CACHE_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".cache", "tailscale", "vmtest", "images")
+}
+
+// ensureImage downloads and caches the OS image if not already present.
+func ensureImage(ctx context.Context, img OSImage) error {
+	if img.IsGokrazy {
+		return nil // gokrazy images are handled separately
+	}
+
+	cacheDir := imageCacheDir()
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return err
+	}
+
+	// Use a filename based on the image name.
+	cachedPath := filepath.Join(cacheDir, img.Name+".qcow2")
+	if _, err := os.Stat(cachedPath); err == nil {
+		// If we have a SHA256 to verify, check it.
+		if img.SHA256 != "" {
+			if err := verifySHA256(cachedPath, img.SHA256); err != nil {
+				log.Printf("cached image %s failed SHA256 check, re-downloading: %v", img.Name, err)
+				os.Remove(cachedPath)
+			} else {
+				return nil
+			}
+		} else {
+			return nil // exists, no hash to verify
+		}
+	}
+
+	isXZ := strings.HasSuffix(img.URL, ".xz")
+	log.Printf("downloading %s from %s...", img.Name, img.URL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", img.URL, nil)
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", img.Name, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", img.Name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("downloading %s: HTTP %s", img.Name, resp.Status)
+	}
+
+	// Set up the reader pipeline: HTTP body → (optional xz decompress) → file.
+	var src io.Reader = resp.Body
+	if isXZ {
+		xzr, err := xz.NewReader(resp.Body)
+		if err != nil {
+			return fmt.Errorf("creating xz reader for %s: %w", img.Name, err)
+		}
+		src = xzr
+	}
+
+	tmpFile := cachedPath + ".tmp"
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		f.Close()
+		os.Remove(tmpFile)
+	}()
+
+	h := sha256.New()
+	w := io.MultiWriter(f, h)
+	if _, err := io.Copy(w, src); err != nil {
+		return fmt.Errorf("downloading %s: %w", img.Name, err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	if img.SHA256 != "" {
+		got := hex.EncodeToString(h.Sum(nil))
+		if got != img.SHA256 {
+			return fmt.Errorf("SHA256 mismatch for %s: got %s, want %s", img.Name, got, img.SHA256)
+		}
+	}
+
+	if err := os.Rename(tmpFile, cachedPath); err != nil {
+		return err
+	}
+	log.Printf("downloaded %s", img.Name)
+	return nil
+}
+
+// verifySHA256 checks that the file at path has the expected SHA256 hash.
+func verifySHA256(path, expected string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if got != expected {
+		return fmt.Errorf("got %s, want %s", got, expected)
+	}
+	return nil
+}
+
+// cachedImagePath returns the filesystem path to the cached image for the given OS.
+func cachedImagePath(img OSImage) string {
+	return filepath.Join(imageCacheDir(), img.Name+".qcow2")
+}
+
+// createOverlay creates a qcow2 overlay image on top of the given base image.
+func createOverlay(base, overlay string) error {
+	out, err := exec.Command("qemu-img", "create",
+		"-f", "qcow2",
+		"-F", "qcow2",
+		"-b", base,
+		overlay).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("qemu-img create overlay: %v: %s", err, out)
+	}
+	return nil
+}

@@ -7,15 +7,11 @@ package publicdns
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"log"
-	"math/big"
 	"net/netip"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -60,12 +56,15 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 		return sb.String(), true, true
 	}
 
-	// Control D DoH URLs are of the form "https://dns.controld.com/8yezwenugs"
-	// where the path component is represented by 8 bytes (7-14) of the IPv6 address in base36
-	if controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) {
-		path := big.NewInt(0).SetBytes(ip.AsSlice()[6:14]).Text(36)
-		return controlDBase + path, true, true
-	}
+	// Control D's free anycast resolvers (freedns.controld.com/pN) are the only
+	// Control D addresses that serve DoH; they're registered as exact entries in
+	// dohOfIP (see populate) and are handled by the lookup above.
+	//
+	// The ID-encoded addresses in the 2606:1a40::/48 ranges (customer resolver ID
+	// base36-encoded into the address) are legacy plaintext-DNS (port 53) endpoints
+	// that refuse DoH on :443, so we deliberately don't upgrade them to DoH here:
+	// they fall through and are used as ordinary port-53 resolvers. Premium DoH is
+	// only reachable via the dns.controld.com/<id> URL path (see DoHIPsOfBase).
 
 	return "", false, false
 }
@@ -126,15 +125,12 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 			}
 		}
 	}
-	if pathStr, ok := strings.CutPrefix(dohBase, controlDBase); ok {
-		if i := strings.IndexFunc(pathStr, isSlashOrQuestionMark); i != -1 {
-			pathStr = pathStr[:i]
-		}
+	if strings.HasPrefix(dohBase, controlDBase) {
 		return []netip.Addr{
 			controlDv4One,
 			controlDv4Two,
-			controlDv6Gen(controlDv6RangeA.Addr(), pathStr),
-			controlDv6Gen(controlDv6RangeB.Addr(), pathStr),
+			controlDv6One,
+			controlDv6Two,
 		}
 	}
 	return nil
@@ -330,6 +326,8 @@ var (
 	controlDv6RangeB = netip.MustParsePrefix("2606:1a40:1::/48")
 	controlDv4One    = netip.MustParseAddr("76.76.2.22")
 	controlDv4Two    = netip.MustParseAddr("76.76.10.22")
+	controlDv6One    = netip.MustParseAddr("2606:1a40::22")
+	controlDv6Two    = netip.MustParseAddr("2606:1a40:1::22")
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -341,23 +339,6 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 	a := ip.As16()
 	copy(a[16-len(id):], id)
 	return netip.AddrFrom16(a)
-}
-
-// controlDv6Gen generates a Control D IPv6 address from provided ip and id.
-//
-// The id is taken from the DoH query path component and represents a unique resolver configuration.
-// e.g. https://dns.controld.com/hyq3ipr2ct
-func controlDv6Gen(ip netip.Addr, id string) netip.Addr {
-	b := make([]byte, 8)
-	decoded, err := strconv.ParseUint(id, 36, 64)
-	if err != nil {
-		log.Printf("controlDv6Gen: failed to parse id %q: %v", id, err)
-	}
-	binary.BigEndian.PutUint64(b, decoded)
-	a := ip.AsSlice()
-	copy(a[6:14], b)
-	addr, _ := netip.AddrFromSlice(a)
-	return addr
 }
 
 // IPIsDoHOnlyServer reports whether ip is a DNS server that should only use

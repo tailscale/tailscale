@@ -48,7 +48,8 @@
   }: let
     goVersion = nixpkgs.lib.fileContents ./go.toolchain.version;
     toolChainRev = nixpkgs.lib.fileContents ./go.toolchain.rev;
-    gitHash = nixpkgs.lib.fileContents ./go.toolchain.rev.sri;
+    flakeHashes = builtins.fromJSON (builtins.readFile ./flakehashes.json);
+    gitHash = flakeHashes.toolchain.sri;
     eachSystem = f:
       nixpkgs.lib.genAttrs (import systems) (system:
         f (import nixpkgs {
@@ -103,7 +104,7 @@
         name = "tailscale";
         pname = "tailscale";
         src = ./.;
-        vendorHash = pkgs.lib.fileContents ./go.mod.sri;
+        vendorHash = flakeHashes.vendor.sri;
         nativeBuildInputs = [pkgs.makeWrapper pkgs.installShellFiles];
         ldflags = ["-X tailscale.com/version.gitCommitStamp=${tailscaleRev}"];
         env.CGO_ENABLED = 0;
@@ -158,9 +159,18 @@
           # qemu and e2fsprogs are needed for natlab
           qemu
           e2fsprogs
+
+          # mtools (mcopy) and dtc are needed by the `tsapp-qemu-pi`
+          # Makefile target that boots the Tailscale appliance under qemu.
+          mtools
+          dtc
+
+          # awscli2 is used by gokrazy/build.go to import and register the
+          # Tailscale appliance AMI.
+          awscli2.out
         ];
       };
     });
   };
 }
-# nix-direnv cache busting line: sha256-39axT5Q0+fNTcMgZCMLMNfJEJN46wMaaKDgfI+Uj+Ps=
+# nix-direnv cache busting line: sha256-5ClQ5fSyEHUlhPtZI0ir8ddQRXSnqOG5VIJ3KjWtXmw=

@@ -13,12 +13,12 @@ func TestEscape(t *testing.T) {
 		name, input, want string
 	}{
 		{
-			name:  "no illegal chars",
+			name:  "no-illegal-chars",
 			input: "/home/user",
 			want:  "/home/user",
 		},
 		{
-			name:  "empty string",
+			name:  "empty-string",
 			input: "",
 			want:  "\"\"",
 		},
@@ -38,12 +38,12 @@ func TestEscape(t *testing.T) {
 			want:  "\"\n\"",
 		},
 		{
-			name:  "double quote",
+			name:  "double-quote",
 			input: "\"",
 			want:  "\"\\\"\"",
 		},
 		{
-			name:  "single quote",
+			name:  "single-quote",
 			input: "'",
 			want:  "\"'\"",
 		},
@@ -53,12 +53,12 @@ func TestEscape(t *testing.T) {
 			want:  "\"\\\\\"",
 		},
 		{
-			name:  "greater than",
+			name:  "greater-than",
 			input: ">",
 			want:  "\">\"",
 		},
 		{
-			name:  "less than",
+			name:  "less-than",
 			input: "<",
 			want:  "\"<\"",
 		},
@@ -93,7 +93,7 @@ func TestEscape(t *testing.T) {
 			want:  "\"*\"",
 		},
 		{
-			name:  "question mark",
+			name:  "question-mark",
 			input: "?",
 			want:  "\"?\"",
 		},
@@ -103,12 +103,12 @@ func TestEscape(t *testing.T) {
 			want:  "\"#\"",
 		},
 		{
-			name:  "open paren",
+			name:  "open-paren",
 			input: "(",
 			want:  "\"(\"",
 		},
 		{
-			name:  "close paren",
+			name:  "close-paren",
 			input: ")",
 			want:  "\")\"",
 		},
@@ -118,17 +118,17 @@ func TestEscape(t *testing.T) {
 			want:  "\"\\`\"",
 		},
 		{
-			name:  "char without escape",
+			name:  "char-without-escape",
 			input: "/home/user\t",
 			want:  "\"/home/user\t\"",
 		},
 		{
-			name:  "char with escape",
+			name:  "char-with-escape",
 			input: "/home/user\\",
 			want:  "\"/home/user\\\\\"",
 		},
 		{
-			name:  "all illegal chars",
+			name:  "all-illegal-chars",
 			input: "/home/user" + needsEscape,
 			want:  "\"/home/user \t\n\\\"'\\\\><~|&;\\$*?#()\\`\"",
 		},

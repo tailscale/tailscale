@@ -217,3 +217,19 @@ func TestErrorStringerWithSubproblems(t *testing.T) {
 		t.Errorf("Unexpected error string: wanted %q, got %q", expectedStr, err.Error())
 	}
 }
+
+func TestOrderErrorProblem(t *testing.T) {
+	oe := &OrderError{
+		OrderURL: "url",
+		Status:   "invalid",
+		Problem: &Error{
+			StatusCode:  400,
+			ProblemType: "type",
+			Detail:      "detail",
+		},
+	}
+	want := "acme: order url status: invalid; problem: 400 type: detail"
+	if got := oe.Error(); got != want {
+		t.Errorf("oe.Error() = %q, want %q", got, want)
+	}
+}

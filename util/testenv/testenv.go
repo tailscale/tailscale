@@ -8,6 +8,7 @@ package testenv
 import (
 	"context"
 	"flag"
+	"io"
 
 	"tailscale.com/types/lazy"
 )
@@ -21,8 +22,23 @@ func InTest() bool {
 	})
 }
 
+// Verbose reports whether the test binary is running with verbose
+// output (the -test.v flag), like testing.Verbose but without
+// importing the testing package.
+func Verbose() bool {
+	f := flag.Lookup("test.v")
+	if f == nil {
+		return false
+	}
+	// The flag's String value is "false" when off, and "true" or
+	// "test2json" when on.
+	return f.Value.String() != "false"
+}
+
 // TB is testing.TB, to avoid importing "testing" in non-test code.
 type TB interface {
+	ArtifactDir() string
+	Attr(key, value string)
 	Cleanup(func())
 	Error(args ...any)
 	Errorf(format string, args ...any)
@@ -35,6 +51,7 @@ type TB interface {
 	Log(args ...any)
 	Logf(format string, args ...any)
 	Name() string
+	Output() io.Writer
 	Setenv(key, value string)
 	Chdir(dir string)
 	Skip(args ...any)

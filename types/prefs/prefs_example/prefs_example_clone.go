@@ -61,7 +61,6 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	PostureChecking        prefs.Item[bool]
 	NetfilterKind          prefs.Item[string]
 	DriveShares            prefs.StructList[*drive.Share]
-	AllowSingleHosts       prefs.Item[marshalAsTrueInJSON]
 	Persist                *persist.Persist
 }{})
 

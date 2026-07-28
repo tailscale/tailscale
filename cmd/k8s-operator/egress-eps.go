@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	"tailscale.com/kube/egressservices"
 )
 
@@ -90,9 +91,10 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		lg.Debugf("No egress config found, likely because ProxyGroup has not been created")
 		return res, nil
 	}
-	cfg, ok := (*cfgs)[tailnetSvc]
+
+	cfg, ok := cfgs[tailnetSvc]
 	if !ok {
-		lg.Infof("[unexpected] configuration for tailnet service %s not found", tailnetSvc)
+		lg.Warnf("configuration for tailnet service %q not found", tailnetSvc)
 		return res, nil
 	}
 
@@ -104,16 +106,19 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)
 	for _, pod := range podList.Items {
-		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, lg)
+		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
 			return res, fmt.Errorf("error verifying if Pod is ready to route traffic: %w", err)
 		}
 		if !ready {
 			continue // maybe next time
 		}
-		podIP, err := podIPv4(&pod) // we currently only support IPv4
+		podIP, err := podIPForFamily(&pod, eps.AddressType)
 		if err != nil {
-			return res, fmt.Errorf("error determining IPv4 address for Pod: %w", err)
+			return res, fmt.Errorf("error determining Pod IP for %s EndpointSlice: %w", eps.AddressType, err)
+		}
+		if podIP == "" {
+			continue // Pod doesn't have an IP for this address family
 		}
 		newEndpoints = append(newEndpoints, discoveryv1.Endpoint{
 			Hostname:  (*string)(&pod.UID),
@@ -129,21 +134,25 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// run a cleanup for deleted Pods etc.
 	eps.Endpoints = newEndpoints
 	if !reflect.DeepEqual(eps, oldEps) {
-		lg.Infof("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
-		if err := er.Update(ctx, eps); err != nil {
+		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
+		if err = er.Update(ctx, eps); err != nil {
 			return res, fmt.Errorf("error updating EndpointSlice: %w", err)
 		}
 	}
+
 	return res, nil
 }
 
-func podIPv4(pod *corev1.Pod) (string, error) {
+func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, error) {
 	for _, ip := range pod.Status.PodIPs {
 		parsed, err := netip.ParseAddr(ip.IP)
 		if err != nil {
 			return "", fmt.Errorf("error parsing IP address %s: %w", ip, err)
 		}
-		if parsed.Is4() {
+		switch {
+		case addrType == discoveryv1.AddressTypeIPv4 && parsed.Is4():
+			return parsed.String(), nil
+		case addrType == discoveryv1.AddressTypeIPv6 && parsed.Is6():
 			return parsed.String(), nil
 		}
 	}
@@ -153,61 +162,76 @@ func podIPv4(pod *corev1.Pod) (string, error) {
 // podIsReadyToRouteTraffic returns true if it appears that the proxy Pod has configured firewall rules to be able to
 // route traffic to the given tailnet service. It retrieves the proxy's state Secret and compares the tailnet service
 // status written there to the desired service configuration.
-func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, lg *zap.SugaredLogger) (bool, error) {
+func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod corev1.Pod, cfg *egressservices.Config, tailnetSvcName string, addrType discoveryv1.AddressType, lg *zap.SugaredLogger) (bool, error) {
 	lg = lg.With("proxy_pod", pod.Name)
-	lg.Debugf("checking whether proxy is ready to route to egress service")
+	lg.Debug("checking whether proxy is ready to route to egress service")
 	if !pod.DeletionTimestamp.IsZero() {
-		lg.Debugf("proxy Pod is being deleted, ignore")
+		lg.Debug("proxy Pod is being deleted, ignore")
 		return false, nil
 	}
-	podIP, err := podIPv4(&pod)
-	if err != nil {
+	podIP, err := podIPForFamily(&pod, addrType)
+	switch {
+	case err != nil:
 		return false, fmt.Errorf("error determining Pod IP address: %v", err)
-	}
-	if podIP == "" {
-		lg.Infof("[unexpected] Pod does not have an IPv4 address, and IPv6 is not currently supported")
+	case podIP == "":
+		lg.Debugf("Pod does not have an address for family %s", addrType)
 		return false, nil
 	}
+
 	stateS := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 		},
 	}
+
 	err = er.Get(ctx, client.ObjectKeyFromObject(stateS), stateS)
-	if apierrors.IsNotFound(err) {
-		lg.Debugf("proxy does not have a state Secret, waiting...")
+	switch {
+	case apierrors.IsNotFound(err):
+		lg.Debug("proxy does not yet have a state Secret, waiting...")
 		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("error retrieving state Secret: %w", err)
 	}
-	if err != nil {
-		return false, fmt.Errorf("error getting state Secret: %w", err)
-	}
+
 	svcStatusBS := stateS.Data[egressservices.KeyEgressServices]
 	if len(svcStatusBS) == 0 {
-		lg.Debugf("proxy's state Secret does not contain egress services status, waiting...")
+		lg.Debug("proxy's state Secret does not contain egress services status, waiting...")
 		return false, nil
 	}
+
 	svcStatus := &egressservices.Status{}
-	if err := json.Unmarshal(svcStatusBS, svcStatus); err != nil {
+	if err = json.Unmarshal(svcStatusBS, svcStatus); err != nil {
 		return false, fmt.Errorf("error unmarshalling egress service status: %w", err)
 	}
-	if !strings.EqualFold(podIP, svcStatus.PodIPv4) {
-		lg.Infof("proxy's egress service status is for Pod IP %s, current proxy's Pod IP %s, waiting for the proxy to reconfigure...", svcStatus.PodIPv4, podIP)
+	var statusIP string
+	switch addrType {
+	case discoveryv1.AddressTypeIPv4:
+		statusIP = svcStatus.PodIPv4
+	case discoveryv1.AddressTypeIPv6:
+		statusIP = svcStatus.PodIPv6
+	}
+	if !strings.EqualFold(podIP, statusIP) {
+		lg.Infof("proxy's egress service status is for Pod IP %q, current proxy's Pod IP %q, waiting for the proxy to reconfigure...", statusIP, podIP)
 		return false, nil
 	}
-	st, ok := (*svcStatus).Services[tailnetSvcName]
+
+	st, ok := svcStatus.Services[tailnetSvcName]
 	if !ok {
 		lg.Infof("proxy's state Secret does not have egress service status, waiting...")
 		return false, nil
 	}
+
 	if !reflect.DeepEqual(cfg.TailnetTarget, st.TailnetTarget) {
-		lg.Infof("proxy has configured egress service for tailnet target %v, current target is %v, waiting for proxy to reconfigure...", st.TailnetTarget, cfg.TailnetTarget)
+		lg.Infof("proxy has configured egress service for tailnet target %q, current target is %q, waiting for proxy to reconfigure...", st.TailnetTarget, cfg.TailnetTarget)
 		return false, nil
 	}
+
 	if !reflect.DeepEqual(cfg.Ports, st.Ports) {
 		lg.Debugf("proxy has configured egress service for ports %#+v, wants ports %#+v, waiting for proxy to reconfigure", st.Ports, cfg.Ports)
 		return false, nil
 	}
-	lg.Debugf("proxy is ready to route traffic to egress service")
+
+	lg.Debug("proxy is ready to route traffic to egress service")
 	return true, nil
 }

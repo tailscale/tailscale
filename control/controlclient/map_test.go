@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -33,9 +34,7 @@ import (
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
-	"tailscale.com/util/usermetric"
 	"tailscale.com/util/zstdframe"
-	"tailscale.com/wgengine"
 )
 
 func eps(s ...string) []netip.AddrPort {
@@ -630,82 +629,171 @@ func TestUpdateDiscoForNode(t *testing.T) {
 		name            string
 		initialOnline   bool
 		initialLastSeen time.Time
+		updateDiscoKey  func() key.DiscoPublic
 		updateOnline    bool
 		updateLastSeen  time.Time
 		wantUpdate      bool
+		wantKeyChanged  bool
 	}{
 		{
 			name:            "newer_key_not_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    false,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      true,
+			wantKeyChanged:  true,
 		},
 		{
 			name:            "newer_key_online",
 			initialOnline:   true,
 			initialLastSeen: time.Unix(1, 0),
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    true,
 			updateLastSeen:  time.Now(),
 			wantUpdate:      true,
+			wantKeyChanged:  true,
 		},
 		{
 			name:            "older_key_not_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    false,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      false,
+			wantKeyChanged:  false,
 		},
 		{
 			name:            "older_key_online",
 			initialOnline:   false,
 			initialLastSeen: time.Now(),
+			updateDiscoKey:  key.NewDisco().Public,
 			updateOnline:    true,
 			updateLastSeen:  time.Unix(1, 0),
 			wantUpdate:      true,
+			wantKeyChanged:  true,
+		},
+		{
+			name:            "same_newer_key_not_online",
+			initialOnline:   true,
+			initialLastSeen: time.Unix(1, 0),
+			updateDiscoKey:  nil,
+			updateOnline:    false,
+			updateLastSeen:  time.Now(),
+			wantUpdate:      false,
+			wantKeyChanged:  false,
+		},
+		{
+			name:            "same_newer_key_online",
+			initialOnline:   true,
+			initialLastSeen: time.Unix(1, 0),
+			updateDiscoKey:  nil,
+			updateOnline:    true,
+			updateLastSeen:  time.Now(),
+			wantUpdate:      false,
+			wantKeyChanged:  false,
+		},
+		{
+			name:            "same_older_key_not_online",
+			initialOnline:   false,
+			initialLastSeen: time.Now(),
+			updateDiscoKey:  nil,
+			updateOnline:    false,
+			updateLastSeen:  time.Unix(1, 0),
+			wantUpdate:      false,
+			wantKeyChanged:  false,
+		},
+		{
+			name:            "same_older_key_online",
+			initialOnline:   false,
+			initialLastSeen: time.Now(),
+			updateDiscoKey:  nil,
+			updateOnline:    true,
+			updateLastSeen:  time.Unix(1, 0),
+			wantUpdate:      true,
+			wantKeyChanged:  false,
+		},
+		{
+			name:           "no_initial_last_seen",
+			initialOnline:  false,
+			updateDiscoKey: key.NewDisco().Public,
+			updateOnline:   false,
+			updateLastSeen: time.Now(),
+			wantUpdate:     true,
+			wantKeyChanged: true,
+		},
+		{
+			name:          "zero_key",
+			initialOnline: false,
+			updateDiscoKey: func() key.DiscoPublic {
+				return key.DiscoPublic{}
+			},
+			updateOnline:   false,
+			updateLastSeen: time.Now(),
+			wantUpdate:     false,
+			wantKeyChanged: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			nu := &rememberLastNetmapUpdater{
-				done: make(chan any, 1),
-			}
-			ms := newTestMapSession(t, nu)
+			synctest.Test(t, func(*testing.T) {
+				nu := &rememberLastNetmapUpdater{
+					done: make(chan any, 1),
+				}
+				ms := newTestMapSession(t, nu)
+				defer ms.Close()
 
-			oldKey := key.NewDisco()
+				oldKey := key.NewDisco()
 
-			// Insert existing node
-			node := tailcfg.Node{
-				ID:       1,
-				Key:      key.NewNode().Public(),
-				DiscoKey: oldKey.Public(),
-				Online:   &tt.initialOnline,
-				LastSeen: &tt.initialLastSeen,
-			}
+				// Insert existing node
+				node := tailcfg.Node{
+					ID:       1,
+					Key:      key.NewNode().Public(),
+					DiscoKey: oldKey.Public(),
+					Online:   &tt.initialOnline,
+				}
+				if !tt.initialLastSeen.IsZero() {
+					node.LastSeen = &tt.initialLastSeen
+				}
 
-			if nm := ms.netmapForResponse(&tailcfg.MapResponse{
-				Peers: []*tailcfg.Node{&node},
-			}); len(nm.Peers) != 1 {
-				t.Fatalf("node not inserted")
-			}
+				if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+					Peers: []*tailcfg.Node{&node},
+				}); len(nm.Peers) != 1 {
+					t.Fatalf("node not inserted")
+				}
 
-			newKey := key.NewDisco()
-			ms.updateDiscoForNode(node.ID, node.Key, newKey.Public(), tt.updateLastSeen, tt.updateOnline)
-			<-nu.done
+				newKey := oldKey.Public()
+				if tt.updateDiscoKey != nil {
+					newKey = tt.updateDiscoKey()
+				}
+				ms.updateDiscoForNode(node.ID, node.Key, newKey, tt.updateLastSeen, tt.updateOnline)
 
-			nm := ms.netmap()
-			peerIdx := nm.PeerIndexByNodeID(node.ID)
-			if peerIdx == -1 {
-				t.Fatal("node not found")
-			}
+				// We have an early escape that would not trigger the netmap updater.
+				synctest.Wait()
+				select {
+				case <-nu.done:
+					if !tt.wantUpdate {
+						t.Errorf("did not expect update, got: %v", nu.last)
+					}
+				default:
+					if tt.wantUpdate {
+						t.Errorf("expected update, did not get any")
+					}
+				}
 
-			updated := nm.Peers[peerIdx].DiscoKey().Compare(newKey.Public()) == 0
-			if updated != tt.wantUpdate {
-				t.Fatalf("Disco key update: %t, wanted update: %t", updated, tt.wantUpdate)
-			}
+				peer, ok := ms.peers[node.ID]
+				if !ok {
+					t.Fatal("node not found")
+				}
+
+				keyChanged := peer.DiscoKey().Compare(oldKey.Public()) != 0
+				if keyChanged != tt.wantKeyChanged {
+					t.Errorf("Disco key update: %t, wanted update: %t", keyChanged, tt.wantKeyChanged)
+				}
+			})
 		})
 	}
 }
@@ -786,6 +874,53 @@ func TestUpdateDiscoForNodeCallback(t *testing.T) {
 				nu.lastTSMPKey, nu.lastTSMPDisco)
 		}
 	})
+
+	t.Run("test_deadlock", func(t *testing.T) {
+		nu := &rememberLastNetmapUpdater{
+			done: make(chan any, 1),
+		}
+		ms := newTestMapSession(t, nu)
+		// Very barebones onDebug func that will let us exercise sleep command
+		// from control and potentially induce deadlocks.
+		ms.onDebug = func(ctx context.Context, d *tailcfg.Debug) error {
+			time.Sleep(time.Duration(d.SleepSeconds * float64(time.Second)))
+			return nil
+		}
+
+		oldKey := key.NewDisco()
+
+		// Insert existing node
+		node := tailcfg.Node{
+			ID:       1,
+			Key:      key.NewNode().Public(),
+			DiscoKey: oldKey.Public(),
+			Online:   new(false),
+			LastSeen: new(time.Unix(1, 0)),
+		}
+
+		if nm := ms.netmapForResponse(&tailcfg.MapResponse{
+			Peers: []*tailcfg.Node{&node},
+		}); len(nm.Peers) != 1 {
+			t.Fatalf("node not inserted")
+		}
+
+		sleep1 := &tailcfg.MapResponse{
+			Debug: &tailcfg.Debug{
+				SleepSeconds: 1.0,
+			},
+		}
+		ms.HandleNonKeepAliveMapResponse(t.Context(), sleep1)
+
+		// Resembles the disco key advert subscriber running in a separate context.
+		go func() {
+			newKey := key.NewDisco()
+			ms.updateDiscoForNode(node.ID, node.Key, newKey.Public(), time.Now(), false)
+		}()
+
+		ms.Close()
+
+		<-nu.done
+	})
 }
 
 func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
@@ -801,7 +936,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 		expectNewDisco  bool
 	}{
 		{
-			name:            "disco key wired through when newer lastSeen",
+			name:            "disco-key-newer-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: oldTime,
 			updateOnline:    false,
@@ -809,7 +944,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  true,
 		},
 		{
-			name:            "disco key NOT wired through when older lastSeen",
+			name:            "disco-key-older-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: now,
 			updateOnline:    false,
@@ -817,7 +952,7 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  false,
 		},
 		{
-			name:            "disco key wired through when newer lastSeen, going offline",
+			name:            "disco-key-newer-lastSeen-going-offline",
 			initialOnline:   true,
 			initialLastSeen: oldTime,
 			updateOnline:    false,
@@ -825,12 +960,20 @@ func TestUpdateDiscoForNodeCallbackWithFullNetmap(t *testing.T) {
 			expectNewDisco:  true,
 		},
 		{
-			name:            "online flip with newer lastSeen",
+			name:            "online-flip-newer-lastSeen",
 			initialOnline:   false,
 			initialLastSeen: oldTime,
 			updateOnline:    true,
 			updateLastSeen:  now,
 			expectNewDisco:  true,
+		},
+		{
+			name:            "local-lastseen-preserved-after-first-reconnect",
+			initialOnline:   false,
+			initialLastSeen: now,
+			updateOnline:    false,
+			updateLastSeen:  now,
+			expectNewDisco:  false,
 		},
 	}
 
@@ -1116,17 +1259,20 @@ func TestPeerChangeDiff(t *testing.T) {
 			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
 			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil, tailcfg.CapabilityDebug: nil}},
 			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil, tailcfg.CapabilityDebug: nil}},
-		}, {
+		},
+		{
 			name: "patch-capmap-remove-key",
 			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
 			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{}},
 			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{}},
-		}, {
+		},
+		{
 			name: "patch-capmap-remove-as-nil",
 			a:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
 			b:    &tailcfg.Node{ID: 1},
 			want: &tailcfg.PeerChange{NodeID: 1, CapMap: tailcfg.NodeCapMap{}},
-		}, {
+		},
+		{
 			name: "patch-capmap-add-key-to-empty-map",
 			a:    &tailcfg.Node{ID: 1},
 			b:    &tailcfg.Node{ID: 1, CapMap: tailcfg.NodeCapMap{tailcfg.CapabilityAdmin: nil}},
@@ -1141,7 +1287,7 @@ func TestPeerChangeDiff(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pc, ok := peerChangeDiff(tt.a.View(), tt.b)
+			pc, ok := peerChangeDiff(tt.a.View(), tt.b, nil)
 			if tt.wantEqual {
 				if !ok || pc != nil {
 					t.Errorf("got (%p, %v); want (nil, true); pc=%v", pc, ok, logger.AsJSON(pc))
@@ -1162,7 +1308,7 @@ func TestPeerChangeDiffAllocs(t *testing.T) {
 	a := &tailcfg.Node{ID: 1}
 	b := &tailcfg.Node{ID: 1}
 	n := testing.AllocsPerRun(10000, func() {
-		diff, ok := peerChangeDiff(a.View(), b)
+		diff, ok := peerChangeDiff(a.View(), b, nil)
 		if !ok || diff != nil {
 			t.Fatalf("unexpected result: (%s, %v)", logger.AsJSON(diff), ok)
 		}
@@ -1178,6 +1324,56 @@ type countingNetmapUpdater struct {
 
 func (nu *countingNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.full.Add(1)
+}
+
+type countingDeltaNetmapUpdater struct {
+	countingNetmapUpdater
+	delta atomic.Int64
+}
+
+func (nu *countingDeltaNetmapUpdater) UpdateNetmapDelta([]netmap.NodeMutation) bool {
+	nu.delta.Add(1)
+	return true
+}
+
+func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
+	nu := &countingDeltaNetmapUpdater{}
+	ms := newTestMapSession(t, nu)
+	ctx := t.Context()
+
+	peer := &tailcfg.Node{
+		ID:         1,
+		StableID:   "peer",
+		Name:       "peer.example.ts.net.",
+		Key:        key.NewNode().Public(),
+		DiscoKey:   key.NewDisco().Public(),
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
+	}
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
+		Peers: []*tailcfg.Node{peer},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Fatalf("full updates after initial response = %d; want 1", got)
+	}
+
+	replacement := peer.Clone()
+	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Errorf("full updates after route-changing peer replacement = %d; want 1", got)
+	}
+	if got := nu.delta.Load(); got != 1 {
+		t.Errorf("delta updates after route-changing peer replacement = %d; want 1", got)
+	}
 }
 
 // tests (*mapSession).patchifyPeersChanged; smaller tests are in TestPeerChangeDiff
@@ -1351,6 +1547,24 @@ func TestUpgradeNode(t *testing.T) {
 			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
 			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{}},
 		},
+		{
+			// An unsigned peer is not covered by tailnet lock and must not carry advertised routes
+			name: "unsigned-peer-strips-extra-allowed-ips",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}, UnsignedPeerAPIOnly: true},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+		},
+		{
+			// An unsigned peer whose AllowedIPs already equal its Addresses is left untouched
+			name: "unsigned-peer-allowed-ips-equal-addresses",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2}, UnsignedPeerAPIOnly: true},
+		},
+		{
+			// A signed peer keeps its advertised routes: the strip only applies to unsigned peers
+			name: "signed-peer-keeps-extra-allowed-ips",
+			in:   &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}},
+			want: &tailcfg.Node{Addresses: []netip.Prefix{a1, a2}, AllowedIPs: []netip.Prefix{a1, a2, a3, a4}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1367,7 +1581,6 @@ func TestUpgradeNode(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func BenchmarkMapSessionDelta(b *testing.B) {
@@ -1763,21 +1976,158 @@ func TestLearnZstdOfKeepAlive(t *testing.T) {
 	}
 }
 
-func TestPathDiscokeyerImplementations(t *testing.T) {
-	bus := eventbustest.NewBus(t)
-	ht := health.NewTracker(bus)
-	reg := new(usermetric.Registry)
-	e, err := wgengine.NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
-	if err != nil {
-		t.Fatal(err)
+func TestPeerIDAndKeyByTailscaleIP(t *testing.T) {
+	peerKey1 := key.NewNode().Public()
+	peerKey2 := key.NewNode().Public()
+
+	peer1 := &tailcfg.Node{
+		ID:        1,
+		Key:       peerKey1,
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 	}
-	t.Cleanup(e.Close)
-	if _, ok := e.(patchDiscoKeyer); !ok {
-		t.Error("wgengine.userspaceEngine must implement patchDiscoKeyer")
+	peer2 := &tailcfg.Node{
+		ID:  2,
+		Key: peerKey2,
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.2/32"),
+			netip.MustParsePrefix("fd7a:115c::2/128"),
+		},
 	}
 
-	wd := wgengine.NewWatchdog(e)
-	if _, ok := wd.(patchDiscoKeyer); !ok {
-		t.Error("wgengine.watchdogEngine must implement patchDiscoKeyer")
+	ms := newTestMapSession(t, nil)
+	ms.updateStateFromResponse(&tailcfg.MapResponse{
+		Node:  new(tailcfg.Node),
+		Peers: []*tailcfg.Node{peer1, peer2},
+	})
+
+	t.Run("known_ip_peer1", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("100.64.0.1"))
+		if !ok {
+			t.Fatal("PeerIDAndKeyByTailscaleIP returned ok=false, want true")
+		}
+		if gotID != peer1.ID {
+			t.Errorf("NodeID = %v, want %v", gotID, peer1.ID)
+		}
+		if gotKey != peerKey1 {
+			t.Errorf("NodePublic = %v, want %v", gotKey, peerKey1)
+		}
+	})
+
+	t.Run("known_ip_peer2_v6", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("fd7a:115c::2"))
+		if !ok {
+			t.Fatal("PeerIDAndKeyByTailscaleIP returned ok=false, want true")
+		}
+		if gotID != peer2.ID {
+			t.Errorf("NodeID = %v, want %v", gotID, peer2.ID)
+		}
+		if gotKey != peerKey2 {
+			t.Errorf("NodePublic = %v, want %v", gotKey, peerKey2)
+		}
+	})
+
+	t.Run("unknown_ip", func(t *testing.T) {
+		gotID, gotKey, ok := ms.PeerIDAndKeyByTailscaleIP(netip.MustParseAddr("100.64.0.99"))
+		if ok {
+			t.Errorf("PeerIDAndKeyByTailscaleIP returned ok=true for unknown IP, got id=%v key=%v", gotID, gotKey)
+		}
+	})
+}
+
+func TestRemoveUnwantedDiscoUpdates(t *testing.T) {
+	tests := []struct {
+		name           string
+		viaTSMP        bool
+		existingOnline bool
+		sameKey        bool
+		newerLastSeen  bool
+		wantAccepted   bool
+	}{
+		{
+			name:           "tsmp_online_peer_same_key",
+			viaTSMP:        true,
+			existingOnline: true,
+			sameKey:        true,
+			newerLastSeen:  true,
+			wantAccepted:   false,
+		},
+		{
+			name:           "not_tsmp_online_peer_same_key",
+			viaTSMP:        false,
+			existingOnline: true,
+			sameKey:        true,
+			newerLastSeen:  true,
+			wantAccepted:   true,
+		},
+		{
+			name:           "tsmp_offline_peer_same_key",
+			viaTSMP:        true,
+			existingOnline: false,
+			sameKey:        true,
+			newerLastSeen:  true,
+			wantAccepted:   true,
+		},
+		{
+			name:           "tsmp_online_peer_diff_key",
+			viaTSMP:        true,
+			existingOnline: true,
+			sameKey:        false,
+			newerLastSeen:  true,
+			wantAccepted:   true,
+		},
+		{
+			name:           "tsmp_online_peer_same_key_old_lastseen",
+			viaTSMP:        true,
+			existingOnline: true,
+			sameKey:        true,
+			newerLastSeen:  false,
+			wantAccepted:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := newTestMapSession(t, &rememberLastNetmapUpdater{done: make(chan any, 1)})
+
+			existingKey := key.NewDisco().Public()
+			existingOnline := tt.existingOnline
+			initialLastSeen := time.Unix(1, 0)
+
+			ms.updateStateFromResponse(&tailcfg.MapResponse{
+				Peers: []*tailcfg.Node{{
+					ID:       1,
+					Key:      key.NewNode().Public(),
+					DiscoKey: existingKey,
+					Online:   &existingOnline,
+					LastSeen: &initialLastSeen,
+				}},
+			})
+
+			changeKey := existingKey
+			if !tt.sameKey {
+				changeKey = key.NewDisco().Public()
+			}
+			changeOnline := false // must be false to reach the new guard
+			updateLastSeen := time.Unix(2, 0)
+			if !tt.newerLastSeen {
+				updateLastSeen = time.Unix(0, 0)
+			}
+
+			resp := &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:   1,
+					DiscoKey: &changeKey,
+					Online:   &changeOnline,
+					LastSeen: &updateLastSeen,
+				}},
+			}
+
+			ms.removeUnwantedDiscoUpdates(resp, tt.viaTSMP)
+
+			got := len(resp.PeersChangedPatch) > 0
+			if got != tt.wantAccepted {
+				t.Errorf("accepted=%v, want %v", got, tt.wantAccepted)
+			}
+		})
 	}
 }

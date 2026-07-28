@@ -1403,7 +1403,7 @@ func readUint64(r io.Reader) (uint64, error) {
 	}
 }
 
-// rsaPrivateKeyJSONWrapper is the the JSON serialization
+// rsaPrivateKeyJSONWrapper is the JSON serialization
 // format used by RSAPrivateKey.
 type rsaPrivateKeyJSONWrapper struct {
 	Key string

@@ -58,7 +58,7 @@ func TestStateStoreError(t *testing.T) {
 	args.statedir = t.TempDir()
 	args.tunname = "userspace-networking"
 
-	t.Run("new state", func(t *testing.T) {
+	t.Run("new-state", func(t *testing.T) {
 		sys := tsd.NewSystem()
 		sys.NetMon.Set(must.Get(netmon.New(sys.Bus.Get(), t.Logf)))
 		lb, err := getLocalBackend(t.Context(), t.Logf, logID.Public(), sys)
@@ -70,7 +70,7 @@ func TestStateStoreError(t *testing.T) {
 			t.Errorf("StateStoreHealth is unhealthy on fresh LocalBackend:\n%s", strings.Join(lb.HealthTracker().Strings(), "\n"))
 		}
 	})
-	t.Run("corrupt state", func(t *testing.T) {
+	t.Run("corrupt-state", func(t *testing.T) {
 		sys := tsd.NewSystem()
 		sys.NetMon.Set(must.Get(netmon.New(sys.Bus.Get(), t.Logf)))
 		// Populate the state file with something that will fail to parse to

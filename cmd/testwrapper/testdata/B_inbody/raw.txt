@@ -1,0 +1,30 @@
+=== RUN   TestRace
+==================
+WARNING: DATA RACE
+Read at 0x0000007f12a8 by goroutine 8:
+  racesurvey/B_inbody.TestRace.func1()
+      /tmp/racesurvey/B_inbody/b_test.go:13 +0x74
+
+Previous write at 0x0000007f12a8 by goroutine 9:
+  racesurvey/B_inbody.TestRace.func2()
+      /tmp/racesurvey/B_inbody/b_test.go:14 +0x8c
+
+Goroutine 8 (running) created at:
+  racesurvey/B_inbody.TestRace()
+      /tmp/racesurvey/B_inbody/b_test.go:13 +0xbe
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+
+Goroutine 9 (finished) created at:
+  racesurvey/B_inbody.TestRace()
+      /tmp/racesurvey/B_inbody/b_test.go:14 +0x124
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+==================
+    testing.go:1712: race detected during execution of test
+--- FAIL: TestRace (0.00s)
+FAIL

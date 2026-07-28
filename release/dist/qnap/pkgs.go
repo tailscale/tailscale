@@ -118,7 +118,16 @@ func (t *target) buildQPKG(b *dist.Build, qnapBuilds *qnapBuilds, inner *innerPk
 		return nil, fmt.Errorf("docker run %v: %s", err, out)
 	}
 
-	return []string{filePath, filePath + ".md5"}, nil
+	ret := []string{filePath, filePath + ".md5"}
+	// If the build was signed, a .codesigning file is produced containing
+	// the last 32 characters of the base64-encoded CMS signature. This is
+	// used by pkgserve to populate <signature> entries in the QNAP
+	// repository XML.
+	codesigning := filePath + ".codesigning"
+	if _, err := os.Stat(codesigning); err == nil {
+		ret = append(ret, codesigning)
+	}
+	return ret, nil
 }
 
 type qnapBuildsMemoizeKey struct{}

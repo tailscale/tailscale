@@ -2,27 +2,42 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tstest provides utilities for use in unit tests.
+//
+// It intentionally does not depend on the "testing" package (using
+// [testenv.TB] instead of testing.TB) so that importing it from
+// non-test code doesn't link the testing package and its flag
+// registration side effects into the binary.
 package tstest
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"testing"
 	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
-	"tailscale.com/util/cibuild"
+	"tailscale.com/util/testenv"
 )
+
+// AssertNotParallel asserts that t has not been marked as parallel.
+// It panics (via t.Setenv) if t.Parallel has already been called.
+//
+// Use this when a test modifies package-level globals or other shared
+// state that would be unsafe to modify concurrently with other tests.
+func AssertNotParallel(t testenv.TB) {
+	t.Helper()
+	t.Setenv("ASSERT_NOT_PARALLEL_TEST", "1") // panics if t.Parallel was called
+}
 
 // Replace replaces the value of target with val.
 // The old value is restored when the test ends.
-func Replace[T any](t testing.TB, target *T, val T) {
+//
+// When target is a package-level variable, the caller should also call
+// [AssertNotParallel] to ensure the test is not running in parallel with
+// other tests that may access the same variable.
+func Replace[T any](t testenv.TB, target *T, val T) {
 	t.Helper()
 	if target == nil {
 		t.Fatalf("Replace: nil pointer")
@@ -34,7 +49,6 @@ func Replace[T any](t testing.TB, target *T, val T) {
 	})
 
 	*target = val
-	return
 }
 
 // WaitFor retries try for up to maxWait.
@@ -54,50 +68,26 @@ func WaitFor(maxWait time.Duration, try func() error) error {
 	return err
 }
 
-var testNum atomic.Int32
-
-// Shard skips t if it's not running if the TS_TEST_SHARD test shard is set to
-// "n/m" and this test execution number in the process mod m is not equal to n-1.
-// That is, to run with 4 shards, set TS_TEST_SHARD=1/4, ..., TS_TEST_SHARD=4/4
-// for the four jobs.
-func Shard(t testing.TB) {
-	e := os.Getenv("TS_TEST_SHARD")
-	a, b, ok := strings.Cut(e, "/")
-	if !ok {
-		return
-	}
-	wantShard, _ := strconv.ParseInt(a, 10, 32)
-	shards, _ := strconv.ParseInt(b, 10, 32)
-	if wantShard == 0 || shards == 0 {
-		return
-	}
-
-	shard := ((testNum.Add(1) - 1) % int32(shards)) + 1
-	if shard != int32(wantShard) {
-		t.Skipf("skipping shard %d/%d (process has TS_TEST_SHARD=%q)", shard, shards, e)
-	}
-}
-
-// SkipOnUnshardedCI skips t if we're in CI and the TS_TEST_SHARD
-// environment variable isn't set.
-func SkipOnUnshardedCI(t testing.TB) {
-	if cibuild.On() && os.Getenv("TS_TEST_SHARD") == "" {
-		t.Skip("skipping on CI without TS_TEST_SHARD")
-	}
-}
-
 var serializeParallel = envknob.RegisterBool("TS_SERIAL_TESTS")
 
 // Parallel calls t.Parallel, unless TS_SERIAL_TESTS is set true.
-func Parallel(t *testing.T) {
+func Parallel(t interface{ Parallel() }) {
 	if !serializeParallel() {
 		t.Parallel()
 	}
 }
 
+// RequireRoot skips the test if the current user is not root.
+func RequireRoot(tb testenv.TB) {
+	tb.Helper()
+	if os.Getuid() != 0 {
+		tb.Skip("skipping test; requires root")
+	}
+}
+
 // SkipOnKernelVersions skips the test if the current
 // kernel version is in the specified list.
-func SkipOnKernelVersions(t testing.TB, issue string, versions ...string) {
+func SkipOnKernelVersions(t testenv.TB, issue string, versions ...string) {
 	major, minor, patch := KernelVersion()
 	if major == 0 && minor == 0 && patch == 0 {
 		t.Logf("could not determine kernel version")

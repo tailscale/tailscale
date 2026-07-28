@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -41,8 +42,10 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/race"
 	"tailscale.com/version"
 )
@@ -324,11 +327,29 @@ type forwarder struct {
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
 
+	// schemes are the collection of registered URI scheme names that
+	// dynamically decide which resolver to use at the time of each query. The
+	// key is the scheme (the portion before the first `:`) and the value is a
+	// handler that determines where the current query should be sent.
+	// Use schemeCacheLocked() to get the current contents that can continue to
+	// be accessed once mu is released. This allows the (much more common)
+	// resolver code path to avoid repeated locking and unlocking.
+	// When modified, call invalidateSchemeCacheLocked() before unlocking mu.
+	schemes map[string]CustomSchemeHandler
+	// schemeCache is an immutable copy of schemes. Do not read directly,
+	// use schemeCacheLocked() which will regenerate its contents as needed.
+	schemeCache views.Map[string, CustomSchemeHandler]
+
 	// acceptDNS tracks the CorpDNS pref (--accept-dns)
 	// This lets us skip health warnings if the forwarder receives inbound
 	// queries directly - but we didn't configure it with any upstream resolvers.
 	// That's an error, but not a health error if the user has disabled CorpDNS.
 	acceptDNS bool
+}
+
+func (f *forwarder) probeLocks() {
+	f.mu.Lock()
+	f.mu.Unlock()
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer, health *health.Tracker, knobs *controlknobs.Knobs) *forwarder {
@@ -996,15 +1017,66 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
+// applySchemes resolves any custom-scheme entries in rrs using the provided
+// scheme handlers, returning the resulting slice. Entries whose handler returns
+// an error or empty string are dropped. Entries with no registered scheme pass
+// through unchanged. If schemes is nil, rrs is returned as-is.
+func applySchemes(logf logger.Logf, rrs []resolverAndDelay, schemes views.Map[string, CustomSchemeHandler]) []resolverAndDelay {
+	if schemes.IsNil() {
+		return rrs
+	}
+	var result []resolverAndDelay
+	for i, rr := range rrs {
+		scheme, _, hasColon := strings.Cut(rr.name.Addr, ":")
+		handler, isCustom := schemes.GetOk(scheme)
+		if !hasColon || !isCustom {
+			if result != nil {
+				result = append(result, rr)
+			}
+			continue
+		}
+		// Avoid making a results slice in the common case where there
+		// are no custom scheme resolvers.
+		if result == nil {
+			result = make([]resolverAndDelay, i, len(rrs))
+			copy(result, rrs)
+		}
+		newAddr, err := handler(rr.name.Addr)
+		if err != nil {
+			logf("error from custom scheme handler, skipping resolver : %v", err)
+		}
+		if err != nil || newAddr == "" {
+			continue
+		}
+		newResolver := *rr.name
+		newResolver.Addr = newAddr
+		result = append(result, resolverAndDelay{name: &newResolver, startDelay: rr.startDelay})
+	}
+	// If we didn't have any custom schemes, return the original rrs.
+	if result == nil {
+		return rrs
+	}
+	return result
+}
+
 // resolvers returns the resolvers to use for domain.
 func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	f.mu.Lock()
 	routes := f.routes
 	cloudHostFallback := f.cloudHostFallback
+	schemes := f.schemeCacheLocked()
 	f.mu.Unlock()
+
 	for _, route := range routes {
-		if route.Suffix == "." || route.Suffix.Contains(domain) {
-			return route.Resolvers
+		if route.Suffix != "." && !route.Suffix.Contains(domain) {
+			continue
+		}
+		resolved := applySchemes(f.logf, route.Resolvers, schemes)
+		// If scheme resolution filtered out all resolvers from a non-empty
+		// route, fall through to the next matching route. If the resolvers
+		// were configured to be empty allow resolved to be empty.
+		if len(resolved) > 0 || len(route.Resolvers) == 0 {
+			return resolved
 		}
 	}
 	return cloudHostFallback // or nil if no fallback
@@ -1019,6 +1091,39 @@ func (f *forwarder) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver 
 		upstreamResolvers = append(upstreamResolvers, r.name)
 	}
 	return upstreamResolvers
+}
+
+// RegisterCustomScheme adds a [CustomSchemeHandler] that is called to provide
+// an updated address when a [dnstype.Resolver.Addr] uses that scheme.
+func (f *forwarder) RegisterCustomScheme(scheme string, h CustomSchemeHandler) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.schemes[scheme]; ok {
+		return fmt.Errorf("scheme %q already registered", scheme)
+	}
+	f.invalidateSchemeCacheLocked()
+	mak.Set(&f.schemes, scheme, h)
+	return nil
+}
+
+// invalidateSchemeCacheLocked clears f.schemeCache so that it will be rebuilt
+// on the next call to f.schemeCacheLocked().
+func (f *forwarder) invalidateSchemeCacheLocked() {
+	f.schemeCache = views.Map[string, CustomSchemeHandler]{}
+}
+
+// schemeCacheLocked returns an immutable copy of f.schemes that can be used
+// after mu is unlocked.
+func (f *forwarder) schemeCacheLocked() views.Map[string, CustomSchemeHandler] {
+	if !f.schemeCache.IsNil() {
+		return f.schemeCache
+	}
+	if f.schemes == nil {
+		return f.schemeCache // returns a nil view
+	}
+	// Regenerate the cache
+	f.schemeCache = views.MapOf(maps.Clone(f.schemes))
+	return f.schemeCache
 }
 
 // forwardQuery is information and state about a forwarded DNS query that's
@@ -1094,10 +1199,11 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	if len(resolvers) == 0 {
 		resolvers = f.resolvers(domain)
 		if len(resolvers) == 0 {
+			// No upstream resolver for this name isn't a forwarder failure:
+			// it's split DNS / a name we weren't asked to handle. Count it
+			// rather than raising dnsForwarderFailing, which is reserved for
+			// resolvers we found but couldn't reach. See tailscale/tailscale#19931.
 			metricDNSFwdErrorNoUpstream.Add(1)
-			if f.acceptDNS {
-				f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: ""})
-			}
 			f.logf("no upstream resolvers set, returning SERVFAIL")
 
 			res, err := servfailResponse(query)
@@ -1243,8 +1349,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 			// If we haven't got an error or a successful response,
 			// include all resolvers in the error message so we can
-			// at least see what what servers we're trying to
-			// query.
+			// at least see what servers we're trying to query.
 			var resolverAddrs []string
 			for _, rr := range resolvers {
 				resolverAddrs = append(resolverAddrs, rr.name.Addr)

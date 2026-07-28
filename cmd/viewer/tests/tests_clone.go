@@ -96,14 +96,36 @@ func (src *Map) Clone() *Map {
 	dst.StructWithoutPtr = maps.Clone(src.StructWithoutPtr)
 	if dst.SlicesWithPtrs != nil {
 		dst.SlicesWithPtrs = map[string][]*StructWithPtrs{}
-		for k := range src.SlicesWithPtrs {
-			dst.SlicesWithPtrs[k] = append([]*StructWithPtrs{}, src.SlicesWithPtrs[k]...)
+		for k, sv := range src.SlicesWithPtrs {
+			if sv == nil {
+				dst.SlicesWithPtrs[k] = nil
+				continue
+			}
+			dst.SlicesWithPtrs[k] = make([]*StructWithPtrs, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.SlicesWithPtrs[k][i] = nil
+				} else {
+					dst.SlicesWithPtrs[k][i] = sv[i].Clone()
+				}
+			}
 		}
 	}
 	if dst.SlicesWithoutPtrs != nil {
 		dst.SlicesWithoutPtrs = map[string][]*StructWithoutPtrs{}
-		for k := range src.SlicesWithoutPtrs {
-			dst.SlicesWithoutPtrs[k] = append([]*StructWithoutPtrs{}, src.SlicesWithoutPtrs[k]...)
+		for k, sv := range src.SlicesWithoutPtrs {
+			if sv == nil {
+				dst.SlicesWithoutPtrs[k] = nil
+				continue
+			}
+			dst.SlicesWithoutPtrs[k] = make([]*StructWithoutPtrs, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.SlicesWithoutPtrs[k][i] = nil
+				} else {
+					dst.SlicesWithoutPtrs[k][i] = new(*sv[i])
+				}
+			}
 		}
 	}
 	dst.StructWithoutPtrKey = maps.Clone(src.StructWithoutPtrKey)
@@ -115,8 +137,19 @@ func (src *Map) Clone() *Map {
 	}
 	if dst.SliceIntPtr != nil {
 		dst.SliceIntPtr = map[string][]*int{}
-		for k := range src.SliceIntPtr {
-			dst.SliceIntPtr[k] = append([]*int{}, src.SliceIntPtr[k]...)
+		for k, sv := range src.SliceIntPtr {
+			if sv == nil {
+				dst.SliceIntPtr[k] = nil
+				continue
+			}
+			dst.SliceIntPtr[k] = make([]*int, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.SliceIntPtr[k][i] = nil
+				} else {
+					dst.SliceIntPtr[k][i] = new(*sv[i])
+				}
+			}
 		}
 	}
 	dst.PointerKey = maps.Clone(src.PointerKey)
@@ -399,8 +432,15 @@ func (src *GenericCloneableStruct[T, V]) Clone() *GenericCloneableStruct[T, V] {
 	}
 	if dst.SliceMap != nil {
 		dst.SliceMap = map[string][]T{}
-		for k := range src.SliceMap {
-			dst.SliceMap[k] = append([]T{}, src.SliceMap[k]...)
+		for k, sv := range src.SliceMap {
+			if sv == nil {
+				dst.SliceMap[k] = nil
+				continue
+			}
+			dst.SliceMap[k] = make([]T, len(sv))
+			for i := range sv {
+				dst.SliceMap[k][i] = sv[i].Clone()
+			}
 		}
 	}
 	return dst
@@ -500,14 +540,36 @@ func (src *StructWithTypeAliasFields) Clone() *StructWithTypeAliasFields {
 	}
 	if dst.MapOfSlicesWithPtrs != nil {
 		dst.MapOfSlicesWithPtrs = map[string][]*StructWithPtrsAlias{}
-		for k := range src.MapOfSlicesWithPtrs {
-			dst.MapOfSlicesWithPtrs[k] = append([]*StructWithPtrsAlias{}, src.MapOfSlicesWithPtrs[k]...)
+		for k, sv := range src.MapOfSlicesWithPtrs {
+			if sv == nil {
+				dst.MapOfSlicesWithPtrs[k] = nil
+				continue
+			}
+			dst.MapOfSlicesWithPtrs[k] = make([]*StructWithPtrsAlias, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.MapOfSlicesWithPtrs[k][i] = nil
+				} else {
+					dst.MapOfSlicesWithPtrs[k][i] = sv[i].Clone()
+				}
+			}
 		}
 	}
 	if dst.MapOfSlicesWithoutPtrs != nil {
 		dst.MapOfSlicesWithoutPtrs = map[string][]*StructWithoutPtrsAlias{}
-		for k := range src.MapOfSlicesWithoutPtrs {
-			dst.MapOfSlicesWithoutPtrs[k] = append([]*StructWithoutPtrsAlias{}, src.MapOfSlicesWithoutPtrs[k]...)
+		for k, sv := range src.MapOfSlicesWithoutPtrs {
+			if sv == nil {
+				dst.MapOfSlicesWithoutPtrs[k] = nil
+				continue
+			}
+			dst.MapOfSlicesWithoutPtrs[k] = make([]*StructWithoutPtrsAlias, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.MapOfSlicesWithoutPtrs[k][i] = nil
+				} else {
+					dst.MapOfSlicesWithoutPtrs[k][i] = new(*sv[i])
+				}
+			}
 		}
 	}
 	return dst
@@ -562,4 +624,38 @@ func (src *StructWithMapOfViews) Clone() *StructWithMapOfViews {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithMapOfViewsCloneNeedsRegeneration = StructWithMapOfViews(struct {
 	MapOfViews map[string]StructWithoutPtrsView
+}{})
+
+// Clone makes a deep copy of StructWithNamedMap.
+// The result aliases no memory with the original.
+func (src *StructWithNamedMap) Clone() *StructWithNamedMap {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithNamedMap)
+	*dst = *src
+	dst.Attrs = src.Attrs.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedMapCloneNeedsRegeneration = StructWithNamedMap(struct {
+	Attrs NamedMap
+}{})
+
+// Clone makes a deep copy of StructWithNamedSlice.
+// The result aliases no memory with the original.
+func (src *StructWithNamedSlice) Clone() *StructWithNamedSlice {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithNamedSlice)
+	*dst = *src
+	dst.Items = src.Items.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithNamedSliceCloneNeedsRegeneration = StructWithNamedSlice(struct {
+	Items NamedSlice
 }{})

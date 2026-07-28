@@ -355,7 +355,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		})
 	})
 
-	t.Run("tailscale status", func(t *testing.T) {
+	t.Run("tailscale-status", func(t *testing.T) {
 		dur := 100 * time.Millisecond
 		var outp []byte
 		var err error
@@ -383,7 +383,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		t.Fatalf("error: %v", err)
 	})
 
-	t.Run("dump routes", func(t *testing.T) {
+	t.Run("dump-routes", func(t *testing.T) {
 		sess, err := cli.NewSession()
 		if err != nil {
 			t.Fatal(err)

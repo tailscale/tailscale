@@ -25,11 +25,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 )
@@ -88,7 +89,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
 	// Verify Tailscale Service uses custom tags
-	tsSvc, err := ft.GetVIPService(t.Context(), "svc:my-svc")
+	tsSvc, err := ft.VIPServices().Get(t.Context(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, ing3.Namespace, ing3.Name)
 
 	// Delete the service from "control"
-	ft.vipServices = make(map[tailcfg.ServiceName]*tailscale.VIPService)
+	ft.vipServices = make(map[string]tailscale.VIPService)
 
 	// Delete the ingress and confirm we don't get stuck due to the VIP service not existing.
 	if err = fc.Delete(t.Context(), ing3); err != nil {
@@ -319,11 +320,11 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	verifyTailscaleService(t, ft, "svc:updated-svc", []string{"tcp:443"})
 	verifyTailscaledConfig(t, fc, "test-pg", []string{"svc:updated-svc"})
 
-	_, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	_, err := ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err == nil {
 		t.Fatalf("svc:my-svc not cleaned up")
 	}
-	if !isErrorTailscaleServiceNotFound(err) {
+	if !tailscale.IsNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -877,20 +878,18 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	mustCreate(t, fc, ing)
 
 	// Simulate existing Tailscale Service from another cluster
-	existingVIPSvc := &tailscale.VIPService{
+	existingVIPSvc := tailscale.VIPService{
 		Name: "svc:my-svc",
 		Annotations: map[string]string{
 			ownerAnnotation: `{"ownerrefs":[{"operatorID":"operator-2"}]}`,
 		},
 	}
-	ft.vipServices = map[tailcfg.ServiceName]*tailscale.VIPService{
-		"svc:my-svc": existingVIPSvc,
-	}
+	ft.VIPServices().CreateOrUpdate(t.Context(), existingVIPSvc)
 
 	// Verify reconciliation adds our operator reference
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
-	tsSvc, err := ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err := ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service: %v", err)
 	}
@@ -917,7 +916,7 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 	}
 	expectRequeue(t, ingPGR, "default", "test-ingress")
 
-	tsSvc, err = ft.GetVIPService(context.Background(), "svc:my-svc")
+	tsSvc, err = ft.VIPServices().Get(context.Background(), "svc:my-svc")
 	if err != nil {
 		t.Fatalf("getting Tailscale Service after deletion: %v", err)
 	}
@@ -1024,7 +1023,7 @@ func populateTLSSecret(t *testing.T, c client.Client, pgName, domain string) {
 
 func verifyTailscaleService(t *testing.T, ft *fakeTSClient, serviceName string, wantPorts []string) {
 	t.Helper()
-	tsSvc, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(serviceName))
+	tsSvc, err := ft.VIPServices().Get(context.Background(), serviceName)
 	if err != nil {
 		t.Fatalf("getting Tailscale Service %q: %v", serviceName, err)
 	}
@@ -1203,7 +1202,9 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 
 	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
 
-	ft := &fakeTSClient{}
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
 		t.Fatal(err)
@@ -1211,7 +1212,7 @@ func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeT
 
 	ingPGR := &HAIngressReconciler{
 		Client:           fc,
-		tsClient:         ft,
+		clients:          tsclient.NewProvider(ft),
 		defaultTags:      []string{"tag:k8s"},
 		tsNamespace:      "operator-ns",
 		tsnetServer:      fakeTsnetServer,

@@ -5,6 +5,7 @@ package tsaddr
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -249,6 +250,12 @@ func TestIsTailscaleIPv4(t *testing.T) {
 			in:   netip.MustParseAddr("100.115.92.157"),
 			want: false,
 		},
+		{
+			// IsTailscaleIPv4 does not unmap, so an IPv4-mapped IPv6 form of a
+			// CGNAT address is not an IPv4 address and must return false.
+			in:   netip.AddrFrom16(netip.MustParseAddr("100.67.19.57").As16()),
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		if got := IsTailscaleIPv4(tt.in); got != tt.want {
@@ -283,10 +290,44 @@ func TestIsTailscaleIP(t *testing.T) {
 			in:   netip.MustParseAddr("100.115.92.157"),
 			want: false,
 		},
+		{
+			// IPv4-mapped IPv6 form of a CGNAT address is still a Tailscale IP.
+			in:   netip.MustParseAddr("::ffff:100.67.19.57"),
+			want: true,
+		},
+		{
+			// IPv4-mapped IPv6 form of a non-Tailscale address.
+			in:   netip.MustParseAddr("::ffff:10.10.10.10"),
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		if got := IsTailscaleIP(tt.in); got != tt.want {
 			t.Errorf("IsTailscaleIP(%v) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestFirstTailscaleAddrs(t *testing.T) {
+	pfx := func(s string) netip.Prefix { return netip.MustParsePrefix(s) }
+	addr := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+	tests := []struct {
+		name  string
+		in    []netip.Prefix
+		want4 netip.Addr
+		want6 netip.Addr
+	}{
+		{"empty", nil, netip.Addr{}, netip.Addr{}},
+		{"both", []netip.Prefix{pfx("100.64.0.1/32"), pfx("fd7a:115c:a1e0::1/128")}, addr("100.64.0.1"), addr("fd7a:115c:a1e0::1")},
+		{"first-of-each", []netip.Prefix{pfx("100.64.0.1/32"), pfx("100.64.0.2/32"), pfx("fd7a:115c:a1e0::1/128"), pfx("fd7a:115c:a1e0::2/128")}, addr("100.64.0.1"), addr("fd7a:115c:a1e0::1")},
+		{"non-tailscale-skipped", []netip.Prefix{pfx("192.168.1.1/32"), pfx("2001:db8::1/128"), pfx("100.64.0.9/32")}, addr("100.64.0.9"), netip.Addr{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got4, got6 := FirstTailscaleAddrs(slices.All(tt.in))
+			if got4 != tt.want4 || got6 != tt.want6 {
+				t.Errorf("FirstTailscaleAddrs = %v, %v; want %v, %v", got4, got6, tt.want4, tt.want6)
+			}
+		})
 	}
 }

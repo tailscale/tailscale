@@ -51,6 +51,13 @@ while [ "$#" -gt 1 ]; do
 		ldflags="$ldflags -w -s"
 		tags="${tags:+$tags,},$(GOOS= GOARCH= $go run ./cmd/featuretags --min)"
 		;;
+	--strip)
+		# --min overrides your flags, when you're using custom tags and want to
+		# additionally strip symbols to help reduce the size, this is the easiest
+		# way to do it.
+		shift
+		ldflags="$ldflags -w -s"
+		;;
 	--box)
 		if [ ! -z "${TAGS:-}" ]; then
 			echo "set either --box or \$TAGS, but not both"

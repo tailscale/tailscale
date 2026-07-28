@@ -36,6 +36,7 @@ import (
 )
 
 func init() {
+	feature.Register("clientupdate")
 	ipnext.RegisterExtension("clientupdate", newExt)
 
 	// C2N
@@ -163,6 +164,7 @@ func (e *extension) DoSelfUpdate() {
 	})
 	if err != nil {
 		e.pushSelfUpdateProgress(ipnstate.NewUpdateProgress(ipnstate.UpdateFailed, err.Error()))
+		return
 	}
 	err = up.Update()
 	if err != nil {

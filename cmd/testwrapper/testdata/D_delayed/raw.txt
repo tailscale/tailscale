@@ -1,0 +1,32 @@
+=== RUN   TestA
+--- PASS: TestA (0.00s)
+=== RUN   TestSleep
+==================
+WARNING: DATA RACE
+Read at 0x0000007f12a8 by goroutine 9:
+  racesurvey/D_postterminal.TestA.func2()
+      /tmp/racesurvey/D_postterminal/d_test.go:16 +0x8a
+
+Previous write at 0x0000007f12a8 by goroutine 8:
+  racesurvey/D_postterminal.TestA.func1()
+      /tmp/racesurvey/D_postterminal/d_test.go:15 +0xa4
+
+Goroutine 9 (running) created at:
+  racesurvey/D_postterminal.TestA()
+      /tmp/racesurvey/D_postterminal/d_test.go:16 +0x44
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+
+Goroutine 8 (finished) created at:
+  racesurvey/D_postterminal.TestA()
+      /tmp/racesurvey/D_postterminal/d_test.go:15 +0x34
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+==================
+    testing.go:1712: race detected during execution of test
+--- FAIL: TestSleep (0.05s)
+FAIL

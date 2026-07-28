@@ -291,7 +291,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 			Certificates: p.downstreamCert,
 			MinVersion:   tls.VersionTLS12,
 		})
-		if err = uptc.HandshakeContext(ctx); err != nil {
+		if err = s.HandshakeContext(ctx); err != nil {
 			p.errors.Add("client-tls", 1)
 			return fmt.Errorf("client TLS handshake: %v", err)
 		}

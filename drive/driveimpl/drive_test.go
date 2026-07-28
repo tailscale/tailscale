@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"log"
 	"net"
 	"net/http"
@@ -156,27 +157,27 @@ func TestMissingPaths(t *testing.T) {
 		wantStatus int
 	}{
 		{
-			name:       "empty path",
+			name:       "empty-path",
 			path:       "",
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "single slash",
+			name:       "single-slash",
 			path:       "/",
 			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "only token",
+			name:       "only-token",
 			path:       "/" + secretToken,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "token with trailing slash",
+			name:       "token-trailing-slash",
 			path:       "/" + secretToken + "/",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "token and invalid share",
+			name:       "token-invalid-share",
 			path:       "/" + secretToken + "/nonexistentshare",
 			wantStatus: http.StatusNotFound,
 		},
@@ -239,7 +240,7 @@ func TestLOCK(t *testing.T) {
 	}
 
 	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
-		s.local.l.Addr(),
+		s.local.ln.Addr(),
 		url.PathEscape(domain),
 		url.PathEscape(remote1),
 		url.PathEscape(share11),
@@ -365,7 +366,7 @@ func TestUNLOCK(t *testing.T) {
 	}
 
 	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
-		s.local.l.Addr(),
+		s.local.ln.Addr(),
 		url.PathEscape(domain),
 		url.PathEscape(remote1),
 		url.PathEscape(share11),
@@ -428,12 +429,12 @@ func TestUNLOCK(t *testing.T) {
 }
 
 type local struct {
-	l  net.Listener
+	ln net.Listener
 	fs *FileSystemForLocal
 }
 
 type remote struct {
-	l           net.Listener
+	ln          net.Listener
 	fs          *FileSystemForRemote
 	fileServer  *FileServer
 	shares      map[string]string
@@ -456,10 +457,48 @@ func (r *remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type system struct {
-	t       *testing.T
-	local   *local
-	client  *gowebdav.Client
+	t         *testing.T
+	local     *local
+	client    *gowebdav.Client
+	transport http.RoundTripper
+
+	mu      sync.Mutex
 	remotes map[string]*remote
+	gen     uint64
+}
+
+// Domain implements [drive.RemoteSource].
+func (s *system) Domain() string { return domain }
+
+// Transport implements [drive.RemoteSource].
+func (s *system) Transport() http.RoundTripper { return s.transport }
+
+// Remotes implements [drive.RemoteSource].
+func (s *system) Remotes() iter.Seq[*drive.Remote] {
+	s.mu.Lock()
+	rs := make([]*drive.Remote, 0, len(s.remotes))
+	for name, r := range s.remotes {
+		url := fmt.Sprintf("http://%s", r.ln.Addr())
+		rs = append(rs, &drive.Remote{
+			Name: name,
+			URL:  func() string { return url },
+		})
+	}
+	s.mu.Unlock()
+	return func(yield func(*drive.Remote) bool) {
+		for _, r := range rs {
+			if !yield(r) {
+				return
+			}
+		}
+	}
+}
+
+// Generation implements [drive.RemoteSource].
+func (s *system) Generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen
 }
 
 func newSystem(t *testing.T) *system {
@@ -483,14 +522,19 @@ func newSystem(t *testing.T) *system {
 		}
 	}()
 
-	client := gowebdav.NewAuthClient(fmt.Sprintf("http://%s", ln.Addr()), &noopAuthorizer{})
+	client := gowebdav.NewClient(fmt.Sprintf("http://%s", ln.Addr()), "", "")
 	client.SetTransport(&http.Transport{DisableKeepAlives: true})
 	s := &system{
-		t:       t,
-		local:   &local{l: ln, fs: fs},
+		t:     t,
+		local: &local{ln: ln, fs: fs},
+		transport: &http.Transport{
+			DisableKeepAlives:     true,
+			ResponseHeaderTimeout: 5 * time.Second,
+		},
 		client:  client,
 		remotes: make(map[string]*remote),
 	}
+	fs.SetRemoteSource(s)
 	t.Cleanup(s.stop)
 	return s
 }
@@ -510,7 +554,7 @@ func (s *system) addRemote(name string) string {
 	s.t.Logf("FileServer for %v listening at %s", name, fileServer.Addr())
 
 	r := &remote{
-		l:           ln,
+		ln:          ln,
 		fileServer:  fileServer,
 		fs:          NewFileSystemForRemote(log.Printf),
 		shares:      make(map[string]string),
@@ -518,22 +562,11 @@ func (s *system) addRemote(name string) string {
 	}
 	r.fs.SetFileServerAddr(fileServer.Addr())
 	go http.Serve(ln, r)
-	s.remotes[name] = r
 
-	remotes := make([]*drive.Remote, 0, len(s.remotes))
-	for name, r := range s.remotes {
-		remotes = append(remotes, &drive.Remote{
-			Name: name,
-			URL:  func() string { return fmt.Sprintf("http://%s", r.l.Addr()) },
-		})
-	}
-	s.local.fs.SetRemotes(
-		domain,
-		remotes,
-		&http.Transport{
-			DisableKeepAlives:     true,
-			ResponseHeaderTimeout: 5 * time.Second,
-		})
+	s.mu.Lock()
+	s.remotes[name] = r
+	s.gen++
+	s.mu.Unlock()
 
 	return fileServer.Addr()
 }
@@ -683,7 +716,7 @@ func (s *system) stop() {
 		s.t.Fatalf("failed to Close fs: %s", err)
 	}
 
-	err = s.local.l.Close()
+	err = s.local.ln.Close()
 	if err != nil {
 		s.t.Fatalf("failed to Close listener: %s", err)
 	}
@@ -694,7 +727,7 @@ func (s *system) stop() {
 			s.t.Fatalf("failed to Close remote fs: %s", err)
 		}
 
-		err = r.l.Close()
+		err = r.ln.Close()
 		if err != nil {
 			s.t.Fatalf("failed to Close remote listener: %s", err)
 		}
@@ -737,36 +770,6 @@ func fileInfoToStatic(fi fs.FileInfo, fixupMode bool) fs.FileInfo {
 
 func pathTo(remote, share, name string) string {
 	return path.Join(domain, remote, share, name)
-}
-
-// noopAuthorizer implements gowebdav.Authorizer. It does no actual
-// authorizing. We use it in place of gowebdav's built-in authorizer in order
-// to avoid a race condition in that authorizer.
-type noopAuthorizer struct{}
-
-func (a *noopAuthorizer) NewAuthenticator(body io.Reader) (gowebdav.Authenticator, io.Reader) {
-	return &noopAuthenticator{}, nil
-}
-
-func (a *noopAuthorizer) AddAuthenticator(key string, fn gowebdav.AuthFactory) {
-}
-
-type noopAuthenticator struct{}
-
-func (a *noopAuthenticator) Authorize(c *http.Client, rq *http.Request, path string) error {
-	return nil
-}
-
-func (a *noopAuthenticator) Verify(c *http.Client, rs *http.Response, path string) (redo bool, err error) {
-	return false, nil
-}
-
-func (a *noopAuthenticator) Clone() gowebdav.Authenticator {
-	return &noopAuthenticator{}
-}
-
-func (a *noopAuthenticator) Close() error {
-	return nil
 }
 
 const lockBody = `<?xml version="1.0" encoding="utf-8" ?>

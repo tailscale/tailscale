@@ -39,19 +39,19 @@ func TestDelta(t *testing.T) {
 		wantStats map[sockstats.Label]deltaStat
 	}{
 		{
-			name:      "nil a stat",
+			name:      "nil-a-stat",
 			a:         nil,
 			b:         &sockstats.SockStats{},
 			wantStats: nil,
 		},
 		{
-			name:      "nil b stat",
+			name:      "nil-b-stat",
 			a:         &sockstats.SockStats{},
 			b:         nil,
 			wantStats: nil,
 		},
 		{
-			name: "no change",
+			name: "no-change",
 			a: &sockstats.SockStats{
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {
@@ -69,7 +69,7 @@ func TestDelta(t *testing.T) {
 			wantStats: nil,
 		},
 		{
-			name: "tx after empty stat",
+			name: "tx-after-empty-stat",
 			a:    &sockstats.SockStats{},
 			b: &sockstats.SockStats{
 				Stats: map[sockstats.Label]sockstats.SockStat{
@@ -83,7 +83,7 @@ func TestDelta(t *testing.T) {
 			},
 		},
 		{
-			name: "rx after non-empty stat",
+			name: "rx-after-non-empty-stat",
 			a: &sockstats.SockStats{
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {

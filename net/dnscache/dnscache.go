@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 )
 
@@ -422,24 +422,21 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		}
 	}()
 
-	ip, ip6, allIPs, err := d.dnsCache.LookupIP(ctx, host)
+	ip, _, allIPs, err := d.dnsCache.LookupIP(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
 	}
-	i4s := v4addrs(allIPs)
-	if len(i4s) < 2 {
+
+	// If we only have one candidate, just dial that, no matter what the
+	// address family is.
+	if len(allIPs) == 1 {
 		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
-		c, err := dc.dialOne(ctx, ip.Unmap())
-		if err == nil || ctx.Err() != nil || !ip6.IsValid() {
-			return c, err
-		}
-		// Fall back to trying IPv6.
-		return dc.dialOne(ctx, ip6)
+		return dc.dialOne(ctx, ip.Unmap())
 	}
 
-	// Multiple IPv4 candidates, and 0+ IPv6.
-	ipsToTry := append(i4s, v6addrs(allIPs)...)
-	return dc.raceDial(ctx, ipsToTry)
+	// If we have multiple candidates, across address families, use happy
+	// eyeballs to find a connection.
+	return dc.raceDial(ctx, allIPs)
 }
 
 func (d *dialer) shouldTryBootstrap(ctx context.Context, err error, dc *dialCall) bool {
@@ -555,16 +552,6 @@ const fallbackDelay = 300 * time.Millisecond
 // raceDial tries to dial port on each ip in ips, starting a new race
 // dial every fallbackDelay apart, returning whichever completes first.
 func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	type res struct {
-		c   net.Conn
-		err error
-	}
-	resc := make(chan res)           // must be unbuffered
-	failBoost := make(chan struct{}) // best effort send on dial failure
-
 	// Remove IPs that we tried & failed to dial previously
 	// (such as when we're being called after a dnsfallback lookup and get
 	// the same results)
@@ -572,96 +559,20 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 	if len(ips) == 0 {
 		return nil, errors.New("no IPs")
 	}
-
-	// Partition candidate list and then merge such that an IPv6 address is
-	// in the first spot if present, and then addresses are interleaved.
-	// This ensures that we're trying an IPv6 address first, then
-	// alternating between v4 and v6 in case one of the two networks is
-	// broken.
-	var iv4, iv6 []netip.Addr
-	for _, ip := range ips {
-		if ip.Is6() {
-			iv6 = append(iv6, ip)
-		} else {
-			iv4 = append(iv4, ip)
-		}
+	port, err := strconv.ParseUint(dc.port, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port %q: %w", dc.port, err)
 	}
-	ips = slicesx.Interleave(iv6, iv4)
-
-	go func() {
-		for i, ip := range ips {
-			if i != 0 {
-				timer := time.NewTimer(fallbackDelay)
-				select {
-				case <-timer.C:
-				case <-failBoost:
-					timer.Stop()
-				case <-ctx.Done():
-					timer.Stop()
-					return
-				}
-			}
-			go func(ip netip.Addr) {
-				c, err := dc.dialOne(ctx, ip)
-				if err != nil {
-					// Best effort wake-up a pending dial.
-					// e.g. IPv4 dials failing quickly on an IPv6-only system.
-					// In that case we don't want to wait 300ms per IPv4 before
-					// we get to the IPv6 addresses.
-					select {
-					case failBoost <- struct{}{}:
-					default:
-					}
-				}
-				select {
-				case resc <- res{c, err}:
-				case <-ctx.Done():
-					if c != nil {
-						c.Close()
-					}
-				}
-			}(ip)
-		}
-	}()
-
-	var firstErr error
-	var fails int
-	for {
-		select {
-		case r := <-resc:
-			if r.c != nil {
-				return r.c, nil
-			}
-			fails++
-			if firstErr == nil {
-				firstErr = r.err
-			}
-			if fails == len(ips) {
-				return nil, firstErr
-			}
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	addrs := make([]netip.AddrPort, len(ips))
+	for i, ip := range ips {
+		addrs[i] = netip.AddrPortFrom(ip, uint16(port))
 	}
-}
-
-func v4addrs(aa []netip.Addr) (ret []netip.Addr) {
-	for _, a := range aa {
-		a = a.Unmap()
-		if a.Is4() {
-			ret = append(ret, a)
-		}
-	}
-	return ret
-}
-
-func v6addrs(aa []netip.Addr) (ret []netip.Addr) {
-	for _, a := range aa {
-		if a.Is6() && !a.Is4In6() {
-			ret = append(ret, a)
-		}
-	}
-	return ret
+	return netx.RaceDial(ctx, addrs, func(ctx context.Context, network, address string) (net.Conn, error) {
+		c, err := dc.d.fwd(ctx, network, address)
+		ipp, _ := netip.ParseAddrPort(address)
+		dc.noteDialResult(ipp.Addr(), err)
+		return c, err
+	}, fallbackDelay)
 }
 
 // TLSDialer is like Dialer but returns a func suitable for using with net/http.Transport.DialTLSContext.

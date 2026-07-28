@@ -28,6 +28,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/paths"
 	"tailscale.com/util/slicesx"
+	"tailscale.com/util/testenv"
 	"tailscale.com/version/distro"
 )
 
@@ -92,8 +93,8 @@ var localClient = local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 
-// Run runs the CLI. The args do not include the binary name.
-func Run(args []string) (err error) {
+// RunWithContext runs the CLI. The args do not include the binary name.
+func RunWithContext(ctx context.Context, args []string) (err error) {
 	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 && len(args) == 0 {
 		// We're running on gokrazy and the user did not specify 'up'.
 		// Don't run the tailscale CLI and spam logs with usage; just exit.
@@ -163,7 +164,7 @@ func Run(args []string) (err error) {
 		return
 	}
 
-	err = rootCmd.Run(context.Background())
+	err = rootCmd.Run(ctx)
 	if local.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
 		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s'.\nTo not require root, use 'sudo tailscale set --operator=$USER' once.", err, strings.Join(args, " "))
 	}
@@ -171,6 +172,11 @@ func Run(args []string) (err error) {
 		return nil
 	}
 	return err
+}
+
+// Run is equivalent to calling [RunWithContext] with the background context.
+func Run(args []string) (err error) {
+	return RunWithContext(context.Background(), args)
 }
 
 type onceFlagValue struct {
@@ -194,26 +200,49 @@ func (v *onceFlagValue) IsBoolFlag() bool {
 	return ok && bf.IsBoolFlag()
 }
 
-// noDupFlagify modifies c recursively to make all the
-// flag values be wrappers that permit setting the value
-// at most once.
-func noDupFlagify(c *ffcli.Command) {
-	if c.FlagSet != nil {
-		c.FlagSet.VisitAll(func(f *flag.Flag) {
-			f.Value = &onceFlagValue{Value: f.Value}
-		})
+// noDupFlagify modifies c recursively to make all the flag values be
+// wrappers that permit setting the value at most once. If tb is
+// non-nil, the original values are restored when the test completes.
+func noDupFlagify(c *ffcli.Command, tb testenv.TB) {
+	if tb == nil && testenv.InTest() {
+		return
 	}
-	for _, sub := range c.Subcommands {
-		noDupFlagify(sub)
+	type restore struct {
+		f *flag.Flag
+		v flag.Value
+	}
+	var restores []restore
+	var walk func(*ffcli.Command)
+	walk = func(c *ffcli.Command) {
+		if c.FlagSet != nil {
+			c.FlagSet.VisitAll(func(f *flag.Flag) {
+				if tb != nil {
+					restores = append(restores, restore{f, f.Value})
+				}
+				f.Value = &onceFlagValue{Value: f.Value}
+			})
+		}
+		for _, sub := range c.Subcommands {
+			walk(sub)
+		}
+	}
+	walk(c)
+	if tb != nil {
+		tb.Cleanup(func() {
+			for _, r := range restores {
+				r.f.Value = r.v
+			}
+		})
 	}
 }
 
 var (
 	fileCmd,
 	sysPolicyCmd,
+	maybeRoutecheckCmd,
 	maybeWebCmd,
 	maybeDriveCmd,
-	maybeNetlockCmd,
+	maybeTailnetLockCmd,
 	maybeFunnelCmd,
 	maybeServeCmd,
 	maybeCertCmd,
@@ -221,7 +250,7 @@ var (
 	_ func() *ffcli.Command
 )
 
-func newRootCmd() *ffcli.Command {
+func newRootCmd(tb ...testenv.TB) *ffcli.Command {
 	rootfs := newFlagSet("tailscale")
 	rootfs.Func("socket", "path to tailscaled socket", func(s string) error {
 		localClient.Socket = s
@@ -246,12 +275,14 @@ change in the future.
 			upCmd,
 			downCmd,
 			setCmd,
+			getCmd,
 			loginCmd,
 			logoutCmd,
 			switchCmd,
 			configureCmd(),
 			nilOrCall(sysPolicyCmd),
 			netcheckCmd,
+			nilOrCall(maybeRoutecheckCmd),
 			ipCmd,
 			dnsCmd,
 			statusCmd,
@@ -261,16 +292,18 @@ change in the future.
 			sshCmd,
 			nilOrCall(maybeFunnelCmd),
 			nilOrCall(maybeServeCmd),
+			serviceCmd,
 			versionCmd,
 			nilOrCall(maybeWebCmd),
 			nilOrCall(fileCmd),
 			bugReportCmd,
 			nilOrCall(maybeCertCmd),
-			nilOrCall(maybeNetlockCmd),
+			nilOrCall(maybeTailnetLockCmd),
 			licensesCmd,
 			exitNodeCmd(),
 			nilOrCall(maybeUpdateCmd),
 			whoisCmd,
+			whoamiCmd,
 			debugCmd(),
 			nilOrCall(maybeDriveCmd),
 			idTokenCmd,
@@ -303,7 +336,11 @@ change in the future.
 	})
 
 	ffcomplete.Inject(rootCmd, func(c *ffcli.Command) { c.LongHelp = hidden + c.LongHelp }, usageFunc)
-	noDupFlagify(rootCmd)
+	var t testenv.TB
+	if len(tb) > 0 {
+		t = tb[0]
+	}
+	noDupFlagify(rootCmd, t)
 	return rootCmd
 }
 
@@ -452,7 +489,7 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 
 			showDefault := f.DefValue != "" && withDefaults
 			// Issue 6766: don't show the default Windows socket path. It's long
-			// and distracting. And people on on Windows aren't likely to ever
+			// and distracting. And people on Windows aren't likely to ever
 			// change it anyway.
 			if runtime.GOOS == "windows" && f.Name == "socket" && strings.HasPrefix(f.DefValue, `\\.\pipe\ProtectedPrefix\`) {
 				showDefault = false

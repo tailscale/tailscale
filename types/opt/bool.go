@@ -13,7 +13,7 @@ import (
 // is either "true", "false", or the empty string to mean unset.
 //
 // As a special case, the underlying string may also be the string
-// "unset" as as a synonym for the empty string. This lets the
+// "unset" as a synonym for the empty string. This lets the
 // explicit unset value be exchanged over an encoding/json "omitempty"
 // field without it being dropped.
 type Bool string

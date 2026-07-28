@@ -43,12 +43,32 @@ func TestNameserverReconciler(t *testing.T) {
 					ClusterIP: "5.4.3.2",
 				},
 				Pod: &tsapi.NameserverPod{
+					NodeSelector: map[string]string{
+						"foo": "bar",
+					},
 					Tolerations: []corev1.Toleration{
 						{
 							Key:      "some-key",
 							Operator: corev1.TolerationOpEqual,
 							Value:    "some-value",
 							Effect:   corev1.TaintEffectNoSchedule,
+						},
+					},
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{
+									{
+										MatchExpressions: []corev1.NodeSelectorRequirement{
+											{
+												Key:      "some-key",
+												Operator: corev1.NodeSelectorOpIn,
+												Values:   []string{"some-value"},
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -80,7 +100,7 @@ func TestNameserverReconciler(t *testing.T) {
 	nameserverLabels := nameserverResourceLabels(dnsConfig.Name, tsNamespace)
 
 	wantsDeploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: tsNamespace}, TypeMeta: metav1.TypeMeta{Kind: "Deployment", APIVersion: appsv1.SchemeGroupVersion.Identifier()}}
-	t.Run("deployment has expected fields", func(t *testing.T) {
+	t.Run("deployment-expected-fields", func(t *testing.T) {
 		if err = yaml.Unmarshal(deployYaml, wantsDeploy); err != nil {
 			t.Fatalf("unmarshalling yaml: %v", err)
 		}
@@ -97,12 +117,32 @@ func TestNameserverReconciler(t *testing.T) {
 				Effect:   corev1.TaintEffectNoSchedule,
 			},
 		}
+		wantsDeploy.Spec.Template.Spec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{
+						{
+							MatchExpressions: []corev1.NodeSelectorRequirement{
+								{
+									Key:      "some-key",
+									Operator: corev1.NodeSelectorOpIn,
+									Values:   []string{"some-value"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		wantsDeploy.Spec.Template.Spec.NodeSelector = map[string]string{
+			"foo": "bar",
+		}
 
 		expectEqual(t, fc, wantsDeploy)
 	})
 
 	wantsSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: tsNamespace}, TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: corev1.SchemeGroupVersion.Identifier()}}
-	t.Run("service has expected fields", func(t *testing.T) {
+	t.Run("service-expected-fields", func(t *testing.T) {
 		if err = yaml.Unmarshal(svcYaml, wantsSvc); err != nil {
 			t.Fatalf("unmarshalling yaml: %v", err)
 		}
@@ -113,7 +153,7 @@ func TestNameserverReconciler(t *testing.T) {
 		expectEqual(t, fc, wantsSvc)
 	})
 
-	t.Run("dns config status is set", func(t *testing.T) {
+	t.Run("dns-config-status-set", func(t *testing.T) {
 		// Verify that DNSConfig advertizes the nameserver's Service IP address,
 		// has the ready status condition and tailscale finalizer.
 		mustUpdate(t, fc, "tailscale", "nameserver", func(svc *corev1.Service) {
@@ -136,7 +176,7 @@ func TestNameserverReconciler(t *testing.T) {
 		expectEqual(t, fc, dnsConfig)
 	})
 
-	t.Run("nameserver image can be updated", func(t *testing.T) {
+	t.Run("nameserver-image-updated", func(t *testing.T) {
 		// Verify that nameserver image gets updated to match DNSConfig spec.
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image.Tag = "v0.0.2"
@@ -146,7 +186,7 @@ func TestNameserverReconciler(t *testing.T) {
 		expectEqual(t, fc, wantsDeploy)
 	})
 
-	t.Run("reconciler does not overwrite custom configuration", func(t *testing.T) {
+	t.Run("reconciler-preserves-custom-config", func(t *testing.T) {
 		// Verify that when another actor sets ConfigMap data, it does not get
 		// overwritten by nameserver reconciler.
 		dnsRecords := &operatorutils.Records{Version: "v1alpha1", IP4: map[string][]string{"foo.ts.net": {"1.2.3.4"}}}
@@ -175,7 +215,7 @@ func TestNameserverReconciler(t *testing.T) {
 		expectEqual(t, fc, wantCm)
 	})
 
-	t.Run("uses default nameserver image", func(t *testing.T) {
+	t.Run("uses-default-nameserver-image", func(t *testing.T) {
 		// Verify that if dnsconfig.spec.nameserver.image.{repo,tag} are unset,
 		// the nameserver image defaults to tailscale/k8s-nameserver:unstable.
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {

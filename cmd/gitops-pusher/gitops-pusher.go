@@ -26,7 +26,7 @@ import (
 	"github.com/tailscale/hujson"
 	"golang.org/x/oauth2/clientcredentials"
 	tsclient "tailscale.com/client/tailscale"
-	_ "tailscale.com/feature/condregister/identityfederation"
+	_ "tailscale.com/feature/identityfederation"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/util/httpm"
 )
@@ -255,7 +255,11 @@ func getCredentials() (*http.Client, string) {
 		} else if idok && idToken != "" && oiok && oauthId != "" {
 			if exchangeJWTForToken, ok := tailscale.HookExchangeJWTForTokenViaWIF.GetOk(); ok {
 				var err error
-				apiKeyEnv, err = exchangeJWTForToken(context.Background(), fmt.Sprintf("https://%s", *apiServer), oauthId, idToken)
+				apiKeyEnv, err = exchangeJWTForToken(context.Background(), tailscale.ExchangeJWTForTokenWIFArgs{
+					BaseURL:  fmt.Sprintf("https://%s", *apiServer),
+					ClientID: oauthId,
+					IDToken:  idToken,
+				})
 				if err != nil {
 					log.Fatal(err)
 				}

@@ -197,6 +197,7 @@ func TestComputeStateAt(t *testing.T) {
 // for tests you want one AUM to be 'lower' than another, so that
 // that chain is taken based on fork resolution rules).
 func fakeAUM(t *testing.T, template any, parent *AUMHash) (AUM, AUMHash) {
+	t.Helper()
 	if seed, ok := template.(int); ok {
 		a := AUM{MessageKind: AUMNoOp, KeyID: []byte{byte(seed)}}
 		if parent != nil {
@@ -299,15 +300,17 @@ func TestAuthorityHead(t *testing.T) {
 func TestAuthorityValidDisablement(t *testing.T) {
 	pub, _ := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	disablementSecret := []byte{1, 2, 3}
+	state := State{
+		Keys:              []Key{key},
+		DisablementValues: [][]byte{DisablementKDF(disablementSecret)},
+	}
 	c := newTestchain(t, `
         G1 -> L1
 
         G1.template = genesis
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &state}),
 	)
 
 	a, _ := Open(c.Chonk())
@@ -320,10 +323,7 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	a1, genesisAUM, err := Create(ChonkMem(), State{
-		Keys:              []Key{key},
-		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, signer25519(priv))
+	a1, genesisAUM, err := Create(ChonkMem(), CreateStateForTest(key), signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -352,10 +352,7 @@ func TestBootstrapChonkMustBeEmpty(t *testing.T) {
 
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
-	state := State{
-		Keys:              []Key{key},
-		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}
+	state := CreateStateForTest(key)
 
 	// Bootstrap our chonk for the first time, which should succeed.
 	_, _, err := Create(chonk, state, signer25519(priv))
@@ -415,14 +412,11 @@ func TestAuthorityInformNonLinear(t *testing.T) {
                | -> L4 -> L5
 
         G1.template = genesis
-        L1.hashSeed = 3
+        L1.hashSeed = 2
         L2.hashSeed = 2
         L4.hashSeed = 2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
@@ -451,6 +445,8 @@ func TestAuthorityInformNonLinear(t *testing.T) {
 	}
 
 	if a.Head() != c.AUMHashes["L3"] {
+		t.Logf("a.Head() = %s", a.Head())
+		t.Logf("auMHashes = %v", c.AUMHashes)
 		t.Fatal("authority did not converge to correct AUM")
 	}
 }
@@ -464,10 +460,7 @@ func TestAuthorityInformLinear(t *testing.T) {
 
         G1.template = genesis
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
@@ -504,21 +497,12 @@ func TestInteropWithNLKey(t *testing.T) {
 	pub2 := key.NewNLPrivate().Public()
 	pub3 := key.NewNLPrivate().Public()
 
-	a, _, err := Create(ChonkMem(), State{
-		Keys: []Key{
-			{
-				Kind:   Key25519,
-				Votes:  1,
-				Public: pub1.KeyID(),
-			},
-			{
-				Kind:   Key25519,
-				Votes:  1,
-				Public: pub2.KeyID(),
-			},
-		},
-		DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-	}, priv1)
+	state := CreateStateForTest(
+		Key{Kind: Key25519, Votes: 1, Public: pub1.KeyID()},
+		Key{Kind: Key25519, Votes: 1, Public: pub2.KeyID()},
+	)
+
+	a, _, err := Create(ChonkMem(), state, priv1)
 	if err != nil {
 		t.Errorf("tka.Create: %v", err)
 		return
@@ -538,6 +522,7 @@ func TestInteropWithNLKey(t *testing.T) {
 func TestAuthorityCompact(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	state := CreateStateForTest(key)
 
 	c := newTestchain(t, `
         G -> A -> B -> C -> D -> E
@@ -545,14 +530,8 @@ func TestAuthorityCompact(t *testing.T) {
         G.template = genesis
         C.template = checkpoint2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
-		optTemplate("checkpoint2", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{key},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(key),
+		optTemplate("checkpoint2", AUM{MessageKind: AUMCheckpoint, State: &state}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
@@ -602,10 +581,7 @@ func TestFindParentForRewrite(t *testing.T) {
         C.template = add3
         D.template = remove2
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{k1},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(k1),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}),
 		optTemplate("remove2", AUM{MessageKind: AUMRemoveKey, KeyID: k2ID}))
@@ -671,10 +647,7 @@ func TestMakeRetroactiveRevocation(t *testing.T) {
         C.template = add2
         D.template = add3
     `,
-		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
-			Keys:              []Key{k1},
-			DisablementValues: [][]byte{DisablementKDF([]byte{1, 2, 3})},
-		}}),
+		genesisTemplate(k1),
 		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
 		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}))
 

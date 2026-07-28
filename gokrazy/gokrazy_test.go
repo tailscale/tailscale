@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,83 @@ import (
 )
 
 var runVMTests = flag.Bool("run-vm-tests", false, "run tests that require a VM")
+
+func TestTsappConfigs(t *testing.T) {
+	tests := []struct {
+		name     string
+		app      string
+		goarch   string
+		kernel   string
+		firmware string
+		eeprom   string
+	}{
+		{
+			name:     "tsapp",
+			app:      "tsapp",
+			goarch:   "amd64",
+			kernel:   "github.com/gokrazy/kernel.amd64",
+			firmware: "github.com/gokrazy/kernel.amd64",
+		},
+		{
+			name:     "tsapp-vm-arm64",
+			app:      "tsapp-vm.arm64",
+			goarch:   "arm64",
+			kernel:   "github.com/gokrazy/kernel.arm64",
+			firmware: "github.com/gokrazy/kernel.arm64",
+			eeprom:   "",
+		},
+		{
+			name:     "tsapp-pi-arm64",
+			app:      "tsapp-pi.arm64",
+			goarch:   "arm64",
+			kernel:   "github.com/gokrazy/kernel.rpi",
+			firmware: "github.com/gokrazy/firmware",
+			eeprom:   "github.com/gokrazy/rpi-eeprom",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfgBytes, err := os.ReadFile(filepath.Join(tt.app, "config.json"))
+			if err != nil {
+				t.Fatalf("reading config.json: %v", err)
+			}
+			var cfg struct {
+				Environment     []string
+				KernelPackage   string
+				FirmwarePackage string
+				EEPROMPackage   *string
+			}
+			if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+				t.Fatalf("unmarshaling config.json: %v", err)
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(cfgBytes, &raw); err != nil {
+				t.Fatalf("unmarshaling config.json as map: %v", err)
+			}
+			var goarch string
+			for _, e := range cfg.Environment {
+				if v, ok := strings.CutPrefix(e, "GOARCH="); ok {
+					goarch = v
+				}
+			}
+			if goarch != tt.goarch {
+				t.Errorf("GOARCH = %q; want %q", goarch, tt.goarch)
+			}
+			if cfg.KernelPackage != tt.kernel {
+				t.Errorf("KernelPackage = %q; want %q", cfg.KernelPackage, tt.kernel)
+			}
+			if cfg.FirmwarePackage != tt.firmware {
+				t.Errorf("FirmwarePackage = %q; want %q", cfg.FirmwarePackage, tt.firmware)
+			}
+			if _, ok := raw["EEPROMPackage"]; tt.goarch == "arm64" && !ok {
+				t.Error("EEPROMPackage is missing")
+			}
+			if cfg.EEPROMPackage != nil && *cfg.EEPROMPackage != tt.eeprom {
+				t.Errorf("EEPROMPackage = %q; want %q", *cfg.EEPROMPackage, tt.eeprom)
+			}
+		})
+	}
+}
 
 func findKernelPath(t *testing.T) string {
 	t.Helper()
@@ -39,11 +117,11 @@ func findKernelPath(t *testing.T) string {
 		t.Fatalf("go env GOMODCACHE: %v", err)
 	}
 	for _, r := range mf.Require {
-		if r.Mod.Path == "github.com/tailscale/gokrazy-kernel" {
+		if r.Mod.Path == "github.com/gokrazy/kernel.amd64" {
 			return strings.TrimSpace(string(goModB)) + "/" + r.Mod.String() + "/vmlinuz"
 		}
 	}
-	t.Fatal("failed to find gokrazy-kernel in go.mod")
+	t.Fatal("failed to find kernel.amd64 in go.mod")
 	return ""
 }
 
@@ -109,12 +187,7 @@ func (sl *serialLog) lastN(n int) []string {
 func (sl *serialLog) findLine(pred func(string) bool) bool {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
-	for _, line := range sl.lines {
-		if pred(line) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(sl.lines, pred)
 }
 
 // TestBusyboxInTsapp boots the tsapp image in QEMU and verifies that

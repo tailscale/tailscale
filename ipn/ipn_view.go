@@ -9,6 +9,7 @@ import (
 	jsonv1 "encoding/json"
 	"errors"
 	"net/netip"
+	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -131,6 +132,12 @@ func (v LoginProfileView) LocalUserID() WindowsUserID { return v.ж.LocalUserID 
 // into.
 func (v LoginProfileView) ControlURL() string { return v.ж.ControlURL }
 
+// Created is when this profile was first added to this client. It is
+// stamped once at profile creation and never changes. It is used to sort
+// the profile list with newest first; profiles created before this field
+// existed have a zero value and sort after all stamped profiles.
+func (v LoginProfileView) Created() time.Time { return v.ж.Created }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	ID             ProfileID
@@ -141,6 +148,7 @@ var _LoginProfileViewNeedsRegeneration = LoginProfile(struct {
 	NodeID         tailcfg.StableNodeID
 	LocalUserID    WindowsUserID
 	ControlURL     string
+	Created        time.Time
 }{})
 
 // View returns a read-only view of Prefs.
@@ -283,7 +291,8 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
 // CorpDNS specifies whether to install the Tailscale network's
-// DNS configuration, if it exists.
+// DNS configuration, if it exists. It is the internal name for
+// the "tailscale set --accept-dns=" flag.
 func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
 
 // RunSSH bool is whether this node should run an SSH
@@ -432,6 +441,24 @@ func (v PrefsView) PostureChecking() bool { return v.ж.PostureChecking }
 // Linux-only.
 func (v PrefsView) NetfilterKind() string { return v.ж.NetfilterKind }
 
+// RemoteConfig, if true, delegates full remote control of this node's
+// prefs and LocalAPI to the tailnet admin via the control plane. When
+// enabled, the control server can read and edit any of this node's
+// prefs at any time, and invoke any LocalAPI endpoint on this node,
+// without any further local consent (no CLI or GUI confirmation).
+//
+// This is an alternative to Tailscale's default per-feature double
+// opt-in model, in which both the tailnet admin and the local machine
+// owner must agree to each individual setting change. RemoteConfig is
+// a single client-side "I trust the tailnet admin" switch that hands
+// over full remote management of this node.
+//
+// Only enable this when the tailnet admin owns the machine (e.g. a
+// corporate fleet device) or the local user has explicitly delegated
+// full control to the tailnet admin. Do NOT enable this on personal
+// or BYOD devices where the tailnet admin is not fully trusted.
+func (v PrefsView) RemoteConfig() bool { return v.ж.RemoteConfig }
+
 // DriveShares are the configured DriveShares, stored in increasing order
 // by name.
 func (v PrefsView) DriveShares() views.SliceView[*drive.Share, drive.ShareView] {
@@ -452,16 +479,6 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[uint16] {
 func (v PrefsView) RelayServerStaticEndpoints() views.Slice[netip.AddrPort] {
 	return views.SliceOf(v.ж.RelayServerStaticEndpoints)
 }
-
-// AllowSingleHosts was a legacy field that was always true
-// for the past 4.5 years. It controlled whether Tailscale
-// peers got /32 or /128 routes for each other.
-// As of 2024-05-17 we're starting to ignore it, but to let
-// people still downgrade Tailscale versions and not break
-// all peer-to-peer networking we still write it to disk (as JSON)
-// so it can be loaded back by old versions.
-// TODO(bradfitz): delete this in 2025 sometime. See #12058.
-func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 
 // The Persist field is named 'Config' in the file for backward
 // compatibility with earlier versions.
@@ -503,10 +520,10 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AppConnector               AppConnectorPrefs
 	PostureChecking            bool
 	NetfilterKind              string
+	RemoteConfig               bool
 	DriveShares                []*drive.Share
 	RelayServerPort            *uint16
 	RelayServerStaticEndpoints []netip.AddrPort
-	AllowSingleHosts           marshalAsTrueInJSON
 	Persist                    *persist.Persist
 }{})
 
@@ -807,7 +824,10 @@ func (v TCPPortHandlerView) HTTPS() bool { return v.ж.HTTPS }
 // It is mutually exclusive with TCPForward.
 func (v TCPPortHandlerView) HTTP() bool { return v.ж.HTTP }
 
-// TCPForward is the IP:port to forward TCP connections to.
+// TCPForward is the address to forward TCP connections to.
+// It is either a host:port (e.g. "127.0.0.1:3128", "localhost:5432")
+// or a Unix socket path prefixed with "unix:"
+// (e.g. "unix:/var/run/app.sock" or "unix:relative.sock").
 // Whether or not TLS is terminated by tailscaled depends on
 // TerminateTLS.
 //

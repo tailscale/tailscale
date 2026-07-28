@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/netip"
 	"slices"
 	"sort"
@@ -33,11 +32,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/client/tailscale/v2"
 
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -56,6 +56,7 @@ const (
 	reasonProxyGroupCreating           = "ProxyGroupCreating"
 	reasonProxyGroupInvalid            = "ProxyGroupInvalid"
 	reasonProxyGroupTailnetUnavailable = "ProxyGroupTailnetUnavailable"
+	reasonACMEAccountsPendingDeletion  = "ACMEAccountsPendingDeletion"
 
 	// Copied from k8s.io/apiserver/pkg/registry/generic/registry/store.go@cccad306d649184bf2a0e319ba830c53f65c445c
 	optimisticLockErrorMsg  = "the object has been modified; please apply your changes to the latest version and try again"
@@ -85,7 +86,7 @@ type ProxyGroupReconciler struct {
 	log      *zap.SugaredLogger
 	recorder record.EventRecorder
 	clock    tstime.Clock
-	tsClient tsClient
+	clients  ClientProvider
 
 	// User-specified defaults from the helm installation.
 	tsNamespace       string
@@ -102,6 +103,14 @@ type ProxyGroupReconciler struct {
 	apiServerProxyGroups set.Slice[types.UID]     // for kube-apiserver proxygroups gauge
 	authKeyRateLimits    map[string]*rate.Limiter // per-ProxyGroup rate limiters for auth key re-issuance.
 	authKeyReissuing     map[string]bool
+
+	// sharedACMEAccountKey is the operator-wide default for the
+	// shared-ACME-account feature. When true, every ProxyGroup uses the
+	// shared per-tailnet account key unless the ProxyGroup explicitly
+	// opts out via tailscale.com/share-acme-account=false. When false,
+	// only ProxyGroups annotated with tailscale.com/share-acme-account=true
+	// use it.
+	sharedACMEAccountKey bool
 }
 
 func (r *ProxyGroupReconciler) logger(name string) *zap.SugaredLogger {
@@ -122,7 +131,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("failed to get tailscale.com ProxyGroup: %w", err)
 	}
 
-	tailscaleClient, loginUrl, err := r.getClientAndLoginURL(ctx, pg.Spec.Tailnet)
+	tsClient, err := r.clients.For(pg.Spec.Tailnet)
 	if err != nil {
 		oldPGStatus := pg.Status.DeepCopy()
 		nrr := &notReadyReason{
@@ -141,7 +150,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			return reconcile.Result{}, nil
 		}
 
-		if done, err := r.maybeCleanup(ctx, tailscaleClient, pg); err != nil {
+		if done, err := r.maybeCleanup(ctx, tsClient, pg); err != nil {
 			if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 				logger.Infof("optimistic lock error, retrying: %s", err)
 				return reconcile.Result{}, nil
@@ -160,7 +169,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	oldPGStatus := pg.Status.DeepCopy()
-	staticEndpoints, nrr, err := r.reconcilePG(ctx, tailscaleClient, loginUrl, pg, logger)
+	staticEndpoints, nrr, err := r.reconcilePG(ctx, tsClient, pg, logger)
 	return reconcile.Result{}, errors.Join(err, r.maybeUpdateStatus(ctx, logger, pg, oldPGStatus, nrr, staticEndpoints))
 }
 
@@ -168,7 +177,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 // for deletion. It is separated out from Reconcile to make a clear separation
 // between reconciling the ProxyGroup, and posting the status of its created
 // resources onto the ProxyGroup status field.
-func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tailscaleClient tsClient, loginUrl string, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (map[string][]netip.AddrPort, *notReadyReason, error) {
+func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	if !slices.Contains(pg.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
@@ -209,7 +218,7 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tailscaleClient 
 		return notReady(reasonProxyGroupInvalid, fmt.Sprintf("invalid ProxyGroup spec: %v", err))
 	}
 
-	staticEndpoints, nrr, err := r.maybeProvision(ctx, tailscaleClient, loginUrl, pg, proxyClass)
+	staticEndpoints, nrr, err := r.maybeProvision(ctx, tsClient, pg, proxyClass)
 	if err != nil {
 		return nil, nrr, err
 	}
@@ -295,7 +304,7 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 	return errors.Join(errs...)
 }
 
-func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClient tsClient, loginUrl string, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {
+func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup, proxyClass *tsapi.ProxyClass) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	logger := r.logger(pg.Name)
 	r.mu.Lock()
 	r.ensureStateAddedForProxyGroup(pg)
@@ -317,7 +326,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClie
 		}
 	}
 
-	staticEndpoints, err := r.ensureConfigSecretsCreated(ctx, tailscaleClient, loginUrl, pg, proxyClass, svcToNodePorts)
+	staticEndpoints, err := r.ensureConfigSecretsCreated(ctx, tsClient, pg, proxyClass, svcToNodePorts)
 	if err != nil {
 		if _, ok := errors.AsType[*FindStaticEndpointErr](err); ok {
 			reason := reasonProxyGroupCreationFailed
@@ -354,7 +363,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClie
 		}
 	}
 
-	role := pgRole(pg, r.tsNamespace)
+	role := pgRole(pg, r.tsNamespace, r.sharedACMEAccountEnabledFor(pg))
 	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
 		r.ObjectMeta.Labels = role.ObjectMeta.Labels
 		r.ObjectMeta.Annotations = role.ObjectMeta.Annotations
@@ -394,13 +403,36 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClie
 		}); err != nil {
 			return r.notReadyErrf(pg, logger, "error provisioning ingress ConfigMap %q: %w", cm.Name, err)
 		}
+
+		// Ensure the shared ACME accounts Secret exists (with finalizer)
+		// when this ProxyGroup opts into the feature. Proxy pods
+		// populate its fields on first cert issuance. See #18251.
+		if r.sharedACMEAccountEnabledFor(pg) {
+			acmeSecret := pgACMEAccountSecret(r.tsNamespace)
+			if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, acmeSecret, func(existing *corev1.Secret) {
+				if !existing.DeletionTimestamp.IsZero() {
+					// Deletion can't be undone; warn so the account keys
+					// get backed up before the finalizer is removed.
+					msg := fmt.Sprintf("shared ACME accounts Secret %q is marked for deletion but retained by the %q finalizer. Its data remains readable until the finalizer is removed - back it up first to preserve the ACME account keys.", existing.Name, kubetypes.ACMEAccountsFinalizer)
+					r.recorder.Event(existing, corev1.EventTypeWarning, reasonACMEAccountsPendingDeletion, msg)
+					logger.Warn(msg)
+					return
+				}
+				existing.Labels = acmeSecret.Labels
+				if !slices.Contains(existing.Finalizers, kubetypes.ACMEAccountsFinalizer) {
+					existing.Finalizers = append(existing.Finalizers, kubetypes.ACMEAccountsFinalizer)
+				}
+			}); err != nil {
+				return r.notReadyErrf(pg, logger, "error provisioning shared ACME accounts Secret %q: %w", acmeSecret.Name, err)
+			}
+		}
 	}
 
 	defaultImage := r.tsProxyImage
 	if pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer {
 		defaultImage = r.k8sProxyImage
 	}
-	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass)
+	ss, err := pgStatefulSet(pg, r.tsNamespace, defaultImage, r.tsFirewallMode, tailscaledPort, proxyClass, r.sharedACMEAccountEnabledFor(pg))
 	if err != nil {
 		return r.notReadyErrf(pg, logger, "error generating StatefulSet spec: %w", err)
 	}
@@ -428,7 +460,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tailscaleClie
 		return r.notReadyErrf(pg, logger, "error reconciling metrics resources: %w", err)
 	}
 
-	if err := r.cleanupDanglingResources(ctx, tailscaleClient, pg, proxyClass); err != nil {
+	if err := r.cleanupDanglingResources(ctx, tsClient, pg, proxyClass); err != nil {
 		return r.notReadyErrf(pg, logger, "error cleaning up dangling resources: %w", err)
 	}
 
@@ -625,7 +657,7 @@ func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context,
 
 // cleanupDanglingResources ensures we don't leak config secrets, state secrets, and
 // tailnet devices when the number of replicas specified is reduced.
-func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) error {
+func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup, pc *tsapi.ProxyClass) error {
 	logger := r.logger(pg.Name)
 	metadata, err := getNodeMetadata(ctx, pg, r.Client, r.tsNamespace)
 	if err != nil {
@@ -639,7 +671,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tai
 
 		// Dangling resource, delete the config + state Secrets, as well as
 		// deleting the device from the tailnet.
-		if err := r.ensureDeviceDeleted(ctx, tailscaleClient, m.tsID, logger); err != nil {
+		if err := r.ensureDeviceDeleted(ctx, tsClient, m.tsID, logger); err != nil {
 			return err
 		}
 		if err := r.Delete(ctx, m.stateSecret); err != nil && !apierrors.IsNotFound(err) {
@@ -682,7 +714,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tai
 // maybeCleanup just deletes the device from the tailnet. All the kubernetes
 // resources linked to a ProxyGroup will get cleaned up via owner references
 // (which we can use because they are all in the same namespace).
-func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup) (bool, error) {
+func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup) (bool, error) {
 	logger := r.logger(pg.Name)
 
 	metadata, err := getNodeMetadata(ctx, pg, r.Client, r.tsNamespace)
@@ -691,7 +723,7 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tailscaleClient
 	}
 
 	for _, m := range metadata {
-		if err := r.ensureDeviceDeleted(ctx, tailscaleClient, m.tsID, logger); err != nil {
+		if err := r.ensureDeviceDeleted(ctx, tsClient, m.tsID, logger); err != nil {
 			return false, err
 		}
 	}
@@ -712,25 +744,23 @@ func (r *ProxyGroupReconciler) maybeCleanup(ctx context.Context, tailscaleClient
 	return true, nil
 }
 
-func (r *ProxyGroupReconciler) ensureDeviceDeleted(ctx context.Context, tailscaleClient tsClient, id tailcfg.StableNodeID, logger *zap.SugaredLogger) error {
+func (r *ProxyGroupReconciler) ensureDeviceDeleted(ctx context.Context, tsClient tsclient.Client, id tailcfg.StableNodeID, logger *zap.SugaredLogger) error {
 	logger.Debugf("deleting device %s from control", string(id))
-	if err := tailscaleClient.DeleteDevice(ctx, string(id)); err != nil {
-		if errResp, ok := errors.AsType[tailscale.ErrResponse](err); ok && errResp.Status == http.StatusNotFound {
-			logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
-		} else {
-			return fmt.Errorf("error deleting device: %w", err)
-		}
-	} else {
-		logger.Debugf("device %s deleted from control", string(id))
+	err := tsClient.Devices().Delete(ctx, string(id))
+	switch {
+	case tailscale.IsNotFound(err):
+		logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
+	case err != nil:
+		return fmt.Errorf("error deleting device: %w", err)
 	}
 
+	logger.Debugf("device %s deleted from control", string(id))
 	return nil
 }
 
 func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 	ctx context.Context,
-	tailscaleClient tsClient,
-	loginUrl string,
+	tsClient tsclient.Client,
 	pg *tsapi.ProxyGroup,
 	proxyClass *tsapi.ProxyClass,
 	svcToNodePorts map[string]uint16,
@@ -756,7 +786,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 			return nil, err
 		}
 
-		authKey, err := r.getAuthKey(ctx, tailscaleClient, pg, existingCfgSecret, i, logger)
+		authKey, err := r.getAuthKey(ctx, tsClient, pg, existingCfgSecret, i, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -838,8 +868,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				}
 			}
 
-			if loginUrl != "" {
-				cfg.ServerURL = new(loginUrl)
+			if tsClient.LoginURL() != "" {
+				cfg.ServerURL = new(tsClient.LoginURL())
 			}
 
 			if proxyClass != nil && proxyClass.Spec.TailscaleConfig != nil {
@@ -867,7 +897,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 				return nil, err
 			}
 
-			configs, err := pgTailscaledConfig(pg, loginUrl, proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices)
+			configs, err := pgTailscaledConfig(pg, tsClient.LoginURL(), proxyClass, i, authKey, endpoints[nodePortSvcName], existingAdvertiseServices)
 			if err != nil {
 				return nil, fmt.Errorf("error creating tailscaled config: %w", err)
 			}
@@ -904,7 +934,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 // A new key is created if the config Secret doesn't exist yet, or if the
 // proxy has requested a reissue via its state Secret. An existing key is
 // retained while the device hasn't authed or a reissue is in progress.
-func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, existingCfgSecret *corev1.Secret, ordinal int32, logger *zap.SugaredLogger) (*string, error) {
+func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup, existingCfgSecret *corev1.Secret, ordinal int32, logger *zap.SugaredLogger) (*string, error) {
 	// Get state Secret to check if it's already authed or has requested
 	// a fresh auth key.
 	stateSecret := &corev1.Secret{
@@ -931,7 +961,7 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient t
 
 	if !createAuthKey {
 		var err error
-		createAuthKey, err = r.shouldReissueAuthKey(ctx, tailscaleClient, pg, stateSecret, cfgAuthKey)
+		createAuthKey, err = r.shouldReissueAuthKey(ctx, tsClient, pg, stateSecret, cfgAuthKey)
 		if err != nil {
 			return nil, err
 		}
@@ -945,7 +975,7 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient t
 		if len(tags) == 0 {
 			tags = r.defaultTags
 		}
-		key, err := newAuthKey(ctx, tailscaleClient, tags)
+		key, err := newAuthKey(ctx, tsClient, tags)
 		if err != nil {
 			return nil, err
 		}
@@ -965,7 +995,7 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tailscaleClient t
 // shouldReissueAuthKey returns true if the proxy needs a new auth key. It
 // tracks in-flight reissues via authKeyReissuing to avoid duplicate API calls
 // across reconciles.
-func (r *ProxyGroupReconciler) shouldReissueAuthKey(ctx context.Context, tailscaleClient tsClient, pg *tsapi.ProxyGroup, stateSecret *corev1.Secret, cfgAuthKey *string) (shouldReissue bool, err error) {
+func (r *ProxyGroupReconciler) shouldReissueAuthKey(ctx context.Context, tsClient tsclient.Client, pg *tsapi.ProxyGroup, stateSecret *corev1.Secret, cfgAuthKey *string) (shouldReissue bool, err error) {
 	r.mu.Lock()
 	reissuing := r.authKeyReissuing[stateSecret.Name]
 	r.mu.Unlock()
@@ -1017,7 +1047,7 @@ func (r *ProxyGroupReconciler) shouldReissueAuthKey(ctx context.Context, tailsca
 	r.log.Infof("Proxy failing to auth; attempting cleanup and new key")
 	if tsID := stateSecret.Data[kubetypes.KeyDeviceID]; len(tsID) > 0 {
 		id := tailcfg.StableNodeID(tsID)
-		if err := r.ensureDeviceDeleted(ctx, tailscaleClient, id, r.log); err != nil {
+		if err = r.ensureDeviceDeleted(ctx, tsClient, id, r.log); err != nil {
 			return false, err
 		}
 	}
@@ -1106,7 +1136,33 @@ func (r *ProxyGroupReconciler) findStaticEndpoints(ctx context.Context, existing
 		return nil, &FindStaticEndpointErr{msg: fmt.Sprintf("failed to find any `status.addresses` of type %q on nodes using configured Selectors on `spec.staticEndpoints.nodePort.selectors` for ProxyClass %q", corev1.NodeExternalIP, proxyClass.Name)}
 	}
 
+	// If we ended up selecting the same set of addresses already in use, keep
+	// the existing order. nodes.Items from r.List is not guaranteed to be in
+	// a stable order across calls, so without this the slice can permute on
+	// each reconcile, making the marshalled config Secret differ byte-for-byte
+	// even though nothing has effectively changed. That trips the DeepEqual
+	// check on the config Secret, which writes the Secret, which fires a
+	// watch event, which re-enqueues the ProxyGroup, and so on.
+	if len(currAddrs) > 0 && sameAddrPortSet(endpoints, currAddrs) {
+		return currAddrs, nil
+	}
+
 	return endpoints, nil
+}
+
+// sameAddrPortSet reports whether a and b contain the same AddrPorts,
+// ignoring order. Both slices are assumed to be free of duplicates, which
+// holds for callers in this package.
+func sameAddrPortSet(a, b []netip.AddrPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	return true
 }
 
 func getStaticEndpointAddress(a *corev1.NodeAddress, port uint16) *netip.AddrPort {
@@ -1162,6 +1218,9 @@ func (r *ProxyGroupReconciler) ensureStateRemovedForProxyGroup(pg *tsapi.ProxyGr
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 	delete(r.authKeyRateLimits, pg.Name)
+	for i := range pgReplicas(pg) {
+		delete(r.authKeyReissuing, pgStateSecretName(pg.Name, i))
+	}
 }
 
 func pgTailscaledConfig(pg *tsapi.ProxyGroup, loginServer string, pc *tsapi.ProxyClass, idx int32, authKey *string, staticEndpoints []netip.AddrPort, oldAdvertiseServices []string) (tailscaledConfigs, error) {
@@ -1305,29 +1364,6 @@ func (r *ProxyGroupReconciler) getRunningProxies(ctx context.Context, pg *tsapi.
 	return devices, nil
 }
 
-// getClientAndLoginURL returns the appropriate Tailscale client and resolved login URL
-// for the given tailnet name. If no tailnet is specified, returns the default client
-// and login server. Applies fallback to the operator's login server if the tailnet
-// doesn't specify a custom login URL.
-func (r *ProxyGroupReconciler) getClientAndLoginURL(ctx context.Context, tailnetName string) (tsClient,
-	string, error) {
-	if tailnetName == "" {
-		return r.tsClient, r.loginServer, nil
-	}
-
-	tc, loginUrl, err := clientForTailnet(ctx, r.Client, r.tsNamespace, tailnetName)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// Apply fallback if tailnet doesn't specify custom login URL
-	if loginUrl == "" {
-		loginUrl = r.loginServer
-	}
-
-	return tc, loginUrl, nil
-}
-
 type nodeMetadata struct {
 	ordinal     int32
 	stateSecret *corev1.Secret
@@ -1341,6 +1377,25 @@ func notReady(reason, msg string) (map[string][]netip.AddrPort, *notReadyReason,
 		reason:  reason,
 		message: msg,
 	}, nil
+}
+
+// sharedACMEAccountEnabledFor reports whether the shared-ACME-account
+// feature should be applied to pg. The per-PG
+// tailscale.com/share-acme-account annotation wins when set; otherwise
+// the operator's OPERATOR_SHARED_ACME_ACCOUNT_KEY setting is the default
+// for every ProxyGroup.
+func (r *ProxyGroupReconciler) sharedACMEAccountEnabledFor(pg *tsapi.ProxyGroup) bool {
+	return sharedACMEAccountEnabled(pg, r.sharedACMEAccountKey)
+}
+
+// sharedACMEAccountEnabled reports whether pg should use the shared ACME
+// account, with the tailscale.com/share-acme-account annotation overriding
+// the operator-wide default.
+func sharedACMEAccountEnabled(pg *tsapi.ProxyGroup, operatorDefault bool) bool {
+	if v, ok := pg.Annotations[AnnotationShareACMEAccount]; ok {
+		return v == "true"
+	}
+	return operatorDefault
 }
 
 func (r *ProxyGroupReconciler) notReadyErrf(pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, format string, a ...any) (map[string][]netip.AddrPort, *notReadyReason, error) {

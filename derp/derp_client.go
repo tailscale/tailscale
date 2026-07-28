@@ -33,6 +33,7 @@ type Client struct {
 	meshKey     key.DERPMesh
 	canAckPings bool
 	isProber    bool
+	appName     string
 
 	wmu  sync.Mutex // hold while writing to bw
 	bw   *bufio.Writer
@@ -60,6 +61,7 @@ type clientOpt struct {
 	ServerPub   key.NodePublic
 	CanAckPings bool
 	IsProber    bool
+	AppName     string
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -69,7 +71,7 @@ type clientOpt struct {
 func MeshKey(k key.DERPMesh) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.MeshKey = k }) }
 
 // IsProber returns a ClientOpt to pass to the DERP server during connect to
-// declare that this client is a a prober.
+// declare that this client is a prober.
 func IsProber(v bool) ClientOpt { return clientOptFunc(func(o *clientOpt) { o.IsProber = v }) }
 
 // ServerPublicKey returns a ClientOpt to declare that the server's DERP public key is known.
@@ -82,6 +84,13 @@ func ServerPublicKey(key key.NodePublic) ClientOpt {
 // server that it's capable of acknowledging ping requests.
 func CanAckPings(v bool) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.CanAckPings = v })
+}
+
+// AppName returns a ClientOpt to set an opaque app name string to
+// advertise to the DERP server for stats purposes. It is sent to the
+// server in the ClientInfo.
+func AppName(name string) ClientOpt {
+	return clientOptFunc(func(o *clientOpt) { o.AppName = name })
 }
 
 func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
@@ -106,6 +115,7 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 		meshKey:     opt.MeshKey,
 		canAckPings: opt.CanAckPings,
 		isProber:    opt.IsProber,
+		appName:     opt.AppName,
 		clock:       tstime.StdClock{},
 	}
 	if opt.ServerPub.IsZero() {
@@ -167,7 +177,7 @@ type ClientInfo struct {
 	// trusted clients.  It's required to subscribe to the
 	// connection list & forward packets. It's empty for regular
 	// users.
-	MeshKey key.DERPMesh `json:"meshKey,omitempty,omitzero"`
+	MeshKey key.DERPMesh `json:"meshKey,omitzero"`
 
 	// Version is the DERP protocol version that the client was built with.
 	// See the ProtocolVersion const.
@@ -179,6 +189,10 @@ type ClientInfo struct {
 
 	// IsProber is whether this client is a prober.
 	IsProber bool `json:",omitempty"`
+
+	// AppName is an optional opaque app name string the client
+	// advertises to the server for stats purposes.
+	AppName string `json:",omitempty"`
 }
 
 // Equal reports if two clientInfo values are equal.
@@ -186,7 +200,7 @@ func (c *ClientInfo) Equal(other *ClientInfo) bool {
 	if c == nil || other == nil {
 		return c == other
 	}
-	if c.Version != other.Version || c.CanAckPings != other.CanAckPings || c.IsProber != other.IsProber {
+	if c.Version != other.Version || c.CanAckPings != other.CanAckPings || c.IsProber != other.IsProber || c.AppName != other.AppName {
 		return false
 	}
 	return c.MeshKey.Equal(other.MeshKey)
@@ -198,6 +212,7 @@ func (c *Client) sendClientKey() error {
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
+		AppName:     c.appName,
 	})
 	if err != nil {
 		return err
@@ -554,7 +569,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			return sm, nil
 		case FrameKeepAlive:
 			// A one-way keep-alive message that doesn't require an acknowledgement.
-			// This predated framePing/framePong.
+			// This predated FramePing/FramePong.
 			return KeepAliveMessage{}, nil
 		case FramePeerGone:
 			if n < KeyLen {

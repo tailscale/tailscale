@@ -38,8 +38,10 @@ import (
 	"time"
 
 	"github.com/axiomhq/hyperloglog"
+	"github.com/go4org/hashtriemap"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
+	xrate "golang.org/x/time/rate"
 	"tailscale.com/client/local"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
@@ -139,6 +141,12 @@ type Server struct {
 	debug       bool
 	localClient local.Client
 
+	// onClientInfoForTest, if non-nil, is called with each connecting
+	// client's key and ClientInfo. It is set (before the server accepts
+	// any connections) via forTest.SetOnClientInfo and is nil outside
+	// of tests.
+	onClientInfoForTest func(key.NodePublic, derp.ClientInfo)
+
 	// Counters:
 	packetsSent, bytesSent     expvar.Int
 	packetsRecv, bytesRecv     expvar.Int
@@ -171,6 +179,8 @@ type Server struct {
 	meshUpdateBatchSize        *metrics.Histogram
 	meshUpdateLoopCount        *metrics.Histogram
 	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
+	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -180,11 +190,23 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
-	mu       syncs.Mutex
+	perClientSendQueueDepth int // Sets the client send queue depth for the server.
+	tcpWriteTimeout         time.Duration
+	clock                   tstime.Clock
+
+	mu       syncs.Mutex // guards the following fields
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
-	clients  map[key.NodePublic]*clientSet
-	watchers set.Set[*sclient] // mesh peers
+	// clients holds the set of clients connected locally to this server,
+	// keyed by their public key. Writes happen under Server.mu so they
+	// stay consistent with clientsMesh, watchers, dup tracking, and the
+	// numLocalClientKeys counter. Reads on the packet send hot path
+	// are performed lock-free; see lookupDest.
+	clients hashtriemap.HashTrieMap[key.NodePublic, *clientSet]
+	// numLocalClientKeys is the number of distinct keys in clients.
+	// HashTrieMap has no Len, so the count is tracked here.
+	numLocalClientKeys int
+	watchers           set.Set[*sclient] // mesh peers
 	// clientsMesh tracks all clients in the cluster, both locally
 	// and to mesh peers.  If the value is nil, that means the
 	// peer is only local (and thus in the clients Map, but not
@@ -196,16 +218,9 @@ type Server struct {
 	// is gone from the region, we notify all of these watchers,
 	// calling their funcs in a new goroutine.
 	peerGoneWatchers map[key.NodePublic]set.HandleSet[func(key.NodePublic)]
-
 	// maps from netip.AddrPort to a client's public key
-	keyOfAddr map[netip.AddrPort]key.NodePublic
-
-	// Sets the client send queue depth for the server.
-	perClientSendQueueDepth int
-
-	tcpWriteTimeout time.Duration
-
-	clock tstime.Clock
+	keyOfAddr  map[netip.AddrPort]key.NodePublic
+	rateConfig RateConfig // per-client DERP frame rate limiting config
 }
 
 // clientSet represents 1 or more *sclients.
@@ -229,10 +244,6 @@ type clientSet struct {
 	// activeClient holds the currently active connection for the set. It's nil
 	// if there are no connections or the connection is disabled.
 	//
-	// A pointer to a clientSet can be held by peers for long periods of time
-	// without holding Server.mu to avoid mutex contention on Server.mu, only
-	// re-acquiring the mutex and checking the clients map if activeClient is
-	// nil.
 	activeClient atomic.Pointer[sclient]
 
 	// dup is non-nil if there are multiple connections for the
@@ -368,7 +379,6 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		logf:                logf,
 		limitedLogf:         logger.RateLimitedFn(logf, 30*time.Second, 5, 100),
 		packetsRecvByKind:   metrics.LabelMap{Label: "kind"},
-		clients:             map[key.NodePublic]*clientSet{},
 		clientsMesh:         map[key.NodePublic]PacketForwarder{},
 		netConns:            map[derp.Conn]chan struct{}{},
 		memSys0:             ms.Sys,
@@ -508,6 +518,79 @@ func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
 }
 
+// minRateLimitTokenBucketSize represents the minimum size of a token bucket
+// applied for the purposes of rate limiting a DERP connection per received DERP
+// frame.
+//
+// Note: The DERP protocol supports frames larger than this ([math.MaxUint32] length),
+// but a [derp.FrameSendPacket] cannot exceed this value, which is what we optimize
+// our token bucket calls for.
+const minRateLimitTokenBucketSize = derp.MaxPacketSize + derp.KeyLen
+
+// RateConfig is a JSON-serializable configuration for rate limits. Values are
+// in bytes.
+type RateConfig struct {
+	// PerClientRateLimitBytesPerSec represents the per-client
+	// rate limit in bytes per second. A zero value disables all rate limiting.
+	PerClientRateLimitBytesPerSec uint64 `json:",omitzero"`
+	// PerClientRateBurstBytes represents the per-client token bucket depth,
+	// or burst, in bytes. Any value lower than [minRateLimitTokenBucketSize]
+	// will be increased to [minRateLimitTokenBucketSize] before application. Only
+	// relevant if PerClientRateLimitBytesPerSec is nonzero.
+	PerClientRateBurstBytes uint64 `json:",omitzero"`
+}
+
+// LoadRateConfig reads and JSON-unmarshals a [RateConfig] from the file at path.
+func LoadRateConfig(path string) (RateConfig, error) {
+	if path == "" {
+		return RateConfig{}, errors.New("rate config path is empty")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return RateConfig{}, fmt.Errorf("error reading rate config: %w", err)
+	}
+	var rc RateConfig
+	if err := json.Unmarshal(b, &rc); err != nil {
+		return RateConfig{}, fmt.Errorf("error parsing rate config: %w", err)
+	}
+	return rc, nil
+}
+
+// LoadAndApplyRateConfig reads a [RateConfig] from the file at path and
+// applies it to the server via [Server.UpdateRateLimits].
+func (s *Server) LoadAndApplyRateConfig(path string) error {
+	rc, err := LoadRateConfig(path)
+	if err != nil {
+		return err
+	}
+	applied := s.UpdateRateLimits(rc)
+	s.logf("rate config applied: client-rate=%d bytes/sec, client-burst=%d bytes",
+		applied.PerClientRateLimitBytesPerSec, applied.PerClientRateBurstBytes)
+	return nil
+}
+
+// UpdateRateLimits sets the receive rate limits, updating all existing client
+// connections. It returns the applied config, which may differ from rc. If the
+// per-client rate limits is 0, rate limiting is disabled. Mesh peers are always
+// exempt from rate limiting.
+func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rc.PerClientRateLimitBytesPerSec == 0 {
+		// all rate limiting is disabled
+		rc = RateConfig{}
+	} else {
+		rc.PerClientRateBurstBytes = max(rc.PerClientRateBurstBytes, minRateLimitTokenBucketSize)
+	}
+	s.rateConfig = rc
+	for _, cs := range s.clients.All() {
+		cs.ForeachClient(func(c *sclient) {
+			c.setRateLimit(rc.PerClientRateLimitBytesPerSec, rc.PerClientRateBurstBytes)
+		})
+	}
+	return rc
+}
+
 // HasMeshKey reports whether the server is configured with a mesh key.
 func (s *Server) HasMeshKey() bool { return !s.meshKey.IsZero() }
 
@@ -557,7 +640,7 @@ func (s *Server) isClosed() bool {
 func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	x, ok := s.clients[k]
+	x, ok := s.clients.Load(k)
 	if !ok {
 		return false
 	}
@@ -642,7 +725,9 @@ func (s *Server) initMetacert() {
 func (s *Server) MetaCert() []byte { return s.metaCert }
 
 // ModifyTLSConfigToAddMetaCert modifies c.GetCertificate to make
-// it append s.MetaCert to the returned certificates.
+// it append s.MetaCert to the returned certificates. The certificate
+// returned by the underlying GetCertificate is not mutated; a copy
+// with the meta cert appended is returned instead.
 //
 // It panics if c or c.GetCertificate is nil.
 func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
@@ -655,8 +740,18 @@ func (s *Server) ModifyTLSConfigToAddMetaCert(c *tls.Config) {
 		if err != nil {
 			return nil, err
 		}
-		cert.Certificate = append(cert.Certificate, s.MetaCert())
-		return cert, nil
+		if cert == nil {
+			// Underlying GetCertificate returned (nil, nil) to signal
+			// fallback to Config.Certificates et al. Pass that through.
+			return nil, nil
+		}
+		// Don't mutate the *tls.Certificate pointed to by cert: the
+		// underlying GetCertificate implementation may return a shared
+		// cached value. Return a shallow copy with the meta cert
+		// appended to a freshly allocated chain slice.
+		certCopy := *cert
+		certCopy.Certificate = append(slices.Clip(cert.Certificate), s.MetaCert())
+		return &certCopy, nil
 	}
 }
 
@@ -670,11 +765,14 @@ func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cs, ok := s.clients[c.key]
+	c.setRateLimit(s.rateConfig.PerClientRateLimitBytesPerSec, s.rateConfig.PerClientRateBurstBytes)
+
+	cs, ok := s.clients.Load(c.key)
 	if !ok {
 		c.debugLogf("register single client")
 		cs = &clientSet{}
-		s.clients[c.key] = cs
+		s.clients.Store(c.key, cs)
+		s.numLocalClientKeys++
 	}
 	was := cs.activeClient.Load()
 	if was == nil {
@@ -740,7 +838,7 @@ func (s *Server) unregisterClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	set, ok := s.clients[c.key]
+	set, ok := s.clients.Load(c.key)
 	if !ok {
 		c.logf("[unexpected]; clients map is empty")
 		return
@@ -760,7 +858,9 @@ func (s *Server) unregisterClient(c *sclient) {
 		}
 		c.debugLogf("removed connection")
 		set.activeClient.Store(nil)
-		delete(s.clients, c.key)
+		if s.clients.CompareAndDelete(c.key, set) {
+			s.numLocalClientKeys--
+		}
 		if v, ok := s.clientsMesh[c.key]; ok && v == nil {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
@@ -891,7 +991,7 @@ func (s *Server) addWatcher(c *sclient) {
 	defer s.mu.Unlock()
 
 	// Queue messages for each already-connected client.
-	for peer, clientSet := range s.clients {
+	for peer, clientSet := range s.clients.All() {
 		ac := clientSet.activeClient.Load()
 		if ac == nil {
 			continue
@@ -943,7 +1043,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		br:             br,
 		bw:             bw,
 		logf:           logger.WithPrefix(s.logf, fmt.Sprintf("derp client %v%s: ", remoteAddr, clientKey.ShortString())),
-		done:           ctx.Done(),
+		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, s.perClientSendQueueDepth),
@@ -966,6 +1066,9 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 	}
 	if s.debug {
 		c.debug = true
+	}
+	if f := s.onClientInfoForTest; f != nil {
+		f(clientKey, c.info)
 	}
 
 	s.registerClient(c)
@@ -1027,6 +1130,13 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %s: readFrameHeader: %w", c.key.ShortString(), err)
 		}
+		// Rate-limit by DERP frame length (fl), which excludes TLS protocol and
+		// DERP frame length field overheads.
+		// Note: meshed clients are exempt from rate limits.
+		if err := c.rateLimit(int(fl)); err != nil {
+			return err // context canceled, connection closing
+		}
+
 		c.s.noteClientActivity(c)
 		switch ft {
 		case derp.FrameNotePreferred:
@@ -1096,6 +1206,7 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
+
 	select {
 	case c.sendPongCh <- [8]byte(m):
 	default:
@@ -1121,7 +1232,7 @@ func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if set, ok := s.clients[targetKey]; ok {
+	if set, ok := s.clients.Load(targetKey); ok {
 		if set.Len() == 1 {
 			c.logf("frameClosePeer closing peer %x", targetKey)
 		} else {
@@ -1139,7 +1250,7 @@ func (c *sclient) handleFrameClosePeer(ft derp.FrameType, fl uint32) error {
 
 // handleFrameForwardPacket reads a "forward packet" frame from the client
 // (which must be a trusted client, a peer in our mesh).
-func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	if !c.canMesh {
 		return fmt.Errorf("insufficient permissions")
 	}
@@ -1151,15 +1262,10 @@ func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 	}
 	s.packetsForwardedIn.Add(1)
 
-	var dstLen int
-	var dst *sclient
-
-	s.mu.Lock()
-	if set, ok := s.clients[dstKey]; ok {
-		dstLen = set.Len()
-		dst = set.activeClient.Load()
-	}
-	s.mu.Unlock()
+	// Use the same lock-free fast path as the local send path. The mesh
+	// forwarder return is intentionally discarded: we never re-forward an
+	// already-forwarded packet.
+	dst, _, dstLen := c.lookupDest(dstKey)
 
 	if dst == nil {
 		reason := dropReasonUnknownDestOnFwd
@@ -1181,8 +1287,42 @@ func (c *sclient) handleFrameForwardPacket(ft derp.FrameType, fl uint32) error {
 	})
 }
 
+// lookupDest returns the local client, mesh forwarder, or duplicate-client
+// count for dst. dstLen is only meaningful when the returned local client is
+// nil; when a local client is returned, dstLen is just non-zero.
+//
+// The fast path reads Server.clients lock-free: if a *clientSet is present
+// for dst and has an active client, we return that without taking Server.mu.
+// Misses, inactive clientSets, duplicate-client accounting, and mesh
+// forwarder lookups fall through to a slow path under Server.mu. At most
+// one local client and PacketForwarder can be non-nil: local clients win
+// over mesh forwarding, and mesh forwarding is considered only when there
+// is no local clientSet.
+func (c *sclient) lookupDest(dst key.NodePublic) (_ *sclient, fwd PacketForwarder, dstLen int) {
+	s := c.s
+	if set, ok := s.clients.Load(dst); ok {
+		if dst := set.activeClient.Load(); dst != nil {
+			return dst, nil, 1
+		}
+	}
+	// Slow path: no active local client. Take Server.mu to read the
+	// duplicate-client count and clientsMesh consistently.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if set, ok := s.clients.Load(dst); ok {
+		if dst := set.activeClient.Load(); dst != nil {
+			return dst, nil, 1
+		}
+		dstLen = set.Len()
+	}
+	if dstLen < 1 {
+		fwd = s.clientsMesh[dst]
+	}
+	return nil, fwd, dstLen
+}
+
 // handleFrameSendPacket reads a "send packet" frame from the client.
-func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
+func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	s := c.s
 
 	dstKey, contents, err := s.recvPacket(c.br, fl)
@@ -1190,19 +1330,7 @@ func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 
-	var fwd PacketForwarder
-	var dstLen int
-	var dst *sclient
-
-	s.mu.Lock()
-	if set, ok := s.clients[dstKey]; ok {
-		dstLen = set.Len()
-		dst = set.activeClient.Load()
-	}
-	if dst == nil && dstLen < 1 {
-		fwd = s.clientsMesh[dstKey]
-	}
-	s.mu.Unlock()
+	dst, fwd, dstLen := c.lookupDest(dstKey)
 
 	if dst == nil {
 		if fwd != nil {
@@ -1233,6 +1361,80 @@ func (c *sclient) handleFrameSendPacket(ft derp.FrameType, fl uint32) error {
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
+}
+
+// setRateLimit updates the receive rate limiter. When bytesPerSec is 0, or the
+// client is a mesh peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
+func (c *sclient) setRateLimit(bytesPerSec, burst uint64) {
+	if c.canMesh || bytesPerSec == 0 {
+		c.recvLim.Store(nil)
+		return
+	}
+	limiter := xrate.NewLimiter(xrate.Limit(bytesPerSec), int(burst))
+	c.recvLim.Store(limiter)
+}
+
+// rateLimitWait is a reimplementation of [xrate.Limiter.WaitN] via [xrate.Limiter.ReserveN].
+// It returns the duration waited for tokens to become available.
+func rateLimitWait(ctx context.Context, lim *xrate.Limiter, n int, now time.Time, newTimer func(time.Duration) (<-chan time.Time, func() bool)) (time.Duration, error) {
+	r := lim.ReserveN(now, n)
+	if !r.OK() {
+		return 0, fmt.Errorf("rate: Wait(n=%d) exceeds limiter's burst %d", n, lim.Burst())
+	}
+	delay := r.DelayFrom(now)
+	if delay == 0 {
+		return 0, nil
+	}
+	ch, stop := newTimer(delay)
+	defer stop()
+	select {
+	case <-ch:
+		// Note: We return the predicted delay as wall-clock duration. May be not the same.
+		return delay, nil
+	case <-ctx.Done():
+		r.Cancel()
+		return 0, ctx.Err()
+	}
+}
+
+// rateLimit applies the receive rate limit.
+// By limiting here we prevent reading from the buffered reader
+// [sclient.br] if the limit has been exceeded. Any reads done here provide space
+// within the buffered reader to fill back in with data from
+// the TCP socket. Pacing reads acts as a form of natural
+// backpressure via TCP flow control.
+// When rate limiting is disabled or the client is a mesh peer, recvLim is nil
+// and this is a no-op.
+func (c *sclient) rateLimit(n int) error {
+	if lim := c.recvLim.Load(); lim != nil {
+		newTimer := func(d time.Duration) (<-chan time.Time, func() bool) {
+			tc, ch := c.s.clock.NewTimer(d)
+			return ch, tc.Stop
+		}
+		// If n exceeds the capacity of the bucket, then WaitN will return
+		// an error and consume zero tokens. To prevent this, clamp n to
+		// [minRateLimitTokenBucketSize].
+		//
+		// While we could call WaitN multiple times and/or more precisely for
+		// lim.Burst(), it's better to return early as a larger DERP frame:
+		//   1. is unexpected
+		//   2. is only partially read off the socket (bufio)
+		//   3. would cause the connection to close shortly after rate limiting, anyway.
+		clampedN := min(n, minRateLimitTokenBucketSize)
+		now := c.s.clock.Now()
+		var (
+			durationWaited time.Duration
+			err            error
+		)
+		durationWaited, err = rateLimitWait(c.ctx, lim, clampedN, now, newTimer)
+		if err != nil {
+			return err
+		}
+		if durationWaited > 0 {
+			c.s.rateLimitPerClientWaited.Add(1)
+		}
+	}
+	return nil
 }
 
 func (c *sclient) debugLogf(format string, v ...any) {
@@ -1296,7 +1498,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	}
 	for attempt := range 3 {
 		select {
-		case <-dst.done:
+		case <-dst.ctx.Done():
 			s.recordDrop(p.bs, c.key, dstKey, dropReasonGoneDisconnected)
 			dst.debugLogf("sendPkt attempt %d dropped, dst gone", attempt)
 			return nil
@@ -1341,7 +1543,7 @@ func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason derp.PeerGone
 		peer:   peer,
 		reason: reason,
 	}:
-	case <-c.done:
+	case <-c.ctx.Done():
 	}
 }
 
@@ -1460,7 +1662,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cs, ok := s.clients[c.key]
+	cs, ok := s.clients.Load(c.key)
 	if !ok {
 		return
 	}
@@ -1523,7 +1725,7 @@ func (s *Server) sendServerInfo(bw *lazyBufioWriter, clientKey key.NodePublic) e
 	return bw.Flush()
 }
 
-// recvClientKey reads the frameClientInfo frame from the client (its
+// recvClientKey reads the FrameClientInfo frame from the client (its
 // proof of identity) upon its initial connection. It should be
 // considered especially untrusted at this point.
 func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info *derp.ClientInfo, err error) {
@@ -1626,7 +1828,7 @@ type sclient struct {
 	key            key.NodePublic
 	info           derp.ClientInfo
 	logf           logger.Logf
-	done           <-chan struct{}  // closed when connection closes
+	ctx            context.Context  // closed when connection closes
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt         // packets queued to this client; never closed
 	discoSendQueue chan pkt         // important packets queued to this client; never closed
@@ -1666,6 +1868,16 @@ type sclient struct {
 	// client that it's trying to establish a direct connection
 	// through us with a peer we have no record of.
 	peerGoneLim *rate.Limiter
+
+	// recvLim is the receive rate limiter. When rate limiting is enabled for a
+	// non-mesh client, it points to a [xrate.Limiter]. When rate limiting
+	// is disabled or the client is a mesh peer, it is nil and [sclient.rateLimit]
+	// is a no-op. Updated atomically by [sclient.setRateLimit] so that
+	// [sclient.rateLimit] can load it without holding [Server.mu].
+	//
+	// TODO: consider porting the required APIs from [xrate.Limiter] to [rate.Limiter],
+	// which is already optimized to use [mono.Time].
+	recvLim atomic.Pointer[xrate.Limiter]
 }
 
 func (c *sclient) presentFlags() derp.PeerPresentFlags {
@@ -2116,7 +2328,7 @@ func (s *Server) RemovePacketForwarder(dst key.NodePublic, fwd PacketForwarder) 
 		return
 	}
 
-	if _, isLocal := s.clients[dst]; isLocal {
+	if _, isLocal := s.clients.Load(dst); isLocal {
 		s.clientsMesh[dst] = nil
 	} else {
 		delete(s.clientsMesh, dst)
@@ -2206,7 +2418,7 @@ func (s *Server) expVarFunc(f func() any) expvar.Func {
 }
 
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
-func (s *Server) ExpVar() expvar.Var {
+func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 	m := new(metrics.Set)
 	m.Set("gauge_memstats_sys0", expvar.Func(func() any { return int64(s.memSys0) }))
 	m.Set("gauge_watchers", s.expVarFunc(func() any { return len(s.watchers) }))
@@ -2215,8 +2427,8 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("gauge_current_home_connections", &s.curHomeClients)
 	m.Set("gauge_current_notideal_connections", &s.curClientsNotIdeal)
 	m.Set("gauge_clients_total", s.expVarFunc(func() any { return len(s.clientsMesh) }))
-	m.Set("gauge_clients_local", s.expVarFunc(func() any { return len(s.clients) }))
-	m.Set("gauge_clients_remote", s.expVarFunc(func() any { return len(s.clientsMesh) - len(s.clients) }))
+	m.Set("gauge_clients_local", s.expVarFunc(func() any { return s.numLocalClientKeys }))
+	m.Set("gauge_clients_remote", s.expVarFunc(func() any { return len(s.clientsMesh) - s.numLocalClientKeys }))
 	m.Set("gauge_current_dup_client_keys", &s.dupClientKeys)
 	m.Set("gauge_current_dup_client_conns", &s.dupClientConns)
 	m.Set("counter_total_dup_client_conns", &s.dupClientConnTotal)
@@ -2249,6 +2461,18 @@ func (s *Server) ExpVar() expvar.Var {
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long())
 	m.Set("version", &expvarVersion)
+	if rateLimitEnabled {
+		// Rate limiting is currently experimental, its APIs are unstable, and it must
+		// be opted-in via --rate-config. Therefore, we only publish related metrics
+		// on demand, to avoid polluting uninterested metrics consumers.
+		m.Set("rate_limit_per_client_bytes_per_second", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateLimitBytesPerSec
+		}))
+		m.Set("rate_limit_per_client_burst_bytes", s.expVarFunc(func() any {
+			return s.rateConfig.PerClientRateBurstBytes
+		}))
+		m.Set("rate_limit_per_client_waited", &s.rateLimitPerClientWaited)
+	}
 	return m
 }
 
@@ -2261,7 +2485,7 @@ func (s *Server) ConsistencyCheck() error {
 	var nilMeshNotInClient int
 	for k, f := range s.clientsMesh {
 		if f == nil {
-			if _, ok := s.clients[k]; !ok {
+			if _, ok := s.clients.Load(k); !ok {
 				nilMeshNotInClient++
 			}
 		}
@@ -2271,7 +2495,7 @@ func (s *Server) ConsistencyCheck() error {
 	}
 
 	var clientNotInMesh int
-	for k := range s.clients {
+	for k := range s.clients.All() {
 		if _, ok := s.clientsMesh[k]; !ok {
 			clientNotInMesh++
 		}
@@ -2280,10 +2504,10 @@ func (s *Server) ConsistencyCheck() error {
 		errs = append(errs, fmt.Sprintf("%d s.clients keys not in s.clientsMesh", clientNotInMesh))
 	}
 
-	if s.curClients.Value() != int64(len(s.clients)) {
+	if s.curClients.Value() != int64(s.numLocalClientKeys) {
 		errs = append(errs, fmt.Sprintf("expvar connections = %d != clients map says of %d",
 			s.curClients.Value(),
-			len(s.clients)))
+			s.numLocalClientKeys))
 	}
 
 	if s.verifyClientsLocalTailscaled {
@@ -2379,7 +2603,7 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 			if prev.Sent < next.Sent || prev.Recv < next.Recv {
 				if pkey, ok := s.keyOfAddr[k]; ok {
 					next.Key = pkey
-					if cs, ok := s.clients[pkey]; ok {
+					if cs, ok := s.clients.Load(pkey); ok {
 						if c := cs.activeClient.Load(); c != nil {
 							next.UniqueSenders = c.EstimatedUniqueSenders()
 						}

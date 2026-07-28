@@ -106,22 +106,12 @@ func TestGroupPolicyReadLockClose(t *testing.T) {
 
 	doWithCustomEnterLeaveFuncs(t, func(gpLock *PolicyLock) {
 		done := make(chan struct{})
+		var lockErr error
 		go func() {
 			defer close(done)
-
-			err := gpLock.Lock()
-			if err == nil {
+			lockErr = gpLock.Lock()
+			if lockErr == nil {
 				defer gpLock.Unlock()
-			}
-
-			// We closed gpLock before the enter function returned.
-			// (*PolicyLock).Lock is expected to fail.
-			if err == nil || !errors.Is(err, ErrInvalidLockState) {
-				t.Errorf("(*PolicyLock).Lock: got %v; want %v", err, ErrInvalidLockState)
-			}
-			// gpLock must not be held as Lock() failed.
-			if lockCnt := gpLock.lockCnt.Load(); lockCnt != 0 {
-				t.Errorf("lockCnt: got %v; want 0", lockCnt)
 			}
 		}()
 
@@ -130,7 +120,22 @@ func TestGroupPolicyReadLockClose(t *testing.T) {
 		if err := gpLock.Close(); err != nil {
 			t.Fatalf("(*PolicyLock).Close failed: %v", err)
 		}
+		// Wait for Lock to fully unwind before reading lockCnt.
+		// Otherwise we race with Close clearing the LSB:
+		// close(lk.closing) wakes lockSlow's select, whose defer
+		// runs Add(-2) on lockCnt before Close completes its CAS,
+		// briefly leaving lockCnt at 1 instead of 0.
 		<-done
+
+		// We closed gpLock before the enter function returned.
+		// (*PolicyLock).Lock is expected to fail.
+		if lockErr == nil || !errors.Is(lockErr, ErrInvalidLockState) {
+			t.Errorf("(*PolicyLock).Lock: got %v; want %v", lockErr, ErrInvalidLockState)
+		}
+		// gpLock must not be held as Lock() failed.
+		if lockCnt := gpLock.lockCnt.Load(); lockCnt != 0 {
+			t.Errorf("lockCnt: got %v; want 0", lockCnt)
+		}
 	}, enter, leave)
 }
 

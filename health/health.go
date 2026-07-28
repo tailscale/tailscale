@@ -353,6 +353,15 @@ func (t *Tracker) nil() bool {
 	return true
 }
 
+// ProbeLocks acquires and releases the tracker's internal mutex.
+func (t *Tracker) ProbeLocks() {
+	if t.nil() {
+		return
+	}
+	t.mu.Lock()
+	t.mu.Unlock()
+}
+
 // Severity represents how serious an error is. Each GUI interprets this severity value in different ways,
 // to surface the error in a more or less visible way. For instance, the macOS GUI could change its menubar
 // icon to display an exclamation mark and present a modal notification for SeverityHigh warnings, but not
@@ -492,7 +501,12 @@ func (t *Tracker) SetHealthy(w *Warnable) {
 }
 
 func (t *Tracker) setHealthyLocked(w *Warnable) {
-	if !buildfeatures.HasHealth || t.warnableVal[w] == nil {
+	if !buildfeatures.HasHealth {
+		return
+	}
+
+	ws := t.warnableVal[w]
+	if ws == nil {
 		// Nothing to remove
 		return
 	}
@@ -501,15 +515,28 @@ func (t *Tracker) setHealthyLocked(w *Warnable) {
 
 	// Stop any pending visiblity timers for this Warnable
 	if canc, ok := t.pendingVisibleTimers[w]; ok {
+		// We removed the warningState for this Warnable,
+		// and we hold the lock, so even if the timer callback
+		// has already started, it won't find a warningState
+		// for this Warnable and won't publish any changes.
 		canc.Stop()
 		delete(t.pendingVisibleTimers, w)
 	}
 
-	change := Change{
-		WarnableChanged: true,
-		Warnable:        w,
+	// Only publish a change if the Warnable was unhealthy long
+	// enough to become visible to the user. Otherwise, it would
+	// not have been published as unhealthy, so there is no need
+	// to publish it as healthy. This prevents eventbus (and by
+	// extension the IPN bus) churn for Warnables that are marked
+	// unhealthy and then healthy again. Notably, this includes
+	// warnables touched by [Tracker.updateBuiltinWarnablesLocked].
+	if w.IsVisible(ws, t.now) {
+		change := Change{
+			WarnableChanged: true,
+			Warnable:        w,
+		}
+		t.changePub.Publish(change)
 	}
-	t.changePub.Publish(change)
 }
 
 // notifyWatchersControlChangedLocked calls each watcher to signal that control

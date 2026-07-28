@@ -6,11 +6,12 @@
 package batching
 
 import (
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/types/nettype"
 )
 
 // TryUpgradeToConn is no-op on all platforms except linux.
-func TryUpgradeToConn(pconn nettype.PacketConn, _ string, _ int, _ string) nettype.PacketConn {
+func TryUpgradeToConn(pconn nettype.PacketConn, _ string, _ int, _ string, _ *controlknobs.Knobs) nettype.PacketConn {
 	return pconn
 }
 

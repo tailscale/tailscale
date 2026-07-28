@@ -19,6 +19,14 @@ var (
 	fakeDERP2             = newVIP("derp2.tailscale", "33.4.0.2") // 3340=DERP; 2=derp 2
 	fakeLogCatcher        = newVIP("log.tailscale.com", 4)
 	fakeSyslog            = newVIP("syslog.tailscale", 9)
+	fakeCloudInit         = newVIP("cloud-init.tailscale", 5) // serves cloud-init metadata/userdata per node
+	fakeFiles             = newVIP("files.tailscale", 6)      // serves binary files (tta, tailscale, tailscaled) to VMs
+	fakeACME              = newVIP("acme.example", 7)         // fake ACME CA for vmtests
+
+	// FakeDualStackWeb is a dual-stack webserver VIP used by
+	// TestExitNodeV4Only to verify that traffic works through an
+	// IPv4-only exit node even when DNS returns both A and AAAA.
+	FakeDualStackWeb = newVIP("dualstack-web.example.com", "5.0.0.100", "2052::5:100")
 )
 
 type virtualIP struct {
@@ -30,6 +38,13 @@ type virtualIP struct {
 func (v virtualIP) Match(a netip.Addr) bool {
 	return v.v4 == a.Unmap() || v.v6 == a
 }
+
+// TestDriverIPv4 returns the IPv4 address of the test driver VIP (52.52.0.2).
+// TTA agents dial this IP on port TestDriverPort to connect to the test harness.
+func TestDriverIPv4() netip.Addr { return fakeTestAgent.v4 }
+
+// TestDriverPort is the port the test driver listens on.
+const TestDriverPort = 8008
 
 // FakeDNSIPv4 returns the fake DNS IPv4 address.
 func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }

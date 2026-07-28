@@ -67,10 +67,10 @@ func TestPrefsEqual(t *testing.T) {
 		"AppConnector",
 		"PostureChecking",
 		"NetfilterKind",
+		"RemoteConfig",
 		"DriveShares",
 		"RelayServerPort",
 		"RelayServerStaticEndpoints",
-		"AllowSingleHosts",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeFor[Prefs]()); !reflect.DeepEqual(have, prefsHandles) {
@@ -458,7 +458,7 @@ func TestPrefsFromBytesPreservesOldValues(t *testing.T) {
 			want: Prefs{ControlURL: "https://foo", RouteAll: true},
 		},
 		{
-			name: "opt.Bool", // test that we don't normalize it early
+			name: "opt-Bool", // test that we don't normalize it early
 			old:  Prefs{Sync: "unset"},
 			json: []byte(`{}`),
 			want: Prefs{Sync: "unset"},
@@ -523,6 +523,11 @@ func TestPrefsPretty(t *testing.T) {
 			Prefs{ShieldsUp: true},
 			"windows",
 			"Prefs{ra=false dns=false want=false shields=true update=off Persist=nil}",
+		},
+		{
+			Prefs{RemoteConfig: true},
+			"windows",
+			"Prefs{ra=false dns=false want=false remoteconfig=true update=off Persist=nil}",
 		},
 		{
 			Prefs{},
@@ -714,7 +719,7 @@ func TestMaskedPrefsFields(t *testing.T) {
 	have := map[string]bool{}
 	for _, f := range fieldsOf(reflect.TypeFor[Prefs]()) {
 		switch f {
-		case "Persist", "AllowSingleHosts":
+		case "Persist":
 			// These can't be edited.
 			continue
 		}
@@ -1006,10 +1011,19 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			want: mustIP("1.2.3.4"),
 		},
 		{
-			name:    "no_match",
-			arg:     "unknown",
-			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
-			wantErr: `invalid value "unknown" for --exit-node; must be IP or hostname`,
+			name: "no_match",
+			arg:  "unknown",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			wantErr: `invalid value "unknown" for --exit-node; must be IP or peer hostname`,
 		},
 		{
 			name: "name",
@@ -1057,6 +1071,12 @@ func TestExitNodeIPOfArg(t *testing.T) {
 			want: mustIP("1.0.0.2"),
 		},
 		{
+			name:    "hostname_no_peer",
+			arg:     "skippy.foo",
+			st:      &ipnstate.Status{},
+			wantErr: `cannot resolve exit node by hostname while Tailscale is starting up; please use its Tailscale IP address instead`,
+		},
+		{
 			name: "name_not_exit",
 			arg:  "skippy",
 			st: &ipnstate.Status{
@@ -1082,7 +1102,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or hostname`,
+			wantErr: `invalid value "skippy.bar." for --exit-node; must be IP or peer hostname`,
 		},
 		{
 			name: "ambiguous",
@@ -1207,27 +1227,6 @@ func TestNotifyPrefsJSONRoundtrip(t *testing.T) {
 	}
 }
 
-// Verify that our Prefs type writes out an AllowSingleHosts field so we can
-// downgrade to older versions that require it.
-func TestPrefsDowngrade(t *testing.T) {
-	var p Prefs
-	j, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	type oldPrefs struct {
-		AllowSingleHosts bool
-	}
-	var op oldPrefs
-	if err := json.Unmarshal(j, &op); err != nil {
-		t.Fatal(err)
-	}
-	if !op.AllowSingleHosts {
-		t.Fatal("AllowSingleHosts should be true")
-	}
-}
-
 func TestParseAutoExitNodeString(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1236,13 +1235,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 		wantExpr   ExitNodeExpression
 	}{
 		{
-			name:       "empty expr",
+			name:       "empty-expr",
 			exitNodeID: "",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "no auto prefix",
+			name:       "no-auto-prefix",
 			exitNodeID: "foo",
 			wantOk:     false,
 			wantExpr:   "",
@@ -1260,13 +1259,13 @@ func TestParseAutoExitNodeString(t *testing.T) {
 			wantExpr:   "foo",
 		},
 		{
-			name:       "auto prefix but empty suffix",
+			name:       "auto-prefix-empty-suffix",
 			exitNodeID: "auto:",
 			wantOk:     false,
 			wantExpr:   "",
 		},
 		{
-			name:       "auto prefix no colon",
+			name:       "auto-prefix-no-colon",
 			exitNodeID: "auto",
 			wantOk:     false,
 			wantExpr:   "",

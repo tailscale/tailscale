@@ -55,7 +55,7 @@ main() {
 		VERSION_MAJOR="${VERSION_ID:-}"
 		VERSION_MAJOR="${VERSION_MAJOR%%.*}"
 		case "$ID" in
-			ubuntu|pop|neon|zorin|tuxedo)
+			ubuntu|pop|neon|tuxedo)
 				OS="ubuntu"
 				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
 				    VERSION="$UBUNTU_CODENAME"
@@ -266,7 +266,7 @@ main() {
 				VERSION="leap/$VERSION_ID"
 				PACKAGETYPE="zypper"
 				;;
-			opensuse-tumbleweed)
+			opensuse-tumbleweed|opensuse-slowroll)
 				OS="opensuse"
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
@@ -336,6 +336,16 @@ main() {
 				VERSION="$VERSION_MAJOR"
 				PACKAGETYPE="tdnf"
 				;;
+			zorin)
+				OS="ubuntu"
+				VERSION="$UBUNTU_CODENAME"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_MAJOR" -lt 16 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
 			steamos)
 				echo "To install Tailscale on SteamOS, please follow the instructions here:"
 				echo "https://github.com/tailscale-dev/deck-tailscale"
@@ -343,7 +353,7 @@ main() {
 				;;
 			kde-linux)
 				echo "The maintainers of KDE Linux provide documentation on multiple ways to install Tailscale. These instructions are not officially supported by Tailscale:"
-				echo "https://kde.org/linux/docs/more-software/#tailscale"
+				echo "https://linux.kde.org/docs/more-software/#tailscale"
 				exit 1
 				;;
 
@@ -524,7 +534,6 @@ main() {
 	[ "$VERSION" != "" ] && OSVERSION="$OSVERSION $VERSION"
 
 	# Prepare package name with optional version
-	PACKAGE_NAME="tailscale"
 	if [ -n "$TAILSCALE_VERSION" ]; then
 		echo "Installing Tailscale $TAILSCALE_VERSION for $OSVERSION, using method $PACKAGETYPE"
 	else

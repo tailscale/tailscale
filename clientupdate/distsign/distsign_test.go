@@ -30,7 +30,7 @@ func TestDownload(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			desc:    "missing file",
+			desc:    "missing-file",
 			before:  func(*testing.T) {},
 			src:     "hello",
 			wantErr: true,
@@ -44,7 +44,7 @@ func TestDownload(t *testing.T) {
 			want: []byte("world"),
 		},
 		{
-			desc: "no signature",
+			desc: "no-signature",
 			before: func(*testing.T) {
 				srv.add("hello", []byte("world"))
 			},
@@ -52,7 +52,7 @@ func TestDownload(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "bad signature",
+			desc: "bad-signature",
 			before: func(*testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", []byte("potato"))
@@ -61,7 +61,7 @@ func TestDownload(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "signed with untrusted key",
+			desc: "signed-untrusted-key",
 			before: func(t *testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", newSigningKeyPair(t).sign([]byte("world")))
@@ -70,7 +70,7 @@ func TestDownload(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "signed with root key",
+			desc: "signed-with-root-key",
 			before: func(t *testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", ed25519.Sign(srv.roots[0].k, []byte("world")))
@@ -79,7 +79,7 @@ func TestDownload(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "bad signing key signature",
+			desc: "bad-signing-key-signature",
 			before: func(t *testing.T) {
 				srv.add("distsign.pub.sig", []byte("potato"))
 				srv.addSigned("hello", []byte("world"))
@@ -130,7 +130,7 @@ func TestValidateLocalBinary(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			desc:    "missing file",
+			desc:    "missing-file",
 			before:  func(*testing.T) {},
 			src:     "hello",
 			wantErr: true,
@@ -143,7 +143,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			src: "hello",
 		},
 		{
-			desc: "contents changed",
+			desc: "contents-changed",
 			before: func(*testing.T) {
 				srv.addSigned("hello", []byte("new world"))
 			},
@@ -151,7 +151,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "no signature",
+			desc: "no-signature",
 			before: func(*testing.T) {
 				srv.add("hello", []byte("world"))
 			},
@@ -159,7 +159,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "bad signature",
+			desc: "bad-signature",
 			before: func(*testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", []byte("potato"))
@@ -168,7 +168,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "signed with untrusted key",
+			desc: "signed-untrusted-key",
 			before: func(t *testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", newSigningKeyPair(t).sign([]byte("world")))
@@ -177,7 +177,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "signed with root key",
+			desc: "signed-with-root-key",
 			before: func(t *testing.T) {
 				srv.add("hello", []byte("world"))
 				srv.add("hello.sig", ed25519.Sign(srv.roots[0].k, []byte("world")))
@@ -186,7 +186,7 @@ func TestValidateLocalBinary(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc: "bad signing key signature",
+			desc: "bad-signing-key-signature",
 			before: func(t *testing.T) {
 				srv.add("distsign.pub.sig", []byte("potato"))
 				srv.addSigned("hello", []byte("world"))
@@ -341,7 +341,7 @@ func TestParseRootKey(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			desc: "invalid PEM tag",
+			desc: "invalid-PEM-tag",
 			generate: func() ([]byte, []byte, error) {
 				priv, pub, err := GenerateRootKey()
 				priv = bytes.Replace(priv, []byte("ROOT "), nil, -1)
@@ -350,7 +350,7 @@ func TestParseRootKey(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc:     "not PEM",
+			desc:     "not-PEM",
 			generate: func() ([]byte, []byte, error) { return []byte("s3cr3t"), nil, nil },
 			wantErr:  true,
 		},
@@ -399,7 +399,7 @@ func TestParseSigningKey(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			desc: "invalid PEM tag",
+			desc: "invalid-PEM-tag",
 			generate: func() ([]byte, []byte, error) {
 				priv, pub, err := GenerateSigningKey()
 				priv = bytes.Replace(priv, []byte("SIGNING "), nil, -1)
@@ -408,7 +408,7 @@ func TestParseSigningKey(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			desc:     "not PEM",
+			desc:     "not-PEM",
 			generate: func() ([]byte, []byte, error) { return []byte("s3cr3t"), nil, nil },
 			wantErr:  true,
 		},

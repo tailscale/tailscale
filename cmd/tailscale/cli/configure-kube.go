@@ -20,10 +20,8 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/yaml"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 )
@@ -46,7 +44,7 @@ See: https://tailscale.com/s/k8s-auth-proxy
 `),
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("kubeconfig")
-			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "Use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
+			fs.BoolVar(&configureKubeconfigArgs.http, "http", false, "use HTTP instead of HTTPS to connect to the auth proxy. Ignored if you include a scheme in the hostname argument.")
 			return fs
 		})(),
 		Exec: runConfigureKubeconfig,
@@ -54,18 +52,15 @@ See: https://tailscale.com/s/k8s-auth-proxy
 }
 
 // kubeconfigPath returns the path to the kubeconfig file for the current user.
-func kubeconfigPath() (string, error) {
+func kubeconfigPath() string {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
-		if version.IsSandboxedMacOS() {
-			return "", errors.New("cannot read $KUBECONFIG on GUI builds of the macOS client: this requires the open-source tailscaled distribution")
-		}
 		var out string
 		for _, out = range filepath.SplitList(kubeconfig) {
 			if info, err := os.Stat(out); !os.IsNotExist(err) && !info.IsDir() {
 				break
 			}
 		}
-		return out, nil
+		return out
 	}
 
 	var dir string
@@ -79,7 +74,64 @@ func kubeconfigPath() (string, error) {
 	} else {
 		dir = homedir.HomeDir()
 	}
-	return filepath.Join(dir, ".kube", "config"), nil
+	return filepath.Join(dir, ".kube", "config")
+}
+
+// checkKubeconfigWritable returns nil if the kubeconfig at path can be written,
+// or an error explaining why it can't. A not-yet-created file or .kube
+// directory is fine as long as the nearest existing ancestor is writable.
+//
+// On sandboxed macOS builds, kubeconfigPath resolves path to the user's real
+// ~/.kube/config, which we can only write via the home-relative-path
+// entitlement. If that write would fail (e.g. because $KUBECONFIG points
+// somewhere the sandbox can't reach), we want to surface a clear error pointing
+// at the open-source tailscaled distribution rather than silently writing a
+// config the user's kubectl will never read into the sandbox container.
+func checkKubeconfigWritable(path string) error {
+	for try := path; ; try = filepath.Dir(try) {
+		if _, err := os.Stat(try); err == nil {
+			if err := isWritable(try); err != nil {
+				return kubeconfigAccessErr(path, err)
+			}
+			return nil
+		} else if !os.IsNotExist(err) {
+			return kubeconfigAccessErr(path, err)
+		}
+		if parent := filepath.Dir(try); parent == try {
+			return nil // reached the filesystem root
+		}
+	}
+}
+
+// isWritable reports whether path can be opened or created for writing. For a
+// directory it probes by creating and removing a temporary file.
+func isWritable(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		f, err := os.CreateTemp(path, ".tailscale-kubeconfig-*")
+		if err != nil {
+			return err
+		}
+		f.Close()
+		return os.Remove(f.Name())
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// kubeconfigAccessErr wraps err with context about path, adding macOS sandbox
+// guidance when the process is sandboxed.
+func kubeconfigAccessErr(path string, err error) error {
+	if version.IsSandboxedMacOS() {
+		return fmt.Errorf("cannot write kubeconfig at %q: %w; GUI builds of the macOS client run in a sandbox and can only access files under your home directory, use the open-source tailscaled distribution for other locations", path, err)
+	}
+	return fmt.Errorf("cannot write kubeconfig at %q: %w", path, err)
 }
 
 func runConfigureKubeconfig(ctx context.Context, args []string) error {
@@ -98,18 +150,18 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 	if st.BackendState != "Running" {
 		return errors.New("Tailscale is not running")
 	}
-	nm, err := getNetMap(ctx)
+	dnsCfg, err := getDNSConfig(ctx)
 	if err != nil {
 		return err
 	}
 
-	targetFQDN, err := nodeOrServiceDNSNameFromArg(st, nm, hostOrFQDNOrIP)
+	targetFQDN, err := nodeOrServiceDNSNameFromArg(st, dnsCfg, hostOrFQDNOrIP)
 	if err != nil {
 		return err
 	}
 	targetFQDN = strings.TrimSuffix(targetFQDN, ".")
-	var kubeconfig string
-	if kubeconfig, err = kubeconfigPath(); err != nil {
+	kubeconfig := kubeconfigPath()
+	if err := checkKubeconfigWritable(kubeconfig); err != nil {
 		return err
 	}
 	scheme := "https://"
@@ -217,13 +269,8 @@ func setKubeconfigForPeer(scheme, fqdn, filePath string) error {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		if err := os.Mkdir(dir, 0755); err != nil {
-			if version.IsSandboxedMacOS() && errors.Is(err, os.ErrPermission) {
-				// macOS sandboxing prevents us from creating the .kube directory
-				// in the home directory.
-				return errors.New("unable to create .kube directory in home directory, please create it manually (e.g. mkdir ~/.kube")
-			}
-			return err
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return kubeconfigAccessErr(filePath, err)
 		}
 	}
 	b, err := os.ReadFile(filePath)
@@ -240,14 +287,14 @@ func setKubeconfigForPeer(scheme, fqdn, filePath string) error {
 // nodeOrServiceDNSNameFromArg returns the PeerStatus.DNSName value from a peer
 // in st that matches the input arg which can be a base name, full DNS name, or
 // an IP. If none is found, it looks for a Tailscale Service
-func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg string) (string, error) {
+func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, dns *tailcfg.DNSConfig, arg string) (string, error) {
 	// First check for a node DNS name.
 	if dnsName, ok := nodeDNSNameFromArg(st, arg); ok {
 		return dnsName, nil
 	}
 
 	// If not found, check for a Tailscale Service DNS name.
-	rec, ok := serviceDNSRecordFromNetMap(nm, arg)
+	rec, ok := serviceDNSRecordFromDNSConfig(dns, arg)
 	if !ok {
 		return "", fmt.Errorf("no peer found for %q", arg)
 	}
@@ -259,6 +306,11 @@ func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg
 	}
 	ipPrefix := netip.PrefixFrom(ip, ip.BitLen())
 	for _, ps := range st.Peer {
+		if ps.AllowedIPs == nil {
+			// Peer with no addresses visible in the tailnet, e.g. a ProxyGroup
+			// whose backing nodes are offline or not yet approved (#20255).
+			continue
+		}
 		for _, allowedIP := range ps.AllowedIPs.All() {
 			if allowedIP == ipPrefix {
 				return rec.Name, nil
@@ -269,25 +321,13 @@ func nodeOrServiceDNSNameFromArg(st *ipnstate.Status, nm *netmap.NetworkMap, arg
 	return "", fmt.Errorf("%q is in MagicDNS, but is not currently reachable on any known peer", arg)
 }
 
-func getNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+func getDNSConfig(ctx context.Context) (*tailcfg.DNSConfig, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		return nil, err
-	}
-	defer watcher.Close()
-
-	n, err := watcher.Next()
-	if err != nil {
-		return nil, err
-	}
-
-	return n.NetMap, nil
+	return localClient.DNSConfig(ctx)
 }
 
-func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, arg string) (rec tailcfg.DNSRecord, ok bool) {
+func serviceDNSRecordFromDNSConfig(dns *tailcfg.DNSConfig, arg string) (rec tailcfg.DNSRecord, ok bool) {
 	argIP, _ := netip.ParseAddr(arg)
 	argFQDN, err := dnsname.ToFQDN(arg)
 	argFQDNValid := err == nil
@@ -295,7 +335,7 @@ func serviceDNSRecordFromNetMap(nm *netmap.NetworkMap, arg string) (rec tailcfg.
 		return rec, false
 	}
 
-	for _, rec := range nm.DNS.ExtraRecords {
+	for _, rec := range dns.ExtraRecords {
 		if argIP.IsValid() {
 			recIP, _ := netip.ParseAddr(rec.Value)
 			if recIP == argIP {

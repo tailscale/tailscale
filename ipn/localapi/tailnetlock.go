@@ -43,7 +43,7 @@ func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	j, err := json.MarshalIndent(h.b.TailnetLockStatus(), "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -72,7 +72,7 @@ func (h *Handler) serveTKASign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockSign(req.NodeKey, req.RotationPublic); err != nil {
+	if err := h.b.TailnetLockSign(req.NodeKey, req.RotationPublic); err != nil {
 		http.Error(w, "signing failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -101,17 +101,17 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.b.NetworkLockAllowed() {
+	if !h.b.TailnetLockAllowed() {
 		http.Error(w, "Tailnet Lock is not supported on your pricing plan", http.StatusForbidden)
 		return
 	}
 
-	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues, req.SupportDisablement); err != nil {
+	if err := h.b.TailnetLockInit(req.Keys, req.DisablementValues, req.SupportDisablement); err != nil {
 		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	j, err := json.MarshalIndent(h.b.TailnetLockStatus(), "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
@@ -140,7 +140,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockModify(req.AddKeys, req.RemoveKeys); err != nil {
+	if err := h.b.TailnetLockModify(req.AddKeys, req.RemoveKeys); err != nil {
 		http.Error(w, "tailnet-lock modify failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -172,7 +172,7 @@ func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	wrappedKey, err := h.b.NetworkLockWrapPreauthKey(req.TSKey, priv)
+	wrappedKey, err := h.b.TailnetLockWrapPreauthKey(req.TSKey, priv)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -200,7 +200,7 @@ func (h *Handler) serveTKAVerifySigningDeeplink(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	res := h.b.NetworkLockVerifySigningDeeplink(req.URL)
+	res := h.b.TailnetLockVerifySigningDeeplink(req.URL)
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
@@ -227,7 +227,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockDisable(secret); err != nil {
+	if err := h.b.TailnetLockDisable(secret); err != nil {
 		http.Error(w, "tailnet-lock disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -251,7 +251,7 @@ func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockForceLocalDisable(); err != nil {
+	if err := h.b.TailnetLockForceLocalDisable(); err != nil {
 		http.Error(w, "tailnet-lock local disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -274,7 +274,7 @@ func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
 		limit = int(lm)
 	}
 
-	updates, err := h.b.NetworkLockLog(limit)
+	updates, err := h.b.TailnetLockLog(limit)
 	if err != nil {
 		http.Error(w, "reading log failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -300,7 +300,7 @@ func (h *Handler) serveTKAAffectedSigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sigs, err := h.b.NetworkLockAffectedSigs(keyID)
+	sigs, err := h.b.TailnetLockAffectedSigs(keyID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -343,7 +343,7 @@ func (h *Handler) serveTKAGenerateRecoveryAUM(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	res, err := h.b.NetworkLockGenerateRecoveryAUM(req.Keys, forkFrom)
+	res, err := h.b.TailnetLockGenerateRecoveryAUM(req.Keys, forkFrom)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -374,7 +374,7 @@ func (h *Handler) serveTKACosignRecoveryAUM(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	res, err := h.b.NetworkLockCosignRecoveryAUM(&aum)
+	res, err := h.b.TailnetLockCosignRecoveryAUM(&aum)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -405,7 +405,7 @@ func (h *Handler) serveTKASubmitRecoveryAUM(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.b.NetworkLockSubmitRecoveryAUM(&aum); err != nil {
+	if err := h.b.TailnetLockSubmitRecoveryAUM(&aum); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

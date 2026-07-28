@@ -167,6 +167,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp       bool
 	ShareeNode      bool
 	NoLogsNoSupport bool
+	RemoteConfig    bool
 	WireIngress     bool
 	IngressEnabled  bool
 	AllowsUpdate    bool
@@ -262,8 +263,19 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	}
 	if dst.Routes != nil {
 		dst.Routes = map[string][]*dnstype.Resolver{}
-		for k := range src.Routes {
-			dst.Routes[k] = append([]*dnstype.Resolver{}, src.Routes[k]...)
+		for k, sv := range src.Routes {
+			if sv == nil {
+				dst.Routes[k] = nil
+				continue
+			}
+			dst.Routes[k] = make([]*dnstype.Resolver, len(sv))
+			for i := range sv {
+				if sv[i] == nil {
+					dst.Routes[k][i] = nil
+				} else {
+					dst.Routes[k][i] = sv[i].Clone()
+				}
+			}
 		}
 	}
 	if src.FallbackResolvers != nil {

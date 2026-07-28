@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"tailscale.com/util/testenv"
 )
 
 // ErrNoIntersection is returned when a shared AUM could
@@ -60,18 +62,6 @@ func FromSyncOffer(offer SyncOffer) (head string, ancestors []string, err error)
 	return string(headBytes), ancestors, nil
 }
 
-const (
-	// The starting number of AUMs to skip when listing
-	// ancestors in a SyncOffer.
-	ancestorsSkipStart = 4
-
-	// How many bits to advance the skip count when listing
-	// ancestors in a SyncOffer.
-	//
-	// 2 bits, so (4<<2), so after skipping 4 it skips 16.
-	ancestorsSkipShift = 2
-)
-
 // SyncOffer returns an abbreviated description of the current AUM
 // chain, which can be used to synchronize with another (untrusted)
 // Authority instance.
@@ -92,20 +82,10 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		Ancestors: make([]AUMHash, 0, 6), // 6 chosen arbitrarily.
 	}
 
-	// We send some subset of our ancestors to help the remote
-	// find a more-recent 'head intersection'.
-	// The number of AUMs between each ancestor entry gets
-	// exponentially larger.
-	var (
-		skipAmount uint64  = ancestorsSkipStart
-		curs       AUMHash = a.Head()
-	)
-	for i := range uint64(maxSyncHeadIntersectionIter) {
-		if i > 0 && (i%skipAmount) == 0 {
-			out.Ancestors = append(out.Ancestors, curs)
-			skipAmount = skipAmount << ancestorsSkipShift
-		}
-
+	// We send all our checkpoints to help the remote find a
+	// more-recent 'head intersection'.
+	curs := a.Head()
+	for range maxSyncHeadIntersectionIter {
 		parent, err := storage.AUM(curs)
 		if err != nil {
 			if err != os.ErrNotExist {
@@ -118,6 +98,11 @@ func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 		if parent.Hash() == oldest {
 			break
 		}
+
+		if parent.MessageKind == AUMCheckpoint {
+			out.Ancestors = append(out.Ancestors, curs)
+		}
+
 		copy(curs[:], parent.PrevAUMHash)
 	}
 
@@ -273,4 +258,66 @@ func (a *Authority) MissingAUMs(storage Chonk, remoteOffer SyncOffer) ([]AUM, er
 	}
 
 	panic("unreachable")
+}
+
+// SeedNode is an authority-chonk pair that can be seeded by [SeedAUMs].
+type SeedNode struct {
+	authority *Authority
+	storage   Chonk
+}
+
+// CreateSeedNode creates a node for use with [SeedAUMs].
+func CreateSeedNode(t testenv.TB, authority *Authority, storage Chonk) SeedNode {
+	t.Helper()
+	return SeedNode{authority, storage}
+}
+
+type SeedAUMConfig struct {
+	Count  int
+	Signer Signer
+	Nodes  []SeedNode
+}
+
+// SeedAUMs generates many AUMs by repeatedly adding and removing keys
+// from the TKA.
+//
+// The AUMs are written to all the supplied nodes, so if you pass more
+// than one, you can build up a long sync history.
+//
+// This is only for use in testing.
+func SeedAUMs(t testenv.TB, config SeedAUMConfig) {
+	t.Helper()
+
+	if len(config.Nodes) == 0 {
+		panic("called SeedAUMs without any nodes")
+	}
+	primaryNode := config.Nodes[0]
+
+	// The key that we'll repeatedly add/remove in the TKA.
+	key := Key{Kind: Key25519, Public: []byte{1, 1, 1}, Votes: 1}
+
+	for i := 0; i < config.Count/2; i++ {
+		for _, action := range []string{"add", "remove"} {
+			updater := primaryNode.authority.NewUpdater(config.Signer)
+			if action == "add" {
+				if err := updater.AddKey(key); err != nil {
+					t.Fatalf("error from updater.AddKey: %v")
+				}
+			} else {
+				if err := updater.RemoveKey(key.MustID()); err != nil {
+					t.Fatalf("error from updater.RemoveKey: %v")
+				}
+			}
+			aum, err := updater.Finalize(primaryNode.storage)
+			if err != nil {
+				t.Fatalf("error from authority.Finalize: %v", err)
+			}
+
+			for _, n := range config.Nodes {
+				if err := n.authority.Inform(n.storage, aum); err != nil {
+					t.Fatalf("error from authority.Inform: %v", err)
+				}
+			}
+		}
+	}
 }

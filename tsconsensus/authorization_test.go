@@ -68,14 +68,17 @@ func authForPeers(self *ipnstate.PeerStatus, peers []*ipnstate.PeerStatus) *auth
 
 func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 	tests := []struct {
+		name     string
 		in       *ipnstate.Status
 		expected string
 	}{
 		{
+			name:     "no-status",
 			in:       nil,
 			expected: "no status",
 		},
 		{
+			name: "ts-server-not-running",
 			in: &ipnstate.Status{
 				BackendState: "NeedsMachineAuth",
 			},
@@ -84,7 +87,7 @@ func TestAuthRefreshErrorsNotRunning(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			a := authForStatus(tt.in)
 			err := a.Refresh(ctx)
@@ -127,22 +130,22 @@ func TestAuthAllowsHost(t *testing.T) {
 		expected   bool
 	}{
 		{
-			name:       "tagged with different tag",
+			name:       "tagged-different-tag",
 			peerStatus: peers[0],
 			expected:   false,
 		},
 		{
-			name:       "not tagged",
+			name:       "not-tagged",
 			peerStatus: peers[1],
 			expected:   false,
 		},
 		{
-			name:       "tags includes testTag",
+			name:       "tags-include-testTag",
 			peerStatus: peers[2],
 			expected:   true,
 		},
 		{
-			name:       "only tag is testTag",
+			name:       "only-testTag",
 			peerStatus: peers[3],
 			expected:   true,
 		},
@@ -201,12 +204,12 @@ func TestAuthSelfAllowed(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "self has different tag",
+			name:     "self-different-tag",
 			in:       []string{"woo"},
 			expected: false,
 		},
 		{
-			name:     "selfs tags include testTag",
+			name:     "self-tags-include-testTag",
 			in:       []string{"woo", testTag},
 			expected: true,
 		},

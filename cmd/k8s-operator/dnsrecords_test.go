@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -21,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -287,6 +290,88 @@ func TestDNSRecordsReconcilerErrorCases(t *testing.T) {
 	}
 	if len(ip6s) != 0 {
 		t.Errorf("expected no IPv6 addresses, got %v", ip6s)
+	}
+}
+
+func TestDNSRecordsReconcilerOptimisticLockError(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, client client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			return errors.New(optimisticLockErrorMsg)
+		},
+	}
+
+	dnsCfg := &tsapi.DNSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig"},
+		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
+	}
+	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, metav1.Condition{
+		Type:   string(tsapi.NameserverReady),
+		Status: metav1.ConditionTrue,
+	})
+
+	egressSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lock-service",
+			Namespace: "default",
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "lock-service.example.ts.net",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "unused",
+		},
+	}
+
+	proxyGroupEgressSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-proxygroup-egress-abcd1",
+			Namespace: "tailscale",
+			Labels: map[string]string{
+				kubetypes.LabelManaged: "true",
+				LabelParentName:        "lock-service",
+				LabelParentNamespace:   "default",
+				LabelParentType:        "svc",
+				labelProxyGroup:        "test-proxy-group",
+				labelSvcType:           typeEgress,
+			},
+		},
+	}
+
+	f := fake.NewClientBuilder().
+		WithInterceptorFuncs(funcs).
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(dnsCfg, proxyGroupEgressSvc, egressSvc).
+		WithStatusSubresource(dnsCfg).
+		Build()
+
+	dnsRR := &dnsRecordsReconciler{
+		Client:      f,
+		tsNamespace: "tailscale",
+		logger:      zl.Sugar(),
+	}
+
+	namespacedName := types.NamespacedName{
+		Namespace: proxyGroupEgressSvc.GetNamespace(),
+		Name:      proxyGroupEgressSvc.GetName(),
+	}
+
+	res, err := dnsRR.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: namespacedName,
+	})
+
+	if err != nil {
+		t.Errorf("expected requeueAfter in result, got error: %s", err)
+	}
+
+	if res.RequeueAfter == 0 {
+		t.Errorf("exptected requeueAfter in result to be > 0, got %d", res.RequeueAfter)
 	}
 }
 

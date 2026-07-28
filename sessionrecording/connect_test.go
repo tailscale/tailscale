@@ -35,7 +35,7 @@ func TestConnectToRecorder(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			desc: "v1 recorder",
+			desc: "v1-recorder",
 			setup: func(t *testing.T) (*http.ServeMux, <-chan []byte) {
 				uploadHash := make(chan []byte, 1)
 				mux := http.NewServeMux()
@@ -50,7 +50,7 @@ func TestConnectToRecorder(t *testing.T) {
 			},
 		},
 		{
-			desc:  "v2 recorder",
+			desc:  "v2-recorder",
 			http2: true,
 			setup: func(t *testing.T) (*http.ServeMux, <-chan []byte) {
 				uploadHash := make(chan []byte, 1)
@@ -100,7 +100,7 @@ func TestConnectToRecorder(t *testing.T) {
 			},
 		},
 		{
-			desc:    "v2 recorder no acks",
+			desc:    "v2-recorder-no-acks",
 			http2:   true,
 			wantErr: true,
 			setup: func(t *testing.T) (*http.ServeMux, <-chan []byte) {

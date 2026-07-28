@@ -56,6 +56,19 @@ var (
 
 	// ErrNoAccount indicates that the Client's key has not been registered with the CA.
 	ErrNoAccount = errors.New("acme: account does not exist")
+
+	// errPreAuthorizationNotSupported indicates that the server does not
+	// support pre-authorization of identifiers.
+	errPreAuthorizationNotSupported = errors.New("acme: pre-authorization is not supported")
+
+	// ErrCADoesNotSupportProfiles indicates that [WithOrderProfile] was
+	// included with a CA that does not advertise support for profiles in
+	// their directory.
+	ErrCADoesNotSupportProfiles = errors.New("acme: certificate authority does not support profiles")
+
+	// ErrProfileNotInSetOfSupportedProfiles indicates that the profile
+	// specified with [WithOrderProfile} is not one supported by the CA
+	ErrProfileNotInSetOfSupportedProfiles = errors.New("acme: certificate authority does not advertise a profile with name")
 )
 
 // A Subproblem describes an ACME subproblem as reported in an Error.
@@ -150,17 +163,24 @@ func (a *AuthorizationError) Error() string {
 
 // OrderError is returned from Client's order related methods.
 // It indicates the order is unusable and the clients should start over with
-// AuthorizeOrder.
+// AuthorizeOrder. A Problem description may be provided with details on
+// what caused the order to become unusable.
 //
 // The clients can still fetch the order object from CA using GetOrder
 // to inspect its state.
 type OrderError struct {
 	OrderURL string
 	Status   string
+	// Problem is the error that occurred while processing the order.
+	Problem *Error
 }
 
 func (oe *OrderError) Error() string {
-	return fmt.Sprintf("acme: order %s status: %s", oe.OrderURL, oe.Status)
+	str := fmt.Sprintf("acme: order %s status: %s", oe.OrderURL, oe.Status)
+	if oe.Problem != nil {
+		str += fmt.Sprintf("; problem: %s", oe.Problem)
+	}
+	return str
 }
 
 // RateLimit reports whether err represents a rate limit error and
@@ -308,6 +328,10 @@ type Directory struct {
 	// ExternalAccountRequired indicates that the CA requires for all account-related
 	// requests to include external account binding information.
 	ExternalAccountRequired bool
+
+	// Profiles indicates that the CA supports specifying a profile for an
+	// order. See also [WithOrderNotAfter].
+	Profiles Profiles
 }
 
 // Order represents a client's request for a certificate.
@@ -383,6 +407,15 @@ func WithOrderNotAfter(t time.Time) OrderOption {
 	return orderNotAfterOpt(t)
 }
 
+// WithOrderProfile sets an order's Profile field for servers which support
+// profiles.
+// See also:
+// * https://datatracker.ietf.org/doc/draft-aaron-acme-profiles/
+// * https://letsencrypt.org/docs/profiles/
+func WithOrderProfile(name string) OrderOption {
+	return orderProfileOpt(name)
+}
+
 type orderNotBeforeOpt time.Time
 
 func (orderNotBeforeOpt) privateOrderOpt() {}
@@ -414,6 +447,10 @@ func WithOrderReplacesCertDER(der []byte) OrderOption {
 type orderReplacesCertDER []byte
 
 func (orderReplacesCertDER) privateOrderOpt() {}
+
+type orderProfileOpt string
+
+func (orderProfileOpt) privateOrderOpt() {}
 
 // Authorization encodes an authorization response.
 type Authorization struct {
@@ -643,7 +680,7 @@ func (*certOptKey) privateCertOpt() {}
 //
 // In TLS ChallengeCert methods, the template is also used as parent,
 // resulting in a self-signed certificate.
-// The DNSNames field of t is always overwritten for tls-sni challenge certs.
+// The DNSNames or IPAddresses fields of t are always overwritten for tls-alpn challenge certs.
 func WithTemplate(t *x509.Certificate) CertOption {
 	return (*certOptTemplate)(t)
 }
@@ -664,4 +701,19 @@ type RenewalInfoWindow struct {
 type RenewalInfo struct {
 	SuggestedWindow RenewalInfoWindow `json:"suggestedWindow"`
 	ExplanationURL  string            `json:"explanationURL"`
+}
+
+type Profiles map[string]string
+
+func (ps Profiles) isSupported() bool {
+	return len(ps) > 0
+}
+
+func (ps Profiles) GetDescription(name string) string {
+	return ps[name]
+}
+
+func (ps Profiles) Has(name string) bool {
+	_, ok := ps[name]
+	return ok
 }

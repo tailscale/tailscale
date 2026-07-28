@@ -6,33 +6,30 @@
 package netstack
 
 import (
+	"context"
+	"net"
 	"net/netip"
 	"time"
 
-	probing "github.com/prometheus-community/pro-bing"
+	"tailscale.com/net/ping"
 )
 
 // sendOutboundUserPing sends a non-privileged ICMP (or ICMPv6) ping to dstIP with the given timeout.
 func (ns *Impl) sendOutboundUserPing(dstIP netip.Addr, timeout time.Duration) error {
-	p, err := probing.NewPinger(dstIP.String())
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	p := ping.New(ctx, ns.logf, nil)
+	p.Unprivileged = true
+	defer p.Close()
+
+	dst := &net.IPAddr{IP: dstIP.AsSlice(), Zone: dstIP.Zone()}
+	ns.logf("sendOutboundUserPing: forwarding ping to %s", dstIP)
+	d, err := p.Send(ctx, dst, []byte("tailscale-userping"))
 	if err != nil {
-		ns.logf("sendICMPPingToIP failed to create pinger: %v", err)
+		ns.logf("sendOutboundUserPing: ping to %s failed: %v", dstIP, err)
 		return err
 	}
-
-	p.Timeout = timeout
-	p.Count = 1
-	p.SetPrivileged(false)
-
-	p.OnSend = func(pkt *probing.Packet) {
-		ns.logf("sendICMPPingToIP: forwarding ping to %s:", p.Addr())
-	}
-	p.OnRecv = func(pkt *probing.Packet) {
-		ns.logf("sendICMPPingToIP: %d bytes pong from %s: icmp_seq=%d time=%v", pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
-	}
-	p.OnFinish = func(stats *probing.Statistics) {
-		ns.logf("sendICMPPingToIP: done, %d replies received", stats.PacketsRecv)
-	}
-
-	return p.Run()
+	ns.logf("sendOutboundUserPing: pong from %s in %v", dstIP, d)
+	return nil
 }

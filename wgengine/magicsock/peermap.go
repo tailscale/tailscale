@@ -151,7 +151,11 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 
 	epDisco := ep.disco.Load()
 	if epDisco == nil || oldDiscoKey != epDisco.key {
-		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
+		s := m.nodesOfDisco[oldDiscoKey]
+		delete(s, ep.publicKey)
+		if len(s) == 0 {
+			delete(m.nodesOfDisco, oldDiscoKey)
+		}
 	}
 	if ep.isWireguardOnly {
 		// If the peer is a WireGuard only peer, add all of its endpoints.
@@ -214,7 +218,11 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 
 	pi := m.byNodeKey[ep.publicKey]
 	if epDisco != nil {
-		delete(m.nodesOfDisco[epDisco.key], ep.publicKey)
+		s := m.nodesOfDisco[epDisco.key]
+		delete(s, ep.publicKey)
+		if len(s) == 0 {
+			delete(m.nodesOfDisco, epDisco.key)
+		}
 	}
 	delete(m.byNodeKey, ep.publicKey)
 	if was, ok := m.byNodeID[ep.nodeID]; ok && was.ep == ep {

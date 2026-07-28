@@ -31,7 +31,7 @@ func TestSetupKube(t *testing.T) {
 		kc      *kubeClient
 	}{
 		{
-			name: "TS_AUTHKEY set, state Secret exists",
+			name: "authkey-set-secret-exists",
 			cfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -50,7 +50,7 @@ func TestSetupKube(t *testing.T) {
 			},
 		},
 		{
-			name: "TS_AUTHKEY set, state Secret does not exist, we have permissions to create it",
+			name: "authkey-set-secret-missing-can-create",
 			cfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -69,7 +69,7 @@ func TestSetupKube(t *testing.T) {
 			},
 		},
 		{
-			name: "TS_AUTHKEY set, state Secret does not exist, we do not have permissions to create it",
+			name: "authkey-set-secret-missing-cannot-create",
 			cfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -89,7 +89,7 @@ func TestSetupKube(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "TS_AUTHKEY set, we encounter a non-404 error when trying to retrieve the state Secret",
+			name: "authkey-set-get-secret-non-404-error",
 			cfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -109,7 +109,7 @@ func TestSetupKube(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "TS_AUTHKEY set, we encounter a non-404 error when trying to check Secret permissions",
+			name: "authkey-set-check-perms-error",
 			cfg: &settings{
 				AuthKey:    "foo",
 				KubeSecret: "foo",
@@ -127,7 +127,7 @@ func TestSetupKube(t *testing.T) {
 		},
 		{
 			// Interactive login using URL in Pod logs
-			name: "TS_AUTHKEY not set, state Secret does not exist, we have permissions to create it",
+			name: "no-authkey-secret-missing-can-create",
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
@@ -145,7 +145,7 @@ func TestSetupKube(t *testing.T) {
 		},
 		{
 			// Interactive login using URL in Pod logs
-			name: "TS_AUTHKEY not set, state Secret exists, but does not contain auth key",
+			name: "no-authkey-secret-exists-no-key",
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
@@ -162,7 +162,7 @@ func TestSetupKube(t *testing.T) {
 			}},
 		},
 		{
-			name: "TS_AUTHKEY not set, state Secret contains auth key, we do not have RBAC to patch it",
+			name: "no-authkey-secret-has-key-cannot-patch",
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
@@ -180,7 +180,7 @@ func TestSetupKube(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "TS_AUTHKEY not set, state Secret contains auth key, we have RBAC to patch it",
+			name: "no-authkey-secret-has-key-can-patch",
 			cfg: &settings{
 				KubeSecret: "foo",
 			},
@@ -257,12 +257,8 @@ func TestResetContainerbootState(t *testing.T) {
 			authkey: "new-authkey",
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
-				kubetypes.KeyCapVer: capver,
-				kubetypes.KeyPodUID: []byte("1234"),
-				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyCapVer:              capver,
+				kubetypes.KeyPodUID:              []byte("1234"),
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -271,11 +267,7 @@ func TestResetContainerbootState(t *testing.T) {
 		"empty_initial_no_pod_uid": {
 			initial: map[string][]byte{},
 			expected: map[string][]byte{
-				kubetypes.KeyCapVer: capver,
-				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
+				kubetypes.KeyCapVer:              capver,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -303,9 +295,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				kubetypes.KeyPodUID: []byte("1234"),
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -321,9 +310,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer:         capver,
 				kubetypes.KeyReissueAuthkey: nil,
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -338,9 +324,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				// reissue_authkey not cleared.
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
@@ -355,9 +338,6 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer: capver,
 				// reissue_authkey not cleared.
 				// Cleared keys.
-				kubetypes.KeyDeviceID:            nil,
-				kubetypes.KeyDeviceFQDN:          nil,
-				kubetypes.KeyDeviceIPs:           nil,
 				kubetypes.KeyHTTPSEndpoint:       nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,

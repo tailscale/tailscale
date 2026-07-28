@@ -56,9 +56,11 @@ import (
 	"github.com/hdevalence/ed25519consensus"
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/feature"
+	"tailscale.com/net/netutil"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/must"
+	"tailscale.com/util/progresstracking"
 )
 
 const (
@@ -329,7 +331,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 // download writes the response body of url into a local file at dst, up to
 // limit bytes. On success, the returned value is a BLAKE2s hash of the file.
 func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]byte, int64, error) {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	tr.Proxy = feature.HookProxyFromEnvironment.GetOrNil()
 	defer tr.CloseIdleConnections()
 	hc := &http.Client{
@@ -372,7 +374,10 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 		return nil, 0, err
 	}
 	defer of.Close()
-	pw := &progressWriter{total: res.ContentLength, logf: c.logf}
+	total := res.ContentLength
+	pw := progresstracking.NewWriter(io.Discard, total, 2*time.Second, func(done int64) {
+		c.logf("Downloaded %v/%v (%.1f%%)", done, total, float64(done)/float64(total)*100)
+	})
 	h := NewPackageHash()
 	n, err := io.Copy(io.MultiWriter(of, h, pw), io.LimitReader(dlRes.Body, limit))
 	if err != nil {
@@ -387,29 +392,8 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 	if err := of.Close(); err != nil {
 		return nil, n, err
 	}
-	pw.print()
 
 	return h.Sum(nil), h.Len(), nil
-}
-
-type progressWriter struct {
-	done      int64
-	total     int64
-	lastPrint time.Time
-	logf      logger.Logf
-}
-
-func (pw *progressWriter) Write(p []byte) (n int, err error) {
-	pw.done += int64(len(p))
-	if time.Since(pw.lastPrint) > 2*time.Second {
-		pw.print()
-	}
-	return len(p), nil
-}
-
-func (pw *progressWriter) print() {
-	pw.lastPrint = time.Now()
-	pw.logf("Downloaded %v/%v (%.1f%%)", pw.done, pw.total, float64(pw.done)/float64(pw.total)*100)
 }
 
 func parsePrivateKey(data []byte, typeTag string) (ed25519.PrivateKey, error) {

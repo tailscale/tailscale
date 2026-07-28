@@ -19,7 +19,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
@@ -62,7 +64,7 @@ func TestConnector(t *testing.T) {
 		recorder: record.NewFakeRecorder(10),
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -140,6 +142,22 @@ func TestConnector(t *testing.T) {
 		}
 	})
 	opts.subnetRoutes = "10.44.0.0/20"
+	expectReconciled(t, cr, "", "test")
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+
+	// Set an invalid 4via6 route (site ID too large).
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"fd7a:115c:a1e0:b1a:1:0:a2c:0/116"}
+	})
+	expectReconciled(t, cr, "", "test")
+	// STS should still have the previous valid route, unchanged.
+	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+
+	// Set a valid 4via6 route.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.SubnetRouter.AdvertiseRoutes = []tsapi.Route{"fd7a:115c:a1e0:b1a:0:1:a2c:0/116"}
+	})
+	opts.subnetRoutes = "fd7a:115c:a1e0:b1a:0:1:a2c:0/116"
 	expectReconciled(t, cr, "", "test")
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
 
@@ -252,7 +270,7 @@ func TestConnectorWithProxyClass(t *testing.T) {
 		clock:  cl,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -346,7 +364,7 @@ func TestConnectorWithAppConnector(t *testing.T) {
 		clock:  cl,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",
@@ -446,7 +464,7 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 		clock:  cl,
 		ssr: &tailscaleSTSReconciler{
 			Client:            fc,
-			tsClient:          ft,
+			clients:           tsclient.NewProvider(ft),
 			defaultTags:       []string{"tag:k8s"},
 			operatorNamespace: "operator-ns",
 			proxyImage:        "tailscale/tailscale",

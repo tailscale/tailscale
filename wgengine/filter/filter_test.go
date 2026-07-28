@@ -254,6 +254,8 @@ func TestNoAllocs(t *testing.T) {
 		{"udp6_in", in, udp6Packet},
 		{"udp4_out", out, udp4Packet},
 		{"udp6_out", out, udp6Packet},
+		{"frag6_first_in", in, udp6FirstFragment},
+		{"frag6_nonfirst_in", in, udp6NonFirstFragment},
 	}
 
 	for _, test := range tests {
@@ -377,6 +379,41 @@ func BenchmarkFilter(b *testing.B) {
 	}
 }
 
+// udp6FirstFragment is the first fragment (offset 0) of a source-fragmented
+// IPv6 UDP datagram from 2001::5 to [2001::1]:443. decode6 reads its ports past
+// the 8-byte Fragment extension header so the filter can match it like an
+// unfragmented packet.
+var udp6FirstFragment = []byte{
+	// IPv6 header. Next header = 44 (Fragment), payload len = 24.
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x18, 0x2c, 0x40,
+	// Src: 2001::5
+	0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
+	// Dst: 2001::1
+	0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	// Fragment header: NextHeader=UDP, Reserved, Offset=0 + M=1, Identification.
+	0x11, 0x00, 0x00, 0x01, 0xde, 0xad, 0xbe, 0xef,
+	// UDP header: sport 1234, dport 443.
+	0x04, 0xd2, 0x01, 0xbb, 0x00, 0x10, 0x00, 0x00,
+	// Payload.
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+}
+
+// udp6NonFirstFragment is a later fragment (nonzero offset, no transport
+// header) of an IPv6 datagram. decode6 classifies it as ipproto.Fragment,
+// which pre() passes through regardless of ACL, exactly as for IPv4.
+var udp6NonFirstFragment = []byte{
+	// IPv6 header. Next header = 44 (Fragment), payload len = 16.
+	0x60, 0x00, 0x00, 0x00, 0x00, 0x10, 0x2c, 0x40,
+	// Src: 2001::5
+	0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
+	// Dst: 2001::1
+	0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+	// Fragment header: NextHeader=UDP, Reserved, Offset=185 blocks + M=0, Identification.
+	0x11, 0x00, 0x05, 0xc8, 0xde, 0xad, 0xbe, 0xef,
+	// Payload continuation (no transport header).
+	0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61,
+}
+
 func TestPreFilter(t *testing.T) {
 	packets := []struct {
 		desc       string
@@ -389,6 +426,7 @@ func TestPreFilter(t *testing.T) {
 		{"short-junk", Drop, usermetric.ReasonTooShort, raw4default(ipproto.Unknown, 10)},
 		{"long-junk", Drop, usermetric.ReasonUnknownProtocol, raw4default(ipproto.Unknown, 21)},
 		{"fragment", Accept, "", raw4default(ipproto.Fragment, 40)},
+		{"fragment6", Accept, "", udp6NonFirstFragment},
 		{"tcp", noVerdict, "", raw4default(ipproto.TCP, 0)},
 		{"udp", noVerdict, "", raw4default(ipproto.UDP, 0)},
 		{"icmp", noVerdict, "", raw4default(ipproto.ICMPv4, 0)},
@@ -401,6 +439,26 @@ func TestPreFilter(t *testing.T) {
 		if got != testPacket.want || gotReason != testPacket.wantReason {
 			t.Errorf("%q got=%v want=%v gotReason=%s wantReason=%s packet:\n%s", testPacket.desc, got, testPacket.want, gotReason, testPacket.wantReason, packet.Hexdump(testPacket.b))
 		}
+	}
+}
+
+// TestRunInIPv6FirstFragment checks that the first fragment of a
+// source-fragmented IPv6 datagram is matched on its ports and accepted like an
+// unfragmented packet, rather than being dropped as an unknown protocol (the
+// bug where v6 fragments were silently counted as "acl" drops).
+func TestRunInIPv6FirstFragment(t *testing.T) {
+	f := newFilter(t.Logf)
+
+	var p packet.Parsed
+	p.Decode(udp6FirstFragment)
+	// The fragment header must be parsed through to the real sub-protocol;
+	// otherwise no ACL rule can match it.
+	if p.IPProto != ipproto.UDP {
+		t.Fatalf("decoded IPProto = %v, want UDP (fragment header not parsed)", p.IPProto)
+	}
+	// 2001::5 => [2001::1]:443 is permitted by the "::/0 => ::/0:443" rule.
+	if got := f.RunIn(&p, 0); got != Accept {
+		t.Errorf("RunIn(first fragment) = %v, want Accept", got)
 	}
 }
 

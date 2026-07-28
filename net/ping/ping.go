@@ -29,8 +29,10 @@ import (
 )
 
 const (
-	v4Type = "ip4:icmp"
-	v6Type = "ip6:icmp"
+	v4Type    = "ip4:icmp"
+	v6Type    = "ip6:icmp"
+	v4UDPType = "udp4" // unprivileged datagram-oriented ICMPv4
+	v6UDPType = "udp6" // unprivileged datagram-oriented ICMPv6
 )
 
 type response struct {
@@ -54,12 +56,30 @@ type ListenPacketer interface {
 // A new instance should be created for each concurrent set of ping requests;
 // this type should not be reused.
 type Pinger struct {
+	// options that must be set before the first call to Send
+
+	// Unprivileged, when set, makes the Pinger use non-privileged
+	// datagram-oriented ICMP sockets ("udp4"/"udp6") opened via
+	// golang.org/x/net/icmp.ListenPacket instead of raw ICMP sockets
+	// ("ip4:icmp"/"ip6:icmp") opened via the configured ListenPacketer.
+	//
+	// Unprivileged mode is supported on macOS, iOS, and Linux (subject to
+	// the /proc/sys/net/ipv4/ping_group_range sysctl). When set, the
+	// ListenPacketer passed to New is ignored and the kernel rewrites the
+	// outgoing ICMP echo ID to match the socket; replies are matched by
+	// sequence number and echo data only.
+	//
+	// Must be set before the first call to Send.
+	Unprivileged bool
+
+	Verbose bool        // verbose logging
+	Logf    logger.Logf // optional logging function; if nil, logs to the standard logger
+
 	lp ListenPacketer
 
 	// closed guards against send incrementing the waitgroup concurrently with close.
-	closed  atomic.Bool
-	Logf    logger.Logf
-	Verbose bool
+	closed atomic.Bool
+
 	timeNow func() time.Time
 	id      uint16 // uint16 per RFC 792
 	wg      sync.WaitGroup
@@ -95,7 +115,17 @@ func (p *Pinger) mkconn(ctx context.Context, typ, addr string) (net.PacketConn, 
 		return nil, net.ErrClosed
 	}
 
-	c, err := p.lp.ListenPacket(ctx, typ, addr)
+	var c net.PacketConn
+	var err error
+	if p.Unprivileged {
+		// icmp.ListenPacket on "udp4"/"udp6" opens a datagram-oriented
+		// ICMP socket that does not require elevated privileges. The
+		// returned *icmp.PacketConn implements net.PacketConn and, on
+		// Darwin/iOS, strips the IPv4 header on read via IP_STRIPHDR.
+		c, err = icmp.ListenPacket(typ, addr)
+	} else {
+		c, err = p.lp.ListenPacket(ctx, typ, addr)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +155,7 @@ func (p *Pinger) getConn(ctx context.Context, typ string) (net.PacketConn, error
 	}
 
 	var addr = "0.0.0.0"
-	if typ == v6Type {
+	if typ == v6Type || typ == v6UDPType {
 		addr = "::"
 	}
 	c, err := p.mkconn(ctx, typ, addr)
@@ -216,9 +246,9 @@ func (p *Pinger) handleResponse(buf []byte, now time.Time, typ string) {
 	// and IPv6.
 	var icmpType icmp.Type
 	switch typ {
-	case v4Type:
+	case v4Type, v4UDPType:
 		icmpType = ipv4.ICMPTypeEchoReply
-	case v6Type:
+	case v6Type, v6UDPType:
 		icmpType = ipv6.ICMPTypeEchoReply
 	default:
 		p.vlogf("handleResponse: unknown icmp.Type")
@@ -243,7 +273,10 @@ func (p *Pinger) handleResponse(buf []byte, now time.Time, typ string) {
 	}
 
 	// We assume we sent this if the ID in the response is ours.
-	if uint16(resp.ID) != p.id {
+	// In unprivileged ICMP DGRAM mode the kernel rewrites the ID to match
+	// the socket, so the value we set on the way out is not what comes
+	// back; rely on sequence and data matching instead.
+	if !p.Unprivileged && uint16(resp.ID) != p.id {
 		p.vlogf("handleResponse: wanted ID=%d; got %d", p.id, resp.ID)
 		return
 	}
@@ -294,12 +327,28 @@ func (p *Pinger) Send(ctx context.Context, dest net.Addr, data []byte) (time.Dur
 	}
 	if ap.Is6() {
 		icmpType = ipv6.ICMPTypeEchoRequest
-		conn, err = p.getConn(ctx, v6Type)
+		typ := v6Type
+		if p.Unprivileged {
+			typ = v6UDPType
+		}
+		conn, err = p.getConn(ctx, typ)
 	} else {
-		conn, err = p.getConn(ctx, v4Type)
+		typ := v4Type
+		if p.Unprivileged {
+			typ = v4UDPType
+		}
+		conn, err = p.getConn(ctx, typ)
 	}
 	if err != nil {
 		return 0, err
+	}
+
+	// In unprivileged ICMP DGRAM mode (icmp.ListenPacket on "udp4"/"udp6"),
+	// the kernel requires a *net.UDPAddr destination for WriteTo even though
+	// the wire packet is ICMP.
+	writeDst := dest
+	if p.Unprivileged {
+		writeDst = &net.UDPAddr{IP: ap.AsSlice(), Zone: ap.Zone()}
 	}
 
 	m := icmp.Message{
@@ -324,7 +373,7 @@ func (p *Pinger) Send(ctx context.Context, dest net.Addr, data []byte) (time.Dur
 	p.mu.Unlock()
 
 	start := p.timeNow()
-	n, err := conn.WriteTo(b, dest)
+	n, err := conn.WriteTo(b, writeDst)
 	if err != nil {
 		return 0, err
 	} else if n != len(b) {

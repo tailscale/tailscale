@@ -5,8 +5,10 @@ package derpserver
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/binary"
@@ -15,10 +17,12 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/axiomhq/hyperloglog"
@@ -27,8 +31,10 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 )
 
 const testMeshKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -145,7 +151,6 @@ func pubAll(b byte) (ret key.NodePublic) {
 
 func TestForwarderRegistration(t *testing.T) {
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	want := func(want map[key.NodePublic]PacketForwarder) {
@@ -227,7 +232,7 @@ func TestForwarderRegistration(t *testing.T) {
 		key:  u1,
 		logf: logger.Discard,
 	}
-	s.clients[u1] = singleClient(u1c)
+	s.clients.Store(u1, singleClient(u1c))
 	s.RemovePacketForwarder(u1, testFwd(100))
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -247,7 +252,7 @@ func TestForwarderRegistration(t *testing.T) {
 	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
 	// that they're also connected to a peer of ours. That shouldn't transition the forwarder
 	// from nil to the new one, not a multiForwarder.
-	s.clients[u1] = singleClient(u1c)
+	s.clients.Store(u1, singleClient(u1c))
 	s.clientsMesh[u1] = nil
 	want(map[key.NodePublic]PacketForwarder{
 		u1: nil,
@@ -279,7 +284,6 @@ func TestMultiForwarder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		clients:     make(map[key.NodePublic]*clientSet),
 		clientsMesh: map[key.NodePublic]PacketForwarder{},
 	}
 	u := pubAll(1)
@@ -358,6 +362,70 @@ func TestMetaCert(t *testing.T) {
 	}
 }
 
+// TestModifyTLSConfigToAddMetaCert verifies that the wrapped GetCertificate
+// appends the meta cert to a copy of the provider's chain without mutating
+// the shared *tls.Certificate returned by the underlying provider (issue
+// 20352). Cert providers such as autocert cache and return the same
+// *tls.Certificate for concurrent handshakes, so appending to its
+// Certificate slice in place is both a data race and unbounded growth of
+// the served chain.
+func TestModifyTLSConfigToAddMetaCert(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+
+	// Give the shared chain slice spare capacity so that a regression to a
+	// plain append (rather than a copy into a freshly allocated slice)
+	// writes into the shared backing array. Concurrent goroutines doing so
+	// is a write-write race caught by the race detector, and the write
+	// itself is caught by the backing-array check after wg.Wait below.
+	chain := make([][]byte, 1, 2)
+	chain[0] = []byte{1, 2, 3}
+	shared := &tls.Certificate{
+		Certificate: chain,
+	}
+	c := &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return shared, nil
+		},
+	}
+	s.ModifyTLSConfigToAddMetaCert(c)
+
+	var wg sync.WaitGroup
+	// The goroutine count and iteration count are arbitrary: correctness is
+	// checked deterministically by the assertions below; the concurrency
+	// exists only to give the race detector overlapping calls to observe.
+	for range 10 {
+		wg.Go(func() {
+			for range 10 {
+				cert, err := c.GetCertificate(&tls.ClientHelloInfo{})
+				if err != nil {
+					t.Errorf("GetCertificate: %v", err)
+					return
+				}
+				if len(cert.Certificate) != 2 {
+					t.Errorf("chain length = %d; want 2", len(cert.Certificate))
+					return
+				}
+				if !bytes.Equal(cert.Certificate[0], []byte{1, 2, 3}) {
+					t.Errorf("chain[0] = %v; want provider's leaf cert %v", cert.Certificate[0], []byte{1, 2, 3})
+					return
+				}
+				if !bytes.Equal(cert.Certificate[1], s.MetaCert()) {
+					t.Errorf("chain[1] = %v; want meta cert", cert.Certificate[1])
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	if len(shared.Certificate) != 1 {
+		t.Errorf("shared cert chain length = %d; want 1 (must not be mutated)", len(shared.Certificate))
+	}
+	if got := chain[:cap(chain)][1]; got != nil {
+		t.Errorf("shared cert backing array was written: %v", got)
+	}
+}
+
 func TestServerDupClients(t *testing.T) {
 	serverPriv := key.NewNode()
 	var s *Server
@@ -388,7 +456,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantSingleClient := func(t *testing.T, want *sclient) {
 		t.Helper()
-		got, ok := s.clients[want.key]
+		got, ok := s.clients.Load(want.key)
 		if !ok {
 			t.Error("no clients for key")
 			return
@@ -411,7 +479,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantNoClient := func(t *testing.T) {
 		t.Helper()
-		_, ok := s.clients[clientPub]
+		_, ok := s.clients.Load(clientPub)
 		if !ok {
 			// Good
 			return
@@ -420,7 +488,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantDupSet := func(t *testing.T) *dupClientSet {
 		t.Helper()
-		cs, ok := s.clients[clientPub]
+		cs, ok := s.clients.Load(clientPub)
 		if !ok {
 			t.Fatal("no set for key; want dup set")
 			return nil
@@ -433,7 +501,7 @@ func TestServerDupClients(t *testing.T) {
 	}
 	wantActive := func(t *testing.T, want *sclient) {
 		t.Helper()
-		set, ok := s.clients[clientPub]
+		set, ok := s.clients.Load(clientPub)
 		if !ok {
 			t.Error("no set for key")
 			return
@@ -774,7 +842,7 @@ func TestServeDebugTrafficUniqueSenders(t *testing.T) {
 	s.mu.Lock()
 	cs := &clientSet{}
 	cs.activeClient.Store(c)
-	s.clients[clientKey] = cs
+	s.clients.Store(clientKey, cs)
 	s.mu.Unlock()
 
 	estimate := c.EstimatedUniqueSenders()
@@ -951,6 +1019,631 @@ func BenchmarkHyperLogLogEstimate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = hll.Estimate()
 	}
+}
+
+func TestPerClientRateLimit(t *testing.T) {
+	t.Run("throttled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			s := New(key.NewNode(), logger.Discard)
+			defer s.Close()
+
+			c := &sclient{
+				ctx: ctx,
+				s:   s,
+			}
+			lim := rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize)
+			c.recvLim.Store(lim)
+			wantTokens := func(t *testing.T, wantTokens float64) {
+				t.Helper()
+				if lim.Tokens() != wantTokens {
+					t.Fatalf("want tokens: %v got: %v", wantTokens, lim.Tokens())
+				}
+			}
+
+			// First call within burst should not block.
+			c.rateLimit(minRateLimitTokenBucketSize)
+
+			wantTokens(t, 0)
+
+			// Next call exceeds burst, should block until tokens replenish.
+			done := make(chan error, 1)
+			go func() {
+				done <- c.rateLimit(minRateLimitTokenBucketSize)
+			}()
+
+			// After settling, the goroutine should be blocked (no result yet).
+			synctest.Wait()
+			select {
+			case err := <-done:
+				t.Fatalf("rateLimit should have blocked, but returned: %v", err)
+			default:
+			}
+
+			// Advance time by 1 second, the goroutine should be unblocked
+			time.Sleep(1 * time.Second)
+			synctest.Wait()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("rateLimit after time advance: %v", err)
+				}
+			default:
+				t.Fatal("rateLimit should have unblocked after 1s")
+			}
+
+			wantTokens(t, 0)
+
+			// The second rateLimit call had to wait
+			if got := s.rateLimitPerClientWaited.Value(); got != 1 {
+				t.Fatalf("rateLimitPerClientWaited = %d, want 1", got)
+			}
+		})
+	})
+
+	t.Run("context_canceled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+
+			s := New(key.NewNode(), logger.Discard)
+			defer s.Close()
+
+			c := &sclient{
+				ctx: ctx,
+				s:   s,
+			}
+			lim := rate.NewLimiter(rate.Limit(minRateLimitTokenBucketSize), minRateLimitTokenBucketSize)
+			c.recvLim.Store(lim)
+
+			// Exhaust burst.
+			if err := c.rateLimit(minRateLimitTokenBucketSize); err != nil {
+				t.Fatalf("rateLimit: %v", err)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				done <- c.rateLimit(minRateLimitTokenBucketSize)
+			}()
+			synctest.Wait()
+
+			// Cancel the context; the blocked rateLimit should return an error.
+			cancel()
+			synctest.Wait()
+
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("expected error from canceled context")
+				}
+			default:
+				t.Fatal("rateLimit should have returned after context cancelation")
+			}
+		})
+	})
+
+	t.Run("mesh_peer_exempt", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		// Mesh peers have nil recvLim, so rate limiting is a no-op.
+		c := &sclient{
+			ctx:     ctx,
+			canMesh: true,
+		}
+
+		if err := c.rateLimit(1000); err != nil {
+			t.Fatalf("mesh peer rateLimit should be no-op: %v", err)
+		}
+	})
+
+	t.Run("zero_config_no_limiter", func(t *testing.T) {
+		s := New(key.NewNode(), logger.Discard)
+		defer s.Close()
+		if !reflect.DeepEqual(s.rateConfig, RateConfig{}) {
+			t.Errorf("expected zero rate limit, got %+v", s.rateConfig)
+		}
+	})
+}
+
+// zeroTimer returns a timer that fires immediately.
+func zeroTimer(_ time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(0)
+	return t.C, t.Stop
+}
+
+// neverTimer returns a timer that never fires.
+func neverTimer(_ time.Duration) (<-chan time.Time, func() bool) {
+	return make(chan time.Time), func() bool { return false }
+}
+
+func TestRateLimitWait(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no_wait", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		waited, err := rateLimitWait(ctx, lim, 5, time.Now(), zeroTimer)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+	})
+
+	t.Run("wait_for_tokens", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		now := time.Now()
+		waited, err := rateLimitWait(ctx, lim, 10, now, zeroTimer) // exhaust all tokens
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+		waited, err = rateLimitWait(ctx, lim, 10, now, zeroTimer)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if waited == 0 {
+			t.Fatal("waited = 0, want > 0")
+		}
+	})
+
+	t.Run("context_canceled", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 10)
+		now := time.Now()
+		_, err := rateLimitWait(ctx, lim, 10, now, zeroTimer) // exhaust all tokens
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		canceled, cancel := context.WithCancel(ctx) // cancel context so the select picks ctx.Done()
+		cancel()
+		waited, err := rateLimitWait(canceled, lim, 10, now, neverTimer) // neverTimer to only unblock via context
+		if err == nil {
+			t.Fatal("expected error from canceled context")
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+	})
+
+	t.Run("n_exceeds_burst", func(t *testing.T) {
+		lim := rate.NewLimiter(10, 5)
+		waited, err := rateLimitWait(ctx, lim, 10, time.Now(), zeroTimer)
+		if err == nil {
+			t.Fatal("expected error when n > burst")
+		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0", waited)
+		}
+	})
+}
+
+func verifyLimiter(t *testing.T, lim *rate.Limiter, wantRateConfig RateConfig) {
+	t.Helper()
+	if got := lim.Limit(); got != rate.Limit(wantRateConfig.PerClientRateLimitBytesPerSec) {
+		t.Errorf("client rate limit = %v; want %d", got, wantRateConfig.PerClientRateLimitBytesPerSec)
+	}
+	if got := lim.Burst(); got != int(wantRateConfig.PerClientRateBurstBytes) {
+		t.Errorf("client burst = %v; want %d", got, wantRateConfig.PerClientRateBurstBytes)
+	}
+}
+
+func TestUpdateRateLimits(t *testing.T) {
+	const (
+		testClientBurst1 = minRateLimitTokenBucketSize + 1
+		testClientRate1  = minRateLimitTokenBucketSize + 2
+		testClientBurst2 = minRateLimitTokenBucketSize + 3
+		testClientRate2  = minRateLimitTokenBucketSize + 4
+	)
+
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	// Create a non-mesh client with no initial limiter.
+	clientKey := key.NewNode().Public()
+	c := &sclient{
+		key:     clientKey,
+		s:       s,
+		logf:    logger.Discard,
+		canMesh: false,
+	}
+	cs := &clientSet{}
+	cs.activeClient.Store(c)
+
+	s.mu.Lock()
+	s.clients.Store(clientKey, cs)
+	s.mu.Unlock()
+
+	rc := RateConfig{
+		PerClientRateLimitBytesPerSec: testClientRate1,
+		PerClientRateBurstBytes:       testClientBurst1,
+	}
+	s.UpdateRateLimits(rc)
+
+	lim := c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter after update")
+	}
+	verifyLimiter(t, lim, rc)
+
+	// Verify server fields updated.
+	s.mu.Lock()
+	if !reflect.DeepEqual(s.rateConfig, rc) {
+		t.Errorf("s.rateConfig = %+v; want %+v", s.rateConfig, rc)
+	}
+	s.mu.Unlock()
+
+	// Update again with different nonzero values.
+	rc = RateConfig{
+		PerClientRateLimitBytesPerSec: testClientRate2,
+		PerClientRateBurstBytes:       testClientBurst2,
+	}
+	s.UpdateRateLimits(rc)
+	lim = c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter")
+	}
+	verifyLimiter(t, lim, rc)
+
+	// Disable rate limiting (set to 0).
+	s.UpdateRateLimits(RateConfig{})
+
+	if got := c.recvLim.Load(); got != nil {
+		t.Errorf("expected nil limiter after disable, got limit=%v", got.Limit())
+	}
+
+	// Mesh peer should always have nil limiter regardless of update.
+	meshKey := key.NewNode().Public()
+	meshClient := &sclient{
+		key:     meshKey,
+		s:       s,
+		logf:    logger.Discard,
+		canMesh: true,
+	}
+	meshCS := &clientSet{}
+	meshCS.activeClient.Store(meshClient)
+
+	s.mu.Lock()
+	s.clients.Store(meshKey, meshCS)
+	s.mu.Unlock()
+
+	rc = RateConfig{
+		PerClientRateLimitBytesPerSec: testClientRate2,
+		PerClientRateBurstBytes:       testClientBurst2,
+	}
+	s.UpdateRateLimits(rc)
+
+	if got := meshClient.recvLim.Load(); got != nil {
+		t.Errorf("mesh peer should have nil limiter, got limit=%v", got.Limit())
+	}
+	// Non-mesh client should be updated.
+	lim = c.recvLim.Load()
+	if lim == nil {
+		t.Fatal("expected non-nil limiter for non-mesh client")
+	}
+	verifyLimiter(t, lim, rc)
+
+	// Verify dup clients are also updated.
+	dupKey := key.NewNode().Public()
+	d1 := &sclient{key: dupKey, s: s, logf: logger.Discard}
+	d2 := &sclient{key: dupKey, s: s, logf: logger.Discard}
+	dupCS := &clientSet{}
+	dupCS.activeClient.Store(d1)
+	dupCS.dup = &dupClientSet{set: set.Of(d1, d2)}
+	s.mu.Lock()
+	s.clients.Store(dupKey, dupCS)
+	s.mu.Unlock()
+
+	rc = RateConfig{
+		PerClientRateLimitBytesPerSec: testClientRate1,
+		PerClientRateBurstBytes:       testClientBurst1,
+	}
+	s.UpdateRateLimits(rc)
+	for i, d := range []*sclient{d1, d2} {
+		dl := d.recvLim.Load()
+		if dl == nil {
+			t.Fatalf("dup client %d: expected non-nil limiter", i)
+		}
+		verifyLimiter(t, dl, rc)
+	}
+}
+
+func TestLoadRateConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		json           string
+		wantRateConfig RateConfig
+	}{
+		{"all_set", `{"PerClientRateLimitBytesPerSec": 1, "PerClientRateBurstBytes": 2}`, RateConfig{
+			PerClientRateLimitBytesPerSec: 1,
+			PerClientRateBurstBytes:       2,
+		}},
+		{"rate_only", `{"PerClientRateLimitBytesPerSec": 1}`, RateConfig{
+			PerClientRateLimitBytesPerSec: 1,
+		}},
+		{"zeros", `{"PerClientRateLimitBytesPerSec": 0, "PerClientRateBurstBytes": 0}`, RateConfig{}},
+		{"empty_json", `{}`, RateConfig{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "rate.json")
+			if err := os.WriteFile(f, []byte(tt.json), 0644); err != nil {
+				t.Fatal(err)
+			}
+			rc, err := LoadRateConfig(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(rc, tt.wantRateConfig) {
+				t.Errorf("rate config = %v want %v", rc, tt.wantRateConfig)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name    string
+		path    string
+		content string // written to loaded path if non-empty; path used as-is if empty
+	}{
+		{"empty_path", "", ""},
+		{"missing_file", filepath.Join(t.TempDir(), "nonexistent.json"), ""},
+		{"invalid_json", "", "not json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.path
+			if tt.content != "" {
+				path = filepath.Join(t.TempDir(), "rate.json")
+				if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := LoadRateConfig(path)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestLoadAndApplyRateConfig(t *testing.T) {
+	writeConfig := func(t *testing.T, json string) string {
+		t.Helper()
+		f := filepath.Join(t.TempDir(), "rate.json")
+		if err := os.WriteFile(f, []byte(json), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	t.Run("applies_and_updates_clients", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		clientKey := key.NewNode().Public()
+		c := &sclient{key: clientKey, s: s, logf: logger.Discard}
+		cs := &clientSet{}
+		cs.activeClient.Store(c)
+		s.mu.Lock()
+		s.clients.Store(clientKey, cs)
+		s.mu.Unlock()
+
+		f := writeConfig(t, fmt.Sprintf(`{"PerClientRateLimitBytesPerSec": %d, "PerClientRateBurstBytes": %d}`,
+			minRateLimitTokenBucketSize, minRateLimitTokenBucketSize+1))
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatalf("LoadAndApplyRateConfig: %v", err)
+		}
+
+		// Verify server fields.
+		wantRateConfig := RateConfig{
+			PerClientRateLimitBytesPerSec: minRateLimitTokenBucketSize,
+			PerClientRateBurstBytes:       minRateLimitTokenBucketSize + 1,
+		}
+		s.mu.Lock()
+		if !reflect.DeepEqual(s.rateConfig, wantRateConfig) {
+			t.Errorf("s.rateConfig = %+v; want %+v", s.rateConfig, wantRateConfig)
+		}
+		s.mu.Unlock()
+
+		// Verify client limiter.
+		lim := c.recvLim.Load()
+		if lim == nil {
+			t.Fatal("expected non-nil limiter")
+		}
+		verifyLimiter(t, lim, wantRateConfig)
+	})
+
+	t.Run("burst_is_at_least_minRateLimitTokenBucketSize", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 10}`)
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatalf("LoadAndApplyRateConfig: %v", err)
+		}
+
+		s.mu.Lock()
+		gotClientBurst := s.rateConfig.PerClientRateBurstBytes
+		s.mu.Unlock()
+		if gotClientBurst != minRateLimitTokenBucketSize {
+			t.Errorf("client burst = %d; want %d", gotClientBurst, minRateLimitTokenBucketSize)
+		}
+	})
+
+	t.Run("reload_disables_limiting", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		f := writeConfig(t, `{"PerClientRateLimitBytesPerSec": 1250000, "PerClientRateBurstBytes": 2500000}`)
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatal(err)
+		}
+		s.mu.Lock()
+		if reflect.DeepEqual(s.rateConfig, RateConfig{}) {
+			t.Error("s.rateConfig is zero val; want nonzero rates")
+		}
+		s.mu.Unlock()
+
+		if err := os.WriteFile(f, []byte(`{}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.LoadAndApplyRateConfig(f); err != nil {
+			t.Fatal(err)
+		}
+
+		s.mu.Lock()
+		if !reflect.DeepEqual(s.rateConfig, RateConfig{}) {
+			t.Errorf("s.rateConfig = %+v; want %+v", s.rateConfig, RateConfig{})
+		}
+		s.mu.Unlock()
+	})
+
+	t.Run("propagates_errors", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+
+		if err := s.LoadAndApplyRateConfig(filepath.Join(t.TempDir(), "nonexistent.json")); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestLookupDestHashTrieFastPath(t *testing.T) {
+	s := &Server{
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	dstClient := &sclient{key: dst}
+	cs := &clientSet{}
+	cs.activeClient.Store(dstClient)
+	s.clients.Store(dst, cs)
+
+	c := &sclient{s: s, key: src}
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != dstClient || fwd != nil || dstLen != 1 {
+		t.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, dstClient)
+	}
+
+	// This must not deadlock while s.mu is held; the hashtrie fast path
+	// should not acquire Server.mu.
+	s.mu.Lock()
+	got, _, _ = c.lookupDest(dst)
+	s.mu.Unlock()
+	if got != dstClient {
+		t.Fatalf("lookupDest got %v, want %v", got, dstClient)
+	}
+}
+
+func TestLookupDestHashTrieFallsBackForForwarder(t *testing.T) {
+	s := &Server{
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	c := &sclient{s: s, key: src}
+
+	s.clientsMesh[dst] = testFwd(1)
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != nil || fwd != testFwd(1) || dstLen != 0 {
+		t.Fatalf("lookupDest = (%v, %v, %d), want (nil, testFwd(1), 0)", got, fwd, dstLen)
+	}
+}
+
+func TestLookupDestHashTrieIgnoresInactiveSet(t *testing.T) {
+	s := &Server{
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	src := pubAll(1)
+	dst := pubAll(2)
+	c := &sclient{s: s, key: src}
+
+	// A clientSet with no activeClient (a transient state during
+	// register/unregister) must not be returned by the fast path.
+	cs := &clientSet{}
+	s.clients.Store(dst, cs)
+
+	got, fwd, dstLen := c.lookupDest(dst)
+	if got != nil || fwd != nil || dstLen != 0 {
+		t.Fatalf("lookupDest with inactive set = (%v, %v, %d), want (nil, nil, 0)", got, fwd, dstLen)
+	}
+
+	// Setting activeClient on the same in-map entry must make the next
+	// fast-path lookup observe it.
+	newClient := &sclient{key: dst}
+	cs.activeClient.Store(newClient)
+	got, fwd, dstLen = c.lookupDest(dst)
+	if got != newClient || fwd != nil || dstLen != 1 {
+		t.Fatalf("lookupDest after activation = (%v, %v, %d), want (%v, nil, 1)", got, fwd, dstLen, newClient)
+	}
+}
+
+func TestLookupDestHashTrieNoAlloc(t *testing.T) {
+	s := &Server{
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	var dstKeys [4]key.NodePublic
+	var dstClients [4]*sclient
+	for i := range dstKeys {
+		dstKeys[i] = pubAll(byte(i + 2))
+		dstClients[i] = &sclient{key: dstKeys[i]}
+		cs := &clientSet{}
+		cs.activeClient.Store(dstClients[i])
+		s.clients.Store(dstKeys[i], cs)
+	}
+	c := &sclient{s: s, key: pubAll(1)}
+
+	var i int
+	var got *sclient
+	allocs := testing.AllocsPerRun(1000, func() {
+		idx := i & (len(dstKeys) - 1)
+		got, _, _ = c.lookupDest(dstKeys[idx])
+		i++
+	})
+	if got == nil {
+		t.Fatal("lookupDest returned nil")
+	}
+	if allocs != 0 {
+		t.Fatalf("lookupDest allocated %v times per run, want 0", allocs)
+	}
+}
+
+func BenchmarkLookupDestHashTrie(b *testing.B) {
+	s := &Server{
+		clientsMesh: map[key.NodePublic]PacketForwarder{},
+		clock:       tstime.StdClock{},
+	}
+	var dstKeys [4]key.NodePublic
+	var dstClients [4]*sclient
+	for i := range dstKeys {
+		dstKeys[i] = pubAll(byte(i + 2))
+		dstClients[i] = &sclient{key: dstKeys[i]}
+		cs := &clientSet{}
+		cs.activeClient.Store(dstClients[i])
+		s.clients.Store(dstKeys[i], cs)
+	}
+
+	b.ReportAllocs()
+	b.SetParallelism(32)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		c := &sclient{s: s, key: pubAll(1)}
+		var i int
+		for pb.Next() {
+			idx := i & (len(dstKeys) - 1)
+			got, fwd, dstLen := c.lookupDest(dstKeys[idx])
+			if got != dstClients[idx] || fwd != nil {
+				b.Fatalf("lookupDest = (%v, %v, %d), want (%v, nil, _)", got, fwd, dstLen, dstClients[idx])
+			}
+			i++
+		}
+	})
 }
 
 func BenchmarkSenderCardinalityOverhead(b *testing.B) {

@@ -8,6 +8,7 @@ package conffile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -40,6 +41,15 @@ func (c *Config) WantRunning() bool {
 // from the VM's metadata service's user-data field.
 const VMUserDataPath = "vm:user-data"
 
+// ErrNoConfig is returned (wrapped) by Load when the config source is absent or
+// unreadable: a missing file, an EC2 instance with no user-data, an unreachable
+// metadata service, or a build without the relevant cloud support. It reports
+// "no config was provided", as distinct from "a config was provided but is
+// invalid" (which Load returns as an unwrapped parse/validate error). Callers
+// that want to boot unconfigured when no config is present (e.g. tailscaled's
+// "optional:" -config prefix) can check for it with errors.Is.
+var ErrNoConfig = errors.New("no config present")
+
 // hujsonStandardize is set to hujson.Standardize by conffile_hujson.go on
 // platforms that support config files.
 var hujsonStandardize func([]byte) ([]byte, error)
@@ -62,7 +72,10 @@ func Load(path string) (*Config, error) {
 		c.Raw, err = os.ReadFile(path)
 	}
 	if err != nil {
-		return nil, err
+		// Read-phase failure: the config source is absent or unreadable.
+		// Wrap ErrNoConfig so callers can distinguish this from a config
+		// that was read but failed to parse below.
+		return nil, fmt.Errorf("%w: %v", ErrNoConfig, err)
 	}
 	if buildfeatures.HasHuJSONConf && hujsonStandardize != nil {
 		c.Std, err = hujsonStandardize(c.Raw)

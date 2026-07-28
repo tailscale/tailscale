@@ -40,6 +40,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/proxy"
 
@@ -63,7 +64,17 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
+	"tailscale.com/wgengine/filter"
 )
+
+// pingTimeout returns a per-ping budget for use within the larger test ctx:
+// enough headroom for wireguard-go's RekeyTimeout (5s) plus the actual handshake on slow CI
+// (notably GOARCH=386 emulation where Curve25519/ChaCha20 lack the amd64 assembly fast paths),
+// but tight enough that a hung Ping points the finger at its callsite
+// rather than swallowing the whole test deadline.
+func pingTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, 10*time.Second)
+}
 
 // TestListener_Server ensures that the listener type always keeps the Server
 // method, which is used by some external applications to identify a tsnet.Listener
@@ -334,13 +345,40 @@ func startServer(t *testing.T, ctx context.Context, controlURL, hostname string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.lb.ConfigureCertsForTest(testCertRoot.getCert)
+	s.lb.ForTest().ConfigureCerts(testCertRoot.getCert)
+
+	// Wait for the server to finish connecting to its home DERP server,
+	// to prevent fast tests from racing the DERP handshake resulting
+	// in a dropped request with PeerGoneNotHere.
+	waitForHomeDERPConnected(t, ctx, s)
 
 	return s, status.TailscaleIPs[0], status.Self.PublicKey
 }
 
+// waitForHomeDERPConnected blocks until s has selected a home DERP region
+// and received its first frame from that region.
+// Until s establishes a complete connection to its home DERP server,
+// the DERP server will drop any incoming peer DISCO frames looking for s
+// with PeerGoneNotHere.
+func waitForHomeDERPConnected(t testing.TB, ctx context.Context, s *Server) {
+	t.Helper()
+	h := s.Sys().HealthTracker.Get()
+	ms := s.Sys().MagicSock.Get()
+	for {
+		if r := ms.GetLastNetcheckReport(ctx); r != nil &&
+			r.PreferredDERP != 0 &&
+			!h.GetDERPRegionReceivedTime(r.PreferredDERP).IsZero() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waitForHomeDERPConnected(%s): %v", s.hostname, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 func TestDialBlocks(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -387,7 +425,6 @@ func TestDialBlocks(t *testing.T) {
 //   - s2 can dial through the subnet router functionality (getting a synthetic RST
 //     that we verify we generated & saw)
 func TestConn(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -429,7 +466,9 @@ func TestConn(t *testing.T) {
 	}))
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingTSMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +559,6 @@ func TestConn(t *testing.T) {
 
 func TestLoopbackLocalAPI(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8557")
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -596,7 +634,6 @@ func TestLoopbackLocalAPI(t *testing.T) {
 
 func TestLoopbackSOCKS5(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/8198")
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -647,7 +684,6 @@ func TestLoopbackSOCKS5(t *testing.T) {
 }
 
 func TestTailscaleIPs(t *testing.T) {
-	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -690,7 +726,6 @@ func TestTailscaleIPs(t *testing.T) {
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -733,7 +768,6 @@ func (wc *closeTrackConn) Close() error {
 // tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
 // stop it, and restart it, even on Windows.
 func TestStartStopStartGetsSameIP(t *testing.T) {
-	tstest.Shard(t)
 	controlURL, _ := startControl(t)
 
 	tmp := t.TempDir()
@@ -783,7 +817,6 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
-	tstest.Shard(t)
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -848,7 +881,6 @@ func TestFunnel(t *testing.T) {
 // after itself when closed. Specifically, changes made to the serve config
 // should be cleared.
 func TestFunnelClose(t *testing.T) {
-	tstest.Shard(t)
 
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
 		t.Helper()
@@ -1022,7 +1054,11 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 		t.Helper()
 		w := must.Get(s.localClient.WatchIPNBus(t.Context(), ipn.NotifyInitialNetMap))
 		defer w.Close()
-		for n := must.Get(w.Next()); !netmapUpToDate(n.NetMap); n = must.Get(w.Next()) {
+		for {
+			must.Get(w.Next())
+			if nm := s.lb.NetMapWithPeers(); nm != nil && netmapUpToDate(nm) {
+				return
+			}
 		}
 	}
 	waitForLatestNetmap(t, client)
@@ -1030,7 +1066,6 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 }
 
 func TestListenService(t *testing.T) {
-	tstest.Shard(t)
 
 	type dialFn func(context.Context, string, string) (net.Conn, error)
 
@@ -1426,7 +1461,6 @@ func TestListenService(t *testing.T) {
 }
 
 func TestListenServiceClose(t *testing.T) {
-	tstest.Shard(t)
 	const serviceName = "svc:foo"
 
 	diffServeConfig := func(a, b ipn.ServeConfigView) string {
@@ -1582,7 +1616,6 @@ func TestListenServiceClose(t *testing.T) {
 }
 
 func TestListenerClose(t *testing.T) {
-	tstest.Shard(t)
 	ctx := context.Background()
 	controlURL, _ := startControl(t)
 
@@ -1662,7 +1695,6 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 }
 
 func TestFallbackTCPHandler(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1677,7 +1709,9 @@ func TestFallbackTCPHandler(t *testing.T) {
 	}
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1704,8 +1738,297 @@ func TestFallbackTCPHandler(t *testing.T) {
 	}
 }
 
+// TestPingPeerLearnedViaDelta verifies that `tailscale ping` works
+// for a peer that the local node learned about only via a
+// [tailcfg.MapResponse.PeersChanged] delta, never via a full
+// [tailcfg.MapResponse.Peers] list.
+//
+// Before aa5da2e5f22a, every peer change rebuilt a full netmap on
+// the engine, so [wgengine.Engine.SetNetworkMap] kept the engine's
+// cached netmap fresh and [wgengine.Engine.Reconfig] kept wgdev and
+// e.lastCfg fresh. After that refactor, peer adds and removes
+// ride the delta path and only mutate [nodeBackend]; the engine's
+// cached netmap and wireguard config stayed stale, and
+// [wgengine.Engine.PeerForIP] / [wgengine.Engine.Ping] / wgdev's
+// outbound encryption all missed the new peer.
+//
+// Two subtests exercise different layers:
+//
+//   - "disco" uses [tailcfg.PingDisco], which goes straight to
+//     magicsock (which has the peer via UpsertPeer) and bypasses
+//     wireguard-go entirely. It targets the cold-path PeerForIP
+//     lookup -- before the fix this missed the new peer with
+//     "no matching peer".
+//
+//   - "tsmp" uses [tailcfg.PingTSMP], which builds a real
+//     IP-proto-99 packet and pushes it through the full data path:
+//     PeerForIP -> lookupPeerByIP -> wgdev encryption ->
+//     magicsock transport. The receiving side's [tstun.Wrapper]
+//     intercepts TSMP and replies with a pong. Catches the
+//     wireguard-go side too: wgdev's PeerLookupFunc closure
+//     (captured at the last ReconfigDevice) didn't have the new
+//     peer's noise key, so even after lookupPeerByIP returned the
+//     right NodePublic wgdev couldn't lazily create the peer for
+//     outbound encryption.
+//
+// See tailscale/corp#43394.
+func TestPingPeerLearnedViaDelta(t *testing.T) {
+	for _, pt := range []tailcfg.PingType{tailcfg.PingDisco, tailcfg.PingTSMP} {
+		t.Run(string(pt), func(t *testing.T) {
+			testPingPeerLearnedViaDelta(t, pt)
+		})
+	}
+}
+
+func testPingPeerLearnedViaDelta(t *testing.T, pt tailcfg.PingType) {
+	if runtime.GOARCH == "386" {
+		t.Skip("skipping on 386: see https://github.com/tailscale/tailscale/issues/20146")
+	}
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	controlURL, control := startControl(t)
+
+	// Bring up s1 alone so its initial (auto-generated) MapResponse
+	// has no peers; testcontrol only has s1 registered at this point.
+	s1, _, s1Key := startServer(t, ctx, controlURL, "s1")
+
+	// Switch s1 into manual MapResponse mode. The empty response is a
+	// no-op heartbeat; the side effect is that suppressAutoMapResponses
+	// is set for s1, so the s2 join below cannot reach s1 as a full
+	// auto-generated netmap.
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{}) {
+		t.Fatal("AddRawMapResponse(s1, empty): node not connected")
+	}
+
+	// Bring up s2. testcontrol would normally push a peer-changed
+	// update to s1's long-poll, but autos for s1 are suppressed.
+	// s2 itself is not suppressed, so it gets a full netmap that
+	// includes s1, which is necessary for disco to complete in both
+	// directions (and for the TSMP pong to make it back).
+	_, s2ip, s2Key := startServer(t, ctx, controlURL, "s2")
+
+	// Snapshot s2's node-as-seen-by-control and inject it into s1's
+	// stream as a PeersChanged delta.
+	s2Node := control.Node(s2Key)
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{s2Node},
+	}) {
+		t.Fatal("AddRawMapResponse(s1, PeersChanged): node not connected")
+	}
+
+	// Wait for the delta to land in s1's nodeBackend.
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, s2ip, pt)
+	if err != nil {
+		t.Fatalf("Ping(%s): %v", pt, err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("Ping(%s) s1->s2 failed: %s (want success)", pt, pr.Err)
+	}
+}
+
+// TestPingSubnetRouteOfDeltaPeer verifies that when a peer arrives
+// purely via a [tailcfg.MapResponse.PeersChanged] delta and that peer
+// advertises a subnet route, the local node can resolve an IP within
+// that subnet to the new peer and exchange traffic with it.
+//
+// Before the fix, [netmapDeltaNeedsAuthReconfig] returned false for a
+// brand-new peer Upsert (the NodeID wasn't already known), so
+// [LocalBackend.authReconfigLocked] -- the only path that pushes a
+// fresh wireguard config into the engine -- never ran. The engine's
+// wireguard-filtered peer list and BART stayed stale, so
+// [LocalBackend.lookupPeerByIP] and [LocalBackend.peerForIP] both
+// missed any IP inside the advertised CIDR, and wgdev's
+// PeerLookupFunc closure didn't have the new peer's noise key for
+// outbound encryption.
+//
+// See tailscale/corp#43394.
+func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
+	if runtime.GOARCH == "386" {
+		t.Skip("skipping on 386: see https://github.com/tailscale/tailscale/issues/20146")
+	}
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	controlURL, control := startControl(t)
+
+	// Bring up s1 alone so its initial netmap has no peers.
+	s1, _, s1Key := startServer(t, ctx, controlURL, "s1")
+
+	// Accept subnet routes on s1; otherwise nmcfg.WGCfg strips a peer's
+	// non-self AllowedIPs out of the wireguard config (and thus out of
+	// the engine BART), and a subnet-router delta wouldn't actually
+	// install the route locally even with the fix.
+	lc1 := must.Get(s1.LocalClient())
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:       ipn.Prefs{RouteAll: true},
+		RouteAllSet: true,
+	}))
+
+	// Switch s1 into manual MapResponse mode so the s2 join cannot
+	// arrive as a full auto-generated netmap.
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{}) {
+		t.Fatal("AddRawMapResponse(s1, empty): node not connected")
+	}
+
+	// Bring up s2. We'll treat it as a subnet router for 10.0.0.0/24
+	// by adding that prefix to its AllowedIPs in the delta we inject
+	// below. (s2 isn't a real subnet router -- we don't try to forward
+	// traffic through it. The receiving side's tstun.Wrapper handles
+	// TSMP regardless of dst IP, so the pong comes back as long as
+	// the encrypt/transport chain works.)
+	_, _, s2Key := startServer(t, ctx, controlURL, "s2")
+
+	const subnet = "10.0.0.0/24"
+	subnetPrefix := netip.MustParsePrefix(subnet)
+	probeIP := netip.MustParseAddr("10.0.0.5")
+
+	// Inject s2 into s1 as a PeersChanged delta with the subnet route
+	// in AllowedIPs.
+	s2Node := control.Node(s2Key)
+	s2Node.PrimaryRoutes = []netip.Prefix{subnetPrefix}
+	s2Node.AllowedIPs = append(s2Node.AllowedIPs, subnetPrefix)
+	if !control.AddRawMapResponse(s1Key, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{s2Node},
+	}) {
+		t.Fatal("AddRawMapResponse(s1, PeersChanged): node not connected")
+	}
+
+	// Wait for the delta to land in s1's nodeBackend.
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	// PingTSMP sends a real IP packet (IP proto 99) over wireguard
+	// to probeIP, exercising the full data path -- PeerForIP lookup,
+	// outbound wgdev encryption, magicsock transport. The receiving
+	// side (s2's tstun.Wrapper) intercepts TSMP regardless of dst
+	// IP and replies with a pong. So this catches both halves of
+	// the bug: a stale BART / lastCfg (PeerForIP / lookupPeerByIP
+	// miss) AND a stale wgdev PeerLookupFunc closure (peer's noise
+	// key not yet registered for outbound encryption).
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, probeIP, tailcfg.PingTSMP)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("ping s1->%v (subnet route via s2) failed: %s (want success)", probeIP, pr.Err)
+	}
+}
+
+// TestPingSelfReturnsIsLocalIP verifies that pinging one's own
+// Tailscale IP takes the IsSelf early-out in [wgengine.Engine.Ping]
+// instead of trying to ping self via magicsock. Lives here as a
+// regression guard against future refactors of the PeerForIP self
+// path; the original userspaceEngine.PeerForIP handles self via a
+// dedicated nm.GetAddresses() scan, but anything that re-routes
+// PeerForIP through a more general index needs to keep
+// [wgengine.PeerForIP.IsSelf] set for self addresses.
+func TestPingSelfReturnsIsLocalIP(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, s1ip, _ := startServer(t, ctx, controlURL, "s1")
+
+	lc, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc.Ping(pingCtx, s1ip, tailcfg.PingDisco)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if !pr.IsLocalIP {
+		t.Errorf("IsLocalIP = false, want true (pr=%+v)", pr)
+	}
+	if pr.Err == "" {
+		t.Errorf("Err = %q, want a 'local Tailscale IP' message", pr.Err)
+	}
+}
+
+// TestStatusReportsPeerInEngine verifies that a peer with an active
+// wireguard session is reported as InEngine=true in the local
+// [ipnstate.Status]. This exercises [wgengine.Engine.UpdateStatus] ->
+// userspaceEngine.getStatus -> the active-wgdev-peer iteration ->
+// [ipnstate.StatusBuilder.AddPeer] with InEngine=true. It's the only
+// signal in the tree that exercises getStatus's peer-list path; the
+// wgengine and ipnlocal unit tests don't assert on it.
+func TestStatusReportsPeerInEngine(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+
+	controlURL, _ := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+	_, s2ip, s2Key := startServer(t, ctx, controlURL, "s2")
+
+	lc1, err := s1.LocalClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := waitFor(t, ctx, s1, func(nm *netmap.NetworkMap) bool {
+		return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+			return p.Key() == s2Key
+		})
+	}); err != nil {
+		t.Fatalf("waitFor s2 in s1 netmap: %v", err)
+	}
+
+	// Ping via ICMP so a real packet flows through wireguard-go and
+	// instantiates s2 in s1's wgdev peer map. PingDisco wouldn't
+	// suffice; it goes directly to magicsock and bypasses wgdev.
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	pr, err := lc1.Ping(pingCtx, s2ip, tailcfg.PingICMP)
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if pr.Err != "" {
+		t.Fatalf("Ping s1->s2 failed: %s", pr.Err)
+	}
+
+	status, err := lc1.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, ok := status.Peer[s2Key]
+	if !ok {
+		t.Fatalf("status.Peer missing s2 (%v); peers=%v", s2Key, status.Peers())
+	}
+	if !peer.InEngine {
+		t.Errorf("peer.InEngine = false, want true (peer=%+v)", peer)
+	}
+}
+
 func TestCapturePcap(t *testing.T) {
-	tstest.Shard(t)
 	const timeLimit = 120
 	ctx, cancel := context.WithTimeout(context.Background(), timeLimit*time.Second)
 	defer cancel()
@@ -1726,7 +2049,9 @@ func TestCapturePcap(t *testing.T) {
 	}
 
 	// send a packet which both nodes will capture
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1759,7 +2084,6 @@ func TestCapturePcap(t *testing.T) {
 }
 
 func TestUDPConn(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1774,7 +2098,9 @@ func TestUDPConn(t *testing.T) {
 	}
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1832,7 +2158,11 @@ func TestUDPConn(t *testing.T) {
 func parseMetrics(m []byte) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 
-	var parser expfmt.TextParser
+	// prometheus/common v0.67 made the validation scheme mandatory;
+	// the zero-value parser now panics. LegacyValidation matches the
+	// classic ASCII metric/label name rules that the tailscaled exporter
+	// uses (e.g. tailscaled_inbound_bytes_total).
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	mf, err := parser.TextToMetricFamilies(bytes.NewReader(m))
 	if err != nil {
 		return nil, err
@@ -1951,7 +2281,6 @@ func sendData(logf func(format string, args ...any), ctx context.Context, bytesC
 }
 
 func TestUserMetricsByteCounters(t *testing.T) {
-	tstest.Shard(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1993,7 +2322,9 @@ func TestUserMetricsByteCounters(t *testing.T) {
 	})
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	res, err := lc2.Ping(pingCtx, s1ip, tailcfg.PingICMP)
 	if err != nil {
 		t.Fatalf("pinging: %s", err)
 	}
@@ -2066,7 +2397,6 @@ func TestUserMetricsByteCounters(t *testing.T) {
 }
 
 func TestUserMetricsRouteGauges(t *testing.T) {
-	tstest.Shard(t)
 	// Windows does not seem to support or report back routes when running in
 	// userspace via tsnet. So, we skip this check on Windows.
 	// TODO(kradalby): Figure out if this is correct.
@@ -2230,6 +2560,10 @@ type chanTUN struct {
 	Outbound chan []byte // packets to read from TUN
 	closed   chan struct{}
 	events   chan tun.Event
+
+	// wmu serializes Write and Close so a Write can't send on
+	// Inbound while Close is closing it.
+	wmu sync.Mutex
 }
 
 func newChanTUN() *chanTUN {
@@ -2246,6 +2580,8 @@ func newChanTUN() *chanTUN {
 func (t *chanTUN) File() *os.File { panic("not implemented") }
 
 func (t *chanTUN) Close() error {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
 	select {
 	case <-t.closed:
 	default:
@@ -2266,14 +2602,19 @@ func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 }
 
 func (t *chanTUN) Write(bufs [][]byte, offset int) (int, error) {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	select {
+	case <-t.closed:
+		return 0, errors.New("closed")
+	default:
+	}
 	for _, buf := range bufs {
 		pkt := buf[offset:]
 		if len(pkt) == 0 {
 			continue
 		}
 		select {
-		case <-t.closed:
-			return 0, errors.New("closed")
 		case t.Inbound <- slices.Clone(pkt):
 		default:
 			// Drop the packet if the channel is full, like a real
@@ -2298,11 +2639,41 @@ type listenTest struct {
 	tun          *chanTUN // nil for netstack mode
 }
 
+// waitForPeerReachable blocks until s's current netmap contains the given peer
+// with a non-zero HomeDERP and endpoints.
+//
+// This is polled via the LocalBackend's netmap rather than via the IPN bus
+// because the bus does not carry HomeDERP or Endpoint deltas; the netmap
+// itself is the source of truth for those fields.
+func waitForPeerReachable(t *testing.T, s *Server, peer key.NodePublic) {
+	t.Helper()
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		nm := s.lb.NetMapWithPeers()
+		if nm == nil {
+			return errors.New("no netmap yet")
+		}
+		for _, p := range nm.Peers {
+			if p.Key() != peer {
+				continue
+			}
+			if p.HomeDERP() == 0 {
+				return fmt.Errorf("peer %v: no HomeDERP", peer.ShortString())
+			}
+			if p.Endpoints().Len() == 0 {
+				return fmt.Errorf("peer %v: no endpoints", peer.ShortString())
+			}
+			return nil
+		}
+		return fmt.Errorf("peer %v not in netmap", peer.ShortString())
+	}); err != nil {
+		t.Fatalf("waitForPeerReachable(%v): %v", peer.ShortString(), err)
+	}
+}
+
 // setupTwoClientTest creates two tsnet servers for testing.
 // If useTUN is true, s2 uses a chanTUN; otherwise it uses netstack only.
 func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	t.Helper()
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx := t.Context()
 	controlURL, control := startControl(t)
@@ -2333,7 +2704,7 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2.lb.ConfigureCertsForTest(testCertRoot.getCert)
+	s2.lb.ForTest().ConfigureCerts(testCertRoot.getCert)
 
 	s1ip4, s1ip6 := s1.TailscaleIPs()
 	s2ip4 := s2status.TailscaleIPs[0]
@@ -2342,8 +2713,14 @@ func setupTwoClientTest(t *testing.T, useTUN bool) *listenTest {
 		s2ip6 = s2status.TailscaleIPs[1]
 	}
 
+	waitForPeerReachable(t, s1, s2.lb.NodeKey())
+	waitForPeerReachable(t, s2, s1.lb.NodeKey())
+
 	lc1 := must.Get(s1.LocalClient())
-	must.Get(lc1.Ping(ctx, s2ip4, tailcfg.PingTSMP))
+
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	must.Get(lc1.Ping(pingCtx, s2ip4, tailcfg.PingTSMP))
 
 	return &listenTest{
 		control: control,
@@ -2858,6 +3235,143 @@ func TestDialUDP(t *testing.T) {
 	})
 }
 
+// TestDialUDPInjectedReadRecordsFlowState reproduces tailscale/tailscale#14229
+// and #20064: a tsnet/netstack client dialing UDP must record reverse-flow
+// state in its inbound filter for the outbound packet it injects via
+// [netstack.Impl] → [tstun.Wrapper.InjectOutboundPacketBuffer]. If it doesn't,
+// the inbound reply is silently dropped by the inbound packet filter when no
+// ACL rule explicitly admits it.
+//
+// [TestDialUDP] doesn't catch this because [testcontrol.Server] serves
+// [tailcfg.FilterAllowAll] by default, so the reply is always admitted by
+// rule and the flow-state path is never exercised. Each subtest below sets
+// up s1 and s2 so that the inbound reply is admissible only via the
+// reverse-flow state recorded when s2 dialed.
+func TestDialUDPInjectedReadRecordsFlowState(t *testing.T) {
+	// RestrictedACL replaces the default allow-all PacketFilter with a
+	// one-way rule that permits s2 → s1 only. The reply path s1 → s2 matches
+	// no rule, so it can only be admitted by reverse-flow state on s2's
+	// main filter.
+	t.Run("RestrictedACL", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false) // netstack on both sides.
+		rule := []tailcfg.FilterRule{{
+			SrcIPs: []string{lt.s2ip4.String(), lt.s2ip6.String()},
+			DstPorts: []tailcfg.NetPortRange{
+				{IP: lt.s1ip4.String(), Ports: tailcfg.PortRange{First: 0, Last: 65535}},
+				{IP: lt.s1ip6.String(), Ports: tailcfg.PortRange{First: 0, Last: 65535}},
+			},
+			IPProto: []int{int(ipproto.TCP), int(ipproto.UDP)},
+		}}
+
+		for _, s := range []*Server{lt.s1, lt.s2} {
+			if !lt.control.AddRawMapResponse(s.lb.NodeKey(), &tailcfg.MapResponse{
+				PacketFilter: rule,
+			}) {
+				t.Fatalf("AddRawMapResponse(%s) failed", s.Hostname)
+			}
+		}
+
+		// PacketFilter-only changes don't necessarily fire peer/netmap
+		// notifications, so poll the wgengine filter directly.
+		if err := tstest.WaitFor(30*time.Second, func() error {
+			f := lt.s2.lb.ForTest().GetFilter()
+			if f == nil {
+				return errors.New("no filter yet")
+			}
+			if got := f.Check(lt.s1ip4, lt.s2ip4, 1234, ipproto.UDP); got != filter.Drop {
+				return fmt.Errorf("inbound s1 → s2:1234 UDP: got %v, want Drop", got)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("waiting for restrictive filter on s2: %v", err)
+		}
+
+		runDialUDPEcho(t, lt)
+	})
+
+	// JailedPeer marks s1 as jailed from s2's perspective. tstun.Wrapper
+	// then routes s2's outbound to s1 and inbound from s1 through a
+	// separate "jailed" filter (a shields-up filter with no rules; also
+	// used for Mullvad exit nodes). The reply path can only be admitted
+	// by reverse-flow state on the *jailed* filter, so injectedRead must
+	// select the right filter for the outbound packet.
+	t.Run("JailedPeer", func(t *testing.T) {
+		lt := setupTwoClientTest(t, false) // netstack on both sides.
+		s1Key := lt.s1.lb.NodeKey()
+		lt.control.SetJailed(lt.s2.lb.NodeKey(), s1Key, true)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		if err := waitFor(t, ctx, lt.s2, func(nm *netmap.NetworkMap) bool {
+			return slices.ContainsFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+				return p.Key() == s1Key && p.IsJailed()
+			})
+		}); err != nil {
+			t.Fatalf("waiting for s1 to appear jailed in s2's netmap: %v", err)
+		}
+
+		runDialUDPEcho(t, lt)
+	})
+}
+
+// runDialUDPEcho runs an s2.Dial("udp", s1-listener)/Write/Read round trip
+// against listeners on lt.s1's IPv4 and IPv6 addresses as t.Run subtests,
+// asserting that the echoed reply makes it back to s2. The caller is
+// responsible for configuring lt so that the inbound reply on s2 is only
+// admissible via reverse-flow state recorded by the outbound dial.
+func runDialUDPEcho(t *testing.T, lt *listenTest) {
+	t.Helper()
+	test := func(t *testing.T, listenIP netip.Addr) {
+		pc, err := lt.s1.ListenPacket("udp", netip.AddrPortFrom(listenIP, 0).String())
+		if err != nil {
+			t.Fatalf("ListenPacket: %v", err)
+		}
+		defer pc.Close()
+
+		echoErr := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 1500)
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				echoErr <- err
+				return
+			}
+			if _, err := pc.WriteTo(buf[:n], addr); err != nil {
+				echoErr <- err
+			}
+		}()
+
+		conn, err := lt.s2.Dial(t.Context(), "udp", pc.LocalAddr().String())
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		defer conn.Close()
+
+		want := "hello udp"
+		if _, err := conn.Write([]byte(want)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got := make([]byte, 1024)
+		n, err := conn.Read(got)
+		if err != nil {
+			select {
+			case e := <-echoErr:
+				t.Fatalf("echo error: %v; read error: %v", e, err)
+			default:
+				t.Fatalf("UDP reply dropped — injectedRead didn't record flow state on the filter that runs on the reply (#14229, #20064): %v", err)
+			}
+		}
+		if string(got[:n]) != want {
+			t.Errorf("got %q, want %q", got[:n], want)
+		}
+	}
+
+	t.Run("IPv4", func(t *testing.T) { test(t, lt.s1ip4) })
+	t.Run("IPv6", func(t *testing.T) { test(t, lt.s1ip6) })
+}
+
 // buildDNSQuery builds a UDP/IP packet containing a DNS query for name to the
 // Tailscale service IP (100.100.100.100 for IPv4, fd7a:115c:a1e0::53 for IPv6).
 func buildDNSQuery(name string, srcIP netip.Addr) []byte {
@@ -2900,16 +3414,26 @@ func buildDNSQuery(name string, srcIP netip.Addr) []byte {
 }
 
 func TestDeps(t *testing.T) {
-	tstest.Shard(t)
 	deptest.DepChecker{
 		GOOS:   "linux",
 		GOARCH: "amd64",
 		BadDeps: map[string]string{
 			"golang.org/x/crypto/ssh":                       "tsnet should not depend on SSH",
 			"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf": "tsnet should not depend on SSH",
+			"tailscale.com/chirp":                           "tsnet should not depend on BIRD integration",
+			"tailscale.com/feature/bird":                    "tsnet should not depend on BIRD integration",
+			"tailscale.com/feature/captiveportal":           "tsnet apps don't need captive portal detection; import it explicitly if desired",
+			"tailscale.com/feature/clientupdate":            "tsnet should not depend on feature/clientupdate",
+			"tailscale.com/feature/remoteconfig":            "tsnet should not depend on feature/remoteconfig",
+			"tailscale.com/feature/syspolicy":               "tsnet should not depend on syspolicy",
+			"tailscale.com/ipn/store/awsstore":              "tsnet callers wanting AWS state storage should import awsstore themselves",
+			"tailscale.com/ipn/store/kubestore":             "tsnet callers wanting Kubernetes state storage should import kubestore themselves",
+			"tailscale.com/wif":                             "tsnet callers wanting workload identity federation should import tailscale.com/feature/identityfederation themselves",
 		},
 		OnDep: func(dep string) {
-			if strings.Contains(dep, "portlist") {
+			if strings.Contains(dep, "portlist") ||
+				strings.Contains(dep, "github.com/aws/") ||
+				strings.Contains(dep, "k8s.io/") {
 				t.Errorf("unexpected dep: %q", dep)
 			}
 		},
@@ -2926,19 +3450,19 @@ func TestResolveAuthKey(t *testing.T) {
 		audience        string
 		oauthAvailable  bool
 		wifAvailable    bool
-		resolveViaOAuth func(ctx context.Context, clientSecret string, tags []string) (string, error)
-		resolveViaWIF   func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error)
+		resolveViaOAuth func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error)
+		resolveViaWIF   func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error)
 		wantAuthKey     string
 		wantErr         bool
 		wantErrContains string
 	}{
 		{
-			name:           "successful resolution via OAuth client secret",
+			name:           "success-oauth-client-secret",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
-				if clientSecret != "tskey-client-secret-123" {
-					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
+				if args.AuthKey != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", args.AuthKey)
 				}
 				return "tskey-auth-via-oauth", nil
 			},
@@ -2946,25 +3470,25 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:           "failing resolution via OAuth client secret",
+			name:           "fail-oauth-client-secret",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wantErrContains: "resolution failed",
 		},
 		{
-			name:         "successful resolution via federated ID token",
+			name:         "success-federated-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
-				if clientID != "client-id-123" {
-					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
+				if args.ClientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", args.ClientID)
 				}
-				if idToken != "id-token-456" {
-					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				if args.IDToken != "id-token-456" {
+					return "", fmt.Errorf("unexpected ID token: %s", args.IDToken)
 				}
 				return "tskey-auth-via-wif", nil
 			},
@@ -2972,16 +3496,16 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:         "successful resolution via federated audience",
+			name:         "success-federated-audience",
 			clientID:     "client-id-123",
 			audience:     "api.tailscale.com",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
-				if clientID != "client-id-123" {
-					return "", fmt.Errorf("unexpected client ID: %s", clientID)
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
+				if args.ClientID != "client-id-123" {
+					return "", fmt.Errorf("unexpected client ID: %s", args.ClientID)
 				}
-				if audience != "api.tailscale.com" {
-					return "", fmt.Errorf("unexpected ID token: %s", idToken)
+				if args.Audience != "api.tailscale.com" {
+					return "", fmt.Errorf("unexpected audience: %s", args.Audience)
 				}
 				return "tskey-auth-via-wif", nil
 			},
@@ -2989,89 +3513,89 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:         "failing resolution via federated ID token",
+			name:         "fail-federated-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wantErrContains: "resolution failed",
 		},
 		{
-			name:         "empty client ID with ID token",
+			name:         "empty-client-id-with-token",
 			clientID:     "",
 			idToken:      "id-token-456",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
 		},
 		{
-			name:         "empty client ID with audience",
+			name:         "empty-client-id-with-audience",
 			clientID:     "",
 			audience:     "api.tailscale.com",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
 		},
 		{
-			name:         "empty ID token",
+			name:         "empty-id-token",
 			clientID:     "client-id-123",
 			idToken:      "",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "empty",
 		},
 		{
-			name:         "audience with ID token",
+			name:         "audience-with-id-token",
 			clientID:     "client-id-123",
 			idToken:      "id-token-456",
 			audience:     "api.tailscale.com",
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "only one of ID token and audience",
 		},
 		{
-			name:           "workload identity resolution skipped if resolution via OAuth token succeeds",
+			name:           "wif-skipped-oauth-succeeds",
 			clientSecret:   "tskey-client-secret-123",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
-				if clientSecret != "tskey-client-secret-123" {
-					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
+				if args.AuthKey != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", args.AuthKey)
 				}
 				return "tskey-auth-via-oauth", nil
 			},
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantAuthKey:     "tskey-auth-via-oauth",
 			wantErrContains: "",
 		},
 		{
-			name:           "workload identity resolution skipped if resolution via OAuth token fails",
+			name:           "wif-skipped-oauth-fails",
 			clientID:       "tskey-client-id-123",
 			idToken:        "",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wifAvailable: true,
-			resolveViaWIF: func(ctx context.Context, baseURL, clientID, idToken, audience string, tags []string) (string, error) {
+			resolveViaWIF: func(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (string, error) {
 				return "", fmt.Errorf("should not be called")
 			},
 			wantErrContains: "failed",
 		},
 		{
-			name:            "authkey set and no resolution available",
+			name:            "authkey-set-no-resolution",
 			authKey:         "tskey-auth-123",
 			oauthAvailable:  false,
 			wifAvailable:    false,
@@ -3079,19 +3603,19 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:            "no authkey set and no resolution available",
+			name:            "no-authkey-no-resolution",
 			oauthAvailable:  false,
 			wifAvailable:    false,
 			wantAuthKey:     "",
 			wantErrContains: "",
 		},
 		{
-			name:           "authkey is client secret and resolution via OAuth client secret succeeds",
+			name:           "authkey-client-secret-oauth-succeeds",
 			authKey:        "tskey-client-secret-123",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
-				if clientSecret != "tskey-client-secret-123" {
-					return "", fmt.Errorf("unexpected client secret: %s", clientSecret)
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
+				if args.AuthKey != "tskey-client-secret-123" {
+					return "", fmt.Errorf("unexpected client secret: %s", args.AuthKey)
 				}
 				return "tskey-auth-via-oauth", nil
 			},
@@ -3099,10 +3623,10 @@ func TestResolveAuthKey(t *testing.T) {
 			wantErrContains: "",
 		},
 		{
-			name:           "authkey is client secret but resolution via OAuth client secret fails",
+			name:           "authkey-client-secret-oauth-fails",
 			authKey:        "tskey-client-secret-123",
 			oauthAvailable: true,
-			resolveViaOAuth: func(ctx context.Context, clientSecret string, tags []string) (string, error) {
+			resolveViaOAuth: func(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (string, error) {
 				return "", fmt.Errorf("resolution failed")
 			},
 			wantErrContains: "resolution failed",
@@ -3159,7 +3683,6 @@ func TestResolveAuthKey(t *testing.T) {
 // packets were sent to WireGuard (which has no peer for the node's own IP)
 // and silently dropped, causing Dial to hang indefinitely.
 func TestSelfDial(t *testing.T) {
-	tstest.Shard(t)
 	tstest.ResourceCheck(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -3282,12 +3805,12 @@ func TestListenUnspecifiedAddr(t *testing.T) {
 
 	t.Run("Netstack", func(t *testing.T) {
 		lt := setupTwoClientTest(t, false)
-		t.Run("0.0.0.0", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
+		t.Run("v4-unspec", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
 		t.Run("::", func(t *testing.T) { testUnspec(t, lt, "[::]:8081", "8081") })
 	})
 	t.Run("TUN", func(t *testing.T) {
 		lt := setupTwoClientTest(t, true)
-		t.Run("0.0.0.0", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
+		t.Run("v4-unspec", func(t *testing.T) { testUnspec(t, lt, "0.0.0.0:8080", "8080") })
 		t.Run("::", func(t *testing.T) { testUnspec(t, lt, "[::]:8081", "8081") })
 	})
 }

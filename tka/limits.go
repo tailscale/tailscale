@@ -3,11 +3,15 @@
 
 package tka
 
+import (
+	"time"
+)
+
 const (
 	// Upper bound on checkpoint elements, chosen arbitrarily. Intended
 	// to cap the size of large AUMs.
-	maxDisablementSecrets = 32
-	maxKeys               = 512
+	maxDisablementValues = 32
+	maxKeys              = 512
 
 	// Max amount of metadata that can be associated with a key, chosen arbitrarily.
 	// Intended to avoid people abusing TKA as a key-value score.
@@ -17,8 +21,15 @@ const (
 	maxSyncIter = 2000
 
 	// Max iterations searching for a head intersection during the sync process.
-	maxSyncHeadIntersectionIter = 400
+	maxSyncHeadIntersectionIter = 1000
 
 	// Limit on scanning AUM trees, chosen arbitrarily.
 	maxScanIterations = 2000
+)
+
+var (
+	CompactionDefaults = CompactionOptions{
+		MinChain: 24,                  // Keep at minimum 24 AUMs since head.
+		MinAge:   14 * 24 * time.Hour, // Keep 2 weeks of AUMs.
+	}
 )

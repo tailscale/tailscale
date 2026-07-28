@@ -36,6 +36,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
@@ -1210,7 +1211,7 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode, isPr
 var httpOrFileClient = &http.Client{Transport: httpOrFileTransport()}
 
 func httpOrFileTransport() http.RoundTripper {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr := netutil.NewDefaultTransport()
 	tr.RegisterProtocol("file", http.NewFileTransport(http.Dir("/")))
 	return tr
 }

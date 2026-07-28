@@ -10,6 +10,6 @@ package tsconst
 const WintunInterfaceDesc = "Tailscale Tunnel"
 const WintunInterfaceDesc0_14 = "Wintun Userspace Tunnel"
 
-// TailnetLockNotTrustedMsg is the error message used by network lock
+// TailnetLockNotTrustedMsg is the error message used by tailnet lock
 // and sniffed (via substring) out of an error sent over the network.
-const TailnetLockNotTrustedMsg = "this node is not trusted by network lock"
+const TailnetLockNotTrustedMsg = "this node is not trusted by Tailnet Lock"

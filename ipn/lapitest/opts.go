@@ -66,7 +66,7 @@ func (o *options) Sys() *tsd.System {
 
 // Backend returns the [ipnlocal.LocalBackend] to be used by the server.
 // If a backend is provided via [WithBackend], it is used as-is.
-// Otherwise, a new backend is created with the the [options] in o.
+// Otherwise, a new backend is created with the [options] in o.
 func (o *options) Backend() *ipnlocal.LocalBackend {
 	return o.backend.Get(func() *ipnlocal.LocalBackend { return newBackend(o) })
 }

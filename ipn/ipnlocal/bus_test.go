@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -29,7 +30,13 @@ func TestIsNotableNotify(t *testing.T) {
 		{"empty", &ipn.Notify{}, false},
 		{"version", &ipn.Notify{Version: "foo"}, false},
 		{"netmap", &ipn.Notify{NetMap: new(netmap.NetworkMap)}, false},
+		{"peerchanges", &ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{}}}, true},
+		{"peerschanged", &ipn.Notify{PeersChanged: []*tailcfg.Node{{}}}, true},
+		{"peersremoved", &ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, true},
+		{"userprofiles", &ipn.Notify{UserProfiles: map[tailcfg.UserID]tailcfg.UserProfileView{1: (&tailcfg.UserProfile{}).View()}}, true},
 		{"engine", &ipn.Notify{Engine: new(ipn.EngineStatus)}, false},
+		{"peerstate", &ipn.Notify{PeerState: map[tailcfg.StableNodeID]ipn.PeerState{"a": {PeerWireGuardState: ipn.PeerWireGuardStateHandshake}}}, true},
+		{"selfchange", &ipn.Notify{SelfChange: &tailcfg.Node{}}, true},
 	}
 
 	// Then for all other fields, assume they're notable.
@@ -39,7 +46,7 @@ func TestIsNotableNotify(t *testing.T) {
 	for sf := range rt.Fields() {
 		n := &ipn.Notify{}
 		switch sf.Name {
-		case "_", "NetMap", "Engine", "Version":
+		case "_", "NetMap", "PeerChangedPatch", "SelfChange", "PeersChanged", "PeersRemoved", "UserProfiles", "Engine", "PeerState", "Version":
 			// Already covered above or not applicable.
 			continue
 		case "DriveShares":
@@ -120,18 +127,18 @@ func (st *rateLimitingBusSenderTester) advance(d time.Duration) {
 }
 
 func TestRateLimitingBusSender(t *testing.T) {
-	nm1 := &ipn.Notify{NetMap: new(netmap.NetworkMap)}
-	nm2 := &ipn.Notify{NetMap: new(netmap.NetworkMap)}
+	ver1 := &ipn.Notify{Version: "1"}
+	ver2 := &ipn.Notify{Version: "2"}
 	eng1 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 	eng2 := &ipn.Notify{Engine: new(ipn.EngineStatus)}
 
 	t.Run("unbuffered", func(t *testing.T) {
 		st := &rateLimitingBusSenderTester{tb: t}
-		st.send(nm1)
-		st.send(nm2)
+		st.send(ver1)
+		st.send(ver2)
 		st.send(eng1)
 		st.send(eng2)
-		if !slices.Equal(st.got, []*ipn.Notify{nm1, nm2, eng1, eng2}) {
+		if !slices.Equal(st.got, []*ipn.Notify{ver1, ver2, eng1, eng2}) {
 			t.Errorf("got %d items; want 4 specific ones, unmodified", len(st.got))
 		}
 	})
@@ -144,8 +151,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 		if len(st.got) != 1 {
 			t.Fatalf("got %d items; expected 1 (first to flush immediately)", len(st.got))
 		}
-		st.send(nm1)
-		st.send(nm2)
+		st.send(ver1)
+		st.send(ver2)
 		st.send(eng1)
 		st.send(eng2)
 		if len(st.got) != 1 {
@@ -160,8 +167,8 @@ func TestRateLimitingBusSender(t *testing.T) {
 			t.Fatalf("got %d items; want 2", len(st.got))
 		}
 		gotn := st.got[1]
-		if gotn.NetMap != nm2.NetMap {
-			t.Errorf("got wrong NetMap; got %p", gotn.NetMap)
+		if gotn.Version != ver1.Version {
+			t.Errorf("got wrong Version; got %q want %q", gotn.Version, ver1.Version)
 		}
 		if gotn.Engine != eng2.Engine {
 			t.Errorf("got wrong Engine; got %p", gotn.Engine)
@@ -198,15 +205,18 @@ func TestRateLimitingBusSender(t *testing.T) {
 
 		incoming := make(chan *ipn.Notify, 2)
 		go func() {
-			incoming <- nm1
+			incoming <- ver1
 			waitSend()
-			incoming <- nm2
+			incoming <- eng2
 			waitSend()
 			st.advance(5 * time.Second)
 			select {
 			case n := <-flushc:
-				if n.NetMap != nm2.NetMap {
-					t.Errorf("got wrong NetMap; got %p", n.NetMap)
+				if n.Version != ver1.Version {
+					t.Errorf("got wrong Version; got %q want %q", n.Version, ver1.Version)
+				}
+				if n.Engine != eng2.Engine {
+					t.Errorf("got wrong Engine; got %p", n.Engine)
 				}
 			case <-time.After(10 * time.Second):
 				t.Error("timeout")
@@ -215,5 +225,105 @@ func TestRateLimitingBusSender(t *testing.T) {
 		}()
 
 		st.s.Run(ctx, incoming)
+	})
+}
+
+func TestMergePeerChangedPatch(t *testing.T) {
+	online := true
+	offline := false
+
+	t.Run("no_overlap_appends", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 2, DERPRegion: 2},
+		}
+		got := mergePeerChangedPatch(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2", len(got))
+		}
+		if got[0].NodeID != 1 || got[1].NodeID != 2 {
+			t.Errorf("got NodeIDs %d, %d; want 1, 2", got[0].NodeID, got[1].NodeID)
+		}
+	})
+
+	t.Run("overlap_merges", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1, Online: &online},
+			{NodeID: 2, DERPRegion: 10},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 5, Online: &offline},
+		}
+		got := mergePeerChangedPatch(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2 (merged, not appended)", len(got))
+		}
+		if got[0].DERPRegion != 5 {
+			t.Errorf("DERPRegion = %d; want 5 (from new)", got[0].DERPRegion)
+		}
+		if *got[0].Online != false {
+			t.Errorf("Online = %v; want false (from new)", *got[0].Online)
+		}
+		// Node 2 should be untouched.
+		if got[1].NodeID != 2 || got[1].DERPRegion != 10 {
+			t.Errorf("node 2 was modified unexpectedly")
+		}
+	})
+
+	t.Run("partial_overlap_merges_and_appends", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 2},
+			{NodeID: 3, DERPRegion: 30},
+		}
+		got := mergePeerChangedPatch(old, new)
+		if len(got) != 2 {
+			t.Fatalf("len = %d; want 2", len(got))
+		}
+		if got[0].NodeID != 1 || got[0].DERPRegion != 2 {
+			t.Errorf("node 1: DERPRegion = %d; want 2", got[0].DERPRegion)
+		}
+		if got[1].NodeID != 3 || got[1].DERPRegion != 30 {
+			t.Errorf("node 3: DERPRegion = %d; want 30", got[1].DERPRegion)
+		}
+	})
+
+	t.Run("preserves_old_fields_on_merge", func(t *testing.T) {
+		old := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1, Online: &online, Cap: 10},
+		}
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, Online: &offline},
+		}
+		got := mergePeerChangedPatch(old, new)
+		if len(got) != 1 {
+			t.Fatalf("len = %d; want 1", len(got))
+		}
+		if got[0].DERPRegion != 1 {
+			t.Errorf("DERPRegion = %d; want 1 (preserved from old)", got[0].DERPRegion)
+		}
+		if got[0].Cap != 10 {
+			t.Errorf("Cap = %d; want 10 (preserved from old)", got[0].Cap)
+		}
+		if *got[0].Online != false {
+			t.Errorf("Online = %v; want false (from new)", *got[0].Online)
+		}
+	})
+
+	t.Run("nil_old", func(t *testing.T) {
+		new := []*tailcfg.PeerChange{
+			{NodeID: 1, DERPRegion: 1},
+		}
+		got := mergePeerChangedPatch(nil, new)
+		if len(got) != 1 {
+			t.Fatalf("len = %d; want 1", len(got))
+		}
+		if got[0].NodeID != 1 {
+			t.Errorf("NodeID = %d; want 1", got[0].NodeID)
+		}
 	})
 }

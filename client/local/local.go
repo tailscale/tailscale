@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package local contains a Go client for the Tailscale LocalAPI.
+//
+// The APIs in this package vary in maturity: some methods are considered
+// stable APIs and are documented as such, while others are not necessarily
+// stable and are subject to change between releases. Methods without an
+// explicit "API maturity" note in their documentation should be assumed
+// to be unstable.
 package local
 
 import (
@@ -135,6 +141,9 @@ func (lc *Client) defaultDialer(ctx context.Context, network, addr string) (net.
 // authenticating to the local Tailscale daemon vary by platform.
 //
 // DoLocalRequest may mutate the request to add Authorization headers.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DoLocalRequest(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
 	lc.tsClientOnce.Do(func() {
@@ -280,7 +289,7 @@ func (lc *Client) sendWithHeaders(
 	}
 	if res.StatusCode != wantStatus {
 		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
-		return nil, nil, httpStatusError{bestError(err, slurp), res.StatusCode}
+		return nil, nil, httpStatusError{bestError(err, slurp), res.StatusCode, res.Header}
 	}
 	return slurp, res.Header, nil
 }
@@ -288,6 +297,7 @@ func (lc *Client) sendWithHeaders(
 type httpStatusError struct {
 	error
 	HTTPStatus int
+	Header     http.Header
 }
 
 func (lc *Client) get200(ctx context.Context, path string) ([]byte, error) {
@@ -316,8 +326,43 @@ func decodeJSON[T any](b []byte) (ret T, err error) {
 // For connections proxied by tailscaled, this looks up the owner of the given
 // address as TCP first, falling back to UDP; if you want to only check a
 // specific address family, use WhoIsProto.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
+// WhoIsForService is like [Client.WhoIs] but scopes the returned CapMap to
+// capabilities that apply to the named VIP service. This enables per-service
+// capability resolution on hosts that advertise multiple VIP services.
+//
+// API maturity: this is considered a stable API.
+func (lc *Client) WhoIsForService(ctx context.Context, remoteAddr string, svcName tailcfg.ServiceName) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr)+"&svc_name="+url.QueryEscape(string(svcName)))
+	if err != nil {
+		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
+			return nil, ErrPeerNotFound
+		}
+		return nil, err
+	}
+	return decodeJSON[*apitype.WhoIsResponse](body)
+}
+
+// WhoIsForIP is like [Client.WhoIs] but scopes the returned CapMap to
+// capabilities that apply to the given destination IP. The IP may be a
+// VIP service address, the node's own tailnet address, or any other
+// routable IP the node handles.
+//
+// API maturity: this is considered a stable API.
+func (lc *Client) WhoIsForIP(ctx context.Context, remoteAddr string, dst netip.Addr) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr)+"&dst_ip="+url.QueryEscape(dst.String()))
 	if err != nil {
 		if hs, ok := err.(httpStatusError); ok && hs.HTTPStatus == http.StatusNotFound {
 			return nil, ErrPeerNotFound
@@ -334,6 +379,8 @@ var ErrPeerNotFound = errors.New("peer not found")
 // WhoIsNodeKey returns the owner of the given wireguard public key.
 //
 // If not found, the error is ErrPeerNotFound.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) WhoIsNodeKey(ctx context.Context, key key.NodePublic) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(key.String()))
 	if err != nil {
@@ -349,6 +396,8 @@ func (lc *Client) WhoIsNodeKey(ctx context.Context, key key.NodePublic) (*apityp
 // IP:port, for the given protocol (tcp or udp).
 //
 // If not found, the error is [ErrPeerNotFound].
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) WhoIsProto(ctx context.Context, proto, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?proto="+url.QueryEscape(proto)+"&addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
@@ -425,6 +474,9 @@ func (lc *Client) SetGauge(ctx context.Context, name string, value int) error {
 
 // TailDaemonLogs returns a stream the Tailscale daemon's logs as they arrive.
 // Close the context to stop the stream.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) TailDaemonLogs(ctx context.Context) (io.Reader, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+apitype.LocalAPIHost+"/localapi/v0/logtap", nil)
 	if err != nil {
@@ -441,12 +493,18 @@ func (lc *Client) TailDaemonLogs(ctx context.Context) (io.Reader, error) {
 }
 
 // EventBusGraph returns a graph of active publishers and subscribers in the eventbus
-// as a [eventbus.DebugTopics]
+// as a [eventbus.DebugTopics].
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) EventBusGraph(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/debug-bus-graph")
 }
 
 // EventBusQueues returns a JSON snapshot of event bus queue depths per client.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) EventBusQueues(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/debug-bus-queues")
 }
@@ -455,6 +513,9 @@ func (lc *Client) EventBusQueues(ctx context.Context) ([]byte, error) {
 // Each pair is a valid event and a nil error, or a zero event a non-nil error.
 // In case of error, the iterator ends after the pair reporting the error.
 // Iteration stops if ctx ends.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) StreamBusEvents(ctx context.Context) iter.Seq2[eventbus.DebugEvent, error] {
 	return func(yield func(eventbus.DebugEvent, error) bool) {
 		req, err := http.NewRequestWithContext(ctx, "GET",
@@ -523,6 +584,8 @@ type BugReportOpts struct {
 //
 // The opts type specifies options to pass to the Tailscale daemon when
 // generating this bug report.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) BugReportWithOpts(ctx context.Context, opts BugReportOpts) (string, error) {
 	qparams := make(url.Values)
 	if opts.Note != "" {
@@ -568,12 +631,17 @@ func (lc *Client) BugReportWithOpts(ctx context.Context, opts BugReportOpts) (st
 //
 // This is the same as calling [Client.BugReportWithOpts] and only specifying the Note
 // field.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) BugReport(ctx context.Context, note string) (string, error) {
 	return lc.BugReportWithOpts(ctx, BugReportOpts{Note: note})
 }
 
 // DebugAction invokes a debug action, such as "rebind" or "restun".
-// These are development tools and subject to change or removal over time.
+// These are development tools.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change or removal between releases.
 func (lc *Client) DebugAction(ctx context.Context, action string) error {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
 	if err != nil {
@@ -584,7 +652,10 @@ func (lc *Client) DebugAction(ctx context.Context, action string) error {
 
 // DebugActionBody invokes a debug action with a body parameter, such as
 // "debug-force-prefer-derp".
-// These are development tools and subject to change or removal over time.
+// These are development tools.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change or removal between releases.
 func (lc *Client) DebugActionBody(ctx context.Context, action string, rbody io.Reader) error {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, rbody)
 	if err != nil {
@@ -594,7 +665,10 @@ func (lc *Client) DebugActionBody(ctx context.Context, action string, rbody io.R
 }
 
 // DebugResultJSON invokes a debug action and returns its result as something JSON-able.
-// These are development tools and subject to change or removal over time.
+// These are development tools.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change or removal between releases.
 func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
 	if err != nil {
@@ -605,6 +679,27 @@ func (lc *Client) DebugResultJSON(ctx context.Context, action string) (any, erro
 		return nil, err
 	}
 	return x, nil
+}
+
+// GetDebugResultJSON invokes a debug action and decodes the JSON response
+// into a value of type T. It avoids the marshal/unmarshal roundtrip that
+// callers of [Client.DebugResultJSON] otherwise need to do to get a typed
+// value.
+//
+// These are development tools.
+//
+// API maturity: this function is not considered a stable API and is
+// subject to change or removal between releases.
+func GetDebugResultJSON[T any](ctx context.Context, lc *Client, action string) (T, error) {
+	var v T
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return v, fmt.Errorf("error %w: %s", err, body)
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return v, err
+	}
+	return v, nil
 }
 
 // QueryOptionalFeatures queries the optional features supported by the Tailscale daemon.
@@ -636,6 +731,9 @@ func (lc *Client) SetDevStoreKeyValue(ctx context.Context, key, value string) er
 // SetComponentDebugLogging sets component's debug logging enabled for
 // the provided duration. If the duration is in the past, the debug logging
 // is disabled.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) SetComponentDebugLogging(ctx context.Context, component string, d time.Duration) error {
 	if !buildfeatures.HasDebug {
 		return feature.ErrUnavailable
@@ -664,6 +762,8 @@ func Status(ctx context.Context) (*ipnstate.Status, error) {
 }
 
 // Status returns the Tailscale daemon's status.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) Status(ctx context.Context) (*ipnstate.Status, error) {
 	return lc.status(ctx, "")
 }
@@ -674,6 +774,8 @@ func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 }
 
 // StatusWithoutPeers returns the Tailscale daemon's status, without the peer info.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 	return lc.status(ctx, "?peers=false")
 }
@@ -778,6 +880,9 @@ func (lc *Client) PushFile(ctx context.Context, target tailcfg.StableNodeID, siz
 // CheckIPForwarding asks the local Tailscale daemon whether it looks like the
 // machine is properly configured to forward IP packets as a subnet router
 // or exit node.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) CheckIPForwarding(ctx context.Context) error {
 	if !buildfeatures.HasAdvertiseRoutes {
 		return nil
@@ -801,6 +906,9 @@ func (lc *Client) CheckIPForwarding(ctx context.Context) error {
 // CheckUDPGROForwarding asks the local Tailscale daemon whether it looks like
 // the machine is optimally configured to forward UDP packets as a subnet router
 // or exit node.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) CheckUDPGROForwarding(ctx context.Context) error {
 	body, err := lc.get200(ctx, "/localapi/v0/check-udp-gro-forwarding")
 	if err != nil {
@@ -850,6 +958,9 @@ func (lc *Client) CheckPrefs(ctx context.Context, p *ipn.Prefs) error {
 	return err
 }
 
+// GetPrefs returns the [ipn.Prefs] of the current Tailscale profile.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/prefs")
 	if err != nil {
@@ -867,6 +978,8 @@ func (lc *Client) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 // or a policy restriction. An optional reason or justification for the request can be
 // provided as a context value using [apitype.RequestReasonKey]. If permitted by policy,
 // access may be granted, and the reason will be logged for auditing purposes.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, jsonBody(mp))
 	if err != nil {
@@ -877,6 +990,9 @@ func (lc *Client) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Pref
 
 // GetDNSOSConfig returns the system DNS configuration for the current device.
 // That is, it returns the DNS configuration that the system would use if Tailscale weren't being used.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) GetDNSOSConfig(ctx context.Context) (*apitype.DNSOSConfig, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
@@ -910,7 +1026,26 @@ func (lc *Client) QueryDNS(ctx context.Context, name string, queryType string) (
 	return res.Bytes, res.Resolvers, nil
 }
 
-// StartLoginInteractive starts an interactive login.
+// StartLoginInteractive starts an interactive login, requesting a new
+// auth URL from the control plane if a login flow is not already in
+// progress. If one is, the existing auth URL is re-sent.
+//
+// The auth URL is not returned by this method; it is delivered
+// asynchronously to IPN bus watchers (see [Client.WatchIPNBus]) as an
+// [ipn.Notify] with a non-empty BrowseToURL field. StartLoginInteractive
+// returns as soon as the login has been requested; it does not wait for
+// the login to complete.
+//
+// Calling StartLoginInteractive does not itself change the node's
+// desired run state, but successfully completing the login does: the
+// node's WantRunning pref is set to true, so a stopped node
+// ("tailscale down") starts once the login finishes. If the login is
+// completed as a different user or node identity than the current
+// profile's, the node switches to an existing profile matching the new
+// identity if one exists, or else updates the current profile to the
+// new identity.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) StartLoginInteractive(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/login-interactive", http.StatusNoContent, nil)
 	return err
@@ -935,6 +1070,8 @@ func (lc *Client) Logout(ctx context.Context) error {
 // tailscaled), a FQDN, or an IP address.
 //
 // The ctx is only used for the duration of the call, not the lifetime of the [net.Conn].
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
 	return lc.UserDial(ctx, "tcp", host, port)
 }
@@ -946,6 +1083,8 @@ func (lc *Client) DialTCP(ctx context.Context, host string, port uint16) (net.Co
 //
 // The ctx is only used for the duration of the call, not the lifetime of the
 // [net.Conn].
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) UserDial(ctx context.Context, network, host string, port uint16) (net.Conn, error) {
 	connCh := make(chan net.Conn, 1)
 	trace := httptrace.ClientTrace{
@@ -972,6 +1111,19 @@ func (lc *Client) UserDial(ctx context.Context, network, host string, port uint1
 	if res.StatusCode != http.StatusSwitchingProtocols {
 		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
+		if res.StatusCode == http.StatusOK && res.Header.Get("Dial-Self") == "true" {
+			// Server told us to dial the address ourselves rather than
+			// proxying through the daemon. This happens for non-Tailscale
+			// addresses where the daemon shouldn't dial as root on the
+			// client's behalf. The server provides the resolved address
+			// to avoid a TOCTOU race with DNS re-resolution.
+			addr := res.Header.Get("Dial-Addr")
+			if addr == "" {
+				return nil, errors.New("server returned Dial-Self without Dial-Addr")
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}
 		return nil, fmt.Errorf("unexpected HTTP response: %s, %s", res.Status, body)
 	}
 	// From here on, the underlying net.Conn is ours to use, but there
@@ -997,6 +1149,10 @@ func (lc *Client) UserDial(ctx context.Context, network, host string, port uint1
 
 // CurrentDERPMap returns the current DERPMap that is being used by the local tailscaled.
 // It is intended to be used with netcheck to see availability of DERPs.
+//
+// API maturity: this is considered a stable API, though the returned
+// [tailcfg.DERPMap] type is subject to minor changes over time; its
+// general shape is stable.
 func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
 	var derpMap tailcfg.DERPMap
 	res, err := lc.send(ctx, "GET", "/localapi/v0/derpmap", 200, nil)
@@ -1007,6 +1163,66 @@ func (lc *Client) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) 
 		return nil, fmt.Errorf("invalid derp map json: %w", err)
 	}
 	return &derpMap, nil
+}
+
+// CertDomains returns the list of domains for which the local tailscaled can
+// fetch TLS certificates, equivalent to the DNS.CertDomains field of the
+// current netmap. The returned list is sorted in ascending order, and is
+// empty if no netmap has been received yet.
+//
+// API maturity: this is considered a stable API.
+func (lc *Client) CertDomains(ctx context.Context) ([]string, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/cert-domains")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[[]string](body)
+}
+
+// DNSConfig returns the [tailcfg.DNSConfig] from the current netmap.
+// It returns an error if no netmap has been received yet.
+// It is intended for callers that need fields like ExtraRecords or CertDomains
+// without pulling the rest of the netmap.
+func (lc *Client) DNSConfig(ctx context.Context) (*tailcfg.DNSConfig, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/dns-config")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*tailcfg.DNSConfig](body)
+}
+
+// PeerByID returns a peer's current full [tailcfg.Node] looked up by its
+// [tailcfg.NodeID]. It returns an error if no peer with that NodeID is in the
+// current netmap.
+//
+// It is intended for callers that observed a peer-mutation signal (e.g.
+// [ipn.Notify.PeerChangedPatch] or [ipn.Notify.PeersChanged]) and want the
+// latest state of the affected node without having to apply the patch
+// themselves.
+func (lc *Client) PeerByID(ctx context.Context, id tailcfg.NodeID) (*tailcfg.Node, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/peer-by-id?id="+strconv.FormatInt(int64(id), 10))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*tailcfg.Node](body)
+}
+
+// UserProfile returns the current [tailcfg.UserProfile] for the given
+// [tailcfg.UserID]. It returns an error if no user with that UserID is in the
+// current netmap.
+//
+// It is the LocalAPI fallback for IPN-bus consumers that see a UserID
+// referenced by a peer Node and want to resolve it to a UserProfile. Sessions
+// opted in to [ipn.NotifyPeerChanges] / [ipn.NotifyPeerPatches] also receive
+// UserProfiles automatically via [ipn.Notify.UserProfiles].
+//
+// API maturity: this is considered a stable API.
+func (lc *Client) UserProfile(ctx context.Context, id tailcfg.UserID) (*tailcfg.UserProfile, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/user-profile?id="+strconv.FormatInt(int64(id), 10))
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*tailcfg.UserProfile](body)
 }
 
 // PingOpts contains options for the ping request.
@@ -1045,6 +1261,8 @@ func (lc *Client) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.Ping
 // DisconnectControl shuts down all connections to control, thus making control consider this node inactive. This can be
 // run on HA subnet router or app connector replicas before shutting them down to ensure peers get told to switch over
 // to another replica whilst there is still some grace period for the existing connections to terminate.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) DisconnectControl(ctx context.Context) error {
 	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/disconnect-control", 200, nil, nil)
 	if err != nil {
@@ -1140,13 +1358,18 @@ func (lc *Client) ReloadConfig(ctx context.Context) (ok bool, err error) {
 
 // SwitchToEmptyProfile creates and switches to a new unnamed profile. The new
 // profile is not assigned an ID until it is persisted after a successful login.
-// In order to login to the new profile, the user must call LoginInteractive.
+// In order to login to the new profile, the user must call
+// [Client.StartLoginInteractive].
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) SwitchToEmptyProfile(ctx context.Context) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/profiles/", http.StatusCreated, nil)
 	return err
 }
 
 // SwitchProfile switches to the given profile.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) SwitchProfile(ctx context.Context, profile ipn.ProfileID) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/profiles/"+url.PathEscape(string(profile)), 204, nil)
 	return err
@@ -1181,6 +1404,11 @@ func (lc *Client) QueryFeature(ctx context.Context, feature string) (*tailcfg.Qu
 	return decodeJSON[*tailcfg.QueryFeatureResponse](body)
 }
 
+// DebugDERPRegion reports diagnostic information about the DERP region with
+// the given ID or code.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DebugDERPRegion(ctx context.Context, regionIDOrCode string) (*ipnstate.DebugDERPRegionReport, error) {
 	v := url.Values{"region": {regionIDOrCode}}
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-derp-region?"+v.Encode(), 200, nil)
@@ -1191,6 +1419,9 @@ func (lc *Client) DebugDERPRegion(ctx context.Context, regionIDOrCode string) (*
 }
 
 // DebugPacketFilterRules returns the packet filter rules for the current device.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DebugPacketFilterRules(ctx context.Context) ([]tailcfg.FilterRule, error) {
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-packet-filter-rules", 200, nil)
 	if err != nil {
@@ -1202,6 +1433,9 @@ func (lc *Client) DebugPacketFilterRules(ctx context.Context) ([]tailcfg.FilterR
 // DebugSetExpireIn marks the current node key to expire in d.
 //
 // This is meant primarily for debug and testing.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 	v := url.Values{"expiry": {fmt.Sprint(time.Now().Add(d).Unix())}}
 	_, err := lc.send(ctx, "POST", "/localapi/v0/set-expiry-sooner?"+v.Encode(), 200, nil)
@@ -1210,6 +1444,9 @@ func (lc *Client) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
 
 // DebugPeerRelaySessions returns debug information about the current peer
 // relay sessions running through this node.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerStatus, error) {
 	body, err := lc.send(ctx, "GET", "/localapi/v0/debug-peer-relay-sessions", 200, nil)
 	if err != nil {
@@ -1222,6 +1459,9 @@ func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerSta
 //
 // The provided context does not determine the lifetime of the
 // returned [io.ReadCloser].
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-capture", nil)
 	if err != nil {
@@ -1248,9 +1488,16 @@ func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error)
 // resources.
 //
 // A default set of ipn.Notify messages are returned but the set can be modified by mask.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IPNBusWatcher, error) {
+	m, err := mask.MarshalText()
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+fmt.Sprint(mask),
+		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+string(m),
 		nil)
 	if err != nil {
 		return nil, err
@@ -1274,6 +1521,8 @@ func (lc *Client) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IP
 // CheckUpdate returns a [*tailcfg.ClientVersion] indicating whether or not an update is available
 // to be installed via the LocalAPI. In case the LocalAPI can't install updates, it returns a
 // ClientVersion that says that we are up to date.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/update/check")
 	if err != nil {
@@ -1290,6 +1539,8 @@ func (lc *Client) CheckUpdate(ctx context.Context) (*tailcfg.ClientVersion, erro
 // To turn it on, there must have been a previously used exit node.
 // The most previously used one is reused.
 // This is a convenience method for GUIs. To select an actual one, update the prefs.
+//
+// API maturity: this is considered a stable API.
 func (lc *Client) SetUseExitNode(ctx context.Context, on bool) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/set-use-exit-node-enabled?enabled="+strconv.FormatBool(on), http.StatusOK, nil)
 	return err
@@ -1298,6 +1549,9 @@ func (lc *Client) SetUseExitNode(ctx context.Context, on bool) error {
 // DriveSetServerAddr instructs Taildrive to use the server at addr to access
 // the filesystem. This is used on platforms like Windows and MacOS to let
 // Taildrive know to use the file server running in the GUI app.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DriveSetServerAddr(ctx context.Context, addr string) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/drive/fileserver-address", http.StatusCreated, strings.NewReader(addr))
 	return err
@@ -1306,6 +1560,9 @@ func (lc *Client) DriveSetServerAddr(ctx context.Context, addr string) error {
 // DriveShareSet adds or updates the given share in the list of shares that
 // Taildrive will serve to remote nodes. If a share with the same name already
 // exists, the existing share is replaced/updated.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DriveShareSet(ctx context.Context, share *drive.Share) error {
 	_, err := lc.send(ctx, "PUT", "/localapi/v0/drive/shares", http.StatusCreated, jsonBody(share))
 	return err
@@ -1313,6 +1570,9 @@ func (lc *Client) DriveShareSet(ctx context.Context, share *drive.Share) error {
 
 // DriveShareRemove removes the share with the given name from the list of
 // shares that Taildrive will serve to remote nodes.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DriveShareRemove(ctx context.Context, name string) error {
 	_, err := lc.send(
 		ctx,
@@ -1324,6 +1584,9 @@ func (lc *Client) DriveShareRemove(ctx context.Context, name string) error {
 }
 
 // DriveShareRename renames the share from old to new name.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DriveShareRename(ctx context.Context, oldName, newName string) error {
 	_, err := lc.send(
 		ctx,
@@ -1336,6 +1599,9 @@ func (lc *Client) DriveShareRename(ctx context.Context, oldName, newName string)
 
 // DriveShareList returns the list of shares that drive is currently serving
 // to remote nodes.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) DriveShareList(ctx context.Context) ([]*drive.Share, error) {
 	result, err := lc.get200(ctx, "/localapi/v0/drive/shares")
 	if err != nil {
@@ -1392,8 +1658,25 @@ func (lc *Client) SuggestExitNode(ctx context.Context) (apitype.ExitNodeSuggesti
 	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
 }
 
+// SuggestExitNodeWithProbe requests an exit node suggestion based on an immediate routecheck probe,
+// waits for the probe to finish, and returns the exit node's details.
+func (lc *Client) SuggestExitNodeWithProbe(ctx context.Context) (apitype.ExitNodeSuggestionResponse, error) {
+	if !buildfeatures.HasRouteCheck {
+		return apitype.ExitNodeSuggestionResponse{}, feature.ErrUnavailable
+	}
+	v := url.Values{"probe": {"true"}}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/suggest-exit-node?"+v.Encode(), 200, nil)
+	if err != nil {
+		return apitype.ExitNodeSuggestionResponse{}, err
+	}
+	return decodeJSON[apitype.ExitNodeSuggestionResponse](body)
+}
+
 // CheckSOMarkInUse reports whether the socket mark option is in use. This will only
 // be true if tailscale is running on Linux and tailscaled uses SO_MARK.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) CheckSOMarkInUse(ctx context.Context) (bool, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/check-so-mark-in-use")
 	if err != nil {
@@ -1410,15 +1693,33 @@ func (lc *Client) CheckSOMarkInUse(ctx context.Context) (bool, error) {
 }
 
 // ShutdownTailscaled requests a graceful shutdown of tailscaled.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) ShutdownTailscaled(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/shutdown", 200, nil)
 	return err
 }
 
+// GetAppConnectorRouteInfo returns the current [appctype.RouteInfo] for this
+// node's app connector.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
 func (lc *Client) GetAppConnectorRouteInfo(ctx context.Context) (appctype.RouteInfo, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/appc-route-info")
 	if err != nil {
 		return appctype.RouteInfo{}, err
 	}
 	return decodeJSON[appctype.RouteInfo](body)
+}
+
+// GetServices returns the Services visible to this node,
+// including their names, IP addresses, and ports, keyed by service name.
+func (lc *Client) GetServices(ctx context.Context) (map[tailcfg.ServiceName]tailcfg.ServiceDetails, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/services")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[map[tailcfg.ServiceName]tailcfg.ServiceDetails](body)
 }

@@ -24,10 +24,23 @@ func TestUsedConsistently(t *testing.T) {
 		t.Skipf("skipping test since .git doesn't exist: %v", err)
 	}
 
+	// Open .git/index so Go's test cache tracks it as an input.
+	// The index file changes on git reset, checkout, pull, etc.,
+	// so the cache is properly invalidated when moving between commits.
+	if f, err := os.Open(filepath.Join(rootDir, ".git", "index")); err == nil {
+		f.Close()
+	}
+
 	cmd := exec.Command("git", "grep", "-l", "-F", "http.Method")
 	cmd.Dir = rootDir
 	matches, _ := cmd.Output()
 	for fn := range strings.SplitSeq(strings.TrimSpace(string(matches)), "\n") {
+		if strings.HasPrefix(fn, "tempfork/") {
+			// Files under tempfork are vendored copies of upstream
+			// code that we want to keep as close to upstream as
+			// possible, so don't hold them to this rule.
+			continue
+		}
 		switch fn {
 		case "util/httpm/httpm.go", "util/httpm/httpm_test.go":
 			continue

@@ -1,0 +1,31 @@
+=== RUN   TestSpawn
+--- PASS: TestSpawn (0.00s)
+=== RUN   TestWait
+==================
+WARNING: DATA RACE
+Read at 0x0000007f12a8 by goroutine 8:
+  racesurvey/C_spawnwait.TestSpawn.func1()
+      /tmp/racesurvey/C_spawnwait/c_test.go:13 +0x70
+
+Previous write at 0x0000007f12a8 by goroutine 9:
+  racesurvey/C_spawnwait.TestSpawn.func2()
+      /tmp/racesurvey/C_spawnwait/c_test.go:14 +0x88
+
+Goroutine 8 (running) created at:
+  racesurvey/C_spawnwait.TestSpawn()
+      /tmp/racesurvey/C_spawnwait/c_test.go:13 +0x34
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+
+Goroutine 9 (finished) created at:
+  racesurvey/C_spawnwait.TestSpawn()
+      /tmp/racesurvey/C_spawnwait/c_test.go:14 +0x44
+  testing.tRunner()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /home/ubuntu/sdk/go1.26.3/src/testing/testing.go:2101 +0x38
+==================
+--- PASS: TestWait (0.00s)
+FAIL

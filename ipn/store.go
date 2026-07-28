@@ -92,7 +92,9 @@ type StateStore interface {
 	// ReadState returns the bytes associated with ID. Returns (nil,
 	// ErrStateNotExist) if the ID doesn't have associated state.
 	ReadState(id StateKey) ([]byte, error)
-	// WriteState saves bs as the state associated with ID.
+	// WriteState saves bs as the state associated with ID. If bs is nil,
+	// the state associated with ID is deleted, and a subsequent ReadState
+	// for ID will return ErrStateNotExist.
 	//
 	// Callers should generally use the ipn.WriteState wrapper func
 	// instead, which only writes if the value is different from what's

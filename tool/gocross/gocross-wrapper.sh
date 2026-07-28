@@ -75,7 +75,7 @@ case "$REV" in
             # Go uses the name "amd64".
             HOST_ARCH="amd64"
         fi
-        curl -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${HOST_OS}-${HOST_ARCH}.tar.gz"
+        curl --retry 3 -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${HOST_OS}-${HOST_ARCH}.tar.gz"
         mkdir -p "$toolchain"
         (cd "$toolchain" && tar --strip-components=1 -xf "$toolchain.tar.gz")
         echo "$REV" >"$toolchain.extracted"

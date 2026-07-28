@@ -139,16 +139,26 @@ func (v ConfigView) SubdomainHosts() views.Map[dnsname.FQDN, struct{}] {
 
 // OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 // instead of the IPv4 version (100.100.100.100).
-func (v ConfigView) OnlyIPv6() bool           { return v.ж.OnlyIPv6 }
-func (v ConfigView) Equal(v2 ConfigView) bool { return v.ж.Equal(v2.ж) }
+func (v ConfigView) OnlyIPv6() bool { return v.ж.OnlyIPv6 }
+
+// MagicDNSHostsUnrouted is whether MagicDNS host records are
+// served on demand via [resolver.MagicDNSHosts] (so are not
+// listed in Hosts) without being covered by any Routes entry;
+// that is, MagicDNS domain routing is off. It preserves the
+// effect the node records had when they were listed in Hosts:
+// hasHostsWithoutSplitDNSRoutes reports true, keeping quad-100
+// in the OS resolver path so the names still resolve.
+func (v ConfigView) MagicDNSHostsUnrouted() bool { return v.ж.MagicDNSHostsUnrouted }
+func (v ConfigView) Equal(v2 ConfigView) bool    { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ConfigViewNeedsRegeneration = Config(struct {
-	AcceptDNS        bool
-	DefaultResolvers []*dnstype.Resolver
-	Routes           map[dnsname.FQDN][]*dnstype.Resolver
-	SearchDomains    []dnsname.FQDN
-	Hosts            map[dnsname.FQDN][]netip.Addr
-	SubdomainHosts   set.Set[dnsname.FQDN]
-	OnlyIPv6         bool
+	AcceptDNS             bool
+	DefaultResolvers      []*dnstype.Resolver
+	Routes                map[dnsname.FQDN][]*dnstype.Resolver
+	SearchDomains         []dnsname.FQDN
+	Hosts                 map[dnsname.FQDN][]netip.Addr
+	SubdomainHosts        set.Set[dnsname.FQDN]
+	OnlyIPv6              bool
+	MagicDNSHostsUnrouted bool
 }{})

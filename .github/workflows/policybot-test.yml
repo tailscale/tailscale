@@ -1,0 +1,45 @@
+name: policybot-test
+
+env:
+  HOME: ${{ github.workspace }}
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
+  CMD_GO_USE_GIT_HASH: "true"
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+    paths:
+      - .github/workflows/policybot-test.yml
+      - .policy.yml
+      - .policy-tests.yml
+      - go.mod
+  pull_request:
+    paths:
+      - .github/workflows/policybot-test.yml
+      - .policy.yml
+      - .policy-tests.yml
+      - go.mod
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  policybot-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: src
+
+      # The version of github.com/tailscale/policybottest used here is
+      # pinned by go.mod via internal/tooldeps/tooldeps.go; bump it with
+      # "go get github.com/tailscale/policybottest@<sha> && go mod tidy".
+      - name: Run policy tests
+        working-directory: src
+        run: ./tool/go run github.com/tailscale/policybottest -policy .policy.yml -tests .policy-tests.yml

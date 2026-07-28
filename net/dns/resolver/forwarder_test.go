@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,10 +24,12 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 )
 
@@ -143,9 +146,19 @@ func TestResolversWithDelays(t *testing.T) {
 			want: o("https://dns.nextdns.io/c3a884"),
 		},
 		{
-			name: "controld-ipv6-expand",
+			// ID-encoded Control D addresses are legacy port-53-only
+			// endpoints (see #20433); they must not be upgraded to DoH and
+			// instead pass through as ordinary port-53 resolvers.
+			name: "controld-ipv6-id-encoded-not-doh",
 			in:   q("2606:1a40:0:6:7b5b:5949:35ad:0"),
-			want: o("https://dns.controld.com/hyq3ipr2ct"),
+			want: o("2606:1a40:0:6:7b5b:5949:35ad:0"),
+		},
+		{
+			// The free anycast resolvers (freedns.controld.com/pN) do serve
+			// DoH and are upgraded.
+			name: "controld-free-anycast-doh",
+			in:   q("2606:1a40::1"),
+			want: o("https://freedns.controld.com/p1", "2606:1a40::1+0.5s"),
 		},
 		{
 			name: "controld-doh-input",
@@ -223,6 +236,84 @@ func TestGetKnownDoHClientForProvider(t *testing.T) {
 	}
 	defer res.Body.Close()
 	t.Logf("Got: %+v", res)
+}
+
+// TestControlDPremiumDoHLive exercises the real DoH dial path against Control D's
+// live infrastructure for a premium resolver, to confirm end-to-end that we use
+// reachable DoH endpoints (see ESC-30: we previously synthesized per-resolver
+// IPv6 addresses that only speak plaintext DNS on port 53 and refuse :443).
+//
+// It is disabled by default and only runs when TS_TEST_CONTROLD_RESOLVER_ID is
+// set to a Control D premium resolver ID (the path component of a
+// https://dns.controld.com/<id> DoH URL). For example:
+//
+//	TS_TEST_CONTROLD_RESOLVER_ID=abc123 go test ./net/dns/resolver/ \
+//	    -run TestControlDPremiumDoHLive -v
+//
+// To reproduce the pre-fix failure, temporarily revert DoHIPsOfBase to return
+// the controlDv6Gen-synthesized addresses: on an IPv6-only network this test
+// then fails with a connection error instead of a successful response.
+func TestControlDPremiumDoHLive(t *testing.T) {
+	id := os.Getenv("TS_TEST_CONTROLD_RESOLVER_ID")
+	if id == "" {
+		t.Skip("set TS_TEST_CONTROLD_RESOLVER_ID=<premium resolver id> to run")
+	}
+
+	logf := tstest.WhileTestRunningLogger(t)
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialer tsdial.Dialer
+	dialer.SetNetMon(netMon)
+	dialer.SetBus(bus)
+	fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+
+	urlBase := "https://dns.controld.com/" + id
+	c, ok := fwd.getKnownDoHClientForProvider(urlBase)
+	if !ok {
+		t.Fatalf("no known DoH client for %q", urlBase)
+	}
+	t.Logf("dialing DoH IPs: %v", publicdns.DoHIPsOfBase(urlBase))
+
+	// Build an A query for example.com.
+	builder := dns.NewBuilder(nil, dns.Header{RecursionDesired: true})
+	builder.StartQuestions()
+	if err := builder.Question(dns.Question{
+		Name:  dns.MustNewName("example.com."),
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	query, err := builder.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	res, err := fwd.sendDoH(ctx, urlBase, c, query)
+	if err != nil {
+		t.Fatalf("sendDoH: %v", err)
+	}
+	if rcode := getRCode(res); rcode != dns.RCodeSuccess {
+		t.Fatalf("got rcode %v, want success", rcode)
+	}
+
+	var p dns.Parser
+	if _, err := p.Start(res); err != nil {
+		t.Fatalf("parsing response: %v", err)
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		t.Fatalf("skipping questions: %v", err)
+	}
+	if _, err := p.AnswerHeader(); err != nil {
+		t.Fatalf("no answers returned: %v", err)
+	}
+	t.Logf("ControlD premium DoH query for example.com succeeded (%d bytes)", len(res))
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {
@@ -670,10 +761,7 @@ func makeResponseOfSize(tb testing.TB, domain string, targetSize int, includeOPT
 	if includeOPT {
 		baseSize += 11 // OPT record adds ~11 bytes
 	}
-	estimatedRecords := (targetSize - baseSize) / bytesPerRecord
-	if estimatedRecords < 1 {
-		estimatedRecords = 1
-	}
+	estimatedRecords := max((targetSize-baseSize)/bytesPerRecord, 1)
 
 	// Start with estimated records and adjust
 	txtLen := 200
@@ -740,10 +828,7 @@ func makeResponseOfSize(tb testing.TB, domain string, targetSize int, includeOPT
 			// If we need too many records, increase TXT length instead
 			txtLen = 255         // Max single TXT string length
 			bytesPerRecord = 280 // Adjusted estimate
-			estimatedRecords = (targetSize - baseSize) / bytesPerRecord
-			if estimatedRecords < 1 {
-				estimatedRecords = 1
-			}
+			estimatedRecords = max((targetSize-baseSize)/bytesPerRecord, 1)
 		}
 	}
 
@@ -1127,7 +1212,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "ServFail+Success",
+			name: "ServFail-and-Success",
 			responses: [][]byte{ // All upstream servers fail except for one.
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
@@ -1150,7 +1235,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "NXDomain+Success",
+			name: "NXDomain-and-Success",
 			responses: [][]byte{ // All upstream servers returned NXDOMAIN except for one.
 				makeTestResponse(t, domain, dns.RCodeNameError),
 				makeTestResponse(t, domain, dns.RCodeNameError),
@@ -1173,7 +1258,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "Refused+Success",
+			name: "Refused-and-Success",
 			responses: [][]byte{ // Some upstream servers refuse, but one succeeds.
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeRefused),
@@ -1187,7 +1272,7 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 			},
 		},
 		{
-			name: "Refused+ServFail",
+			name: "Refused-and-ServFail",
 			responses: [][]byte{ // Some servers refuse, at least one fails.
 				makeTestResponse(t, domain, dns.RCodeRefused),
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
@@ -1381,6 +1466,191 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 
 			if got := ht.IsUnhealthy(dnsForwarderFailing); got != tt.wantUnhealthy {
 				t.Errorf("IsUnhealthy = %v, want %v", got, tt.wantUnhealthy)
+			}
+		})
+	}
+}
+
+// TestForwarderHealthNoUpstreamResolvers verifies that a query with no upstream
+// resolver never raises dnsForwarderFailing, regardless of acceptDNS; that
+// warning is reserved for resolvers we found but couldn't reach (see
+// TestForwarderHealthOnContextExpiry). See tailscale/tailscale#19931.
+func TestForwarderHealthNoUpstreamResolvers(t *testing.T) {
+	const domain = "no-resolver.example.com."
+
+	for _, acceptDNS := range []bool{true, false} {
+		t.Run(fmt.Sprintf("acceptDNS=%v", acceptDNS), func(t *testing.T) {
+			request := makeTestRequest(t, domain, dns.TypeA, 0)
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			ht := health.NewTracker(bus)
+			fwd := newForwarder(logf, netMon, nil, &dialer, ht, nil)
+			fwd.acceptDNS = acceptDNS
+			// No routes are configured, so the forwarder has no upstream
+			// resolver for the query and returns SERVFAIL.
+
+			rpkt := packet{
+				bs:     request,
+				family: "udp",
+				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+			}
+			// Buffered so the SERVFAIL response can be sent without a reader.
+			responseChan := make(chan packet, 1)
+
+			if err := fwd.forwardWithDestChan(context.Background(), rpkt, responseChan); err != nil {
+				t.Fatalf("forwardWithDestChan: %v", err)
+			}
+
+			if ht.IsUnhealthy(dnsForwarderFailing) {
+				t.Error("dnsForwarderFailing was raised for a query with no upstream resolver; want healthy")
+			}
+		})
+	}
+}
+
+func TestResolversCustomScheme(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		domain    dnsname.FQDN
+		schemes   map[string]CustomSchemeHandler
+		routes    map[dnsname.FQDN][]*dnstype.Resolver
+		wantAddrs []string
+	}{
+		{
+			name:    "no-custom-scheme",
+			domain:  "example.com.",
+			schemes: map[string]CustomSchemeHandler{},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "192.168.1.2:53"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53", "192.168.1.2:53"},
+		},
+		{
+			name:   "single-custom-scheme",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "1.2.3.4:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {{Addr: "myscheme:customKey"}},
+			},
+			wantAddrs: []string{"1.2.3.4:53"},
+		},
+		{
+			name:   "with-other-resolvers",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(key string) (string, error) { return "1.2.3.4:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+					{Addr: "192.168.1.2:53"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53", "1.2.3.4:53", "192.168.1.2:53"},
+		},
+		{
+			name:   "multiple-custom-schemes",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"schemeOne": func(string) (string, error) { return "1.2.3.4:53", nil },
+				"schemeTwo": func(string) (string, error) { return "5.6.7.8:53", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "schemeOne:customKey"},
+					{Addr: "schemeTwo:customKey"},
+				},
+			},
+			wantAddrs: []string{"1.2.3.4:53", "5.6.7.8:53"},
+		},
+		{
+			name:   "empty-string-means-no-resolver",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+		{
+			name:   "error-means-no-resolver",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", fmt.Errorf("handler error") },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {
+					{Addr: "192.168.1.1:53"},
+					{Addr: "myscheme:customKey"},
+				},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+		{
+			// If the best-matching route yields no resolvers after scheme
+			// resolution, fall through to the next matching route.
+			name:   "empty-scheme-result-falls-through-to-next-matching-route",
+			domain: "example.com.",
+			schemes: map[string]CustomSchemeHandler{
+				"myscheme": func(string) (string, error) { return "", nil },
+			},
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"example.com.": {{Addr: "myscheme:customKey"}},
+				".":            {{Addr: "192.168.1.1:53"}},
+			},
+			wantAddrs: []string{"192.168.1.1:53"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+			for scheme, handler := range tt.schemes {
+				if err := fwd.RegisterCustomScheme(scheme, handler); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			fwd.setRoutes(tt.routes, false)
+
+			got := fwd.resolvers(tt.domain)
+			var gotAddrs []string
+			for _, r := range got {
+				gotAddrs = append(gotAddrs, r.name.Addr)
+			}
+			if !slices.Equal(gotAddrs, tt.wantAddrs) {
+				t.Errorf("got %v, want %v", gotAddrs, tt.wantAddrs)
 			}
 		})
 	}

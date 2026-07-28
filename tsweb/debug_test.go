@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -205,4 +207,83 @@ func ExampleDebugHandler_Section() {
 		io.WriteString(w, "<h3>Dump of your HTTP request</h3>")
 		fmt.Fprintf(w, "<code>%#v</code>", r)
 	})
+}
+
+func TestParseTrustedCIDRs(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []netip.Prefix
+	}{
+		{
+			name: "empty",
+			raw:  "",
+			want: nil,
+		},
+		{
+			name: "single_v4",
+			raw:  "10.0.0.0/8",
+			want: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		},
+		{
+			name: "multiple",
+			raw:  "10.0.0.0/8,172.16.0.0/12",
+			want: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.0/8"),
+				netip.MustParsePrefix("172.16.0.0/12"),
+			},
+		},
+		{
+			name: "spaces_trimmed",
+			raw:  " 10.0.0.0/8 , 192.168.0.0/16 ",
+			want: []netip.Prefix{
+				netip.MustParsePrefix("10.0.0.0/8"),
+				netip.MustParsePrefix("192.168.0.0/16"),
+			},
+		},
+		{
+			name: "ipv6",
+			raw:  "fd00::/8",
+			want: []netip.Prefix{netip.MustParsePrefix("fd00::/8")},
+		},
+		{
+			name: "trailing_comma",
+			raw:  "10.0.0.0/8,",
+			want: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTrustedCIDRs(tt.raw)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAllowDebugAccessTrustedCIDRContains(t *testing.T) {
+	// Verify that parsed CIDRs correctly match/reject IPs.
+	cidrs := parseTrustedCIDRs("10.0.0.0/8,192.168.1.0/24,fd00::/8")
+
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"10.1.2.3", true},
+		{"10.255.255.255", true},
+		{"192.168.1.50", true},
+		{"192.168.2.1", false},
+		{"172.16.0.1", false},
+		{"8.8.8.8", false},
+		{"fd00::1", true},
+		{"fe80::1", false},
+	}
+	for _, tt := range tests {
+		ip := netip.MustParseAddr(tt.ip)
+		if got := cidrsContain(cidrs, ip); got != tt.want {
+			t.Errorf("CIDRs contain %s = %v, want %v", tt.ip, got, tt.want)
+		}
+	}
 }

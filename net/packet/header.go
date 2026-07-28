@@ -45,7 +45,7 @@ type HeaderChecksummer interface {
 	Header
 
 	// WriteCheck writes the correct checksum into buf, which should
-	// be be the already-marshalled header and payload.
+	// be the already-marshalled header and payload.
 	WriteChecksum(buf []byte)
 }
 

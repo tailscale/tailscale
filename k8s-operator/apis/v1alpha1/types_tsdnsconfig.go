@@ -113,6 +113,12 @@ type NameserverPod struct {
 	// If specified, applies tolerations to the pods deployed by the DNSConfig resource.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+	// If specified, applies affinity rules to the pods deployed by the DNSConfig resource.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitzero"`
+	// If specified, applies node selector rules to the pods deployed by the DNSConfig resource.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitzero"`
 }
 
 type DNSConfigStatus struct {

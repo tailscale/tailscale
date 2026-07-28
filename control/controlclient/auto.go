@@ -20,10 +20,12 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/views"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/execqueue"
 	"tailscale.com/util/testenv"
+	"tailscale.com/wgengine/filter"
 )
 
 type LoginGoal struct {
@@ -356,7 +358,15 @@ func (c *Auto) authRoutine() {
 		if err != nil {
 			c.direct.health.SetAuthRoutineInError(err)
 			report(err, f)
-			bo.BackOff(ctx, err)
+			if rle, ok := errors.AsType[*rateLimitError](err); ok {
+				c.logf("authRoutine: %s", rle)
+				select {
+				case <-ctx.Done():
+				case <-time.After(rle.retryAfter):
+				}
+			} else {
+				bo.BackOff(ctx, err)
+			}
 			continue
 		}
 		if url != "" {
@@ -370,9 +380,15 @@ func (c *Auto) authRoutine() {
 			}
 			c.mu.Lock()
 			c.urlToVisit = url
-			c.loginGoal = &LoginGoal{
-				flags: LoginDefault,
-				url:   url,
+			// Only store the URL follow-up goal if no concurrent Login() call has
+			// replaced the goal we were processing while our control plane request
+			// was in flight. Otherwise, the intent from the more recent goal gets
+			// lost.
+			if c.loginGoal == goal {
+				c.loginGoal = &LoginGoal{
+					flags: LoginDefault,
+					url:   url,
+				}
 			}
 			c.mu.Unlock()
 
@@ -390,13 +406,25 @@ func (c *Auto) authRoutine() {
 		// success
 		c.direct.health.SetAuthRoutineInError(nil)
 		c.mu.Lock()
-		c.urlToVisit = ""
-		c.loggedIn = true
-		c.loginGoal = nil
+		// Only commit the login success if no concurrent Login()
+		// call has reset the goal and no Logout() has moved on
+		// while our control plane request was in flight. In the
+		// first case, clearing the goal would prevent the next
+		// iteration from picking it up and running with it. In
+		// the second case, we would record that we're loggedIn
+		// even though we're logged out.
+		goalStillCurrentGoal := c.loginGoal == goal
+		if goalStillCurrentGoal {
+			c.urlToVisit = ""
+			c.loggedIn = true
+			c.loginGoal = nil
+		}
 		c.mu.Unlock()
 
-		c.sendStatus("authRoutine-success", nil, "", nil)
-		c.restartMap()
+		if goalStillCurrentGoal {
+			c.sendStatus("authRoutine-success", nil, "", nil)
+			c.restartMap()
+		}
 		bo.Reset()
 	}
 }
@@ -462,36 +490,106 @@ func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
 	ndu, canDelta := c.observer.(NetmapDeltaUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !canDelta {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
-	var ok bool
-	err := c.observerQueue.RunSync(ctx, func() {
-		ok = ndu.UpdateNetmapDelta(muts)
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- ndu.UpdateNetmapDelta(muts)
 	})
-	return err == nil && ok
+	select {
+	case ok := <-ch:
+		return ok
+	case <-ctx.Done():
+		return false
+	}
 }
 
-var _ patchDiscoKeyer = mapRoutineState{}
+var (
+	_ PacketFilterUpdater = mapRoutineState{}
+	_ UserProfileUpdater  = mapRoutineState{}
+)
+
+// UpdatePacketFilter implements [PacketFilterUpdater] by forwarding to
+// [Auto.observer] if it implements [PacketFilterUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [PacketFilterUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdatePacketFilter(rules views.Slice[tailcfg.FilterRule], parsed []filter.Match) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	pfu, ok := c.observer.(PacketFilterUpdater)
+	mapCtx := c.mapCtx
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- pfu.UpdatePacketFilter(rules, parsed)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// UpdateUserProfiles implements [UserProfileUpdater] by forwarding to
+// [Auto.observer] if it implements [UserProfileUpdater]. It returns
+// false (signaling fall back to a full netmap rebuild) if the
+// downstream observer doesn't implement [UserProfileUpdater] or isn't
+// in a state to accept updates.
+func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	c := mrs.c
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	upu, ok := c.observer.(UserProfileUpdater)
+	mapCtx := c.mapCtx
+	c.mu.Unlock()
+	if !goodState || !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
+	defer cancel()
+	ch := make(chan bool, 1)
+	c.observerQueue.Add(func() {
+		ch <- upu.UpdateUserProfiles(profiles)
+	})
+	select {
+	case applied := <-ch:
+		return applied
+	case <-ctx.Done():
+		return false
+	}
+}
+
+var _ DiscoKeyUpdater = mapRoutineState{}
 
 func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
 	c := mrs.c
 	c.mu.Lock()
 	goodState := c.loggedIn && c.inMapPoll
-	dun, ok := c.observer.(patchDiscoKeyer)
+	dun, ok := c.observer.(DiscoKeyUpdater)
+	mapCtx := c.mapCtx
 	c.mu.Unlock()
 
 	if !goodState || !ok {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
 	defer cancel()
 
 	c.observerQueue.RunSync(ctx, func() {

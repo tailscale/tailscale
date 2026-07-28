@@ -86,11 +86,6 @@ func getVal() *tailscaleTypes {
 	return &tailscaleTypes{
 		&wgcfg.Config{
 			Addresses: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom16([16]byte{3: 3}).Unmap(), 5)},
-			Peers: []wgcfg.Peer{
-				{
-					PublicKey: key.NodePublic{},
-				},
-			},
 		},
 		&router.Config{
 			Routes: []netip.Prefix{

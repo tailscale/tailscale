@@ -6,13 +6,14 @@
 package gokrazydeps
 
 import (
+	_ "github.com/bradfitz/qemu-guest-kragent"
 	_ "github.com/gokrazy/breakglass"
-	_ "github.com/gokrazy/gokrazy"
 	_ "github.com/gokrazy/gokrazy/cmd/dhcp"
 	_ "github.com/gokrazy/gokrazy/cmd/ntp"
 	_ "github.com/gokrazy/gokrazy/cmd/randomd"
+	_ "github.com/gokrazy/kernel.amd64"
 	_ "github.com/gokrazy/serial-busybox"
-	_ "github.com/tailscale/gokrazy-kernel"
+	_ "github.com/tailscale/ts-gokrazy/gokrazyinit"
 	_ "tailscale.com/cmd/tailscale"
 	_ "tailscale.com/cmd/tailscaled"
 )

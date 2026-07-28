@@ -232,7 +232,7 @@ type Injector struct {
 }
 
 // NewInjector constructs an [Injector] that can be used to inject events into
-// the the stream of events used by code under test. After construction the
+// the stream of events used by code under test. After construction the
 // caller may use [Inject] to insert events into the bus.
 func NewInjector(t *testing.T, b *eventbus.Bus) *Injector {
 	inj := &Injector{

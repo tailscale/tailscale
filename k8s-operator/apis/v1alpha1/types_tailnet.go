@@ -48,13 +48,16 @@ type TailnetSpec struct {
 	// URL of the control plane to be used by all resources managed by the operator using this Tailnet.
 	// +optional
 	LoginURL string `json:"loginUrl,omitempty"`
-	// Denotes the location of the OAuth credentials to use for authenticating with this Tailnet.
+	// Denotes the location of the credentials to use for authenticating with this Tailnet.
 	Credentials TailnetCredentials `json:"credentials"`
 }
 
 type TailnetCredentials struct {
-	// The name of the secret containing the OAuth credentials. This secret must contain two fields "client_id" and
-	// "client_secret".
+	// The name of the secret containing the credentials used to authenticate with this Tailnet. The secret must always
+	// contain a "client_id" field. To authenticate with a static OAuth client, also set "client_secret". To authenticate
+	// via workload identity federation, set "audience" to the audience value expected by the Tailscale OAuth
+	// client; the operator will mint a ServiceAccount token for itself with that audience and exchange it for an API
+	// token. "client_secret" and "audience" are mutually exclusive.
 	SecretName string `json:"secretName"`
 }
 

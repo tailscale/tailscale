@@ -10,9 +10,15 @@ linters:
   enable:
     - bidichk
     - govet
+    - importas
     - misspell
     - revive
   settings:
+    importas:
+      no-unaliased: true
+      alias:
+        - pkg: github.com/tailscale/gliderssh
+          alias: gliderssh
     # Matches what we use in corp as of 2023-12-07
     govet:
       enable:

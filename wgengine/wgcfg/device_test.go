@@ -4,199 +4,72 @@
 package wgcfg
 
 import (
-	"bufio"
-	"bytes"
 	"io"
 	"net/netip"
 	"os"
-	"sort"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"go4.org/mem"
 	"tailscale.com/types/key"
 )
 
-func TestDeviceConfig(t *testing.T) {
-	newK := func() (key.NodePublic, key.NodePrivate) {
-		t.Helper()
-		k := key.NewNode()
-		return k.Public(), k
-	}
-	k1, pk1 := newK()
-	ip1 := netip.MustParsePrefix("10.0.0.1/32")
+func TestNewPeerLookupFunc(t *testing.T) {
+	k1, _ := newK()
 
-	k2, pk2 := newK()
+	k2, _ := newK()
 	ip2 := netip.MustParsePrefix("10.0.0.2/32")
 
 	k3, _ := newK()
-	ip3 := netip.MustParsePrefix("10.0.0.3/32")
 
-	cfg1 := &Config{
-		PrivateKey: pk1,
-		Peers: []Peer{{
-			PublicKey:  k2,
-			AllowedIPs: []netip.Prefix{ip2},
-		}},
+	dev := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "test"))
+	defer dev.Close()
+
+	// peers is the live per-peer config source, standing in for what
+	// LocalBackend provides via wgengine.Engine.SetPeerConfigFunc.
+	peers := map[device.NoisePublicKey][]netip.Prefix{
+		k2.Raw32(): {ip2},
 	}
+	dev.SetPeerLookupFunc(NewPeerLookupFunc(dev.Bind(), t.Logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
+		ips, ok := peers[pubk]
+		return ips, ok
+	}))
 
-	cfg2 := &Config{
-		PrivateKey: pk2,
-		Peers: []Peer{{
-			PublicKey:           k1,
-			AllowedIPs:          []netip.Prefix{ip1},
-			PersistentKeepalive: 5,
-		}},
-	}
-
-	device1 := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device1"))
-	device2 := NewDevice(newNilTun(), new(noopBind), device.NewLogger(device.LogLevelError, "device2"))
-	defer device1.Close()
-	defer device2.Close()
-
-	cmp := func(t *testing.T, d *device.Device, want *Config) {
-		t.Helper()
-		got, err := DeviceConfig(d)
-		if err != nil {
-			t.Fatal(err)
+	t.Run("lazy-creation", func(t *testing.T) {
+		// A peer known to the config source should be creatable on
+		// demand via LookupPeer.
+		if p := dev.LookupPeer(k2.Raw32()); p == nil {
+			t.Fatal("expected peer k2 to exist via LookupPeer")
 		}
-		prev := new(Config)
-		gotbuf := new(strings.Builder)
-		err = got.ToUAPI(t.Logf, gotbuf, prev)
-		gotStr := gotbuf.String()
-		if err != nil {
-			t.Errorf("got.ToUAPI(): error: %v", err)
-			return
+		// An unknown peer should not be found.
+		if p := dev.LookupPeer(k3.Raw32()); p != nil {
+			t.Fatal("expected unknown peer k3 to not exist")
 		}
-		wantbuf := new(strings.Builder)
-		err = want.ToUAPI(t.Logf, wantbuf, prev)
-		wantStr := wantbuf.String()
-		if err != nil {
-			t.Errorf("want.ToUAPI(): error: %v", err)
-			return
-		}
-		if gotStr != wantStr {
-			buf := new(bytes.Buffer)
-			w := bufio.NewWriter(buf)
-			if err := d.IpcGetOperation(w); err != nil {
-				t.Errorf("on error, could not IpcGetOperation: %v", err)
-			}
-			w.Flush()
-			t.Errorf("config mismatch:\n---- got:\n%s\n---- want:\n%s\n---- uapi:\n%s", gotStr, wantStr, buf.String())
-		}
-	}
-
-	t.Run("device1 config", func(t *testing.T) {
-		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device1, cfg1)
 	})
 
-	t.Run("device2 config", func(t *testing.T) {
-		if err := ReconfigDevice(device2, cfg2, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device2, cfg2)
-	})
-
-	// This is only to test that Config and Reconfig are properly synchronized.
-	t.Run("device2 config/reconfig", func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		go func() {
-			ReconfigDevice(device2, cfg2, t.Logf)
-			wg.Done()
-		}()
-
-		go func() {
-			DeviceConfig(device2)
-			wg.Done()
-		}()
-
-		wg.Wait()
-	})
-
-	t.Run("device1 modify peer", func(t *testing.T) {
-		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 1, 31: 0}))
-		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device1, cfg1)
-	})
-
-	t.Run("device1 replace endpoint", func(t *testing.T) {
-		cfg1.Peers[0].DiscoKey = key.DiscoPublicFromRaw32(mem.B([]byte{0: 2, 31: 0}))
-		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device1, cfg1)
-	})
-
-	t.Run("device1 add new peer", func(t *testing.T) {
-		cfg1.Peers = append(cfg1.Peers, Peer{
-			PublicKey:  k3,
-			AllowedIPs: []netip.Prefix{ip3},
+	t.Run("remove-peer", func(t *testing.T) {
+		delete(peers, k2.Raw32())
+		dev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {
+			_, ok := peers[pk]
+			return !ok
 		})
-		sort.Slice(cfg1.Peers, func(i, j int) bool {
-			return cfg1.Peers[i].PublicKey.Less(cfg1.Peers[j].PublicKey)
-		})
-
-		origCfg, err := DeviceConfig(device1)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device1, cfg1)
-
-		newCfg, err := DeviceConfig(device1)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		peer0 := func(cfg *Config) Peer {
-			p, ok := cfg.PeerWithKey(k2)
-			if !ok {
-				t.Helper()
-				t.Fatal("failed to look up peer 2")
-			}
-			return p
-		}
-		peersEqual := func(p, q Peer) bool {
-			return p.PublicKey == q.PublicKey && p.DiscoKey == q.DiscoKey && p.PersistentKeepalive == q.PersistentKeepalive && cidrsEqual(p.AllowedIPs, q.AllowedIPs)
-		}
-		if !peersEqual(peer0(origCfg), peer0(newCfg)) {
-			t.Error("reconfig modified old peer")
+		if p := dev.LookupPeer(k2.Raw32()); p != nil {
+			t.Fatal("expected peer k2 to not exist after removal")
 		}
 	})
 
-	t.Run("device1 remove peer", func(t *testing.T) {
-		removeKey := cfg1.Peers[len(cfg1.Peers)-1].PublicKey
-		cfg1.Peers = cfg1.Peers[:len(cfg1.Peers)-1]
-
-		if err := ReconfigDevice(device1, cfg1, t.Logf); err != nil {
-			t.Fatal(err)
-		}
-		cmp(t, device1, cfg1)
-
-		newCfg, err := DeviceConfig(device1)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		_, ok := newCfg.PeerWithKey(removeKey)
-		if ok {
-			t.Error("reconfig failed to remove peer")
+	t.Run("self-key-not-peer", func(t *testing.T) {
+		// The device's own key should not be a peer.
+		if p := dev.LookupPeer(k1.Raw32()); p != nil {
+			t.Fatal("expected own key to not be a peer")
 		}
 	})
+}
+
+func newK() (key.NodePublic, key.NodePrivate) {
+	k := key.NewNode()
+	return k.Public(), k
 }
 
 // TODO: replace with a loopback tunnel

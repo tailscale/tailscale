@@ -14,7 +14,13 @@ package vnet
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -23,13 +29,15 @@ import (
 	"iter"
 	"log"
 	"maps"
+	"math/big"
 	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,7 +155,43 @@ func (n *network) initStack() error {
 	if tcpipErr != nil {
 		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
 	}
-	n.linkEP = channel.New(512, 1500, tcpip.LinkAddress(n.mac.HWAddr()))
+	// Raise the TCP buffer limits (defaults: 1 MB send, 1 MB receive)
+	// so that netstack-terminated connections (the fake control plane,
+	// DERP, log catcher, file servers) can keep a large window's worth
+	// of data in flight. In slow environments (oversubscribed CI
+	// runners) the effective RTT of the userspace data path reaches
+	// tens or hundreds of milliseconds, and throughput is capped at
+	// window/RTT.
+	//
+	// The send buffer default deliberately stays at 1 MB: the send
+	// buffer caps how much un-ACKed data one connection can burst into
+	// the QEMU socket and the guest's virtio RX ring. Bursting more
+	// than the downstream path can buffer mass-drops segments, and
+	// netstack's loss recovery handles wide holes so poorly (one or two
+	// segments per 200 ms RTO, for minutes) that transfers effectively
+	// wedge. 1 MB of in-flight data fits within the socket buffer plus
+	// the (enlarged, see qemu.go) virtio ring, and still allows 10 MB/s
+	// at a 100 ms effective RTT.
+	sndBufOpt := tcpip.TCPSendBufferSizeRangeOption{Min: 4 << 10, Default: 1 << 20, Max: 4 << 20}
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &sndBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption send buf: %v", err)
+	}
+	rcvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption recv buf: %v", err)
+	}
+	// Enable receive buffer moderation (auto-tuning) so idle
+	// connections don't hold the full 4 MB.
+	modRcvBufOpt := tcpip.TCPModerateReceiveBufferOption(true)
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &modRcvBufOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption moderate recv buf: %v", err)
+	}
+	// The queue is sized to hold a full TCP send buffer's worth of
+	// 1500-byte frames (see the send buffer sizing above) so that a
+	// burst from one netstack connection can't overflow it; overflow
+	// here is silent packet loss. It's a channel of pointers, so the
+	// memory cost of the headroom is trivial.
+	n.linkEP = channel.New(4096, 1500, tcpip.LinkAddress(n.mac.HWAddr()))
 	if tcpipProblem := n.ns.CreateNIC(nicID, n.linkEP); tcpipProblem != nil {
 		return fmt.Errorf("CreateNIC: %v", tcpipProblem)
 	}
@@ -193,6 +237,8 @@ func (n *network) initStack() error {
 			Destination: ipv6Subnet,
 			NIC:         nicID,
 		})
+
+		n.startUnsolicitedRAs()
 	}
 
 	n.ns.SetRouteTable(routes)
@@ -204,7 +250,7 @@ func (n *network) initStack() error {
 		return tcpFwd.HandlePacket(tei, pb)
 	})
 
-	go func() {
+	n.s.wg.Go(func() {
 		for {
 			pkt := n.linkEP.ReadContext(n.s.shutdownCtx)
 			if pkt == nil {
@@ -216,7 +262,7 @@ func (n *network) initStack() error {
 			}
 			n.handleIPPacketFromGvisor(pkt.ToView().AsSlice())
 		}
-	}()
+	})
 	return nil
 }
 
@@ -267,10 +313,18 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		n.logf("gvisor: serialize error: %v", err)
 		return
 	}
-	if nw, ok := n.writers.Load(node.mac); ok {
-		nw.write(resPkt)
+	// Use the MAC address for this specific network (important for multi-NIC nodes
+	// where the primary MAC may be on a different network).
+	mac := node.macForNet(n)
+	if nw, ok := n.writers.Load(mac); ok {
+		// conditionedWrite (rather than nw.write) so that the network's
+		// simulated latency and packet loss also apply to traffic
+		// originating from the router's own netstack (the fake control
+		// plane, DERP, DNS, file servers, etc), not just to forwarded
+		// node-to-node traffic.
+		n.conditionedWrite(nw, resPkt)
 	} else {
-		n.logf("gvisor write: no writeFunc for %v", node.mac)
+		n.logf("gvisor write: no writeFunc for %v (node %v on net %v)", mac, node, n.mac)
 	}
 }
 
@@ -284,10 +338,54 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	return netip.Addr{}
 }
 
+// debugSampleTCPInfo periodically logs the TCP sender state (cwnd, RTO,
+// RTT, congestion state) of ep plus stack-wide TCP counters, for
+// debugging vnet throughput. Enabled by VNET_TCP_DEBUG=1. It returns
+// when the endpoint leaves the established state.
+func (n *network) debugSampleTCPInfo(ep tcpip.Endpoint) {
+	st := n.ns.Stats().TCP
+	for {
+		time.Sleep(500 * time.Millisecond)
+		var info tcpip.TCPInfoOption
+		if err := ep.GetSockOpt(&info); err != nil {
+			log.Printf("tcpdebug: GetSockOpt: %v", err)
+			return
+		}
+		log.Printf("tcpdebug: state=%v cc=%v cwnd=%v ssthresh=%v rtt=%v rttvar=%v rto=%v reorderSeen=%v | stack: retrans=%v rtoTimeouts=%v fastRetrans=%v fastRecovery=%v sackRecovery=%v spuriousRecovery=%v sendErrs=%v qDrops=%v",
+			info.State, info.CcState, info.SndCwnd, info.SndSsthresh,
+			info.RTT.Round(time.Microsecond), info.RTTVar.Round(time.Microsecond), info.RTO,
+			info.ReorderSeen,
+			st.Retransmits.Value(), st.Timeouts.Value(), st.FastRetransmit.Value(),
+			st.FastRecovery.Value(), st.SACKRecovery.Value(), st.SpuriousRecovery.Value(),
+			st.SegmentSendErrors.Value(), n.ns.Stats().DroppedPackets.Value())
+		if info.State != tcpip.EndpointState(tcp.StateEstablished) {
+			return
+		}
+	}
+}
+
 func stringifyTEI(tei stack.TransportEndpointID) string {
 	localHostPort := net.JoinHostPort(tei.LocalAddress.String(), strconv.Itoa(int(tei.LocalPort)))
 	remoteHostPort := net.JoinHostPort(tei.RemoteAddress.String(), strconv.Itoa(int(tei.RemotePort)))
 	return fmt.Sprintf("%s -> %s", remoteHostPort, localHostPort)
+}
+
+// vipNameOf returns the VIP name for the given IP, or "" if it's not a VIP.
+func vipNameOf(ip netip.Addr) string {
+	for _, v := range vips {
+		if v.Match(ip) {
+			return v.name
+		}
+	}
+	return ""
+}
+
+// nodeNameOf returns the node's name for the given IP on this network, or "" if unknown.
+func (n *network) nodeNameOf(ip netip.Addr) string {
+	if node, ok := n.nodeByIP(ip); ok {
+		return node.String()
+	}
+	return ""
 }
 
 func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
@@ -301,7 +399,17 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	log.Printf("vnet-AcceptTCP: %v", stringifyTEI(reqDetails))
+	// Annotate the log with node/VIP names for readability.
+	srcHP := net.JoinHostPort(clientRemoteIP.String(), strconv.Itoa(int(reqDetails.RemotePort)))
+	srcStr := srcHP
+	if name := n.nodeNameOf(clientRemoteIP); name != "" {
+		srcStr = fmt.Sprintf("%s (%s)", srcHP, name)
+	}
+	dstStr := net.JoinHostPort(destIP.String(), strconv.Itoa(int(destPort)))
+	if name := vipNameOf(destIP); name != "" {
+		dstStr = fmt.Sprintf("%s (%s)", dstStr, name)
+	}
+	log.Printf("vnet-AcceptTCP: %s -> %s", srcStr, dstStr)
 
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -320,7 +428,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 8008 && fakeTestAgent.Match(destIP) {
+	if destPort == TestDriverPort && fakeTestAgent.Match(destIP) {
 		node, ok := n.nodeByIP(clientRemoteIP)
 		if !ok {
 			n.logf("unknown client IP %v trying to connect to test driver", clientRemoteIP)
@@ -334,11 +442,23 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
-	if destPort == 80 && fakeControl.Match(destIP) {
+	if fakeControl.Match(destIP) && (destPort == 80 || destPort == 443) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		// The control client's noise dialer forces an HTTPS (port 443) dial when
+		// it made a noise dial recently — e.g. an immediate re-login or profile
+		// switch; see controlhttp.Dialer.forceNoise443. Serve the test control
+		// over TLS on 443 too so that path reaches it. (The cert isn't
+		// validated: noise dials authenticate via the Noise handshake.)
+		var ln net.Listener = netutil.NewOneConnListener(tc, nil)
+		if destPort == 443 {
+			ln = netutil.NewOneConnListener(tls.Server(tc, n.s.controlTLS), nil)
+		}
 		hs := &http.Server{Handler: n.s.control}
-		go hs.Serve(netutil.NewOneConnListener(tc, nil))
+		n.s.wg.Go(func() {
+			hs.Serve(ln)
+		})
 		return
 	}
 
@@ -351,23 +471,68 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 
 			r.Complete(false)
 			tc := gonet.NewTCPConn(&wq, ep)
+			context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 			tlsConn := tls.Server(tc, ds.tlsConfig)
 			hs := &http.Server{Handler: ds.handler}
-			go hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+			n.s.wg.Go(func() {
+				hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+			})
 			return
 		}
 		if destPort == 80 {
 			r.Complete(false)
 			tc := gonet.NewTCPConn(&wq, ep)
+			context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 			hs := &http.Server{Handler: n.s.derps[0].handler}
-			go hs.Serve(netutil.NewOneConnListener(tc, nil))
+			n.s.wg.Go(func() {
+				hs.Serve(netutil.NewOneConnListener(tc, nil))
+			})
 			return
 		}
 	}
 	if destPort == 443 && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		go n.serveLogCatcherConn(clientRemoteIP, tc)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		n.s.wg.Go(func() {
+			n.serveLogCatcherConn(clientRemoteIP, tc)
+		})
+		return
+	}
+
+	if destPort == 80 && fakeCloudInit.Match(destIP) {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		hs := &http.Server{Handler: n.s.cloudInitHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
+	if destPort == 80 && fakeFiles.Match(destIP) {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		if os.Getenv("VNET_TCP_DEBUG") == "1" {
+			go n.debugSampleTCPInfo(ep)
+		}
+		hs := &http.Server{Handler: n.s.fileServerHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
+	if destPort == 80 && fakeACME.Match(destIP) && n.s.fakeACME != nil {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		hs := &http.Server{Handler: n.s.fakeACME}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
 		return
 	}
 
@@ -540,6 +705,15 @@ type network struct {
 	// writers is a map of MAC -> networkWriters to write packets to that MAC.
 	// It contains entries for connected nodes only.
 	writers syncs.Map[MAC, networkWriter] // MAC -> to networkWriter for that MAC
+
+	blackholeMu  sync.Mutex
+	blackholeMap map[netip.Addr]netip.Addr // blackholeMap contains address pairs for dropping traffic (in either direction)
+
+	// raStopMu guards raStopped and serializes with the unsolicited RA
+	// goroutine's send so that StopUnsolicitedRAsForTest can deterministically
+	// silence the background traffic.
+	raStopMu  sync.Mutex
+	raStopped bool
 }
 
 // registerWriter registers a client address with a MAC address.
@@ -552,6 +726,17 @@ func (n *network) registerWriter(mac MAC, c vmClient) {
 		nw.interfaceID = node.interfaceID
 	}
 	n.writers.Store(mac, nw)
+
+	// As soon as a host appears on the wire, hand it a Router Advertisement
+	// so its kernel installs the prefix + default route. Without this, hosts
+	// that never emit a Router Solicitation (e.g. gokrazy with DHCPv4 doing
+	// link bringup) would have to wait for the next periodic RA, by which
+	// point the test may have already failed.
+	if n.v6 {
+		if pkt, err := n.buildIPv6RouterAdvertisement(mac, ipv6AllNodes); err == nil {
+			n.writeEth(pkt)
+		}
+	}
 }
 
 func (n *network) unregisterWriter(mac MAC) {
@@ -573,8 +758,10 @@ func (n *network) MACOfIP(ip netip.Addr) (_ MAC, ok bool) {
 	if n.lanIP4.Addr() == ip {
 		return n.mac, true
 	}
-	if n, ok := n.nodesByIP4[ip]; ok {
-		return n.mac, true
+	if node, ok := n.nodesByIP4[ip]; ok {
+		// Use the MAC for this specific network (important for multi-NIC nodes
+		// where the primary MAC may be on a different network).
+		return node.macForNet(n), true
 	}
 	return MAC{}, false
 }
@@ -585,6 +772,28 @@ func (n *network) SetControlBlackholed(v bool) {
 	n.blackholeControl = v
 }
 
+// BlackholeControlForAddr sets up a map entry, ensuring that traffic to or from
+// control from the addr is dropped.
+func (n *network) BlackholeControlForAddr(addr netip.Addr) {
+	n.blackholeMu.Lock()
+	defer n.blackholeMu.Unlock()
+
+	if addr.Is6() {
+		mak.Set(&n.blackholeMap, addr, fakeControl.v6)
+	} else {
+		mak.Set(&n.blackholeMap, addr, fakeControl.v4)
+	}
+}
+
+// nodeNIC represents a single network interface on a node.
+// For multi-homed nodes, additional NICs beyond the primary are stored in node.extraNICs.
+type nodeNIC struct {
+	mac         MAC
+	net         *network
+	lanIP       netip.Addr
+	interfaceID int
+}
+
 type node struct {
 	mac           MAC
 	num           int // 1-based node number
@@ -593,12 +802,43 @@ type node struct {
 	lanIP         netip.Addr // must be in net.lanIP prefix + unique in net
 	verboseSyslog bool
 
+	extraNICs []nodeNIC // secondary NICs for multi-homed nodes
+
 	// logMu guards logBuf.
 	// TODO(bradfitz): conditionally write these out to separate files at the end?
 	// Currently they only hold logcatcher logs.
 	logMu            sync.Mutex
 	logBuf           bytes.Buffer
 	logCatcherWrites int
+}
+
+// netForMAC returns the network associated with the given MAC address on this node.
+// It checks the primary NIC first, then any extra NICs.
+func (n *node) netForMAC(mac MAC) *network {
+	if mac == n.mac {
+		return n.net
+	}
+	for _, nic := range n.extraNICs {
+		if nic.mac == mac {
+			return nic.net
+		}
+	}
+	return nil
+}
+
+// macForNet returns the MAC address that this node uses on the given network.
+// For the primary network, this is node.mac. For secondary networks, it's the
+// extra NIC's MAC.
+func (n *node) macForNet(net *network) MAC {
+	if n.net == net {
+		return n.mac
+	}
+	for _, nic := range n.extraNICs {
+		if nic.net == net {
+			return nic.mac
+		}
+	}
+	return n.mac // fallback to primary
 }
 
 // String returns the string "nodeN" where N is the 1-based node number.
@@ -610,16 +850,23 @@ type derpServer struct {
 	srv       *derpserver.Server
 	handler   http.Handler
 	tlsConfig *tls.Config
+	// certSHA256Hex is the SHA-256 hex fingerprint of the leaf certificate
+	// served by this DERP server. It is the value tests pin against when
+	// they configure a custom DERP map with CertName="sha256-raw:<hex>".
+	certSHA256Hex string
 }
 
-func newDERPServer() *derpServer {
-	// Just to get a self-signed TLS cert:
-	ts := httptest.NewTLSServer(nil)
-	ts.Close()
-
+// newDERPServer returns a derpServer whose TLS cert is a freshly generated
+// self-signed ECDSA cert valid for hostname. Tests that use a stock test DERP
+// map with InsecureForTests=true ignore the cert content entirely; tests that
+// want to exercise sha256-raw cert pinning can read the certSHA256Hex via
+// [Server.DERPCertSHA256Hex].
+func newDERPServer(hostname string) *derpServer {
+	tlsConfig, certHex := selfSignedCert(hostname)
 	ds := &derpServer{
-		srv:       derpserver.New(key.NewNode(), logger.Discard),
-		tlsConfig: ts.TLS, // self-signed; test client configure to not check
+		srv:           derpserver.New(key.NewNode(), logger.Discard),
+		tlsConfig:     tlsConfig,
+		certSHA256Hex: certHex,
 	}
 	var mux http.ServeMux
 	mux.Handle("/derp", derpserver.Handler(ds.srv))
@@ -627,6 +874,40 @@ func newDERPServer() *derpServer {
 
 	ds.handler = &mux
 	return ds
+}
+
+// selfSignedCert builds a self-signed ECDSA P-256 cert valid for hostname and
+// returns a *tls.Config that serves it, along with the SHA-256 hex digest of
+// the cert's DER bytes (used by DERP for sha256-raw cert pinning).
+func selfSignedCert(hostname string) (*tls.Config, string) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: generating DERP cert key: %v", err))
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: hostname},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{hostname},
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+		tmpl.DNSNames = nil
+	}
+	der, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(fmt.Sprintf("vnet: creating DERP cert: %v", err))
+	}
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{der},
+			PrivateKey:  key,
+		}},
+	}
+	return cfg, fmt.Sprintf("%x", sha256.Sum256(der))
 }
 
 type Server struct {
@@ -645,18 +926,37 @@ type Server struct {
 	networks     set.Set[*network]
 	networkByWAN *bart.Table[*network]
 
-	control    *testcontrol.Server
+	control *testcontrol.Server
+	// controlTLS is a self-signed cert for serving the test control over HTTPS
+	// (port 443) in addition to plaintext HTTP. The control client does not
+	// validate this cert (noise dials authenticate via the Noise handshake, not
+	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
+	controlTLS *tls.Config
 	derps      []*derpServer
+	fakeACME   *fakeACMEServer
 	pcapWriter *pcapWriter
 
-	// writeMu serializes all writes to VM clients.
-	writeMu sync.Mutex
-	scratch []byte
+	// vmWriteState holds per-VM-connection write state, serializing
+	// writes of length-prefixed frames so concurrent writers can't
+	// interleave them mid-frame. It is deliberately per-connection
+	// rather than one global lock: a VM that is slow to drain its
+	// socket (common on contended CI hosts) must not stall writes to
+	// every other VM on the server.
+	vmWriteState syncs.Map[*net.UnixConn, *vmWriteState]
 
 	mu              sync.Mutex
 	agentConnWaiter map[*node]chan<- struct{} // signaled after added to set
 	agentConns      set.Set[*agentConn]       //  not keyed by node; should be small/cheap enough to scan all
 	agentDialer     map[*node]netx.DialFunc
+	gotFirstPacket  map[MAC]chan struct{} // closed on first packet from each MAC
+
+	cloudInitData map[int]*CloudInitData // node num → cloud-init config
+	fileContents  map[string][]byte      // filename → file bytes
+	dnsTXTRecords map[string][]string
+
+	// onDHCPEvent, if non-nil, is called when DHCP messages are processed.
+	// Parameters are: source MAC, node number, DHCP message type, assigned IP.
+	onDHCPEvent func(nodeMAC MAC, nodeNum int, msgType layers.DHCPMsgType, assignedIP netip.Addr)
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -671,6 +971,21 @@ func (s *Server) SetLoggerForTest(logf func(format string, args ...any)) {
 	s.optLogf = logf
 }
 
+// SetDHCPCallback registers a function to be called when DHCP messages are
+// processed. The callback receives the source MAC, node number, DHCP message
+// type (Discover, Offer, Request, Ack), and the assigned IP address.
+func (s *Server) SetDHCPCallback(fn func(MAC, int, layers.DHCPMsgType, netip.Addr)) {
+	s.onDHCPEvent = fn
+}
+
+// derpHostnames are the SNI/HostName values vnet's fake DERP servers identify
+// as. They are also used to issue the per-DERP self-signed certificate so that
+// hostname verification succeeds for tests that pin via sha256-raw.
+var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
+
+// controlHostname is the hostname the fake control server is reached at.
+const controlHostname = "control.tailscale"
+
 var derpMap = &tailcfg.DERPMap{
 	Regions: map[int]*tailcfg.DERPRegion{
 		1: {
@@ -681,7 +996,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "1a",
 					RegionID:         1,
-					HostName:         "derp1.tailscale",
+					HostName:         derpHostnames[0],
 					IPv4:             fakeDERP1.v4.String(),
 					IPv6:             fakeDERP1.v6.String(),
 					InsecureForTests: true,
@@ -697,7 +1012,7 @@ var derpMap = &tailcfg.DERPMap{
 				{
 					Name:             "2a",
 					RegionID:         2,
-					HostName:         "derp2.tailscale",
+					HostName:         derpHostnames[1],
 					IPv4:             fakeDERP2.v4.String(),
 					IPv6:             fakeDERP2.v6.String(),
 					InsecureForTests: true,
@@ -716,21 +1031,33 @@ func New(c *Config) (*Server, error) {
 
 		control: &testcontrol.Server{
 			DERPMap:         derpMap,
-			ExplicitBaseURL: "http://control.tailscale",
+			ExplicitBaseURL: "http://" + controlHostname,
 		},
+		fakeACME: newFakeACMEServer("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
 
-		nodeByMAC:    map[MAC]*node{},
-		networkByWAN: &bart.Table[*network]{},
-		networks:     set.Of[*network](),
+		nodeByMAC:     map[MAC]*node{},
+		networkByWAN:  &bart.Table[*network]{},
+		networks:      set.Of[*network](),
+		dnsTXTRecords: map[string][]string{},
 	}
-	for range 2 {
-		s.derps = append(s.derps, newDERPServer())
+	s.control.OnSetDNS = func(req *tailcfg.SetDNSRequest) error {
+		s.setDNSRecord(req.Name, req.Value)
+		return nil
+	}
+	s.fakeACME.lookupTXT = s.lookupTXT
+	s.controlTLS, _ = selfSignedCert(controlHostname)
+	for _, host := range derpHostnames {
+		s.derps = append(s.derps, newDERPServer(host))
 	}
 	if err := s.initFromConfig(c); err != nil {
 		return nil, err
+	}
+	s.gotFirstPacket = make(map[MAC]chan struct{})
+	for mac := range s.nodeByMAC {
+		s.gotFirstPacket[mac] = make(chan struct{})
 	}
 	for n := range s.networks {
 		if err := n.initStack(); err != nil {
@@ -741,6 +1068,132 @@ func New(c *Config) (*Server, error) {
 	return s, nil
 }
 
+// ControlServer returns the test control server used by this vnet.
+func (s *Server) ControlServer() *testcontrol.Server {
+	return s.control
+}
+
+// DERPHostname returns the SNI/HostName used by vnet's idx'th fake DERP
+// server. idx must be 0 or 1.
+func (s *Server) DERPHostname(idx int) string {
+	return derpHostnames[idx]
+}
+
+// DERPCertSHA256Hex returns the SHA-256 hex fingerprint of the self-signed
+// TLS certificate served by vnet's idx'th fake DERP server. It is the value
+// to pin against in a [tailcfg.DERPNode.CertName] formatted as
+// "sha256-raw:<hex>". idx must be 0 or 1.
+func (s *Server) DERPCertSHA256Hex(idx int) string {
+	return s.derps[idx].certSHA256Hex
+}
+
+// FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
+func (s *Server) FakeACMEDirectoryURL() string {
+	return s.fakeACME.directoryURL()
+}
+
+// FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
+func (s *Server) FakeACMERootPEM() []byte {
+	return s.fakeACME.rootPEM()
+}
+
+func (s *Server) setDNSRecord(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsTXTRecords[name] = append(s.dnsTXTRecords[name], value)
+}
+
+func (s *Server) lookupTXT(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.dnsTXTRecords[name]...)
+}
+
+// CloudInitData holds the cloud-init configuration for a node.
+type CloudInitData struct {
+	MetaData      string
+	UserData      string
+	NetworkConfig string // optional; if set, served as network-config
+}
+
+// SetCloudInitData registers cloud-init configuration for the given node number.
+// This data is served via the cloud-init.tailscale VIP when the VM boots.
+func (s *Server) SetCloudInitData(nodeNum int, data *CloudInitData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mak.Set(&s.cloudInitData, nodeNum, data)
+}
+
+// RegisterFile registers a file to be served by the files.tailscale VIP.
+// The path is the URL path (e.g., "tta" is served at http://files.tailscale/tta).
+func (s *Server) RegisterFile(path string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mak.Set(&s.fileContents, path, data)
+}
+
+// cloudInitHandler returns an HTTP handler that serves cloud-init
+// meta-data and user-data for VMs that boot with
+// ds=nocloud;s=http://cloud-init.tailscale/node-N/.
+func (s *Server) cloudInitHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Parse node number from URL path like "/node-2/meta-data"
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) != 2 {
+			http.Error(w, "bad path", http.StatusNotFound)
+			return
+		}
+		nodeNum := 0
+		if _, err := fmt.Sscanf(parts[0], "node-%d", &nodeNum); err != nil {
+			http.Error(w, "bad node number", http.StatusNotFound)
+			return
+		}
+		s.mu.Lock()
+		data := s.cloudInitData[nodeNum]
+		s.mu.Unlock()
+		if data == nil {
+			http.Error(w, "no cloud-init data for node", http.StatusNotFound)
+			return
+		}
+		switch parts[1] {
+		case "meta-data":
+			w.Header().Set("Content-Type", "text/yaml")
+			io.WriteString(w, data.MetaData)
+		case "user-data":
+			w.Header().Set("Content-Type", "text/yaml")
+			io.WriteString(w, data.UserData)
+		case "network-config":
+			if data.NetworkConfig == "" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/yaml")
+			io.WriteString(w, data.NetworkConfig)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+}
+
+// fileServerHandler returns an HTTP handler that serves files registered
+// via RegisterFile. Files are served at http://files.tailscale/<path>.
+func (s *Server) fileServerHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		s.mu.Lock()
+		data, ok := s.fileContents[path]
+		s.mu.Unlock()
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Write(data)
+	})
+}
+
 func (s *Server) Close() {
 	if shutdown := s.shuttingDown.Swap(true); !shutdown {
 		s.shutdownCancel()
@@ -749,9 +1202,37 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+// AwaitFirstPacket waits until the first ethernet frame is received from the
+// given MAC address, indicating the VM has booted far enough to send network
+// traffic. It returns an error if the context expires first.
+func (s *Server) AwaitFirstPacket(ctx context.Context, mac MAC) error {
+	ch, ok := s.gotFirstPacket[mac]
+	if !ok {
+		return fmt.Errorf("unknown MAC %v", mac)
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no network packets received from %v: %w", mac, ctx.Err())
+	}
+}
+
 // MACs returns the MAC addresses of the configured nodes.
 func (s *Server) MACs() iter.Seq[MAC] {
 	return maps.Keys(s.nodeByMAC)
+}
+
+// StopUnsolicitedRAsForTest stops all networks from sending periodic
+// unsolicited IPv6 Router Advertisements. It blocks until any in-progress
+// send has finished, so callers may safely register sinks afterwards
+// without races against background RA traffic.
+func (s *Server) StopUnsolicitedRAsForTest() {
+	for n := range s.networks {
+		n.raStopMu.Lock()
+		n.raStopped = true
+		n.raStopMu.Unlock()
+	}
 }
 
 func (s *Server) RegisterSinkForTest(mac MAC, fn func(eth []byte)) {
@@ -778,22 +1259,31 @@ const (
 	ProtocolUnixDGRAM // for macOS Virtualization.Framework and VZFileHandleNetworkDeviceAttachment
 )
 
-func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID int) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+// vmWriteState is a VM connection's write serialization state.
+// See the Server.vmWriteState field comment.
+type vmWriteState struct {
+	mu      sync.Mutex
+	scratch []byte // length-prefixed frame being written; owned by mu
+}
 
+func (s *Server) writeEthernetFrameToVM(c vmClient, ethPkt []byte, interfaceID int) {
 	if ethPkt == nil {
 		return
 	}
 	switch c.proto() {
 	case ProtocolQEMU:
-		s.scratch = binary.BigEndian.AppendUint32(s.scratch[:0], uint32(len(ethPkt)))
-		s.scratch = append(s.scratch, ethPkt...)
-		if _, err := c.uc.Write(s.scratch); err != nil {
+		ws, _ := s.vmWriteState.LoadOrInit(c.uc, func() *vmWriteState { return new(vmWriteState) })
+		ws.mu.Lock()
+		ws.scratch = binary.BigEndian.AppendUint32(ws.scratch[:0], uint32(len(ethPkt)))
+		ws.scratch = append(ws.scratch, ethPkt...)
+		_, err := c.uc.Write(ws.scratch)
+		ws.mu.Unlock()
+		if err != nil {
 			s.logf("Write pkt: %v", err)
 		}
 
 	case ProtocolUnixDGRAM:
+		// Datagram writes are atomic; no locking needed.
 		if _, err := c.uc.WriteToUnix(ethPkt, c.raddr); err != nil {
 			s.logf("Write pkt : %v", err)
 			return
@@ -851,6 +1341,15 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 	s.logf("Got conn %T %p", uc, uc)
 	defer uc.Close()
 
+	// Enlarge the socket buffers (best effort; the kernel caps these at
+	// net.core.{w,r}mem_max). The write buffer sits between vnet and a
+	// QEMU process that may be slow to drain on a contended host; the
+	// deeper it is, the more of a TCP flow's in-flight data queues here
+	// (lossless backpressure) instead of overrunning the guest's virtio
+	// RX ring and getting dropped.
+	uc.SetWriteBuffer(4 << 20)
+	uc.SetReadBuffer(4 << 20)
+
 	buf := make([]byte, 16<<10)
 	didReg := map[MAC]bool{}
 	for {
@@ -862,8 +1361,7 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 			n, addr, err := uc.ReadFromUnix(buf)
 			raddr = addr
 			if err != nil {
-				if s.shutdownCtx.Err() != nil {
-					// Return without logging.
+				if s.shutdownCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				s.logf("ReadFromUnix: %#v", err)
@@ -905,9 +1403,21 @@ func (s *Server) ServeUnixConn(uc *net.UnixConn, proto Protocol) {
 		}
 		if !didReg[srcMAC] {
 			didReg[srcMAC] = true
+			if ch, ok := s.gotFirstPacket[srcMAC]; ok {
+				select {
+				case <-ch: // already closed
+				default:
+					close(ch)
+				}
+			}
+			srcNet := srcNode.netForMAC(srcMAC)
+			if srcNet == nil {
+				s.logf("[conn %p] node %v has no network for MAC %v", c.uc, srcNode, srcMAC)
+				continue
+			}
 			s.logf("[conn %p] Registering writer for MAC %v, node %v", c.uc, srcMAC, srcNode.lanIP)
-			srcNode.net.registerWriter(srcMAC, c)
-			defer srcNode.net.unregisterWriter(srcMAC)
+			srcNet.registerWriter(srcMAC, c)
+			defer srcNet.unregisterWriter(srcMAC)
 		}
 
 		if err := s.handleEthernetFrameFromVM(packetRaw); err != nil {
@@ -930,14 +1440,36 @@ func (s *Server) handleEthernetFrameFromVM(packetRaw []byte) error {
 		return fmt.Errorf("got frame from unknown MAC %v", srcMAC)
 	}
 
+	srcNet := srcNode.netForMAC(srcMAC)
+	if srcNet == nil {
+		return fmt.Errorf("node %v has no network for MAC %v", srcNode, srcMAC)
+	}
+
 	must.Do(s.pcapWriter.WritePacket(gopacket.CaptureInfo{
 		Timestamp:      time.Now(),
 		CaptureLength:  len(packetRaw),
 		Length:         len(packetRaw),
 		InterfaceIndex: srcNode.interfaceID,
 	}, packetRaw))
-	srcNode.net.HandleEthernetPacket(ep)
+	srcNet.HandleEthernetPacket(ep)
 	return nil
+}
+
+// routeTCPPacket forwards a TCP packet to the network owning the
+// destination IP (looked up by WAN IP). Used for inter-network TCP
+// forwarding so guest VM TCP stacks talk end-to-end through vnet's
+// packet-level NAT.
+func (s *Server) routeTCPPacket(tp TCPPacket) {
+	dstIP := tp.Dst.Addr()
+	netw, ok := s.networkByWAN.Lookup(dstIP)
+	if !ok {
+		if dstIP.IsPrivate() {
+			return
+		}
+		log.Printf("no network to route TCP packet for %v", tp.Dst)
+		return
+	}
+	netw.HandleTCPPacket(tp)
 }
 
 func (s *Server) routeUDPPacket(up UDPPacket) {
@@ -1176,6 +1708,65 @@ func (n *network) nodeByIP(ip netip.Addr) (node *node, ok bool) {
 	return node, ok
 }
 
+// HandleTCPPacket handles a TCP packet arriving from the simulated
+// internet, addressed to the network's WAN IP. It NATs the destination
+// back to a LAN node and writes the rewritten packet onto the LAN.
+func (n *network) HandleTCPPacket(p TCPPacket) {
+	buf, err := n.serializedTCPPacket(p.Src, p.Dst, p.TCP, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
+	if p.Dst.Addr().Is4() && n.breakWAN4 {
+		return
+	}
+	dst := n.doNATIn(p.Src, p.Dst)
+	if !dst.IsValid() {
+		n.logf("Warning: NAT dropped TCP packet; no mapping for %v=>%v", p.Src, p.Dst)
+		return
+	}
+	p.Dst = dst
+	buf, err = n.serializedTCPPacket(p.Src, p.Dst, p.TCP, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
+	n.WriteTCPPacketNoNAT(p)
+}
+
+// WriteTCPPacketNoNAT writes a TCP packet to the network without doing
+// any NAT translation. The src/dst in p must already be in their final
+// form for the LAN.
+func (n *network) WriteTCPPacketNoNAT(p TCPPacket) {
+	node, ok := n.nodeByIP(p.Dst.Addr())
+	if !ok {
+		n.logf("no node for dest IP %v in TCP packet %v=>%v", p.Dst.Addr(), p.Src, p.Dst)
+		return
+	}
+	eth := &layers.Ethernet{
+		SrcMAC: n.mac.HWAddr(),
+		DstMAC: node.macForNet(n).HWAddr(),
+	}
+	ethRaw, err := n.serializedTCPPacket(p.Src, p.Dst, p.TCP, eth)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.writeEth(ethRaw)
+}
+
 // WriteUDPPacketNoNAT writes a UDP packet to the network, without
 // doing any NAT translation.
 //
@@ -1191,8 +1782,8 @@ func (n *network) WriteUDPPacketNoNAT(p UDPPacket) {
 	}
 
 	eth := &layers.Ethernet{
-		SrcMAC: n.mac.HWAddr(), // of gateway
-		DstMAC: node.mac.HWAddr(),
+		SrcMAC: n.mac.HWAddr(),             // of gateway; on the specific network
+		DstMAC: node.macForNet(n).HWAddr(), // use the MAC for this network
 	}
 	ethRaw, err := n.serializedUDPPacket(src, dst, p.Payload, eth)
 	if err != nil {
@@ -1223,6 +1814,27 @@ func mkIPLayer(proto layers.IPProtocol, src, dst netip.Addr) serializableNetwork
 		}
 	}
 	panic("invalid src IP")
+}
+
+// serializedTCPPacket serializes a TCP packet with the given src/dst,
+// using the provided TCP layer (its flags, seq/ack, window, options,
+// and payload are preserved; only the src/dst ports are overwritten).
+//
+// If eth is non-nil, it is used as the Ethernet layer, otherwise the
+// Ethernet layer is omitted.
+func (n *network) serializedTCPPacket(src, dst netip.AddrPort, tcp *layers.TCP, eth *layers.Ethernet) ([]byte, error) {
+	ip := mkIPLayer(layers.IPProtocolTCP, src.Addr(), dst.Addr())
+	// Copy the TCP layer with new ports and a zeroed checksum so
+	// gopacket recomputes it against the new IP pseudo-header.
+	newTCP := *tcp
+	newTCP.SrcPort = layers.TCPPort(src.Port())
+	newTCP.DstPort = layers.TCPPort(dst.Port())
+	newTCP.Checksum = 0
+	payload := gopacket.Payload(tcp.Payload)
+	if eth == nil {
+		return mkPacket(ip, &newTCP, payload)
+	}
+	return mkPacket(eth, ip, &newTCP, payload)
 }
 
 // serializedUDPPacket serializes a UDP packet with the given source and
@@ -1275,6 +1887,17 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 			// Blackhole the packet.
 			return
 		}
+
+		// Drop traffic to/from address pairs in the blackholeMap.
+		n.blackholeMu.Lock()
+		defer n.blackholeMu.Unlock()
+		if src, ok := n.blackholeMap[flow.dst]; ok && flow.src == src {
+			return
+		}
+		if dst, ok := n.blackholeMap[flow.src]; ok && flow.dst == dst {
+			return
+		}
+
 		var base *layers.BaseLayer
 		proto := header.IPv4ProtocolNumber
 		if v4, ok := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4); ok {
@@ -1296,12 +1919,79 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
+	// Inter-network TCP forwarding: a guest VM is sending TCP to another
+	// simulated network's WAN IP. Apply egress NAT (rewriting src) and
+	// hand the packet off to the destination network for ingress NAT and
+	// LAN delivery, so the two guest TCP stacks talk end-to-end.
+	if toForward && flow.dst.Is4() {
+		if tcp, ok := packet.Layer(layers.LayerTypeTCP).(*layers.TCP); ok {
+			if _, ok := n.s.networkByWAN.Lookup(flow.dst); ok {
+				n.handleTCPPacketForRouter(tcp, flow)
+				return
+			}
+		}
+	}
+
 	if flow.src.Is6() && flow.src.IsLinkLocalUnicast() && !flow.dst.IsLinkLocalUnicast() {
 		// Don't log.
 		return
 	}
 
+	if toForward {
+		// Traffic to destinations we don't handle (e.g. VMs trying to reach
+		// the real internet for NTP, package updates, etc). Expected; drop silently.
+		return
+	}
+
 	n.logf("router got unknown packet: %v", packet)
+}
+
+// handleTCPPacketForRouter handles a TCP packet from a LAN node that
+// targets another simulated network's WAN IP. It rewrites src via the
+// local NAT, then routes the packet to the destination network where
+// HandleTCPPacket rewrites dst and delivers it to the LAN.
+func (n *network) handleTCPPacketForRouter(tcp *layers.TCP, flow ipSrcDst) {
+	if flow.dst.Is4() && n.breakWAN4 {
+		return
+	}
+	src := netip.AddrPortFrom(flow.src, uint16(tcp.SrcPort))
+	dst := netip.AddrPortFrom(flow.dst, uint16(tcp.DstPort))
+
+	buf, err := n.serializedTCPPacket(src, dst, tcp, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.lanInterfaceID,
+	}, buf)
+
+	lanSrc := src
+	src = n.doNATOut(src, dst)
+	if !src.IsValid() {
+		n.logf("warning: NAT dropped TCP packet; no NAT out mapping for %v=>%v", lanSrc, dst)
+		return
+	}
+	buf, err = n.serializedTCPPacket(src, dst, tcp, nil)
+	if err != nil {
+		n.logf("serializing TCP packet: %v", err)
+		return
+	}
+	n.s.pcapWriter.WritePacket(gopacket.CaptureInfo{
+		Timestamp:      time.Now(),
+		CaptureLength:  len(buf),
+		Length:         len(buf),
+		InterfaceIndex: n.wanInterfaceID,
+	}, buf)
+
+	n.s.routeTCPPacket(TCPPacket{
+		Src: src,
+		Dst: dst,
+		TCP: tcp,
+	})
 }
 
 func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, toForward bool, flow ipSrcDst) {
@@ -1420,21 +2110,36 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 	n.logf("router got unknown UDP packet: %v", packet)
 }
 
-func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICMPv6RouterSolicitation) {
-	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+// ipv6AllNodes is the IPv6 link-local "all nodes" multicast address (ff02::1).
+// Unsolicited Router Advertisements are sent here so that every connected
+// host on the LAN sees them without the router having to know each host's
+// unicast address.
+var ipv6AllNodes = net.ParseIP("ff02::1")
 
-	// Send a router advertisement back.
+// unsolicitedRAInterval is how often vnet sends an unsolicited IPv6 Router
+// Advertisement on each v6-enabled network. Real routers default to 200s
+// (RFC 4861 §6.2.1, MaxRtrAdvInterval). We pick a much smaller value so
+// short-lived tests don't have to wait: the first RA goes out as soon as
+// a VM connects, and any subsequent gokrazy/Linux init paths that miss the
+// initial RA pick one up quickly.
+const unsolicitedRAInterval = 5 * time.Second
+
+// buildIPv6RouterAdvertisement serializes a Router Advertisement frame
+// addressed to (dstMAC, dstIP), advertising n.wanIP6's /64 as on-link and
+// fe80::1 as a default router. dstMAC/dstIP are typically the soliciting
+// host (for a solicited reply) or the link-local all-nodes group (for an
+// unsolicited periodic RA).
+func (n *network) buildIPv6RouterAdvertisement(dstMAC MAC, dstIP net.IP) ([]byte, error) {
 	eth := &layers.Ethernet{
 		SrcMAC:       n.mac.HWAddr(),
-		DstMAC:       ep.SrcMAC().HWAddr(),
+		DstMAC:       dstMAC.HWAddr(),
 		EthernetType: layers.EthernetTypeIPv6,
 	}
-	n.logf("sending IPv6 router advertisement to %v from %v", eth.DstMAC, eth.SrcMAC)
 	ip := &layers.IPv6{
 		NextHeader: layers.IPProtocolICMPv6,
 		HopLimit:   255, // per RFC 4861, 7.1.1 etc (all NDP messages); don't use mkPacket's default of 64
 		SrcIP:      net.ParseIP("fe80::1"),
-		DstIP:      v6.SrcIP,
+		DstIP:      dstIP,
 	}
 	icmp := &layers.ICMPv6{
 		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeRouterAdvertisement, 0),
@@ -1457,12 +2162,58 @@ func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, rs *layers.ICM
 			},
 		},
 	}
-	pkt, err := mkPacket(eth, ip, icmp, ra)
+	return mkPacket(eth, ip, icmp, ra)
+}
+
+func (n *network) handleIPv6RouterSolicitation(ep EthernetPacket, _ *layers.ICMPv6RouterSolicitation) {
+	v6 := ep.gp.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+	n.logf("sending IPv6 router advertisement to %v from %v", ep.SrcMAC(), n.mac)
+	pkt, err := n.buildIPv6RouterAdvertisement(ep.SrcMAC(), v6.SrcIP)
 	if err != nil {
 		n.logf("serializing ICMPv6 RA: %v", err)
 		return
 	}
 	n.writeEth(pkt)
+}
+
+// startUnsolicitedRAs sends an unsolicited Router Advertisement to the
+// link-local all-nodes group every unsolicitedRAInterval until the vnet
+// server shuts down. This ensures hosts on the LAN install vnet's default
+// IPv6 route even if their stack never emits a Router Solicitation, which
+// is what gokrazy's dual-stack init does in practice: it brings the link
+// up via DHCPv4 and then leaves IPv6 to the kernel, which under our
+// configuration never sends an RS.
+func (n *network) startUnsolicitedRAs() {
+	n.s.wg.Go(func() {
+		send := func() {
+			// Hold raStopMu across the writeEth so that
+			// StopUnsolicitedRAsForTest can synchronize with any
+			// in-progress send: once StopUnsolicitedRAsForTest returns,
+			// no further unsolicited RAs will be delivered to writers.
+			n.raStopMu.Lock()
+			defer n.raStopMu.Unlock()
+			if n.raStopped {
+				return
+			}
+			pkt, err := n.buildIPv6RouterAdvertisement(macAllNodes, ipv6AllNodes)
+			if err != nil {
+				n.logf("building unsolicited RA: %v", err)
+				return
+			}
+			n.writeEth(pkt)
+		}
+		send()
+		t := time.NewTicker(unsolicitedRAInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-n.s.shutdownCtx.Done():
+				return
+			case <-t.C:
+				send()
+			}
+		}
+	})
 }
 
 func (n *network) handleIPv6NeighborSolicitation(ep EthernetPacket, ns *layers.ICMPv6NeighborSolicitation) {
@@ -1531,11 +2282,27 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		log.Printf("DHCP request from unknown node %v; ignoring", srcMAC)
 		return nil, nil
 	}
-	gwIP := node.net.lanIP4.Addr()
+	// Use the network associated with this MAC (important for multi-NIC nodes).
+	srcNet := node.netForMAC(srcMAC)
+	if srcNet == nil {
+		log.Printf("DHCP request from MAC %v with no associated network; ignoring", srcMAC)
+		return nil, nil
+	}
+	gwIP := srcNet.lanIP4.Addr()
 
-	ipLayer := request.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 	udpLayer := request.Layer(layers.LayerTypeUDP).(*layers.UDP)
 	dhcpLayer := request.Layer(layers.LayerTypeDHCPv4).(*layers.DHCPv4)
+
+	// Determine the client's LAN IP for this specific NIC.
+	clientIP := node.lanIP
+	if srcMAC != node.mac {
+		for _, nic := range node.extraNICs {
+			if nic.mac == srcMAC {
+				clientIP = nic.lanIP
+				break
+			}
+		}
+	}
 
 	response := &layers.DHCPv4{
 		Operation:    layers.DHCPOpReply,
@@ -1544,7 +2311,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		Xid:          dhcpLayer.Xid,
 		ClientHWAddr: dhcpLayer.ClientHWAddr,
 		Flags:        dhcpLayer.Flags,
-		YourClientIP: node.lanIP.AsSlice(),
+		YourClientIP: clientIP.AsSlice(),
 		Options: []layers.DHCPOption{
 			{
 				Type:   layers.DHCPOptServerID,
@@ -1562,11 +2329,37 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	}
 	switch msgType {
 	case layers.DHCPMsgTypeDiscover:
-		response.Options = append(response.Options, layers.DHCPOption{
-			Type:   layers.DHCPOptMessageType,
-			Data:   []byte{byte(layers.DHCPMsgTypeOffer)},
-			Length: 1,
-		})
+		response.Options = append(response.Options,
+			layers.DHCPOption{
+				Type:   layers.DHCPOptMessageType,
+				Data:   []byte{byte(layers.DHCPMsgTypeOffer)},
+				Length: 1,
+			},
+			layers.DHCPOption{
+				Type:   layers.DHCPOptLeaseTime,
+				Data:   binary.BigEndian.AppendUint32(nil, 3600),
+				Length: 4,
+			},
+			layers.DHCPOption{
+				Type:   layers.DHCPOptSubnetMask,
+				Data:   net.CIDRMask(srcNet.lanIP4.Bits(), 32),
+				Length: 4,
+			},
+			layers.DHCPOption{
+				Type:   layers.DHCPOptRouter,
+				Data:   gwIP.AsSlice(),
+				Length: 4,
+			},
+			layers.DHCPOption{
+				Type:   layers.DHCPOptDNS,
+				Data:   fakeDNS.v4.AsSlice(),
+				Length: 4,
+			},
+		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeDiscover, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeOffer, clientIP)
+		}
 	case layers.DHCPMsgTypeRequest:
 		response.Options = append(response.Options,
 			layers.DHCPOption{
@@ -1591,10 +2384,14 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 			},
 			layers.DHCPOption{
 				Type:   layers.DHCPOptSubnetMask,
-				Data:   net.CIDRMask(node.net.lanIP4.Bits(), 32),
+				Data:   net.CIDRMask(srcNet.lanIP4.Bits(), 32),
 				Length: 4,
 			},
 		)
+		if s.onDHCPEvent != nil {
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeRequest, clientIP)
+			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeAck, clientIP)
+		}
 	}
 
 	eth := &layers.Ethernet{
@@ -1604,8 +2401,8 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 	}
 	ip := &layers.IPv4{
 		Protocol: layers.IPProtocolUDP,
-		SrcIP:    ipLayer.DstIP,
-		DstIP:    ipLayer.SrcIP,
+		SrcIP:    gwIP.AsSlice(),
+		DstIP:    net.IPv4bcast, // DHCP responses are broadcast when client has no IP yet
 	}
 	udp := &layers.UDP{
 		SrcPort: udpLayer.DstPort,
@@ -1653,7 +2450,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 	}
 
 	if tcp.DstPort == 80 || tcp.DstPort == 443 {
-		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher} {
+		for _, v := range []virtualIP{fakeControl, fakeDERP1, fakeDERP2, fakeLogCatcher, fakeCloudInit, fakeFiles, fakeACME} {
 			if v.Match(flow.dst) {
 				return true
 			}
@@ -1665,7 +2462,7 @@ func (s *Server) shouldInterceptTCP(pkt gopacket.Packet) bool {
 			return true
 		}
 	}
-	if tcp.DstPort == 8008 && fakeTestAgent.Match(flow.dst) {
+	if tcp.DstPort == TestDriverPort && fakeTestAgent.Match(flow.dst) {
 		// Connection from cmd/tta.
 		return true
 	}
@@ -1779,6 +2576,17 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 					Type:  q.Type,
 					Class: q.Class,
 					IP:    ip.AsSlice(),
+					TTL:   60,
+				})
+			}
+		} else if q.Type == layers.DNSTypeTXT {
+			for _, txt := range s.lookupTXT(string(q.Name)) {
+				response.ANCount++
+				response.Answers = append(response.Answers, layers.DNSResourceRecord{
+					Name:  q.Name,
+					Type:  q.Type,
+					Class: q.Class,
+					TXTs:  [][]byte{[]byte(txt)},
 					TTL:   60,
 				})
 			}
@@ -2055,6 +2863,17 @@ type UDPPacket struct {
 	Payload []byte // everything after UDP header
 }
 
+// TCPPacket is a TCP packet flowing through vnet's NAT, used for
+// packet-level TCP forwarding between simulated networks. Unlike UDP
+// (which only needs ports + payload), TCP carries flags, sequence
+// numbers, and options that must be preserved end-to-end so the guest
+// VM kernels' TCP state machines stay in sync.
+type TCPPacket struct {
+	Src netip.AddrPort
+	Dst netip.AddrPort
+	TCP *layers.TCP // full parsed TCP layer (header + options + payload)
+}
+
 func (s *Server) WriteStartingBanner(w io.Writer) {
 	fmt.Fprintf(w, "vnet serving clients:\n")
 
@@ -2086,13 +2905,23 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 
 func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
 	const debug = false
+	// stuckThreshold is how long we wait before deciding the agent is slow
+	// enough to warrant a log line. Below this we stay quiet because, in
+	// healthy runs with many agent dials in flight, even a few-millisecond
+	// wait would otherwise log every poll for every concurrent waiter.
+	const stuckThreshold = 10 * time.Second
+	start := time.Now()
+	var lastWarn time.Time
 	for {
-		ac, ok := s.takeAgentConnOne(n)
-		if ok {
+		ac, miss := s.takeAgentConnOne(n)
+		if ac != nil {
 			if debug {
 				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
 			}
 			return ac, true
+		}
+		if debug && miss > 0 {
+			log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
 		}
 		s.mu.Lock()
 		ready := make(chan struct{})
@@ -2101,6 +2930,10 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 
 		if debug {
 			log.Printf("takeAgentConn: waiting for agent conn for %v", n.mac)
+		}
+		if elapsed := time.Since(start); elapsed > stuckThreshold && time.Since(lastWarn) > stuckThreshold {
+			log.Printf("takeAgentConn: still waiting for agent conn for %v after %v (%d idle conns for other nodes)", n.mac, elapsed.Round(time.Second), miss)
+			lastWarn = time.Now()
 		}
 		select {
 		case <-ctx.Done():
@@ -2114,21 +2947,21 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 	}
 }
 
-func (s *Server) takeAgentConnOne(n *node) (_ *agentConn, ok bool) {
+// takeAgentConnOne returns an idle agent conn for n if one is available,
+// otherwise nil. miss is the number of idle agent conns for other nodes that
+// were walked over while looking; the caller may use it for diagnostics when
+// a wait drags on.
+func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	miss := 0
 	for ac := range s.agentConns {
 		if ac.node == n {
 			s.agentConns.Delete(ac)
-			return ac, true
+			return ac, 0
 		}
 		miss++
 	}
-	if miss > 0 {
-		log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
-	}
-	return nil, false
+	return nil, miss
 }
 
 type NodeAgentClient struct {

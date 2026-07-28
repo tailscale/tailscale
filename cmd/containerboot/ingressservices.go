@@ -265,7 +265,13 @@ func ensureIngressRulesAdded(cfgs map[string]ingressservices.Config, nfr linuxfw
 
 func addDNATRuleForSvc(nfr linuxfw.NetfilterRunner, serviceName string, tsIP, clusterIP netip.Addr) error {
 	log.Printf("adding DNAT rule for Tailscale Service %s with IP %s to Kubernetes Service IP %s", serviceName, tsIP, clusterIP)
-	return nfr.EnsureDNATRuleForSvc(serviceName, tsIP, clusterIP)
+	if err := nfr.EnsureDNATRuleForSvc(serviceName, tsIP, clusterIP); err != nil {
+		return err
+	}
+	if err := nfr.ClampMSSToPMTU(tailscaleTunInterface, clusterIP); err != nil {
+		return fmt.Errorf("error clamping MSS to PMTU: %w", err)
+	}
+	return nil
 }
 
 // ensureIngressRulesDeleted takes a map of Tailscale Services and rules and ensures that the firewall rules are deleted.

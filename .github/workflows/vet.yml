@@ -14,15 +14,17 @@ on:
       - main
       - "release-branch/*"
     paths:
+      - .github/workflows/vet.yml
       - "**.go"
   pull_request:
     paths:
+      - .github/workflows/vet.yml
       - "**.go"
 
 jobs:
   vet:
-    runs-on: [ self-hosted, linux ]
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
 
     steps:
       - name: Check out code
@@ -36,8 +38,10 @@ jobs:
 
       - name: Run 'go vet'
         working-directory: src
+        # Use listpkgs --ignore-3p to skip tempfork/ packages, which
+        # intentionally match upstream and may not follow our style rules.
         # Must use ./... instead of tailscale.com/... because the latter will
         # include the v2 go client (tailscale.com/client/tailscale/v2) if it's
         # a dependency in our go.mod file. Possibly a go vet bug, but avoid
         # cross-repo vetting for now so we can safely add the dependency.
-        run: ./tool/go vet -vettool=/tmp/vettool ./...
+        run: ./tool/go vet -vettool=/tmp/vettool $(./tool/go run ./tool/listpkgs --ignore-3p ./...)

@@ -49,7 +49,7 @@ func TestIgnoreDuplicateNEWADDR(t *testing.T) {
 		return msg
 	}
 
-	t.Run("suppress duplicate NEWADDRs", func(t *testing.T) {
+	t.Run("suppress-duplicate-NEWADDRs", func(t *testing.T) {
 		c := nlConn{
 			buffered: []netlink.Message{
 				newAddrMsg(1, "192.168.0.5", unix.RTM_NEWADDR),
@@ -69,7 +69,7 @@ func TestIgnoreDuplicateNEWADDR(t *testing.T) {
 		}
 	})
 
-	t.Run("do not suppress after DELADDR", func(t *testing.T) {
+	t.Run("no-suppress-after-DELADDR", func(t *testing.T) {
 		c := nlConn{
 			buffered: []netlink.Message{
 				newAddrMsg(1, "192.168.0.5", unix.RTM_NEWADDR),

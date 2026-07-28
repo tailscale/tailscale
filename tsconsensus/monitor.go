@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"slices"
 
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/dnsname"
@@ -108,24 +107,16 @@ func (m *monitor) handleNetmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	watcher, err := lc.WatchIPNBus(r.Context(), ipn.NotifyInitialNetMap)
+	st, err := lc.Status(r.Context())
 	if err != nil {
-		log.Printf("monitor: error WatchIPNBus: %v", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-	defer watcher.Close()
-
-	n, err := watcher.Next()
-	if err != nil {
-		log.Printf("monitor: error watcher.Next: %v", err)
+		log.Printf("monitor: error fetching status: %v", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "\t")
-	if err := encoder.Encode(n); err != nil {
-		log.Printf("monitor: error encoding netmap: %v", err)
+	if err := encoder.Encode(st); err != nil {
+		log.Printf("monitor: error encoding status: %v", err)
 		return
 	}
 }

@@ -3,7 +3,6 @@
 
 //go:build cgo || !darwin
 
-// Package systray provides a minimal Tailscale systray application.
 package systray
 
 import (

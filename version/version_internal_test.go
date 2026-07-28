@@ -3,7 +3,13 @@
 
 package version
 
-import "testing"
+import (
+	"os/exec"
+	"strings"
+	"testing"
+
+	"tailscale.com/util/cibuild"
+)
 
 func TestIsValidLongWithTwoRepos(t *testing.T) {
 	tests := []struct {
@@ -24,6 +30,26 @@ func TestIsValidLongWithTwoRepos(t *testing.T) {
 			t.Errorf("IsValidLongWithTwoRepos(%q) = %v; want %v", tt.long, got, tt.want)
 		}
 	}
+}
+
+func TestTailscaleToolchainRev(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatalf("go env GOROOT: %v", err)
+	}
+	goRoot := strings.TrimSpace(string(out))
+	isTsgo := strings.Contains(goRoot, "/.cache/tsgo/")
+	if !cibuild.On() && !isTsgo {
+		t.Skip("skipping; not in CI and not using the Tailscale Go toolchain")
+	}
+	if !isTailscaleGo {
+		t.Skip("skipping; not built with tailscale_go build tag")
+	}
+	rev := tailscaleToolchainRev()
+	if rev == "" {
+		t.Fatal("tailscale.toolchain.rev is empty in build info; expected non-empty when using tsgo")
+	}
+	t.Logf("tailscale.toolchain.rev = %s", rev)
 }
 
 func TestPrepExeNameForCmp(t *testing.T) {

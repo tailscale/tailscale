@@ -19,19 +19,11 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
-	for _, ep := range eps {
-		ret = append(ret, ep.Addr)
-	}
-	return
-}
 
 func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.Prefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
@@ -90,6 +82,29 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	e1.SetFilter(filter.NewAllowAllForTest(l1))
 	e2.SetFilter(filter.NewAllowAllForTest(l2))
 
+	// There is no LocalBackend in this benchmark, so install trivial
+	// outbound peer lookups and per-peer config sources; without them,
+	// outbound packets can't lazily create their WireGuard peer.
+	k1pub, k2pub := k1.Public(), k2.Public()
+	e1.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
+		return k2pub, a2.Contains(dst)
+	})
+	e2.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
+		return k1pub, a1.Contains(dst)
+	})
+	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+		if pubk == k2pub {
+			return []netip.Prefix{a2}, true
+		}
+		return nil, false
+	})
+	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+		if pubk == k1pub {
+			return []netip.Prefix{a1}, true
+		}
+		return nil, false
+	})
+
 	var wait sync.WaitGroup
 	wait.Add(2)
 
@@ -103,23 +118,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e1 status: %v", *st)
 
-		n := &tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
-			Name:       "n1",
-			Addresses:  []netip.Prefix{a1},
-			AllowedIPs: []netip.Prefix{a1},
-			Endpoints:  epFromTyped(st.LocalAddrs),
-		}
-		e2.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey: k2.Public(),
-			Peers:   []tailcfg.NodeView{n.View()},
-		})
-
-		p := wgcfg.Peer{
-			PublicKey:  c1.PrivateKey.Public(),
-			AllowedIPs: []netip.Prefix{a1},
-		}
-		c2.Peers = []wgcfg.Peer{p}
+		e2.SetSelfNode(tailcfg.NodeView{})
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
 		e1waitDoneOnce.Do(wait.Done)
 	})
@@ -134,23 +133,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		}
 		logf("e2 status: %v", *st)
 
-		n := &tailcfg.Node{
-			ID:         tailcfg.NodeID(0),
-			Name:       "n2",
-			Addresses:  []netip.Prefix{a2},
-			AllowedIPs: []netip.Prefix{a2},
-			Endpoints:  epFromTyped(st.LocalAddrs),
-		}
-		e1.SetNetworkMap(&netmap.NetworkMap{
-			NodeKey: k1.Public(),
-			Peers:   []tailcfg.NodeView{n.View()},
-		})
-
-		p := wgcfg.Peer{
-			PublicKey:  c2.PrivateKey.Public(),
-			AllowedIPs: []netip.Prefix{a2},
-		}
-		c1.Peers = []wgcfg.Peer{p}
+		e1.SetSelfNode(tailcfg.NodeView{})
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))
 		e2waitDoneOnce.Do(wait.Done)
 	})

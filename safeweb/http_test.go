@@ -41,25 +41,25 @@ func TestPostRequestContentTypeValidation(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "API routes should accept `application/json` content-type",
+			name:         "API-accept-application-json",
 			browserRoute: false,
 			contentType:  "application/json",
 			wantErr:      false,
 		},
 		{
-			name:         "API routes should reject `application/x-www-form-urlencoded` content-type",
+			name:         "API-reject-form-urlencoded",
 			browserRoute: false,
 			contentType:  "application/x-www-form-urlencoded",
 			wantErr:      true,
 		},
 		{
-			name:         "Browser routes should accept `application/x-www-form-urlencoded` content-type",
+			name:         "browser-accept-form-urlencoded",
 			browserRoute: true,
 			contentType:  "application/x-www-form-urlencoded",
 			wantErr:      false,
 		},
 		{
-			name:         "non Browser routes should accept `application/json` content-type",
+			name:         "browser-accept-application-json",
 			browserRoute: true,
 			contentType:  "application/json",
 			wantErr:      false,
@@ -106,21 +106,21 @@ func TestAPIMuxCrossOriginResourceSharingHeaders(t *testing.T) {
 		corsMethods     []string
 	}{
 		{
-			name:            "do not set CORS headers for non-OPTIONS requests",
+			name:            "no-CORS-headers-for-non-OPTIONS",
 			corsOrigins:     []string{"https://foobar.com"},
 			corsMethods:     []string{"GET", "POST", "HEAD"},
 			httpMethod:      "GET",
 			wantCORSHeaders: false,
 		},
 		{
-			name:            "set CORS headers for non-OPTIONS requests",
+			name:            "CORS-headers-for-OPTIONS",
 			corsOrigins:     []string{"https://foobar.com"},
 			corsMethods:     []string{"GET", "POST", "HEAD"},
 			httpMethod:      "OPTIONS",
 			wantCORSHeaders: true,
 		},
 		{
-			name:            "do not serve CORS headers for OPTIONS requests with no configured origins",
+			name:            "no-CORS-headers-for-OPTIONS-without-origins",
 			httpMethod:      "OPTIONS",
 			wantCORSHeaders: false,
 		},
@@ -162,19 +162,19 @@ func TestCSRFProtection(t *testing.T) {
 		wantStatus    int
 	}{
 		{
-			name:          "POST requests to non-API routes require CSRF token and fail if not provided",
+			name:          "non-API-POST-without-CSRF-fails",
 			apiRoute:      false,
 			passCSRFToken: false,
 			wantStatus:    http.StatusForbidden,
 		},
 		{
-			name:          "POST requests to non-API routes require CSRF token and pass if provided",
+			name:          "non-API-POST-with-CSRF-passes",
 			apiRoute:      false,
 			passCSRFToken: true,
 			wantStatus:    http.StatusOK,
 		},
 		{
-			name:          "POST requests to /api/ routes do not require CSRF token",
+			name:          "API-POST-without-CSRF-passes",
 			apiRoute:      true,
 			passCSRFToken: false,
 			wantStatus:    http.StatusOK,
@@ -246,11 +246,11 @@ func TestContentSecurityPolicyHeader(t *testing.T) {
 		wantCSP  string
 	}{
 		{
-			name:    "default CSP",
+			name:    "default-CSP",
 			wantCSP: `base-uri 'self'; block-all-mixed-content; default-src 'self'; form-action 'self'; frame-ancestors 'none';`,
 		},
 		{
-			name: "custom CSP",
+			name: "custom-CSP",
 			csp: CSP{
 				"default-src":               {"'self'", "https://tailscale.com"},
 				"upgrade-insecure-requests": nil,
@@ -258,7 +258,7 @@ func TestContentSecurityPolicyHeader(t *testing.T) {
 			wantCSP: `default-src 'self' https://tailscale.com; upgrade-insecure-requests;`,
 		},
 		{
-			name:     "`/api/*` routes do not get CSP headers",
+			name:     "api-routes-no-CSP-headers",
 			apiRoute: true,
 			wantCSP:  "",
 		},
@@ -301,12 +301,12 @@ func TestCSRFCookieSecureMode(t *testing.T) {
 		wantSecure bool
 	}{
 		{
-			name:       "CSRF cookie should be secure when server is in secure context",
+			name:       "secure-context-cookie-secure",
 			secureMode: true,
 			wantSecure: true,
 		},
 		{
-			name:       "CSRF cookie should not be secure when server is not in secure context",
+			name:       "non-secure-context-cookie-not-secure",
 			secureMode: false,
 			wantSecure: false,
 		},
@@ -343,12 +343,12 @@ func TestRefererPolicy(t *testing.T) {
 		wantRefererPolicy bool
 	}{
 		{
-			name:              "BrowserMux routes get Referer-Policy headers",
+			name:              "BrowserMux-gets-Referer-Policy",
 			browserRoute:      true,
 			wantRefererPolicy: true,
 		},
 		{
-			name:              "APIMux routes do not get Referer-Policy headers",
+			name:              "APIMux-no-Referer-Policy",
 			browserRoute:      false,
 			wantRefererPolicy: false,
 		},
@@ -420,54 +420,54 @@ func TestRouting(t *testing.T) {
 		want            string
 	}{
 		{
-			desc:            "only browser mux",
+			desc:            "only-browser-mux",
 			browserPatterns: []string{"/"},
 			requestPath:     "/index.html",
 			want:            "browser",
 		},
 		{
-			desc:        "only API mux",
+			desc:        "only-API-mux",
 			apiPatterns: []string{"/api/"},
 			requestPath: "/api/foo",
 			want:        "api",
 		},
 		{
-			desc:            "browser mux match",
+			desc:            "browser-mux-match",
 			browserPatterns: []string{"/content/"},
 			apiPatterns:     []string{"/api/"},
 			requestPath:     "/content/index.html",
 			want:            "browser",
 		},
 		{
-			desc:            "API mux match",
+			desc:            "API-mux-match",
 			browserPatterns: []string{"/content/"},
 			apiPatterns:     []string{"/api/"},
 			requestPath:     "/api/foo",
 			want:            "api",
 		},
 		{
-			desc:            "browser wildcard match",
+			desc:            "browser-wildcard-match",
 			browserPatterns: []string{"/"},
 			apiPatterns:     []string{"/api/"},
 			requestPath:     "/index.html",
 			want:            "browser",
 		},
 		{
-			desc:            "API wildcard match",
+			desc:            "API-wildcard-match",
 			browserPatterns: []string{"/content/"},
 			apiPatterns:     []string{"/"},
 			requestPath:     "/api/foo",
 			want:            "api",
 		},
 		{
-			desc:            "path conflict",
+			desc:            "path-conflict",
 			browserPatterns: []string{"/foo/"},
 			apiPatterns:     []string{"/foo/bar/"},
 			requestPath:     "/foo/bar/baz",
 			want:            "api",
 		},
 		{
-			desc:            "no match",
+			desc:            "no-match",
 			browserPatterns: []string{"/foo/"},
 			apiPatterns:     []string{"/bar/"},
 			requestPath:     "/baz",
@@ -521,43 +521,43 @@ func TestGetMoreSpecificPattern(t *testing.T) {
 			want: unknownHandler,
 		},
 		{
-			desc: "identical prefix",
+			desc: "identical-prefix",
 			a:    "/foo/bar/",
 			b:    "/foo/bar/",
 			want: unknownHandler,
 		},
 		{
-			desc: "trailing slash",
+			desc: "trailing-slash",
 			a:    "/foo",
 			b:    "/foo/", // path.Clean will strip the trailing slash.
 			want: unknownHandler,
 		},
 		{
-			desc: "same prefix",
+			desc: "same-prefix",
 			a:    "/foo/bar/quux",
 			b:    "/foo/bar/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
-			desc: "almost same prefix, but not a path component",
+			desc: "almost-same-prefix-not-path-component",
 			a:    "/goat/sheep/cheese",
 			b:    "/goat/sheepcheese/", // path.Clean will strip the trailing slash.
 			want: apiHandler,
 		},
 		{
-			desc: "attempt to make less-specific pattern look more specific",
+			desc: "traversal-less-specific-pattern",
 			a:    "/goat/cat/buddy",
 			b:    "/goat/../../../../../../../cat", // path.Clean catches this foolishness
 			want: apiHandler,
 		},
 		{
-			desc: "2 names for / (1)",
+			desc: "two-names-for-root-1",
 			a:    "/",
 			b:    "/../../../../../../",
 			want: unknownHandler,
 		},
 		{
-			desc: "2 names for / (2)",
+			desc: "two-names-for-root-2",
 			a:    "/",
 			b:    "///////",
 			want: unknownHandler,
@@ -586,15 +586,15 @@ func TestStrictTransportSecurityOptions(t *testing.T) {
 		expect        string
 	}{
 		{
-			name: "off by default",
+			name: "off-by-default",
 		},
 		{
-			name:          "default HSTS options in the secure context",
+			name:          "default-HSTS-in-secure-context",
 			secureContext: true,
 			expect:        DefaultStrictTransportSecurityOptions,
 		},
 		{
-			name:          "custom options sent in the secure context",
+			name:          "custom-options-in-secure-context",
 			options:       DefaultStrictTransportSecurityOptions + "; includeSubDomains",
 			secureContext: true,
 			expect:        DefaultStrictTransportSecurityOptions + "; includeSubDomains",

@@ -7,6 +7,7 @@ package main
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 
 	"tailscale.com/kube/ingressservices"
@@ -22,6 +23,7 @@ func TestSyncIngressConfigs(t *testing.T) {
 			TailscaleServiceIP netip.Addr
 			ClusterIP          netip.Addr
 		}
+		wantClampedAddrs []netip.Addr // cluster IPs that should have MSS clamping applied
 	}{
 		{
 			name: "add_new_rules_when_no_existing_config",
@@ -35,6 +37,7 @@ func TestSyncIngressConfigs(t *testing.T) {
 			}{
 				"svc:foo": makeWantService("100.64.0.1", "10.0.0.1"),
 			},
+			wantClampedAddrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")},
 		},
 		{
 			name: "add_multiple_services",
@@ -52,6 +55,11 @@ func TestSyncIngressConfigs(t *testing.T) {
 				"svc:bar": makeWantService("100.64.0.2", "10.0.0.2"),
 				"svc:baz": makeWantService("100.64.0.3", "10.0.0.3"),
 			},
+			wantClampedAddrs: []netip.Addr{
+				netip.MustParseAddr("10.0.0.1"),
+				netip.MustParseAddr("10.0.0.2"),
+				netip.MustParseAddr("10.0.0.3"),
+			},
 		},
 		{
 			name: "add_both_ipv4_and_ipv6_rules",
@@ -64,6 +72,10 @@ func TestSyncIngressConfigs(t *testing.T) {
 				ClusterIP          netip.Addr
 			}{
 				"svc:foo": makeWantService("2001:db8::1", "2001:db8::2"),
+			},
+			wantClampedAddrs: []netip.Addr{
+				netip.MustParseAddr("10.0.0.1"),
+				netip.MustParseAddr("2001:db8::2"),
 			},
 		},
 		{
@@ -78,6 +90,7 @@ func TestSyncIngressConfigs(t *testing.T) {
 			}{
 				"svc:ipv6": makeWantService("2001:db8::10", "2001:db8::20"),
 			},
+			wantClampedAddrs: []netip.Addr{netip.MustParseAddr("2001:db8::20")},
 		},
 		{
 			name:           "delete_all_rules_when_config_removed",
@@ -94,6 +107,7 @@ func TestSyncIngressConfigs(t *testing.T) {
 				TailscaleServiceIP netip.Addr
 				ClusterIP          netip.Addr
 			}{},
+			wantClampedAddrs: nil, // no rules added, no clamping
 		},
 		{
 			name: "add_remove_modify",
@@ -116,6 +130,10 @@ func TestSyncIngressConfigs(t *testing.T) {
 			}{
 				"svc:foo": makeWantService("100.64.0.1", "10.0.0.2"),
 				"svc:new": makeWantService("100.64.0.4", "10.0.0.4"),
+			},
+			wantClampedAddrs: []netip.Addr{
+				netip.MustParseAddr("10.0.0.2"),
+				netip.MustParseAddr("10.0.0.4"),
 			},
 		},
 		{
@@ -152,12 +170,17 @@ func TestSyncIngressConfigs(t *testing.T) {
 				"svc:web-ipv6": makeWantService("2001:db8::10", "2001:db8::20"),
 				"svc:api":      makeWantService("100.64.0.20", "10.0.0.20"),
 			},
+			wantClampedAddrs: []netip.Addr{
+				netip.MustParseAddr("10.0.0.10"),
+				netip.MustParseAddr("10.0.0.20"),
+				netip.MustParseAddr("2001:db8::20"),
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var nfr linuxfw.NetfilterRunner = linuxfw.NewFakeNetfilterRunner()
+			nfr := linuxfw.NewFakeNetfilterRunner()
 
 			ep := &ingressProxy{
 				nfr:     nfr,
@@ -170,8 +193,7 @@ func TestSyncIngressConfigs(t *testing.T) {
 				t.Fatalf("syncIngressConfigs failed: %v", err)
 			}
 
-			fake := nfr.(*linuxfw.FakeNetfilterRunner)
-			gotServices := fake.GetServiceState()
+			gotServices := nfr.GetServiceState()
 			if len(gotServices) != len(tt.wantServices) {
 				t.Errorf("got %d services, want %d", len(gotServices), len(tt.wantServices))
 			}
@@ -186,6 +208,20 @@ func TestSyncIngressConfigs(t *testing.T) {
 				}
 				if got.ClusterIP != want.ClusterIP {
 					t.Errorf("service %s: got ClusterIP %v, want %v", svc, got.ClusterIP, want.ClusterIP)
+				}
+			}
+
+			gotClamped := nfr.GetClampedAddrs()
+			slices.SortFunc(gotClamped, func(a, b netip.Addr) int { return a.Compare(b) })
+			slices.SortFunc(tt.wantClampedAddrs, func(a, b netip.Addr) int { return a.Compare(b) })
+			if len(gotClamped) != len(tt.wantClampedAddrs) {
+				t.Errorf("ClampMSSToPMTU: got %v, want %v", gotClamped, tt.wantClampedAddrs)
+			} else {
+				for i := range gotClamped {
+					if gotClamped[i] != tt.wantClampedAddrs[i] {
+						t.Errorf("ClampMSSToPMTU: got %v, want %v", gotClamped, tt.wantClampedAddrs)
+						break
+					}
 				}
 			}
 		})

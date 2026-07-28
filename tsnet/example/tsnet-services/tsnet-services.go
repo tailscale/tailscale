@@ -8,17 +8,16 @@
 //  1. Add access controls which (i) define a new ACL tag, (ii) allow the demo
 //     node to host the Service, and (iii) allow peers on the tailnet to reach
 //     the Service. A sample ACL policy is provided below.
-//
 //  2. [Generate an auth key] using the Tailscale admin panel. When doing so, add
 //     your new tag to your key (Service hosts must be tagged nodes).
-//
 //  3. [Define a Service]. For the purposes of this demo, it must be defined to
 //     listen on TCP port 443. Note that you only need to follow Step 1 in the
 //     linked document.
+//  4. Run the demo on the command line (step 4 command shown below).
 //
-//  4. Run the demo on the command line:
+// Command for step 4:
 //
-//     TS_AUTHKEY=<yourkey> go run tsnet-services.go -service <service-name>
+//	TS_AUTHKEY=<yourkey> go run tsnet-services.go -service <service-name>
 //
 // The following is a sample ACL policy for step 1:
 //

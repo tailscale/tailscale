@@ -42,7 +42,33 @@ func init() {
 	expvar.Publish("go_version", StaticStringVar(runtime.Version()))
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
+	if v := nodeBootTime(); v != 0 {
+		var vi any = v // box once
+		// The name matches what Prometheus's node exporter uses
+		// for the same value.
+		expvar.Publish("node_boot_time_seconds", expvar.Func(func() any { return vi }))
+	}
 }
+
+// nodeBootTime returns the machine's boot time in Unix seconds,
+// as reported by the "btime" line of Linux's /proc/stat.
+// It returns 0 if unavailable, such as on non-Linux systems.
+var nodeBootTime = sync.OnceValue(func() int64 {
+	stat, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0
+	}
+	for line := range strings.Lines(string(stat)) {
+		if rest, ok := strings.CutPrefix(line, "btime "); ok {
+			sec, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if err != nil {
+				return 0
+			}
+			return sec
+		}
+	}
+	return 0
+})
 
 const (
 	gaugePrefix     = "gauge_"

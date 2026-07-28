@@ -54,7 +54,7 @@ func createAndCleanup(t *testing.T, cl client.Client, obj client.Object) {
 	t.Cleanup(func() {
 		// Use context.Background() for cleanup, as t.Context() is cancelled
 		// just before cleanup functions are called.
-		if err = cl.Delete(context.Background(), obj); err != nil {
+		if err := cl.Delete(context.Background(), obj); err != nil {
 			t.Errorf("error cleaning up %s %s/%s: %s", obj.GetObjectKind().GroupVersionKind(), obj.GetNamespace(), obj.GetName(), err)
 		}
 	})
@@ -69,7 +69,7 @@ func createAndCleanupErr(t *testing.T, cl client.Client, obj client.Object) erro
 	}
 
 	t.Cleanup(func() {
-		if err = cl.Delete(context.Background(), obj); err != nil {
+		if err := cl.Delete(context.Background(), obj); err != nil {
 			t.Errorf("error cleaning up %s %s/%s: %s", obj.GetObjectKind().GroupVersionKind(), obj.GetNamespace(), obj.GetName(), err)
 		}
 	})

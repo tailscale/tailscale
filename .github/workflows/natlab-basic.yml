@@ -1,0 +1,45 @@
+# Run a single natlab smoke test on every PR. The full natlab suite
+# is opt-in and lives in .github/workflows/natlab-test.yml.
+# See https://github.com/tailscale/tailscale/issues/13038
+name: "natlab-basic"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - "main"
+      - "release-branch/*"
+  pull_request:
+    # all PRs on all branches
+  merge_group:
+    branches:
+      - "main"
+jobs:
+  EasyEasy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install qemu
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -y update
+          sudo apt-get -y remove man-db
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+      - name: Build VM image
+        # The test will build this if missing, but we do it explicitly
+        # to avoid cutting into the go test -timeout budget, and to
+        # fail earlier with a clearer error if the image build breaks.
+        run: |
+          make -C gokrazy natlab
+      - name: Run natlab integration tests
+        run: |
+          ./tool/go test -v -run=^TestEasyEasy$ -timeout=3m -count=1 ./tstest/natlab/vmtest --run-vm-tests

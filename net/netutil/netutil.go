@@ -8,9 +8,39 @@ import (
 	"bufio"
 	"io"
 	"net"
+	"net/http"
+	"time"
 
 	"tailscale.com/syncs"
 )
+
+// NewDefaultTransport returns a new *http.Transport configured identically to
+// the Go standard library's http.DefaultTransport.
+//
+// Unlike http.DefaultTransport.(*http.Transport).Clone(), it does not panic
+// when a program has replaced http.DefaultTransport with a RoundTripper that
+// is not a *http.Transport. In the common case (the global is still the
+// standard *http.Transport) it returns a clone of it, preserving the existing
+// behavior exactly; otherwise it returns a fresh transport mirroring the
+// stdlib defaults.
+func NewDefaultTransport() *http.Transport {
+	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+		return tr.Clone()
+	}
+	// Values copied verbatim from net/http's DefaultTransport.
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
 
 // NewOneConnListener returns a net.Listener that returns c on its
 // first Accept and EOF thereafter.

@@ -12,9 +12,10 @@ import (
 
 type FakeLocalClient struct {
 	FakeIPNBusWatcher
-	SetServeCalled bool
-	EditPrefsCalls []*ipn.MaskedPrefs
-	GetPrefsResult *ipn.Prefs
+	SetServeCalled    bool
+	EditPrefsCalls    []*ipn.MaskedPrefs
+	GetPrefsResult    *ipn.Prefs
+	CertDomainsResult []string
 }
 
 func (m *FakeLocalClient) SetServeConfig(ctx context.Context, cfg *ipn.ServeConfig) error {
@@ -43,6 +44,10 @@ func (f *FakeLocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchO
 
 func (f *FakeLocalClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
 	return nil, nil, fmt.Errorf("CertPair not implemented")
+}
+
+func (f *FakeLocalClient) CertDomains(ctx context.Context) ([]string, error) {
+	return f.CertDomainsResult, nil
 }
 
 type FakeIPNBusWatcher struct {

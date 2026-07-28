@@ -23,7 +23,10 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"software.sslmate.com/src/go-pkcs12"
 	"tailscale.com/atomicfile"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/tsconst"
 	"tailscale.com/version"
 )
 
@@ -112,6 +115,11 @@ func runCert(ctx context.Context, args []string) error {
 		certArgs.certFile = fileBase + ".crt"
 		certArgs.keyFile = fileBase + ".key"
 	}
+	if buildfeatures.HasHealth {
+		watchCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go watchCertPendingHealth(watchCtx, domain)
+	}
 	certPEM, keyPEM, err := localClient.CertPairWithValidity(ctx, domain, certArgs.minValidity)
 	if err != nil {
 		return err
@@ -165,6 +173,44 @@ func runCert(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+// watchCertPendingHealth subscribes to the IPN bus and prints the
+// [tsconst.HealthWarnableTLSCertPending] warning to stderr if it appears
+// for domain while a cert fetch is in flight. It returns once it has
+// printed the warning or ctx is done.
+//
+// Subscription is delayed 1 second so we don't print anything when the
+// daemon returns a cached cert quickly.
+func watchCertPendingHealth(ctx context.Context, domain string) {
+	select {
+	case <-time.After(1 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+	watcher, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialHealthState|ipn.NotifyNoNetMap)
+	if err != nil {
+		return
+	}
+	defer watcher.Close()
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			return
+		}
+		if n.Health == nil {
+			continue
+		}
+		ws, ok := n.Health.Warnings[tsconst.HealthWarnableTLSCertPending]
+		if !ok {
+			continue
+		}
+		if !strings.Contains(ws.Args[health.ArgDomains], domain) {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "%s: %s\n", ws.Title, ws.Text)
+		return
+	}
 }
 
 func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed bool, err error) {

@@ -94,7 +94,7 @@ type ObjectMeta struct {
 	// Null for lists.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
-	CreationTimestamp time.Time `json:"creationTimestamp,omitempty"`
+	CreationTimestamp time.Time `json:"creationTimestamp"`
 
 	// DeletionTimestamp is RFC 3339 date and time at which this resource will be deleted. This
 	// field is set by the server when a graceful deletion is requested by the user, and is not
@@ -169,14 +169,14 @@ type Event struct {
 	ObjectMeta `json:"metadata"`
 	Message    string      `json:"message,omitempty"`
 	Reason     string      `json:"reason,omitempty"`
-	Source     EventSource `json:"source,omitempty"` // who is emitting this Event
-	Type       string      `json:"type,omitempty"`   // Normal or Warning
+	Source     EventSource `json:"source"`         // who is emitting this Event
+	Type       string      `json:"type,omitempty"` // Normal or Warning
 	// InvolvedObject is the subject of the Event. `kubectl describe` will, for most object types, display any
 	// currently present cluster Events matching the object (but you probably want to set UID for this to work).
 	InvolvedObject ObjectReference `json:"involvedObject"`
 	Count          int32           `json:"count,omitempty"` // how many times Event was observed
-	FirstTimestamp time.Time       `json:"firstTimestamp,omitempty"`
-	LastTimestamp  time.Time       `json:"lastTimestamp,omitempty"`
+	FirstTimestamp time.Time       `json:"firstTimestamp"`
+	LastTimestamp  time.Time       `json:"lastTimestamp"`
 }
 
 // EventSource includes a subset of fields from corev1.EventSource.

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"reflect"
 	"slices"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
@@ -201,6 +203,10 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 		return nil
 	}
 
+	if err := esr.ensureEndpointSlices(ctx, svc, clusterIPSvc, lg); err != nil {
+		return err
+	}
+
 	// Update ExternalName Service to point at the ClusterIP Service.
 	clusterDomain := retrieveClusterDomain(esr.tsNamespace, lg)
 	clusterIPSvcFQDN := fmt.Sprintf("%s.%s.svc.%s", clusterIPSvc.Name, clusterIPSvc.Namespace, clusterDomain)
@@ -214,6 +220,60 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	}
 	r = svcConfiguredReason(svc, true, lg)
 	st = metav1.ConditionTrue
+	return nil
+}
+
+// addrTypesForClusterIPSvc returns the EndpointSlice address types (IP families)
+// that the given ClusterIP Service supports, derived from its ClusterIPs.
+// TODO(beckypauley): this could read Spec.IPFamilies directly instead of parsing
+// ClusterIPs to determine the family.
+func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.AddressType, error) {
+	addrTypes := make([]discoveryv1.AddressType, 0, len(clusterIPSvc.Spec.ClusterIPs))
+	for _, clusterIP := range clusterIPSvc.Spec.ClusterIPs {
+		ip, err := netip.ParseAddr(clusterIP)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing ClusterIP %q: %w", clusterIP, err)
+		}
+		addrType := discoveryv1.AddressTypeIPv4
+		if ip.Is6() {
+			addrType = discoveryv1.AddressTypeIPv6
+		}
+		addrTypes = append(addrTypes, addrType)
+	}
+	return addrTypes, nil
+}
+
+// ensureEndpointSlices ensures that EndpointSlices exist for the egress service
+// for each IP family supported by the cluster, and that their ports are up to
+// date.
+func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
+	crl := egressSvcEpsLabels(svc, clusterIPSvc)
+	// Only create EndpointSlices for IP families supported by the cluster.
+	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		return err
+	}
+	for _, addrType := range addrTypes {
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+				Namespace: esr.tsNamespace,
+				Labels:    crl,
+			},
+			AddressType: addrType,
+			Ports:       epsPortsFromSvc(clusterIPSvc),
+		}
+		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
+			e.Labels = eps.Labels
+			e.AddressType = eps.AddressType
+			e.Ports = eps.Ports
+			for _, p := range e.Endpoints {
+				p.Conditions.Ready = nil
+			}
+		}); err != nil {
+			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+		}
+	}
 	return nil
 }
 
@@ -315,29 +375,6 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		}
 	}
 
-	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	// TODO(irbekrm): support IPv6, but need to investigate how kube proxy
-	// sets up Service -> Pod routing when IPv6 is involved.
-	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ipv4", clusterIPSvc.Name),
-			Namespace: esr.tsNamespace,
-			Labels:    crl,
-		},
-		AddressType: discoveryv1.AddressTypeIPv4,
-		Ports:       epsPortsFromSvc(clusterIPSvc),
-	}
-	if eps, err = createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-		e.Labels = eps.Labels
-		e.AddressType = eps.AddressType
-		e.Ports = eps.Ports
-		for _, p := range e.Endpoints {
-			p.Conditions.Ready = nil
-		}
-	}); err != nil {
-		return nil, false, fmt.Errorf("error ensuring EndpointSlice: %w", err)
-	}
-
 	cm, cfgs, err := egressSvcsConfigs(ctx, esr.Client, proxyGroupName, esr.tsNamespace)
 	if err != nil {
 		return nil, false, fmt.Errorf("error retrieving egress services configuration: %w", err)
@@ -347,11 +384,11 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 		return nil, false, nil
 	}
 	tailnetSvc := tailnetSvcName(svc)
-	gotCfg := (*cfgs)[tailnetSvc]
+	gotCfg := cfgs[tailnetSvc]
 	wantsCfg := egressSvcCfg(svc, clusterIPSvc, esr.tsNamespace, lg)
 	if !reflect.DeepEqual(gotCfg, wantsCfg) {
 		lg.Debugf("updating egress services ConfigMap %s", cm.Name)
-		mak.Set(cfgs, tailnetSvc, wantsCfg)
+		mak.Set(&cfgs, tailnetSvc, wantsCfg)
 		bs, err := json.Marshal(cfgs)
 		if err != nil {
 			return nil, false, fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -457,7 +494,8 @@ func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *c
 			Labels:       crl,
 		},
 		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
+			Type:           corev1.ServiceTypeClusterIP,
+			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
 		},
 	}
 }
@@ -484,19 +522,19 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 		lggr.Debugf("ConfigMap does not contain egress service configs")
 		return nil
 	}
-	cfgs := &egressservices.Configs{}
-	if err := json.Unmarshal(bs, cfgs); err != nil {
+	cfgs := egressservices.Configs{}
+	if err := json.Unmarshal(bs, &cfgs); err != nil {
 		return fmt.Errorf("error unmarshalling egress services configs")
 	}
 	tailnetSvc := tailnetSvcName(svc)
-	_, ok := (*cfgs)[tailnetSvc]
+	_, ok := cfgs[tailnetSvc]
 	if !ok {
 		lggr.Debugf("ConfigMap does not contain egress service config, likely because it was already deleted")
 		return nil
 	}
-	lggr.Infof("before deleting config %+#v", *cfgs)
-	delete(*cfgs, tailnetSvc)
-	lggr.Infof("after deleting config %+#v", *cfgs)
+	lggr.Infof("before deleting config %+#v", cfgs)
+	delete(cfgs, tailnetSvc)
+	lggr.Infof("after deleting config %+#v", cfgs)
 	bs, err := json.Marshal(cfgs)
 	if err != nil {
 		return fmt.Errorf("error marshalling egress services configs: %w", err)
@@ -648,7 +686,7 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 
 // egressSvcConfig returns a ConfigMap that contains egress services configuration for the provided ProxyGroup as well
 // as unmarshalled configuration from the ConfigMap.
-func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs *egressservices.Configs, err error) {
+func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs egressservices.Configs, err error) {
 	name := pgEgressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -663,9 +701,9 @@ func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, ts
 	if err != nil {
 		return nil, nil, fmt.Errorf("error retrieving egress services ConfigMap %s: %v", name, err)
 	}
-	cfgs = &egressservices.Configs{}
+	cfgs = egressservices.Configs{}
 	if len(cm.BinaryData[egressservices.KeyEgressServices]) != 0 {
-		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], cfgs); err != nil {
+		if err := json.Unmarshal(cm.BinaryData[egressservices.KeyEgressServices], &cfgs); err != nil {
 			return nil, nil, fmt.Errorf("error unmarshaling egress services config %v: %w", cm.BinaryData[egressservices.KeyEgressServices], err)
 		}
 	}

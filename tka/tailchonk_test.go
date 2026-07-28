@@ -185,7 +185,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 0,
 		},
 		{
-			name:     "simple truncate",
+			name:     "simple-truncate",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -196,7 +196,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 1,
 		},
 		{
-			name:     "long truncate",
+			name:     "long-truncate",
 			minChain: 5,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -211,7 +211,7 @@ func TestMarkActiveChain(t *testing.T) {
 			expectLastActiveIdx: 2,
 		},
 		{
-			name:     "truncate finding checkpoint",
+			name:     "truncate-finding-checkpoint",
 			minChain: 2,
 			chain: []aumTemplate{
 				{AUM: AUM{MessageKind: AUMCheckpoint, State: &State{}}},
@@ -315,11 +315,6 @@ func TestMarkDescendantAUMs(t *testing.T) {
 }
 
 func TestMarkAncestorIntersectionAUMs(t *testing.T) {
-	fakeState := &State{
-		Keys:              []Key{{Kind: Key25519, Votes: 1}},
-		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
-	}
-
 	tcs := []struct {
 		name            string
 		chain           *testChain
@@ -333,7 +328,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			name: "genesis",
 			chain: newTestchain(t, `
                 A
-                A.template = checkpoint`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                A.template = checkpoint`, checkpointTemplate()),
 			initialAncestor: "A",
 			wantAncestor:    "A",
 			verdicts: map[string]retainState{
@@ -342,11 +337,11 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantRetained: []string{"A"},
 		},
 		{
-			name: "no adjustment",
+			name: "no-adjustment",
 			chain: newTestchain(t, `
                 DEAD -> A -> B -> C
                 A.template = checkpoint
-                B.template = checkpoint`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                B.template = checkpoint`, checkpointTemplate()),
 			initialAncestor: "A",
 			wantAncestor:    "A",
 			verdicts: map[string]retainState{
@@ -366,7 +361,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
                 A.template = checkpoint
                 C.template = checkpoint
                 D.template = checkpoint
-                FORK.hashSeed = 2`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                FORK.hashSeed = 2`, checkpointTemplate()),
 			initialAncestor: "D",
 			wantAncestor:    "C",
 			verdicts: map[string]retainState{
@@ -380,14 +375,14 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B"},
 		},
 		{
-			name: "fork finding earlier checkpoint",
+			name: "fork-finding-earlier-checkpoint",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F
                           | -> FORK
                 A.template = checkpoint
                 B.template = checkpoint
                 E.template = checkpoint
-                FORK.hashSeed = 2`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                FORK.hashSeed = 2`, checkpointTemplate()),
 			initialAncestor: "E",
 			wantAncestor:    "B",
 			verdicts: map[string]retainState{
@@ -403,7 +398,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A"},
 		},
 		{
-			name: "fork multi",
+			name: "fork-multi",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E
                                | -> DEADFORK
@@ -413,7 +408,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
                 D.template = checkpoint
                 E.template = checkpoint
                 FORK.hashSeed = 2
-                DEADFORK.hashSeed = 3`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                DEADFORK.hashSeed = 3`, checkpointTemplate()),
 			initialAncestor: "D",
 			wantAncestor:    "C",
 			verdicts: map[string]retainState{
@@ -429,7 +424,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
 			wantDeleted:  []string{"A", "B", "DEADFORK"},
 		},
 		{
-			name: "fork multi 2",
+			name: "fork-multi-2",
 			chain: newTestchain(t, `
                 A -> B -> C -> D -> E -> F -> G
 
@@ -443,7 +438,7 @@ func TestMarkAncestorIntersectionAUMs(t *testing.T) {
                 F.template = checkpoint
                 F1.hashSeed = 2
                 F2.hashSeed = 3
-                F3.hashSeed = 4`, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState})),
+                F3.hashSeed = 4`, checkpointTemplate()),
 			initialAncestor: "F",
 			wantAncestor:    "B",
 			verdicts: map[string]retainState{
@@ -541,11 +536,6 @@ func cloneMem(src, dst *Mem) {
 }
 
 func TestCompact(t *testing.T) {
-	fakeState := &State{
-		Keys:              []Key{{Kind: Key25519, Votes: 1}},
-		DisablementValues: [][]byte{bytes.Repeat([]byte{1}, 32)},
-	}
-
 	// A & B are deleted because the new lastActiveAncestor advances beyond them.
 	// OLD is deleted because it does not match retention criteria, and
 	// though it is a descendant of the new lastActiveAncestor (C), it is not a
@@ -578,7 +568,7 @@ func TestCompact(t *testing.T) {
         F1.hashSeed = 1
         OLD.hashSeed = 2
         G2.hashSeed = 3
-    `, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState}))
+    `, checkpointTemplate())
 
 	storage := &compactingChonkFake{
 		aumAge:     map[AUMHash]time.Time{(c.AUMHashes["F1"]): time.Now()},
@@ -607,12 +597,10 @@ func TestCompactLongButYoung(t *testing.T) {
 	ourPriv := key.NewNLPrivate()
 	ourKey := Key{Kind: Key25519, Public: ourPriv.Public().Verifier(), Votes: 1}
 	someOtherKey := Key{Kind: Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 1}
+	state := CreateStateForTest(ourKey, someOtherKey)
 
 	storage := ChonkMem()
-	auth, _, err := Create(storage, State{
-		Keys:              []Key{ourKey, someOtherKey},
-		DisablementValues: [][]byte{DisablementKDF(bytes.Repeat([]byte{0xa5}, 32))},
-	}, ourPriv)
+	auth, _, err := Create(storage, state, ourPriv)
 	if err != nil {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}

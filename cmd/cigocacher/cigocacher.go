@@ -143,19 +143,32 @@ func main() {
 			log.Printf("Using cigocached at %s", *srvURL)
 		}
 		c.remote = &cachers.HTTPClient{
-			BaseURL:        *srvURL,
-			Disk:           c.disk,
-			HTTPClient:     httpClient(srvHost, *srvHostDial),
-			AccessToken:    *token,
-			Verbose:        *verbose,
-			BestEffortHTTP: true,
+			BaseURL:               *srvURL,
+			Disk:                  c.disk,
+			HTTPClient:            httpClient(srvHost, *srvHostDial),
+			AccessToken:           *token,
+			Verbose:               *verbose,
+			BestEffortHTTP:        true,
+			AsyncPutTimeout:       asyncPutTimeout,
+			AsyncPutMaxConcurrent: 10,
 		}
 	}
 	var p *cacheproc.Process
 	p = &cacheproc.Process{
 		Close: func() error {
+			if c.remote != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if !c.remote.Shutdown(ctx) {
+					log.Printf("cigocacher: timed out waiting for background PUTs to drain")
+				}
+				// Always surface dropped PUTs.
+				if timedOut, canceled := c.remote.PutsTimedOut.Load(), c.remote.PutsCanceled.Load(); timedOut+canceled > 0 {
+					log.Printf("cigocacher: %d background PUTs timed out, %d canceled", timedOut, canceled)
+				}
+			}
 			if c.verbose {
-				log.Printf("gocacheprog: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
+				log.Printf("cigocacher: closing; %d gets (%d hits, %d misses, %d errors); %d puts (%d errors)",
 					p.Gets.Load(), p.GetHits.Load(), p.GetMisses.Load(), p.GetErrors.Load(), p.Puts.Load(), p.PutErrors.Load())
 			}
 			return c.close()
@@ -337,4 +350,24 @@ func fetchStats(cl *http.Client, baseURL, accessToken string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+const (
+	// minPutTimeout is the floor we clamp to for small objects where the time is
+	// dominated by fixed overheads like connection establishment, waiting for a
+	// busy server to service the request etc.
+	minPutTimeout = 5 * time.Second
+	// maxPutTimeout is the ceiling we clamp to for large objects.
+	maxPutTimeout = 30 * time.Second
+	// minAverageBandwidth is the minimum average bandwidth (2MiB/s) we require
+	// for PUTs to complete within the timeout in its linear scaling region.
+	minAverageBandwidth = 2 * 1 << 20 / float64(time.Second)
+)
+
+// asyncPutTimeout returns a size-dependent timeout for async PUTs to the remote
+// gocached server. It returns 5s for size <= 10MiB, 30s for size >= 60MiB and
+// scales linearly in between.
+func asyncPutTimeout(size int64) time.Duration {
+	timeout := time.Duration(float64(size) / minAverageBandwidth)
+	return min(max(minPutTimeout, timeout), maxPutTimeout)
 }

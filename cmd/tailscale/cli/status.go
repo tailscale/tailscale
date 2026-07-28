@@ -54,7 +54,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.BoolVar(&statusArgs.self, "self", true, "show status of local machine")
 		fs.BoolVar(&statusArgs.peers, "peers", true, "show status of peers")
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
-		fs.BoolVar(&statusArgs.browser, "browser", true, "Open a browser in web mode")
+		fs.BoolVar(&statusArgs.browser, "browser", true, "open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
 		return fs
 	})(),

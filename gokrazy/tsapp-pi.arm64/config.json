@@ -1,0 +1,49 @@
+{
+    "Hostname": "tsapp",
+    "Update": {
+        "NoPassword": true
+    },
+    "SerialConsole": "serial0,115200",
+    "GokrazyPackages": [
+        "github.com/gokrazy/gokrazy/cmd/dhcp",
+        "github.com/gokrazy/gokrazy/cmd/randomd",
+        "github.com/gokrazy/gokrazy/cmd/ntp"
+    ],
+    "Packages": [
+        "github.com/gokrazy/serial-busybox",
+        "github.com/gokrazy/breakglass",
+        "tailscale.com/cmd/fbstatus",
+        "tailscale.com/cmd/tailscale",
+        "tailscale.com/cmd/tailscaled"
+    ],
+    "PackageConfig": {
+        "github.com/gokrazy/breakglass": {
+            "CommandLineFlags": [
+                "-authorized_keys=/perm/breakglass.authorized_keys"
+            ]
+        },
+        "tailscale.com/cmd/tailscale": {
+            "ExtraFilePaths": {
+                "/usr": "usr-dir"
+            },
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
+        },
+        "tailscale.com/cmd/tailscaled": {
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
+        }
+    },
+    "Environment": [
+        "GOOS=linux",
+        "GOARCH=arm64"
+    ],
+    "KernelPackage": "github.com/gokrazy/kernel.rpi",
+    "FirmwarePackage": "github.com/gokrazy/firmware",
+    "EEPROMPackage": "github.com/gokrazy/rpi-eeprom",
+    "InternalCompatibilityFlags": {
+        "InitImportPath": "github.com/tailscale/ts-gokrazy/gokrazyinit"
+    }
+}

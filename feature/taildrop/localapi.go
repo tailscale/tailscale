@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
@@ -127,27 +128,9 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Periodically report progress of outgoing files.
-	outgoingFiles := make(map[string]*ipn.OutgoingFile)
-	t := time.NewTicker(1 * time.Second)
-	progressUpdates := make(chan ipn.OutgoingFile)
-	defer close(progressUpdates)
-
-	go func() {
-		defer t.Stop()
-		defer ext.updateOutgoingFiles(outgoingFiles)
-		for {
-			select {
-			case u, ok := <-progressUpdates:
-				if !ok {
-					return
-				}
-				outgoingFiles[u.ID] = &u
-			case <-t.C:
-				ext.updateOutgoingFiles(outgoingFiles)
-			}
-		}
-	}()
+	// Notify any updates buffered at request return.
+	progress := newOutgoingProgress(ext)
+	defer progress.notify()
 
 	switch r.Method {
 	case "PUT":
@@ -157,16 +140,73 @@ func serveFilePut(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
 			Name:         filenameEscaped,
 			DeclaredSize: r.ContentLength,
 		}
-		singleFilePut(h, r.Context(), progressUpdates, w, r.Body, dstURL, file)
+		singleFilePut(h, r.Context(), progress, w, r.Body, dstURL, file)
 	case "POST":
-		multiFilePost(h, progressUpdates, w, r, peerID, dstURL)
+		multiFilePost(h, progress, w, r, peerID, dstURL)
 	default:
 		http.Error(w, "want PUT to put file", http.StatusBadRequest)
 		return
 	}
 }
 
-func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile), w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
+// outgoingProgress forwards file-put progress to the Taildrop Extension
+// for one localapi request. update coalesces hot-path changes; notify
+// distributes any pending updates to observers immediately, disregarding
+// the coalescing interval. The owner must call notify before returning
+// so buffered updates aren't lost.
+//
+// outgoingProgress is safe for concurrent use.
+type outgoingProgress struct {
+	ext            *Extension
+	notifyInterval time.Duration
+
+	mu      sync.Mutex
+	pending map[string]ipn.OutgoingFile // by OutgoingFile.ID
+	last    time.Time
+}
+
+func newOutgoingProgress(ext *Extension) *outgoingProgress {
+	return &outgoingProgress{
+		ext:            ext,
+		notifyInterval: time.Second,
+	}
+}
+
+// update buffers f. If notifyInterval has elapsed since the last notify,
+// pending updates are also distributed to observers.
+func (p *outgoingProgress) update(f ipn.OutgoingFile) {
+	var updates map[string]ipn.OutgoingFile
+	p.mu.Lock()
+	mak.Set(&p.pending, f.ID, f)
+	if time.Since(p.last) >= p.notifyInterval {
+		updates, p.pending = p.pending, nil
+		p.last = time.Now()
+	}
+	p.mu.Unlock()
+	if updates != nil {
+		p.ext.updateOutgoingFiles(updates)
+	}
+}
+
+// notify distributes any pending updates to observers immediately,
+// disregarding the coalescing interval. Callers should notify
+// explicitly for new files and completion events so observers don't
+// have to wait for the next coalesced send. It is safe to call
+// repeatedly.
+func (p *outgoingProgress) notify() {
+	var updates map[string]ipn.OutgoingFile
+	p.mu.Lock()
+	if len(p.pending) > 0 {
+		updates, p.pending = p.pending, nil
+		p.last = time.Now()
+	}
+	p.mu.Unlock()
+	if updates != nil {
+		p.ext.updateOutgoingFiles(updates)
+	}
+}
+
+func multiFilePost(h *localapi.Handler, progress *outgoingProgress, w http.ResponseWriter, r *http.Request, peerID tailcfg.StableNodeID, dstURL *url.URL) {
 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("invalid Content-Type for multipart POST: %s", err), http.StatusBadRequest)
@@ -209,13 +249,13 @@ func multiFilePost(h *localapi.Handler, progressUpdates chan (ipn.OutgoingFile),
 
 			for _, file := range manifest {
 				outgoingFilesByName[file.Name] = file
-				progressUpdates <- file
+				progress.update(file)
 			}
 
 			continue
 		}
 
-		if !singleFilePut(h, r.Context(), progressUpdates, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
+		if !singleFilePut(h, r.Context(), progress, ww, part, dstURL, outgoingFilesByName[part.FileName()]) {
 			return
 		}
 
@@ -271,22 +311,25 @@ func (ww *multiFilePostResponseWriter) Flush(w http.ResponseWriter) error {
 func singleFilePut(
 	h *localapi.Handler,
 	ctx context.Context,
-	progressUpdates chan (ipn.OutgoingFile),
+	progress *outgoingProgress,
 	w http.ResponseWriter,
 	body io.Reader,
 	dstURL *url.URL,
 	outgoingFile ipn.OutgoingFile,
 ) bool {
 	outgoingFile.Started = time.Now()
-	body = progresstracking.NewReader(body, 1*time.Second, func(n int, err error) {
+	progress.update(outgoingFile)
+	progress.notify()
+	body = progresstracking.NewReader(body, time.Second, func(n int, err error) {
 		outgoingFile.Sent = int64(n)
-		progressUpdates <- outgoingFile
+		progress.update(outgoingFile)
 	})
 
 	fail := func() {
 		outgoingFile.Finished = true
 		outgoingFile.Succeeded = false
-		progressUpdates <- outgoingFile
+		progress.update(outgoingFile)
+		progress.notify()
 	}
 
 	// Before we PUT a file we check to see if there are any existing partial file and if so,
@@ -351,7 +394,8 @@ func singleFilePut(
 
 	outgoingFile.Finished = true
 	outgoingFile.Succeeded = true
-	progressUpdates <- outgoingFile
+	progress.update(outgoingFile)
+	progress.notify()
 
 	return true
 }

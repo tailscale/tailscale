@@ -103,10 +103,10 @@ class Config: Codable {
 
 }
 
-// The VM Bundle URL holds the restore image and a set of VM images
-// By default, VM's are persisted at ~/VM.bundle
+// The VM Bundle URL holds the restore image and a set of VM images.
+// VMs are stored under ~/.cache/tailscale/vmtest/macos/.
 var vmBundleURL: URL = {
-    let vmBundlePath = NSHomeDirectory() + "/VM.bundle/"
+    let vmBundlePath = NSHomeDirectory() + "/.cache/tailscale/vmtest/macos/"
     createDir(vmBundlePath)
     let bundleURL = URL(fileURLWithPath: vmBundlePath)
     return bundleURL

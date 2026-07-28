@@ -13,6 +13,7 @@ import (
 	"path"
 
 	"github.com/tailscale/hujson"
+	"tailscale.com/cmd/tsconnect/wasmbuild"
 	"tailscale.com/util/precompress"
 	"tailscale.com/version"
 )
@@ -41,6 +42,10 @@ func runBuildPkg() {
 
 	if err := precompressWasm(); err != nil {
 		log.Fatalf("Could not pre-recompress wasm: %v", err)
+	}
+
+	if err := writeBuildInfo(); err != nil {
+		log.Fatalf("Could not write %s: %v", wasmbuild.BuildInfoFile, err)
 	}
 
 	log.Printf("Generating types...\n")
@@ -88,6 +93,21 @@ func updateVersion() error {
 	}
 
 	return os.WriteFile(path.Join(*pkgDir, "package.json"), packageJSONBytes, 0644)
+}
+
+// writeBuildInfo writes pkg/build-info.json so tests can detect a stale
+// pkg/main.wasm. lastRawWasmSHA256 is set by buildWasm (in common.go)
+// just before wasm-opt overwrites the file.
+func writeBuildInfo() error {
+	if lastRawWasmSHA256 == "" {
+		return fmt.Errorf("lastRawWasmSHA256 unset; buildWasm did not run in non-dev mode")
+	}
+	bi := wasmbuild.BuildInfo{RawWasmSHA256: lastRawWasmSHA256}
+	data, err := json.MarshalIndent(bi, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path.Join(*pkgDir, wasmbuild.BuildInfoFile), append(data, '\n'), 0644)
 }
 
 func copyReadme() error {

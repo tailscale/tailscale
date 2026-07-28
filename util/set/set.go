@@ -6,9 +6,12 @@ package set
 
 import (
 	"encoding/json"
+	"iter"
 	"maps"
 	"reflect"
 	"sort"
+
+	"tailscale.com/types/views"
 )
 
 // Set is a set of T.
@@ -26,17 +29,45 @@ func Of[T comparable](slice ...T) Set[T] {
 	return s
 }
 
+// OfSliceView returns a new set constructed from the elements in v.
+func OfSliceView[T comparable](v views.Slice[T]) Set[T] {
+	s := make(Set[T], v.Len())
+	s.AddSliceView(v)
+	return s
+}
+
 // Clone returns a new set cloned from the elements in s.
 func (s Set[T]) Clone() Set[T] {
 	return maps.Clone(s)
 }
 
+// All returns an iterator over all elements in s.
+// The iteration order is not specified
+// and is not guaranteed to be the same from one call to the next.
+func (s Set[T]) All() iter.Seq[T] {
+	return maps.Keys(s)
+}
+
 // Add adds e to s.
 func (s Set[T]) Add(e T) { s[e] = struct{}{} }
+
+// AddSeq adds each element of es to s.
+func (s Set[T]) AddSeq(es iter.Seq[T]) {
+	for e := range es {
+		s.Add(e)
+	}
+}
 
 // AddSlice adds each element of es to s.
 func (s Set[T]) AddSlice(es []T) {
 	for _, e := range es {
+		s.Add(e)
+	}
+}
+
+// AddSliceView adds each element of v to s.
+func (s Set[T]) AddSliceView(v views.Slice[T]) {
+	for _, e := range v.All() {
 		s.Add(e)
 	}
 }
@@ -104,6 +135,27 @@ func genOrderedSwapper(rt reflect.Type) func(reflect.Value) func(i, j int) bool 
 
 // Delete removes e from the set.
 func (s Set[T]) Delete(e T) { delete(s, e) }
+
+// DeleteSeq removes all elements in es from the set.
+func (s Set[T]) DeleteSeq(es iter.Seq[T]) {
+	for e := range es {
+		s.Delete(e)
+	}
+}
+
+// DeleteSlice removes all elements in es from the set.
+func (s Set[T]) DeleteSlice(es []T) {
+	for _, e := range es {
+		s.Delete(e)
+	}
+}
+
+// DeleteSet removes all elements in es from the set.
+func (s Set[T]) DeleteSet(es Set[T]) {
+	for e := range es {
+		s.Delete(e)
+	}
+}
 
 // Contains reports whether s contains e.
 func (s Set[T]) Contains(e T) bool {

@@ -7,12 +7,15 @@ package certs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
 
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/localclient"
 	"tailscale.com/types/logger"
@@ -94,22 +97,72 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	return nil
 }
 
+// isTransientCertErr reports whether err represents a failure that did not
+// reach the CA (ctx timeout, LocalAPI socket unreachable). Such errors must
+// not advance the loop's retryCount.
+func isTransientCertErr(err error) bool {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, syscall.ECONNREFUSED),
+		errors.Is(err, syscall.ECONNRESET),
+		errors.Is(err, syscall.EHOSTUNREACH),
+		errors.Is(err, syscall.EPIPE):
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return false
+}
+
+// nextRetryInterval picks the wait until the next CertPair attempt:
+//   - success: reset retryCount, normalInterval.
+//   - transient (never reached the CA): retrySchedule[0], no retryCount advance.
+//   - retryAfter > 0: honour it, retryCount still advances.
+//   - other: advance retryCount, walk retrySchedule.
+func nextRetryInterval(err error, retryCount *int, normalInterval, retryAfter time.Duration) time.Duration {
+	switch {
+	case err == nil:
+		*retryCount = 0
+		return normalInterval
+	case isTransientCertErr(err):
+		return retrySchedule[0]
+	}
+	*retryCount++
+	idx := *retryCount - 1
+	if idx >= len(retrySchedule) {
+		idx = len(retrySchedule) - 1
+	}
+	interval := retrySchedule[idx]
+	if retryAfter > 0 {
+		interval = retryAfter
+	}
+	return interval
+}
+
+// retrySchedule is the wait between successive failed issuance attempts,
+// following LE's recommended schedule.
+// https://letsencrypt.org/docs/integration-guide/#retrying-failures
+var retrySchedule = []time.Duration{
+	1 * time.Minute,
+	10 * time.Minute,
+	100 * time.Minute,
+	24 * time.Hour,
+}
+
 // runCertLoop:
 // - calls localAPI certificate endpoint to ensure that certs are issued for the
 // given domain name
 // - calls localAPI certificate endpoint daily to ensure that certs are renewed
-// - if certificate issuance failed retries after an exponential backoff period
-// starting at 1 minute and capped at 24 hours. Reset the backoff once issuance succeeds.
+// - if certificate issuance failed, retries on the schedule defined by
+// [retrySchedule]; resets to the start once issuance succeeds.
 // Note that renewal check also happens when the node receives an HTTPS request and it is possible that certs get
 // renewed at that point. Renewal here is needed to prevent the shared certs from expiry in edge cases where the 'write'
 // replica does not get any HTTPS requests.
-// https://letsencrypt.org/docs/integration-guide/#retrying-failures
 func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
-	const (
-		normalInterval   = 24 * time.Hour  // regular renewal check
-		initialRetry     = 1 * time.Minute // initial backoff after a failure
-		maxRetryInterval = 24 * time.Hour  // max backoff period
-	)
+	const normalInterval = 24 * time.Hour // regular renewal check
 
 	if err := cm.waitForCertDomain(ctx, domain); err != nil {
 		// Best-effort, log and continue with the issuing loop.
@@ -136,33 +189,15 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 			// node's HTTPS endpoint share the same state/renewal lock mechanism,
 			// so we should not run into redundant issuances during concurrent
 			// renewal checks.
-
-			// An issuance holds a shared lock, so we need to avoid a situation
-			// where other services cannot issue certs because a single one is
-			// holding the lock.
-			ctxT, cancel := context.WithTimeout(ctx, time.Second*300)
+			//
+			// Long enough to cover queue contention behind tailscaled's
+			// shared cert mutex; if it fires, something is wedged.
+			ctxT, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			_, _, err := cm.lc.CertPair(ctxT, domain)
 			cancel()
+			retryAfter, _ := local.RateLimitRetryAfter(err)
+			nextInterval := nextRetryInterval(err, &retryCount, normalInterval, retryAfter)
 			if err != nil {
-				cm.logf("error refreshing certificate for %s: %v", domain, err)
-			}
-			var nextInterval time.Duration
-			// TODO(irbekrm): distinguish between LE rate limit errors and other
-			// error types like transient network errors.
-			if err == nil {
-				retryCount = 0
-				nextInterval = normalInterval
-			} else {
-				retryCount++
-				// Calculate backoff: initialRetry * 2^(retryCount-1)
-				// For retryCount=1: 1min * 2^0 = 1min
-				// For retryCount=2: 1min * 2^1 = 2min
-				// For retryCount=3: 1min * 2^2 = 4min
-				backoff := initialRetry * time.Duration(1<<(retryCount-1))
-				if backoff > maxRetryInterval {
-					backoff = maxRetryInterval
-				}
-				nextInterval = backoff
 				cm.logf("Error refreshing certificate for %s (retry %d): %v. Will retry in %v\n",
 					domain, retryCount, err, nextInterval)
 			}
@@ -171,8 +206,9 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 	}
 }
 
-// waitForCertDomain ensures the requested domain is in the list of allowed
-// domains before issuing the cert for the first time.
+// domains before issuing the cert for the first time. It uses the IPN bus
+// only as a wake-up trigger (Notify.SelfChange) and queries the current
+// cert domains explicitly via [LocalClient.CertDomains].
 func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) error {
 	w, err := cm.lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
 	if err != nil {
@@ -185,11 +221,14 @@ func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) err
 		if err != nil {
 			return err
 		}
-		if n.NetMap == nil {
+		if n.SelfChange == nil {
 			continue
 		}
-
-		if slices.Contains(n.NetMap.DNS.CertDomains, domain) {
+		domains, err := cm.lc.CertDomains(ctx)
+		if err != nil {
+			continue
+		}
+		if slices.Contains(domains, domain) {
 			return nil
 		}
 	}

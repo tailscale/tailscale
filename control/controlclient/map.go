@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"runtime/debug"
@@ -86,7 +87,6 @@ type mapSession struct {
 	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
 	lastCapSet             set.Set[tailcfg.NodeCapability]
-	peers                  map[tailcfg.NodeID]tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfileView
@@ -106,6 +106,10 @@ type mapSession struct {
 	changeQueue            chan responseWithSource
 	changeQueueClosed      bool
 	processQueue           sync.WaitGroup
+
+	// mu protects the peers map.
+	peersMu sync.RWMutex
+	peers   map[tailcfg.NodeID]tailcfg.NodeView
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -196,6 +200,11 @@ func (ms *mapSession) Close() {
 var ErrChangeQueueClosed = errors.New("change queue closed")
 
 func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, discoKey key.DiscoPublic, lastSeen time.Time, online bool) error {
+	if discoKey.IsZero() {
+		ms.logf("[v1] controlclient: received zero disco key update from nodeID %v", id)
+		return nil
+	}
+
 	ms.cqmu.Lock()
 
 	if ms.changeQueueClosed {
@@ -203,6 +212,7 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		ms.processQueue.Wait()
 		return ErrChangeQueueClosed
 	}
+	defer ms.cqmu.Unlock()
 
 	resp := responseWithSource{
 		response: &tailcfg.MapResponse{
@@ -216,12 +226,24 @@ func (ms *mapSession) updateDiscoForNode(id tailcfg.NodeID, key key.NodePublic, 
 		},
 		viaTSMP: true,
 	}
-	ms.changeQueue <- resp
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(resp)
 }
 
+// HandleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
+// incremental).
+//
+// All fields that are valid on a KeepAlive MapResponse have already been
+// handled.
+//
+// Debug messages are handled first, followed by pushing the response onto a
+// queue for new updates handled sequentially.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
+	if debug := resp.Debug; debug != nil {
+		if err := ms.onDebug(ctx, debug); err != nil {
+			return err
+		}
+	}
+
 	ms.cqmu.Lock()
 
 	if ms.changeQueueClosed {
@@ -230,14 +252,23 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		return ErrChangeQueueClosed
 	}
 
+	defer ms.cqmu.Unlock()
+
 	change := responseWithSource{
 		response: resp,
 		viaTSMP:  false,
 	}
 
-	ms.changeQueue <- change
-	ms.cqmu.Unlock()
-	return nil
+	return ms.addRespToQueue(change)
+}
+
+func (ms *mapSession) addRespToQueue(resp responseWithSource) error {
+	select {
+	case ms.changeQueue <- resp:
+		return nil
+	case <-ms.sessionAliveCtx.Done():
+		return ErrChangeQueueClosed
+	}
 }
 
 // handleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
@@ -249,12 +280,6 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 // TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
 // is [re]factoring progress enough.
 func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse, viaTSMP bool) error {
-	if debug := resp.Debug; debug != nil {
-		if err := ms.onDebug(ctx, debug); err != nil {
-			return err
-		}
-	}
-
 	if DevKnob.StripEndpoints() {
 		for _, p := range resp.Peers {
 			p.Endpoints = nil
@@ -294,7 +319,12 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.patchifyPeersChanged(resp)
 
-	ms.removeUnwantedDiscoUpdates(resp)
+	ms.removeUnwantedDiscoUpdates(resp, viaTSMP)
+
+	// TSMP learned key was rejected, no need to do any more work in the engine.
+	if viaTSMP && len(resp.PeersChangedPatch) == 0 {
+		return nil
+	}
 	ms.removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp)
 
 	ms.updateStateFromResponse(resp)
@@ -307,9 +337,11 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	}
 
 	if ms.tryHandleIncrementally(resp) {
+		metricMapResponseHandledIncrementally.Add(1)
 		ms.occasionallyPrintSummary(ms.lastNetmapSummary)
 		return nil
 	}
+	metricMapResponseHandledFullRebuild.Add(1)
 
 	// We have to rebuild the whole netmap (lots of garbage & work downstream of
 	// our UpdateFullNetmap call). This is the part we tried to avoid but
@@ -335,7 +367,7 @@ func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *t
 }
 
 func (ms *mapSession) tryMarkDiscoAsLearnedFromTSMP(res *tailcfg.MapResponse) {
-	dun, ok := ms.netmapUpdater.(patchDiscoKeyer)
+	dun, ok := ms.netmapUpdater.(DiscoKeyUpdater)
 	if !ok {
 		return
 	}
@@ -374,6 +406,12 @@ func upgradeNode(n *tailcfg.Node) {
 	if n.AllowedIPs == nil {
 		n.AllowedIPs = slices.Clone(n.Addresses)
 	}
+	// Unsigned peers aren't covered by tailnet lock, so a (possibly malicious)
+	// control server must not grant them network access via advertised routes.
+	// Strip any AllowedIPs beyond their own addresses.
+	if n.UnsignedPeerAPIOnly && !slices.Equal(n.AllowedIPs, n.Addresses) {
+		n.AllowedIPs = slices.Clone(n.Addresses)
+	}
 }
 
 func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
@@ -384,11 +422,49 @@ func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
 	if !ok {
 		return false
 	}
+	// If the response carries a new packet filter, the updater must
+	// support pushing it narrowly; otherwise fall back to a full netmap
+	// rebuild. PacketFilter/PacketFilters are no longer in
+	// mapResponseContainsNonPatchFields, so MutationsFromMapResponse will
+	// happily return mutations alongside a filter change — we need to
+	// deliver the filter separately before those mutations land.
+	if res.PacketFilter != nil || res.PacketFilters != nil {
+		pfu, ok := ms.netmapUpdater.(PacketFilterUpdater)
+		if !ok {
+			return false
+		}
+		if !pfu.UpdatePacketFilter(ms.lastPacketFilterRules, ms.lastParsedPacketFilter) {
+			return false
+		}
+	}
+	// Same shape for UserProfiles: deliver any new/updated profiles before
+	// the peer mutations that may reference them, so bus consumers never
+	// see a UserID for which a profile hasn't been published. The values
+	// are read from ms.lastUserProfile (just populated by
+	// updateStateFromResponse) so views are shared with mapSession's
+	// store; downstream consumers can use [UserProfileView.Equal] for
+	// dedup without copying.
+	if len(res.UserProfiles) > 0 {
+		upu, ok := ms.netmapUpdater.(UserProfileUpdater)
+		if !ok {
+			return false
+		}
+		profiles := make(map[tailcfg.UserID]tailcfg.UserProfileView, len(res.UserProfiles))
+		for _, up := range res.UserProfiles {
+			profiles[up.ID] = ms.lastUserProfile[up.ID]
+		}
+		if !upu.UpdateUserProfiles(profiles) {
+			return false
+		}
+	}
 	mutations, ok := netmap.MutationsFromMapResponse(res, time.Now())
-	if ok && len(mutations) > 0 {
+	if !ok {
+		return false
+	}
+	if len(mutations) > 0 {
 		return nud.UpdateNetmapDelta(mutations)
 	}
-	return ok
+	return true
 }
 
 // updateStats are some stats from updateStateFromResponse, primarily for
@@ -403,11 +479,10 @@ type updateStats struct {
 
 // removeUnwantedDiscoUpdates goes over the patchified updates and reject items
 // where the node is offline and has last been seen before the recorded last seen.
-func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
-	existingMap := ms.netmap()
-	if existingMap == nil {
-		return
-	}
+func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse, viaTSMP bool) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	acceptedDiscoUpdates := resp.PeersChangedPatch[:0]
 
 	for _, change := range resp.PeersChangedPatch {
@@ -419,6 +494,30 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 			continue
 		}
 
+		existingNode, ok := ms.peers[change.NodeID]
+		// Accept if:
+		// - Cannot find the peer, don't have enough data.
+		if !ok {
+			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
+			continue
+		}
+
+		// Reject if:
+		// - key was learned via tsmp AND,
+		// - existing node is online AND,
+		// - key did not change.
+		// Here to avoid a deeper reconfig in the case where we get a TSMP key
+		// exchange while that node is already in a connected state (from the view
+		// of the control plane). This is meant to keep the node stable, avoiding a
+		// reconfiguration of the node deeper down in the engine.
+		// With this, we are avoiding updating the LastSeen and Online fields from
+		// TSMP updates when that is not relevant, overall making the connection
+		// state change less, and updating the engine less.
+		if viaTSMP && existingNode.Online().Get() &&
+			*change.DiscoKey == existingNode.DiscoKey() {
+			continue
+		}
+
 		// Accept if:
 		// - Node is online.
 		if *change.Online {
@@ -426,18 +525,10 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 			continue
 		}
 
-		peerIdx := existingMap.PeerIndexByNodeID(change.NodeID)
 		// Accept if:
-		// - Cannot find the peer, don't have enough data
-		if peerIdx < 0 {
-			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
-			continue
-		}
-		existingNode := existingMap.Peers[peerIdx]
-
-		// Accept if:
-		// - lastSeen moved forward in time.
-		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); ok &&
+		// - if we don't have a last seen to compare against on the existing node.
+		// - OR lastSeen moved forward in time.
+		if existingLastSeen, ok := existingNode.LastSeen().GetOk(); !ok ||
 			change.LastSeen.After(existingLastSeen) {
 			acceptedDiscoUpdates = append(acceptedDiscoUpdates, change)
 		}
@@ -452,11 +543,10 @@ func (ms *mapSession) removeUnwantedDiscoUpdates(resp *tailcfg.MapResponse) {
 // local netmap has a newer key learned via TSMP, overwrite the update with the
 // key from TSMP.
 func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailcfg.MapResponse) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	if len(resp.Peers) == 0 {
-		return
-	}
-	existingMap := ms.netmap()
-	if existingMap == nil {
 		return
 	}
 	for _, peer := range resp.Peers {
@@ -466,14 +556,13 @@ func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailc
 
 		// Accept if:
 		// - peer is new
-		peerIdx := existingMap.PeerIndexByNodeID(peer.ID)
-		if peerIdx < 0 {
+		existingNode, ok := ms.peers[peer.ID]
+		if !ok {
 			continue
 		}
 
 		// Accept if:
 		// - disco key has not changed
-		existingNode := existingMap.Peers[peerIdx]
 		if existingNode.DiscoKey() == peer.DiscoKey {
 			continue
 		}
@@ -497,8 +586,13 @@ func (ms *mapSession) removeUnwantedDiscoUpdatesFromFullNetmapUpdate(resp *tailc
 			continue
 		}
 
-		// Overwrite the key in the full netmap update.
+		// Overwrite the key and last seen in the full netmap update.
 		peer.DiscoKey = existingNode.DiscoKey()
+		if t, ok := existingNode.LastSeen().GetOk(); ok {
+			peer.LastSeen = new(t)
+		} else {
+			peer.LastSeen = nil
+		}
 	}
 }
 
@@ -670,11 +764,25 @@ var (
 
 	patchifiedPeer      = clientmetric.NewCounter("controlclient_patchified_peer")
 	patchifiedPeerEqual = clientmetric.NewCounter("controlclient_patchified_peer_equal")
+
+	// metricMapResponseHandledIncrementally counts non-keepalive MapResponses
+	// that were processed via [mapSession.tryHandleIncrementally] (i.e. the
+	// "fast" delta path that avoids rebuilding the full netmap).
+	metricMapResponseHandledIncrementally = clientmetric.NewCounter("controlclient_map_response_handled_incrementally")
+
+	// metricMapResponseHandledFullRebuild counts non-keepalive MapResponses
+	// that fell through to the full netmap rebuild path because they
+	// carried a field that the incremental path can't handle. See
+	// [netmap.mapResponseContainsNonPatchFields].
+	metricMapResponseHandledFullRebuild = clientmetric.NewCounter("controlclient_map_response_handled_full_rebuild")
 )
 
 // updatePeersStateFromResponseres updates ms.peers from resp.
 // It takes ownership of resp.
 func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (stats updateStats) {
+	ms.peersMu.Lock()
+	defer ms.peersMu.Unlock()
+
 	if ms.peers == nil {
 		ms.peers = make(map[tailcfg.NodeID]tailcfg.NodeView)
 	}
@@ -809,13 +917,22 @@ func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserI
 }
 
 var debugPatchifyPeer = envknob.RegisterBool("TS_DEBUG_PATCHIFY_PEER")
+var debugPatchifyPeerMiss = envknob.RegisterBool("TS_DEBUG_PATCHIFY_PEER_MISS")
+
+// patchifyMissOnFalse, if non-nil, is called with the field name when
+// patchifyPeer fails. It is set by an init func in map_debug.go.
+var patchifyMissOnFalse func(string)
 
 // patchifyPeersChanged mutates resp to promote PeersChanged entries to PeersChangedPatch
 // when possible.
 func (ms *mapSession) patchifyPeersChanged(resp *tailcfg.MapResponse) {
+	var onFalse func(string)
+	if debugPatchifyPeerMiss() {
+		onFalse = patchifyMissOnFalse
+	}
 	filtered := resp.PeersChanged[:0]
 	for _, n := range resp.PeersChanged {
-		if p, ok := ms.patchifyPeer(n); ok {
+		if p, ok := ms.patchifyPeer(n, onFalse); ok {
 			patchifiedPeer.Add(1)
 			if debugPatchifyPeer() {
 				patchj, _ := json.Marshal(p)
@@ -853,18 +970,27 @@ func getNodeFields() []string {
 //
 // It returns ok=false if a patch can't be made, (V, ok) on a delta, or (nil,
 // true) if all the fields were identical (a zero change).
-func (ms *mapSession) patchifyPeer(n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+func (ms *mapSession) patchifyPeer(n *tailcfg.Node, onFalse func(string)) (_ *tailcfg.PeerChange, ok bool) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	was, ok := ms.peers[n.ID]
 	if !ok {
+		if onFalse != nil {
+			onFalse("peer_not_found")
+		}
 		return nil, false
 	}
-	return peerChangeDiff(was, n)
+	return peerChangeDiff(was, n, onFalse)
 }
 
 // peerChangeDiff returns the difference from 'was' to 'n', if possible.
 //
 // It returns (nil, true) if the fields were identical.
-func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string)) (_ *tailcfg.PeerChange, ok bool) {
+	if onFalse == nil {
+		onFalse = func(string) {}
+	}
 	var ret *tailcfg.PeerChange
 	pc := func() *tailcfg.PeerChange {
 		if ret == nil {
@@ -888,22 +1014,27 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			// And it was never sent by any known control server.
 		case "ID":
 			if was.ID() != n.ID {
+				onFalse(field)
 				return nil, false
 			}
 		case "StableID":
 			if was.StableID() != n.StableID {
+				onFalse(field)
 				return nil, false
 			}
 		case "Name":
 			if was.Name() != n.Name {
+				onFalse(field)
 				return nil, false
 			}
 		case "User":
 			if was.User() != n.User {
+				onFalse(field)
 				return nil, false
 			}
 		case "Sharer":
 			if was.Sharer() != n.Sharer {
+				onFalse(field)
 				return nil, false
 			}
 		case "Key":
@@ -920,6 +1051,7 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Machine":
 			if was.Machine() != n.Machine {
+				onFalse(field)
 				return nil, false
 			}
 		case "DiscoKey":
@@ -928,10 +1060,12 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Addresses":
 			if !views.SliceEqual(was.Addresses(), views.SliceOf(n.Addresses)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "AllowedIPs":
 			if !views.SliceEqual(was.AllowedIPs(), views.SliceOf(n.AllowedIPs)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Endpoints":
@@ -951,13 +1085,16 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if !was.Hostinfo().Valid() || !n.Hostinfo.Valid() {
+				onFalse(field)
 				return nil, false
 			}
 			if !was.Hostinfo().Equal(n.Hostinfo) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Created":
 			if !was.Created().Equal(n.Created) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Cap":
@@ -985,10 +1122,12 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "Tags":
 			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "PrimaryRoutes":
 			if !views.SliceEqual(was.PrimaryRoutes(), views.SliceOf(n.PrimaryRoutes)) {
+				onFalse(field)
 				return nil, false
 			}
 		case "Online":
@@ -1001,22 +1140,27 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			}
 		case "MachineAuthorized":
 			if was.MachineAuthorized() != n.MachineAuthorized {
+				onFalse(field)
 				return nil, false
 			}
 		case "UnsignedPeerAPIOnly":
 			if was.UnsignedPeerAPIOnly() != n.UnsignedPeerAPIOnly {
+				onFalse(field)
 				return nil, false
 			}
 		case "IsWireGuardOnly":
 			if was.IsWireGuardOnly() != n.IsWireGuardOnly {
+				onFalse(field)
 				return nil, false
 			}
 		case "IsJailed":
 			if was.IsJailed() != n.IsJailed {
+				onFalse(field)
 				return nil, false
 			}
 		case "Expired":
 			if was.Expired() != n.Expired {
+				onFalse(field)
 				return nil, false
 			}
 		case "SelfNodeV4MasqAddrForThisPeer":
@@ -1025,6 +1169,7 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
+				onFalse(field)
 				return nil, false
 			}
 		case "SelfNodeV6MasqAddrForThisPeer":
@@ -1033,17 +1178,20 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 				continue
 			}
 			if va, ok := va.GetOk(); !ok || vb == nil || va != *vb {
+				onFalse(field)
 				return nil, false
 			}
 		case "ExitNodeDNSResolvers":
 			va, vb := was.ExitNodeDNSResolvers(), views.SliceOfViews(n.ExitNodeDNSResolvers)
 
 			if va.Len() != vb.Len() {
+				onFalse(field)
 				return nil, false
 			}
 
 			for i := range va.Len() {
 				if !va.At(i).Equal(vb.At(i)) {
+					onFalse(field)
 					return nil, false
 				}
 			}
@@ -1056,7 +1204,28 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 	return ret, true
 }
 
+// PeerIDAndKeyByTailscaleIP returns the node ID and node Key from the peers
+// map without touching the netmap itself. The implementation mirrors the
+// implementation of [netmap.PeerByTailscaleIP].
+func (ms *mapSession) PeerIDAndKeyByTailscaleIP(ip netip.Addr) (tailcfg.NodeID, key.NodePublic, bool) {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+	for _, n := range ms.peers {
+		ad := n.Addresses()
+		for i := range ad.Len() {
+			a := ad.At(i)
+			if a.Addr() == ip {
+				return n.ID(), n.Key(), true
+			}
+		}
+	}
+	return 0, key.NodePublic{}, false
+}
+
 func (ms *mapSession) sortedPeers() []tailcfg.NodeView {
+	ms.peersMu.RLock()
+	defer ms.peersMu.RUnlock()
+
 	ret := slicesx.MapValues(ms.peers)
 	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
 		return cmp.Compare(a.ID(), b.ID())

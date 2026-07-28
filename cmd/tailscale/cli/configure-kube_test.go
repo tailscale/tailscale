@@ -7,10 +7,18 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
 
 func TestKubeconfig(t *testing.T) {
@@ -76,7 +84,7 @@ users:
     token: unused`,
 		},
 		{
-			name: "all configs, clusters, users have been deleted",
+			name: "all-configs-clusters-users-deleted",
 			in: `apiVersion: v1
 clusters: null
 contexts: null
@@ -247,6 +255,69 @@ users:
 	}
 }
 
+func TestCheckKubeconfigWritable(t *testing.T) {
+	t.Run("nonexistent-file-in-writable-dir", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := checkKubeconfigWritable(filepath.Join(dir, "config")); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("nonexistent-file-and-dir-in-writable-parent", func(t *testing.T) {
+		dir := t.TempDir()
+		// The .kube directory does not exist yet, but its parent does and is
+		// writable, so this should be fine.
+		if err := checkKubeconfigWritable(filepath.Join(dir, ".kube", "config")); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("existing-writable-file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config")
+		if err := os.WriteFile(path, []byte("apiVersion: v1\nkind: Config\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(path); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("unwritable-existing-file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("file mode permissions are not enforced the same way on Windows")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("root bypasses file permission checks")
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config")
+		if err := os.WriteFile(path, []byte("x"), 0400); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(path); err == nil {
+			t.Error("expected error for read-only file, got nil")
+		}
+	})
+
+	t.Run("unwritable-dir", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory mode permissions are not enforced the same way on Windows")
+		}
+		if os.Getuid() == 0 {
+			t.Skip("root bypasses directory permission checks")
+		}
+		dir := t.TempDir()
+		sub := filepath.Join(dir, "ro")
+		if err := os.Mkdir(sub, 0500); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkKubeconfigWritable(filepath.Join(sub, "config")); err == nil {
+			t.Error("expected error for unwritable dir, got nil")
+		}
+	})
+}
+
 func TestGetInputs(t *testing.T) {
 	for _, arg := range []string{
 		"foo.tail-scale.ts.net",
@@ -271,5 +342,70 @@ func TestGetInputs(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestNodeOrServiceDNSNameFromArg(t *testing.T) {
+	svcIP := netip.MustParseAddr("100.100.100.100")
+	dnsCfg := &tailcfg.DNSConfig{
+		ExtraRecords: []tailcfg.DNSRecord{
+			{Name: "svc.example.ts.net", Value: svcIP.String()},
+		},
+	}
+
+	peerWithService := &ipnstate.PeerStatus{DNSName: "node-a.example.ts.net."}
+	allowed := views.SliceOf([]netip.Prefix{netip.PrefixFrom(svcIP, svcIP.BitLen())})
+	peerWithService.AllowedIPs = &allowed
+
+	// A peer with no AllowedIPs, as reported for a ProxyGroup whose backing
+	// nodes are offline or not yet approved (issue #20255).
+	peerNoAddrs := &ipnstate.PeerStatus{DNSName: "node-b.example.ts.net."}
+
+	tests := []struct {
+		name    string
+		peers   []*ipnstate.PeerStatus
+		arg     string
+		want    string
+		wantErr string
+	}{
+		{
+			name:    "service_with_no_reachable_peer",
+			peers:   []*ipnstate.PeerStatus{peerNoAddrs},
+			arg:     "svc",
+			wantErr: "not currently reachable",
+		},
+		{
+			name:  "service_advertised_by_peer",
+			peers: []*ipnstate.PeerStatus{peerNoAddrs, peerWithService},
+			arg:   "svc",
+			want:  "svc.example.ts.net",
+		},
+		{
+			name:  "node_dns_name",
+			peers: []*ipnstate.PeerStatus{peerNoAddrs},
+			arg:   "node-b",
+			want:  "node-b.example.ts.net.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{}}
+			for _, ps := range tt.peers {
+				st.Peer[key.NewNode().Public()] = ps
+			}
+			got, err := nodeOrServiceDNSNameFromArg(st, dnsCfg, tt.arg)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

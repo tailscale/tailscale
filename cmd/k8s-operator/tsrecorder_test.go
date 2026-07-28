@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -21,9 +22,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/tstest"
 )
 
@@ -48,18 +51,19 @@ func TestRecorder(t *testing.T) {
 		WithObjects(tsr).
 		WithStatusSubresource(tsr).
 		Build()
-	tsClient := &fakeTSClient{}
+	tsClient := &fakeTSClient{loginURL: tsLoginServer}
 	zl, _ := zap.NewDevelopment()
 	fr := record.NewFakeRecorder(2)
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	reconciler := &RecorderReconciler{
-		tsNamespace: tsNamespace,
-		Client:      fc,
-		tsClient:    tsClient,
-		recorder:    fr,
-		log:         zl.Sugar(),
-		clock:       cl,
-		loginServer: tsLoginServer,
+		tsNamespace:       tsNamespace,
+		Client:            fc,
+		clients:           tsclient.NewProvider(tsClient),
+		recorder:          fr,
+		log:               zl.Sugar(),
+		clock:             cl,
+		authKeyRateLimits: make(map[string]*rate.Limiter),
+		authKeyReissuing:  make(map[string]bool),
 	}
 
 	t.Run("invalid_spec_gives_an_error_condition", func(t *testing.T) {
@@ -194,8 +198,8 @@ func TestRecorder(t *testing.T) {
 	})
 
 	t.Run("populate_node_info_in_state_secret_and_see_it_appear_in_status", func(t *testing.T) {
-
 		const key = "profile-abc"
+
 		for replica := range *tsr.Spec.Replicas {
 			bytes, err := json.Marshal(map[string]any{
 				"Config": map[string]any{
@@ -216,6 +220,24 @@ func TestRecorder(t *testing.T) {
 					key:               bytes,
 				}
 			})
+		}
+
+		tsClient.devices = []tailscale.Device{
+			{
+				ID:        "node-0",
+				Hostname:  "hostname-node-0",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
+			{
+				ID:        "node-1",
+				Hostname:  "hostname-node-1",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
+			{
+				ID:        "node-2",
+				Hostname:  "hostname-node-2",
+				Addresses: []string{"1.2.3.4", "::1"},
+			},
 		}
 
 		expectReconciled(t, reconciler, "", tsr.Name)

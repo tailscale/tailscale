@@ -12,26 +12,41 @@
     "Packages": [
         "github.com/gokrazy/serial-busybox",
         "github.com/gokrazy/breakglass",
+        "github.com/bradfitz/qemu-guest-kragent",
+        "tailscale.com/cmd/fbstatus",
         "tailscale.com/cmd/tailscale",
         "tailscale.com/cmd/tailscaled"
     ],
     "PackageConfig": {
         "github.com/gokrazy/breakglass": {
             "CommandLineFlags": [
-                "-authorized_keys=ec2"
+                "-authorized_keys=/perm/breakglass.authorized_keys"
             ]
         },
         "tailscale.com/cmd/tailscale": {
             "ExtraFilePaths": {
                 "/usr": "usr-dir"
-            }
+            },
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
+        },
+        "tailscale.com/cmd/tailscaled": {
+            "CommandLineFlags": [
+                "-config=optional:vm:user-data"
+            ],
+            "GoBuildTags": [
+                "ts_appliance"
+            ]
         }
     },
     "Environment": [
         "GOOS=linux",
         "GOARCH=amd64"
     ],
-    "KernelPackage": "github.com/tailscale/gokrazy-kernel",
-    "FirmwarePackage": "github.com/tailscale/gokrazy-kernel",
-    "InternalCompatibilityFlags": {}
+    "KernelPackage": "github.com/gokrazy/kernel.amd64",
+    "FirmwarePackage": "github.com/gokrazy/kernel.amd64",
+    "InternalCompatibilityFlags": {
+        "InitImportPath": "github.com/tailscale/ts-gokrazy/gokrazyinit"
+    }
 }

@@ -13,6 +13,7 @@ import (
 	"expvar"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -54,6 +55,50 @@ func IsProd443(addr string) bool {
 	return port == "443" || port == "https"
 }
 
+// debugTrustedCIDRs is the envknob for TS_DEBUG_TRUSTED_CIDRS, a
+// comma-separated list of CIDR ranges (e.g. "10.0.0.0/8,172.16.0.0/12")
+// whose source IPs are allowed to access debug endpoints without Tailscale
+// authentication. This will supersede both IsTailscaleIP() and
+// TS_ALLOW_DEBUG_IP.
+var debugTrustedCIDRs = envknob.RegisterString("TS_DEBUG_TRUSTED_CIDRS")
+
+// trustedCIDRs returns the parsed CIDR prefixes from TS_DEBUG_TRUSTED_CIDRS.
+var trustedCIDRs = sync.OnceValue(func() []netip.Prefix {
+	return parseTrustedCIDRs(debugTrustedCIDRs())
+})
+
+// parseTrustedCIDRs parses a comma-separated list of CIDR prefixes.
+// It fatals on invalid entries, consistent with other envknob parsing.
+func parseTrustedCIDRs(raw string) []netip.Prefix {
+	if raw == "" {
+		return nil
+	}
+	var prefixes []netip.Prefix
+	for s := range strings.SplitSeq(raw, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		pfx, err := netip.ParsePrefix(s)
+		if err != nil {
+			log.Fatalf("invalid CIDR in TS_DEBUG_TRUSTED_CIDRS: %q: %v", s, err)
+		}
+		prefixes = append(prefixes, pfx)
+	}
+	return prefixes
+}
+
+// cidrsContain checks if the source IP is associated with one of the
+// provided cidrs.
+func cidrsContain(cidrs []netip.Prefix, ip netip.Addr) bool {
+	for _, pfx := range cidrs {
+		if pfx.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // AllowDebugAccess reports whether r should be permitted to access
 // various debug endpoints.
 func AllowDebugAccess(r *http.Request) bool {
@@ -73,6 +118,9 @@ func AllowDebugAccess(r *http.Request) bool {
 		return false
 	}
 	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == envknob.String("TS_ALLOW_DEBUG_IP") {
+		return true
+	}
+	if cidrsContain(trustedCIDRs(), ip) {
 		return true
 	}
 	return false
@@ -736,6 +784,12 @@ func (h errorHandler) handleError(w http.ResponseWriter, r *http.Request, lw *lo
 	// Extract a presentable, loggable error.
 	var hOK bool
 	hErr, hAsOK := errors.AsType[HTTPError](err)
+	if !hAsOK {
+		if hs, ok := errors.AsType[HTTPStatuser](err); ok {
+			hErr = hs.HTTPStatus()
+			hAsOK = true
+		}
+	}
 	if hAsOK {
 		hOK = true
 		if hErr.Code == 0 {
@@ -869,6 +923,15 @@ func WriteHTTPError(w http.ResponseWriter, r *http.Request, e HTTPError) {
 			io.WriteString(w, "\n")
 		}
 	}
+}
+
+// HTTPStatuser is an optional interface implemented by errors that
+// carry an intended HTTP response. Handlers translating errors to
+// HTTP should honour the returned HTTPError rather than defaulting to
+// 500.
+type HTTPStatuser interface {
+	error
+	HTTPStatus() HTTPError
 }
 
 // HTTPError is an error with embedded HTTP response information.

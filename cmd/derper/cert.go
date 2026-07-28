@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -35,21 +36,34 @@ var unsafeHostnameCharacters = regexp.MustCompile(`[^a-zA-Z0-9-\.]`)
 type certProvider interface {
 	// TLSConfig creates a new TLS config suitable for net/http.Server servers.
 	//
-	// The returned Config must have a GetCertificate function set and that
-	// function must return a unique *tls.Certificate for each call. The
-	// returned *tls.Certificate will be mutated by the caller to append to the
-	// (*tls.Certificate).Certificate field.
+	// The returned Config must have a GetCertificate function set. The
+	// *tls.Certificate values it returns may be shared and cached, so
+	// callers must not mutate them.
 	TLSConfig() *tls.Config
 	// HTTPHandler handle ACME related request, if any.
 	HTTPHandler(fallback http.Handler) http.Handler
 }
 
-func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (certProvider, error) {
+func certProviderByCertMode(mode, dir, hostname string, ipCerts bool, eabKID, eabKey, email string) (certProvider, error) {
 	if dir == "" {
 		return nil, errors.New("missing required --certdir flag")
 	}
+	if ipCerts && mode != "letsencrypt" {
+		return nil, errors.New("--acme-ip-certs requires --certmode=letsencrypt")
+	}
 	switch mode {
 	case "letsencrypt", "gcp":
+		if net.ParseIP(hostname) != nil {
+			if mode == "gcp" {
+				return nil, errors.New("--certmode=gcp requires --hostname to be a DNS name, not an IP address")
+			}
+			if !ipCerts {
+				return nil, errors.New("--hostname is an IP address; use --certmode=manual for a self-signed cert, or set --acme-ip-certs to get LetsEncrypt IP address certs")
+			}
+			// IP-only server: certs are issued on demand per
+			// connection, so there is no hostname cert provider.
+			return newIPCertManager(dir, email, "", nil)
+		}
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist(hostname),
@@ -81,6 +95,9 @@ func certProviderByCertMode(mode, dir, hostname, eabKID, eabKey, email string) (
 			certManager.Email = email
 		} else if hostname == "derp.tailscale.com" {
 			certManager.Email = "security@tailscale.com"
+		}
+		if ipCerts {
+			return newIPCertManager(dir, email, "", certManager)
 		}
 		return certManager, nil
 	case "manual":
@@ -157,12 +174,11 @@ func (m *manualCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certif
 		return nil, fmt.Errorf("cert mismatch with hostname: %q", hi.ServerName)
 	}
 
-	// Return a shallow copy of the cert so the caller can append to its
-	// Certificate field.
-	certCopy := new(tls.Certificate)
-	*certCopy = *m.cert
-	certCopy.Certificate = certCopy.Certificate[:len(certCopy.Certificate):len(certCopy.Certificate)]
-	return certCopy, nil
+	// Return a shallow copy of the cert with a capacity-clamped chain
+	// so callers can never mutate the manager's long-lived certificate.
+	certCopy := *m.cert
+	certCopy.Certificate = slices.Clip(certCopy.Certificate)
+	return &certCopy, nil
 }
 
 func (m *manualCertManager) HTTPHandler(fallback http.Handler) http.Handler {

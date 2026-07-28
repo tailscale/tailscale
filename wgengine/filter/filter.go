@@ -621,8 +621,25 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 	return noVerdict, "no rules matched"
 }
 
-// runIn runs the output-specific part of the filter logic.
+// runOut runs the output-specific part of the filter logic.
 func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
+	f.UpdateOutboundFlowState(q)
+	return Accept, "ok out"
+}
+
+// UpdateOutboundFlowState records reverse-flow connection-tracking state for
+// the given outbound packet so that subsequent inbound replies on the same
+// flow are admitted by [Filter.RunIn] without an explicit allow rule.
+//
+// Only UDP and SCTP packets are tracked; for other protocols this is a no-op.
+//
+// It is intended for callers that synthesize outbound packets and bypass
+// [Filter.RunOut] (for example netstack's [InjectOutbound] path used by
+// userspace networking, tsnet and the SOCKS5/HTTP proxies), so that reply
+// packets matching an outbound UDP flow are not silently dropped as "no
+// matching rule" by [Filter.RunIn]. See tailscale/tailscale#14229 and
+// tailscale/tailscale#20064.
+func (f *Filter) UpdateOutboundFlowState(q *packet.Parsed) {
 	switch q.IPProto {
 	case ipproto.UDP, ipproto.SCTP:
 		tuple := flowtrack.MakeTuple(q.IPProto, q.Dst, q.Src) // src/dst reversed
@@ -630,7 +647,6 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 		f.state.lru.Add(tuple, struct{}{})
 		f.state.mu.Unlock()
 	}
-	return Accept, "ok out"
 }
 
 // direction is whether a packet was flowing into this machine, or

@@ -24,8 +24,10 @@
         "GOOS=linux",
         "GOARCH=amd64"
     ],
-    "KernelPackage": "github.com/tailscale/gokrazy-kernel",
+    "KernelPackage": "github.com/gokrazy/kernel.amd64",
     "FirmwarePackage": "",
     "EEPROMPackage": "",
-    "InternalCompatibilityFlags": {}
+    "InternalCompatibilityFlags": {
+        "InitImportPath": "github.com/tailscale/ts-gokrazy/gokrazyinit"
+    }
 }

@@ -45,7 +45,6 @@ import (
 	"tailscale.com/drive/driveimpl"
 	"tailscale.com/envknob"
 	_ "tailscale.com/ipn/auditlog"
-	_ "tailscale.com/ipn/desktop"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"

@@ -7,8 +7,11 @@ package netlog
 
 type Logger struct{}
 
-func (*Logger) Startup(...any) error   { return nil }
-func (*Logger) Running() bool          { return false }
-func (*Logger) Shutdown(any) error     { return nil }
-func (*Logger) ReconfigNetworkMap(any) {}
-func (*Logger) ReconfigRoutes(any)     {}
+// NodeSource is a stub kept so the omit build does not break consumers that
+// reference the type. It has no methods.
+type NodeSource any
+
+func (*Logger) Startup(...any) error { return nil }
+func (*Logger) Running() bool        { return false }
+func (*Logger) Shutdown(any) error   { return nil }
+func (*Logger) ReconfigRoutes(any)   {}

@@ -37,6 +37,17 @@ func Test_conn_Read(t *testing.T) {
 		wantCastHeaderHeight int
 		wantRecorded         []byte
 	}{
+		// Empty final continuation frame after a resize frame.
+		{
+			name: "continuation_frame_with_empty_payload",
+			inputs: [][]byte{
+				append([]byte{0x02, lenResizeMsgPayload}, testResizeMsg...),
+				{0x80, 0x00},
+			},
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+		},
 		{
 			name:   "single_read_control_message",
 			inputs: [][]byte{{0x88, 0x0}},
@@ -55,6 +66,19 @@ func Test_conn_Read(t *testing.T) {
 				append([]byte{0x82, lenResizeMsgPayload}, testResizeMsg...),
 			},
 			wantRecorded:         append(fakes.AsciinemaCastHeaderMsg(t, 10, 20), fakes.AsciinemaCastResizeMsg(t, 10, 20)...),
+			wantCastHeaderWidth:  10,
+			wantCastHeaderHeight: 20,
+		},
+		{
+			// A control frame (close) followed by a resize data frame in
+			// a single Read. Without the frame loop, the close frame
+			// would cause the data frame to be skipped.
+			name: "control_then_data_in_one_read",
+			inputs: [][]byte{
+				// close frame (0x88, len 0), then resize data frame
+				append([]byte{0x88, 0x00, 0x82, lenResizeMsgPayload}, testResizeMsg...),
+			},
+			wantRecorded:         fakes.AsciinemaCastHeaderMsg(t, 10, 20),
 			wantCastHeaderWidth:  10,
 			wantCastHeaderHeight: 20,
 		},
@@ -156,6 +180,26 @@ func Test_conn_Write(t *testing.T) {
 		wantRecorded  []byte
 		hasTerm       bool
 	}{
+		// Empty final continuation frame; stream ID already set by
+		// the initial fragment.
+		{
+			name: "continuation_frame_with_empty_payload",
+			inputs: [][]byte{
+				{0x02, 0x03, 0x01, 0x07, 0x08},
+				{0x80, 0x00},
+			},
+			wantForwarded: []byte{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			wantRecorded:  fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+		},
+		// Same as above but both fragments land in one Write call.
+		{
+			name: "continuation_frame_with_empty_payload_single_write",
+			inputs: [][]byte{
+				{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			},
+			wantForwarded: []byte{0x02, 0x03, 0x01, 0x07, 0x08, 0x80, 0x00},
+			wantRecorded:  fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+		},
 		{
 			name:          "single_write_control_frame",
 			inputs:        [][]byte{{0x88, 0x0}},
@@ -202,6 +246,38 @@ func Test_conn_Write(t *testing.T) {
 			wantForwarded: []byte{0x2, 0x3, 0x1, 0x7, 0x8, 0x80, 0x6, 0x1, 0x1, 0x2, 0x3, 0x4, 0x5},
 			wantRecorded:  fakes.CastLine(t, []byte{0x7, 0x8, 0x1, 0x2, 0x3, 0x4, 0x5}, cl),
 			hasTerm:       true,
+		},
+		{
+			// Two complete WebSocket frames coalesced into a single
+			// Write() call: a stdout binary frame followed by a close
+			// frame. Without a loop in the Write path, the close frame
+			// gets stranded in writeBuf and misinterpreted on the next
+			// Write.
+			name: "two_frames_in_one_write_data_then_close",
+			inputs: [][]byte{
+				// binary frame (opcode 0x2, FIN set = 0x82), payload len 3,
+				// stream ID 1 (stdout), two data bytes,
+				// then close frame (opcode 0x8, FIN set = 0x88), payload len 0
+				{0x82, 0x03, 0x01, 0x07, 0x08, 0x88, 0x00},
+			},
+			wantForwarded: []byte{0x82, 0x03, 0x01, 0x07, 0x08, 0x88, 0x00},
+			wantRecorded:  fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+		},
+		{
+			// Two complete stdout data frames in one Write() call.
+			// Mirrors the "resize_data_frame_two_in_one_read" test
+			// for the Read path.
+			name: "two_data_frames_in_one_write",
+			inputs: [][]byte{
+				// first: binary frame, payload len 3, stdout stream, two data bytes
+				// second: binary frame, payload len 3, stdout stream, two different data bytes
+				{0x82, 0x03, 0x01, 0x07, 0x08, 0x82, 0x03, 0x01, 0x09, 0x0a},
+			},
+			wantForwarded: []byte{0x82, 0x03, 0x01, 0x07, 0x08, 0x82, 0x03, 0x01, 0x09, 0x0a},
+			wantRecorded: append(
+				fakes.CastLine(t, []byte{0x07, 0x08}, cl),
+				fakes.CastLine(t, []byte{0x09, 0x0a}, cl)...,
+			),
 		},
 	}
 	for _, tt := range tests {
@@ -254,12 +330,20 @@ func Test_conn_ReadRand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating a test logger: %v", err)
 	}
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	sr := &fakes.TestSessionRecorder{}
+	rec := tsrecorder.New(sr, cl, cl.Now(), true, zl.Sugar())
 	for i := range 100 {
 		tc := &fakes.TestConn{}
 		tc.ResetReadBuf()
+		headerSent := make(chan struct{})
+		close(headerSent) // pre-close so handleData doesn't block
 		c := &conn{
-			Conn: tc,
-			log:  zl.Sugar(),
+			Conn:                  tc,
+			log:                   zl.Sugar(),
+			ctx:                   context.Background(),
+			rec:                   rec,
+			initialCastHeaderSent: headerSent,
 		}
 		bb := fakes.RandomBytes(t)
 		for j, input := range bb {

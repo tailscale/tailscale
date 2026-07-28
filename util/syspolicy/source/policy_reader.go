@@ -91,7 +91,7 @@ func newReader(store Store, origin *setting.Origin) (*Reader, error) {
 }
 
 // GetSettings returns the current [*setting.Snapshot],
-// re-reading it from from the underlying [Store] only if the policy
+// re-reading it from the underlying [Store] only if the policy
 // has changed since it was read last. It never fails and returns
 // the previous version of the policy settings if a read attempt fails.
 func (r *Reader) GetSettings() *setting.Snapshot {
@@ -125,6 +125,11 @@ func (r *Reader) ReadSettings() (*setting.Snapshot, error) {
 func (r *Reader) reload(force bool) (*setting.Snapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closing {
+		// The reader is closing (or already closed) and r.store may be nil.
+		// Return the last known policy instead of reading from the store.
+		return r.lastPolicy, nil
+	}
 	if r.upToDate && !force {
 		return r.lastPolicy, nil
 	}
@@ -267,12 +272,13 @@ func (r *Reader) Close() error {
 			return err
 		}
 	}
-	r.store = nil
-
 	close(r.doneCh)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Nil out the store only while holding r.mu; reload reads r.store
+	// under the same lock, so writing it unlocked would be a data race.
+	r.store = nil
 	for _, c := range r.sessions {
 		c.closeInternal()
 	}

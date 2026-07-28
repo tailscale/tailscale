@@ -108,8 +108,8 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Slice(ent, func(i, j int) bool { return ent[i].pub.Less(ent[j].pub) })
 
-		peers := map[key.NodePublic]tailcfg.NodeView{}
-		for _, p := range c.peers.All() {
+		peers := make(map[key.NodePublic]tailcfg.NodeView, len(c.peersByID))
+		for _, p := range c.peersByID {
 			peers[p.Key()] = p
 		}
 

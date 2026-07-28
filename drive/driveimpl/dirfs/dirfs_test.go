@@ -29,7 +29,7 @@ func TestStat(t *testing.T) {
 		err      error
 	}{
 		{
-			label: "root folder",
+			label: "root-folder",
 			name:  "",
 			expected: &shared.StaticFileInfo{
 				Named:      "",
@@ -40,7 +40,7 @@ func TestStat(t *testing.T) {
 			},
 		},
 		{
-			label: "static root folder",
+			label: "static-root-folder",
 			name:  "/domain",
 			expected: &shared.StaticFileInfo{
 				Named:      "domain",
@@ -73,7 +73,7 @@ func TestStat(t *testing.T) {
 			},
 		},
 		{
-			label: "non-existent remote",
+			label: "non-existent-remote",
 			name:  "remote3",
 			err:   os.ErrNotExist,
 		},
@@ -108,7 +108,7 @@ func TestListDir(t *testing.T) {
 		err      error
 	}{
 		{
-			label: "root folder",
+			label: "root-folder",
 			name:  "",
 			expected: []fs.FileInfo{
 				&shared.StaticFileInfo{
@@ -121,7 +121,7 @@ func TestListDir(t *testing.T) {
 			},
 		},
 		{
-			label: "static root folder",
+			label: "static-root-folder",
 			name:  "/domain",
 			expected: []fs.FileInfo{
 				&shared.StaticFileInfo{
@@ -189,19 +189,19 @@ func TestMkdir(t *testing.T) {
 		err   error
 	}{
 		{
-			label: "attempt to create root folder",
+			label: "create-root-folder",
 			name:  "/",
 		},
 		{
-			label: "attempt to create static root folder",
+			label: "create-static-root-folder",
 			name:  "/domain",
 		},
 		{
-			label: "attempt to create remote",
+			label: "create-remote",
 			name:  "/domain/remote1",
 		},
 		{
-			label: "attempt to create non-existent remote",
+			label: "create-non-existent-remote",
 			name:  "/domain/remote3",
 			err:   os.ErrPermission,
 		},
@@ -231,7 +231,7 @@ func TestRemoveAll(t *testing.T) {
 		err   error
 	}{
 		{
-			label: "attempt to remove root folder",
+			label: "remove-root-folder",
 			name:  "/",
 			err:   os.ErrPermission,
 		},
@@ -258,7 +258,7 @@ func TestRename(t *testing.T) {
 		err     error
 	}{
 		{
-			label:   "attempt to move root folder",
+			label:   "move-root-folder",
 			oldName: "/",
 			newName: "/domain/remote2/copy.txt",
 			err:     os.ErrPermission,

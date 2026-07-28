@@ -135,11 +135,41 @@ func testStoreSemantics(t *testing.T, store ipn.StateStore) {
 	}
 }
 
+func testStoreDeleteSemantics(t *testing.T, store ipn.StateStore) {
+	t.Helper()
+
+	// Write a key, verify it exists.
+	if err := store.WriteState("delme", []byte("val")); err != nil {
+		t.Fatalf("WriteState: %v", err)
+	}
+	if bs, err := store.ReadState("delme"); err != nil {
+		t.Fatalf("ReadState after write: %v", err)
+	} else if string(bs) != "val" {
+		t.Fatalf("ReadState after write: got %q, want %q", bs, "val")
+	}
+
+	// Delete by writing nil.
+	if err := store.WriteState("delme", nil); err != nil {
+		t.Fatalf("WriteState(nil): %v", err)
+	}
+
+	// Read should return ErrStateNotExist.
+	if _, err := store.ReadState("delme"); err != ipn.ErrStateNotExist {
+		t.Fatalf("ReadState after delete: got err %v, want ErrStateNotExist", err)
+	}
+
+	// Delete of a non-existent key should not error.
+	if err := store.WriteState("never-existed", nil); err != nil {
+		t.Fatalf("WriteState(nil) on non-existent key: %v", err)
+	}
+}
+
 func TestMemoryStore(t *testing.T) {
 	tstest.PanicOnLog()
 
 	store := new(mem.Store)
 	testStoreSemantics(t, store)
+	testStoreDeleteSemantics(t, store)
 }
 
 func TestFileStore(t *testing.T) {
@@ -154,6 +184,7 @@ func TestFileStore(t *testing.T) {
 	}
 
 	testStoreSemantics(t, store)
+	testStoreDeleteSemantics(t, store)
 
 	// Build a brand new file store and check that both IDs written
 	// above are still there.
@@ -175,5 +206,10 @@ func TestFileStore(t *testing.T) {
 		if string(bs) != want {
 			t.Errorf("reading %q (2nd store): got %q, want %q", key, bs, want)
 		}
+	}
+
+	// Verify deleted key is still gone after reload.
+	if _, err := store.ReadState("delme"); err != ipn.ErrStateNotExist {
+		t.Fatalf("reading deleted key from reloaded store: got err %v, want ErrStateNotExist", err)
 	}
 }

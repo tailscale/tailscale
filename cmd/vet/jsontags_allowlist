@@ -195,6 +195,7 @@ OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.OperatorUserSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.PostureCheckingSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.ProfileNameSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.RelayServerPortSet
+OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.RemoteConfigSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.RouteAllSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.RunSSHSet
 OmitEmptyUnsupportedInV2	tailscale.com/ipn.MaskedPrefs.RunWebClientSet

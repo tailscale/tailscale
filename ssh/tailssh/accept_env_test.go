@@ -10,6 +10,39 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func TestIsDangerousEnvVar(t *testing.T) {
+	tests := []struct {
+		name      string
+		dangerous bool
+	}{
+		{"LD_PRELOAD", true},
+		{"LD_LIBRARY_PATH", true},
+		{"LD_AUDIT", true},
+		{"LD_DEBUG", true},
+		{"LD_PROFILE", true},
+		{"ld_preload", true},
+		{"DYLD_INSERT_LIBRARIES", true},
+		{"DYLD_LIBRARY_PATH", true},
+		{"DYLD_FRAMEWORK_PATH", true},
+		{"dyld_insert_libraries", true},
+		{"TERM", false},
+		{"LANG", false},
+		{"LC_ALL", false},
+		{"PATH", false},
+		{"HOME", false},
+		{"LDFLAGS", false},
+		{"MY_LD_PRELOAD", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDangerousEnvVar(tt.name); got != tt.dangerous {
+				t.Errorf("isDangerousEnvVar(%q) = %v, want %v", tt.name, got, tt.dangerous)
+			}
+		})
+	}
+}
+
 func TestMatchAcceptEnvPattern(t *testing.T) {
 	testCases := []struct {
 		pattern string
@@ -111,29 +144,65 @@ func TestFilterEnv(t *testing.T) {
 		wantErrMessage   string
 	}{
 		{
-			name:             "simple direct matches",
+			name:             "simple-direct-matches",
 			acceptEnv:        []string{"FOO", "FOO2", "FOO_3"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 			expectedFiltered: []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123"},
 		},
 		{
-			name:             "bare wildcard",
+			name:             "bare-wildcard",
 			acceptEnv:        []string{"*"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 			expectedFiltered: []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG"},
 		},
 		{
-			name:             "complex matches",
+			name:             "complex-matches",
 			acceptEnv:        []string{"FO?", "FOOO*", "FO*5?7"},
 			environ:          []string{"FOO=BAR", "FOO2=BAZ", "FOO_3=123", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC", "FO57=BAR2"},
 			expectedFiltered: []string{"FOO=BAR", "FOOOO4-2=AbCdEfG", "FO1-kmndGamc79567=ABC"},
 		},
 		{
-			name:             "environ format invalid",
+			name:             "environ-format-invalid",
 			acceptEnv:        []string{"FO?", "FOOO*", "FO*5?7"},
 			environ:          []string{"FOOBAR"},
 			expectedFiltered: nil,
 			wantErrMessage:   `invalid environment variable: "FOOBAR". Variables must be in "KEY=VALUE" format`,
+		},
+		{
+			name:             "ld-preload-rejected-with-wildcard",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"LD_PRELOAD=/tmp/evil.so", "TERM=xterm"},
+			expectedFiltered: []string{"TERM=xterm"},
+		},
+		{
+			name:             "ld-vars-rejected-with-wildcard",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"LD_PRELOAD=/tmp/evil.so", "LD_LIBRARY_PATH=/tmp", "LD_AUDIT=/tmp/audit.so", "SAFE_VAR=ok"},
+			expectedFiltered: []string{"SAFE_VAR=ok"},
+		},
+		{
+			name:             "ld-vars-rejected-with-explicit-match",
+			acceptEnv:        []string{"LD_PRELOAD", "LD_LIBRARY_PATH"},
+			environ:          []string{"LD_PRELOAD=/tmp/evil.so", "LD_LIBRARY_PATH=/tmp"},
+			expectedFiltered: nil,
+		},
+		{
+			name:             "ld-vars-rejected-with-prefix-pattern",
+			acceptEnv:        []string{"LD_*"},
+			environ:          []string{"LD_PRELOAD=/tmp/evil.so", "LD_LIBRARY_PATH=/tmp"},
+			expectedFiltered: nil,
+		},
+		{
+			name:             "ld-vars-case-insensitive",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"ld_preload=/tmp/evil.so", "Ld_Library_Path=/tmp", "SAFE=ok"},
+			expectedFiltered: []string{"SAFE=ok"},
+		},
+		{
+			name:             "dyld-vars-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "DYLD_LIBRARY_PATH=/tmp", "TERM=xterm"},
+			expectedFiltered: []string{"TERM=xterm"},
 		},
 	}
 

@@ -22,15 +22,15 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
-
-	"tailscale.com/tailcfg"
 )
 
 func TestServicePGReconciler(t *testing.T) {
@@ -102,11 +102,11 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 	verifyTailscaleService(t, ft, fmt.Sprintf("svc:%s", hostname), []string{"do-not-validate"})
 	verifyTailscaledConfig(t, fc, "test-pg", []string{fmt.Sprintf("svc:%s", hostname)})
 
-	_, err := ft.GetVIPService(context.Background(), tailcfg.ServiceName(fmt.Sprintf("svc:default-%s", svc.Name)))
+	_, err := ft.VIPServices().Get(context.Background(), fmt.Sprintf("svc:default-%s", svc.Name))
 	if err == nil {
 		t.Fatalf("svc:default-%s not cleaned up", svc.Name)
 	}
-	if !isErrorTailscaleServiceNotFound(err) {
+	if !tailscale.IsNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -188,7 +188,9 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 		t.Fatal(err)
 	}
 
-	ft := &fakeTSClient{}
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +199,7 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	svcPGR := &HAServiceReconciler{
 		Client:      fc,
-		tsClient:    ft,
+		clients:     tsclient.NewProvider(ft),
 		clock:       cl,
 		defaultTags: []string{"tag:k8s"},
 		tsNamespace: "operator-ns",
@@ -256,7 +258,7 @@ func TestValidateService(t *testing.T) {
 					Status:             metav1.ConditionFalse,
 					Reason:             reasonIngressSvcInvalid,
 					LastTransitionTime: metav1.NewTime(cl.Now().Truncate(time.Second)),
-					Message:            `found duplicate Service "ns-2/my-app2" for hostname "my-app" - multiple HA Services for the same hostname in the same cluster are not allowed`,
+					Message:            `found duplicate Service "ns-2/my-app2" for hostname "my-app" - multiple HA Services for the same hostname on the same tailnet are not allowed`,
 				},
 			},
 		},
@@ -268,6 +270,142 @@ func TestValidateService(t *testing.T) {
 	expectEqual(t, lc, wantSvc)
 }
 
+// Regression test for #20069. The pre-fix duplicate-hostname check scanned
+// every Service with shouldExpose=true, which meant a Service exposed on
+// one tailnet via the single-proxy path (svc.go) would block a ProxyGroup
+// ingress Service for the same hostname on a different tailnet. The
+// ProxyGroup path's validateService must skip Services that aren't
+// themselves managed by a ProxyGroup.
+func TestValidateService_SingleProxyServiceDoesNotCollideWithProxyGroup(t *testing.T) {
+	pgr, _, lc, _, _ := setupServiceTest(t)
+	// Service exposed via the single-proxy path: tailscale.com/expose=true
+	// and no tailscale.com/proxy-group annotation. Its hostname matches
+	// the ProxyGroup-managed Service below, but it lives in a different
+	// reconciler entirely and must not be flagged as a duplicate.
+	singleProxySvc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "single-proxy",
+			Namespace: "ns-1",
+			UID:       types.UID("single-proxy-uid"),
+			Annotations: map[string]string{
+				"tailscale.com/expose":   "true",
+				"tailscale.com/hostname": "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "1.2.3.4",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	}
+	// ProxyGroup-managed Service for the same hostname.
+	pgSvc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pg-svc",
+			Namespace: "ns-2",
+			UID:       types.UID("pg-svc-uid"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+				"tailscale.com/hostname":    "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "1.2.3.5",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+		},
+	}
+
+	mustCreate(t, lc, singleProxySvc)
+	mustCreate(t, lc, pgSvc)
+	expectReconciled(t, pgr, pgSvc.Namespace, pgSvc.Name)
+
+	got := &corev1.Service{}
+	if err := lc.Get(context.Background(), client.ObjectKeyFromObject(pgSvc), got); err != nil {
+		t.Fatalf("get Service: %v", err)
+	}
+	for _, c := range got.Status.Conditions {
+		if c.Type == string(tsapi.IngressSvcValid) && c.Status == metav1.ConditionFalse {
+			t.Fatalf("ProxyGroup Service flagged invalid by a single-proxy Service on a different tailnet: %s", c.Message)
+		}
+	}
+}
+
+// Regression test for #20069. Two ProxyGroup-managed Services with the same
+// hostname but joined to different tailnets each have their own DNS
+// namespace and must not be flagged as duplicates. The Service being
+// reconciled here is on the default tailnet (so it uses the configured
+// fake tsclient); the conflicting Service already exists in-cluster on
+// a different tailnet and must be skipped by the duplicate check.
+func TestValidateService_DifferentTailnetDoesNotCollide(t *testing.T) {
+	pgr, _, lc, _, _ := setupServiceTest(t)
+	// Pre-create a ProxyGroup joined to a different tailnet.
+	secondaryPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "secondary-pg",
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type:    tsapi.ProxyGroupTypeIngress,
+			Tailnet: "secondary",
+		},
+	}
+	if err := lc.Create(context.Background(), secondaryPG); err != nil {
+		t.Fatalf("create secondary ProxyGroup: %v", err)
+	}
+	// Pre-existing Service on the secondary tailnet with the conflicting hostname.
+	otherTailnetSvc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "other-tailnet-svc",
+			Namespace: "ns-2",
+			UID:       types.UID("other-tailnet-svc-uid"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "secondary-pg",
+				"tailscale.com/hostname":    "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "1.2.3.5",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+		},
+	}
+	mustCreate(t, lc, otherTailnetSvc)
+
+	// Service being reconciled: same hostname, default tailnet ProxyGroup.
+	primarySvc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "primary-svc",
+			Namespace: "ns-1",
+			UID:       types.UID("primary-svc-uid"),
+			Annotations: map[string]string{
+				"tailscale.com/proxy-group": "test-pg",
+				"tailscale.com/hostname":    "my-app",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "1.2.3.4",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+		},
+	}
+	mustCreate(t, lc, primarySvc)
+	expectReconciled(t, pgr, primarySvc.Namespace, primarySvc.Name)
+
+	got := &corev1.Service{}
+	if err := lc.Get(context.Background(), client.ObjectKeyFromObject(primarySvc), got); err != nil {
+		t.Fatalf("get Service: %v", err)
+	}
+	for _, c := range got.Status.Conditions {
+		if c.Type == string(tsapi.IngressSvcValid) && c.Status == metav1.ConditionFalse {
+			t.Fatalf("ProxyGroup Service flagged invalid by a Service on a different tailnet with the same hostname: %s", c.Message)
+		}
+	}
+}
+
 func TestServicePGReconciler_MultiCluster(t *testing.T) {
 	var ft *fakeTSClient
 	for i := 0; i <= 10; i++ {
@@ -275,22 +413,22 @@ func TestServicePGReconciler_MultiCluster(t *testing.T) {
 		if i == 0 {
 			ft = fti
 		} else {
-			pgr.tsClient = ft
+			pgr.clients = tsclient.NewProvider(ft)
 		}
 
 		svc, _ := setupTestService(t, "test-multi-cluster", "", "4.3.2.1", fc, stateSecret)
 		expectReconciled(t, pgr, "default", svc.Name)
 
-		tsSvcs, err := ft.ListVIPServices(context.Background())
+		tsSvcs, err := ft.VIPServices().List(t.Context())
 		if err != nil {
 			t.Fatalf("getting Tailscale Service: %v", err)
 		}
 
-		if len(tsSvcs.VIPServices) != 1 {
-			t.Fatalf("unexpected number of Tailscale Services (%d)", len(tsSvcs.VIPServices))
+		if len(tsSvcs) != 1 {
+			t.Fatalf("unexpected number of Tailscale Services (%d)", len(tsSvcs))
 		}
 
-		for _, svc := range tsSvcs.VIPServices {
+		for _, svc := range tsSvcs {
 			t.Logf("found Tailscale Service with name %q", svc.Name)
 		}
 	}
@@ -322,9 +460,9 @@ func TestIgnoreRegularService(t *testing.T) {
 
 	verifyTailscaledConfig(t, fc, "test-pg", nil)
 
-	tsSvcs, err := ft.ListVIPServices(context.Background())
+	tsSvcs, err := ft.VIPServices().List(t.Context())
 	if err == nil {
-		if len(tsSvcs.VIPServices) > 0 {
+		if len(tsSvcs) > 0 {
 			t.Fatal("unexpected Tailscale Services found")
 		}
 	}

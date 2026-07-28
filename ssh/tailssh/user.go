@@ -93,7 +93,7 @@ func defaultPathForUser(u *user.User) string {
 	}
 	isRoot := u.Uid == "0"
 	switch distro.Get() {
-	case distro.Debian:
+	case distro.Debian, distro.Crostini:
 		hi := hostinfo.New()
 		if hi.Distro == "ubuntu" {
 			// distro.Get's Debian includes Ubuntu. But see if it's actually Ubuntu.
@@ -104,7 +104,7 @@ func defaultPathForUser(u *user.User) string {
 		if isRoot {
 			return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 		}
-		return "/usr/local/bin:/usr/bin:/bin:/usr/bn/games"
+		return "/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
 	case distro.NixOS:
 		return defaultPathForUserOnNixOS(u)
 	}

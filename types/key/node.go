@@ -65,6 +65,11 @@ func NewNode() NodePrivate {
 // Raw32 returns k as 32 raw bytes.
 func (k NodePrivate) Raw32() [32]byte { return k.k }
 
+// NodePrivateAs returns a NodePrivate as a named fixed-size array of bytes.
+// It's intended for interoperability with wireguard-go's
+// device.NoisePrivateKey type.
+func NodePrivateAs[T ~[32]byte](k NodePrivate) T { return k.k }
+
 // NodePrivateFromRaw32 parses a 32-byte raw value as a NodePrivate.
 //
 // Deprecated: only needed to cast from legacy node private key types,

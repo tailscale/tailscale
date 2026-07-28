@@ -56,7 +56,7 @@ func srcMatches(m *filtertype.Match, srcAddr netip.Addr, hasCap CapTestFunc) boo
 // CapTestFunc is the function signature of a function that tests whether srcIP
 // has a given capability.
 //
-// It it used in the fast path of evaluating filter rules so should be fast.
+// It is used in the fast path of evaluating filter rules so should be fast.
 type CapTestFunc = func(srcIP netip.Addr, cap tailcfg.NodeCapability) bool
 
 func (ms matches) matchIPsOnly(q *packet.Parsed, hasCap CapTestFunc) bool {

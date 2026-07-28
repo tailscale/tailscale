@@ -36,4 +36,8 @@ const (
 	// ArgServerName provides a Warnable with comma delimited list of the hostname of the servers involved in the unhealthy state.
 	// If no nameservers were available to query, this will be an empty string.
 	ArgDNSServers Arg = "dns-servers"
+
+	// ArgDomains provides a Warnable with a comma-delimited list of domain
+	// names involved in the unhealthy state.
+	ArgDomains Arg = "domains"
 )
