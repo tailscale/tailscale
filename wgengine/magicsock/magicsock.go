@@ -2678,7 +2678,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		return
 	}
 
-	c.maybeSendTSMPDiscoAdvert(de)
+	//c.maybeSendTSMPDiscoAdvert(de)
 
 	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
@@ -4565,6 +4565,12 @@ type NewDiscoKeyAvailable struct {
 	NodeID        tailcfg.NodeID
 }
 
+func (c *Conn) MaybeSendTSMPDiscoAdvert(nk key.NodePublic) {
+	if ep, ok := c.peerMap.endpointForNodeKey(nk); ok {
+		c.maybeSendTSMPDiscoAdvert(ep)
+	}
+}
+
 // maybeSendTSMPDiscoAdvert conditionally emits an event indicating that we
 // should send our DiscoKey to the first node address of the magicksock endpoint.
 //
@@ -4585,9 +4591,9 @@ func (c *Conn) maybeSendTSMPDiscoAdvert(de *endpoint) {
 	// here has pathological behaviors. Therefore, it should be disabled for
 	// almost all tailnets, and we lean on the network map caching control knob
 	// for this purpose. See #20081.
-	if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
-		return
-	}
+	//if c.controlKnobs == nil || !c.controlKnobs.CacheNetworkMaps.Load() {
+	//	return
+	//}
 
 	de.mu.Lock()
 	defer de.mu.Unlock()

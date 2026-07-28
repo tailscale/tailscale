@@ -5843,6 +5843,9 @@ func (b *LocalBackend) handlePeerWireGuardState(peerKey key.NodePublic, st ipn.P
 		delete(b.peerWGStableIDByKey, peerKey)
 		addPeerWGStateMetric(old.PeerWireGuardState, -1)
 	} else {
+		if st == ipn.PeerWireGuardStateEstablished {
+			b.MagicConn().MaybeSendTSMPDiscoAdvert(peerKey)
+		}
 		old := b.peerWGState[id].PeerWireGuardState
 		if old == st {
 			return
