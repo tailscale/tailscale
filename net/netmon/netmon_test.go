@@ -157,6 +157,68 @@ func TestMonitorMode(t *testing.T) {
 	}
 }
 
+func TestInterfaceIPDisappeared(t *testing.T) {
+	ip := netip.MustParseAddr("192.0.2.1")
+
+	stateWithIP := func(ip netip.Addr) *State {
+		return &State{InterfaceIPs: map[string][]netip.Prefix{
+			"eth0": {netip.PrefixFrom(ip, ip.BitLen())},
+		}}
+	}
+	stateWithoutIP := func() *State {
+		return &State{InterfaceIPs: map[string][]netip.Prefix{
+			"eth0": {netip.MustParsePrefix("198.51.100.1/32")},
+		}}
+	}
+
+	tests := []struct {
+		name string
+		old  *State
+		new  *State
+		want bool
+	}{
+		{
+			name: "initial_state",
+			new:  stateWithIP(ip),
+		},
+		{
+			name: "disappeared",
+			old:  stateWithIP(ip),
+			new:  stateWithoutIP(),
+			want: true,
+		},
+		{
+			name: "unchanged_present",
+			old:  stateWithIP(ip),
+			new:  stateWithIP(ip),
+		},
+		{
+			name: "appeared",
+			old:  stateWithoutIP(),
+			new:  stateWithIP(ip),
+		},
+		{
+			name: "unchanged_absent",
+			old:  stateWithoutIP(),
+			new:  stateWithoutIP(),
+		},
+		{
+			name: "new_unknown",
+			old:  stateWithIP(ip),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cd := &ChangeDelta{old: tt.old, new: tt.new}
+			if got := cd.InterfaceIPDisappeared(ip); got != tt.want {
+				t.Fatalf("InterfaceIPDisappeared(%v) = %v; want %v", ip, got, tt.want)
+			}
+		})
+	}
+}
+
 // tests (*ChangeDelta).RebindRequired
 func TestRebindRequired(t *testing.T) {
 	// s1 must not be nil by definition
