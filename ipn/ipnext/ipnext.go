@@ -426,6 +426,11 @@ type Hooks struct {
 	// in Hostinfo from the portlist extension.
 	ShouldUploadServices feature.Hook[func() bool]
 
+	// ServiceClientPrefs returns the current login profile's saved service launch
+	// preferences, for the initial [ipn.Notify] sent to a new bus watcher. It returns
+	// nil if the prefs can't be read.
+	ServiceClientPrefs feature.Hook[func() *ipn.ServiceClientPrefsNotify]
+
 	// Filter contains hooks for the packet filter.
 	// See [filter.Filter] for details on how these hooks are invoked.
 	Filter FilterHooks
