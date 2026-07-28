@@ -102,9 +102,12 @@ func (msg *message) Parse(b []byte, log *zap.SugaredLogger) (bool, error) {
 	finalized := isFinalFragment(b)
 	maskSet := isMasked(b)
 
-	payloadLength, payloadOffset, maskOffset, err := fragmentDimensions(b, maskSet)
+	payloadLength, payloadOffset, maskOffset, ok, err := fragmentDimensions(b, maskSet)
 	if err != nil {
 		return false, fmt.Errorf("error determining payload length: %w", err)
+	}
+	if !ok { // incomplete frame header, wait for more bytes
+		return false, nil
 	}
 	log.Debugf("parse: parsing a message fragment with payload length: %d payload offset: %d maskOffset: %d mask set: %t, is finalized: %t, is initial fragment: %t", payloadLength, payloadOffset, maskOffset, maskSet, finalized, isInitialFragment)
 
@@ -209,8 +212,11 @@ func zeroFirstBit(b byte) byte {
 	return b & 0x7f
 }
 
-// fragmentDimensions returns payload length as well as payload offset and mask offset.
-func fragmentDimensions(b []byte, maskSet bool) (payloadLength, payloadOffset, maskOffset uint64, _ error) {
+// fragmentDimensions returns payload length as well as payload offset and mask
+// offset. If b does not yet contain the full frame header, it returns ok ==
+// false to signal that the caller must wait for more bytes; this is not an
+// error, as a frame header can be split across multiple reads.
+func fragmentDimensions(b []byte, maskSet bool) (payloadLength, payloadOffset, maskOffset uint64, ok bool, _ error) {
 
 	// payload length can be stored either in bits [9-15] or in bytes 2, 3
 	// or in bytes 2, 3, 4, 5, 6, 7.
@@ -235,17 +241,17 @@ func fragmentDimensions(b []byte, maskSet bool) (payloadLength, payloadOffset, m
 	case payloadLengthIndicator == 126:
 		maskOffset = 4
 		if len(b) < int(maskOffset) {
-			return 0, 0, 0, fmt.Errorf("invalid message fragment- length indicator suggests that length is stored in bytes 2:4, but message length is only %d", len(b))
+			return 0, 0, 0, false, nil // incomplete frame header
 		}
 		payloadLength = uint64(binary.BigEndian.Uint16(b[2:4]))
 	case payloadLengthIndicator == 127:
 		maskOffset = 10
 		if len(b) < int(maskOffset) {
-			return 0, 0, 0, fmt.Errorf("invalid message fragment- length indicator suggests that length is stored in bytes 2:10, but message length is only %d", len(b))
+			return 0, 0, 0, false, nil // incomplete frame header
 		}
 		payloadLength = binary.BigEndian.Uint64(b[2:10])
 	default:
-		return 0, 0, 0, fmt.Errorf("unexpected payload length indicator value: %v", payloadLengthIndicator)
+		return 0, 0, 0, false, fmt.Errorf("unexpected payload length indicator value: %v", payloadLengthIndicator)
 	}
 
 	// Ensure that a rogue or broken client doesn't cause us attempt to
@@ -254,7 +260,7 @@ func fragmentDimensions(b []byte, maskSet bool) (payloadLength, payloadOffset, m
 	// by server side of this connection, so we can safely reject messages
 	// with larger payload size.
 	if payloadLength > websocket.DefaultMaxPayloadBytes {
-		return 0, 0, 0, fmt.Errorf("[unexpected]: too large payload size: %v", payloadLength)
+		return 0, 0, 0, false, fmt.Errorf("[unexpected]: too large payload size: %v", payloadLength)
 	}
 
 	// Masking key can take up 0 or 4 bytes- we need to take that into
@@ -272,5 +278,5 @@ func fragmentDimensions(b []byte, maskSet bool) (payloadLength, payloadOffset, m
 	} else {
 		payloadOffset = maskOffset
 	}
-	return
+	return payloadLength, payloadOffset, maskOffset, true, nil
 }
