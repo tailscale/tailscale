@@ -33,7 +33,7 @@ func TestCache(t *testing.T) {
 
 	// Write initial cache value
 	initialCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",
@@ -109,7 +109,7 @@ func TestCacheUnchanged(t *testing.T) {
 
 	// Write initial cache value
 	initialCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",
@@ -155,7 +155,7 @@ func TestCacheUnchanged(t *testing.T) {
 	// Now, update the cache with something slightly different and verify
 	// that we did re-write the file on-disk.
 	updatedCache := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			99: {
 				RegionID:   99,
 				RegionCode: "test",

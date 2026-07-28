@@ -987,7 +987,7 @@ var derpHostnames = []string{"derp1.tailscale", "derp2.tailscale"}
 const controlHostname = "control.tailscale"
 
 var derpMap = &tailcfg.DERPMap{
-	Regions: map[int]*tailcfg.DERPRegion{
+	Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 		1: {
 			RegionID:   1,
 			RegionCode: "atlantis",

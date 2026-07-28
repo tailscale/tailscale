@@ -1462,7 +1462,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 		}
 		endpoints := filterInvalidIPv6Endpoints(req.Endpoints)
 		var hi tailcfg.HostinfoView
-		var newDERP int
+		var newDERP tailcfg.DERPRegionID
 		if req.Hostinfo != nil {
 			hi = req.Hostinfo.View()
 			if ni := hi.NetInfo(); ni.Valid() {

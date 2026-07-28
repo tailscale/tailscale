@@ -407,7 +407,7 @@ type Node struct {
 	//
 	// HomeDERP may be zero if not (yet) known, but ideally always be non-zero
 	// for magicsock connectivity to function normally.
-	HomeDERP int `json:",omitzero"` // DERP region ID of the node's home DERP
+	HomeDERP DERPRegionID `json:",omitzero"` // DERP region ID of the node's home DERP
 
 	Hostinfo HostinfoView      `json:",omitzero"`
 	Created  time.Time         `json:",omitzero"`
@@ -1112,7 +1112,7 @@ type NetInfo struct {
 	// that are located elsewhere) but PreferredDERP is the region ID
 	// that the node subscribes to traffic at.
 	// Zero means disconnected or unknown.
-	PreferredDERP int `json:",omitzero"`
+	PreferredDERP DERPRegionID `json:",omitzero"`
 
 	// LinkType is the current link type, if known.
 	LinkType string `json:",omitzero"` // "wired", "wifi", "mobile" (LTE, 4G, 3G, etc)
@@ -1945,7 +1945,7 @@ type PingResponse struct {
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
-	DERPRegionID int `json:",omitempty"`
+	DERPRegionID DERPRegionID `json:",omitempty"`
 
 	// DERPRegionCode is the three-letter region code
 	// corresponding to DERPRegionID.
@@ -3015,7 +3015,7 @@ type PeerChange struct {
 
 	// DERPRegion, if non-zero, means that NodeID's home DERP
 	// region ID is now this number.
-	DERPRegion int `json:",omitzero"`
+	DERPRegion DERPRegionID `json:",omitzero"`
 
 	// Cap, if non-zero, means that NodeID's capability version has changed.
 	Cap CapabilityVersion `json:",omitzero"`

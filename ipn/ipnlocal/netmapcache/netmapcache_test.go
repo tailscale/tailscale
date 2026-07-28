@@ -138,7 +138,7 @@ func init() {
 
 		DERPMap: &tailcfg.DERPMap{ // "derp"
 			HomeParams: &tailcfg.DERPHomeParams{
-				RegionScore: map[int]float64{10: 0.31, 20: 0.141, 30: 0.592},
+				RegionScore: map[tailcfg.DERPRegionID]float64{10: 0.31, 20: 0.141, 30: 0.592},
 			},
 			OmitDefaultRegions: true,
 		},

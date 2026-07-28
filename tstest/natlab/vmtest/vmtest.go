@@ -1309,7 +1309,7 @@ func (e *Env) RotateDiscoKey(n *Node) {
 // "force-prefer-derp" debug action, so its reported NetInfo.PreferredDERP is
 // deterministic. The force lives on the long-lived magicsock.Conn and so
 // persists across an in-process profile switch. It fatals the test on error.
-func (e *Env) ForcePreferredDERP(n *Node, region int) {
+func (e *Env) ForcePreferredDERP(n *Node, region tailcfg.DERPRegionID) {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1802,7 +1802,7 @@ func (e *Env) buildSelfSignedDERPMap() *tailcfg.DERPMap {
 	}
 	src := e.server.ControlServer().DERPMap
 	dm := &tailcfg.DERPMap{
-		Regions: make(map[int]*tailcfg.DERPRegion, len(src.Regions)),
+		Regions: make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion, len(src.Regions)),
 	}
 	for id, srcRegion := range src.Regions {
 		r := *srcRegion

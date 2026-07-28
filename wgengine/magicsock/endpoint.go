@@ -2022,7 +2022,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	ps.Relay = de.c.derpRegionCodeOfIDLocked(int(de.derpAddr.Port()))
+	ps.Relay = de.c.derpRegionCodeOfIDLocked(tailcfg.DERPRegionID(de.derpAddr.Port()))
 
 	if de.lastSendExt.IsZero() {
 		return

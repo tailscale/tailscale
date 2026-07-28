@@ -199,7 +199,7 @@ func (d *derpProber) probeMapFn(ctx context.Context) error {
 		for _, server := range region.Nodes {
 			labels := Labels{
 				"region":    region.RegionCode,
-				"region_id": strconv.Itoa(region.RegionID),
+				"region_id": region.RegionID.String(),
 				"hostname":  server.HostName,
 			}
 
@@ -643,7 +643,7 @@ func (d *derpProber) ProbeUDP(ipaddr string, port int) ProbeClass {
 }
 
 func (d *derpProber) skipRegion(region *tailcfg.DERPRegion) bool {
-	return d.regionCodeOrID != "" && region.RegionCode != d.regionCodeOrID && strconv.Itoa(region.RegionID) != d.regionCodeOrID
+	return d.regionCodeOrID != "" && region.RegionCode != d.regionCodeOrID && region.RegionID.String() != d.regionCodeOrID
 }
 
 func derpProbeUDP(ctx context.Context, ipStr string, port int) error {

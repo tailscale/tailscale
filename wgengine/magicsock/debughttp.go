@@ -42,7 +42,7 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<h2 id=derp><a href=#derp>#</a> DERP</h2><ul>")
 	if c.derpMap != nil {
 		type D struct {
-			regionID   int
+			regionID   tailcfg.DERPRegionID
 			lastWrite  time.Time
 			createTime time.Time
 		}

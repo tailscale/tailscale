@@ -540,7 +540,7 @@ func TestDERPAppNamePlumbing(t *testing.T) {
 	t.Cleanup(stunCleanup)
 
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				RegionID:   1,
 				RegionCode: "test",
