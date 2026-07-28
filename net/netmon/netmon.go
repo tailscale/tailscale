@@ -254,7 +254,7 @@ func (cd *ChangeDelta) InterfaceIPDisappeared(ip netip.Addr) bool {
 	if cd.new == nil && cd.old.HasIP(ip) {
 		return true
 	}
-	return cd.new.HasIP(ip) && !cd.old.HasIP(ip)
+	return cd.old.HasIP(ip) && !cd.new.HasIP(ip)
 }
 
 // AnyInterfaceUp reports whether any interfaces are up in the new state.
