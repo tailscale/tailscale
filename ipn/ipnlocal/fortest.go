@@ -45,6 +45,7 @@ func (f forTest) SetIPServiceMappings(m netmap.IPServiceMappings) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ipVIPServiceMap = m
+	b.tunServiceMetrics.updateLocked(b)
 	if ns, ok := b.sys.Netstack.GetOK(); ok {
 		ns.UpdateIPServiceMappings(m)
 	}
@@ -124,6 +125,7 @@ func (f forTest) SetServeConfig(sc ipn.ServeConfigView) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.serveConfig = sc
+	b.tunServiceMetrics.updateLocked(b)
 }
 
 // SetNetMap installs nm as the backend's current netmap without going

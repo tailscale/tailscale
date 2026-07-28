@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"expvar"
 	"fmt"
 	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -65,6 +67,25 @@ func udp4(src, dst string, sport, dport uint16) []byte {
 		DstPort: dport,
 	}
 	return packet.Generate(header, []byte("udp_payload"))
+}
+
+func udp6(src, dst string, sport, dport uint16) []byte {
+	sip, err := netip.ParseAddr(src)
+	if err != nil {
+		panic(err)
+	}
+	dip, err := netip.ParseAddr(dst)
+	if err != nil {
+		panic(err)
+	}
+	return packet.Generate(packet.UDP6Header{
+		IP6Header: packet.IP6Header{
+			Src: sip,
+			Dst: dip,
+		},
+		SrcPort: sport,
+		DstPort: dport,
+	}, []byte("udp_payload"))
 }
 
 func tcp4syn(src, dst string, sport, dport uint16) []byte {
@@ -197,6 +218,14 @@ func newFakeTUN(logf logger.Logf, bus *eventbus.Bus, secure bool) (*fakeTUN, *Wr
 		tun.disableFilter = true
 	}
 	return ftun.(*fakeTUN), tun
+}
+
+type writeErrorTUN struct {
+	*fakeTUN
+}
+
+func (*writeErrorTUN) Write([][]byte, int) (int, error) {
+	return 0, errors.New("test TUN write error")
 }
 
 func TestReadAndInject(t *testing.T) {
@@ -582,6 +611,49 @@ func BenchmarkWrite(b *testing.B) {
 	}
 }
 
+func packetMetricTableByIP(counters map[netip.Addr]PacketMetricCounters) *bart.Table[PacketMetricCounters] {
+	if len(counters) == 0 {
+		return nil
+	}
+	table := new(bart.Table[PacketMetricCounters])
+	for ip, counters := range counters {
+		table.Insert(netip.PrefixFrom(ip, ip.BitLen()), counters)
+	}
+	return table
+}
+
+func BenchmarkWrapperWritePacketMetrics(b *testing.B) {
+	dstIP := netip.MustParseAddr("1.2.3.4")
+	packet := [][]byte{udp4("5.6.7.8", dstIP.String(), 89, 89)}
+	for _, tt := range []struct {
+		name     string
+		counters *bart.Table[PacketMetricCounters]
+	}{
+		{name: "disabled"},
+		{
+			name: "matched",
+			counters: packetMetricTableByIP(map[netip.Addr]PacketMetricCounters{
+				dstIP: {Inbound: new(expvar.Int), Outbound: new(expvar.Int)},
+			}),
+		},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			bus := eventbustest.NewBus(b)
+			_, tw := newFakeTUN(b.Logf, bus, true)
+			defer tw.Close()
+			tw.SetFilter(filter.NewAllowAllForTest(b.Logf))
+			tw.SetPacketMetricCounters(tt.counters)
+			b.ResetTimer()
+			for range b.N {
+				if _, err := tw.Write(packet, 0); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestAtomic64Alignment(t *testing.T) {
 	off := unsafe.Offsetof(Wrapper{}.lastActivityAtomic)
 	if off%8 != 0 {
@@ -590,6 +662,209 @@ func TestAtomic64Alignment(t *testing.T) {
 
 	c := new(Wrapper)
 	c.lastActivityAtomic.StoreAtomic(mono.Now())
+}
+
+func TestPacketMetricCounters(t *testing.T) {
+	service4 := netip.MustParseAddr("1.2.3.4")
+	peer4 := netip.MustParseAddr("5.6.7.8")
+	service6 := netip.MustParseAddr("fd7a:115c:a1e0::10")
+	peer6 := netip.MustParseAddr("fd7a:115c:a1e0::20")
+
+	t.Run("inbound_accepted_packets", func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		_, tw := newFakeTUN(t.Logf, bus, true)
+		defer tw.Close()
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+
+		var inbound, outbound expvar.Int
+		tw.SetPacketMetricCounters(packetMetricTableByIP(map[netip.Addr]PacketMetricCounters{
+			service4: {Inbound: &inbound, Outbound: &outbound},
+			service6: {Inbound: &inbound, Outbound: &outbound},
+		}))
+
+		// Attribute the packet before DNAT changes its destination.
+		routes := new(bart.Table[*routemanager.PeerRoute])
+		routes.Insert(netip.PrefixFrom(peer4, peer4.BitLen()), &routemanager.PeerRoute{
+			MasqAddr4: service4,
+		})
+		tw.SetPeerRoutes(netip.MustParseAddr("100.64.0.1"), netip.Addr{}, routes)
+
+		pkt4 := udp4(peer4.String(), service4.String(), 1234, 89)
+		if n, err := tw.Write([][]byte{pkt4}, 0); err != nil || n != 1 {
+			t.Fatalf("Write IPv4 = %d, %v; want 1, nil", n, err)
+		}
+		if got := inbound.Value(); got != int64(len(pkt4)) {
+			t.Fatalf("IPv4 inbound bytes = %d; want %d", got, len(pkt4))
+		}
+
+		pkt6 := udp6(peer6.String(), service6.String(), 1234, 89)
+		if n, err := tw.Write([][]byte{pkt6}, 0); err != nil || n != 1 {
+			t.Fatalf("Write IPv6 = %d, %v; want 1, nil", n, err)
+		}
+		if got, want := inbound.Value(), int64(len(pkt4)+len(pkt6)); got != want {
+			t.Fatalf("IPv6 inbound bytes = %d; want %d", got, want)
+		}
+
+		// Non-initial fragments have no transport header.
+		fragment := udp4(peer4.String(), service4.String(), 1234, 89)
+		binary.BigEndian.PutUint16(fragment[6:8], 16)
+		if n, err := tw.Write([][]byte{fragment}, 0); err != nil || n != 1 {
+			t.Fatalf("Write fragment = %d, %v; want 1, nil", n, err)
+		}
+		if got, want := inbound.Value(), int64(len(pkt4)+len(pkt6)+len(fragment)); got != want {
+			t.Fatalf("fragment inbound bytes = %d; want %d", got, want)
+		}
+
+		tw.SetFilter(filter.NewAllowNone(t.Logf, &netipx.IPSet{}))
+		rejected := udp4(peer4.String(), service4.String(), 1234, 91)
+		if n, err := tw.Write([][]byte{rejected}, 0); err != nil || n != 0 {
+			t.Fatalf("Write rejected = %d, %v; want 0, nil", n, err)
+		}
+		if got, want := inbound.Value(), int64(len(pkt4)+len(pkt6)+len(fragment)); got != want {
+			t.Fatalf("inbound after ACL drop = %d; want %d", got, want)
+		}
+
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+		tw.PostFilterPacketInboundFromWireGuard = func(*packet.Parsed, *Wrapper, *gro.GRO) (filter.Response, *gro.GRO) {
+			return filter.DropSilently, nil
+		}
+		if n, err := tw.Write([][]byte{pkt4}, 0); err != nil || n != 0 {
+			t.Fatalf("Write intercepted = %d, %v; want 0, nil", n, err)
+		}
+		if got, want := inbound.Value(), int64(len(pkt4)+len(pkt6)+len(fragment)); got != want {
+			t.Fatalf("inbound after interception = %d; want %d", got, want)
+		}
+		tw.PostFilterPacketInboundFromWireGuard = nil
+	})
+
+	t.Run("inbound_tun_write_error", func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		tun := &writeErrorTUN{fakeTUN: NewFake().(*fakeTUN)}
+		tw := Wrap(t.Logf, tun, new(usermetric.Registry), bus)
+		defer tw.Close()
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+
+		var inbound expvar.Int
+		tw.SetPacketMetricCounters(packetMetricTableByIP(map[netip.Addr]PacketMetricCounters{
+			service4: {Inbound: &inbound},
+		}))
+
+		pkt1 := udp4(peer4.String(), service4.String(), 1234, 92)
+		pkt2 := udp4(peer4.String(), service4.String(), 1234, 93)
+		if n, err := tw.Write([][]byte{pkt1, pkt2}, 0); err == nil || n != 2 {
+			t.Fatalf("Write = %d, %v; want 2, error", n, err)
+		}
+		if got, want := inbound.Value(), int64(len(pkt1)+len(pkt2)); got != want {
+			t.Fatalf("inbound bytes = %d; want %d", got, want)
+		}
+	})
+
+	t.Run("longest_prefix_match", func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		_, tw := newFakeTUN(t.Logf, bus, true)
+		defer tw.Close()
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+
+		var hostInbound, routeInbound expvar.Int
+		counters := new(bart.Table[PacketMetricCounters])
+		counters.Insert(netip.MustParsePrefix("1.2.3.0/24"), PacketMetricCounters{Inbound: &routeInbound})
+		counters.Insert(netip.PrefixFrom(service4, service4.BitLen()), PacketMetricCounters{Inbound: &hostInbound})
+		tw.SetPacketMetricCounters(counters)
+
+		hostPacket := udp4(peer4.String(), service4.String(), 1234, 89)
+		routePacket := udp4(peer4.String(), "1.2.3.5", 1234, 89)
+		if n, err := tw.Write([][]byte{hostPacket}, 0); err != nil || n != 1 {
+			t.Fatalf("Write host packet = %d, %v; want 1, nil", n, err)
+		}
+		if n, err := tw.Write([][]byte{routePacket}, 0); err != nil || n != 1 {
+			t.Fatalf("Write route packet = %d, %v; want 1, nil", n, err)
+		}
+		if got, want := hostInbound.Value(), int64(len(hostPacket)); got != want {
+			t.Fatalf("host inbound bytes = %d; want %d", got, want)
+		}
+		if got, want := routeInbound.Value(), int64(len(routePacket)); got != want {
+			t.Fatalf("route inbound bytes = %d; want %d", got, want)
+		}
+	})
+
+	t.Run("outbound_accepted_packets", func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		chtun := tuntest.NewChannelTUN()
+		tw := Wrap(t.Logf, chtun.TUN(), new(usermetric.Registry), bus)
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+		tw.Start()
+		defer tw.Close()
+
+		var inbound, outbound expvar.Int
+		// Counters can be installed after Start.
+		tw.SetPacketMetricCounters(packetMetricTableByIP(map[netip.Addr]PacketMetricCounters{
+			service4: {Inbound: &inbound, Outbound: &outbound},
+		}))
+
+		pkt := udp4(service4.String(), peer4.String(), 89, 1234)
+		go func() { chtun.Outbound <- pkt }()
+		buffs := [][]byte{make([]byte, MaxPacketSize)}
+		sizes := make([]int, 1)
+		if n, err := tw.Read(buffs, sizes, 0); err != nil || n != 1 {
+			t.Fatalf("Read = %d, %v; want 1, nil", n, err)
+		}
+		if got := outbound.Value(); got != int64(len(pkt)) {
+			t.Fatalf("outbound bytes = %d; want %d", got, len(pkt))
+		}
+
+		tw.PreFilterPacketOutboundToWireGuardNetstackIntercept = func(*packet.Parsed, *Wrapper, *gro.GRO) (filter.Response, *gro.GRO) {
+			return filter.DropSilently, nil
+		}
+		go func() { chtun.Outbound <- pkt }()
+		if n, err := tw.Read(buffs, sizes, 0); err != nil || n != 0 {
+			t.Fatalf("Read intercepted = %d, %v; want 0, nil", n, err)
+		}
+		if got := outbound.Value(); got != int64(len(pkt)) {
+			t.Fatalf("outbound after interception = %d; want %d", got, len(pkt))
+		}
+		tw.PreFilterPacketOutboundToWireGuardNetstackIntercept = nil
+
+		tw.SetPacketMetricCounters(nil)
+		go func() { chtun.Outbound <- pkt }()
+		if n, err := tw.Read(buffs, sizes, 0); err != nil || n != 1 {
+			t.Fatalf("Read after removal = %d, %v; want 1, nil", n, err)
+		}
+		if got := outbound.Value(); got != int64(len(pkt)) {
+			t.Fatalf("outbound after removal = %d; want %d", got, len(pkt))
+		}
+	})
+
+	t.Run("concurrent_reconfiguration", func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		_, tw := newFakeTUN(t.Logf, bus, true)
+		defer tw.Close()
+		tw.SetFilter(filter.NewAllowAllForTest(t.Logf))
+
+		var inbound, outbound expvar.Int
+		counters := packetMetricTableByIP(map[netip.Addr]PacketMetricCounters{
+			service4: {Inbound: &inbound, Outbound: &outbound},
+		})
+		pkt := udp4(peer4.String(), service4.String(), 1234, 89)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 1_000 {
+				tw.SetPacketMetricCounters(counters)
+				tw.SetPacketMetricCounters(nil)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 1_000 {
+				if _, err := tw.Write([][]byte{pkt}, 0); err != nil {
+					t.Errorf("Write: %v", err)
+					return
+				}
+			}
+		}()
+		wg.Wait()
+	})
 }
 
 func TestPeerAPIBypass(t *testing.T) {
