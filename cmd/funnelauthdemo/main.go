@@ -33,6 +33,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -40,6 +41,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -82,11 +84,20 @@ func main() {
 		log.Fatalf("injector: LocalClient: %v", err)
 	}
 
-	peerAPI, err := waitForTargetPeerAPI(ctx, lc, *target)
+	peerAPI, targetIP, err := waitForTargetPeerAPI(ctx, lc, *target)
 	if err != nil {
 		log.Fatalf("injector: locating target PeerAPI: %v", err)
 	}
-	log.Printf("injector: target %q PeerAPI at %s", *target, peerAPI)
+	log.Printf("injector: target %q PeerAPI at %s (ip %s)", *target, peerAPI, targetIP)
+
+	// A peer appearing in the netmap does NOT mean WireGuard is reachable yet:
+	// magicsock still has to establish a path (disco over DERP, then ideally a
+	// direct hop). Dialing the PeerAPI cold races that and times out. Warm the
+	// path with disco pings until one succeeds before we splice.
+	if err := warmUpPath(ctx, lc, targetIP); err != nil {
+		log.Fatalf("injector: could not establish a path to %s: %v", targetIP, err)
+	}
+	log.Printf("injector: path to %s is up", targetIP)
 
 	v := &visitor{
 		srv:         srv,
@@ -102,37 +113,56 @@ func main() {
 	log.Printf("DEMO OK: authenticated and fetched %s%s\n---\n%s", *target, *path, body)
 }
 
-// waitForTargetPeerAPI resolves the target node's PeerAPI base URL from the
-// injector's netmap, retrying until the peer appears (the injector may see the
-// target a moment after joining).
-func waitForTargetPeerAPI(ctx context.Context, lc *local.Client, target string) (string, error) {
+// waitForTargetPeerAPI resolves the target node's PeerAPI base URL and one of
+// its Tailscale IPs from the injector's netmap, retrying until the peer appears
+// (the injector may see the target a moment after joining).
+func waitForTargetPeerAPI(ctx context.Context, lc *local.Client, target string) (peerAPI string, ip netip.Addr, err error) {
 	target = strings.TrimSuffix(target, ".")
 	for {
 		st, err := lc.Status(ctx)
 		if err == nil {
-			if u := peerAPIFromStatus(st, target); u != "" {
-				return u, nil
+			if u, addr := peerAPIFromStatus(st, target); u != "" {
+				return u, addr, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("target %q not found among peers before timeout", target)
+			return "", netip.Addr{}, fmt.Errorf("target %q not found among peers before timeout", target)
 		case <-time.After(time.Second):
 		}
 	}
 }
 
-func peerAPIFromStatus(st *ipnstate.Status, target string) string {
+func peerAPIFromStatus(st *ipnstate.Status, target string) (string, netip.Addr) {
 	for _, p := range st.Peer {
 		dns := strings.TrimSuffix(p.DNSName, ".")
 		if !strings.EqualFold(dns, target) {
 			continue
 		}
-		if len(p.PeerAPIURL) > 0 {
-			return p.PeerAPIURL[0]
+		if len(p.PeerAPIURL) > 0 && len(p.TailscaleIPs) > 0 {
+			return p.PeerAPIURL[0], p.TailscaleIPs[0]
 		}
 	}
-	return ""
+	return "", netip.Addr{}
+}
+
+// warmUpPath pings the target over the tailnet until a path is established, so
+// the subsequent PeerAPI dial doesn't race magicsock's path setup. A disco ping
+// forces path discovery without needing the OS IP stack on either end.
+func warmUpPath(ctx context.Context, lc *local.Client, ip netip.Addr) error {
+	for {
+		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		res, err := lc.Ping(pctx, ip, tailcfg.PingDisco)
+		cancel()
+		if err == nil && res != nil && res.Err == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("no path after retries (last err: %v)", err)
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 type visitor struct {

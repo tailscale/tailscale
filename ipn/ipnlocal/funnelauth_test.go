@@ -592,3 +592,133 @@ func TestIsRealEmailDomain(t *testing.T) {
 		}
 	}
 }
+
+// TestFunnelCallbackExchangeEndToEnd drives the node-side OIDC callback path in
+// process against a stub IdP: token exchange (/api/v2/oauth/token) + JWKS fetch
+// (/.well-known/jwks.json) + id_token verification + session-cookie minting.
+// This is the "full login loop minus WireGuard/DNS/cert" backup for the
+// containerized demo: it proves the callback logic without any tailnet transport
+// (the injector's job of physically reaching the node is not exercised here).
+func TestFunnelCallbackExchangeEndToEnd(t *testing.T) {
+	const fqdn = "example.ts.net"
+	const kid = "stub-key-1"
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stub IdP: serves JWKS and a token endpoint that returns a valid id_token.
+	var issuer string // set after the server starts (so iss == control URL)
+	nonce := "test-nonce-xyz"
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/jwks.json":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(jwksJSONForKey(t, priv, kid))
+		case "/api/v2/oauth/token":
+			// A real control validates grant_type/PKCE/client_id here; the stub
+			// asserts the essentials and mints the token.
+			r.ParseForm()
+			if r.Form.Get("grant_type") != "authorization_code" ||
+				r.Form.Get("client_id") != funnelAuthClientID ||
+				r.Form.Get("code") == "" || r.Form.Get("code_verifier") == "" {
+				http.Error(w, "bad token request", http.StatusBadRequest)
+				return
+			}
+			tok := signTestRS256JWT(t, priv, kid, map[string]any{
+				"sub": "u-alice", "email": "alice@example.com", "email_verified": true,
+				"name": "Alice", "iss": issuer, "aud": fqdn, "nonce": nonce,
+				"exp": time.Now().Add(time.Hour).Unix(),
+			})
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"id_token": tok})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer idp.Close()
+	issuer = idp.URL
+
+	b := newTestBackend(t)
+	// Point the node's control URL at the stub IdP so funnelAuthControlURL,
+	// funnelAuthIssuer, and the JWKS fetch all resolve to it.
+	pv := b.pm.CurrentPrefs().AsStruct()
+	pv.ControlURL = idp.URL
+	if err := b.pm.SetPrefs(pv.View(), ipn.NetworkProfile{}); err != nil {
+		t.Fatal(err)
+	}
+
+	backendHit := false
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHit = true
+		w.Header().Set("Echo-User-Login", r.Header.Get("Tailscale-User-Login"))
+	}))
+	defer app.Close()
+
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(fqdn + ":443"): {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {Proxy: app.URL, Auth: &ipn.FunnelAuth{Provider: "tailscale"}},
+			}},
+		},
+		AllowFunnel: map[ipn.HostPort]bool{ipn.HostPort(fqdn + ":443"): true},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := b.funnelAuthKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seal a state matching what startFunnelAuthLogin would have produced.
+	csrf := "csrf-token-123"
+	st := &funnelAuthState{
+		OrigURL:      "https://" + fqdn + "/private",
+		CodeVerifier: "verifier-abc",
+		Nonce:        nonce,
+		CSRF:         csrf,
+		Expiry:       time.Now().Add(10 * time.Minute).Unix(),
+	}
+	stateVal, err := keys.sealFunnelState(st, fqdn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drive the callback: GET /.well-known/tailscale/funnel-auth/callback?code&state
+	// with the matching state cookie.
+	req := funnelReq(t, funnelAuthCallbackPath+"?code=authcode123&state="+url.QueryEscape(stateVal), "")
+	req.AddCookie(&http.Cookie{Name: funnelStateCookieName, Value: csrf})
+	w := httptest.NewRecorder()
+	b.serveWebHandler(w, req)
+	res := w.Result()
+	if res.StatusCode != http.StatusFound {
+		t.Fatalf("callback status = %d; want 302 to original URL. body=%s", res.StatusCode, w.Body.String())
+	}
+	if loc := res.Header.Get("Location"); !strings.Contains(loc, "/private") {
+		t.Errorf("callback Location = %q; want the original /private URL", loc)
+	}
+	// The callback must set the session cookie.
+	var sessCookie string
+	for _, c := range res.Cookies() {
+		if c.Name == funnelSessionCookieName {
+			sessCookie = c.Value
+		}
+	}
+	if sessCookie == "" {
+		t.Fatal("callback did not set a session cookie")
+	}
+
+	// That session cookie must now admit a request to the protected app.
+	w2 := httptest.NewRecorder()
+	b.serveWebHandler(w2, funnelReq(t, "/private", sessCookie))
+	if w2.Result().StatusCode != http.StatusOK {
+		t.Fatalf("authed request status = %d; want 200", w2.Result().StatusCode)
+	}
+	if !backendHit {
+		t.Error("backend was not reached with the minted session cookie")
+	}
+	if got := w2.Result().Header.Get("Echo-User-Login"); got != "alice@example.com" {
+		t.Errorf("forwarded login = %q; want alice@example.com", got)
+	}
+}
