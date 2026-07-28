@@ -1100,6 +1100,22 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 				} else {
 					delete(nb.tsmpLearnedDisco, old.Key())
 				}
+				// Evict index entries derived from the old node value
+				// before re-adding them from the new one below, so a
+				// changed name, address, or key doesn't leave a stale
+				// entry behind. Notably, a node rename in the admin
+				// console arrives as an upsert with a new Name, and a
+				// stale nodeByName entry would keep serving MagicDNS
+				// answers for the old name (tailscale/corp#45631).
+				for _, ipp := range old.Addresses().All() {
+					if ipp.IsSingleIP() {
+						delete(nb.nodeByAddr, ipp.Addr())
+					}
+				}
+				delete(nb.nodeByKey, old.Key())
+				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
+				delete(nb.nodeByStableID, old.StableID())
+				nb.removeNodeNameLocked(old.Name())
 			}
 			mak.Set(&nb.peers, nid, m.Node)
 			for _, ipp := range m.Node.Addresses().All() {
