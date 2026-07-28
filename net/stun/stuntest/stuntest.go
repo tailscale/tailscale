@@ -94,10 +94,10 @@ func runSTUN(t testing.TB, pc nettype.PacketConn, stats *stunStats, done chan<- 
 
 func DERPMapOf(stun ...string) *tailcfg.DERPMap {
 	m := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{},
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
 	}
 	for i, hostPortStr := range stun {
-		regionID := i + 1
+		regionID := tailcfg.DERPRegionID(i + 1)
 		host, portStr, err := net.SplitHostPort(hostPortStr)
 		if err != nil {
 			panic(fmt.Sprintf("bogus STUN hostport: %q", hostPortStr))

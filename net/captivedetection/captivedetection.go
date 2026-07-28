@@ -73,11 +73,11 @@ const Timeout = 3 * time.Second
 //
 // This function might take a while to return, as it will attempt to detect a captive portal on all available interfaces
 // by performing multiple HTTP requests. It should be called in a separate goroutine if you want to avoid blocking.
-func (d *Detector) Detect(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID int) (found bool) {
+func (d *Detector) Detect(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID) (found bool) {
 	return d.detectCaptivePortalWithGOOS(ctx, netMon, derpMap, preferredDERPRegionID, runtime.GOOS)
 }
 
-func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID int, goos string) (found bool) {
+func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID, goos string) (found bool) {
 	ifState := netMon.InterfaceState()
 	if !ifState.AnyInterfaceUp() {
 		d.logf("[v2] DetectCaptivePortal: no interfaces up, returning false")

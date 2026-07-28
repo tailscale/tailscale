@@ -259,7 +259,7 @@ type Config struct {
 	// true, the packet is considered handled and is not passed to
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
-	OnDERPRecv func(regionID int, src key.NodePublic, pkt []byte) (handled bool)
+	OnDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) (handled bool)
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.

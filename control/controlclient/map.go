@@ -394,7 +394,7 @@ func upgradeNode(n *tailcfg.Node) {
 			if ip == tailcfg.DerpMagicIP && err == nil {
 				port, err := strconv.Atoi(portStr)
 				if err == nil {
-					n.HomeDERP = port
+					n.HomeDERP = tailcfg.DERPRegionID(port)
 				}
 			}
 		}
@@ -638,7 +638,7 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 		// really the control plane should pick this. This is only a fallback.
 		if hostinfo.IsInVM86() {
 			numCanMeasure := 0
-			lowest := 0
+			var lowest tailcfg.DERPRegionID
 			for rid, r := range dm.Regions {
 				if !r.NoMeasureNoHome {
 					numCanMeasure++

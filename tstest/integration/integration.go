@@ -334,7 +334,7 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 	stunAddr, stunCleanup := stuntest.ServeWithPacketListener(t, nettype.Std{})
 
 	m := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				RegionID:   1,
 				RegionCode: "test",
