@@ -641,4 +641,18 @@ func TestNodeBackendMagicDNSHosts(t *testing.T) {
 		t.Fatal("UpdateNetmapDelta not handled")
 	}
 	wantHost("p3.example.ts.net.", netip.MustParseAddr("100.64.0.3"))
+
+	// Renaming a peer arrives as an upsert of the full node with a
+	// new Name. The old name must stop resolving and the new one
+	// must start (tailscale/corp#45631).
+	p3renamed := p3.Clone()
+	p3renamed.Name = "p3-renamed.example.ts.net."
+	if _, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: p3renamed.View()}}); !handled {
+		t.Fatal("UpdateNetmapDelta not handled")
+	}
+	wantHost("p3-renamed.example.ts.net.", netip.MustParseAddr("100.64.0.3"))
+	wantHost("p3.example.ts.net.")
+	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.3")); !ok || fqdn != "p3-renamed.example.ts.net." {
+		t.Errorf("magicDNSPTR(100.64.0.3) after rename = %q, %v; want p3's new name", fqdn, ok)
+	}
 }
