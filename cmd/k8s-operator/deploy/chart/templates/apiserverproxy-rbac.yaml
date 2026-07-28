@@ -31,7 +31,7 @@ metadata:
 subjects:
 {{- if eq (toString .Values.apiServerProxyConfig.mode) "true" }}
 - kind: ServiceAccount
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 {{- end }}
 - kind: ServiceAccount

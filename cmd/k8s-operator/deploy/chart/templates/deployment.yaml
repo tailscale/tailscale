@@ -4,7 +4,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   {{- if .Values.annotations }}
   annotations: {{- toYaml .Values.annotations | nindent 4 }}
@@ -15,7 +15,7 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: operator
+      app: {{ include "tailscale-operator.fullname" . }}
   template:
     metadata:
       {{- with .Values.operatorConfig.podAnnotations }}
@@ -23,7 +23,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        app: operator
+        app: {{ include "tailscale-operator.fullname" . }}
         {{- with .Values.operatorConfig.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -32,7 +32,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: operator
+      serviceAccountName: {{ include "tailscale-operator.fullname" . }}
       {{- with .Values.operatorConfig.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -53,7 +53,7 @@ spec:
         {{- else }}
         - name: oauth
           secret:
-            secretName: operator-oauth
+            secretName: {{ include "tailscale-operator.fullname" . }}-oauth
         {{- end }}
       containers:
         - name: operator
@@ -74,7 +74,7 @@ spec:
             - name: OPERATOR_HOSTNAME
               value: {{ .Values.operatorConfig.hostname }}
             - name: OPERATOR_SECRET
-              value: operator
+              value: {{ include "tailscale-operator.fullname" . }}
             - name: OPERATOR_LOGGING
               value: {{ .Values.operatorConfig.logging }}
             - name: OPERATOR_NAMESPACE

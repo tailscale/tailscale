@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
   {{- with .Values.operatorConfig.serviceAccountAnnotations }}
   annotations:
@@ -18,7 +18,7 @@ imagePullSecrets:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: tailscale-operator
+  name: {{ include "tailscale-operator.clusterResourceName" . }}
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
@@ -64,20 +64,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: tailscale-operator
+  name: {{ include "tailscale-operator.clusterResourceName" . }}
 subjects:
 - kind: ServiceAccount
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: tailscale-operator
+  name: {{ include "tailscale-operator.clusterResourceName" . }}
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
@@ -85,7 +85,7 @@ rules:
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: [""]
   resources: ["serviceaccounts/token"]
-  resourceNames: ["operator"]
+  resourceNames: ["{{ include "tailscale-operator.fullname" . }}"]
   verbs: ["create"]
 - apiGroups: [""]
   resources: ["pods"]
@@ -109,13 +109,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 subjects:
 - kind: ServiceAccount
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: operator
+  name: {{ include "tailscale-operator.fullname" . }}
   apiGroup: rbac.authorization.k8s.io

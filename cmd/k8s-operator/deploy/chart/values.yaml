@@ -1,9 +1,34 @@
 # Copyright (c) Tailscale Inc & contributors
 # SPDX-License-Identifier: BSD-3-Clause
 
-# Operator oauth credentials. If unset a Secret named operator-oauth must be
-# precreated or oauthSecretVolume needs to be adjusted. This block will be
-# overridden by oauthSecretVolume, if set.
+# nameOverride and fullnameOverride customize the names of the resources
+# created by this chart. fullnameOverride is used verbatim as the resource
+# name and takes precedence. nameOverride is combined with the release name
+# instead, producing resources named "<release-name>-<nameOverride>".
+#
+# If neither is set, resources use "operator" for namespaced resources,
+# "tailscale-operator" for cluster-scoped ones.
+#
+# The Secret the operator stores its tailnet device state in also follows
+# this name. Changing these values on an existing installation therefore
+# gives the operator a fresh state Secret and it will re-register as a new
+# device on the tailnet; the old Secret and device are left behind.
+#
+# Changing these on an existing installation also changes the operator
+# Deployment's pod selector, which Kubernetes treats as immutable, so
+# "helm upgrade" will fail. Delete the existing Deployment (or uninstall and
+# reinstall the chart) first.
+#
+# Similarly, if you precreate the oauth credentials Secret instead of setting
+# the oauth block below, its name must be "<fullname>-oauth", so
+# "myname-oauth" when fullnameOverride is set to "myname". The operator's Pod
+# will not start if that Secret is missing.
+nameOverride: ""
+fullnameOverride: ""
+
+# Operator oauth credentials. If unset a Secret named <fullname>-oauth
+# (operator-oauth by default) must be precreated or oauthSecretVolume needs to
+# be adjusted. This block will be overridden by oauthSecretVolume, if set.
 oauth:
   # The Client ID the operator will authenticate with.
   clientId: ""
