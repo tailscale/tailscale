@@ -58,6 +58,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/ipset"
+	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netkernelconf"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -9059,22 +9060,8 @@ func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID
 
 // minLatencyDERPRegion returns the region with the lowest latency value given
 // the per-region latency map. If there are no latency values, it returns 0.
-func minLatencyDERPRegion(regions []int, regionLatency map[int]time.Duration) int {
-	min := slices.MinFunc(regions, func(i, j int) int {
-		const largeDuration time.Duration = math.MaxInt64
-		iLatency, ok := regionLatency[i]
-		if !ok {
-			iLatency = largeDuration
-		}
-		jLatency, ok := regionLatency[j]
-		if !ok {
-			jLatency = largeDuration
-		}
-		if c := cmp.Compare(iLatency, jLatency); c != 0 {
-			return c
-		}
-		return cmp.Compare(i, j)
-	})
+func minLatencyDERPRegion(regions []int, regionLatency netcheck.RegionLatency) int {
+	min := slices.MinFunc(regions, regionLatency.Compare)
 	latency, ok := regionLatency[min]
 	if !ok || latency == 0 {
 		return 0

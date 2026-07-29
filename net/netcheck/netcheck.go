@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
@@ -111,10 +112,10 @@ type Report struct {
 	// Empty means not checked.
 	PCP opt.Bool
 
-	PreferredDERP   int                   // or 0 for unknown
-	RegionLatency   map[int]time.Duration // keyed by DERP Region ID
-	RegionV4Latency map[int]time.Duration // keyed by DERP Region ID
-	RegionV6Latency map[int]time.Duration // keyed by DERP Region ID
+	PreferredDERP   int           // or 0 for unknown
+	RegionLatency   RegionLatency // keyed by DERP Region ID
+	RegionV4Latency RegionLatency // keyed by DERP Region ID
+	RegionV6Latency RegionLatency // keyed by DERP Region ID
 
 	GlobalV4Counters map[netip.AddrPort]int // number of times the endpoint was observed
 	GlobalV6Counters map[netip.AddrPort]int // number of times the endpoint was observed
@@ -182,6 +183,34 @@ func (r *Report) Clone() *Report {
 	r2.GlobalV4Counters = maps.Clone(r2.GlobalV4Counters)
 	r2.GlobalV6Counters = maps.Clone(r2.GlobalV6Counters)
 	return &r2
+}
+
+// RegionLatency is a map of DERP region IDs associated with their measured latencies.
+type RegionLatency map[int]time.Duration
+
+// Compare compares the latency of the regions i and j. It returns
+//
+//	-1 if region i is contained in lat, but region j is missing
+//	+1 if region j is contained in lat, but region i is missing
+//
+// Otherwise, it returns
+//
+//	-1 if the latency of region i is less than the latency of region j
+//	+1 if the latency of region i is greater than the latency of region j
+//
+// If both latency values are equal, then it breaks ties by region ID and returns
+//
+//	-1 if i is less than j
+//	 0 if i equals j
+//	+1 if i is greater than j
+func (lat RegionLatency) Compare(i, j int) int {
+	iLat, iOK := lat[i]
+	jLat, jOK := lat[j]
+	return cmp.Or(
+		bools.Compare(!iOK, !jOK), // defined things sort first
+		cmp.Compare(iLat, jLat),   // sort by latency
+		cmp.Compare(i, j),         // break ties by region ID
+	)
 }
 
 // Client generates Reports describing the result of both passive and active

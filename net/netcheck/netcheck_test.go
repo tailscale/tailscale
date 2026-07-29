@@ -1101,3 +1101,118 @@ func TestNoUDPNilGetReportOpts(t *testing.T) {
 		t.Fatal("unexpected working UDP")
 	}
 }
+
+func TestRegionLatencyCompare(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lat  RegionLatency
+		i    int
+		j    int
+		want int
+	}{
+		{
+			name: "no-lat-ids-equal",
+			lat:  RegionLatency{},
+			i:    1,
+			j:    1,
+			want: 0,
+		},
+		{
+			name: "no-lat-ids-increasing",
+			lat:  RegionLatency{},
+			i:    1,
+			j:    2,
+			want: -1,
+		},
+		{
+			name: "no-lat-ids-decreasing",
+			lat:  RegionLatency{},
+			i:    2,
+			j:    1,
+			want: +1,
+		},
+		{
+			name: "i-lat-only-ids-increasing",
+			lat:  RegionLatency{1: 10},
+			i:    1,
+			j:    2,
+			want: -1,
+		},
+		{
+			name: "i-lat-only-ids-decreasing",
+			lat:  RegionLatency{2: 20},
+			i:    2,
+			j:    1,
+			want: -1,
+		},
+		{
+			name: "j-lat-only-ids-increasing",
+			lat:  RegionLatency{2: 20},
+			i:    1,
+			j:    2,
+			want: +1,
+		},
+		{
+			name: "j-lat-only-ids-decreasing",
+			lat:  RegionLatency{1: 10},
+			i:    2,
+			j:    1,
+			want: +1,
+		},
+		{
+			name: "i-lower-lat-ids-increasing",
+			lat:  RegionLatency{1: 10, 2: 20},
+			i:    1,
+			j:    2,
+			want: -1,
+		},
+		{
+			name: "i-lower-lat-ids-decreasing",
+			lat:  RegionLatency{2: 20, 1: 100},
+			i:    2,
+			j:    1,
+			want: -1,
+		},
+		{
+			name: "j-lower-lat-ids-increasing",
+			lat:  RegionLatency{1: 100, 2: 20},
+			i:    1,
+			j:    2,
+			want: +1,
+		},
+		{
+			name: "j-lower-lat-ids-decreasing",
+			lat:  RegionLatency{2: 20, 1: 10},
+			i:    2,
+			j:    1,
+			want: +1,
+		},
+		{
+			name: "equal-lat-ids-increasing",
+			lat:  RegionLatency{1: 10, 2: 10},
+			i:    1,
+			j:    2,
+			want: -1,
+		},
+		{
+			name: "equal-lat-ids-decreasing",
+			lat:  RegionLatency{2: 20, 1: 20},
+			i:    2,
+			j:    1,
+			want: +1,
+		},
+		{
+			name: "equal-lat-ids-equal",
+			lat:  RegionLatency{1: 10},
+			i:    1,
+			j:    1,
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.lat.Compare(tc.i, tc.j); got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
