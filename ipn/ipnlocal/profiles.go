@@ -716,6 +716,18 @@ func (pm *profileManager) loadSavedPrefs(k ipn.StateKey) (ipn.PrefsView, error) 
 	if savedPrefs.AutoUpdate.Apply.EqualBool(true) && !feature.CanAutoUpdate() {
 		savedPrefs.AutoUpdate.Apply.Clear()
 	}
+	// Same problem, same fix: CollectLoadMetrics is rejected on App Connectors
+	// and off Linux, and checkCollectLoadMetrics validates the whole prefs, so
+	// prefs holding the disallowed combination make every later EditPrefs fail,
+	// even unrelated ones. Prefs written by an older client, or by a config
+	// file from before the check existed, can hold it.
+	//
+	// Clear the load-metrics pref rather than the thing it conflicts with: it
+	// is the opt-in extra, and being an App Connector is the node's job.
+	if err := checkCollectLoadMetrics(savedPrefs); err != nil {
+		pm.logf("clearing CollectLoadMetrics from saved prefs: %v", err)
+		savedPrefs.CollectLoadMetrics.Clear()
+	}
 
 	return savedPrefs.View(), nil
 }

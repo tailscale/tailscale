@@ -1030,6 +1030,9 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
 	p.ApplyEdits(&mp)
+	if err := b.checkConfigPrefsLocked(p); err != nil {
+		return err
+	}
 	if err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{}); err != nil {
 		return err
 	}
@@ -1037,6 +1040,27 @@ func (b *LocalBackend) initPrefsFromConfig(conf *conffile.Config) error {
 	b.setStaticEndpointsFromConfigLocked(conf)
 	b.conf = conf
 	return nil
+}
+
+// checkConfigPrefsLocked validates prefs that came from a config file.
+//
+// It cannot use [LocalBackend.checkPrefsLocked], which starts by rejecting any
+// reconfiguration while a config file is in use — true by construction here, so
+// calling it would fail every config load. The checks below are the ones that
+// describe combinations of prefs that no source may produce, as opposed to the
+// ones that reject a *user* changing prefs out from under a config file.
+//
+// b.mu must be held.
+func (b *LocalBackend) checkConfigPrefsLocked(p *ipn.Prefs) error {
+	syncs.RequiresMutex(&b.mu)
+	var errs []error
+	if err := checkAdvertiseRoutes(p); err != nil {
+		errs = append(errs, err)
+	}
+	if err := checkCollectLoadMetrics(p); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config) {
@@ -1085,6 +1109,9 @@ func (b *LocalBackend) setConfigLocked(conf *conffile.Config) error {
 		return fmt.Errorf("error parsing config to prefs: %w", err)
 	}
 	p.ApplyEdits(&mp)
+	if err := b.checkConfigPrefsLocked(p); err != nil {
+		return err
+	}
 	b.setStaticEndpointsFromConfigLocked(conf)
 	b.setPrefsLocked(p)
 
