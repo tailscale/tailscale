@@ -241,6 +241,25 @@ type Prefs struct {
 	// Linux-only.
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
 
+	// CollectLoadMetrics specifies whether to collect per-route load metrics
+	// for the subnet routes advertised in AdvertiseRoutes. The default is not
+	// to collect them.
+	//
+	// When enabled, forwarded bytes and packets are counted per advertised
+	// route and exposed as tailscaled_subnet_forwarded_{bytes,packets}_total.
+	// This adds a longest-prefix lookup to the packet path of a subnet router,
+	// so it is opt-in.
+	//
+	// It is not supported on App Connectors, which advertise a route per
+	// resolved DNS address and would therefore produce unbounded metric
+	// cardinality.
+	//
+	// This is an opt.Bool so that "never set" is distinguishable from
+	// "explicitly disabled".
+	//
+	// Linux-only.
+	CollectLoadMetrics opt.Bool `json:",omitempty"`
+
 	// NetfilterMode specifies how much to manage netfilter rules for
 	// Tailscale, if at all.
 	NetfilterMode preftype.NetfilterMode
@@ -379,6 +398,7 @@ type MaskedPrefs struct {
 	SyncSet                       bool                `json:",omitzero"`
 	NoSNATSet                     bool                `json:",omitempty"`
 	NoStatefulFilteringSet        bool                `json:",omitempty"`
+	CollectLoadMetricsSet         bool                `json:",omitempty"`
 	NetfilterModeSet              bool                `json:",omitempty"`
 	OperatorUserSet               bool                `json:",omitempty"`
 	ProfileNameSet                bool                `json:",omitempty"`
@@ -600,6 +620,10 @@ func (p *Prefs) pretty(goos string) string {
 			bb, _ := p.NoStatefulFiltering.Get()
 			fmt.Fprintf(&sb, "statefulFiltering=%v ", !bb)
 		}
+		if p.CollectLoadMetrics.EqualBool(true) {
+			// Only print when enabled; it is off by default.
+			fmt.Fprint(&sb, "loadMetrics=true ")
+		}
 	}
 	if len(p.AdvertiseTags) > 0 {
 		fmt.Fprintf(&sb, "tags=%s ", strings.Join(p.AdvertiseTags, ","))
@@ -684,6 +708,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ShieldsUp == p2.ShieldsUp &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
+		p.CollectLoadMetrics == p2.CollectLoadMetrics &&
 		p.NetfilterMode == p2.NetfilterMode &&
 		p.OperatorUser == p2.OperatorUser &&
 		p.Hostname == p2.Hostname &&

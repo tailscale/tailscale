@@ -60,6 +60,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Sync",
 		"NoSNAT",
 		"NoStatefulFiltering",
+		"CollectLoadMetrics",
 		"NetfilterMode",
 		"OperatorUser",
 		"ProfileName",
