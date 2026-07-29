@@ -314,6 +314,7 @@ func debugCmd() *ffcli.Command {
 					fs.BoolVar(&ts2021Args.verbose, "verbose", false, "be extra verbose")
 					fs.StringVar(&ts2021Args.aceHost, "ace", "", "if non-empty, use this ACE server IP/hostname as a candidate path")
 					fs.StringVar(&ts2021Args.dialPlanJSONFile, "dial-plan", "", "if non-empty, use this JSON file to configure the dial plan")
+					fs.StringVar(&ts2021Args.connectIP, "connect-ip", "", "if non-empty, dial this IP for the noise connection instead of resolving the host, keeping the host for the key fetch, SNI, and Host header")
 					return fs
 				})(),
 			},
@@ -1033,6 +1034,7 @@ var ts2021Args struct {
 	aceHost string // if non-empty, FQDN of https ACE server to use ("ace.example.com")
 
 	dialPlanJSONFile string // if non-empty, path to JSON file [tailcfg.ControlDialPlan] JSON
+	connectIP        string // if non-empty, IP to dial for the noise connection instead of resolving host
 }
 
 func runTS2021(ctx context.Context, args []string) error {
@@ -1088,6 +1090,11 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	dialFunc := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if ts2021Args.connectIP != "" {
+			if _, port, err := net.SplitHostPort(address); err == nil {
+				address = net.JoinHostPort(ts2021Args.connectIP, port)
+			}
+		}
 		log.Printf("Dial(%q, %q) ...", network, address)
 		c, err := dialer.DialContext(ctx, network, address)
 		if err != nil {
