@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tsmetrics "tailscale.com/metrics"
+	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 )
 
@@ -219,5 +220,108 @@ func BenchmarkSubnetCountersAdd(b *testing.B) {
 		if rc := sc.forAddr(addr); rc != nil {
 			rc.add(1500, false)
 		}
+	}
+}
+
+// TestWrapperSubnetRouteCountingTx checks that traffic entering the TUN from a
+// tailnet peer, bound for a host inside an advertised subnet, is counted as tx:
+// the router is sending it into the subnet on the peer's behalf.
+func TestWrapperSubnetRouteCountingTx(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	if tun.subnetCounters() != nil {
+		t.Fatal("counting is enabled before SetSubnetRoutes; want disabled by default")
+	}
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")})
+	sc := tun.subnetCounters()
+	if sc == nil {
+		t.Fatal("counting still disabled after SetSubnetRoutes")
+	}
+
+	pkt := udp4("100.64.0.1", "10.1.2.3", 123, 456)
+	if _, err := tun.tdevWrite([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+
+	txBytes, rxBytes, txPackets, rxPackets := routeCountsFor(t, sc, "10.1.0.0/16")
+	if txPackets != 1 {
+		t.Errorf("txPackets = %d, want 1", txPackets)
+	}
+	if txBytes != int64(len(pkt)) {
+		t.Errorf("txBytes = %d, want %d", txBytes, len(pkt))
+	}
+	if rxPackets != 0 || rxBytes != 0 {
+		t.Errorf("rx counters moved on a tx packet: rxBytes=%d rxPackets=%d", rxBytes, rxPackets)
+	}
+
+	// Traffic to an address outside every advertised route (exit node traffic)
+	// must not be counted.
+	if _, err := tun.tdevWrite([][]byte{udp4("100.64.0.1", "192.0.2.7", 1, 2)}, 0); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+	if _, _, gotTx, _ := routeCountsFor(t, sc, "10.1.0.0/16"); gotTx != 1 {
+		t.Errorf("txPackets = %d after an unrouted packet, want still 1", gotTx)
+	}
+
+	// Traffic between two tailnet addresses is the node's own, not forwarded.
+	if _, err := tun.tdevWrite([][]byte{udp4("100.64.0.1", "100.64.0.2", 1, 2)}, 0); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+	if _, _, gotTx, _ := routeCountsFor(t, sc, "10.1.0.0/16"); gotTx != 1 {
+		t.Errorf("txPackets = %d after tailnet-only traffic, want still 1", gotTx)
+	}
+}
+
+// TestWrapperSubnetRouteCountingRx checks that traffic read out of the TUN
+// toward a tailnet peer is counted as rx: the router received it from the
+// subnet and is returning it to the peer.
+func TestWrapperSubnetRouteCountingRx(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")})
+	sc := tun.subnetCounters()
+	if sc == nil {
+		t.Fatal("counting disabled after SetSubnetRoutes")
+	}
+
+	pkt := udp4("10.1.2.3", "100.64.0.1", 456, 123)
+	go func() { chtun.Outbound <- pkt }()
+
+	var buf [MaxPacketSize]byte
+	buffs := [][]byte{buf[:]}
+	sizes := make([]int, 1)
+	if _, err := tun.Read(buffs, sizes, 0); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	txBytes, rxBytes, txPackets, rxPackets := routeCountsFor(t, sc, "10.1.0.0/16")
+	if rxPackets != 1 {
+		t.Errorf("rxPackets = %d, want 1", rxPackets)
+	}
+	if rxBytes != int64(len(pkt)) {
+		t.Errorf("rxBytes = %d, want %d", rxBytes, len(pkt))
+	}
+	if txPackets != 0 || txBytes != 0 {
+		t.Errorf("tx counters moved on an rx packet: txBytes=%d txPackets=%d", txBytes, txPackets)
+	}
+}
+
+// TestWrapperSubnetRouteCountingOffByDefault verifies that traffic is not
+// counted, and no series exist, until routes are set.
+func TestWrapperSubnetRouteCountingOffByDefault(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	pkt := udp4("100.64.0.1", "10.1.2.3", 123, 456)
+	if _, err := tun.tdevWrite([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+	if sc := tun.subnetCounters(); sc != nil {
+		t.Errorf("subnetCounters is non-nil with no routes set: %v series", seriesCount(sc))
 	}
 }

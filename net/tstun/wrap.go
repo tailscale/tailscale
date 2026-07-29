@@ -221,9 +221,19 @@ type Wrapper struct {
 	// connCounter maintains per-connection counters.
 	connCounter syncs.AtomicValue[netlogfunc.ConnectionCounter]
 
+	// subnetRouteCounters counts forwarded traffic per advertised subnet
+	// route. It is nil until SetSubnetRoutes is called with a non-empty set
+	// of routes, so nodes that are not subnet routers, and nodes that have
+	// not opted in, pay only a nil load on the packet path.
+	subnetRouteCounters atomic.Pointer[subnetCounters]
+
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
 	metrics *metrics
+
+	// usermetrics is the registry the per-route subnet counters publish into
+	// when they are first enabled by SetSubnetRoutes.
+	usermetrics *usermetric.Registry
 
 	eventClient              *eventbus.Client
 	discoKeyAdvertisementPub *eventbus.Publisher[events.DiscoKeyAdvertisement]
@@ -303,6 +313,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 		startCh:     make(chan struct{}),
 		metrics:     registerMetrics(m),
+		usermetrics: m,
 	}
 
 	if buildfeatures.HasTUNDevStats {
@@ -911,6 +922,12 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				updateConnCounter(update, p.Buffer(), false)
 			}
 		}
+		// Traffic leaving the TUN toward a tailnet peer: on a subnet router
+		// this is a response coming back out of the subnet, so it is rx.
+		// p is already decoded here, so attribute it without re-parsing.
+		if sc := t.subnetRouteCounters.Load(); sc != nil {
+			sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), len(p.Buffer()), true)
+		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
 		// the filter sees the original source address. See #12133.
@@ -1086,6 +1103,13 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 			for i := 0; i < n; i++ {
 				updateConnCounter(update, outBuffs[i][offset:offset+sizes[i]], false)
 			}
+		}
+	}
+	// Injected packets travel the same direction as Read: out to a tailnet
+	// peer, i.e. rx from the subnet router's point of view.
+	if sc := t.subnetRouteCounters.Load(); sc != nil {
+		for i := range n {
+			t.countSubnetRoutePacket(outBuffs[i][offset:offset+sizes[i]], true)
 		}
 	}
 
@@ -1278,6 +1302,13 @@ func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
 			for i := range buffs {
 				updateConnCounter(update, buffs[i][offset:], true)
 			}
+		}
+	}
+	// Traffic entering the TUN from a tailnet peer: on a subnet router this is
+	// sent onward into the subnet, so it is tx.
+	if sc := t.subnetRouteCounters.Load(); sc != nil {
+		for i := range buffs {
+			t.countSubnetRoutePacket(buffs[i][offset:], false)
 		}
 	}
 	return t.tdev.Write(buffs, offset)
@@ -1503,6 +1534,76 @@ func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 	if buildfeatures.HasNetLog {
 		t.connCounter.Store(fn)
 	}
+}
+
+// SetSubnetRoutes sets the advertised subnet routes for which forwarded
+// traffic is counted, enabling per-route load metrics.
+//
+// Passing an empty or nil slice disables counting, so callers gate the feature
+// simply by not supplying routes. Counting is deliberately independent of
+// network flow logging, so it works with flow logging off.
+func (t *Wrapper) SetSubnetRoutes(routes []netip.Prefix) {
+	if !buildfeatures.HasUserMetrics && !buildfeatures.HasClientMetrics {
+		return
+	}
+	sc := t.subnetRouteCounters.Load()
+	if sc == nil {
+		if len(routes) == 0 {
+			return
+		}
+		sc = newSubnetCounters(t.usermetrics)
+		t.subnetRouteCounters.Store(sc)
+	}
+	sc.setRoutes(routes)
+	if len(routes) == 0 {
+		t.subnetRouteCounters.Store(nil)
+	}
+}
+
+// subnetCounters returns the active per-route counters, or nil if per-route
+// counting is disabled.
+func (t *Wrapper) subnetCounters() *subnetCounters {
+	return t.subnetRouteCounters.Load()
+}
+
+// countSubnetRouteTraffic attributes a packet to an advertised subnet route,
+// if it is forwarded traffic for one.
+//
+// rx reports the direction from the subnet router's point of view: true when
+// the packet was received from the subnet on its way to a tailnet peer, false
+// when it is being sent into the subnet on a peer's behalf.
+//
+// Only traffic with exactly one Tailscale endpoint is counted: that is what
+// makes it forwarded traffic rather than the node's own. Addresses outside
+// every advertised route are not counted, which excludes exit node traffic.
+func (sc *subnetCounters) countSubnetRouteTraffic(src, dst netip.Addr, bytes int, rx bool) {
+	srcIsTS := tsaddr.IsTailscaleIP(src)
+	dstIsTS := tsaddr.IsTailscaleIP(dst)
+	if srcIsTS == dstIsTS {
+		return
+	}
+	remote := dst
+	if dstIsTS {
+		remote = src
+	}
+	if rc := sc.forAddr(remote); rc != nil {
+		rc.add(bytes, rx)
+	}
+}
+
+// countSubnetRoutePacket decodes just enough of b to attribute it to an
+// advertised subnet route. It is a no-op when per-route counting is disabled.
+func (t *Wrapper) countSubnetRoutePacket(b []byte, rx bool) {
+	sc := t.subnetRouteCounters.Load()
+	if sc == nil {
+		return
+	}
+	var p packet.Parsed
+	p.Decode(b)
+	if p.IPVersion == 0 {
+		return
+	}
+	sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), len(b), rx)
 }
 
 var (
