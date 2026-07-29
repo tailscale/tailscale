@@ -274,6 +274,42 @@ func TestWrapperSubnetRouteCountingTx(t *testing.T) {
 	}
 }
 
+// TestWrapperSubnetRouteCountingBufferSlack checks that only the decoded
+// packet length is counted, not the slack in the buffer holding it.
+//
+// wireguard-go hands Write a full-MTU buffer per packet with the payload at
+// [PacketStartOffset:PacketStartOffset+n], so buffs[i][offset:] runs to the end
+// of the buffer. Counting len(b) there would attribute every trailing byte of
+// slack to the route and report a bogus mean packet size.
+func TestWrapperSubnetRouteCountingBufferSlack(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")})
+	sc := tun.subnetCounters()
+	if sc == nil {
+		t.Fatal("counting disabled after SetSubnetRoutes")
+	}
+
+	pkt := udp4("100.64.0.1", "10.1.2.3", 123, 456)
+	buf := make([]byte, PacketStartOffset+MaxPacketSize)
+	copy(buf[PacketStartOffset:], pkt)
+
+	if _, err := tun.tdevWrite([][]byte{buf}, PacketStartOffset); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+
+	txBytes, _, txPackets, _ := routeCountsFor(t, sc, "10.1.0.0/16")
+	if txPackets != 1 {
+		t.Errorf("txPackets = %d, want 1", txPackets)
+	}
+	if txBytes != int64(len(pkt)) {
+		t.Errorf("txBytes = %d, want %d (the packet length, not the %d-byte buffer)",
+			txBytes, len(pkt), len(buf)-PacketStartOffset)
+	}
+}
+
 // TestWrapperSubnetRouteCountingRx checks that traffic read out of the TUN
 // toward a tailnet peer is counted as rx: the router received it from the
 // subnet and is returning it to the peer.

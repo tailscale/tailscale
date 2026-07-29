@@ -461,6 +461,24 @@ func (q *Parsed) Buffer() []byte {
 	return q.b
 }
 
+// TotalLen returns the on-wire length of the packet in bytes: the IPv4 Total
+// Length field, or the IPv6 payload length plus the fixed header.
+//
+// This is not the same as len(q.Buffer()), which includes any trailing slack in
+// the buffer the packet was decoded from. Use TotalLen for anything that
+// accounts for bytes; wireguard-go and the TUN read path both hand up
+// full-MTU buffers holding a shorter packet.
+//
+// It returns 0 unless q decoded as IPv4 or IPv6, and is clamped to the
+// buffer length so a packet truncated below its claimed length never reports
+// more bytes than are present.
+func (q *Parsed) TotalLen() int {
+	if q.IPVersion == 0 {
+		return 0
+	}
+	return min(q.length, len(q.b))
+}
+
 // Payload returns the payload of the IP subprotocol section.
 // This is a read-only view; that is, q retains the ownership of the buffer.
 func (q *Parsed) Payload() []byte {

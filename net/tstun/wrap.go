@@ -925,8 +925,12 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// Traffic leaving the TUN toward a tailnet peer: on a subnet router
 		// this is a response coming back out of the subnet, so it is rx.
 		// p is already decoded here, so attribute it without re-parsing.
+		//
+		// p.TotalLen() rather than len(p.Buffer()): the buffers this path
+		// gets are exactly sized today, but the decoded length is the
+		// authoritative byte count and does not depend on that staying true.
 		if sc := t.subnetRouteCounters.Load(); sc != nil {
-			sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), len(p.Buffer()), true)
+			sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), p.TotalLen(), true)
 		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
@@ -1609,7 +1613,10 @@ func (t *Wrapper) countSubnetRoutePacket(b []byte, rx bool) {
 	if p.IPVersion == 0 {
 		return
 	}
-	sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), len(b), rx)
+	// p.TotalLen(), not len(b): b may have trailing slack. wireguard-go hands
+	// Write a full-MTU buffer per packet, so buffs[i][offset:] in tdevWrite
+	// runs to the end of that buffer rather than to the end of the packet.
+	sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), p.TotalLen(), rx)
 }
 
 var (
