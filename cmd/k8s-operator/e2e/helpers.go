@@ -14,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
@@ -34,6 +35,49 @@ func newHTTPClient(cl *tsnet.Server) *http.Client {
 			DialContext:     cl.Dial,
 		},
 	}
+}
+
+func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server) error {
+	t.Helper()
+	lc, err := cl.LocalClient()
+	if err != nil {
+		return err
+	}
+	status, err := lc.Status(t.Context())
+	if err != nil {
+		return err
+	}
+	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
+	if !ok {
+		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
+	}
+	if err := tstest.WaitFor(3*time.Minute, func() error {
+		var secrets corev1.SecretList
+		if err := kubeClient.List(t.Context(), &secrets,
+			client.InNamespace("tailscale"),
+			client.MatchingLabels{
+				"tailscale.com/parent-resource-type": "connector",
+				"tailscale.com/parent-resource":      cn.Name,
+			},
+		); err != nil {
+			return err
+		}
+		if len(secrets.Items) == 0 {
+			return fmt.Errorf("no state secrets found for Connector %q yet", cn.Name)
+		}
+		fqdn := strings.TrimSuffix(string(secrets.Items[0].Data[kubetypes.KeyDeviceFQDN]), ".")
+		_, tailnet, ok := strings.Cut(fqdn, ".")
+		if !ok {
+			return fmt.Errorf("Connector %q: device FQDN %q has no domain yet", cn.Name, fqdn)
+		}
+		if tailnet != expectedTailnet {
+			return fmt.Errorf("Connector %q on wrong tailnet: got domain %q, want %q", cn.Name, tailnet, expectedTailnet)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("Connector %q not on expected tailnet: %v", cn.Name, err)
+	}
+	return nil
 }
 
 // verifyProxyGroupTailnet verifies that a ProxyGroup is registered to the correct tailnet.
