@@ -152,4 +152,8 @@ apiServerProxyConfig:
   # availability set of API server proxies instead.
   mode: "false" # "true", "false", "noauth"
 
+# imagePullSecrets is a list of references to Secrets used to pull images.
+# These are applied to the operator, the proxies, and the API server auth proxy
+# ServiceAccounts, so that all pods created by the operator (proxies, ingress,
+# connectors, etc.) can pull images from private registries.
 imagePullSecrets: []
