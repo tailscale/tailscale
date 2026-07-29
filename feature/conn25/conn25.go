@@ -26,7 +26,6 @@ import (
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
-	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
@@ -45,7 +44,6 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
-	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -90,11 +88,6 @@ func init() {
 }
 
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
-	// TODO(tailscale/corp#39033): Remove for alpha release.
-	if !envknob.UseWIPCode() && !testenv.InTest() {
-		w.WriteHeader(http.StatusNotImplemented)
-		return
-	}
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
 		http.Error(w, "miswired", http.StatusInternalServerError)
@@ -107,10 +100,6 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 }
 
 func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
-	// TODO(tailscale/corp#39033): Remove for alpha release.
-	if !envknob.UseWIPCode() && !testenv.InTest() {
-		return false
-	}
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
 		return false
@@ -135,11 +124,6 @@ func (e *extension) Name() string {
 
 // Init implements [ipnext.Extension].
 func (e *extension) Init(host ipnext.Host) error {
-	// TODO(tailscale/corp#39033): Remove for alpha release.
-	if !envknob.UseWIPCode() && !testenv.InTest() {
-		return ipnext.SkipExtension
-	}
-
 	if e.ctxCancel != nil {
 		return nil
 	}
