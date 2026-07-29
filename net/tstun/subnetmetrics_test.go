@@ -325,3 +325,54 @@ func TestWrapperSubnetRouteCountingOffByDefault(t *testing.T) {
 		t.Errorf("subnetCounters is non-nil with no routes set: %v series", seriesCount(sc))
 	}
 }
+
+// TestSubnetCountersAggregateAgreement checks that the unlabeled clientmetric
+// aggregates move by the same amounts as the labeled series, since both are
+// fed from the same backing values.
+//
+// The aggregates are process-global and other tests in this package register
+// counters with them, so this compares deltas rather than absolute values.
+func TestSubnetCountersAggregateAgreement(t *testing.T) {
+	sc := newSubnetCounters(new(usermetric.Registry))
+	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
+
+	base := [4]int64{
+		cMetricSubnetForwardedTxBytes.Value(),
+		cMetricSubnetForwardedRxBytes.Value(),
+		cMetricSubnetForwardedTxPackets.Value(),
+		cMetricSubnetForwardedRxPackets.Value(),
+	}
+
+	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(1000, false)
+	sc.forAddr(netip.MustParseAddr("10.1.2.4")).add(64, true)
+	sc.forAddr(netip.MustParseAddr("192.168.0.9")).add(500, false)
+
+	// Summing the per-route series gives what the aggregates should have
+	// gained, because both read the same expvar.Int values.
+	var want [4]int64
+	for _, route := range []string{"10.1.0.0/16", "192.168.0.0/24"} {
+		txB, rxB, txP, rxP := routeCountsFor(t, sc, route)
+		want[0] += txB
+		want[1] += rxB
+		want[2] += txP
+		want[3] += rxP
+	}
+
+	got := [4]int64{
+		cMetricSubnetForwardedTxBytes.Value() - base[0],
+		cMetricSubnetForwardedRxBytes.Value() - base[1],
+		cMetricSubnetForwardedTxPackets.Value() - base[2],
+		cMetricSubnetForwardedRxPackets.Value() - base[3],
+	}
+	names := [4]string{
+		"subnet_forwarded_tx_bytes",
+		"subnet_forwarded_rx_bytes",
+		"subnet_forwarded_tx_packets",
+		"subnet_forwarded_rx_packets",
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("%s gained %d, want %d (sum of the labeled series)", names[i], got[i], want[i])
+		}
+	}
+}
