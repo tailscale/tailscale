@@ -17,9 +17,11 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,6 +57,10 @@ type (
 		clock              tstime.Clock
 
 		tracker *reconciler.ResourceTracker
+
+		mu                sync.Mutex               // protects following
+		authKeyRateLimits map[string]*rate.Limiter // per-PeerRelay rate limiters for auth key re-issuance.
+		authKeyReissuing  map[string]bool
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -126,6 +132,8 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
 		tracker:            reconciler.NewResourceTracker(gaugePeerRelayResources),
+		authKeyRateLimits:  make(map[string]*rate.Limiter),
+		authKeyReissuing:   make(map[string]bool),
 	}
 }
 
@@ -218,6 +226,20 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 	if pr.Spec.Replicas != nil {
 		replicas = *pr.Spec.Replicas
 	}
+
+	r.mu.Lock()
+	if _, ok := r.authKeyRateLimits[pr.Name]; !ok {
+		// Allow every replica to have its auth key re-issued quickly the first
+		// time, but with an overall limit of 1 every 30s after a burst.
+		r.authKeyRateLimits[pr.Name] = rate.NewLimiter(rate.Every(30*time.Second), int(replicas))
+	}
+	for i := int32(0); i < replicas; i++ {
+		name := replicaName(pr.Name, i)
+		if _, ok := r.authKeyReissuing[name]; !ok {
+			r.authKeyReissuing[name] = false
+		}
+	}
+	r.mu.Unlock()
 
 	// Belt-and-braces: CEL on the CRD enforces this at admission, but we also validate here to guard against older
 	// clusters without CEL, resources created before the CRD schema landed, or hand-edited status paths. If the user
@@ -396,6 +418,18 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 
 	r.tracker.Remove(pr.UID)
 
+	replicas := int32(1)
+	if pr.Spec.Replicas != nil {
+		replicas = *pr.Spec.Replicas
+	}
+
+	r.mu.Lock()
+	delete(r.authKeyRateLimits, pr.Name)
+	for i := int32(0); i < replicas; i++ {
+		delete(r.authKeyReissuing, replicaName(pr.Name, i))
+	}
+	r.mu.Unlock()
+
 	return reconcile.Result{}, nil
 }
 
@@ -430,7 +464,7 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, logger *zap.Sugared
 }
 
 func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
-	authKey, err := r.reuseOrMintAuthKey(ctx, pr, idx)
+	authKey, err := r.getAuthKey(ctx, pr, idx)
 	if err != nil {
 		return err
 	}
@@ -446,41 +480,6 @@ func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.Sugared
 	}
 
 	return nil
-}
-
-func (r *Reconciler) reuseOrMintAuthKey(ctx context.Context, pr *tsapi.PeerRelay, idx int32) (*string, error) {
-	var existing corev1.Secret
-	err := r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, &existing)
-	switch {
-	case apierrors.IsNotFound(err):
-		key, err := r.mintAuthKey(ctx, pr)
-		if err != nil {
-			return nil, err
-		}
-		return &key, nil
-	case err != nil:
-		return nil, fmt.Errorf("failed to get config Secret: %w", err)
-	}
-
-	if existingKey := tailscaled.AuthKeyFromConfigSecret(&existing); existingKey != nil {
-		return existingKey, nil
-	}
-
-	key, err := r.mintAuthKey(ctx, pr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &key, nil
-}
-
-func (r *Reconciler) mintAuthKey(ctx context.Context, pr *tsapi.PeerRelay) (string, error) {
-	client, err := r.tsClients.For(pr.Spec.Tailnet)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
-	}
-
-	return tailscaled.NewAuthKey(ctx, client, r.peerRelayTags(pr))
 }
 
 func (r *Reconciler) ensureStateSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32) error {
