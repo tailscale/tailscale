@@ -137,6 +137,7 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 
 	args := []string{
 		"-M", "microvm,isa-serial=off",
+		"-accel", "kvm",
 		"-m", fmt.Sprintf("%dM", n.os.MemoryMB),
 		"-nodefaults", "-no-user-config", "-nographic",
 		"-kernel", e.gokrazyKernel,
