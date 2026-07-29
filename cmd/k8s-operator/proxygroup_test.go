@@ -1221,6 +1221,11 @@ func TestProxyGroupTypes(t *testing.T) {
 		if *sts.Spec.Template.DeletionGracePeriodSeconds != deletionGracePeriodSeconds {
 			t.Errorf("unexpected deletion grace period seconds %d, want %d", *sts.Spec.Template.DeletionGracePeriodSeconds, deletionGracePeriodSeconds)
 		}
+		if !slices.ContainsFunc(sts.Spec.Template.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
+			return r.ConditionType == tsEgressReadinessGate
+		}) {
+			t.Errorf("expected egress readiness gate %q to be set, got %v", tsEgressReadinessGate, sts.Spec.Template.Spec.ReadinessGates)
+		}
 	})
 	t.Run("egress_type_no_lifecycle_hook_when_local_addr_port_set", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
@@ -1256,6 +1261,11 @@ func TestProxyGroupTypes(t *testing.T) {
 
 		if sts.Spec.Template.Spec.Containers[0].Lifecycle != nil {
 			t.Error("lifecycle hook was set when TS_LOCAL_ADDR_PORT was configured via ProxyClass")
+		}
+		if slices.ContainsFunc(sts.Spec.Template.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
+			return r.ConditionType == tsEgressReadinessGate
+		}) {
+			t.Error("egress readiness gate was set when TS_LOCAL_ADDR_PORT was configured via ProxyClass")
 		}
 	})
 
