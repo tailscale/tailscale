@@ -26,7 +26,8 @@ func generateName(prefix string) string {
 }
 
 // newHTTPClient returns a HTTP client for the given tailnet client.
-// When running against devcontrol, trusts Pebble testCAs.
+// When running against devcontrol, trusts Pebble testCAs. Otherwise,
+// trusts Let's Encrypt staging testCA.
 func newHTTPClient(cl *tsnet.Server) *http.Client {
 	return &http.Client{
 		Timeout: 10 * time.Second,

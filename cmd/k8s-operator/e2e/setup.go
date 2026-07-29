@@ -90,9 +90,16 @@ var (
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
 
-	// Either nil (system) or pebble CAs if pebble is deployed for devcontrol.
-	// pebble has a static "mini" CA that its ACME directory URL serves a cert
-	// from, and also dynamically generates a different CA for issuing certs.
+	// Let's Encrypt staging environment root "Pretend Pear X1", used when
+	// running against real tailnets.
+	// Available from https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem
+	//go:embed certs/letsencrypt-stg-root-x1.pem
+	leStagingRootX1 []byte
+
+	// Either  pebble CAs (if pebble is deployed for devcontrol) or
+	// Let's Encrypt staging when running against real tailnets).
+	// pebble has a static "mini" CA that its ACME directory URL serves a cert from,
+	// and also dynamically generates a different CA for issuing certs.
 	testCAs *x509.CertPool
 
 	//go:embed acl.hujson
@@ -185,6 +192,7 @@ func runTests(m *testing.M) (int, error) {
 		certsDir                           = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
 		secondClientID, secondClientSecret string                        // OAuth client for the second tailnet (for the operator to use).
 	)
+	testCAs = x509.NewCertPool()
 	if *fDevcontrol {
 		// Deploy pebble and get its certs.
 		if err = applyPebbleResources(ctx, kubeClient); err != nil {
@@ -200,7 +208,6 @@ func runTests(m *testing.M) (int, error) {
 			return 0, fmt.Errorf("failed to set up port forwarding to pebble: %w", err)
 		}
 
-		testCAs = x509.NewCertPool()
 		if ok := testCAs.AppendCertsFromPEM(pebbleMiniCACert); !ok {
 			return 0, fmt.Errorf("failed to parse pebble minica cert")
 		}
@@ -357,6 +364,10 @@ func runTests(m *testing.M) (int, error) {
 		}
 
 	} else {
+		if ok := testCAs.AppendCertsFromPEM(leStagingRootX1); !ok {
+			return 0, fmt.Errorf("failed to parse Let's Encrypt staging root")
+		}
+
 		clientSecret = os.Getenv("TS_API_CLIENT_SECRET")
 		if clientSecret == "" {
 			return 0, fmt.Errorf("must use --devcontrol or set TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
@@ -456,6 +467,8 @@ func runTests(m *testing.M) (int, error) {
 	}
 	if *fDevcontrol {
 		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://pebble:14000/dir"})
+	} else {
+		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://acme-staging-v02.api.letsencrypt.org/directory"})
 	}
 	values := map[string]any{
 		"loginServer": clusterLoginServer,
@@ -685,6 +698,7 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 			Name: "default",
 		},
 		Spec: tsapi.ProxyClassSpec{
+			UseLetsEncryptStagingEnvironment: !*fDevcontrol,
 			StatefulSet: &tsapi.StatefulSet{
 				Pod: &tsapi.Pod{
 					TailscaleInitContainer: &tsapi.Container{
