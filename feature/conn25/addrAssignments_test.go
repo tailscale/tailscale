@@ -6,6 +6,7 @@ package conn25
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -172,5 +173,50 @@ func TestPopExpiredHandlesExpiresAtChanges(t *testing.T) {
 	}
 	if len(assignments.byMagicIP) != 0 {
 		t.Fatalf("expected assignments to be exhausted")
+	}
+}
+
+func TestExpireAllBreakingFlows(t *testing.T) {
+	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
+	assignments := addrAssignments{clock: clock}
+	// This helps make sure we get both packets before and after the dead flow
+	// wait timeout.
+	expiryInterval := deadFlowWaitTimeout / 4
+	makeAndAddAddrs := func(i int) *addrs {
+		t.Helper()
+		as := &addrs{
+			dst:     netip.MustParseAddr(fmt.Sprintf("192.0.2.%d", i)),
+			magic:   netip.MustParseAddr(fmt.Sprintf("100.100.100.%d", i)),
+			transit: netip.MustParseAddr(fmt.Sprintf("10.0.25.%d", i)),
+			app:     "an-application-on-the-internet",
+			domain:  "an-application-on-the-internet.example.",
+			// Get some packets with "active flows" and some without.
+			activeFlowCount: i % 2,
+		}
+		err := assignments.insertWithExpiry(as, time.Duration(i+1)*expiryInterval)
+		if err != nil {
+			t.Errorf("insertWithExpiry(%d): %v", i, err)
+		}
+		return as
+	}
+	wantAddresses := []*addrs{}
+	for i := range 8 {
+		wantAddresses = append(wantAddresses, makeAndAddAddrs(i))
+	}
+	gotAddresses := assignments.expireAllBreakingFlows()
+	// We don't guarantee ordering of `expireAllBreakingFlows`, so order the
+	// addresses we got by destination IP (which will in turn order them by
+	// the loop variable `i`, the same ordering as `wantAddresses`).
+	slices.SortFunc(gotAddresses, func(a, b *addrs) int { return a.dst.Compare(b.dst) })
+	if diff := cmp.Diff(
+		wantAddresses,
+		gotAddresses,
+		cmp.AllowUnexported(addrs{}),
+		cmpopts.EquateComparable(netip.Addr{}),
+	); diff != "" {
+		t.Errorf("incorrect addresses returned (-want +got):\n%s", diff)
+	}
+	if len(assignments.byMagicIP) != 0 {
+		t.Errorf("expected assignments to be exhausted")
 	}
 }

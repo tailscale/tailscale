@@ -118,8 +118,9 @@ func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
-	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	conn25                *Conn25            // safe for concurrent access and only set at creation
+	backend               ipnext.SafeBackend // safe for concurrent access and only set at creation
+	clearAllDatapathFlows func()             // safe for concurrent access and only set at creation
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
@@ -226,6 +227,11 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		}
 		e.conn25.client.resendTransitIPMapping(pkt.Dst.Addr())
 	}
+
+	// The profile state change hook needs to clear all active flows on a
+	// major change (eg. switching tailnets), so make that hook accessible
+	// to it.
+	e.clearAllDatapathFlows = dph.ClearAllActiveFlows
 
 	// Manage how we react to changes to the current node,
 	// including property changes (e.g. HostInfo, Capabilities, CapMap).
@@ -395,6 +401,20 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 	// TODO(mzb): Handle node changes. Wipe out all config?
 	// We'll need to look at the ordering of this hook and onSelfChange.
 	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
+
+	// If a client changes profiles and becomes a different node, all of its
+	// existing flows lose meaning, and we should delete them so that the
+	// settings of our new environment can take over.
+	// TODO(naman): also do something for connectors that change profiles?
+	if !sameNode {
+		if e.clearAllDatapathFlows != nil {
+			e.clearAllDatapathFlows()
+		}
+		expired := e.conn25.client.assignments.expireAllBreakingFlows()
+		if err := e.conn25.client.returnAddrs(expired...); err != nil {
+			e.conn25.logf("returning expired magic/transit IPs: %v", err)
+		}
+	}
 }
 
 func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
@@ -793,6 +813,24 @@ func (c *client) isKnownTransitIP(tip netip.Addr) bool {
 	return ok
 }
 
+// returnAddrs returns the magic and transit IPs of many address assignments
+// at the same time.
+func (c *client) returnAddrs(addrs ...*addrs) error {
+	var errs []error
+	for _, a := range addrs {
+		if a.is4() {
+			errs = append(errs, c.v4MagicIPPool.returnAddr(a.magic))
+			errs = append(errs, c.v4TransitIPPool.returnAddr(a.transit))
+		} else if a.is6() {
+			errs = append(errs, c.v6MagicIPPool.returnAddr(a.magic))
+			errs = append(errs, c.v6TransitIPPool.returnAddr(a.transit))
+		} else {
+			errs = append(errs, fmt.Errorf("destination IP neither v4 nor v6: %q", a.dst))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (c *client) reconfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -862,14 +900,8 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		if a == nil {
 			break
 		}
-		if a.is4() {
-			c.v4MagicIPPool.returnAddr(a.magic)
-			c.v4TransitIPPool.returnAddr(a.transit)
-		} else if a.is6() {
-			c.v6MagicIPPool.returnAddr(a.magic)
-			c.v6TransitIPPool.returnAddr(a.transit)
-		} else {
-			return nil, errors.New("unexpected neither 4 nor 6")
+		if err := c.returnAddrs(a); err != nil {
+			return nil, err
 		}
 	}
 
