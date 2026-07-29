@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"testing"
 
+	tsmetrics "tailscale.com/metrics"
 	"tailscale.com/util/usermetric"
 )
 
@@ -112,4 +113,111 @@ func mustPrefixes(t *testing.T, ss []string) []netip.Prefix {
 		ps = append(ps, netip.MustParsePrefix(s))
 	}
 	return ps
+}
+
+func TestSubnetCountersDirections(t *testing.T) {
+	sc := newSubnetCounters(new(usermetric.Registry))
+	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16"}))
+
+	// Two packets into the subnet, one back out of it.
+	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(100, false)
+	sc.forAddr(netip.MustParseAddr("10.1.2.4")).add(200, false)
+	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(50, true)
+
+	txBytes, rxBytes, txPackets, rxPackets := routeCountsFor(t, sc, "10.1.0.0/16")
+	if txBytes != 300 {
+		t.Errorf("txBytes = %d, want 300", txBytes)
+	}
+	if rxBytes != 50 {
+		t.Errorf("rxBytes = %d, want 50", rxBytes)
+	}
+	if txPackets != 2 {
+		t.Errorf("txPackets = %d, want 2", txPackets)
+	}
+	if rxPackets != 1 {
+		t.Errorf("rxPackets = %d, want 1", rxPackets)
+	}
+}
+
+func TestSubnetCountersRouteWithdrawal(t *testing.T) {
+	reg := new(usermetric.Registry)
+	sc := newSubnetCounters(reg)
+
+	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
+	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(100, false)
+
+	if got := seriesCount(sc); got != 8 {
+		t.Fatalf("after advertising 2 routes, series count = %d, want 8", got)
+	}
+
+	// Withdraw one route; its series must go away, the other must remain.
+	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16"}))
+	if got := seriesCount(sc); got != 4 {
+		t.Errorf("after withdrawing 1 of 2 routes, series count = %d, want 4", got)
+	}
+	if sc.forRoute(netip.MustParsePrefix("192.168.0.0/24")) != nil {
+		t.Error("withdrawn route still resolves via forRoute")
+	}
+	if sc.forAddr(netip.MustParseAddr("192.168.0.5")) != nil {
+		t.Error("withdrawn route still matches in the lookup table")
+	}
+
+	// A re-advertised route resumes its previous total rather than resetting,
+	// keeping the aggregate clientmetrics monotonic.
+	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
+	if txBytes, _, _, _ := routeCountsFor(t, sc, "10.1.0.0/16"); txBytes != 100 {
+		t.Errorf("txBytes after re-advertise = %d, want 100 retained", txBytes)
+	}
+
+	// Churning the same route set repeatedly must not grow the series count.
+	for range 20 {
+		sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16"}))
+		sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
+	}
+	if got := seriesCount(sc); got != 8 {
+		t.Errorf("after 20 churn cycles, series count = %d, want 8 (leak)", got)
+	}
+}
+
+// seriesCount returns the number of labeled series currently published.
+func seriesCount(sc *subnetCounters) int {
+	var n int
+	sc.bytesTotal.Do(func(tsmetrics.KeyValue[subnetRouteLabels]) { n++ })
+	sc.packetsTotal.Do(func(tsmetrics.KeyValue[subnetRouteLabels]) { n++ })
+	return n
+}
+
+// TestSubnetCountersNoAllocs pins the hot path to zero allocations. The naive
+// implementation formats the prefix into a label value on every packet, which
+// costs two allocations and roughly 4.7x the time; see the design doc.
+func TestSubnetCountersNoAllocs(t *testing.T) {
+	sc := newSubnetCounters(new(usermetric.Registry))
+	sc.setRoutes(mustPrefixes(t, []string{"10.0.0.0/8", "10.1.0.0/16", "192.168.0.0/24"}))
+	addr := netip.MustParseAddr("10.1.2.3")
+
+	if got := testing.AllocsPerRun(1000, func() {
+		if rc := sc.forAddr(addr); rc != nil {
+			rc.add(1500, false)
+		}
+	}); got != 0 {
+		t.Errorf("counting a packet allocated %v times per run, want 0", got)
+	}
+}
+
+func BenchmarkSubnetCountersAdd(b *testing.B) {
+	b.ReportAllocs()
+	sc := newSubnetCounters(new(usermetric.Registry))
+	sc.setRoutes([]netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("10.1.0.0/16"),
+		netip.MustParsePrefix("192.168.0.0/24"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("10.2.0.0/16"),
+	})
+	addr := netip.MustParseAddr("10.1.2.3")
+	for range b.N {
+		if rc := sc.forAddr(addr); rc != nil {
+			rc.add(1500, false)
+		}
+	}
 }
