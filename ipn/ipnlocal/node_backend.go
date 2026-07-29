@@ -16,7 +16,6 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/appc"
-	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -1557,7 +1556,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// TODO(tailscale/corp#37125): make this a hook the extension can add
 	// to reduce dependency from ipnlocal to appc.
 	var conn25AppRoutes map[string][]*dnstype.Resolver
-	if (envknob.UseWIPCode() || testenv.InTest()) && buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
+	if buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
 		conn25AppRoutes = appc.AppDNSRoutes(nm.HasCap, nm.SelfNode)
 	}
 
