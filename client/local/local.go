@@ -95,6 +95,13 @@ type Client struct {
 	// different operating system, such as in integration tests.
 	OmitAuth bool
 
+	// CIID optionally specifies a client invocation ID: an opaque
+	// random string identifying one invocation of a CLI command or
+	// GUI action, sent with each request in the
+	// [apitype.RequestCIIDHeader] header. See that constant's docs
+	// for details. If empty, no such header is sent.
+	CIID string
+
 	// tsClient does HTTP requests to the local Tailscale daemon.
 	// It's lazily initialized on first use.
 	tsClient     *http.Client
@@ -146,6 +153,9 @@ func (lc *Client) defaultDialer(ctx context.Context, network, addr string) (net.
 // subject to change between releases.
 func (lc *Client) DoLocalRequest(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
+	if lc.CIID != "" {
+		req.Header.Set(apitype.RequestCIIDHeader, lc.CIID)
+	}
 	lc.tsClientOnce.Do(func() {
 		lc.tsClient = &http.Client{
 			Transport: cmp.Or(lc.Transport, http.RoundTripper(
