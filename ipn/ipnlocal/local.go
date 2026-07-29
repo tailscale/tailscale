@@ -4971,6 +4971,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := checkAdvertiseRoutes(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := checkCollectLoadMetrics(p); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -5078,6 +5081,26 @@ func checkAdvertiseRoutes(p *ipn.Prefs) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// checkCollectLoadMetrics validates the CollectLoadMetrics pref.
+//
+// Per-route load metrics are rejected on App Connectors: those advertise a
+// route per resolved DNS address, so the number of series would grow with
+// end-user browsing rather than with admin configuration. They are also
+// rejected off Linux, where nothing on the packet path honors the pref, so
+// accepting it would leave it silently inert.
+func checkCollectLoadMetrics(p *ipn.Prefs) error {
+	if !p.CollectLoadMetrics.EqualBool(true) {
+		return nil
+	}
+	if buildfeatures.HasAppConnectors && p.AppConnector.Advertise {
+		return errors.New("load metrics are not supported on App Connectors: this node advertises routes dynamically per resolved DNS address, which would produce unbounded metric cardinality. Support for App Connectors is planned; for now use network flow logs for per-destination visibility on this node")
+	}
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("load metrics are only supported on Linux, not %s", runtime.GOOS)
+	}
+	return nil
 }
 
 // SetUseExitNodeEnabled turns on or off the most recently selected exit node.
