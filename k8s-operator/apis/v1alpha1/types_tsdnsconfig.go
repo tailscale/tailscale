@@ -119,6 +119,10 @@ type NameserverPod struct {
 	// If specified, applies node selector rules to the pods deployed by the DNSConfig resource.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitzero"`
+	// Nameserver Pod's image pull Secrets.
+	// https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 type DNSConfigStatus struct {
