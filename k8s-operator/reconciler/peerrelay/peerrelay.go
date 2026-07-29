@@ -464,12 +464,17 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, logger *zap.Sugared
 }
 
 func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
-	authKey, err := r.getAuthKey(ctx, pr, idx)
+	tsClient, err := r.tsClients.For(pr.Spec.Tailnet)
+	if err != nil {
+		return fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
+	}
+
+	authKey, err := r.getAuthKey(ctx, tsClient, pr, idx)
 	if err != nil {
 		return err
 	}
 
-	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKey)
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKey, tsClient.LoginURL())
 	if err != nil {
 		return fmt.Errorf("failed to build config Secret: %w", err)
 	}

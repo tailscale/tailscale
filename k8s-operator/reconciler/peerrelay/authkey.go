@@ -34,15 +34,10 @@ func (r *Reconciler) peerRelayTags(pr *tsapi.PeerRelay) []string {
 // needed. A new key is minted if the config Secret doesn't exist yet, or if the replica has
 // requested a reissue via its state Secret. An existing key is retained while the device hasn't
 // authed or a reissue is in progress.
-func (r *Reconciler) getAuthKey(ctx context.Context, pr *tsapi.PeerRelay, idx int32) (*string, error) {
-	tsClient, err := r.tsClients.For(pr.Spec.Tailnet)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve Tailscale API client for tailnet %q: %w", pr.Spec.Tailnet, err)
-	}
-
+func (r *Reconciler) getAuthKey(ctx context.Context, tsClient tsclient.Client, pr *tsapi.PeerRelay, idx int32) (*string, error) {
 	var existingCfgSecret *corev1.Secret
 	cfgSecret := &corev1.Secret{}
-	err = r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, cfgSecret)
+	err := r.Get(ctx, types.NamespacedName{Namespace: r.tailscaleNamespace, Name: configSecretName(pr.Name, idx)}, cfgSecret)
 	switch {
 	case apierrors.IsNotFound(err):
 	case err != nil:
