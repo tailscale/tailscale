@@ -975,6 +975,12 @@ func applyProxyClassToStatefulSet(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, 
 		if overlay.ImagePullPolicy != "" {
 			base.ImagePullPolicy = overlay.ImagePullPolicy
 		}
+		if overlay.LivenessProbe != nil {
+			base.LivenessProbe = overlay.LivenessProbe
+		}
+		if overlay.ReadinessProbe != nil {
+			base.ReadinessProbe = overlay.ReadinessProbe
+		}
 		return base
 	}
 	for i, c := range ss.Spec.Template.Spec.Containers {

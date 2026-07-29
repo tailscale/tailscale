@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
@@ -104,6 +105,16 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 						Env:             []tsapi.Env{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}},
 						ImagePullPolicy: "IfNotPresent",
 						Image:           "ghcr.io/my-repo/tailscale:v0.01testsomething",
+						LivenessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt(9002)},
+							},
+						},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt(9002)},
+							},
+						},
 					},
 					TailscaleInitContainer: &tsapi.Container{
 						SecurityContext: &corev1.SecurityContext{
@@ -203,6 +214,8 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}}...)
 	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
+	wantSS.Spec.Template.Spec.Containers[0].LivenessProbe = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.LivenessProbe
+	wantSS.Spec.Template.Spec.Containers[0].ReadinessProbe = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.ReadinessProbe
 	wantSS.Spec.Template.Spec.InitContainers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
 	wantSS.Spec.Template.Spec.InitContainers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
@@ -246,6 +259,8 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	wantSS.Spec.Template.Spec.Containers[0].Env = append(wantSS.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{{Name: "foo", Value: "bar"}, {Name: "TS_USERSPACE", Value: "true"}, {Name: "bar"}}...)
 	wantSS.Spec.Template.Spec.Containers[0].ImagePullPolicy = "IfNotPresent"
 	wantSS.Spec.Template.Spec.Containers[0].Image = "ghcr.io/my-repo/tailscale:v0.01testsomething"
+	wantSS.Spec.Template.Spec.Containers[0].LivenessProbe = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.LivenessProbe
+	wantSS.Spec.Template.Spec.Containers[0].ReadinessProbe = proxyClassAllOpts.Spec.StatefulSet.Pod.TailscaleContainer.ReadinessProbe
 	wantSS.Spec.Template.Spec.PriorityClassName = proxyClassAllOpts.Spec.StatefulSet.Pod.PriorityClassName
 	wantSS.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 	wantSS.Spec.Template.Spec.DNSConfig = proxyClassAllOpts.Spec.StatefulSet.Pod.DNSConfig

@@ -426,6 +426,20 @@ type Container struct {
 	// Not recommended for production use.
 	// +optional
 	Debug *Debug `json:"debug,omitempty"`
+	// Container livenessProbe.
+	// By default the operator does not apply any liveness probe. Set the
+	// TS_ENABLE_HEALTH_CHECK env var to probe the /healthz endpoint served on
+	// TS_LOCAL_ADDR_PORT (9002 by default).
+	// https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+	// +optional
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
+	// Container readinessProbe.
+	// By default the operator does not apply any readiness probe. Set the
+	// TS_ENABLE_HEALTH_CHECK env var to probe the /healthz endpoint served on
+	// TS_LOCAL_ADDR_PORT (9002 by default).
+	// https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+	// +optional
+	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 }
 
 type Debug struct {
