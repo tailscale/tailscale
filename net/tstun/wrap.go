@@ -1615,6 +1615,13 @@ type selfTailscaleAddrs struct {
 // traffic from the node's own; a4 and a6 are typically
 // [tsaddr.FirstTailscaleAddrs] of the node's wireguard config addresses.
 // Callers may pass invalid addresses for either family.
+//
+// The engine calls this and SetSubnetRoutes from the same Reconfig, in that
+// order, so the addresses are in place before a route becomes countable. A
+// reconfig that changes both leaves a window of a few instructions where the
+// counters see the new addresses with the old routes; the consequence is at
+// most a handful of packets attributed as forwarded when they were the node's
+// own, which is not worth a lock on the packet path to close.
 func (t *Wrapper) SetSelfTailscaleAddrs(a4, a6 netip.Addr) {
 	if old := t.selfAddrs.Load(); old != nil && old.v4 == a4 && old.v6 == a6 {
 		return

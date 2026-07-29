@@ -41,7 +41,7 @@ const (
 
 	// maxRetainedRoutes caps how many routes' counters are kept alive for the
 	// process's lifetime; see subnetCounters.counters for why retention is
-	// needed and evictRetainedLocked for what happens past the cap.
+	// needed and evictRetained for what happens past the cap.
 	//
 	// A subnet router's advertised set is admin-configured and small; the cap
 	// only matters if it churns unexpectedly. 4 KiB of routeCounters is a few
@@ -186,7 +186,7 @@ func newSubnetCounters(reg *usermetric.Registry, table *atomicPrefixTable) *subn
 //
 // 4via6 routes are excluded too, for M1. Their prefixes live inside
 // fd7a:115c:a1e0::/48, so both endpoints of 4via6 traffic are Tailscale
-// addresses and countSubnetRouteTraffic's "exactly one Tailscale endpoint"
+// addresses and countSubnetRouteParsed's "exactly one Tailscale endpoint"
 // test never admits such a packet. Admitting the route anyway would publish
 // four series that can never move, which reads to an operator as an idle
 // router rather than an unsupported route type. Counting 4via6 properly needs

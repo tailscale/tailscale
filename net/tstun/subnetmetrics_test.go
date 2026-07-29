@@ -402,7 +402,7 @@ func TestSubnetCountersExitNodeOnlyNotEnabled(t *testing.T) {
 
 // TestSubnetCountersViaRouteExcluded checks that 4via6 routes get no series.
 // Both endpoints of 4via6 traffic are inside the Tailscale ULA range, so
-// countSubnetRouteTraffic can never attribute a packet to one, and publishing
+// countSubnetRouteParsed can never attribute a packet to one, and publishing
 // four permanently-zero series would read as "this route is idle".
 func TestSubnetCountersViaRouteExcluded(t *testing.T) {
 	sc := newTestSubnetCounters()
@@ -530,7 +530,7 @@ func TestWrapperSubnetRouteCountingStalePacket(t *testing.T) {
 
 // TestSubnetCountersHotPathNoAllocs pins the real hooks, not just the
 // forAddr+add pair, to zero allocations. A prefix.String() creeping back into
-// countSubnetRouteTraffic would allocate twice per packet.
+// countSubnetRouteParsed would allocate twice per packet.
 func TestSubnetCountersHotPathNoAllocs(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	_, tun := newFakeTUN(t.Logf, bus, false)
