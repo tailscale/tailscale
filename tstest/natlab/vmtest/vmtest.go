@@ -375,6 +375,7 @@ type Node struct {
 	vnetNode         *vnet.Node // primary vnet node (set during Start)
 	agent            *vnet.NodeAgentClient
 	joinTailnet      bool
+	runSSH           bool // true to enable the node's Tailscale SSH server
 	noAgent          bool // true to skip TTA agent setup (e.g. macOS VMs without TTA)
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
@@ -405,6 +406,8 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 		case nodeOptNoTailscale:
 			n.joinTailnet = false
 			vnetOpts = append(vnetOpts, vnet.DontJoinTailnet)
+		case nodeOptTailscaleSSH:
+			n.runSSH = true
 		case nodeOptNoAgent:
 			n.noAgent = true
 		case nodeOptAdvertiseRoutes:
@@ -440,6 +443,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
+type nodeOptTailscaleSSH struct{}
 type nodeOptNoAgent struct{}
 type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
@@ -450,6 +454,13 @@ func OS(img OSImage) nodeOptOS { return nodeOptOS(img) }
 
 // DontJoinTailnet returns a NodeOption that prevents the node from running tailscale up.
 func DontJoinTailnet() nodeOptNoTailscale { return nodeOptNoTailscale{} }
+
+// TailscaleSSH returns a NodeOption that enables the node's Tailscale SSH
+// server by passing --ssh to tailscale up. If any node has this option, the
+// test control server is configured with a permissive SSH policy that lets
+// any tailnet node connect as any SSH user, mapped to the same-named local
+// user.
+func TailscaleSSH() nodeOptTailscaleSSH { return nodeOptTailscaleSSH{} }
 
 // NoAgent returns a NodeOption that skips TTA agent setup. The node will not
 // have a test agent, so agent-dependent operations (Status, ExecOnNode, etc.)
@@ -639,6 +650,9 @@ func (e *Env) tailscaleUp(ctx context.Context, n *Node) error {
 	url := "http://unused/up?accept-routes=true"
 	if n.advertiseRoutes != "" {
 		url += "&advertise-routes=" + n.advertiseRoutes
+	}
+	if n.runSSH {
+		url += "&ssh=true"
 	}
 	if n.snatSubnetRoutes != nil {
 		if *n.snatSubnetRoutes {
@@ -1278,6 +1292,19 @@ func (e *Env) initVnet() {
 		}
 		if e.allOnline {
 			e.server.ControlServer().AllOnline = true
+		}
+		for _, n := range e.nodes {
+			if n.runSSH {
+				e.server.ControlServer().SSHPolicy = &tailcfg.SSHPolicy{
+					Rules: []*tailcfg.SSHRule{{
+						Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+						// Allow permissive login + root login by default
+						SSHUsers: map[string]string{"*": "=", "root": "root"},
+						Action:   &tailcfg.SSHAction{Accept: true},
+					}},
+				}
+				break
+			}
 		}
 	})
 }

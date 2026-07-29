@@ -65,6 +65,11 @@ type Server struct {
 	// grants rules.
 	PeerRelayGrants bool
 
+	// SSHPolicy, if non-nil, is sent to every node in MapResponses.
+	// Each node also gets [tailcfg.CapabilitySSH] added to its capability
+	// map, permitting "tailscale up --ssh".
+	SSHPolicy *tailcfg.SSHPolicy
+
 	// AllNodesSameUser, if true, makes all created nodes
 	// belong to the same user.
 	AllNodesSameUser bool
@@ -571,6 +576,15 @@ func (s *Server) SetMasqueradeAddresses(pairs []MasqueradePair) {
 	defer s.mu.Unlock()
 	s.masquerades = m
 	s.updateLocked("SetMasqueradeAddresses", s.nodeIDsLocked(0))
+}
+
+// SetSSHPolicy sets the SSH policy sent in MapResponses and notifies all
+// connected nodes so they pick up the change.
+func (s *Server) SetSSHPolicy(policy *tailcfg.SSHPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SSHPolicy = policy
+	s.updateLocked("SetSSHPolicy", s.nodeIDsLocked(0))
 }
 
 // SetNodeCapMap overrides the capability map the specified client receives.
@@ -1378,10 +1392,14 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		dns = s.DNSConfig.Clone()
 	}
 	magicDNSDomain := s.MagicDNSDomain
+	sshPolicy := s.SSHPolicy.Clone()
 	s.mu.Unlock()
 
 	node.CapMap = nodeCapMap
 	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
+	if sshPolicy != nil {
+		mak.Set(&node.CapMap, tailcfg.CapabilitySSH, nil)
+	}
 
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
 	if dns != nil && magicDNSDomain != "" {
@@ -1395,6 +1413,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		CollectServices: cmp.Or(s.CollectServices, opt.True),
 		PacketFilter:    packetFilterWithIngress(s.PeerRelayGrants),
 		DNSConfig:       dns,
+		SSHPolicy:       sshPolicy,
 		ControlTime:     &t,
 	}
 
