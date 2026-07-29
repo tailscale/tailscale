@@ -771,6 +771,35 @@ type sshSession struct {
 	exitHandled chan struct{}
 }
 
+// forwardedEnvChildFD is the fd the incubator child reads the forwarded environment from, sent via
+// --env-fd. It must match the payload file's index in launchProcess's ExtraFiles (fd = 3 + index).
+const forwardedEnvChildFD = 3
+
+// forwardedEnvFile returns the read end of a pipe holding the JSON-encoded forwarded pairs.
+// The read end is passed to the incubator child via exec.Cmd.ExtraFiles to communicate
+// secrets and config; the payload only ever exists in memory, never on any filesystem. A
+// goroutine writes the payload and closes the write end. Caller must close the read end
+// after the child starts.
+func forwardedEnvFile(forwardedEnv []string) (*os.File, error) {
+	if len(forwardedEnv) == 0 {
+		return nil, errors.New("no forwarded environment")
+	}
+	b, err := json.Marshal(forwardedEnv)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling forwarded environment: %w", err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating forwarded environment pipe: %w", err)
+	}
+	go func() {
+		defer w.Close()
+		// A short read fails the session child-side
+		_, _ = w.Write(b)
+	}()
+	return r, nil
+}
+
 func (ss *sshSession) vlogf(format string, args ...any) {
 	if sshVerboseLogging() {
 		ss.logf(format, args...)

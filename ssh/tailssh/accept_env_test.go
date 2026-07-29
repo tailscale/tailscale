@@ -204,6 +204,48 @@ func TestFilterEnv(t *testing.T) {
 			environ:          []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib", "DYLD_LIBRARY_PATH=/tmp", "TERM=xterm"},
 			expectedFiltered: []string{"TERM=xterm"},
 		},
+		{
+			// A forwarded key containing the "," allowlist separator must be
+			// rejected, since it would otherwise inject extra "su -w" entries.
+			name:             "comma-in-key-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"A,B=x", "GOOD=1"},
+			expectedFiltered: []string{"GOOD=1"},
+		},
+		{
+			name:             "empty-key-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"=x", "GOOD=1"},
+			expectedFiltered: []string{"GOOD=1"},
+		},
+		{
+			// GOTRACEBACK controls crash tracebacks/core dumps of the
+			// privileged incubator child, which could leak secrets
+			name:             "gotraceback-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"GOTRACEBACK=crash", "TERM=xterm"},
+			expectedFiltered: []string{"TERM=xterm"},
+		},
+		{
+			name:             "nul-in-name-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"A\x00B=x", "GOOD=1"},
+			expectedFiltered: []string{"GOOD=1"},
+		},
+		{
+			name:             "nul-in-value-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"GOOD=a\x00b"},
+			expectedFiltered: nil,
+		},
+		{
+			// Key names are closed to a known charset: spaces, control
+			// chars, punctuation other than '-' and non-ASCII are rejected.
+			name:             "key-charset-restricted",
+			acceptEnv:        []string{"*"},
+			environ:          []string{"MY VAR=1", "WEIRD\tNAME=2", "MY.VAR=3", "MY-VAR=ok", "B\xc3\xa4R=5", "MY_VAR=ok2"},
+			expectedFiltered: []string{"MY-VAR=ok", "MY_VAR=ok2"},
+		},
 	}
 
 	for _, tc := range testCases {
