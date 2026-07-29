@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -331,7 +332,7 @@ func TestIPCertManager(t *testing.T) {
 	dir := t.TempDir()
 	ca := newFakeIPACME(t)
 
-	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil)
+	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), netip.Addr{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +397,7 @@ func TestIPCertManager(t *testing.T) {
 
 	// A second manager over the same cert directory must use the
 	// on-disk cache rather than creating more orders.
-	m2, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil)
+	m2, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), netip.Addr{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,13 +422,47 @@ func TestIPCertManager(t *testing.T) {
 	}
 }
 
+// TestIPCertManagerFixedIP verifies that an explicit IP --hostname is
+// used instead of the post-NAT local address of the accepted connection.
+func TestIPCertManagerFixedIP(t *testing.T) {
+	const publicIP = "198.51.100.42"
+	const privateIP = "172.31.86.204"
+	dir := t.TempDir()
+	ca := newFakeIPACME(t)
+
+	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), netip.MustParseAddr(publicIP), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeSrv := httptest.NewServer(m.HTTPHandler(http.NotFoundHandler()))
+	defer challengeSrv.Close()
+	ca.challengeBase = challengeSrv.URL
+
+	cert, err := m.getCertificate(helloFor(t, privateIP, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert.Leaf.VerifyHostname(publicIP); err != nil {
+		t.Errorf("issued cert not valid for explicit public IP %v: %v", publicIP, err)
+	}
+	if ca.gotIDType != "ip" || ca.gotIDValue != publicIP {
+		t.Errorf("order identifier = %q %q; want %q %q", ca.gotIDType, ca.gotIDValue, "ip", publicIP)
+	}
+	if _, err := m.getCertificate(helloFor(t, privateIP, publicIP)); err != nil {
+		t.Errorf("getCertificate with configured public IP SNI: %v", err)
+	}
+	if _, err := m.getCertificate(helloFor(t, privateIP, privateIP)); err == nil {
+		t.Error("getCertificate with post-NAT private IP SNI succeeded; want error")
+	}
+}
+
 // TestIPCertManagerNextProvider verifies that connections with a DNS
 // name in the SNI are passed through to the next provider.
 func TestIPCertManagerNextProvider(t *testing.T) {
 	dir := t.TempDir()
 	ca := newFakeIPACME(t)
 	stubCert := &tls.Certificate{}
-	m, err := newIPCertManager(dir, "", ca.directoryURL(), &stubCertProvider{cert: stubCert})
+	m, err := newIPCertManager(dir, "", ca.directoryURL(), netip.Addr{}, &stubCertProvider{cert: stubCert})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,6 +509,13 @@ func TestCertModeIPCertsGating(t *testing.T) {
 				wantNext := net.ParseIP(tt.host) == nil
 				if gotNext := m.next != nil; gotNext != wantNext {
 					t.Errorf("has next provider = %v; want %v", gotNext, wantNext)
+				}
+				wantFixedIP := netip.Addr{}
+				if ip, err := netip.ParseAddr(tt.host); err == nil {
+					wantFixedIP = ip.Unmap()
+				}
+				if m.fixedIP != wantFixedIP {
+					t.Errorf("fixed IP = %v; want %v", m.fixedIP, wantFixedIP)
 				}
 				return
 			}
