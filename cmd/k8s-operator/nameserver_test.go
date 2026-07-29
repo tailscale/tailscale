@@ -71,6 +71,9 @@ func TestNameserverReconciler(t *testing.T) {
 							},
 						},
 					},
+					ImagePullSecrets: []corev1.LocalObjectReference{
+						{Name: "some-secret"},
+					},
 				},
 			},
 		},
@@ -136,6 +139,9 @@ func TestNameserverReconciler(t *testing.T) {
 		}
 		wantsDeploy.Spec.Template.Spec.NodeSelector = map[string]string{
 			"foo": "bar",
+		}
+		wantsDeploy.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
+			{Name: "some-secret"},
 		}
 
 		expectEqual(t, fc, wantsDeploy)
