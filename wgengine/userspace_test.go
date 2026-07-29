@@ -687,3 +687,94 @@ func TestReconfigSubnetRouteLoadMetrics(t *testing.T) {
 		t.Error("per-route counting stayed enabled after opting out")
 	}
 }
+
+// TestReconfigSubnetRouteLoadMetricsTransitions drives the empty -> non-empty
+// -> empty -> non-empty transitions of the advertised set through Reconfig.
+//
+// Reconfig(&router.Config{}) happens for real, from enterStateLocked, and any
+// netmap update that transiently yields no SubnetRoutes has the same shape.
+func TestReconfigSubnetRouteLoadMetricsTransitions(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	ue := e.(*userspaceEngine)
+	routes := []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}
+	on := func(rs []netip.Prefix) *router.Config {
+		return &router.Config{SubnetRoutes: rs, CollectLoadMetrics: true}
+	}
+
+	// Opted in, but with no routes yet: nothing to count.
+	if err := ue.Reconfig(&wgcfg.Config{}, on(nil), &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if ue.tundev.SubnetRouteCountingEnabledForTest() {
+		t.Error("counting is enabled with an empty route set")
+	}
+
+	// Routes arrive.
+	if err := ue.Reconfig(&wgcfg.Config{}, on(routes), &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if !ue.tundev.SubnetRouteCountingEnabledForTest() {
+		t.Fatal("counting is disabled after routes were advertised")
+	}
+
+	// A transient empty netmap, e.g. the reset from enterStateLocked. This must
+	// not decrease any counter, so the instance survives; it just goes inactive.
+	if err := ue.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if ue.tundev.SubnetRouteCountingEnabledForTest() {
+		t.Error("counting stayed active across a reset to an empty config")
+	}
+
+	// And back: still counting, and the route is countable again.
+	if err := ue.Reconfig(&wgcfg.Config{}, on(routes), &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if !ue.tundev.SubnetRouteCountingEnabledForTest() {
+		t.Error("counting did not come back after routes were re-advertised")
+	}
+}
+
+// TestReconfigSubnetRouteLoadMetricsSelfAddrs verifies that the engine tells
+// the wrapper this node's own Tailscale addresses, which is what lets the
+// subnet counters exclude traffic the node originates itself.
+func TestReconfigSubnetRouteLoadMetricsSelfAddrs(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	ue := e.(*userspaceEngine)
+	self4 := netip.MustParseAddr("100.64.0.1")
+	self6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	cfg := &wgcfg.Config{Addresses: []netip.Prefix{
+		netip.PrefixFrom(self4, 32),
+		netip.PrefixFrom(self6, 128),
+	}}
+	if err := ue.Reconfig(cfg, &router.Config{
+		SubnetRoutes:       []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")},
+		CollectLoadMetrics: true,
+	}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	for _, a := range []netip.Addr{self4, self6} {
+		if !ue.tundev.IsSelfTailscaleAddrForTest(a) {
+			t.Errorf("the wrapper does not know %v is one of this node's own addresses", a)
+		}
+	}
+	if ue.tundev.IsSelfTailscaleAddrForTest(netip.MustParseAddr("100.64.0.2")) {
+		t.Error("the wrapper thinks a peer address is one of this node's own")
+	}
+}

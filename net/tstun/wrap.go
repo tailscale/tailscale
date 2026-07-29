@@ -222,10 +222,19 @@ type Wrapper struct {
 	connCounter syncs.AtomicValue[netlogfunc.ConnectionCounter]
 
 	// subnetRouteCounters counts forwarded traffic per advertised subnet
-	// route. It is nil until SetSubnetRoutes is called with a non-empty set
-	// of routes, so nodes that are not subnet routers, and nodes that have
-	// not opted in, pay only a nil load on the packet path.
+	// route. It is nil until SetSubnetRoutes is called with at least one
+	// countable route, so nodes that are not subnet routers, and nodes that
+	// have not opted in, pay only a nil load on the packet path.
+	//
+	// Once created it stays non-nil, because it owns registrations that cannot
+	// be undone; use [Wrapper.subnetCountersActive] on the packet path, which
+	// also covers the currently-disabled case.
 	subnetRouteCounters atomic.Pointer[subnetCounters]
+
+	// selfAddrs holds this node's own Tailscale addresses, used by the subnet
+	// counters to tell forwarded traffic from the node's own. Nil until
+	// SetSelfTailscaleAddrs is called.
+	selfAddrs atomic.Pointer[selfTailscaleAddrs]
 
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
@@ -697,13 +706,15 @@ type SetIPer interface {
 	SetIP(ipV4, ipV6 netip.Addr) error
 }
 
-// SetWGConfig is called when a new NetworkMap is received. Its only
-// remaining job is updating the TAP device's IP addresses; the
-// per-peer route attributes arrive via [Wrapper.SetPeerRoutes].
+// SetWGConfig is called when a new NetworkMap is received. It records this
+// node's own Tailscale addresses and updates the TAP device's IP addresses;
+// the per-peer route attributes arrive via [Wrapper.SetPeerRoutes].
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
+	a4, a6 := tsaddr.FirstTailscaleAddrs(slices.All(wcfg.Addresses))
+	t.SetSelfTailscaleAddrs(a4, a6)
 	if t.isTAP {
 		if sip, ok := t.tdev.(SetIPer); ok {
-			sip.SetIP(tsaddr.FirstTailscaleAddrs(slices.All(wcfg.Addresses)))
+			sip.SetIP(a4, a6)
 		}
 	}
 }
@@ -925,12 +936,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// Traffic leaving the TUN toward a tailnet peer: on a subnet router
 		// this is a response coming back out of the subnet, so it is rx.
 		// p is already decoded here, so attribute it without re-parsing.
-		//
-		// p.TotalLen() rather than len(p.Buffer()): the buffers this path
-		// gets are exactly sized today, but the decoded length is the
-		// authoritative byte count and does not depend on that staying true.
-		if sc := t.subnetRouteCounters.Load(); sc != nil {
-			sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), p.TotalLen(), true)
+		if sc := t.subnetCountersActive(); sc != nil {
+			t.countSubnetRouteParsed(sc, p, true)
 		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
@@ -1111,9 +1118,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	}
 	// Injected packets travel the same direction as Read: out to a tailnet
 	// peer, i.e. rx from the subnet router's point of view.
-	if sc := t.subnetRouteCounters.Load(); sc != nil {
+	if sc := t.subnetCountersActive(); sc != nil {
 		for i := range n {
-			t.countSubnetRoutePacket(outBuffs[i][offset:offset+sizes[i]], true)
+			t.countSubnetRoutePacket(sc, outBuffs[i][offset:offset+sizes[i]], true)
 		}
 	}
 
@@ -1310,9 +1317,9 @@ func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
 	}
 	// Traffic entering the TUN from a tailnet peer: on a subnet router this is
 	// sent onward into the subnet, so it is tx.
-	if sc := t.subnetRouteCounters.Load(); sc != nil {
+	if sc := t.subnetCountersActive(); sc != nil {
 		for i := range buffs {
-			t.countSubnetRoutePacket(buffs[i][offset:], false)
+			t.countSubnetRoutePacket(sc, buffs[i][offset:], false)
 		}
 	}
 	return t.tdev.Write(buffs, offset)
@@ -1543,80 +1550,145 @@ func (t *Wrapper) SetConnectionCounter(fn netlogfunc.ConnectionCounter) {
 // SetSubnetRoutes sets the advertised subnet routes for which forwarded
 // traffic is counted, enabling per-route load metrics.
 //
-// Passing an empty or nil slice disables counting, so callers gate the feature
-// simply by not supplying routes. Counting is deliberately independent of
-// network flow logging, so it works with flow logging off.
+// Passing no countable routes — an empty slice, or only exit and 4via6 routes —
+// disables counting, so callers gate the feature simply by not supplying
+// routes. Counting is deliberately independent of network flow logging, so it
+// works with flow logging off.
+//
+// Disabling does not discard what has been counted. Both metric views are
+// counters, so a re-advertised route resumes its previous total rather than
+// resetting: see [subnetCounters] for why the instance outlives a disable.
 func (t *Wrapper) SetSubnetRoutes(routes []netip.Prefix) {
 	if !buildfeatures.HasUserMetrics && !buildfeatures.HasClientMetrics {
 		return
 	}
 	sc := t.subnetRouteCounters.Load()
 	if sc == nil {
-		if len(routes) == 0 {
+		if !anyCountableRoute(routes) {
+			// Never enabled and nothing to enable it for. Don't create the
+			// counters at all, so nodes that are not subnet routers, and nodes
+			// that have not opted in, publish no series and pay only a nil
+			// load on the packet path.
 			return
 		}
 		sc = newSubnetCounters(t.usermetrics)
 		t.subnetRouteCounters.Store(sc)
 	}
 	sc.setRoutes(routes)
-	if len(routes) == 0 {
-		t.subnetRouteCounters.Store(nil)
-	}
 }
 
-// subnetCounters returns the active per-route counters, or nil if per-route
-// counting is disabled.
+// subnetCounters returns the per-route counters, or nil if they were never
+// enabled. They may be present but inactive; see [Wrapper.subnetCountersActive].
 func (t *Wrapper) subnetCounters() *subnetCounters {
 	return t.subnetRouteCounters.Load()
+}
+
+// subnetCountersActive returns the per-route counters if traffic should be
+// counted right now, or nil if per-route counting is disabled or no countable
+// route is advertised.
+//
+// This is the packet path's gate: two nil-able atomic loads, no decode and no
+// lookup when counting is off.
+func (t *Wrapper) subnetCountersActive() *subnetCounters {
+	sc := t.subnetRouteCounters.Load()
+	if sc == nil || sc.table.load() == nil {
+		return nil
+	}
+	return sc
 }
 
 // SubnetRouteCountingEnabledForTest reports whether per-route subnet load
 // metrics are currently being collected.
 func (t *Wrapper) SubnetRouteCountingEnabledForTest() bool {
-	return t.subnetRouteCounters.Load() != nil
+	return t.subnetCountersActive() != nil
 }
 
-// countSubnetRouteTraffic attributes a packet to an advertised subnet route,
-// if it is forwarded traffic for one.
+// selfTailscaleAddrs holds this node's own Tailscale addresses, so that the
+// subnet counters can tell traffic the node forwards from traffic it
+// originates or terminates itself.
+type selfTailscaleAddrs struct {
+	v4, v6 netip.Addr
+}
+
+// SetSelfTailscaleAddrs tells the Wrapper this node's own Tailscale addresses.
+//
+// It is used only by the per-route subnet counters, to distinguish forwarded
+// traffic from the node's own; a4 and a6 are typically
+// [tsaddr.FirstTailscaleAddrs] of the node's wireguard config addresses.
+// Callers may pass invalid addresses for either family.
+func (t *Wrapper) SetSelfTailscaleAddrs(a4, a6 netip.Addr) {
+	if old := t.selfAddrs.Load(); old != nil && old.v4 == a4 && old.v6 == a6 {
+		return
+	}
+	t.selfAddrs.Store(&selfTailscaleAddrs{v4: a4, v6: a6})
+}
+
+// isSelfTailscaleAddr reports whether a is one of this node's own Tailscale
+// addresses.
+//
+// It reports false when the addresses are unknown, which counts a packet the
+// same way it was counted before the addresses were plumbed through. In
+// practice they are set alongside the routes, from the same Reconfig.
+func (t *Wrapper) isSelfTailscaleAddr(a netip.Addr) bool {
+	s := t.selfAddrs.Load()
+	return s != nil && (a == s.v4 || a == s.v6)
+}
+
+// IsSelfTailscaleAddrForTest reports whether the Wrapper considers a to be one
+// of this node's own Tailscale addresses.
+func (t *Wrapper) IsSelfTailscaleAddrForTest(a netip.Addr) bool {
+	return t.isSelfTailscaleAddr(a)
+}
+
+// countSubnetRouteParsed attributes an already-decoded packet to an advertised
+// subnet route, if it is traffic this node forwards on a peer's behalf.
 //
 // rx reports the direction from the subnet router's point of view: true when
 // the packet was received from the subnet on its way to a tailnet peer, false
 // when it is being sent into the subnet on a peer's behalf.
 //
-// Only traffic with exactly one Tailscale endpoint is counted: that is what
-// makes it forwarded traffic rather than the node's own. Addresses outside
-// every advertised route are not counted, which excludes exit node traffic.
-func (sc *subnetCounters) countSubnetRouteTraffic(src, dst netip.Addr, bytes int, rx bool) {
+// Addresses outside every advertised route are not counted, which excludes exit
+// node traffic.
+func (t *Wrapper) countSubnetRouteParsed(sc *subnetCounters, p *packet.Parsed, rx bool) {
+	if p.IPVersion == 0 {
+		// Decode bailed out. Src and Dst are not cleared on that path and p is
+		// pool-reused across packets, so they may hold a previous packet's
+		// addresses; counting them would attribute traffic to the wrong route.
+		return
+	}
+	src, dst := p.Src.Addr(), p.Dst.Addr()
 	srcIsTS := tsaddr.IsTailscaleIP(src)
 	dstIsTS := tsaddr.IsTailscaleIP(dst)
 	if srcIsTS == dstIsTS {
+		// Both endpoints on the tailnet, or neither: not subnet forwarding.
 		return
 	}
-	remote := dst
+	remote, tailnetEnd := dst, src
 	if dstIsTS {
-		remote = src
+		remote, tailnetEnd = src, dst
+	}
+	// Exactly one Tailscale endpoint is necessary but not sufficient: it is
+	// equally true of traffic the node itself originates toward, or receives
+	// from, a host inside one of its own advertised prefixes. Requiring the
+	// tailnet end to be a *peer* is what makes the packet forwarded — and
+	// keeps the node's own traffic from being counted in the opposite
+	// direction from the one it actually travelled.
+	if t.isSelfTailscaleAddr(tailnetEnd) {
+		return
 	}
 	if rc := sc.forAddr(remote); rc != nil {
-		rc.add(bytes, rx)
+		// p.TotalLen(), not len(p.Buffer()): the buffer may have trailing
+		// slack, e.g. the full-MTU buffers wireguard-go hands Write.
+		rc.add(p.TotalLen(), rx)
 	}
 }
 
 // countSubnetRoutePacket decodes just enough of b to attribute it to an
-// advertised subnet route. It is a no-op when per-route counting is disabled.
-func (t *Wrapper) countSubnetRoutePacket(b []byte, rx bool) {
-	sc := t.subnetRouteCounters.Load()
-	if sc == nil {
-		return
-	}
+// advertised subnet route.
+func (t *Wrapper) countSubnetRoutePacket(sc *subnetCounters, b []byte, rx bool) {
 	var p packet.Parsed
 	p.Decode(b)
-	if p.IPVersion == 0 {
-		return
-	}
-	// p.TotalLen(), not len(b): b may have trailing slack. wireguard-go hands
-	// Write a full-MTU buffer per packet, so buffs[i][offset:] in tdevWrite
-	// runs to the end of that buffer rather than to the end of the packet.
-	sc.countSubnetRouteTraffic(p.Src.Addr(), p.Dst.Addr(), p.TotalLen(), rx)
+	t.countSubnetRouteParsed(sc, &p, rx)
 }
 
 var (

@@ -4,12 +4,15 @@
 package tstun
 
 import (
+	"cmp"
 	"expvar"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 
 	"github.com/gaissmai/bart"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/usermetric"
 )
@@ -35,6 +38,16 @@ const (
 	packetsHelp = "Packets forwarded on behalf of tailnet peers for each advertised subnet route. " +
 		`Direction is from the subnet router's point of view: "tx" was sent into the subnet, ` +
 		`"rx" was received from the subnet and returned to the peer.`
+
+	// maxRetainedRoutes caps how many routes' counters are kept alive for the
+	// process's lifetime; see subnetCounters.counters for why retention is
+	// needed and evictRetainedLocked for what happens past the cap.
+	//
+	// A subnet router's advertised set is admin-configured and small; the cap
+	// only matters if it churns unexpectedly. 4 KiB of routeCounters is a few
+	// hundred KiB, and at the cap the labeled series are still bounded by the
+	// advertised set, not by this.
+	maxRetainedRoutes = 4096
 )
 
 // Aggregate node-level clientmetrics, registered over the same [expvar.Int]
@@ -57,6 +70,11 @@ type routeCounters struct {
 	rxBytes   expvar.Int
 	txPackets expvar.Int
 	rxPackets expvar.Int
+
+	// lastActiveSeq is the value of subnetCounters.seq when this route was
+	// last advertised. Eviction drops the least recently advertised routes
+	// first. Only ever accessed from setRoutes.
+	lastActiveSeq uint64
 }
 
 // add records a packet of size bytes in the given direction.
@@ -78,6 +96,12 @@ func (rc *routeCounters) add(bytes int, rx bool) {
 // lookup plus atomic adds: no allocation, no label formatting, and no map
 // hashing per packet.
 //
+// A subnetCounters lives for the lifetime of the [Wrapper] once created, even
+// while the feature is disabled: the aggregate clientmetrics it registers
+// values with cannot be unregistered individually, and both metric views are
+// counters, which must never decrease. Disabling clears the lookup table
+// instead, which is what the packet path checks.
+//
 // It is not safe to call setRoutes concurrently with itself; the engine calls
 // it only from Reconfig. Lookups are safe concurrently with setRoutes.
 type subnetCounters struct {
@@ -87,23 +111,38 @@ type subnetCounters struct {
 	// table maps an address to the counters for the most specific advertised
 	// route containing it. setRoutes swaps in a wholly new table rather than
 	// mutating the published one, so the packet path needs no locking.
+	//
+	// It is nil when no countable route is advertised, which is how the packet
+	// path skips its work: see [Wrapper.subnetCountersActive].
 	table atomicPrefixTable
 
-	// counters holds the counters for every route advertised during this
-	// process's lifetime, including withdrawn ones.
+	// counters holds the counters for every route advertised recently,
+	// including withdrawn ones, up to maxRetainedRoutes entries.
 	//
-	// Entries are never removed. Withdrawn routes must stay registered with
-	// the aggregate clientmetrics, because those are counters and dropping a
-	// route's contribution would make them decrease. Retaining the entry also
-	// means a route that is withdrawn and later re-advertised resumes its
-	// previous total instead of resetting. The labeled usermetric series *are*
-	// removed on withdrawal, so per-route cardinality tracks the advertised
-	// set. Only ever accessed from setRoutes.
+	// Withdrawn routes are retained because they must stay registered with the
+	// aggregate clientmetrics: those are counters, and dropping a route's
+	// contribution would make them decrease. Retaining the entry also means a
+	// route that is withdrawn and later re-advertised resumes its previous
+	// total instead of resetting. The labeled usermetric series *are* removed
+	// on withdrawal, so per-route cardinality tracks the advertised set.
+	//
+	// Only ever accessed from setRoutes.
 	counters map[netip.Prefix]*routeCounters
+
+	// evicted accumulates the totals of routes dropped from counters once it
+	// reached maxRetainedRoutes. It stays registered with the aggregates
+	// forever, so eviction preserves their value; only the per-route breakdown
+	// of those bytes is lost, and an evicted route has not been advertised for
+	// at least maxRetainedRoutes reconfigs. Only ever accessed from setRoutes.
+	evicted routeCounters
 
 	// active is the set of currently advertised routes, i.e. those with live
 	// labeled series. Only ever accessed from setRoutes.
 	active map[netip.Prefix]bool
+
+	// seq increments on every setRoutes call and orders routes by how recently
+	// they were advertised, for eviction. Only ever accessed from setRoutes.
+	seq uint64
 }
 
 // atomicPrefixTable is an atomically-swappable longest-prefix-match table.
@@ -117,13 +156,13 @@ func (a *atomicPrefixTable) store(t *bart.Table[*routeCounters]) {
 }
 
 // newSubnetCounters returns a subnetCounters that publishes its per-route
-// series into reg.
+// series into reg. It starts with no routes, i.e. inactive.
 func newSubnetCounters(reg *usermetric.Registry) *subnetCounters {
 	sc := &subnetCounters{
 		counters: map[netip.Prefix]*routeCounters{},
 		active:   map[netip.Prefix]bool{},
 	}
-	sc.table.store(&bart.Table[*routeCounters]{})
+	sc.registerAggregate(&sc.evicted)
 	if buildfeatures.HasUserMetrics {
 		sc.bytesTotal = usermetric.NewMultiLabelMapWithRegistry[subnetRouteLabels](
 			reg, "tailscaled_subnet_forwarded_bytes_total", "counter", bytesHelp)
@@ -139,12 +178,39 @@ func newSubnetCounters(reg *usermetric.Registry) *subnetCounters {
 // exit-node traffic to 0.0.0.0/0 would be misleading. This mirrors the
 // Bits() > 0 check the network flow logger uses when classifying subnet
 // traffic.
-func countableRoute(p netip.Prefix) bool { return p.IsValid() && p.Bits() > 0 }
+//
+// 4via6 routes are excluded too, for M1. Their prefixes live inside
+// fd7a:115c:a1e0::/48, so both endpoints of 4via6 traffic are Tailscale
+// addresses and countSubnetRouteTraffic's "exactly one Tailscale endpoint"
+// test never admits such a packet. Admitting the route anyway would publish
+// four series that can never move, which reads to an operator as an idle
+// router rather than an unsupported route type. Counting 4via6 properly needs
+// attribution on the translated v4 address, which is a later milestone.
+func countableRoute(p netip.Prefix) bool {
+	return p.IsValid() && p.Bits() > 0 && !tsaddr.IsViaPrefix(p)
+}
+
+// anyCountableRoute reports whether routes contains at least one route that
+// would get counters, i.e. whether counting should be active at all.
+func anyCountableRoute(routes []netip.Prefix) bool {
+	for _, p := range routes {
+		if countableRoute(p) {
+			return true
+		}
+	}
+	return false
+}
 
 // setRoutes updates the set of advertised routes being counted.
+//
+// Passing no countable routes deactivates counting without discarding any
+// retained totals: the lookup table is cleared and the labeled series are
+// removed, but the [expvar.Int] values stay registered with the aggregates so
+// neither metric view decreases.
 func (sc *subnetCounters) setRoutes(routes []netip.Prefix) {
+	sc.seq++
 	next := make(map[netip.Prefix]bool, len(routes))
-	tbl := &bart.Table[*routeCounters]{}
+	var tbl *bart.Table[*routeCounters]
 
 	for _, p := range routes {
 		if !countableRoute(p) {
@@ -160,10 +226,14 @@ func (sc *subnetCounters) setRoutes(routes []netip.Prefix) {
 			sc.counters[p] = rc
 			sc.registerAggregate(rc)
 		}
+		rc.lastActiveSeq = sc.seq
 		if !sc.active[p] {
 			sc.setSeries(p, rc)
 		}
 		next[p] = true
+		if tbl == nil {
+			tbl = &bart.Table[*routeCounters]{}
+		}
 		tbl.Insert(p, rc)
 	}
 
@@ -175,7 +245,56 @@ func (sc *subnetCounters) setRoutes(routes []netip.Prefix) {
 	}
 
 	sc.active = next
+	sc.evictRetained()
 	sc.table.store(tbl)
+}
+
+// evictRetained drops the least recently advertised retained routes once
+// counters exceeds maxRetainedRoutes, folding their totals into sc.evicted so
+// that the aggregate clientmetrics keep their value.
+//
+// Currently advertised routes are never evicted: the cap is on retention of
+// withdrawn routes, and the advertised set is bounded by admin configuration.
+func (sc *subnetCounters) evictRetained() {
+	if len(sc.counters) <= maxRetainedRoutes {
+		return
+	}
+	// Evict down to half the cap so this runs amortized-rarely rather than on
+	// every reconfig once at the cap.
+	target := maxRetainedRoutes / 2
+	type candidate struct {
+		p   netip.Prefix
+		seq uint64
+	}
+	cands := make([]candidate, 0, len(sc.counters))
+	for p, rc := range sc.counters {
+		if sc.active[p] {
+			continue
+		}
+		cands = append(cands, candidate{p, rc.lastActiveSeq})
+	}
+	// Oldest first.
+	slices.SortFunc(cands, func(a, b candidate) int { return cmp.Compare(a.seq, b.seq) })
+	for _, c := range cands {
+		if len(sc.counters) <= target {
+			break
+		}
+		rc := sc.counters[c.p]
+		// Fold the evicted totals into the residual counter, which stays
+		// registered with the aggregates, then drop the entry. rc's own values
+		// are still in the aggregates' registered set with no way to remove
+		// them, so zero them out to avoid double counting: nothing references
+		// rc after this, so no further adds can land on it.
+		sc.evicted.txBytes.Add(rc.txBytes.Value())
+		sc.evicted.rxBytes.Add(rc.rxBytes.Value())
+		sc.evicted.txPackets.Add(rc.txPackets.Value())
+		sc.evicted.rxPackets.Add(rc.rxPackets.Value())
+		rc.txBytes.Set(0)
+		rc.rxBytes.Set(0)
+		rc.txPackets.Set(0)
+		rc.rxPackets.Set(0)
+		delete(sc.counters, c.p)
+	}
 }
 
 // registerAggregate adds rc's counters to the node-level clientmetrics.
@@ -214,9 +333,14 @@ func (sc *subnetCounters) deleteSeries(p netip.Prefix) {
 }
 
 // forAddr returns the counters for the most specific advertised route
-// containing addr, or nil if addr is not within any advertised route.
+// containing addr, or nil if addr is not within any advertised route or
+// counting is currently inactive.
 func (sc *subnetCounters) forAddr(addr netip.Addr) *routeCounters {
-	rc, _ := sc.table.load().Lookup(addr)
+	tbl := sc.table.load()
+	if tbl == nil {
+		return nil
+	}
+	rc, _ := tbl.Lookup(addr)
 	return rc
 }
 
@@ -228,4 +352,22 @@ func (sc *subnetCounters) forRoute(p netip.Prefix) *routeCounters {
 		return nil
 	}
 	return sc.counters[p]
+}
+
+// retainedForRoute returns the counters retained for exactly p whether or not
+// it is currently advertised, or nil if p has never been advertised (or was
+// evicted). For tests.
+func (sc *subnetCounters) retainedForRoute(p netip.Prefix) *routeCounters {
+	return sc.counters[p.Masked()]
+}
+
+// aggregateTxBytesForTest returns the sum of tx bytes across every retained
+// route plus the residual from evicted ones, i.e. what the aggregate
+// clientmetric should read for this instance.
+func (sc *subnetCounters) aggregateTxBytesForTest() int64 {
+	total := sc.evicted.txBytes.Value()
+	for _, rc := range sc.counters {
+		total += rc.txBytes.Value()
+	}
+	return total
 }

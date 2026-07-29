@@ -4,10 +4,14 @@
 package tstun
 
 import (
+	"expvar"
+	"fmt"
 	"net/netip"
 	"testing"
 
 	tsmetrics "tailscale.com/metrics"
+	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
 )
@@ -205,20 +209,424 @@ func TestSubnetCountersNoAllocs(t *testing.T) {
 	}
 }
 
+// TestSubnetCountersDisableEnableCycle checks that toggling the feature off and
+// back on does not reset the labeled counters. Prometheus counters must never
+// decrease: a reset produces a phantom rate() spike and false alerts.
+//
+// tailscale down/up, a profile switch, and Reconfig(&router.Config{}) from
+// enterStateLocked all drive an empty route set through this path.
+func TestSubnetCountersDisableEnableCycle(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	routes := []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}
+	tun.SetSubnetRoutes(routes)
+	sc := tun.subnetCounters()
+	if sc == nil {
+		t.Fatal("counting disabled after SetSubnetRoutes")
+	}
+	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(1000000, false)
+
+	// The labeled series and the aggregates must agree here, before the toggle.
+	if got := labeledSeriesValue(t, sc, "10.1.0.0/16", directionTx, true); got != 1000000 {
+		t.Fatalf("labeled tx_bytes before the toggle = %d, want 1000000", got)
+	}
+
+	// Disable, then re-enable with the same route.
+	tun.SetSubnetRoutes(nil)
+	tun.SetSubnetRoutes(routes)
+
+	sc2 := tun.subnetCounters()
+	if sc2 == nil {
+		t.Fatal("counting disabled after re-enabling")
+	}
+	if got := labeledSeriesValue(t, sc2, "10.1.0.0/16", directionTx, true); got != 1000000 {
+		t.Errorf("labeled tx_bytes after a disable/enable cycle = %d, want 1000000 retained "+
+			"(a Prometheus counter must never decrease)", got)
+	}
+	if txBytes, _, _, _ := routeCountsFor(t, sc2, "10.1.0.0/16"); txBytes != 1000000 {
+		t.Errorf("route tx_bytes after a disable/enable cycle = %d, want 1000000 retained", txBytes)
+	}
+}
+
+// labeledSeriesValue returns the value published under the given labels, or -1
+// if there is no such series.
+func labeledSeriesValue(t *testing.T, sc *subnetCounters, route, direction string, bytes bool) int64 {
+	t.Helper()
+	m := sc.packetsTotal
+	if bytes {
+		m = sc.bytesTotal
+	}
+	got := int64(-1)
+	m.Do(func(kv tsmetrics.KeyValue[subnetRouteLabels]) {
+		if kv.Key.Route != route || kv.Key.Direction != direction {
+			return
+		}
+		iv, ok := kv.Value.(*expvar.Int)
+		if !ok {
+			t.Fatalf("series %v/%v has value type %T, want *expvar.Int", route, direction, kv.Value)
+		}
+		got = iv.Value()
+	})
+	return got
+}
+
+// TestSubnetCountersDisabledCountsNothing checks that while the feature is
+// disabled no traffic is counted, and that withdrawn routes' labeled series are
+// removed even though their totals are retained.
+func TestSubnetCountersDisabledCountsNothing(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	routes := []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}
+	tun.SetSubnetRoutes(routes)
+	sc := tun.subnetCounters()
+	pkt := udp4("100.64.0.1", "10.1.2.3", 123, 456)
+	if _, err := tun.tdevWrite([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("tdevWrite: %v", err)
+	}
+	_, _, want, _ := routeCountsFor(t, sc, "10.1.0.0/16")
+	if want != 1 {
+		t.Fatalf("txPackets while enabled = %d, want 1", want)
+	}
+
+	tun.SetSubnetRoutes(nil)
+
+	// Nothing is counted while disabled, and no series remain published.
+	for range 5 {
+		if _, err := tun.tdevWrite([][]byte{pkt}, 0); err != nil {
+			t.Fatalf("tdevWrite: %v", err)
+		}
+	}
+	if got := seriesCount(sc); got != 0 {
+		t.Errorf("series count while disabled = %d, want 0", got)
+	}
+	// forRoute reports only advertised routes, so the withdrawn one is gone
+	// from there; the retained totals must be untouched by the 5 packets.
+	if got := sc.forRoute(netip.MustParsePrefix("10.1.0.0/16")); got != nil {
+		t.Error("a withdrawn route still resolves via forRoute")
+	}
+	rc := sc.retainedForRoute(netip.MustParsePrefix("10.1.0.0/16"))
+	if rc == nil {
+		t.Fatal("the withdrawn route's counters were discarded, not retained")
+	}
+	if got := rc.txPackets.Value(); got != 1 {
+		t.Errorf("retained txPackets after 5 packets while disabled = %d, want still 1", got)
+	}
+}
+
+// TestSubnetCountersNoAggregateLeak checks that repeatedly enabling and
+// disabling does not leak expvar values into the process-global aggregate
+// clientmetrics. AggregateCounter has no unregister-one API and Value() is
+// O(n) over the registered set, on every scrape and every logtail delta.
+func TestSubnetCountersNoAggregateLeak(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	routes := []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}
+	tun.SetSubnetRoutes(routes)
+	base := aggregateRegisteredCount()
+
+	for range 10 {
+		tun.SetSubnetRoutes(nil)
+		tun.SetSubnetRoutes(routes)
+	}
+	if got := aggregateRegisteredCount() - base; got != 0 {
+		t.Errorf("10 disable/enable cycles registered %d additional values with the "+
+			"aggregate clientmetrics, want 0", got)
+	}
+}
+
+// aggregateRegisteredCount returns how many expvar values are registered with
+// the four aggregate clientmetrics.
+func aggregateRegisteredCount() int {
+	return cMetricSubnetForwardedTxBytes.RegisteredCountForTest() +
+		cMetricSubnetForwardedRxBytes.RegisteredCountForTest() +
+		cMetricSubnetForwardedTxPackets.RegisteredCountForTest() +
+		cMetricSubnetForwardedRxPackets.RegisteredCountForTest()
+}
+
+// TestSubnetCountersRetentionBound checks that the retained-counter map is
+// bounded. Retention is deliberate (a withdrawn route must keep contributing to
+// the aggregates, which are counters) but unbounded retention lets an
+// unexpectedly churning route set grow memory without limit.
+func TestSubnetCountersRetentionBound(t *testing.T) {
+	sc := newSubnetCounters(new(usermetric.Registry))
+
+	// Churn far more distinct routes than the cap, counting a byte on each so
+	// that eviction has to preserve something.
+	const n = maxRetainedRoutes * 3
+	var wantTotal int64
+	for i := range n {
+		p := netip.MustParsePrefix(fmt.Sprintf("10.%d.%d.0/24", i/256, i%256))
+		sc.setRoutes([]netip.Prefix{p})
+		sc.forAddr(p.Addr().Next()).add(100, false)
+		wantTotal += 100
+	}
+
+	if got := len(sc.counters); got > maxRetainedRoutes {
+		t.Errorf("after %d single-route reconfigs, retained %d routeCounters, want at most %d",
+			n, got, maxRetainedRoutes)
+	}
+	// Eviction must not lose counted bytes: the aggregate is a counter.
+	if got := sc.aggregateTxBytesForTest(); got != wantTotal {
+		t.Errorf("total tx bytes across retained plus evicted = %d, want %d "+
+			"(eviction must not make the aggregate decrease)", got, wantTotal)
+	}
+}
+
+// TestSubnetCountersExitNodeOnlyNotEnabled checks that a node advertising only
+// exit routes does not install the counting hook: it would publish zero series
+// while paying a decode and a lookup on every packet.
+func TestSubnetCountersExitNodeOnlyNotEnabled(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSubnetRoutes([]netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/0"),
+		netip.MustParsePrefix("::/0"),
+	})
+	if tun.SubnetRouteCountingEnabledForTest() {
+		t.Error("counting is enabled for an exit-node-only route set; want disabled")
+	}
+}
+
+// TestSubnetCountersViaRouteExcluded checks that 4via6 routes get no series.
+// Both endpoints of 4via6 traffic are inside the Tailscale ULA range, so
+// countSubnetRouteTraffic can never attribute a packet to one, and publishing
+// four permanently-zero series would read as "this route is idle".
+func TestSubnetCountersViaRouteExcluded(t *testing.T) {
+	sc := newSubnetCounters(new(usermetric.Registry))
+	// 4via6 form of 10.1.0.0/16 through site 7.
+	via := netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:0/112")
+	if !tsaddr.IsViaPrefix(via) {
+		t.Fatalf("%v is not a via prefix; fix the test fixture", via)
+	}
+	sc.setRoutes([]netip.Prefix{via})
+	if got := seriesCount(sc); got != 0 {
+		t.Errorf("a 4via6 route published %d series, want 0 (they could never move)", got)
+	}
+	if sc.forAddr(via.Addr().Next()) != nil {
+		t.Error("a 4via6 route is present in the lookup table")
+	}
+}
+
+// TestWrapperSubnetRouteCountingOwnTraffic checks that traffic the node
+// originates itself toward an address inside one of its own advertised prefixes
+// is not counted. Only forwarded traffic belongs in these counters, and such a
+// packet has exactly one Tailscale endpoint, so the endpoint test alone admits
+// it -- with the direction inverted, since it is egress being counted as rx.
+func TestWrapperSubnetRouteCountingOwnTraffic(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	const selfIP = "100.64.0.1"
+	tun.SetSelfTailscaleAddrs(netip.MustParseAddr(selfIP), netip.Addr{})
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	sc := tun.subnetCounters()
+	if sc == nil {
+		t.Fatal("counting disabled after SetSubnetRoutes")
+	}
+
+	// The node's own egress to a host inside its advertised prefix. This
+	// leaves via the TUN read path, where forwarded return traffic is rx.
+	go func() { chtun.Outbound <- udp4(selfIP, "10.1.2.3", 123, 456) }()
+
+	var buf [MaxPacketSize]byte
+	buffs := [][]byte{buf[:]}
+	sizes := make([]int, 1)
+	if _, err := tun.Read(buffs, sizes, 0); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	txBytes, rxBytes, txPackets, rxPackets := routeCountsFor(t, sc, "10.0.0.0/8")
+	if rxPackets != 0 || rxBytes != 0 {
+		t.Errorf("the node's own egress was counted as rx: rxBytes=%d rxPackets=%d; want 0, 0",
+			rxBytes, rxPackets)
+	}
+	if txPackets != 0 || txBytes != 0 {
+		t.Errorf("the node's own egress was counted as tx: txBytes=%d txPackets=%d; want 0, 0",
+			txBytes, txPackets)
+	}
+}
+
+// TestWrapperSubnetRouteCountingForwardedStillCounted is the companion to
+// TestWrapperSubnetRouteCountingOwnTraffic: excluding the node's own traffic
+// must not also exclude the forwarded traffic these counters exist for.
+func TestWrapperSubnetRouteCountingForwardedStillCounted(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSelfTailscaleAddrs(netip.MustParseAddr("100.64.0.1"), netip.Addr{})
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	sc := tun.subnetCounters()
+
+	// Forwarded: from a subnet host, to a *peer*, not to this node.
+	pkt := udp4("10.1.2.3", "100.64.0.2", 456, 123)
+	go func() { chtun.Outbound <- pkt }()
+
+	var buf [MaxPacketSize]byte
+	buffs := [][]byte{buf[:]}
+	sizes := make([]int, 1)
+	if _, err := tun.Read(buffs, sizes, 0); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	_, rxBytes, _, rxPackets := routeCountsFor(t, sc, "10.0.0.0/8")
+	if rxPackets != 1 || rxBytes != int64(len(pkt)) {
+		t.Errorf("forwarded traffic: rxBytes=%d rxPackets=%d; want %d, 1", rxBytes, rxPackets, len(pkt))
+	}
+}
+
+// TestWrapperSubnetRouteCountingStalePacket checks that the Read hook does not
+// attribute traffic using addresses left over from a previous packet. Parsed is
+// pool-reused across the loop and Decode does not clear Src/Dst when it bails
+// out early, so a hook that reads them without an IPVersion check can count a
+// stale address.
+func TestWrapperSubnetRouteCountingStalePacket(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	chtun, tun := newChannelTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSelfTailscaleAddrs(netip.MustParseAddr("100.64.0.1"), netip.Addr{})
+	tun.SetSubnetRoutes([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	sc := tun.subnetCounters()
+
+	// A real forwarded packet, then a garbage one in the same batch. The
+	// second must not be counted against the first's route.
+	good := udp4("10.1.2.3", "100.64.0.2", 456, 123)
+	junk := []byte{0x45, 0x74, 0x63, 0x70} // decodes as IPVersion 0
+	go func() {
+		chtun.Outbound <- good
+		chtun.Outbound <- junk
+	}()
+
+	var bufs [2][MaxPacketSize]byte
+	buffs := [][]byte{bufs[0][:], bufs[1][:]}
+	sizes := make([]int, 2)
+	for range 2 {
+		if _, err := tun.Read(buffs, sizes, 0); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+	}
+
+	_, rxBytes, _, rxPackets := routeCountsFor(t, sc, "10.0.0.0/8")
+	if rxPackets != 1 || rxBytes != int64(len(good)) {
+		t.Errorf("after one good and one undecodable packet: rxBytes=%d rxPackets=%d; want %d, 1",
+			rxBytes, rxPackets, len(good))
+	}
+}
+
+// TestSubnetCountersHotPathNoAllocs pins the real hooks, not just the
+// forAddr+add pair, to zero allocations. A prefix.String() creeping back into
+// countSubnetRouteTraffic would allocate twice per packet.
+func TestSubnetCountersHotPathNoAllocs(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	_, tun := newFakeTUN(t.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSelfTailscaleAddrs(netip.MustParseAddr("100.64.0.1"), netip.Addr{})
+	tun.SetSubnetRoutes(mustPrefixes(t, []string{"10.0.0.0/8", "10.1.0.0/16", "192.168.0.0/24"}))
+
+	pkt := udp4("100.64.0.2", "10.1.2.3", 123, 456)
+	buf := make([]byte, PacketStartOffset+MaxPacketSize)
+	copy(buf[PacketStartOffset:], pkt)
+
+	// The tdevWrite/injectedRead hook, including its decode and the active
+	// check the packet path actually runs.
+	if got := testing.AllocsPerRun(1000, func() {
+		if sc := tun.subnetCountersActive(); sc != nil {
+			tun.countSubnetRoutePacket(sc, buf[PacketStartOffset:], false)
+		}
+	}); got != 0 {
+		t.Errorf("countSubnetRoutePacket allocated %v times per run, want 0", got)
+	}
+
+	// And the Read hook, which counts an already-decoded packet.
+	var p packet.Parsed
+	p.Decode(buf[PacketStartOffset:])
+	if got := testing.AllocsPerRun(1000, func() {
+		if sc := tun.subnetCountersActive(); sc != nil {
+			tun.countSubnetRouteParsed(sc, &p, true)
+		}
+	}); got != 0 {
+		t.Errorf("countSubnetRouteParsed allocated %v times per run, want 0", got)
+	}
+
+	// The disabled path must be free too: nodes that have not opted in pay
+	// only the nil check.
+	tun.SetSubnetRoutes(nil)
+	if got := testing.AllocsPerRun(1000, func() {
+		if sc := tun.subnetCountersActive(); sc != nil {
+			t.Fatal("counting is still active after SetSubnetRoutes(nil)")
+		}
+	}); got != 0 {
+		t.Errorf("the disabled check allocated %v times per run, want 0", got)
+	}
+}
+
 func BenchmarkSubnetCountersAdd(b *testing.B) {
 	b.ReportAllocs()
 	sc := newSubnetCounters(new(usermetric.Registry))
-	sc.setRoutes([]netip.Prefix{
-		netip.MustParsePrefix("10.0.0.0/8"),
-		netip.MustParsePrefix("10.1.0.0/16"),
-		netip.MustParsePrefix("192.168.0.0/24"),
-		netip.MustParsePrefix("172.16.0.0/12"),
-		netip.MustParsePrefix("10.2.0.0/16"),
-	})
+	sc.setRoutes(benchRoutes)
 	addr := netip.MustParseAddr("10.1.2.3")
 	for range b.N {
 		if rc := sc.forAddr(addr); rc != nil {
 			rc.add(1500, false)
+		}
+	}
+}
+
+var benchRoutes = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("10.1.0.0/16"),
+	netip.MustParsePrefix("192.168.0.0/24"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("10.2.0.0/16"),
+}
+
+// BenchmarkSubnetCountersHook measures the whole per-packet hook as the write
+// path runs it: the active check, the decode, the forwarded-traffic tests, the
+// lookup, and the adds.
+func BenchmarkSubnetCountersHook(b *testing.B) {
+	b.ReportAllocs()
+	bus := eventbustest.NewBus(b)
+	_, tun := newFakeTUN(b.Logf, bus, false)
+	defer tun.Close()
+
+	tun.SetSelfTailscaleAddrs(netip.MustParseAddr("100.64.0.1"), netip.Addr{})
+	tun.SetSubnetRoutes(benchRoutes)
+
+	pkt := udp4("100.64.0.2", "10.1.2.3", 123, 456)
+	buf := make([]byte, PacketStartOffset+MaxPacketSize)
+	copy(buf[PacketStartOffset:], pkt)
+	body := buf[PacketStartOffset:]
+
+	for range b.N {
+		if sc := tun.subnetCountersActive(); sc != nil {
+			tun.countSubnetRoutePacket(sc, body, false)
+		}
+	}
+}
+
+// BenchmarkSubnetCountersHookDisabled measures what a node that has not opted
+// in pays: the nil check and nothing else.
+func BenchmarkSubnetCountersHookDisabled(b *testing.B) {
+	b.ReportAllocs()
+	bus := eventbustest.NewBus(b)
+	_, tun := newFakeTUN(b.Logf, bus, false)
+	defer tun.Close()
+
+	pkt := udp4("100.64.0.2", "10.1.2.3", 123, 456)
+	for range b.N {
+		if sc := tun.subnetCountersActive(); sc != nil {
+			tun.countSubnetRoutePacket(sc, pkt, false)
 		}
 	}
 }
