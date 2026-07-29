@@ -31,6 +31,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/ts2021"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/useproxy"
 	"tailscale.com/health"
@@ -315,6 +316,7 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&ts2021Args.aceHost, "ace", "", "if non-empty, use this ACE server IP/hostname as a candidate path")
 					fs.StringVar(&ts2021Args.dialPlanJSONFile, "dial-plan", "", "if non-empty, use this JSON file to configure the dial plan")
 					fs.StringVar(&ts2021Args.connectIP, "connect-ip", "", "if non-empty, dial this IP for the noise connection instead of resolving the host, keeping the host for the key fetch, SNI, and Host header")
+					fs.StringVar(&ts2021Args.forcePort, "force-port", "", "if non-empty (\"80\" or \"443\"), only dial the noise connection on this port; by default port 80 is tried first with a port 443 fallback")
 					return fs
 				})(),
 			},
@@ -1035,11 +1037,26 @@ var ts2021Args struct {
 
 	dialPlanJSONFile string // if non-empty, path to JSON file [tailcfg.ControlDialPlan] JSON
 	connectIP        string // if non-empty, IP to dial for the noise connection instead of resolving host
+	forcePort        string // if non-empty ("80" or "443"), only dial the noise connection on this port
 }
 
 func runTS2021(ctx context.Context, args []string) error {
 	log.SetOutput(Stdout)
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	switch ts2021Args.forcePort {
+	case "":
+	case "443":
+		// Make the controlhttp dialer skip its plaintext port 80 attempt
+		// and go straight to TLS. The dialFunc guard below is then just a
+		// backstop.
+		envknob.Setenv("TS_FORCE_NOISE_443", "true")
+	case "80":
+		// No dialer knob exists to disable the port 443 fallback, so the
+		// dialFunc guard below enforces this one.
+	default:
+		return fmt.Errorf("invalid --force-port value %q; must be \"80\" or \"443\"", ts2021Args.forcePort)
+	}
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
 
@@ -1090,8 +1107,11 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	dialFunc := func(ctx context.Context, network, address string) (net.Conn, error) {
-		if ts2021Args.connectIP != "" {
-			if _, port, err := net.SplitHostPort(address); err == nil {
+		if _, port, err := net.SplitHostPort(address); err == nil {
+			if ts2021Args.forcePort != "" && port != ts2021Args.forcePort {
+				return nil, fmt.Errorf("dial to port %s disabled by --force-port=%s", port, ts2021Args.forcePort)
+			}
+			if ts2021Args.connectIP != "" {
 				address = net.JoinHostPort(ts2021Args.connectIP, port)
 			}
 		}
