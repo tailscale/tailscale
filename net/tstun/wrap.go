@@ -223,13 +223,18 @@ type Wrapper struct {
 
 	// subnetRouteCounters counts forwarded traffic per advertised subnet
 	// route. It is nil until SetSubnetRoutes is called with at least one
-	// countable route, so nodes that are not subnet routers, and nodes that
-	// have not opted in, pay only a nil load on the packet path.
+	// countable route, and stays non-nil afterwards even while counting is
+	// disabled, because it owns registrations that cannot be undone.
 	//
-	// Once created it stays non-nil, because it owns registrations that cannot
-	// be undone; use [Wrapper.subnetCountersActive] on the packet path, which
-	// also covers the currently-disabled case.
+	// The packet path does not read it: it reads subnetRouteTable, which is
+	// non-nil exactly when traffic should be counted. So a node that is not a
+	// subnet router, or has not opted in, pays a single nil atomic load.
 	subnetRouteCounters atomic.Pointer[subnetCounters]
+
+	// subnetRouteTable is the published lookup table of subnetRouteCounters,
+	// or nil when no countable route is advertised. See
+	// [Wrapper.subnetCountersActive].
+	subnetRouteTable atomicPrefixTable
 
 	// selfAddrs holds this node's own Tailscale addresses, used by the subnet
 	// counters to tell forwarded traffic from the node's own. Nil until
@@ -936,8 +941,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// Traffic leaving the TUN toward a tailnet peer: on a subnet router
 		// this is a response coming back out of the subnet, so it is rx.
 		// p is already decoded here, so attribute it without re-parsing.
-		if sc := t.subnetCountersActive(); sc != nil {
-			t.countSubnetRouteParsed(sc, p, true)
+		if tbl := t.subnetCountersActive(); tbl != nil {
+			t.countSubnetRouteParsed(tbl, p, true)
 		}
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
@@ -1118,9 +1123,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 	}
 	// Injected packets travel the same direction as Read: out to a tailnet
 	// peer, i.e. rx from the subnet router's point of view.
-	if sc := t.subnetCountersActive(); sc != nil {
+	if tbl := t.subnetCountersActive(); tbl != nil {
 		for i := range n {
-			t.countSubnetRoutePacket(sc, outBuffs[i][offset:offset+sizes[i]], true)
+			t.countSubnetRoutePacket(tbl, outBuffs[i][offset:offset+sizes[i]], true)
 		}
 	}
 
@@ -1317,9 +1322,9 @@ func (t *Wrapper) tdevWrite(buffs [][]byte, offset int) (int, error) {
 	}
 	// Traffic entering the TUN from a tailnet peer: on a subnet router this is
 	// sent onward into the subnet, so it is tx.
-	if sc := t.subnetCountersActive(); sc != nil {
+	if tbl := t.subnetCountersActive(); tbl != nil {
 		for i := range buffs {
-			t.countSubnetRoutePacket(sc, buffs[i][offset:], false)
+			t.countSubnetRoutePacket(tbl, buffs[i][offset:], false)
 		}
 	}
 	return t.tdev.Write(buffs, offset)
@@ -1567,11 +1572,10 @@ func (t *Wrapper) SetSubnetRoutes(routes []netip.Prefix) {
 		if !anyCountableRoute(routes) {
 			// Never enabled and nothing to enable it for. Don't create the
 			// counters at all, so nodes that are not subnet routers, and nodes
-			// that have not opted in, publish no series and pay only a nil
-			// load on the packet path.
+			// that have not opted in, publish no series.
 			return
 		}
-		sc = newSubnetCounters(t.usermetrics)
+		sc = newSubnetCounters(t.usermetrics, &t.subnetRouteTable)
 		t.subnetRouteCounters.Store(sc)
 	}
 	sc.setRoutes(routes)
@@ -1583,18 +1587,13 @@ func (t *Wrapper) subnetCounters() *subnetCounters {
 	return t.subnetRouteCounters.Load()
 }
 
-// subnetCountersActive returns the per-route counters if traffic should be
-// counted right now, or nil if per-route counting is disabled or no countable
-// route is advertised.
+// subnetCountersActive returns the lookup table to attribute packets with, or
+// nil if per-route counting is disabled or no countable route is advertised.
 //
-// This is the packet path's gate: two nil-able atomic loads, no decode and no
+// This is the packet path's gate: one nil-able atomic load, no decode and no
 // lookup when counting is off.
-func (t *Wrapper) subnetCountersActive() *subnetCounters {
-	sc := t.subnetRouteCounters.Load()
-	if sc == nil || sc.table.load() == nil {
-		return nil
-	}
-	return sc
+func (t *Wrapper) subnetCountersActive() *bart.Table[*routeCounters] {
+	return t.subnetRouteTable.load()
 }
 
 // SubnetRouteCountingEnabledForTest reports whether per-route subnet load
@@ -1649,7 +1648,7 @@ func (t *Wrapper) IsSelfTailscaleAddrForTest(a netip.Addr) bool {
 //
 // Addresses outside every advertised route are not counted, which excludes exit
 // node traffic.
-func (t *Wrapper) countSubnetRouteParsed(sc *subnetCounters, p *packet.Parsed, rx bool) {
+func (t *Wrapper) countSubnetRouteParsed(tbl *bart.Table[*routeCounters], p *packet.Parsed, rx bool) {
 	if p.IPVersion == 0 {
 		// Decode bailed out. Src and Dst are not cleared on that path and p is
 		// pool-reused across packets, so they may hold a previous packet's
@@ -1676,7 +1675,7 @@ func (t *Wrapper) countSubnetRouteParsed(sc *subnetCounters, p *packet.Parsed, r
 	if t.isSelfTailscaleAddr(tailnetEnd) {
 		return
 	}
-	if rc := sc.forAddr(remote); rc != nil {
+	if rc, ok := tbl.Lookup(remote); ok {
 		// p.TotalLen(), not len(p.Buffer()): the buffer may have trailing
 		// slack, e.g. the full-MTU buffers wireguard-go hands Write.
 		rc.add(p.TotalLen(), rx)
@@ -1685,10 +1684,10 @@ func (t *Wrapper) countSubnetRouteParsed(sc *subnetCounters, p *packet.Parsed, r
 
 // countSubnetRoutePacket decodes just enough of b to attribute it to an
 // advertised subnet route.
-func (t *Wrapper) countSubnetRoutePacket(sc *subnetCounters, b []byte, rx bool) {
+func (t *Wrapper) countSubnetRoutePacket(tbl *bart.Table[*routeCounters], b []byte, rx bool) {
 	var p packet.Parsed
 	p.Decode(b)
-	t.countSubnetRouteParsed(sc, &p, rx)
+	t.countSubnetRouteParsed(tbl, &p, rx)
 }
 
 var (

@@ -112,9 +112,12 @@ type subnetCounters struct {
 	// route containing it. setRoutes swaps in a wholly new table rather than
 	// mutating the published one, so the packet path needs no locking.
 	//
-	// It is nil when no countable route is advertised, which is how the packet
-	// path skips its work: see [Wrapper.subnetCountersActive].
-	table atomicPrefixTable
+	// It holds nil when no countable route is advertised, which is how the
+	// packet path skips its work. It is owned by the [Wrapper] rather than
+	// stored inline here so that the packet path reaches it with a single
+	// atomic load, without first loading the subnetCounters: a node that has
+	// not opted in must pay no more than one nil check per packet.
+	table *atomicPrefixTable
 
 	// counters holds the counters for every route advertised recently,
 	// including withdrawn ones, up to maxRetainedRoutes entries.
@@ -156,9 +159,11 @@ func (a *atomicPrefixTable) store(t *bart.Table[*routeCounters]) {
 }
 
 // newSubnetCounters returns a subnetCounters that publishes its per-route
-// series into reg. It starts with no routes, i.e. inactive.
-func newSubnetCounters(reg *usermetric.Registry) *subnetCounters {
+// series into reg and its lookup table into table. It starts with no routes,
+// i.e. inactive.
+func newSubnetCounters(reg *usermetric.Registry, table *atomicPrefixTable) *subnetCounters {
 	sc := &subnetCounters{
+		table:    table,
 		counters: map[netip.Prefix]*routeCounters{},
 		active:   map[netip.Prefix]bool{},
 	}

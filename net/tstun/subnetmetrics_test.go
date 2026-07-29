@@ -16,6 +16,12 @@ import (
 	"tailscale.com/util/usermetric"
 )
 
+// newTestSubnetCounters returns a standalone subnetCounters with its own
+// registry and lookup table, for tests that don't need a whole Wrapper.
+func newTestSubnetCounters() *subnetCounters {
+	return newSubnetCounters(new(usermetric.Registry), new(atomicPrefixTable))
+}
+
 // routeCountsFor returns the four counter values for the given route, or
 // zeroes if the route is not being counted.
 func routeCountsFor(t *testing.T, sc *subnetCounters, route string) (txBytes, rxBytes, txPackets, rxPackets int64) {
@@ -85,7 +91,7 @@ func TestSubnetCountersAttribution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sc := newSubnetCounters(new(usermetric.Registry))
+			sc := newTestSubnetCounters()
 			sc.setRoutes(mustPrefixes(t, tt.routes))
 
 			remote := netip.MustParseAddr(tt.remote)
@@ -121,7 +127,7 @@ func mustPrefixes(t *testing.T, ss []string) []netip.Prefix {
 }
 
 func TestSubnetCountersDirections(t *testing.T) {
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16"}))
 
 	// Two packets into the subnet, one back out of it.
@@ -145,8 +151,7 @@ func TestSubnetCountersDirections(t *testing.T) {
 }
 
 func TestSubnetCountersRouteWithdrawal(t *testing.T) {
-	reg := new(usermetric.Registry)
-	sc := newSubnetCounters(reg)
+	sc := newTestSubnetCounters()
 
 	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
 	sc.forAddr(netip.MustParseAddr("10.1.2.3")).add(100, false)
@@ -196,7 +201,7 @@ func seriesCount(sc *subnetCounters) int {
 // implementation formats the prefix into a label value on every packet, which
 // costs two allocations and roughly 4.7x the time; see the design doc.
 func TestSubnetCountersNoAllocs(t *testing.T) {
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 	sc.setRoutes(mustPrefixes(t, []string{"10.0.0.0/8", "10.1.0.0/16", "192.168.0.0/24"}))
 	addr := netip.MustParseAddr("10.1.2.3")
 
@@ -354,7 +359,7 @@ func aggregateRegisteredCount() int {
 // the aggregates, which are counters) but unbounded retention lets an
 // unexpectedly churning route set grow memory without limit.
 func TestSubnetCountersRetentionBound(t *testing.T) {
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 
 	// Churn far more distinct routes than the cap, counting a byte on each so
 	// that eviction has to preserve something.
@@ -400,7 +405,7 @@ func TestSubnetCountersExitNodeOnlyNotEnabled(t *testing.T) {
 // countSubnetRouteTraffic can never attribute a packet to one, and publishing
 // four permanently-zero series would read as "this route is idle".
 func TestSubnetCountersViaRouteExcluded(t *testing.T) {
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 	// 4via6 form of 10.1.0.0/16 through site 7.
 	via := netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:0/112")
 	if !tsaddr.IsViaPrefix(via) {
@@ -573,7 +578,7 @@ func TestSubnetCountersHotPathNoAllocs(t *testing.T) {
 
 func BenchmarkSubnetCountersAdd(b *testing.B) {
 	b.ReportAllocs()
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 	sc.setRoutes(benchRoutes)
 	addr := netip.MustParseAddr("10.1.2.3")
 	for range b.N {
@@ -777,7 +782,7 @@ func TestWrapperSubnetRouteCountingOffByDefault(t *testing.T) {
 // The aggregates are process-global and other tests in this package register
 // counters with them, so this compares deltas rather than absolute values.
 func TestSubnetCountersAggregateAgreement(t *testing.T) {
-	sc := newSubnetCounters(new(usermetric.Registry))
+	sc := newTestSubnetCounters()
 	sc.setRoutes(mustPrefixes(t, []string{"10.1.0.0/16", "192.168.0.0/24"}))
 
 	base := [4]int64{
