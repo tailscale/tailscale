@@ -643,3 +643,47 @@ func TestDERPAppNamePlumbing(t *testing.T) {
 		t.Fatal("timeout waiting for engine to connect to the test DERP server")
 	}
 }
+
+// TestReconfigSubnetRouteLoadMetrics verifies that the CollectLoadMetrics
+// opt-in reaches the TUN wrapper, and that per-route counting stays off
+// without it.
+func TestReconfigSubnetRouteLoadMetrics(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	reg := new(usermetric.Registry)
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, ht, reg, bus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+
+	ue := e.(*userspaceEngine)
+	routes := []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}
+
+	// Opted out: no counting, even though routes are advertised.
+	if err := ue.Reconfig(&wgcfg.Config{}, &router.Config{SubnetRoutes: routes}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if got := ue.tundev.SubnetRouteCountingEnabledForTest(); got {
+		t.Error("per-route counting is enabled without CollectLoadMetrics")
+	}
+
+	// Opted in: counting enabled.
+	if err := ue.Reconfig(&wgcfg.Config{}, &router.Config{
+		SubnetRoutes:       routes,
+		CollectLoadMetrics: true,
+	}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if got := ue.tundev.SubnetRouteCountingEnabledForTest(); !got {
+		t.Error("per-route counting is disabled with CollectLoadMetrics set")
+	}
+
+	// Opting back out disables it again.
+	if err := ue.Reconfig(&wgcfg.Config{}, &router.Config{SubnetRoutes: routes}, &dns.Config{}); err != nil {
+		t.Fatalf("Reconfig: %v", err)
+	}
+	if got := ue.tundev.SubnetRouteCountingEnabledForTest(); got {
+		t.Error("per-route counting stayed enabled after opting out")
+	}
+}

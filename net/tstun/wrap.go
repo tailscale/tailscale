@@ -1566,6 +1566,12 @@ func (t *Wrapper) subnetCounters() *subnetCounters {
 	return t.subnetRouteCounters.Load()
 }
 
+// SubnetRouteCountingEnabledForTest reports whether per-route subnet load
+// metrics are currently being collected.
+func (t *Wrapper) SubnetRouteCountingEnabledForTest() bool {
+	return t.subnetRouteCounters.Load() != nil
+}
+
 // countSubnetRouteTraffic attributes a packet to an advertised subnet route,
 // if it is forwarded traffic for one.
 //
