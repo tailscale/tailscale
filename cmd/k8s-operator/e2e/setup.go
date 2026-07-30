@@ -42,6 +42,7 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -396,9 +397,10 @@ func runTests(m *testing.M) (int, error) {
 		}
 		logger.Infof("using OSS image tag: %q", ossTag)
 		ossImageToTarget := map[string]string{
-			"local/k8s-operator": "publishdevoperator",
-			"local/tailscale":    "publishdevimage",
-			"local/k8s-proxy":    "publishdevproxy",
+			"local/k8s-operator":   "publishdevoperator",
+			"local/tailscale":      "publishdevimage",
+			"local/k8s-proxy":      "publishdevproxy",
+			"local/k8s-nameserver": "publishdevnameserver",
 		}
 		for img, target := range ossImageToTarget {
 			if err := buildImage(ctx, ossDir, img, target, ossTag, caPaths); err != nil {
@@ -500,6 +502,14 @@ func runTests(m *testing.M) (int, error) {
 
 	if err := applyDefaultProxyClass(ctx, logger, kubeClient); err != nil {
 		return 0, fmt.Errorf("failed to apply default ProxyClass: %w", err)
+	}
+
+	nameserverImg := &tsapi.NameserverImage{
+		Repo: "local/k8s-nameserver",
+		Tag:  ossTag,
+	}
+	if err := deployNameserver(ctx, logger, kubeClient, nameserverImg); err != nil {
+		return 0, fmt.Errorf("failed to deploy nameserver: %w", err)
 	}
 
 	caps := tailscale.KeyCapabilities{}
@@ -725,6 +735,40 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 	return nil
 }
 
+func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.Client, img *tsapi.NameserverImage) error {
+	dc := &tsapi.DNSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "dns"},
+		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
+	}
+	if err := createOrUpdate(ctx, cl, dc); err != nil {
+		return fmt.Errorf("failed to create DNSConfig: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	for {
+		if err := cl.Get(ctx, client.ObjectKeyFromObject(dc), dc); err != nil {
+			return fmt.Errorf("failed to get DNSConfig: %w", err)
+		}
+		deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: "tailscale"}}
+		err := cl.Get(ctx, client.ObjectKeyFromObject(deploy), deploy)
+		// The operator marks the DNSConfig ready once the nameserver Service has
+		// a ClusterIP, before the Pod is up, so also wait for the Deployment to
+		// be available.
+		if tsoperator.DNSCfgIsReady(dc) && dc.Status.Nameserver != nil && dc.Status.Nameserver.IP != "" &&
+			err == nil && deploy.Status.AvailableReplicas >= 1 {
+			logger.Infof("nameserver ready; Service IP %s", dc.Status.Nameserver.IP)
+			return nil
+		}
+		logger.Info("waiting for nameserver to be ready...")
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for nameserver to be ready")
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // forwardLocalPortToPod sets up port forwarding to the specified Pod and remote port.
 // It runs until the provided ctx is done.
 func forwardLocalPortToPod(ctx context.Context, logger *zap.SugaredLogger, cfg *rest.Config, ns, podName string, port int) error {
@@ -873,7 +917,7 @@ func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) er
 func detectClusterIPFamilies(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("ipfamily-probe"),
+			Name:      "ipfamily-probe",
 			Namespace: ns,
 		},
 		Spec: corev1.ServiceSpec{
