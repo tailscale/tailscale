@@ -245,6 +245,56 @@ func TestTrimSuffix(t *testing.T) {
 	}
 }
 
+func TestValidLabel(t *testing.T) {
+	tests := []struct {
+		label   string
+		wantErr string
+	}{
+		{"", "empty DNS label"},
+		{"example", ""},
+		{" example", `must start with a letter or number`},
+		{"example ", `must end with a letter or number`},
+		{strings.Repeat("a", 63), ""},
+		{strings.Repeat("a", 64), `is too long, max length is 63 bytes`},
+		{"what🤦xx", "contains invalid character"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.label, func(t *testing.T) {
+			err := ValidLabel(test.label)
+			if (err == nil) != (test.wantErr == "") || (err != nil && !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("ValidLabel(%s)=%v; expected %v", test.label, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidLabelLike(t *testing.T) {
+	tests := []struct {
+		labelLike string
+		maxLength int
+		wantErr   string
+	}{
+		{"", 63, "empty DNS label"},
+		{"example", 63, ""},
+		{" example", 63, `must start with a letter or number`},
+		{"example ", 63, `must end with a letter or number`},
+		{strings.Repeat("a", 63), 63, ""},
+		{strings.Repeat("a", 64), 63, `is too long, max length is 63 bytes`},
+		{strings.Repeat("a", 65), 64, `is too long, max length is 64 bytes`},
+		{"what🤦xx", 63, "contains invalid character"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.labelLike, func(t *testing.T) {
+			err := ValidLabelLike(test.labelLike, test.maxLength)
+			if (err == nil) != (test.wantErr == "") || (err != nil && !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("ValidLabelLike(%s)=%v; expected %v", test.labelLike, err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidHostname(t *testing.T) {
 	tests := []struct {
 		hostname string

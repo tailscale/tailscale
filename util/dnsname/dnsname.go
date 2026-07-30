@@ -109,11 +109,19 @@ func (f FQDN) Parent() FQDN {
 // ValidLabel reports whether label is a valid DNS label. All errors are
 // [vizerror.Error].
 func ValidLabel(label string) error {
+	return ValidLabelLike(label, maxLabelLength)
+}
+
+// ValidLabelLike reports whether label contains DNS-valid characters
+// only, adheres to a given maximum length, and starts and ends with
+// a letter or number. For strict DNS-validity use [ValidLabel].
+// All errors are [vizerror.Error].
+func ValidLabelLike(label string, maxLen int) error {
 	if len(label) == 0 {
 		return vizerror.New("empty DNS label")
 	}
-	if len(label) > maxLabelLength {
-		return vizerror.Errorf("%q is too long, max length is %d bytes", label, maxLabelLength)
+	if len(label) > maxLen {
+		return vizerror.Errorf("%q is too long, max length is %d bytes", label, maxLen)
 	}
 	if !isalphanum(label[0]) {
 		return vizerror.Errorf("%q is not a valid DNS label: must start with a letter or number", label)
@@ -121,7 +129,8 @@ func ValidLabel(label string) error {
 	if !isalphanum(label[len(label)-1]) {
 		return vizerror.Errorf("%q is not a valid DNS label: must end with a letter or number", label)
 	}
-	if len(label) < 2 {
+	if len(label) <= 2 {
+		// Return early because we've already checked start and end characters (the only 2) are alphanumeric.
 		return nil
 	}
 	for i := 1; i < len(label)-1; i++ {
