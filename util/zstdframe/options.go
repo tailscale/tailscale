@@ -10,6 +10,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"tailscale.com/util/must"
+	"tailscale.com/util/testenv"
 )
 
 // Option is an option that can be passed to [AppendEncode] or [AppendDecode].
@@ -104,6 +105,17 @@ func (lowMemory) isOption() {}
 // By default, more memory used for better speed.
 func LowMemory(low bool) Option { return lowMemory(low) }
 
+// poolCoders reports whether encoders and decoders should be pooled for
+// reuse across calls.
+//
+// Pooling is disabled within testing/synctest bubbles. The zstd Encoder and
+// Decoder types use channels internally, and the Go runtime kills the
+// process when a channel created within a bubble is used from outside that
+// bubble. A process-wide pool shared between bubbled and non-bubbled
+// goroutines does exactly that, so bubbled goroutines instead construct a
+// fresh coder per call and let the GC reclaim it.
+func poolCoders() bool { return !testenv.InSynctestBubble() }
+
 var encoderPools sync.Map // map[encoderOptions]*sync.Pool -> *zstd.Encoder
 
 type encoderOptions struct {
@@ -133,12 +145,16 @@ func getEncoder(opts ...Option) encoder {
 		}
 	}
 
-	vpool, ok := encoderPools.Load(eopts)
-	if !ok {
-		vpool, _ = encoderPools.LoadOrStore(eopts, new(sync.Pool))
+	var pool *sync.Pool
+	var enc *zstd.Encoder
+	if poolCoders() {
+		vpool, ok := encoderPools.Load(eopts)
+		if !ok {
+			vpool, _ = encoderPools.LoadOrStore(eopts, new(sync.Pool))
+		}
+		pool = vpool.(*sync.Pool)
+		enc, _ = pool.Get().(*zstd.Encoder)
 	}
-	pool := vpool.(*sync.Pool)
-	enc, _ := pool.Get().(*zstd.Encoder)
 	if enc == nil {
 		var noopts int
 		zopts := [...]zstd.EOption{
@@ -167,7 +183,11 @@ func getEncoder(opts ...Option) encoder {
 	return encoder{pool, enc}
 }
 
-func putEncoder(e encoder) { e.pool.Put(e.Encoder) }
+func putEncoder(e encoder) {
+	if e.pool != nil {
+		e.pool.Put(e.Encoder)
+	}
+}
 
 var decoderPools sync.Map // map[decoderOptions]*sync.Pool -> *zstd.Decoder
 
@@ -205,12 +225,16 @@ func getDecoder(opts ...Option) decoder {
 		}
 	}
 
-	vpool, ok := decoderPools.Load(dopts)
-	if !ok {
-		vpool, _ = decoderPools.LoadOrStore(dopts, new(sync.Pool))
+	var pool *sync.Pool
+	var dec *zstd.Decoder
+	if poolCoders() {
+		vpool, ok := decoderPools.Load(dopts)
+		if !ok {
+			vpool, _ = decoderPools.LoadOrStore(dopts, new(sync.Pool))
+		}
+		pool = vpool.(*sync.Pool)
+		dec, _ = pool.Get().(*zstd.Decoder)
 	}
-	pool := vpool.(*sync.Pool)
-	dec, _ := pool.Get().(*zstd.Decoder)
 	if dec == nil {
 		var noopts int
 		zopts := [...]zstd.DOption{
@@ -231,7 +255,11 @@ func getDecoder(opts ...Option) decoder {
 	return decoder{pool, dec, maxSize}
 }
 
-func putDecoder(d decoder) { d.pool.Put(d.Decoder) }
+func putDecoder(d decoder) {
+	if d.pool != nil {
+		d.pool.Put(d.Decoder)
+	}
+}
 
 func (d decoder) DecodeAll(src, dst []byte) ([]byte, error) {
 	// We only configure DecodeAll to enforce MaxDecodedSize by powers-of-two.
