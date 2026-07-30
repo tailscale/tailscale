@@ -401,18 +401,18 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
 
 	if !sameNode {
+		// Load an empty configuration to disable conn25 entirely, since we
+		// don't yet know that it is configured on the new profile. We will
+		// know once [extension.onSelfChange] is called with a new
+		// configuration, if any.
+		e.conn25.reconfig(&config{})
+
 		// If a client changes profiles and becomes a different node, all of its
 		// existing flows lose meaning, and we should delete them so that the
 		// settings of our new environment can take over.
 		if e.clearAllDatapathFlows != nil {
 			e.clearAllDatapathFlows()
 		}
-
-		// Load an empty configuration to disable conn25 entirely, since we
-		// don't yet know that it is configured on the new profile. We will
-		// know once [extension.onSelfChange] is called with a new
-		// configuration, if any.
-		e.conn25.reconfig(&config{})
 
 		// Clear internal state, like address assignments for clients and
 		// transit IP mappings for connectors.
@@ -776,6 +776,7 @@ type client struct {
 	addrsCh   chan addrs
 	getIPSets func() ipSets
 
+	// Remember to add new fields to [client.reset] if needed.
 	mu              sync.Mutex // protects the fields below
 	v4MagicIPPool   *ippool
 	v4TransitIPPool *ippool
