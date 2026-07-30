@@ -408,14 +408,9 @@ func envForUser(u *userMeta) []string {
 	}
 }
 
-// acceptEnvPair reports whether the environment variable key=value pair
-// should be accepted from the client. It uses the same default as OpenSSH
-// AcceptEnv.
-func acceptEnvPair(kv string) bool {
-	k, _, ok := strings.Cut(kv, "=")
-	if !ok {
-		return false
-	}
-	_ = k
-	return true // permit anything on plan9 during bringup, for debugging at least
+// acceptEnvVar reports whether the environment variable "key" should be
+// accepted from the client. It uses the same default as OpenSSH AcceptEnv.
+func acceptEnvVar(kv string) bool {
+	// Permit anything on plan9 during bringup, for debugging at least
+	return true
 }

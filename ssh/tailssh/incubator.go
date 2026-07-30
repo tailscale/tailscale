@@ -667,6 +667,23 @@ func handleSSHInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 		return err
 	}
 
+	// For each locale environment variable, if we don't have this set in
+	// our environ already, set it. This is technically O(n^2), but there's
+	// usually very few locale environment variables, so it shouldn't be a
+	// problem.
+	root, err := os.OpenRoot("/")
+	if err != nil {
+		return fmt.Errorf("opening root directory: %w", err)
+	}
+	for k, v := range readLocale(root) {
+		found := slices.ContainsFunc(environ, func(kv string) bool {
+			return strings.HasPrefix(kv, k+"=")
+		})
+		if !found {
+			environ = append(environ, k+"="+v)
+		}
+	}
+
 	args := shellArgs(ia.isShell, ia.cmd)
 	dlogf("running %s %q", ia.loginShell, args)
 	cmd := newCommand(ia.hasTTY, ia.loginShell, environ, args)
@@ -844,22 +861,34 @@ func (ss *sshSession) launchProcess() error {
 		return err
 	}
 
-	cmd := ss.cmd
-	cmd.Env = envForUser(ss.conn.localUser)
+	env := envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
-		if acceptEnvPair(kv) {
-			cmd.Env = append(cmd.Env, kv)
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if acceptEnvVar(k) {
+			env[k] = v
 		}
 	}
 
+	// NOTE: these environment variables are actually load-bearing in a
+	// non-obvious way: on Linux distros that compile Bash with the
+	// `SSH_SOURCE_BASHRC` option, the presence of the SSH_CLIENT
+	// environment variable causes Bash to source ~/.bashrc even for
+	// non-interactive shells, which is necessary for things like setting
+	// up the PATH correctly.
 	ci := ss.conn.info
-	cmd.Env = append(cmd.Env,
-		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.Addr(), ci.src.Port(), ci.dst.Port()),
-		fmt.Sprintf("SSH_CONNECTION=%s %d %s %d", ci.src.Addr(), ci.src.Port(), ci.dst.Addr(), ci.dst.Port()),
-	)
+	env["SSH_CLIENT"] = fmt.Sprintf("%s %d %d", ci.src.Addr(), ci.src.Port(), ci.dst.Port())
+	env["SSH_CONNECTION"] = fmt.Sprintf("%s %d %s %d", ci.src.Addr(), ci.src.Port(), ci.dst.Addr(), ci.dst.Port())
 
 	if ss.agentListener != nil {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
+		env["SSH_AUTH_SOCK"] = ss.agentListener.Addr().String()
+	}
+
+	cmd := ss.cmd
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
 
 	ptyReq, winCh, isPty := ss.Pty()
@@ -1098,13 +1127,19 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return ss.cmd.Start()
 }
 
-func envForUser(u *userMeta) []string {
-	return []string{
-		fmt.Sprintf("SHELL=%s", u.LoginShell()),
-		fmt.Sprintf("USER=%s", u.Username),
-		fmt.Sprintf("HOME=%s", u.HomeDir),
-		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
+func envForUser(u *userMeta) map[string]string {
+	env := map[string]string{
+		"SHELL": u.LoginShell(),
+		"USER":  u.Username,
+		"HOME":  u.HomeDir,
+		"PATH":  defaultPathForUser(&u.User),
 	}
+	if root, err := os.OpenRoot("/"); err == nil {
+		for k, v := range readLocale(root) {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 // updateStringInSlice mutates ss to change the first occurrence of a
@@ -1118,14 +1153,9 @@ func updateStringInSlice(ss []string, a, b string) {
 	}
 }
 
-// acceptEnvPair reports whether the environment variable key=value pair
-// should be accepted from the client. It uses the same default as OpenSSH
-// AcceptEnv.
-func acceptEnvPair(kv string) bool {
-	k, _, ok := strings.Cut(kv, "=")
-	if !ok {
-		return false
-	}
+// acceptEnvVar reports whether the environment variable "key" should be
+// accepted from the client. It uses the same default as OpenSSH AcceptEnv.
+func acceptEnvVar(k string) bool {
 	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
 }
 
