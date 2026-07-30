@@ -11,7 +11,7 @@ on:
     paths:
       - "ssh/**"
       - "tempfork/gliderlabs/ssh/**"
-      - ".github/workflows/ssh-integrationtest"
+      - ".github/workflows/ssh-integrationtest.yml"
 jobs:
   ssh-integrationtest:
     runs-on: ubuntu-latest
@@ -37,3 +37,97 @@ jobs:
       - name: Run SSH integration tests (${{ matrix.base }})
         run: |
           docker build --build-arg="BASE=${{ matrix.base }}" -t "${{ matrix.tag }}" ssh/tailssh/testcontainers
+
+  macos-ssh-integrationtest:
+    runs-on: macos-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Capture runner identity, OpenSSH version, and the test user's
+      # login shell so a future failure can be attributed to a runner
+      # image change without re-running with extra logging.
+      - name: macOS preflight diagnostics
+        run: |
+          set +e
+          echo "=== uname -a ==="
+          uname -a
+          echo "=== sw_vers ==="
+          sw_vers
+          echo "=== id ==="
+          id
+          echo "=== id runner ==="
+          id runner
+          echo "=== ssh -V ==="
+          ssh -V
+          echo "=== dscl . -read /Users/runner UserShell ==="
+          dscl . -read /Users/runner UserShell
+
+      - name: Build test binaries
+        run: |
+          ./tool/go test -tags integrationtest -c ./ssh/tailssh -o /tmp/tailssh.test
+          ./tool/go build -o /tmp/tailscaled ./cmd/tailscaled
+          ls -l /tmp/tailssh.test /tmp/tailscaled
+
+      # The two test steps below are wired with continue-on-error so a
+      # failure in one still lets the other run. The aggregator step at
+      # the end fails the job if either failed. We need both: the Go SSH
+      # client test exercises the wire-level frame ordering, and the
+      # OpenSSH client test exercises the actual binary that users of
+      # #18256 are running.
+
+      - name: Run macOS OpenSSH exit status integration tests
+        id: openssh
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sudo env \
+            PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH \
+            TAILSCALED_PATH=/tmp/tailscaled \
+            TS_SSH_INTEGRATION_TEST_USER=runner \
+            /tmp/tailssh.test -test.v -test.timeout=5m -test.run '^TestOpenSSHExitCodes$' \
+            2>&1 | tee /tmp/openssh-exitcodes.log
+
+      - name: Run macOS Go SSH exit status integration tests
+        id: gossh
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          sudo env \
+            PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH \
+            TAILSCALED_PATH=/tmp/tailscaled \
+            TS_SSH_INTEGRATION_TEST_USER=runner \
+            /tmp/tailssh.test -test.v -test.timeout=5m -test.run '^TestIntegrationExitCodes$' \
+            2>&1 | tee /tmp/gossh-exitcodes.log
+
+      - name: Collect incubator log
+        if: always()
+        run: |
+          if [ -f /tmp/tailscalessh.log ]; then
+            sudo cp /tmp/tailscalessh.log /tmp/tailscalessh.log.copy || true
+            sudo chmod a+r /tmp/tailscalessh.log.copy || true
+          else
+            echo "no incubator log produced" > /tmp/tailscalessh.log.copy
+          fi
+
+      - name: Upload diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: macos-ssh-integrationtest-logs
+          path: |
+            /tmp/openssh-exitcodes.log
+            /tmp/gossh-exitcodes.log
+            /tmp/tailscalessh.log.copy
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Aggregate test result
+        run: |
+          openssh="${{ steps.openssh.outcome }}"
+          gossh="${{ steps.gossh.outcome }}"
+          echo "OpenSSH test outcome: $openssh"
+          echo "Go SSH test outcome:  $gossh"
+          if [ "$openssh" != "success" ] || [ "$gossh" != "success" ]; then
+            exit 1
+          fi
