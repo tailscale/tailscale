@@ -53,17 +53,32 @@ func TestQnapAuthnURL(t *testing.T) {
 		{
 			name: "IP-http",
 			in:   "http://10.1.20.4:80/",
-			want: "http://10.1.20.4:80/cgi-bin/authLogin.cgi?qtoken=token",
+			want: "http://localhost:80/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
 			name: "IP6-https",
 			in:   "https://[ff7d:0:1:2::1]/",
-			want: "https://[ff7d:0:1:2::1]/cgi-bin/authLogin.cgi?qtoken=token",
+			want: "https://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
 			name: "hostname-https",
 			in:   "https://qnap.example.com/",
-			want: "https://qnap.example.com/cgi-bin/authLogin.cgi?qtoken=token",
+			want: "https://localhost/cgi-bin/authLogin.cgi?qtoken=token",
+		},
+		{
+			name: "attacker-supplied-host",
+			in:   "http://evil.example.com/cgi-bin/qpkg/Tailscale/index.cgi/api/data",
+			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
+		},
+		{
+			name: "attacker-supplied-host-and-port",
+			in:   "https://evil.example.com:8443/",
+			want: "https://localhost:8443/cgi-bin/authLogin.cgi?qtoken=token",
+		},
+		{
+			name: "attacker-supplied-userinfo-host",
+			in:   "http://localhost@evil.example.com/",
+			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
 		{
 			name: "invalid-URL",
