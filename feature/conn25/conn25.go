@@ -398,22 +398,26 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 
 // profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
 func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-	// TODO(mzb): Handle node changes. Wipe out all config?
-	// We'll need to look at the ordering of this hook and onSelfChange.
 	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
 
-	// If a client changes profiles and becomes a different node, all of its
-	// existing flows lose meaning, and we should delete them so that the
-	// settings of our new environment can take over.
-	// TODO(naman): also do something for connectors that change profiles?
 	if !sameNode {
+		// If a client changes profiles and becomes a different node, all of its
+		// existing flows lose meaning, and we should delete them so that the
+		// settings of our new environment can take over.
 		if e.clearAllDatapathFlows != nil {
 			e.clearAllDatapathFlows()
 		}
-		expired := e.conn25.client.assignments.expireAllBreakingFlows()
-		if err := e.conn25.client.returnAddrs(expired...); err != nil {
-			e.conn25.logf("returning expired magic/transit IPs: %v", err)
-		}
+
+		// Load an empty configuration to disable conn25 entirely, since we
+		// don't yet know that it is configured on the new profile. We will
+		// know once [extension.onSelfChange] is called with a new
+		// configuration, if any.
+		e.conn25.reconfig(&config{})
+
+		// Clear internal state, like address assignments for clients and
+		// transit IP mappings for connectors.
+		e.conn25.client.reset()
+		e.conn25.connector.reset()
 	}
 }
 
@@ -813,24 +817,6 @@ func (c *client) isKnownTransitIP(tip netip.Addr) bool {
 	return ok
 }
 
-// returnAddrs returns the magic and transit IPs of many address assignments
-// at the same time.
-func (c *client) returnAddrs(addrs ...*addrs) error {
-	var errs []error
-	for _, a := range addrs {
-		if a.is4() {
-			errs = append(errs, c.v4MagicIPPool.returnAddr(a.magic))
-			errs = append(errs, c.v4TransitIPPool.returnAddr(a.transit))
-		} else if a.is6() {
-			errs = append(errs, c.v6MagicIPPool.returnAddr(a.magic))
-			errs = append(errs, c.v6TransitIPPool.returnAddr(a.transit))
-		} else {
-			errs = append(errs, fmt.Errorf("destination IP neither v4 nor v6: %q", a.dst))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 func (c *client) reconfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -841,6 +827,21 @@ func (c *client) reconfig() {
 	c.v4TransitIPPool = c.v4TransitIPPool.reconfig(ipSets.v4Transit)
 	c.v6MagicIPPool = c.v6MagicIPPool.reconfig(ipSets.v6Magic)
 	c.v6TransitIPPool = c.v6TransitIPPool.reconfig(ipSets.v6Transit)
+}
+
+// reset clears all internal state of [client], that are not configuration
+// passed into it.
+func (c *client) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ipSets := c.getIPSets()
+	c.v4MagicIPPool = newIPPool(ipSets.v4Magic)
+	c.v4TransitIPPool = newIPPool(ipSets.v4Transit)
+	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
+	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
+	c.assignments = addrAssignments{clock: c.assignments.clock}
+	c.byConnKey = nil
 }
 
 // getAppsForConnectorDomain returns the slice of app names which match the
@@ -900,8 +901,14 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		if a == nil {
 			break
 		}
-		if err := c.returnAddrs(a); err != nil {
-			return nil, err
+		if a.is4() {
+			c.v4MagicIPPool.returnAddr(a.magic)
+			c.v4TransitIPPool.returnAddr(a.transit)
+		} else if a.is6() {
+			c.v6MagicIPPool.returnAddr(a.magic)
+			c.v6TransitIPPool.returnAddr(a.transit)
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
 		}
 	}
 
@@ -1410,6 +1417,15 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	}
 	v, ok := m[transitIP]
 	return v, ok
+}
+
+// reset clears all internal state of [connector], that are not configuration
+// passed into it.
+func (c *connector) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
 }
 
 type addrs struct {

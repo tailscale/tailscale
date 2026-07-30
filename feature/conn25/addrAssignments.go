@@ -164,20 +164,6 @@ func (a *addrAssignments) updateExpiry(as *addrs, expiresIn time.Duration) {
 	heap.Init(&a.byExpiresAt)
 }
 
-// expireAllBreakingFlows expires all address assignments, including those
-// that refer to existing flows. This should only be used in situations where
-// the flows themselves will no longer meaningfully exist, for example when
-// switching to another tailnet.
-// It returns the address assignments that were expired.
-func (a *addrAssignments) expireAllBreakingFlows() []*addrs {
-	expired := a.byExpiresAt
-	a.byMagicIP = nil
-	a.byTransitIP = nil
-	a.byDomainDst = nil
-	a.byExpiresAt = nil
-	return expired
-}
-
 type addrsHeap []*addrs
 
 func (h addrsHeap) Len() int           { return len(h) }
