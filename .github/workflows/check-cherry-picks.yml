@@ -1,0 +1,61 @@
+name: check-cherry-picks
+
+on:
+  pull_request:
+    branches:
+      - "release-branch/*"
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Company policy requires that all cherry-picks onto release
+    # branches be made with "git cherry-pick -x" so the commit message
+    # records the original commit. Commits that are intentionally not
+    # cherry-picks (version bumps, release-only fixes) can be exempted
+    # by adding the "not-a-cherry-pick" label to the PR.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'not-a-cherry-pick') }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so that both the PR commits and origin/main
+          # are available for the ancestry check below.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check commits for cherry-pick markers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for commit in $(git rev-list --no-merges "$BASE_SHA".."$HEAD_SHA"); do
+            subject=$(git log -1 --format=%s "$commit")
+            orig=$(git log -1 --format=%B "$commit" |
+                   sed -ne 's/^(cherry picked from commit \([0-9a-f]\{40\}\))$/\1/p' |
+                   tail -n1)
+            if [ -z "$orig" ]; then
+              echo "::error::Commit $commit (\"$subject\") is missing a \"(cherry picked from commit ...)\" line."
+              failed=1
+            elif ! git merge-base --is-ancestor "$orig" origin/main 2>/dev/null; then
+              echo "::error::Commit $commit (\"$subject\") says it was cherry-picked from $orig, but that commit is not on main."
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "Cherry-picks onto release branches must be made with \"git cherry-pick -x\"."
+            echo "If this PR is intentionally not a cherry-pick, add the \"not-a-cherry-pick\" label."
+            exit 1
+          fi
