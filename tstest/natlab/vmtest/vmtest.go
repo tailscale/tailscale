@@ -1543,6 +1543,56 @@ func (e *Env) waitForPeerRoute(n *Node, prefix string, timeout time.Duration) bo
 	}
 }
 
+// HTTPGetN fetches wantBytes bytes from the /bytes endpoint of the webserver
+// [WebServer] started on the to node, from the from node, and reports how many
+// bytes arrived and how long it took.
+//
+// Unlike [Env.HTTPGet] it neither buffers the body nor fails the test: it
+// discards bytes as they arrive, counting them, and returns any error for the
+// caller to interpret. A short read is an error, but n still reports what
+// arrived, since a stalled transfer is truncated rather than refused.
+//
+// timeout bounds this side of the request only. TTA caps its own upstream fetch
+// at 10s, so size wantBytes to complete well inside that.
+func (e *Env) HTTPGetN(from, to *Node, wantBytes int, timeout time.Duration) (n int64, d time.Duration, err error) {
+	e.t.Helper()
+	if to.webServerPort == 0 {
+		e.t.Fatalf("HTTPGetN: node %s has no webserver; pass vmtest.WebServer(port) to AddNode", to.name)
+	}
+	toSt := e.Status(to)
+	if len(toSt.Self.TailscaleIPs) == 0 {
+		e.t.Fatalf("HTTPGetN: node %s has no Tailscale IPs", to.name)
+	}
+	// Escaped because it is nested as a query parameter of TTA's own URL.
+	target := url.QueryEscape(fmt.Sprintf("http://%s:%d/bytes?n=%d",
+		toSt.Self.TailscaleIPs[0], to.webServerPort, wantBytes))
+
+	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/http-get?url="+target, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	t0 := time.Now()
+	res, err := from.agent.HTTPClient.Do(req)
+	if err != nil {
+		return 0, time.Since(t0), err
+	}
+	defer res.Body.Close()
+	n, err = io.Copy(io.Discard, res.Body)
+	d = time.Since(t0)
+	if err != nil {
+		return n, d, fmt.Errorf("after %v and %d of %d bytes: %w", d.Round(time.Millisecond), n, wantBytes, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		return n, d, fmt.Errorf("TTA returned status %d (upstream %q)", res.StatusCode, res.Header.Get("X-Upstream-Status"))
+	}
+	if n != int64(wantBytes) {
+		return n, d, fmt.Errorf("short read: got %d of %d bytes after %v", n, wantBytes, d.Round(time.Millisecond))
+	}
+	return n, d, nil
+}
+
 // HTTPGet makes an HTTP GET request from the given node to the specified URL.
 // The request is proxied through TTA's /http-get handler.
 func (e *Env) HTTPGet(from *Node, targetURL string) string {

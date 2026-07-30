@@ -391,6 +391,7 @@ type Network struct {
 
 	latency  time.Duration // latency applied to interface writes
 	lossRate float64       // chance of packet loss (0.0 to 1.0)
+	mtu      int           // IP MTU of the router's WAN link; 0 means unlimited
 
 	// ...
 	err error // carried error
@@ -399,6 +400,22 @@ type Network struct {
 // SetLatency sets the simulated network latency for this network.
 func (n *Network) SetLatency(d time.Duration) {
 	n.latency = d
+}
+
+// SetMTU sets the IP MTU of this network's WAN link: the largest IP packet the
+// router will forward to or from the simulated internet. 0 (the default) means
+// unlimited.
+//
+// Oversized packets are dropped, neither fragmented nor answered with an ICMP
+// "fragmentation needed": the worst case for a sender that assumes an MTU
+// rather than probing it.
+//
+// Only forwarded traffic crossing the WAN link is constrained. Same-LAN packets
+// and traffic the router originates from its netstack (control, DERP, DNS) skip
+// the router's WAN path and are unaffected, so a test can narrow the underlay
+// between two nodes while leaving their paths to control and DERP full-size.
+func (n *Network) SetMTU(mtu int) {
+	n.mtu = mtu
 }
 
 // SetPacketLoss sets the packet loss rate for this network 0.0 (no loss) to 1.0 (total loss).
@@ -510,6 +527,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			breakWAN4:  conf.breakWAN4,
 			latency:    conf.latency,
 			lossRate:   conf.lossRate,
+			mtu:        conf.mtu,
 			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
 			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),

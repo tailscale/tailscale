@@ -283,6 +283,23 @@ func main() {
 				host, _, _ := net.SplitHostPort(r.RemoteAddr)
 				fmt.Fprintf(w, "Hello world I am %s from %s", name, host)
 			})
+			// /bytes?n=N serves N bytes, for tests that need to move enough
+			// data to fill full-size packets rather than just check
+			// reachability. The body is zeros: the point is the packet sizes
+			// on the wire, and an explicit Content-Length lets the client
+			// tell a truncated transfer from a complete one.
+			mux.HandleFunc("/bytes", func(w http.ResponseWriter, r *http.Request) {
+				n, err := strconv.Atoi(r.URL.Query().Get("n"))
+				if err != nil || n < 0 {
+					http.Error(w, "bad or missing n", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Length", strconv.Itoa(n))
+				if _, err := io.CopyN(w, zeroReader{}, int64(n)); err != nil {
+					log.Printf("/bytes: writing %d bytes: %v", n, err)
+				}
+			})
 			if err := http.ListenAndServe(":"+port, mux); err != nil {
 				log.Printf("webserver on :%s failed: %v", port, err)
 			}
@@ -663,4 +680,13 @@ func (lb *logBuffer) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 	return lb.buf.Write(p)
+}
+
+// zeroReader is an infinite source of zero bytes, for serving a payload of a
+// requested size without allocating it.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }

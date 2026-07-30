@@ -686,6 +686,7 @@ type network struct {
 	blackholeControl bool                 // blackhole control connectivity
 	latency          time.Duration        // latency applied to interface writes
 	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	mtu              int                  // IP MTU of the WAN link; 0 means unlimited
 	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC       map[MAC]*node
 	logf             func(format string, args ...any)
@@ -1542,6 +1543,20 @@ func (n *network) writeEth(res []byte) bool {
 	return false
 }
 
+// exceedsWANMTU reports whether an IP packet of ipLen bytes is too large to
+// cross this network's WAN link, logging it if so, and always false if no MTU
+// is set. See [Network.SetMTU].
+//
+// ipLen excludes any Ethernet header, matching the kernel's definition of an
+// interface MTU.
+func (n *network) exceedsWANMTU(ipLen int, src, dst netip.AddrPort) bool {
+	if n.mtu == 0 || ipLen <= n.mtu {
+		return false
+	}
+	n.logf("dropping packet %v=>%v: IP length %d exceeds WAN MTU %d", src, dst, ipLen, n.mtu)
+	return true
+}
+
 func (n *network) conditionedWrite(nw networkWriter, packet []byte) {
 	if n.lossRate > 0 && rand.Float64() < n.lossRate {
 		// packet lost
@@ -1667,6 +1682,9 @@ func (n *network) HandleUDPPacket(p UDPPacket) {
 		// Blackhole the packet.
 		return
 	}
+	if n.exceedsWANMTU(len(buf), p.Src, p.Dst) {
+		return
+	}
 	dst := n.doNATIn(p.Src, p.Dst)
 	if !dst.IsValid() {
 		n.logf("Warning: NAT dropped packet; no mapping for %v=>%v", p.Src, p.Dst)
@@ -1724,6 +1742,9 @@ func (n *network) HandleTCPPacket(p TCPPacket) {
 		InterfaceIndex: n.wanInterfaceID,
 	}, buf)
 	if p.Dst.Addr().Is4() && n.breakWAN4 {
+		return
+	}
+	if n.exceedsWANMTU(len(buf), p.Src, p.Dst) {
 		return
 	}
 	dst := n.doNATIn(p.Src, p.Dst)
@@ -1968,6 +1989,9 @@ func (n *network) handleTCPPacketForRouter(tcp *layers.TCP, flow ipSrcDst) {
 		Length:         len(buf),
 		InterfaceIndex: n.lanInterfaceID,
 	}, buf)
+	if n.exceedsWANMTU(len(buf), src, dst) {
+		return
+	}
 
 	lanSrc := src
 	src = n.doNATOut(src, dst)
@@ -2067,6 +2091,9 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 			Length:         len(buf),
 			InterfaceIndex: n.lanInterfaceID,
 		}, buf)
+		if n.exceedsWANMTU(len(buf), src, dst) {
+			return
+		}
 
 		lanSrc := src // the original src, before NAT (for logging only)
 		src = n.doNATOut(src, dst)
