@@ -116,7 +116,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
-					Items:      []corev1.KeyToPath{{Key: "authkey", Path: "authkey"}},
+					Items:      []corev1.KeyToPath{{Key: authKeySecretKey, Path: authKeySecretKey}},
 				},
 			},
 		})
@@ -223,7 +223,7 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replic
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 		StringData: map[string]string{
-			"authkey": authKey,
+			authKeySecretKey: authKey,
 		},
 	}
 }
