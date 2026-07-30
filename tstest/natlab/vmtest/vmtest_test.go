@@ -1314,6 +1314,7 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
 		"magicsock_cached_peer_contact_derp":   0,
 		"magicsock_cached_peer_contact_direct": 0,
+		"magicsock_tsmp_disco_key_advertisement_sent": 0,
 	})
 	checkInitialMetrics.End(nil)
 
@@ -1349,6 +1350,7 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	checkFinalMetrics.Begin()
 	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
 		"magicsock_cached_peer_contact_direct": 1,
+		"magicsock_tsmp_disco_key_advertisement_sent": 1,
 	})
 	checkFinalMetrics.End(nil)
 }
