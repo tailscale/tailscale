@@ -301,3 +301,20 @@ func (t *FlowTable) removeFlowLocked(ele *list.Element) func() {
 
 	return flow.data.OnRemove
 }
+
+// Clear empties the entire FlowTable, losing track of all active flows. This
+// is used when all current flows between this and all other nodes cease to
+// exist; for example, when switching tailnets.
+func (t *FlowTable) Clear() {
+	var onRemoves []func()
+	t.mu.Lock()
+	for ele := t.lru.Back(); ele != nil; ele = t.lru.Back() {
+		onRemoves = append(onRemoves, t.removeFlowLocked(ele))
+	}
+	t.mu.Unlock()
+	for _, onRemove := range onRemoves {
+		if onRemove != nil {
+			onRemove()
+		}
+	}
+}

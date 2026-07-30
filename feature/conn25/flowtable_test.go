@@ -515,3 +515,42 @@ func TestFlowTable_OnRemove(t *testing.T) {
 		assertFlowHit(t, ft, FromTun, tun2)
 	})
 }
+
+func TestFlowTable_Clear(t *testing.T) {
+	ft := NewFlowTable(0)
+
+	flowN := 5
+	flows := make([]FlowData, 0, flowN)
+
+	onRemovesRan := 0
+
+	for i := range flowN {
+		from := fmt.Sprintf("10.0.0.%d:6767", i)
+		to := fmt.Sprintf("192.0.2.%d:443", i)
+		tun := mkTuple(from, to)
+		wg := mkTuple(to, from)
+		flow := mkFlow(tun, wg)
+		flow.OnRemove = func() {
+			onRemovesRan++
+		}
+		ft.NewFlow(flow)
+		flows = append(flows, flow)
+	}
+
+	// The flows are installed.
+	for _, f := range flows {
+		assertFlowHit(t, ft, FromTun, f.FromTun.Tuple)
+	}
+
+	ft.Clear()
+
+	// The flows are no longer installed after clearing.
+	for _, f := range flows {
+		assertFlowMiss(t, ft, FromTun, f.FromTun.Tuple)
+	}
+
+	// The OnRemoves ran.
+	if onRemovesRan != flowN {
+		t.Errorf("expected %d flows to have OnRemove() called, got %d", flowN, onRemovesRan)
+	}
+}

@@ -110,8 +110,9 @@ func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
 // extension is an [ipnext.Extension] managing the connector on platforms
 // that import this package.
 type extension struct {
-	conn25  *Conn25            // safe for concurrent access and only set at creation
-	backend ipnext.SafeBackend // safe for concurrent access and only set at creation
+	conn25                *Conn25            // safe for concurrent access and only set at creation
+	backend               ipnext.SafeBackend // safe for concurrent access and only set at creation
+	clearAllDatapathFlows func()             // safe for concurrent access and only set at creation
 
 	host      ipnext.Host             // set in Init, read-only after
 	ctxCancel context.CancelCauseFunc // cancels sendLoop goroutine
@@ -213,6 +214,11 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		}
 		e.conn25.client.resendTransitIPMapping(pkt.Dst.Addr())
 	}
+
+	// The profile state change hook needs to clear all active flows on a
+	// major change (eg. switching tailnets), so make that hook accessible
+	// to it.
+	e.clearAllDatapathFlows = dph.ClearAllActiveFlows
 
 	// Manage how we react to changes to the current node,
 	// including property changes (e.g. HostInfo, Capabilities, CapMap).
@@ -379,9 +385,27 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 
 // profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
 func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-	// TODO(mzb): Handle node changes. Wipe out all config?
-	// We'll need to look at the ordering of this hook and onSelfChange.
 	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
+
+	if !sameNode {
+		// Load an empty configuration to disable conn25 entirely, since we
+		// don't yet know that it is configured on the new profile. We will
+		// know once [extension.onSelfChange] is called with a new
+		// configuration, if any.
+		e.conn25.reconfig(&config{})
+
+		// If a client changes profiles and becomes a different node, all of its
+		// existing flows lose meaning, and we should delete them so that the
+		// settings of our new environment can take over.
+		if e.clearAllDatapathFlows != nil {
+			e.clearAllDatapathFlows()
+		}
+
+		// Clear internal state, like address assignments for clients and
+		// transit IP mappings for connectors.
+		e.conn25.client.reset()
+		e.conn25.connector.reset()
+	}
 }
 
 func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
@@ -739,6 +763,7 @@ type client struct {
 	addrsCh   chan addrs
 	getIPSets func() ipSets
 
+	// Remember to add new fields to [client.reset] if needed.
 	mu              sync.Mutex // protects the fields below
 	v4MagicIPPool   *ippool
 	v4TransitIPPool *ippool
@@ -790,6 +815,21 @@ func (c *client) reconfig() {
 	c.v4TransitIPPool = c.v4TransitIPPool.reconfig(ipSets.v4Transit)
 	c.v6MagicIPPool = c.v6MagicIPPool.reconfig(ipSets.v6Magic)
 	c.v6TransitIPPool = c.v6TransitIPPool.reconfig(ipSets.v6Transit)
+}
+
+// reset clears all internal state of [client], that are not configuration
+// passed into it.
+func (c *client) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ipSets := c.getIPSets()
+	c.v4MagicIPPool = newIPPool(ipSets.v4Magic)
+	c.v4TransitIPPool = newIPPool(ipSets.v4Transit)
+	c.v6MagicIPPool = newIPPool(ipSets.v6Magic)
+	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
+	c.assignments = addrAssignments{clock: c.assignments.clock}
+	c.byConnKey = nil
 }
 
 // getAppsForConnectorDomain returns the slice of app names which match the
@@ -1323,6 +1363,7 @@ type connector struct {
 	logf      logger.Logf
 	getIPSets func() ipSets
 
+	// Remember to add new fields to [connector.reset] if needed.
 	mu sync.Mutex // protects the fields below
 	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
 	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
@@ -1365,6 +1406,15 @@ func (c *connector) lookupBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (appA
 	}
 	v, ok := m[transitIP]
 	return v, ok
+}
+
+// reset clears all internal state of [connector], that are not configuration
+// passed into it.
+func (c *connector) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
 }
 
 type addrs struct {

@@ -304,3 +304,11 @@ func (dh *datapathHandler) debugLogf(msg string, args ...any) {
 		dh.logf(msg, args...)
 	}
 }
+
+// ClearAllActiveFlows removes all active flows from the datapath handler. This
+// is useful when all active flows lose meaning; for example, when switching
+// tailnets.
+func (dh *datapathHandler) ClearAllActiveFlows() {
+	dh.clientFlowTable.Clear()
+	dh.connectorFlowTable.Clear()
+}
