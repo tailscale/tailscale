@@ -194,7 +194,7 @@ func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.
 		f(pm.currentProfile, pm.prefs, false)
 	}
 	// Do not call pm.extHost.NotifyProfileChange here; it is invoked in
-	// [LocalBackend.resetForProfileChangeLockedOnEntry] after the netmap reset.
+	// [LocalBackend.resetForProfileChangeLocked] after the netmap reset.
 	// TODO(nickkhyl): Consider moving it here (or into the stateChangeCb handler
 	// in [LocalBackend]) once the profile/node state, including the netmap,
 	// is actually tied to the current profile.
@@ -381,7 +381,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView, np ipn.NetworkProfile)
 	// WantRunning and possibly other fields. This may not be the desired behavior.
 	//
 	// Additionally, LocalBackend doesn't treat it as a proper profile switch, meaning that
-	// [LocalBackend.resetForProfileChangeLockedOnEntry] is not called and certain
+	// [LocalBackend.resetForProfileChangeLocked] is not called and certain
 	// node/profile-specific state may not be reset as expected.
 	//
 	// However, [profileManager] notifies [ipnext.Extension]s about the profile change,
