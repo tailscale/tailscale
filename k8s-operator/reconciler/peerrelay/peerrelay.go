@@ -17,7 +17,6 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,7 +38,6 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/set"
 )
 
 type (
@@ -56,9 +54,7 @@ type (
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
 
-		// Metrics related fields
-		mu         sync.Mutex
-		peerRelays set.Slice[types.UID]
+		tracker *reconciler.ResourceTracker
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -129,6 +125,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		resolver:           resolver,
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
+		tracker:            reconciler.NewResourceTracker(gaugePeerRelayResources),
 	}
 }
 
@@ -211,20 +208,11 @@ func (r *Reconciler) reportTailnetUnavailable(ctx context.Context, logger *zap.S
 }
 
 func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {
-	if !slices.Contains(pr.Finalizers, reconciler.FinalizerName) {
-		reconciler.SetFinalizer(pr)
-		if err := r.Update(ctx, pr); err != nil {
-			return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
-		}
+	if err := reconciler.EnsureFinalizer(ctx, r.Client, pr); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
 	}
 
-	r.mu.Lock()
-	if !r.peerRelays.Contains(pr.UID) {
-		r.peerRelays.Add(pr.UID)
-		logger.Infof("now managing PeerRelay %q", pr.Name)
-	}
-	r.mu.Unlock()
-	gaugePeerRelayResources.Set(int64(r.peerRelays.Len()))
+	r.tracker.Add(pr.UID)
 
 	replicas := int32(1)
 	if pr.Spec.Replicas != nil {
@@ -402,15 +390,11 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	reconciler.RemoveFinalizer(pr)
-	if err := r.Update(ctx, pr); err != nil {
+	if err := reconciler.ClearFinalizer(ctx, r.Client, pr); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from PeerRelay %q: %w", pr.Name, err)
 	}
 
-	r.mu.Lock()
-	r.peerRelays.Remove(pr.UID)
-	r.mu.Unlock()
-	gaugePeerRelayResources.Set(int64(r.peerRelays.Len()))
+	r.tracker.Remove(pr.UID)
 
 	return reconcile.Result{}, nil
 }
