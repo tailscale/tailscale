@@ -13,13 +13,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
-	tailscaleclient "tailscale.com/client/tailscale/v2"
-
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
-	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/tailcfg"
 )
 
 func (r *Reconciler) peerRelayTags(pr *tsapi.PeerRelay) []string {
@@ -65,7 +61,13 @@ func (r *Reconciler) getAuthKey(ctx context.Context, pr *tsapi.PeerRelay, idx in
 	}
 
 	if !createAuthKey {
-		createAuthKey, err = r.shouldReissueAuthKey(ctx, tsClient, pr, idx, stateSecret, cfgAuthKey)
+		createAuthKey, err = r.reissuer.ShouldReissue(ctx, tsClient, r.logger, tailscaled.ReissueInput{
+			ParentName:  pr.Name,
+			ReplicaName: replicaName(pr.Name, idx),
+			Kind:        tailscaled.KindPeerRelay,
+			StateSecret: stateSecret,
+			CfgAuthKey:  cfgAuthKey,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -88,76 +90,4 @@ func (r *Reconciler) getAuthKey(ctx context.Context, pr *tsapi.PeerRelay, idx in
 	}
 
 	return authKey, nil
-}
-
-// shouldReissueAuthKey returns true if the replica needs a new auth key. It tracks in-flight
-// reissues via authKeyReissuing to avoid duplicate API calls across reconciles.
-func (r *Reconciler) shouldReissueAuthKey(ctx context.Context, tsClient tsclient.Client, pr *tsapi.PeerRelay, idx int32, stateSecret *corev1.Secret, cfgAuthKey *string) (shouldReissue bool, err error) {
-	name := replicaName(pr.Name, idx)
-
-	r.mu.Lock()
-	reissuing := r.authKeyReissuing[name]
-	r.mu.Unlock()
-
-	if reissuing {
-		_, requestStillPresent := stateSecret.Data[kubetypes.KeyReissueAuthkey]
-		if !requestStillPresent {
-			r.mu.Lock()
-			r.authKeyReissuing[name] = false
-			r.mu.Unlock()
-			r.logger.Debugf("auth key reissue completed for %q", name)
-			return false, nil
-		}
-		r.logger.Debugf("auth key already in process of re-issuance for %q, waiting", name)
-		return false, nil
-	}
-
-	defer func() {
-		r.mu.Lock()
-		r.authKeyReissuing[name] = shouldReissue
-		r.mu.Unlock()
-	}()
-
-	brokenAuthkey, ok := stateSecret.Data[kubetypes.KeyReissueAuthkey]
-	if !ok {
-		return false, nil
-	}
-
-	empty := cfgAuthKey == nil || *cfgAuthKey == ""
-	broken := cfgAuthKey != nil && *cfgAuthKey == string(brokenAuthkey)
-
-	// A new key has been written but the replica hasn't picked it up yet.
-	if !empty && !broken {
-		return false, nil
-	}
-
-	lim := r.authKeyRateLimits[pr.Name]
-	if !lim.Allow() {
-		r.logger.Debugf("auth key re-issuance rate limit exceeded, limit: %.2f, burst: %d, tokens: %.2f",
-			lim.Limit(), lim.Burst(), lim.Tokens())
-		return false, fmt.Errorf("auth key re-issuance rate limit exceeded for PeerRelay %q, will retry with backoff", pr.Name)
-	}
-
-	r.logger.Infof("PeerRelay replica %s failing to auth; attempting cleanup and new key", name)
-	if tsID := stateSecret.Data[kubetypes.KeyDeviceID]; len(tsID) > 0 {
-		if err = r.ensureDeviceDeleted(ctx, tsClient, tailcfg.StableNodeID(tsID)); err != nil {
-			return false, err
-		}
-	}
-
-	return true, nil
-}
-
-func (r *Reconciler) ensureDeviceDeleted(ctx context.Context, tsClient tsclient.Client, id tailcfg.StableNodeID) error {
-	r.logger.Debugf("deleting device %s from control", string(id))
-	err := tsClient.Devices().Delete(ctx, string(id))
-	switch {
-	case tailscaleclient.IsNotFound(err):
-		r.logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
-	case err != nil:
-		return fmt.Errorf("error deleting device: %w", err)
-	default:
-		r.logger.Debugf("device %s deleted from control", string(id))
-	}
-	return nil
 }

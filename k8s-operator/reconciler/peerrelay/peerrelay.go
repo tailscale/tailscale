@@ -17,11 +17,9 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,12 +53,9 @@ type (
 		resolver           func(ctx context.Context, network, host string) ([]netip.Addr, error)
 		logger             *zap.SugaredLogger
 		clock              tstime.Clock
+		reissuer           *tailscaled.Reissuer
 
 		tracker *reconciler.ResourceTracker
-
-		mu                sync.Mutex               // protects following
-		authKeyRateLimits map[string]*rate.Limiter // per-PeerRelay rate limiters for auth key re-issuance.
-		authKeyReissuing  map[string]bool
 	}
 
 	// The ReconcilerOptions type contains configuration values for the Reconciler.
@@ -132,8 +127,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		logger:             options.Logger.Named(reconcilerName),
 		clock:              clock,
 		tracker:            reconciler.NewResourceTracker(gaugePeerRelayResources),
-		authKeyRateLimits:  make(map[string]*rate.Limiter),
-		authKeyReissuing:   make(map[string]bool),
+		reissuer:           tailscaled.NewReissuer(),
 	}
 }
 
@@ -227,19 +221,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		replicas = *pr.Spec.Replicas
 	}
 
-	r.mu.Lock()
-	if _, ok := r.authKeyRateLimits[pr.Name]; !ok {
-		// Allow every replica to have its auth key re-issued quickly the first
-		// time, but with an overall limit of 1 every 30s after a burst.
-		r.authKeyRateLimits[pr.Name] = rate.NewLimiter(rate.Every(30*time.Second), int(replicas))
-	}
-	for i := int32(0); i < replicas; i++ {
-		name := replicaName(pr.Name, i)
-		if _, ok := r.authKeyReissuing[name]; !ok {
-			r.authKeyReissuing[name] = false
-		}
-	}
-	r.mu.Unlock()
+	r.reissuer.EnsureState(pr.Name, int(replicas))
 
 	// Belt-and-braces: CEL on the CRD enforces this at admission, but we also validate here to guard against older
 	// clusters without CEL, resources created before the CRD schema landed, or hand-edited status paths. If the user
@@ -417,18 +399,7 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 	}
 
 	r.tracker.Remove(pr.UID)
-
-	replicas := int32(1)
-	if pr.Spec.Replicas != nil {
-		replicas = *pr.Spec.Replicas
-	}
-
-	r.mu.Lock()
-	delete(r.authKeyRateLimits, pr.Name)
-	for i := int32(0); i < replicas; i++ {
-		delete(r.authKeyReissuing, replicaName(pr.Name, i))
-	}
-	r.mu.Unlock()
+	r.reissuer.RemoveState(pr.Name)
 
 	return reconcile.Result{}, nil
 }

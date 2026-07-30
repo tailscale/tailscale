@@ -20,7 +20,6 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -59,6 +58,7 @@ import (
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
@@ -704,14 +704,13 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&rbacv1.Role{}, recorderFilter).
 		Watches(&rbacv1.RoleBinding{}, recorderFilter).
 		Complete(&RecorderReconciler{
-			recorder:          eventRecorder,
-			tsNamespace:       opts.tailscaleNamespace,
-			Client:            mgr.GetClient(),
-			log:               opts.log.Named("recorder-reconciler"),
-			clock:             tstime.DefaultClock{},
-			clients:           clients,
-			authKeyRateLimits: make(map[string]*rate.Limiter),
-			authKeyReissuing:  make(map[string]bool),
+			recorder:    eventRecorder,
+			tsNamespace: opts.tailscaleNamespace,
+			Client:      mgr.GetClient(),
+			log:         opts.log.Named("recorder-reconciler"),
+			clock:       tstime.DefaultClock{},
+			clients:     clients,
+			reissuer:    tailscaled.NewReissuer(),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create Recorder reconciler: %v", err)
@@ -777,8 +776,7 @@ func runReconcilers(opts reconcilerOpts) {
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
 			loginServer:       opts.tsServer.ControlURL,
-			authKeyRateLimits: make(map[string]*rate.Limiter),
-			authKeyReissuing:  make(map[string]bool),
+			reissuer:          tailscaled.NewReissuer(),
 
 			sharedACMEAccountKey: opts.sharedACMEAccountKey,
 		})
