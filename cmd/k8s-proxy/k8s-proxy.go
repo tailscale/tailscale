@@ -312,7 +312,7 @@ func run(logger *zap.SugaredLogger) error {
 			hz := healthz.RegisterHealthHandlers(mux, v4, v6, logger.Infof)
 			group.Go(func() error {
 				err := hz.MonitorHealth(ctx, lc)
-				if err == nil || errors.Is(err, context.Canceled) {
+				if errors.Is(err, context.Canceled) {
 					return nil
 				}
 				return err

@@ -221,14 +221,13 @@ func (s *localListener) Run() {
 		s.closeListener.Store(ln.Close)
 
 		s.logf("listening on %v", s.ap)
+		// handleListenersAccept always returns a non-nil error.
 		err = s.handleListenersAccept(ln)
 		if s.ctx.Err() != nil {
 			// context canceled, we're done
 			return
 		}
-		if err != nil {
-			s.logf("localListener accept error, retrying: %v", err)
-		}
+		s.logf("localListener accept error, retrying: %v", err)
 	}
 }
 
