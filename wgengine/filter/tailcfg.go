@@ -31,89 +31,103 @@ var defaultProtosView = views.SliceOf(defaultProtos)
 func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 	mm := make([]Match, 0, len(pf))
 	var erracc error
-
 	for _, r := range pf {
-		if len(r.SrcBits) > 0 {
-			return nil, fmt.Errorf("unexpected SrcBits; control plane should not send this to this client version")
+		m, err := MatchFromFilterRule(r)
+		if err != nil && erracc == nil {
+			erracc = err
 		}
-		// Profiling determined that this function was spending a lot
-		// of time in runtime.growslice. As such, we attempt to
-		// pre-allocate some slices. Multipliers were chosen arbitrarily.
-		m := Match{
-			Srcs: make([]netip.Prefix, 0, len(r.SrcIPs)),
-			Dsts: make([]NetPortRange, 0, 2*len(r.DstPorts)),
-			Caps: make([]CapMatch, 0, 3*len(r.CapGrant)),
-		}
-
-		if len(r.IPProto) == 0 {
-			m.IPProto = defaultProtosView
-		} else {
-			filtered := make([]ipproto.Proto, 0, len(r.IPProto))
-			for _, n := range r.IPProto {
-				if n >= 0 && n <= 0xff {
-					filtered = append(filtered, ipproto.Proto(n))
-				}
-			}
-			m.IPProto = views.SliceOf(filtered)
-		}
-
-		for _, s := range r.SrcIPs {
-			nets, cap, err := parseIPSet(s)
-			if err != nil && erracc == nil {
-				erracc = err
-				continue
-			}
-			m.Srcs = append(m.Srcs, nets...)
-			if cap != "" {
-				m.SrcCaps = append(m.SrcCaps, cap)
-			}
-		}
-		m.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(m.Srcs))
-
-		for _, d := range r.DstPorts {
-			if d.Bits != nil {
-				return nil, fmt.Errorf("unexpected DstBits; control plane should not send this to this client version")
-			}
-			nets, cap, err := parseIPSet(d.IP)
-			if err != nil && erracc == nil {
-				erracc = err
-				continue
-			}
-			if cap != "" {
-				erracc = fmt.Errorf("unexpected capability %q in DstPorts", cap)
-				continue
-			}
-			for _, net := range nets {
-				m.Dsts = append(m.Dsts, NetPortRange{
-					Net: net,
-					Ports: PortRange{
-						First: d.Ports.First,
-						Last:  d.Ports.Last,
-					},
-				})
-			}
-		}
-		for _, cm := range r.CapGrant {
-			for _, dstNet := range cm.Dsts {
-				for _, cap := range cm.Caps {
-					m.Caps = append(m.Caps, CapMatch{
-						Dst: dstNet,
-						Cap: cap,
-					})
-				}
-				for cap, val := range cm.CapMap {
-					m.Caps = append(m.Caps, CapMatch{
-						Dst:    dstNet,
-						Cap:    tailcfg.PeerCapability(cap),
-						Values: val,
-					})
-				}
-			}
-		}
-
 		mm = append(mm, m)
 	}
 	return mm, erracc
+}
+
+// MatchFromFilterRule converts a single tailcfg FilterRule into a Match.
+//
+// If an error is returned, the Match result is still valid, containing the
+// portions of the rule that were successfully converted.
+func MatchFromFilterRule(r tailcfg.FilterRule) (m Match, retErr error) {
+	if len(r.SrcBits) > 0 {
+		var zero Match
+		return zero, fmt.Errorf("unexpected SrcBits; control plane should not send this to this client version")
+	}
+
+	// Profiling determined that this function was spending a lot
+	// of time in runtime.growslice. As such, we attempt to
+	// pre-allocate some slices. Multipliers were chosen arbitrarily.
+	m = Match{
+		Srcs: make([]netip.Prefix, 0, len(r.SrcIPs)),
+		Dsts: make([]NetPortRange, 0, 2*len(r.DstPorts)),
+		Caps: make([]CapMatch, 0, 3*len(r.CapGrant)),
+	}
+
+	if len(r.IPProto) == 0 {
+		m.IPProto = defaultProtosView
+	} else {
+		filtered := make([]ipproto.Proto, 0, len(r.IPProto))
+		for _, n := range r.IPProto {
+			if n >= 0 && n <= 0xff {
+				filtered = append(filtered, ipproto.Proto(n))
+			}
+		}
+		m.IPProto = views.SliceOf(filtered)
+	}
+
+	for _, s := range r.SrcIPs {
+		nets, cap, err := parseIPSet(s)
+		if err != nil && retErr == nil {
+			retErr = err
+			continue
+		}
+		m.Srcs = append(m.Srcs, nets...)
+		if cap != "" {
+			m.SrcCaps = append(m.SrcCaps, cap)
+		}
+	}
+	m.SrcsContains = ipset.NewContainsIPFunc(views.SliceOf(m.Srcs))
+
+	for _, d := range r.DstPorts {
+		if d.Bits != nil {
+			var zero Match
+			return zero, fmt.Errorf("unexpected DstBits; control plane should not send this to this client version")
+		}
+		nets, cap, err := parseIPSet(d.IP)
+		if err != nil && retErr == nil {
+			retErr = err
+			continue
+		}
+		if cap != "" {
+			retErr = fmt.Errorf("unexpected capability %q in DstPorts", cap)
+			continue
+		}
+		for _, net := range nets {
+			m.Dsts = append(m.Dsts, NetPortRange{
+				Net: net,
+				Ports: PortRange{
+					First: d.Ports.First,
+					Last:  d.Ports.Last,
+				},
+			})
+		}
+	}
+	for _, cm := range r.CapGrant {
+		for _, dstNet := range cm.Dsts {
+			for _, cap := range cm.Caps {
+				m.Caps = append(m.Caps, CapMatch{
+					Dst: dstNet,
+					Cap: cap,
+				})
+			}
+			for cap, val := range cm.CapMap {
+				m.Caps = append(m.Caps, CapMatch{
+					Dst:    dstNet,
+					Cap:    tailcfg.PeerCapability(cap),
+					Values: val,
+				})
+			}
+		}
+	}
+
+	return m, retErr
 }
 
 var (
