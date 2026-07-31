@@ -190,7 +190,8 @@ type CapabilityVersion int
 //   - 141: 2026-05-28: Client understands [NodeAttrNeverGSOEqualTail]
 //   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
 //   - 143: 2026-07-22: Client correctly ignores conn25 node attributes when not enabled by environment variable
-const CurrentCapabilityVersion CapabilityVersion = 143
+//   - 144: 2026-07-31: Client sends [packet.TSMPDiscoKeyAdvertisement] around WireGuard handshakes
+const CurrentCapabilityVersion CapabilityVersion = 144
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
