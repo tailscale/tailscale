@@ -747,8 +747,10 @@ func (e *userspaceEngine) SetPeerSessionStateFunc(fn func(key.NodePublic, PeerWi
 }
 
 // SetPeerPriorityMessageOnEstablishmentFunc registers a callback with a
-// [github.com/tailscale/wireguard-go/device] to be sent on session establishement.
-// This establishment happens at every wireguard rekey event.
+// [github.com/tailscale/wireguard-go/device.Device] to be triggered whenever
+// WireGuard establishes a new encryption keypair with an active peer, including
+// during periodic key rotation after approximately [device.RekeyAfterTime] of
+// activity.
 //
 // This callback must be cheap and must not call back into the
 // [github.com/tailscale/wireguard-go/device.Device]. The returned message must
