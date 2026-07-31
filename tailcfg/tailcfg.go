@@ -1579,6 +1579,18 @@ type CapGrant struct {
 // It must be a URL like "https://tailscale.com/cap/file-send".
 type PeerCapability string
 
+// PeerCapabilityPrefix is a prefix for [PeerCapMap] keys that share a common
+// namespace, where each entry represents a distinct named instance (e.g. one
+// per connector app). The full key is formed by concatenating the prefix with
+// the instance name.
+type PeerCapabilityPrefix string
+
+// ToAttribute returns the full [NodeCapability] key for the given value under
+// this prefix, of the form prefix+value.
+func (p PeerCapabilityPrefix) ToAttribute(value string) PeerCapability {
+	return PeerCapability(string(p) + value)
+}
+
 const (
 	// PeerCapabilityFileSharingTarget grants the current node the ability to send
 	// files to the peer which has this capability.
@@ -1620,6 +1632,20 @@ const (
 	// capabilities, such as the ability to add user groups to the OIDC
 	// claim
 	PeerCapabilityTsIDP PeerCapability = "tailscale.com/cap/tsidp"
+)
+
+const (
+	// PeerCapabilityPrefixConn25 is the prefix for per-app [PeerCapMap] entries
+	// that grant a peer access to an app provided by a conn25 app connector.
+	// Actual capabilities look like "tailscale.com/cap/conn25/example" for
+	// an app named "example".
+	// Each value under such a key is a JSON-marshaled slice of
+	// [ProtoPortRange].
+	// Typically, there is only a single value. If multiple values are present
+	// then they should be treated the same as if combined into a single
+	// slice. The order does not matter, as the union of all entries will pass
+	// the packet filter.
+	PeerCapabilityPrefixConn25 PeerCapabilityPrefix = "sailorfrag.net/cap/conn25/"
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for

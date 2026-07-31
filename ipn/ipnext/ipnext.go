@@ -477,6 +477,11 @@ type Hooks struct {
 	//
 	// The hook is called with LocalBackend's mutex locked.
 	ExtraRouterConfigRoutes feature.Hook[func() views.Slice[netip.Prefix]]
+
+	// OnPolicyChange is called (in a separate goroutine) when the packet
+	// filter changes so that existing sessions can be re-evaluated for validity
+	// and closed if they'd no longer be accepted.
+	OnPolicyChange feature.Hooks[func()]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet

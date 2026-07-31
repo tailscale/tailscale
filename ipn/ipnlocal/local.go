@@ -3483,9 +3483,12 @@ func (b *LocalBackend) updateFilterLocked(prefs ipn.PrefsView) {
 	oldJailedFilter := b.e.GetJailedFilter()
 	b.e.SetJailedFilter(filter.NewShieldsUpFilter(localNets, logNets, oldJailedFilter, b.logf))
 
-	if b.sshServer != nil {
-		b.goTracker.Go(b.sshServer.OnPolicyChange)
-	}
+	b.goTracker.Go(func() {
+		b.sshServer.OnPolicyChange()
+		for _, f := range b.extHost.Hooks().OnPolicyChange {
+			f()
+		}
+	})
 }
 
 // packetFilterPermitsUnlockedNodes reports any peer in peers with the

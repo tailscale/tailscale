@@ -92,10 +92,11 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	}).View()
 
 	tests := []struct {
-		name         string
-		ctipReqPeers []tailcfg.NodeView           // One entry per request and the other
-		ctipReqs     []ConnectorTransitIPRequest  // arrays in this struct must have the same
-		wants        []ConnectorTransitIPResponse // cardinality
+		name            string
+		ctipReqPeers    []tailcfg.NodeView // One entry per request and the other
+		ctipReqPeerCaps []tailcfg.PeerCapMap
+		ctipReqs        []ConnectorTransitIPRequest  // arrays in this struct must have the same
+		wants           []ConnectorTransitIPResponse // cardinality
 		// For checking lookups:
 		//	The outer array needs to correspond to the number of requests,
 		//	can be nil if no lookups need to be done after the request is processed.
@@ -351,8 +352,9 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			for i, peer := range tt.ctipReqPeers {
 				req := tt.ctipReqs[i]
 				want := tt.wants[i]
+				peerCap := tt.ctipReqPeerCaps[i]
 
-				resp := c.handleConnectorTransitIPRequest(peer, req)
+				resp := c.handleConnectorTransitIPRequest(peer, peerCap, req)
 
 				// Ensure that we have the expected number of responses
 				if len(resp.TransitIPs) != len(want.TransitIPs) {
@@ -382,7 +384,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 						}
 						pip, tip, wantDip := wantLookup[0], wantLookup[1], wantLookup[2]
 						aa, _ := c.connector.lookupBySrcIPAndTransitIP(pip, tip)
-						gotDip := aa.addr
+						gotDip := aa.Addr
 						if gotDip != wantDip {
 							t.Errorf("wrong result on lookup[%d][%d] ([%v], [%v]): got [%v] expected [%v]",
 								i, j, pip, tip, gotDip, wantDip)
@@ -2484,9 +2486,9 @@ func TestConnectorRealIPForTransitIPConnection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(t.Logf)
 			c.reconfig(cfg)
-			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc] = map[netip.Addr]appAddr{}
-			c.connector.transitIPs[mappedSrc][mappedTip] = appAddr{addr: mappedMip}
+			c.connector.transitIPs = map[netip.Addr]map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc] = map[netip.Addr]AppAddr{}
+			c.connector.transitIPs[mappedSrc][mappedTip] = AppAddr{Addr: mappedMip}
 			mip, err := c.ConnectorRealIPForTransitIPConnection(tt.src, tt.tip)
 			if mip != tt.wantMip {
 				t.Fatalf("checking magic ip: want %v, got %v", tt.wantMip, mip)
