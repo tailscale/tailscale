@@ -28,6 +28,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
@@ -56,6 +57,7 @@ func mustIPSetFromPrefix(s string) *netipx.IPSet {
 func TestHandleConnectorTransitIPRequest(t *testing.T) {
 
 	const appName = "TestApp"
+	const invalidAppName = "InvalidApp"
 
 	// Peer IPs
 	pipV4_1 := netip.MustParseAddr("100.101.101.101")
@@ -94,10 +96,12 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	}).View()
 
 	tests := []struct {
-		name         string
-		ctipReqPeers []tailcfg.NodeView           // One entry per request and the other
-		ctipReqs     []ConnectorTransitIPRequest  // arrays in this struct must have the same
-		wants        []ConnectorTransitIPResponse // cardinality
+		name           string
+		ctipReqPeers   []tailcfg.NodeView          // One entry per request and the other
+		ctipReqs       []ConnectorTransitIPRequest // arrays in this struct must have the same
+		missingPeerCap bool
+		bypassFilter   bool
+		wants          []ConnectorTransitIPResponse // cardinality
 		// For checking lookups:
 		//	The outer array needs to correspond to the number of requests,
 		//	can be nil if no lookups need to be done after the request is processed.
@@ -318,13 +322,86 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-invalid-app",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: "Unknown App"}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
 				{{pipV4_2, tipV4_1, netip.Addr{}}},
+			},
+		},
+		// Missing PeerCap
+		{
+			name:         "missing-peercap",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+			},
+			missingPeerCap: true,
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: MissingAppPermission, Message: missingAppPermissionMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, netip.Addr{}}},
+			},
+		},
+		// Missing PeerCap but BypassFilter is set
+		{
+			name:         "missing-peercap-bypass",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+			},
+			missingPeerCap: true,
+			bypassFilter:   true,
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}},
+			},
+		},
+		// Has PeerCap and BypassFilter is set
+		{
+			name:         "has-peercap-bypass",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+			},
+			bypassFilter: true,
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}},
+			},
+		},
+		{
+			name:         "invalid-app-with-peercap",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{},
+			},
+		},
+		{
+			name:         "invalid-app-without-peercap",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+			},
+			missingPeerCap: true,
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: MissingAppPermission, Message: missingAppPermissionMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{},
 			},
 		},
 	}
@@ -347,14 +424,26 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(&config{
 				isConfigured: true,
-				appsByName:   map[string]appctype.Conn25Attr{appName: {}},
+				appsByName: map[string]appctype.Conn25Attr{
+					appName: {
+						Name:                        appName,
+						TemporaryUnsafeBypassFilter: tt.bypassFilter,
+					},
+				},
 			})
 
 			for i, peer := range tt.ctipReqPeers {
 				req := tt.ctipReqs[i]
 				want := tt.wants[i]
+				peerCap := tailcfg.PeerCapMap{
+					peercap.Conn25Prefix.ToAttribute(appName):        []tailcfg.RawMessage{`"*"`},
+					peercap.Conn25Prefix.ToAttribute(invalidAppName): []tailcfg.RawMessage{`"*"`},
+				}
+				if tt.missingPeerCap {
+					peerCap = nil
+				}
 
-				resp := c.handleConnectorTransitIPRequest(peer, req)
+				resp := c.handleConnectorTransitIPRequest(peer, peerCap, req)
 
 				// Ensure that we have the expected number of responses
 				if len(resp.TransitIPs) != len(want.TransitIPs) {
@@ -2674,8 +2763,12 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	// this would be a data race if we had started the sweeper, but we haven't.
 	c.connector.clock = clock
 
+	peerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute(appName): []tailcfg.RawMessage{`"*"`},
+	}
+
 	register := func(peer tailcfg.NodeView, tip, dst netip.Addr) {
-		c.handleConnectorTransitIPRequest(peer, ConnectorTransitIPRequest{
+		c.handleConnectorTransitIPRequest(peer, peerCap, ConnectorTransitIPRequest{
 			TransitIPs: []TransitIPRequest{{TransitIP: tip, DestinationIP: dst, App: appName}},
 		})
 	}
