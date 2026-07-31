@@ -12,14 +12,19 @@ package desktop
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"sync"
 
+	"golang.org/x/sys/windows"
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/util/syspolicy/rsop"
+	"tailscale.com/util/syspolicy/setting"
+	"tailscale.com/util/syspolicy/source"
 )
 
 // featureName is the name of the feature implemented by this package.
@@ -48,6 +53,16 @@ type desktopSessionsExt struct {
 	// mu protects all following fields.
 	mu       sync.Mutex
 	sessByID map[SessionID]*Session
+
+	// userPolicyStores tracks per-user RSOP policy store registrations,
+	// refcounted by the number of active sessions for each user
+	userPolicyStores map[string]*userPolicyStore
+}
+
+type userPolicyStore struct {
+	refcount int
+	store    source.Store
+	reg      *rsop.StoreRegistration
 }
 
 // newDesktopSessionsExt returns a new [desktopSessionsExt],
@@ -78,8 +93,12 @@ func (e *desktopSessionsExt) Init(host ipnext.Host) (err error) {
 	if err != nil {
 		return fmt.Errorf("session callback registration failed: %w", err)
 	}
+	unregisterPolicyCb, err := e.sm.RegisterInitCallback(e.initUserPolicyStore)
+	if err != nil {
+		return fmt.Errorf("policy store callback registration failed: %w", err)
+	}
 	host.Hooks().BackgroundProfileResolvers.Add(e.getBackgroundProfile)
-	e.cleanup = []func(){unregisterSessionCb}
+	e.cleanup = []func(){unregisterSessionCb, unregisterPolicyCb}
 	return nil
 }
 
@@ -116,6 +135,96 @@ func (e *desktopSessionsExt) updateDesktopSessionState(session *Session) {
 	reason := fmt.Sprintf("%s %s session %v", userIdentifier, action, session.ID)
 
 	e.host.Profiles().SwitchToBestProfileAsync(reason)
+}
+
+// initUserPolicyStore is a [SessionInitCallback] that registers a
+// per-user policy store when a user logs in. The returned cleanup
+// function releases the store when the session is destroyed.
+func (e *desktopSessionsExt) initUserPolicyStore(session *Session) func() {
+	uid := string(session.User.UserID())
+	if uid == "" {
+		return nil
+	}
+
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(uint32(session.ID), &token); err != nil {
+		e.logf("failed to get user token for session %d: %v", session.ID, err)
+		return nil
+	}
+	defer token.Close()
+
+	store, err := source.NewUserPlatformPolicyStore(token)
+	if err != nil {
+		e.logf("failed to create user policy store for %s: %v", uid, err)
+		return nil
+	}
+
+	if err := e.ensureUserPolicyStore(uid, store); err != nil {
+		e.logf("failed to register user policy store for %s: %v", uid, err)
+		return nil
+	}
+
+	e.logf("registered user policy store for %s (session %d)", uid, session.ID)
+	return func() {
+		e.releaseUserPolicyStore(uid)
+		e.logf("released user policy store for %s (session %d)", uid, session.ID)
+	}
+}
+
+// ensureUserPolicyStore registers a per-user policy store with RSOP.
+// If a store is already registered for this user (from another session),
+// it increments the refcount and closes the provided store.
+func (e *desktopSessionsExt) ensureUserPolicyStore(uid string, store source.Store) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if ups, ok := e.userPolicyStores[uid]; ok {
+		ups.refcount++
+		if c, ok := store.(io.Closer); ok {
+			c.Close()
+		}
+		return nil
+	}
+
+	scope := setting.UserScopeOf(uid)
+	reg, err := rsop.RegisterStore("Platform", scope, store)
+	if err != nil {
+		if c, ok := store.(io.Closer); ok {
+			c.Close()
+		}
+		return err
+	}
+
+	if e.userPolicyStores == nil {
+		e.userPolicyStores = make(map[string]*userPolicyStore)
+	}
+	e.userPolicyStores[uid] = &userPolicyStore{
+		refcount: 1,
+		store:    store,
+		reg:      reg,
+	}
+	return nil
+}
+
+// releaseUserPolicyStore decrements the refcount for a user's policy
+// store. At zero, the store is unregistered from RSOP and closed.
+func (e *desktopSessionsExt) releaseUserPolicyStore(uid string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	ups, ok := e.userPolicyStores[uid]
+	if !ok {
+		return
+	}
+	ups.refcount--
+	if ups.refcount > 0 {
+		return
+	}
+	ups.reg.Unregister()
+	if c, ok := ups.store.(io.Closer); ok {
+		c.Close()
+	}
+	delete(e.userPolicyStores, uid)
 }
 
 // getBackgroundProfile is a [ipnext.ProfileResolver] that works as follows:
