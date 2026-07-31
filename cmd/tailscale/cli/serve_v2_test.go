@@ -1474,6 +1474,43 @@ func TestMessageForPort(t *testing.T) {
 				"",
 				"https://foo.test.ts.net/",
 				"|-- proxy http://127.0.0.1:3000",
+				"|-- " + funnelAuthPostureLine(nil),
+				"",
+				fmt.Sprintf(msgRunningInBackground, "Funnel"),
+				fmt.Sprintf(msgDisableProxy, "funnel", "https", 443),
+			}, "\n"),
+		},
+		{
+			name:   "funnel-https-auth",
+			subcmd: funnel,
+			serveConfig: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"foo.test.ts.net:443": {
+						Handlers: map[string]*ipn.HTTPHandler{
+							"/": {
+								Proxy: "http://127.0.0.1:3000",
+								Auth:  &ipn.FunnelAuth{Provider: "tailscale", Allow: []string{"*@example.com"}},
+							},
+						},
+					},
+				},
+				AllowFunnel: map[ipn.HostPort]bool{
+					"foo.test.ts.net:443": true,
+				},
+			},
+			status:  &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"}},
+			dnsName: "foo.test.ts.net",
+			srvType: serveTypeHTTPS,
+			srvPort: 443,
+			expected: strings.Join([]string{
+				msgFunnelAvailable,
+				"",
+				"https://foo.test.ts.net/",
+				"|-- proxy http://127.0.0.1:3000",
+				"|-- " + funnelAuthPostureLine(&ipn.FunnelAuth{Provider: "tailscale", Allow: []string{"*@example.com"}}),
 				"",
 				fmt.Sprintf(msgRunningInBackground, "Funnel"),
 				fmt.Sprintf(msgDisableProxy, "funnel", "https", 443),

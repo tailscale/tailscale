@@ -245,6 +245,15 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 				fs.Var(&serviceNameFlag{Value: &e.service}, "service", "Serve for a service with distinct virtual IP instead on node itself.")
 				fs.BoolVar(&e.tun, "tun", false, "Forward all traffic to the local machine (default false), only supported for services. Refer to docs for more information.")
 			}
+			if subcmd == funnel {
+				// Authenticated Funnel: require internet visitors to sign in
+				// with Login With Tailscale before they can reach your server.
+				// This protects an otherwise-public Funnel endpoint; without
+				// it, anyone on the internet can reach the served content.
+				fs.BoolVar(&e.auth, "auth", false, "Require visitors to authenticate with Login With Tailscale before reaching the server. Without --auth, the Funnel is public to the entire internet.")
+				fs.StringVar(&e.allow, "allow", "", "With --auth, restrict access to a comma-separated allowlist. Each entry is an exact email (alice@example.com), an email domain (*@example.com), or a tailnet (tailnet:example.com). Empty allows any Tailscale user.")
+				fs.DurationVar(&e.authSessionTTL, "auth-session-ttl", 0, "With --auth, how long a visitor's browser session stays valid before re-authenticating (e.g. 1h, 12h). Zero uses a default of 12h.")
+			}
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
@@ -410,6 +419,17 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			if err := e.verifyFunnelEnabled(ctx, 443); err != nil {
 				return err
 			}
+		}
+
+		// Authenticated Funnel flags only make sense with funnel.
+		if !funnel && (e.auth || e.allow != "" || e.authSessionTTL != 0) {
+			return errors.New("Error: --auth, --allow, and --auth-session-ttl are only supported with funnel")
+		}
+		if !e.auth && (e.allow != "" || e.authSessionTTL != 0) {
+			return errors.New("Error: --allow and --auth-session-ttl require --auth")
+		}
+		if _, err := funnelAuthFromFlags(e.auth, e.allow, e.authSessionTTL); err != nil {
+			return err
 		}
 
 		if forService && !e.bg.Value {
@@ -995,7 +1015,16 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveTy
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
 		useTLS := srvType == serveTypeHTTPS
-		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps)
+		// Authenticated Funnel only applies to node HTTP(S) serve that is
+		// funneled; it is rejected earlier for services.
+		var auth *ipn.FunnelAuth
+		if allowFunnel {
+			var err error
+			if auth, err = funnelAuthFromFlags(e.auth, e.allow, e.authSessionTTL); err != nil {
+				return err
+			}
+		}
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target, mds, caps, auth)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
@@ -1119,10 +1148,16 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		sort.Slice(mounts, func(i, j int) bool {
 			return len(mounts[i]) < len(mounts[j])
 		})
+		funneled := !forService && sc.AllowFunnel[hp]
 		for _, m := range mounts {
-			t, d := srvTypeAndDesc(webConfig.Handlers[m])
+			h := webConfig.Handlers[m]
+			t, d := srvTypeAndDesc(h)
 			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
-			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
+			output.WriteString(fmt.Sprintf("%s %-5s %s\n", "|--", t, d))
+			if funneled {
+				output.WriteString("|-- " + funnelAuthPostureLine(h.Auth) + "\n")
+			}
+			output.WriteString("\n")
 		}
 	} else if tcpHandler != nil {
 		var annotations []string
@@ -1241,8 +1276,9 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 	return nil
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability, auth *ipn.FunnelAuth) error {
 	h := new(ipn.HTTPHandler)
+	h.Auth = auth
 	switch {
 	case strings.HasPrefix(target, "text:"):
 		text := strings.TrimPrefix(target, "text:")

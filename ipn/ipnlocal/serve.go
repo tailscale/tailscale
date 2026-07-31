@@ -93,6 +93,13 @@ type serveHTTPContext struct {
 	Funnel *funnelFlow
 	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
 	AppCapabilities views.Slice[tailcfg.PeerCapability]
+
+	// FunnelAuthSession, if non-nil, is the authenticated visitor identity
+	// for an authenticated Funnel request. It is set by funnelAuthGate once a
+	// request passes the session check, and read by addTailscaleIdentityHeaders
+	// to forward the visitor's identity to the backend. Nil for
+	// unauthenticated funnel and for tailnet traffic.
+	FunnelAuthSession *funnelAuthSession
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -801,9 +808,9 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 	return <-errc
 }
 
-func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
-	var z ipn.HTTPHandlerView // zero value
-
+// webServerConfigForRequest resolves the WebServerConfigView serving r's host
+// and port, applying the same hostname normalization getServeHandler uses.
+func (b *LocalBackend) webServerConfigForRequest(r *http.Request) (wsc ipn.WebServerConfigView, ok bool) {
 	hostname := r.Host
 	if r.TLS == nil {
 		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
@@ -816,13 +823,31 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	} else {
 		hostname = r.TLS.ServerName
 	}
-
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
 	if !ok {
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
-		return z, "", false
+		return wsc, false
 	}
-	wsc, ok := b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
+	return b.webServerConfig(hostname, sctx.ForVIPService, sctx.DestPort)
+}
+
+// funnelHostHasAuth reports whether any handler on wsc has authenticated Funnel
+// configured. When true, the whole /.well-known/tailscale/funnel-auth/ prefix
+// is owned by the node for that host and must never fall through to an app
+// route, even one whose own handler has no Auth.
+func funnelHostHasAuth(wsc ipn.WebServerConfigView) (auth ipn.FunnelAuthView, ok bool) {
+	for _, h := range wsc.Handlers().All() {
+		if a := h.Auth(); a.Valid() {
+			return a, true
+		}
+	}
+	return auth, false
+}
+
+func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
+	var z ipn.HTTPHandlerView // zero value
+
+	wsc, ok := b.webServerConfigForRequest(r)
 	if !ok {
 		return z, "", false
 	}
@@ -1078,6 +1103,7 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
 	r.Out.Header.Del("Tailscale-User-Login")
+	r.Out.Header.Del("Tailscale-User-Email")
 	r.Out.Header.Del("Tailscale-User-Name")
 	r.Out.Header.Del("Tailscale-User-Profile-Pic")
 	r.Out.Header.Del("Tailscale-Funnel-Request")
@@ -1089,6 +1115,19 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	}
 	if c.Funnel != nil {
 		r.Out.Header.Set("Tailscale-Funnel-Request", "?1")
+		// For authenticated Funnel, forward the verified visitor identity so
+		// the backend app knows who is calling. Only set when a session
+		// passed the gate; unauthenticated Funnel forwards nothing here.
+		if s := c.FunnelAuthSession; s != nil {
+			if s.Email != "" {
+				r.Out.Header.Set("Tailscale-User-Login", encTailscaleHeaderValue(s.Email))
+				r.Out.Header.Set("Tailscale-User-Email", encTailscaleHeaderValue(s.Email))
+			}
+			if s.Name != "" {
+				r.Out.Header.Set("Tailscale-User-Name", encTailscaleHeaderValue(s.Name))
+			}
+			r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
+		}
 		return
 	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
@@ -1171,11 +1210,41 @@ func parseRedirectWithCode(redirect string) (code int, url string) {
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
+	// Authenticated Funnel: reserved-path interception. If this is a Funnel
+	// request to a host that has any Auth-configured handler, the whole
+	// /.well-known/tailscale/funnel-auth/ prefix belongs to the node. Handling
+	// it here — before mount-point matching — means the OIDC callback and
+	// logout endpoints can never be shadowed by, and a reserved-prefix app
+	// route can never leak to, the backend. Unauthenticated funnel and tailnet
+	// traffic are wholly unaffected.
+	funnelReq := false
+	if sctx, ok := serveHTTPContextKey.ValueOk(r.Context()); ok && sctx.Funnel != nil {
+		funnelReq = true
+		if wsc, ok := b.webServerConfigForRequest(r); ok {
+			if auth, ok := funnelHostHasAuth(wsc); ok {
+				if b.handleFunnelAuthReserved(w, r, auth) {
+					return
+				}
+			}
+		}
+	}
+
 	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Authenticated Funnel gate, per matched mount point (Auth is per-mount,
+	// spec §6.3). Runs only for Funnel requests to a handler with Auth set.
+	if funnelReq {
+		if auth := h.Auth(); auth.Valid() {
+			if !b.funnelAuthGate(w, r, auth) {
+				return
+			}
+		}
+	}
+
 	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, s)
@@ -1562,6 +1631,14 @@ func (b *LocalBackend) hasIngressEnabledLocked() bool {
 	return b.serveConfig.Valid() && b.serveConfig.IsFunnelOn()
 }
 
+// hasFunnelAuthEnabledLocked reports whether any funnel-enabled endpoint
+// requires authentication. This bool is sent to control (in
+// Hostinfo.FunnelAuthEnabled) so the admin console can show each funnel's
+// posture (authenticated vs. public).
+func (b *LocalBackend) hasFunnelAuthEnabledLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.HasFunnelAuth()
+}
+
 // shouldWireInactiveIngressLocked reports whether the node is in a state where funnel is not actively enabled, but it
 // seems that it is intended to be used with funnel.
 func (b *LocalBackend) shouldWireInactiveIngressLocked() bool {
@@ -1700,6 +1777,14 @@ func maybeUpdateHostinfoFunnelLocked(b *LocalBackend, hi *tailcfg.Hostinfo, pref
 	if ie := b.hasIngressEnabledLocked(); hi.IngressEnabled != ie {
 		b.logf("Hostinfo.IngressEnabled changed to %v", ie)
 		hi.IngressEnabled = ie
+		changed = true
+	}
+	// The Hostinfo.FunnelAuthEnabled field tells control whether any funnel
+	// endpoint requires authentication, so the admin console can show the
+	// funnel's posture (authenticated vs. public).
+	if fa := b.hasFunnelAuthEnabledLocked(); hi.FunnelAuthEnabled != fa {
+		b.logf("Hostinfo.FunnelAuthEnabled changed to %v", fa)
+		hi.FunnelAuthEnabled = fa
 		changed = true
 	}
 	// The Hostinfo.WireIngress field tells control whether the user intends

@@ -54,6 +54,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"RemoteConfig",
 		"WireIngress",
 		"IngressEnabled",
+		"FunnelAuthEnabled",
 		"AllowsUpdate",
 		"Machine",
 		"GoArch",

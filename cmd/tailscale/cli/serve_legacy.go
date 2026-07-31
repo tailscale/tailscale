@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/local"
@@ -176,6 +177,9 @@ type serveEnv struct {
 	tun              bool                     // redirect traffic to OS for service
 	allServices      bool                     // apply config file to all services
 	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward
+	auth             bool                     // require Login With Tailscale for funnel visitors
+	allow            string                   // comma-separated funnel auth allowlist
+	authSessionTTL   time.Duration            // funnel auth session lifetime (0 = default)
 
 	lc localServeClient // localClient interface, specific to serve
 	// optional stuff for tests:

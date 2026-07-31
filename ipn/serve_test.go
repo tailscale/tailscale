@@ -4,11 +4,127 @@
 package ipn
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
+
+// TestFunnelAuthJSONRoundTrip verifies that HTTPHandler.Auth survives a
+// JSON round trip (ServeConfig persists as JSON in the StateStore) and
+// that configs without Auth are unaffected by the new field.
+func TestFunnelAuthJSONRoundTrip(t *testing.T) {
+	sc := &ServeConfig{
+		Web: map[HostPort]*WebServerConfig{
+			"foo.test.ts.net:443": {
+				Handlers: map[string]*HTTPHandler{
+					"/": {
+						Proxy: "http://127.0.0.1:3000",
+						Auth: &FunnelAuth{
+							Provider:   "tailscale",
+							Allow:      []string{"alice@example.com", "*@example.com", "tailnet:example.com"},
+							SessionTTL: 12 * time.Hour,
+						},
+					},
+					"/public": {Proxy: "http://127.0.0.1:3001"},
+				},
+			},
+		},
+	}
+	j, err := json.Marshal(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ServeConfig
+	if err := json.Unmarshal(j, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sc, &got) {
+		t.Errorf("round trip mismatch:\n got: %+v\nwant: %+v", &got, sc)
+	}
+
+	// A handler without Auth must not emit the field (old nodes ignore
+	// unknown fields, but keeping the wire format identical is cheaper).
+	hj, err := json.Marshal(got.Web["foo.test.ts.net:443"].Handlers["/public"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"Proxy":"http://127.0.0.1:3001"}`; string(hj) != want {
+		t.Errorf("handler without Auth marshals to %s; want %s", hj, want)
+	}
+
+	// An old config (no Auth anywhere) still loads with Auth == nil.
+	var old ServeConfig
+	if err := json.Unmarshal([]byte(`{"Web":{"foo.test.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if h := old.Web["foo.test.ts.net:443"].Handlers["/"]; h.Auth != nil {
+		t.Errorf("old config unexpectedly has Auth: %+v", h.Auth)
+	}
+}
+
+func TestHasFunnelAuth(t *testing.T) {
+	authed := func() *HTTPHandler {
+		return &HTTPHandler{Proxy: "http://127.0.0.1:3000", Auth: &FunnelAuth{Provider: "tailscale"}}
+	}
+	tests := []struct {
+		name string
+		sc   *ServeConfig
+		want bool
+	}{
+		{name: "nil", sc: nil, want: false},
+		{name: "empty", sc: &ServeConfig{}, want: false},
+		{
+			name: "funnel on but no auth",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": true},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": {Proxy: "http://127.0.0.1:3000"}}}},
+			},
+			want: false,
+		},
+		{
+			name: "auth but funnel off",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": false},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+			},
+			want: false,
+		},
+		{
+			name: "auth and funnel on",
+			sc: &ServeConfig{
+				AllowFunnel: map[HostPort]bool{"h:443": true},
+				Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+			},
+			want: true,
+		},
+		{
+			name: "auth in foreground config",
+			sc: &ServeConfig{
+				Foreground: map[string]*ServeConfig{
+					"sess": {
+						AllowFunnel: map[HostPort]bool{"h:443": true},
+						Web:         map[HostPort]*WebServerConfig{"h:443": {Handlers: map[string]*HTTPHandler{"/": authed()}}},
+					},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sc.HasFunnelAuth(); got != tt.want {
+				t.Errorf("HasFunnelAuth() = %v; want %v", got, tt.want)
+			}
+			if got := tt.sc.View().HasFunnelAuth(); got != tt.want {
+				t.Errorf("View().HasFunnelAuth() = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestCheckFunnelAccess(t *testing.T) {
 	caps := func(c ...tailcfg.NodeCapability) []tailcfg.NodeCapability { return c }

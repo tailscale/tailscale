@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -182,8 +183,34 @@ type HTTPHandler struct {
 	//   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
 	Redirect string `json:",omitempty"`
 
+	// Auth, if non-nil, configures authentication for Funnel requests to
+	// this handler. Visitors from the public internet are redirected to
+	// Login With Tailscale and admitted only with a valid session,
+	// optionally filtered by Auth.Allow. Nil means unauthenticated
+	// (the default; today's behavior). It has no effect on requests
+	// arriving over the tailnet.
+	Auth *FunnelAuth `json:",omitempty"`
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes?
+}
+
+// FunnelAuth configures authentication for a Funnel HTTP handler.
+// Nil means unauthenticated (today's behavior).
+type FunnelAuth struct {
+	// Provider is the identity provider. v1 supports only "tailscale".
+	Provider string `json:",omitempty"`
+
+	// Allow is an optional allowlist. Empty = any Tailscale user.
+	// Each entry is one of:
+	//   "alice@example.com"   exact email
+	//   "*@example.com"       email domain (requires a verified email)
+	//   "tailnet:example.com" a specific tailnet
+	Allow []string `json:",omitempty"`
+
+	// SessionTTL is how long a browser session cookie is valid.
+	// Zero means a default of 12 hours.
+	SessionTTL time.Duration `json:",omitempty"`
 }
 
 // WebHandlerExists reports whether if the ServeConfig Web handler exists for
@@ -628,6 +655,40 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 	}
 	for _, conf := range sc.Foreground {
 		if conf.IsFunnelOn() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFunnelAuth reports whether any funnel-enabled web handler on this node
+// requires visitors to authenticate with Login With Tailscale (HTTPHandler.Auth
+// is set). It is used to report the node's authenticated-Funnel posture to
+// control (Hostinfo.FunnelAuthEnabled).
+func (v ServeConfigView) HasFunnelAuth() bool { return v.ж.HasFunnelAuth() }
+
+// HasFunnelAuth reports whether any funnel-enabled web handler requires
+// authentication. See [ServeConfigView.HasFunnelAuth].
+func (sc *ServeConfig) HasFunnelAuth() bool {
+	if sc == nil {
+		return false
+	}
+	for hp, on := range sc.AllowFunnel {
+		if !on {
+			continue
+		}
+		wsc, ok := sc.Web[hp]
+		if !ok {
+			continue
+		}
+		for _, h := range wsc.Handlers {
+			if h != nil && h.Auth != nil {
+				return true
+			}
+		}
+	}
+	for _, conf := range sc.Foreground {
+		if conf.HasFunnelAuth() {
 			return true
 		}
 	}
