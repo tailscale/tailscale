@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/transport"
+
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	ksr "tailscale.com/k8s-operator/sessionrecording"
@@ -55,7 +56,7 @@ var (
 //     caller's Tailscale identity and the rules defined in the tailnet ACLs.
 //   - false: the proxy is started and requests are passed through to the
 //     Kubernetes API without any auth modifications.
-func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, mode kubetypes.APIServerProxyMode, https bool) (*APIServerProxy, error) {
+func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsnet.Server, mode kubetypes.APIServerProxyMode, https bool, svcName tailcfg.ServiceName) (*APIServerProxy, error) {
 	if mode == kubetypes.APIServerProxyModeNoAuth {
 		restConfig = rest.AnonymousClientConfig(restConfig)
 	}
@@ -95,6 +96,7 @@ func NewAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, ts *tsn
 		lc:            lc,
 		authMode:      mode == kubetypes.APIServerProxyModeAuth,
 		https:         https,
+		svcName:       svcName,
 		upstreamURL:   u,
 		ts:            ts,
 		sendEventFunc: sessionrecording.SendEvent,
@@ -197,6 +199,7 @@ type APIServerProxy struct {
 
 	authMode    bool // Whether to run with impersonation using caller's tailnet identity.
 	https       bool // Whether to serve on https for the device hostname; true for k8s-operator, false (and localhost) for k8s-proxy.
+	svcName     tailcfg.ServiceName
 	ts          *tsnet.Server
 	hs          *http.Server
 	upstreamURL *url.URL
@@ -471,7 +474,7 @@ func (ap *APIServerProxy) addImpersonationHeadersAsRequired(r *http.Request) {
 }
 
 func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error) {
-	who, remoteErr := ap.lc.WhoIs(r.Context(), r.RemoteAddr)
+	who, remoteErr := ap.whoIsAddr(r.Context(), r.RemoteAddr)
 	if remoteErr == nil {
 		ap.log.Debugf("WhoIs from remote addr: %s", r.RemoteAddr)
 		return who, nil
@@ -480,7 +483,7 @@ func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error)
 	var fwdErr error
 	fwdFor := r.Header.Get("X-Forwarded-For")
 	if fwdFor != "" && !ap.https {
-		who, fwdErr = ap.lc.WhoIs(r.Context(), fwdFor)
+		who, fwdErr = ap.whoIsAddr(r.Context(), fwdFor)
 		if fwdErr == nil {
 			ap.log.Debugf("WhoIs from X-Forwarded-For header: %s", fwdFor)
 			return who, nil
@@ -488,6 +491,14 @@ func (ap *APIServerProxy) whoIs(r *http.Request) (*apitype.WhoIsResponse, error)
 	}
 
 	return nil, errors.Join(remoteErr, fwdErr)
+}
+
+func (ap *APIServerProxy) whoIsAddr(ctx context.Context, addr string) (*apitype.WhoIsResponse, error) {
+	if ap.svcName != "" {
+		return ap.lc.WhoIsForService(ctx, addr, ap.svcName)
+	}
+
+	return ap.lc.WhoIs(ctx, addr)
 }
 
 func (ap *APIServerProxy) authError(w http.ResponseWriter, err error) {
