@@ -99,7 +99,6 @@ spec:
                         also dynamically discover other routes.
                         https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
                       type: array
-                      minItems: 1
                       items:
                         type: string
                         format: cidr
