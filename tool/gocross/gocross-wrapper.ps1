@@ -152,7 +152,7 @@ $bootstrapScriptBlock = {
     if (Test-Path -LiteralPath $toolchain -PathType Container -ErrorAction SilentlyContinue) {
         $goMod = Join-Path $repoRoot 'go.mod' -Resolve
         $goLine = Get-Content -LiteralPath $goMod | Select-String -Pattern '^go (.*)$' -List
-        $wantGoMinor = $goLine.Matches.Groups[1].Value.split('.')[1]
+        $wantGoMinor = $goLine.Matches.Groups[1].Value.split('.')[1] -replace 'rc.*', ''
         $versionFile = Join-Path $toolchain 'VERSION'
         if (Test-Path -LiteralPath $versionFile -PathType Leaf -ErrorAction SilentlyContinue) {
             try {
