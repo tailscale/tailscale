@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/key"
@@ -359,7 +360,7 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
 		return
 	}
-	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), req)
+	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), h.PeerCaps(), req)
 	bs, err := json.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
@@ -485,13 +486,14 @@ const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPReq
 const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
 const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
 const unknownAppNameMessage = "The App name in the request does not match a configured App"
+const missingAppPermissionMessage = "You do not have permission to use this App"
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
 // to a ConnectorTransitIPRequest. It updates the connectors mapping of
 // TransitIP->DestinationIP per peer (using the Peer's IP that matches the address
 // family of the transitIP). If a peer has stored this mapping in the connector,
 // Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
-func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps tailcfg.PeerCapMap, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
 	resp := ConnectorTransitIPResponse{}
 	cfg, ok := c.getConfig()
 	if !ok {
@@ -531,7 +533,22 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, ctipr Conne
 			continue
 		}
 
-		if _, ok := cfg.appsByName[each.App]; !ok {
+		authorized := peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App))
+
+		app, ok := cfg.appsByName[each.App]
+		if !authorized && !(ok && app.TemporaryUnsafeBypassFilter) {
+			// Ideally this check should occur immediately after setting
+			// authorized above, but for development we have a bypass in the app
+			// config. For unknown apps that are not authorized, we should
+			// present the authorization error to prevent enumeration of apps.
+			// TODO(tailscale/corp#40076): simplify after temporary bypass is removed
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    MissingAppPermission,
+				Message: missingAppPermissionMessage,
+			})
+			continue
+		}
+		if !ok {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    UnknownAppName,
 				Message: unknownAppNameMessage,
@@ -643,6 +660,10 @@ const (
 	// UnknownAppName indicates that the connector is not configured to handle requests
 	// for the App name that was specified in the request.
 	UnknownAppName = 5
+
+	// MissingAppPermission indicates that the client is not permitted to access
+	// the App name that was specified in the request.
+	MissingAppPermission = 6
 )
 
 // TransitIPResponse is the response to a TransitIPRequest
