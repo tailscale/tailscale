@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -965,4 +966,50 @@ func anyErr() func(error) string {
 
 func cmd(s string) []string {
 	return strings.Fields(s)
+}
+
+// TestServeStatusJSONWarning verifies that "serve status --json" prints a
+// warning to stderr explaining that the JSON is internal runtime state and
+// pointing users to the declarative get-config/set-config commands, while
+// keeping stdout as clean, parseable JSON. See tailscale/corp#39789.
+func TestServeStatusJSONWarning(t *testing.T) {
+	lc := &fakeLocalServeClient{
+		config: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	e := &serveEnv{
+		lc:         lc,
+		json:       true,
+		testStdout: &stdout,
+		testStderr: &stderr,
+	}
+	if err := e.runServeStatus(context.Background(), nil); err != nil {
+		t.Fatalf("runServeStatus: %v", err)
+	}
+
+	// stdout must remain valid, parseable JSON (no warning mixed in), so that
+	// existing `--json | jq` pipelines keep working.
+	var sc ipn.ServeConfig
+	if err := json.Unmarshal(stdout.Bytes(), &sc); err != nil {
+		t.Errorf("stdout is not valid JSON: %v\nstdout:\n%s", err, stdout.Bytes())
+	}
+	if strings.Contains(stdout.String(), "Warning") {
+		t.Errorf("warning leaked into stdout JSON:\n%s", stdout.String())
+	}
+
+	// stderr must carry the warning, name both declarative commands, and link
+	// to the serve KB.
+	errOut := stderr.String()
+	for _, want := range []string{
+		"internal",
+		"get-config",
+		"set-config",
+		"tailscale.com/kb/1242/tailscale-serve",
+	} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr missing %q; got:\n%s", want, errOut)
+		}
+	}
 }

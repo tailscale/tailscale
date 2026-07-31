@@ -625,6 +625,13 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 		}
 		j = append(j, '\n')
 		e.stdout().Write(j)
+		// The JSON output is Tailscale's internal runtime representation, not a
+		// supported declarative configuration format. Warn on stderr (so it
+		// doesn't corrupt the JSON on stdout) and point users at the
+		// declarative get-config/set-config commands. See tailscale/corp#39789.
+		fmt.Fprint(e.stderr(), "Warning: the output of \"tailscale serve status --json\" reflects internal runtime state and is not a supported configuration format.\n"+
+			"To view or manage your serve configuration declaratively, use \"tailscale serve get-config\" and \"tailscale serve set-config\".\n"+
+			"See https://tailscale.com/kb/1242/tailscale-serve for details.\n")
 		return nil
 	}
 	printFunnelStatus(ctx)
