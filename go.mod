@@ -139,7 +139,7 @@ require (
 	gopkg.in/square/go-jose.v2 v2.6.0
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
 	helm.sh/helm/v3 v3.19.0
-	honnef.co/go/tools v0.7.0
+	honnef.co/go/tools v0.8.0-rc.1
 	k8s.io/api v0.34.0
 	k8s.io/apimachinery v0.34.0
 	k8s.io/apiserver v0.34.0
