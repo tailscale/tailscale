@@ -41,6 +41,11 @@ jobs:
         with:
           version: v2.10.1
 
+          # DO NOT MERGE: the prebuilt golangci-lint binary is built with
+          # Go 1.26 and refuses to target Go 1.27rc2, so build it from
+          # source with the Go toolchain installed above.
+          install-mode: goinstall
+
           # Show only new issues if it's a pull request.
           only-new-issues: true
 
