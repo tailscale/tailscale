@@ -39,9 +39,6 @@ jobs:
         with:
           version: v2.10.1
 
-          # Show only new issues if it's a pull request.
-          only-new-issues: true
-
           # Loading packages with a cold cache takes a while:
           args: --timeout=10m
           
