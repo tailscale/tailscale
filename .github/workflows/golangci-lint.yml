@@ -31,7 +31,9 @@ jobs:
 
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: go.mod
+          # DO NOT MERGE: setup-go can't resolve the "1.27rc2" go.mod
+          # directive, so pin the release candidate explicitly.
+          go-version: "1.27.0-rc.2"
           cache: true
 
       - name: golangci-lint
