@@ -480,7 +480,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			svcName = e.service
 			dnsName = e.service.String()
 		}
-		tagged := st.Self.Tags != nil && st.Self.Tags.Len() > 0
+		tagged := st.Self.Tags.Len() > 0
 		if forService && !tagged && !turnOff {
 			return errors.New("service hosts must be tagged nodes")
 		}

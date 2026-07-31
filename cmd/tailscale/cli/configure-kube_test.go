@@ -354,8 +354,7 @@ func TestNodeOrServiceDNSNameFromArg(t *testing.T) {
 	}
 
 	peerWithService := &ipnstate.PeerStatus{DNSName: "node-a.example.ts.net."}
-	allowed := views.SliceOf([]netip.Prefix{netip.PrefixFrom(svcIP, svcIP.BitLen())})
-	peerWithService.AllowedIPs = &allowed
+	peerWithService.AllowedIPs = views.SliceOf([]netip.Prefix{netip.PrefixFrom(svcIP, svcIP.BitLen())})
 
 	// A peer with no AllowedIPs, as reported for a ProxyGroup whose backing
 	// nodes are offline or not yet approved (issue #20255).

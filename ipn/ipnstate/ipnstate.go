@@ -249,16 +249,16 @@ type PeerStatus struct {
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
 	// AllowedIPs are IP addresses allowed to route to this node.
-	AllowedIPs *views.Slice[netip.Prefix] `json:",omitempty"`
+	AllowedIPs views.Slice[netip.Prefix] `json:",omitzero"`
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
-	Tags *views.Slice[string] `json:",omitempty"`
+	Tags views.Slice[string] `json:",omitzero"`
 
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
-	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
+	PrimaryRoutes views.Slice[netip.Prefix] `json:",omitzero"`
 
 	// Endpoints:
 	Addrs     []string
@@ -366,10 +366,6 @@ func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
 // It is the analogue of [tailcfg.Node.IsRouter].
 func (ps *PeerStatus) IsRouter() bool {
 	// TODO(sfllaw): Keep this aligned with dbx.Node.IsSubnetRouter.
-	if ps.AllowedIPs == nil {
-		return false
-	}
-
 	for _, r := range ps.AllowedIPs.All() {
 		if !r.IsSingleIP() || !slices.Contains(ps.TailscaleIPs, r.Addr()) {
 			return true
@@ -380,7 +376,7 @@ func (ps *PeerStatus) IsRouter() bool {
 
 // IsTagged reports whether ps is tagged.
 func (ps *PeerStatus) IsTagged() bool {
-	return ps.Tags != nil && ps.Tags.Len() > 0
+	return ps.Tags.Len() > 0
 }
 
 // StatusBuilder is a request to construct a Status. A new StatusBuilder is
@@ -495,13 +491,13 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
 	}
-	if v := st.PrimaryRoutes; v != nil && !v.IsNil() {
+	if v := st.PrimaryRoutes; !v.IsNil() {
 		e.PrimaryRoutes = v
 	}
-	if v := st.AllowedIPs; v != nil && !v.IsNil() {
+	if v := st.AllowedIPs; !v.IsNil() {
 		e.AllowedIPs = v
 	}
-	if v := st.Tags; v != nil && !v.IsNil() {
+	if v := st.Tags; !v.IsNil() {
 		e.Tags = v
 	}
 	if v := st.OS; v != "" {

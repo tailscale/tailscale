@@ -1108,7 +1108,7 @@ func TestIncrementalMapUpdatePeerAllowedIPsReachability(t *testing.T) {
 		if !ok {
 			return fmt.Errorf("node 1 doesn't see node 2 as a peer")
 		}
-		if p.AllowedIPs == nil {
+		if p.AllowedIPs.Len() == 0 {
 			return fmt.Errorf("node 1 sees node 2 with no AllowedIPs")
 		}
 		for _, allowedIP := range p.AllowedIPs.All() {

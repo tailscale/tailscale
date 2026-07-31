@@ -91,7 +91,7 @@ func TestQnapAuthnURL(t *testing.T) {
 //  2. permissioning of api endpoints based on node capabilities
 func TestServeAPI(t *testing.T) {
 	selfTags := views.SliceOf([]string{"tag:server"})
-	self := &ipnstate.PeerStatus{ID: "self", Tags: &selfTags}
+	self := &ipnstate.PeerStatus{ID: "self", Tags: selfTags}
 	prefs := &ipn.Prefs{}
 
 	remoteUser := &tailcfg.UserProfile{ID: tailcfg.UserID(1)}
@@ -345,7 +345,7 @@ func TestGetTailscaleBrowserSession(t *testing.T) {
 		},
 		{
 			name:        "no-session-tagged-self-node",
-			selfNode:    &ipnstate.PeerStatus{ID: "self", Tags: &tags},
+			selfNode:    &ipnstate.PeerStatus{ID: "self", Tags: tags},
 			remoteAddr:  userANodeIP,
 			wantSession: nil,
 			wantError:   errNoSession,
@@ -1226,7 +1226,7 @@ func TestRequireTailscaleIP(t *testing.T) {
 func TestPeerCapabilities(t *testing.T) {
 	userOwnedStatus := &ipnstate.Status{Self: &ipnstate.PeerStatus{UserID: tailcfg.UserID(1)}}
 	tags := views.SliceOf[string]([]string{"tag:server"})
-	tagOwnedStatus := &ipnstate.Status{Self: &ipnstate.PeerStatus{Tags: &tags}}
+	tagOwnedStatus := &ipnstate.Status{Self: &ipnstate.PeerStatus{Tags: tags}}
 
 	// Testing web.toPeerCapabilities
 	toPeerCapsTests := []struct {

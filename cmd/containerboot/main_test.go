@@ -1554,10 +1554,7 @@ func peerStatusFromNode(n tailcfg.NodeView) *ipnstate.PeerStatus {
 			ps.TailscaleIPs = append(ps.TailscaleIPs, p.Addr())
 		}
 	}
-	if n.AllowedIPs().Len() != 0 {
-		v := n.AllowedIPs()
-		ps.AllowedIPs = &v
-	}
+	ps.AllowedIPs = n.AllowedIPs()
 	return ps
 }
 

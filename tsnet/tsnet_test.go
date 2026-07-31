@@ -2457,7 +2457,7 @@ func TestUserMetricsRouteGauges(t *testing.T) {
 		}
 		// Wait for the primary routes to reach our desired routes, which is wantRoutes + 1, because
 		// the PrimaryRoutes list will contain a exit node route, which the metric does not count.
-		return status1.Self.PrimaryRoutes != nil && status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
+		return status1.Self.PrimaryRoutes.Len() == int(wantRoutes)+1
 	})
 
 	ctxLc, cancelLc := context.WithTimeout(context.Background(), 5*time.Second)
