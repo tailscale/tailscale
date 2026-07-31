@@ -1186,18 +1186,9 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 //
 // The test has two modes, pinging from the offline node to the online node,
 // and pinging from the online node to the offline node.
-//
-// TODO(cmol): The online -> offline test is skipped for now (as of 2026-06-12).
-// The TSMP disco key exchange currently relies on disco ping messages being
-// sent. These will however not be sent if there is not endpoints on the online
-// node which is possible in the event where a node has registered but not
-// finished STUN.
 func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 	for _, testPingFrom := range []string{"offline", "online"} {
 		t.Run(fmt.Sprintf("ping_from_%s", testPingFrom), func(t *testing.T) {
-			if testPingFrom == "online" {
-				t.Skip("https://github.com/tailscale/tailscale/issues/19843")
-			}
 			env := vmtest.New(t)
 
 			aNet := env.AddNetwork("1.0.0.1", "192.168.1.1/24", vnet.EasyNAT)
@@ -1217,6 +1208,7 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 			}
 			checkInitialMetrics := env.AddStep("Check initial client metrics")
 			cutControlStep := env.AddStep("Cut control server access from a")
+			verifyEndpointsStep := env.AddStep("Wait for endpoints")
 			restartStep := env.AddStep("Restart tailscaled on a")
 			tsmpPingStep := env.AddStep(fmt.Sprintf("%s TSMP (cached netmap, no control)", pStr))
 			discoPingStep := env.AddStep(fmt.Sprintf("%s Disco (want Direct)", pStr))
@@ -1240,6 +1232,22 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 				}
 			})
 			cutControlStep.End(nil)
+
+			// Wait for endpoints to show up on both nodes to ensure disco pings can
+			// be sent.
+			verifyEndpointsStep.Begin()
+			if err := tstest.WaitFor(15*time.Second, func() error {
+				if err := env.HasEndpointsForOther(a, b); err != nil {
+					return err
+				}
+				if err := env.HasEndpointsForOther(b, a); err != nil {
+					return err
+				}
+				return nil
+			}); err != nil {
+				verifyEndpointsStep.Fatalf("got no endpoints %v", err)
+			}
+			verifyEndpointsStep.End(nil)
 
 			restartStep.Begin()
 			env.RestartTailscaled(a)
