@@ -10,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
 	"tailscale.com/types/key"
 )
@@ -128,10 +129,13 @@ func TestTSMPDiscoKeyAdvertisementMarshal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.tka.Marshal()
 			if err != nil {
-				t.Errorf("error mashalling TSMPDiscoAdvertisement: %s", err)
+				t.Errorf("error marshalling TSMPDiscoAdvertisement: %s", err)
 			}
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("error mashalling TSMPDiscoAdvertisement, expected: \n%x, \ngot:\n%x", tt.want, got)
+				t.Errorf("error marshalling TSMPDiscoAdvertisement, expected: \n%x, \ngot:\n%x", tt.want, got)
+			}
+			if len(got) > device.MaxPriorityMessageContentSize {
+				t.Errorf("marshalled length (%d) exceeds device.MaxPriorityMessageContentSize (%d)", len(got), device.MaxPriorityMessageContentSize)
 			}
 		})
 	}
