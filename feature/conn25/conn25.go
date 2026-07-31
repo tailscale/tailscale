@@ -17,6 +17,7 @@ import (
 	"iter"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -180,7 +181,7 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		if urlBase == "" {
 			return "", nil
 		}
-		return urlBase + "/dns-query", nil
+		return fmt.Sprintf("%s/dns-query?app=%s", urlBase, url.QueryEscape(app.Name)), nil
 	}); err != nil {
 		return fmt.Errorf("could not register DNS resolver scheme: %w", err)
 	}
