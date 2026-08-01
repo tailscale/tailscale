@@ -53,8 +53,11 @@ func serveServiceClientPrefs(h *localapi.Handler, w http.ResponseWriter, r *http
 		var err error
 		if out, err = ext.setServiceClientPref(req); err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errInvalidServiceClientPref) {
+			switch {
+			case errors.Is(err, errInvalidServiceClientPref):
 				status = http.StatusBadRequest
+			case errors.Is(err, errProfileChanged):
+				status = http.StatusConflict
 			}
 			http.Error(w, err.Error(), status)
 			return

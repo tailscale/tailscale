@@ -79,6 +79,59 @@ func TestServiceClientPrefsEmptyKeyRejected(t *testing.T) {
 	}
 }
 
+func TestServiceClientPrefsProfileIDGuard(t *testing.T) {
+	tests := []struct {
+		name      string
+		profileID string
+		wantErr   bool
+	}{
+		{name: "empty_profile_id_skips_the_check", profileID: ""},
+		{name: "matching_profile_id_is_accepted", profileID: "pid"},
+		{name: "stale_profile_id_is_rejected", profileID: "other", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestExtension(t, "pid")
+			req := apitype.ServiceClientPrefRequest{Key: "ssh:22", Client: "terminal", ProfileID: tt.profileID}
+			_, err := e.setServiceClientPref(req)
+			if gotErr := errors.Is(err, errProfileChanged); gotErr != tt.wantErr {
+				t.Fatalf("errProfileChanged = %v (err %v); want %v", gotErr, err, tt.wantErr)
+			}
+			got, err := e.serviceClientPrefs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wrote := got["ssh:22"].Client == "terminal"; wrote == tt.wantErr {
+				t.Errorf("pref written = %v; want %v", wrote, !tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServiceClientPrefsPublishedToBus(t *testing.T) {
+	e := newTestExtension(t, "pid")
+	host := e.host.(*fakeHost)
+
+	// onChangeProfile in newTestExtension publishes the (empty) initial state.
+	got := host.lastServiceClientPrefs()
+	if got == nil {
+		t.Fatal("no notify published on profile change")
+	}
+	if got.ProfileID != "pid" {
+		t.Errorf("ProfileID = %q; want pid", got.ProfileID)
+	}
+	if len(got.Prefs) != 0 {
+		t.Errorf("Prefs = %v; want empty", got.Prefs)
+	}
+
+	if _, err := e.setServiceClientPref(apitype.ServiceClientPrefRequest{Key: "ssh:22", Client: "terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if got = host.lastServiceClientPrefs(); got.Prefs["ssh:22"].Client != "terminal" {
+		t.Errorf("published prefs = %v; want Client=terminal for ssh:22", got.Prefs)
+	}
+}
+
 func TestServiceClientPrefsNoCurrentProfileReturnsEmpty(t *testing.T) {
 	e := newTestExtension(t, "") // no current profile
 	got, err := e.serviceClientPrefs()

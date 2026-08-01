@@ -112,6 +112,10 @@ type ServiceClientPrefRequest struct {
 	// where serviceName is a [tailcfg.ServiceName], e.g. "svc:my-db:5432".
 	Key string
 
+	// ProfileID is the ID of the user profile that the service client pref belongs to. Optional.
+	// When set, the write is rejected if the profile ID does not match the current user profile ID.
+	ProfileID string `json:",omitzero"`
+
 	// Client is the name of the client that the user picked in the service launch. Optional.
 	Client string `json:",omitzero"`
 
