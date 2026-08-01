@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -828,6 +829,75 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 			h := w.Result().Header
 			for _, c := range tt.wantHeaders {
 				if got := h.Get(c.header); got != c.want {
+					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestAddProxyForwardedHeaders(t *testing.T) {
+	tests := []struct {
+		name      string
+		tls       bool
+		inHeader  http.Header
+		wantProto string
+	}{
+		{
+			name:      "https",
+			tls:       true,
+			wantProto: "https",
+		},
+		{
+			name:      "http",
+			wantProto: "http",
+		},
+		{
+			name:      "http-with-client-supplied-proto",
+			inHeader:  http.Header{"X-Forwarded-Proto": []string{"https"}},
+			wantProto: "http",
+		},
+		{
+			name:      "https-with-client-supplied-proto",
+			tls:       true,
+			inHeader:  http.Header{"X-Forwarded-Proto": []string{"gopher"}},
+			wantProto: "https",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := &http.Request{
+				Method: "GET",
+				Host:   "example.ts.net",
+				URL:    &url.URL{Path: "/"},
+				Header: http.Header{
+					"X-Forwarded-For":  []string{"9.9.9.9"},
+					"X-Forwarded-Host": []string{"evil.example"},
+				},
+			}
+			for k, vv := range tt.inHeader {
+				in.Header[k] = vv
+			}
+			if tt.tls {
+				in.TLS = &tls.ConnectionState{ServerName: "example.ts.net"}
+			}
+			in = in.WithContext(serveHTTPContextKey.WithValue(in.Context(), &serveHTTPContext{
+				DestPort: 80,
+				SrcAddr:  netip.MustParseAddrPort("100.150.151.152:1234"),
+			}))
+			out := in.Clone(in.Context())
+
+			addProxyForwardedHeaders(&httputil.ProxyRequest{In: in, Out: out})
+
+			for _, c := range []struct {
+				header string
+				want   string
+			}{
+				{"X-Forwarded-Proto", tt.wantProto},
+				{"X-Forwarded-For", "100.150.151.152"},
+				{"X-Forwarded-Host", "example.ts.net"},
+			} {
+				if got := out.Header.Get(c.header); got != c.want {
 					t.Errorf("invalid %q header; want=%q, got=%q", c.header, c.want, got)
 				}
 			}
