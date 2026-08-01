@@ -5,6 +5,7 @@ package integration
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 
 // TestPeerCapMap tests that the node capability map (CapMap) is included in peer information.
 func TestPeerCapMap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -96,6 +100,9 @@ func TestPeerCapMap(t *testing.T) {
 
 // TestSetNodeCapMap tests that SetNodeCapMap updates are propagated to peers.
 func TestSetNodeCapMap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
