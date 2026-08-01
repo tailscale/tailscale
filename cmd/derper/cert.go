@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -52,20 +53,27 @@ func certProviderByCertMode(mode, dir, hostname string, ipCerts bool, eabKID, ea
 	if ipCerts && mode != "letsencrypt" {
 		return nil, errors.New("--acme-ip-certs requires --certmode=letsencrypt")
 	}
+	hostnameIPs, hostnameIsIPs, err := parseIPHostnames(hostname)
+	if err != nil {
+		return nil, err
+	}
 	switch mode {
 	case "letsencrypt", "gcp":
-		if hostnameIP, err := netip.ParseAddr(hostname); err == nil {
+		if hostnameIsIPs {
 			if mode == "gcp" {
 				return nil, errors.New("--certmode=gcp requires --hostname to be a DNS name, not an IP address")
 			}
 			if !ipCerts {
+				if len(hostnameIPs) > 1 {
+					return nil, errors.New("--hostname contains an IPv4 and IPv6 pair; set --acme-ip-certs to get LetsEncrypt IP address certs")
+				}
 				return nil, errors.New("--hostname is an IP address; use --certmode=manual for a self-signed cert, or set --acme-ip-certs to get LetsEncrypt IP address certs")
 			}
-			// IP-only server: use the explicitly configured address as
-			// the certificate identifier. This also supports public IPs
-			// delivered to the server through NAT, where LocalAddr reports
-			// the post-NAT private address.
-			return newIPCertManager(dir, email, "", hostnameIP, nil)
+			// IP-only server: use the explicitly configured address for
+			// each address family as the certificate identifier. This also
+			// supports public IPs delivered to the server through NAT, where
+			// LocalAddr reports the post-NAT private address.
+			return newIPCertManager(dir, email, "", hostnameIPs, nil)
 		}
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -100,14 +108,60 @@ func certProviderByCertMode(mode, dir, hostname string, ipCerts bool, eabKID, ea
 			certManager.Email = "security@tailscale.com"
 		}
 		if ipCerts {
-			return newIPCertManager(dir, email, "", netip.Addr{}, certManager)
+			return newIPCertManager(dir, email, "", nil, certManager)
 		}
 		return certManager, nil
 	case "manual":
+		if len(hostnameIPs) > 1 {
+			return nil, errors.New("--certmode=manual requires --hostname to be a single DNS name or IP address")
+		}
 		return NewManualCertManager(dir, hostname)
 	default:
 		return nil, fmt.Errorf("unsupport cert mode: %q", mode)
 	}
+}
+
+// parseIPHostnames parses hostname as either a single IP address or a
+// comma-separated IPv4 and IPv6 pair. A value without a comma that is not an IP
+// address is treated as a DNS hostname.
+func parseIPHostnames(hostname string) (ips []netip.Addr, isIPs bool, err error) {
+	parts := strings.Split(hostname, ",")
+	if len(parts) == 1 {
+		ip, err := netip.ParseAddr(hostname)
+		if err != nil {
+			return nil, false, nil
+		}
+		if ip.Zone() != "" {
+			return nil, true, errors.New("--hostname IP address must not contain a zone")
+		}
+		return []netip.Addr{ip.Unmap()}, true, nil
+	}
+
+	var hasIPv4, hasIPv6 bool
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		ip, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, true, fmt.Errorf("--hostname must be a DNS name or a comma-separated IPv4 and IPv6 pair: %q is not an IP address", part)
+		}
+		if ip.Zone() != "" {
+			return nil, true, fmt.Errorf("--hostname IP address %q must not contain a zone", part)
+		}
+		ip = ip.Unmap()
+		if ip.Is4() {
+			if hasIPv4 {
+				return nil, true, errors.New("--hostname may contain at most one IPv4 address")
+			}
+			hasIPv4 = true
+		} else {
+			if hasIPv6 {
+				return nil, true, errors.New("--hostname may contain at most one IPv6 address")
+			}
+			hasIPv6 = true
+		}
+		ips = append(ips, ip)
+	}
+	return ips, true, nil
 }
 
 type manualCertManager struct {

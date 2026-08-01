@@ -42,9 +42,11 @@ const shortlivedProfile = "shortlived"
 // short-lived ACME certificate profile and the HTTP-01 challenge
 // served on the derper's plaintext HTTP port.
 //
-// If --hostname is an IP address, that explicitly configured address
-// is used. This supports servers behind NAT, where a connection to the
-// public IP has a private local address after destination NAT.
+// If --hostname contains IP addresses, the explicitly configured address for
+// the connection's address family is used. This supports servers behind NAT,
+// where a connection to the public IP has a private local address after
+// destination NAT. An address family not listed in --hostname continues to use
+// the connection's local address.
 //
 // Otherwise, clients connecting to an IP address usually send no SNI,
 // so the requested IP address is taken from the TCP connection's local
@@ -57,12 +59,12 @@ const shortlivedProfile = "shortlived"
 // optional next provider (the regular autocert manager for the
 // --hostname certificate), if any.
 type ipCertManager struct {
-	certDir string
-	email   string // optional ACME account contact
-	client  *acme.Client
-	fixedIP netip.Addr   // explicit public IP from an IP --hostname, or invalid
-	next    certProvider // provider for DNS hostname connections, or nil
-	nextTLS *tls.Config  // next.TLSConfig(), or nil
+	certDir     string
+	email       string // optional ACME account contact
+	client      *acme.Client
+	hostnameIPs []netip.Addr // explicit public IPs from an IP-valued --hostname
+	next        certProvider // provider for DNS hostname connections, or nil
+	nextTLS     *tls.Config  // next.TLSConfig(), or nil
 
 	mu     sync.Mutex
 	certs  map[netip.Addr]*ipCertEntry
@@ -85,8 +87,9 @@ type ipCertEntry struct {
 //
 // If directoryURL is empty, the LetsEncrypt production directory is
 // used; tests point it at a fake ACME server. If next is non-nil,
-// connections with a DNS name in the SNI are served by it.
-func newIPCertManager(certdir, email, directoryURL string, fixedIP netip.Addr, next certProvider) (*ipCertManager, error) {
+// connections with a DNS name in the SNI are served by it. hostnameIPs may
+// contain at most one IPv4 and one IPv6 address.
+func newIPCertManager(certdir, email, directoryURL string, hostnameIPs []netip.Addr, next certProvider) (*ipCertManager, error) {
 	if err := os.MkdirAll(certdir, 0700); err != nil {
 		return nil, err
 	}
@@ -94,10 +97,14 @@ func newIPCertManager(certdir, email, directoryURL string, fixedIP netip.Addr, n
 	if err != nil {
 		return nil, fmt.Errorf("ACME account key: %w", err)
 	}
+	hostnameIPs = slices.Clone(hostnameIPs)
+	for i := range hostnameIPs {
+		hostnameIPs[i] = hostnameIPs[i].Unmap()
+	}
 	m := &ipCertManager{
-		certDir: certdir,
-		email:   email,
-		fixedIP: fixedIP.Unmap(),
+		certDir:     certdir,
+		email:       email,
+		hostnameIPs: hostnameIPs,
 		client: &acme.Client{
 			Key:          accountKey,
 			DirectoryURL: directoryURL,
@@ -176,17 +183,23 @@ func connLocalIP(hi *tls.ClientHelloInfo) (netip.Addr, bool) {
 	return ip, ip.IsValid()
 }
 
+// certIPForConn returns the configured public IP for connIP's address family,
+// or connIP itself if that family has no configured override.
+func (m *ipCertManager) certIPForConn(connIP netip.Addr) netip.Addr {
+	for _, ip := range m.hostnameIPs {
+		if ip.IsValid() && ip.Is4() == connIP.Is4() {
+			return ip
+		}
+	}
+	return connIP
+}
+
 func (m *ipCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	connIP, connIPOK := connLocalIP(hi)
-	certIP := m.fixedIP
-	if !certIP.IsValid() {
-		if !connIPOK {
-			return nil, errors.New("unable to determine the connection's local IP address")
-		}
-		certIP = connIP
-	}
+	var sniIP netip.Addr
 	if hi.ServerName != "" {
-		sniIP, err := netip.ParseAddr(hi.ServerName)
+		var err error
+		sniIP, err = netip.ParseAddr(hi.ServerName)
 		if err != nil {
 			// The SNI is a DNS name; let the hostname provider handle it.
 			if m.nextTLS != nil && m.nextTLS.GetCertificate != nil {
@@ -194,7 +207,14 @@ func (m *ipCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certificat
 			}
 			return nil, fmt.Errorf("no certificate for hostname %q; this server only serves IP address certificates", hi.ServerName)
 		}
-		if sniIP.Unmap() != certIP {
+		sniIP = sniIP.Unmap()
+	}
+	if !connIPOK {
+		return nil, errors.New("unable to determine the connection's local IP address")
+	}
+	certIP := m.certIPForConn(connIP)
+	if sniIP.IsValid() {
+		if sniIP != certIP {
 			return nil, fmt.Errorf("requested certificate for IP %v does not match server IP %v", sniIP, certIP)
 		}
 	}
