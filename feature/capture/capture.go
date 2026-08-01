@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,8 +39,10 @@ func serveLocalAPIDebugCapture(h *localapi.Handler, w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 
+	snapLen, _ := strconv.Atoi(r.URL.Query().Get("snaplen"))
+
 	b := h.LocalBackend()
-	s := b.GetOrSetCaptureSink(newSink)
+	s := b.GetOrSetCaptureSink(func() packet.CaptureSink { return newSink(snapLen) })
 
 	unregister := s.RegisterOutput(w)
 
@@ -60,32 +63,42 @@ var bufferPool = sync.Pool{
 
 const flushPeriod = 100 * time.Millisecond
 
-func writePcapHeader(w io.Writer) {
+// defaultSnapLen is the pcap snapshot length used when a capture does not
+// request one. It matches tcpdump's default; Tailscale packets are far smaller,
+// so the default effectively never truncates.
+const defaultSnapLen = 262144
+
+func writePcapHeader(w io.Writer, snapLen int) {
 	binary.Write(w, binary.LittleEndian, uint32(0xA1B2C3D4)) // pcap magic number
 	binary.Write(w, binary.LittleEndian, uint16(2))          // version major
 	binary.Write(w, binary.LittleEndian, uint16(4))          // version minor
 	binary.Write(w, binary.LittleEndian, uint32(0))          // this zone
 	binary.Write(w, binary.LittleEndian, uint32(0))          // zone significant figures
-	binary.Write(w, binary.LittleEndian, uint32(65535))      // max packet len
+	binary.Write(w, binary.LittleEndian, uint32(snapLen))    // snapshot length
 	binary.Write(w, binary.LittleEndian, uint32(147))        // link-layer ID - USER0
 }
 
-func writePktHeader(w *bytes.Buffer, when time.Time, length int) {
+func writePktHeader(w *bytes.Buffer, when time.Time, inclLen, origLen int) {
 	s := when.Unix()
 	us := when.UnixMicro() - (s * 1000000)
 
-	binary.Write(w, binary.LittleEndian, uint32(s))      // timestamp in seconds
-	binary.Write(w, binary.LittleEndian, uint32(us))     // timestamp microseconds
-	binary.Write(w, binary.LittleEndian, uint32(length)) // length present
-	binary.Write(w, binary.LittleEndian, uint32(length)) // total length
+	binary.Write(w, binary.LittleEndian, uint32(s))       // timestamp in seconds
+	binary.Write(w, binary.LittleEndian, uint32(us))      // timestamp microseconds
+	binary.Write(w, binary.LittleEndian, uint32(inclLen)) // number of octets of packet saved
+	binary.Write(w, binary.LittleEndian, uint32(origLen)) // actual length of packet
 }
 
-// newSink creates a new capture sink.
-func newSink() packet.CaptureSink {
+// newSink creates a new capture sink that stores at most snapLen bytes of each
+// captured packet. A snapLen <= 0 uses [defaultSnapLen].
+func newSink(snapLen int) packet.CaptureSink {
+	if snapLen <= 0 {
+		snapLen = defaultSnapLen
+	}
 	ctx, c := context.WithCancel(context.Background())
 	return &Sink{
 		ctx:       ctx,
 		ctxCancel: c,
+		snapLen:   snapLen,
 	}
 }
 
@@ -95,6 +108,10 @@ func newSink() packet.CaptureSink {
 type Sink struct {
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+
+	// snapLen is the maximum number of bytes stored for each captured packet.
+	// It is set once at creation and never mutated afterwards.
+	snapLen int
 
 	mu         sync.Mutex
 	outputs    set.HandleSet[io.Writer]
@@ -116,7 +133,7 @@ func (s *Sink) RegisterOutput(w io.Writer) (unregister func()) {
 	default:
 	}
 
-	writePcapHeader(w)
+	writePcapHeader(w, s.snapLen)
 	s.mu.Lock()
 	hnd := s.outputs.Add(w)
 	s.mu.Unlock()
@@ -188,29 +205,43 @@ func (s *Sink) LogPacket(path packet.CapturePath, when time.Time, data []byte, m
 	}
 
 	extraLen := customDataLen(meta)
-	b := bufferPool.Get().(*bytes.Buffer)
-	b.Reset()
-	b.Grow(16 + extraLen + len(data)) // 16b pcap header + len(metadata) + len(payload)
-	defer bufferPool.Put(b)
+	origLen := extraLen + len(data)
+	inclLen := origLen
+	if s.snapLen > 0 && inclLen > s.snapLen {
+		inclLen = s.snapLen
+	}
 
-	writePktHeader(b, when, len(data)+extraLen)
+	// body holds the record contents (custom metadata followed by the packet
+	// payload) so it can be truncated to the snapshot length before the pcap
+	// record is written.
+	body := bufferPool.Get().(*bytes.Buffer)
+	body.Reset()
+	body.Grow(origLen)
+	defer bufferPool.Put(body)
 
 	// Custom tailscale debugging data
-	binary.Write(b, binary.LittleEndian, uint16(path))
+	binary.Write(body, binary.LittleEndian, uint16(path))
 	if meta.DidSNAT {
-		binary.Write(b, binary.LittleEndian, uint8(meta.OriginalSrc.Addr().BitLen()/8))
-		b.Write(meta.OriginalSrc.Addr().AsSlice())
+		binary.Write(body, binary.LittleEndian, uint8(meta.OriginalSrc.Addr().BitLen()/8))
+		body.Write(meta.OriginalSrc.Addr().AsSlice())
 	} else {
-		binary.Write(b, binary.LittleEndian, uint8(0)) // SNAT addr len == 0
+		binary.Write(body, binary.LittleEndian, uint8(0)) // SNAT addr len == 0
 	}
 	if meta.DidDNAT {
-		binary.Write(b, binary.LittleEndian, uint8(meta.OriginalDst.Addr().BitLen()/8))
-		b.Write(meta.OriginalDst.Addr().AsSlice())
+		binary.Write(body, binary.LittleEndian, uint8(meta.OriginalDst.Addr().BitLen()/8))
+		body.Write(meta.OriginalDst.Addr().AsSlice())
 	} else {
-		binary.Write(b, binary.LittleEndian, uint8(0)) // DNAT addr len == 0
+		binary.Write(body, binary.LittleEndian, uint8(0)) // DNAT addr len == 0
 	}
+	body.Write(data)
 
-	b.Write(data)
+	b := bufferPool.Get().(*bytes.Buffer)
+	b.Reset()
+	b.Grow(16 + inclLen) // 16b pcap header + up to snapLen bytes of the record
+	defer bufferPool.Put(b)
+
+	writePktHeader(b, when, inclLen, origLen)
+	b.Write(body.Bytes()[:inclLen])
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
