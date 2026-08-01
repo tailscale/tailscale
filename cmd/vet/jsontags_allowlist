@@ -1,3 +1,9 @@
+FormatUnsupported	tailscale.com/types/jsonx.*.ISO8601
+FormatUnsupported	tailscale.com/types/jsonx.*.Nano
+FormatUnsupported	tailscale.com/types/jsonx.*.RFC1123
+FormatUnsupported	tailscale.com/types/jsonx.*.Units
+FormatUnsupported	tailscale.com/types/jsonx.*.Unix
+FormatUnsupported	tailscale.com/types/jsonx.*.UnixNano
 OmitEmptyShouldBeOmitZero	tailscale.com/client/web.authResponse.ViewerIdentity
 OmitEmptyShouldBeOmitZero	tailscale.com/cmd/k8s-operator.OwnerRef.Resource
 OmitEmptyShouldBeOmitZero	tailscale.com/cmd/tailscale/cli.apiResponse.Error
