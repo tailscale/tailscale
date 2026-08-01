@@ -253,7 +253,8 @@ type LocalBackend struct {
 	// exposeRemoteWebClientAtomicBool controls whether the web client is exposed over
 	// Tailscale on port 5252.
 	exposeRemoteWebClientAtomicBool atomic.Bool // TODO(nickkhyl): move to nodeBackend
-	shutdownCalled                  bool        // if Shutdown has been called
+	shutdownOnce                    sync.Once   // guards execution of Shutdown
+	shutdownCalled                  bool        // if Shutdown has been called; guarded by mu
 	debugSink                       packet.CaptureSink
 	sockstatLogger                  *sockstatlog.Logger
 
@@ -1291,6 +1292,10 @@ func (b *LocalBackend) ClearCaptureSink() {
 // Shutdown halts the backend and all its sub-components. The backend
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
+	b.shutdownOnce.Do(b.shutdown)
+}
+
+func (b *LocalBackend) shutdown() {
 	defer b.CheckDeadlocks()()
 
 	// Close the [eventbus.Client] to wait for subscribers to
@@ -1305,13 +1310,7 @@ func (b *LocalBackend) Shutdown() {
 	b.em.close()
 
 	b.mu.Lock()
-	if b.shutdownCalled {
-		b.mu.Unlock()
-		return
-	}
 	b.shutdownCalled = true
-
-	b.shutdownCertRefreshLoopLocked()
 
 	b.stopReconnectTimerLocked()
 
@@ -1330,10 +1329,8 @@ func (b *LocalBackend) Shutdown() {
 		b.mu.Lock()
 	}
 	cc := b.cc
-	if b.sshServer != nil {
-		b.sshServer.Shutdown()
-		b.sshServer = nil
-	}
+	sshServer := b.sshServer
+	b.sshServer = nil
 	b.closePeerAPIListenersLocked()
 	if b.debugSink != nil {
 		b.e.InstallCaptureHook(nil)
@@ -1345,6 +1342,15 @@ func (b *LocalBackend) Shutdown() {
 	}
 	b.appConnector.Close()
 	b.mu.Unlock()
+
+	// These shutdown methods wait for goroutines that can acquire b.mu. The
+	// state gates above prevent either subsystem from restarting after the
+	// mutex is released.
+	b.shutdownCertRefreshLoop()
+	if sshServer != nil {
+		sshServer.Shutdown()
+	}
+
 	b.webClientShutdown()
 
 	if b.sockstatLogger != nil {
@@ -8111,6 +8117,9 @@ func (b *LocalBackend) ActiveSSHConns() int {
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.shutdownCalled {
+		return nil, errShutdown
+	}
 	if b.sshServer != nil {
 		return b.sshServer, nil
 	}

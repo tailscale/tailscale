@@ -125,15 +125,18 @@ func (b *LocalBackend) getACMETLSALPNProto(hi *tls.ClientHelloInfo) (string, boo
 // changes, so the cert refresh loop can be (re)started or stopped.
 // b.mu must be held.
 func (b *LocalBackend) updateCertRefreshLoopLocked() {
+	if b.shutdownCalled {
+		return
+	}
 	if f, ok := HookUpdateCertRefreshLoop.GetOk(); ok {
 		f(b, b.state, b.serveConfig)
 	}
 }
 
-// shutdownCertRefreshLoopLocked is called from
-// [LocalBackend.Shutdown] to cancel the cert refresh loop.
-// b.mu must be held.
-func (b *LocalBackend) shutdownCertRefreshLoopLocked() {
+// shutdownCertRefreshLoop is called from [LocalBackend.Shutdown] to cancel the
+// cert refresh loop. It must be called without b.mu held because it waits for
+// the loop, which can be blocked acquiring b.mu.
+func (b *LocalBackend) shutdownCertRefreshLoop() {
 	if f, ok := HookShutdownCertRefreshLoop.GetOk(); ok {
 		f(b)
 	}
