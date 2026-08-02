@@ -973,6 +973,44 @@ func TestSortRegions(t *testing.T) {
 	}
 }
 
+func TestDERPProbeURL(t *testing.T) {
+	tests := []struct {
+		name string
+		node *tailcfg.DERPNode
+		want string
+	}{
+		{
+			name: "default port",
+			node: &tailcfg.DERPNode{HostName: "derp.example.com"},
+			want: "https://derp.example.com/derp/probe",
+		},
+		{
+			name: "explicit https port",
+			node: &tailcfg.DERPNode{
+				HostName: "derp.example.com",
+				DERPPort: 443,
+			},
+			want: "https://derp.example.com/derp/probe",
+		},
+		{
+			name: "custom port",
+			node: &tailcfg.DERPNode{
+				HostName: "derp.example.com",
+				DERPPort: 1443,
+			},
+			want: "https://derp.example.com:1443/derp/probe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := derpProbeURL(tt.node); got != tt.want {
+				t.Fatalf("derpProbeURL() = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type RoundTripFunc func(req *http.Request) *http.Response
 
 func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
