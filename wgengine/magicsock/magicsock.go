@@ -270,6 +270,14 @@ type Conn struct {
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
+	// testOnlyRelayEndpointReadyHook, if non-nil, is invoked by
+	// [endpoint.udpRelayEndpointReady] after it installs a peer relay path
+	// as an endpoint's bestAddr, with the peer's node key and the installed
+	// [addrQuality]. It enables tests to observe peer relay path
+	// establishment as an event instead of polling endpoint state. The hook
+	// must not block; it is invoked from goroutines internal to magicsock.
+	testOnlyRelayEndpointReadyHook syncs.AtomicValue[func(peer key.NodePublic, addr addrQuality)]
+
 	// discoAtomic is the current disco private and public keypair for this conn.
 	discoAtomic discoAtomic
 
