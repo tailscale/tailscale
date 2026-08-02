@@ -1949,8 +1949,8 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:        "tun-mode-with-handlers",
-			description: "Services cannot enable TUN mode if L4 or L7 handlers already exist",
+			name:        "replace-handlers-with-tun-mode",
+			description: "replacing L4 or L7 handlers with TUN mode should work",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
@@ -1974,11 +1974,11 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 					},
 				},
 			},
-			wantError: true,
+			wantError: false,
 		},
 		{
-			name:        "handlers-with-tun-mode",
-			description: "Services cannot add L4 or L7 handlers if TUN mode is already enabled",
+			name:        "replace-tun-mode-with-handlers",
+			description: "replacing TUN mode with L4 or L7 handlers should work",
 			existing: &ipn.ServeConfig{
 				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
 					"svc:foo": {
@@ -2002,7 +2002,7 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 					},
 				},
 			},
-			wantError: true,
+			wantError: false,
 		},
 	}
 
