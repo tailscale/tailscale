@@ -6,6 +6,8 @@ package osrouter
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/tailscale/wireguard-go/tun"
@@ -182,9 +184,43 @@ func ensurePFAnchorRef() error {
 		return nil // already present
 	}
 
+	// "pfctl -sn"/"-sr" print only a table's name, never the addresses it
+	// holds, so a ruleset reconstructed from them re-declares every table
+	// as empty. Reloading it would silently drop the contents of any table
+	// the operator populates out-of-band (a "persist file" table, "pfctl -T
+	// add", etc.), breaking whatever rules reference it. There is no way to
+	// insert an anchor reference into a running ruleset without a reload, so
+	// refuse rather than clobber, and tell the operator how to fix it
+	// permanently.
+	if t := pfTablesReferenced(natRules + filterRules); len(t) > 0 {
+		return fmt.Errorf("refusing to reload main PF ruleset: it references table(s) %s "+
+			"whose contents cannot be preserved across a reload; add %q and %q to "+
+			"/etc/pf.conf instead",
+			strings.Join(t, ", "), natAnchorRef, anchorRef)
+	}
+
 	// Prepend our anchor references so they're evaluated, then include
 	// all existing rules so we don't disrupt the user's configuration.
 	return loadPFMainRuleset(additions + natRules + filterRules)
+}
+
+// pfTableRx matches a table reference in "pfctl -sn"/"-sr" output, e.g. the
+// "<zabbix_proxies>" in "pass in on em0 from <zabbix_proxies> to any".
+var pfTableRx = regexp.MustCompile(`<([a-zA-Z0-9_.:-]+)>`)
+
+// pfTablesReferenced returns the sorted, deduplicated names of PF tables
+// referenced by the given ruleset text.
+func pfTablesReferenced(rules string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range pfTableRx.FindAllStringSubmatch(rules, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			names = append(names, m[1])
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // removePFAnchorRef removes the nat-anchor and anchor references for
