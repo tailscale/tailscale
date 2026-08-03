@@ -297,6 +297,17 @@ func main() {
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 	})
+	ttaMux.HandleFunc("/exec", func(w http.ResponseWriter, r *http.Request) {
+		// Run an arbitrary command via the shell, for test diagnostics that
+		// need to inspect OS state (firewall counters, routing tables, ...)
+		// on a node the harness has no SSH access to.
+		cmd := r.URL.Query().Get("cmd")
+		if cmd == "" {
+			http.Error(w, "missing cmd", http.StatusBadRequest)
+			return
+		}
+		serveCmd(w, "sh", "-c", cmd)
+	})
 	ttaMux.HandleFunc("/fw", addFirewallHandler)
 	ttaMux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		logBuf.mu.Lock()

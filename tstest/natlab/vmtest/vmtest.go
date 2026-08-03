@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -567,13 +568,23 @@ func (e *Env) waitForPeerRoute(n *Node, prefix string, timeout time.Duration) bo
 // HTTPGet makes an HTTP GET request from the given node to the specified URL.
 // The request is proxied through TTA's /http-get handler.
 func (e *Env) HTTPGet(from *Node, targetURL string) string {
+	body, err := e.HTTPGetErr(from, targetURL)
+	if err != nil {
+		e.t.Fatalf("HTTPGet from %s to %s: %v", from.name, targetURL, err)
+	}
+	return body
+}
+
+// HTTPGetErr is like HTTPGet but returns an error instead of failing the
+// test, for tests that want to observe request failures.
+func (e *Env) HTTPGetErr(from *Node, targetURL string) (string, error) {
 	for attempt := range 3 {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		reqURL := "http://unused/http-get?url=" + targetURL
 		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 		if err != nil {
 			cancel()
-			e.t.Fatalf("HTTPGet: %v", err)
+			return "", err
 		}
 		res, err := from.agent.HTTPClient.Do(req)
 		cancel()
@@ -588,10 +599,33 @@ func (e *Env) HTTPGet(from *Node, targetURL string) string {
 			time.Sleep(2 * time.Second)
 			continue
 		}
-		return string(body)
+		return string(body), nil
 	}
-	e.t.Fatalf("HTTPGet from %s to %s: all attempts failed", from.name, targetURL)
-	return ""
+	return "", fmt.Errorf("all attempts failed")
+}
+
+// Exec runs a shell command on the given node via TTA's /exec handler and
+// returns its combined output. Unlike SSHExec it needs no debug SSH port, so
+// it works on any node running TTA. Intended for test diagnostics that inspect
+// OS state (firewall counters, routing tables, ...).
+func (e *Env) Exec(on *Node, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	reqURL := "http://unused/exec?cmd=" + url.QueryEscape(cmd)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := on.agent.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if ec := res.Header.Get("Exec-Exit-Code"); ec != "" && ec != "0" {
+		return string(body), fmt.Errorf("exit code %s", ec)
+	}
+	return string(body), nil
 }
 
 var buildGokrazy sync.Once
