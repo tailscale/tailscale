@@ -114,6 +114,7 @@ var (
 	fSkipCleanup = flag.Bool("skip-cleanup", false, "if true, do not delete the kind cluster (if created) or tmp dir on exit")
 	fCluster     = flag.Bool("cluster", false, "if true, create or use a pre-existing kind cluster named k8s-operator-e2e; otherwise assume a usable cluster already exists in kubeconfig")
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already set up")
+	fBaseImage   = flag.String("base-image", "", "if set, use this image as the base for all images built by --build, instead of the default base image in build_docker.sh")
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -406,13 +407,16 @@ func runTests(m *testing.M) (int, error) {
 			return 0, err
 		}
 		logger.Infof("using OSS image tag: %q", ossTag)
+		if *fBaseImage != "" {
+			logger.Infof("using base image: %q", *fBaseImage)
+		}
 		ossImageToTarget := map[string]string{
 			"local/k8s-operator": "publishdevoperator",
 			"local/tailscale":    "publishdevimage",
 			"local/k8s-proxy":    "publishdevproxy",
 		}
 		for img, target := range ossImageToTarget {
-			if err := buildImage(ctx, ossDir, img, target, ossTag, caPaths); err != nil {
+			if err := buildImage(ctx, ossDir, img, target, ossTag, *fBaseImage, caPaths); err != nil {
 				return 0, err
 			}
 			nodes, err := kindProvider.ListInternalNodes(kindClusterName)
@@ -850,17 +854,23 @@ func pebbleGet(ctx context.Context, port uint16, path string) ([]byte, error) {
 	return b, nil
 }
 
-func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts []string) error {
+func buildImage(ctx context.Context, dir, repo, target, tag, baseImage string, extraCACerts []string) error {
 	var files []string
 	for _, f := range extraCACerts {
 		files = append(files, fmt.Sprintf("%s:/etc/ssl/certs/%s", f, filepath.Base(f)))
 	}
-	cmd := exec.CommandContext(ctx, "make", target,
+	args := []string{target,
 		"PLATFORM=local",
 		fmt.Sprintf("TAGS=%s", tag),
 		fmt.Sprintf("REPO=%s", repo),
 		fmt.Sprintf("FILES=%s", strings.Join(files, ",")),
-	)
+	}
+	if baseImage != "" {
+		// make exports command line variables to recipes, so this reaches
+		// build_docker.sh as the BASE env var.
+		args = append(args, fmt.Sprintf("BASE=%s", baseImage))
+	}
+	cmd := exec.CommandContext(ctx, "make", args...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
