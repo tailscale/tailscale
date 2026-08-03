@@ -114,6 +114,7 @@ var (
 	fSkipCleanup = flag.Bool("skip-cleanup", false, "if true, do not delete the kind cluster (if created) or tmp dir on exit")
 	fCluster     = flag.Bool("cluster", false, "if true, create or use a pre-existing kind cluster named k8s-operator-e2e; otherwise assume a usable cluster already exists in kubeconfig")
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already set up")
+	fBaseVariant = flag.String("base-variant", "alpine", `base image variant to build and test the operator images on: "alpine" (the default published base) or "ubi" (the Red Hat Universal Base Image variant). Only used with --build.`)
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -400,6 +401,27 @@ func runTests(m *testing.M) (int, error) {
 		// TODO(tomhjp): support non-local platform.
 		// TODO(tomhjp): build tsrecorder as well.
 
+		// Select the base image for the requested variant. mkctr pulls the
+		// base from a registry, so for the UBI variant we build our
+		// ubi-base image and push it to a throwaway local registry that the
+		// build can pull from. An empty base leaves build_docker.sh's default
+		// (Alpine).
+		var base string
+		switch *fBaseVariant {
+		case "alpine":
+		case "ubi":
+			base, err = buildUBIBase(ctx, logger, ossDir)
+			if err != nil {
+				return 0, fmt.Errorf("failed to build UBI base image: %w", err)
+			}
+			if !*fSkipCleanup {
+				defer removeUBIBaseRegistry(logger)
+			}
+		default:
+			return 0, fmt.Errorf("unknown --base-variant %q, want %q or %q", *fBaseVariant, "alpine", "ubi")
+		}
+		logger.Infof("building images for base variant %q", *fBaseVariant)
+
 		// Build tailscale/k8s-operator, tailscale/tailscale, tailscale/k8s-proxy, with pebble CAs added.
 		ossTag, err = tagForRepo(ossDir)
 		if err != nil {
@@ -412,7 +434,7 @@ func runTests(m *testing.M) (int, error) {
 			"local/k8s-proxy":    "publishdevproxy",
 		}
 		for img, target := range ossImageToTarget {
-			if err := buildImage(ctx, ossDir, img, target, ossTag, caPaths); err != nil {
+			if err := buildImage(ctx, ossDir, img, target, ossTag, base, caPaths); err != nil {
 				return 0, err
 			}
 			nodes, err := kindProvider.ListInternalNodes(kindClusterName)
@@ -850,7 +872,10 @@ func pebbleGet(ctx context.Context, port uint16, path string) ([]byte, error) {
 	return b, nil
 }
 
-func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts []string) error {
+// buildImage builds the given make target as repo:tag on base, adding
+// extraCACerts to the image. An empty base uses build_docker.sh's default
+// (Alpine).
+func buildImage(ctx context.Context, dir, repo, target, tag, base string, extraCACerts []string) error {
 	var files []string
 	for _, f := range extraCACerts {
 		files = append(files, fmt.Sprintf("%s:/etc/ssl/certs/%s", f, filepath.Base(f)))
@@ -859,6 +884,7 @@ func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts
 		"PLATFORM=local",
 		fmt.Sprintf("TAGS=%s", tag),
 		fmt.Sprintf("REPO=%s", repo),
+		fmt.Sprintf("BASE=%s", base),
 		fmt.Sprintf("FILES=%s", strings.Join(files, ",")),
 	)
 	cmd.Dir = dir
@@ -869,6 +895,61 @@ func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts
 	}
 
 	return nil
+}
+
+const (
+	// ubiBaseRegistryName is the name of the throwaway local registry container
+	// used to serve the UBI base image to mkctr during --base-variant=ubi runs.
+	ubiBaseRegistryName = "k8s-operator-e2e-ubi-registry"
+	// ubiBaseRegistryPort is the host port the local registry listens on. mkctr
+	// pulls the base image from a registry rather than the local daemon, and
+	// go-containerregistry treats localhost registries as insecure HTTP.
+	ubiBaseRegistryPort = "5007"
+)
+
+// buildUBIBase builds the tailscale/ubi-base image from Dockerfile.base.ubi and
+// pushes it to a throwaway local registry, returning a base image reference
+// suitable for passing to build_docker.sh as BASE. It builds only for the host
+// architecture, matching the PLATFORM=local operator image builds.
+//
+// mkctr pulls the --base image from a registry, so the base cannot be served
+// from the local Docker daemon; hence the local registry.
+func buildUBIBase(ctx context.Context, logger *zap.SugaredLogger, ossDir string) (string, error) {
+	// Start (or reuse) a local registry container.
+	removeUBIBaseRegistry(logger)
+	run := func(name string, args ...string) error {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+	if err := run("docker", "run", "-d", "--name", ubiBaseRegistryName, "-p", ubiBaseRegistryPort+":5000", "registry:2"); err != nil {
+		return "", fmt.Errorf("failed to start local registry: %w", err)
+	}
+
+	tag, err := os.ReadFile(filepath.Join(ossDir, "UBI.txt"))
+	if err != nil {
+		return "", fmt.Errorf("failed to read UBI.txt: %w", err)
+	}
+	base := fmt.Sprintf("localhost:%s/tailscale/ubi-base:%s", ubiBaseRegistryPort, strings.TrimSpace(string(tag)))
+
+	logger.Infof("building UBI base image %q", base)
+	if err := run("docker", "build", "-f", filepath.Join(ossDir, "Dockerfile.base.ubi"), "-t", base, ossDir); err != nil {
+		return "", fmt.Errorf("failed to build UBI base image: %w", err)
+	}
+	if err := run("docker", "push", base); err != nil {
+		return "", fmt.Errorf("failed to push UBI base image: %w", err)
+	}
+	return base, nil
+}
+
+// removeUBIBaseRegistry removes the throwaway local registry container started
+// by [buildUBIBase]. A missing container is not an error.
+func removeUBIBaseRegistry(logger *zap.SugaredLogger) {
+	cmd := exec.Command("docker", "rm", "-f", ubiBaseRegistryName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		logger.Debugf("failed to remove UBI base registry (may not exist): %v: %s", err, out)
+	}
 }
 
 func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) error {

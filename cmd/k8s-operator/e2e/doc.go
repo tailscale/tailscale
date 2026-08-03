@@ -16,6 +16,12 @@
 // a dedicated kind cluster for the tests, and --build to build and test the
 // operator and proxy images for the current checkout.
 //
+// With --build, use --base-variant to choose the base image the operator
+// images are built on: "alpine" (the default) or "ubi" for the Red Hat
+// Universal Base Image variant. The "ubi" variant builds tailscale/ubi-base
+// from Dockerfile.base.ubi and serves it to the build from a throwaway local
+// registry, so it additionally requires the docker CLI on PATH.
+//
 // To run with minimal dependencies, use:
 //
 // go test -count=1 -v ./cmd/k8s-operator/e2e/ --build --cluster --devcontrol --skip-cleanup
