@@ -28,13 +28,27 @@ func TestAlpineTag(t *testing.T) {
 }
 
 func readAlpineTag(t *testing.T, file string) string {
+	return readFromTag(t, file, "FROM alpine:")
+}
+
+func TestUBITag(t *testing.T) {
+	if tag := readFromTag(t, "../Dockerfile.base.ubi", "FROM registry.access.redhat.com/ubi9/ubi-minimal:"); tag == "" {
+		t.Fatal(`"FROM registry.access.redhat.com/ubi9/ubi-minimal:" not found in Dockerfile.base.ubi`)
+	} else if tag != ts.UBIDockerTag {
+		t.Errorf("ubi version mismatch: Dockerfile.base.ubi has %q; UBI.txt has %q", tag, ts.UBIDockerTag)
+	}
+}
+
+// readFromTag returns the tag from the first "FROM <prefix>" line in file, or
+// the empty string if no such line is present.
+func readFromTag(t *testing.T, file, prefix string) string {
 	f, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for line := range bytes.SplitSeq(f, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
-		_, suf, ok := bytes.Cut(line, []byte("FROM alpine:"))
+		_, suf, ok := bytes.Cut(line, []byte(prefix))
 		if !ok {
 			continue
 		}

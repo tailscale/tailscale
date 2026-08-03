@@ -1,0 +1,17 @@
+# Copyright (c) Tailscale Inc & contributors
+# SPDX-License-Identifier: BSD-3-Clause
+
+# This is the Red Hat Universal Base Image (UBI) equivalent of Dockerfile.base.
+# It produces tailscale/ubi-base, which is used as the base image for the UBI
+# variants of our published container images (tailscale/tailscale,
+# tailscale/k8s-proxy, tailscale/k8s-nameserver) for customers who require Red
+# Hat certified images. See https://catalog.redhat.com/en/software/base-images.
+#
+# Unlike Dockerfile.base (Alpine), UBI has no iptables-legacy package: the
+# iptables and ip6tables commands are provided by iptables-nft, which programs
+# the kernel via the nftables backend. UBI targets RHEL/OpenShift hosts, which
+# are nftables-native, so the legacy backend that Dockerfile.base links for
+# Synology/NAS compatibility (https://github.com/tailscale/tailscale/issues/17854)
+# is neither available nor needed here.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.6
+RUN microdnf -y install ca-certificates iptables-nft iproute iputils && microdnf clean all

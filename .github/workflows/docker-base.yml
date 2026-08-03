@@ -1,9 +1,10 @@
 name: "Validate Docker base image"
-on: 
+on:
   workflow_dispatch:
   pull_request:
     paths:
     - "Dockerfile.base"
+    - "Dockerfile.base.ubi"
     - ".github/workflows/docker-base.yml"
 jobs:
   build-and-test:
@@ -25,5 +26,29 @@ jobs:
         ip6tables_version=$(docker run --rm "$IMG" ip6tables --version)
         if [[ "$ip6tables_version" != *"(legacy)"* ]]; then
             echo "ERROR: Docker base image should contain legacy ip6tables; found ${ip6tables_version}"
+            exit 1
+        fi
+
+  build-and-test-ubi:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: "build and test"
+      run: |
+        set -e
+        IMG="test-base-ubi:$(head -c 8 /dev/urandom | xxd -p)"
+        docker build -t "$IMG" -f Dockerfile.base.ubi .
+
+        # UBI has no iptables-legacy; iptables and ip6tables are provided by
+        # iptables-nft, which programs the kernel via the nftables backend.
+        iptables_version=$(docker run --rm "$IMG" iptables --version)
+        if [[ "$iptables_version" != *"(nf_tables)"* ]]; then
+            echo "ERROR: UBI base image should contain nf_tables iptables; found ${iptables_version}"
+            exit 1
+        fi
+
+        ip6tables_version=$(docker run --rm "$IMG" ip6tables --version)
+        if [[ "$ip6tables_version" != *"(nf_tables)"* ]]; then
+            echo "ERROR: UBI base image should contain nf_tables ip6tables; found ${ip6tables_version}"
             exit 1
         fi

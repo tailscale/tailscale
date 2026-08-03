@@ -20,6 +20,12 @@ var VersionDotTxt string
 //go:embed ALPINE.txt
 var AlpineDockerTag string
 
+// UBIDockerTag is the tag of the registry.access.redhat.com/ubi9/ubi-minimal
+// image that the Red Hat UBI variants of our container images are based on.
+//
+//go:embed UBI.txt
+var UBIDockerTag string
+
 // GoToolchainRev is the git hash from github.com/tailscale/go that this release
 // should be built using. It may end in a newline.
 //

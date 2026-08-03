@@ -119,19 +119,19 @@ check-image-repo:
 	done
 
 publishdevimage: check-image-repo ## Build and publish tailscale image to location specified by ${REPO}
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=client ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} BASE="${BASE}" PLATFORM=${PLATFORM} PUSH=true TARGET=client ./build_docker.sh
 
 publishdevoperator: check-image-repo ## Build and publish k8s-operator image to location specified by ${REPO}
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-operator ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} BASE="${BASE}" PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-operator ./build_docker.sh
 
 publishdevnameserver: check-image-repo ## Build and publish k8s-nameserver image to location specified by ${REPO}
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} BASE="${BASE}" PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-nameserver ./build_docker.sh
 
 publishdevtsidp: check-image-repo ## Build and publish tsidp image to location specified by ${REPO}
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=tsidp ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} BASE="${BASE}" PLATFORM=${PLATFORM} PUSH=true TARGET=tsidp ./build_docker.sh
 
 publishdevproxy: check-image-repo ## Build and publish k8s-proxy image to location specified by ${REPO}
-	TAGS="${TAGS}" REPOS=${REPO} PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-proxy ./build_docker.sh
+	TAGS="${TAGS}" REPOS=${REPO} BASE="${BASE}" PLATFORM=${PLATFORM} PUSH=true TARGET=k8s-proxy ./build_docker.sh
 
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers

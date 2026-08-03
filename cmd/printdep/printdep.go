@@ -19,6 +19,7 @@ var (
 	goToolchain    = flag.Bool("go", false, "print the supported Go toolchain git hash (a github.com/tailscale/go commit)")
 	goToolchainURL = flag.Bool("go-url", false, "print the URL to the tarball of the Tailscale Go toolchain")
 	alpine         = flag.Bool("alpine", false, "print the tag of alpine docker image")
+	ubi            = flag.Bool("ubi", false, "print the tag of the ubi9-minimal docker image")
 	next           = flag.Bool("next", false, "if set, modifies --go or --go-url to use the upcoming/unreleased/rc Go release version instead")
 )
 
@@ -26,6 +27,10 @@ func main() {
 	flag.Parse()
 	if *alpine {
 		fmt.Println(strings.TrimSpace(ts.AlpineDockerTag))
+		return
+	}
+	if *ubi {
+		fmt.Println(strings.TrimSpace(ts.UBIDockerTag))
 		return
 	}
 	goRev := strings.TrimSpace(ts.GoToolchainRev)
