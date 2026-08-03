@@ -733,6 +733,19 @@ func handleSubnetsInNetstack() bool {
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
 		// affect the GUI clients).
 		return true
+	case "freebsd":
+		// FreeBSD can route subnets in the kernel and SNAT them with pf,
+		// but that is not yet the safe default: the pf NAT rule we install
+		// never matches (evaluated but never translating), and inserting the
+		// pf anchor at runtime cannot preserve the contents of tables an
+		// existing ruleset references.
+		//
+		// Keep handling subnets in netstack, which does its own SNAT in
+		// userspace and touches no system state, and let the kernel path be
+		// opted into with TS_DEBUG_NETSTACK_SUBNETS=false. Only that path can
+		// serve --snat-subnet-routes=false, which netstack cannot do because
+		// it must rewrite the source address.
+		return true
 	}
 	return false
 }
