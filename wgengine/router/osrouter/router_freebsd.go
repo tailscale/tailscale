@@ -5,6 +5,7 @@ package osrouter
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
@@ -121,11 +122,19 @@ func (r *freebsdRouter) addPFNATRules() error {
 	// addresses exiting any non-Tailscale interface is source-NATed to the
 	// outgoing interface's address so that return traffic routes back through
 	// this node.
-	rules := fmt.Sprintf(
-		"nat on ! %s inet from 100.64.0.0/10 to any -> (self)\n"+
-			"nat on ! %s inet6 from fd7a:115c:a1e0::/48 to any -> (self)\n",
-		r.tunname, r.tunname,
-	)
+	//
+	// This must be one rule per interface translating to that interface's own
+	// address. A single "nat on ! tailscale0 ... -> (self)" rule looks
+	// equivalent but is not: "(self)" is a round-robin pool of every address
+	// on the machine (including tailscale0's own address and loopback), and
+	// pf deals each new state the next address in the pool. Flows translated
+	// to an address that isn't the egress interface's get replies that the
+	// far end cannot route back, so roughly (N-1)/N of connections through
+	// the subnet router silently hang at SYN.
+	rules, err := r.buildPFNATRules()
+	if err != nil {
+		return fmt.Errorf("building PF NAT rules: %w", err)
+	}
 
 	pfctl := exec.Command("pfctl", "-a", pfAnchorName, "-f", "-")
 	pfctl.Stdin = strings.NewReader(rules)
@@ -134,6 +143,52 @@ func (r *freebsdRouter) addPFNATRules() error {
 		return fmt.Errorf("pfctl -a %s -f: %v (%s)", pfAnchorName, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// buildPFNATRules returns the NAT rules for the tailscale anchor: one rule
+// per up, non-loopback, non-Tailscale interface, translating to that
+// interface's own address. Rules are emitted per address family only for
+// interfaces that hold a usable address of that family, since "-> (ifname)"
+// on an interface with no address of the packet's family cannot translate.
+//
+// The interface set is sampled when SNAT is enabled; interfaces added later
+// are not covered until SNAT is toggled or tailscaled restarts.
+func (r *freebsdRouter) buildPFNATRules() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, iface := range ifaces {
+		if iface.Name == r.tunname ||
+			iface.Flags&net.FlagLoopback != 0 ||
+			iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		var has4, has6 bool
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip4 := ipn.IP.To4(); ip4 != nil {
+				has4 = true
+			} else if !ipn.IP.IsLinkLocalUnicast() {
+				has6 = true
+			}
+		}
+		if has4 {
+			fmt.Fprintf(&b, "nat on %s inet from 100.64.0.0/10 to any -> (%s)\n", iface.Name, iface.Name)
+		}
+		if has6 {
+			fmt.Fprintf(&b, "nat on %s inet6 from fd7a:115c:a1e0::/48 to any -> (%s)\n", iface.Name, iface.Name)
+		}
+	}
+	return b.String(), nil
 }
 
 // getPFMainRuleset reads the current main PF filter and NAT rules.
