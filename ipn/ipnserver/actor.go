@@ -123,6 +123,19 @@ func (a *actor) pid() int {
 	return a.ci.Pid()
 }
 
+// unixUserID returns the Unix user ID of the connected client if the
+// connection is over a Unix socket with known peer credentials.
+func (a *actor) unixUserID() (uid string, ok bool) {
+	if a.ci == nil || !a.ci.IsUnixSock() {
+		return "", false
+	}
+	creds := a.ci.Creds()
+	if creds == nil {
+		return "", false
+	}
+	return creds.UserID()
+}
+
 // ClientID implements [ipnauth.Actor].
 func (a *actor) ClientID() (_ ipnauth.ClientID, ok bool) {
 	return a.clientID, a.clientID != ipnauth.NoClientID
