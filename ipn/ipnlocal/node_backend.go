@@ -418,8 +418,8 @@ func (nb *nodeBackend) PeerCaps(src netip.Addr) tailcfg.PeerCapMap {
 }
 
 // srcIsUnsignedPeerLocked reports whether src is an address of a peer with
-// UnsignedPeerAPIOnly set. Such peers are not covered by tailnet lock and must
-// never be granted peer capabilities.
+// UnsignedPeerAPIOnly set. Such peers are not covered by tailnet lock and may
+// only hold the capabilities permitted by capsAllowedForUnsignedPeer.
 //
 // nb.mu must be held before calling.
 func (nb *nodeBackend) srcIsUnsignedPeerLocked(src netip.Addr) bool {
@@ -431,10 +431,21 @@ func (nb *nodeBackend) srcIsUnsignedPeerLocked(src netip.Addr) bool {
 	return ok && n.UnsignedPeerAPIOnly()
 }
 
-func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
-	if nb.srcIsUnsignedPeerLocked(src) {
-		return nil
+// capsAllowedForUnsignedPeer filters caps down to the set that an unsigned
+// (UnsignedPeerAPIOnly) peer may hold. Unsigned peers aren't covered by
+// tailnet lock, so a possibly malicious control server must not be able to
+// grant them capabilities. The sole exception is PeerCapabilityIngress:
+// Tailscale Funnel ingress nodes are unsigned by design, and the capability
+// only permits ingress requests over the PeerAPI, which unsigned peers can
+// already reach.
+func capsAllowedForUnsignedPeer(caps tailcfg.PeerCapMap) tailcfg.PeerCapMap {
+	if vals, ok := caps[tailcfg.PeerCapabilityIngress]; ok {
+		return tailcfg.PeerCapMap{tailcfg.PeerCapabilityIngress: vals}
 	}
+	return nil
+}
+
+func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	if nb.netMap == nil {
 		return nil
 	}
@@ -450,7 +461,11 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 		}
 		dst := a.Addr()
 		if dst.BitLen() == src.BitLen() { // match on family
-			return filt.CapsWithValues(src, dst)
+			caps := filt.CapsWithValues(src, dst)
+			if nb.srcIsUnsignedPeerLocked(src) {
+				caps = capsAllowedForUnsignedPeer(caps)
+			}
+			return caps
 		}
 	}
 	return nil
@@ -463,9 +478,6 @@ func (nb *nodeBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	if nb.srcIsUnsignedPeerLocked(src) {
-		return nil
-	}
 	if nb.netMap == nil {
 		return nil
 	}
@@ -473,7 +485,11 @@ func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
 	if filt == nil {
 		return nil
 	}
-	return filt.CapsWithValues(src, dst)
+	caps := filt.CapsWithValues(src, dst)
+	if nb.srcIsUnsignedPeerLocked(src) {
+		caps = capsAllowedForUnsignedPeer(caps)
+	}
+	return caps
 }
 
 // PeerCapsForService returns the capabilities that remote src IP has when
@@ -483,9 +499,6 @@ func (nb *nodeBackend) PeerCapsForIP(src, dst netip.Addr) tailcfg.PeerCapMap {
 func (nb *nodeBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.ServiceName) tailcfg.PeerCapMap {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	if nb.srcIsUnsignedPeerLocked(src) {
-		return nil
-	}
 	if nb.netMap == nil {
 		return nil
 	}
@@ -496,7 +509,11 @@ func (nb *nodeBackend) PeerCapsForService(src netip.Addr, svcName tailcfg.Servic
 	addrs := nb.netMap.GetVIPServiceIPMap()[svcName]
 	for _, ip := range addrs {
 		if ip.BitLen() == src.BitLen() {
-			return filt.CapsWithValues(src, ip)
+			caps := filt.CapsWithValues(src, ip)
+			if nb.srcIsUnsignedPeerLocked(src) {
+				caps = capsAllowedForUnsignedPeer(caps)
+			}
+			return caps
 		}
 	}
 	return nil
