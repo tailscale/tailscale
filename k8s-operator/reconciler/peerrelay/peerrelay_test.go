@@ -944,12 +944,13 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		).
 		Build()
 
+	const testLoginURL = "https://control.example.test"
 	r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 		Client:             fc,
 		TailscaleNamespace: tailscaleNamespace,
 		ProxyImage:         testProxyImage,
 		DefaultTags:        []string{"tag:test-peer-relay"},
-		Clients:            &fakeClientProvider{client: &fakeTSClient{}},
+		Clients:            &fakeClientProvider{client: &fakeTSClient{loginURL: testLoginURL}},
 		Resolver:           testResolver,
 		Logger:             logger.Sugar(),
 	})
@@ -969,6 +970,9 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 	if got0.Hostname == nil || *got0.Hostname != "test-0" {
 		t.Errorf("replica 0: expected hostname=test-0, got %v", got0.Hostname)
 	}
+	if got0.ServerURL == nil || *got0.ServerURL != testLoginURL {
+		t.Errorf("replica 0: expected ServerURL=%q, got %v", testLoginURL, got0.ServerURL)
+	}
 
 	got1 := readTailscaledConfig(t, fc, "peerrelay-test-1-config")
 	if got1.RelayServerPort == nil || *got1.RelayServerPort != 41641 {
@@ -977,6 +981,9 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 	// Replica 1's LB has not been provisioned yet, so no static endpoints.
 	if len(got1.RelayServerStaticEndpoints) != 0 {
 		t.Errorf("replica 1: expected no RelayServerStaticEndpoints, got %v", got1.RelayServerStaticEndpoints)
+	}
+	if got1.ServerURL == nil || *got1.ServerURL != testLoginURL {
+		t.Errorf("replica 1: expected ServerURL=%q, got %v", testLoginURL, got1.ServerURL)
 	}
 }
 
@@ -1035,6 +1042,8 @@ func (p *fakeClientProvider) For(_ string) (tsclient.Client, error) { return p.c
 type fakeTSClient struct {
 	tsclient.Client
 
+	loginURL string
+
 	mu            sync.Mutex
 	keyCalls      []tailscaleclient.CreateKeyRequest
 	deviceDeletes []string
@@ -1043,6 +1052,7 @@ type fakeTSClient struct {
 
 func (c *fakeTSClient) Keys() tsclient.KeyResource       { return (*fakeKeys)(c) }
 func (c *fakeTSClient) Devices() tsclient.DeviceResource { return (*fakeDevices)(c) }
+func (c *fakeTSClient) LoginURL() string                 { return c.loginURL }
 
 func (c *fakeTSClient) CreateAuthKeyCalls() []tailscaleclient.CreateKeyRequest {
 	c.mu.Lock()
