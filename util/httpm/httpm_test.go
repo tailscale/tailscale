@@ -18,18 +18,23 @@ func TestUsedConsistently(t *testing.T) {
 	}
 	rootDir := filepath.Join(dir, "../..")
 
-	// If we don't have a .git directory, we're not in a git checkout (e.g.
-	// a downstream package); skip this test.
-	if _, err := os.Stat(filepath.Join(rootDir, ".git")); err != nil {
-		t.Skipf("skipping test since .git doesn't exist: %v", err)
-	}
-
-	// Open .git/index so Go's test cache tracks it as an input.
+	// Open the git index so Go's test cache tracks it as an input.
 	// The index file changes on git reset, checkout, pull, etc.,
 	// so the cache is properly invalidated when moving between commits.
-	if f, err := os.Open(filepath.Join(rootDir, ".git", "index")); err == nil {
-		f.Close()
+	// Ask git for the path because .git is a file in a git worktree. Opening
+	// only the index avoids recording the broader .git directory metadata.
+	indexCmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-path", "index")
+	indexCmd.Dir = rootDir
+	indexOut, err := indexCmd.Output()
+	if err != nil {
+		t.Skipf("skipping test since git index cannot be found: %v", err)
 	}
+	indexPath := strings.TrimSpace(string(indexOut))
+	f, err := os.Open(indexPath)
+	if err != nil {
+		t.Fatalf("opening git index %q: %v", indexPath, err)
+	}
+	f.Close()
 
 	cmd := exec.Command("git", "grep", "-l", "-F", "http.Method")
 	cmd.Dir = rootDir
