@@ -1187,10 +1187,23 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 	//  * write the questions through as they are
 	//  * not send through the additional section
 	//  * provide our answers, or no answers if we don't handle those answers (possibly in the future we should write through answers for eg TypeTXT)
-	var answers []dnsResponseRewrite
-	var cnameChain map[dnsname.FQDN]dnsname.FQDN
+	//   * We handle A, AAAA and HTTPS type questions
+	//   * We drop all others
+
+	// Question Type HTTPS
+	if question.Type == dnsmessage.TypeHTTPS {
+		newBuf, err := rewriteHTTPSResponse(hdr, questions, &p)
+		if err != nil {
+			metricDNSResponseRewriteErrorServfail.Add(1)
+			c.logf("error rewriting HTTPS dns response: %v", err)
+			return makeServFail(c.logf, hdr, question)
+		}
+		return newBuf
+	}
+
+	// Other Question Types dropped
 	if question.Type != dnsmessage.TypeA && question.Type != dnsmessage.TypeAAAA {
-		newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, answers)
+		newBuf, err := c.client.rewriteDNSResponse(appName, hdr, questions, []dnsResponseRewrite{})
 		if err != nil {
 			metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail.Add(1)
 			c.logf("error writing empty response for unsupported type: %v", err)
@@ -1198,6 +1211,10 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 		}
 		return newBuf
 	}
+
+	// Question Type A/AAAA
+	var answers []dnsResponseRewrite
+	var cnameChain map[dnsname.FQDN]dnsname.FQDN
 	for {
 		h, err := p.AnswerHeader()
 		if err == dnsmessage.ErrSectionDone {
@@ -1358,6 +1375,53 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 		return nil, err
 	}
 	return out, nil
+}
+
+// rewriteHTTPSResponse writes through the HTTPS (type 65) answers in a DNS
+// response, stripping the ipv4hint/ipv6hint SvcParams (not obvious if we
+// should replace with magic IPs). p must be positioned at the start of the
+// answer section (i.e. questions already consumed). The additional section is
+// dropped.
+func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question, p *dnsmessage.Parser) ([]byte, error) {
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+	for {
+		h, err := p.AnswerHeader()
+		if err == dnsmessage.ErrSectionDone {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if h.Type != dnsmessage.TypeHTTPS {
+			// Only HTTPS records are expected in an HTTPS response; drop anything else.
+			if err := p.SkipAnswer(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		r, err := p.HTTPSResource()
+		if err != nil {
+			return nil, err
+		}
+		r.DeleteParam(dnsmessage.SVCParamIPv4Hint)
+		r.DeleteParam(dnsmessage.SVCParamIPv6Hint)
+		if err := b.HTTPSResource(h, r); err != nil {
+			return nil, err
+		}
+	}
+	return b.Finish()
 }
 
 type connector struct {

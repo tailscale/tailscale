@@ -917,23 +917,41 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 	for _, ans := range answers {
 		switch ans.Header.Type {
 		case dnsmessage.TypeA:
-			body, ok := (ans.Body).(*dnsmessage.AResource)
-			if !ok {
-				t.Fatalf("unexpected answer type, update test")
-			}
+			body, _ := (ans.Body).(*dnsmessage.AResource)
 			b.AResource(ans.Header, *body)
 		case dnsmessage.TypeAAAA:
-			body, ok := (ans.Body).(*dnsmessage.AAAAResource)
-			if !ok {
-				t.Fatalf("unexpected answer type, update test")
-			}
+			body, _ := (ans.Body).(*dnsmessage.AAAAResource)
 			b.AAAAResource(ans.Header, *body)
 		case dnsmessage.TypeCNAME:
-			body, ok := (ans.Body).(*dnsmessage.CNAMEResource)
-			if !ok {
-				t.Fatalf("unexpected answer type, update test")
-			}
+			body, _ := (ans.Body).(*dnsmessage.CNAMEResource)
 			b.CNAMEResource(ans.Header, *body)
+		case dnsmessage.TypeHTTPS:
+			body, _ := (ans.Body).(*dnsmessage.HTTPSResource)
+			b.HTTPSResource(ans.Header, *body)
+		case dnsmessage.TypeNS:
+			body, _ := (ans.Body).(*dnsmessage.NSResource)
+			b.NSResource(ans.Header, *body)
+		case dnsmessage.TypeSOA:
+			body, _ := (ans.Body).(*dnsmessage.SOAResource)
+			b.SOAResource(ans.Header, *body)
+		case dnsmessage.TypePTR:
+			body, _ := (ans.Body).(*dnsmessage.PTRResource)
+			b.PTRResource(ans.Header, *body)
+		case dnsmessage.TypeMX:
+			body, _ := (ans.Body).(*dnsmessage.MXResource)
+			b.MXResource(ans.Header, *body)
+		case dnsmessage.TypeTXT:
+			body, _ := (ans.Body).(*dnsmessage.TXTResource)
+			b.TXTResource(ans.Header, *body)
+		case dnsmessage.TypeSRV:
+			body, _ := (ans.Body).(*dnsmessage.SRVResource)
+			b.SRVResource(ans.Header, *body)
+		case dnsmessage.TypeOPT:
+			body, _ := (ans.Body).(*dnsmessage.OPTResource)
+			b.OPTResource(ans.Header, *body)
+		case dnsmessage.TypeSVCB:
+			body, _ := (ans.Body).(*dnsmessage.SVCBResource)
+			b.SVCBResource(ans.Header, *body)
 		default:
 			t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
 		}
@@ -1347,6 +1365,34 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 					{
 						Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("cdn.example.net."), Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: wantTTL},
 						Body:   &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+					},
+				},
+				nil,
+			),
+		},
+		{
+			name: "typeHTTPS",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeHTTPS, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeHTTPS,
+							Class: dnsmessage.ClassINET,
+							TTL:   wantTTL,
+						},
+						Body: &dnsmessage.HTTPSResource{
+							SVCBResource: dnsmessage.SVCBResource{
+								Priority: 1,
+								Target:   dnsMessageName,
+								Params: []dnsmessage.SVCParam{
+									{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
+									{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
+									{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
+								},
+							},
+						},
 					},
 				},
 				nil,
@@ -2085,12 +2131,118 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			),
 			assertFx: assertParsesToAnswers(nil),
 		},
+		{
+			name: "https-record-strips-address-hints",
+			toMap: makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeHTTPS, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{
+							Name:  dnsMessageName,
+							Type:  dnsmessage.TypeHTTPS,
+							Class: dnsmessage.ClassINET,
+							TTL:   300,
+						},
+						Body: &dnsmessage.HTTPSResource{
+							SVCBResource: dnsmessage.SVCBResource{
+								Priority: 1,
+								Target:   dnsMessageName,
+								Params: []dnsmessage.SVCParam{
+									{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
+									{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
+									{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
+								},
+							},
+						},
+					},
+				},
+				nil,
+			),
+			assertFx: func(t *testing.T, bs []byte) {
+				want := []dnsmessage.HTTPSResource{
+					{
+						SVCBResource: dnsmessage.SVCBResource{
+							Priority: 1,
+							Target:   dnsMessageName,
+							Params: []dnsmessage.SVCParam{
+								{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
+							},
+						},
+					},
+				}
+				answers, _ := parseResponse(t, bs)
+				var got []dnsmessage.HTTPSResource
+				for _, r := range answers {
+					if b, ok := r.Body.(*dnsmessage.HTTPSResource); ok {
+						got = append(got, *b)
+					}
+				}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Fatalf("HTTPS records mismatch (-want +got):\n%s", diff)
+				}
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(cfg)
 			bs := c.mapDNSResponse(tt.toMap)
 			tt.assertFx(t, bs)
+		})
+	}
+}
+
+// TestMapDNSResponseDropsUnhandledTypes asserts that for a configured domain,
+// every DNS record type dnsmessage supports other than the ones we handle
+// is dropped: the response is returned with the question echoed and no answers.
+func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
+	configuredDomain := "example.com"
+	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:connector"},
+		Domains:    []string{configuredDomain},
+	}}, appctype.Conn25PoolsAttr{
+		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
+		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
+		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
+	}, []string{})
+	cfg := mustConfig(t, sn)
+
+	unhandled := []struct {
+		typ  dnsmessage.Type
+		body dnsmessage.ResourceBody
+	}{
+		{dnsmessage.TypeNS, &dnsmessage.NSResource{NS: dnsMessageName}},
+		{dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsMessageName}},
+		{dnsmessage.TypeSOA, &dnsmessage.SOAResource{NS: dnsMessageName, MBox: dnsMessageName, Serial: 1}},
+		{dnsmessage.TypePTR, &dnsmessage.PTRResource{PTR: dnsMessageName}},
+		{dnsmessage.TypeMX, &dnsmessage.MXResource{Pref: 10, MX: dnsMessageName}},
+		{dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"hello"}}},
+		{dnsmessage.TypeSRV, &dnsmessage.SRVResource{Priority: 1, Weight: 1, Port: 443, Target: dnsMessageName}},
+		{dnsmessage.TypeOPT, &dnsmessage.OPTResource{}},
+		{dnsmessage.TypeSVCB, &dnsmessage.SVCBResource{Priority: 1, Target: dnsMessageName}},
+	}
+	for _, tt := range unhandled {
+		t.Run(tt.typ.String(), func(t *testing.T) {
+			toMap := makeDNSResponseForSections(t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{
+					{
+						Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET, TTL: 300},
+						Body:   tt.body,
+					},
+				},
+				nil,
+			)
+			c := newConn25(logger.Discard)
+			c.reconfig(cfg)
+			bs := c.mapDNSResponse(toMap)
+			answers, _ := parseResponse(t, bs)
+			if len(answers) != 0 {
+				t.Fatalf("expected response to be dropped (0 answers), got %d: %v", len(answers), answers)
+			}
 		})
 	}
 }
