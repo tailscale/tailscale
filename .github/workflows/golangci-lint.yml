@@ -31,13 +31,20 @@ jobs:
 
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: go.mod
+          # DO NOT MERGE: setup-go can't resolve the "1.27rc2" go.mod
+          # directive, so pin the release candidate explicitly.
+          go-version: "1.27.0-rc.2"
           cache: true
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@b7bcab6379029e905e3f389a6bf301f1bc220662 # head as of 2026-03-04
         with:
           version: v2.10.1
+
+          # DO NOT MERGE: the prebuilt golangci-lint binary is built with
+          # Go 1.26 and refuses to target Go 1.27rc2, so build it from
+          # source with the Go toolchain installed above.
+          install-mode: goinstall
 
           # Show only new issues if it's a pull request.
           only-new-issues: true
