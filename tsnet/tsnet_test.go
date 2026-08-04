@@ -820,9 +820,28 @@ func TestFunnel(t *testing.T) {
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
-	controlURL, _ := startControl(t)
+	controlURL, control := startControl(t)
 	s1, _, _ := startServer(t, ctx, controlURL, "s1")
-	s2, _, _ := startServer(t, ctx, controlURL, "s2")
+	s2, s2ip, s2key := startServer(t, ctx, controlURL, "s2")
+
+	// Real Funnel ingress nodes appear in the target node's netmap as
+	// unsigned (UnsignedPeerAPIOnly) peers. Mark s2 the same way and wait
+	// for s1 to see it, so that this test exercises the same peer
+	// capability checks that production Funnel traffic does.
+	control.SetUnsignedPeerAPIOnly(s2key, true)
+	lc1 := must.Get(s1.LocalClient())
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		res, err := lc1.WhoIs(ctx, s2ip.String())
+		if err != nil {
+			return err
+		}
+		if !res.Node.UnsignedPeerAPIOnly {
+			return errors.New("s1 does not yet see s2 as UnsignedPeerAPIOnly")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	ln := must.Get(s1.ListenFunnel("tcp", ":443"))
 	defer ln.Close()
