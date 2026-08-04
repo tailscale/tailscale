@@ -216,7 +216,7 @@ func (r *Reconciler) reportTailnetUnavailable(ctx context.Context, logger *zap.S
 }
 
 func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) (reconcile.Result, error) {
-	if err := reconciler.EnsureFinalizer(ctx, r.Client, pr); err != nil {
+	if err := reconciler.EnsureFinalizer(ctx, r.Client, pr, reconciler.Finalizer); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to add finalizer to PeerRelay %q: %w", pr.Name, err)
 	}
 
@@ -412,7 +412,7 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, pr *
 		return reconcile.Result{}, fmt.Errorf("failed to delete Services for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	if err := reconciler.ClearFinalizer(ctx, r.Client, pr); err != nil {
+	if err := reconciler.ClearFinalizer(ctx, r.Client, pr, reconciler.Finalizer); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer from PeerRelay %q: %w", pr.Name, err)
 	}
 
