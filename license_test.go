@@ -8,12 +8,31 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"tailscale.com/util/set"
 )
+
+// gitTrackedFiles returns the set of files known to git in the current
+// directory tree, or nil if the tree is not a git checkout or git is
+// unavailable.
+func gitTrackedFiles(t *testing.T) set.Set[string] {
+	out, err := exec.Command("git", "ls-files", "-z").Output()
+	if err != nil {
+		t.Logf("git ls-files failed (%v); checking all files", err)
+		return nil
+	}
+	tracked := set.Set[string]{}
+	for f := range strings.SplitSeq(string(out), "\x00") {
+		if f != "" {
+			tracked.Add(f)
+		}
+	}
+	return tracked
+}
 
 func normalizeLineEndings(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
@@ -47,9 +66,15 @@ func TestLicenseHeaders(t *testing.T) {
 		"k8s-operator/apis/v1alpha1/zz_generated.deepcopy.go",
 	)
 
+	tracked := gitTrackedFiles(t)
+
 	err := filepath.Walk(".", func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return fmt.Errorf("path %s: %v", path, err)
+		}
+		if tracked != nil && !fi.IsDir() && !tracked.Contains(filepath.ToSlash(path)) {
+			// Ignore files not known to git (scratch files, etc).
+			return nil
 		}
 		if exceptions.Contains(filepath.ToSlash(path)) {
 			return nil
