@@ -4,6 +4,8 @@
 package magicsock
 
 import (
+	"sync"
+
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/set"
@@ -48,6 +50,7 @@ type peerMap struct {
 	// byEpAddr. That issue is being tracked in http://go/corp/29422.
 	relayEpAddrByNodeKey map[key.NodePublic]epAddr
 
+	nodesMu sync.RWMutex // protects nodesOfDisco
 	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
 	nodesOfDisco map[key.DiscoPublic]set.Set[key.NodePublic]
@@ -74,6 +77,9 @@ func (m *peerMap) nodeCount() int {
 // knownPeerDiscoKey reports whether there exists any peer with the disco key
 // dk.
 func (m *peerMap) knownPeerDiscoKey(dk key.DiscoPublic) bool {
+	m.nodesMu.RLock()
+	defer m.nodesMu.RUnlock()
+
 	_, ok := m.nodesOfDisco[dk]
 	return ok
 }
@@ -117,8 +123,11 @@ func (m *peerMap) forEachEndpoint(f func(ep *endpoint)) {
 
 // forEachEndpointWithDiscoKey invokes f on every endpoint in m that has the
 // provided DiscoKey until f returns false or there are no endpoints left to
-// iterate.
+// iterate. f must call back into peerMap and mutate [nodesOfDisco].
 func (m *peerMap) forEachEndpointWithDiscoKey(dk key.DiscoPublic, f func(*endpoint) (keepGoing bool)) {
+	m.nodesMu.RLock()
+	defer m.nodesMu.RUnlock()
+
 	for nk := range m.nodesOfDisco[dk] {
 		pi, ok := m.byNodeKey[nk]
 		if !ok {
@@ -138,7 +147,9 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk key.DiscoPublic, f func(*endpoi
 // upsertEndpoint stores endpoint in the peerInfo for
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
-func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
+func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic,
+	fromTSMP bool,
+) {
 	if ep.nodeID == 0 {
 		panic("internal error: upsertEndpoint called with zero NodeID")
 	}
@@ -149,13 +160,14 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 	}
 	m.byNodeID[ep.nodeID] = pi
 
+	// Load key and make the comparison based on the source of the new key.
 	epDisco := ep.disco.Load()
-	if epDisco == nil || oldDiscoKey != epDisco.key {
-		s := m.nodesOfDisco[oldDiscoKey]
-		delete(s, ep.publicKey)
-		if len(s) == 0 {
-			delete(m.nodesOfDisco, oldDiscoKey)
-		}
+	epKey := epDisco.keyFromControl()
+	if fromTSMP {
+		epKey = epDisco.keyFromTSMP()
+	}
+	if epDisco == nil || oldDiscoKey != epKey {
+		m.cleanFromNodesOfDisco(oldDiscoKey, ep.publicKey)
 	}
 	if ep.isWireguardOnly {
 		// If the peer is a WireGuard only peer, add all of its endpoints.
@@ -170,12 +182,22 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		}
 		return
 	}
-	discoSet := m.nodesOfDisco[epDisco.key]
+
+	// There is no need to insert a new node key under a zero disco key as it
+	// wastes space and will risk stale entries just sitting there in a long list
+	// under the zero key.
+	if epKey.IsZero() {
+		return
+	}
+
+	m.nodesMu.Lock()
+	discoSet := m.nodesOfDisco[epKey]
 	if discoSet == nil {
 		discoSet = set.Set[key.NodePublic]{}
-		m.nodesOfDisco[epDisco.key] = discoSet
+		m.nodesOfDisco[epKey] = discoSet
 	}
 	discoSet.Add(ep.publicKey)
+	m.nodesMu.Unlock()
 }
 
 // setNodeKeyForEpAddr makes future peer lookups by addr return the
@@ -218,12 +240,16 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 
 	pi := m.byNodeKey[ep.publicKey]
 	if epDisco != nil {
-		s := m.nodesOfDisco[epDisco.key]
-		delete(s, ep.publicKey)
-		if len(s) == 0 {
-			delete(m.nodesOfDisco, epDisco.key)
+		for _, discoKey := range []key.DiscoPublic{
+			epDisco.keyFromControl(), epDisco.keyFromTSMP(),
+		} {
+			if discoKey.IsZero() {
+				continue
+			}
+			m.cleanFromNodesOfDisco(discoKey, ep.publicKey)
 		}
 	}
+
 	delete(m.byNodeKey, ep.publicKey)
 	if was, ok := m.byNodeID[ep.nodeID]; ok && was.ep == ep {
 		delete(m.byNodeID, ep.nodeID)
@@ -237,4 +263,14 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 		delete(m.byEpAddr, ip)
 	}
 	delete(m.relayEpAddrByNodeKey, ep.publicKey)
+}
+
+func (m *peerMap) cleanFromNodesOfDisco(disco key.DiscoPublic, node key.NodePublic) {
+	m.nodesMu.Lock()
+	defer m.nodesMu.Unlock()
+	s := m.nodesOfDisco[disco]
+	delete(s, node)
+	if len(s) == 0 {
+		delete(m.nodesOfDisco, disco)
+	}
 }
