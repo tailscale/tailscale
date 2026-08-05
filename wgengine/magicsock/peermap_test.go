@@ -18,9 +18,8 @@ func Test_peerMap_oneRelayEpAddrPerNK(t *testing.T) {
 		nodeID:    1,
 		publicKey: nk,
 	}
-	ed := &endpointDisco{key: key.NewDisco().Public()}
-	ep.disco.Store(ed)
-	pm.upsertEndpoint(ep, key.DiscoPublic{})
+	ep.updateDiscoKey(key.NewDisco().Public())
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, false)
 	vni := packet.VirtualNetworkID{}
 	vni.Set(1)
 	relayEpAddrA := epAddr{ap: netip.MustParseAddrPort("127.0.0.1:1"), vni: vni}
@@ -43,16 +42,16 @@ func Test_peerMap_nodesOfDisco_upsertCleansOldKey(t *testing.T) {
 	discoK2 := key.NewDisco().Public()
 
 	ep := &endpoint{nodeID: 1, publicKey: nk}
-	ep.disco.Store(&endpointDisco{key: discoK1})
-	pm.upsertEndpoint(ep, key.DiscoPublic{}) // insert with K1
+	ep.updateDiscoKey(discoK1)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, false) // insert with K1
 
 	if !pm.knownPeerDiscoKey(discoK1) {
 		t.Fatal("expected K1 to be known after initial upsert")
 	}
 
 	// Rotate disco
-	ep.disco.Store(&endpointDisco{key: discoK2})
-	pm.upsertEndpoint(ep, discoK1)
+	ep.updateDiscoKey(discoK2)
+	pm.upsertEndpoint(ep, discoK1, false)
 
 	if pm.knownPeerDiscoKey(discoK1) {
 		t.Error("old disco key K1 is still known after rotation")
@@ -77,8 +76,8 @@ func Test_peerMap_nodesOfDisco_deleteCleansKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep.disco.Store(&endpointDisco{key: dk})
-	pm.upsertEndpoint(ep, key.DiscoPublic{})
+	ep.updateDiscoKey(dk)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, false)
 
 	if !pm.knownPeerDiscoKey(dk) {
 		t.Fatal("expected disco key to be known after upsert")
@@ -108,8 +107,8 @@ func Test_peerMap_nodesOfDisco_sharedDiscoKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep1.disco.Store(&endpointDisco{key: dk})
-	pm.upsertEndpoint(ep1, key.DiscoPublic{})
+	ep1.updateDiscoKey(dk)
+	pm.upsertEndpoint(ep1, key.DiscoPublic{}, false)
 
 	ep2 := &endpoint{
 		nodeID:        2,
@@ -117,8 +116,8 @@ func Test_peerMap_nodesOfDisco_sharedDiscoKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep2.disco.Store(&endpointDisco{key: dk})
-	pm.upsertEndpoint(ep2, key.DiscoPublic{})
+	ep2.updateDiscoKey(dk)
+	pm.upsertEndpoint(ep2, key.DiscoPublic{}, false)
 
 	pm.deleteEndpoint(ep1)
 
@@ -130,5 +129,87 @@ func Test_peerMap_nodesOfDisco_sharedDiscoKey(t *testing.T) {
 
 	if pm.knownPeerDiscoKey(dk) {
 		t.Error("disco key should be unknown after both peers removed")
+	}
+}
+
+func TestPeerMapNodesOfDiscoMultipleKeySourcesDeleteEndpoint(t *testing.T) {
+	pm := newPeerMap()
+	nk := key.NewNode().Public()
+	dk1 := key.NewDisco().Public()
+	dk2 := key.NewDisco().Public()
+
+	conn := newTestConn(t)
+
+	ep := &endpoint{
+		nodeID:        1,
+		publicKey:     nk,
+		c:             conn,
+		endpointState: map[netip.AddrPort]*endpointState{},
+	}
+	ep.updateDiscoKey(dk1)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, false)
+	ep.updateTSMPDiscoKey(dk2)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, true)
+
+	if !pm.knownPeerDiscoKey(dk1) {
+		t.Error("disco key 1 should be known")
+	}
+	if !pm.knownPeerDiscoKey(dk2) {
+		t.Error("disco key 2 should be known")
+	}
+
+	// Delete endpoint, nothing should be known.
+	pm.deleteEndpoint(ep)
+	for d, s := range pm.nodesOfDisco {
+		for n := range s {
+			if n == nk {
+				t.Errorf("node should be unknown, found nk: %v, under dk: %v", n, d)
+			}
+		}
+	}
+}
+
+func TestPeerMapNodesOfDiscoMultipleKeySourcesUpsertEndpoint(t *testing.T) {
+	pm := newPeerMap()
+	nk := key.NewNode().Public()
+	dk1 := key.NewDisco().Public()
+	dk2 := key.NewDisco().Public()
+
+	conn := newTestConn(t)
+
+	ep := &endpoint{
+		nodeID:        1,
+		publicKey:     nk,
+		c:             conn,
+		endpointState: map[netip.AddrPort]*endpointState{},
+	}
+	ep.updateDiscoKey(dk1)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, false)
+	ep.updateTSMPDiscoKey(dk2)
+	pm.upsertEndpoint(ep, key.DiscoPublic{}, true)
+
+	if !pm.knownPeerDiscoKey(dk1) {
+		t.Error("disco key 1 should be known")
+	}
+	if !pm.knownPeerDiscoKey(dk2) {
+		t.Error("disco key 2 should be known")
+	}
+
+	// Delete control learned key, tsmp key should still be known.
+	ep.updateDiscoKey(key.DiscoPublic{})
+	pm.upsertEndpoint(ep, dk1, false)
+	if !pm.knownPeerDiscoKey(dk2) {
+		t.Error("disco key 2 should be known")
+	}
+
+	// Delete TSMP learned key, nothing should be known.
+	ep.updateTSMPDiscoKey(key.DiscoPublic{})
+	pm.upsertEndpoint(ep, dk2, true)
+	for d, s := range pm.nodesOfDisco {
+		for n := range s {
+			if n == nk {
+				t.Errorf("node should be unknown, found nk: %v, under dk: %v", n, d)
+			}
+		}
 	}
 }

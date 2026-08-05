@@ -869,7 +869,7 @@ func (r *relayManager) sendCallMeMaybeVia(ep *endpoint, se udprelay.ServerEndpoi
 			AddrPorts:           se.AddrPorts,
 		},
 	}
-	ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, epDisco.key, callMeMaybeVia, discoVerboseLog)
+	ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, epDisco.key(), callMeMaybeVia, discoVerboseLog)
 }
 
 func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
@@ -892,7 +892,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 	common := disco.BindUDPRelayEndpointCommon{
 		VNI:        work.se.VNI,
 		Generation: work.handshakeGen,
-		RemoteKey:  epDisco.key,
+		RemoteKey:  epDisco.key(),
 	}
 
 	work.dlogf("[v1] magicsock: relayManager: starting handshake addrPorts=%v",
@@ -946,7 +946,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 				answer.Challenge = *withAnswer
 				ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, work.se.ServerDisco, answer, discoVerboseLog)
 			}
-			ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, epDisco.key, ping, discoVerboseLog)
+			ep.c.sendDiscoMessage(epAddr{ap: to, vni: vni}, key.NodePublic{}, epDisco.key(), ping, discoVerboseLog)
 		}()
 	}
 
@@ -954,7 +954,7 @@ func (r *relayManager) handshakeServerEndpoint(work *relayHandshakeWork) {
 		if common.VNI != work.se.VNI {
 			return errors.New("mismatching VNI")
 		}
-		if common.RemoteKey.Compare(epDisco.key) != 0 {
+		if common.RemoteKey.Compare(epDisco.key()) != 0 {
 			return errors.New("mismatching RemoteKey")
 		}
 		return nil
@@ -1099,7 +1099,7 @@ func (r *relayManager) allocateAllServersRunLoop(wlb endpointWithLastBest) {
 	if remoteDisco == nil {
 		return
 	}
-	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoAtomic.Public(), remoteDisco.key)
+	discoKeys := key.NewSortedPairOfDiscoPublic(wlb.ep.c.discoAtomic.Public(), remoteDisco.key())
 	for _, v := range r.serversByNodeKey {
 		byDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[v.nodeKey]
 		if !ok {
