@@ -7,9 +7,11 @@ package relayserver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"tailscale.com/disco"
 	"tailscale.com/feature"
@@ -36,6 +38,7 @@ func init() {
 	feature.Register(featureName)
 	ipnext.RegisterExtension(featureName, newExtension)
 	localapi.Register("debug-peer-relay-sessions", servePeerRelayDebugSessions)
+	localapi.Register("debug-peer-relay-server-lifetimes", servePeerRelayDebugSetLifetimes)
 }
 
 // servePeerRelayDebugSessions is an HTTP handler for the Local API that
@@ -63,6 +66,50 @@ func servePeerRelayDebugSessions(h *localapi.Handler, w http.ResponseWriter, r *
 	w.Write(j)
 }
 
+// servePeerRelayDebugSetLifetimes is an HTTP handler for the Local API that
+// overrides the endpoint bind and steady state lifetimes of the running peer
+// relay server, parsed as [time.Duration] from the "bind-lifetime" and
+// "steady-state-lifetime" query parameters. It returns an HTTP 403/405/400
+// with error text as the body if access or validation fails, e.g. if the
+// relay server is not running.
+//
+// It exists to enable tests, e.g. natlab VM tests, to reproduce
+// relay-session-reap scenarios (tailscale/tailscale#20082) in seconds rather
+// than the minutes implied by the production default lifetimes. It must be
+// called after the relay server has been enabled via the RelayServerPort
+// pref.
+func servePeerRelayDebugSetLifetimes(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	bind, err := time.ParseDuration(r.FormValue("bind-lifetime"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid bind-lifetime: %v", err), http.StatusBadRequest)
+		return
+	}
+	steadyState, err := time.ParseDuration(r.FormValue("steady-state-lifetime"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid steady-state-lifetime: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var e *extension
+	if ok := h.LocalBackend().FindMatchingExtension(&e); !ok {
+		http.Error(w, "peer relay server extension unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	if err := e.setServerLifetimes(bind, steadyState); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+}
+
 // newExtension is an [ipnext.NewExtensionFn] that creates a new relay server
 // extension. It is registered with [ipnext.RegisterExtension] if the package is
 // imported.
@@ -87,6 +134,7 @@ type relayServer interface {
 	GetSessions() []status.ServerSession
 	SetDERPMapView(tailcfg.DERPMapView)
 	SetStaticAddrPorts(addrPorts views.Slice[netip.AddrPort])
+	SetLifetimes(bind, steadyState time.Duration) error
 }
 
 // extension is an [ipnext.Extension] managing the relay server on platforms
@@ -248,6 +296,24 @@ func (e *extension) Shutdown() error {
 	e.shutdown = true
 	e.stopRelayServerLocked()
 	return nil
+}
+
+// errServerNotRunning is returned by [extension.setServerLifetimes] when the
+// relay server has not been started, e.g. before the RelayServerPort pref is
+// set, or while [tailcfg.NodeAttrDisableRelayServer] is present.
+var errServerNotRunning = errors.New("peer relay server is not running; set the RelayServerPort pref to start it")
+
+// setServerLifetimes overrides the endpoint lifetimes of the running relay
+// server, see [udprelay.Server.SetLifetimes]. It returns
+// [errServerNotRunning] if the relay server is not running, or an error if
+// the values are invalid.
+func (e *extension) setServerLifetimes(bind, steadyState time.Duration) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rs == nil {
+		return errServerNotRunning
+	}
+	return e.rs.SetLifetimes(bind, steadyState)
 }
 
 // serverStatus gathers and returns current peer relay server status information
