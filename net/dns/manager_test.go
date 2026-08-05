@@ -175,6 +175,15 @@ func TestCompileHostEntries(t *testing.T) {
 
 var serviceAddr46 = []netip.Addr{tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6()}
 
+// scopeQuad100Knobs returns Knobs with ScopeQuad100OnMacOS set, i.e. the
+// NodeAttrScopeQuad100OnMacOS opt-in that lets sandboxed macOS scope quad-100
+// to its match domains instead of installing it as the primary resolver.
+func scopeQuad100Knobs() *controlknobs.Knobs {
+	k := new(controlknobs.Knobs)
+	k.ScopeQuad100OnMacOS.Store(true)
+	return k
+}
+
 func TestManager(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("test's assumptions break because of https://github.com/tailscale/corp/issues/1662")
@@ -455,16 +464,18 @@ func TestManager(t *testing.T) {
 			// Sandboxed macOS app builds use NetworkExtension DNS settings
 			// rather than tailscaled's /etc/resolver configurator, so split
 			// traffic stays pointed at quad-100 instead of handing 2.2.2.2 to
-			// the OS directly (it may only be reachable via the tunnel). But
-			// quad-100 is still scoped to the match domains, so public names
-			// fall through to the OS resolver -- e.g. a DoH profile -- rather
-			// than being shadowed by a "." route. tailscale/corp#45534.
+			// the OS directly (it may only be reachable via the tunnel). With
+			// NodeAttrScopeQuad100OnMacOS set, quad-100 is scoped to the match
+			// domains, so public names fall through to the OS resolver -- e.g. a
+			// DoH profile -- rather than being shadowed by a "." route. See the
+			// -no-knob variant below for the default behavior. tailscale/corp#45534.
 			name: "routes-split-sandboxed-darwin",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
+			knobs: scopeQuad100Knobs(),
 			bs: OSConfig{
 				Nameservers:   mustIPs("8.8.8.8"),
 				SearchDomains: fqdns("coffee.shop"),
@@ -482,6 +493,34 @@ func TestManager(t *testing.T) {
 			sandboxedMacOS: true,
 		},
 		{
+			// Same as above but without NodeAttrScopeQuad100OnMacOS: the default
+			// on sandboxed macOS, matching iOS. quad-100 is installed as the OS
+			// primary resolver (a "." route to the base config's 8.8.8.8), so it
+			// proxies all public DNS -- shadowing any DoH profile -- and is not
+			// scoped to MatchDomains. tailscale/corp#45534.
+			name: "routes-split-sandboxed-darwin-no-knob",
+			in: Config{
+				Routes:        upstreams("corp.com", "2.2.2.2"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: fqdns("coffee.shop"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "8.8.8.8",
+					"corp.com.", "2.2.2.2"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
 			// An ExtraRecord that dnsConfigForNetmap has paired with an
 			// authoritative (resolver-less) route is scoped like any other
 			// split domain, on every platform. Nothing here is Apple-specific:
@@ -493,6 +532,7 @@ func TestManager(t *testing.T) {
 				SearchDomains: fqdns("corp.ts.net"),
 			},
 			split: true,
+			knobs: scopeQuad100Knobs(),
 			bs: OSConfig{
 				Nameservers: mustIPs("8.8.8.8"),
 			},
@@ -533,8 +573,9 @@ func TestManager(t *testing.T) {
 			// MagicDNS names exist but MagicDNS domain routing is off, so no
 			// route suffix covers them and there is nothing to scope to.
 			// quad-100 must stay primary or those names stop resolving --
-			// requiresPrimaryResolver. The DoH profile is still shadowed here;
-			// that is the cost of serving unrouted names.
+			// requiresPrimaryResolver overrides NodeAttrScopeQuad100OnMacOS even
+			// when it's set. The DoH profile is still shadowed here; that is the
+			// cost of serving unrouted names.
 			name: "unrouted-magicdns-hosts-keep-quad100-primary",
 			in: Config{
 				Routes:                upstreams("corp.ts.net.", "1.2.3.4"),
@@ -542,6 +583,7 @@ func TestManager(t *testing.T) {
 				MagicDNSHostsUnrouted: true,
 			},
 			split: true,
+			knobs: scopeQuad100Knobs(),
 			bs: OSConfig{
 				Nameservers: mustIPs("192.168.1.1"),
 			},
