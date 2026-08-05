@@ -139,10 +139,11 @@ type directManager struct {
 	// but is better than having non-functioning DNS.
 	renameBroken bool
 
-	trampleCount  atomic.Int64
-	trampleTimer  *time.Timer
-	eventClient   *eventbus.Client
-	trampleDNSPub *eventbus.Publisher[TrampleDNS]
+	trampleCount    atomic.Int64
+	trampleTimer    *time.Timer
+	eventClient     *eventbus.Client
+	trampleDNSPub   *eventbus.Publisher[TrampleDNS]
+	osDNSChangedPub *eventbus.Publisher[OSDNSConfigChanged]
 
 	ctx      context.Context    // valid until Close
 	ctxClose context.CancelFunc // closes ctx
@@ -172,6 +173,7 @@ func newDirectManagerOnFS(logf logger.Logf, health *health.Tracker, bus *eventbu
 	if bus != nil {
 		m.eventClient = bus.Client("dns.directManager")
 		m.trampleDNSPub = eventbus.Publish[TrampleDNS](m.eventClient)
+		m.osDNSChangedPub = eventbus.Publish[OSDNSConfigChanged](m.eventClient)
 	}
 	m.trampleTimer = time.AfterFunc(trampleWatchDuration, func() {
 		m.trampleCount.Store(0)
@@ -517,6 +519,11 @@ func (m *directManager) checkForFileTrample() {
 	m.mu.Unlock()
 
 	if want == nil {
+		// Not managing /etc/resolv.conf; the change may be the OS publishing
+		// resolvers the Manager is waiting on, so nudge it to re-probe.
+		if m.osDNSChangedPub != nil {
+			m.osDNSChangedPub.Publish(OSDNSConfigChanged{})
+		}
 		return
 	}
 

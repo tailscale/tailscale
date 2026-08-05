@@ -41,6 +41,36 @@ var (
 	// ErrNoDNSConfig is returned by RecompileDNSConfig when the Manager
 	// has no existing DNS configuration.
 	ErrNoDNSConfig = errors.New("no DNS configuration")
+	// errBaseConfigNotReady is returned by compileConfig while takeover is
+	// withheld for a not-ready base config (see baseConfigStatus).
+	errBaseConfigNotReady = errors.New("system DNS base config not ready (no upstream resolvers)")
+)
+
+// baseConfigStatus tracks whether the OS has published the upstream resolvers
+// that Tailscale forwards the default route to, on backends that can't do
+// OS-level split DNS and must blend the system base config into their own.
+//
+// If tailscaled reads the OS resolver config before the system has populated
+// it (e.g. before NetworkManager/systemd-resolved run at boot), taking over
+// DNS would point the OS at 100.100.100.100 with an empty "." route and
+// SERVFAIL all non-Tailscale lookups. Instead we withhold takeover and re-probe
+// until upstream resolvers appear.
+// See https://github.com/tailscale/tailscale/issues/20341
+type baseConfigStatus int
+
+const (
+	baseConfigReady baseConfigStatus = iota // OS has upstream resolvers (default); takeover proceeds
+	baseConfigEmpty                         // OS has no upstream resolvers; takeover withheld
+)
+
+// baseConfigRetryInterval is the initial delay before the Manager re-probes the
+// OS base config while withholding takeover, backing up the best-effort
+// resolv.conf watch so the state progresses even on backends without a file
+// watch. It backs off exponentially up to maxBaseConfigRetryInterval so a host
+// that never gets upstream resolvers eventually goes quiet.
+const (
+	baseConfigRetryInterval    = 2 * time.Second
+	maxBaseConfigRetryInterval = 60 * time.Second
 )
 
 // maxActiveQueries returns the maximal number of DNS requests that can
@@ -65,6 +95,11 @@ type Manager struct {
 
 	activeQueriesAtomic int32
 
+	// withholdingTakeover mirrors baseStatus == baseConfigEmpty for lock-free
+	// reads on the OSDNSConfigChanged hot path, which fires on every unowned
+	// resolv.conf change. See https://github.com/tailscale/tailscale/issues/20341
+	withholdingTakeover atomic.Bool
+
 	ctx       context.Context    // good until Down
 	ctxCancel context.CancelFunc // closes ctx
 
@@ -76,6 +111,9 @@ type Manager struct {
 	mu                  sync.Mutex // guards following
 	config              *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 	queryResponseMapper ResponseMapper
+	baseStatus          baseConfigStatus // readiness of the OS base config
+	baseRetryTimer      *time.Timer      // re-probes base config while baseConfigEmpty; nil when not waiting
+	baseRetryInterval   time.Duration    // current backoff delay for baseRetryTimer
 }
 
 // NewManager created a new manager from the given config.
@@ -117,6 +155,18 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		if err := m.setLocked(*m.config); err != nil {
 			m.logf("error setting DNS config: %s", err)
 		}
+	})
+	eventbus.SubscribeFunc(m.eventClient, func(OSDNSConfigChanged) {
+		// The OS resolver config changed while we weren't managing it; re-probe
+		// in case upstream resolvers we were waiting on have appeared. This
+		// fires on every unowned resolv.conf change, so skip the lock entirely
+		// unless we're actually withholding takeover.
+		if !m.withholdingTakeover.Load() {
+			return
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.reprobeBaseConfigLocked("os dns config changed")
 	})
 
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
@@ -217,6 +267,10 @@ func (m *Manager) setLocked(cfg Config) error {
 
 	m.health.SetHealthy(osConfigurationSetWarnable)
 	m.config = &cfg
+
+	// A successful set means we're no longer withholding takeover for a
+	// missing base config; clear any not-ready state and stop re-probing.
+	m.setBaseConfigStatusLocked(baseConfigReady)
 
 	return nil
 }
@@ -444,6 +498,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		}
 	}
 	var defaultRoutes []*dnstype.Resolver
+	if len(base.Nameservers) == 0 && !appleSplitDNSWorkaround {
+		// No upstream resolvers yet; withhold takeover. See baseConfigStatus.
+		m.setBaseConfigStatusLocked(baseConfigEmpty)
+		return resolver.Config{}, OSConfig{}, errBaseConfigNotReady
+	}
 	for _, ip := range base.Nameservers {
 		defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
 	}
@@ -462,6 +521,107 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
+}
+
+// dnsBaseConfigNotReadyWarnable warns that takeover is withheld while waiting
+// for the system to publish upstream resolvers (see baseConfigStatus); MagicDNS
+// is temporarily inactive but the existing system DNS is left untouched.
+var dnsBaseConfigNotReadyWarnable = health.Register(&health.Warnable{
+	Code:      "dns-base-config-not-ready",
+	Title:     "Waiting for system DNS configuration",
+	Text:      health.StaticMessage("Tailscale is waiting for the system DNS configuration to become available before taking over DNS; MagicDNS is temporarily inactive."),
+	Severity:  health.SeverityMedium,
+	DependsOn: []*health.Warnable{health.NetworkStatusWarnable},
+})
+
+// setBaseConfigStatusLocked records the readiness of the OS base config and
+// keeps the health warnable and retry timer consistent with it.
+//
+// m.mu must be held.
+func (m *Manager) setBaseConfigStatusLocked(s baseConfigStatus) {
+	syncs.AssertLocked(&m.mu)
+	prev := m.baseStatus
+	m.baseStatus = s
+	m.withholdingTakeover.Store(s == baseConfigEmpty)
+	switch s {
+	case baseConfigEmpty:
+		if prev != baseConfigEmpty {
+			m.logf("base config not ready (no OS upstream resolvers); withholding takeover")
+		}
+		m.health.SetUnhealthy(dnsBaseConfigNotReadyWarnable, nil)
+		m.armBaseConfigRetryLocked()
+	default: // baseConfigReady
+		if prev == baseConfigEmpty {
+			m.logf("base config became ready; taking over DNS")
+		}
+		m.health.SetHealthy(dnsBaseConfigNotReadyWarnable)
+		m.stopBaseConfigRetryLocked()
+	}
+}
+
+// armBaseConfigRetryLocked ensures a timer is running to re-probe the OS base
+// config, backing up the best-effort resolv.conf watch so the empty state
+// progresses even on backends without a file watch. The delay backs off
+// exponentially up to maxBaseConfigRetryInterval.
+//
+// m.mu must be held.
+func (m *Manager) armBaseConfigRetryLocked() {
+	syncs.AssertLocked(&m.mu)
+	if m.baseRetryTimer != nil {
+		return // already waiting
+	}
+	if m.ctx.Err() != nil {
+		return // shutting down; don't schedule more work
+	}
+	if m.baseRetryInterval == 0 {
+		m.baseRetryInterval = baseConfigRetryInterval
+	}
+	m.baseRetryTimer = time.AfterFunc(m.baseRetryInterval, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		// Clear the handle so reprobe can re-arm with a backed-off delay.
+		m.baseRetryTimer = nil
+		m.baseRetryInterval = min(m.baseRetryInterval*2, maxBaseConfigRetryInterval)
+		m.reprobeBaseConfigLocked("retry timer")
+	})
+}
+
+// stopBaseConfigRetryLocked stops any pending base-config retry and resets the
+// backoff.
+//
+// m.mu must be held.
+func (m *Manager) stopBaseConfigRetryLocked() {
+	syncs.AssertLocked(&m.mu)
+	if m.baseRetryTimer != nil {
+		m.baseRetryTimer.Stop()
+		m.baseRetryTimer = nil
+	}
+	m.baseRetryInterval = 0
+}
+
+// reprobeBaseConfigLocked re-applies the last good config so compileConfig
+// re-reads the OS base config. No-op unless we're withholding takeover. If the
+// base config is still not ready afterwards (e.g. still empty, or GetBaseConfig
+// returned a transient error), it re-arms the retry timer so the state always
+// progresses.
+//
+// m.mu must be held.
+func (m *Manager) reprobeBaseConfigLocked(reason string) {
+	syncs.AssertLocked(&m.mu)
+	if m.baseStatus != baseConfigEmpty || m.config == nil {
+		return
+	}
+	if m.ctx.Err() != nil {
+		return // shutting down; don't touch the OS config after Down
+	}
+	m.logf("[v1] re-probing base config (%s)", reason)
+	if err := m.setLocked(*m.config); err != nil && err != errBaseConfigNotReady {
+		// A non-empty failure (e.g. a transient GetBaseConfig error) leaves
+		// baseStatus at baseConfigEmpty without re-arming via
+		// setBaseConfigStatusLocked, so ensure a retry is scheduled here.
+		m.logf("error re-probing base config: %s", err)
+		m.armBaseConfigRetryLocked()
+	}
 }
 
 var isSandboxedMacOS = version.IsSandboxedMacOS
@@ -528,6 +688,16 @@ type TrampleDNS struct {
 	LastTrample       time.Time
 	TramplesInTimeout int64
 }
+
+// OSDNSConfigChanged is an event indicating that the OS resolver
+// configuration (e.g. /etc/resolv.conf) changed while Tailscale was not
+// managing it, used to re-probe a not-ready base config (see baseConfigStatus).
+//
+// This is only a latency optimization, and only directManager publishes it
+// (from its resolv.conf inotify watch). The baseConfigRetryInterval timer is
+// the general convergence mechanism that works on every backend; this event
+// just lets Linux direct mode recover faster than the next timer tick.
+type OSDNSConfigChanged struct{}
 
 // dnsTCPSession services DNS requests sent over TCP.
 type dnsTCPSession struct {
@@ -654,6 +824,9 @@ func (m *Manager) Down() error {
 		return nil
 	}
 	m.ctxCancel()
+	m.mu.Lock()
+	m.stopBaseConfigRetryLocked()
+	m.mu.Unlock()
 	if err := m.os.Close(); err != nil {
 		return err
 	}

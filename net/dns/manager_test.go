@@ -38,12 +38,14 @@ import (
 )
 
 type fakeOSConfigurator struct {
-	SplitDNS   bool
-	BaseConfig OSConfig
+	SplitDNS bool
 
-	OSConfig         OSConfig
-	ResolverConfig   resolver.Config
-	GetBaseConfigErr *error
+	mu                sync.Mutex // guards BaseConfig/baseConfigErrOnce; only contended in concurrent (synctest) tests
+	BaseConfig        OSConfig
+	baseConfigErrOnce error // if non-nil, returned by the next GetBaseConfig then cleared
+	OSConfig          OSConfig
+	ResolverConfig    resolver.Config
+	GetBaseConfigErr  *error
 }
 
 func (c *fakeOSConfigurator) SetDNS(cfg OSConfig) error {
@@ -62,9 +64,31 @@ func (c *fakeOSConfigurator) SupportsSplitDNS() bool {
 	return c.SplitDNS
 }
 
+// setBaseConfig updates BaseConfig safely for tests where a background
+// re-probe goroutine may read it concurrently via GetBaseConfig.
+func (c *fakeOSConfigurator) setBaseConfig(cfg OSConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BaseConfig = cfg
+}
+
+// setBaseConfigErrOnce arms GetBaseConfig to return err exactly once (then
+// resume returning BaseConfig), simulating a transient read failure.
+func (c *fakeOSConfigurator) setBaseConfigErrOnce(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseConfigErrOnce = err
+}
+
 func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 	if c.GetBaseConfigErr != nil {
 		return OSConfig{}, *c.GetBaseConfigErr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.baseConfigErrOnce; err != nil {
+		c.baseConfigErrOnce = nil
+		return OSConfig{}, err
 	}
 	return c.BaseConfig, nil
 }
@@ -1163,12 +1187,290 @@ func TestConfigRecompilation(t *testing.T) {
 	}
 }
 
+// TestBaseConfigEmptyWithholdsTakeover is a regression test for
+// https://github.com/tailscale/tailscale/issues/20341: when the OS can't do
+// split DNS and the system base config has no upstream nameservers (e.g.
+// tailscaled started before NetworkManager/systemd-resolved populated
+// /etc/resolv.conf), the Manager must withhold takeover rather than point the
+// OS at 100.100.100.100 with an empty "." route, which would SERVFAIL all
+// non-Tailscale DNS. The healthy path (a populated base config) is covered by
+// TestManager's "routes-multi" case.
+func TestBaseConfigEmptyWithholdsTakeover(t *testing.T) {
+	f := &fakeOSConfigurator{
+		SplitDNS:   false,      // can't split at OS -> blend base config path
+		BaseConfig: OSConfig{}, // empty: no upstream nameservers
+	}
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
+	m := NewManager(t.Logf, f, ht, dialer, nil, nil, "linux", bus)
+	m.resolver.TestOnlySetHook(f.SetResolver)
+
+	// Split-DNS-only tailnet config: a route plus MagicDNS, no DefaultResolvers.
+	cfg := Config{
+		Routes:        upstreams("ts.net", "199.247.155.53"),
+		SearchDomains: fqdns("foo.ts.net"),
+	}
+	if err := m.Set(cfg); err == nil {
+		t.Fatal("m.Set: want error for empty base config, got nil")
+	}
+	// Must not have installed a self-referential OS config that funnels all DNS
+	// to 100.100.100.100 with no upstream to forward to.
+	if len(f.OSConfig.Nameservers) != 0 {
+		t.Errorf("OSConfig.Nameservers = %v; want none (should not hijack OS DNS)", f.OSConfig.Nameservers)
+	}
+	m.mu.Lock()
+	gotStatus := m.baseStatus
+	m.mu.Unlock()
+	if gotStatus != baseConfigEmpty {
+		t.Errorf("baseStatus = %v; want baseConfigEmpty", gotStatus)
+	}
+	if _, ok := ht.CurrentState().Warnings[dnsBaseConfigNotReadyWarnable.Code]; !ok {
+		t.Error("dnsBaseConfigNotReadyWarnable not set; want set while withholding takeover")
+	}
+}
+
+// TestBaseConfigBecomesReady verifies that once the OS publishes upstream
+// resolvers, an OSDNSConfigChanged event drives the Manager out of the
+// withheld state and into a normal takeover, clearing the health warning.
+func TestBaseConfigBecomesReady(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeOSConfigurator{
+			SplitDNS:   false,
+			BaseConfig: OSConfig{}, // start empty
+		}
+		bus := eventbustest.NewBus(t)
+		ht := health.NewTracker(bus)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		m := NewManager(t.Logf, f, ht, dialer, nil, nil, "linux", bus)
+		m.resolver.TestOnlySetHook(f.SetResolver)
+
+		cfg := Config{
+			Routes:        upstreams("ts.net", "199.247.155.53"),
+			SearchDomains: fqdns("foo.ts.net"),
+		}
+		if err := m.Set(cfg); err == nil {
+			t.Fatal("m.Set: want error for empty base config, got nil")
+		}
+
+		// The OS finally publishes its resolvers.
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+
+		inj := eventbustest.NewInjector(t, bus)
+		eventbustest.Inject(inj, OSDNSConfigChanged{})
+		synctest.Wait()
+
+		if len(f.OSConfig.Nameservers) == 0 {
+			t.Error("OSConfig.Nameservers empty after base config became ready; want takeover")
+		}
+		m.mu.Lock()
+		gotStatus := m.baseStatus
+		m.mu.Unlock()
+		if gotStatus != baseConfigReady {
+			t.Errorf("baseStatus = %v; want baseConfigReady", gotStatus)
+		}
+		if _, ok := ht.CurrentState().Warnings[dnsBaseConfigNotReadyWarnable.Code]; ok {
+			t.Error("dnsBaseConfigNotReadyWarnable still set after takeover; want cleared")
+		}
+	})
+}
+
+// TestBaseConfigTimeoutReprobe verifies the fixed-interval retry timer (which
+// backs up the best-effort resolv.conf watch) re-probes and takes over once
+// the OS base config becomes available, even with no OSDNSConfigChanged event.
+// This is the convergence path for backends without a file watch (BSDs,
+// resolvconf family).
+func TestBaseConfigTimeoutReprobe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeOSConfigurator{
+			SplitDNS:   false,
+			BaseConfig: OSConfig{}, // start empty
+		}
+		bus := eventbustest.NewBus(t)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+		m.resolver.TestOnlySetHook(f.SetResolver)
+
+		cfg := Config{
+			Routes:        upstreams("ts.net", "199.247.155.53"),
+			SearchDomains: fqdns("foo.ts.net"),
+		}
+		if err := m.Set(cfg); err == nil {
+			t.Fatal("m.Set: want error for empty base config, got nil")
+		}
+
+		// Base config becomes available with no event; only the timer will notice.
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+
+		time.Sleep(baseConfigRetryInterval + time.Second)
+		synctest.Wait()
+
+		if len(f.OSConfig.Nameservers) == 0 {
+			t.Error("OSConfig.Nameservers empty after retry timer; want takeover")
+		}
+		m.mu.Lock()
+		gotStatus := m.baseStatus
+		gotTimer := m.baseRetryTimer
+		m.mu.Unlock()
+		if gotStatus != baseConfigReady {
+			t.Errorf("baseStatus = %v; want baseConfigReady", gotStatus)
+		}
+		if gotTimer != nil {
+			t.Error("baseRetryTimer still armed after reaching ready; want stopped")
+		}
+	})
+}
+
+// TestBaseConfigTransientErrorKeepsRetrying is a regression test: a transient
+// GetBaseConfig error during a timer re-probe must not permanently drop the
+// retry timer (issue #20341 review finding). After the transient error, the
+// timer must re-arm and eventually converge once the base config is available.
+func TestBaseConfigTransientErrorKeepsRetrying(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeOSConfigurator{
+			SplitDNS:   false,
+			BaseConfig: OSConfig{}, // start empty -> withhold + arm timer
+		}
+		bus := eventbustest.NewBus(t)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+		m.resolver.TestOnlySetHook(f.SetResolver)
+
+		cfg := Config{
+			Routes:        upstreams("ts.net", "199.247.155.53"),
+			SearchDomains: fqdns("foo.ts.net"),
+		}
+		if err := m.Set(cfg); err == nil {
+			t.Fatal("m.Set: want error for empty base config, got nil")
+		}
+
+		// The next re-probe hits a transient GetBaseConfig error.
+		f.setBaseConfigErrOnce(errors.New("transient resolvconf failure"))
+		time.Sleep(baseConfigRetryInterval + time.Second)
+		synctest.Wait()
+
+		// The transient error must not have dropped the retry: still withholding,
+		// timer re-armed.
+		m.mu.Lock()
+		gotStatus := m.baseStatus
+		gotTimer := m.baseRetryTimer
+		m.mu.Unlock()
+		if gotStatus != baseConfigEmpty {
+			t.Errorf("after transient error: baseStatus = %v; want baseConfigEmpty", gotStatus)
+		}
+		if gotTimer == nil {
+			t.Fatal("after transient error: baseRetryTimer is nil; want re-armed (would be stuck forever)")
+		}
+
+		// Now the base config becomes available; the re-armed (backed-off) timer
+		// should converge.
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+		time.Sleep(maxBaseConfigRetryInterval + time.Second)
+		synctest.Wait()
+
+		if len(f.OSConfig.Nameservers) == 0 {
+			t.Error("OSConfig.Nameservers empty after recovery; want takeover")
+		}
+		m.mu.Lock()
+		gotStatus = m.baseStatus
+		m.mu.Unlock()
+		if gotStatus != baseConfigReady {
+			t.Errorf("baseStatus = %v; want baseConfigReady", gotStatus)
+		}
+	})
+}
+
+// TestBaseConfigReadyStaysReady verifies the healthy path never enters the
+// withheld state or arms the retry timer.
+func TestBaseConfigReadyStaysReady(t *testing.T) {
+	f := &fakeOSConfigurator{
+		SplitDNS:   false,
+		BaseConfig: OSConfig{Nameservers: mustIPs("8.8.8.8")},
+	}
+	bus := eventbustest.NewBus(t)
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
+	m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+	m.resolver.TestOnlySetHook(f.SetResolver)
+
+	cfg := Config{
+		Routes:        upstreams("ts.net", "199.247.155.53"),
+		SearchDomains: fqdns("foo.ts.net"),
+	}
+	if err := m.Set(cfg); err != nil {
+		t.Fatalf("m.Set: %v", err)
+	}
+	m.mu.Lock()
+	gotStatus := m.baseStatus
+	gotTimer := m.baseRetryTimer
+	m.mu.Unlock()
+	if gotStatus != baseConfigReady {
+		t.Errorf("baseStatus = %v; want baseConfigReady", gotStatus)
+	}
+	if gotTimer != nil {
+		t.Error("baseRetryTimer armed on healthy path; want none")
+	}
+}
+
+// TestBaseConfigNoReprobeAfterDown is a regression test: after Down() cancels
+// the Manager's context, a racing retry-timer fire or OSDNSConfigChanged event
+// must not re-apply DNS takeover on the (now closed) OSConfigurator
+// (issue #20341 review finding).
+func TestBaseConfigNoReprobeAfterDown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeOSConfigurator{
+			SplitDNS:   false,
+			BaseConfig: OSConfig{}, // empty -> withhold + arm timer
+		}
+		bus := eventbustest.NewBus(t)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+		m.resolver.TestOnlySetHook(f.SetResolver)
+
+		cfg := Config{
+			Routes:        upstreams("ts.net", "199.247.155.53"),
+			SearchDomains: fqdns("foo.ts.net"),
+		}
+		if err := m.Set(cfg); err == nil {
+			t.Fatal("m.Set: want error for empty base config, got nil")
+		}
+
+		// Shut down while withholding, then make the base config "ready" and
+		// try to drive a reprobe via both paths. Neither should take over.
+		if err := m.Down(); err != nil {
+			t.Fatalf("Down: %v", err)
+		}
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+
+		m.mu.Lock()
+		m.reprobeBaseConfigLocked("post-down test")
+		m.mu.Unlock()
+
+		time.Sleep(maxBaseConfigRetryInterval + time.Second)
+		synctest.Wait()
+
+		if len(f.OSConfig.Nameservers) != 0 {
+			t.Errorf("OSConfig.Nameservers = %v after Down; want none (no takeover after shutdown)", f.OSConfig.Nameservers)
+		}
+		m.mu.Lock()
+		gotTimer := m.baseRetryTimer
+		m.mu.Unlock()
+		if gotTimer != nil {
+			t.Error("baseRetryTimer re-armed after Down; want none")
+		}
+	})
+}
+
 func TestTrampleRetrample(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeOSConfigurator{}
 		f.BaseConfig = OSConfig{
-			Nameservers: mustIPs("1.1.1.1"),
-		}
+			Nameservers: mustIPs("1.1.1.1")}
 
 		config := Config{
 			Routes:        upstreams("ts.net", "69.4.2.0", "foo.ts.net", ""),
