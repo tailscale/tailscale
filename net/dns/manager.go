@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
@@ -381,8 +382,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// workaround.
 	isWindows := m.goos == "windows"
 	isIOS := m.goos == "ios"
+	isSandboxedMac := m.goos == "darwin" && isSandboxedMacOS()
 	supportsSplitDNS := m.os.SupportsSplitDNS()
-	isSandboxedApple := isIOS || (m.goos == "darwin" && isSandboxedMacOS())
+	isSandboxedApple := isIOS || isSandboxedMac
 	// Apple platforms keep split-domain traffic pointed at quad-100 rather than
 	// handing the upstream resolvers to the OS directly, because those resolvers
 	// may only be reachable through the tunnel.
@@ -402,7 +404,15 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	rcfg.Routes = routes
 	ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 
-	if supportsSplitDNS && !isIOS && !cfg.requiresPrimaryResolver() {
+	// usePrimaryResolver forces quad-100 to be installed as the OS's primary
+	// (catch-all) resolver rather than scoped to the match domains. iOS always
+	// does this (it has no way to selectively answer ExtraRecords). Sandboxed
+	// macOS did too until control opts it into scoping via
+	// NodeAttrScopeQuad100OnMacOS, so that a user's DoH system profile isn't
+	// shadowed by quad-100. See tailscale/corp#45534.
+	usePrimaryResolver := isIOS || (isSandboxedMac && !m.scopeQuad100OnMacOS())
+
+	if supportsSplitDNS && !usePrimaryResolver && !cfg.requiresPrimaryResolver() {
 		ocfg.MatchDomains = cfg.matchDomains()
 		return rcfg, ocfg, nil
 	}
@@ -419,9 +429,13 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// that the DNS configuration has changed via [RecompileDNSConfig].
 	base, err := m.os.GetBaseConfig()
 	if err != nil {
-		if (isIOS || isNoopManager(m.os)) && err == ErrGetBaseConfigNotSupported {
-			// Expected when using noopManager (userspace networking) or on
-			// certain iOS builds. Continue without base config.
+		if (isIOS || isNoopManager(m.os) || (supportsSplitDNS && !isSandboxedMac)) && err == ErrGetBaseConfigNotSupported {
+			// No base config to blend in: noopManager (userspace networking),
+			// some iOS builds, or a split-DNS manager that has none by
+			// construction (e.g. systemd-resolved). Fall back to a scoped
+			// config instead of erroring and leaving the old OS config.
+			// Sandboxed macOS is excluded: it does have a base config
+			// (/etc/resolv.conf), so this error is a real read failure there.
 			m.health.SetHealthy(osConfigurationReadWarnable)
 			ocfg.MatchDomains = cfg.matchDomains()
 			return rcfg, ocfg, nil
@@ -466,6 +480,19 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 func (m *Manager) disableSplitDNSOptimization() bool {
 	return m.knobs != nil && m.knobs.DisableSplitDNSWhenNoCustomResolvers.Load()
+}
+
+var scopeQuad100OnMacOSEnv = envknob.RegisterOptBool("TS_DEBUG_SCOPE_QUAD100_MACOS")
+
+// scopeQuad100OnMacOS reports whether sandboxed macOS should scope quad-100 to
+// its match domains rather than installing it as the OS's primary resolver.
+// Off (false) unless control sets NodeAttrScopeQuad100OnMacOS, or the
+// TS_DEBUG_SCOPE_QUAD100_MACOS env override is set. See tailscale/corp#45534.
+func (m *Manager) scopeQuad100OnMacOS() bool {
+	if v, ok := scopeQuad100OnMacOSEnv().Get(); ok {
+		return v
+	}
+	return m.knobs != nil && m.knobs.ScopeQuad100OnMacOS.Load()
 }
 
 var isSandboxedMacOS = version.IsSandboxedMacOS

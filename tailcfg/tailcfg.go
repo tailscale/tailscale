@@ -191,7 +191,8 @@ type CapabilityVersion int
 //   - 142: 2026-07-06: Client understands c2n /remoteapi/localapi/* proxy
 //   - 143: 2026-07-22: Client correctly ignores conn25 node attributes when not enabled by environment variable
 //   - 144: 2026-07-31: Client sends [packet.TSMPDiscoKeyAdvertisement] around WireGuard handshakes
-const CurrentCapabilityVersion CapabilityVersion = 144
+//   - 145: 2026-08-04: Client understands [NodeAttrScopeQuad100OnMacOS]
+const CurrentCapabilityVersion CapabilityVersion = 145
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2696,6 +2697,15 @@ const (
 	// and this node attribute allows us to disable the optimization remotely
 	// if needed.
 	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
+
+	// NodeAttrScopeQuad100OnMacOS makes sandboxed macOS clients scope quad-100
+	// to its match domains instead of installing it as the OS's primary
+	// (catch-all) resolver, so that public names fall through to the OS
+	// resolver -- e.g. a user's DoH system profile -- rather than being
+	// shadowed. It has no effect on any other platform. Without this attribute,
+	// sandboxed macOS keeps the older behavior of making quad-100 the default
+	// resolver, as iOS still does. See tailscale/corp#45534.
+	NodeAttrScopeQuad100OnMacOS NodeCapability = "scope-quad100-macos"
 
 	// NodeAttrDisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
 	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
