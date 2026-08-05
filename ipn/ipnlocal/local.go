@@ -6637,8 +6637,15 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	if h := prefs.Hostname(); h != "" {
 		hi.Hostname = h
 	}
-	hi.RoutableIPs = prefs.AdvertiseRoutes().AsSlice()
-	hi.RequestTags = prefs.AdvertiseTags().AsSlice()
+
+	routableIPs := prefs.AdvertiseRoutes().AsSlice()
+	slices.SortFunc(routableIPs, netipx.ComparePrefix)
+	hi.RoutableIPs = slices.Compact(routableIPs)
+
+	requestTags := prefs.AdvertiseTags().AsSlice()
+	slices.Sort(requestTags)
+	hi.RequestTags = slices.Compact(requestTags)
+
 	hi.ShieldsUp = prefs.ShieldsUp()
 	// Only advertise RemoteConfig to control when the feature is both
 	// compiled in (buildfeatures.HasRemoteConfig; a const so the whole
