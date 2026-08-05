@@ -68,6 +68,7 @@ import (
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
@@ -1049,6 +1050,434 @@ func TestActiveDiscovery(t *testing.T) {
 		}
 		testActiveDiscovery(t, n)
 	})
+}
+
+// TestDirectPathFailureDoesNotBlackholeKnownAlternate models a peer with a
+// fast public endpoint and a known-working slower private endpoint. When the
+// public endpoint stops replying, the private candidate must take over without
+// a multi-second interruption to user traffic.
+func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
+	tstest.ResourceCheck(t)
+
+	clientHandler := &dualPathClientHandler{}
+	peerHandler := &dualPathPeerHandler{privatePathDelay: 20 * time.Millisecond}
+	client := &natlab.Machine{Name: "client", PacketHandler: clientHandler}
+	peer := &natlab.Machine{Name: "peer", PacketHandler: peerHandler}
+	stunMachine := &natlab.Machine{Name: "stun"}
+	inet := natlab.NewInternet()
+	lan := &natlab.Network{
+		Name:    "private",
+		Prefix4: netip.MustParsePrefix("10.17.65.0/24"),
+	}
+	stunIF := stunMachine.Attach("eth0", inet)
+	client.Attach("public", inet)
+	peerPublicIF := peer.Attach("public", inet)
+	clientPrivateIF := client.Attach("private", lan)
+	peerPrivateIF := peer.Attach("private", lan)
+
+	clientHandler.publicPeer = peerPublicIF.V4()
+	peerHandler.privatePeer = clientPrivateIF.V4()
+
+	derpMap, cleanupDERP := runDERPAndStun(t, t.Logf, stunMachine, stunIF.V4())
+	defer cleanupDERP()
+
+	clientStack := newMagicStack(t, logger.WithPrefix(t.Logf, "client: "), client, derpMap)
+	defer clientStack.Close()
+	peerStack := newMagicStack(t, logger.WithPrefix(t.Logf, "peer: "), peer, derpMap)
+	defer peerStack.Close()
+
+	privatePeerAddr := netip.AddrPortFrom(peerPrivateIF.V4(), peerStack.conn.LocalPort())
+	peerStack.conn.SetStaticEndpoints(views.SliceOf([]netip.AddrPort{privatePeerAddr}))
+
+	var withoutDERP atomic.Bool
+	cleanupMesh := meshStacks(t.Logf, func(_ int, nm *netmap.NetworkMap) {
+		if !withoutDERP.Load() {
+			return
+		}
+		for i, peer := range nm.Peers {
+			n := peer.AsStruct()
+			n.HomeDERP = 0
+			nm.Peers[i] = n.View()
+		}
+	}, clientStack, peerStack)
+	defer cleanupMesh()
+
+	trafficCtx, stopTraffic := context.WithCancel(context.Background())
+	var trafficWG sync.WaitGroup
+	var nextSequence atomic.Uint32
+	deliveries := make(chan deliveredPing, 256)
+	trafficWG.Add(2)
+	go func() {
+		defer trafficWG.Done()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-trafficCtx.Done():
+				return
+			case <-ticker.C:
+				sequence := uint16(nextSequence.Add(1))
+				select {
+				case clientStack.tun.Outbound <- sequencedPing(peerStack.IP(), clientStack.IP(), sequence):
+				case <-trafficCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		defer trafficWG.Done()
+		for {
+			select {
+			case <-trafficCtx.Done():
+				return
+			case packet := <-peerStack.tun.Inbound:
+				sequence, ok := pingSequence(packet)
+				if !ok {
+					continue
+				}
+				select {
+				case deliveries <- deliveredPing{sequence: sequence, at: time.Now()}:
+				case <-trafficCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		stopTraffic()
+		trafficWG.Wait()
+	}()
+
+	// Initially block the public route so discovery establishes the known-good
+	// private route first.
+	waitForPeerEndpoint(t, clientStack, peerStack, 5*time.Second)
+	forceFullDirectDiscovery(t, clientStack, peerStack)
+	waitForPeerAddr(t, clientStack, peerStack, privatePeerAddr, 10*time.Second)
+	waitForPingDelivery(t, deliveries, 0, 5*time.Second)
+	t.Logf("baseline: private direct path %v is selected and carrying traffic", privatePeerAddr)
+
+	// Remove DERP before the failure. Recovery must come from the working
+	// private candidate, not relay fallback.
+	withoutDERP.Store(true)
+	forceEndpointUpdate(t, clientStack)
+	waitForPeerWithoutDERP(t, clientStack, peerStack, 5*time.Second)
+	t.Log("DERP fallback disabled; recovery must use the advertised private direct path")
+
+	clientHandler.mode.Store(int32(dualPathPublicAllowed))
+	forceFullDirectDiscovery(t, clientStack, peerStack)
+	publicPeerAddr := netip.AddrPortFrom(peerPublicIF.V4(), peerStack.conn.LocalPort())
+	waitForPeerAddr(t, clientStack, peerStack, publicPeerAddr, 5*time.Second)
+	t.Logf("public path %v wins discovery over the slower private path", publicPeerAddr)
+
+	trustDeadline := peerTrustDeadline(t, clientStack, peerStack)
+	for {
+		select {
+		case <-deliveries:
+		default:
+			goto deliveriesDrained
+		}
+	}
+
+deliveriesDrained:
+	clientHandler.publicWireGuardSent.Store(0)
+	clientHandler.publicPacketsDropped.Store(0)
+	peerHandler.privateDiscoSent.Store(0)
+	clientHandler.mode.Store(int32(dualPathPublicBlackholed))
+	blackholedAt := time.Now()
+	remaining := trustDeadline.Sub(mono.Now())
+	t.Logf("public path blackholed: WireGuard traffic to and from %v is dropped, while DISCO remains available for recovery", publicPeerAddr)
+	t.Logf("public path trust deadline is in %v (configured trustUDPAddrDuration=%v)", remaining, trustUDPAddrDuration)
+	if remaining < trustUDPAddrDuration-250*time.Millisecond {
+		t.Fatalf("public path was trusted for only %v; want approximately %v", remaining, trustUDPAddrDuration)
+	}
+	// Let packets that were already in WireGuard or NATLab before the blackhole
+	// settle. The sequence boundary below then includes only post-failure data.
+	time.Sleep(500 * time.Millisecond)
+	for {
+		select {
+		case <-deliveries:
+		default:
+			goto deliveriesSettled
+		}
+	}
+
+deliveriesSettled:
+	blackholeSequence := uint16(nextSequence.Load())
+
+	triggeredExpirySend := false
+	deadline := time.Now().Add(trustUDPAddrDuration + 2*time.Second)
+	for peerCurAddr(clientStack, peerStack) != privatePeerAddr.String() && time.Now().Before(deadline) {
+		if !triggeredExpirySend && !mono.Now().Before(trustDeadline) {
+			// endpoint.send is the production path WireGuard invokes for the
+			// next encrypted user packet after trust has expired.
+			elapsed := time.Since(blackholedAt)
+			t.Logf("public trust expired after %v (configured=%v, delta=%v); triggering the next outbound endpoint send", elapsed, trustUDPAddrDuration, elapsed-trustUDPAddrDuration)
+			if elapsed < trustUDPAddrDuration-250*time.Millisecond || elapsed > trustUDPAddrDuration+250*time.Millisecond {
+				t.Fatalf("trust expiry occurred after %v; want approximately %v", elapsed, trustUDPAddrDuration)
+			}
+			triggerEndpointSend(t, clientStack, peerStack)
+			triggeredExpirySend = true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := peerCurAddr(clientStack, peerStack); got != privatePeerAddr.String() {
+		t.Fatalf("working private path did not take over after public trust expired; current address is %q", got)
+	}
+
+	recovery := waitForPingDelivery(t, deliveries, blackholeSequence, 2*time.Second)
+	gap := recovery.at.Sub(blackholedAt)
+	missing := uint16(recovery.sequence - blackholeSequence - 1)
+	t.Logf("public path blackholed at %v; ping sequence %d was first delivered after %v (%d packets missing)", blackholedAt.Format(time.RFC3339Nano), recovery.sequence, gap, missing)
+	if clientHandler.publicWireGuardSent.Load() == 0 {
+		t.Fatal("test did not send WireGuard traffic to the blackholed public path")
+	}
+	if clientHandler.publicPacketsDropped.Load() == 0 {
+		t.Fatal("test did not drop replies from the public path")
+	}
+	if peerHandler.privateDiscoSent.Load() == 0 {
+		t.Fatal("test did not receive a private-path discovery response during recovery")
+	}
+	if gap > heartbeatInterval+500*time.Millisecond {
+		t.Fatalf("working private path was unavailable for %v; want failover within %v", gap, heartbeatInterval+500*time.Millisecond)
+	}
+	if got := peerCurAddr(clientStack, peerStack); got != privatePeerAddr.String() {
+		t.Fatalf("recovered through %q; want private endpoint %q", got, privatePeerAddr)
+	}
+}
+
+type deliveredPing struct {
+	sequence uint16
+	at       time.Time
+}
+
+func sequencedPing(dst, src netip.Addr, sequence uint16) []byte {
+	p := tuntest.Ping(dst, src)
+	binary.BigEndian.PutUint16(p[26:28], sequence)
+	binary.BigEndian.PutUint16(p[22:24], 0)
+	binary.BigEndian.PutUint16(p[22:24], internetChecksum(p[20:]))
+	return p
+}
+
+func pingSequence(p []byte) (uint16, bool) {
+	if len(p) < 28 || p[0]>>4 != 4 || p[9] != 1 || p[20] != 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint16(p[26:28]), true
+}
+
+func internetChecksum(p []byte) uint16 {
+	var sum uint32
+	for len(p) >= 2 {
+		sum += uint32(binary.BigEndian.Uint16(p))
+		p = p[2:]
+	}
+	if len(p) == 1 {
+		sum += uint32(p[0]) << 8
+	}
+	for sum > 0xffff {
+		sum = (sum >> 16) + (sum & 0xffff)
+	}
+	return ^uint16(sum)
+}
+
+func waitForPingDelivery(t *testing.T, deliveries <-chan deliveredPing, after uint16, timeout time.Duration) deliveredPing {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case delivery := <-deliveries:
+			if after == 0 || delivery.sequence > after {
+				return delivery
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for a ping delivery after sequence %d", after)
+		}
+	}
+}
+
+type dualPathMode int32
+
+const (
+	dualPathPrivateOnly dualPathMode = iota
+	dualPathPublicAllowed
+	dualPathPublicBlackholed
+)
+
+// dualPathClientHandler controls only the peer's public endpoint. This models
+// the capture: the client can transmit to the public address, but packets from
+// it, including disco Pongs, disappear during the failure window.
+type dualPathClientHandler struct {
+	publicPeer           netip.Addr
+	mode                 atomic.Int32
+	publicWireGuardSent  atomic.Int64
+	publicPacketsDropped atomic.Int64
+}
+
+func (h *dualPathClientHandler) HandleIn(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	if p.Src.Addr() != h.publicPeer {
+		return p
+	}
+	if h.mode.Load() != int32(dualPathPublicAllowed) {
+		h.publicPacketsDropped.Add(1)
+		return nil
+	}
+	return p
+}
+
+func (h *dualPathClientHandler) HandleOut(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	if p.Dst.Addr() == h.publicPeer && h.mode.Load() == int32(dualPathPublicBlackholed) && !disco.LooksLikeDiscoWrapper(p.Payload) {
+		h.publicWireGuardSent.Add(1)
+		return nil
+	}
+	if p.Dst.Addr() == h.publicPeer && h.mode.Load() == int32(dualPathPrivateOnly) {
+		return nil
+	}
+	return p
+}
+
+func (h *dualPathClientHandler) HandleForward(p *natlab.Packet, _, _ *natlab.Interface) *natlab.Packet {
+	return p
+}
+
+// dualPathPeerHandler makes the public path win the latency comparison while
+// preserving a usable, slower private path for recovery.
+type dualPathPeerHandler struct {
+	privatePeer      netip.Addr
+	privatePathDelay time.Duration
+	privateDiscoSent atomic.Int64
+}
+
+func (h *dualPathPeerHandler) delayPrivate(p *natlab.Packet) {
+	if p.Src.Addr() == h.privatePeer || p.Dst.Addr() == h.privatePeer {
+		time.Sleep(h.privatePathDelay)
+	}
+}
+
+func (h *dualPathPeerHandler) HandleIn(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	h.delayPrivate(p)
+	return p
+}
+
+func (h *dualPathPeerHandler) HandleOut(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
+	if p.Dst.Addr() == h.privatePeer && disco.LooksLikeDiscoWrapper(p.Payload) {
+		h.privateDiscoSent.Add(1)
+	}
+	h.delayPrivate(p)
+	return p
+}
+
+func (h *dualPathPeerHandler) HandleForward(p *natlab.Packet, _, _ *natlab.Interface) *natlab.Packet {
+	return p
+}
+
+func peerCurAddr(from, to *magicStack) string {
+	peer, ok := from.Status().Peer[to.Public()]
+	if !ok {
+		return ""
+	}
+	return peer.CurAddr
+}
+
+func waitForPeerAddr(t *testing.T, from, to *magicStack, want netip.AddrPort, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := peerCurAddr(from, to); got == want.String() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for endpoint %q; got %q", want, peerCurAddr(from, to))
+}
+
+func waitForPeerEndpoint(t *testing.T, from, to *magicStack, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		from.conn.mu.Lock()
+		_, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+		from.conn.mu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for endpoint for peer %v", to.Public())
+}
+
+func forceFullDirectDiscovery(t *testing.T, from, to *magicStack) {
+	t.Helper()
+	from.conn.mu.Lock()
+	de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+	from.conn.mu.Unlock()
+	if !ok {
+		t.Fatalf("no endpoint for peer %v", to.Public())
+	}
+	de.mu.Lock()
+	for _, state := range de.endpointState {
+		state.lastPing = 0
+	}
+	de.sendDiscoPingsLocked(mono.Now(), true)
+	de.mu.Unlock()
+}
+
+func triggerEndpointSend(t *testing.T, from, to *magicStack) {
+	t.Helper()
+	from.conn.mu.Lock()
+	de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+	from.conn.mu.Unlock()
+	if !ok {
+		t.Fatalf("no endpoint for peer %v", to.Public())
+	}
+	if err := de.send([][]byte{{0, 0, 0, 0, 0, 0, 0, 0, 0}}, 8); err != nil {
+		t.Fatalf("endpoint send after trust expiry: %v", err)
+	}
+}
+
+func forceEndpointUpdate(t *testing.T, s *magicStack) {
+	t.Helper()
+	s.conn.mu.Lock()
+	eps := slices.Clone(s.conn.lastEndpoints)
+	s.conn.mu.Unlock()
+	s.epCh <- eps
+}
+
+func peerTrustDeadline(t *testing.T, from, to *magicStack) mono.Time {
+	t.Helper()
+	from.conn.mu.Lock()
+	de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+	from.conn.mu.Unlock()
+	if !ok {
+		t.Fatalf("no endpoint for peer %v", to.Public())
+	}
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	if !de.bestAddr.ap.IsValid() {
+		t.Fatal("public endpoint was selected without a best address")
+	}
+	return de.trustBestAddrUntil
+}
+
+func waitForPeerWithoutDERP(t *testing.T, from, to *magicStack, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		from.conn.mu.Lock()
+		de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+		from.conn.mu.Unlock()
+		if ok {
+			de.mu.Lock()
+			noDERP := !de.derpAddr.IsValid()
+			de.mu.Unlock()
+			if noDERP {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out removing the peer's DERP route")
 }
 
 type devices struct {
