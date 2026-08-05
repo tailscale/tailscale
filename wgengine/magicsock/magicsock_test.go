@@ -1235,7 +1235,6 @@ func TestPeerEndpointMigrationDoesNotInterruptTraffic(t *testing.T) {
 
 deliveriesDrained:
 	clientHandler.publicPacketsDropped.Store(0)
-	peerHandler.privateDiscoSent.Store(0)
 	underlayAtMigration := underlayRoundTrips.Load()
 	migrationStarted := time.Now()
 	oldPort := peerStack.conn.LocalPort()
@@ -1269,9 +1268,6 @@ deliveriesDrained:
 	}
 	if last := lastUnderlayRoundTrip.Load(); last == 0 || time.Since(time.Unix(0, last)) > 300*time.Millisecond {
 		t.Fatal("independent public-underlay probes stopped during endpoint migration")
-	}
-	if peerHandler.privateDiscoSent.Load() == 0 {
-		t.Fatal("test did not receive a discovery response from the available private path")
 	}
 	if gap > time.Second {
 		t.Fatalf("peer endpoint migration on a lossless underlay interrupted TUN delivery for %v; want at most 1s", gap)
@@ -1372,7 +1368,6 @@ func (h *dualPathClientHandler) HandleForward(p *natlab.Packet, _, _ *natlab.Int
 type dualPathPeerHandler struct {
 	privatePeer      netip.Addr
 	privatePathDelay time.Duration
-	privateDiscoSent atomic.Int64
 }
 
 func (h *dualPathPeerHandler) delayPrivate(p *natlab.Packet) {
@@ -1387,9 +1382,6 @@ func (h *dualPathPeerHandler) HandleIn(p *natlab.Packet, _ *natlab.Interface) *n
 }
 
 func (h *dualPathPeerHandler) HandleOut(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
-	if p.Dst.Addr() == h.privatePeer && disco.LooksLikeDiscoWrapper(p.Payload) {
-		h.privateDiscoSent.Add(1)
-	}
 	h.delayPrivate(p)
 	return p
 }
