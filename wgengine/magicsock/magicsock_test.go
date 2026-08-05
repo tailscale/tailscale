@@ -1052,11 +1052,11 @@ func TestActiveDiscovery(t *testing.T) {
 	})
 }
 
-// TestDirectPathFailureDoesNotBlackholeKnownAlternate models a peer with a
-// fast public endpoint and a known-working slower private endpoint. When the
-// public endpoint stops replying, the private candidate must take over without
-// a multi-second interruption to user traffic.
-func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
+// TestPeerEndpointMigrationDoesNotInterruptTraffic models a peer restart that
+// rotates its disco key and UDP port. The public and private networks remain
+// available, an independent public UDP probe runs throughout, and no NATLab
+// packet handler drops traffic during the measured migration.
+func TestPeerEndpointMigrationDoesNotInterruptTraffic(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	clientHandler := &dualPathClientHandler{}
@@ -1106,7 +1106,19 @@ func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
 	var trafficWG sync.WaitGroup
 	var nextSequence atomic.Uint32
 	deliveries := make(chan deliveredPing, 256)
-	trafficWG.Add(2)
+	underlayReceiver, err := peer.ListenPacket(trafficCtx, "udp4", ":0")
+	if err != nil {
+		t.Fatalf("listen for underlay probes: %v", err)
+	}
+	underlaySender, err := client.ListenPacket(trafficCtx, "udp4", ":0")
+	if err != nil {
+		underlayReceiver.Close()
+		t.Fatalf("create underlay probe sender: %v", err)
+	}
+	var underlayRoundTrips atomic.Uint64
+	var lastUnderlayRoundTrip atomic.Int64
+	underlayPort := uint16(underlayReceiver.LocalAddr().(*net.UDPAddr).Port)
+	trafficWG.Add(5)
 	go func() {
 		defer trafficWG.Done()
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -1144,8 +1156,50 @@ func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
 			}
 		}
 	}()
+	go func() {
+		defer trafficWG.Done()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		dst := net.UDPAddrFromAddrPort(netip.AddrPortFrom(peerPublicIF.V4(), underlayPort))
+		for {
+			select {
+			case <-trafficCtx.Done():
+				return
+			case <-ticker.C:
+				if _, err := underlaySender.WriteTo([]byte{1}, dst); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		defer trafficWG.Done()
+		buf := make([]byte, 1)
+		for {
+			n, src, err := underlayReceiver.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if _, err := underlayReceiver.WriteTo(buf[:n], src); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer trafficWG.Done()
+		buf := make([]byte, 1)
+		for {
+			if _, _, err := underlaySender.ReadFrom(buf); err != nil {
+				return
+			}
+			underlayRoundTrips.Add(1)
+			lastUnderlayRoundTrip.Store(time.Now().UnixNano())
+		}
+	}()
 	defer func() {
 		stopTraffic()
+		underlaySender.Close()
+		underlayReceiver.Close()
 		trafficWG.Wait()
 	}()
 
@@ -1168,9 +1222,9 @@ func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
 	forceFullDirectDiscovery(t, clientStack, peerStack)
 	publicPeerAddr := netip.AddrPortFrom(peerPublicIF.V4(), peerStack.conn.LocalPort())
 	waitForPeerAddr(t, clientStack, peerStack, publicPeerAddr, 5*time.Second)
+	waitForPingDelivery(t, deliveries, 0, 2*time.Second)
 	t.Logf("public path %v wins discovery over the slower private path", publicPeerAddr)
 
-	trustDeadline := peerTrustDeadline(t, clientStack, peerStack)
 	for {
 		select {
 		case <-deliveries:
@@ -1180,69 +1234,47 @@ func TestDirectPathFailureDoesNotBlackholeKnownAlternate(t *testing.T) {
 	}
 
 deliveriesDrained:
-	clientHandler.publicWireGuardSent.Store(0)
 	clientHandler.publicPacketsDropped.Store(0)
 	peerHandler.privateDiscoSent.Store(0)
-	clientHandler.mode.Store(int32(dualPathPublicBlackholed))
-	blackholedAt := time.Now()
-	remaining := trustDeadline.Sub(mono.Now())
-	t.Logf("public path blackholed: WireGuard traffic to and from %v is dropped, while DISCO remains available for recovery", publicPeerAddr)
-	t.Logf("public path trust deadline is in %v (configured trustUDPAddrDuration=%v)", remaining, trustUDPAddrDuration)
-	if remaining < trustUDPAddrDuration-250*time.Millisecond {
-		t.Fatalf("public path was trusted for only %v; want approximately %v", remaining, trustUDPAddrDuration)
+	underlayAtMigration := underlayRoundTrips.Load()
+	migrationStarted := time.Now()
+	oldPort := peerStack.conn.LocalPort()
+	newPort := oldPort + 1
+	if newPort == 0 {
+		newPort = oldPort - 1
 	}
-	// Let packets that were already in WireGuard or NATLab before the blackhole
-	// settle. The sequence boundary below then includes only post-failure data.
-	time.Sleep(500 * time.Millisecond)
-	for {
-		select {
-		case <-deliveries:
-		default:
-			goto deliveriesSettled
-		}
+	oldDiscoKey := peerStack.conn.DiscoPublicKey()
+	peerStack.conn.RotateDiscoKey()
+	peerStack.conn.SetPreferredPort(newPort)
+	if got := peerStack.conn.LocalPort(); got != newPort {
+		t.Fatalf("peer UDP listener did not migrate: got port %d, want %d", got, newPort)
 	}
+	peerStack.conn.SetStaticEndpoints(views.SliceOf([]netip.AddrPort{
+		netip.AddrPortFrom(peerPrivateIF.V4(), newPort),
+	}))
+	sequenceAtMigration := uint16(nextSequence.Load())
+	newDiscoKey := peerStack.conn.DiscoPublicKey()
+	waitForPeerDiscoKey(t, clientStack, peerStack, newDiscoKey, 5*time.Second)
 
-deliveriesSettled:
-	blackholeSequence := uint16(nextSequence.Load())
-
-	triggeredExpirySend := false
-	deadline := time.Now().Add(trustUDPAddrDuration + 2*time.Second)
-	for peerCurAddr(clientStack, peerStack) != privatePeerAddr.String() && time.Now().Before(deadline) {
-		if !triggeredExpirySend && !mono.Now().Before(trustDeadline) {
-			// endpoint.send is the production path WireGuard invokes for the
-			// next encrypted user packet after trust has expired.
-			elapsed := time.Since(blackholedAt)
-			t.Logf("public trust expired after %v (configured=%v, delta=%v); triggering the next outbound endpoint send", elapsed, trustUDPAddrDuration, elapsed-trustUDPAddrDuration)
-			if elapsed < trustUDPAddrDuration-250*time.Millisecond || elapsed > trustUDPAddrDuration+250*time.Millisecond {
-				t.Fatalf("trust expiry occurred after %v; want approximately %v", elapsed, trustUDPAddrDuration)
-			}
-			triggerEndpointSend(t, clientStack, peerStack)
-			triggeredExpirySend = true
-		}
-		time.Sleep(10 * time.Millisecond)
+	recovery := waitForPingDelivery(t, deliveries, sequenceAtMigration, trustUDPAddrDuration+2*time.Second)
+	gap := recovery.at.Sub(migrationStarted)
+	missing := uint16(recovery.sequence - sequenceAtMigration - 1)
+	underlayDuringMigration := underlayRoundTrips.Load() - underlayAtMigration
+	t.Logf("peer migrated from disco key %v port %d to %v port %d; ping sequence %d was first delivered after %v (%d packets missing); %d independent underlay probes completed round trips", oldDiscoKey.ShortString(), oldPort, newDiscoKey.ShortString(), newPort, recovery.sequence, gap, missing, underlayDuringMigration)
+	if dropped := clientHandler.publicPacketsDropped.Load(); dropped != 0 {
+		t.Fatalf("NATLab packet handler dropped %d packets during endpoint migration", dropped)
 	}
-	if got := peerCurAddr(clientStack, peerStack); got != privatePeerAddr.String() {
-		t.Fatalf("working private path did not take over after public trust expired; current address is %q", got)
+	if want := uint64(gap / (250 * time.Millisecond)); underlayDuringMigration < want {
+		t.Fatalf("only %d independent underlay probes completed round trips during migration; want at least %d", underlayDuringMigration, want)
 	}
-
-	recovery := waitForPingDelivery(t, deliveries, blackholeSequence, 2*time.Second)
-	gap := recovery.at.Sub(blackholedAt)
-	missing := uint16(recovery.sequence - blackholeSequence - 1)
-	t.Logf("public path blackholed at %v; ping sequence %d was first delivered after %v (%d packets missing)", blackholedAt.Format(time.RFC3339Nano), recovery.sequence, gap, missing)
-	if clientHandler.publicWireGuardSent.Load() == 0 {
-		t.Fatal("test did not send WireGuard traffic to the blackholed public path")
-	}
-	if clientHandler.publicPacketsDropped.Load() == 0 {
-		t.Fatal("test did not drop replies from the public path")
+	if last := lastUnderlayRoundTrip.Load(); last == 0 || time.Since(time.Unix(0, last)) > 300*time.Millisecond {
+		t.Fatal("independent public-underlay probes stopped during endpoint migration")
 	}
 	if peerHandler.privateDiscoSent.Load() == 0 {
-		t.Fatal("test did not receive a private-path discovery response during recovery")
+		t.Fatal("test did not receive a discovery response from the available private path")
 	}
-	if gap > heartbeatInterval+500*time.Millisecond {
-		t.Fatalf("working private path was unavailable for %v; want failover within %v", gap, heartbeatInterval+500*time.Millisecond)
-	}
-	if got := peerCurAddr(clientStack, peerStack); got != privatePeerAddr.String() {
-		t.Fatalf("recovered through %q; want private endpoint %q", got, privatePeerAddr)
+	if gap > time.Second {
+		t.Fatalf("peer endpoint migration on a lossless underlay interrupted TUN delivery for %v; want at most 1s", gap)
 	}
 }
 
@@ -1302,16 +1334,13 @@ type dualPathMode int32
 const (
 	dualPathPrivateOnly dualPathMode = iota
 	dualPathPublicAllowed
-	dualPathPublicBlackholed
 )
 
-// dualPathClientHandler controls only the peer's public endpoint. This models
-// the capture: the client can transmit to the public address, but packets from
-// it, including disco Pongs, disappear during the failure window.
+// dualPathClientHandler initially suppresses the public path so the test can
+// establish a working private path before allowing both paths without loss.
 type dualPathClientHandler struct {
 	publicPeer           netip.Addr
 	mode                 atomic.Int32
-	publicWireGuardSent  atomic.Int64
 	publicPacketsDropped atomic.Int64
 }
 
@@ -1327,11 +1356,8 @@ func (h *dualPathClientHandler) HandleIn(p *natlab.Packet, _ *natlab.Interface) 
 }
 
 func (h *dualPathClientHandler) HandleOut(p *natlab.Packet, _ *natlab.Interface) *natlab.Packet {
-	if p.Dst.Addr() == h.publicPeer && h.mode.Load() == int32(dualPathPublicBlackholed) && !disco.LooksLikeDiscoWrapper(p.Payload) {
-		h.publicWireGuardSent.Add(1)
-		return nil
-	}
 	if p.Dst.Addr() == h.publicPeer && h.mode.Load() == int32(dualPathPrivateOnly) {
+		h.publicPacketsDropped.Add(1)
 		return nil
 	}
 	return p
@@ -1392,6 +1418,23 @@ func waitForPeerAddr(t *testing.T, from, to *magicStack, want netip.AddrPort, ti
 	t.Fatalf("timed out waiting for endpoint %q; got %q", want, peerCurAddr(from, to))
 }
 
+func waitForPeerDiscoKey(t *testing.T, from, to *magicStack, want key.DiscoPublic, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		from.conn.mu.Lock()
+		de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
+		from.conn.mu.Unlock()
+		if ok {
+			if disco := de.disco.Load(); disco != nil && disco.key == want {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for peer disco key %v", want.ShortString())
+}
+
 func waitForPeerEndpoint(t *testing.T, from, to *magicStack, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1423,41 +1466,12 @@ func forceFullDirectDiscovery(t *testing.T, from, to *magicStack) {
 	de.mu.Unlock()
 }
 
-func triggerEndpointSend(t *testing.T, from, to *magicStack) {
-	t.Helper()
-	from.conn.mu.Lock()
-	de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
-	from.conn.mu.Unlock()
-	if !ok {
-		t.Fatalf("no endpoint for peer %v", to.Public())
-	}
-	if err := de.send([][]byte{{0, 0, 0, 0, 0, 0, 0, 0, 0}}, 8); err != nil {
-		t.Fatalf("endpoint send after trust expiry: %v", err)
-	}
-}
-
 func forceEndpointUpdate(t *testing.T, s *magicStack) {
 	t.Helper()
 	s.conn.mu.Lock()
 	eps := slices.Clone(s.conn.lastEndpoints)
 	s.conn.mu.Unlock()
 	s.epCh <- eps
-}
-
-func peerTrustDeadline(t *testing.T, from, to *magicStack) mono.Time {
-	t.Helper()
-	from.conn.mu.Lock()
-	de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
-	from.conn.mu.Unlock()
-	if !ok {
-		t.Fatalf("no endpoint for peer %v", to.Public())
-	}
-	de.mu.Lock()
-	defer de.mu.Unlock()
-	if !de.bestAddr.ap.IsValid() {
-		t.Fatal("public endpoint was selected without a best address")
-	}
-	return de.trustBestAddrUntil
 }
 
 func waitForPeerWithoutDERP(t *testing.T, from, to *magicStack, timeout time.Duration) {
