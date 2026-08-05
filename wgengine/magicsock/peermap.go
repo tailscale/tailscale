@@ -150,7 +150,7 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 	m.byNodeID[ep.nodeID] = pi
 
 	epDisco := ep.disco.Load()
-	if epDisco == nil || oldDiscoKey != epDisco.key {
+	if epDisco == nil || oldDiscoKey != epDisco.key() {
 		s := m.nodesOfDisco[oldDiscoKey]
 		delete(s, ep.publicKey)
 		if len(s) == 0 {
@@ -170,10 +170,10 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		}
 		return
 	}
-	discoSet := m.nodesOfDisco[epDisco.key]
+	discoSet := m.nodesOfDisco[epDisco.key()]
 	if discoSet == nil {
 		discoSet = set.Set[key.NodePublic]{}
-		m.nodesOfDisco[epDisco.key] = discoSet
+		m.nodesOfDisco[epDisco.key()] = discoSet
 	}
 	discoSet.Add(ep.publicKey)
 }
@@ -218,10 +218,10 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 
 	pi := m.byNodeKey[ep.publicKey]
 	if epDisco != nil {
-		s := m.nodesOfDisco[epDisco.key]
+		s := m.nodesOfDisco[epDisco.key()]
 		delete(s, ep.publicKey)
 		if len(s) == 0 {
-			delete(m.nodesOfDisco, epDisco.key)
+			delete(m.nodesOfDisco, epDisco.key())
 		}
 	}
 	delete(m.byNodeKey, ep.publicKey)

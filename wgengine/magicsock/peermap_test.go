@@ -18,8 +18,7 @@ func Test_peerMap_oneRelayEpAddrPerNK(t *testing.T) {
 		nodeID:    1,
 		publicKey: nk,
 	}
-	ed := &endpointDisco{key: key.NewDisco().Public()}
-	ep.disco.Store(ed)
+	ep.updateDiscoKey(key.NewDisco().Public())
 	pm.upsertEndpoint(ep, key.DiscoPublic{})
 	vni := packet.VirtualNetworkID{}
 	vni.Set(1)
@@ -43,7 +42,7 @@ func Test_peerMap_nodesOfDisco_upsertCleansOldKey(t *testing.T) {
 	discoK2 := key.NewDisco().Public()
 
 	ep := &endpoint{nodeID: 1, publicKey: nk}
-	ep.disco.Store(&endpointDisco{key: discoK1})
+	ep.updateDiscoKey(discoK1)
 	pm.upsertEndpoint(ep, key.DiscoPublic{}) // insert with K1
 
 	if !pm.knownPeerDiscoKey(discoK1) {
@@ -51,7 +50,7 @@ func Test_peerMap_nodesOfDisco_upsertCleansOldKey(t *testing.T) {
 	}
 
 	// Rotate disco
-	ep.disco.Store(&endpointDisco{key: discoK2})
+	ep.updateDiscoKey(discoK2)
 	pm.upsertEndpoint(ep, discoK1)
 
 	if pm.knownPeerDiscoKey(discoK1) {
@@ -77,7 +76,7 @@ func Test_peerMap_nodesOfDisco_deleteCleansKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep.disco.Store(&endpointDisco{key: dk})
+	ep.updateDiscoKey(dk)
 	pm.upsertEndpoint(ep, key.DiscoPublic{})
 
 	if !pm.knownPeerDiscoKey(dk) {
@@ -108,7 +107,7 @@ func Test_peerMap_nodesOfDisco_sharedDiscoKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep1.disco.Store(&endpointDisco{key: dk})
+	ep1.updateDiscoKey(dk)
 	pm.upsertEndpoint(ep1, key.DiscoPublic{})
 
 	ep2 := &endpoint{
@@ -117,7 +116,7 @@ func Test_peerMap_nodesOfDisco_sharedDiscoKey(t *testing.T) {
 		c:             conn,
 		endpointState: map[netip.AddrPort]*endpointState{},
 	}
-	ep2.disco.Store(&endpointDisco{key: dk})
+	ep2.updateDiscoKey(dk)
 	pm.upsertEndpoint(ep2, key.DiscoPublic{})
 
 	pm.deleteEndpoint(ep1)

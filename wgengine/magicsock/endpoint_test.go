@@ -309,10 +309,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 				bestAddr: tt.bestAddr,
 			}
 			if tt.remoteDisco != nil {
-				remote := &endpointDisco{
-					key: *tt.remoteDisco,
-				}
-				de.disco.Store(remote)
+				de.updateDiscoKey(*tt.remoteDisco)
 			}
 			p := tt.probeUDPLifetimeFn()
 			de.probeUDPLifetime = p
@@ -585,7 +582,7 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 				sentPing:      make(map[stun.TxID]sentPing),
 				endpointState: make(map[netip.AddrPort]*endpointState),
 			}
-			de.disco.Store(&endpointDisco{key: key.NewDisco().Public()})
+			de.updateDiscoKey(key.NewDisco().Public())
 			de.endpointState[directAddr] = &endpointState{}
 			de.sendDiscoPingsLocked(now, true)
 

@@ -70,7 +70,8 @@ type endpoint struct {
 	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using
 	nodeAddr     netip.Addr     // the node's first tailscale address; used for logging & wireguard rate-limiting (Issue 6686)
 
-	disco atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
+	discoMu syncs.Mutex                    // must be held when changing the disco field
+	disco   atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
 
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -371,11 +372,38 @@ func (de *endpoint) setProbeUDPLifetimeConfigLocked(desired *ProbeUDPLifetimeCon
 	p.resetCycleEndpointLocked()
 }
 
-// endpointDisco is the current disco key and short string for an endpoint. This
-// structure is immutable.
+// endpointDisco is the current disco key and short string for an endpoint for
+// keys learned both from controlClient and via TSMP. Only one key is active at
+// a time for sending. Currently the controlClient learned key is always
+// considered active as TSMP writes keys through this route.
+//
+// This structure is immutable.
 type endpointDisco struct {
-	key   key.DiscoPublic // for discovery messages.
-	short string          // ShortString of discoKey.
+	controlKey   key.DiscoPublic // key learned via control for disco messages.
+	tsmpKey      key.DiscoPublic // key learned via TSMP for disco messages.
+	controlShort string          // ShortString of control learned key.
+	tsmpShort    string          // ShortString of TSMP learned key.
+	tsmpActive   bool
+}
+
+// key returns the disco key currently regarded as active or a zero key if
+// endpointDisco is nil.
+// Only one key exists as of now in the struct and will always active.
+func (e *endpointDisco) key() key.DiscoPublic {
+	if e == nil {
+		return key.DiscoPublic{}
+	}
+	return e.controlKey
+}
+
+// short returns the ShortString of the key currently regarded as active or an
+// empty string if endpointDisco is nil.
+// Only one string exists as of now in the struct and will always active.
+func (e *endpointDisco) short() string {
+	if e == nil {
+		return ""
+	}
+	return e.controlShort
 }
 
 type sentPing struct {
@@ -546,7 +574,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 func (de *endpoint) discoShort() string {
 	var short string
 	if d := de.disco.Load(); d != nil {
-		short = d.short
+		short = d.short()
 	}
 	return short
 }
@@ -706,7 +734,7 @@ func (de *endpoint) maybeProbeUDPLifetimeLocked() (afterInactivityFor time.Durat
 	// shuffling probing probability where the local node ends up with a large
 	// key value lexicographically relative to the other nodes it tends to
 	// communicate with. If de's disco key changes, the cycle will reset.
-	if de.c.discoAtomic.Public().Compare(epDisco.key) >= 0 {
+	if de.c.discoAtomic.Public().Compare(epDisco.key()) >= 0 {
 		// lower disco pub key node probes higher
 		return afterInactivityFor, false
 	}
@@ -1351,7 +1379,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		if purpose == pingHeartbeatForUDPLifetime && de.probeUDPLifetime != nil {
 			de.probeUDPLifetime.lastTxID = txid
 		}
-		go de.sendDiscoPing(ep, epDisco.key, txid, s, logLevel)
+		go de.sendDiscoPing(ep, epDisco.key(), txid, s, logLevel)
 	}
 
 }
@@ -1476,15 +1504,23 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
-// updateDiscoKey replaces the disco key for de. If the key is a zero value key,
-// set the key to nil.
+// updateDiscoKey replaces the control learned disco key for de.
+// If the key is a zero value key, set the key to nil.
 func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
+	de.discoMu.Lock()
+	defer de.discoMu.Unlock()
+
+	old := de.disco.Load()
+
 	if key.IsZero() {
 		de.disco.Store(nil)
 	} else {
 		de.disco.Store(&endpointDisco{
-			key:   key,
-			short: key.ShortString(),
+			controlKey:   key,
+			controlShort: key.ShortString(),
+			tsmpKey: old.tsmpKey,
+			tsmpShort: old.tsmpShort,
+			tsmpActive: old.tsmpActive,
 		})
 	}
 }
@@ -1509,7 +1545,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	epDisco := de.disco.Load()
 	var discoKey key.DiscoPublic
 	if epDisco != nil {
-		discoKey = epDisco.key
+		discoKey = epDisco.key()
 	}
 
 	if discoKey != n.DiscoKey() {

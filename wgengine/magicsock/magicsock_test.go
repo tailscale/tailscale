@@ -1878,8 +1878,8 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	if deDisco == nil {
 		t.Fatalf("discoEndpoint disco is nil")
 	}
-	if deDisco.key != discoKey {
-		t.Errorf("discoKey = %v; want %v", deDisco.key, discoKey)
+	if deDisco.key() != discoKey {
+		t.Errorf("discoKey = %v; want %v", deDisco.key(), discoKey)
 	}
 	if _, ok := conn.peerMap.endpointForNodeKey(nodeKey1); ok {
 		t.Errorf("didn't expect to find node for key1")
@@ -4195,9 +4195,7 @@ func TestConn_receiveIP(t *testing.T) {
 			publicKey:  key.NewNode().Public(),
 			lastRecvWG: lastRecvWG,
 		}
-		ep.disco.Store(&endpointDisco{
-			key: key.NewDisco().Public(),
-		})
+		ep.updateDiscoKey(key.NewDisco().Public())
 		return ep
 	}
 
@@ -4474,9 +4472,7 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 				nodeID:    1,
 				publicKey: key.NewNode().Public(),
 			}
-			ep.disco.Store(&endpointDisco{
-				key: key.NewDisco().Public(),
-			})
+			ep.updateDiscoKey(key.NewDisco().Public())
 
 			conn := newConn(t.Logf)
 			ep.c = conn
@@ -4536,9 +4532,7 @@ func Test_lazyEndpoint_FromPeer(t *testing.T) {
 				nodeID:    1,
 				publicKey: key.NewNode().Public(),
 			}
-			ep.disco.Store(&endpointDisco{
-				key: key.NewDisco().Public(),
-			})
+			ep.updateDiscoKey(key.NewDisco().Public())
 			conn := newConn(t.Logf)
 			ep.c = conn
 
@@ -4672,10 +4666,7 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 				nodeAddr:  netip.MustParseAddr("100.64.0.1"),
 			}
 			discoKey := key.NewDisco().Public()
-			ep.disco.Store(&endpointDisco{
-				key:   discoKey,
-				short: discoKey.ShortString(),
-			})
+			ep.updateDiscoKey(discoKey)
 			ep.c = conn
 			conn.mu.Lock()
 			nodeView := (&tailcfg.Node{
@@ -4704,8 +4695,8 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 				wantDiscoKey = newDiscoKey
 			}
 
-			if ep.disco.Load().short != wantDiscoKey.ShortString() {
-				t.Errorf("New disco key %s, does not match %s", newDiscoKey.ShortString(), ep.disco.Load().short)
+			if ep.disco.Load().short() != wantDiscoKey.ShortString() {
+				t.Errorf("New disco key %s, does not match %s", newDiscoKey.ShortString(), ep.disco.Load().short())
 			}
 		})
 	}
@@ -4743,10 +4734,7 @@ func TestPriorityMessageForPeer(t *testing.T) {
 	}
 
 	discoKey := key.NewDisco().Public()
-	ep.disco.Store(&endpointDisco{
-		key:   discoKey,
-		short: discoKey.ShortString(),
-	})
+	ep.updateDiscoKey(discoKey)
 
 	ep.c = conn
 
@@ -4841,10 +4829,7 @@ func BenchmarkPriorityMessageForPeer(b *testing.B) {
 				}
 
 				discoKey := key.NewDisco().Public()
-				ep.disco.Store(&endpointDisco{
-					key:   discoKey,
-					short: discoKey.ShortString(),
-				})
+				ep.updateDiscoKey(discoKey)
 
 				ep.c = conn
 				nodeView := (&tailcfg.Node{
