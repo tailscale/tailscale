@@ -16,6 +16,11 @@
 // a dedicated kind cluster for the tests, and --build to build and test the
 // operator and proxy images for the current checkout.
 //
+// When building with --build, --base-image overrides the base image that all
+// the built images are layered on top of, e.g.
+// --base-image=registry.access.redhat.com/ubi9/ubi-minimal:latest. Without it,
+// the default base image in build_docker.sh is used.
+//
 // To run with minimal dependencies, use:
 //
 // go test -count=1 -v ./cmd/k8s-operator/e2e/ --build --cluster --devcontrol --skip-cleanup
