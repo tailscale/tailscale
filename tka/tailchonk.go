@@ -20,6 +20,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"tailscale.com/atomicfile"
 	"tailscale.com/tstime"
+	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 )
 
@@ -300,7 +301,7 @@ type FS struct {
 	// They avoid repeatedly scanning every AUM file while walking the authority
 	// graph. AUM contents are still decoded from disk on demand. A nil aumIndex
 	// means the indexes need to be rebuilt.
-	aumIndex    map[AUMHash]struct{}
+	aumIndex    set.Set[AUMHash]
 	parentIndex map[AUMHash][]AUMHash
 }
 
@@ -548,14 +549,14 @@ func (c *FS) buildIndexLocked() error {
 		return nil
 	}
 
-	aumIndex := make(map[AUMHash]struct{})
+	aumIndex := make(set.Set[AUMHash])
 	parentIndex := make(map[AUMHash][]AUMHash)
 	if err := c.scanHashes(func(info *fsHashInfo) {
 		if info.AUM == nil {
 			return
 		}
 		h := info.AUM.Hash()
-		aumIndex[h] = struct{}{}
+		aumIndex.Add(h)
 		if parent, ok := info.AUM.Parent(); ok {
 			parentIndex[parent] = append(parentIndex[parent], h)
 		}
