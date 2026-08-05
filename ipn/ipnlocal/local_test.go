@@ -9693,3 +9693,64 @@ func TestRouterConfigExitNodeBlackhole(t *testing.T) {
 		t.Errorf("no exit node: Routes = %v; want no default routes", rcfg.Routes)
 	}
 }
+
+func TestApplyPrefsToHostinfoDedup(t *testing.T) {
+	t.Parallel()
+
+	pfx := netip.MustParsePrefix
+	tests := []struct {
+		name       string
+		routes     []netip.Prefix
+		tags       []string
+		wantRoutes []netip.Prefix
+		wantTags   []string
+	}{
+		{
+			name:       "no_dups",
+			routes:     []netip.Prefix{pfx("10.0.0.0/8"), pfx("192.168.0.0/16")},
+			tags:       []string{"tag:a", "tag:b"},
+			wantRoutes: []netip.Prefix{pfx("10.0.0.0/8"), pfx("192.168.0.0/16")},
+			wantTags:   []string{"tag:a", "tag:b"},
+		},
+		{
+			name:       "dup_routes",
+			routes:     []netip.Prefix{pfx("10.0.0.0/8"), pfx("192.168.0.0/16"), pfx("10.0.0.0/8")},
+			wantRoutes: []netip.Prefix{pfx("10.0.0.0/8"), pfx("192.168.0.0/16")},
+		},
+		{
+			name:     "dup_tags",
+			tags:     []string{"tag:b", "tag:a", "tag:b", "tag:a"},
+			wantTags: []string{"tag:a", "tag:b"},
+		},
+		{
+			name:       "dups_unsorted_input",
+			routes:     []netip.Prefix{pfx("192.168.0.0/16"), pfx("10.0.0.0/8"), pfx("192.168.0.0/16")},
+			tags:       []string{"tag:z", "tag:a", "tag:z"},
+			wantRoutes: []netip.Prefix{pfx("10.0.0.0/8"), pfx("192.168.0.0/16")},
+			wantTags:   []string{"tag:a", "tag:z"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := newTestLocalBackend(t)
+			prefs := &ipn.Prefs{
+				AdvertiseRoutes: tt.routes,
+				AdvertiseTags:   tt.tags,
+			}
+
+			var hi tailcfg.Hostinfo
+			b.mu.Lock()
+			b.applyPrefsToHostinfoLocked(&hi, prefs.View())
+			b.mu.Unlock()
+
+			if !slices.Equal(tt.wantRoutes, hi.RoutableIPs) {
+				t.Errorf("RoutableIPs mismatch, got %v; want %v", hi.RoutableIPs, tt.wantRoutes)
+			}
+			if !slices.Equal(tt.wantTags, hi.RequestTags) {
+				t.Errorf("RequestTags mismatch, got %v; want %v", hi.RequestTags, tt.wantTags)
+			}
+		})
+	}
+}
