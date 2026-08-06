@@ -1503,9 +1503,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			set(peer.Name(), peer.Addresses())
 		}
 	}
-	// extraRecordNames are the ExtraRecord FQDNs, tracked separately from
-	// dcfg.Hosts because on Windows that map also holds every node's records.
-	var extraRecordNames []dnsname.FQDN
 	for _, rec := range nm.DNS.ExtraRecords {
 		switch rec.Type {
 		case "", "A", "AAAA":
@@ -1522,9 +1519,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		fqdn, err := dnsname.ToFQDN(rec.Name)
 		if err != nil {
 			continue
-		}
-		if !slices.Contains(extraRecordNames, fqdn) {
-			extraRecordNames = append(extraRecordNames, fqdn)
 		}
 		dcfg.Hosts[fqdn] = append(dcfg.Hosts[fqdn], ip)
 	}
@@ -1574,34 +1568,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
-	// coverExtraRecords adds an authoritative (resolver-less) route for each
-	// ExtraRecord name not already covered by one, so dns.Manager can scope
-	// quad-100 to those names instead of having to install it as the OS's
-	// primary resolver just to answer them. This is the same convention
-	// addSplitDNSRoutes implements for control-sent empty routes (Issue 2706);
-	// here we apply it to records control sent without a matching route.
-	//
-	// Only ExtraRecords, not all of dcfg.Hosts: on Windows Hosts also carries
-	// every node's records, and routing each one individually would mean a
-	// per-node NRPT rule.
-	//
-	// Must run after all addSplitDNSRoutes calls so a control-sent route for
-	// the same suffix wins.
-	coverExtraRecords := func() {
-		for _, fqdn := range extraRecordNames {
-			covered := false
-			for route := range dcfg.Routes {
-				if route.Contains(fqdn) {
-					covered = true
-					break
-				}
-			}
-			if !covered {
-				dcfg.Routes[fqdn] = nil
-			}
-		}
-	}
-
 	// conn25 split DNS routes are calculated from the domains in the SelfNode.CapMap
 	// section of the netmap, so need to be assembled separately.
 	// TODO(tailscale/corp#37125): make this a hook the extension can add
@@ -1627,7 +1593,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 			addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
 			addSplitDNSRoutes(useWithExitNodeRoutes(conn25AppRoutes))
-			coverExtraRecords()
 			return dcfg
 		}
 	}
@@ -1646,7 +1611,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
 	addSplitDNSRoutes(conn25AppRoutes)
-	coverExtraRecords()
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See
