@@ -422,7 +422,21 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		defer cancel()
 		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
 		if err != nil {
-			return nil, err
+			// forwardWithDestChan failed without writing a response: this
+			// covers upstream timeouts and network-down conditions where the
+			// forwarder never heard back from any resolver. Rather than
+			// silently dropping the query (which leaves the client's resolver
+			// to time out on its own), synthesize a SERVFAIL so the client
+			// gets a definitive answer.
+			res, sfErr := servfailResponse(packet{bs, family, from})
+			if sfErr != nil {
+				// bs was unparseable (so we couldn't build a reply); return
+				// the original forwarding error.
+				r.logf("building SERVFAIL response after forward error %v: %v", err, sfErr)
+				return nil, err
+			}
+			r.logf("forwarder returned %v; responding with SERVFAIL", err)
+			return res.bs, nil
 		}
 		return (<-responses).bs, nil
 	}

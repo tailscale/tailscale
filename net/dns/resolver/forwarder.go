@@ -1424,7 +1424,7 @@ func servfailResponse(req packet) (res packet, err error) {
 
 	h := p.Header
 	h.Response = true
-	h.Authoritative = true
+	h.RecursionAvailable = h.RecursionDesired
 	h.RCode = dns.RCodeServerFailure
 	b := dns.NewBuilder(nil, h)
 	b.StartQuestions()

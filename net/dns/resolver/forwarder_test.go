@@ -670,6 +670,31 @@ func makeTestResponse(tb testing.TB, domain string, code dns.RCode, addrs ...net
 	return response
 }
 
+// makeTestServfailResponse returns the non-authoritative SERVFAIL that
+// forwardWithDestChan synthesizes when it can't return an upstream server's
+// SERVFAIL bytes directly (e.g. when firstErr is a REFUSED response). It
+// mirrors servfailResponse: response bit set, AA clear, rcode SERVFAIL.
+func makeTestServfailResponse(tb testing.TB, domain string) []byte {
+	tb.Helper()
+	builder := dns.NewBuilder(nil, dns.Header{
+		Response: true,
+		RCode:    dns.RCodeServerFailure,
+	})
+	builder.StartQuestions()
+	if err := builder.Question(dns.Question{
+		Name:  dns.MustNewName(domain),
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+	}); err != nil {
+		tb.Fatal(err)
+	}
+	response, err := builder.Finish()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return response
+}
+
 func mustRunTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports ...uint16) []byte {
 	resp, err := runTestQuery(tb, request, modify, ports...)
 	if err != nil {
@@ -1279,7 +1304,12 @@ func TestForwarderWithManyResolvers(t *testing.T) {
 				makeTestResponse(t, domain, dns.RCodeRefused),
 			},
 			wantResponses: [][]byte{ // Any non-REFUSED failure triggers SERVFAIL regardless of arrival order.
+				// If the SERVFAIL response is recorded first, its upstream
+				// (authoritative) bytes are forwarded verbatim; if a REFUSED
+				// error is recorded first, forwardWithDestChan synthesizes a
+				// non-authoritative SERVFAIL instead. Either is acceptable.
 				makeTestResponse(t, domain, dns.RCodeServerFailure),
+				makeTestServfailResponse(t, domain),
 			},
 		},
 		{

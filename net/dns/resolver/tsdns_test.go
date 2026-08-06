@@ -1763,6 +1763,60 @@ func TestServfail(t *testing.T) {
 	}
 }
 
+// TestServfailOnForwardTimeout verifies that when a forwarded query never gets
+// a response from any upstream resolver (e.g. the network is down and reads
+// hang until the context expires), Resolver.Query synthesizes a SERVFAIL for
+// the client rather than silently dropping the query.
+func TestServfailOnForwardTimeout(t *testing.T) {
+	// Blackhole UDP socket: bound but never reads or replies, so a forwarded
+	// query to it will hang until the query context is canceled.
+	blackhole, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blackhole.Close()
+
+	r := newResolver(t)
+	defer r.Close()
+
+	cfg := dnsCfg
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+		".": {{Addr: blackhole.LocalAddr().String()}},
+	}
+	r.SetConfig(cfg)
+
+	// Use a short deadline so we exercise the timeout path without waiting for
+	// the full dnsQueryTimeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	query := dnspacket("test.site.", dns.TypeA, noEdns)
+	pkt, err := r.Query(ctx, query, "udp", netip.AddrPort{})
+	if err != nil {
+		t.Fatalf("Query returned error %v; want a synthesized SERVFAIL response", err)
+	}
+
+	var parser dns.Parser
+	hdr, err := parser.Start(pkt)
+	if err != nil {
+		t.Fatalf("parsing response header: %v", err)
+	}
+	if !hdr.Response {
+		t.Error("response bit not set")
+	}
+	if got, want := hdr.RCode, dns.RCodeServerFailure; got != want {
+		t.Errorf("RCode = %v, want %v", got, want)
+	}
+	// The synthesized SERVFAIL should echo the original question back.
+	q, err := parser.Question()
+	if err != nil {
+		t.Fatalf("parsing question: %v", err)
+	}
+	if got, want := q.Name.String(), "test.site."; got != want {
+		t.Errorf("question name = %q, want %q", got, want)
+	}
+}
+
 // TestLocalResponseTCFlagIntegration tests that checkResponseSizeAndSetTC is
 // correctly applied to local DNS responses through the Resolver.Query integration path.
 // This complements the unit test in forwarder_test.go by verifying the end-to-end behavior.
