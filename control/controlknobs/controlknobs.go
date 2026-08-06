@@ -140,14 +140,6 @@ type Knobs struct {
 	// maps and use them to establish peer connectivity on start, if doing so
 	// is supported by the client and storage is available.
 	CacheNetworkMaps atomic.Bool
-
-	// ScopeQuad100OnMacOS is whether sandboxed macOS should scope quad-100 to
-	// its match domains rather than installing it as the OS's primary resolver,
-	// so a user's DoH system profile isn't shadowed. It has no effect on other
-	// platforms. Off by default; when off, sandboxed macOS keeps the older
-	// behavior of making quad-100 the default resolver, as iOS still does.
-	// See tailscale/corp#45534.
-	ScopeQuad100OnMacOS atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -184,7 +176,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		disableTUNTCPGRO                     = has(tailcfg.NodeAttrDisableTUNTCPGRO)
 		neverGSOEqualTail                    = has(tailcfg.NodeAttrNeverGSOEqualTail)
 		cacheNetworkMaps                     = has(tailcfg.NodeAttrCacheNetworkMaps)
-		scopeQuad100OnMacOS                  = has(tailcfg.NodeAttrScopeQuad100OnMacOS)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -219,7 +210,6 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.DisableTUNTCPGRO.Store(disableTUNTCPGRO)
 	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 	k.CacheNetworkMaps.Store(cacheNetworkMaps)
-	k.ScopeQuad100OnMacOS.Store(scopeQuad100OnMacOS)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
