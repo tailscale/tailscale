@@ -112,7 +112,7 @@ func run(pass *analysis.Pass) (any, error) {
 						report(pass, structType, fieldVar, OmitEmptyShouldBeOmitZeroButHasIsZero)
 					}
 				case "string":
-					if !isNumericKind(fieldVar.Type()) {
+					if !isStringTagSafe(fieldVar.Type()) {
 						report(pass, structType, fieldVar, StringOnNonNumericKind)
 					}
 				default:
@@ -183,4 +183,32 @@ func isNumericKind(t types.Type) bool {
 		return true
 	}
 	return false
+}
+
+// isStringTagSafe reports whether the JSON `string` tag option is valid for t.
+// It is valid for basic numeric types and for jsonformat types that encode as
+// JSON numbers (and honor StringifyNumbers / the string tag).
+func isStringTagSafe(t types.Type) bool {
+	if pointer, ok := t.(*types.Pointer); ok {
+		t = pointer.Elem()
+	}
+	if isNumericKind(t) {
+		return true
+	}
+	return isJSONFormatNumeric(t)
+}
+
+// isJSONFormatNumeric reports whether t is a tailscale.com/types/jsonformat
+// type that represents a JSON number (optionally stringified).
+func isJSONFormatNumeric(t types.Type) bool {
+	pkgPath, name := typeName(t)
+	if pkgPath != "tailscale.com/types/jsonformat" {
+		return false
+	}
+	switch name {
+	case "TimeUnix", "TimeUnixNano", "DurationNano":
+		return true
+	default:
+		return false
+	}
 }
