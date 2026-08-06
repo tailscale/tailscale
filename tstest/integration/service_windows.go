@@ -47,20 +47,27 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 	if out, err := exec.CommandContext(t.Context(), n.env.daemon, "install-system-daemon").CombinedOutput(); err != nil {
 		t.Fatalf("install-system-daemon: %v\n%s", err, out)
 	}
-	// Teardown (LIFO): stop, uninstall, then wipe state for the next test.
+	var proc *os.Process
+	// Teardown: stop, wait for the process to exit so it releases the files below,
+	// uninstall, then wipe state for the next test.
 	t.Cleanup(func() {
 		n.stopService()
+		if proc != nil {
+			proc.Wait()
+		}
 		n.uninstallService()
 		n.cleanupServiceState()
 	})
 
-	n.startService()
+	proc = n.startService()
 	n.waitServiceReady(90 * time.Second)
-	return &Daemon{svc: n}
+	return &Daemon{node: n, svc: n, Process: proc}
 }
 
-// startService starts the service and waits for the SCM to report it Running.
-func (n *TestNode) startService() {
+// startService starts the service, waits for the SCM to report it Running, and
+// returns its process. Holding the process open keeps its PID from being reused,
+// so waiting on it can't wait on an unrelated process.
+func (n *TestNode) startService() *os.Process {
 	t := n.env.t
 	t.Helper()
 	m := connectSCM(t)
@@ -73,7 +80,12 @@ func (n *TestNode) startService() {
 	if err := s.Start(); err != nil {
 		t.Fatalf("start service %q: %v", serviceName, err)
 	}
-	n.waitServiceState(s, svc.Running, 60*time.Second)
+	st := n.waitServiceState(s, svc.Running, 60*time.Second)
+	p, err := os.FindProcess(int(st.ProcessId))
+	if err != nil {
+		t.Fatalf("open service process %d: %v", st.ProcessId, err)
+	}
+	return p
 }
 
 // stopService requests a stop and waits until the service is Stopped, failing
@@ -169,7 +181,7 @@ func (n *TestNode) waitServiceReady(timeout time.Duration) {
 }
 
 // waitServiceState polls s until it reaches want, failing the test on timeout.
-func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time.Duration) {
+func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time.Duration) svc.Status {
 	t := n.env.t
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -179,11 +191,12 @@ func (n *TestNode) waitServiceState(s *mgr.Service, want svc.State, timeout time
 			t.Fatalf("query service %q: %v", serviceName, err)
 		}
 		if st.State == want {
-			return
+			return st
 		}
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("service %q did not reach state %d within %v", serviceName, want, timeout)
+	panic("unreachable")
 }
 
 // waitServiceGone polls until the service no longer exists.

@@ -12,7 +12,6 @@ package tstest
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"tailscale.com/envknob"
@@ -77,11 +76,12 @@ func Parallel(t interface{ Parallel() }) {
 	}
 }
 
-// RequireRoot skips the test if the current user is not root.
+// RequireRoot skips the test if the current process lacks superuser privileges,
+// meaning root on most platforms and an elevated process on Windows.
 func RequireRoot(tb testenv.TB) {
 	tb.Helper()
-	if os.Getuid() != 0 {
-		tb.Skip("skipping test; requires root")
+	if !hasSuperuserPrivileges() {
+		tb.Skip("skipping test; requires superuser privileges")
 	}
 }
 
