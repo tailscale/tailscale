@@ -1834,6 +1834,19 @@ func TestIsLegacyInvocation(t *testing.T) {
 	}
 }
 
+func TestValidateFunnelArgsRejectsLegacyOnTarget(t *testing.T) {
+	var stderr bytes.Buffer
+	e := &serveEnv{testStderr: &stderr}
+
+	err := e.validateArgs(funnel, []string{"on"})
+	if err == nil {
+		t.Fatal("validateArgs unexpectedly accepted the legacy on target")
+	}
+	if got := stderr.String(); !strings.Contains(got, "tailscale funnel --bg <target>") {
+		t.Fatalf("error output did not explain the current syntax: %q", got)
+	}
+}
+
 func TestSetServe(t *testing.T) {
 	e := &serveEnv{}
 	magicDNSSuffix := "test.ts.net"
