@@ -70,8 +70,7 @@ type endpoint struct {
 	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using
 	nodeAddr     netip.Addr     // the node's first tailscale address; used for logging & wireguard rate-limiting (Issue 6686)
 
-	discoMu syncs.Mutex                    // must be held when changing the disco field
-	disco   atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
+	disco atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
 
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -393,15 +392,35 @@ func (e *endpointDisco) key() key.DiscoPublic {
 	if e == nil {
 		return key.DiscoPublic{}
 	}
+	if e.tsmpActive {
+		return e.tsmpKey
+	}
 	return e.controlKey
 }
 
-// short returns the ShortString of the key currently regarded as active or an
+func (e *endpointDisco) keyFromControl() key.DiscoPublic {
+	if e == nil {
+		return key.DiscoPublic{}
+	}
+	return e.controlKey
+}
+
+func (e *endpointDisco) keyFromTSMP() key.DiscoPublic {
+	if e == nil {
+		return key.DiscoPublic{}
+	}
+	return e.tsmpKey
+}
+
+// shortString returns the ShortString of the key currently regarded as active or an
 // empty string if endpointDisco is nil.
 // Only one string exists as of now in the struct and will always active.
-func (e *endpointDisco) short() string {
+func (e *endpointDisco) shortString() string {
 	if e == nil {
 		return ""
+	}
+	if e.tsmpActive {
+		return e.tsmpShort
 	}
 	return e.controlShort
 }
@@ -572,11 +591,7 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 }
 
 func (de *endpoint) discoShort() string {
-	var short string
-	if d := de.disco.Load(); d != nil {
-		short = d.short()
-	}
-	return short
+	return de.disco.Load().shortString()
 }
 
 // String exists purely so wireguard-go internals can log.Printf("%v")
@@ -1381,7 +1396,6 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		}
 		go de.sendDiscoPing(ep, epDisco.key(), txid, s, logLevel)
 	}
-
 }
 
 // sendDiscoPingsLocked starts pinging all of ep's direct endpoints.
@@ -1504,29 +1518,75 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 	state.lastPing = now
 }
 
-// updateDiscoKey replaces the control learned disco key for de.
-// If the key is a zero value key, set the key to nil.
+// updateDiscoKey replaces the controlClient learned disco key for de.
+// Update only the control-provided key, leaving any existing TSMP key as-is.
+// If the new control key is zero, switch back to using the TSMP key if it
+// exists; otherwise mark the new control key as preferred.
+// Should both keys be zero, nil out the saved key.
+// The loop here ensures another update did not occur during the interval
+// between load and store (based on pointer identity).
 func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
-	de.discoMu.Lock()
-	defer de.discoMu.Unlock()
+	epDisco := &endpointDisco{}
+	for {
+		old := de.disco.Load()
+		if old != nil {
+			epDisco.tsmpKey = old.tsmpKey
+			epDisco.tsmpShort = old.tsmpShort
+			epDisco.tsmpActive = old.tsmpActive
+		}
+		if !key.IsZero() {
+			epDisco.controlKey = key
+			epDisco.controlShort = key.ShortString()
+			epDisco.tsmpActive = false
+		}
+		// We have no key material, nil out key.
+		if epDisco.controlKey.IsZero() && epDisco.tsmpKey.IsZero() {
+			epDisco = nil
+		}
+		if de.disco.CompareAndSwap(old, epDisco) {
+			// Fall out of the loop if the swap was successful (no change was made
+			// since the load).
+			break
+		}
+	}
+}
 
-	old := de.disco.Load()
-
-	if key.IsZero() {
-		de.disco.Store(nil)
-	} else {
-		de.disco.Store(&endpointDisco{
-			controlKey:   key,
-			controlShort: key.ShortString(),
-			tsmpKey: old.tsmpKey,
-			tsmpShort: old.tsmpShort,
-			tsmpActive: old.tsmpActive,
-		})
+// updateTSMPDiscoKey replaces the TSMP learned disco key for de.
+// Update only the TSMP-provided key, leaving any existing control key as-is.
+// If the new TSMP key is zero, switch back to using the control key if it
+// exists; otherwise mark the new TSMP key as preferred.
+// Should both keys be zero, nil out the saved key.
+// The loop here ensures another update did not occur during the interval
+// between load and store (based on pointer identity).
+func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) {
+	epDisco := &endpointDisco{}
+	for {
+		old := de.disco.Load()
+		if old != nil {
+			epDisco.controlKey = old.controlKey
+			epDisco.controlShort = old.controlShort
+			epDisco.tsmpActive = !key.IsZero()
+		}
+		if !key.IsZero() {
+			epDisco.tsmpKey = key
+			epDisco.tsmpShort = key.ShortString()
+			epDisco.tsmpActive = true
+		}
+		// We have no key material, nil out key.
+		if epDisco.controlKey.IsZero() && epDisco.tsmpKey.IsZero() {
+			epDisco = nil
+		}
+		if de.disco.CompareAndSwap(old, epDisco) {
+			// Fall out of the loop if the swap was successful (no change was made
+			// since the load).
+			break
+		}
 	}
 }
 
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
-// update.
+// update. The node is assumed to originate from the control client from the
+// perspective of discoKey management.
 func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, probeUDPLifetimeEnabled bool) {
 	if !n.Valid() {
 		panic("nil node when updating endpoint")
@@ -1542,11 +1602,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	}
 	de.expired = n.Expired()
 
-	epDisco := de.disco.Load()
-	var discoKey key.DiscoPublic
-	if epDisco != nil {
-		discoKey = epDisco.key()
-	}
+	discoKey := de.disco.Load().keyFromControl()
 
 	if discoKey != n.DiscoKey() {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())

@@ -722,3 +722,59 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 		})
 	}
 }
+
+// TestUpdateFromNodeUsesControlKeyForComparison verifies that updateFromNode
+// compares the netmap-provided disco key against the endpoint's control-learned
+// key (keyFromControl), not the currently active key (key()).
+// Some of this is scaffold for later changes.
+func TestUpdateFromNodeUsesControlKeyForComparison(t *testing.T) {
+	dk1 := key.NewDisco().Public() // initial control key
+	dk2 := key.NewDisco().Public() // TSMP key
+
+	tests := []struct {
+		name           string
+		netmapDiscoKey key.DiscoPublic
+		wantControlKey key.DiscoPublic
+		wantActiveKey  key.DiscoPublic
+		wantTsmpActive bool
+	}{
+		{
+			name:           "control_catches_up_to_tsmp_key",
+			netmapDiscoKey: dk2,
+			wantControlKey: dk2,
+			wantActiveKey:  dk2,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "unchanged_netmap_key_preserves_active",
+			netmapDiscoKey: dk1,
+			wantControlKey: dk1,
+			wantActiveKey:  dk2,
+			wantTsmpActive: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			de := &endpoint{c: &Conn{logf: func(msg string, args ...any) {}}}
+			de.updateDiscoKey(dk1)
+			de.updateTSMPDiscoKey(dk2)
+
+			// Calls updateDiscoKey() internally and sets the endpoint `disco` field.
+			de.updateFromNode(
+				(&tailcfg.Node{Key: de.publicKey, DiscoKey: tt.netmapDiscoKey}).View(),
+				false, false)
+
+			epDisco := de.disco.Load()
+			if got := epDisco.keyFromControl(); got != tt.wantControlKey {
+				t.Errorf("keyFromControl: got %v, want %v", got, tt.wantControlKey)
+			}
+			if got := epDisco.tsmpActive; got != tt.wantTsmpActive {
+				t.Errorf("tsmpActive: got %t, want %t", got, tt.wantTsmpActive)
+			}
+			if got := epDisco.key(); got != tt.wantActiveKey {
+				t.Errorf("key(): got %v, want %v", got, tt.wantActiveKey)
+			}
+		})
+	}
+}
