@@ -175,6 +175,15 @@ func TestCompileHostEntries(t *testing.T) {
 
 var serviceAddr46 = []netip.Addr{tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6()}
 
+// scopeQuad100Knobs returns Knobs with ScopeQuad100OnMacOS set, i.e. the
+// NodeAttrScopeQuad100OnMacOS opt-in that lets sandboxed macOS scope quad-100
+// to its match domains instead of installing it as the primary resolver.
+func scopeQuad100Knobs() *controlknobs.Knobs {
+	k := new(controlknobs.Knobs)
+	k.ScopeQuad100OnMacOS.Store(true)
+	return k
+}
+
 func TestManager(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("test's assumptions break because of https://github.com/tailscale/corp/issues/1662")
@@ -191,6 +200,7 @@ func TestManager(t *testing.T) {
 		in             Config
 		split          bool
 		bs             OSConfig
+		bsErr          error // if set, GetBaseConfig returns this
 		os             OSConfig
 		knobs          *controlknobs.Knobs
 		rs             resolver.Config
@@ -452,10 +462,39 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
-			// Sandboxed macOS app builds use NetworkExtension DNS settings, not
-			// tailscaled's /etc/resolver configurator, so they keep the older
-			// Apple base-config behavior.
+			// Sandboxed macOS: split traffic stays pointed at quad-100 (upstreams
+			// may only be reachable via the tunnel). With NodeAttrScopeQuad100OnMacOS
+			// set, quad-100 is scoped to the match domains so public names fall
+			// through to the OS resolver (e.g. a DoH profile) rather than being
+			// shadowed. See the -no-knob variant for the default. tailscale/corp#45534.
 			name: "routes-split-sandboxed-darwin",
+			in: Config{
+				Routes:        upstreams("corp.com", "2.2.2.2"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			split: true,
+			knobs: scopeQuad100Knobs(),
+			bs: OSConfig{
+				Nameservers:   mustIPs("8.8.8.8"),
+				SearchDomains: fqdns("coffee.shop"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					"corp.com.", "2.2.2.2"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
+			// As above but without NodeAttrScopeQuad100OnMacOS (the default,
+			// matching iOS): quad-100 is the OS primary resolver (a "." route to
+			// the base config's 8.8.8.8), shadowing any DoH profile.
+			name: "routes-split-sandboxed-darwin-no-knob",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
@@ -476,6 +515,110 @@ func TestManager(t *testing.T) {
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,
+		},
+		{
+			// An ExtraRecord paired with an authoritative (resolver-less) route
+			// is scoped like any other split domain, on every platform. The
+			// darwin and linux variants must agree.
+			name: "extra-record-routed-scopes-quad100",
+			in: Config{
+				Hosts:         hosts("extra.example.com.", "100.64.0.9"),
+				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", ""),
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			split: true,
+			knobs: scopeQuad100Knobs(),
+			bs: OSConfig{
+				Nameservers: mustIPs("8.8.8.8"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("corp.ts.net", "extra.example.com"),
+			},
+			rs: resolver.Config{
+				Hosts:        hosts("extra.example.com.", "100.64.0.9"),
+				LocalDomains: fqdns("corp.ts.net.", "extra.example.com."),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
+			name: "extra-record-routed-scopes-quad100-linux",
+			in: Config{
+				Hosts:         hosts("extra.example.com.", "100.64.0.9"),
+				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", ""),
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers: mustIPs("8.8.8.8"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("corp.ts.net", "extra.example.com"),
+			},
+			rs: resolver.Config{
+				Hosts:        hosts("extra.example.com.", "100.64.0.9"),
+				LocalDomains: fqdns("corp.ts.net.", "extra.example.com."),
+			},
+		},
+		{
+			// MagicDNS names present but domain routing off: no route suffix
+			// covers them, so quad-100 must stay primary or they stop resolving.
+			// requiresPrimaryResolver overrides NodeAttrScopeQuad100OnMacOS, at
+			// the cost of shadowing the DoH profile.
+			name: "unrouted-magicdns-hosts-keep-quad100-primary",
+			in: Config{
+				Routes:                upstreams("corp.ts.net.", "1.2.3.4"),
+				SearchDomains:         fqdns("corp.ts.net"),
+				MagicDNSHostsUnrouted: true,
+			},
+			split: true,
+			knobs: scopeQuad100Knobs(),
+			bs: OSConfig{
+				Nameservers: mustIPs("192.168.1.1"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "192.168.1.1",
+					"corp.ts.net.", "1.2.3.4"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
+		},
+		{
+			// MagicDNSHostsUnrouted on a split-DNS manager with no base config
+			// (e.g. systemd-resolved): fall back to a scoped config instead of
+			// erroring. Two differing resolver sets keep us off the
+			// single-resolver fast path so we reach GetBaseConfig. Regression
+			// test for tailscale/corp#45534.
+			name: "unrouted-magicdns-hosts-no-base-config-linux",
+			in: Config{
+				Routes: upstreams(
+					"corp.ts.net.", "1.2.3.4",
+					"bigco.net.", "3.3.3.3"),
+				SearchDomains:         fqdns("corp.ts.net"),
+				MagicDNSHostsUnrouted: true,
+			},
+			split: true,
+			bsErr: ErrGetBaseConfigNotSupported,
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("bigco.net", "corp.ts.net"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					"corp.ts.net.", "1.2.3.4",
+					"bigco.net.", "3.3.3.3"),
+			},
+			goos: "linux",
 		},
 		{
 			name: "routes-multi",
@@ -1008,6 +1151,9 @@ func TestManager(t *testing.T) {
 			f := fakeOSConfigurator{
 				SplitDNS:   test.split,
 				BaseConfig: test.bs,
+			}
+			if test.bsErr != nil {
+				f.GetBaseConfigErr = &test.bsErr
 			}
 			goos := test.goos
 			if goos == "" {
