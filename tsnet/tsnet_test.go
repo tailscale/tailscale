@@ -53,6 +53,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/integration"
@@ -1011,17 +1012,17 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 	// is a mapping from the Service name to the Service VIP.
 	cm := host.lb.NetMap().SelfNode.CapMap()
 	svcIPMap := make(tailcfg.ServiceIPMappings)
-	if cm.Contains(tailcfg.NodeAttrServiceHost) {
-		parsed := must.Get(tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](cm, tailcfg.NodeAttrServiceHost))
+	if cm.Contains(nodecap.ServiceHost) {
+		parsed := must.Get(tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](cm, nodecap.ServiceHost))
 		if len(parsed) != 1 {
-			t.Fatalf("expected only one capability for %v, got %d", tailcfg.NodeAttrServiceHost, len(parsed))
+			t.Fatalf("expected only one capability for %v, got %d", nodecap.ServiceHost, len(parsed))
 		}
 		svcIPMap = parsed[0]
 	}
 	svcIPMap[serviceName] = []netip.Addr{netip.MustParseAddr(ip)}
 	svcIPMapJSON := must.Get(json.Marshal(svcIPMap))
 	newCM := cm.AsMap()
-	mak.Set(&newCM, tailcfg.NodeAttrServiceHost, []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)})
+	mak.Set(&newCM, nodecap.ServiceHost, []tailcfg.RawMessage{tailcfg.RawMessage(svcIPMapJSON)})
 	control.SetNodeCapMap(host.lb.NodeKey(), newCM)
 
 	// The Service host must be allowed to advertise the Service VIP.

@@ -13,6 +13,7 @@ import (
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -277,7 +278,7 @@ func (v NodeView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
 //	"https://tailscale.com/cap/file-sharing"
 //
 // Deprecated: use CapMap instead. See https://github.com/tailscale/tailscale/issues/11508
-func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
+func (v NodeView) Capabilities() views.Slice[nodecap.Cap] { return views.SliceOf(v.ж.Capabilities) }
 
 // CapMap is a map of capabilities to their optional argument/data values.
 //
@@ -288,7 +289,7 @@ func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.Slic
 // represented by the Capabilities field, but can now be represented by
 // CapMap with an empty value.
 //
-// See NodeCapability for more information on keys.
+// See [nodecap.Cap] for more information on keys.
 //
 // Metadata about nodes can be transmitted in 3 ways:
 //  1. MapResponse.Node.CapMap describes attributes that affect behavior for
@@ -299,7 +300,7 @@ func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.Slic
 //  3. MapResponse.Peers[].CapMap describes attributes regarding a peer node,
 //     such as which features the peer supports or if that peer is preferred
 //     for a particular task vs other peers that could also be chosen.
-func (v NodeView) CapMap() views.MapSlice[NodeCapability, RawMessage] {
+func (v NodeView) CapMap() views.MapSlice[nodecap.Cap, RawMessage] {
 	return views.MapSliceOf(v.ж.CapMap)
 }
 
@@ -402,7 +403,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	LastSeen                      *time.Time
 	Online                        *bool
 	MachineAuthorized             bool
-	Capabilities                  []NodeCapability
+	Capabilities                  []nodecap.Cap
 	CapMap                        NodeCapMap
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string

@@ -12,6 +12,8 @@ import (
 	"tailscale.com/net/ipset"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/views"
 )
@@ -104,7 +106,7 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 				for cap, val := range cm.CapMap {
 					m.Caps = append(m.Caps, CapMatch{
 						Dst:    dstNet,
-						Cap:    tailcfg.PeerCapability(cap),
+						Cap:    peercap.Cap(cap),
 						Values: val,
 					})
 				}
@@ -133,7 +135,7 @@ var (
 // around, and ultimately use a new version of IPSet.ContainsFunc like
 // Contains16Func that works in [16]byte address, so we can match
 // at runtime without allocating?
-func parseIPSet(arg string) (prefixes []netip.Prefix, peerCap tailcfg.NodeCapability, err error) {
+func parseIPSet(arg string) (prefixes []netip.Prefix, peerCap nodecap.Cap, err error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
 		return []netip.Prefix{
@@ -142,7 +144,7 @@ func parseIPSet(arg string) (prefixes []netip.Prefix, peerCap tailcfg.NodeCapabi
 		}, "", nil
 	}
 	if cap, ok := strings.CutPrefix(arg, "cap:"); ok {
-		return nil, tailcfg.NodeCapability(cap), nil
+		return nil, nodecap.Cap(cap), nil
 	}
 	if strings.Contains(arg, "/") {
 		pfx, err := netip.ParsePrefix(arg)

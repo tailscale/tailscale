@@ -17,7 +17,7 @@ import (
 
 	"tailscale.com/drive"
 	"tailscale.com/ipn"
-	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
 	"tailscale.com/util/httpm"
@@ -381,7 +381,7 @@ func (s driveRemoteSource) Remotes() iter.Seq[*drive.Remote] {
 						b.logf("[v2] taildrive: peer %s (%s, id=%v) PeerAPI unreachable", peerKey, peerName, peerID)
 						return false
 					}
-					if cn.PeerHasCap(peer, tailcfg.PeerCapabilityTaildriveSharer) {
+					if cn.PeerHasCap(peer, peercap.TaildriveSharer) {
 						b.logf("[v2] taildrive: peer %s (%s, id=%v) available", peerKey, peerName, peerID)
 						return true
 					}

@@ -33,6 +33,8 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tka"
 	"tailscale.com/tstest/tkatest"
 	"tailscale.com/types/key"
@@ -1057,10 +1059,10 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 			capMap = *s.DefaultNodeCapabilities
 		} else {
 			capMap = tailcfg.NodeCapMap{
-				tailcfg.CapabilityHTTPS:                           []tailcfg.RawMessage{},
-				tailcfg.NodeAttrFunnel:                            []tailcfg.RawMessage{},
-				tailcfg.CapabilityFileSharing:                     []tailcfg.RawMessage{},
-				tailcfg.CapabilityFunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{},
+				nodecap.HTTPS:                           []tailcfg.RawMessage{},
+				nodecap.Funnel:                          []tailcfg.RawMessage{},
+				nodecap.FileSharing:                     []tailcfg.RawMessage{},
+				nodecap.FunnelPorts + "?ports=8080,443": []tailcfg.RawMessage{},
 			}
 		}
 
@@ -1605,12 +1607,12 @@ var keepAliveMsg = &struct {
 func packetFilterWithIngress(addRelayCaps bool, allowSrcs []string) []tailcfg.FilterRule {
 	out := slices.Clone(tailcfg.FilterAllowAll)
 	out[0].SrcIPs = allowSrcs
-	caps := []tailcfg.PeerCapability{
-		tailcfg.PeerCapabilityIngress,
+	caps := []peercap.Cap{
+		peercap.Ingress,
 	}
 	if addRelayCaps {
-		caps = append(caps, tailcfg.PeerCapabilityRelay)
-		caps = append(caps, tailcfg.PeerCapabilityRelayTarget)
+		caps = append(caps, peercap.Relay)
+		caps = append(caps, peercap.RelayTarget)
 	}
 	out = append(out, tailcfg.FilterRule{
 		SrcIPs: []string{"*"},
@@ -1647,9 +1649,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	s.mu.Unlock()
 
 	node.CapMap = nodeCapMap
-	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
+	node.Capabilities = append(node.Capabilities, nodecap.DisableUPnP)
 	if sshPolicy != nil {
-		mak.Set(&node.CapMap, tailcfg.CapabilitySSH, nil)
+		mak.Set(&node.CapMap, nodecap.SSH, nil)
 	}
 
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)

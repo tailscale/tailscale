@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vmtest"
@@ -1116,10 +1117,10 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 
 	a := env.AddNode("a", aNet,
 		vmtest.OS(vmtest.Gokrazy),
-		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+		tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 	b := env.AddNode("b", bNet,
 		vmtest.OS(vmtest.Gokrazy),
-		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+		tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 
 	connectStep := env.AddStep("Establish initial TSMP tunnel")
 	cutControlStep := env.AddStep("Cut control server access")
@@ -1206,10 +1207,10 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 			// Node "a" is the offline peer, node "b" is the online peer.
 			a := env.AddNode("a", aNet,
 				vmtest.OS(vmtest.Gokrazy),
-				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+				tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 			b := env.AddNode("b", bNet,
 				vmtest.OS(vmtest.Gokrazy),
-				tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+				tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 
 			pStr := "Ping a → b"
 			if testPingFrom == "online" {
@@ -1295,10 +1296,10 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 
 	a := env.AddNode("a", aNet,
 		vmtest.OS(vmtest.Gokrazy),
-		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+		tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 	b := env.AddNode("b", bNet,
 		vmtest.OS(vmtest.Gokrazy),
-		tailcfg.NodeCapMap{tailcfg.NodeAttrCacheNetworkMaps: nil})
+		tailcfg.NodeCapMap{nodecap.CacheNetworkMaps: nil})
 
 	checkInitialMetrics := env.AddStep("Check initial client metrics")
 	cutControlStep := env.AddStep("Cut control server access")

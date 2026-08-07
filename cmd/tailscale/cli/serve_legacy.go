@@ -29,6 +29,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/util/slicesx"
 	"tailscale.com/version"
 )
@@ -163,19 +165,19 @@ type serveEnv struct {
 	json bool // output JSON (status only for now)
 
 	// v2 specific flags
-	bg               bgBoolFlag               // background mode
-	setPath          string                   // serve path
-	https            uint                     // HTTP port
-	http             uint                     // HTTP port
-	tcp              uint                     // TCP port
-	tlsTerminatedTCP uint                     // a TLS terminated TCP port
-	proxyProtocol    uint                     // PROXY protocol version (1 or 2)
-	subcmd           serveMode                // subcommand
-	yes              bool                     // update without prompt
-	service          tailcfg.ServiceName      // service name
-	tun              bool                     // redirect traffic to OS for service
-	allServices      bool                     // apply config file to all services
-	acceptAppCaps    []tailcfg.PeerCapability // app capabilities to forward
+	bg               bgBoolFlag          // background mode
+	setPath          string              // serve path
+	https            uint                // HTTP port
+	http             uint                // HTTP port
+	tcp              uint                // TCP port
+	tlsTerminatedTCP uint                // a TLS terminated TCP port
+	proxyProtocol    uint                // PROXY protocol version (1 or 2)
+	subcmd           serveMode           // subcommand
+	yes              bool                // update without prompt
+	service          tailcfg.ServiceName // service name
+	tun              bool                // redirect traffic to OS for service
+	allServices      bool                // apply config file to all services
+	acceptAppCaps    []peercap.Cap       // app capabilities to forward
 
 	lc localServeClient // localClient interface, specific to serve
 	// optional stuff for tests:
@@ -276,7 +278,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		// on, enableFeatureInteractive will error. For now, we hide that
 		// error and maintain the previous behavior (prior to 2023-08-15)
 		// of letting them edit the serve config before enabling certs.
-		e.enableFeatureInteractive(ctx, "serve", tailcfg.CapabilityHTTPS)
+		e.enableFeatureInteractive(ctx, "serve", nodecap.HTTPS)
 	}
 
 	srcPort, err := parseServePort(srcPortStr)
@@ -790,7 +792,7 @@ func parseServePort(s string) (uint16, error) {
 //
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
-func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...tailcfg.NodeCapability) (err error) {
+func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...nodecap.Cap) (err error) {
 	st, err := e.getLocalClientStatusWithoutPeers(ctx)
 	if err != nil {
 		return fmt.Errorf("getting client status: %w", err)

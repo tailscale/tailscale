@@ -33,6 +33,8 @@ import (
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -100,7 +102,7 @@ func (b *bgBoolFlag) String() string {
 }
 
 type acceptAppCapsFlag struct {
-	Value *[]tailcfg.PeerCapability
+	Value *[]peercap.Cap
 }
 
 // An application capability name has the form {domain}/{name}.
@@ -120,7 +122,7 @@ func (u *acceptAppCapsFlag) Set(s string) error {
 		if !validAppCap.MatchString(appCap) {
 			return fmt.Errorf("%q does not match the form {domain}/{name}, where domain must be a fully qualified domain name", appCap)
 		}
-		*u.Value = append(*u.Value, tailcfg.PeerCapability(appCap))
+		*u.Value = append(*u.Value, peercap.Cap(appCap))
 	}
 	return nil
 }
@@ -468,7 +470,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// on, enableFeatureInteractive will error. For now, we hide that
 			// error and maintain the previous behavior (prior to 2023-08-15)
 			// of letting them edit the serve config before enabling certs.
-			if err := e.enableFeatureInteractive(ctx, "serve", tailcfg.CapabilityHTTPS); err != nil {
+			if err := e.enableFeatureInteractive(ctx, "serve", nodecap.HTTPS); err != nil {
 				return fmt.Errorf("error enabling https feature: %w", err)
 			}
 		}
@@ -990,7 +992,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	return e.lc.SetServeConfig(ctx, sc)
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []tailcfg.PeerCapability, proxyProtocol int) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int) error {
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
@@ -1079,7 +1081,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		return "", ""
 	}
 	if forService {
-		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, tailcfg.NodeAttrServiceHost)
+		serviceIPMaps, err := tailcfg.UnmarshalNodeCapJSON[tailcfg.ServiceIPMappings](st.Self.CapMap, nodecap.ServiceHost)
 		if err != nil || len(serviceIPMaps) == 0 || serviceIPMaps[0][svcName] == nil {
 			// The capmap does not contain IPs for this service yet. Usually this means
 			// the service hasn't been added to prefs and sent to control yet.
@@ -1241,7 +1243,7 @@ func (e *serveEnv) shouldWarnRemoteDestCompatibility(ctx context.Context, target
 	return nil
 }
 
-func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []tailcfg.PeerCapability) error {
+func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target, mds string, caps []peercap.Cap) error {
 	h := new(ipn.HTTPHandler)
 	switch {
 	case strings.HasPrefix(target, "text:"):

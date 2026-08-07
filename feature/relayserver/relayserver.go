@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -209,7 +210,7 @@ func (e *extension) handleRelayServerStaticAddrPortsLocked() {
 func (e *extension) selfNodeViewChanged(nodeView tailcfg.NodeView) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.hasNodeAttrDisableRelayServer = nodeView.HasCap(tailcfg.NodeAttrDisableRelayServer)
+	e.hasNodeAttrDisableRelayServer = nodeView.HasCap(nodecap.DisableRelayServer)
 	e.handleRelayServerLifetimeLocked()
 }
 

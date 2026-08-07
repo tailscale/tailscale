@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -446,7 +448,7 @@ type Node struct {
 	//    "https://tailscale.com/cap/file-sharing"
 	//
 	// Deprecated: use CapMap instead. See https://github.com/tailscale/tailscale/issues/11508
-	Capabilities []NodeCapability `json:",omitempty"`
+	Capabilities []nodecap.Cap `json:",omitempty"`
 
 	// CapMap is a map of capabilities to their optional argument/data values.
 	//
@@ -457,7 +459,7 @@ type Node struct {
 	// represented by the Capabilities field, but can now be represented by
 	// CapMap with an empty value.
 	//
-	// See NodeCapability for more information on keys.
+	// See [nodecap.Cap] for more information on keys.
 	//
 	// Metadata about nodes can be transmitted in 3 ways:
 	// 1. MapResponse.Node.CapMap describes attributes that affect behavior for
@@ -543,13 +545,13 @@ type Node struct {
 
 // HasCap reports whether the node has the given capability.
 // It is safe to call on an invalid NodeView.
-func (v NodeView) HasCap(cap NodeCapability) bool {
+func (v NodeView) HasCap(cap nodecap.Cap) bool {
 	return v.ж.HasCap(cap)
 }
 
 // HasCap reports whether the node has the given capability.
 // It is safe to call on a nil Node.
-func (v *Node) HasCap(cap NodeCapability) bool {
+func (v *Node) HasCap(cap nodecap.Cap) bool {
 	return v != nil && v.CapMap.Contains(cap)
 }
 
@@ -1565,7 +1567,7 @@ type CapGrant struct {
 	// FilterRule.SrcIPs are granted to the destination IP,
 	// matched by Dsts.
 	// Deprecated: use CapMap instead.
-	Caps []PeerCapability `json:",omitempty"`
+	Caps []peercap.Cap `json:",omitempty"`
 
 	// CapMap is a map of capabilities to their values.
 	// The key is the capability name, and the value is a list of
@@ -1573,62 +1575,40 @@ type CapGrant struct {
 	CapMap PeerCapMap `json:",omitempty"`
 }
 
-// PeerCapability represents a capability granted to a peer by a FilterRule when
-// the peer communicates with the node that has this rule. Its meaning is
-// application-defined.
+// PeerCapability is a type alias to [peercap.Cap]
+// and peer capabilities are now defined in the peercap package,
+// see [PeerCapabilityFileSharingTarget].
 //
-// It must be a URL like "https://tailscale.com/cap/file-send".
-type PeerCapability string
+//go:fix inline
+type PeerCapability = peercap.Cap
 
+// Deprecated: Peer capabilities are now defined in the peercap package, see [peercap.Cap].
+// These constants are provided for backwards compatibility
+// but no new [PeerCapability] aliases will be added to this list.
+//
+//go:fix inline
 const (
-	// PeerCapabilityFileSharingTarget grants the current node the ability to send
-	// files to the peer which has this capability.
-	PeerCapabilityFileSharingTarget PeerCapability = "https://tailscale.com/cap/file-sharing-target"
-	// PeerCapabilityFileSharingSend grants the ability to receive files from a
-	// node that's owned by a different user.
-	PeerCapabilityFileSharingSend PeerCapability = "https://tailscale.com/cap/file-send"
-	// PeerCapabilityDebugPeer grants the ability for a peer to read this node's
-	// goroutines, metrics, magicsock internal state, etc.
-	PeerCapabilityDebugPeer PeerCapability = "https://tailscale.com/cap/debug-peer"
-	// PeerCapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
-	PeerCapabilityWakeOnLAN PeerCapability = "https://tailscale.com/cap/wake-on-lan"
-	// PeerCapabilityIngress grants the ability for a peer to send ingress traffic.
-	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
-	// PeerCapabilityWebUI grants the ability for a peer to edit features from the
-	// device Web UI.
-	PeerCapabilityWebUI PeerCapability = "tailscale.com/cap/webui"
-	// PeerCapabilityTaildrive grants the ability for a peer to access Taildrive
-	// shares.
-	PeerCapabilityTaildrive PeerCapability = "tailscale.com/cap/drive"
-	// PeerCapabilityTaildriveSharer indicates that a peer has the ability to
-	// share folders with us.
-	PeerCapabilityTaildriveSharer PeerCapability = "tailscale.com/cap/drive-sharer"
-
-	// PeerCapabilityKubernetes grants a peer Kubernetes-specific
-	// capabilities, such as the ability to impersonate specific Tailscale
-	// user groups as Kubernetes user groups. This capability is read by
-	// peers that are Tailscale Kubernetes operator instances.
-	PeerCapabilityKubernetes PeerCapability = "tailscale.com/cap/kubernetes"
-
-	// PeerCapabilityRelay grants the ability for a peer to allocate relay
-	// endpoints.
-	PeerCapabilityRelay PeerCapability = "tailscale.com/cap/relay"
-	// PeerCapabilityRelayTarget grants the current node the ability to allocate
-	// relay endpoints to the peer which has this capability.
-	PeerCapabilityRelayTarget PeerCapability = "tailscale.com/cap/relay-target"
-
-	// PeerCapabilityTsIDP grants a peer tsidp-specific
-	// capabilities, such as the ability to add user groups to the OIDC
-	// claim
-	PeerCapabilityTsIDP PeerCapability = "tailscale.com/cap/tsidp"
+	PeerCapabilityFileSharingTarget = peercap.FileSharingTarget
+	PeerCapabilityFileSharingSend   = peercap.FileSharingSend
+	PeerCapabilityDebugPeer         = peercap.DebugPeer
+	PeerCapabilityWakeOnLAN         = peercap.WakeOnLAN
+	PeerCapabilityIngress           = peercap.Ingress
+	PeerCapabilityWebUI             = peercap.WebUI
+	PeerCapabilityTaildrive         = peercap.Taildrive
+	PeerCapabilityTaildriveSharer   = peercap.TaildriveSharer
+	PeerCapabilityKubernetes        = peercap.Kubernetes
+	PeerCapabilityRelay             = peercap.Relay
+	PeerCapabilityRelayTarget       = peercap.RelayTarget
+	PeerCapabilityTsIDP             = peercap.TsIDP
+	// Deprecated: Do not add any further values here, use [peercap] instead.
 )
 
 // NodeCapMap is a map of capabilities to their optional values. It is valid for
 // a capability to have no values (nil slice); such capabilities can be tested
 // for by using the [NodeCapMap.Contains] method.
 //
-// See [NodeCapability] for more information on keys.
-type NodeCapMap map[NodeCapability][]RawMessage
+// See [nodecap.Cap] for more information on keys.
+type NodeCapMap map[nodecap.Cap][]RawMessage
 
 // Equal reports whether c and c2 are equal.
 func (c NodeCapMap) Equal(c2 NodeCapMap) bool {
@@ -1638,14 +1618,14 @@ func (c NodeCapMap) Equal(c2 NodeCapMap) bool {
 // UnmarshalNodeCapJSON unmarshals each JSON value in cm[cap] as T.
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
-func UnmarshalNodeCapJSON[T any](cm NodeCapMap, cap NodeCapability) ([]T, error) {
+func UnmarshalNodeCapJSON[T any](cm NodeCapMap, cap nodecap.Cap) ([]T, error) {
 	return UnmarshalNodeCapViewJSON[T](views.MapSliceOf(cm), cap)
 }
 
 // UnmarshalNodeCapViewJSON unmarshals each JSON value in cm.Get(cap) as T.
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
-func UnmarshalNodeCapViewJSON[T any](cm views.MapSlice[NodeCapability, RawMessage], cap NodeCapability) ([]T, error) {
+func UnmarshalNodeCapViewJSON[T any](cm views.MapSlice[nodecap.Cap, RawMessage], cap nodecap.Cap) ([]T, error) {
 	vals, ok := cm.GetOk(cap)
 	if !ok {
 		return nil, nil
@@ -1664,7 +1644,7 @@ func UnmarshalNodeCapViewJSON[T any](cm views.MapSlice[NodeCapability, RawMessag
 // Contains reports whether c has the capability cap. This is used to test for
 // the existence of a capability, especially when the capability has no
 // associated argument/data values.
-func (c NodeCapMap) Contains(cap NodeCapability) bool {
+func (c NodeCapMap) Contains(cap nodecap.Cap) bool {
 	_, ok := c[cap]
 	return ok
 }
@@ -1675,19 +1655,19 @@ func (c NodeCapMap) Contains(cap NodeCapability) bool {
 //
 // The values are opaque to Tailscale, but are passed through from the ACLs to
 // the application via the WhoIs API.
-type PeerCapMap map[PeerCapability][]RawMessage
+type PeerCapMap map[peercap.Cap][]RawMessage
 
 // UnmarshalCapJSON unmarshals each JSON value in cm[cap] as T.
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
-func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
+func UnmarshalCapJSON[T any](cm PeerCapMap, cap peercap.Cap) ([]T, error) {
 	return UnmarshalCapViewJSON[T](views.MapSliceOf(cm), cap)
 }
 
 // UnmarshalCapViewJSON unmarshals each JSON value in cm.Get(cap) as T.
 // If cap does not exist in cm, it returns (nil, nil).
 // It returns an error if the values cannot be unmarshaled into the provided type.
-func UnmarshalCapViewJSON[T any](cm views.MapSlice[PeerCapability, RawMessage], cap PeerCapability) ([]T, error) {
+func UnmarshalCapViewJSON[T any](cm views.MapSlice[peercap.Cap, RawMessage], cap peercap.Cap) ([]T, error) {
 	vals, ok := cm.GetOk(cap)
 	if !ok {
 		return nil, nil
@@ -1706,7 +1686,7 @@ func UnmarshalCapViewJSON[T any](cm views.MapSlice[PeerCapability, RawMessage], 
 // HasCapability reports whether c has the capability cap. This is used to test
 // for the existence of a capability, especially when the capability has no
 // associated argument/data values.
-func (c PeerCapMap) HasCapability(cap PeerCapability) bool {
+func (c PeerCapMap) HasCapability(cap peercap.Cap) bool {
 	_, ok := c[cap]
 	return ok
 }
@@ -2475,441 +2455,110 @@ type Oauth2Token struct {
 	Expiry time.Time `json:"expiry,omitzero"`
 }
 
-// NodeCapability represents a capability granted to the self node as listed in
-// MapResponse.Node.Capabilities.
+// NodeCapability is a type alias to [nodecap.Cap]
+// and node capabilities are now defined in the [nodecap] package,
+// see [CapabilityFileSharing] and [NodeAttrDisableAndroidBindToActiveNetwork] respectively.
 //
-// It must be a URL like "https://tailscale.com/cap/file-sharing", or a
-// well-known capability name like "funnel". The latter is only allowed for
-// Tailscale-defined capabilities.
+//go:fix inline
+type NodeCapability = nodecap.Cap
+
+// NodeCapabilityPrefix is a type alias to [nodecap.Prefix]
+// and these prefixes are now defined in the [nodecap] package,
+// see [NodeAttrPrefixServices].
 //
-// Unlike PeerCapability, NodeCapability is not in context of a peer and is
-// granted to the node itself.
+//go:fix inline
+type NodeCapabilityPrefix = nodecap.Prefix
+
+// Deprecated: Capabilities and NodeAttrs are now defined in the nodecap package, see [nodecap.Cap].
+// These constants are provided for backwards compatibility
+// but no new [NodeCapability] aliases will be added to this list.
 //
-// These are also referred to as "Node Attributes" in the ACL policy file.
-type NodeCapability string
-
-// NodeCapabilityPrefix is a prefix for [NodeCapMap] keys that share a common
-// namespace, where each entry represents a distinct named instance (e.g. one
-// per service). The full key is formed by concatenating the prefix with the
-// instance name.
-type NodeCapabilityPrefix string
-
-// ToAttribute returns the full [NodeCapability] key for the given value under
-// this prefix, of the form prefix+value.
-func (p NodeCapabilityPrefix) ToAttribute(value string) NodeCapability {
-	return NodeCapability(string(p) + value)
-}
-
+//go:fix inline
 const (
-	CapabilityFileSharing        NodeCapability = "https://tailscale.com/cap/file-sharing"
-	CapabilityAdmin              NodeCapability = "https://tailscale.com/cap/is-admin"
-	CapabilityOwner              NodeCapability = "https://tailscale.com/cap/is-owner"
-	CapabilitySSH                NodeCapability = "https://tailscale.com/cap/ssh"                   // feature enabled/available
-	CapabilitySSHRuleIn          NodeCapability = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
-	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
-	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
-	CapabilityHTTPS              NodeCapability = "https"
-
-	// CapabilityMacUIV2 makes the macOS GUI enable its v2 mode.
-	CapabilityMacUIV2 NodeCapability = "https://tailscale.com/cap/mac-ui-v2"
-
-	// CapabilityServicesInDesktopClients enables services list/menu/section in desktop clients.
-	// If this capability is not present, desktop clients should not show services.
-	CapabilityServicesInDesktopClients NodeCapability = "https://tailscale.com/cap/services-in-desktop-clients"
-
-	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
-	// sockets (in the net/netns package). See that package for more
-	// details on the behaviour of this capability.
-	CapabilityBindToInterfaceByRoute NodeCapability = "https://tailscale.com/cap/bind-to-interface-by-route"
-
-	// NodeAttrDisableAndroidBindToActiveNetwork disables binding sockets to the
-	// currently active network on Android, which is enabled by default.
-	// This allows the control plane to turn off the behavior if it causes
-	// problems.
-	NodeAttrDisableAndroidBindToActiveNetwork NodeCapability = "disable-android-bind-to-active-network"
-
-	// CapabilityDebugDisableAlternateDefaultRouteInterface changes how Darwin
-	// nodes get the default interface. There is an optional hook (used by the
-	// macOS and iOS clients) to override the default interface, this capability
-	// disables that and uses the default behavior (of parsing the routing
-	// table).
-	CapabilityDebugDisableAlternateDefaultRouteInterface NodeCapability = "https://tailscale.com/cap/debug-disable-alternate-default-route-interface"
-
-	// CapabilityDebugDisableBindConnToInterface disables the automatic binding
-	// of connections to the default network interface on Darwin nodes.
-	CapabilityDebugDisableBindConnToInterface NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
-
-	// CapabilityDebugDisableBindConnToInterface disables the automatic binding
-	// of connections to the default network interface on Darwin nodes using network extensions
-	CapabilityDebugDisableBindConnToInterfaceAppleExt NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface-apple-ext"
-
-	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
-	CapabilityTailnetLock NodeCapability = "https://tailscale.com/cap/tailnet-lock"
-
-	// Funnel warning capabilities used for reporting errors to the user.
-
-	// CapabilityWarnFunnelNoInvite indicates whether Funnel is enabled for the tailnet.
-	// This cap is no longer used 2023-08-09 onwards.
-	CapabilityWarnFunnelNoInvite NodeCapability = "https://tailscale.com/cap/warn-funnel-no-invite"
-
-	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
-	// This cap is no longer used 2023-08-09 onwards.
-	CapabilityWarnFunnelNoHTTPS NodeCapability = "https://tailscale.com/cap/warn-funnel-no-https"
-
-	// Debug logging capabilities
-
-	// CapabilityDebugTSDNSResolution enables verbose debug logging for DNS
-	// resolution for Tailscale-controlled domains (the control server, log
-	// server, DERP servers, etc.)
-	CapabilityDebugTSDNSResolution NodeCapability = "https://tailscale.com/cap/debug-ts-dns-resolution"
-
-	// CapabilityFunnelPorts specifies the ports that the Funnel is available on.
-	// The ports are specified as a comma-separated list of port numbers or port
-	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
-	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
-	CapabilityFunnelPorts NodeCapability = "https://tailscale.com/cap/funnel-ports"
-
-	// NodeAttrOnlyTCP443 specifies that the client should not attempt to generate
-	// any outbound traffic that isn't TCP on port 443 (HTTPS). This is used for
-	// clients in restricted environments where only HTTPS traffic is allowed
-	// other types of traffic trips outbound firewall alarms. This thus implies
-	// all traffic is over DERP.
-	NodeAttrOnlyTCP443 NodeCapability = "only-tcp-443"
-
-	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
-	NodeAttrFunnel NodeCapability = "funnel"
-	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.
-	NodeAttrSSHAggregator NodeCapability = "ssh-aggregator"
-
-	// NodeAttrDebugForceBackgroundSTUN forces a node to always do background
-	// STUN queries regardless of inactivity.
-	NodeAttrDebugForceBackgroundSTUN NodeCapability = "debug-always-stun"
-
-	// NodeAttrDebugDisableWGTrim disables the lazy WireGuard configuration,
-	// always giving WireGuard the full netmap, even for idle peers.
-	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
-
-	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
-	// disabled if WPAD is present on the network.
-	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
-
-	// NodeAttrDisableUPnP makes the client not perform a UPnP portmapping.
-	// By default, we want to enable it to see if it works on more clients.
-	//
-	// If UPnP catastrophically fails for people, this should be set kill
-	// new attempts at UPnP connections.
-	NodeAttrDisableUPnP NodeCapability = "debug-disable-upnp"
-
-	// NodeAttrDisableDeltaUpdates makes the client not process updates via the
-	// delta update mechanism and should instead treat all netmap changes as
-	// "full" ones as tailscaled did in 1.48.x and earlier.
-	NodeAttrDisableDeltaUpdates NodeCapability = "disable-delta-updates"
-
-	// NodeAttrRandomizeClientPort makes magicsock UDP bind to
-	// :0 to get a random local port, ignoring any configured
-	// fixed port.
-	NodeAttrRandomizeClientPort NodeCapability = "randomize-client-port"
-
-	// NodeAttrSilentDisco makes the client suppress disco heartbeats to its
-	// peers.
-	NodeAttrSilentDisco NodeCapability = "silent-disco"
-
-	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
-	// rather than a /32 per peer. At most one of this or
-	// NodeAttrOneCGNATDisable may be set; if neither are, it's automatic.
-	NodeAttrOneCGNATEnable NodeCapability = "one-cgnat?v=true"
-
-	// NodeAttrOneCGNATDisable makes the client prefer a /32 route per peer
-	// rather than one big /10 CGNAT route. At most one of this or
-	// NodeAttrOneCGNATEnable may be set; if neither are, it's automatic.
-	NodeAttrOneCGNATDisable NodeCapability = "one-cgnat?v=false"
-
-	// NodeAttrPeerMTUEnable makes the client do path MTU discovery to its
-	// peers. If it isn't set, it defaults to the client default.
-	NodeAttrPeerMTUEnable NodeCapability = "peer-mtu-enable"
-
-	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
-	// DNS queries over TCP if the response is truncated.
-	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
-
-	// NodeAttrLinuxMustUseIPTables forces Linux clients to use iptables for
-	// netfilter management.
-	// This cannot be set simultaneously with NodeAttrLinuxMustUseNfTables.
-	NodeAttrLinuxMustUseIPTables NodeCapability = "linux-netfilter?v=iptables"
-
-	// NodeAttrLinuxMustUseNfTables forces Linux clients to use nftables for
-	// netfilter management.
-	// This cannot be set simultaneously with NodeAttrLinuxMustUseIPTables.
-	NodeAttrLinuxMustUseNfTables NodeCapability = "linux-netfilter?v=nftables"
-
-	// NodeAttrProbeUDPLifetime makes the client probe UDP path lifetime at the
-	// tail end of an active direct connection in magicsock.
-	NodeAttrProbeUDPLifetime NodeCapability = "probe-udp-lifetime"
-
-	// NodeAttrsTaildriveShare enables sharing via Taildrive.
-	NodeAttrsTaildriveShare NodeCapability = "drive:share"
-
-	// NodeAttrsTaildriveAccess enables accessing shares via Taildrive.
-	NodeAttrsTaildriveAccess NodeCapability = "drive:access"
-
-	// NodeAttrSuggestExitNode is applied to each exit node which the control plane has determined
-	// is a recommended exit node.
-	NodeAttrSuggestExitNode NodeCapability = "suggest-exit-node"
-
-	// NodeAttrDisableWebClient disables using the web client.
-	NodeAttrDisableWebClient NodeCapability = "disable-web-client"
-
-	// NodeAttrLogExitFlows enables exit node destinations in network flow logs.
-	NodeAttrLogExitFlows NodeCapability = "log-exit-flows"
-
-	// NodeAttrAutoExitNode permits the automatic exit nodes feature.
-	NodeAttrAutoExitNode NodeCapability = "auto-exit-node"
-
-	// NodeAttrStoreAppCRoutes configures the node to store app connector routes persistently.
-	NodeAttrStoreAppCRoutes NodeCapability = "store-appc-routes"
-
-	// NodeAttrSuggestExitNodeUI allows the currently suggested exit node to appear in the client GUI.
-	NodeAttrSuggestExitNodeUI NodeCapability = "suggest-exit-node-ui"
-
-	// NodeAttrUserDialUseRoutes makes UserDial use either the peer dialer or the system dialer,
-	// depending on the destination address and the configured routes. When present, it also makes
-	// the DNS forwarder use UserDial instead of SystemDial when dialing resolvers.
-	NodeAttrUserDialUseRoutes NodeCapability = "user-dial-routes"
-
-	// NodeAttrSSHBehaviorV1 forces SSH to use the V1 behavior (no su, run SFTP in-process)
-	// Added 2024-05-29 in Tailscale version 1.68.
-	NodeAttrSSHBehaviorV1 NodeCapability = "ssh-behavior-v1"
-
-	// NodeAttrSSHBehaviorV2 forces SSH to use the V2 behavior (use su, run SFTP in child process).
-	// This overrides NodeAttrSSHBehaviorV1 if set.
-	// See forceV1Behavior in ssh/tailssh/incubator.go for distinction between
-	// V1 and V2 behavior.
-	// Added 2024-08-06 in Tailscale version 1.72.
-	NodeAttrSSHBehaviorV2 NodeCapability = "ssh-behavior-v2"
-
-	// NodeAttrDisableSplitDNSWhenNoCustomResolvers indicates that the node's
-	// DNS manager should not adopt a split DNS configuration even though the
-	// Config of the resolver only contains routes that do not specify custom
-	// resolver(s), hence all DNS queries can be safely sent to the upstream
-	// DNS resolver and the node's DNS forwarder doesn't need to handle all
-	// DNS traffic.
-	// This is for now (2024-06-06) an iOS-specific battery life optimization,
-	// and this node attribute allows us to disable the optimization remotely
-	// if needed.
-	NodeAttrDisableSplitDNSWhenNoCustomResolvers NodeCapability = "disable-split-dns-when-no-custom-resolvers"
-
-	// NodeAttrScopeQuad100OnMacOS makes sandboxed macOS clients scope quad-100
-	// to its match domains instead of installing it as the OS's primary
-	// (catch-all) resolver, so that public names fall through to the OS
-	// resolver -- e.g. a user's DoH system profile -- rather than being
-	// shadowed. It has no effect on any other platform. Without this attribute,
-	// sandboxed macOS keeps the older behavior of making quad-100 the default
-	// resolver, as iOS still does. See tailscale/corp#45534.
-	NodeAttrScopeQuad100OnMacOS NodeCapability = "scope-quad100-macos"
-
-	// NodeAttrDisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
-	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
-	// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers
-	// associated with all network adapters, even when "Override local DNS" is enabled and/or
-	// a Mullvad exit node is being used, resulting in DNS leaks.
-	// We began creating this rule on 2024-06-14, and this node attribute
-	// allows us to disable the new behavior remotely if needed.
-	NodeAttrDisableLocalDNSOverrideViaNRPT NodeCapability = "disable-local-dns-override-via-nrpt"
-
-	// NodeAttrDisableMagicSockCryptoRouting disables the use of the
-	// magicsock cryptorouting hook. See tailscale/corp#20732.
-	//
-	// Deprecated: NodeAttrDisableMagicSockCryptoRouting is deprecated as of
-	// CapabilityVersion 124, CryptoRouting is now mandatory. See tailscale/corp#31083.
-	NodeAttrDisableMagicSockCryptoRouting NodeCapability = "disable-magicsock-crypto-routing"
-
-	// NodeAttrDisableCaptivePortalDetection instructs the client to not perform captive portal detection
-	// automatically when the network state changes.
-	NodeAttrDisableCaptivePortalDetection NodeCapability = "disable-captive-portal-detection"
-
-	// NodeAttrDisableSkipStatusQueue is set when the node should disable skipping
-	// of queued netmap.NetworkMap between the controlclient and LocalBackend.
-	// See tailscale/tailscale#14768.
-	NodeAttrDisableSkipStatusQueue NodeCapability = "disable-skip-status-queue"
-
-	// NodeAttrSSHEnvironmentVariables enables logic for handling environment variables sent
-	// via SendEnv in the SSH server and applying them to the SSH session.
-	NodeAttrSSHEnvironmentVariables NodeCapability = "ssh-env-vars"
-
-	// NodeAttrServiceHost indicates the VIP Services for which the client is
-	// approved to act as a service host, and which IP addresses are assigned
-	// to those VIP Services. Any VIP Services that the client is not
-	// advertising can be ignored.
-	// Each value of this key in [NodeCapMap] is of type [ServiceIPMappings].
-	// If multiple values of this key exist, they should be merged in sequence
-	// (replace conflicting keys).
-	NodeAttrServiceHost NodeCapability = "service-host"
-
-	// NodeAttrMaxKeyDuration represents the MaxKeyDuration setting on the
-	// tailnet. The value of this key in [NodeCapMap] will be only one entry of
-	// type float64 representing the duration in seconds. This cap will be
-	// omitted if the tailnet's MaxKeyDuration is the default.
-	NodeAttrMaxKeyDuration NodeCapability = "tailnet.maxKeyDuration"
-
-	// NodeAttrNativeIPV4 contains the IPV4 address of the node in its
-	// native tailnet. This is currently only sent to Hello, in its
-	// peer node list.
-	NodeAttrNativeIPV4 NodeCapability = "native-ipv4"
-
-	// NodeAttrDisableRelayServer prevents the node from acting as an underlay
-	// UDP relay server. There are no expected values for this key; the key
-	// only needs to be present in [NodeCapMap] to take effect.
-	NodeAttrDisableRelayServer NodeCapability = "disable-relay-server"
-
-	// NodeAttrDisableRelayClient prevents the node from both allocating UDP
-	// relay server endpoints itself, and from using endpoints allocated by
-	// its peers. This attribute can be added to the node dynamically; if added
-	// while the node is already running, the node will be unable to allocate
-	// endpoints after it next updates its network map, and will be immediately
-	// unable to use new paths via a UDP relay server. Setting this attribute
-	// dynamically does not remove any existing paths, including paths that
-	// traverse a UDP relay server. There are no expected values for this key
-	// in [NodeCapMap]; the key only needs to be present in [NodeCapMap] to
-	// take effect.
-	NodeAttrDisableRelayClient NodeCapability = "disable-relay-client"
-
-	// NodeAttrMagicDNSPeerAAAA is a capability that tells the node's MagicDNS
-	// server to answer AAAA queries about its peers. See tailscale/tailscale#1152.
-	NodeAttrMagicDNSPeerAAAA NodeCapability = "magicdns-aaaa"
-
-	// NodeAttrDNSSubdomainResolve, when set on Self or a Peer node, indicates
-	// that the subdomains of that node's MagicDNS name should resolve to the
-	// same IP addresses as the node itself.
-	// For example, if node "myserver.tailnet.ts.net" has this capability,
-	// then "anything.myserver.tailnet.ts.net" will resolve to myserver's IPs.
-	NodeAttrDNSSubdomainResolve NodeCapability = "dns-subdomain-resolve"
-
-	// NodeAttrTrafficSteering configures the node to use the traffic
-	// steering subsystem for via routes. See tailscale/corp#29966.
-	NodeAttrTrafficSteering NodeCapability = "traffic-steering"
-
-	// NodeAttrTailnetDisplayName is an optional alternate name for the tailnet
-	// to be displayed to the user.
-	// If empty or absent, a default is used.
-	// If this value is present and set by a user this will only include letters,
-	// numbers, apostrophe, spaces, and hyphens. This may not be true for the default.
-	// Values can look like "foo.com" or "Foo's Test Tailnet - Staging".
-	NodeAttrTailnetDisplayName NodeCapability = "tailnet-display-name"
-
-	// NodeAttrClientSideReachability configures the node to determine
-	// reachability itself when choosing connectors. When absent, the
-	// default behavior is to trust the control plane when it claims that a
-	// node is no longer online, but that is not a reliable signal.
-	//
-	// It is temporary and will be ignored once its behaviour becomes the default.
-	NodeAttrClientSideReachability NodeCapability = "client-side-reachability"
-
-	// NodeAttrClientSideReachabilityRouteCheck configures the node to use
-	// the routecheck subsystem to determine reachability when choosing
-	// connectors. This relies on [NodeAttrClientSideReachability] being set.
-	// See tailscale/tailscale#17367.
-	//
-	// It is temporary and will be ignored once its behaviour becomes the default.
-	NodeAttrClientSideReachabilityRouteCheck NodeCapability = "client-side-reachability-routecheck"
-
-	// NodeAttrDefaultAutoUpdate advertises the default node auto-update setting
-	// for this tailnet. The node is free to opt-in or out locally regardless of
-	// this value. Once this has been set and stored in the client, future
-	// changes from the control plane are ignored.
-	//
-	// The value of the key in [NodeCapMap] is a JSON boolean.
-	NodeAttrDefaultAutoUpdate NodeCapability = "default-auto-update"
-
-	// NodeAttrDisableHostsFileUpdates indicates that the node's DNS manager should
-	// not create hosts file entries when it normally would, such as when we're not
-	// the primary resolver on Windows or when the host is domain-joined and its
-	// primary domain takes precedence over MagicDNS. As of 2026-02-12, it is only
-	// used on Windows.
-	NodeAttrDisableHostsFileUpdates NodeCapability = "disable-hosts-file-updates"
-
-	// NodeAttrForceRegisterMagicDNSIPv4Only forces the client to only register
-	// its MagicDNS IPv4 address with systemd/etc, and not both its IPv4 and IPv6 addresses.
-	// See https://github.com/tailscale/tailscale/issues/15404.
-	// TODO(bradfitz): remove this a few releases after 2026-02-16.
-	NodeAttrForceRegisterMagicDNSIPv4Only NodeCapability = "force-register-magicdns-ipv4-only"
-
-	// NodeAttrCacheNetworkMaps instructs the node to persistently cache network
-	// maps and use them to establish peer connectivity on start, if doing so is
-	// supported by the client and storage is available. When this attribute is
-	// absent (or removed), a node that supports netmap caching will ignore and
-	// discard existing cached maps, and will not store any.
-	NodeAttrCacheNetworkMaps NodeCapability = "cache-network-maps"
-
-	// NodeAttrDisableCacheNetworkMaps indicates that the node should not cache
-	// network maps (as per [NodeAttrCacheNetworkMaps]) when it normally would.
-	// This attribute exists to allow the policy document to override the default.
-	// When set, it takes precedence over [NodeAttrCacheNetworkMaps].
-	NodeAttrDisableCacheNetworkMaps NodeCapability = "disable-cache-network-maps"
-
-	// NodeAttrDisableLinuxCGNATDropRule tells Linux clients to not insert a
-	// blanket firewall DROP rule for inbound traffic from the CGNAT IP range
-	// that does not originate from the Tailscale network interface.
-	// This enables access to off-tailnet endpoints within that IP range.
-	NodeAttrDisableLinuxCGNATDropRule NodeCapability = "disable-linux-cgnat-drop-rule"
-
-	// NodeAttrEmitRuntimeMetrics enables emission of [runtime/metrics] as
-	// [tailscale.com/util/clientmetric]'s.
-	NodeAttrEmitRuntimeMetrics NodeCapability = "emit-runtime-metrics"
-
-	// NodeAttrDisableUDPGRO disables UDP GRO (UDP_GRO socket option on Linux)
-	// on the magicsock UDP socket. It exists so control can mitigate kernel
-	// regressions that cause throughput or correctness issues with UDP GRO on
-	// specific OS/kernel versions, without requiring a client release. See
-	// https://github.com/tailscale/tailscale/issues/19777 for example.
-	// Currently only consulted on Linux; may apply to other platforms as they
-	// gain UDP GRO support.
-	NodeAttrDisableUDPGRO NodeCapability = "disable-udp-gro"
-
-	// NodeAttrDisableUDPGSO disables UDP GSO (UDP_SEGMENT socket option on
-	// Linux) on the magicsock UDP socket. It exists so control can mitigate
-	// kernel regressions that cause throughput or correctness issues with UDP
-	// GSO on specific OS/kernel versions, without requiring a client release.
-	// See https://github.com/tailscale/tailscale/issues/19777 for example.
-	// Currently only consulted on Linux; may apply to other platforms as they
-	// gain UDP GSO support.
-	NodeAttrDisableUDPGSO NodeCapability = "disable-udp-gso"
-
-	// NodeAttrDisableTUNUDPGRO disables UDP GRO on the Tailscale TUN device.
-	// It exists so control can mitigate kernel regressions that cause
-	// throughput or correctness issues with TUN UDP GRO on specific OS/kernel
-	// versions, without requiring a client release. See
-	// https://github.com/tailscale/tailscale/issues/13041 for example.
-	// Currently only consulted on Linux; may apply to other platforms as they
-	// gain TUN UDP GRO support.
-	NodeAttrDisableTUNUDPGRO NodeCapability = "disable-tun-udp-gro"
-
-	// NodeAttrDisableTUNTCPGRO disables TCP GRO on the Tailscale TUN device.
-	// It exists so control can mitigate kernel regressions that cause
-	// throughput or correctness issues with TUN TCP GRO on specific OS/kernel
-	// versions, without requiring a client release. See
-	// https://github.com/tailscale/tailscale/issues/13041 for example.
-	// Currently only consulted on Linux; may apply to other platforms as they
-	// gain TUN TCP GRO support.
-	NodeAttrDisableTUNTCPGRO NodeCapability = "disable-tun-tcp-gro"
-
-	// NodeAttrNeverGSOEqualTail enables a sentinel-tail workaround in the
-	// underlay UDP packet TX path on Linux. Applies to magicsock and peer relay
-	// UDP sockets. The workaround avoids emitting UDP GSO batches whose
-	// fragments are all equal in length, at a small payload and packet overhead
-	// cost. It exists so control can mitigate kernel regressions that mangle
-	// UDP headers or checksums for equal-length GSO batches, without requiring
-	// a client release. See https://github.com/tailscale/tailscale/issues/19777.
-	NodeAttrNeverGSOEqualTail NodeCapability = "never-gso-equal-tail"
-)
-
-const (
-	// NodeAttrPrefixServices is the prefix for per-service [NodeCapMap]
-	// entries describing Services visible (accessible) to this node.
-	// Each value under such a key is of type [ServiceDetails].
-	// The suffix after the prefix is an opaque server-chosen identifier;
-	// consumers must use [ServiceDetails.Name] as the canonical service name
-	// rather than parsing it from the map key.
-	NodeAttrPrefixServices NodeCapabilityPrefix = "services/"
+	CapabilityFileSharing                                = nodecap.FileSharing
+	CapabilityAdmin                                      = nodecap.Admin
+	CapabilityOwner                                      = nodecap.Owner
+	CapabilitySSH                                        = nodecap.SSH
+	CapabilitySSHRuleIn                                  = nodecap.SSHRuleIn
+	CapabilityDataPlaneAuditLogs                         = nodecap.DataPlaneAuditLogs
+	CapabilityDebug                                      = nodecap.Debug
+	CapabilityHTTPS                                      = nodecap.HTTPS
+	CapabilityMacUIV2                                    = nodecap.MacUIV2
+	CapabilityServicesInDesktopClients                   = nodecap.ServicesInDesktopClients
+	CapabilityBindToInterfaceByRoute                     = nodecap.BindToInterfaceByRoute
+	CapabilityDebugDisableAlternateDefaultRouteInterface = nodecap.DebugDisableAlternateDefaultRouteInterface
+	CapabilityDebugDisableBindConnToInterface            = nodecap.DebugDisableBindConnToInterface
+	CapabilityDebugDisableBindConnToInterfaceAppleExt    = nodecap.DebugDisableBindConnToInterfaceAppleExt
+	CapabilityTailnetLock                                = nodecap.TailnetLock
+	CapabilityWarnFunnelNoInvite                         = nodecap.WarnFunnelNoInvite
+	CapabilityWarnFunnelNoHTTPS                          = nodecap.WarnFunnelNoHTTPS
+	CapabilityDebugTSDNSResolution                       = nodecap.DebugTSDNSResolution
+	CapabilityFunnelPorts                                = nodecap.FunnelPorts
+	// Deprecated: Do not add any further values here, use [nodecap] instead.
+
+	NodeAttrDisableAndroidBindToActiveNetwork    = nodecap.DisableAndroidBindToActiveNetwork
+	NodeAttrOnlyTCP443                           = nodecap.OnlyTCP443
+	NodeAttrFunnel                               = nodecap.Funnel
+	NodeAttrSSHAggregator                        = nodecap.SSHAggregator
+	NodeAttrDebugForceBackgroundSTUN             = nodecap.DebugForceBackgroundSTUN
+	NodeAttrDebugDisableWGTrim                   = nodecap.DebugDisableWGTrim
+	NodeAttrDisableSubnetsIfPAC                  = nodecap.DisableSubnetsIfPAC
+	NodeAttrDisableUPnP                          = nodecap.DisableUPnP
+	NodeAttrDisableDeltaUpdates                  = nodecap.DisableDeltaUpdates
+	NodeAttrRandomizeClientPort                  = nodecap.RandomizeClientPort
+	NodeAttrSilentDisco                          = nodecap.SilentDisco
+	NodeAttrOneCGNATEnable                       = nodecap.OneCGNATEnable
+	NodeAttrOneCGNATDisable                      = nodecap.OneCGNATDisable
+	NodeAttrPeerMTUEnable                        = nodecap.PeerMTUEnable
+	NodeAttrDNSForwarderDisableTCPRetries        = nodecap.DNSForwarderDisableTCPRetries
+	NodeAttrLinuxMustUseIPTables                 = nodecap.LinuxMustUseIPTables
+	NodeAttrLinuxMustUseNfTables                 = nodecap.LinuxMustUseNfTables
+	NodeAttrProbeUDPLifetime                     = nodecap.ProbeUDPLifetime
+	NodeAttrsTaildriveShare                      = nodecap.TaildriveShare
+	NodeAttrsTaildriveAccess                     = nodecap.TaildriveAccess
+	NodeAttrSuggestExitNode                      = nodecap.SuggestExitNode
+	NodeAttrDisableWebClient                     = nodecap.DisableWebClient
+	NodeAttrLogExitFlows                         = nodecap.LogExitFlows
+	NodeAttrAutoExitNode                         = nodecap.AutoExitNode
+	NodeAttrStoreAppCRoutes                      = nodecap.StoreAppCRoutes
+	NodeAttrSuggestExitNodeUI                    = nodecap.SuggestExitNodeUI
+	NodeAttrUserDialUseRoutes                    = nodecap.UserDialUseRoutes
+	NodeAttrSSHBehaviorV1                        = nodecap.SSHBehaviorV1
+	NodeAttrSSHBehaviorV2                        = nodecap.SSHBehaviorV2
+	NodeAttrDisableSplitDNSWhenNoCustomResolvers = nodecap.DisableSplitDNSWhenNoCustomResolvers
+	NodeAttrScopeQuad100OnMacOS                  = nodecap.ScopeQuad100OnMacOS
+	NodeAttrDisableLocalDNSOverrideViaNRPT       = nodecap.DisableLocalDNSOverrideViaNRPT
+	NodeAttrDisableMagicSockCryptoRouting        = nodecap.DisableMagicSockCryptoRouting
+	NodeAttrDisableCaptivePortalDetection        = nodecap.DisableCaptivePortalDetection
+	NodeAttrDisableSkipStatusQueue               = nodecap.DisableSkipStatusQueue
+	NodeAttrSSHEnvironmentVariables              = nodecap.SSHEnvironmentVariables
+	NodeAttrServiceHost                          = nodecap.ServiceHost
+	NodeAttrMaxKeyDuration                       = nodecap.MaxKeyDuration
+	NodeAttrNativeIPV4                           = nodecap.NativeIPV4
+	NodeAttrDisableRelayServer                   = nodecap.DisableRelayServer
+	NodeAttrDisableRelayClient                   = nodecap.DisableRelayClient
+	NodeAttrMagicDNSPeerAAAA                     = nodecap.MagicDNSPeerAAAA
+	NodeAttrDNSSubdomainResolve                  = nodecap.DNSSubdomainResolve
+	NodeAttrTrafficSteering                      = nodecap.TrafficSteering
+	NodeAttrTailnetDisplayName                   = nodecap.TailnetDisplayName
+	NodeAttrClientSideReachability               = nodecap.ClientSideReachability
+	NodeAttrClientSideReachabilityRouteCheck     = nodecap.ClientSideReachabilityRouteCheck
+	NodeAttrDefaultAutoUpdate                    = nodecap.DefaultAutoUpdate
+	NodeAttrDisableHostsFileUpdates              = nodecap.DisableHostsFileUpdates
+	NodeAttrForceRegisterMagicDNSIPv4Only        = nodecap.ForceRegisterMagicDNSIPv4Only
+	NodeAttrCacheNetworkMaps                     = nodecap.CacheNetworkMaps
+	NodeAttrDisableCacheNetworkMaps              = nodecap.DisableCacheNetworkMaps
+	NodeAttrDisableLinuxCGNATDropRule            = nodecap.DisableLinuxCGNATDropRule
+	NodeAttrEmitRuntimeMetrics                   = nodecap.EmitRuntimeMetrics
+	NodeAttrDisableUDPGRO                        = nodecap.DisableUDPGRO
+	NodeAttrDisableUDPGSO                        = nodecap.DisableUDPGSO
+	NodeAttrDisableTUNUDPGRO                     = nodecap.DisableTUNUDPGRO
+	NodeAttrDisableTUNTCPGRO                     = nodecap.DisableTUNTCPGRO
+	NodeAttrNeverGSOEqualTail                    = nodecap.NeverGSOEqualTail
+	// Deprecated: Do not add any further values here, use [nodecap] instead.
+
+	NodeAttrPrefixServices = nodecap.ServicesPrefix
+	// Deprecated: Do not add any further values here, use [nodecap] instead.
 )
 
 // SetDNSRequest is a request to add a DNS record.

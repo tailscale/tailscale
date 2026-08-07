@@ -22,6 +22,8 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/logger"
@@ -124,7 +126,7 @@ func (e *Extension) onSelfChange(self tailcfg.NodeView) {
 	if self.Valid() {
 		e.selfUID = self.User()
 	}
-	e.capFileSharing = self.Valid() && self.CapMap().Contains(tailcfg.CapabilityFileSharing)
+	e.capFileSharing = self.Valid() && self.CapMap().Contains(nodecap.FileSharing)
 	osshare.SetFileSharingEnabled(e.capFileSharing, e.logf)
 }
 
@@ -353,7 +355,7 @@ func (e *Extension) FileTargets() ([]*apitype.FileTarget, error) {
 		if self == p.User() {
 			return true
 		}
-		if nb.PeerHasCap(p, tailcfg.PeerCapabilityFileSharingTarget) {
+		if nb.PeerHasCap(p, peercap.FileSharingTarget) {
 			// Explicitly noted in the netmap ACL caps as a target.
 			return true
 		}
@@ -400,7 +402,7 @@ func (e *Extension) taildropTargetStatus(p tailcfg.NodeView, nb ipnext.NodeBacke
 	}
 	if selfUID != p.User() {
 		// Different user must have the explicit file sharing target capability
-		if !nb.PeerHasCap(p, tailcfg.PeerCapabilityFileSharingTarget) {
+		if !nb.PeerHasCap(p, peercap.FileSharingTarget) {
 			return ipnstate.TaildropTargetOwnedByOtherUser
 		}
 	}

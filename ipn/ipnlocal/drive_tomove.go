@@ -7,7 +7,7 @@
 
 package ipnlocal
 
-import "tailscale.com/tailcfg"
+import "tailscale.com/tailcfg/nodecap"
 
 const (
 	// DriveLocalPort is the port on which the Taildrive listens for location
@@ -19,12 +19,12 @@ const (
 // enabled. This is currently based on checking for the drive:share node
 // attribute.
 func (b *LocalBackend) DriveSharingEnabled() bool {
-	return b.currentNode().SelfHasCap(tailcfg.NodeAttrsTaildriveShare)
+	return b.currentNode().SelfHasCap(nodecap.TaildriveShare)
 }
 
 // DriveAccessEnabled reports whether accessing Taildrive shares on remote nodes
 // is enabled. This is currently based on checking for the drive:access node
 // attribute.
 func (b *LocalBackend) DriveAccessEnabled() bool {
-	return b.currentNode().SelfHasCap(tailcfg.NodeAttrsTaildriveAccess)
+	return b.currentNode().SelfHasCap(nodecap.TaildriveAccess)
 }

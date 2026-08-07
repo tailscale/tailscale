@@ -42,6 +42,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
@@ -556,7 +557,7 @@ func TestServeToken(t *testing.T) {
 			remoteAddr:  "127.0.0.1:12345",
 			strictMode:  false,
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -578,7 +579,7 @@ func TestServeToken(t *testing.T) {
 			code:        "valid-code",
 			strictMode:  false,
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -714,7 +715,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "extra-claim",
 			tokenValidTill: time.Now().Add(1 * time.Minute),
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -731,7 +732,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "duplicate-claim-distinct-values",
 			tokenValidTill: time.Now().Add(1 * time.Minute),
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -748,7 +749,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "multiple-extra-claims",
 			tokenValidTill: time.Now().Add(1 * time.Minute),
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -773,7 +774,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "overwrite-protected-claim",
 			tokenValidTill: time.Now().Add(1 * time.Minute),
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: true,
 						ExtraClaims: map[string]any{
@@ -789,7 +790,7 @@ func TestExtraUserInfo(t *testing.T) {
 			name:           "extra-claim-omitted",
 			tokenValidTill: time.Now().Add(1 * time.Minute),
 			caps: tailcfg.PeerCapMap{
-				tailcfg.PeerCapabilityTsIDP: {
+				peercap.TsIDP: {
 					mustMarshalJSON(t, capRule{
 						IncludeInUserInfo: false,
 						ExtraClaims: map[string]any{

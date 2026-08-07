@@ -17,6 +17,7 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	. "tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -1081,23 +1082,23 @@ func TestMarshalToRawMessageAndBack(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		capType PeerCapability
+		capType peercap.Cap
 		val     testRule
 	}{
 		{
 			name:    "empty",
 			val:     testRule{},
-			capType: PeerCapability("foo"),
+			capType: peercap.Cap("foo"),
 		},
 		{
 			name:    "some-values",
 			val:     testRule{Ports: []int{80, 443}, Name: "foo"},
-			capType: PeerCapability("foo"),
+			capType: peercap.Cap("foo"),
 		},
 		{
 			name:    "all-values",
 			val:     testRule{Ports: []int{80, 443}, Name: "foo", ToggleOn: true, Groups: inner{Groups: []string{"foo", "bar"}}, Addrs: []netip.AddrPort{testip}},
-			capType: PeerCapability("foo"),
+			capType: peercap.Cap("foo"),
 		},
 	}
 	for _, tc := range tests {

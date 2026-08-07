@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/set"
@@ -60,7 +61,7 @@ func PickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 // time.
 const DNSAddrScheme = "tailscale-app"
 
-func AppDNSRoutes(hasCap func(c tailcfg.NodeCapability) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
+func AppDNSRoutes(hasCap func(c nodecap.Cap) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
 	if !hasCap(AppConnectorsExperimentalAttrName) {
 		return nil
 	}

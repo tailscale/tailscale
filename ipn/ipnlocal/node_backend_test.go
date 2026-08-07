@@ -15,6 +15,7 @@ import (
 
 	"tailscale.com/net/routecheck/peernode"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -239,10 +240,10 @@ func TestNodeBackendReachability(t *testing.T) {
 				Name:     "self",
 			}
 			if tc.cap {
-				mak.Set(&self.CapMap, tailcfg.NodeAttrClientSideReachability, nil)
+				mak.Set(&self.CapMap, nodecap.ClientSideReachability, nil)
 			}
 			if tc.rchk {
-				mak.Set(&self.CapMap, tailcfg.NodeAttrClientSideReachabilityRouteCheck, nil)
+				mak.Set(&self.CapMap, nodecap.ClientSideReachabilityRouteCheck, nil)
 			}
 
 			peer := &tailcfg.Node{
@@ -584,7 +585,7 @@ func TestNodeBackendMagicDNSHosts(t *testing.T) {
 			netip.MustParsePrefix("100.64.0.2/32"),
 			netip.MustParsePrefix("fd7a:115c:a1e0::2/128"),
 		},
-		CapMap: tailcfg.NodeCapMap{tailcfg.NodeAttrDNSSubdomainResolve: nil},
+		CapMap: tailcfg.NodeCapMap{nodecap.DNSSubdomainResolve: nil},
 	}
 	nb.SetNetMap(&netmap.NetworkMap{
 		SelfNode: self.View(),

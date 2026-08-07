@@ -35,6 +35,8 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
@@ -578,7 +580,7 @@ func (h *peerAPIHandler) CanDebug() bool { return h.canDebug() }
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
-	if !h.selfNode.HasCap(tailcfg.CapabilityDebug) {
+	if !h.selfNode.HasCap(nodecap.Debug) {
 		// This node does not expose debug info.
 		return false
 	}
@@ -586,17 +588,17 @@ func (h *peerAPIHandler) canDebug() bool {
 		// Unsigned peers can't debug.
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityDebugPeer)
+	return h.isSelf || h.peerHasCap(peercap.DebugPeer)
 }
 
 var allowSelfIngress = envknob.RegisterBool("TS_ALLOW_SELF_INGRESS")
 
 // canIngress reports whether h can send ingress requests to this node.
 func (h *peerAPIHandler) canIngress() bool {
-	return h.peerHasCap(tailcfg.PeerCapabilityIngress) || (allowSelfIngress() && h.isSelf)
+	return h.peerHasCap(peercap.Ingress) || (allowSelfIngress() && h.isSelf)
 }
 
-func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
+func (h *peerAPIHandler) peerHasCap(wantCap peercap.Cap) bool {
 	return h.PeerCaps().HasCapability(wantCap)
 }
 

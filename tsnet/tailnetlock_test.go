@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -73,7 +74,7 @@ func setupTailnetLockedServer(t *testing.T, ctx context.Context, extraTrustedKey
 	// Hand out the tailnet-lock capability so the server can call
 	// TailnetLockInit.
 	control.DefaultNodeCapabilities = &tailcfg.NodeCapMap{
-		tailcfg.CapabilityTailnetLock: nil,
+		nodecap.TailnetLock: nil,
 	}
 
 	s, _, s1Key = startServer(t, ctx, controlURL, "s1")

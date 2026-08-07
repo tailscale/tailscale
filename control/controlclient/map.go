@@ -26,6 +26,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -86,7 +87,7 @@ type mapSession struct {
 	// Fields storing state over the course of multiple MapResponses.
 	lastPrintMap           time.Time
 	lastNode               tailcfg.NodeView
-	lastCapSet             set.Set[tailcfg.NodeCapability]
+	lastCapSet             set.Set[nodecap.Cap]
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfileView
@@ -603,7 +604,7 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	if resp.Node != nil {
 		ms.lastNode = resp.Node.View()
 
-		capSet := set.Set[tailcfg.NodeCapability]{}
+		capSet := set.Set[nodecap.Cap]{}
 		for _, c := range resp.Node.Capabilities {
 			capSet.Add(c)
 		}

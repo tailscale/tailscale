@@ -19,6 +19,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/util/slicesx"
 )
 
@@ -175,7 +176,7 @@ func runExitNodeSuggest(ctx context.Context, args []string) error {
 
 func hasAnyExitNodeSuggestions(peers []*ipnstate.PeerStatus) bool {
 	for _, peer := range peers {
-		if peer.HasCap(tailcfg.NodeAttrSuggestExitNode) {
+		if peer.HasCap(nodecap.SuggestExitNode) {
 			return true
 		}
 	}
