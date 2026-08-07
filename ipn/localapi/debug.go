@@ -25,6 +25,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpm"
@@ -216,7 +217,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	case "pick-new-derp":
 		err = h.b.DebugPickNewDERP()
 	case "force-prefer-derp":
-		var n int
+		var n tailcfg.DERPRegionID
 		err = json.NewDecoder(r.Body).Decode(&n)
 		if err != nil {
 			break

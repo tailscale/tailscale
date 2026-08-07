@@ -45,12 +45,12 @@ const frameReceiveRecordRate = 5 * time.Second
 // current connection for that regionID is dc. (but dc should not be
 // used to write directly; it's owned by the read/write loops)
 type derpRoute struct {
-	regionID int
+	regionID tailcfg.DERPRegionID
 	dc       *derphttp.Client // don't use directly; see comment above
 }
 
 // removeDerpPeerRoute removes a DERP route entry previously added by addDerpPeerRoute.
-func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, regionID int, dc *derphttp.Client) {
+func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, regionID tailcfg.DERPRegionID, dc *derphttp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r2 := derpRoute{regionID, dc}
@@ -62,7 +62,7 @@ func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, regionID int, dc *derpht
 // addDerpPeerRoute adds a DERP route entry, noting that peer was seen
 // on DERP node derpID, at least on the connection identified by dc.
 // See issue 150 for details.
-func (c *Conn) addDerpPeerRoute(peer key.NodePublic, regionID int, dc *derphttp.Client) {
+func (c *Conn) addDerpPeerRoute(peer key.NodePublic, regionID tailcfg.DERPRegionID, dc *derphttp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	mak.Set(&c.derpRoute, peer, derpRoute{regionID, dc})
@@ -79,7 +79,7 @@ func (c *Conn) addDerpPeerRoute(peer key.NodePublic, regionID int, dc *derphttp.
 // first connection.
 //
 // This can also help nodes from a slow or misbehaving control plane.
-func (c *Conn) fallbackDERPRegionForPeer(peer key.NodePublic) (regionID int) {
+func (c *Conn) fallbackDERPRegionForPeer(peer key.NodePublic) (regionID tailcfg.DERPRegionID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if dr, ok := c.derpRoute[peer]; ok {
@@ -101,7 +101,7 @@ type activeDerp struct {
 }
 
 var (
-	pickDERPFallbackForTests func() int
+	pickDERPFallbackForTests func() tailcfg.DERPRegionID
 	reSTUNHookForTests       func(why string)
 )
 
@@ -111,7 +111,7 @@ var (
 // checks aren't working).
 //
 // c.mu must NOT be held.
-func (c *Conn) pickDERPFallback() int {
+func (c *Conn) pickDERPFallback() tailcfg.DERPRegionID {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -156,7 +156,7 @@ var checkControlHealthDuringNearestDERPInTests = false
 // region that it selected and set (via setNearestDERP).
 //
 // c.mu must NOT be held.
-func (c *Conn) maybeSetNearestDERP(report *netcheck.Report, force bool) (preferredDERP int) {
+func (c *Conn) maybeSetNearestDERP(report *netcheck.Report, force bool) (preferredDERP tailcfg.DERPRegionID) {
 	// Don't change our PreferredDERP if we don't have a connection to
 	// control; if we don't, then we can't inform peers about a DERP home
 	// change, which breaks all connectivity. Even if this DERP region is
@@ -221,14 +221,14 @@ func (c *Conn) maybeSetNearestDERP(report *netcheck.Report, force bool) (preferr
 // into the netmap at the controlClient mapSession level once there is a stable
 // abstraction to use.
 type HomeDERPChanged struct {
-	Old, New int
+	Old, New tailcfg.DERPRegionID
 }
 
-func (c *Conn) ForceSetNearestDERP(regionID int) int {
+func (c *Conn) ForceSetNearestDERP(regionID tailcfg.DERPRegionID) tailcfg.DERPRegionID {
 	return c.maybeSetNearestDERP(&netcheck.Report{PreferredDERP: regionID}, true)
 }
 
-func (c *Conn) derpRegionCodeLocked(regionID int) string {
+func (c *Conn) derpRegionCodeLocked(regionID tailcfg.DERPRegionID) string {
 	if c.derpMap == nil {
 		return ""
 	}
@@ -241,14 +241,14 @@ func (c *Conn) derpRegionCodeLocked(regionID int) string {
 // setHomeDERPGaugeLocked updates the home DERP gauge metric.
 //
 // c.mu must be held.
-func (c *Conn) setHomeDERPGaugeLocked(derpNum int) {
+func (c *Conn) setHomeDERPGaugeLocked(derpNum tailcfg.DERPRegionID) {
 	if c.homeDERPGauge != nil {
 		c.homeDERPGauge.Set(float64(derpNum))
 	}
 }
 
 // c.mu must NOT be held.
-func (c *Conn) setNearestDERP(derpNum int) (wantDERP bool) {
+func (c *Conn) setNearestDERP(derpNum tailcfg.DERPRegionID) (wantDERP bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.wantDerpLocked() {
@@ -306,7 +306,7 @@ func (c *Conn) startDerpHomeConnectLocked() {
 // DERP region ID.
 //
 // c.mu may be held, but does not need to be.
-func (c *Conn) goDerpConnect(regionID int) {
+func (c *Conn) goDerpConnect(regionID tailcfg.DERPRegionID) {
 	if regionID == 0 {
 		return
 	}
@@ -336,7 +336,7 @@ const derpWriteQueueDepth = 32
 //
 // It returns nil if the network is down, the Conn is closed, or the regionID is
 // not known.
-func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan derpWriteRequest {
+func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.NodePublic) chan derpWriteRequest {
 	if c.networkDown() {
 		return nil
 	}
@@ -390,8 +390,8 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan de
 	firstDerp := false
 	if c.activeDerp == nil {
 		firstDerp = true
-		c.activeDerp = make(map[int]activeDerp)
-		c.prevDerp = make(map[int]*syncs.WaitGroupChan)
+		c.activeDerp = make(map[tailcfg.DERPRegionID]activeDerp)
+		c.prevDerp = make(map[tailcfg.DERPRegionID]*syncs.WaitGroupChan)
 	}
 
 	// Note that derphttp.NewRegionClient does not dial the server
@@ -481,7 +481,7 @@ func (c *Conn) derpWriteChanForRegion(regionID int, peer key.NodePublic) chan de
 // If there's any change, it logs.
 //
 // c.mu must be held.
-func (c *Conn) setPeerLastDerpLocked(peer key.NodePublic, regionID, homeID int) {
+func (c *Conn) setPeerLastDerpLocked(peer key.NodePublic, regionID, homeID tailcfg.DERPRegionID) {
 	if peer.IsZero() {
 		return
 	}
@@ -517,7 +517,7 @@ func (c *Conn) setPeerLastDerpLocked(peer key.NodePublic, regionID, homeID int) 
 // get at the packet contents they need to call copyBuf to copy it
 // out, which also releases the buffer.
 type derpReadResult struct {
-	regionID int
+	regionID tailcfg.DERPRegionID
 	n        int // length of data received
 	src      key.NodePublic
 	// copyBuf is called to copy the data to dst.  It returns how
@@ -530,7 +530,7 @@ type derpReadResult struct {
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpReader(ctx context.Context, regionID int, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
+func (c *Conn) runDerpReader(ctx context.Context, regionID tailcfg.DERPRegionID, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
 	defer wg.Decr()
 	defer dc.Close()
 
@@ -734,7 +734,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	if dm.copyBuf == nil {
 		return 0, nil
 	}
-	var regionID int
+	var regionID tailcfg.DERPRegionID
 	n, regionID = dm.n, dm.regionID
 	ncopy := dm.copyBuf(b)
 	if ncopy != n {
@@ -778,7 +778,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 // SendDERPPacketTo sends an arbitrary packet to the given node key via
 // the DERP relay for the given region. It creates the DERP connection
 // to the region if one doesn't already exist.
-func (c *Conn) SendDERPPacketTo(dstKey key.NodePublic, regionID int, pkt []byte) (sent bool, err error) {
+func (c *Conn) SendDERPPacketTo(dstKey key.NodePublic, regionID tailcfg.DERPRegionID, pkt []byte) (sent bool, err error) {
 	return c.sendAddr(
 		netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID)),
 		dstKey, pkt, false, false)
@@ -823,7 +823,7 @@ func (c *Conn) setDERPMap(dm *tailcfg.DERPMap, doReStun bool) {
 		}
 		dm = &tailcfg.DERPMap{
 			OmitDefaultRegions: true,
-			Regions: map[int]*tailcfg.DERPRegion{
+			Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 				999: {
 					RegionID: 999,
 					Nodes: []*tailcfg.DERPNode{{
@@ -940,7 +940,7 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 // why is a reason for logging.
 //
 // c.mu must be held.
-func (c *Conn) closeOrReconnectDERPLocked(regionID int, why string) {
+func (c *Conn) closeOrReconnectDERPLocked(regionID tailcfg.DERPRegionID, why string) {
 	c.closeDerpLocked(regionID, why)
 	if !c.privateKey.IsZero() && c.myDerp == regionID {
 		c.startDerpHomeConnectLocked()
@@ -949,7 +949,7 @@ func (c *Conn) closeOrReconnectDERPLocked(regionID int, why string) {
 
 // c.mu must be held.
 // It is the responsibility of the caller to call logActiveDerpLocked after any set of closes.
-func (c *Conn) closeDerpLocked(regionID int, why string) {
+func (c *Conn) closeDerpLocked(regionID tailcfg.DERPRegionID, why string) {
 	if ad, ok := c.activeDerp[regionID]; ok {
 		c.logf("magicsock: closing connection to derp-%v (%v), age %v", regionID, why, time.Since(ad.createTime).Round(time.Second))
 		go ad.c.Close()
@@ -967,14 +967,14 @@ func (c *Conn) logActiveDerpLocked() {
 			return
 		}
 		buf.WriteString(":")
-		c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+		c.foreachActiveDerpSortedLocked(func(node tailcfg.DERPRegionID, ad activeDerp) {
 			fmt.Fprintf(buf, " derp-%d=cr%v,wr%v", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
 		})
 	}))
 }
 
 // c.mu must be held.
-func (c *Conn) foreachActiveDerpSortedLocked(fn func(regionID int, ad activeDerp)) {
+func (c *Conn) foreachActiveDerpSortedLocked(fn func(regionID tailcfg.DERPRegionID, ad activeDerp)) {
 	if len(c.activeDerp) < 2 {
 		for id, ad := range c.activeDerp {
 			fn(id, ad)
@@ -1040,7 +1040,7 @@ func (c *Conn) DERPs() int {
 	return len(c.activeDerp)
 }
 
-func (c *Conn) derpRegionCodeOfIDLocked(regionID int) string {
+func (c *Conn) derpRegionCodeOfIDLocked(regionID tailcfg.DERPRegionID) string {
 	if c.derpMap == nil {
 		return ""
 	}

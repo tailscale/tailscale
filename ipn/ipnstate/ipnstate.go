@@ -746,7 +746,7 @@ type PingResult struct {
 
 	// DERPRegionID is non-zero DERP region ID if DERP was used.
 	// It is not currently set for TSMP pings.
-	DERPRegionID int
+	DERPRegionID tailcfg.DERPRegionID
 
 	// DERPRegionCode is the three-letter region code
 	// corresponding to DERPRegionID.

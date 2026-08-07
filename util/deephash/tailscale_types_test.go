@@ -116,7 +116,7 @@ func getVal() *tailscaleTypes {
 		},
 		&tailcfg.MapResponse{
 			DERPMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					1: {
 						RegionID:   1,
 						RegionCode: "foo",

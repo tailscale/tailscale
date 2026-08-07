@@ -67,7 +67,7 @@ func (b *LocalBackend) patchNetmapHomeDERPLocked(nm *netmap.NetworkMap) *netmap.
 	// Make a shallow copy and mutate a copy of the selfNode.
 	nmCopy := *nm
 	selfNode := nm.SelfNode.AsStruct()
-	selfNode.HomeDERP = int(b.currentNode().homeDERP.Load())
+	selfNode.HomeDERP = tailcfg.DERPRegionID(b.currentNode().homeDERP.Load())
 	nmCopy.SelfNode = selfNode.View()
 	return &nmCopy
 }

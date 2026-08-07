@@ -4,8 +4,10 @@
 package tailcfg
 
 import (
+	"fmt"
 	"net/netip"
-	"sort"
+	"slices"
+	"strconv"
 
 	"tailscale.com/types/key"
 )
@@ -25,7 +27,7 @@ type DERPMap struct {
 	// It's keyed by the DERPRegion.RegionID.
 	//
 	// The numbers are not necessarily contiguous.
-	Regions map[int]*DERPRegion
+	Regions map[DERPRegionID]*DERPRegion
 
 	// OmitDefaultRegions specifies to not use Tailscale's DERP servers, and only use those
 	// specified in this DERPMap. If there are none set outside of the defaults, this is a noop.
@@ -34,13 +36,13 @@ type DERPMap struct {
 	OmitDefaultRegions bool `json:"omitDefaultRegions,omitempty"`
 }
 
-// / RegionIDs returns the sorted region IDs.
-func (m *DERPMap) RegionIDs() []int {
-	ret := make([]int, 0, len(m.Regions))
+// RegionIDs returns the sorted region IDs.
+func (m *DERPMap) RegionIDs() []DERPRegionID {
+	ret := make([]DERPRegionID, 0, len(m.Regions))
 	for rid := range m.Regions {
 		ret = append(ret, rid)
 	}
-	sort.Ints(ret)
+	slices.Sort(ret)
 	return ret
 }
 
@@ -60,7 +62,48 @@ type DERPHomeParams struct {
 	//
 	// A nil map means no change from the previous value (if any); an empty
 	// non-nil map can be sent to reset all scores back to 1.0.
-	RegionScore map[int]float64 `json:",omitempty"`
+	RegionScore map[DERPRegionID]float64 `json:",omitempty"`
+}
+
+// DERPRegionID is a unique integer for a geographic region.
+//
+// It corresponds to the legacy derpN.tailscale.com hostnames used by older clients.
+// (Older clients will continue to resolve derpN.tailscale.com when contacting peers,
+// rather than use the server-provided DERPMap)
+//
+// It must be non-zero, positive, and guaranteed to fit in a JavaScript number.
+//
+// IDs in range 900-999 are reserved for end users to run their own DERP nodes.
+type DERPRegionID int64
+
+// ParseDERPRegionID parses s and returns a [DERPRegionID].
+// It returns an error if s isn’t a valid region ID.
+func ParseDERPRegionID(s string) (DERPRegionID, error) {
+	id, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	rid := DERPRegionID(id)
+	if !rid.IsValid() {
+		return 0, fmt.Errorf("invalid region ID: %s", s)
+	}
+	return rid, nil
+}
+
+// IsValid reports whether id is non-zero, positive, and fits in a JavaScript number.
+func (id DERPRegionID) IsValid() bool {
+	const maxSafeJavaScriptInteger DERPRegionID = 1<<53 - 1 // Number.MAX_SAFE_INTEGER
+	return id > 0 && id <= maxSafeJavaScriptInteger
+}
+
+// Int64 returns the int64 representation of id.
+func (id DERPRegionID) Int64() int64 {
+	return int64(id)
+}
+
+// String implements the [fmt.Stringer] interface.
+func (id DERPRegionID) String() string {
+	return strconv.FormatInt(int64(id), 10)
 }
 
 // DERPRegion is a geographic region running DERP relay node(s).
@@ -84,7 +127,7 @@ type DERPRegion struct {
 	//
 	// RegionIDs in range 900-999 are reserved for end users to run their
 	// own DERP nodes.
-	RegionID int
+	RegionID DERPRegionID
 
 	// RegionCode is a short name for the region. It's usually a popular
 	// city or airport code in the region: "nyc", "sf", "sin",
@@ -150,7 +193,7 @@ type DERPNode struct {
 
 	// RegionID is the RegionID of the DERPRegion that this node
 	// is running in.
-	RegionID int
+	RegionID DERPRegionID
 
 	// HostName is the DERP node's hostname.
 	//
