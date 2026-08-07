@@ -382,6 +382,8 @@ type LocalBackend struct {
 	serveConfig       ipn.ServeConfigView      // or !Valid if none
 	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeBackend
 
+	tunServiceMetrics tunServiceMetricsState
+
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
 
@@ -606,6 +608,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		loginFlags:   loginFlags,
 		clock:        clock,
 	}
+
+	b.tunServiceMetrics.init(sys)
 
 	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
 
@@ -7378,6 +7382,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if buildfeatures.HasServe {
 		m := nm.GetIPVIPServiceMap()
 		b.ipVIPServiceMap = m
+		b.tunServiceMetrics.updateLocked(b)
 		if ns, ok := b.sys.Netstack.GetOK(); ok {
 			ns.UpdateIPServiceMappings(m)
 			// In case the prefs reloaded from Profile Manager but didn't change,

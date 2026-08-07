@@ -584,6 +584,22 @@ func (b *LocalBackend) meteredConnForService(c net.Conn, svc tailcfg.ServiceName
 	}
 }
 
+// ensureServeMetricSeriesLocked initializes metrics for userspace Services.
+// b.mu must be held.
+func (b *LocalBackend) ensureServeMetricSeriesLocked() {
+	if !b.serveConfig.Valid() || b.metrics.serveBytesInbound == nil || b.metrics.serveBytesOutbound == nil {
+		return
+	}
+	for svc, cfg := range b.serveConfig.Services().All() {
+		if svc == "" || cfg.Tun() {
+			continue
+		}
+		key := serveLabels{Service: svc.String()}
+		b.metrics.serveBytesInbound.Add(key, 0)
+		b.metrics.serveBytesOutbound.Add(key, 0)
+	}
+}
+
 // tcpHandlerForVIPService returns a handler for a TCP connection to a VIP service
 // that is being served via the ipn.ServeConfig. It returns nil if the destination
 // address is not a VIP service or if the VIP service does not have a TCP handler set.
@@ -1612,6 +1628,11 @@ func serveSetTCPPortsInterceptedFromNetmapAndPrefsLocked(b *LocalBackend, prefs 
 // the method to only run the reset-logic and not reload the store from memory to ensure
 // foreground sessions are not removed if they are not saved on disk.
 func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
+	defer func() {
+		b.ensureServeMetricSeriesLocked()
+		b.tunServiceMetrics.updateLocked(b)
+	}()
+
 	if !b.currentNode().Self().Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID() == "" {
 		// We're not logged in, so we don't have a profile.
 		// Don't try to load the serve config.

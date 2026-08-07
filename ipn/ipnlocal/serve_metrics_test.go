@@ -11,6 +11,7 @@ import (
 	"net"
 	"testing"
 
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/usermetric"
 )
@@ -78,5 +79,35 @@ func TestServiceMeteredConnLabelKeepsPrefix(t *testing.T) {
 	}
 	if v := counterValue(b.metrics.serveBytesInbound, "my-app"); v != -1 {
 		t.Errorf("counter unexpectedly present under prefix-stripped name; got %d", v)
+	}
+}
+
+func TestServeMetricSeriesCreatedFromConfig(t *testing.T) {
+	b := newTestBackend(t)
+	const (
+		serveService = tailcfg.ServiceName("svc:serve")
+		tunService   = tailcfg.ServiceName("svc:tun")
+	)
+	b.mu.Lock()
+	b.serveConfig = (&ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			serveService: {},
+			tunService:   {Tun: true},
+		},
+	}).View()
+	b.ensureServeMetricSeriesLocked()
+	b.mu.Unlock()
+
+	if got := counterValue(b.metrics.serveBytesInbound, serveService.String()); got != 0 {
+		t.Errorf("initial inbound = %d; want zero-valued series", got)
+	}
+	if got := counterValue(b.metrics.serveBytesOutbound, serveService.String()); got != 0 {
+		t.Errorf("initial outbound = %d; want zero-valued series", got)
+	}
+	if got := counterValue(b.metrics.serveBytesInbound, tunService.String()); got != -1 {
+		t.Errorf("Serve counter for TUN Service = %d; want absent", got)
+	}
+	if got := counterValue(b.metrics.serveBytesOutbound, tunService.String()); got != -1 {
+		t.Errorf("Serve counter for TUN Service = %d; want absent", got)
 	}
 }
