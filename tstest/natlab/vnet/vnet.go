@@ -2498,7 +2498,7 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	if !ok {
 		return false
 	}
-	if !fakeDNS.Match(f.dst) {
+	if !fakeDNS.Match(f.dst) && !fakeSplitDNS.Match(f.dst) {
 		// TODO(bradfitz): maybe support configs where DNS is local in the LAN
 		return false
 	}
@@ -2547,6 +2547,10 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		ResponseCode: layers.DNSResponseCodeNoErr,
 	}
 
+	// Which of the two fake DNS servers was addressed; they serve disjoint
+	// name sets. See [splitDNSZone].
+	toSplitDNS := fakeSplitDNS.Match(flow.dst)
+
 	var names []string
 	for _, q := range dnsLayer.Questions {
 		response.QDCount++
@@ -2561,6 +2565,21 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 
 		names = append(names, q.Type.String()+"/"+string(q.Name))
 		if q.Class != layers.DNSClassIN {
+			continue
+		}
+
+		if toSplitDNS {
+			// The secondary server serves only its own zone, and only A records.
+			if addr, ok := splitDNSZone[string(q.Name)]; ok && q.Type == layers.DNSTypeA {
+				response.ANCount++
+				response.Answers = append(response.Answers, layers.DNSResourceRecord{
+					Name:  q.Name,
+					Type:  q.Type,
+					Class: q.Class,
+					IP:    addr.AsSlice(),
+					TTL:   60,
+				})
+			}
 			continue
 		}
 
