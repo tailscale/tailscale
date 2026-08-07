@@ -13,3 +13,10 @@ const WintunInterfaceDesc0_14 = "Wintun Userspace Tunnel"
 // TailnetLockNotTrustedMsg is the error message used by tailnet lock
 // and sniffed (via substring) out of an error sent over the network.
 const TailnetLockNotTrustedMsg = "this node is not trusted by Tailnet Lock"
+
+// RequestIDHeader is the name of the HTTP header that Tailscale
+// servers (including the control plane) use to report an opaque
+// request ID for debugging. It is not part of the Tailscale protocol;
+// clients may log its value, if present, to correlate their requests
+// with server-side logs.
+const RequestIDHeader = "X-Tailscale-Request-Id"

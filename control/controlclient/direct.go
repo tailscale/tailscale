@@ -50,6 +50,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstime"
 	"tailscale.com/types/events"
 	"tailscale.com/types/key"
@@ -850,25 +851,37 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	ts2021.AddLBHeader(req, request.OldNodeKey)
 	ts2021.AddLBHeader(req, request.NodeKey)
 
+	t0 := c.clock.Now()
 	res, err := httpc.Do(req)
 	if err != nil {
 		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
 	}
+	reqID := res.Header.Get(tsconst.RequestIDHeader)
+	if d := c.clock.Since(t0); d > slowServerRespThreshold && reqID != "" {
+		c.logf("RegisterReq: response headers took %v%s", d.Round(time.Millisecond), requestIDSuffix(reqID))
+	}
 	// Handle 429 Too Many Requests with a specific error type that includes the retry-after duration.
 	if res.StatusCode == 429 {
 		rle := parseRateLimitError(res)
-		msg := fmt.Sprintf("node registration rate limited; will retry after %v", rle.retryAfter)
+		msg := fmt.Sprintf("node registration rate limited; will retry after %v%s", rle.retryAfter, requestIDSuffix(reqID))
 		return false, "", nil, vizerror.WrapWithMessage(rle, msg)
 	}
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return regen, opt.URL, nil, fmt.Errorf("register request: http %d: %.200s",
-			res.StatusCode, strings.TrimSpace(string(msg)))
+		return regen, opt.URL, nil, fmt.Errorf("register request: http %d: %.200s%s",
+			res.StatusCode, strings.TrimSpace(string(msg)), requestIDSuffix(reqID))
+	}
+	if reqID != "" {
+		// Log if the server hangs before sending the RegisterResponse body.
+		hangTimer := c.clock.AfterFunc(slowServerRespThreshold, func() {
+			c.logf("RegisterReq: still waiting for RegisterResponse after %v%s", slowServerRespThreshold, requestIDSuffix(reqID))
+		})
+		defer hangTimer.Stop()
 	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp); err != nil {
-		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
+		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v%s", serverKey, machinePrivKey.Public(), err, requestIDSuffix(reqID))
 		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
 	if DevKnob.DumpRegister() {
@@ -881,6 +894,9 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.Error != "" {
+		if reqID != "" {
+			c.logf("RegisterReq: server returned error%s", requestIDSuffix(reqID))
+		}
 		return false, "", nil, vizerror.New(resp.Error)
 	}
 	if len(resp.NodeKeySignature) > 0 {
@@ -1053,6 +1069,21 @@ type ControlTime struct {
 // every minute.
 const watchdogTimeout = 120 * time.Second
 
+// slowServerRespThreshold is how long we wait for the control server to
+// respond before we consider it slow and log the server's request ID
+// (if any) to aid correlation with server-side logs.
+const slowServerRespThreshold = 5 * time.Second
+
+// requestIDSuffix formats reqID, the value of a server's
+// [tsconst.RequestIDHeader] response header, as a suffix for a log or
+// error message. It returns the empty string if reqID is empty.
+func requestIDSuffix(reqID string) string {
+	if reqID == "" {
+		return ""
+	}
+	return "; requestID=" + reqID
+}
+
 // sendMapRequest makes a /map request to download the network map, calling cb
 // with each new netmap. If isStreaming, it will poll forever and only returns
 // if the context expires or the server returns an error/closes the connection
@@ -1205,13 +1236,18 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	watchdogTimer, watchdogTimedOut := c.clock.NewTimer(watchdogTimeout)
 	defer watchdogTimer.Stop()
 
+	// serverReqID is the value of the server's [tsconst.RequestIDHeader]
+	// response header, once known. It's atomic because it's read by the
+	// watchdog goroutine below.
+	var serverReqID syncs.AtomicValue[string]
+
 	go func() {
 		select {
 		case <-ctx.Done():
 			vlogf("netmap: ending timeout goroutine")
 			return
 		case <-watchdogTimedOut:
-			c.logf("map response long-poll timed out!")
+			c.logf("map response long-poll timed out!%s", requestIDSuffix(serverReqID.Load()))
 			cancel()
 			return
 		}
@@ -1228,12 +1264,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf("netmap: Do: %v", err)
 		return err
 	}
+	reqID := res.Header.Get(tsconst.RequestIDHeader)
+	serverReqID.Store(reqID)
 	vlogf("netmap: Do = %v after %v", res.StatusCode, time.Since(t0).Round(time.Millisecond))
+	if d := c.clock.Since(t0); d > slowServerRespThreshold && reqID != "" {
+		c.logf("netmap: response headers took %v%s", d.Round(time.Millisecond), requestIDSuffix(reqID))
+	}
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return fmt.Errorf("initial fetch failed %d: %.200s",
-			res.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("initial fetch failed %d: %.200s%s",
+			res.StatusCode, strings.TrimSpace(string(msg)), requestIDSuffix(reqID))
 	}
 	defer res.Body.Close()
 
@@ -1290,6 +1331,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// KeepAlive set.
 	var gotNonKeepAliveMessage bool
 
+	// firstMsgTimer, if non-nil, logs the server's request ID if the server
+	// hangs before sending its first MapResponse message.
+	var firstMsgTimer tstime.TimerController
+	if reqID != "" {
+		firstMsgTimer = c.clock.AfterFunc(slowServerRespThreshold, func() {
+			c.logf("netmap: still waiting for initial MapResponse after %v%s", slowServerRespThreshold, requestIDSuffix(reqID))
+		})
+		defer firstMsgTimer.Stop()
+	}
+
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
 	// away, followed by a delay, and eventually others.
@@ -1313,6 +1364,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			return err
 		}
 		vlogf("netmap: read body after %v", time.Since(t0).Round(time.Millisecond))
+		if firstMsgTimer != nil {
+			firstMsgTimer.Stop()
+			firstMsgTimer = nil
+		}
 
 		var resp tailcfg.MapResponse
 		if err := sess.decodeMsg(msg, &resp); err != nil {
