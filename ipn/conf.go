@@ -42,6 +42,7 @@ type ConfigVAlpha struct {
 
 	NetfilterMode       *string  `json:",omitempty"` // "on", "off", "nodivert"
 	NoStatefulFiltering opt.Bool `json:",omitempty"`
+	CollectLoadMetrics  opt.Bool `json:",omitempty"` // per-route subnet load metrics; defaults to off
 
 	PostureChecking opt.Bool         `json:",omitempty"`
 	RunSSHServer    opt.Bool         `json:",omitempty"` // Tailscale SSH
@@ -142,6 +143,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.NoStatefulFiltering != "" {
 		mp.NoStatefulFiltering = c.NoStatefulFiltering
 		mp.NoStatefulFilteringSet = true
+	}
+	if c.CollectLoadMetrics != "" {
+		mp.CollectLoadMetrics = c.CollectLoadMetrics
+		mp.CollectLoadMetricsSet = true
 	}
 
 	if c.NetfilterMode != nil {

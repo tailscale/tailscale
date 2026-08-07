@@ -128,8 +128,15 @@ type Config struct {
 	// SubnetRoutes is the list of subnets that this node is
 	// advertising to other Tailscale nodes.
 	// As of 2023-10-11, this field is only used for network
-	// flow logging and is otherwise ignored.
+	// flow logging and is otherwise ignored. As of 2026-07-28, it is
+	// additionally used for per-route load metrics when CollectLoadMetrics
+	// is set.
 	SubnetRoutes []netip.Prefix
+
+	// CollectLoadMetrics is whether to count forwarded bytes and packets per
+	// entry in SubnetRoutes. It is opt-in because it adds a longest-prefix
+	// lookup to the packet path.
+	CollectLoadMetrics bool
 
 	// Linux-only things below, ignored on other platforms.
 	SNATSubnetRoutes    bool                   // SNAT traffic to local subnets

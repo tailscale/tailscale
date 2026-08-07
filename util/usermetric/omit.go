@@ -25,5 +25,6 @@ func NewMultiLabelMapWithRegistry[T comparable](m *Registry, name string, promTy
 
 func (*noopMap[T]) Add(T, int64) {}
 func (*noopMap[T]) Set(T, any)   {}
+func (*noopMap[T]) Delete(T)     {}
 
 func (r *Registry) Handler(any, any) {} // no-op HTTP handler

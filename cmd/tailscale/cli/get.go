@@ -184,6 +184,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 			return false
 		}
 		return true
+	case "collect-load-metrics":
+		return prefs.CollectLoadMetrics.EqualBool(true)
 	case "netfilter-mode":
 		return prefs.NetfilterMode.String()
 	case "unattended":

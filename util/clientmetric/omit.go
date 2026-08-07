@@ -13,6 +13,8 @@ func (*Metric) Value() int64           { return 0 }
 func (*Metric) Register(expvarInt any) {}
 func (*Metric) UnregisterAll()         {}
 
+func (*Metric) RegisteredCountForTest() int { return 0 }
+
 type MetricUpdate struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`

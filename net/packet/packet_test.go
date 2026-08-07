@@ -806,6 +806,80 @@ func BenchmarkDecode(b *testing.B) {
 	}
 }
 
+// TestTotalLen checks that TotalLen reports the on-wire packet length rather
+// than the length of the buffer the packet was decoded from. Byte accounting
+// depends on this: the TUN write path is handed full-MTU buffers holding a
+// shorter packet, so len(Buffer()) would over-count the slack.
+func TestTotalLen(t *testing.T) {
+	const slack = 500
+
+	tests := []struct {
+		name string
+		buf  []byte
+		want int
+	}{
+		{"udp4", udp4RequestBuffer, len(udp4RequestBuffer)},
+		{"udp6", udp6RequestBuffer, len(udp6RequestBuffer)},
+		{"tcp4", tcp4PacketBuffer, len(tcp4PacketBuffer)},
+		{"tcp6", tcp6RequestBuffer, len(tcp6RequestBuffer)},
+		{"icmp4", icmp4RequestBuffer, len(icmp4RequestBuffer)},
+		{"icmp6", icmp6PacketBuffer, len(icmp6PacketBuffer)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var p Parsed
+			p.Decode(tt.buf)
+			if got := p.TotalLen(); got != tt.want {
+				t.Errorf("TotalLen() on an exact buffer = %d, want %d", got, tt.want)
+			}
+
+			// The same packet in a buffer with trailing slack must report the
+			// same length, not the buffer's.
+			padded := make([]byte, len(tt.buf)+slack)
+			copy(padded, tt.buf)
+			p.Decode(padded)
+			if got := p.TotalLen(); got != tt.want {
+				t.Errorf("TotalLen() with %d bytes of slack = %d, want %d", slack, got, tt.want)
+			}
+			if got := len(p.Buffer()); got == tt.want {
+				t.Errorf("test is not exercising slack: len(Buffer()) = %d", got)
+			}
+		})
+	}
+
+	t.Run("undecodable is zero", func(t *testing.T) {
+		var p Parsed
+		p.Decode(unknownPacketBuffer)
+		if got := p.TotalLen(); got != 0 {
+			t.Errorf("TotalLen() on an undecodable packet = %d, want 0", got)
+		}
+	})
+
+	t.Run("stale length is cleared", func(t *testing.T) {
+		// Decode does not zero length on an early bail-out, so a Parsed
+		// reused across packets (as the pool-backed ones on the packet path
+		// are) must not report the previous packet's length.
+		var p Parsed
+		p.Decode(udp4RequestBuffer)
+		p.Decode(unknownPacketBuffer)
+		if got := p.TotalLen(); got != 0 {
+			t.Errorf("TotalLen() after reuse on an undecodable packet = %d, want 0", got)
+		}
+	})
+
+	t.Run("truncated is clamped to the buffer", func(t *testing.T) {
+		// A packet claiming more bytes than it has must never report more
+		// than are present.
+		var p Parsed
+		p.Decode(udp4RequestBuffer[:len(udp4RequestBuffer)-4])
+		if got := p.TotalLen(); got > len(udp4RequestBuffer)-4 {
+			t.Errorf("TotalLen() on a truncated packet = %d, want at most %d",
+				got, len(udp4RequestBuffer)-4)
+		}
+	})
+}
+
 func TestMarshalRequest(t *testing.T) {
 	// Too small to hold our packets, but only barely.
 	var small [20]byte

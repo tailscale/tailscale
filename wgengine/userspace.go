@@ -820,6 +820,14 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	defer e.wgLock.Unlock()
 	e.tundev.SetWGConfig(cfg)
 
+	// Per-route load metrics are opt-in, so pass no routes when they are
+	// disabled; that leaves the counting hook uninstalled entirely.
+	if routerCfg.CollectLoadMetrics {
+		e.tundev.SetSubnetRoutes(routerCfg.SubnetRoutes)
+	} else {
+		e.tundev.SetSubnetRoutes(nil)
+	}
+
 	e.mu.Lock()
 	self := e.selfNode
 	e.mu.Unlock()

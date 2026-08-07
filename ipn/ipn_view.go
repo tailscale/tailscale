@@ -404,6 +404,25 @@ func (v PrefsView) NoSNAT() bool { return v.ж.NoSNAT }
 // Linux-only.
 func (v PrefsView) NoStatefulFiltering() opt.Bool { return v.ж.NoStatefulFiltering }
 
+// CollectLoadMetrics specifies whether to collect per-route load metrics
+// for the subnet routes advertised in AdvertiseRoutes. The default is not
+// to collect them.
+//
+// When enabled, forwarded bytes and packets are counted per advertised
+// route and exposed as tailscaled_subnet_forwarded_{bytes,packets}_total.
+// This adds a longest-prefix lookup to the packet path of a subnet router,
+// so it is opt-in.
+//
+// It is not supported on App Connectors, which advertise a route per
+// resolved DNS address and would therefore produce unbounded metric
+// cardinality.
+//
+// This is an opt.Bool so that "never set" is distinguishable from
+// "explicitly disabled".
+//
+// Linux-only.
+func (v PrefsView) CollectLoadMetrics() opt.Bool { return v.ж.CollectLoadMetrics }
+
 // NetfilterMode specifies how much to manage netfilter rules for
 // Tailscale, if at all.
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
@@ -513,6 +532,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	Sync                       opt.Bool
 	NoSNAT                     bool
 	NoStatefulFiltering        opt.Bool
+	CollectLoadMetrics         opt.Bool
 	NetfilterMode              preftype.NetfilterMode
 	OperatorUser               string
 	ProfileName                string

@@ -280,6 +280,17 @@ func (c *AggregateCounter) Register(counter *expvar.Int) {
 	c.counters.Add(counter)
 }
 
+// RegisteredCountForTest returns how many counters are registered with c.
+//
+// Value() is O(this), on every scrape and every logtail delta, so callers that
+// register counters over a process's lifetime use it to assert they aren't
+// leaking. There is no unregister-one API.
+func (c *AggregateCounter) RegisteredCountForTest() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.counters)
+}
+
 // UnregisterAll unregisters all counters resulting in it
 // starting back down at zero. This is to ensure monotonicity
 // and respect the semantics of the counter.
