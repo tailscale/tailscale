@@ -250,7 +250,7 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 							Name:    "sysctler",
 							Image:   "tailscale/tailscale",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"sysctl -w net.ipv4.ip_forward=1 && if sysctl net.ipv6.conf.all.forwarding; then sysctl -w net.ipv6.conf.all.forwarding=1; fi"},
+							Args:    []string{"echo 1 > /proc/sys/net/ipv4/ip_forward && if [ -e /proc/sys/net/ipv6/conf/all/forwarding ]; then echo 1 > /proc/sys/net/ipv6/conf/all/forwarding; fi"},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: new(true),
 							},
