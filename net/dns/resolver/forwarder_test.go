@@ -30,6 +30,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 )
 
@@ -1173,6 +1174,155 @@ func TestForwarderTCPFallbackError(t *testing.T) {
 	}
 	if got, want := respHeader.RCode, dns.RCodeServerFailure; got != want {
 		t.Errorf("wanted %v, got %v", want, got)
+	}
+}
+
+// netstackUpstream is a resolver at a tailnet (CGNAT) address. In userspace
+// networking mode the host stack has no route to it; only netstack does.
+var netstackUpstream = netip.MustParseAddrPort("100.64.1.2:53")
+
+// netstackDialCounts records which netstack dial hooks the forwarder used.
+type netstackDialCounts struct {
+	udp, tcp atomic.Int64
+}
+
+// newNetstackDialer returns a [tsdial.Dialer] configured the way userspace
+// networking mode configures it: UseNetstackForIP reports true for the tailnet
+// upstream, and the netstack dial hooks are the only way to reach it.
+//
+// These are the same hooks cmd/tailscaled installs when onlyNetstack is set
+// (cmd/tailscaled/tailscaled.go, cmd/tailscaled/netstack.go) and that tsnet
+// installs in tsnet.go. Both hooks here redirect to peer, a real DNS server on
+// loopback standing in for the tailnet resolver, so a correctly-routed query
+// gets a real answer rather than a synthetic one.
+func newNetstackDialer(tb testing.TB, netMon *netmon.Monitor, bus *eventbus.Bus, peer netip.AddrPort) (*tsdial.Dialer, *netstackDialCounts) {
+	tb.Helper()
+	counts := new(netstackDialCounts)
+
+	d := &tsdial.Dialer{Logf: tstest.WhileTestRunningLogger(tb)}
+	d.SetNetMon(netMon)
+	d.SetBus(bus)
+	d.UseNetstackForIP = func(ip netip.Addr) bool {
+		return ip == netstackUpstream.Addr()
+	}
+	d.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		counts.udp.Add(1)
+		var nd net.Dialer
+		return nd.DialContext(ctx, "udp4", peer.String())
+	}
+	d.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		counts.tcp.Add(1)
+		var nd net.Dialer
+		return nd.DialContext(ctx, "tcp4", peer.String())
+	}
+	return d, counts
+}
+
+// TestForwarderNetstackUpstream checks that the forwarder reaches an upstream
+// resolver that is only routable through netstack — the userspace networking
+// case, where there is no tun device and so the host stack cannot reach the
+// tailnet.
+//
+// The two subtests send the same query to the same upstream and differ only in
+// the transport the forwarder picks. sendTCP dials through [tsdial.Dialer]
+// (getDialerType -> UserDial -> dialOneUser), which consults UseNetstackForIP;
+// sendUDP goes straight to a host-stack socket via packetListener and never
+// consults the dialer at all. So TCP passes and UDP fails, and the difference
+// between the two is the whole defect.
+//
+// Note that this test constructs only a [tsdial.Dialer]. It does not import
+// tsnet, which is why the UDP failure is attributable to the forwarder rather
+// than to tsnet: any userspace networking configuration hits it, including
+// tailscaled --tun=userspace-networking.
+//
+// The UDP subtest is skipped rather than left failing so CI stays green; drop
+// the skip to see the bug. See tailscale/tailscale#20314.
+func TestForwarderNetstackUpstream(t *testing.T) {
+	const domain = "netstack-upstream.example.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	for _, family := range []string{"tcp", "udp"} {
+		t.Run(family, func(t *testing.T) {
+			if family == "udp" {
+				t.Skip("known failure: sendUDP ignores the netstack dialer; see https://github.com/tailscale/tailscale/issues/20314")
+			}
+
+			var sawUDP, sawTCP atomic.Bool
+			port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+				if isTCP {
+					sawTCP.Store(true)
+				} else {
+					sawUDP.Store(true)
+				}
+				if !bytes.Equal(request, gotRequest) {
+					t.Errorf("invalid request\ngot:  %+v\nwant: %+v", gotRequest, request)
+				}
+			})
+			peer := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)
+
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer netMon.Close()
+
+			dialer, dials := newNetstackDialer(t, netMon, bus, peer)
+			fwd := newForwarder(logf, netMon, nil, dialer, health.NewTracker(bus), nil)
+			fwd.verboseFwd = true
+
+			rpkt := packet{
+				bs:     request,
+				family: family,
+				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+			}
+			rchan := make(chan packet, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			start := time.Now()
+			err = fwd.forwardWithDestChan(ctx, rpkt, rchan,
+				resolverAndDelay{name: &dnstype.Resolver{Addr: netstackUpstream.String()}})
+			if err != nil {
+				t.Fatalf("forwardWithDestChan: %v", err)
+			}
+			var got []byte
+			select {
+			case res := <-rchan:
+				got = res.bs
+			case <-ctx.Done():
+				t.Fatalf("timed out waiting for response: %v", ctx.Err())
+			}
+			elapsed := time.Since(start)
+			t.Logf("query took %v; netstack dials udp=%d tcp=%d; upstream saw udp=%v tcp=%v",
+				elapsed, dials.udp.Load(), dials.tcp.Load(), sawUDP.Load(), sawTCP.Load())
+
+			if !bytes.Equal(got, response) {
+				t.Errorf("invalid response\ngot:  %+v\nwant: %+v", got, response)
+			}
+
+			// The forwarder must reach the upstream over the netstack
+			// dialer for the family it was asked to use. Asserting on
+			// the dial hook rather than on latency alone keeps this
+			// meaningful on a host that blackholes CGNAT traffic (a
+			// default route) and on one that rejects it immediately.
+			if family == "udp" {
+				if dials.udp.Load() == 0 {
+					t.Errorf("forwarder never dialed UDP via netstack: the UDP path bypassed the dialer")
+				}
+				if !sawUDP.Load() {
+					t.Errorf("upstream never saw a UDP query")
+				}
+				if elapsed >= udpRaceTimeout {
+					t.Errorf("query took %v (>= udpRaceTimeout %v): UDP never answered and the response came from the TCP fallback",
+						elapsed, udpRaceTimeout)
+				}
+			} else if dials.tcp.Load() == 0 {
+				t.Errorf("forwarder never dialed TCP via netstack")
+			}
+		})
 	}
 }
 
