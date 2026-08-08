@@ -3,11 +3,4 @@
 #
 # Generate for local usage with:
 # go run tailscale.com/cmd/k8s-operator/generate helmcrd
-/connector.yaml
-/dnsconfig.yaml
-/proxyclass.yaml
-/proxygroup.yaml
-/recorder.yaml
-/tailnet.yaml 
-/proxygrouppolicy.yaml
-/peerrelay.yaml
+/tailscale.com_*.yaml
