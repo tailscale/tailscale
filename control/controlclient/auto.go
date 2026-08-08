@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,6 +143,8 @@ type Auto struct {
 	loggedIn       bool        // true if currently logged in
 	loginGoal      *LoginGoal  // non-nil if some login activity is desired
 	inMapPoll      bool        // true once we get the first MapResponse in a stream; false when HTTP response ends
+
+	lastSTUNIPs map[netip.Addr]bool
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap and update requests
@@ -301,6 +304,26 @@ func (c *Auto) restartMap() {
 	c.mu.Unlock()
 
 	c.logf("[v1] restartMap: synced=%v", synced)
+	c.updateControl()
+}
+
+// restartMapWithNewNoiseClient restarts map polling over a fresh transport.
+// An upstream NAT change can leave the old TCP connection blackholed without
+// changing any local interface.
+func (c *Auto) restartMapWithNewNoiseClient() {
+	nc := c.direct.takeNoiseClient()
+
+	c.mu.Lock()
+	c.cancelMapCtxLocked()
+	synced := c.inMapPoll
+	c.mu.Unlock()
+
+	if nc != nil {
+		if err := nc.Close(); err != nil {
+			c.logf("closing stale control connection: %v", err)
+		}
+	}
+	c.logf("[v1] restartMap: new STUN IP; synced=%v", synced)
 	c.updateControl()
 }
 
@@ -885,10 +908,46 @@ func (c *Auto) SetExpirySooner(ctx context.Context, expiry time.Time) error {
 //
 // It does not retain the provided slice.
 func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
-	changed := c.direct.SetEndpoints(endpoints)
-	if changed {
-		c.updateControl()
+	if !c.direct.SetEndpoints(endpoints) {
+		return
 	}
+	if c.noteSTUNEndpointIPs(endpoints) {
+		c.restartMapWithNewNoiseClient()
+		return
+	}
+	c.updateControl()
+}
+
+// noteSTUNEndpointIPs reports whether endpoints contain a new public IPv4
+// address. The first non-empty set establishes a baseline. Empty results and
+// port-only changes leave an existing control connection alone.
+func (c *Auto) noteSTUNEndpointIPs(endpoints []tailcfg.Endpoint) bool {
+	current := make(map[netip.Addr]bool)
+	for _, ep := range endpoints {
+		if ep.Type != tailcfg.EndpointSTUN {
+			continue
+		}
+		if ip := ep.Addr.Addr().Unmap(); ip.Is4() {
+			current[ip] = true
+		}
+	}
+	if len(current) == 0 {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var hasNewIP bool
+	for ip := range current {
+		if !c.lastSTUNIPs[ip] {
+			hasNewIP = true
+			break
+		}
+	}
+	hadBaseline := len(c.lastSTUNIPs) != 0
+	c.lastSTUNIPs = current
+	return hadBaseline && hasNewIP && !c.closed
 }
 
 // SetDiscoPublicKey sets the client's Disco public to key and sends the change
