@@ -1558,6 +1558,7 @@ var (
 	metricDNSFwdUDPErrorServer  = clientmetric.NewCounter("dns_query_fwd_udp_error_server")
 	metricDNSFwdUDPErrorRefused = clientmetric.NewCounter("dns_query_fwd_udp_error_refused")
 	metricDNSFwdUDPErrorTxID    = clientmetric.NewCounter("dns_query_fwd_udp_error_txid")
+	metricDNSFwdUDPErrorSrcAddr = clientmetric.NewCounter("dns_query_fwd_udp_error_srcaddr")
 	metricDNSFwdUDPErrorRead    = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
 	metricDNSFwdUDPSuccess      = clientmetric.NewCounter("dns_query_fwd_udp_success")
 

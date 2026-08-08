@@ -1655,3 +1655,54 @@ func TestResolversCustomScheme(t *testing.T) {
 		})
 	}
 }
+
+// TestForwarderUDPResponseSourceAddr checks that a UDP reply is only treated as
+// the answer when it comes back from the address the query was sent to. A
+// packet carrying the right transaction ID from anywhere else must be dropped
+// and the real reply used instead.
+func TestForwarderUDPResponseSourceAddr(t *testing.T) {
+	const domain = "spoofed.example.com."
+
+	upstream, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+
+	// A second socket, on a different port, stands in for any host that can
+	// reach the forwarder's ephemeral port but is not the resolver we asked.
+	offPath, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer offPath.Close()
+
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	realResponse := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("1.2.3.4"))
+	spoofedResponse := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("6.6.6.6"))
+
+	// Give both replies the transaction ID of the query, so the only thing
+	// separating them is the address they arrive from.
+	copy(realResponse[:2], request[:2])
+	copy(spoofedResponse[:2], request[:2])
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, maxResponseBytes)
+		n, src, err := upstream.ReadFromUDPAddrPort(buf)
+		if err != nil || n < headerBytes {
+			return
+		}
+		offPath.WriteToUDPAddrPort(spoofedResponse, src)
+		time.Sleep(50 * time.Millisecond)
+		upstream.WriteToUDPAddrPort(realResponse, src)
+	}()
+	t.Cleanup(func() { <-done })
+
+	port := uint16(upstream.LocalAddr().(*net.UDPAddr).Port)
+	res := mustRunTestQuery(t, request, nil, port)
+	if !bytes.Equal(res, realResponse) {
+		t.Errorf("got response %x, want %x", res, realResponse)
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netx"
@@ -114,10 +115,9 @@ const (
 
 // txid identifies a DNS transaction.
 //
-// As the standard DNS Request ID is only 16 bits, we extend it:
-// the lower 32 bits are the zero-extended bits of the DNS Request ID;
-// the upper 32 bits are the CRC32 checksum of the first question in the request.
-// This makes probability of txid collision negligible.
+// It holds the 16-bit DNS Request ID, zero-extended. It used to also carry a
+// CRC32 of the first question in the upper bits, but that was dropped (see
+// getTxID), so on its own it is weak evidence that a reply belongs to a query.
 type txid uint64
 
 // getTxID computes the txid of the given DNS packet.
@@ -824,17 +824,31 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
-	n, _, err := conn.ReadFromUDPAddrPort(out)
-	if err != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+
+	// A reply is only an answer to our query if it came back from the address
+	// we sent the query to. Anything else is some other host racing the
+	// resolver for our ephemeral port, so drop it and keep reading; the
+	// context deadline closes conn and ends the loop. See RFC 5452, section
+	// 9.1.
+	wantSrc := netaddr.Unmap(ipp)
+	var n int
+	for {
+		var src netip.AddrPort
+		var err error
+		n, src, err = conn.ReadFromUDPAddrPort(out)
+		if err != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if !neterror.PacketWasTruncated(err) {
+				metricDNSFwdUDPErrorRead.Add(1)
+				return nil, err
+			}
 		}
-		if neterror.PacketWasTruncated(err) {
-			err = nil
-		} else {
-			metricDNSFwdUDPErrorRead.Add(1)
-			return nil, err
+		if netaddr.Unmap(src) == wantSrc {
+			break
 		}
+		metricDNSFwdUDPErrorSrcAddr.Add(1)
 	}
 	truncated := n > maxResponseBytes
 	if truncated {
