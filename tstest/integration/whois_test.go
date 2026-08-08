@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 // netstack forwards the connection to localhost, and the listener
 // calls WhoIs on n2's LocalAPI to identify the remote peer as n1.
 func TestUserspaceWhoIsProxyMap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 

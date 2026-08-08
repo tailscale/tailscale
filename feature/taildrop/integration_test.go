@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"testing"
 	"time"
 
@@ -40,6 +41,9 @@ func TestTaildropIntegration_Fresh(t *testing.T) {
 //
 // This exercises an ipnext hook ordering issue we hit earlier.
 func testTaildropIntegration(t *testing.T, freshProfiles bool) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	controlOpt := integration.ConfigureControl(func(s *testcontrol.Server) {
 		s.AllNodesSameUser = true // required for Taildrop
