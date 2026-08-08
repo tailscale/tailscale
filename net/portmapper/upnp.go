@@ -287,13 +287,14 @@ func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, 
 }
 
 // selectBestService picks the "best" service from the given UPnP root device
-// to use to create a port mapping. It may return (nil, nil) if no supported
-// service was found in the provided *goupnp.RootDevice.
+// to use to create a port mapping. If selecting the service required querying
+// its external IP, it also returns that address. It may return a nil client if
+// no supported service was found in the provided *goupnp.RootDevice.
 //
 // loc is the parsed location that was used to fetch the given RootDevice.
 //
 // The provided ctx is not retained in the returned upnpClient.
-func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootDevice, loc *url.URL) (client upnpClient, err error) {
+func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootDevice, loc *url.URL) (client upnpClient, externalIP netip.Addr, err error) {
 	method := "none"
 	defer func() {
 		if client == nil {
@@ -339,12 +340,12 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 	// If we have no clients, then return right now; if we only have one,
 	// just select and return it.
 	if len(clients) == 0 {
-		return nil, nil
+		return nil, netip.Addr{}, nil
 	}
 	if len(clients) == 1 {
 		method = "single"
 		metricUPnPSelectSingle.Add(1)
-		return clients[0], nil
+		return clients[0], netip.Addr{}, nil
 	}
 
 	metricUPnPSelectMultiple.Add(1)
@@ -395,7 +396,7 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 		if !externalIP.IsPrivate() {
 			method = "ext-public"
 			metricUPnPSelectExternalPublic.Add(1)
-			return svc, nil
+			return svc, externalIP, nil
 		}
 	}
 
@@ -415,11 +416,11 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 			if hasExtIP {
 				method = "ext-private"
 				metricUPnPSelectExternalPrivate.Add(1)
-				return svc, nil
+				return svc, externalIPs[svc], nil
 			} else if try == 1 {
 				method = "up"
 				metricUPnPSelectUp.Add(1)
-				return svc, nil
+				return svc, netip.Addr{}, nil
 			}
 		}
 	}
@@ -427,7 +428,7 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 	// Nothing is up, but we have something (length of clients checked
 	// above); just return the first one.
 	metricUPnPSelectNone.Add(1)
-	return clients[0], nil
+	return clients[0], netip.Addr{}, nil
 }
 
 // serviceIsConnected returns whether a given UPnP service is connected, based
@@ -602,7 +603,7 @@ func (c *Client) tryUPnPPortmapWithDevice(
 	// Select the best mapping service from the given root device. This
 	// makes network requests, and can vary from mapping to mapping if the
 	// upstream device's connection status changes.
-	client, err := selectBestService(ctx, c.logf, rootDev, loc)
+	client, externalIP, err := selectBestService(ctx, c.logf, rootDev, loc)
 	if err != nil {
 		return netip.AddrPort{}, nil, err
 	}
@@ -619,6 +620,35 @@ func (c *Client) tryUPnPPortmapWithDevice(
 		})
 
 		return netip.AddrPort{}, nil, fmt.Errorf("no supported UPnP clients")
+	}
+
+	// Obtain and validate the external IP before creating the mapping. In
+	// particular, MikroTik only supports permanent leases, so forgetting a
+	// successfully-created mapping after a later request fails leaks the rule
+	// forever and each retry creates another one.
+	if !externalIP.IsValid() {
+		extIP, err := client.GetExternalIPAddressCtx(ctx)
+		c.vlogf("client.GetExternalIPAddress: %v, %v", extIP, err)
+		if err != nil {
+			return netip.AddrPort{}, nil, err
+		}
+		externalIP, err = netip.ParseAddr(extIP)
+		if err != nil {
+			return netip.AddrPort{}, nil, err
+		}
+	}
+
+	// Do a bit of validation on the external IP; we've seen cases where
+	// UPnP devices return the public IP 0.0.0.0, which obviously doesn't
+	// work as an endpoint.
+	//
+	// See: https://github.com/tailscale/corp/issues/23538
+	if externalIP.IsUnspecified() {
+		c.logf("UPnP returned unspecified external IP %v", externalIP)
+		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned unspecified external IP")
+	} else if externalIP.IsLoopback() {
+		c.logf("UPnP returned loopback external IP %v", externalIP)
+		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned loopback external IP")
 	}
 
 	// Start by trying to make a temporary lease with a duration.
@@ -660,30 +690,6 @@ func (c *Client) tryUPnPPortmapWithDevice(
 	}
 	if err != nil {
 		return netip.AddrPort{}, nil, err
-	}
-
-	// TODO cache this ip somewhere?
-	extIP, err := client.GetExternalIPAddressCtx(ctx)
-	c.vlogf("client.GetExternalIPAddress: %v, %v", extIP, err)
-	if err != nil {
-		return netip.AddrPort{}, nil, err
-	}
-	externalIP, err := netip.ParseAddr(extIP)
-	if err != nil {
-		return netip.AddrPort{}, nil, err
-	}
-
-	// Do a bit of validation on the external IP; we've seen cases where
-	// UPnP devices return the public IP 0.0.0.0, which obviously doesn't
-	// work as an endpoint.
-	//
-	// See: https://github.com/tailscale/corp/issues/23538
-	if externalIP.IsUnspecified() {
-		c.logf("UPnP returned unspecified external IP %v", externalIP)
-		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned unspecified external IP")
-	} else if externalIP.IsLoopback() {
-		c.logf("UPnP returned loopback external IP %v", externalIP)
-		return netip.AddrPort{}, nil, fmt.Errorf("UPnP returned loopback external IP")
 	}
 
 	return netip.AddrPortFrom(externalIP, newPort), client, nil
