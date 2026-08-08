@@ -793,38 +793,19 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	metricDNSFwdUDP.Add(1)
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderUDP, f.logf)
 
-	ln, err := f.packetListener(ipp.Addr())
-	if err != nil {
-		return nil, err
-	}
-
-	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
-	udpFam := "udp4"
-	if ipp.Addr().Is6() {
-		udpFam = "udp6"
-	}
-	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
-	if err != nil {
-		f.logf("ListenPacket failed: %v", err)
-		return nil, err
-	}
-	defer conn.Close()
-
-	fq.closeOnCtxDone.Add(conn)
-	defer fq.closeOnCtxDone.Remove(conn)
-
-	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
-		metricDNSFwdUDPErrorWrite.Add(1)
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, err
-	}
-	metricDNSFwdUDPWrote.Add(1)
-
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
-	n, _, err := conn.ReadFromUDPAddrPort(out)
+
+	// The host stack has no route to the tailnet in userspace networking
+	// mode (tsnet, or tailscaled --tun=userspace-networking), so an upstream
+	// that's a tailnet peer or behind a subnet router is only reachable
+	// through netstack. Same dispatch as [tsdial.Dialer.dialOneUser].
+	var n int
+	if f.dialer.UseNetstackForIP != nil && f.dialer.UseNetstackForIP(ipp.Addr()) {
+		n, err = f.exchangeUDPNetstack(ctx, fq, ipp, out)
+	} else {
+		n, err = f.exchangeUDPHost(ctx, fq, ipp, out)
+	}
 	if err != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -886,6 +867,81 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	clampEDNSSize(out, maxResponseBytes)
 	metricDNSFwdUDPSuccess.Add(1)
 	return out, nil
+}
+
+// exchangeUDPHost writes fq's query to ipp over an unconnected host-stack UDP
+// socket and reads the reply into out, returning the number of bytes read.
+func (f *forwarder) exchangeUDPHost(ctx context.Context, fq *forwardQuery, ipp netip.AddrPort, out []byte) (int, error) {
+	ln, err := f.packetListener(ipp.Addr())
+	if err != nil {
+		return 0, err
+	}
+
+	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
+	udpFam := "udp4"
+	if ipp.Addr().Is6() {
+		udpFam = "udp6"
+	}
+	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
+	if err != nil {
+		f.logf("ListenPacket failed: %v", err)
+		return 0, err
+	}
+	defer conn.Close()
+
+	fq.closeOnCtxDone.Add(conn)
+	defer fq.closeOnCtxDone.Remove(conn)
+
+	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
+		metricDNSFwdUDPErrorWrite.Add(1)
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 0, err
+	}
+	metricDNSFwdUDPWrote.Add(1)
+
+	n, _, err := conn.ReadFromUDPAddrPort(out)
+	return n, err
+}
+
+// exchangeUDPNetstack is [forwarder.exchangeUDPHost] but over a connected UDP
+// socket obtained from the netstack dialer, for upstreams only reachable
+// through the tunnel in userspace networking mode.
+//
+// The caller's truncation check (n > maxResponseBytes, with out sized
+// maxResponseBytes+1) holds here just as it does for a kernel socket:
+// gonet.commonRead wraps out in a tcpip.SliceWriter, whose Write fills the
+// buffer and reports io.ErrShortWrite, but gvisor's UDP endpoint.Read only
+// turns a write error into ErrBadBuffer when nothing at all was copied. So an
+// oversized datagram comes back as (len(out), nil) with the tail dropped.
+func (f *forwarder) exchangeUDPNetstack(ctx context.Context, fq *forwardQuery, ipp netip.AddrPort, out []byte) (int, error) {
+	if f.dialer.NetstackDialUDP == nil {
+		return 0, errors.New("dialer not initialized correctly: no NetstackDialUDP")
+	}
+	conn, err := f.dialer.NetstackDialUDP(ctx, ipp)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	// The netstack conn honors deadlines rather than ctx, so registering it
+	// here is what makes the query cancelable, same as sendTCP does.
+	fq.closeOnCtxDone.Add(conn)
+	defer fq.closeOnCtxDone.Remove(conn)
+
+	if _, err := conn.Write(fq.packet); err != nil {
+		metricDNSFwdUDPErrorWrite.Add(1)
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 0, err
+	}
+	metricDNSFwdUDPWrote.Add(1)
+
+	// A close mid-read surfaces as io.EOF rather than a ctx error, but the
+	// caller checks ctx.Err() first, so cancellation still reports as such.
+	return conn.Read(out)
 }
 
 var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DEBUG_DNS_FORWARD_USE_ROUTES")
