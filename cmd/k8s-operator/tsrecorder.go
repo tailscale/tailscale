@@ -14,11 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 	xslices "golang.org/x/exp/slices"
-	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -35,6 +33,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -51,6 +50,9 @@ const (
 	reasonRecorderTailnetUnavailable = "RecorderTailnetUnavailable"
 
 	currentProfileKey = "_current-profile"
+
+	// authKeySecretKey is the data key under which a Recorder replica's auth key is stored in its auth Secret.
+	authKeySecretKey = "authkey"
 )
 
 var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount)
@@ -59,15 +61,14 @@ var gaugeRecorderResources = clientmetric.NewGauge(kubetypes.MetricRecorderCount
 // Recorder CRs.
 type RecorderReconciler struct {
 	client.Client
-	log               *zap.SugaredLogger
-	recorder          record.EventRecorder
-	clock             tstime.Clock
-	clients           ClientProvider
-	tsNamespace       string
-	authKeyRateLimits map[string]*rate.Limiter // per-Recorder rate limiters for auth key re-issuance.
-	authKeyReissuing  map[string]bool
-	mu                sync.Mutex           // protects following
-	recorders         set.Slice[types.UID] // for recorders gauge
+	log         *zap.SugaredLogger
+	recorder    record.EventRecorder
+	clock       tstime.Clock
+	clients     ClientProvider
+	tsNamespace string
+	reissuer    *tailscaled.Reissuer
+	mu          sync.Mutex           // protects following
+	recorders   set.Slice[types.UID] // for recorders gauge
 }
 
 func (r *RecorderReconciler) logger(name string) *zap.SugaredLogger {
@@ -175,16 +176,8 @@ func (r *RecorderReconciler) maybeProvision(ctx context.Context, tsClient tsclie
 	r.mu.Lock()
 	r.recorders.Add(tsr.UID)
 	gaugeRecorderResources.Set(int64(r.recorders.Len()))
-	if _, ok := r.authKeyRateLimits[tsr.Name]; !ok {
-		r.authKeyRateLimits[tsr.Name] = rate.NewLimiter(rate.Every(30*time.Second), int(replicas))
-	}
-	for replica := range replicas {
-		name := fmt.Sprintf("%s-%d", tsr.Name, replica)
-		if _, ok := r.authKeyReissuing[name]; !ok {
-			r.authKeyReissuing[name] = false
-		}
-	}
 	r.mu.Unlock()
+	r.reissuer.EnsureState(tsr.Name, int(replicas))
 
 	if err := r.ensureAuthSecretsCreated(ctx, tsClient, tsr); err != nil {
 		return fmt.Errorf("error creating secrets: %w", err)
@@ -435,11 +428,8 @@ func (r *RecorderReconciler) maybeCleanup(ctx context.Context, tsr *tsapi.Record
 	r.mu.Lock()
 	r.recorders.Remove(tsr.UID)
 	gaugeRecorderResources.Set(int64(r.recorders.Len()))
-	delete(r.authKeyRateLimits, tsr.Name)
-	for replica := range replicas {
-		delete(r.authKeyReissuing, fmt.Sprintf("%s-%d", tsr.Name, replica))
-	}
 	r.mu.Unlock()
+	r.reissuer.RemoveState(tsr.Name)
 
 	return true, nil
 }
@@ -467,7 +457,18 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsCli
 		err := r.Get(ctx, key, existingSecret)
 		switch {
 		case err == nil:
-			reissue, err := r.shouldReissueAuthKey(ctx, tsClient, tsr, replica, existingSecret)
+			stateSecret, err := r.getStateSecret(ctx, tsr.Name, replica)
+			if err != nil {
+				return fmt.Errorf("error getting state Secret for replica %d: %w", replica, err)
+			}
+			cfgAuthKey := string(existingSecret.Data[authKeySecretKey])
+			reissue, err := r.reissuer.ShouldReissue(ctx, tsClient, r.log, tailscaled.ReissueInput{
+				ParentName:  tsr.Name,
+				ReplicaName: fmt.Sprintf("%s-%d", tsr.Name, replica),
+				Kind:        tailscaled.KindRecorder,
+				StateSecret: stateSecret,
+				CfgAuthKey:  &cfgAuthKey,
+			})
 			if err != nil {
 				return fmt.Errorf("error checking auth key reissue for replica %d: %w", replica, err)
 			}
@@ -479,7 +480,7 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsCli
 			if err != nil {
 				return err
 			}
-			existingSecret.Data["authkey"] = []byte(authKey)
+			existingSecret.Data[authKeySecretKey] = []byte(authKey)
 			if err = r.Update(ctx, existingSecret); err != nil {
 				return err
 			}
@@ -497,85 +498,6 @@ func (r *RecorderReconciler) ensureAuthSecretsCreated(ctx context.Context, tsCli
 		}
 	}
 
-	return nil
-}
-
-// shouldReissueAuthKey returns true if the proxy needs a new auth key. It
-// tracks in-flight reissues via authKeyReissuing to avoid duplicate API calls
-// across reconciles.
-func (r *RecorderReconciler) shouldReissueAuthKey(ctx context.Context, tsClient tsclient.Client, tsr *tsapi.Recorder, replica int32, authSecret *corev1.Secret) (shouldReissue bool, err error) {
-	stateSecret, err := r.getStateSecret(ctx, tsr.Name, replica)
-	if err != nil || stateSecret == nil {
-		return false, err
-	}
-
-	stateSecretName := fmt.Sprintf("%s-%d", tsr.Name, replica)
-
-	r.mu.Lock()
-	reissuing := r.authKeyReissuing[stateSecretName]
-	r.mu.Unlock()
-
-	if reissuing {
-		_, requestStillPresent := stateSecret.Data[kubetypes.KeyReissueAuthkey]
-		if !requestStillPresent {
-			r.mu.Lock()
-			r.authKeyReissuing[stateSecretName] = false
-			r.mu.Unlock()
-			r.log.Debugf("auth key reissue completed for %q", stateSecretName)
-			return false, nil
-		}
-		r.log.Debugf("auth key already in process of re-issuance for %q, waiting", stateSecretName)
-		return false, nil
-	}
-
-	defer func() {
-		r.mu.Lock()
-		r.authKeyReissuing[stateSecretName] = shouldReissue
-		r.mu.Unlock()
-	}()
-
-	brokenAuthkey, ok := stateSecret.Data[kubetypes.KeyReissueAuthkey]
-	if !ok {
-		return false, nil
-	}
-
-	cfgAuthKey := string(authSecret.Data["authkey"])
-	empty := cfgAuthKey == ""
-	broken := cfgAuthKey == string(brokenAuthkey)
-
-	if !empty && !broken {
-		return false, nil
-	}
-
-	lim := r.authKeyRateLimits[tsr.Name]
-	if !lim.Allow() {
-		r.log.Debugf("auth key re-issuance rate limit exceeded, limit: %.2f, burst: %d, tokens: %.2f",
-			lim.Limit(), lim.Burst(), lim.Tokens())
-		return false, fmt.Errorf("auth key re-issuance rate limit exceeded for Recorder %q, will retry with backoff", tsr.Name)
-	}
-
-	r.log.Infof("Recorder replica %s failing to auth; attempting cleanup and new key", stateSecretName)
-	if tsID := stateSecret.Data[kubetypes.KeyDeviceID]; len(tsID) > 0 {
-		id := tailcfg.StableNodeID(tsID)
-		if err := r.ensureDeviceDeleted(ctx, tsClient, id, r.log); err != nil {
-			return false, err
-		}
-	}
-
-	return true, nil
-}
-
-func (r *RecorderReconciler) ensureDeviceDeleted(ctx context.Context, tsClient tsclient.Client, id tailcfg.StableNodeID, logger *zap.SugaredLogger) error {
-	logger.Debugf("deleting device %s from control", string(id))
-	err := tsClient.Devices().Delete(ctx, string(id))
-	switch {
-	case tailscale.IsNotFound(err):
-		logger.Debugf("device %s not found, likely because it has already been deleted from control", string(id))
-	case err != nil:
-		return fmt.Errorf("error deleting device: %w", err)
-	default:
-		logger.Debugf("device %s deleted from control", string(id))
-	}
 	return nil
 }
 

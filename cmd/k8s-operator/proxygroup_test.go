@@ -6,19 +6,16 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -36,6 +33,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -642,12 +640,11 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 				tsFirewallMode:    "auto",
 				defaultProxyClass: "default-pc",
 
-				Client:            fc,
-				clients:           tsclient.NewProvider(tsClient),
-				recorder:          fr,
-				clock:             cl,
-				authKeyRateLimits: make(map[string]*rate.Limiter),
-				authKeyReissuing:  make(map[string]bool),
+				Client:   fc,
+				clients:  tsclient.NewProvider(tsClient),
+				recorder: fr,
+				clock:    cl,
+				reissuer: tailscaled.NewReissuer(),
 			}
 
 			for i, r := range tt.reconciles {
@@ -787,13 +784,12 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 					tsFirewallMode:    "auto",
 					defaultProxyClass: "default-pc",
 
-					Client:            fc,
-					clients:           tsclient.NewProvider(tsClient),
-					recorder:          fr,
-					log:               zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
-					clock:             cl,
-					authKeyRateLimits: make(map[string]*rate.Limiter),
-					authKeyReissuing:  make(map[string]bool),
+					Client:   fc,
+					clients:  tsclient.NewProvider(tsClient),
+					recorder: fr,
+					log:      zl.Sugar().With("TestName", tt.name).With("Reconcile", "cleanup"),
+					clock:    cl,
+					reissuer: tailscaled.NewReissuer(),
 				}
 
 				if err := fc.Delete(t.Context(), pg); err != nil {
@@ -934,13 +930,12 @@ func TestProxyGroup(t *testing.T) {
 		tsFirewallMode:    "auto",
 		defaultProxyClass: "default-pc",
 
-		Client:            fc,
-		clients:           tsclient.NewProvider(tsClient),
-		recorder:          fr,
-		log:               zl.Sugar(),
-		clock:             cl,
-		authKeyRateLimits: make(map[string]*rate.Limiter),
-		authKeyReissuing:  make(map[string]bool),
+		Client:   fc,
+		clients:  tsclient.NewProvider(tsClient),
+		recorder: fr,
+		log:      zl.Sugar(),
+		clock:    cl,
+		reissuer: tailscaled.NewReissuer(),
 	}
 
 	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
@@ -1143,8 +1138,7 @@ func TestProxyGroupTypes(t *testing.T) {
 		log:                  zl.Sugar(),
 		clients:              tsclient.NewProvider(&fakeTSClient{}),
 		clock:                tstest.NewClock(tstest.ClockOpts{}),
-		authKeyRateLimits:    make(map[string]*rate.Limiter),
-		authKeyReissuing:     make(map[string]bool),
+		reissuer:             tailscaled.NewReissuer(),
 		sharedACMEAccountKey: true,
 	}
 
@@ -1475,14 +1469,13 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 		WithStatusSubresource(pg).
 		Build()
 	r := &ProxyGroupReconciler{
-		tsNamespace:       tsNamespace,
-		tsProxyImage:      testProxyImage,
-		Client:            fc,
-		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		clients:           tsclient.NewProvider(&fakeTSClient{}),
-		clock:             tstest.NewClock(tstest.ClockOpts{}),
-		authKeyRateLimits: make(map[string]*rate.Limiter),
-		authKeyReissuing:  make(map[string]bool),
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
+		clients:      tsclient.NewProvider(&fakeTSClient{}),
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		reissuer:     tailscaled.NewReissuer(),
 	}
 
 	expectReconciled(t, r, "", pg.Name)
@@ -1530,14 +1523,13 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 		Build()
 
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace:       tsNamespace,
-		tsProxyImage:      testProxyImage,
-		Client:            fc,
-		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		clients:           tsclient.NewProvider(&fakeTSClient{}),
-		clock:             tstest.NewClock(tstest.ClockOpts{}),
-		authKeyRateLimits: make(map[string]*rate.Limiter),
-		authKeyReissuing:  make(map[string]bool),
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
+		clients:      tsclient.NewProvider(&fakeTSClient{}),
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		reissuer:     tailscaled.NewReissuer(),
 	}
 
 	pg := &tsapi.ProxyGroup{
@@ -1617,14 +1609,13 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		WithStatusSubresource(&tsapi.ProxyGroup{}).
 		Build()
 	reconciler := &ProxyGroupReconciler{
-		tsNamespace:       tsNamespace,
-		tsProxyImage:      testProxyImage,
-		Client:            fc,
-		log:               zap.Must(zap.NewDevelopment()).Sugar(),
-		clients:           tsclient.NewProvider(&fakeTSClient{}),
-		clock:             tstest.NewClock(tstest.ClockOpts{}),
-		authKeyRateLimits: make(map[string]*rate.Limiter),
-		authKeyReissuing:  make(map[string]bool),
+		tsNamespace:  tsNamespace,
+		tsProxyImage: testProxyImage,
+		Client:       fc,
+		log:          zap.Must(zap.NewDevelopment()).Sugar(),
+		clients:      tsclient.NewProvider(&fakeTSClient{}),
+		clock:        tstest.NewClock(tstest.ClockOpts{}),
+		reissuer:     tailscaled.NewReissuer(),
 	}
 
 	existingServices := []string{"svc1", "svc2"}
@@ -1890,13 +1881,12 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 			defaultTags:    []string{"tag:test-tag"},
 			tsFirewallMode: "auto",
 
-			Client:            fc,
-			clients:           tsclient.NewProvider(tsClient),
-			recorder:          fr,
-			log:               zl.Sugar(),
-			clock:             cl,
-			authKeyRateLimits: make(map[string]*rate.Limiter),
-			authKeyReissuing:  make(map[string]bool),
+			Client:   fc,
+			clients:  tsclient.NewProvider(tsClient),
+			recorder: fr,
+			log:      zl.Sugar(),
+			clock:    cl,
+			reissuer: tailscaled.NewReissuer(),
 		}
 		reconciler.ensureStateAddedForProxyGroup(pg)
 
@@ -2006,35 +1996,13 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 			}
 
 			// Use the device deletion as a proxy for the fact the new auth key
-			// was due to a reissue.
+			// was due to a reissue. Rate-limit exhaustion is covered directly in
+			// the shared tailscaled.Reissuer test.
 			switch {
 			case tc.expectReissue && len(tsClient.deleted) != 1:
 				t.Errorf("expected 1 deleted device, got %v", tsClient.deleted)
 			case !tc.expectReissue && len(tsClient.deleted) != 0:
 				t.Errorf("expected no deleted devices, got %v", tsClient.deleted)
-			}
-
-			if tc.expectReissue {
-				// Trigger the rate limit in a tight loop. Up to 100 iterations
-				// to allow for CI that is extremely slow, but should happen on
-				// first try for any reasonable machine.
-				stateSecretName := pgStateSecretName(pg.Name, 0)
-				for range 100 {
-					//NOTE: (ChaosInTheCRD) we added some protection here to avoid
-					// trying to reissue when already reissung. This overrides it.
-					reconciler.mu.Lock()
-					reconciler.authKeyReissuing[stateSecretName] = false
-					reconciler.mu.Unlock()
-					_, err := reconciler.getAuthKey(context.Background(), tsClient, pg, cfgSecret, 0,
-						reconciler.log.With("TestName", t.Name()))
-					if err != nil {
-						if !strings.Contains(err.Error(), "rate limit exceeded") {
-							t.Fatalf("unexpected error getting auth key: %v", err)
-						}
-						return // Expected rate limit error.
-					}
-				}
-				t.Fatal("expected rate limit error, but got none")
 			}
 		})
 	}
@@ -2291,8 +2259,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				clients:           tsclient.NewProvider(&fakeTSClient{}),
 				log:               zl.Sugar(),
 				clock:             cl,
-				authKeyRateLimits: make(map[string]*rate.Limiter),
-				authKeyReissuing:  make(map[string]bool),
+				reissuer:          tailscaled.NewReissuer(),
 			}
 
 			expectReconciled(t, reconciler, "", pg.Name)
