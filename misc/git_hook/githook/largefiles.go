@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -20,8 +21,12 @@ const skipLargeFileCheckEnv = "TS_SKIP_LARGE_FILE_CHECK"
 
 // checkLargeBlobs rejects the push p if it adds or changes any blob
 // larger than maxSize bytes, comparing the tree being pushed against
-// the remote's previous tree (or, for new refs, the merge base with the
-// remote's default branch). The same tree diff logic runs in CI via the
+// each available base tree: the remote's previous tree for the ref,
+// and the merge base with the remote's default branch. A file is only
+// flagged if it is a large addition relative to every base, so blobs
+// that are already on the remote via its default branch (e.g. after
+// rebasing past an unrelated large-file change on main) are not
+// reported. The same tree diff logic runs in CI via the
 // check-git-accidental-large-file GitHub Action; this catches mistakes
 // before they permanently bloat the remote repo.
 func checkLargeBlobs(remoteName string, p push, maxSize int64) error {
@@ -36,14 +41,22 @@ func checkLargeBlobs(remoteName string, p push, maxSize int64) error {
 	if err != nil {
 		return fmt.Errorf("resolving tree of %v: %v", p.localSHA, err)
 	}
-	beforeTree := findBaseTree(remoteName, p)
-	if beforeTree == "" {
+	baseTrees := findBaseTrees(remoteName, p)
+	if len(baseTrees) == 0 {
 		fmt.Fprintf(os.Stderr, "git-hook: pre-push: no base tree found for %s; skipping large file check\n", p.remoteRef)
 		return nil
 	}
-	large := appendLargeAdditions(nil, beforeTree, afterTree, "", maxSize)
-	if len(large) == 0 {
-		return nil
+	var large []largeFile
+	for i, baseTree := range baseTrees {
+		additions := appendLargeAdditions(nil, baseTree, afterTree, "", maxSize)
+		if i == 0 {
+			large = additions
+		} else {
+			large = intersectByPath(large, additions)
+		}
+		if len(large) == 0 {
+			return nil
+		}
 	}
 	var sb strings.Builder
 	for _, f := range large {
@@ -52,14 +65,20 @@ func checkLargeBlobs(remoteName string, p push, maxSize int64) error {
 	return fmt.Errorf("push adds files larger than %d bytes:\n%sset %s=1 to push anyway", maxSize, sb.String(), skipLargeFileCheckEnv)
 }
 
-// findBaseTree returns the tree hash to diff the push against, or the
-// empty string if no suitable base is available locally. For updates to
-// an existing remote ref it uses the remote's old commit. For new refs
-// it falls back to the merge base with the remote's default branch.
-func findBaseTree(remoteName string, p push) string {
+// findBaseTrees returns the tree hashes to diff the push against, or
+// nil if no suitable base is available locally. For updates to an
+// existing remote ref it includes the remote's old commit. It also
+// includes the merge base with the remote's default branch, which for
+// new refs is the only base.
+func findBaseTrees(remoteName string, p push) (trees []string) {
+	addTree := func(tree string) {
+		if !slices.Contains(trees, tree) {
+			trees = append(trees, tree)
+		}
+	}
 	if p.remoteSHA != zeroRef {
 		if tree, err := treeOf(p.remoteSHA); err == nil {
-			return tree
+			addTree(tree)
 		}
 	}
 	for _, ref := range []string{
@@ -72,10 +91,26 @@ func findBaseTree(remoteName string, p push) string {
 			continue
 		}
 		if tree, err := treeOf(strings.TrimSpace(string(out))); err == nil {
-			return tree
+			addTree(tree)
+			break
 		}
 	}
-	return ""
+	return trees
+}
+
+// intersectByPath returns the entries of a whose paths also appear in b.
+func intersectByPath(a, b []largeFile) []largeFile {
+	inB := make(map[string]bool, len(b))
+	for _, f := range b {
+		inB[f.path] = true
+	}
+	var out []largeFile
+	for _, f := range a {
+		if inB[f.path] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // treeOf resolves a git ref or commit to its tree hash.
