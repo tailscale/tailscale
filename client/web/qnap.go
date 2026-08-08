@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 )
@@ -55,10 +56,15 @@ func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
 	return "", nil, fmt.Errorf("not authenticated by any mechanism")
 }
 
-// qnapAuthnURL returns the auth URL to use by inferring where the UI is
-// running based on the request URL. This is necessary because QNAP has so
-// many options, see https://github.com/tailscale/tailscale/issues/7108
+// qnapAuthnURL returns the auth URL to use by inferring the scheme and port
+// the UI is running on from the request URL. This is necessary because QNAP has
+// so many options, see https://github.com/tailscale/tailscale/issues/7108
 // and https://github.com/tailscale/tailscale/issues/6903
+//
+// Only the scheme and port are taken from requestUrl. authLogin.cgi is served
+// by the QNAP web server on this same device, and the host in requestUrl comes
+// from the client's Host header, so it must not be used to decide where the
+// user's credentials get sent.
 func qnapAuthnURL(requestUrl string, query url.Values) string {
 	in, err := url.Parse(requestUrl)
 	scheme := ""
@@ -71,7 +77,10 @@ func qnapAuthnURL(requestUrl string, query url.Values) string {
 		host = "localhost"
 	} else {
 		scheme = in.Scheme
-		host = in.Host
+		host = "localhost"
+		if port := in.Port(); port != "" {
+			host = net.JoinHostPort(host, port)
+		}
 	}
 
 	u := url.URL{
