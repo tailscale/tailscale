@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The deptest package contains a shared implementation of negative
-// dependency tests for other packages, making sure we don't start
-// depending on certain packages.
+// Package deptest contains a shared implementation of negative dependency
+// tests for other packages, making sure we don't start depending on certain
+// packages.
 package deptest
 
 import (

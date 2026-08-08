@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The doctor package registers the "doctor" problem diagnosis support into the
+// Package doctor registers the "doctor" problem diagnosis support into the
 // rest of Tailscale.
 package doctor
 

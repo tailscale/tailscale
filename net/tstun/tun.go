@@ -3,8 +3,8 @@
 
 //go:build !wasm && !tamago && !aix && !solaris && !illumos
 
-// Package tun creates a tuntap device, working around OS-specific
-// quirks if necessary.
+// Package tstun creates a tuntap device, working around OS-specific quirks if
+// necessary.
 package tstun
 
 import (

@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// ippool implements IP address storage, creation, and retrieval for cmd/natc
+// Package ippool implements IP address storage, creation, and retrieval for cmd/natc.
 package ippool
 
 import (

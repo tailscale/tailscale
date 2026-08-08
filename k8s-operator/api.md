@@ -6,6 +6,7 @@
 
 ## tailscale.com/v1alpha1
 
+Package v1alpha1 documents the k8s-operator API.
 
 ### Resource Types
 - [Connector](#connector)
