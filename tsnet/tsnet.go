@@ -2222,7 +2222,7 @@ func (s *Server) GetRootPath() string {
 // in this repository.
 // https://tailscale.com/docs/reference/troubleshooting/network-configuration/inspect-unencrypted-packets
 func (s *Server) CapturePcap(ctx context.Context, pcapFile string) error {
-	stream, err := s.localClient.StreamDebugCapture(ctx)
+	stream, err := s.localClient.StreamDebugCapture(ctx, 0)
 	if err != nil {
 		return err
 	}
