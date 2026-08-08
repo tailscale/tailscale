@@ -303,6 +303,18 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// Set the deletion grace period to 6 minutes to ensure that the pre-stop hook has enough time to terminate
 		// gracefully.
 		ss.Spec.Template.DeletionGracePeriodSeconds = new(deletionGracePeriodSeconds)
+
+		// Add a readiness gate so that kubelet does not mark a replica Pod as
+		// ready before egressPodsReconciler has confirmed that cluster traffic
+		// for all egress services is being routed to it. Because StatefulSet
+		// rolling updates only restart the next replica once the previous one
+		// is ready, this prevents a window during updates where every replica
+		// has been recreated but none is yet serving traffic, which would drop
+		// cluster egress traffic. The reconciler sets the corresponding
+		// condition; see egress-pod-readiness.go.
+		tmpl.Spec.ReadinessGates = append(tmpl.Spec.ReadinessGates, corev1.PodReadinessGate{
+			ConditionType: tsEgressReadinessGate,
+		})
 	}
 
 	return ss, nil
