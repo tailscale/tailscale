@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package STUN generates STUN request packets and parses response packets.
+// Package stun generates STUN request packets and parses response packets.
 package stun
 
 import (

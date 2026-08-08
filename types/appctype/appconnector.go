@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package appcfg contains an experimental configuration structure for
+// Package appctype contains an experimental configuration structure for
 // "tailscale.com/app-connectors" capmap extensions.
 package appctype
 

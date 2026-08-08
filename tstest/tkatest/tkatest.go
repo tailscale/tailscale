@@ -1,8 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// tkatest has functions for creating a mock control server that responds
-// to TKA endpoints.
+// Package tkatest has functions for creating a mock control server that
+// responds to TKA endpoints.
 package tkatest
 
 import (

@@ -3,8 +3,8 @@
 
 //go:generate go run gen.go
 
-// The buildfeatures package contains boolean constants indicating which
-// features were included in the binary (via build tags), for use in dead code
-// elimination when using separate build tag protected files is impractical
-// or undesirable.
+// Package buildfeatures contains boolean constants indicating which features
+// were included in the binary (via build tags), for use in dead code
+// elimination when using separate build tag protected files is impractical or
+// undesirable.
 package buildfeatures

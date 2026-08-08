@@ -1,8 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// nocasemaps provides efficient functions to set and get entries in Go maps
-// keyed by a string, where the string is always lower-case.
+// Package nocasemaps provides efficient functions to set and get entries in Go
+// maps keyed by a string, where the string is always lower-case.
 package nocasemaps
 
 import (
