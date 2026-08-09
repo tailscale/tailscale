@@ -1224,19 +1224,12 @@ func newNetstackDialer(tb testing.TB, netMon *netmon.Monitor, bus *eventbus.Bus,
 // tailnet.
 //
 // The two subtests send the same query to the same upstream and differ only in
-// the transport the forwarder picks. sendTCP dials through [tsdial.Dialer]
-// (getDialerType -> UserDial -> dialOneUser), which consults UseNetstackForIP;
-// sendUDP goes straight to a host-stack socket via packetListener and never
-// consults the dialer at all. So TCP passes and UDP fails, and the difference
-// between the two is the whole defect.
+// the transport the forwarder picks; both must consult the dialer, so each
+// asserts on the netstack dial hook. The UDP subtest also bounds elapsed by
+// udpRaceTimeout, since a regression that silently falls back to TCP still
+// produces the right bytes, just two seconds late.
 //
-// Note that this test constructs only a [tsdial.Dialer]. It does not import
-// tsnet, which is why the UDP failure is attributable to the forwarder rather
-// than to tsnet: any userspace networking configuration hits it, including
-// tailscaled --tun=userspace-networking.
-//
-// The UDP subtest is skipped rather than left failing so CI stays green; drop
-// the skip to see the bug. See tailscale/tailscale#20314.
+// See tailscale/tailscale#20314.
 func TestForwarderNetstackUpstream(t *testing.T) {
 	const domain = "netstack-upstream.example.com."
 	request := makeTestRequest(t, domain, dns.TypeA, 0)
@@ -1244,10 +1237,6 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 
 	for _, family := range []string{"tcp", "udp"} {
 		t.Run(family, func(t *testing.T) {
-			if family == "udp" {
-				t.Skip("known failure: sendUDP ignores the netstack dialer; see https://github.com/tailscale/tailscale/issues/20314")
-			}
-
 			var sawUDP, sawTCP atomic.Bool
 			port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
 				if isTCP {
@@ -1321,6 +1310,181 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 				}
 			} else if dials.tcp.Load() == 0 {
 				t.Errorf("forwarder never dialed TCP via netstack")
+			}
+		})
+	}
+}
+
+// TestForwarderNetstackUpstreamTruncated checks that an oversized response
+// from an upstream reached through netstack gets the TC flag, the same as one
+// from a host-stack socket.
+func TestForwarderNetstackUpstreamTruncated(t *testing.T) {
+	const domain = "large-netstack-upstream.example.com."
+	_, largeResponse := makeLargeResponse(t, domain)
+
+	// Advertise an EDNS buffer of maxResponseBytes, so that the TC flag can
+	// only come from read truncation and not from checkResponseSizeAndSetTC
+	// enforcing a smaller limit.
+	request := makeTestRequest(t, domain, dns.TypeA, maxResponseBytes)
+
+	var sawUDP, sawTCP atomic.Bool
+	port := runDNSServer(t, nil, largeResponse, func(isTCP bool, gotRequest []byte) {
+		if isTCP {
+			sawTCP.Store(true)
+		} else {
+			sawUDP.Store(true)
+		}
+		if !bytes.Equal(request, gotRequest) {
+			t.Errorf("invalid request\ngot:  %+v\nwant: %+v", gotRequest, request)
+		}
+	})
+	peer := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)
+
+	logf := tstest.WhileTestRunningLogger(t)
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer netMon.Close()
+
+	dialer, dials := newNetstackDialer(t, netMon, bus, peer)
+	fwd := newForwarder(logf, netMon, nil, dialer, health.NewTracker(bus), nil)
+	fwd.verboseFwd = true
+	// Without this the forwarder retries over TCP and the client gets the
+	// whole response, as in [TestForwarderTCPFallbackDisabled].
+	setupForwarderWithTCPRetriesDisabled()(fwd)
+
+	rpkt := packet{
+		bs:     request,
+		family: "udp",
+		addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
+	}
+	rchan := make(chan packet, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := fwd.forwardWithDestChan(ctx, rpkt, rchan,
+		resolverAndDelay{name: &dnstype.Resolver{Addr: netstackUpstream.String()}}); err != nil {
+		t.Fatalf("forwardWithDestChan: %v", err)
+	}
+	var got []byte
+	select {
+	case res := <-rchan:
+		got = res.bs
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for response: %v", ctx.Err())
+	}
+	t.Logf("netstack dials udp=%d tcp=%d; upstream saw udp=%v tcp=%v",
+		dials.udp.Load(), dials.tcp.Load(), sawUDP.Load(), sawTCP.Load())
+
+	want := append([]byte(nil), largeResponse[:maxResponseBytes]...)
+	setTCFlagInPacket(want)
+	if !bytes.Equal(got, want) {
+		t.Errorf("invalid response\ngot  (%d): %+v\nwant (%d): %+v", len(got), got, len(want), want)
+	}
+
+	if dials.udp.Load() != 1 {
+		t.Errorf("netstack UDP dials = %d, want 1", dials.udp.Load())
+	}
+	if dials.tcp.Load() != 0 {
+		t.Errorf("netstack TCP dials = %d, want 0 (TCP retries are disabled)", dials.tcp.Load())
+	}
+}
+
+// TestDialUDPDispatch checks that dialUDP uses netstack for an upstream
+// UseNetstackForIP claims, and a host-stack socket for everything else.
+func TestDialUDPDispatch(t *testing.T) {
+	publicUpstream := netip.MustParseAddrPort("8.8.8.8:53")
+
+	tests := []struct {
+		name         string
+		useNetstack  func(netip.Addr) bool
+		noDialUDP    bool // leave NetstackDialUDP nil
+		upstream     netip.AddrPort
+		wantNetstack bool
+		wantErr      bool
+	}{
+		{
+			name:     "no_hooks",
+			upstream: netstackUpstream,
+		},
+		{
+			name:        "hook_declines_public_upstream",
+			useNetstack: func(ip netip.Addr) bool { return ip == netstackUpstream.Addr() },
+			upstream:    publicUpstream,
+		},
+		{
+			name:         "hook_claims_tailnet_upstream",
+			useNetstack:  func(ip netip.Addr) bool { return ip == netstackUpstream.Addr() },
+			upstream:     netstackUpstream,
+			wantNetstack: true,
+		},
+		{
+			name:        "hook_claims_upstream_but_no_dialer",
+			useNetstack: func(netip.Addr) bool { return true },
+			noDialUDP:   true,
+			upstream:    netstackUpstream,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer netMon.Close()
+
+			// A UDP server that never replies: dialUDP only connects, so
+			// nothing here needs to answer.
+			pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pc.Close()
+
+			var dialedNetstack bool
+			dialer := &tsdial.Dialer{Logf: logf}
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+			dialer.UseNetstackForIP = tt.useNetstack
+			if !tt.noDialUDP {
+				dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+					dialedNetstack = true
+					var nd net.Dialer
+					return nd.DialContext(ctx, "udp4", pc.LocalAddr().String())
+				}
+			}
+			fwd := newForwarder(logf, netMon, nil, dialer, health.NewTracker(bus), nil)
+
+			conn, err := fwd.dialUDP(context.Background(), tt.upstream)
+			if tt.wantErr {
+				if err == nil {
+					conn.Close()
+					t.Fatal("dialUDP succeeded; want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dialUDP: %v", err)
+			}
+			defer conn.Close()
+
+			if dialedNetstack != tt.wantNetstack {
+				t.Errorf("dialed via netstack = %v, want %v", dialedNetstack, tt.wantNetstack)
+			}
+			if _, ok := conn.(*netstackPacketConn); ok != tt.wantNetstack {
+				t.Errorf("conn is *netstackPacketConn = %v, want %v", ok, tt.wantNetstack)
+			}
+			// The netstack conn is already connected, so check that sendUDP's
+			// addressed write still reaches it. The host path writes to a real
+			// upstream, which may legitimately fail here.
+			if _, err := conn.WriteToUDPAddrPort([]byte("hello"), tt.upstream); err != nil && tt.wantNetstack {
+				t.Errorf("WriteToUDPAddrPort: %v", err)
 			}
 		})
 	}

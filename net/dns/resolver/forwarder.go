@@ -793,19 +793,8 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	metricDNSFwdUDP.Add(1)
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderUDP, f.logf)
 
-	ln, err := f.packetListener(ipp.Addr())
+	conn, err := f.dialUDP(ctx, ipp)
 	if err != nil {
-		return nil, err
-	}
-
-	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
-	udpFam := "udp4"
-	if ipp.Addr().Is6() {
-		udpFam = "udp6"
-	}
-	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
-	if err != nil {
-		f.logf("ListenPacket failed: %v", err)
 		return nil, err
 	}
 	defer conn.Close()
@@ -886,6 +875,58 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	clampEDNSSize(out, maxResponseBytes)
 	metricDNSFwdUDPSuccess.Add(1)
 	return out, nil
+}
+
+// dialUDP returns a UDP conn to ipp, over netstack if that's the only way to
+// reach it. Same dispatch as [tsdial.Dialer.dialOneUser].
+func (f *forwarder) dialUDP(ctx context.Context, ipp netip.AddrPort) (nettype.PacketConn, error) {
+	if f.dialer.UseNetstackForIP != nil && f.dialer.UseNetstackForIP(ipp.Addr()) {
+		if f.dialer.NetstackDialUDP == nil {
+			return nil, errors.New("dialer not initialized correctly: no NetstackDialUDP")
+		}
+		conn, err := f.dialer.NetstackDialUDP(ctx, ipp)
+		if err != nil {
+			return nil, err
+		}
+		return &netstackPacketConn{Conn: conn, peer: ipp}, nil
+	}
+
+	ln, err := f.packetListener(ipp.Addr())
+	if err != nil {
+		return nil, err
+	}
+
+	// Name the family explicitly: netns looks for a "6" in this string to
+	// choose between IP_BOUND_IF and IPV6_BOUND_IF on macOS, and "udp" would
+	// give a v6 socket bound with the v4 option.
+	udpFam := "udp4"
+	if ipp.Addr().Is6() {
+		udpFam = "udp6"
+	}
+	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
+	if err != nil {
+		f.logf("ListenPacket failed: %v", err)
+		return nil, err
+	}
+	return conn, nil
+}
+
+// netstackPacketConn presents a conn already connected to peer as a
+// [nettype.PacketConn].
+type netstackPacketConn struct {
+	net.Conn
+	peer netip.AddrPort
+}
+
+func (c *netstackPacketConn) WriteToUDPAddrPort(b []byte, _ netip.AddrPort) (int, error) {
+	return c.Write(b)
+}
+
+// ReadFromUDPAddrPort returns how much of the datagram fit in b; gVisor drops
+// the rest without erroring, as a kernel socket does.
+func (c *netstackPacketConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	n, err := c.Read(b)
+	return n, c.peer, err
 }
 
 var optDNSForwardUseRoutes = envknob.RegisterOptBool("TS_DEBUG_DNS_FORWARD_USE_ROUTES")
