@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/ipn"
@@ -267,42 +268,49 @@ func TestRefreshAdvertiseServices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fakeLC := &localclient.FakeLocalClient{}
-			err := refreshAdvertiseServices(context.Background(), tt.sc, fakeLC)
+			// Run in a synctest bubble so that the 20 second
+			// post-EditPrefs failover wait in
+			// services.EnsureServicesAdvertised elapses on the fake
+			// clock instead of taking 20 seconds of wall time per
+			// subtest.
+			synctest.Test(t, func(t *testing.T) {
+				fakeLC := &localclient.FakeLocalClient{}
+				err := refreshAdvertiseServices(t.Context(), tt.sc, fakeLC)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("refreshAdvertiseServices() error = %v, wantErr %v", err, tt.wantErr)
-			}
-
-			if tt.wantEditPrefsCalled != (len(fakeLC.EditPrefsCalls) > 0) {
-				t.Errorf("EditPrefs called = %v, want %v", len(fakeLC.EditPrefsCalls) > 0, tt.wantEditPrefsCalled)
-			}
-
-			if tt.wantEditPrefsCalled {
-				if len(fakeLC.EditPrefsCalls) != 1 {
-					t.Fatalf("expected 1 EditPrefs call, got %d", len(fakeLC.EditPrefsCalls))
+				if (err != nil) != tt.wantErr {
+					t.Errorf("refreshAdvertiseServices() error = %v, wantErr %v", err, tt.wantErr)
 				}
 
-				mp := fakeLC.EditPrefsCalls[0]
-				if !mp.AdvertiseServicesSet {
-					t.Error("AdvertiseServicesSet should be true")
+				if tt.wantEditPrefsCalled != (len(fakeLC.EditPrefsCalls) > 0) {
+					t.Errorf("EditPrefs called = %v, want %v", len(fakeLC.EditPrefsCalls) > 0, tt.wantEditPrefsCalled)
 				}
 
-				if len(mp.AdvertiseServices) != len(tt.wantServices) {
-					t.Errorf("AdvertiseServices length = %d, want %d", len(mp.Prefs.AdvertiseServices), len(tt.wantServices))
-				}
+				if tt.wantEditPrefsCalled {
+					if len(fakeLC.EditPrefsCalls) != 1 {
+						t.Fatalf("expected 1 EditPrefs call, got %d", len(fakeLC.EditPrefsCalls))
+					}
 
-				advertised := make(map[string]bool)
-				for _, svc := range mp.AdvertiseServices {
-					advertised[svc] = true
-				}
+					mp := fakeLC.EditPrefsCalls[0]
+					if !mp.AdvertiseServicesSet {
+						t.Error("AdvertiseServicesSet should be true")
+					}
 
-				for _, want := range tt.wantServices {
-					if !advertised[want] {
-						t.Errorf("expected service %q to be advertised, but it wasn't", want)
+					if len(mp.AdvertiseServices) != len(tt.wantServices) {
+						t.Errorf("AdvertiseServices length = %d, want %d", len(mp.Prefs.AdvertiseServices), len(tt.wantServices))
+					}
+
+					advertised := make(map[string]bool)
+					for _, svc := range mp.AdvertiseServices {
+						advertised[svc] = true
+					}
+
+					for _, want := range tt.wantServices {
+						if !advertised[want] {
+							t.Errorf("expected service %q to be advertised, but it wasn't", want)
+						}
 					}
 				}
-			}
+			})
 		})
 	}
 }
