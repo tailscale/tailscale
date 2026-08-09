@@ -50,8 +50,8 @@ const (
 )
 
 // newOpenresolvEnv brings up a single Ubuntu node running upstream openresolv
-// with an existing but empty snippet directory, so the only resolvconf snippet
-// will be Tailscale's own.
+// with an existing but empty snippet directory, so openresolv has no snippets
+// registered until something adds one.
 func newOpenresolvEnv(t *testing.T) (*vmtest.Env, *vmtest.Node) {
 	t.Helper()
 	env := vmtest.New(t,
@@ -76,46 +76,52 @@ func newOpenresolvEnv(t *testing.T) (*vmtest.Env, *vmtest.Node) {
 	return env, node
 }
 
-// TestOpenresolvDNS checks that tailscaled configures DNS on a host where
-// Tailscale owns the only resolvconf snippet. Before the fix for
-// tailscale/tailscale#20825, such a host got no DNS configuration at all.
+// TestOpenresolvDNS checks what tailscaled does on a host where openresolv has
+// no snippets registered, so Tailscale's would be the only one. Before the fix
+// for tailscale/tailscale#20825, resolvconf's exit status 2 aborted DNS
+// configuration with a health error. Now openresolv reports an empty base
+// config, so tailscaled has no upstream to forward public names to. It leaves
+// resolv.conf alone and reports that it is waiting for system DNS servers
+// (tailscale/tailscale#20341).
 func TestOpenresolvDNS(t *testing.T) {
 	env, node := newOpenresolvEnv(t)
 
-	// tailscaled must have taken over resolv.conf. Checking for quad-100 rather
-	// than the signature line alone matters, because natlab provisions a
-	// resolv.conf carrying that same signature.
-	assertOpenresolvResolvConf(t, env, node,
-		[]string{orSignature, orQuad100},
-		[]string{vnet.FakeDNSIPv4().String()})
+	// Wait for tailscaled to report that it is holding off. Checking
+	// resolv.conf alone proves nothing, since the file also looks untouched
+	// before tailscaled has tried.
+	assertEmptyBaseConfigWarning(t, env, node)
 
+	// resolv.conf keeps the nameserver natlab provisioned, and quad-100 is not
+	// installed, since it would have nothing to forward public names to.
+	assertOpenresolvResolvConf(t, env, node,
+		[]string{orSignature, vnet.FakeDNSIPv4().String()},
+		[]string{orQuad100})
+
+	// An empty base config is not a read failure.
 	assertNoDNSReadWarning(t, env, node)
 
-	// Tailscale's snippet must be registered, and it must be the only one.
-	// Otherwise the base-config check below would be running against a host
-	// this test did not set up.
-	if out, err := env.SSHExec(node, "resolvconf -i"); err != nil {
-		t.Errorf("resolvconf -i: %v (%s)", err, strings.TrimSpace(out))
-	} else if got := strings.Fields(out); !slices.Equal(got, []string{"tailscale"}) {
-		t.Errorf("resolvconf -i = %q, want just \"tailscale\"", strings.TrimSpace(out))
+	// Tailscale did not register its snippet, so openresolv still has none.
+	// resolvconf exits 2 in that state, which is what aborted DNS configuration
+	// before the fix for #20825.
+	const cmd = "resolvconf -i; echo rc=$?"
+	if out, err := env.SSHExec(node, cmd); err != nil {
+		t.Errorf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
+	} else if got := strings.Fields(out); !slices.Equal(got, []string{"rc=2"}) {
+		t.Errorf("%s = %q, want no snippets and exit status 2", cmd, strings.TrimSpace(out))
 	}
 
-	// Resolving through the OS resolver proves that libc really uses that
-	// resolv.conf.
-	assertResolves(t, env, node, orLocalName, orLocalIP)
+	// The provisioned resolv.conf still works for public names.
+	assertResolves(t, env, node, orUpstreamOnlyName, orUpstreamOnlyIP)
 
-	// Tailscale's snippet is the only one registered, so openresolv has no OS
-	// config to report: both the nameservers and the search domains must come
-	// back empty. net/dns filters the Tailscale service IPs out of the
-	// nameservers anyway (tailscale/tailscale#7816), so the search domains are
-	// what this check really rests on.
+	// openresolv has no snippets, so it has no OS config to report: both the
+	// nameservers and the search domains must come back empty, with no error.
 	base := openresolvBaseConfig(t, env, node)
 	if base == nil {
 		return // openresolvBaseConfig already reported it
 	}
 	if len(base.Nameservers) != 0 || len(base.SearchDomains) != 0 {
-		t.Errorf("OS base config = %+v, want it empty: Tailscale owns the only "+
-			"resolvconf snippet, so openresolv has no OS config to report "+
+		t.Errorf("OS base config = %+v, want it empty: openresolv has no "+
+			"snippets, so it has no OS config to report "+
 			"(tailscale/tailscale#20825)", *base)
 	}
 }
@@ -238,6 +244,25 @@ func openresolvBaseConfig(t *testing.T, env *vmtest.Env, n *vmtest.Node) *tsdnsj
 		return nil
 	}
 	return st.SystemDNS
+}
+
+// assertEmptyBaseConfigWarning waits until the node's health list includes the
+// warning that the OS has no DNS servers for Tailscale to forward to.
+func assertEmptyBaseConfigWarning(t *testing.T, env *vmtest.Env, n *vmtest.Node) {
+	t.Helper()
+	// Taking the text from the Warnable rather than copying its wording keeps
+	// this check from silently going stale if the wording changes.
+	want := dns.EmptyBaseConfigWarnable.Text(nil)
+	var last []string
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		last = env.Status(n).Health
+		if slices.Contains(last, want) {
+			return nil
+		}
+		return fmt.Errorf("health does not include %q", want)
+	}); err != nil {
+		t.Fatalf("%v\nhealth: %q", err, last)
+	}
 }
 
 // assertNoDNSReadWarning fails if the node is reporting that it could not read
