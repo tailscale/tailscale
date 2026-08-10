@@ -15,6 +15,7 @@ package socks5
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -173,7 +174,14 @@ func (c *Conn) Run() error {
 	}
 
 	user, pwd, err := parseClientAuth(c.clientConn)
-	if err != nil || user != c.srv.Username || pwd != c.srv.Password {
+	// Compare both credentials in constant time. The listener is reachable by
+	// any local process, so a data-dependent comparison would let one recover
+	// the username or password a byte at a time by timing the reject. Evaluate
+	// both halves unconditionally so the username result doesn't gate whether
+	// the password is examined.
+	userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(c.srv.Username))
+	pwdMatch := subtle.ConstantTimeCompare([]byte(pwd), []byte(c.srv.Password))
+	if err != nil || userMatch != 1 || pwdMatch != 1 {
 		c.clientConn.Write([]byte{1, 1}) // auth error
 		return err
 	}
