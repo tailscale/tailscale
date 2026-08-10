@@ -698,6 +698,76 @@ func writeFlakeSummary(path string, flaky []*failedTest, repo string) {
 	}
 }
 
+// writeResultsSummary renders the per-test results panel and JSON for the Windows results feature.
+func writeResultsSummary(summaryPath, jsonPath, pkgOnly string, results map[string]testOutcome, retried map[string]bool, pkgFatal bool) {
+	type result struct {
+		Package string
+		Test    string
+		Outcome string
+	}
+	var rows []result
+	for key, outcome := range results {
+		pkg, test, _ := strings.Cut(key, "\t")
+		if pkgOnly != "" && pkg != pkgOnly {
+			continue
+		}
+		out := string(outcome)
+		if outcome == outcomeFail && retried[key] {
+			out = "retried"
+		}
+		rows = append(rows, result{Package: pkg, Test: test, Outcome: out})
+	}
+	slices.SortFunc(rows, func(a, b result) int {
+		return strings.Compare(a.Test, b.Test)
+	})
+
+	if jsonPath != "" {
+		if j, err := json.Marshal(rows); err != nil {
+			log.Printf("testwrapper: marshaling results JSON: %v", err)
+		} else if err := os.WriteFile(jsonPath, j, 0o644); err != nil {
+			log.Printf("testwrapper: writing results JSON %s: %v", jsonPath, err)
+		}
+	}
+
+	f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("testwrapper: opening summary file %s: %v", summaryPath, err)
+		return
+	}
+	defer f.Close()
+
+	title := "Windows integration test results"
+	if pkgOnly == "" {
+		title = "Test results"
+	}
+	fmt.Fprintf(f, "\n### %s\n\n", title)
+	if len(rows) == 0 {
+		fmt.Fprintln(f, "_No tests ran._")
+		return
+	}
+	var pass, fail, skip int
+	fmt.Fprintln(f, "| Result | Test |")
+	fmt.Fprintln(f, "|--------|------|")
+	for _, r := range rows {
+		var icon string
+		switch r.Outcome {
+		case "pass":
+			icon, pass = "✅", pass+1
+		case "retried":
+			icon, pass = "✅ (retried)", pass+1
+		case "skip":
+			icon, skip = "⚠️", skip+1
+		default:
+			icon, fail = "❌", fail+1
+		}
+		fmt.Fprintf(f, "| %s | `%s` |\n", icon, r.Test)
+	}
+	fmt.Fprintf(f, "\n**%d passed, %d failed, %d skipped**\n", pass, fail, skip)
+	if pkgFatal {
+		fmt.Fprintln(f, "\n_⚠️ A package did not complete (build error or timeout); results may be partial._")
+	}
+}
+
 // buildPackageTests groups failedTests by package into the wire format
 // flakeapp expects.
 //
@@ -786,6 +856,9 @@ func main() {
 	// First pass: run every package once, collect failed tests for retry.
 	var failed []*failedTest
 	var pkgFatal bool // a package produced a non-test fatal (build error, etc.)
+
+	resultsSummary := os.Getenv("TS_TESTWRAPPER_RESULTS_SUMMARY") != ""
+	allResults := map[string]testOutcome{}
 	for _, pkgPattern := range packages {
 		pt := &packageTests{Pattern: pkgPattern}
 		ch := make(chan *testAttempt)
@@ -827,6 +900,9 @@ func main() {
 				}
 				printPkgOutcome(tr.pkg, tr.outcome, tr.cached, tr.end.Sub(tr.start))
 				continue
+			}
+			if resultsSummary && tr.testName != "" {
+				allResults[tr.pkg+"\t"+tr.testName] = tr.outcome
 			}
 			if testingVerbose || tr.outcome == outcomeFail {
 				io.Copy(os.Stdout, &tr.logs)
@@ -880,6 +956,13 @@ func main() {
 	}
 	if path := os.Getenv("GITHUB_STEP_SUMMARY"); path != "" {
 		writeFlakeSummary(path, flaky, repo)
+		if resultsSummary {
+			retried := map[string]bool{}
+			for _, ft := range flaky {
+				retried[ft.pkg+"\t"+ft.testName] = true
+			}
+			writeResultsSummary(path, os.Getenv("TS_TESTWRAPPER_RESULTS_JSON"), os.Getenv("TS_TESTWRAPPER_RESULTS_PKG"), allResults, retried, pkgFatal)
+		}
 	}
 	if len(permanent) > 0 {
 		j, _ := json.Marshal(buildPackageTests(permanent, ""))

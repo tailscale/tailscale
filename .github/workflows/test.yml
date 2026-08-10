@@ -267,6 +267,17 @@ jobs:
       run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
+        TS_TESTWRAPPER_RESULTS_SUMMARY: "1"
+        TS_TESTWRAPPER_RESULTS_PKG: tailscale.com/tstest/integration
+        TS_TESTWRAPPER_RESULTS_JSON: ${{ github.workspace }}/windows-integration-results.json
+
+    - name: Upload Windows integration results
+      if: always() && matrix.key != 'win-bench'
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: windows-integration-results-${{ matrix.key }}
+        path: ${{ github.workspace }}/windows-integration-results.json
+        if-no-files-found: ignore
 
     - name: bench all
       shell: bash
@@ -924,6 +935,78 @@ jobs:
               "color": "danger"
             }]
           }
+
+  notify_windows:
+    if: always()
+    needs:
+      - windows
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Download Windows integration results
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: windows-integration-results-*
+        path: results
+    - name: Build Slack payload
+      id: payload
+      env:
+        WINDOWS_RESULT: ${{ needs.windows.result }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        # head.ref is untrusted on fork PRs; keep it in env and encode via jq --arg, never run: text.
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        rows=$(find results -name windows-integration-results.json -print0 \
+          | xargs -0 jq -s 'add // []' 2>/dev/null || echo '[]')
+        count() { printf '%s' "$rows" | jq "[ (. // [])[] | select(.Outcome == \"$1\") ] | length"; }
+        passed=$(( $(count pass) + $(count retried) ))
+        failed=$(count fail)
+        skipped=$(count skip)
+        total=$((passed + failed + skipped))
+        executed=$((passed + failed))
+        if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
+
+        case "$WINDOWS_RESULT" in
+          success)   emoji=":white_check_mark:"; color="good" ;;
+          failure)   emoji=":x:";                color="danger" ;;
+          cancelled) emoji=":no_entry_sign:";    color="warning" ;;
+          skipped)   emoji=":fast_forward:";     color="warning" ;;
+          *)         emoji=":question:";         color="warning" ;;
+        esac
+
+        integration="${passed} passed, ${failed} failed, ${skipped} skipped (${pct}%)"
+        if { [ "$WINDOWS_RESULT" = "failure" ] && [ "$failed" -eq 0 ]; } || [ "$total" -eq 0 ]; then
+          int_emoji=":warning:"; integration="${integration} — results may be partial (build error or timeout)"
+        elif [ "$failed" -gt 0 ]; then int_emoji=":x:"; else int_emoji=":white_check_mark:"; fi
+
+        jq -n --arg emoji "$emoji" --arg status "$WINDOWS_RESULT" --arg int_emoji "$int_emoji" \
+          --arg integration "$integration" \
+          --arg branch "$HEAD_REF" --arg title "$PR_TITLE" --arg pr_url "$PR_URL" --arg pr_number "$PR_NUMBER" \
+          --arg color "$color" --arg run_url "$RUN_URL" \
+          '{attachments: [{
+            title: ($emoji + " " + $title + ": " + $status),
+            title_link: $run_url,
+            text: (
+              "<" + $pr_url + "|PR #" + $pr_number + "> · `" + $branch + "`"
+              + "\n\n" + $emoji + " Windows CI: " + $status
+              + "\n" + $int_emoji + " Windows Integration Tests: " + $integration
+              + "\n\n<" + $run_url + "|View run details>"
+            ),
+            color: $color,
+            mrkdwn_in: ["text"]
+          }]}' > payload.json
+    - name: Send Slack notification
+      env:
+        WEBHOOK: ${{ secrets.WINDOWS_SLACK_WEBHOOK_URL }}
+      if: env.WEBHOOK != '' && github.event_name == 'pull_request' && needs.windows.result != 'cancelled'
+      continue-on-error: true
+      uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+      with:
+        webhook: ${{ env.WEBHOOK }}
+        webhook-type: incoming-webhook
+        payload-file-path: payload.json
 
   merge_blocker:
     if: always()
