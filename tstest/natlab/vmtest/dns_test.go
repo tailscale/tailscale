@@ -584,3 +584,77 @@ func assertResolverState(t *testing.T, env *vmtest.Env, n *vmtest.Node, want, no
 		t.Fatalf("%v\nwant all of %q and none of %q in resolver state:\n%s", err, want, notWant, last)
 	}
 }
+
+// TestBareNameNotHijackedByPeer checks that a bare, unqualified name owned by
+// the tailnet's global nameserver still reaches that nameserver when a tailnet
+// device shares the name. With MagicDNS off only suffixed names should be
+// answered locally, but quad-100 answered the bare name itself. Issue 20789.
+//
+// The lookup uses "tailscale dns query", which asks for exactly the name given:
+// getent would let a search domain complete it and pass on a different name.
+func TestBareNameNotHijackedByPeer(t *testing.T) {
+	// Only vnet's second DNS server answers this name, so an answer proves the
+	// query was forwarded. Its address is outside the 100.64.x.y block
+	// testcontrol assigns nodes, so it can't be mistaken for a Tailscale IP.
+	const (
+		upstreamName = vnet.SplitDNSBareName
+		upstreamIP   = vnet.SplitDNSBareAddr
+	)
+
+	env := vmtest.New(t,
+		vmtest.SameTailnetUser(), // so the colliding peer is visible in the netmap
+		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
+			// No Proxied: MagicDNS off. No Domains: nothing can complete a bare
+			// name into something else. Resolvers is the tailnet's global
+			// nameserver, which owns upstreamName.
+			Resolvers: []*dnstype.Resolver{{Addr: vnet.FakeSplitDNSIPv4().String()}},
+		}))
+
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	client := env.AddNode("client", lan, vmtest.OS(vmtest.Ubuntu2404))
+	// The collision is the whole test: this node's MagicDNS name matches the
+	// upstream record. Nothing runs on it.
+	peer := env.AddNode(upstreamName, lan, vmtest.OS(vmtest.Ubuntu2404))
+
+	env.Start()
+
+	// A mangled or renamed peer would make the lookup below pass without
+	// exercising the collision at all.
+	peerSt := env.Status(peer)
+	if want := upstreamName + ".tailnet.test"; strings.TrimSuffix(peerSt.Self.DNSName, ".") != want {
+		t.Fatalf("peer DNSName = %q, want %q", peerSt.Self.DNSName, want)
+	}
+	// What a hijacked answer would look like, so the check below can name it.
+	var peerIP string // IPv4: the query below asks for an A record
+	for _, a := range peerSt.Self.TailscaleIPs {
+		if a.Is4() {
+			peerIP = a.String()
+			break
+		}
+	}
+	if peerIP == "" {
+		t.Fatalf("peer has no IPv4 TailscaleIP in status (got %v)", peerSt.Self.TailscaleIPs)
+	}
+
+	// Retried because tailscaled applies the DNS config asynchronously after
+	// coming up.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := env.SSHExec(client, "tailscale dns query "+upstreamName)
+		if err != nil {
+			return fmt.Errorf("tailscale dns query %s: %v (%s)", upstreamName, err, strings.TrimSpace(out))
+		}
+		// Checked first: the failure is a well-formed A record for the wrong
+		// address, which "missing upstreamIP" alone wouldn't convey.
+		if strings.Contains(out, peerIP) {
+			return fmt.Errorf("query for %s was answered with the peer's Tailscale IP %s, "+
+				"want it forwarded to the global nameserver:\n%s", upstreamName, peerIP, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, upstreamIP) {
+			return fmt.Errorf("query for %s = %q, want it to contain %s", upstreamName, strings.TrimSpace(out), upstreamIP)
+		}
+		return nil
+	}); err != nil {
+		out, _ := env.SSHExec(client, "resolvectl status; cat /etc/resolv.conf")
+		t.Fatalf("%v\nclient resolver state:\n%s", err, out)
+	}
+}
