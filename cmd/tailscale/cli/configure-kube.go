@@ -56,7 +56,14 @@ func kubeconfigPath() string {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
 		var out string
 		for _, out = range filepath.SplitList(kubeconfig) {
-			if info, err := os.Stat(out); !os.IsNotExist(err) && !info.IsDir() {
+			info, err := os.Stat(out)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					break
+				}
+				continue
+			}
+			if !info.IsDir() {
 				break
 			}
 		}

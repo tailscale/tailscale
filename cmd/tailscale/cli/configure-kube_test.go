@@ -304,10 +304,18 @@ func TestCheckKubeconfigWritable(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("directory mode permissions are not enforced the same way on Windows")
 		}
-		if os.Getuid() == 0 {
-			t.Skip("root bypasses directory permission checks")
-		}
 		dir := t.TempDir()
+		loop := filepath.Join(dir, "loop")
+		if err := os.Symlink(filepath.Base(loop), loop); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("KUBECONFIG", loop)
+		if got := kubeconfigPath(); got != loop {
+			t.Errorf("kubeconfigPath() = %q, want %q", got, loop)
+		}
+		if os.Getuid() == 0 {
+			return // root bypasses the remaining file permission check
+		}
 		sub := filepath.Join(dir, "ro")
 		if err := os.Mkdir(sub, 0500); err != nil {
 			t.Fatal(err)
