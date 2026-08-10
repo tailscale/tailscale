@@ -2621,6 +2621,20 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("max_port_does_not_wrap", func(t *testing.T) {
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		e := &serveEnv{lc: lc, allServices: true, testStdout: &bytes.Buffer{}, testStderr: &bytes.Buffer{}}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","services":{"svc:foo":{"endpoints":{"tcp:65535":"http://localhost:8080"}}}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatal(err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[65535] == nil || !svc.TCP[65535].HTTP {
+			t.Errorf("svc:foo TCP/65535 HTTP not applied; got %+v", lc.config.Services)
+		}
+	})
+
 	t.Run("new_format_single_service_no_warning", func(t *testing.T) {
 		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
 		var stdout, stderr bytes.Buffer
