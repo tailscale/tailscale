@@ -569,6 +569,11 @@ func TestNodeBackendRouteManagerExtras(t *testing.T) {
 // lookups must serve from the node indexes and stay correct across
 // netmap deltas without any full Hosts map rebuild.
 func TestNodeBackendMagicDNSHosts(t *testing.T) {
+	t.Run("MagicDNS-enabled", func(t *testing.T) { testNodeBackendMagicDNSHosts(t, true) })
+	t.Run("MagicDNS-disabled", func(t *testing.T) { testNodeBackendMagicDNSHosts(t, false) })
+}
+
+func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	self := &tailcfg.Node{
@@ -589,6 +594,7 @@ func TestNodeBackendMagicDNSHosts(t *testing.T) {
 	nb.SetNetMap(&netmap.NetworkMap{
 		SelfNode: self.View(),
 		Peers:    []tailcfg.NodeView{p1.View()},
+		DNS:      tailcfg.DNSConfig{Proxied: magicDNSEnabled},
 	})
 
 	wantHost := func(fqdn dnsname.FQDN, want ...netip.Addr) {
@@ -610,6 +616,14 @@ func TestNodeBackendMagicDNSHosts(t *testing.T) {
 	wantHost("p1.example.ts.net.", netip.MustParseAddr("100.64.0.2"))
 	wantHost("self.example.ts.net.", netip.MustParseAddr("100.64.0.1"))
 	wantHost("unknown.example.ts.net.")
+
+	// Short names are only resolved if MagicDNS is enabled.
+	// Otherwise, the resolver should not serve any short names.
+	var shortNameAddr []netip.Addr
+	if magicDNSEnabled {
+		shortNameAddr = []netip.Addr{netip.MustParseAddr("100.64.0.2")}
+	}
+	wantHost("p1.", shortNameAddr...)
 
 	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); !ok || fqdn != "p1.example.ts.net." {
 		t.Errorf("magicDNSPTR(100.64.0.2) = %q, %v; want p1's name", fqdn, ok)

@@ -81,6 +81,8 @@ func (b *LocalBackend) resolveMagicDNS(hostname, network string) (_ netip.Addr, 
 // pushing a Hosts map of every node into it on every netmap change.
 // It is installed once at LocalBackend construction; going through
 // currentNode makes profile switches take effect immediately.
+// Short names ("foo") are only resolved if MagicDNS is enabled
+// for the current tailnet.
 type magicDNSHosts struct{ b *LocalBackend }
 
 func (m magicDNSHosts) LookupHost(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {
