@@ -953,6 +953,10 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 				if err != nil {
 					return fmt.Errorf("service %q: %w", name, err)
 				}
+				// Prevent wrapping a maximal uint16 port back to zero.
+				if port == ppr.Ports.Last {
+					break
+				}
 			}
 		}
 		if v, set := details.Advertised.Get(); !set || v {
