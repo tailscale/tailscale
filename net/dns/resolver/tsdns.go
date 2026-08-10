@@ -264,6 +264,9 @@ type Resolver struct {
 // methods are called on the DNS query serving path. Name lookups are
 // case-insensitive: the resolver passes lowercase names, but
 // implementations must not rely on that.
+//
+// Short names ("foo") are only resolved if MagicDNS is enabled
+// for the current tailnet.
 type MagicDNSHosts interface {
 	// LookupHost returns the IPs to answer for the node with the
 	// given MagicDNS FQDN, and whether the name is known. It returns
