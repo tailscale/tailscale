@@ -5,6 +5,7 @@ package traffic_test
 
 import (
 	"maps"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -165,11 +166,23 @@ func FuzzSortNodes(f *testing.F) {
 
 		wantScore := traffic.Score(rnd.IntN(2000))
 
-		// Create a reasonably large tailnet, between 20 and 40 nodes.
+		// Create a reasonably large tailnet.
 		// If the number of nodes is too small, the chances of one node
 		// getting ranked best becomes non-trivial.
-		nodes := make([]tailcfg.NodeView, rnd.IntN(20)+20)
-		for i := range len(nodes) {
+		clients := make([]tailcfg.NodeView, 10_000)
+		for i := range len(clients) {
+			n := tailcfg.Node{
+				ID: tailcfg.NodeID(rnd.Int64()),
+			}
+			clients[i] = n.View()
+		}
+		t.Logf("client node ids: %v", nodeIDs(clients))
+
+		// Smaller number of candidates, crossing some power of
+		// two boundaries to ensure most-significant-bits don't skew
+		// the hash output distribution.
+		candidates := make([]tailcfg.NodeView, rnd.IntN(16)+1)
+		for i := range len(candidates) {
 			n := tailcfg.Node{
 				ID: tailcfg.NodeID(rnd.Int64()),
 				Hostinfo: (&tailcfg.Hostinfo{
@@ -178,35 +191,41 @@ func FuzzSortNodes(f *testing.F) {
 					},
 				}).View(),
 			}
-			nodes[i] = n.View()
+			candidates[i] = n.View()
 		}
-		t.Logf("node ids: %v", nodeIDs(nodes))
 
 		// All scores should be the same.
-		ss := traffic.ScoresFor(nodes[0].ID(), nodes)
-		for _, n := range nodes {
+		ss := traffic.ScoresFor(clients[0].ID(), candidates)
+		for _, n := range candidates {
 			s := ss.Score(n)
 			if s != wantScore {
 				t.Errorf("%s: score %d, want %d", n.ID(), s, wantScore)
 			}
 		}
 
-		// Sort nodes from the point-of-view of each node and ensure that
-		// every node is equally represented by ensuring one node isn’t
-		// sorted highest too often.
-		best := make(map[tailcfg.NodeID][]tailcfg.NodeID, len(nodes))
-		for i := range len(nodes) {
-			peers := slices.Clone(nodes)
-			selfID := peers[i].ID()
+		// Map each candidate to the clients that it was the best candidate for, i.e.,
+		//   candidate 1 -> [client 1, client 17, ...]
+		//   candidate 2 -> [client 3, client 14, ...]
+		//   ...
+		best := make(map[tailcfg.NodeID][]tailcfg.NodeID, len(candidates))
+		for i := range len(clients) {
+			peers := slices.Clone(candidates)
+			selfID := clients[i].ID()
 			ss := traffic.ScoresFor(selfID, peers)
 			ss.SortNodes(peers)
 			t.Logf("self %s, sorted %v", selfID, nodeIDs(peers))
 			bestID := peers[0].ID()
 			best[bestID] = append(best[bestID], selfID)
 		}
-		for nid, selfIDs := range best {
-			if count := len(selfIDs); count > len(nodes)/2 {
-				t.Errorf("%s is best too frequently: %d", nid, selfIDs)
+
+		// 20% margin off perfect fairness
+		fair := float64(len(clients)) / float64(len(candidates))
+		lo, hi := math.Floor(fair*0.8), math.Ceil(fair*1.2)
+
+		for candidateID, clientIDs := range best {
+			if count := len(clientIDs); float64(count) < lo || float64(count) > hi {
+				t.Logf("total clients %d; total candidates %d; fair %f", len(clients), len(candidates), fair)
+				t.Errorf("%s is best too frequently (%d): %d", candidateID, count, clientIDs)
 				t.Fatalf("best map: %v", best)
 			}
 		}
