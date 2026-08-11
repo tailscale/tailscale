@@ -42,15 +42,23 @@ const (
 	SplitDNSDomain = "split-dns.example"
 	SplitDNSName   = "internal." + SplitDNSDomain
 	SplitDNSAddr   = "10.99.1.1"
+
+	// SplitDNSBareName is a single label, for tests that need an
+	// upstream-only answer for a name no search domain has completed. Being
+	// outside SplitDNSDomain, it is reached by a resolver pointed at
+	// [FakeSplitDNSIPv4], not by a route for that domain.
+	SplitDNSBareName = "bare-upstream-only"
+	SplitDNSBareAddr = "10.99.1.2"
 )
 
 // splitDNSZone holds the names served only by fakeSplitDNS.
 var splitDNSZone = map[string]netip.Addr{
-	SplitDNSName: netip.MustParseAddr(SplitDNSAddr),
+	SplitDNSName:     netip.MustParseAddr(SplitDNSAddr),
+	SplitDNSBareName: netip.MustParseAddr(SplitDNSBareAddr),
 }
 
 // FakeSplitDNSIPv4 returns the IPv4 address of the secondary (split-DNS) fake
-// DNS server. It answers only [SplitDNSName], with [SplitDNSAddr].
+// DNS server. It answers only [SplitDNSName] and [SplitDNSBareName].
 func FakeSplitDNSIPv4() netip.Addr { return fakeSplitDNS.v4 }
 
 // FakeSplitDNSIPv6 returns the IPv6 address of the secondary (split-DNS) fake

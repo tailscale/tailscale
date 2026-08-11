@@ -97,6 +97,16 @@ func TestPacketSideEffects(t *testing.T) {
 					),
 				},
 				{
+					// Single labels too: the parser produces them with no dots
+					// at all, so they key the zone map like any other name.
+					name: "split-dns-answers-bare-name",
+					pkt:  mkDNSReqTo(FakeSplitDNSIPv4(), SplitDNSBareName),
+					check: all(
+						numPkts(1),
+						pktSubstr("IP="+SplitDNSBareAddr),
+					),
+				},
+				{
 					// The default DNS server must NOT answer the split zone;
 					// that's what makes the answer above meaningful.
 					name: "default-dns-does-not-answer-split-zone",
