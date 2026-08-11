@@ -222,7 +222,12 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	if err != nil {
 		return nil, fmt.Errorf("error determining num headers: %v", err)
 	}
-	h := make(http.Header, numHeaders)
+	// numHeaders is attacker controlled, so it must not be used to pre-size the
+	// map: a small frame can declare ~4 billion headers and make Go reserve
+	// gigabytes of bucket storage before a single header is read. The map grows
+	// itself fine, and the io.LimitReader above bounds how many we can actually
+	// read.
+	h := make(http.Header)
 	for range numHeaders {
 		name, err := readLenBytes()
 		if err != nil {
