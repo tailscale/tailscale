@@ -29,7 +29,10 @@ import (
 //     have plumbed MagicDNS routes and search domains into
 //     systemd-resolved.
 //   - A peer added by control resolves by FQDN and by short name,
-//     and its IP reverse-resolves (PTR) to its name.
+//     and its IP reverse-resolves (PTR) to its name. The short name
+//     resolves both via a search domain and asked of quad-100
+//     verbatim, which is the half [TestBareNameNotHijackedByPeer]
+//     requires to stay off when MagicDNS is disabled.
 //   - A peer renamed by control resolves under its new name only:
 //     the old name must stop resolving, and PTR must track the new
 //     name. When a node is renamed in the admin console, the control
@@ -91,6 +94,11 @@ func TestMagicDNS(t *testing.T) {
 	dt.wantResolves("renamee.tailnet.test", "100.64.7.7")
 	dt.wantResolves("renamee", "100.64.7.7") // via search domain
 	dt.wantResolves("100.64.7.7", "renamee.tailnet.test")
+	// Also as a single label, which the search domain above hides:
+	// getent passes "renamee.tailnet.test" to quad-100, not "renamee".
+	// This is the enabled-MagicDNS counterpart of
+	// [TestBareNameNotHijackedByPeer].
+	dt.wantQueryResolves("renamee", "100.64.7.7")
 
 	// Rename the peer, sending the same delta shape production
 	// control sends: the full node again with only the Name changed.
@@ -116,9 +124,9 @@ func TestMagicDNS(t *testing.T) {
 	dt.wantNXDOMAIN("renamed.tailnet.test")
 }
 
-// dnsTester asserts DNS state in a guest via libc lookups (getent),
-// retrying for a bit because tailscaled applies netmap and DNS config
-// changes asynchronously.
+// dnsTester asserts DNS state in a guest, retrying for a bit because
+// tailscaled applies netmap and DNS config changes asynchronously.
+// Lookups go through libc (getent) unless noted.
 type dnsTester struct {
 	t    *testing.T
 	env  *vmtest.Env
@@ -140,6 +148,27 @@ func (dt *dnsTester) wantResolves(name, want string) {
 		}
 		if !strings.Contains(out, want) {
 			return fmt.Errorf("getent hosts %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
+		}
+		return nil
+	}); err != nil {
+		out, _ := dt.env.SSHExec(dt.node, "resolvectl status; cat /etc/resolv.conf")
+		dt.t.Fatalf("%v\nresolver state:\n%s", err, out)
+	}
+}
+
+// wantQueryResolves is [dnsTester.wantResolves] via "tailscale dns
+// query", which asks quad-100 for exactly the name given. Use it when
+// the name must stay unqualified: getent would let a search domain
+// complete it and resolve a different name.
+func (dt *dnsTester) wantQueryResolves(name, want string) {
+	dt.t.Helper()
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := dt.env.SSHExec(dt.node, "tailscale dns query "+name)
+		if err != nil {
+			return fmt.Errorf("tailscale dns query %s: %v (%s)", name, err, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, want) {
+			return fmt.Errorf("tailscale dns query %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
 		}
 		return nil
 	}); err != nil {
