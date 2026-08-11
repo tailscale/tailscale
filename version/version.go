@@ -67,8 +67,10 @@ var long lazy.SyncValue[string]
 //     builds by Tailscale (these are not distributed).
 //   - "x.y.z-changecount-commithash" for untagged release branch builds
 //     built with build_dist.sh
-//   - "x.y.z-devYYYYMMDD-commithash{,-dirty}" for builds made with plain "go
-//     build" or "go install"
+//   - "x.y.z-devYYYYMMDD-tcommithash{,-dirty}" for builds of tailscale.com
+//     made with plain "go build" or "go install", or
+//     "x.y.z-devYYYYMMDD-gcommithash{,-dirty}" for such builds of a repo
+//     that imports tailscale.com
 //   - "x.y.z-ERR-BuildInfo" for builds made by plain "go run"
 func Long() string {
 	return long.Get(func() string {
@@ -79,7 +81,16 @@ func Long() string {
 		if !bi.valid {
 			return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
 		}
-		return fmt.Sprintf("%s-dev%s-t%s%s", strings.TrimSpace(tailscaleroot.VersionDotTxt), bi.commitDate, bi.commitAbbrev(), dirtyString())
+		// The Go tool's embedded VCS info describes the main module's
+		// repo. By convention (matching mkversion's stamped versions),
+		// "t" always prefixes a tailscale.com commit and "g" a commit of
+		// some other repo that imports tailscale.com, such as Tailscale's
+		// proprietary repo.
+		hashPrefix := "t"
+		if bi.mainModule != "tailscale.com" {
+			hashPrefix = "g"
+		}
+		return fmt.Sprintf("%s-dev%s-%s%s%s", strings.TrimSpace(tailscaleroot.VersionDotTxt), bi.commitDate, hashPrefix, bi.commitAbbrev(), dirtyString())
 	})
 }
 
@@ -105,6 +116,7 @@ func Short() string {
 
 type embeddedInfo struct {
 	valid      bool
+	mainModule string // module path of the main module, e.g. "tailscale.com"
 	commit     string
 	commitDate string
 	commitTime string
@@ -123,7 +135,7 @@ var getEmbeddedInfo = sync.OnceValue(func() embeddedInfo {
 	if !ok {
 		return embeddedInfo{}
 	}
-	ret := embeddedInfo{valid: true}
+	ret := embeddedInfo{valid: true, mainModule: bi.Main.Path}
 	for _, s := range bi.Settings {
 		switch s.Key {
 		case "vcs.revision":
