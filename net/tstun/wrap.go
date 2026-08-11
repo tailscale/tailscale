@@ -25,6 +25,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/batching"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
 	"tailscale.com/net/routemanager"
@@ -1487,7 +1488,7 @@ func (t *Wrapper) BatchSize() int {
 		// Linux, and we cannot make a determination on gVisor usage at
 		// wireguard-go.Device startup, which is when this value matters for
 		// packet memory init.
-		return conn.IdealBatchSize
+		return batching.BatchSizeFromEnv(conn.IdealBatchSize)
 	}
 	return t.tdev.BatchSize()
 }

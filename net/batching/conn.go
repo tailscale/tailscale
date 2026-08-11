@@ -9,9 +9,26 @@ import (
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/envknob"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/nettype"
 )
+
+// BatchSizeFromEnv returns ideal, unless the TS_DEBUG_WG_BATCH_SIZE
+// environment variable is set to a positive integer, in which case it returns
+// that value clamped to [1, ideal].
+//
+// Batch size determines how much packet memory wireguard-go pins per reader
+// goroutine (batch size × 64 KiB message buffers per reader, ~32 MiB total at
+// the Linux default of 128), so memory-budget tests set the env var to 1 to
+// approximate the configuration used on memory-constrained (mobile)
+// platforms, where batch size is always 1.
+func BatchSizeFromEnv(ideal int) int {
+	if v, ok := envknob.LookupInt("TS_DEBUG_WG_BATCH_SIZE"); ok && v > 0 {
+		return min(v, ideal)
+	}
+	return ideal
+}
 
 var (
 	// This acts as a compile-time check for our usage of ipv6.Message in
