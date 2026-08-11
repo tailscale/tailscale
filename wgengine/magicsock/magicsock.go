@@ -3473,7 +3473,7 @@ func (c *connBind) BatchSize() int {
 	// TODO(raggi): determine by properties rather than hardcoding platform behavior
 	switch runtime.GOOS {
 	case "linux":
-		return conn.IdealBatchSize
+		return batching.BatchSizeFromEnv(conn.IdealBatchSize)
 	default:
 		return 1
 	}
