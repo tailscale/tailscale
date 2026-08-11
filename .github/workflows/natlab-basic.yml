@@ -23,6 +23,26 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Go caches, keyed the same as natlab-test.yml's. Only that workflow's
+      # prepare job writes the build cache. A miss here just means a cold build.
+      - name: Cache tsgo toolchain
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
+        with:
+          path: ~/.cache/tsgo
+          key: natlab-tsgo-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+      - name: Cache Go modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # zizmor: ignore[cache-poisoning] v5.0.4
+        with:
+          path: ~/go/pkg/mod
+          key: natlab-gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+      - name: Restore Go build cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            natlab-gobuild-${{ runner.os }}-
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
