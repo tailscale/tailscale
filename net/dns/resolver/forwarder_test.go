@@ -1235,6 +1235,41 @@ func TestForwarderRcodeNoTCPRetry(t *testing.T) {
 	}
 }
 
+// TestForwarderRaceLoserNoReadError checks that the losing resolver in a race
+// isn't recorded as an upstream read failure. It loses because the query ended,
+// and what ends the query also closes its socket out from under its blocked
+// read, so without care dns_query_fwd_udp_error_read counts our own teardown and
+// reads like an upstream problem in a metrics dump.
+func TestForwarderRaceLoserNoReadError(t *testing.T) {
+	const domain = "race-loser.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	answering := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+	// Bound on both transports but answering on neither, so its sendUDP is still
+	// blocked in the read when the other resolver's answer ends the query.
+	silent := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		answer, func(isTCP bool, gotRequest []byte) {})
+
+	const queries = 20
+	before := metricDNSFwdUDPErrorRead.Value()
+	for range queries {
+		resp, err := runTestQuery(t, request, nil, answering, silent)
+		if err != nil {
+			t.Fatalf("runTestQuery: %v", err)
+		}
+		if !bytes.Equal(resp, answer) {
+			t.Fatalf("invalid response\ngot: %+v\nwant: %+v", resp, answer)
+		}
+	}
+	// The losers wake up after their query has returned, so give them a moment
+	// to record whatever they're going to record.
+	time.Sleep(500 * time.Millisecond)
+	if got := metricDNSFwdUDPErrorRead.Value() - before; got != 0 {
+		t.Errorf("dns_query_fwd_udp_error_read advanced by %d over %d queries; want 0", got, queries)
+	}
+}
+
 // TestForwarderRcodeWithHungTCP checks the shape that made every forwarded query
 // slow: the upstream refuses over UDP and accepts TCP without ever answering. The
 // client must still get the REFUSED, promptly.

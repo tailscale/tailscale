@@ -1317,7 +1317,15 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		src:            query.addr,
 		closeOnCtxDone: new(closePool),
 	}
-	defer fq.closeOnCtxDone.Close()
+	defer func() {
+		// Cancel before closing, not the other way around: closing is what wakes
+		// a resolver still blocked reading its socket, and it wakes with
+		// net.ErrClosed. It recognizes that as the query ending, rather than as
+		// an upstream read failure worth counting, only by finding ctx already
+		// done. (Deferred cancel alone wouldn't do it: defers run LIFO.)
+		cancel()
+		fq.closeOnCtxDone.Close()
+	}()
 
 	if f.verboseFwd {
 		domainSha256 := sha256.Sum256([]byte(domain))
