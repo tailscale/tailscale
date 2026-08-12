@@ -881,6 +881,121 @@ func TestGetCertPEMWithValidityTrimsTrailingDot(t *testing.T) {
 	}
 }
 
+// TestAsyncRenewalDedup checks that only one async renewal for a domain
+// is allowed at a time; multiple calls to renew the same domain should
+// be de-duplicated.
+func TestAsyncRenewalDedup(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const domain = "example.com"
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS: tailcfg.DNSConfig{
+			CertDomains: []string{domain},
+		},
+	})
+
+	certDirPath, err := certDir(b)
+	if err != nil {
+		t.Fatalf("certDir error: %v", err)
+	}
+	if _, err := e.getCertStore(b); err != nil {
+		t.Fatalf("getCertStore error: %v", err)
+	}
+	testRoot, err := certTestFS.ReadFile("testdata/rootCA.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(testRoot) {
+		t.Fatal("Unable to add test CA to the cert pool")
+	}
+	testX509Roots = roots
+	defer func() { testX509Roots = nil }()
+
+	// Store a valid, cached cert under a time at which it is due for
+	// renewal (the same epoch as TestGetCertPEMWithValidity's
+	// "renewal_needed" case).
+	os.MkdirAll(certDirPath, 0755)
+	if err := os.WriteFile(filepath.Join(certDirPath, "example.com.crt"),
+		must.Get(certTestFS.ReadFile("testdata/example.com.pem")), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(certDirPath, "example.com.key"),
+		must.Get(certTestFS.ReadFile("testdata/example.com-key.pem")), 0644); err != nil {
+		t.Fatal(err)
+	}
+	b.ForTest().SetClock(tstest.NewClock(tstest.ClockOpts{
+		Start: time.Date(2025, time.May, 1, 0, 0, 0, 0, time.UTC),
+	}))
+
+	// Keep the first async renewal in flight so we can observe a second
+	// trigger that should be deduplicated.
+	renewalStarted := make(chan struct{}, 1)
+	renewalComplete := make(chan struct{})
+	var completeRenewalOnce sync.Once
+	completeFirstRenewal := func() { completeRenewalOnce.Do(func() { close(renewalComplete) }) }
+	defer completeFirstRenewal()
+	orig := getCertPEM
+	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+		t.Logf("calling getCertPEM")
+		renewalStarted <- struct{}{}
+		<-renewalComplete
+		return nil, nil
+	}
+	t.Cleanup(func() { getCertPEM = orig })
+
+	// First trigger starts the async renewal.
+	prevGo := e.goroutinesStarted.Load()
+	pair, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
+	if err != nil {
+		t.Fatalf("first GetCertPEMWithValidity error: %v", err)
+	}
+	if pair == nil || !pair.Cached {
+		t.Fatalf("first GetCertPEMWithValidity = %+v, want cached cert", pair)
+	}
+	if got := e.goroutinesStarted.Load() - prevGo; got != 1 {
+		t.Fatalf("first call spawned %d goroutine(s), want 1 (async renewal started)", got)
+	}
+	select {
+	case <-renewalStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for async renewal to enter getCertPEM")
+	}
+
+	// A second trigger while the renewal is still in flight must be
+	// deduplicated: no new goroutine.
+	prevGo = e.goroutinesStarted.Load()
+	pair2, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
+	if err != nil {
+		t.Fatalf("second GetCertPEMWithValidity error: %v", err)
+	}
+	if pair2 == nil || !pair2.Cached {
+		t.Fatalf("second GetCertPEMWithValidity = %+v, want cached cert", pair2)
+	}
+	if got := e.goroutinesStarted.Load() - prevGo; got != 0 {
+		t.Fatalf("second call spawned %d goroutine(s), want 0 (deduplicated while renewal in flight)", got)
+	}
+
+	// Let the in-flight renewal finish and verify the marker is cleared so
+	// a later renewal can be attempted again.
+	completeFirstRenewal()
+	done := make(chan struct{})
+	go func() { e.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for in-flight async renewal goroutine to finish")
+	}
+	if e.renewingCertDomains.Contains(domain) {
+		t.Fatal("renewingCertDomains still contains domain after renewal finished")
+	}
+}
+
 func TestCertPendingWarnable(t *testing.T) {
 	b := ipnlocaltest.NewBackend(t)
 	e := extOf(t, b)
