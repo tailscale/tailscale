@@ -277,6 +277,7 @@ func (c *Cache) UpdatePeers(ctx context.Context, update []tailcfg.NodeView, remo
 			errs = append(errs, err)
 		}
 		c.wantKeys.Delete(key)
+		delete(c.lastWrote, key)
 	}
 	return errors.Join(errs...)
 }

@@ -355,6 +355,21 @@ func TestUpdatePeers(t *testing.T) {
 	if diff := diffNetMaps(got, &updated); diff != "" {
 		t.Fatalf("Updated map differs (-got, +want):\n%s", diff)
 	}
+
+	// If we re-apply a previously-removed change, it should be persisted.
+	// See tailscale/tailscale#20795.
+	if err := c.UpdatePeers(t.Context(), []tailcfg.NodeView{testNode2}, nil); err != nil {
+		t.Errorf("UpdatePeers restoring an old peer: %v", err)
+	}
+
+	got2, err := c.Load(t.Context())
+	if err != nil {
+		t.Fatalf("Load netmap failed: %v", err)
+	}
+	updated.Peers = []tailcfg.NodeView{modNode1, testNode2, newNode3} // N.B. sorted
+	if diff := diffNetMaps(got2, &updated); diff != "" {
+		t.Fatalf("Updated map differs (-got, +want):\n%s", diff)
+	}
 }
 
 // skippedMapFields are the names of fields that should not be considered by
