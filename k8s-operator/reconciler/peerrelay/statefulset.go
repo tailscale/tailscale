@@ -33,7 +33,7 @@ func peerRelayHostname(pr *tsapi.PeerRelay, idx int32) string {
 	return fmt.Sprintf("%s-%d", prefix, idx)
 }
 
-func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint, authKey *string, loginServer string) ipn.ConfigVAlpha {
+func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoints []tsapi.PeerRelayEndpoint, authKey *string, loginServer string) ipn.ConfigVAlpha {
 	conf := ipn.ConfigVAlpha{
 		Version:         "alpha0",
 		AcceptDNS:       "false",
@@ -48,24 +48,25 @@ func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.P
 		conf.ServerURL = &loginServer
 	}
 
-	if endpoint != nil {
-		if addr, err := netip.ParseAddr(endpoint.Address); err == nil {
-			conf.RelayServerStaticEndpoints = []netip.AddrPort{
-				netip.AddrPortFrom(addr, uint16(endpoint.Port)),
-			}
+	for _, endpoint := range endpoints {
+		addr, err := netip.ParseAddr(endpoint.Address)
+		if err != nil {
+			continue
 		}
+
+		conf.RelayServerStaticEndpoints = append(conf.RelayServerStaticEndpoints, netip.AddrPortFrom(addr, uint16(endpoint.Port)))
 	}
 
 	return conf
 }
 
-func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint, authKey *string, loginServer string) (*corev1.Secret, error) {
+func (r *Reconciler) peerRelayConfigSecret(pr *tsapi.PeerRelay, idx int32, endpoints []tsapi.PeerRelayEndpoint, authKey *string, loginServer string) (*corev1.Secret, error) {
 	labels := peerRelayServiceLabels(pr.Name, idx)
 	return tailscaled.NewConfigSecret(tailscaled.ConfigSecretOptions{
 		Name:      configSecretName(pr.Name, idx),
 		Namespace: r.tailscaleNamespace,
 		Labels:    labels,
-		Config:    peerRelayTailscaledConfig(pr, idx, endpoint, authKey, loginServer),
+		Config:    peerRelayTailscaledConfig(pr, idx, endpoints, authKey, loginServer),
 	})
 }
 
