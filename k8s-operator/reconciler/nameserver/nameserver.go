@@ -3,73 +3,115 @@
 
 //go:build !plan9
 
-package main
+// Package nameserver provides reconciliation logic for the DNSConfig custom resource definition.
+// It is responsible for creating and managing nameserver resources in response to DNSConfig objects.
+package nameserver
 
 import (
 	"context"
 	_ "embed"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
-	"sync"
 
 	"go.uber.org/zap"
-	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/set"
 )
 
 const (
+	reconcilerName = "nameserver-reconciler"
+
 	reasonNameserverCreationFailed  = "NameserverCreationFailed"
 	reasonMultipleDNSConfigsPresent = "MultipleDNSConfigsPresent"
 
-	reasonNameserverCreated = "NameserverCreated"
+	// ReasonNameserverCreated is the condition reason set when nameserver resources have been created successfully.
+	ReasonNameserverCreated = "NameserverCreated"
 
 	messageNameserverCreationFailed  = "Failed creating nameserver resources: %v"
 	messageMultipleDNSConfigsPresent = "Multiple DNSConfig resources found in cluster. Please ensure no more than one is present."
 
 	defaultNameserverImageRepo = "tailscale/k8s-nameserver"
 	defaultNameserverImageTag  = "stable"
+
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
-// NameserverReconciler knows how to create nameserver resources in cluster in
+var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
+
+// ReconcilerOptions contains the options for creating a new Reconciler.
+type ReconcilerOptions struct {
+	Client             client.Client
+	Recorder           record.EventRecorder
+	TailscaleNamespace string
+	Logger             *zap.SugaredLogger
+	Clock              tstime.Clock
+}
+
+// Reconciler knows how to create nameserver resources in cluster in
 // response to users applying DNSConfig.
-type NameserverReconciler struct {
+type Reconciler struct {
 	client.Client
 	logger      *zap.SugaredLogger
 	recorder    record.EventRecorder
 	clock       tstime.Clock
 	tsNamespace string
-
-	mu                 sync.Mutex           // protects following
-	managedNameservers set.Slice[types.UID] // one or none
+	tracker     *reconciler.ResourceTracker
 }
 
-var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
+// NewReconciler creates a new Reconciler.
+func NewReconciler(options ReconcilerOptions) *Reconciler {
+	clock := options.Clock
+	if clock == nil {
+		clock = tstime.DefaultClock{}
+	}
+	return &Reconciler{
+		Client:      options.Client,
+		recorder:    options.Recorder,
+		tsNamespace: options.TailscaleNamespace,
+		logger:      options.Logger.Named(reconcilerName),
+		clock:       clock,
+		tracker:     reconciler.NewResourceTracker(gaugeNameserverResources),
+	}
+}
 
-func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	logger := a.logger.With("dnsConfig", req.Name)
+// Register registers the nameserver reconciler with the controller manager.
+func (r *Reconciler) Register(mgr manager.Manager) error {
+	nameserverFilter := handler.EnqueueRequestsFromMapFunc(reconciler.EnqueueForChild("nameserver"))
+	return builder.ControllerManagedBy(mgr).
+		For(&tsapi.DNSConfig{}).
+		Named(reconcilerName).
+		Watches(&appsv1.Deployment{}, nameserverFilter).
+		Watches(&corev1.ConfigMap{}, nameserverFilter).
+		Watches(&corev1.Service{}, nameserverFilter).
+		Watches(&corev1.ServiceAccount{}, nameserverFilter).
+		Complete(r)
+}
+
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+	logger := r.logger.With("dnsConfig", req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
 	var dnsCfg tsapi.DNSConfig
-	err = a.Get(ctx, req.NamespacedName, &dnsCfg)
+	err = r.Get(ctx, req.NamespacedName, &dnsCfg)
 	if apierrors.IsNotFound(err) {
 		// Request object not found, could have been deleted after reconcile request.
 		logger.Debugf("dnsconfig not found, assuming it was deleted")
@@ -78,18 +120,12 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("failed to get dnsconfig: %w", err)
 	}
 	if !dnsCfg.DeletionTimestamp.IsZero() {
-		ix := xslices.Index(dnsCfg.Finalizers, FinalizerName)
-		if ix < 0 {
-			logger.Debugf("no finalizer, nothing to do")
-			return reconcile.Result{}, nil
-		}
 		logger.Info("Cleaning up DNSConfig resources")
-		if err := a.maybeCleanup(&dnsCfg); err != nil {
+		if err := r.maybeCleanup(&dnsCfg); err != nil {
 			logger.Errorf("error cleaning up reconciler resource: %v", err)
 			return res, err
 		}
-		dnsCfg.Finalizers = append(dnsCfg.Finalizers[:ix], dnsCfg.Finalizers[ix+1:]...)
-		if err := a.Update(ctx, &dnsCfg); err != nil {
+		if err := reconciler.ClearFinalizer(ctx, r.Client, &dnsCfg, reconciler.Finalizer); err != nil {
 			logger.Errorf("error removing finalizer: %v", err)
 			return reconcile.Result{}, err
 		}
@@ -99,36 +135,32 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 	oldCnStatus := dnsCfg.Status.DeepCopy()
 	setStatus := func(dnsCfg *tsapi.DNSConfig, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
-		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, a.clock, logger)
+		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, r.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
-			if updateErr := a.Client.Status().Update(ctx, dnsCfg); updateErr != nil {
+			if updateErr := r.Client.Status().Update(ctx, dnsCfg); updateErr != nil {
 				err = errors.Join(err, updateErr)
 			}
 		}
 		return res, err
 	}
 	var dnsCfgs tsapi.DNSConfigList
-	if err := a.List(ctx, &dnsCfgs); err != nil {
+	if err := r.List(ctx, &dnsCfgs); err != nil {
 		return res, fmt.Errorf("error listing DNSConfigs: %w", err)
 	}
 	if len(dnsCfgs.Items) > 1 { // enforce DNSConfig to be a singleton
 		msg := "invalid cluster configuration: more than one tailscale.com/dnsconfigs found. Please ensure that no more than one is created."
 		logger.Error(msg)
-		a.recorder.Event(&dnsCfg, corev1.EventTypeWarning, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
+		r.recorder.Event(&dnsCfg, corev1.EventTypeWarning, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
 		setStatus(&dnsCfg, metav1.ConditionFalse, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
 	}
 
-	if !slices.Contains(dnsCfg.Finalizers, FinalizerName) {
-		logger.Infof("ensuring nameserver resources")
-		dnsCfg.Finalizers = append(dnsCfg.Finalizers, FinalizerName)
-		if err := a.Update(ctx, &dnsCfg); err != nil {
-			msg := fmt.Sprintf(messageNameserverCreationFailed, err)
-			logger.Error(msg)
-			return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
-		}
+	if err := reconciler.EnsureFinalizer(ctx, r.Client, &dnsCfg, reconciler.Finalizer); err != nil {
+		msg := fmt.Sprintf(messageNameserverCreationFailed, err)
+		logger.Error(msg)
+		return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
 	}
-	if err = a.maybeProvision(ctx, &dnsCfg); err != nil {
+	if err = r.maybeProvision(ctx, &dnsCfg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 			return reconcile.Result{}, nil
@@ -137,39 +169,36 @@ func (a *NameserverReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		}
 	}
 
-	a.mu.Lock()
-	a.managedNameservers.Add(dnsCfg.UID)
-	a.mu.Unlock()
-	gaugeNameserverResources.Set(int64(a.managedNameservers.Len()))
+	r.tracker.Add(dnsCfg.UID)
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: a.tsNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: r.tsNamespace},
 	}
-	if err := a.Client.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
 		return res, fmt.Errorf("error getting Service: %w", err)
 	}
 	if ip := svc.Spec.ClusterIP; ip != "" && ip != "None" {
 		dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
 			IP: ip,
 		}
-		return setStatus(&dnsCfg, metav1.ConditionTrue, reasonNameserverCreated, reasonNameserverCreated)
+		return setStatus(&dnsCfg, metav1.ConditionTrue, ReasonNameserverCreated, ReasonNameserverCreated)
 	}
 	logger.Info("nameserver Service does not have an IP address allocated, waiting...")
 	return reconcile.Result{}, nil
 }
 
 func nameserverResourceLabels(name, namespace string) map[string]string {
-	labels := childResourceLabels(name, namespace, "nameserver")
+	labels := reconciler.Labels("nameserver", name, namespace)
 	labels["app.kubernetes.io/name"] = "tailscale"
 	labels["app.kubernetes.io/component"] = "nameserver"
 	return labels
 }
 
-func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsapi.DNSConfig) error {
-	labels := nameserverResourceLabels(tsDNSCfg.Name, a.tsNamespace)
+func (r *Reconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsapi.DNSConfig) error {
+	labels := nameserverResourceLabels(tsDNSCfg.Name, r.tsNamespace)
 	dCfg := &deployConfig{
 		ownerRefs: []metav1.OwnerReference{*metav1.NewControllerRef(tsDNSCfg, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))},
-		namespace: a.tsNamespace,
+		namespace: r.tsNamespace,
 		labels:    labels,
 		imageRepo: defaultNameserverImageRepo,
 		imageTag:  defaultNameserverImageTag,
@@ -195,22 +224,19 @@ func (a *NameserverReconciler) maybeProvision(ctx context.Context, tsDNSCfg *tsa
 		dCfg.imagePullSecrets = tsDNSCfg.Spec.Nameserver.Pod.ImagePullSecrets
 	}
 
-	for _, deployable := range []deployable{saDeployable, deployDeployable, svcDeployable, cmDeployable} {
-		if err := deployable.updateObj(ctx, dCfg, a.Client); err != nil {
-			return fmt.Errorf("error reconciling %s: %w", deployable.kind, err)
+	for _, d := range []deployable{saDeployable, deployDeployable, svcDeployable, cmDeployable} {
+		if err := d.updateObj(ctx, dCfg, r.Client); err != nil {
+			return fmt.Errorf("error reconciling %s: %w", d.kind, err)
 		}
 	}
 	return nil
 }
 
 // maybeCleanup removes DNSConfig from being tracked. The cluster resources
-// created, will be automatically garbage collected as they are owned by the
+// created will be automatically garbage collected as they are owned by the
 // DNSConfig.
-func (a *NameserverReconciler) maybeCleanup(dnsCfg *tsapi.DNSConfig) error {
-	a.mu.Lock()
-	a.managedNameservers.Remove(dnsCfg.UID)
-	a.mu.Unlock()
-	gaugeNameserverResources.Set(int64(a.managedNameservers.Len()))
+func (r *Reconciler) maybeCleanup(dnsCfg *tsapi.DNSConfig) error {
+	r.tracker.Remove(dnsCfg.UID)
 	return nil
 }
 
@@ -234,13 +260,13 @@ type deployConfig struct {
 }
 
 var (
-	//go:embed deploy/manifests/nameserver/cm.yaml
+	//go:embed manifests/cm.yaml
 	cmYaml []byte
-	//go:embed deploy/manifests/nameserver/deploy.yaml
+	//go:embed manifests/deploy.yaml
 	deployYaml []byte
-	//go:embed deploy/manifests/nameserver/sa.yaml
+	//go:embed manifests/sa.yaml
 	saYaml []byte
-	//go:embed deploy/manifests/nameserver/svc.yaml
+	//go:embed manifests/svc.yaml
 	svcYaml []byte
 
 	deployDeployable = deployable{
@@ -262,7 +288,7 @@ var (
 			updateF := func(oldD *appsv1.Deployment) {
 				oldD.Spec = d.Spec
 			}
-			_, err := createOrUpdate[appsv1.Deployment](ctx, kubeClient, cfg.namespace, d, updateF)
+			_, err := reconciler.CreateOrUpdate[appsv1.Deployment](ctx, kubeClient, cfg.namespace, d, updateF)
 			return err
 		},
 	}
@@ -276,7 +302,7 @@ var (
 			sa.ObjectMeta.Labels = cfg.labels
 			sa.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			sa.ObjectMeta.Namespace = cfg.namespace
-			_, err := createOrUpdate(ctx, kubeClient, cfg.namespace, sa, func(*corev1.ServiceAccount) {})
+			_, err := reconciler.CreateOrUpdate(ctx, kubeClient, cfg.namespace, sa, func(*corev1.ServiceAccount) {})
 			return err
 		},
 	}
@@ -291,7 +317,7 @@ var (
 			svc.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			svc.ObjectMeta.Namespace = cfg.namespace
 			svc.Spec.ClusterIP = cfg.clusterIP
-			_, err := createOrUpdate[corev1.Service](ctx, kubeClient, cfg.namespace, svc, func(*corev1.Service) {})
+			_, err := reconciler.CreateOrUpdate[corev1.Service](ctx, kubeClient, cfg.namespace, svc, func(*corev1.Service) {})
 			return err
 		},
 	}
@@ -305,7 +331,7 @@ var (
 			cm.ObjectMeta.Labels = cfg.labels
 			cm.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			cm.ObjectMeta.Namespace = cfg.namespace
-			_, err := createOrUpdate[corev1.ConfigMap](ctx, kubeClient, cfg.namespace, cm, func(cm *corev1.ConfigMap) {})
+			_, err := reconciler.CreateOrUpdate[corev1.ConfigMap](ctx, kubeClient, cfg.namespace, cm, func(cm *corev1.ConfigMap) {})
 			return err
 		},
 	}
