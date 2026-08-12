@@ -20,6 +20,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"tailscale.com/atomicfile"
 	"tailscale.com/tstime"
+	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
 )
 
@@ -286,14 +287,30 @@ func (c *Mem) PurgeAUMs(hashes []AUMHash) error {
 
 // FS implements filesystem storage of TKA state.
 //
+// FS caches graph metadata derived from its storage directory. Mutations made
+// through this instance invalidate the cache. Graph changes made through
+// another FS or directly to the directory are not reflected in the indexes
+// until they are invalidated or this instance is reopened.
+//
 // FS implements the Chonk interface.
 type FS struct {
 	base string
 	mu   sync.RWMutex
+
+	// aumIndex and parentIndex are initialized together by buildIndexLocked.
+	// They avoid repeatedly scanning every AUM file while walking the authority
+	// graph. AUM contents are still decoded from disk on demand. A nil aumIndex
+	// means the indexes need to be rebuilt.
+	aumIndex    set.Set[AUMHash]
+	parentIndex map[AUMHash][]AUMHash
 }
 
-// ChonkDir returns an implementation of Chonk which uses the
-// given directory to store TKA state.
+// ChonkDir returns an implementation of Chonk which uses the given directory
+// to store TKA state.
+//
+// The returned FS expects exclusive write access to dir for its lifetime.
+// Graph changes made through another FS or directly to dir may not be reflected
+// in queries until the returned FS is reopened.
 func ChonkDir(dir string) (*FS, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil && !os.IsExist(err) {
 		return nil, fmt.Errorf("creating chonk root dir: %v", err)
@@ -354,7 +371,12 @@ func (c *FS) aumDir(h AUMHash) (dir, base string) {
 func (c *FS) AUM(hash AUMHash) (AUM, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.aumLocked(hash)
+}
 
+// aumLocked reads an AUM from disk. The caller must hold c.mu for reading or
+// writing.
+func (c *FS) aumLocked(hash AUMHash) (AUM, error) {
 	info, err := c.get(hash)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -401,20 +423,36 @@ func (c *FS) CommitTime(h AUMHash) (time.Time, error) {
 	return s.ModTime(), nil
 }
 
-// AUM returns any known AUMs with a specific parent hash.
+// ChildAUMs returns any known AUMs with a specific parent hash.
 func (c *FS) ChildAUMs(prevAUMHash AUMHash) ([]AUM, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	if c.aumIndex != nil {
+		defer c.mu.RUnlock()
+		return c.childAUMsFromIndexLocked(prevAUMHash)
+	}
+	c.mu.RUnlock()
 
-	var out []AUM
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.buildIndexLocked(); err != nil {
+		return nil, err
+	}
+	return c.childAUMsFromIndexLocked(prevAUMHash)
+}
 
-	err := c.scanHashes(func(info *fsHashInfo) {
-		if info.AUM != nil && bytes.Equal(info.AUM.PrevAUMHash, prevAUMHash[:]) {
-			out = append(out, *info.AUM)
+// childAUMsFromIndexLocked returns children from the in-memory index. The
+// caller must hold c.mu for reading or writing.
+func (c *FS) childAUMsFromIndexLocked(prevAUMHash AUMHash) ([]AUM, error) {
+	children := c.parentIndex[prevAUMHash]
+	out := make([]AUM, 0, len(children))
+	for i, h := range children {
+		aum, err := c.aumLocked(h)
+		if err != nil {
+			return nil, fmt.Errorf("reading child %d of %x: %w", i, prevAUMHash, err)
 		}
-	})
-
-	return out, err
+		out = append(out, aum)
+	}
+	return out, nil
 }
 
 func (c *FS) get(h AUMHash) (*fsHashInfo, error) {
@@ -442,72 +480,99 @@ func (c *FS) get(h AUMHash) (*fsHashInfo, error) {
 
 // Heads returns AUMs for which there are no children. In other
 // words, the latest AUM in all possible chains (the 'leaves').
-//
-// Heads is expected to be called infrequently compared to AUM() or
-// ChildAUMs(), so we haven't put any work into maintaining an index.
-// Instead, the full set of AUMs is scanned.
 func (c *FS) Heads() ([]AUM, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	if c.aumIndex != nil {
+		defer c.mu.RUnlock()
+		return c.headsFromIndexLocked()
+	}
+	c.mu.RUnlock()
 
-	// Scan the complete list of AUMs, and build a list of all parent hashes.
-	// This tells us which AUMs have children.
-	var parentHashes []AUMHash
-
-	allAUMs, err := c.AllAUMs()
-	if err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.buildIndexLocked(); err != nil {
 		return nil, err
 	}
+	return c.headsFromIndexLocked()
+}
 
-	for _, h := range allAUMs {
-		aum, err := c.AUM(h)
-		if err != nil {
-			return nil, err
-		}
-		parent, hasParent := aum.Parent()
-		if !hasParent {
-			continue
-		}
-		if !slices.Contains(parentHashes, parent) {
-			parentHashes = append(parentHashes, parent)
-		}
-	}
-
-	// Now scan a second time, and only include AUMs which weren't marked as
-	// the parent of any other AUM.
+// headsFromIndexLocked returns heads from the in-memory index. The caller
+// must hold c.mu for reading or writing.
+func (c *FS) headsFromIndexLocked() ([]AUM, error) {
 	out := make([]AUM, 0, 6) // 6 is arbitrary.
-
-	for _, h := range allAUMs {
-		if slices.Contains(parentHashes, h) {
+	for h := range c.aumIndex {
+		if len(c.parentIndex[h]) != 0 {
 			continue
 		}
-		aum, err := c.AUM(h)
+		aum, err := c.aumLocked(h)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading head %x: %w", h, err)
 		}
 		out = append(out, aum)
 	}
-
 	return out, nil
 }
 
 // RemoveAll permanently and completely clears the TKA state.
 func (c *FS) RemoveAll() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.invalidateIndexLocked()
 	return os.RemoveAll(c.base)
 }
 
 // AllAUMs returns all AUMs stored in the chonk.
 func (c *FS) AllAUMs() ([]AUMHash, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	if c.aumIndex != nil {
+		out := slices.Collect(maps.Keys(c.aumIndex))
+		c.mu.RUnlock()
+		return out, nil
+	}
+	c.mu.RUnlock()
 
-	out := make([]AUMHash, 0, 6) // 6 is arbitrary.
-	err := c.scanHashes(func(info *fsHashInfo) {
-		if info.AUM != nil {
-			out = append(out, info.AUM.Hash())
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.buildIndexLocked(); err != nil {
+		return nil, err
+	}
+	return slices.Collect(maps.Keys(c.aumIndex)), nil
+}
+
+// buildIndexLocked builds indexes of the active AUMs in a single filesystem
+// scan. If the index already exists, this is a no-op. The caller must hold
+// c.mu for writing.
+func (c *FS) buildIndexLocked() error {
+	if c.aumIndex != nil {
+		return nil
+	}
+
+	aumIndex := make(set.Set[AUMHash])
+	parentIndex := make(map[AUMHash][]AUMHash)
+	if err := c.scanHashes(func(info *fsHashInfo) {
+		if info.AUM == nil {
+			return
 		}
-	})
-	return out, err
+		h := info.AUM.Hash()
+		aumIndex.Add(h)
+		if parent, ok := info.AUM.Parent(); ok {
+			parentIndex[parent] = append(parentIndex[parent], h)
+		}
+	}); err != nil {
+		return err
+	}
+
+	c.aumIndex = aumIndex
+	c.parentIndex = parentIndex
+	return nil
+}
+
+// invalidateIndexLocked invalidates the in-memory indexes after storage is
+// changed. The caller must hold c.mu for writing.
+func (c *FS) invalidateIndexLocked() {
+	c.aumIndex = nil
+	c.parentIndex = nil
 }
 
 func (c *FS) scanHashes(eachHashInfo func(*fsHashInfo)) error {
@@ -594,6 +659,7 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.invalidateIndexLocked()
 	for i, aum := range updates {
 		h := aum.Hash()
 		err := c.commit(h, func(info *fsHashInfo) {
@@ -610,9 +676,14 @@ func (c *FS) CommitVerifiedAUMs(updates []AUM) error {
 
 // PurgeAUMs marks the specified AUMs for deletion from storage.
 func (c *FS) PurgeAUMs(hashes []AUMHash) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.invalidateIndexLocked()
 	now := time.Now()
 	for i, h := range hashes {
 		stored, err := c.get(h)
