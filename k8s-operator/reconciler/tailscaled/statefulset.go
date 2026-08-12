@@ -35,6 +35,15 @@ const (
 
 	// containerName is the single container inside each pod that runs tailscaled.
 	containerName = "tailscaled"
+
+	// HealthCheckPort is the port containerboot serves /healthz on when TS_ENABLE_HEALTH_CHECK is set. It
+	// reports 200 once the device has tailnet addresses and 503 until then, so it is a meaningful readiness
+	// signal for a load balancer fronting the pod.
+	HealthCheckPort = 9002
+
+	// healthCheckPortName names the health check port on the container so a Service or load balancer can refer
+	// to it by name.
+	healthCheckPortName = "healthz"
 )
 
 // StatefulSetOptions describes a StatefulSet of tailscaled pods. The zero value is not valid , Name, Namespace,
@@ -130,7 +139,16 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 								Name:  "TS_KUBE_SECRET",
 								Value: "$(POD_NAME)",
 							},
+							{
+								Name:  "TS_ENABLE_HEALTH_CHECK",
+								Value: "true",
+							},
 						},
+						Ports: []corev1.ContainerPort{{
+							Name:          healthCheckPortName,
+							ContainerPort: HealthCheckPort,
+							Protocol:      corev1.ProtocolTCP,
+						}},
 					}},
 				},
 			},

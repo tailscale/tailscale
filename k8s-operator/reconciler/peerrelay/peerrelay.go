@@ -260,22 +260,17 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		return reconcile.Result{}, fmt.Errorf("failed to read endpoints for PeerRelay %q: %w", pr.Name, err)
 	}
 
-	endpointsByReplica := make(map[int32]tsapi.PeerRelayEndpoint, len(endpoints))
+	endpointsByReplica := make(map[int32][]tsapi.PeerRelayEndpoint, len(endpoints))
 	for _, ep := range endpoints {
-		endpointsByReplica[ep.Replica] = ep
+		endpointsByReplica[ep.Replica] = append(endpointsByReplica[ep.Replica], ep)
 	}
 
 	for i := int32(0); i < replicas; i++ {
-		var endpoint *tsapi.PeerRelayEndpoint
-		if ep, ok := endpointsByReplica[i]; ok {
-			endpoint = &ep
-		}
-
 		if err = r.ensureStateSecret(ctx, logger, pr, i); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply state Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 
-		if err = r.ensureConfigSecret(ctx, logger, pr, i, endpoint); err != nil {
+		if err = r.ensureConfigSecret(ctx, logger, pr, i, endpointsByReplica[i]); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply config Secret for PeerRelay %q replica %d: %w", pr.Name, i, err)
 		}
 	}
@@ -324,28 +319,30 @@ func (r *Reconciler) readEndpoints(ctx context.Context, logger *zap.SugaredLogge
 		return nil, fmt.Errorf("failed to list Services: %w", err)
 	}
 
-	prevByReplica := make(map[int32]tsapi.PeerRelayEndpoint, len(pr.Status.Endpoints))
+	prevByReplica := make(map[int32][]tsapi.PeerRelayEndpoint, len(pr.Status.Endpoints))
 	for _, ep := range pr.Status.Endpoints {
-		prevByReplica[ep.Replica] = ep
+		prevByReplica[ep.Replica] = append(prevByReplica[ep.Replica], ep)
 	}
 
 	var endpoints []tsapi.PeerRelayEndpoint
 	for i := range list.Items {
 		svc := &list.Items[i]
-		var prev *tsapi.PeerRelayEndpoint
+		var prev []tsapi.PeerRelayEndpoint
 		if idx, ok := replicaIndexFromLabels(svc.Labels); ok {
-			if ep, ok := prevByReplica[idx]; ok {
-				prev = &ep
-			}
+			prev = prevByReplica[idx]
 		}
 
-		if endpoint := r.peerRelayEndpoint(ctx, logger, svc, prev); endpoint != nil {
-			endpoints = append(endpoints, *endpoint)
-		}
+		endpoints = append(endpoints, r.peerRelayEndpoints(ctx, logger, svc, prev)...)
 	}
 
+	// Sorted by replica then address so the list is stable across reconciles, which keeps status updates and the
+	// resulting tailscaled config free of spurious churn. status.endpoints is keyed on both fields, so the pair
+	// is unique.
 	slices.SortFunc(endpoints, func(a, b tsapi.PeerRelayEndpoint) int {
-		return cmp.Compare(a.Replica, b.Replica)
+		if c := cmp.Compare(a.Replica, b.Replica); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Address, b.Address)
 	})
 
 	return endpoints, nil
@@ -361,9 +358,14 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 		readyReplicas = ss.Status.ReadyReplicas
 	}
 
+	addressed := make(map[int32]struct{}, len(endpoints))
+	for _, ep := range endpoints {
+		addressed[ep.Replica] = struct{}{}
+	}
+
 	switch {
-	case int32(len(endpoints)) < replicas:
-		message := fmt.Sprintf("%d of %d replicas have a public IP", len(endpoints), replicas)
+	case int32(len(addressed)) < replicas:
+		message := fmt.Sprintf("%d of %d replicas have a public IP", len(addressed), replicas)
 		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, logger)
 	case readyReplicas < replicas:
 		message := fmt.Sprintf("%d of %d pods are ready", readyReplicas, replicas)
@@ -445,13 +447,13 @@ func (r *Reconciler) deleteServicesFrom(ctx context.Context, logger *zap.Sugared
 	return nil
 }
 
-func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoint *tsapi.PeerRelayEndpoint) error {
+func (r *Reconciler) ensureConfigSecret(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, idx int32, endpoints []tsapi.PeerRelayEndpoint) error {
 	authKey, err := r.reuseOrMintAuthKey(ctx, pr, idx)
 	if err != nil {
 		return err
 	}
 
-	desired, err := r.peerRelayConfigSecret(pr, idx, endpoint, authKey)
+	desired, err := r.peerRelayConfigSecret(pr, idx, endpoints, authKey)
 	if err != nil {
 		return fmt.Errorf("failed to build config Secret: %w", err)
 	}

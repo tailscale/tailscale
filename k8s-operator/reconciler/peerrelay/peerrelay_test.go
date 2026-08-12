@@ -46,6 +46,12 @@ func testResolver(_ context.Context, _ string, host string) ([]netip.Addr, error
 	r := map[string][]netip.Addr{
 		"test-0.elb.amazonaws.com": {netip.MustParseAddr("203.0.113.10")},
 		"test-1.elb.amazonaws.com": {netip.MustParseAddr("203.0.113.11")},
+		// A load balancer spread over several availability zones, returned out of order so the reconciler's
+		// sorting is exercised.
+		"multi-az.elb.amazonaws.com": {
+			netip.MustParseAddr("203.0.113.30"),
+			netip.MustParseAddr("203.0.113.20"),
+		},
 	}
 
 	if addrs, ok := r[host]; ok {
@@ -244,6 +250,11 @@ func TestReconciler_Reconcile(t *testing.T) {
 					Annotations: map[string]string{
 						"service.beta.kubernetes.io/aws-load-balancer-scheme":     "internet-facing",
 						"service.beta.kubernetes.io/azure-load-balancer-internal": "false",
+						// A peer relay listens only on UDP, so the load balancer must health check the pod's
+						// /healthz endpoint instead of the port it forwards, which would never answer.
+						"service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol": "http",
+						"service.beta.kubernetes.io/aws-load-balancer-healthcheck-port":     "9002",
+						"service.beta.kubernetes.io/aws-load-balancer-healthcheck-path":     "/healthz",
 					},
 				},
 			},
@@ -393,21 +404,85 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
-			// A hostname-only Service without the EIP annotation is a Service whose backing LB has unstable IPs
-			// (unmanaged AWS NLB, most third-party providers). The reconciler refuses to resolve — advertising a
-			// transient IP would leave peers connecting to a dead endpoint if AWS shifts the underlying A records.
-			// Users get an explicit "pending" state and either add the annotation or accept the LB isn't usable.
-			Name:    "hostname-without-eip-annotation-stays-pending",
+			// Without spec.aws the reconciler pins no subnet, so the AWS Load Balancer Controller spreads the NLB
+			// over every zone it discovers and cross-zone is defaulted on to make all of those addresses reach the
+			// pod. The hostname is still resolved and advertised: an NLB's addresses are fixed for its lifetime
+			// whether or not an Elastic IP was supplied, so there is nothing to be gained by withholding the
+			// endpoint. Replaces an older rule that only resolved when an EIP annotation was present, which left
+			// this configuration permanently pending despite being perfectly reachable.
+			Name:    "unpinned-nlb-resolves-and-enables-cross-zone",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
+				managedStatefulSet("test", 1, 1),
 			},
-			ExpectedServices:    []expectedService{{Name: "peerrelay-test-0"}},
-			ExpectedReadyStatus: metav1.ConditionFalse,
-			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						lbAttributesAnnotation: "load_balancing.cross_zone.enabled=true",
+					},
+					AbsentAnnotations: []string{eipAllocationsAnnotation, subnetsAnnotation},
+				},
+			},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.10", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// Cross-zone is defaulted on even alongside a pinned EIP. It is inert in that case, since pinning a
+			// subnet leaves only one zone enabled on the load balancer, but applying it unconditionally keeps the
+			// annotation set uniform across every replica.
+			Name:    "pinned-eip-still-gets-cross-zone",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					AWS: &tsapi.PeerRelayAWS{
+						ElasticIPs: []tsapi.PeerRelayAWSElasticIP{
+							{AllocationID: "eipalloc-aaaa", SubnetID: "subnet-aaaa"},
+						},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						eipAllocationsAnnotation: "eipalloc-aaaa",
+						subnetsAnnotation:        "subnet-aaaa",
+						lbAttributesAnnotation:   "load_balancing.cross_zone.enabled=true",
+					},
+				},
+			},
+		},
+		{
+			// A user-supplied attributes value must survive untouched, including turning cross-zone back off.
+			Name:    "user-attributes-annotation-is-not-overridden",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{
+							lbAttributesAnnotation: "load_balancing.cross_zone.enabled=false",
+						},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						lbAttributesAnnotation: "load_balancing.cross_zone.enabled=false",
+					},
+				},
+			},
 		},
 		{
 			// Mixed batch: one replica has a direct IP, another has only a hostname that resolves (with EIP
@@ -435,6 +510,52 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExpectedReadyStatus: metav1.ConditionTrue,
 			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A load balancer spanning several availability zones answers on one address per zone, and every one
+			// of them reaches the replica. All are advertised so a peer can still get through when a zone is
+			// unreachable, and so the user is not paying for addresses nothing uses. status.endpoints is keyed on
+			// replica and address together, so one replica can hold several entries.
+			Name:    "multi-az-lb-advertises-every-address",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.20", Port: 41641},
+				{Replica: 0, Address: "203.0.113.30", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// Replica 0's load balancer spans two zones and contributes two entries, while replica 1 has no
+			// address yet. There are as many entries as replicas, but only one replica is reachable, so the
+			// PeerRelay must not report ready. Counting entries rather than replicas would let the multi-homed
+			// replica mask the one that peers cannot reach at all.
+			Name:    "multi-az-endpoints-do-not-mask-a-replica-without-one",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
+				managedService("test", 1),
+				managedStatefulSet("test", 2, 2),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.20", Port: 41641},
+				{Replica: 0, Address: "203.0.113.30", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionFalse,
+			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
 			// Mid-provisioning: some LBs have addresses, some don't yet. Only the ready ones show up.
@@ -737,6 +858,25 @@ func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *stat
 			t.Errorf("expected container image %q, got %q", want.Image, ss.Spec.Template.Spec.Containers[0].Image)
 		}
 	}
+
+	if len(ss.Spec.Template.Spec.Containers) == 0 {
+		return
+	}
+	c := ss.Spec.Template.Spec.Containers[0]
+
+	// The load balancer health checks /healthz rather than the UDP port it forwards, so containerboot has to be
+	// serving it and the port has to be declared for the check to have anything to talk to.
+	if !slices.ContainsFunc(c.Env, func(e corev1.EnvVar) bool {
+		return e.Name == "TS_ENABLE_HEALTH_CHECK" && e.Value == "true"
+	}) {
+		t.Errorf("expected TS_ENABLE_HEALTH_CHECK=true on the tailscaled container, got env %v", c.Env)
+	}
+
+	if !slices.ContainsFunc(c.Ports, func(p corev1.ContainerPort) bool {
+		return p.ContainerPort == 9002 && p.Protocol == corev1.ProtocolTCP
+	}) {
+		t.Errorf("expected container to declare TCP port 9002 for the health check, got ports %v", c.Ports)
+	}
 }
 
 func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []string) {
@@ -878,6 +1018,7 @@ func managedServiceWithLB(prName string, idx int, ip, hostname string) *corev1.S
 const (
 	eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	subnetsAnnotation        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
+	lbAttributesAnnotation   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
 )
 
 func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {
@@ -939,7 +1080,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		WithStatusSubresource(&tsapi.PeerRelay{}).
 		WithObjects(
 			pr,
-			managedServiceWithLB("test", 0, "1.2.3.4", ""),
+			managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
 			managedService("test", 1),
 		).
 		Build()
@@ -962,7 +1103,12 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 	if got0.RelayServerPort == nil || *got0.RelayServerPort != 41641 {
 		t.Errorf("replica 0: expected RelayServerPort=41641, got %v", got0.RelayServerPort)
 	}
-	wantEndpoints := []netip.AddrPort{netip.MustParseAddrPort("1.2.3.4:41641")}
+	// The load balancer spans two availability zones, so both of its addresses must reach the config in sorted
+	// order. This is what makes the extra addresses worth paying for, rather than provisioned and unused.
+	wantEndpoints := []netip.AddrPort{
+		netip.MustParseAddrPort("203.0.113.20:41641"),
+		netip.MustParseAddrPort("203.0.113.30:41641"),
+	}
 	if !slices.Equal(got0.RelayServerStaticEndpoints, wantEndpoints) {
 		t.Errorf("replica 0: expected RelayServerStaticEndpoints=%v, got %v", wantEndpoints, got0.RelayServerStaticEndpoints)
 	}
