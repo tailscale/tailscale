@@ -36,8 +36,10 @@ func mkDebugCaptureCmd() *ffcli.Command {
 }
 
 var captureArgs struct {
-	outFile string
+	outFile string         
+     snaplen int
 }
+
 
 func runCapture(ctx context.Context, args []string) error {
 	stream, err := localClient.StreamDebugCapture(ctx)
