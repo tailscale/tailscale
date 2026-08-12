@@ -222,7 +222,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	if err != nil {
 		return nil, fmt.Errorf("error determining num headers: %v", err)
 	}
-	h := make(http.Header, numHeaders)
+	h := make(http.Header)
 	for range numHeaders {
 		name, err := readLenBytes()
 		if err != nil {
