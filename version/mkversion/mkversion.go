@@ -190,7 +190,12 @@ func tailscaleModuleRef(modBs []byte) (string, error) {
 		// Get the last - separated part of req.Mod.Version
 		// (which is the git hash).
 		if i := strings.LastIndexByte(req.Mod.Version, '-'); i != -1 {
-			return req.Mod.Version[i+1:], nil
+			// If the last part is "pre", the version is a pre-release.
+			hashOrPre := req.Mod.Version[i+1:]
+			if hashOrPre == "pre" {
+				return req.Mod.Version, nil
+			}
+			return hashOrPre, nil
 		}
 		// If there are no dashes, the version is a tag.
 		return req.Mod.Version, nil
