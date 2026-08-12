@@ -104,22 +104,13 @@ func TestTailchonkFS_IgnoreTempFile(t *testing.T) {
 		}
 	}
 
-	// Check that calling AllAUMs() returns the single committed AUM
-	got, err := chonk.AllAUMs()
-	if err != nil {
-		t.Fatalf("AllAUMs() failed: %v", err)
-	}
-	want := []AUMHash{aum.Hash()}
-	if !slices.Equal(got, want) {
-		t.Fatalf("AllAUMs() is wrong: got %v, want %v", got, want)
-	}
-
 	// Write some temporary files which are named like partially-committed AUMs,
-	// then check that AllAUMs() only returns the single committed AUM.
+	// then check that the initial scan only returns the committed AUM.
 	writeAUMFile("AUM1234.tmp", "incomplete AUM\n")
 	writeAUMFile("AUM1234.tmp_123", "second incomplete AUM\n")
 
-	got, err = chonk.AllAUMs()
+	got, err := chonk.AllAUMs()
+	want := []AUMHash{aum.Hash()}
 	if err != nil {
 		t.Fatalf("AllAUMs() failed: %v", err)
 	}
@@ -163,6 +154,115 @@ func TestTailchonkFS_CannotUseFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("ChonkDir succeeded; expected an error")
 	}
+}
+
+// Indexed FS reads decode AUMs from disk, so mutable fields in returned values
+// must not alias subsequent results.
+func TestTailchonkFS_ReturnsIndependentAUMs(t *testing.T) {
+	chonk := must.Get(ChonkDir(t.TempDir()))
+	parent := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{0}}
+	parentHash := parent.Hash()
+	child := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1}, PrevAUMHash: parentHash[:]}
+	must.Do(chonk.CommitVerifiedAUMs([]AUM{parent, child}))
+
+	got := must.Get(chonk.ChildAUMs(parentHash))
+	if len(got) != 1 {
+		t.Fatalf("ChildAUMs() returned %d children, want 1", len(got))
+	}
+	got[0].PrevAUMHash[0] ^= 0xff
+	got[0].KeyID[0] ^= 0xff
+
+	got = must.Get(chonk.ChildAUMs(parentHash))
+	if diff := cmp.Diff([]AUM{child}, got); diff != "" {
+		t.Fatalf("stored child changed through a returned AUM (-want, +got):\n%s", diff)
+	}
+}
+
+func TestTailchonkFS_ConcurrentIndexBuild(t *testing.T) {
+	chonk := must.Get(ChonkDir(t.TempDir()))
+	parent := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{0}}
+	parentHash := parent.Hash()
+	child := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1}, PrevAUMHash: parentHash[:]}
+	must.Do(chonk.CommitVerifiedAUMs([]AUM{parent, child}))
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range 30 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+
+			switch i % 3 {
+			case 0:
+				if got, err := chonk.ChildAUMs(parentHash); err != nil || len(got) != 1 {
+					t.Errorf("ChildAUMs() = %v, %v; want one child", got, err)
+				}
+			case 1:
+				if got, err := chonk.Heads(); err != nil || len(got) != 1 {
+					t.Errorf("Heads() = %v, %v; want one head", got, err)
+				}
+			case 2:
+				if got, err := chonk.AllAUMs(); err != nil || len(got) != 2 {
+					t.Errorf("AllAUMs() = %v, %v; want two AUMs", got, err)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
+func BenchmarkTailchonkFSOpenLongChain(b *testing.B) {
+	// Exercise the largest linear AUM history accepted by maxScanIterations.
+	// Generate more history than needed, then retain a prefix so the benchmark
+	// size does not depend on checkpoint cadence.
+	const targetAUMs = maxScanIterations
+
+	signer := key.NewNLPrivate()
+	trustedKey := Key{Kind: Key25519, Public: signer.Public().Verifier(), Votes: 1}
+	storage := ChonkMem()
+	authority, _, err := Create(storage, CreateStateForTest(trustedKey), signer)
+	if err != nil {
+		b.Fatal(err)
+	}
+	SeedAUMs(b, SeedAUMConfig{
+		Count:  targetAUMs,
+		Signer: signer,
+		Nodes:  []SeedNode{CreateSeedNode(b, authority, storage)},
+	})
+
+	// SeedAUMs may insert checkpoints in addition to the requested updates.
+	// Walk from the final head to genesis, reverse the result, and retain
+	// exactly the supported maximum.
+	aums := make([]AUM, 0, targetAUMs)
+	for h := authority.Head(); ; {
+		aum := must.Get(storage.AUM(h))
+		aums = append(aums, aum)
+
+		parent, ok := aum.Parent()
+		if !ok {
+			break
+		}
+		h = parent
+	}
+	slices.Reverse(aums)
+
+	if len(aums) < targetAUMs {
+		b.Fatalf("seeded %d AUMs, want at least %d", len(aums), targetAUMs)
+	}
+	aums = aums[:targetAUMs]
+
+	dir := b.TempDir()
+	fs := must.Get(ChonkDir(dir))
+	must.Do(fs.CommitVerifiedAUMs(aums))
+
+	b.ResetTimer()
+	for b.Loop() {
+		fs := must.Get(ChonkDir(dir))
+		must.Get(Open(fs))
+	}
+	b.ReportMetric(float64(len(aums)), "AUMs")
 }
 
 func TestMarkActiveChain(t *testing.T) {
