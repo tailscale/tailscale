@@ -136,13 +136,18 @@ func (e *extension) getCertPEMWithValidity(ctx context.Context, b *ipnlocal.Loca
 			return pair, nil
 		}
 		if minValidity == 0 {
-			logf("starting async renewal")
-			// Start renewal in the background, return current valid cert.
-			e.Go(func() {
-				if _, err := getCertPEM(context.Background(), e, b, cs, logf, traceACME, certDomain, now, minValidity); err != nil {
-					logf("async renewal failed: getCertPem: %v", err)
-				}
-			})
+			// Start renewal in the background if there isn't one already in progress,
+			// return current valid cert.
+			if e.beginAsyncRenewal(certDomain) {
+				logf("starting async renewal")
+
+				e.Go(func() {
+					defer e.endAsyncRenewal(certDomain)
+					if _, err := getCertPEM(context.Background(), e, b, cs, logf, traceACME, certDomain, now, minValidity); err != nil {
+						logf("async renewal failed: getCertPem: %v", err)
+					}
+				})
+			}
 			return pair, nil
 		}
 		// If the caller requested a specific validity duration, fall through
@@ -197,6 +202,32 @@ func (e *extension) domainRenewed(domain string) {
 	e.renewMu.Lock()
 	defer e.renewMu.Unlock()
 	delete(e.renewCertAt, domain)
+}
+
+// beginAsyncRenewal marks a domain as having an async renewal in flight,
+// and reports whether this caller started it.
+//
+// The caller must arrange for endAsyncRenewal(domain) when the renewal
+// finishes, regardless of result.
+func (e *extension) beginAsyncRenewal(domain string) bool {
+	e.renewMu.Lock()
+	defer e.renewMu.Unlock()
+	if e.renewingCertDomains.Contains(domain) {
+		return false
+	}
+	e.renewingCertDomains.Make()
+	e.renewingCertDomains.Add(domain)
+	return true
+}
+
+// endAsyncRenewal clears the in-flight marker for domain, allowing
+// a subsequent renewal to begin.
+//
+// It should only be called by the caller that began the renewal.
+func (e *extension) endAsyncRenewal(domain string) {
+	e.renewMu.Lock()
+	defer e.renewMu.Unlock()
+	e.renewingCertDomains.Delete(domain)
 }
 
 func domainRenewalTimeByExpiry(pair *ipnlocal.TLSCertKeyPair) (time.Time, error) {

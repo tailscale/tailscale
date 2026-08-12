@@ -83,10 +83,14 @@ type extension struct {
 	// accounts.
 	accountMu syncs.Mutex
 
-	// renewMu guards renewCertAt.
+	// renewMu guards renewCertAt and renewingCertDomains.
 	// Lock order: per-domain lock before renewMu.
 	renewMu     syncs.Mutex
 	renewCertAt map[string]time.Time // lazily initialized under renewMu
+
+	// renewingCertDomains tracks domains for which an async renewal is
+	// currently in flight.
+	renewingCertDomains set.Set[string]
 
 	// pendingACMETLSALPNCerts maps SNI names to short-lived ACME
 	// tls-alpn-01 challenge certificates while an ACME order is
