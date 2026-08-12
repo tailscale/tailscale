@@ -144,14 +144,6 @@ func FuzzNodeHasherCompare(f *testing.F) {
 // FuzzSortNodes tests that nodes are sorted such that every node
 // with an equal score has an equal chance of being first.
 func FuzzSortNodes(f *testing.F) {
-	nodeIDs := func(nodes []tailcfg.NodeView) []tailcfg.NodeID {
-		nids := make([]tailcfg.NodeID, len(nodes))
-		for i, n := range nodes {
-			nids[i] = n.ID()
-		}
-		return nids
-	}
-
 	for _, seed := range [][]uint64{
 		{0, 0},
 		{1, 2},
@@ -176,7 +168,6 @@ func FuzzSortNodes(f *testing.F) {
 			}
 			clients[i] = n.View()
 		}
-		t.Logf("client node ids: %v", nodeIDs(clients))
 
 		// Smaller number of candidates, crossing some power of
 		// two boundaries to ensure most-significant-bits don't skew
@@ -203,29 +194,25 @@ func FuzzSortNodes(f *testing.F) {
 			}
 		}
 
-		// Map each candidate to the clients that it was the best candidate for, i.e.,
-		//   candidate 1 -> [client 1, client 17, ...]
-		//   candidate 2 -> [client 3, client 14, ...]
-		//   ...
-		best := make(map[tailcfg.NodeID][]tailcfg.NodeID, len(candidates))
+		// Map each candidate to the number of clients that it was the best candidate for
+		best := make(map[tailcfg.NodeID]int, len(candidates))
 		for i := range len(clients) {
 			peers := slices.Clone(candidates)
 			selfID := clients[i].ID()
 			ss := traffic.ScoresFor(selfID, peers)
 			ss.SortNodes(peers)
-			t.Logf("self %s, sorted %v", selfID, nodeIDs(peers))
 			bestID := peers[0].ID()
-			best[bestID] = append(best[bestID], selfID)
+			best[bestID]++
 		}
 
 		// 20% margin off perfect fairness
 		fair := float64(len(clients)) / float64(len(candidates))
 		lo, hi := math.Floor(fair*0.8), math.Ceil(fair*1.2)
 
-		for candidateID, clientIDs := range best {
-			if count := len(clientIDs); float64(count) < lo || float64(count) > hi {
+		for candidateID, count := range best {
+			if float64(count) < lo || float64(count) > hi {
 				t.Logf("total clients %d; total candidates %d; fair %f", len(clients), len(candidates), fair)
-				t.Errorf("%s is best too frequently (%d): %d", candidateID, count, clientIDs)
+				t.Errorf("%s is best too frequently: %d", candidateID, count)
 				t.Fatalf("best map: %v", best)
 			}
 		}
