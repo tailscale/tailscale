@@ -116,7 +116,21 @@ func MakeRendezvousHasher(seed tailcfg.NodeID) NodeHasher {
 		// This is cheap because hash/fnv doesn’t need to allocate.
 		h := fnv.New64a()
 		h.Write(b[:])
-		return h.Sum64()
+		v := h.Sum64()
+
+		// After FNV-1a, finalize the result by mixing in some large
+		// numbers. This ensures a small change in the seed/input bits
+		// causes a large perturbation in the output bits, aka the
+		// "Avalanche Effect".
+		// We opted to use the mix13 variant described by David Stafford,
+		// a popular choice in other language libraries.
+		// https://web.archive.org/web/20260406221046/https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
+		v ^= v >> 30
+		v *= 0xbf58476d1ce4e5b9
+		v ^= v >> 27
+		v *= 0x94d049bb133111eb
+		v ^= v >> 31
+		return v
 	}
 }
 
