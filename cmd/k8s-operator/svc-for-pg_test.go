@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -549,4 +550,102 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 	mustCreate(t, fc, eps)
 
 	return svc, eps
+}
+
+// TestServicePGReconciler_CleanupOnAnnotationRemoved is a regression test for
+// the case where the tailscale.com/proxy-group annotation is removed from a
+// Service that was previously exposed on a ProxyGroup. The reconciler must
+// clean up the Tailscale Service and remove its finalizer even though the
+// annotation (the only in-object record of the ProxyGroup) is gone, otherwise
+// the Tailscale Service leaks and the Service wedges forever on delete.
+func TestServicePGReconciler_CleanupOnAnnotationRemoved(t *testing.T) {
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
+
+	svc, _ := setupTestService(t, "test-service", "", "4.1.6.7", fc, stateSecret)
+	expectReconciled(t, svcPGR, "default", svc.Name)
+
+	verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
+
+	// The finalizer must encode the ProxyGroup name so cleanup can recover it
+	// once the annotation is gone.
+	got := &corev1.Service{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}, got); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	wantFinalizer := "test-pg.tailscale.com/service-pg-finalizer"
+	if !slices.Contains(got.Finalizers, wantFinalizer) {
+		t.Fatalf("finalizers = %v, want to contain %q", got.Finalizers, wantFinalizer)
+	}
+
+	// Remove the ProxyGroup annotation.
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		delete(s.Annotations, AnnotationProxyGroup)
+	})
+	expectReconciled(t, svcPGR, "default", svc.Name)
+
+	// The Tailscale Service must be cleaned up.
+	if _, err := ft.VIPServices().Get(t.Context(), fmt.Sprintf("svc:default-%s", svc.Name)); err == nil {
+		t.Fatalf("Tailscale Service svc:default-%s not cleaned up after annotation removal", svc.Name)
+	} else if !tailscale.IsNotFound(err) {
+		t.Fatalf("unexpected error getting Tailscale Service: %v", err)
+	}
+
+	// The finalizer must be removed so the Service does not wedge on delete.
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}, got); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	if slices.ContainsFunc(got.Finalizers, isServicePGFinalizer) {
+		t.Fatalf("service-pg finalizer not removed after annotation removal, finalizers = %v", got.Finalizers)
+	}
+}
+
+// TestServicePGReconciler_MigratesLegacyFinalizer verifies that a Service
+// carrying the bare legacy finalizer (set by an older operator) is migrated to
+// the ProxyGroup-encoded finalizer on reconcile, so a later annotation removal
+// remains recoverable.
+func TestServicePGReconciler_MigratesLegacyFinalizer(t *testing.T) {
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
+
+	svc, _ := setupTestService(t, "test-service", "", "4.1.6.7", fc, stateSecret)
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		s.Finalizers = append(s.Finalizers, svcPGFinalizerName)
+	})
+
+	expectReconciled(t, svcPGR, "default", svc.Name)
+	verifyTailscaleService(t, ft, fmt.Sprintf("svc:default-%s", svc.Name), []string{"do-not-validate"})
+
+	got := &corev1.Service{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}, got); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	if slices.Contains(got.Finalizers, svcPGFinalizerName) {
+		t.Fatalf("bare legacy finalizer not migrated, finalizers = %v", got.Finalizers)
+	}
+	wantFinalizer := "test-pg.tailscale.com/service-pg-finalizer"
+	if !slices.Contains(got.Finalizers, wantFinalizer) {
+		t.Fatalf("finalizers = %v, want to contain %q", got.Finalizers, wantFinalizer)
+	}
+}
+
+func TestProxyGroupFromServiceFinalizers(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		finalizers []string
+		wantPG     string
+		wantOK     bool
+	}{
+		{"encoded", []string{"test-pg.tailscale.com/service-pg-finalizer"}, "test-pg", true},
+		{"legacy_bare", []string{"tailscale.com/service-pg-finalizer"}, "", true},
+		{"none", []string{"tailscale.com/finalizer"}, "", false},
+		{"empty", nil, "", false},
+		{"encoded_among_others", []string{"tailscale.com/finalizer", "my-pg.tailscale.com/service-pg-finalizer"}, "my-pg", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Finalizers: tt.finalizers}}
+			gotPG, gotOK := proxyGroupFromServiceFinalizers(svc)
+			if gotPG != tt.wantPG || gotOK != tt.wantOK {
+				t.Errorf("proxyGroupFromServiceFinalizers() = (%q, %v), want (%q, %v)", gotPG, gotOK, tt.wantPG, tt.wantOK)
+			}
+		})
+	}
 }
