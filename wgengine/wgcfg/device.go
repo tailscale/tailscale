@@ -15,7 +15,7 @@ import (
 
 // NewDevice returns a wireguard-go Device configured for Tailscale use.
 func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device.Device {
-	return device.NewDevice(tunDev, bind, logger)
+	return device.NewDevice(tunDev, bind, logger, getDeviceOptions()...)
 }
 
 // NewPeerLookupFunc returns a [device.PeerLookupFunc] that lazily
