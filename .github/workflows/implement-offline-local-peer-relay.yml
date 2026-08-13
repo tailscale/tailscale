@@ -1,0 +1,94 @@
+name: implement offline local peer relay
+on:
+  push:
+    branches: [offline-local-peer-relay]
+permissions:
+  contents: write
+jobs:
+  implement:
+    if: ${{ !contains(github.event.head_commit.message, '[offline-relay-impl]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Implement and test
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          # 1. Wire the relay server to announce itself locally.
+          p = Path('net/udprelay/server.go')
+          s = p.read_text()
+          old = '"tailscale.com/net/udprelay/endpoint"\n'
+          new = '"tailscale.com/net/localrelay"\n\t"tailscale.com/net/udprelay/endpoint"\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '\ts.startPacketReaders()\n\n\tif !s.onlyStaticAddrPorts {'
+          new = '''\ts.startPacketReaders()\n\n\t// Publish the relay identity and UDP port on the local link. This is only a\n\t// discovery hint; clients must still authenticate the advertised Disco key\n\t// against their trusted Peer Relay configuration before using it.\n\ts.wg.Add(1)\n\tgo func() {\n\t\tdefer s.wg.Done()\n\t\tctx, cancel := context.WithCancel(context.Background())\n\t\tgo func() {\n\t\t\t<-s.closeCh\n\t\t\tcancel()\n\t\t}()\n\t\tif err := localrelay.Advertise(ctx, s.logf, s.discoPublic, s.uc4Port); err != nil && !s.closed {\n\t\t\ts.logf("local relay discovery: advertiser failed: %v", err)\n\t\t}\n\t\tcancel()\n\t}()\n\n\tif !s.onlyStaticAddrPorts {'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # 2. Add local relay addresses to relayManager and use them for allocation.
+          p = Path('wgengine/magicsock/relaymanager.go')
+          s = p.read_text()
+          old = '"tailscale.com/net/packet"\n'
+          new = '"tailscale.com/net/localrelay"\n\t"tailscale.com/net/packet"\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '\tderpHomeChangeCh    chan derpHomeChangeEvent\n\n\tdiscoInfoMu'
+          new = '''\tderpHomeChangeCh    chan derpHomeChangeEvent\n\n\tlocalRelayMu        sync.Mutex\n\tlocalRelayByDisco   map[key.DiscoPublic]map[netip.AddrPort]time.Time\n\tlocalRelayStarted   sync.Once\n\n\tdiscoInfoMu'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '\t\tr.derpHomeChangeCh = make(chan derpHomeChangeEvent)\n\t\tr.runLoopStoppedCh'
+          new = '''\t\tr.derpHomeChangeCh = make(chan derpHomeChangeEvent)\n\t\tr.localRelayByDisco = make(map[key.DiscoPublic]map[netip.AddrPort]time.Time)\n\t\tr.runLoopStoppedCh'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '''func (r *relayManager) startUDPRelayPathDiscoveryFor(ep *endpoint, lastBest addrQuality, lastBestIsTrusted bool) {\n\trelayManagerInputEvent(r, nil, &r.startDiscoveryCh, endpointWithLastBest{'''
+          new = '''func (r *relayManager) startUDPRelayPathDiscoveryFor(ep *endpoint, lastBest addrQuality, lastBestIsTrusted bool) {\n\tr.startLocalRelayDiscovery(ep.c)\n\trelayManagerInputEvent(r, nil, &r.startDiscoveryCh, endpointWithLastBest{'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          marker = '''// stopWork stops all outstanding allocation & handshaking work for 'ep'.\n'''
+          insert = '''func (r *relayManager) startLocalRelayDiscovery(c *Conn) {\n\tif c == nil {\n\t\treturn\n\t}\n\tr.localRelayStarted.Do(func() {\n\t\tgo func() {\n\t\t\terr := localrelay.Listen(c.connCtx, func(addr netip.AddrPort, disco key.DiscoPublic) {\n\t\t\t\ttrusted := false\n\t\t\t\tfor _, server := range r.getServers().Slice() {\n\t\t\t\t\tif server.discoKey.Compare(disco) == 0 {\n\t\t\t\t\t\ttrusted = true\n\t\t\t\t\t\tbreak\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif !trusted {\n\t\t\t\t\treturn\n\t\t\t\t}\n\t\t\t\tr.localRelayMu.Lock()\n\t\t\t\tbyAddr := r.localRelayByDisco[disco]\n\t\t\t\tif byAddr == nil {\n\t\t\t\t\tbyAddr = make(map[netip.AddrPort]time.Time)\n\t\t\t\t\tr.localRelayByDisco[disco] = byAddr\n\t\t\t\t}\n\t\t\t\tbyAddr[addr] = time.Now()\n\t\t\t\tr.localRelayMu.Unlock()\n\t\t\t})\n\t\t\tif err != nil && c.connCtx.Err() == nil {\n\t\t\t\tc.logf("local relay discovery: listener failed: %v", err)\n\t\t\t}\n\t\t}()\n\t})\n}\n\nfunc (r *relayManager) localRelayAddr(disco key.DiscoPublic) (netip.AddrPort, bool) {\n\tr.localRelayMu.Lock()\n\tdefer r.localRelayMu.Unlock()\n\tnow := time.Now()\n\tfor addr, seen := range r.localRelayByDisco[disco] {\n\t\tif now.Sub(seen) <= 15*time.Second {\n\t\t\treturn addr, true\n\t\t}\n\t\tdelete(r.localRelayByDisco[disco], addr)\n\t}\n\treturn netip.AddrPort{}, false\n}\n\n'''
+          assert s.count(marker) == 1
+          s = s.replace(marker, insert + marker, 1)
+          old = '''\t\tsendAllocReq := func() {\n\t\twork.wlb.ep.c.sendDiscoAllocateUDPRelayEndpointRequest(\n\t\t\tepAddr{\n\t\t\t\tap: netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, work.candidatePeerRelay.derpHomeRegionID),\n\t\t\t},\n\t\t\twork.candidatePeerRelay.nodeKey,'''
+          new = '''\tsendAllocReq := func() {\n\t\tto := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, work.candidatePeerRelay.derpHomeRegionID)\n\t\tif local, ok := r.localRelayAddr(work.candidatePeerRelay.discoKey); ok {\n\t\t\tto = local\n\t\t}\n\t\twork.wlb.ep.c.sendDiscoAllocateUDPRelayEndpointRequest(\n\t\t\tepAddr{ap: to},\n\t\t\twork.candidatePeerRelay.nodeKey,'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          # Let allocation responses be matched by relay Disco key as a fallback for direct LAN delivery.
+          old = '\tallocWorkByDiscoKeysByServerNodeKey     map[key.NodePublic]map[key.SortedPairOfDiscoPublic]*relayEndpointAllocWork\n'
+          new = old + '\tallocWorkByServerDisco                   map[key.DiscoPublic]*relayEndpointAllocWork\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '\t\tr.allocWorkByDiscoKeysByServerNodeKey = make(map[key.NodePublic]map[key.SortedPairOfDiscoPublic]*relayEndpointAllocWork)\n'
+          new = old + '\t\tr.allocWorkByServerDisco = make(map[key.DiscoPublic]*relayEndpointAllocWork)\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '''\t\tbyDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[event.relayServerNodeKey]\n\t\tif !ok {\n\t\t\t// No outstanding work tied to this relay sever, discard.\n\t\t\treturn\n\t\t}'''
+          new = '''\t\tbyDiscoKeys, ok := r.allocWorkByDiscoKeysByServerNodeKey[event.relayServerNodeKey]\n\t\tif !ok && !event.disco.IsZero() {\n\t\t\tif work := r.allocWorkByServerDisco[event.disco]; work != nil {\n\t\t\t\tbyDiscoKeys = r.allocWorkByDiscoKeysByServerNodeKey[work.candidatePeerRelay.nodeKey]\n\t\t\t}\n\t\t}\n\t\tif !ok && len(byDiscoKeys) == 0 {\n\t\t\treturn\n\t\t}'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '\t\tbyDiscoKeys[discoKeys] = started\n'
+          new = old + '\t\tr.allocWorkByServerDisco[v.discoKey] = started\n'
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          old = '''\tdelete(byDiscoKeys, done.work.discoKeys)\n\tif len(byDiscoKeys) == 0 {'''
+          new = '''\tdelete(byDiscoKeys, done.work.discoKeys)\n\tdelete(r.allocWorkByServerDisco, done.work.candidatePeerRelay.discoKey)\n\tif len(byDiscoKeys) == 0 {'''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          gofmt -w net/localrelay/*.go net/udprelay/server.go wgengine/magicsock/relaymanager.go
+          go test ./net/localrelay ./net/udprelay ./wgengine/magicsock
+          rm -f .github/workflows/implement-offline-local-peer-relay.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: use locally discovered peer relays when offline [offline-relay-impl]'
+          git push origin offline-local-peer-relay
