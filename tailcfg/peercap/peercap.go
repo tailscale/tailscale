@@ -12,6 +12,18 @@ package peercap
 // or "tailscale.com/cap/webui".
 type Cap string
 
+// Prefix is a prefix for [tailscale.com/tailcfg.PeerCapMap] keys that share a
+// common namespace, where each entry represents a distinct named instance (e.g.
+// one per App definition). The full key is formed by concatenating the prefix
+// with the instance name.
+type Prefix string
+
+// ToAttribute returns the full [Cap] key for the given value under this prefix,
+// of the form prefix+value.
+func (p Prefix) ToAttribute(value string) Cap {
+	return Cap(string(p) + value)
+}
+
 const (
 	// FileSharingTarget grants the current node the ability to send
 	// files to the peer which has this capability.
@@ -53,4 +65,15 @@ const (
 	// capabilities, such as the ability to add user groups to the OIDC
 	// claim
 	TsIDP Cap = "tailscale.com/cap/tsidp"
+)
+
+const (
+	// Conn25Prefix is the prefix for per-app [Cap] names that grant a peer
+	// access to an app provided by a conn25 app connector.
+	// Actual capabilities look like "tailscale.com/cap/conn25/example" for
+	// an app named "example".
+	// Each value under such a key is a [tailscale.com/tailcfg.ProtoPortRange].
+	// If multiple values are present, the union of all protocol/port
+	// combinations described shall be permitted.
+	Conn25Prefix Prefix = "tailscale.com/cap/conn25/"
 )
