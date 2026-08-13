@@ -227,6 +227,43 @@ func TestL7Ingress(t *testing.T) {
 	}
 }
 
+func TestL7IngressDNSConfig(t *testing.T) {
+	if tnClient == nil {
+		t.Skip("TestL7IngressDNSConfig requires a working tailnet client")
+	}
+	t.Parallel()
+
+	nginx := nginxDeployment(ns)
+	createAndCleanup(t, kubeClient, nginx)
+	createAndCleanup(t, kubeClient, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nginx.Name,
+			Namespace: ns,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app.kubernetes.io/name": nginx.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name: "http",
+					Port: 80,
+				},
+			},
+		},
+	})
+
+	ingress := l7Ingress(ns, nginx.Name, map[string]string{
+		"tailscale.com/experimental-forward-cluster-traffic-via-ingress": "true",
+	})
+	createAndCleanup(t, kubeClient, ingress)
+	hostname, err := waitForIngressHostname(t, ns, ingress.Name)
+	if err != nil {
+		t.Fatalf("error waiting for Ingress hostname: %v", err)
+	}
+	requireTargetIsReachable(t, fmt.Sprintf("https://%s:443", hostname))
+}
+
 func TestL7HAIngress(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestL7HAIngress requires a working tailnet client")
