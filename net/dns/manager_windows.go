@@ -51,6 +51,9 @@ type windowsManager struct {
 	nrptDB     *nrptRuleDatabase
 	wslManager *wslManager
 	polc       policyclient.Client
+	doV4       bool
+	doV6       bool
+	doNetBIOS  bool
 
 	unregisterPolicyChangeCb func() // called when the manager is closing
 
@@ -71,6 +74,10 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, bus *eventbus.B
 		knobs:      knobs,
 		polc:       polc,
 		wslManager: newWSLManager(logf, health),
+	}
+
+	if err := ret.checkInterfaces(); err != nil {
+		return nil, err
 	}
 
 	if isWindows10OrBetter() {
@@ -94,22 +101,42 @@ func NewOSConfigurator(logf logger.Logf, health *health.Tracker, bus *eventbus.B
 	return ret, nil
 }
 
-func (m *windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (registry.Key, error) {
-	var key registry.Key
-	var err error
-	path := pfx.WithSuffix(m.guid)
-
-	m.mu.Lock()
-	closing := m.closing
-	m.mu.Unlock()
-	if closing {
-		// Do not wait for the interface key to appear if the manager is being closed.
-		// If it's being closed due to the removal of the wintun adapter,
-		// the key would already be gone by now and will not reappear until tailscaled is restarted.
-		key, err = registry.OpenKey(registry.LOCAL_MACHINE, string(path), registry.SET_VALUE)
-	} else {
-		key, err = winutil.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
+func (m *windowsManager) checkInterfaces() error {
+	guid, err := windows.GUIDFromString(m.guid)
+	if err != nil {
+		return err
 	}
+
+	luid, err := winipcfg.LUIDFromGUID(&guid)
+	if err != nil {
+		return err
+	}
+
+	_, err = luid.IPInterface(windows.AF_INET)
+	if err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return fmt.Errorf("getting AF_INET interface: %w", err)
+	}
+	m.doV4 = err == nil
+
+	_, err = luid.IPInterface(windows.AF_INET6)
+	if err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return fmt.Errorf("getting AF_INET6 interface: %w", err)
+	}
+	m.doV6 = err == nil
+
+	if !m.doV4 && !m.doV6 {
+		return errors.New("no IP interfaces available for dns configuration")
+	}
+
+	// NetBIOS is non-fatal
+	_, err = luid.IPInterface(windows.AF_NETBIOS)
+	m.doNetBIOS = err == nil
+	return nil
+}
+
+func (m *windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (registry.Key, error) {
+	path := pfx.WithSuffix(m.guid)
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, string(path), registry.SET_VALUE)
 	if err != nil {
 		return 0, fmt.Errorf("opening %s: %w", path, err)
 	}
@@ -301,58 +328,66 @@ func (m *windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname
 		domStrs = append(domStrs, dom.WithoutTrailingDot())
 	}
 
-	key4, err := m.openInterfaceKey(winutil.IPv4TCPIPInterfacePrefix)
-	if err != nil {
-		return m.muteKeyNotFoundIfClosing(err)
-	}
-	defer key4.Close()
+	if m.doV4 {
+		key4, err := m.openInterfaceKey(winutil.IPv4TCPIPInterfacePrefix)
+		if err != nil {
+			return m.muteKeyNotFoundIfClosing(err)
+		}
+		defer key4.Close()
 
-	if len(ipsv4) == 0 {
-		if err := delValue(key4, "NameServer"); err != nil {
+		if len(ipsv4) == 0 {
+			if err := delValue(key4, "NameServer"); err != nil {
+				return err
+			}
+		} else if err := key4.SetStringValue("NameServer", strings.Join(ipsv4, ",")); err != nil {
 			return err
 		}
-	} else if err := key4.SetStringValue("NameServer", strings.Join(ipsv4, ",")); err != nil {
-		return err
-	}
 
-	if len(domains) == 0 {
-		if err := delValue(key4, "SearchList"); err != nil {
+		if len(domains) == 0 {
+			if err := delValue(key4, "SearchList"); err != nil {
+				return err
+			}
+		} else if err := key4.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
 			return err
 		}
-	} else if err := key4.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
-		return err
-	}
 
-	key6, err := m.openInterfaceKey(winutil.IPv6TCPIPInterfacePrefix)
-	if err != nil {
-		return m.muteKeyNotFoundIfClosing(err)
-	}
-	defer key6.Close()
-
-	if len(ipsv6) == 0 {
-		if err := delValue(key6, "NameServer"); err != nil {
+		// Disable LLMNR on the Tailscale interface. We don't do multicast, and we
+		// certainly don't do LLMNR, so it's pointless to make Windows try it. It is
+		// being deprecated.
+		if err := key4.SetDWordValue("EnableMulticast", 0); err != nil {
 			return err
 		}
-	} else if err := key6.SetStringValue("NameServer", strings.Join(ipsv6, ",")); err != nil {
-		return err
 	}
 
-	if len(domains) == 0 {
-		if err := delValue(key6, "SearchList"); err != nil {
+	if m.doV6 {
+		key6, err := m.openInterfaceKey(winutil.IPv6TCPIPInterfacePrefix)
+		if err != nil {
+			return m.muteKeyNotFoundIfClosing(err)
+		}
+		defer key6.Close()
+
+		if len(ipsv6) == 0 {
+			if err := delValue(key6, "NameServer"); err != nil {
+				return err
+			}
+		} else if err := key6.SetStringValue("NameServer", strings.Join(ipsv6, ",")); err != nil {
 			return err
 		}
-	} else if err := key6.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
-		return err
-	}
 
-	// Disable LLMNR on the Tailscale interface. We don't do multicast, and we
-	// certainly don't do LLMNR, so it's pointless to make Windows try it. It is
-	// being deprecated.
-	if err := key4.SetDWordValue("EnableMulticast", 0); err != nil {
-		return err
-	}
-	if err := key6.SetDWordValue("EnableMulticast", 0); err != nil {
-		return err
+		if len(domains) == 0 {
+			if err := delValue(key6, "SearchList"); err != nil {
+				return err
+			}
+		} else if err := key6.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
+			return err
+		}
+
+		// Disable LLMNR on the Tailscale interface. We don't do multicast, and we
+		// certainly don't do LLMNR, so it's pointless to make Windows try it. It is
+		// being deprecated.
+		if err := key6.SetDWordValue("EnableMulticast", 0); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -573,9 +608,12 @@ func (m *windowsManager) reconfigureDNSRegistration() {
 // the Windows DHCP client from registering Tailscale IP addresses with DNS
 // and sending dynamic updates for our interface to AD domain controllers.
 func (m *windowsManager) configureDNSRegistration(enabled bool) error {
-	prefixen := []winutil.RegistryPathPrefix{
-		winutil.IPv4TCPIPInterfacePrefix,
-		winutil.IPv6TCPIPInterfacePrefix,
+	prefixen := make([]winutil.RegistryPathPrefix, 0, 2)
+	if m.doV4 {
+		prefixen = append(prefixen, winutil.IPv4TCPIPInterfacePrefix)
+	}
+	if m.doV6 {
+		prefixen = append(prefixen, winutil.IPv6TCPIPInterfacePrefix)
 	}
 
 	var (
@@ -629,6 +667,10 @@ func (m *windowsManager) setSingleDWORD(prefix winutil.RegistryPathPrefix, value
 // Further, LLMNR and NetBIOS are being deprecated anyway in favor of MDNS.
 // https://techcommunity.microsoft.com/t5/networking-blog/aligning-on-mdns-ramping-down-netbios-name-resolution-and-llmnr/ba-p/3290816
 func (m *windowsManager) disableNetBIOS() error {
+	if !m.doNetBIOS {
+		return nil
+	}
+
 	return m.setSingleDWORD(winutil.NetBTInterfacePrefix, "NetbiosOptions", 2)
 }
 
