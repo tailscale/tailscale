@@ -574,14 +574,14 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `elasticIPs` _[PeerRelayAWSElasticIP](#peerrelayawselasticip) array_ | ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load<br />Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair<br />per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica<br />has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.<br />When set, the reconciler stamps<br />service.beta.kubernetes.io/aws-load-balancer-eip-allocations and<br />service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in<br />spec.service.annotations. |  | MinItems: 1 <br /> |
+| `elasticIPs` _[PeerRelayAWSElasticIP](#peerrelayawselasticip) array_ | ElasticIPs pins each replica to a specific AWS EIP allocation and subnet. Only meaningful when Network Load<br />Balancers are provisioned by the AWS Load Balancer Controller. ElasticIPs supplies one allocation-subnet pair<br />per replica: replica N uses ElasticIPs[N]. The list must be at least as long as spec.replicas so every replica<br />has a distinct EIP; extra entries are permitted so that scale-up doesn't immediately trip validation.<br />Pinning a subnet enables only that subnet's availability zone on the replica's load balancer, and a Network<br />Load Balancer only forwards to targets in an enabled zone. Nothing constrains the scheduler to place the<br />replica's pod in that zone, so a pod scheduled elsewhere, including after a reschedule, becomes unreachable<br />on its Elastic IP while still appearing healthy.<br />Every replica of a PeerRelay shares one pod template, so a ProxyClass referenced by spec.proxyClass can<br />confine the pods to a zone but cannot place different replicas in different zones. To use this field<br />safely, name subnets in a single availability zone and pin the pods to that same zone with a ProxyClass<br />setting spec.statefulSet.pod.nodeSelector to topology.kubernetes.io/zone. Note that this trades the zone<br />redundancy that running several replicas would otherwise buy. Spreading replicas across zones with their<br />own Elastic IPs needs a per-replica scheduling constraint that neither PeerRelay nor ProxyClass can<br />currently express.<br />When set, the reconciler stamps<br />service.beta.kubernetes.io/aws-load-balancer-eip-allocations and<br />service.beta.kubernetes.io/aws-load-balancer-subnets on each per-replica Service, overriding any values in<br />spec.service.annotations. |  | MinItems: 1 <br /> |
 
 
 #### PeerRelayAWSElasticIP
 
 
 
-PeerRelayAWSElasticIP pairs an EIP allocation with the subnet in the same AZ.
+PeerRelayAWSElasticIP pairs an EIP allocation with the subnet it is attached to.
 
 
 
@@ -591,7 +591,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `allocationID` _string_ | AllocationID is the AWS EIP allocation ID (e.g. eipalloc-0123abcd) whose public IP this replica is reachable<br />on. Stamped as service.beta.kubernetes.io/aws-load-balancer-eip-allocations on the replica's Service. |  | Pattern: `^eipalloc-[0-9a-f]+$` <br /> |
-| `subnetID` _string_ | SubnetID is the AWS subnet in the same availability zone as AllocationID (e.g. subnet-0123abcd). Stamped as<br />service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service so the NLB is provisioned in<br />the same AZ as the EIP. |  | Pattern: `^subnet-[0-9a-f]+$` <br /> |
+| `subnetID` _string_ | SubnetID is the AWS subnet the replica's load balancer is provisioned in (e.g. subnet-0123abcd). It must be<br />a public subnet, and no two replicas may name subnets in the same availability zone, since a load balancer<br />accepts only one Elastic IP per zone. A standard VPC Elastic IP is regional rather than zonal, so it takes<br />the zone of whichever subnet it is paired with here. Stamped as<br />service.beta.kubernetes.io/aws-load-balancer-subnets on the replica's Service. |  | Pattern: `^subnet-[0-9a-f]+$` <br /> |
 
 
 #### PeerRelayEndpoint
@@ -667,7 +667,7 @@ _Appears in:_
 | `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for peer relays.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. | 1 | Minimum: 0 <br /> |
 | `tailnet` _string_ | Tailnet specifies the tailnet this PeerRelay should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 | `service` _[PeerRelayService](#peerrelayservice)_ | Service contains configuration values to modify the LoadBalancer service used to expose the peer relay. |  |  |
-| `aws` _[PeerRelayAWS](#peerrelayaws)_ | AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful<br />when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any<br />aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations. |  |  |
+| `aws` _[PeerRelayAWS](#peerrelayaws)_ | AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful<br />when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any<br />aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.<br />Leave this unset unless the peer relays must be reachable on addresses you control. Pinning a subnet<br />confines a replica's load balancer to that subnet's availability zone, and an AWS Network Load Balancer<br />only forwards to targets in a zone that is enabled on it, so a replica whose pod is scheduled into any<br />other zone stops receiving traffic. Setting this field therefore also requires pinning the pods to the<br />matching zone with a ProxyClass, as described on ElasticIPs. Without this field the AWS Load Balancer<br />Controller instead provisions each load balancer across every zone it discovers, and the operator turns on<br />cross-zone load balancing so the replica is reachable wherever it happens to be scheduled, with no<br />scheduling constraints needed. |  |  |
 
 
 #### PeerRelayStatus
@@ -684,7 +684,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
-| `endpoints` _[PeerRelayEndpoint](#peerrelayendpoint) array_ | Endpoints lists the public address:port pairs each peer relay replica is reachable on. There is one entry<br />per replica whose LoadBalancer Service has been assigned a public address; entries appear as the underlying<br />cloud provisions each Service. |  |  |
+| `endpoints` _[PeerRelayEndpoint](#peerrelayendpoint) array_ | Endpoints lists the public address:port pairs each peer relay replica is reachable on. Entries appear as the<br />underlying cloud provisions each Service. A replica has one entry per address its LoadBalancer Service was<br />given, which is usually one, but a load balancer spanning several availability zones has an address in each<br />and every one of them is listed. |  |  |
 
 
 #### Pod

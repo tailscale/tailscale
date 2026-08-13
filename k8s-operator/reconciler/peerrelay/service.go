@@ -21,6 +21,7 @@ import (
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 )
 
 const (
@@ -41,6 +42,7 @@ const (
 
 	annotationEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	annotationSubnets        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
+	annotationLBAttributes   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
 )
 
 // cloudAnnotations are the cloud-provider-specific annotations applied to every generated LoadBalancer Service to
@@ -51,6 +53,14 @@ var cloudAnnotations = map[string]string{
 	"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
 	"service.beta.kubernetes.io/aws-load-balancer-scheme":          "internet-facing",
 	"service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "ipv4",
+
+	// AWS: health check the pod over HTTP against containerboot's /healthz rather than the port the Service
+	// forwards. A peer relay listens only on UDP, so the default TCP check against the traffic port can never
+	// succeed and every target reports unhealthy even while relaying fine. /healthz returns 200 once the device
+	// has tailnet addresses, which is the condition that actually matters.
+	"service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol": "http",
+	"service.beta.kubernetes.io/aws-load-balancer-healthcheck-port":     strconv.Itoa(tailscaled.HealthCheckPort),
+	"service.beta.kubernetes.io/aws-load-balancer-healthcheck-path":     "/healthz",
 
 	// Azure: pin the LB to external.
 	"service.beta.kubernetes.io/azure-load-balancer-internal": "false",
@@ -82,6 +92,15 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]stri
 	}
 
 	maps.Copy(annotations, cloudAnnotations)
+
+	// Unless the user has taken control of the load balancer attributes themselves, default cross-zone on. When no
+	// subnet is pinned the AWS Load Balancer Controller spreads the load balancer over every zone it discovers,
+	// and cross-zone is what lets all of those addresses reach the replica's pod regardless of the zone the
+	// scheduler placed it in. It is inert when spec.aws.elasticIPs pins a subnet, since only one zone is enabled
+	// on that load balancer, so there is no need to special case it.
+	if _, ok := annotations[annotationLBAttributes]; !ok {
+		annotations[annotationLBAttributes] = "load_balancing.cross_zone.enabled=true"
+	}
 
 	// Per-replica AWS pinning always wins over anything in spec.service.annotations or the cloud defaults so users
 	// can rely on spec.aws.elasticIPs being the single source of truth for each replica's EIP + subnet.
@@ -141,27 +160,33 @@ func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
 	return int32(n), true
 }
 
-func (r *Reconciler) peerRelayEndpoint(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service, prev *tsapi.PeerRelayEndpoint) *tsapi.PeerRelayEndpoint {
+// peerRelayEndpoints returns one endpoint per public address the Service's load balancer answers on. A load
+// balancer confined to a single subnet has one, while one the cloud spread over several availability zones has an
+// address in each, and every one of them reaches the replica. Advertising all of them means a peer can still get
+// through when a zone becomes unreachable, and means the user is not paying for addresses nothing uses.
+//
+// prev is the set of endpoints last published for this replica, returned unchanged when a lookup fails so a
+// transient DNS error doesn't empty status.endpoints.
+func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service, prev []tsapi.PeerRelayEndpoint) []tsapi.PeerRelayEndpoint {
 	idx, ok := replicaIndexFromLabels(svc.Labels)
 	if !ok {
 		return nil
 	}
 
+	var endpoints []tsapi.PeerRelayEndpoint
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP != "" {
-			return &tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort}
+			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort})
 		}
 	}
-
-	// Just return nil if we're not dealing with AWS fun.
-	if _, ok = svc.Annotations[annotationEIPAllocations]; !ok {
-		return nil
+	if len(endpoints) > 0 {
+		return endpoints
 	}
 
-	// If we were not able to obtain an IP address, we fall back to an IPv4 lookup. This is specifically for the case
-	// of AWS where NLB-backed Service resources are only ever given hostnames. We expect users to also provide
-	// an annotation with their elastic IP allocations so that there is only ever 1 IP address behind the hostname, so
-	// we perform a lookup so that the user doesn't also need to provide that IP address.
+	// No IP was assigned, so fall back to resolving the hostname. This is primarily for AWS, where NLB-backed
+	// Service resources are only ever given hostnames. The addresses behind such a hostname belong to the load
+	// balancer and are fixed for its lifetime, whether they came from spec.aws.elasticIPs or were assigned by
+	// AWS, so we resolve it here rather than making the user supply the address themselves.
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.Hostname == "" {
 			continue
@@ -172,9 +197,10 @@ func (r *Reconciler) peerRelayEndpoint(ctx context.Context, logger *zap.SugaredL
 
 		addrs, err := r.resolver(resolveCtx, "ip4", ing.Hostname)
 		if err != nil || len(addrs) == 0 {
-			logger.Warnf("failed to resolve LoadBalancer hostname %q for Service %q: %v", ing.Hostname, svc.Name, err)
-			// Preserve the previously-known endpoint (if any) so that a failure here doesn't erase status.endpoints.
-			if prev != nil {
+			logger.Debugf("failed to resolve LoadBalancer hostname %q for Service %q: %v", ing.Hostname, svc.Name, err)
+			// Preserve the previously-known endpoints (if any) so that a failure here doesn't erase
+			// status.endpoints.
+			if len(prev) > 0 {
 				return prev
 			}
 
@@ -182,7 +208,11 @@ func (r *Reconciler) peerRelayEndpoint(ctx context.Context, logger *zap.SugaredL
 		}
 
 		slices.SortFunc(addrs, netip.Addr.Compare)
-		return &tsapi.PeerRelayEndpoint{Replica: idx, Address: addrs[0].String(), Port: servicePort}
+		for _, addr := range addrs {
+			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: addr.String(), Port: servicePort})
+		}
+
+		return endpoints
 	}
 
 	return nil
