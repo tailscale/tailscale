@@ -120,6 +120,7 @@ func multicastInterfaces() ([]*net.Interface, error) {
 		return nil, err
 	}
 	var out set.Set[*net.Interface]
+	out.Make()
 	for i := range ifaces {
 		iface := &ifaces[i]
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagMulticast == 0 {
