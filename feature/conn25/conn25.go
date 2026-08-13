@@ -96,6 +96,7 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 	}
 	if !e.conn25.isConfigured() {
 		http.Error(w, "conn25 not configured", http.StatusServiceUnavailable)
+		return
 	}
 	e.handleConnectorTransitIP(h, w, r)
 }
