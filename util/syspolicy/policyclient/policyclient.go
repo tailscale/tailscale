@@ -72,6 +72,17 @@ type Client interface {
 	// If uid is empty, returns the default-scope policy. Returns nil, nil if policy
 	// snapshots are not supported.
 	GetPolicySnapshot(uid string) (*PolicySnapshot, error)
+
+	// EnsureUserPolicyStore ensures that a policy store is registered for the user with
+	// the specified Windows SID. It is refcounted, and each call must be balanced by
+	// a ReleaseUserPolicyStore call. It is a no-op on non-Windows platforms or if syspolicy
+	// is omitted from the build.
+	EnsureUserPolicyStore(uid string) error
+
+	// ReleaseUserPolicyStore decrements the refcount for the user's policy store. When
+	// the refcount reaches zero, the store is unregistered and closed. It is a no-op
+	// on non-Windows platforms or if syspolicy is omitted from the build.
+	ReleaseUserPolicyStore(uid string)
 }
 
 // PolicySnapshot is an alias for [setting.Snapshot] unless syspolicy is omitted from the build.
@@ -157,3 +168,7 @@ func (NoPolicyClient) RegisterChangeCallback(uid string, cb func(PolicyChange)) 
 func (NoPolicyClient) GetPolicySnapshot(uid string) (*PolicySnapshot, error) {
 	return nil, nil
 }
+
+func (NoPolicyClient) EnsureUserPolicyStore(uid string) error { return nil }
+
+func (NoPolicyClient) ReleaseUserPolicyStore(uid string) {}

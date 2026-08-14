@@ -278,3 +278,11 @@ func (globalSyspolicy) GetPolicySnapshot(uid string) (*policyclient.PolicySnapsh
 	}
 	return p.Get(), nil
 }
+
+func (globalSyspolicy) EnsureUserPolicyStore(uid string) error {
+	return ensureUserPolicyStore(uid)
+}
+
+func (globalSyspolicy) ReleaseUserPolicyStore(uid string) {
+	releaseUserPolicyStore(uid)
+}

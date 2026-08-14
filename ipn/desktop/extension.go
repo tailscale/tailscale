@@ -78,8 +78,28 @@ func (e *desktopSessionsExt) Init(host ipnext.Host) (err error) {
 	if err != nil {
 		return fmt.Errorf("session callback registration failed: %w", err)
 	}
+
+	// Register per-user policy stores when users log in and unregister them when they log off.
+	polc := policyclient.Get()
+	unregisterPolicyCb, err := e.sm.RegisterInitCallback(func(session *Session) func() {
+		uid := string(session.User.UserID())
+		if uid == "" {
+			return nil
+		}
+		if err := polc.EnsureUserPolicyStore(uid); err != nil {
+			e.logf("failed to register user policy store for %s: %v", uid, err)
+			return nil
+		}
+		return func() {
+			polc.ReleaseUserPolicyStore(uid)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("policy init callback registration failed: %w", err)
+	}
+
 	host.Hooks().BackgroundProfileResolvers.Add(e.getBackgroundProfile)
-	e.cleanup = []func(){unregisterSessionCb}
+	e.cleanup = []func(){unregisterSessionCb, unregisterPolicyCb}
 	return nil
 }
 

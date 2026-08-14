@@ -7770,6 +7770,43 @@ func TestUpdatePrefsOnSysPolicyChange(t *testing.T) {
 	}
 }
 
+func TestPerUserPolicySnapshots(t *testing.T) {
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(pkey.AdminConsoleVisibility, setting.UserSetting, setting.VisibilityValue),
+	)
+
+	deviceStore := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, deviceStore)
+
+	userStoreA := source.NewTestStoreOf(t,
+		source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreA", setting.UserScopeOf("S-1-5-21-1001"), userStoreA)
+
+	userStoreB := source.NewTestStoreOf(t,
+		source.TestSettingOf(pkey.AdminConsoleVisibility, "show"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreB", setting.UserScopeOf("S-1-5-21-1002"), userStoreB)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(testPolicyClient{})
+	lb := newTestLocalBackendWithSys(t, sys)
+
+	actorA := &ipnauth.TestActor{UID: "S-1-5-21-1001"}
+	nwA := newNotificationWatcher(t, lb, actorA)
+	nwA.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
+		wantPolicyWithSetting(pkey.AdminConsoleVisibility, "hide"),
+	})
+	nwA.check()
+
+	actorB := &ipnauth.TestActor{UID: "S-1-5-21-1002"}
+	nwB := newNotificationWatcher(t, lb, actorB)
+	nwB.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
+		wantPolicyWithSetting(pkey.AdminConsoleVisibility, "show"),
+	})
+	nwB.check()
+}
+
 func TestUpdateIngressAndServiceHashLocked(t *testing.T) {
 	prefs := ipn.NewPrefs().View()
 	previousSC := &ipn.ServeConfig{
@@ -8667,6 +8704,10 @@ func (testPolicyClient) RegisterChangeCallback(uid string, cb func(policyclient.
 		cb(change)
 	}), nil
 }
+
+func (testPolicyClient) EnsureUserPolicyStore(uid string) error { return nil }
+
+func (testPolicyClient) ReleaseUserPolicyStore(uid string) {}
 
 type textUpdate struct {
 	Advertise   []string

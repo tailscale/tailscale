@@ -246,3 +246,7 @@ func (sp Config) SetDebugLoggingEnabled(enabled bool) {}
 func (c Config) GetPolicySnapshot(uid string) (*policyclient.PolicySnapshot, error) {
 	return nil, nil
 }
+
+func (c Config) EnsureUserPolicyStore(uid string) error { return nil }
+
+func (c Config) ReleaseUserPolicyStore(uid string) {}

@@ -126,6 +126,27 @@ func newPlatformPolicyStore(scope gp.Scope, softwareKey registry.Key, policyLock
 	}
 }
 
+// nopPolicyLock is a lockableCloser that does nothing.
+// Used when no user token is available to create a real GP lock.
+type nopPolicyLock struct{}
+
+func (nopPolicyLock) Lock() error  { return nil }
+func (nopPolicyLock) Unlock()      {}
+func (nopPolicyLock) Close() error { return nil }
+
+func NewUserPlatformPolicyStoreForSID(sid string) (*PlatformPolicyStore, error) {
+	softwareKey, err := registry.OpenKey(registry.USERS, sid+`\`+softwareKeyName, windows.KEY_READ)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the %s key for user %s: %w", softwareKeyName, sid, err)
+	}
+	return &PlatformPolicyStore{
+		scope:       gp.UserPolicy,
+		softwareKey: softwareKey,
+		done:        make(chan struct{}),
+		policyLock:  nopPolicyLock{},
+	}, nil
+}
+
 // Lock locks the policy store, preventing the system from modifying the policies
 // while they are being read. It is a read lock that may be acquired by multiple goroutines.
 // Each Lock call must be balanced by exactly one Unlock call.

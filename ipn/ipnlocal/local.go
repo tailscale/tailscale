@@ -2389,7 +2389,11 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	snapshot, err := b.polc.GetPolicySnapshot("")
+	uid := ""
+	if sess.owner != nil {
+		uid = string(sess.owner.UserID())
+	}
+	snapshot, err := b.polc.GetPolicySnapshot(uid)
 	if err != nil || snapshot == nil {
 		return
 	}
@@ -3808,9 +3812,9 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		}
 		if mask&ipn.NotifySysPolicyChanges != 0 {
 			var err error
-			ini.Policy, err = b.polc.GetPolicySnapshot("")
+			ini.Policy, err = b.polc.GetPolicySnapshot(string(actor.UserID()))
 			if err != nil {
-				b.logf("syspolicy: GetPolicySnapshot(\"\"): %v", err)
+				b.logf("syspolicy: GetPolicySnapshot(%q): %v", actor.UserID(), err)
 			}
 		}
 	}
@@ -3834,12 +3838,11 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	deadlockDone()
 
 	if mask&ipn.NotifySysPolicyChanges != 0 {
-		if unreg, err := b.polc.RegisterChangeCallback("", func(_ policyclient.PolicyChange) {
+		uid := string(actor.UserID())
+		if unreg, err := b.polc.RegisterChangeCallback(uid, func(_ policyclient.PolicyChange) {
 			b.sysPolicyChangedForSession(session)
 		}); err == nil {
 			defer unreg()
-		} else {
-			b.logf("syspolicy: RegisterChangeCallback(\"\"): %v", err)
 		}
 	}
 
