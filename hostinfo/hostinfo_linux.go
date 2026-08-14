@@ -7,8 +7,12 @@ package hostinfo
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/util/lineiter"
@@ -22,6 +26,7 @@ func init() {
 	distroVersion = distroVersionLinux
 	distroCodeName = distroCodeNameLinux
 	deviceModel = deviceModelLinux
+	systemdLogindDesktop = hasLogindDesktop
 }
 
 var (
@@ -176,4 +181,95 @@ func packageTypeLinux() string {
 		return "snap"
 	}
 	return ""
+}
+
+// hasLogindDesktop calls [systemdLogindFindDesktop] with a 100 millisecond
+// timeout.
+func hasLogindDesktop() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	runner := &osLogindRunner{ctx: ctx}
+	return systemdLogindFindDesktop(runner)
+}
+
+// logindConn is the interface for querying systemd-logind session information.
+// It exists to be able to swap the backend for testing.
+type logindRunner interface {
+	// listSessions returns the raw JSON output of
+	// "loginctl list-sessions --json=short", which is a json blob containing
+	// output like: '[{"session":"8"},{"session":"9"}]'.
+	listSessions() ([]byte, error)
+
+	// getSessionType returns the raw output of
+	// "loginctl show-session <id> --property=Type", which is a single line of
+	// the form "Type=<value>".
+	getSessionType(string) (string, error)
+}
+
+// osLogindRunner implements [logindRunner] by shelling out to the system logind.
+type osLogindRunner struct{ ctx context.Context }
+
+// listSessions implements [logindRunner] using os calls.
+func (r *osLogindRunner) listSessions() ([]byte, error) {
+	path, err := exec.LookPath("loginctl")
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(r.ctx, path, "list-sessions", "--json=short")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return output, nil
+}
+
+// getSessionType implements [logindRunner] using os calls.
+func (r *osLogindRunner) getSessionType(session string) (string, error) {
+	path, err := exec.LookPath("loginctl")
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(r.ctx,
+		path, "show-session", session, "--property=Type", "--value")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	return string(output), nil
+}
+
+// systemdLogindFindDesktop reports whether any active logind session has a
+// graphical desktop type (x11, wayland, or mir). On an error or with no types
+// matching the list above, it returns false.
+func systemdLogindFindDesktop(logind logindRunner) bool {
+	sessionJSON, err := logind.listSessions()
+	if err != nil {
+		return false
+	}
+
+	type session struct {
+		Session string `json:"session"`
+	}
+
+	var sessions []session
+	err = json.Unmarshal(sessionJSON, &sessions)
+	if err != nil {
+		return false
+	}
+
+	for _, sess := range sessions {
+		typeString, err := logind.getSessionType(sess.Session)
+		if err != nil {
+			continue
+		}
+
+		switch strings.ToLower(strings.TrimSpace(typeString)) {
+		case "wayland", "x11", "mir":
+			return true
+		}
+	}
+
+	return false
 }
