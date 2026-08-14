@@ -124,8 +124,8 @@ func FuzzNodeHasherCompare(f *testing.F) {
 		selfID, aID, bID := seed[0], seed[1], seed[2]
 		f.Add(selfID, aID, bID)
 	}
+
 	f.Fuzz(func(t *testing.T, selfID, aID, bID uint64) {
-		t.Logf("selfID %d, aID %d, bID %d", selfID, aID, bID)
 		h := traffic.MakeRendezvousHasher(tailcfg.NodeID(selfID))
 		a, b := tailcfg.NodeID(aID), tailcfg.NodeID(bID)
 		c := h.Compare(a, b)
@@ -152,8 +152,8 @@ func FuzzSortNodes(f *testing.F) {
 	} {
 		f.Add(seed[0], seed[1])
 	}
+
 	f.Fuzz(func(t *testing.T, seed1, seed2 uint64) {
-		t.Logf("using random seeds %d %d", seed1, seed2)
 		rnd := rand.New(rand.NewPCG(seed1, seed2))
 
 		wantScore := traffic.Score(rnd.IntN(2000))
