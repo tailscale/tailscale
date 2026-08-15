@@ -8,6 +8,7 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -566,7 +567,7 @@ func (c *serviceMeteredConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
 	}
-	return nil
+	return errors.ErrUnsupported
 }
 
 // meteredConnForService wraps c to count peer bytes against the per-Service
@@ -779,26 +780,57 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 		proxyHeader, err = header.Format()
 		if err != nil {
 			b.logf("localbackend: failed to format proxy protocol header for port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+			return err
 		}
 	}
 
-	errc := make(chan error, 1)
-	go func() {
-		if len(proxyHeader) > 0 {
-			if _, err := backConn.Write(proxyHeader); err != nil {
+	// Both pumps report exactly once into a channel large enough that neither
+	// can be left blocked while the owner handles the other pump's result.
+	errc := make(chan error, 2)
+	pump := func(dst, src net.Conn, prefix []byte) {
+		if len(prefix) > 0 {
+			if _, err := io.Copy(dst, bytes.NewReader(prefix)); err != nil {
 				errc <- err
-				backConn.Close()
 				return
 			}
 		}
-		_, err := io.Copy(backConn, conn)
-		errc <- err
-	}()
-	go func() {
-		_, err := io.Copy(conn, backConn)
-		errc <- err
-	}()
-	return <-errc
+		if _, err := io.Copy(dst, src); err != nil {
+			errc <- err
+			return
+		}
+		cw, ok := dst.(interface{ CloseWrite() error })
+		if !ok {
+			errc <- errors.ErrUnsupported
+			return
+		}
+		errc <- cw.CloseWrite()
+	}
+
+	go pump(backConn, conn, proxyHeader)
+	go pump(conn, backConn, nil)
+
+	firstErr := <-errc
+	if firstErr != nil {
+		// A hard failure must unblock the other pump before we wait for it.
+		conn.Close()
+		backConn.Close()
+	}
+	secondErr := <-errc
+	// Final full closes release both descriptors after both pumps have exited.
+	conn.Close()
+	backConn.Close()
+	var result error
+	if firstErr != nil {
+		result = firstErr
+	} else {
+		result = secondErr
+	}
+	// Historically the handler reports an unsupported half-close (for example,
+	// on Unix sockets) as a cleanly handled connection-local termination.
+	if errors.Is(result, errors.ErrUnsupported) {
+		return nil
+	}
+	return result
 }
 
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
