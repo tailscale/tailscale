@@ -206,6 +206,9 @@ func TestExpectedFeaturesLinked(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("has a Windows panic-capture race; see #20443")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n := NewTestNode(t, env)
@@ -845,6 +848,9 @@ func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("--config is unsupported by the Windows service; see #20871")
+	}
 	t.Parallel()
 	const authKey = "opensesame"
 	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
@@ -870,6 +876,9 @@ func TestConfigFileAuthKey(t *testing.T) {
 }
 
 func TestTwoNodes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -955,6 +964,9 @@ func TestTwoNodes(t *testing.T) {
 // tests two nodes where the first gets a incremental MapResponse (with only
 // PeersRemoved set) saying that the second node disappeared.
 func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -1042,6 +1054,9 @@ func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
 // This covers VIP additions at runtime, where the VIP route is not reachable
 // before the map mutation but is reachable over TSMP afterward.
 func TestIncrementalMapUpdatePeerAllowedIPsReachability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 
@@ -1267,6 +1282,9 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("restarting the daemon with preserved state needs harness support; see #20750")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -1316,7 +1334,7 @@ func TestNoControlConnWhenDown(t *testing.T) {
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
 	tstest.Parallel(t)
-	env := NewTestEnv(t, canRunAsServiceOnWindows())
+	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
 	n1.upFlagGOOS = "windows"
 
@@ -1334,6 +1352,9 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.
 func TestClientSideJailing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17419")
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
@@ -1446,6 +1467,9 @@ func TestClientSideJailing(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/12169")
 	tstest.Parallel(t)
 	for _, v6 := range []bool{false, true} {
@@ -1574,6 +1598,9 @@ func TestNATPing(t *testing.T) {
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	// Spin up some nodes.
@@ -1633,6 +1660,9 @@ func TestAutoUpdateDefaults_cap(t *testing.T) { testAutoUpdateDefaults(t, true) 
 // useCap is whether to use NodeAttrDefaultAutoUpdate (as opposed to the old
 // DeprecatedDefaultAutoUpdate top-level MapResponse field).
 func testAutoUpdateDefaults(t *testing.T, useCap bool) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	t.Cleanup(feature.HookCanAutoUpdate.SetForTest(func() bool { return true }))
 
 	env := NewTestEnv(t)
@@ -2117,6 +2147,9 @@ func TestNetstackUDPLoopback(t *testing.T) {
 }
 
 func TestEncryptStateMigration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("--encrypt-state is unsupported by the Windows service; see #20872")
+	}
 	if !hostinfo.New().TPM.Present() {
 		t.Skip("TPM not available")
 	}
@@ -2177,6 +2210,9 @@ func TestEncryptStateMigration(t *testing.T) {
 // relay between all 3 nodes, and "tailscale debug peer-relay-sessions" returns
 // expected values.
 func TestPeerRelayPing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/17251")
 	tstest.Parallel(t)
 
@@ -2317,6 +2353,9 @@ func TestPeerRelayPing(t *testing.T) {
 }
 
 func TestC2NDebugNetmap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t, ConfigureControl(func(s *testcontrol.Server) {
 		s.CollectServices = opt.False
@@ -2455,7 +2494,9 @@ func TestC2NDebugNetmap(t *testing.T) {
 }
 
 func TestTailnetLock(t *testing.T) {
-
+	if runtime.GOOS == "windows" {
+		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
+	}
 	// If you run `tailscale lock log` on a node where Tailnet Lock isn't
 	// enabled, you get an error explaining that.
 	t.Run("log-when-not-enabled", func(t *testing.T) {
@@ -2597,6 +2638,9 @@ func TestTailnetLock(t *testing.T) {
 }
 
 func TestNodeWithBadStateFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("service harness can't seed a corrupt state file before start; see #20750")
+	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
