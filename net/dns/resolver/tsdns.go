@@ -107,6 +107,10 @@ type Config struct {
 	// "node.tailnet.ts.net" is in SubdomainHosts, the query resolves
 	// to the IPs for "node.tailnet.ts.net".
 	SubdomainHosts set.Set[dnsname.FQDN]
+	// SingleLabelResolvers, if non-empty, are used for single-label queries
+	// that miss MagicDNS/Hosts and do not match a more-specific non-"."
+	// route. Applied only for local queries, not peer/Exit DNS.
+	SingleLabelResolvers []*dnstype.Resolver
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -131,6 +135,10 @@ func (c *Config) WriteToBufioWriter(w *bufio.Writer) {
 	w.WriteString("]")
 	if arpa > 0 {
 		fmt.Fprintf(w, "+%darpa", arpa)
+	}
+	if len(c.SingleLabelResolvers) > 0 {
+		w.WriteString(" SingleLabelResolvers:")
+		WriteDNSResolvers(w, c.SingleLabelResolvers)
 	}
 	if c := cloudenv.Get(); c != "" {
 		fmt.Fprintf(w, ", cloud=%q", string(c))
@@ -360,7 +368,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		}
 	}
 
-	r.forwarder.setRoutes(cfg.Routes, cfg.AcceptDNS)
+	r.forwarder.setRoutes(cfg.Routes, cfg.AcceptDNS, cfg.SingleLabelResolvers)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -423,7 +431,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
-		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses)
+		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, family, from}, responses, true)
 		if err != nil {
 			return nil, err
 		}
@@ -523,7 +531,8 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 			}}
 		}
 
-		err = r.forwarder.forwardWithDestChan(ctx, packet{q, "tcp", from}, ch, resolvers...)
+		// Exit/peer DNS must not use SingleLabelResolvers.
+		err = r.forwarder.forwardWithDestChan(ctx, packet{q, "tcp", from}, ch, false, resolvers...)
 		if err != nil {
 			metricDNSExitProxyErrorForward.Add(1)
 			return nil, err
