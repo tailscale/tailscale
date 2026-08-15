@@ -5982,7 +5982,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(selfNode tailcfg.NodeView, pre
 		}
 	}
 	slices.Sort(domains)
-	slices.SortFunc(routes, func(i, j netip.Prefix) int { return i.Addr().Compare(j.Addr()) })
+	slices.SortFunc(routes, netipx.ComparePrefix)
 	domains = slices.Compact(domains)
 	routes = slices.Compact(routes)
 	b.appConnector.UpdateDomainsAndRoutes(domains, routes)
