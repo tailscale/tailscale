@@ -219,7 +219,11 @@ func (c *Conn) handleTCP() error {
 		c.clientConn.Write(buf)
 		return err
 	}
-	defer srv.Close()
+	closeBoth := func() {
+		c.clientConn.Close()
+		srv.Close()
+	}
+	defer closeBoth()
 
 	localAddr := srv.LocalAddr().String()
 	serverAddr, serverPort, err := splitHostPort(localAddr)
@@ -237,27 +241,47 @@ func (c *Conn) handleTCP() error {
 	}
 	buf, err := res.marshal()
 	if err != nil {
-		res = errorResponse(generalFailure)
-		buf, _ = res.marshal()
+		failure, _ := errorResponse(generalFailure).marshal()
+		io.Copy(c.clientConn, bytes.NewReader(failure))
+		return err
 	}
-	c.clientConn.Write(buf)
+	if _, err := io.Copy(c.clientConn, bytes.NewReader(buf)); err != nil {
+		return fmt.Errorf("write CONNECT response: %w", err)
+	}
 
+	// Each pump reports exactly once into a channel large enough that neither
+	// can block while the owner handles the other pump's result.
 	errc := make(chan error, 2)
-	go func() {
-		_, err := io.Copy(c.clientConn, srv)
+	pump := func(dst, src net.Conn, direction string) {
+		_, err := io.Copy(dst, src)
 		if err != nil {
-			err = fmt.Errorf("from backend to client: %w", err)
+			errc <- fmt.Errorf("%s: %w", direction, err)
+			return
 		}
-		errc <- err
-	}()
-	go func() {
-		_, err := io.Copy(srv, c.clientConn)
-		if err != nil {
-			err = fmt.Errorf("from client to backend: %w", err)
+		cw, ok := dst.(interface{ CloseWrite() error })
+		if !ok {
+			errc <- fmt.Errorf("%s CloseWrite: %w", direction, errors.ErrUnsupported)
+			return
 		}
-		errc <- err
-	}()
-	return <-errc
+		if err := cw.CloseWrite(); err != nil {
+			errc <- fmt.Errorf("%s CloseWrite: %w", direction, err)
+			return
+		}
+		errc <- nil
+	}
+	go pump(c.clientConn, srv, "from backend to client")
+	go pump(srv, c.clientConn, "from client to backend")
+
+	firstErr := <-errc
+	if firstErr != nil {
+		// A full close unblocks the other pump before the owner waits for it.
+		closeBoth()
+	}
+	secondErr := <-errc
+	if firstErr != nil {
+		return firstErr
+	}
+	return secondErr
 }
 
 func (c *Conn) handleUDP() error {
