@@ -176,26 +176,34 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // testsForShard returns the test names in pkg that belong to the given shard
 // spec (e.g. "2/3"). It uses "go list -json" to find test source files (no
 // compilation) and scans them for top-level test function names, assigning
-// each to a shard by hashing. Returns nil if the spec is invalid or if
-// listing fails (the main run will surface the error).
+// each to a shard by hashing.
+//
+// An empty result means the shard legitimately has no tests, and the caller
+// skips the package without running "go test" at all. Every way discovery can
+// come up short of that must therefore be an error, or the skip silently
+// reports success for tests that were never run.
 func testsForShard(ctx context.Context, pkg, shardSpec string) ([]string, error) {
 	a, b, ok := strings.Cut(shardSpec, "/")
 	if !ok {
-		return nil, nil
+		return nil, fmt.Errorf("invalid shard spec %q, want N/M", shardSpec)
 	}
 	wantShard, err := strconv.Atoi(a)
 	if err != nil || wantShard < 1 {
-		return nil, nil
+		return nil, fmt.Errorf("invalid shard number in shard spec %q", shardSpec)
 	}
 	shards, err := strconv.Atoi(b)
 	if err != nil || shards < 1 {
-		return nil, nil
+		return nil, fmt.Errorf("invalid shard count in shard spec %q", shardSpec)
+	}
+	if wantShard > shards {
+		return nil, fmt.Errorf("shard %d out of range in shard spec %q", wantShard, shardSpec)
 	}
 
-	out, err := exec.CommandContext(ctx, "go", "list", "-json", pkg).Output()
+	list := exec.CommandContext(ctx, "go", "list", "-json", pkg)
+	list.Stderr = os.Stderr
+	out, err := list.Output()
 	if err != nil {
-		// Errors will be surfaced by the main test run.
-		return nil, nil
+		return nil, fmt.Errorf("go list -json %s: %w", pkg, err)
 	}
 
 	type pkgJSON struct {
@@ -211,12 +219,12 @@ func testsForShard(ctx context.Context, pkg, shardSpec string) ([]string, error)
 	for dec.More() {
 		var p pkgJSON
 		if err := dec.Decode(&p); err != nil {
-			break
+			return nil, fmt.Errorf("decoding go list -json output for %s: %w", pkg, err)
 		}
 		for _, f := range append(p.TestGoFiles, p.XTestGoFiles...) {
 			names, err := testFuncNames(filepath.Join(p.Dir, f))
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("scanning test names: %w", err)
 			}
 			for _, name := range names {
 				if seen[name] {

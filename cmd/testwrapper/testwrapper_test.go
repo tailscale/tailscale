@@ -356,6 +356,53 @@ func TestBuildError(t *testing.T) {
 	}
 }
 
+// TestShard covers TS_TEST_SHARD. When the wrapper can't work out which tests
+// the shard should run, it has to fail: it never starts "go test" for a shard
+// that comes up empty, so treating a discovery failure as an empty shard
+// reports success for tests that never ran. A shard that legitimately holds no
+// tests is still a successful skip.
+func TestShard(t *testing.T) {
+	t.Parallel()
+
+	// A package with exactly one test, for the cases that must still pass.
+	// Which of the two shards it lands in depends on the name hash, so both
+	// are expected to succeed, one running it and one skipping it.
+	onefile := filepath.Join(t.TempDir(), "one_test.go")
+	src := []byte("package one_test\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {}\n")
+	if err := os.WriteFile(onefile, src, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		shard    string
+		pkg      string
+		wantCode int
+	}{
+		{"malformed", "bogus", "./doesnotexist", 1},
+		{"zero-shard", "0/3", "./doesnotexist", 1},
+		{"out-of-range", "2/1", "./doesnotexist", 1},
+		{"listing-fails", "1/3", "./doesnotexist", 1},
+		{"valid-first", "1/2", onefile, 0},
+		{"valid-second", "2/2", onefile, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := cmdTestwrapper(t, tt.pkg)
+			cmd.Env = append(cmd.Env, "TS_TEST_SHARD="+tt.shard)
+			out, err := cmd.CombinedOutput()
+			code, ok := errExitCode(err)
+			if err == nil {
+				code, ok = 0, true
+			}
+			if !ok || code != tt.wantCode {
+				t.Fatalf("TS_TEST_SHARD=%s testwrapper %s: got exit code %d, want %d (err: %v, output: %s)", tt.shard, tt.pkg, code, tt.wantCode, err, out)
+			}
+		})
+	}
+}
+
 func TestTimeout(t *testing.T) {
 	t.Parallel()
 
