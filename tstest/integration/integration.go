@@ -9,6 +9,7 @@ package integration
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,8 +62,7 @@ var (
 	verboseTailscaled = flag.Bool("verbose-tailscaled", false, "verbose tailscaled logging")
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 
-	// runWindowsServiceTests enables the Windows service-mode integration tests.
-	// On by default in CI; tests opt in via NewTestEnv(t, canRunAsServiceOnWindows()).
+	// runWindowsServiceTests enables the Windows service-mode integration tests, on by default in CI.
 	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
 )
 
@@ -541,37 +542,10 @@ func (f ConfigureControl) ModifyTestEnv(te *TestEnv) {
 	f(te.Control)
 }
 
-// canRunAsServiceOnWindowsOpt is the TestEnvOpt returned by canRunAsServiceOnWindows.
-type canRunAsServiceOnWindowsOpt struct{}
-
-func (canRunAsServiceOnWindowsOpt) ModifyTestEnv(te *TestEnv) {
-	// Only run as a service on Windows; on other platforms the test runs
-	// the normal userspace daemon with a faked Windows GOOS, as it always has.
-	if runtime.GOOS == "windows" {
-		te.windowsService = true
-	}
-}
-
-// canRunAsServiceOnWindows enables the test to run on Windows.
-// TODO(#20464): remove this and explicitly skip tests that need more work
-// before they can run on Windows, instead of requiring tests to opt in with this option.
-func canRunAsServiceOnWindows() TestEnvOpt { return canRunAsServiceOnWindowsOpt{} }
-
 // NewTestEnv starts a bunch of services and returns a new test environment.
 // NewTestEnv arranges for the environment's resources to be cleaned up on exit.
 func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
-	// Integration tests skip on Windows unless a test opts in via canRunAsServiceOnWindows.
-	// Pre-scan the opts before starting any servers so a skip leaks nothing.
-	canRunAsService := false
-	for _, o := range opts {
-		if _, ok := o.(canRunAsServiceOnWindowsOpt); ok {
-			canRunAsService = true
-		}
-	}
 	if runtime.GOOS == "windows" {
-		if !canRunAsService {
-			t.Skip("integration tests skip on Windows unless the test calls canRunAsServiceOnWindows")
-		}
 		if !*runWindowsServiceTests {
 			t.Skip("Windows service tests disabled (--run-windows-service-tests=false)")
 		}
@@ -587,6 +561,7 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	binaries := GetBinaries(t)
 	e := &TestEnv{
 		t:                 t,
+		windowsService:    runtime.GOOS == "windows",
 		cli:               binaries.Tailscale.Path,
 		daemon:            binaries.Tailscaled.Path,
 		LogCatcher:        logc,
@@ -1130,6 +1105,16 @@ func (n *TestNode) TailscaleForOutput(arg ...string) *exec.Cmd {
 // Tailscale returns a command that runs the tailscale CLI with the provided arguments.
 // It does not start the process.
 func (n *TestNode) Tailscale(arg ...string) *exec.Cmd {
+	isUp := len(arg) > 0 && arg[0] == "up"
+	if isUp && cmp.Or(n.upFlagGOOS, runtime.GOOS) == "windows" {
+		isBareUp := len(arg) == 1
+		// --unattended keeps the current profile after the CLI exits; without it
+		// Windows switches to an empty background profile and the node drops to NoState.
+		// TODO(yaruk): also run tests without --unattended; see #20751.
+		if !isBareUp && !slices.Contains(arg, "--unattended") {
+			arg = append(arg, "--unattended")
+		}
+	}
 	cmd := exec.Command(n.env.cli)
 	cmd.Args = append(cmd.Args, "--socket="+n.sockFile)
 	cmd.Args = append(cmd.Args, arg...)
