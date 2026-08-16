@@ -891,7 +891,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 							nodecap.Funnel:                          nil,
 							nodecap.FunnelPorts + "?ports=443,8443": nil,
 						},
-						Tags: ptrToReadOnlySlice([]string{"some-tag"}),
+						Tags: views.SliceOf([]string{"some-tag"}),
 					},
 					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
 				},
@@ -2419,11 +2419,6 @@ func exactErrMsg(want error) func(error) string {
 		}
 		return fmt.Sprintf("\ngot:  %v\nwant: %v\n", got, want)
 	}
-}
-
-func ptrToReadOnlySlice[T any](s []T) *views.Slice[T] {
-	vs := views.SliceOf(s)
-	return &vs
 }
 
 func writeTmpServeConfig(t *testing.T, body string) string {

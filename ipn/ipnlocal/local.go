@@ -1645,16 +1645,13 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
 	ps.Created = n.Created()
 	ps.ExitNodeOption = buildfeatures.HasUseExitNode && tsaddr.ContainsExitRoutes(n.AllowedIPs())
 	if n.Tags().Len() != 0 {
-		v := n.Tags()
-		ps.Tags = &v
+		ps.Tags = n.Tags()
 	}
 	if n.PrimaryRoutes().Len() != 0 {
-		v := n.PrimaryRoutes()
-		ps.PrimaryRoutes = &v
+		ps.PrimaryRoutes = n.PrimaryRoutes()
 	}
 	if n.AllowedIPs().Len() != 0 {
-		v := n.AllowedIPs()
-		ps.AllowedIPs = &v
+		ps.AllowedIPs = n.AllowedIPs()
 	}
 
 	if n.Expired() {
