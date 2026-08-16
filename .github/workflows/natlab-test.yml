@@ -32,10 +32,10 @@ on:
     - cron: "23 3,15 * * *"
 
 jobs:
-  # prepare warms the per-workflow-run caches (gokrazy image, cloud VM
-  # images) and emits the dynamic matrix of test names. By doing the work
-  # once here, the matrix test jobs never race to rebuild or re-download
-  # the same artifacts on a cold cache.
+  # prepare warms the shared caches (gokrazy image, cloud VM images, tsgo
+  # toolchain, Go module and build caches) and emits the dynamic matrix of
+  # test names. By doing the work once here, the matrix test jobs never race
+  # to rebuild or re-download the same artifacts on a cold cache.
   prepare:
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -48,6 +48,31 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # ./tool/go downloads and extracts the tsgo toolchain on a cold runner.
+      # go.toolchain.rev names an immutable release, so an exact hit is enough.
+      - name: Cache tsgo toolchain
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tsgo
+          key: natlab-tsgo-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+
+      - name: Cache Go modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/go/pkg/mod
+          key: natlab-gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+      # Saved at the end of the job. The run_id suffix keeps each save unique;
+      # restore-keys is what finds a prior entry.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            natlab-gobuild-${{ runner.os }}-
 
       # The cloud VM image cache is keyed only on images.go (image URLs and
       # SHAs), so it survives across workflow runs and is invalidated only
@@ -90,6 +115,24 @@ jobs:
         run: |
           make -C gokrazy natlab
 
+      # No Go source imports this module, so nothing above pulls it in. Fetch
+      # it into the module cache this job saves; see the matrix job for why.
+      - name: Download kernel.amd64 module
+        run: |
+          ./tool/go mod download github.com/gokrazy/kernel.amd64
+
+      # Warm the build cache for the matrix jobs. Both toolchains matter:
+      # ./tool/go (tsgo) compiles the test binaries, while vmtest.go and
+      # gokrazy/build shell out to the runner's stock `go` for the guest
+      # binaries, and GOCACHE entries don't interchange between compilers.
+      # The guest env below mirrors compileBinariesForOS in vmtest.go.
+      - name: Warm Go build cache
+        run: |
+          ./tool/go test -c -o /dev/null ./tstest/natlab/vmtest ./tstest/integration/nat
+          for pkg in tta tailscale tailscaled; do
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/"$pkg"
+          done
+
       - name: Discover tests
         id: list
         # Grep the test files directly rather than invoking `go test -list`
@@ -122,6 +165,22 @@ jobs:
           echo "Discovered tests:"
           jq . "$tmp"
 
+      - name: Tidy Go build cache
+        run: |
+          find $(./tool/go env GOCACHE) -type f -mmin +90 -delete
+
+      # Saved on every run, not just main: the matrix jobs read this entry by
+      # exact key, and a pull_request run's caches are scoped to the merge ref
+      # they share with us. Without it each of them recompiles the gokrazy
+      # image from scratch. Saving from main also seeds later runs and
+      # natlab-basic, since every branch can read main's caches.
+      - name: Save Go build cache
+        if: always()
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+
   test:
     needs: prepare
     runs-on: ubuntu-latest
@@ -134,6 +193,30 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Restore the Go caches before anything invokes ./tool/go.
+      - name: Restore tsgo toolchain
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/tsgo
+          key: natlab-tsgo-${{ runner.os }}-${{ hashFiles('go.toolchain.rev') }}
+
+      - name: Restore Go modules
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/go/pkg/mod
+          key: natlab-gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+      # An exact hit means prepare saved in this same run; otherwise
+      # restore-keys falls back to main's entry.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cache/go-build
+          key: natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            natlab-gobuild-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            natlab-gobuild-${{ runner.os }}-
 
       - name: Enable KVM
         run: |
@@ -168,7 +251,8 @@ jobs:
       # vmlinuz that ships in the gokrazy/kernel.amd64 module.
       # Tests look it up under GOMODCACHE via findKernelPath, so the
       # module has to be present even though no Go source imports it
-      # in the test package itself.
+      # in the test package itself. Normally a no-op: prepare already
+      # fetched it into the module cache restored above.
       - name: Download kernel.amd64 module
         run: |
           ./tool/go mod download github.com/gokrazy/kernel.amd64
