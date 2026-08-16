@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tailscale.com/drive"
+	"tailscale.com/feature/serviceclientprefs/serviceclient"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -192,6 +193,10 @@ const (
 	// non-zero peer states, and subsequent Notifies include per-peer
 	// state changes.
 	NotifyPeerWireGuardState NotifyWatchOpt = 1 << 18
+
+	// NotifyInitialServiceClientPrefs, if set, means the first Notify message
+	// (sent immediately) will contain the current [Notify.ServiceClientPrefs].
+	NotifyInitialServiceClientPrefs NotifyWatchOpt = 1 << 19
 )
 
 // String implements the [fmt.Stringer] interface.
@@ -235,6 +240,7 @@ func (o NotifyWatchOpt) String() string {
 	try(NotifyInProcessNoDisconnect, "NotifyInProcessNoDisconnect")
 	try(NotifySysPolicyChanges, "NotifySysPolicyChanges")
 	try(NotifyPeerWireGuardState, "NotifyPeerWireGuardState")
+	try(NotifyInitialServiceClientPrefs, "NotifyInitialServiceClientPrefs")
 
 	if mask != o {
 		bits = append(bits, fmt.Sprintf("%T(%#x)", o, uint64(o^mask))) // unknown
@@ -287,6 +293,17 @@ func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
 		}
 	}
 	return nil
+}
+
+// ServiceClientPrefsNotify is the [Notify.ServiceClientPrefs] payload: a snapshot of one login
+// profile's saved service launch preferences, tagged with the profile it was read from.
+type ServiceClientPrefsNotify struct {
+	// ProfileID is the login profile the prefs belong to. Snapshots are published
+	// asynchronously, so one can arrive after the profile has already changed.
+	ProfileID ProfileID
+
+	// Prefs is the profile's full set of service client prefs, not a delta.
+	Prefs serviceclient.Prefs
 }
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -476,6 +493,11 @@ type Notify struct {
 	// precedence. Sent initially when [NotifySysPolicyChanges] is set,
 	// and on change thereafter.
 	Policy *policyclient.PolicySnapshot `json:",omitzero"`
+
+	// ServiceClientPrefs, if non-nil, is the current login profile's saved service launch
+	// preferences. Sent initially when [NotifyInitialServiceClientPrefs] is set, and on
+	// change or login profile switch thereafter.
+	ServiceClientPrefs *ServiceClientPrefsNotify `json:",omitzero"`
 
 	// type is mirrored in xcode/IPN/Core/LocalAPI/Model/LocalAPIModel.swift
 }

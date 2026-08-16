@@ -57,6 +57,7 @@ func (e *extension) Name() string { return featureName }
 func (e *extension) Init(h ipnext.Host) error {
 	e.host = h
 	h.Hooks().ProfileStateChange.Add(e.onChangeProfile)
+	h.Hooks().ServiceClientPrefs.Set(e.serviceClientPrefsNotify)
 	profile, prefs := h.Profiles().CurrentProfileState()
 	e.onChangeProfile(profile, prefs, false)
 	return nil
@@ -79,6 +80,7 @@ func (e *extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 	e.curPID = pid
 	e.store = nil
 	if pid == "" {
+		e.publishLocked()
 		return
 	}
 	varRoot := e.sb.TailscaleVarRoot()
@@ -87,6 +89,7 @@ func (e *extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 		// Service client prefs are only used by the desktop clients, so an in-memory store that
 		// doesn't survive restarts is fine here.
 		e.store = new(mem.Store)
+		e.publishLocked()
 		return
 	}
 	// Store the file under a dir plus a hex-encoded filename with no extension, matching
@@ -96,7 +99,38 @@ func (e *extension) onChangeProfile(profile ipn.LoginProfileView, _ ipn.PrefsVie
 	st, err := store.NewFileStore(e.logf, path)
 	if err != nil {
 		e.logf("building store for profile %q: %v", pid, err)
+		e.publishLocked()
 		return
 	}
 	e.store = st
+	e.publishLocked()
+}
+
+// serviceClientPrefsNotify implements the [ipnext.Hooks.ServiceClientPrefs] hook.
+func (e *extension) serviceClientPrefsNotify() *ipn.ServiceClientPrefsNotify {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.notifyPayloadLocked()
+}
+
+// notifyPayloadLocked builds the payload to publish for the current profile. The caller must hold
+// e.mu.
+func (e *extension) notifyPayloadLocked() *ipn.ServiceClientPrefsNotify {
+	prefs, err := e.loadLocked()
+	if err != nil {
+		e.logf("reading prefs to publish: %v", err)
+		return nil
+	}
+	return &ipn.ServiceClientPrefsNotify{
+		ProfileID: e.curPID,
+		Prefs:     prefs,
+	}
+}
+
+// publishLocked publishes the current profile's prefs on the IPN bus, via
+// [ipnext.Host.SendNotifyAsync] so the send doesn't happen under e.mu. The caller must hold e.mu.
+func (e *extension) publishLocked() {
+	if n := e.notifyPayloadLocked(); n != nil {
+		e.host.SendNotifyAsync(ipn.Notify{ServiceClientPrefs: n})
+	}
 }

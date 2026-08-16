@@ -16,6 +16,10 @@ import (
 // fails validation, such as a missing key. The handler maps it to a 400, unlike backend failures.
 var errInvalidServiceClientPref = errors.New("service client pref key is required")
 
+// errProfileChanged is returned by [extension.setServiceClientPref] when the request's profile ID
+// doesn't match the current profile ID. The handler maps it to a 409 error.
+var errProfileChanged = errors.New("active login profile changed since the request was made")
+
 // serviceClientPrefs returns the saved service client prefs for the current profile. It returns an
 // empty, non-nil map when nothing has been saved yet, or when there's no current profile (a logged
 // out node simply has no service client prefs).
@@ -38,6 +42,10 @@ func (e *extension) setServiceClientPref(req apitype.ServiceClientPrefRequest) (
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if req.ProfileID != "" && req.ProfileID != string(e.curPID) {
+		return nil, errProfileChanged
+	}
+
 	prefs, err := e.loadLocked()
 	if err != nil {
 		return nil, err
@@ -58,6 +66,7 @@ func (e *extension) setServiceClientPref(req apitype.ServiceClientPrefRequest) (
 	if err := e.saveLocked(prefs); err != nil {
 		return nil, err
 	}
+	e.publishLocked()
 	return prefs, nil
 }
 

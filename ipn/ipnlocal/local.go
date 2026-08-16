@@ -3762,7 +3762,8 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
-		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
+		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState |
+		ipn.NotifyInitialServiceClientPrefs
 	if mask&initialBits != 0 {
 		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
@@ -3811,6 +3812,11 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			ini.Policy, err = b.polc.GetPolicySnapshot("")
 			if err != nil {
 				b.logf("syspolicy: GetPolicySnapshot(\"\"): %v", err)
+			}
+		}
+		if mask&ipn.NotifyInitialServiceClientPrefs != 0 {
+			if f, ok := b.extHost.Hooks().ServiceClientPrefs.GetOk(); ok {
+				ini.ServiceClientPrefs = f()
 			}
 		}
 	}
