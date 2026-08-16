@@ -190,6 +190,102 @@ func TestShrinkDefaultRoute(t *testing.T) {
 	}
 }
 
+func TestFilterIgnoredRoutes(t *testing.T) {
+	pp := netip.MustParsePrefix
+
+	// Checks that no route overlaps with any ignored prefix
+	assertNoOverlap := func(got []netip.Prefix, ignored []netip.Prefix) {
+		for _, r := range got {
+			for _, ig := range ignored {
+				if r.Overlaps(ig) {
+					t.Errorf("route %s overlaps with ignored %s", r, ig)
+				}
+			}
+		}
+	}
+
+	tests := []struct {
+		name    string
+		routes  []netip.Prefix
+		ignored []netip.Prefix
+		want    []netip.Prefix
+	}{
+		{
+			name:    "no-ignored",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("192.168.1.0/24")},
+			ignored: nil,
+			want:    []netip.Prefix{pp("10.0.0.0/24"), pp("192.168.1.0/24")},
+		},
+		{
+			name:    "no-routes",
+			routes:  nil,
+			ignored: []netip.Prefix{pp("10.0.0.0/8")},
+			want:    nil,
+		},
+		{
+			name:    "exact-match",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("192.168.1.0/24"), pp("172.16.0.0/16")},
+			ignored: []netip.Prefix{pp("192.168.1.0/24")},
+			want:    []netip.Prefix{pp("10.0.0.0/24"), pp("172.16.0.0/16")},
+		},
+		{
+			name:    "supernet-ignore",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("10.0.1.0/24"), pp("192.168.1.0/24")},
+			ignored: []netip.Prefix{pp("10.0.0.0/16")},
+			want:    []netip.Prefix{pp("192.168.1.0/24")},
+		},
+		{
+			name:    "subnet-ignore",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("10.0.1.0/24"), pp("192.168.1.0/24")},
+			ignored: []netip.Prefix{pp("10.0.0.0/8")},
+			want:    []netip.Prefix{pp("192.168.1.0/24")},
+		},
+		{
+			name:    "overlap-v6",
+			routes:  []netip.Prefix{pp("fd7a:115c:a1e0:ab12::/64"), pp("fd7a:115c:a1e1::/48")},
+			ignored: []netip.Prefix{pp("fd7a:115c:a1e0:ab12::/64")},
+			want:    []netip.Prefix{pp("fd7a:115c:a1e1::/48")},
+		},
+		{
+			name:    "multiple-ignored",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("172.16.0.0/16"), pp("192.168.1.0/24"), pp("100.64.0.1/32")},
+			ignored: []netip.Prefix{pp("10.0.0.0/8"), pp("192.168.0.0/16")},
+			want:    []netip.Prefix{pp("172.16.0.0/16"), pp("100.64.0.1/32")},
+		},
+		{
+			name:    "all-filtered",
+			routes:  []netip.Prefix{pp("10.0.0.0/24"), pp("192.168.1.0/24")},
+			ignored: []netip.Prefix{pp("10.0.0.0/8"), pp("192.168.0.0/16")},
+			want:    nil,
+		},
+		{
+			name:    "carve-default-route",
+			routes:  []netip.Prefix{pp("0.0.0.0/0"), pp("::/0")},
+			ignored: []netip.Prefix{pp("192.168.1.0/24"), pp("fd7a:115c:a1e0:ab12::/64")},
+			want:    []netip.Prefix{pp("0.0.0.0/1"), pp("128.0.0.0/2"), pp("192.0.0.0/9"), pp("192.128.0.0/11"), pp("192.160.0.0/13"), pp("192.168.0.0/24"), pp("192.168.2.0/23"), pp("192.168.4.0/22"), pp("192.168.8.0/21"), pp("192.168.16.0/20"), pp("192.168.32.0/19"), pp("192.168.64.0/18"), pp("192.168.128.0/17"), pp("192.169.0.0/16"), pp("192.170.0.0/15"), pp("192.172.0.0/14"), pp("192.176.0.0/12"), pp("192.192.0.0/10"), pp("193.0.0.0/8"), pp("194.0.0.0/7"), pp("196.0.0.0/6"), pp("200.0.0.0/5"), pp("208.0.0.0/4"), pp("224.0.0.0/3"), pp("::/1"), pp("8000::/2"), pp("c000::/3"), pp("e000::/4"), pp("f000::/5"), pp("f800::/6"), pp("fc00::/8"), pp("fd00::/10"), pp("fd40::/11"), pp("fd60::/12"), pp("fd70::/13"), pp("fd78::/15"), pp("fd7a::/20"), pp("fd7a:1000::/24"), pp("fd7a:1100::/26"), pp("fd7a:1140::/28"), pp("fd7a:1150::/29"), pp("fd7a:1158::/30"), pp("fd7a:115c::/33"), pp("fd7a:115c:8000::/35"), pp("fd7a:115c:a000::/40"), pp("fd7a:115c:a100::/41"), pp("fd7a:115c:a180::/42"), pp("fd7a:115c:a1c0::/43"), pp("fd7a:115c:a1e0::/49"), pp("fd7a:115c:a1e0:8000::/51"), pp("fd7a:115c:a1e0:a000::/53"), pp("fd7a:115c:a1e0:a800::/55"), pp("fd7a:115c:a1e0:aa00::/56"), pp("fd7a:115c:a1e0:ab00::/60"), pp("fd7a:115c:a1e0:ab10::/63"), pp("fd7a:115c:a1e0:ab13::/64"), pp("fd7a:115c:a1e0:ab14::/62"), pp("fd7a:115c:a1e0:ab18::/61"), pp("fd7a:115c:a1e0:ab20::/59"), pp("fd7a:115c:a1e0:ab40::/58"), pp("fd7a:115c:a1e0:ab80::/57"), pp("fd7a:115c:a1e0:ac00::/54"), pp("fd7a:115c:a1e0:b000::/52"), pp("fd7a:115c:a1e0:c000::/50"), pp("fd7a:115c:a1e1::/48"), pp("fd7a:115c:a1e2::/47"), pp("fd7a:115c:a1e4::/46"), pp("fd7a:115c:a1e8::/45"), pp("fd7a:115c:a1f0::/44"), pp("fd7a:115c:a200::/39"), pp("fd7a:115c:a400::/38"), pp("fd7a:115c:a800::/37"), pp("fd7a:115c:b000::/36"), pp("fd7a:115c:c000::/34"), pp("fd7a:115d::/32"), pp("fd7a:115e::/31"), pp("fd7a:1160::/27"), pp("fd7a:1180::/25"), pp("fd7a:1200::/23"), pp("fd7a:1400::/22"), pp("fd7a:1800::/21"), pp("fd7a:2000::/19"), pp("fd7a:4000::/18"), pp("fd7a:8000::/17"), pp("fd7b::/16"), pp("fd7c::/14"), pp("fd80::/9"), pp("fe00::/7")},
+		},
+		{
+			name:    "carve-supernet",
+			routes:  []netip.Prefix{pp("123.45.0.0/16")},
+			ignored: []netip.Prefix{pp("123.45.67.0/24")},
+			want:    []netip.Prefix{pp("123.45.0.0/18"), pp("123.45.64.0/23"), pp("123.45.66.0/24"), pp("123.45.68.0/22"), pp("123.45.72.0/21"), pp("123.45.80.0/20"), pp("123.45.96.0/19"), pp("123.45.128.0/17")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := carveIgnoredRoutes(tt.routes, tt.ignored)
+			assertNoOverlap(got, tt.ignored)
+
+			tsaddr.SortPrefixes(got)
+			tsaddr.SortPrefixes(tt.want)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPeerAPIBase(t *testing.T) {
 	tests := []struct {
 		name string

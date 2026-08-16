@@ -69,6 +69,7 @@ type setArgsT struct {
 	netfilterMode              string
 	relayServerPort            string
 	relayServerStaticEndpoints string
+	ignoredRoutes              string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -93,6 +94,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
 	setf.StringVar(&setArgs.relayServerStaticEndpoints, "relay-server-static-endpoints", "", "static IP:port endpoints to advertise as candidates for relay connections (comma-separated, e.g. \"[2001:db8::1]:40000,192.0.2.1:40000\") or empty string to not advertise any static endpoints")
+	setf.StringVar(&setArgs.ignoredRoutes, "ignore-routes", "", "routes to ignore on current node when installing routing rules (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not ignore any routes")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -264,6 +266,20 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		endpoints := endpointsSet.Slice()
 		slices.SortFunc(endpoints, netip.AddrPort.Compare)
 		maskedPrefs.Prefs.RelayServerStaticEndpoints = endpoints
+	}
+
+	if setArgs.ignoredRoutes != "" {
+		var ignoredRoutes []netip.Prefix
+		for s := range strings.SplitSeq(setArgs.ignoredRoutes, ",") {
+			prefix, err := netip.ParsePrefix(s)
+			if err != nil {
+				return fmt.Errorf("failed to parse ignore-routes entry %q: %w", s, err)
+			}
+			ignoredRoutes = append(ignoredRoutes, prefix)
+		}
+		slices.SortFunc(ignoredRoutes, netip.Prefix.Compare)
+		maskedPrefs.Prefs.IgnoredRoutes = ignoredRoutes
+		maskedPrefs.IgnoredRoutesSet = true
 	}
 
 	checkPrefs := curPrefs.Clone()
