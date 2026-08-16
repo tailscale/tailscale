@@ -98,6 +98,12 @@ type Report struct {
 	OSHasIPv6   bool      // could bind a socket to ::1
 	ICMPv4      bool      // an ICMPv4 round trip completed
 
+	// IPv4SendAttempted is whether an IPv4 STUN send was attempted. It is
+	// false when the probe plan held no IPv4 probes, as when the link has no
+	// usable IPv4 address. IPv4CanSend reports a send failure only when this
+	// is true.
+	IPv4SendAttempted bool
+
 	// MappingVariesByDestIP is whether STUN results depend which
 	// STUN server you're talking to (on IPv4).
 	MappingVariesByDestIP opt.Bool
@@ -1630,16 +1636,20 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	}
 
 	n, err := rs.c.SendPacket(req, addr)
+
+	rs.mu.Lock()
+	if probe.proto == probeIPv4 {
+		rs.report.IPv4SendAttempted = true
+	}
 	if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
-		rs.mu.Lock()
 		switch probe.proto {
 		case probeIPv4:
 			rs.report.IPv4CanSend = true
 		case probeIPv6:
 			rs.report.IPv6CanSend = true
 		}
-		rs.mu.Unlock()
 	}
+	rs.mu.Unlock()
 
 	c.vlogf("sent to %v", addr)
 }

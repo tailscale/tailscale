@@ -237,6 +237,8 @@ type Conn struct {
 	// noV4Send is whether IPv4 UDP is known to be unable to transmit
 	// at all. This could happen if the socket is in an invalid state
 	// (as can happen on darwin after a network link status change).
+	// It stays false when netcheck attempted no IPv4 send, so a link
+	// without IPv4 is not mistaken for a broken socket.
 	noV4Send atomic.Bool
 
 	// networkUp is whether the network is up (some interface is up
@@ -1058,7 +1060,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.lastNetCheckReport.Store(report)
 	c.noV4.Store(!report.IPv4)
 	c.noV6.Store(!report.IPv6)
-	c.noV4Send.Store(!report.IPv4CanSend)
+	// !IPv4CanSend alone says nothing when no IPv4 probe was planned; acting
+	// on it rebinds on every netcheck forever on links without IPv4.
+	c.noV4Send.Store(report.IPv4SendAttempted && !report.IPv4CanSend)
 
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
