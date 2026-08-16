@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -146,7 +146,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	if err = a.maybeProvisionConnector(ctx, logger, cn); err != nil {
 		reason := reasonConnectorCreationFailed
 		message := fmt.Sprintf(messageConnectorCreationFailed, err)
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if reconciler.IsOptimisticLockError(err) {
 			reason = reasonConnectorCreating
 			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
 			err = nil

@@ -31,6 +31,8 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
@@ -188,7 +190,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	needsRequeue := false
 	needsRequeue, err = r.maybeProvision(ctx, hostname, svc, pg, logger, tsClient)
 	if err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if reconciler.IsOptimisticLockError(err) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 		} else {
 			return reconcile.Result{}, err
@@ -762,7 +764,7 @@ func (r *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 
 	var count int
 	for _, secret := range secrets.Items {
-		prefs, ok, err := getDevicePrefs(&secret)
+		prefs, ok, err := tailscaled.PrefsFromStateSecret(&secret)
 		if err != nil {
 			return 0, fmt.Errorf("error getting node metadata: %w", err)
 		}

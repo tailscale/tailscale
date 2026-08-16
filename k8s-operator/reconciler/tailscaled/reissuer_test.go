@@ -6,18 +6,15 @@
 package tailscaled_test
 
 import (
-	"context"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 
-	tailscaleclient "tailscale.com/client/tailscale/v2"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
-	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 )
 
@@ -72,7 +69,7 @@ func TestReissuer_ShouldReissue(t *testing.T) {
 				stateSecret = &corev1.Secret{Data: tc.stateData}
 			}
 
-			tsc := &fakeReissueClient{}
+			tsc := reconcilertest.NewFakeClient()
 			r := tailscaled.NewReissuer()
 			r.EnsureState("pg", 1)
 
@@ -89,8 +86,8 @@ func TestReissuer_ShouldReissue(t *testing.T) {
 			if got != tc.wantReissue {
 				t.Errorf("shouldReissue = %v, want %v", got, tc.wantReissue)
 			}
-			if !slices.Equal(tsc.deleted, tc.wantDeleted) {
-				t.Errorf("deleted devices = %v, want %v", tsc.deleted, tc.wantDeleted)
+			if !slices.Equal(tsc.DeviceDeletes(), tc.wantDeleted) {
+				t.Errorf("deleted devices = %v, want %v", tsc.DeviceDeletes(), tc.wantDeleted)
 			}
 		})
 	}
@@ -101,7 +98,7 @@ func TestReissuer_ShouldReissue(t *testing.T) {
 // state Secret.
 func TestReissuer_InFlight(t *testing.T) {
 	key := "broken-key"
-	tsc := &fakeReissueClient{}
+	tsc := reconcilertest.NewFakeClient()
 	r := tailscaled.NewReissuer()
 	r.EnsureState("pg", 1)
 
@@ -137,7 +134,7 @@ func TestReissuer_InFlight(t *testing.T) {
 // across replicas, blocks re-issuance once its burst is exhausted.
 func TestReissuer_RateLimit(t *testing.T) {
 	key := "broken-key"
-	tsc := &fakeReissueClient{}
+	tsc := reconcilertest.NewFakeClient()
 	r := tailscaled.NewReissuer()
 	// Burst of 1: the first replica's reissue consumes the only token.
 	r.EnsureState("pg", 1)
@@ -169,7 +166,7 @@ func TestReissuer_RateLimit(t *testing.T) {
 // EnsureState reissues instead of panicking on a nil limiter.
 func TestReissuer_ShouldReissue_NoEnsureState(t *testing.T) {
 	key := "broken-key"
-	tsc := &fakeReissueClient{}
+	tsc := reconcilertest.NewFakeClient()
 	r := tailscaled.NewReissuer()
 
 	broken := &corev1.Secret{Data: map[string][]byte{
@@ -183,8 +180,8 @@ func TestReissuer_ShouldReissue_NoEnsureState(t *testing.T) {
 	if err != nil || !got {
 		t.Fatalf("got %v, err %v; want true, nil", got, err)
 	}
-	if !slices.Equal(tsc.deleted, []string{"nodeid-0"}) {
-		t.Errorf("deleted devices = %v, want [nodeid-0]", tsc.deleted)
+	if !slices.Equal(tsc.DeviceDeletes(), []string{"nodeid-0"}) {
+		t.Errorf("deleted devices = %v, want [nodeid-0]", tsc.DeviceDeletes())
 	}
 }
 
@@ -192,7 +189,7 @@ func TestReissuer_ShouldReissue_NoEnsureState(t *testing.T) {
 // is cleared, so a later reissue request for the same replica triggers afresh.
 func TestReissuer_RemoveState(t *testing.T) {
 	key := "broken-key"
-	tsc := &fakeReissueClient{}
+	tsc := reconcilertest.NewFakeClient()
 	r := tailscaled.NewReissuer()
 	r.EnsureState("pg", 1)
 
@@ -226,7 +223,7 @@ func TestReissuer_RemoveState(t *testing.T) {
 // parent scaled down then deleted doesn't strand in-flight entries.
 func TestReissuer_RemoveState_AfterScaleDown(t *testing.T) {
 	key := "broken-key"
-	tsc := &fakeReissueClient{}
+	tsc := reconcilertest.NewFakeClient()
 	r := tailscaled.NewReissuer()
 	r.EnsureState("pg", 2)
 
@@ -259,31 +256,4 @@ func TestReissuer_RemoveState_AfterScaleDown(t *testing.T) {
 	if got, err := r.ShouldReissue(t.Context(), tsc, zap.NewNop().Sugar(), broken("pg-1")); err != nil || !got {
 		t.Fatalf("pg-1 after RemoveState: got %v, err %v; want true, nil", got, err)
 	}
-}
-
-type fakeReissueClient struct {
-	tsclient.Client
-
-	mu      sync.Mutex
-	deleted []string
-}
-
-func (c *fakeReissueClient) Devices() tsclient.DeviceResource { return (*fakeReissueDevices)(c) }
-
-type fakeReissueDevices fakeReissueClient
-
-func (d *fakeReissueDevices) Delete(_ context.Context, id string) error {
-	c := (*fakeReissueClient)(d)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.deleted = append(c.deleted, id)
-	return nil
-}
-
-func (d *fakeReissueDevices) List(_ context.Context, _ ...tailscaleclient.ListDevicesOptions) ([]tailscaleclient.Device, error) {
-	return nil, nil
-}
-
-func (d *fakeReissueDevices) Get(_ context.Context, _ string) (*tailscaleclient.Device, error) {
-	return nil, nil
 }
