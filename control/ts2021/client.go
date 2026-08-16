@@ -239,6 +239,11 @@ func (nc *Client) dial(ctx context.Context) (*Conn, error) {
 		timeoutSec = 5
 	}
 
+	serverURL, err := url.Parse(nc.opts.ServerURL)
+	if err != nil {
+		return nil, err
+	}
+
 	timeout := time.Duration(timeoutSec * float64(time.Second))
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -258,6 +263,7 @@ func (nc *Client) dial(ctx context.Context) (*Conn, error) {
 		HealthTracker:   nc.opts.HealthTracker,
 		ExtraRootCAs:    nc.opts.ExtraRootCAs,
 		Clock:           tstime.StdClock{},
+		BasePath:        serverURL.Path,
 	}
 	clientConn, err := chd.Dial(ctx)
 	if err != nil {
