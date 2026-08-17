@@ -11,12 +11,10 @@ import (
 	"crypto/x509"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log"
-	"net"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -68,19 +66,19 @@ import (
 )
 
 const (
-	pebbleTag       = "2.8.0"
-	ns              = "default"
-	tmp             = "/tmp/k8s-operator-e2e"
-	kindClusterName = "k8s-operator-e2e"
+	pebbleTag           = "2.8.0"
+	ns                  = "default"
+	tmp                 = "/tmp/k8s-operator-e2e"
+	kindClusterName     = "k8s-operator-e2e"
+	testCAsConfigMap    = "test-cas"
+	testCAsConfigMapKey = "test-cas.pem"
 )
 
 var (
 	tsClient           *tailscale.Client // For API calls to control.
 	tnClient           *tsnet.Server     // For testing real tailnet traffic on first tailnet.
-	tnTarget           tailnetTarget     // Egress target on the first tailnet.
 	secondTSClient     *tailscale.Client // For API calls to the secondary tailnet (_second_tailnet).
 	secondTNClient     *tsnet.Server     // For testing real tailnet traffic on second tailnet.
-	secondTNTarget     tailnetTarget     // Egress target on the second tailnet.
 	restCfg            *rest.Config      // For constructing a client-go client if necessary.
 	kubeClient         client.WithWatch  // For k8s API calls.
 	clusterLoginServer string
@@ -187,11 +185,12 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	var (
-		clientID, clientSecret string   // OAuth client for the first tailnet (for the operator to use).
-		caPaths                []string // Extra CA cert file paths to add to images.
+		clientID, clientSecret             string // OAuth client for the first tailnet (for the operator to use).
+		secondClientID, secondClientSecret string // OAuth client for the second tailnet (for the operator to use).
 
-		certsDir                           = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
-		secondClientID, secondClientSecret string                        // OAuth client for the second tailnet (for the operator to use).
+		caPaths  []string                      // Extra CA cert file paths to add to images.
+		certsDir = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
+		caPEM    []byte                        // Used to collect and then publish test-cas ConfigMap.
 	)
 	testCAs = x509.NewCertPool()
 	if *fDevcontrol {
@@ -225,6 +224,7 @@ func runTests(m *testing.M) (int, error) {
 		if ok := testCAs.AppendCertsFromPEM(pebbleCAChain); !ok {
 			return 0, fmt.Errorf("failed to parse pebble ca chain cert")
 		}
+		caPEM = appendPEM(caPEM, pebbleMiniCACert, pebbleCAChain)
 
 		if err = os.MkdirAll(certsDir, 0755); err != nil {
 			return 0, fmt.Errorf("failed to create certs dir: %w", err)
@@ -368,7 +368,7 @@ func runTests(m *testing.M) (int, error) {
 		if ok := testCAs.AppendCertsFromPEM(leStagingRootX1); !ok {
 			return 0, fmt.Errorf("failed to parse Let's Encrypt staging root")
 		}
-
+		caPEM = appendPEM(caPEM, leStagingRootX1)
 		clientSecret = os.Getenv("TS_API_CLIENT_SECRET")
 		if clientSecret == "" {
 			return 0, fmt.Errorf("must use --devcontrol or set TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
@@ -395,6 +395,19 @@ func runTests(m *testing.M) (int, error) {
 		}
 	}
 
+	// Publish the trustedCAs as a ConfigMap that can be used by in-cluster
+	// testing workloads.
+	if len(caPEM) > 0 {
+		caCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: testCAsConfigMap, Namespace: ns},
+			Data:       map[string]string{testCAsConfigMapKey: string(caPEM)},
+		}
+		if err := createOrUpdate(ctx, kubeClient, caCM); err != nil {
+			return 0, fmt.Errorf("failed to publish test CAs ConfigMap: %w", err)
+		}
+		defer kubeClient.Delete(context.Background(), caCM)
+	}
+
 	var ossTag string
 	if *fBuild {
 		// TODO(tomhjp): proper support for --build=false and layering pebble certs on top of existing images.
@@ -411,9 +424,10 @@ func runTests(m *testing.M) (int, error) {
 			logger.Infof("using base image: %q", *fBaseImage)
 		}
 		ossImageToTarget := map[string]string{
-			"local/k8s-operator": "publishdevoperator",
-			"local/tailscale":    "publishdevimage",
-			"local/k8s-proxy":    "publishdevproxy",
+			"local/k8s-operator":   "publishdevoperator",
+			"local/tailscale":      "publishdevimage",
+			"local/k8s-proxy":      "publishdevproxy",
+			"local/k8s-nameserver": "publishdevnameserver",
 		}
 		for img, target := range ossImageToTarget {
 			if err := buildImage(ctx, ossDir, img, target, ossTag, *fBaseImage, caPaths); err != nil {
@@ -519,6 +533,26 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("failed to apply default ProxyClass: %w", err)
 	}
 
+	// Leave the nameserver image unset when nothing was built so
+	// the operator falls back to the default.
+	// TODO(beckypauley): fix for other images where build is false.
+	nameserverImg := &tsapi.NameserverImage{}
+	if ossTag != "" {
+		nameserverImg.Repo = "local/k8s-nameserver"
+		nameserverImg.Tag = ossTag
+	}
+	dnsConfig, err := deployNameserver(ctx, logger, kubeClient, nameserverImg)
+	if err != nil {
+		return 0, fmt.Errorf("failed to deploy nameserver: %w", err)
+	}
+	defer kubeClient.Delete(context.Background(), dnsConfig)
+
+	restoreClusterDNS, err := patchClusterDNS(ctx, logger, dnsConfig.Status.Nameserver.IP)
+	if err != nil {
+		return 0, fmt.Errorf("failed to patch cluster DNS: %w", err)
+	}
+	defer restoreClusterDNS()
+
 	caps := tailscale.KeyCapabilities{}
 	caps.Devices.Create.Preauthorized = true
 	caps.Devices.Create.Ephemeral = true
@@ -548,10 +582,6 @@ func runTests(m *testing.M) (int, error) {
 		return 0, err
 	}
 	defer tnClient.Close()
-	tnTarget, err = startTailnetHTTPServer(ctx, tnClient)
-	if err != nil {
-		return 0, fmt.Errorf("failed to start tailnet HTTP server on first tailnet: %w", err)
-	}
 
 	secondTNClient = &tsnet.Server{
 		ControlURL: secondTSClient.BaseURL.String(),
@@ -565,10 +595,6 @@ func runTests(m *testing.M) (int, error) {
 		return 0, err
 	}
 	defer secondTNClient.Close()
-	secondTNTarget, err = startTailnetHTTPServer(ctx, secondTNClient)
-	if err != nil {
-		return 0, fmt.Errorf("failed to start tailnet HTTP server on second tailnet: %w", err)
-	}
 
 	// Create the tailnet Secret in the tailscale namespace.
 	secret := &corev1.Secret{
@@ -743,6 +769,124 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 	return nil
 }
 
+// appendPEM joins PEM blobs with a newline separator so a blob lacking a
+// trailing newline doesn't glue its END line to the next BEGIN line.
+// Otherwise curl/OpenSSL can silently drop the later certs.
+// TODO(beckypauley):  avoid maintaining both caPEM and testCAs. This can then be removed.
+func appendPEM(dst []byte, blobs ...[]byte) []byte {
+	for _, b := range blobs {
+		if len(b) == 0 {
+			continue
+		}
+		if len(dst) > 0 && dst[len(dst)-1] != '\n' {
+			dst = append(dst, '\n')
+		}
+		dst = append(dst, b...)
+	}
+	return dst
+}
+
+func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.Client, img *tsapi.NameserverImage) (*tsapi.DNSConfig, error) {
+	dc := &tsapi.DNSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "dns"},
+		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
+	}
+	if err := createOrUpdate(ctx, cl, dc); err != nil {
+		return nil, fmt.Errorf("failed to create DNSConfig: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(time.Second * 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for nameserver to be ready")
+		case <-ticker.C:
+			if err := cl.Get(ctx, client.ObjectKeyFromObject(dc), dc); err != nil {
+				return nil, fmt.Errorf("failed to get DNSConfig: %w", err)
+			}
+			if tsoperator.DNSCfgIsReady(dc) && dc.Status.Nameserver != nil && dc.Status.Nameserver.IP != "" {
+				logger.Infof("nameserver ready; Service IP %s", dc.Status.Nameserver.IP)
+				return dc, nil
+			}
+			logger.Info("waiting for nameserver to be ready...")
+		}
+	}
+}
+
+func patchClusterDNS(ctx context.Context, logger *zap.SugaredLogger, nameserverIP string) (func(), error) {
+	if cm := getDNSConfigMap(ctx, "coredns"); cm != nil && cm.Data["Corefile"] != "" {
+		corefile := stripTSNetZone(cm.Data["Corefile"]) + fmt.Sprintf(`
+ts.net:53 {
+    errors
+    cache 30
+    forward . %s
+}
+`, nameserverIP)
+		return patchDNSConfigMap(logger, cm, "Corefile", corefile)
+	}
+	if cm := getDNSConfigMap(ctx, "kube-dns"); cm != nil {
+		stub, err := json.Marshal(map[string][]string{"ts.net": {nameserverIP}})
+		if err != nil {
+			return nil, fmt.Errorf("marshalling stubDomains: %w", err)
+		}
+		return patchDNSConfigMap(logger, cm, "stubDomains", string(stub))
+	}
+	return nil, fmt.Errorf("cluster DNS is not a patchable CoreDNS/kube-dns")
+}
+
+func getDNSConfigMap(ctx context.Context, name string) *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: name}}
+	if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
+		return nil
+	}
+	return cm
+}
+
+// patchDNSConfigMap updates the given Configmap and returns a closure
+// for test cleanup.
+func patchDNSConfigMap(logger *zap.SugaredLogger, cm *corev1.ConfigMap, key, value string) (func(), error) {
+	orig := maps.Clone(cm.Data)
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[key] = value
+	if err := kubeClient.Update(context.Background(), cm); err != nil {
+		return nil, fmt.Errorf("patching %s %s: %w", cm.Name, key, err)
+	}
+	logger.Infof("patched %s %s with ts.net entry", cm.Name, key)
+
+	name := cm.Name
+	return func() {
+		restore := getDNSConfigMap(context.Background(), name)
+		if restore == nil {
+			logger.Warnf("restoring %s %s: get failed", name, key)
+			return
+		}
+		restore.Data = orig
+		if err := kubeClient.Update(context.Background(), restore); err != nil {
+			logger.Warnf("restoring %s %s: %v", name, key, err)
+		}
+	}, nil
+}
+
+// stripTSNetZone removes a previously-appended `ts.net:53 { ... }` server block
+// from a Corefile.
+func stripTSNetZone(corefile string) string {
+	idx := strings.Index(corefile, "ts.net:53 {")
+	if idx == -1 {
+		return corefile
+	}
+	rest := corefile[idx:]
+	end := strings.Index(rest, "\n}")
+	if end == -1 {
+		return corefile[:idx]
+	}
+	return corefile[:idx] + rest[end+len("\n}"):]
+}
+
 // forwardLocalPortToPod sets up port forwarding to the specified Pod and remote port.
 // It runs until the provided ctx is done.
 func forwardLocalPortToPod(ctx context.Context, logger *zap.SugaredLogger, cfg *rest.Config, ns, podName string, port int) error {
@@ -897,7 +1041,7 @@ func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) er
 func detectClusterIPFamilies(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("ipfamily-probe"),
+			Name:      "ipfamily-probe",
 			Namespace: ns,
 		},
 		Spec: corev1.ServiceSpec{
@@ -931,46 +1075,6 @@ func detectClusterIPFamilies(ctx context.Context, logger *zap.SugaredLogger, cl 
 		return fmt.Errorf("Service %s/%s reported no IP families", svc.Namespace, svc.Name)
 	}
 	return nil
-}
-
-// tailnetTarget holds the FQDN, IPv4, and IPv6 addresses of the tailnet
-// HTTP server used as the egress target.
-type tailnetTarget struct {
-	fqdn, ipv4, ipv6 string
-}
-
-// startTailnetHTTPServer starts an HTTP server that returns the tailnet FQDN, IPv4,
-// and IPv6 addresses of the created node. Used as an egress target in tests.
-func startTailnetHTTPServer(ctx context.Context, cl *tsnet.Server) (tailnetTarget, error) {
-	ln, err := cl.Listen("tcp", ":80")
-	if err != nil {
-		return tailnetTarget{}, fmt.Errorf("failed to listen on tailnet: %w", err)
-	}
-	go func() {
-		if err := http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("tailnet HTTP server exited: %v", err)
-		}
-	}()
-
-	lc, err := cl.LocalClient()
-	if err != nil {
-		return tailnetTarget{}, fmt.Errorf("failed to get local client: %w", err)
-	}
-	status, err := lc.StatusWithoutPeers(ctx)
-	if err != nil {
-		return tailnetTarget{}, fmt.Errorf("failed to get status: %w", err)
-	}
-	target := tailnetTarget{fqdn: strings.TrimSuffix(status.Self.DNSName, ".")}
-	for _, ip := range status.TailscaleIPs {
-		if ip.Is4() {
-			target.ipv4 = ip.String()
-		} else {
-			target.ipv6 = ip.String()
-		}
-	}
-	return target, nil
 }
 
 // createTailnet creates a new tailnet and returns a tailscale.Client
