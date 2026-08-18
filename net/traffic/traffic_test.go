@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"testing"
+	"testing/quick"
 
 	gocmp "github.com/google/go-cmp/cmp"
 	"tailscale.com/net/traffic"
@@ -215,6 +216,30 @@ func FuzzSortNodes(f *testing.F) {
 				t.Errorf("%s is best too frequently: %d", candidateID, count)
 				t.Fatalf("best map: %v", best)
 			}
+		}
+	})
+}
+
+func TestMakeRendezvousHasher(t *testing.T) {
+	t.Run("new-hasher", func(t *testing.T) {
+		f := func(from, to tailcfg.NodeID) uint64 {
+			h := traffic.MakeRendezvousHasher(from)
+			return h(to)
+		}
+		if err := quick.CheckEqual(f, f, nil); err != nil {
+			t.Error(err)
+		}
+	})
+
+	t.Run("same-hasher", func(t *testing.T) {
+		f := func(from, to tailcfg.NodeID) bool {
+			h := traffic.MakeRendezvousHasher(from)
+			first := h(to)
+			second := h(to)
+			return first == second
+		}
+		if err := quick.Check(f, nil); err != nil {
+			t.Error(err)
 		}
 	})
 }
