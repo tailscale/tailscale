@@ -9,7 +9,6 @@ package conn25
 
 import (
 	"bytes"
-	"cmp"
 	"container/list"
 	"context"
 	"encoding/json"
@@ -35,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -1680,14 +1680,14 @@ func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
 	return isConn
 }
 
-func sortByPreference(ns []tailcfg.NodeView) {
+func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
 	// The ordering of the nodes is semantic (callers use the first node they can
-	// get a peer api url for). We don't (currently 2026-02-27) have any
-	// preference over which node is chosen as long as it's consistent.  In the
-	// future we anticipate integrating with traffic steering.
-	slices.SortFunc(ns, func(a, b tailcfg.NodeView) int {
-		return cmp.Compare(a.ID(), b.ID())
-	})
+	// get a peer api url for).
+	if !self.Valid() {
+		return
+	}
+	scores := traffic.ScoresFor(self.ID(), ns)
+	scores.SortNodes(ns)
 }
 
 // pickConnector returns peers the backend knows about that match the app, in order of preference to use as
@@ -1708,6 +1708,6 @@ func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 		}
 		return false
 	})
-	sortByPreference(matches)
+	sortByPreference(nb.Self(), matches)
 	return matches
 }
