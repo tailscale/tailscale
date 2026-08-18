@@ -15,7 +15,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"tailscale.com/disco"
-	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
 	"tailscale.com/tstime/mono"
@@ -26,46 +25,28 @@ import (
 
 const maxStablePathFailover = time.Second
 
-// TestDirectPathFailureWithStablePeerIdentity models a client with one network
-// interface that reaches a peer's public and private endpoints through
+// TestDirectPathFailureWithStablePeerIdentity models an active client with one
+// network interface that reaches a peer's public and private endpoints through
 // different upstream routes. Both endpoints use the same peer disco key and
-// UDP port. The public endpoint is initially faster and becomes trusted, then
-// its upstream path is blackholed while the slower private path remains healthy.
-//
-// The ReSTUN-only case matches the AWS reproduction. The Rebind+ReSTUN case is
-// a control showing that resetting peer path state avoids waiting for the
-// failed public endpoint's trust window to expire.
+// UDP port. A discovery cycle promotes the faster public endpoint, then its
+// upstream path is blackholed while traffic remains active and the slower
+// private path remains healthy. No network change, ReSTUN, or Rebind occurs.
 func TestDirectPathFailureWithStablePeerIdentity(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	oldPingTimeout := pingTimeoutDuration
 	oldPingInterval := discoPingInterval
-	pingTimeoutDuration = tsconst.DefaultPingTimeout
-	discoPingInterval = tsconst.DefaultPingInterval
+	pingTimeoutDuration = 5 * time.Second
+	discoPingInterval = 5 * time.Second
 	defer func() {
 		pingTimeoutDuration = oldPingTimeout
 		discoPingInterval = oldPingInterval
 	}()
 
-	for _, tt := range []struct {
-		name   string
-		action func(*Conn)
-	}{
-		{"rebind-restun-control", func(c *Conn) {
-			c.Rebind()
-			c.ReSTUN("stable-peer-path-failure-control")
-		}},
-		{"restun-only", func(c *Conn) {
-			c.ReSTUN("stable-peer-path-failure")
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			testDirectPathFailureWithStablePeerIdentity(t, tt.action)
-		})
-	}
+	testDirectPathFailureWithStablePeerIdentity(t)
 }
 
-func testDirectPathFailureWithStablePeerIdentity(t *testing.T, action func(*Conn)) {
+func testDirectPathFailureWithStablePeerIdentity(t *testing.T) {
 	clientLAN := &natlab.Network{
 		Name:    "client-lan",
 		Prefix4: netip.MustParsePrefix("192.168.50.0/24"),
@@ -296,10 +277,6 @@ func testDirectPathFailureWithStablePeerIdentity(t *testing.T, action func(*Conn
 		}
 	}()
 
-	wgPeerBefore, ok := clientStack.dev.LookupActivePeer(peerStack.Public().Raw32())
-	if !ok {
-		t.Fatal("WireGuard peer is not active before path failure")
-	}
 	if got := peerStack.conn.DiscoPublicKey(); got != peerDiscoKey {
 		t.Fatalf("peer disco key changed during setup: got %v, want %v", got.ShortString(), peerDiscoKey.ShortString())
 	}
@@ -326,34 +303,33 @@ func testDirectPathFailureWithStablePeerIdentity(t *testing.T, action func(*Conn
 	}
 	mustSendPing()
 	stablePathWaitForDrop(t, &gatewayHandler.publicWireGuardDropped, time.Second)
-	action(clientStack.conn)
-	// Force peer discovery only to prove that the alternate path remains
-	// bidirectionally healthy. This does not clear bestAddr or its trust timer.
-	stablePathForceFullDiscovery(t, clientStack, peerStack)
-	pongState := stablePathWaitForFreshPong(t, clientStack, peerStack, privatePeerAddr, failureStarted, 2*time.Second)
-	postPongSequence := mustSendPing()
+	postFailureSequence := mustSendPing()
 
-	selectedAt := stablePathWaitForPeerAddr(t, clientStack, peerStack, privatePeerAddr, trustUDPAddrDuration+2*time.Second)
-	firstOverlayAfterPong := stablePathWaitForDelivery(t, deliveries, postPongSequence-1, 2*time.Second)
+	firstOverlayAfterFailure := stablePathWaitForDelivery(t, deliveries, postFailureSequence-1, trustUDPAddrDuration+2*time.Second)
+	overlayGap := firstOverlayAfterFailure.at.Sub(lastBeforeFailure.at)
+	t.Logf("overlay traffic resumed after %v", overlayGap)
+	selectedAt, privateSelected := stablePathPollPeerAddr(clientStack, peerStack, privatePeerAddr, 250*time.Millisecond)
+	publicAtRecovery := gatewayHandler.publicPackets.Load()
+	time.Sleep(500 * time.Millisecond)
+	publicAfterRecovery := gatewayHandler.publicPackets.Load() - publicAtRecovery
+	t.Logf("public packets sent in 500ms after overlay recovery: %d", publicAfterRecovery)
+	if !privateSelected {
+		selectionTimeout := failureStarted.Add(trustUDPAddrDuration + 2*time.Second).Sub(mono.Now())
+		if selectionTimeout <= 0 {
+			selectionTimeout = time.Millisecond
+		}
+		selectedAt = stablePathWaitForPeerAddr(t, clientStack, peerStack, privatePeerAddr, selectionTimeout)
+	}
 	postSelectionSequence := mustSendPing()
 	postSelectionDelivery := stablePathWaitForDelivery(t, deliveries, postSelectionSequence-1, 2*time.Second)
 	stablePathWaitForUnderlay(t, &underlayRoundTrips, underlayAtFailure, 2*time.Second)
 
-	discoDelay := pongState.at.Sub(failureStarted)
 	selectionDelay := selectedAt.Sub(failureStarted)
-	postDiscoLag := firstOverlayAfterPong.at.Sub(pongState.at)
-	overlayGap := firstOverlayAfterPong.at.Sub(lastBeforeFailure.at)
 	underlayDuringFailure := underlayRoundTrips.Load() - underlayAtFailure
-	t.Logf("stable peer disco=%v port=%d; private disco pong after %v while best=%v; private selected after %v (%v from original trust deadline); overlay resumed %v after pong (%v total gap); private-underlay round trips=%d", peerDiscoKey.ShortString(), peerPort, discoDelay, pongState.bestAddr, selectionDelay, selectedAt.Sub(preFailureState.trustUntil), postDiscoLag, overlayGap, underlayDuringFailure)
+	t.Logf("stable peer disco=%v port=%d; private selected after %v (%v from original trust deadline); overlay gap=%v; private-underlay round trips=%d", peerDiscoKey.ShortString(), peerPort, selectionDelay, selectedAt.Sub(preFailureState.trustUntil), overlayGap, underlayDuringFailure)
 
-	if discoDelay > maxStablePathFailover {
-		t.Errorf("private endpoint disco round-trip took %v; want at most %v", discoDelay, maxStablePathFailover)
-	}
 	if !selectedAt.Before(preFailureState.trustUntil) {
 		t.Errorf("private endpoint was selected after %v, but only after trust in the failed public endpoint expired", selectionDelay)
-	}
-	if postDiscoLag > maxStablePathFailover {
-		t.Errorf("overlay traffic remained stalled for %v after a successful private disco round-trip; want at most %v", postDiscoLag, maxStablePathFailover)
 	}
 	if overlayGap > maxStablePathFailover {
 		t.Errorf("public path failure interrupted overlay traffic for %v; want at most %v", overlayGap, maxStablePathFailover)
@@ -403,11 +379,49 @@ func testDirectPathFailureWithStablePeerIdentity(t *testing.T, action func(*Conn
 	if got := clientStack.conn.LocalPort(); got != clientPort {
 		t.Errorf("client UDP port changed during path failure: got %d, want %d", got, clientPort)
 	}
-	wgPeerAfter, ok := clientStack.dev.LookupActivePeer(peerStack.Public().Raw32())
-	if !ok {
-		t.Error("WireGuard peer is not active after path failure")
-	} else if wgPeerAfter != wgPeerBefore {
-		t.Error("WireGuard peer was replaced during path failure")
+	if publicAfterRecovery != 0 {
+		t.Errorf("client sent %d public packets after recovering on private; want none", publicAfterRecovery)
+	}
+
+	// The private path is slower than goodEnoughLatency, so an active session
+	// normally runs another full discovery cycle after one minute. Reopening the
+	// public path models the fresh SNAT/firewall session created after that path
+	// has been idle, and forcing discovery avoids making the test wait a minute.
+	gatewayHandler.publicBlocked.Store(false)
+	secondDiscoveryStarted := mono.Now()
+	stablePathForceFullDiscovery(t, clientStack, peerStack)
+	stablePathWaitForPeerAddr(t, clientStack, peerStack, publicPeerAddr, 2*time.Second)
+	secondPathState := stablePathWaitForTrustedCandidates(t, clientStack, peerStack, publicPeerAddr, privatePeerAddr, secondDiscoveryStarted, trustUDPAddrDuration-500*time.Millisecond)
+	secondPublicSequence := mustSendPing()
+	stablePathWaitForDelivery(t, deliveries, secondPublicSequence-1, 2*time.Second)
+
+	secondBaseline := uint16(nextSequence.Load())
+	secondLastBeforeFailure := stablePathWaitForDelivery(t, deliveries, secondBaseline, 2*time.Second)
+	gatewayHandler.publicDropped.Store(0)
+	gatewayHandler.publicWireGuardDropped.Store(0)
+	gatewayHandler.publicBlocked.Store(true)
+	secondFailureStarted := mono.Now()
+	mustSendPing()
+	stablePathWaitForDrop(t, &gatewayHandler.publicWireGuardDropped, time.Second)
+	secondPostFailureSequence := mustSendPing()
+
+	secondOverlayDelivery := stablePathWaitForDelivery(t, deliveries, secondPostFailureSequence-1, trustUDPAddrDuration+2*time.Second)
+	secondOverlayGap := secondOverlayDelivery.at.Sub(secondLastBeforeFailure.at)
+	secondSelectionTimeout := secondFailureStarted.Add(trustUDPAddrDuration + 2*time.Second).Sub(mono.Now())
+	if secondSelectionTimeout <= 0 {
+		secondSelectionTimeout = time.Millisecond
+	}
+	secondSelectedAt := stablePathWaitForPeerAddr(t, clientStack, peerStack, privatePeerAddr, secondSelectionTimeout)
+	secondSelectionDelay := secondSelectedAt.Sub(secondFailureStarted)
+	secondPostSelectionSequence := mustSendPing()
+	stablePathWaitForDelivery(t, deliveries, secondPostSelectionSequence-1, 2*time.Second)
+	t.Logf("fresh public session was promoted again; second overlay gap=%v, private selected after %v (%v from trust deadline)", secondOverlayGap, secondSelectionDelay, secondSelectedAt.Sub(secondPathState.trustUntil))
+
+	if !secondSelectedAt.Before(secondPathState.trustUntil) {
+		t.Errorf("second failure selected private after %v, but only after trust in public expired", secondSelectionDelay)
+	}
+	if secondOverlayGap > maxStablePathFailover {
+		t.Errorf("second public path failure interrupted overlay traffic for %v; want at most %v", secondOverlayGap, maxStablePathFailover)
 	}
 }
 
@@ -597,15 +611,22 @@ func stablePathPeerCurAddr(from, to *magicStack) string {
 
 func stablePathWaitForPeerAddr(t *testing.T, from, to *magicStack, want netip.AddrPort, timeout time.Duration) mono.Time {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if got := stablePathPeerCurAddr(from, to); got == want.String() {
-			return mono.Now()
-		}
-		time.Sleep(10 * time.Millisecond)
+	if selectedAt, ok := stablePathPollPeerAddr(from, to, want, timeout); ok {
+		return selectedAt
 	}
 	t.Fatalf("timed out waiting for endpoint %q; got %q", want, stablePathPeerCurAddr(from, to))
 	return 0
+}
+
+func stablePathPollPeerAddr(from, to *magicStack, want netip.AddrPort, timeout time.Duration) (mono.Time, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := stablePathPeerCurAddr(from, to); got == want.String() {
+			return mono.Now(), true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return 0, false
 }
 
 func stablePathWaitForPeerEndpoint(t *testing.T, from, to *magicStack, timeout time.Duration) {
@@ -698,35 +719,4 @@ func stablePathWaitForTrustedCandidates(t *testing.T, from, to *magicStack, publ
 	}
 	t.Fatalf("public endpoint is not trusted with fresh public and private candidates; last state: %+v", last)
 	return stablePathState{}
-}
-
-type stablePathPongState struct {
-	at       mono.Time
-	bestAddr netip.AddrPort
-}
-
-func stablePathWaitForFreshPong(t *testing.T, from, to *magicStack, endpoint netip.AddrPort, after mono.Time, timeout time.Duration) stablePathPongState {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		from.conn.mu.Lock()
-		de, ok := from.conn.peerMap.endpointForNodeKey(to.Public())
-		from.conn.mu.Unlock()
-		if ok {
-			de.mu.Lock()
-			state, found := de.endpointState[endpoint]
-			if found && len(state.recentPongs) > 0 {
-				pong := state.recentPongs[state.recentPong]
-				if !pong.pongAt.Before(after) && pong.from == endpoint {
-					result := stablePathPongState{at: pong.pongAt, bestAddr: de.bestAddr.ap}
-					de.mu.Unlock()
-					return result
-				}
-			}
-			de.mu.Unlock()
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for fresh disco Pong from %v", endpoint)
-	return stablePathPongState{}
 }
