@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"encoding/json"
@@ -17,7 +17,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
@@ -32,8 +35,8 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
-				AnnotationProxyGroup:        "foo",
+				reconciler.AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
+				reconciler.AnnotationProxyGroup:        "foo",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -66,43 +69,43 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	er := &egressEpsReconciler{
-		Client:      fc,
-		logger:      zl.Sugar(),
-		tsNamespace: "operator-ns",
-	}
+	er := NewEndpointSliceReconciler(Options{
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		TailscaleNamespace: "operator-ns",
+	})
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo",
 			Namespace: "operator-ns",
 			Labels: map[string]string{
-				LabelParentName:      "test",
-				LabelParentNamespace: "default",
-				labelSvcType:         typeEgress,
-				labelProxyGroup:      "foo"},
+				reconciler.LabelParentName:      "test",
+				reconciler.LabelParentNamespace: "default",
+				labelSvcType:                    typeEgress,
+				labelProxyGroup:                 "foo"},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
-	mustCreate(t, fc, eps)
+	reconcilertest.MustCreate(t, fc, eps)
 
 	t.Run("no_proxy_group_resources", func(t *testing.T) {
-		expectReconciled(t, er, "operator-ns", "foo") // should not error
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo") // should not error
 	})
 
 	t.Run("no_pods_ready_to_route_traffic", func(t *testing.T) {
 		pod, stateS := podAndSecretForProxyGroup("foo")
-		mustCreate(t, fc, pod)
-		mustCreate(t, fc, stateS)
-		expectReconciled(t, er, "operator-ns", "foo") // should not error
+		reconcilertest.MustCreate(t, fc, pod)
+		reconcilertest.MustCreate(t, fc, stateS)
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo") // should not error
 	})
 
 	t.Run("pods_are_ready_to_route_traffic", func(t *testing.T) {
 		pod, stateS := podAndSecretForProxyGroup("foo")
 		stBs := serviceStatusForPodIPs(t, svc, pod.Status.PodIPs[0].IP, "", port)
-		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = append(eps.Endpoints, discoveryv1.Endpoint{
 			Addresses: []string{"10.0.0.1"},
 			Hostname:  new("foo"),
@@ -112,17 +115,17 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: new(false),
 			},
 		})
-		expectEqual(t, fc, eps)
+		reconcilertest.ExpectEqual(t, fc, eps)
 	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
 		_, stateS := podAndSecretForProxyGroup("foo")                // replica Pod has IP 10.0.0.1
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.2", "", port) // status is for a Pod with IP 10.0.0.2
-		mustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", stateS.Name, func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = []discoveryv1.Endpoint{}
-		expectEqual(t, fc, eps)
+		reconcilertest.ExpectEqual(t, fc, eps)
 	})
 
 	// Dual-stack.
@@ -131,34 +134,34 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			Name:      "foo-ipv6",
 			Namespace: "operator-ns",
 			Labels: map[string]string{
-				LabelParentName:      "test",
-				LabelParentNamespace: "default",
-				labelSvcType:         typeEgress,
-				labelProxyGroup:      "foo",
+				reconciler.LabelParentName:      "test",
+				reconciler.LabelParentNamespace: "default",
+				labelSvcType:                    typeEgress,
+				labelProxyGroup:                 "foo",
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
-	mustCreate(t, fc, epsV6)
+	reconcilertest.MustCreate(t, fc, epsV6)
 	t.Run("dual_stack_pod_ready_to_route", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		reconcilertest.MustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
 		dualPod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "foo-0",
 				Namespace: "operator-ns",
-				Labels:    pgLabels("foo", nil),
+				Labels:    reconciler.Labels("proxygroup", "foo", ""),
 				UID:       "foo",
 			},
 			Status: corev1.PodStatus{
 				PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}, {IP: "fd00::1"}},
 			},
 		}
-		mustCreate(t, fc, dualPod)
+		reconcilertest.MustCreate(t, fc, dualPod)
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "fd00::1", port)
-		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo")
 		eps.Endpoints = []discoveryv1.Endpoint{{
 			Addresses: []string{"10.0.0.1"},
 			Hostname:  new("foo"),
@@ -168,8 +171,8 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: new(false),
 			},
 		}}
-		expectEqual(t, fc, eps)
-		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		reconcilertest.ExpectEqual(t, fc, eps)
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo-ipv6")
 		epsV6.Endpoints = []discoveryv1.Endpoint{{
 			Addresses: []string{"fd00::1"},
 			Hostname:  new("foo"),
@@ -179,28 +182,28 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: new(false),
 			},
 		}}
-		expectEqual(t, fc, epsV6)
+		reconcilertest.ExpectEqual(t, fc, epsV6)
 	})
 
 	// IPv6-only.
 	t.Run("ipv4_only_pod_skipped_for_ipv6_slice", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		reconcilertest.MustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
 		ipv4Pod, _ := podAndSecretForProxyGroup("foo")
-		mustCreate(t, fc, ipv4Pod)
+		reconcilertest.MustCreate(t, fc, ipv4Pod)
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "", port)
-		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo-ipv6")
 		// IPv4-only pod should not appear in the IPv6 EndpointSlice.
 		epsV6.Endpoints = []discoveryv1.Endpoint{}
-		expectEqual(t, fc, epsV6)
+		reconcilertest.ExpectEqual(t, fc, epsV6)
 	})
 	ipv6Pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo-0",
 			Namespace: "operator-ns",
-			Labels:    pgLabels("foo", nil),
+			Labels:    reconciler.Labels("proxygroup", "foo", ""),
 			UID:       "foo",
 		},
 		Status: corev1.PodStatus{
@@ -208,22 +211,22 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		},
 	}
 	t.Run("ipv6_status_does_not_match_pod_ip", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
-		mustCreate(t, fc, ipv6Pod)
+		reconcilertest.MustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		reconcilertest.MustCreate(t, fc, ipv6Pod)
 		stBs := serviceStatusForPodIPs(t, svc, "", "fd00::99", port)
-		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo-ipv6")
 		epsV6.Endpoints = []discoveryv1.Endpoint{}
-		expectEqual(t, fc, epsV6)
+		reconcilertest.ExpectEqual(t, fc, epsV6)
 	})
 	t.Run("ipv6_pod_ready_to_route", func(t *testing.T) {
 		stBs := serviceStatusForPodIPs(t, svc, "", ipv6Pod.Status.PodIPs[0].IP, port)
-		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+		reconcilertest.MustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
-		expectReconciled(t, er, "operator-ns", "foo-ipv6")
+		reconcilertest.ExpectReconciled(t, er, "operator-ns", "foo-ipv6")
 		epsV6.Endpoints = append(epsV6.Endpoints, discoveryv1.Endpoint{
 			Addresses: []string{"fd00::1"},
 			Hostname:  new("foo"),
@@ -233,7 +236,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 				Terminating: new(false),
 			},
 		})
-		expectEqual(t, fc, epsV6)
+		reconcilertest.ExpectEqual(t, fc, epsV6)
 	})
 }
 
@@ -246,10 +249,10 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	cfg := egressservices.Config{
 		Ports: ports,
 	}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := svc.Annotations[reconciler.AnnotationTailnetTargetFQDN]; fqdn != "" {
 		cfg.TailnetTarget = egressservices.TailnetTarget{FQDN: fqdn}
 	}
-	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+	if ip := svc.Annotations[reconciler.AnnotationTailnetTargetIP]; ip != "" {
 		cfg.TailnetTarget = egressservices.TailnetTarget{IP: ip}
 	}
 	name := tailnetSvcName(svc)
@@ -260,7 +263,7 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName(svc.Annotations[AnnotationProxyGroup]),
+			Name:      CMName(svc.Annotations[reconciler.AnnotationProxyGroup]),
 			Namespace: "operator-ns",
 		},
 		BinaryData: map[string][]byte{egressservices.KeyEgressServices: bs},
@@ -275,10 +278,10 @@ func serviceStatusForPodIPs(t *testing.T, svc *corev1.Service, ipv4, ipv6 string
 		ports[egressservices.PortMap{Protocol: string(port.Protocol), MatchPort: p, TargetPort: uint16(port.Port)}] = struct{}{}
 	}
 	svcSt := egressservices.ServiceStatus{Ports: ports}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
+	if fqdn := svc.Annotations[reconciler.AnnotationTailnetTargetFQDN]; fqdn != "" {
 		svcSt.TailnetTarget = egressservices.TailnetTarget{FQDN: fqdn}
 	}
-	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+	if ip := svc.Annotations[reconciler.AnnotationTailnetTargetIP]; ip != "" {
 		svcSt.TailnetTarget = egressservices.TailnetTarget{IP: ip}
 	}
 	svcName := tailnetSvcName(svc)
@@ -299,7 +302,7 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels:    pgLabels(pg, nil),
+			Labels:    reconciler.Labels("proxygroup", pg, ""),
 			UID:       "foo",
 		},
 		Status: corev1.PodStatus{
@@ -312,7 +315,7 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-0", pg),
 			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pg, kubetypes.LabelSecretTypeState),
+			Labels:    stateSecretLabels(pg),
 		},
 	}
 	return p, s
@@ -320,4 +323,12 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 
 func randomPort() uint16 {
 	return uint16(rand.Int32N(1000) + 1000)
+}
+
+// stateSecretLabels returns the labels the ProxyGroup reconciler puts on a proxy's tailscaled state Secret. The egress
+// reconcilers select on them to find which Pods are routing, so the fixtures have to match.
+func stateSecretLabels(pgName string) map[string]string {
+	labels := reconciler.Labels("proxygroup", pgName, "")
+	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
+	return labels
 }

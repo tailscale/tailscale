@@ -7,8 +7,6 @@
 package kube
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -93,18 +91,4 @@ func ResolveViaDomain(name string) (netip.Addr, bool) {
 	// MapVia will never error when given an IPv4 netip.Prefix.
 	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
 	return out.Addr(), true
-}
-
-// TruncateLabelValue truncates a Kubernetes label value to fit within the
-// 63-character limit. If the value exceeds the limit, it is truncated and a
-// short hash suffix is appended to preserve uniqueness.
-func TruncateLabelValue(val string) string {
-	const maxLen = 63
-	if len(val) <= maxLen {
-		return val
-	}
-	hash := sha256.Sum256([]byte(val))
-	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
-	truncated := val[:maxLen-len(suffix)-1]
-	return truncated + "-" + suffix
 }

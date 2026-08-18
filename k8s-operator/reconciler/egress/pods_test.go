@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"bytes"
@@ -21,7 +21,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 )
@@ -35,12 +38,12 @@ func TestEgressPodReadiness(t *testing.T) {
 		Build()
 	zl, _ := zap.NewDevelopment()
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	rec := &egressPodsReconciler{
-		tsNamespace: "operator-ns",
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       cl,
-	}
+	rec := NewPodReconciler(Options{
+		TailscaleNamespace: "operator-ns",
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              cl,
+	})
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "dev",
@@ -50,20 +53,20 @@ func TestEgressPodReadiness(t *testing.T) {
 			Replicas: new(int32(3)),
 		},
 	}
-	mustCreate(t, fc, pg)
+	reconcilertest.MustCreate(t, fc, pg)
 	podIP := "10.0.0.2"
 	podTemplate := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "operator-ns",
 			Name:      "pod",
 			Labels: map[string]string{
-				LabelParentType: "proxygroup",
-				LabelParentName: "dev",
+				reconciler.LabelParentType: "proxygroup",
+				reconciler.LabelParentName: "dev",
 			},
 		},
 		Spec: corev1.PodSpec{
 			ReadinessGates: []corev1.PodReadinessGate{{
-				ConditionType: tsEgressReadinessGate,
+				ConditionType: ReadinessGate,
 			}},
 			Containers: []corev1.Container{{
 				Name: "tailscale",
@@ -80,42 +83,42 @@ func TestEgressPodReadiness(t *testing.T) {
 
 	t.Run("no_egress_services", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
-		mustCreate(t, fc, pod)
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.MustCreate(t, fc, pod)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod)
 	})
 	t.Run("one_svc_already_routed_to", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		resp := readyResps(podIP, 1)
 		httpCl := fakeHTTPClient{
 			t:     t,
 			state: map[string][]fakeResponse{hep: resp},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
+		reconcilertest.ExpectEqual(t, fc, pod)
 
 		// A subsequent reconcile should not change the Pod.
-		expectReconciled(t, rec, "operator-ns", pod.Name)
-		expectEqual(t, fc, pod)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectEqual(t, fc, pod)
 
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_many_backends_eventually_routed_to", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// For a 3 replica ProxyGroup the healthcheck endpoint should be called 9 times, make the 9th time only
 		// return with the right Pod IP.
 		resps := append(readyResps("10.0.0.3", 4), append(readyResps("10.0.0.4", 4), readyResps(podIP, 1)...)...)
@@ -124,18 +127,18 @@ func TestEgressPodReadiness(t *testing.T) {
 			state: map[string][]fakeResponse{hep: resps},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_one_backend_eventually_healthy", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// For a 3 replica ProxyGroup the healthcheck endpoint should be called 9 times, make the 9th time only
 		// return with 200 status code.
 		resps := append(unreadyResps(podIP, 8), readyResps(podIP, 1)...)
@@ -144,18 +147,18 @@ func TestEgressPodReadiness(t *testing.T) {
 			state: map[string][]fakeResponse{hep: resps},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_one_backend_never_routable", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// For a 3 replica ProxyGroup the healthcheck endpoint should be called 9 times and Pod should be
 		// requeued if neither of those succeed.
 		resps := readyResps("10.0.0.3", 9)
@@ -164,11 +167,11 @@ func TestEgressPodReadiness(t *testing.T) {
 			state: map[string][]fakeResponse{hep: resps},
 		}
 		rec.httpClient = &httpCl
-		expectRequeue(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_many_backends_already_routable", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -176,7 +179,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, hep := newSvc("svc", 9002)
 		svc2, hep2 := newSvc("svc-2", 9002)
 		svc3, hep3 := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		resps := readyResps(podIP, 1)
 		httpCl := fakeHTTPClient{
 			t: t,
@@ -187,19 +190,19 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("one_svc_many_backends_eventually_routable_and_healthy", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 		svc, hep := newSvc("svc", 9002)
 		svc2, hep2 := newSvc("svc-2", 9002)
 		svc3, hep3 := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		resps := append(readyResps("10.0.0.3", 7), readyResps(podIP, 1)...)
 		resps2 := append(readyResps("10.0.0.3", 5), readyResps(podIP, 1)...)
 		resps3 := append(unreadyResps(podIP, 4), readyResps(podIP, 1)...)
@@ -212,12 +215,12 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("one_svc_many_backends_never_routable_and_healthy", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -225,7 +228,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, hep := newSvc("svc", 9002)
 		svc2, hep2 := newSvc("svc-2", 9002)
 		svc3, hep3 := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		// For a ProxyGroup with 3 replicas, each Service's health endpoint will be tried 9 times and the Pod
 		// will be requeued if neither succeeds.
 		resps := readyResps("10.0.0.3", 9)
@@ -240,11 +243,11 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectRequeue(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("one_svc_many_backends_one_never_routable", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -252,7 +255,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, hep := newSvc("svc", 9002)
 		svc2, hep2 := newSvc("svc-2", 9002)
 		svc3, hep3 := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		// For a ProxyGroup with 3 replicas, each Service's health endpoint will be tried 9 times and the Pod
 		// will be requeued if any one never succeeds.
 		resps := readyResps(podIP, 9)
@@ -267,11 +270,11 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectRequeue(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("one_svc_many_backends_one_never_healthy", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -279,7 +282,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, hep := newSvc("svc", 9002)
 		svc2, hep2 := newSvc("svc-2", 9002)
 		svc3, hep3 := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		// For a ProxyGroup with 3 replicas, each Service's health endpoint will be tried 9 times and the Pod
 		// will be requeued if any one never succeeds.
 		resps := readyResps(podIP, 9)
@@ -294,11 +297,11 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectRequeue(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("one_svc_many_backends_different_ports_eventually_healthy_and_routable", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -306,7 +309,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, hep := newSvc("svc", 9003)
 		svc2, hep2 := newSvc("svc-2", 9004)
 		svc3, hep3 := newSvc("svc-3", 9010)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		// For a ProxyGroup with 3 replicas, each Service's health endpoint will be tried up to 9 times and
 		// marked as success as soon as one try succeeds.
 		resps := append(readyResps("10.0.0.3", 7), readyResps(podIP, 1)...)
@@ -321,12 +324,12 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	// Proxies of 1.78 and earlier did not set the Pod IP header.
 	t.Run("pod_does_not_return_ip_header", func(t *testing.T) {
@@ -334,7 +337,7 @@ func TestEgressPodReadiness(t *testing.T) {
 		pod.Name = "foo-bar"
 
 		svc, hep := newSvc("foo-bar", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// If a response does not contain Pod IP header, we assume that this is an earlier proxy version,
 		// readiness cannot be verified so the readiness gate is just set to true.
 		resps := unreadyResps("", 1)
@@ -345,18 +348,18 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_one_backend_eventually_healthy_and_routable", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// If a response errors, it is probably because the Pod is not yet properly running, so retry.
 		resps := append(erroredResps(8), readyResps(podIP, 1)...)
 		httpCl := fakeHTTPClient{
@@ -366,12 +369,12 @@ func TestEgressPodReadiness(t *testing.T) {
 			},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("one_svc_one_backend_svc_does_not_have_health_port", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -379,14 +382,14 @@ func TestEgressPodReadiness(t *testing.T) {
 		// If a Service does not have health port set, we assume that it is not possible to determine Pod's
 		// readiness and set it to ready.
 		svc, _ := newSvc("svc", -1)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		rec.httpClient = nil
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("error_setting_up_healthcheck", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -397,13 +400,13 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, _ := newSvc("svc", 9002)
 		svc2, _ := newSvc("svc-2", 9002)
 		svc3, _ := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		rec.httpClient = nil
-		expectError(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconcileError(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("pod_does_not_have_an_ip_address", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
@@ -412,38 +415,38 @@ func TestEgressPodReadiness(t *testing.T) {
 		svc, _ := newSvc("svc", 9002)
 		svc2, _ := newSvc("svc-2", 9002)
 		svc3, _ := newSvc("svc-3", 9002)
-		mustCreateAll(t, fc, svc, svc2, svc3, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, svc2, svc3, pod)
 		rec.httpClient = nil
-		expectRequeue(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectRequeue(t, rec, "operator-ns", pod.Name)
 
 		// Pod should not have readiness gate condition set.
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc, svc2, svc3)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc, svc2, svc3)
 	})
 	t.Run("ipv6_only_pod_already_routed_to", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 		pod.Status.PodIPs = []corev1.PodIP{{IP: "fd00::2"}}
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		resp := readyRespsV6("fd00::2", 1)
 		httpCl := fakeHTTPClient{
 			t:     t,
 			state: map[string][]fakeResponse{hep: resp},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 	t.Run("dual_stack_pod", func(t *testing.T) {
 		pod := podTemplate.DeepCopy()
 		pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
 
 		svc, hep := newSvc("svc", 9002)
-		mustCreateAll(t, fc, svc, pod)
+		reconcilertest.MustCreateAll(t, fc, svc, pod)
 		// Dual-stack pod: the reconciler uses PodIPs[0] (the primary IP),
 		// which in this case is IPv4.
 		resp := readyResps("10.0.0.2", 1)
@@ -452,11 +455,11 @@ func TestEgressPodReadiness(t *testing.T) {
 			state: map[string][]fakeResponse{hep: resp},
 		}
 		rec.httpClient = &httpCl
-		expectReconciled(t, rec, "operator-ns", pod.Name)
+		reconcilertest.ExpectReconciled(t, rec, "operator-ns", pod.Name)
 
 		podSetReady(pod, cl)
-		expectEqual(t, fc, pod)
-		mustDeleteAll(t, fc, pod, svc)
+		reconcilertest.ExpectEqual(t, fc, pod)
+		reconcilertest.MustDeleteAll(t, fc, pod, svc)
 	})
 }
 
@@ -516,7 +519,7 @@ func newSvc(name string, port int32) (*corev1.Service, string) {
 
 func podSetReady(pod *corev1.Pod, cl *tstest.Clock) {
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
-		Type:               tsEgressReadinessGate,
+		Type:               ReadinessGate,
 		Status:             corev1.ConditionTrue,
 		LastTransitionTime: metav1.Time{Time: cl.Now().Truncate(time.Second)},
 	})
@@ -571,4 +574,13 @@ type fakeResponse struct {
 	statusCode int
 	podIP      string // for the Pod IP header
 	header     string // header key to use; defaults to PodIPv4Header
+}
+
+// TestReadinessGateName pins the readiness gate's wire value. The ProxyGroup reconciler stamps it onto egress proxy
+// Pod specs and PodReconciler is what satisfies it, so the two must agree; every other test in this package builds its
+// fixtures from the constant and so would follow a rename rather than catch it.
+func TestReadinessGateName(t *testing.T) {
+	if got, want := ReadinessGate, "tailscale.com/egress-services"; got != want {
+		t.Errorf("ReadinessGate = %q, want %q", got, want)
+	}
 }

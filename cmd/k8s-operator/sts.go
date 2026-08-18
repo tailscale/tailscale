@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
@@ -67,6 +68,11 @@ const (
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	AnnotationProxyGroup = "tailscale.com/proxy-group"
+
+	// labelProxyGroup names the ProxyGroup a managed resource belongs to. Same string as
+	// AnnotationProxyGroup, which users set on the Service; this is the label the operator
+	// stamps on the resources it creates in response.
+	labelProxyGroup = "tailscale.com/proxy-group"
 
 	// AnnotationShareACMEAccount opts a single ProxyGroup into ("true")
 	// or out of ("false") using the shared per-tailnet ACME account key.
@@ -216,7 +222,7 @@ func (r *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.Suga
 		if err := r.Get(ctx, types.NamespacedName{Name: sts.ProxyClassName}, proxyClass); err != nil {
 			return nil, fmt.Errorf("failed to get ProxyClass: %w", err)
 		}
-		if !tsoperator.ProxyClassIsReady(proxyClass) {
+		if !reconciler.ProxyClassIsReady(proxyClass) {
 			logger.Infof("ProxyClass %s specified for the proxy, but it is not (yet) in a ready state, waiting..")
 			return nil, nil
 		}
@@ -1286,13 +1292,6 @@ func defaultEnv(envName, defVal string) string {
 		return defVal
 	}
 	return v
-}
-
-func nameForService(svc *corev1.Service) string {
-	if h, ok := svc.Annotations[AnnotationHostname]; ok {
-		return h
-	}
-	return svc.Namespace + "-" + svc.Name
 }
 
 // markedForDeletion reports whether obj has a deletion timestamp, i.e. the API server is waiting on finalizers

@@ -27,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
@@ -132,7 +131,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 
 	oldCnStatus := dnsCfg.Status.DeepCopy()
 	setStatus := func(dnsCfg *tsapi.DNSConfig, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
-		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, r.clock, logger)
+		reconciler.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, r.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, dnsCfg); updateErr != nil {

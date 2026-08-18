@@ -28,7 +28,6 @@ import (
 	"tailscale.com/client/tailscale/v2"
 
 	"tailscale.com/ipn"
-	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
@@ -165,7 +164,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 	// The referenced Secret does not exist within the tailscale namespace, so we'll mark the Tailnet as not ready
 	// for use.
 	if apierrors.IsNotFound(err) {
-		operatorutils.SetTailnetCondition(
+		setCondition(
 			tailnet,
 			tsapi.TailnetReady,
 			metav1.ConditionFalse,
@@ -215,7 +214,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, tailnet *tsapi.Tailnet)
 		return reconcile.Result{RequeueAfter: time.Minute / 2}, nil
 	}
 
-	operatorutils.SetTailnetCondition(
+	setCondition(
 		tailnet,
 		tsapi.TailnetReady,
 		metav1.ConditionTrue,
@@ -334,7 +333,7 @@ func (r *Reconciler) ensurePermissions(ctx context.Context, tsClient tsclient.Cl
 	}
 
 	if errs != nil {
-		operatorutils.SetTailnetCondition(
+		setCondition(
 			tailnet,
 			tsapi.TailnetReady,
 			metav1.ConditionFalse,
@@ -366,7 +365,7 @@ func (r *Reconciler) ensureSecret(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 		return true
 	}
 
-	operatorutils.SetTailnetCondition(
+	setCondition(
 		tailnet,
 		tsapi.TailnetReady,
 		metav1.ConditionFalse,
@@ -377,4 +376,10 @@ func (r *Reconciler) ensureSecret(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 	)
 
 	return false
+}
+
+// setCondition sets a condition on tn's status. ObservedGeneration is always the Tailnet's own generation, so callers
+// don't pass it.
+func setCondition(tn *tsapi.Tailnet, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
+	tn.Status.Conditions = reconciler.SetCondition(tn.Status.Conditions, conditionType, status, reason, message, tn.Generation, clock, logger)
 }

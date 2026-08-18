@@ -24,20 +24,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 )
 
 const (
-	resolvConfPath       = "/etc/resolv.conf"
-	defaultClusterDomain = "cluster.local"
-
 	reasonProxyCreated = "ProxyCreated"
 	reasonProxyInvalid = "ProxyInvalid"
 	reasonProxyFailed  = "ProxyFailed"
@@ -156,7 +151,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 
 		if !a.isTailscaleService(svc) {
-			tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
+			reconciler.RemoveServiceCondition(svc, tsapi.ProxyReady)
 		}
 		return nil
 	}
@@ -192,7 +187,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 
 	if !a.isTailscaleService(svc) {
-		tsoperator.RemoveServiceCondition(svc, tsapi.ProxyReady)
+		reconciler.RemoveServiceCondition(svc, tsapi.ProxyReady)
 	}
 	return nil
 }
@@ -218,14 +213,14 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid config: %v", err)
 		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDCONFIG", msg)
 		a.logger.Error(msg)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
 		return nil
 	}
-	if violations := validateService(svc); len(violations) > 0 {
+	if violations := reconciler.ValidateService(svc); len(violations) > 0 {
 		msg := fmt.Sprintf("unable to provision proxy resources: invalid Service: %s", strings.Join(violations, ", "))
 		a.recorder.Event(svc, corev1.EventTypeWarning, "INVALIDSERVICE", msg)
 		a.logger.Error(msg)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyInvalid, msg, a.clock, logger)
 		return nil
 	}
 
@@ -233,11 +228,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	if proxyClass != "" {
 		if ready, err := proxyClassIsReady(ctx, proxyClass, a.Client); err != nil {
 			errMsg := fmt.Errorf("error verifying ProxyClass for Service: %w", err)
-			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+			reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
 			return errMsg
 		} else if !ready {
 			msg := fmt.Sprintf("ProxyClass %s specified for the Service, but is not (yet) Ready, waiting..", proxyClass)
-			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
+			reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
 			logger.Info(msg)
 			return nil
 		}
@@ -252,7 +247,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
 		if err := a.Update(ctx, svc); err != nil {
 			errMsg := fmt.Errorf("failed to add finalizer: %w", err)
-			tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+			reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
 			return errMsg
 		}
 	}
@@ -266,7 +261,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		Replicas:            1,
 		ParentResourceName:  svc.Name,
 		ParentResourceUID:   string(svc.UID),
-		Hostname:            nameForService(svc),
+		Hostname:            reconciler.NameForService(svc),
 		Tags:                tags,
 		ChildResourceLabels: crl,
 		ProxyClassName:      proxyClass,
@@ -304,12 +299,12 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	var hsvc *corev1.Service
 	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
 		errMsg := fmt.Errorf("failed to provision: %w", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
 		return errMsg
 	}
 
 	if sts.TailnetTargetIP != "" || sts.TailnetTargetFQDN != "" { // if an egress proxy
-		clusterDomain := retrieveClusterDomain(a.tsNamespace, logger)
+		clusterDomain := reconciler.ClusterDomain(a.tsNamespace, logger)
 		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc." + clusterDomain
 		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
 			svc.Spec.ExternalName = headlessSvcName
@@ -317,17 +312,17 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			svc.Spec.Type = corev1.ServiceTypeExternalName
 			if err := a.Update(ctx, svc); err != nil {
 				errMsg := fmt.Errorf("failed to update service: %w", err)
-				tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
+				reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, errMsg.Error(), a.clock, logger)
 				return errMsg
 			}
 		}
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 		return nil
 	}
 
 	if !isTailscaleLoadBalancerService(svc, a.isDefaultLoadBalancer) {
 		logger.Debugf("service is not a LoadBalancer, so not updating ingress")
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 		return nil
 	}
 
@@ -341,7 +336,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		logger.Debug(msg)
 		// No hostname yet. Wait for the proxy pod to auth.
 		svc.Status.LoadBalancer.Ingress = nil
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyPending, msg, a.clock, logger)
 		return nil
 	}
 
@@ -355,7 +350,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
 	if err != nil {
 		msg := fmt.Sprintf("failed to parse cluster IP: %v", err)
-		tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
+		reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionFalse, reasonProxyFailed, msg, a.clock, logger)
 		return errors.New(msg)
 	}
 
@@ -370,42 +365,8 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	svc.Status.LoadBalancer.Ingress = ingress
-	tsoperator.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
+	reconciler.SetServiceCondition(svc, tsapi.ProxyReady, metav1.ConditionTrue, reasonProxyCreated, reasonProxyCreated, a.clock, logger)
 	return nil
-}
-
-func validateService(svc *corev1.Service) []string {
-	violations := make([]string, 0)
-	if svc.Spec.ClusterIP == "None" {
-		violations = append(violations, "headless Services are not supported.")
-	}
-	if svc.Annotations[AnnotationTailnetTargetFQDN] != "" && svc.Annotations[AnnotationTailnetTargetIP] != "" {
-		violations = append(violations, fmt.Sprintf("only one of annotations %s and %s can be set", AnnotationTailnetTargetIP, AnnotationTailnetTargetFQDN))
-	}
-	if fqdn := svc.Annotations[AnnotationTailnetTargetFQDN]; fqdn != "" {
-		if !isMagicDNSName(fqdn) {
-			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q does not appear to be a valid MagicDNS name", AnnotationTailnetTargetFQDN, fqdn))
-		}
-	}
-	if ipStr := svc.Annotations[AnnotationTailnetTargetIP]; ipStr != "" {
-		ip, err := netip.ParseAddr(ipStr)
-		if err != nil {
-			violations = append(violations, fmt.Sprintf("invalid value of annotation %s: %q could not be parsed as a valid IP Address, error: %s", AnnotationTailnetTargetIP, ipStr, err))
-		} else if !ip.IsValid() {
-			violations = append(violations, fmt.Sprintf("parsed IP address in annotation %s: %q is not valid", AnnotationTailnetTargetIP, ipStr))
-		}
-	}
-
-	svcName := nameForService(svc)
-	if err := dnsname.ValidLabel(svcName); err != nil {
-		if _, ok := svc.Annotations[AnnotationHostname]; ok {
-			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname specified %q: %s", svcName, err))
-		} else {
-			violations = append(violations, fmt.Sprintf("invalid Tailscale hostname %q, use %q annotation to override: %s", svcName, AnnotationHostname, err))
-		}
-	}
-	violations = append(violations, tagViolations(svc)...)
-	return violations
 }
 
 func shouldExpose(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
@@ -455,53 +416,5 @@ func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool
 	if err := cl.Get(ctx, types.NamespacedName{Name: name}, proxyClass); err != nil {
 		return false, fmt.Errorf("error getting ProxyClass %s: %w", name, err)
 	}
-	return tsoperator.ProxyClassIsReady(proxyClass), nil
-}
-
-// retrieveClusterDomain determines and retrieves cluster domain i.e
-// (cluster.local) in which this Pod is running by parsing search domains in
-// /etc/resolv.conf. If an error is encountered at any point during the process,
-// defaults cluster domain to 'cluster.local'.
-func retrieveClusterDomain(namespace string, logger *zap.SugaredLogger) string {
-	logger.Infof("attempting to retrieve cluster domain..")
-	conf, err := resolvconffile.ParseFile(resolvConfPath)
-	if err != nil {
-		// Vast majority of clusters use the cluster.local domain, so it
-		// is probably better to fall back to that than error out.
-		logger.Warn("error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
-		return defaultClusterDomain
-	}
-	return clusterDomainFromResolverConf(conf, namespace, logger)
-}
-
-// clusterDomainFromResolverConf attempts to retrieve cluster domain from the provided resolver config.
-// It expects the first three search domains in the resolver config to be ['<namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>, ...]
-// If the first three domains match the expected structure, it returns the third.
-// If the domains don't match the expected structure or an error is encountered, it defaults to 'cluster.local' domain.
-func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string, logger *zap.SugaredLogger) string {
-	if len(conf.SearchDomains) < 3 {
-		logger.Warnf(" resolver config contains only %d search domains, at least three expected.\nDefaulting cluster domain to 'cluster.local'.", len(conf.SearchDomains))
-		return defaultClusterDomain
-	}
-	first := conf.SearchDomains[0]
-	if !strings.HasPrefix(string(first), namespace+".svc") {
-		logger.Warnf("first search domain in resolver config is %s; expected %s.\nDefaulting cluster domain to 'cluster.local'.", first, namespace+".svc.<cluster-domain>")
-		return defaultClusterDomain
-	}
-	second := conf.SearchDomains[1]
-	if !strings.HasPrefix(string(second), "svc") {
-		logger.Warnf("second search domain in resolver config is %s; expected 'svc.<cluster-domain>'.\nDefaulting cluster domain to 'cluster.local'.", second)
-		return defaultClusterDomain
-	}
-	// Trim the trailing dot for backwards compatibility purposes as the
-	// cluster domain was previously hardcoded to 'cluster.local' without a
-	// trailing dot.
-	probablyClusterDomain := strings.TrimPrefix(second.WithoutTrailingDot(), "svc.")
-	third := conf.SearchDomains[2]
-	if !strings.EqualFold(third.WithoutTrailingDot(), probablyClusterDomain) {
-		logger.Warnf("expected resolver config to contain serch domains <namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>; got %s %s %s\n. Defaulting cluster domain to 'cluster.local'.", first, second, third)
-		return defaultClusterDomain
-	}
-	logger.Infof("Cluster domain %q extracted from resolver config", probablyClusterDomain)
-	return probablyClusterDomain
+	return reconciler.ProxyClassIsReady(proxyClass), nil
 }

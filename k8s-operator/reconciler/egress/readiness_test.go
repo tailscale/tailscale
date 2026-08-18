@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"fmt"
@@ -15,8 +15,10 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	tsoperator "tailscale.com/k8s-operator"
+
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 )
@@ -30,20 +32,20 @@ func TestEgressServiceReadiness(t *testing.T) {
 		Build()
 	zl, _ := zap.NewDevelopment()
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	rec := &egressSvcsReadinessReconciler{
-		tsNamespace: "operator-ns",
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       cl,
-	}
+	rec := NewReadinessReconciler(Options{
+		TailscaleNamespace: "operator-ns",
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              cl,
+	})
 	tailnetFQDN := "my-app.tailnetxyz.ts.net"
 	egressSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "dev",
 			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: tailnetFQDN,
+				reconciler.AnnotationProxyGroup:        "dev",
+				reconciler.AnnotationTailnetTargetFQDN: tailnetFQDN,
 			},
 		},
 	}
@@ -51,11 +53,11 @@ func TestEgressServiceReadiness(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
+			Labels:    childResourceLabels(egressSvc),
 		},
 		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1"}},
 	}
-	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
+	labels := epsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
@@ -69,59 +71,59 @@ func TestEgressServiceReadiness(t *testing.T) {
 			Name: "dev",
 		},
 	}
-	mustCreate(t, fc, egressSvc)
-	mustCreate(t, fc, fakeClusterIPSvc)
+	reconcilertest.MustCreate(t, fc, egressSvc)
+	reconcilertest.MustCreate(t, fc, fakeClusterIPSvc)
 	setClusterNotReady(egressSvc, cl, zl.Sugar())
 	t.Run("endpointslice_does_not_exist", func(t *testing.T) {
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // not ready
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // not ready
 	})
 	t.Run("proxy_group_does_not_exist", func(t *testing.T) {
-		mustCreate(t, fc, eps)
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // still not ready
+		reconcilertest.MustCreate(t, fc, eps)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("proxy_group_not_ready", func(t *testing.T) {
-		mustCreate(t, fc, pg)
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // still not ready
+		reconcilertest.MustCreate(t, fc, pg)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("no_ready_replicas", func(t *testing.T) {
 		setPGReady(pg, cl, zl.Sugar())
-		mustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
+		reconcilertest.MustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Status = pg.Status
 		})
-		expectEqual(t, fc, pg)
-		for i := range pgReplicas(pg) {
+		reconcilertest.ExpectEqual(t, fc, pg)
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			p := pod(pg, i)
-			mustCreate(t, fc, p)
-			mustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
+			reconcilertest.MustCreate(t, fc, p)
+			reconcilertest.MustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
 				existing.Status.PodIPs = p.Status.PodIPs
 			})
 		}
-		expectReconciled(t, rec, "dev", "my-app")
-		setNotReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg))
-		expectEqual(t, fc, egressSvc) // still not ready
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		setNotReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // still not ready
 	})
 	t.Run("one_ready_replica", func(t *testing.T) {
 		setEndpointForReplica(pg, 0, eps)
-		mustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
+		reconcilertest.MustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
 			e.Endpoints = eps.Endpoints
 		})
-		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), 1)
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // partially ready
+		setReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg), 1)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // partially ready
 	})
 	t.Run("all_replicas_ready", func(t *testing.T) {
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			setEndpointForReplica(pg, i, eps)
 		}
-		mustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
+		reconcilertest.MustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
 			e.Endpoints = eps.Endpoints
 		})
-		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // ready
+		setReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc) // ready
 	})
 }
 
@@ -132,20 +134,20 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		Build()
 	zl, _ := zap.NewDevelopment()
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	rec := &egressSvcsReadinessReconciler{
-		tsNamespace: "operator-ns",
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       cl,
-	}
+	rec := NewReadinessReconciler(Options{
+		TailscaleNamespace: "operator-ns",
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              cl,
+	})
 	tailnetFQDN := "my-app.tailnetxyz.ts.net"
 	egressSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "dev",
 			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: tailnetFQDN,
+				reconciler.AnnotationProxyGroup:        "dev",
+				reconciler.AnnotationTailnetTargetFQDN: tailnetFQDN,
 			},
 		},
 	}
@@ -153,11 +155,11 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
+			Labels:    childResourceLabels(egressSvc),
 		},
 		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1", "fd00::1"}},
 	}
-	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
+	labels := epsLabels(egressSvc, fakeClusterIPSvc)
 	epsV4 := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app-ipv4",
@@ -166,7 +168,7 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
-	labelsV6 := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
+	labelsV6 := epsLabels(egressSvc, fakeClusterIPSvc)
 	epsV6 := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app-ipv6",
@@ -184,41 +186,41 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 			Type:     tsapi.ProxyGroupTypeEgress,
 		},
 	}
-	mustCreate(t, fc, egressSvc)
-	mustCreate(t, fc, fakeClusterIPSvc)
-	mustCreate(t, fc, epsV4)
-	mustCreate(t, fc, epsV6)
-	mustCreate(t, fc, pg)
+	reconcilertest.MustCreate(t, fc, egressSvc)
+	reconcilertest.MustCreate(t, fc, fakeClusterIPSvc)
+	reconcilertest.MustCreate(t, fc, epsV4)
+	reconcilertest.MustCreate(t, fc, epsV6)
+	reconcilertest.MustCreate(t, fc, pg)
 	setPGReady(pg, cl, zl.Sugar())
-	mustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
+	reconcilertest.MustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
 		p.Status = pg.Status
 	})
 
 	// Create a dual-stack pod.
 	p := pod(pg, 0)
 	p.Status.PodIPs = append(p.Status.PodIPs, corev1.PodIP{IP: "fd00::0"})
-	mustCreate(t, fc, p)
-	mustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
+	reconcilertest.MustCreate(t, fc, p)
+	reconcilertest.MustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
 		existing.Status.PodIPs = p.Status.PodIPs
 	})
 
 	t.Run("not_ready_missing_from_ipv6_slice", func(t *testing.T) {
 		setEndpointForReplicaWithIP("10.0.0.0", epsV4)
-		mustUpdate(t, fc, epsV4.Namespace, epsV4.Name, func(e *discoveryv1.EndpointSlice) {
+		reconcilertest.MustUpdate(t, fc, epsV4.Namespace, epsV4.Name, func(e *discoveryv1.EndpointSlice) {
 			e.Endpoints = epsV4.Endpoints
 		})
-		expectReconciled(t, rec, "dev", "my-app")
-		setNotReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg))
-		expectEqual(t, fc, egressSvc)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		setNotReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectEqual(t, fc, egressSvc)
 	})
 	t.Run("ready_in_both_slices", func(t *testing.T) {
 		setEndpointForReplicaWithIP("fd00::", epsV6)
-		mustUpdate(t, fc, epsV6.Namespace, epsV6.Name, func(e *discoveryv1.EndpointSlice) {
+		reconcilertest.MustUpdate(t, fc, epsV6.Namespace, epsV6.Name, func(e *discoveryv1.EndpointSlice) {
 			e.Endpoints = epsV6.Endpoints
 		})
-		expectReconciled(t, rec, "dev", "my-app")
-		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
-		expectEqual(t, fc, egressSvc)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		setReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectEqual(t, fc, egressSvc)
 	})
 	t.Run("not_ready_when_ipv6_slice_missing", func(t *testing.T) {
 		// Delete the IPv6 EndpointSlice while the ClusterIP Service still
@@ -227,9 +229,9 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 		if err := fc.Delete(t.Context(), epsV6); err != nil {
 			t.Fatalf("error deleting IPv6 EndpointSlice: %v", err)
 		}
-		expectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
 		setClusterNotReady(egressSvc, cl, zl.Sugar())
-		expectEqual(t, fc, egressSvc)
+		reconcilertest.ExpectEqual(t, fc, egressSvc)
 	})
 }
 
@@ -240,19 +242,19 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 		Build()
 	zl, _ := zap.NewDevelopment()
 	cl := tstest.NewClock(tstest.ClockOpts{})
-	rec := &egressSvcsReadinessReconciler{
-		tsNamespace: "operator-ns",
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       cl,
-	}
+	rec := NewReadinessReconciler(Options{
+		TailscaleNamespace: "operator-ns",
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              cl,
+	})
 	egressSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "dev",
 			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: "my-app.tailnetxyz.ts.net",
+				reconciler.AnnotationProxyGroup:        "dev",
+				reconciler.AnnotationTailnetTargetFQDN: "my-app.tailnetxyz.ts.net",
 			},
 		},
 	}
@@ -260,11 +262,11 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app",
 			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
+			Labels:    childResourceLabels(egressSvc),
 		},
 		Spec: corev1.ServiceSpec{ClusterIPs: []string{"fd00::1"}},
 	}
-	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
+	labels := epsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app-ipv6",
@@ -278,45 +280,45 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 			Name: "dev",
 		},
 	}
-	mustCreate(t, fc, egressSvc)
-	mustCreate(t, fc, fakeClusterIPSvc)
-	mustCreate(t, fc, eps)
-	mustCreate(t, fc, pg)
+	reconcilertest.MustCreate(t, fc, egressSvc)
+	reconcilertest.MustCreate(t, fc, fakeClusterIPSvc)
+	reconcilertest.MustCreate(t, fc, eps)
+	reconcilertest.MustCreate(t, fc, pg)
 	setPGReady(pg, cl, zl.Sugar())
-	mustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
+	reconcilertest.MustUpdateStatus(t, fc, pg.Namespace, pg.Name, func(p *tsapi.ProxyGroup) {
 		p.Status = pg.Status
 	})
 
 	// Create IPv6-only pods.
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		p := ipv6OnlyPod(pg, i)
-		mustCreate(t, fc, p)
-		mustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
+		reconcilertest.MustCreate(t, fc, p)
+		reconcilertest.MustUpdateStatus(t, fc, p.Namespace, p.Name, func(existing *corev1.Pod) {
 			existing.Status.PodIPs = p.Status.PodIPs
 		})
 	}
 
 	t.Run("no_ready_replicas", func(t *testing.T) {
-		expectReconciled(t, rec, "dev", "my-app")
-		setNotReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg))
-		expectEqual(t, fc, egressSvc)
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		setNotReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectEqual(t, fc, egressSvc)
 	})
 	t.Run("all_replicas_ready", func(t *testing.T) {
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			p := ipv6OnlyPod(pg, i)
 			setEndpointForReplicaWithIP(p.Status.PodIPs[0].IP, eps)
 		}
-		mustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
+		reconcilertest.MustUpdate(t, fc, eps.Namespace, eps.Name, func(e *discoveryv1.EndpointSlice) {
 			e.Endpoints = eps.Endpoints
 		})
-		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc)
+		setReady(egressSvc, cl, zl.Sugar(), reconciler.ProxyGroupReplicas(pg), reconciler.ProxyGroupReplicas(pg))
+		reconcilertest.ExpectReconciled(t, rec, "dev", "my-app")
+		reconcilertest.ExpectEqual(t, fc, egressSvc)
 	})
 }
 
 func ipv6OnlyPod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
-	labels := pgLabels(pg.Name, nil)
+	labels := reconciler.Labels("proxygroup", pg.Name, "")
 	labels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
 	ip := fmt.Sprintf("fd00::%d", ordinal+1) // +1 to avoid fd00::0 normalization issues
 	return &corev1.Pod{
@@ -332,12 +334,12 @@ func ipv6OnlyPod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
 }
 
 func setClusterNotReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger) {
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonClusterResourcesNotReady, reasonClusterResourcesNotReady, cl, lg)
+	reconciler.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonClusterResourcesNotReady, reasonClusterResourcesNotReady, cl, lg)
 }
 
 func setNotReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger, replicas int32) {
 	msg := fmt.Sprintf(msgReadyToRouteTemplate, 0, replicas)
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonNotReady, msg, cl, lg)
+	reconciler.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionFalse, reasonNotReady, msg, cl, lg)
 }
 
 func setReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger, replicas, readyReplicas int32) {
@@ -346,11 +348,11 @@ func setReady(svc *corev1.Service, cl tstime.Clock, lg *zap.SugaredLogger, repli
 		reason = reasonReady
 	}
 	msg := fmt.Sprintf(msgReadyToRouteTemplate, readyReplicas, replicas)
-	tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionTrue, reason, msg, cl, lg)
+	reconciler.SetServiceCondition(svc, tsapi.EgressSvcReady, metav1.ConditionTrue, reason, msg, cl, lg)
 }
 
 func setPGReady(pg *tsapi.ProxyGroup, cl tstime.Clock, lg *zap.SugaredLogger) {
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, lg)
+	reconciler.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, cl, lg)
 }
 
 func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1.EndpointSlice) {
@@ -366,7 +368,7 @@ func setEndpointForReplica(pg *tsapi.ProxyGroup, ordinal int32, eps *discoveryv1
 }
 
 func pod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
-	labels := pgLabels(pg.Name, nil)
+	labels := reconciler.Labels("proxygroup", pg.Name, "")
 	labels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
 	ip := fmt.Sprintf("10.0.0.%d", ordinal)
 	return &corev1.Pod{

@@ -18,8 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"tailscale.com/client/tailscale/v2"
-	kube "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 	"tailscale.com/util/httpm"
@@ -64,7 +64,7 @@ func TestL3Ingress(t *testing.T) {
 		if err := get(t.Context(), kubeClient, maybeReadySvc); err != nil {
 			return err
 		}
-		isReady := kube.SvcIsReady(maybeReadySvc)
+		isReady := reconciler.SvcIsReady(maybeReadySvc)
 		if isReady {
 			t.Log("Service is ready")
 			return nil

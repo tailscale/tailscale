@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
@@ -158,7 +157,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	oldTSRStatus := tsr.Status.DeepCopy()
 	setStatusReady := func(tsr *tsapi.Recorder, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
-		tsoperator.SetRecorderCondition(tsr, tsapi.RecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
+		tsr.Status.Conditions = reconciler.SetCondition(tsr.Status.Conditions, tsapi.RecorderReady, status, reason, message, tsr.Generation, r.clock, logger)
 		if !apiequality.Semantic.DeepEqual(oldTSRStatus, &tsr.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, tsr); updateErr != nil {

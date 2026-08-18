@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"context"
@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -43,7 +45,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName("foo"),
+			Name:      CMName("foo"),
 			Namespace: "operator-ns",
 		},
 	}
@@ -61,12 +63,12 @@ func TestTailscaleEgressServices(t *testing.T) {
 	}
 	clock := tstest.NewClock(tstest.ClockOpts{})
 
-	esr := &egressSvcsReconciler{
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       clock,
-		tsNamespace: "operator-ns",
-	}
+	esr := NewReconciler(Options{
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              clock,
+		TailscaleNamespace: "operator-ns",
+	})
 	tailnetTargetFQDN := "foo.bar.ts.net."
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -74,8 +76,8 @@ func TestTailscaleEgressServices(t *testing.T) {
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
-				AnnotationProxyGroup:        "foo",
+				reconciler.AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+				reconciler.AnnotationProxyGroup:        "foo",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -92,32 +94,32 @@ func TestTailscaleEgressServices(t *testing.T) {
 	}
 
 	t.Run("service_one_unnamed_port", func(t *testing.T) {
-		mustCreate(t, fc, svc)
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.MustCreate(t, fc, svc)
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 	t.Run("service_add_two_named_ports", func(t *testing.T) {
 		svc.Spec.Ports = []corev1.ServicePort{{Protocol: "TCP", Port: 80, Name: "http"}, {Protocol: "TCP", Port: 443, Name: "https"}}
-		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		reconcilertest.MustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 			s.Spec.Ports = svc.Spec.Ports
 		})
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 	t.Run("service_add_udp_port", func(t *testing.T) {
 		svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{Port: 53, Protocol: "UDP", Name: "dns"})
-		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		reconcilertest.MustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 			s.Spec.Ports = svc.Spec.Ports
 		})
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 	t.Run("service_change_protocol", func(t *testing.T) {
 		svc.Spec.Ports = []corev1.ServicePort{{Protocol: "TCP", Port: 80, Name: "http"}, {Protocol: "TCP", Port: 443, Name: "https"}, {Port: 53, Protocol: "TCP", Name: "tcp_dns"}}
-		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		reconcilertest.MustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 			s.Spec.Ports = svc.Spec.Ports
 		})
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 
@@ -134,7 +136,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 		if err := fc.Delete(t.Context(), eps); err != nil {
 			t.Fatalf("error deleting EndpointSlice: %v", err)
 		}
-		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+		reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 
@@ -143,23 +145,23 @@ func TestTailscaleEgressServices(t *testing.T) {
 		if err := fc.Delete(context.Background(), svc); err != nil {
 			t.Fatalf("error deleting ExternalName Service: %v", err)
 		}
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		// Verify that ClusterIP Service and EndpointSlice have been deleted.
-		expectMissing[corev1.Service](t, fc, "operator-ns", name)
-		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
+		reconcilertest.ExpectMissing[corev1.Service](t, fc, "operator-ns", name)
+		reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
 		// Verify that service config has been deleted from the ConfigMap.
 		mustNotHaveConfigForSvc(t, fc, svc, cm)
 	})
 }
 
-func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReconciler, svc *corev1.Service, clock *tstest.Clock, zl *zap.Logger, cm *corev1.ConfigMap) {
-	expectReconciled(t, esr, "default", "test")
+func validateReadyService(t *testing.T, fc client.WithWatch, esr *Reconciler, svc *corev1.Service, clock *tstest.Clock, zl *zap.Logger, cm *corev1.ConfigMap) {
+	reconcilertest.ExpectReconciled(t, esr, "default", "test")
 	// Verify that a ClusterIP Service has been created.
 	name := findGenNameForEgressSvcResources(t, fc, svc)
-	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc, removeClusterIPsFromSvc)
+	reconcilertest.ExpectEqual(t, fc, clusterIPSvc(name, svc), reconcilertest.RemoveTargetPorts, reconcilertest.RemoveClusterIPs)
 	clusterSvc := mustGetClusterIPSvc(t, fc, name)
 	// Verify that an EndpointSlice has been created.
-	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+	reconcilertest.ExpectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
 	// Verify that ConfigMap contains configuration for the new egress service.
 	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm, zl)
 	r := svcConfiguredReason(svc, true, zl.Sugar())
@@ -171,7 +173,7 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	}
 	svc.ObjectMeta.Finalizers = []string{"tailscale.com/finalizer"}
 	svc.Spec.ExternalName = fmt.Sprintf("%s.operator-ns.svc.cluster.local", name)
-	expectEqual(t, fc, svc)
+	reconcilertest.ExpectEqual(t, fc, svc)
 
 }
 
@@ -179,7 +181,7 @@ func condition(typ tsapi.ConditionType, st metav1.ConditionStatus, r, msg string
 	return metav1.Condition{
 		Type:               string(typ),
 		Status:             st,
-		LastTransitionTime: conditionTime(clock),
+		LastTransitionTime: reconcilertest.ConditionTime(clock),
 		Reason:             r,
 		Message:            msg,
 	}
@@ -187,8 +189,8 @@ func condition(typ tsapi.ConditionType, st metav1.ConditionStatus, r, msg string
 
 func findGenNameForEgressSvcResources(t *testing.T, client client.Client, svc *corev1.Service) string {
 	t.Helper()
-	labels := egressSvcChildResourceLabels(svc)
-	s, err := getSingleObject[corev1.Service](context.Background(), client, "operator-ns", labels)
+	labels := childResourceLabels(svc)
+	s, err := reconciler.GetSingleObject[corev1.Service](context.Background(), client, "operator-ns", labels)
 	if err != nil {
 		t.Fatalf("finding ClusterIP Service for ExternalName Service %s: %v", svc.Name, err)
 	}
@@ -199,7 +201,7 @@ func findGenNameForEgressSvcResources(t *testing.T, client client.Client, svc *c
 }
 
 func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
-	labels := egressSvcChildResourceLabels(extNSvc)
+	labels := childResourceLabels(extNSvc)
 	ports := make([]corev1.ServicePort, len(extNSvc.Spec.Ports))
 	for i, port := range extNSvc.Spec.Ports {
 		ports[i] = corev1.ServicePort{ // Copy the port to avoid modifying the original.
@@ -246,7 +248,7 @@ func mustGetClusterIPSvc(t *testing.T, cl client.Client, name string) *corev1.Se
 }
 
 func endpointSlice(name string, extNSvc, clusterIPSvc *corev1.Service, addrType discoveryv1.AddressType) *discoveryv1.EndpointSlice {
-	labels := egressSvcChildResourceLabels(extNSvc)
+	labels := childResourceLabels(extNSvc)
 	labels[discoveryv1.LabelManagedBy] = "tailscale.com"
 	labels[discoveryv1.LabelServiceName] = name
 	suffix := "ipv4"
@@ -335,7 +337,7 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName("foo"),
+			Name:      CMName("foo"),
 			Namespace: "operator-ns",
 		},
 	}
@@ -353,20 +355,20 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 	}
 	clock := tstest.NewClock(tstest.ClockOpts{})
 
-	esr := &egressSvcsReconciler{
-		Client:      fc,
-		logger:      zl.Sugar(),
-		clock:       clock,
-		tsNamespace: "operator-ns",
-	}
+	esr := NewReconciler(Options{
+		Client:             fc,
+		Logger:             zl.Sugar(),
+		Clock:              clock,
+		TailscaleNamespace: "operator-ns",
+	})
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "default",
 			UID:       types.UID("1234-UID"),
 			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
-				AnnotationProxyGroup:        "foo",
+				reconciler.AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				reconciler.AnnotationProxyGroup:        "foo",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -383,13 +385,13 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 	}
 
 	t.Run("dual_stack_creates_both_endpoint_slices", func(t *testing.T) {
-		mustCreate(t, fc, svc)
-		expectReconciled(t, esr, "default", "test")
+		reconcilertest.MustCreate(t, fc, svc)
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 		// Also verify the IPv6 EndpointSlice was created.
 		name := findGenNameForEgressSvcResources(t, fc, svc)
 		clusterSvc := mustGetClusterIPSvc(t, fc, name)
-		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+		reconcilertest.ExpectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
 	})
 
 	t.Run("dual_stack_endpointslice_deletion_recovery", func(t *testing.T) {
@@ -406,12 +408,12 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 			if err := fc.Delete(t.Context(), eps); err != nil {
 				t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
 			}
-			expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+			reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
 		}
 		// Reconcile should recreate both.
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 		clusterSvc := mustGetClusterIPSvc(t, fc, name)
-		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+		reconcilertest.ExpectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
 	})
 
 	t.Run("dual_stack_single_endpointslice_deletion_recovery", func(t *testing.T) {
@@ -427,13 +429,13 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		if err := fc.Delete(t.Context(), eps); err != nil {
 			t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
 		}
-		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
+		reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", epsName)
 		// Reconcile should recreate the missing IPv6 EndpointSlice while leaving
 		// the IPv4 one untouched.
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 		clusterSvc := mustGetClusterIPSvc(t, fc, name)
-		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
-		expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+		reconcilertest.ExpectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+		reconcilertest.ExpectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
 	})
 
 	t.Run("delete_dual_stack_service", func(t *testing.T) {
@@ -441,10 +443,10 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		if err := fc.Delete(context.Background(), svc); err != nil {
 			t.Fatalf("error deleting ExternalName Service: %v", err)
 		}
-		expectReconciled(t, esr, "default", "test")
-		expectMissing[corev1.Service](t, fc, "operator-ns", name)
-		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
-		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv6", name))
+		reconcilertest.ExpectReconciled(t, esr, "default", "test")
+		reconcilertest.ExpectMissing[corev1.Service](t, fc, "operator-ns", name)
+		reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
+		reconcilertest.ExpectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv6", name))
 		mustNotHaveConfigForSvc(t, fc, svc, cm)
 	})
 }

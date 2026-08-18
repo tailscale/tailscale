@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
@@ -201,7 +200,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func (r *Reconciler) reportTailnetUnavailable(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay, tsErr error) (reconcile.Result, error) {
-	operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonTailnetUnavailable, tsErr.Error(), r.clock, logger)
+	setCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonTailnetUnavailable, tsErr.Error(), r.clock, logger)
 	if err := r.Status().Update(ctx, pr); err != nil {
 		return reconcile.Result{}, errors.Join(tsErr, fmt.Errorf("failed to update PeerRelay status: %w", err))
 	}
@@ -229,7 +228,7 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 	// condition so they can fix the spec.
 	if pr.Spec.AWS != nil && int32(len(pr.Spec.AWS.ElasticIPs)) < replicas {
 		message := fmt.Sprintf("spec.aws.elasticIPs has %d entries but spec.replicas is %d", len(pr.Spec.AWS.ElasticIPs), replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonAWSConfigInvalid, message, r.clock, logger)
+		setCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonAWSConfigInvalid, message, r.clock, logger)
 		if err := r.Status().Update(ctx, pr); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to update PeerRelay status for %q: %w", pr.Name, err)
 		}
@@ -358,12 +357,12 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 	switch {
 	case int32(len(addressed)) < replicas:
 		message := fmt.Sprintf("%d of %d replicas have a public IP", len(addressed), replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, logger)
+		setCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonEndpointsPending, message, r.clock, logger)
 	case readyReplicas < replicas:
 		message := fmt.Sprintf("%d of %d pods are ready", readyReplicas, replicas)
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonPodsPending, message, r.clock, logger)
+		setCondition(pr, tsapi.PeerRelayReady, metav1.ConditionFalse, ReasonPodsPending, message, r.clock, logger)
 	default:
-		operatorutils.SetPeerRelayCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, logger)
+		setCondition(pr, tsapi.PeerRelayReady, metav1.ConditionTrue, ReasonReady, ReasonReady, r.clock, logger)
 	}
 
 	if reflect.DeepEqual(prevStatus, &pr.Status) {
@@ -530,4 +529,10 @@ func (r *Reconciler) deleteStatefulSet(ctx context.Context, logger *zap.SugaredL
 		return fmt.Errorf("failed to delete StatefulSet: %w", err)
 	}
 	return nil
+}
+
+// setCondition sets a condition on pr's status. ObservedGeneration is always the PeerRelay's own generation, so
+// callers don't pass it.
+func setCondition(pr *tsapi.PeerRelay, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
+	pr.Status.Conditions = reconciler.SetCondition(pr.Status.Conditions, conditionType, status, reason, message, pr.Generation, clock, logger)
 }

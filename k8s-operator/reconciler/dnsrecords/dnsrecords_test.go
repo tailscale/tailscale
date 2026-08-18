@@ -83,7 +83,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	// Set the ready condition of the DNSConfig
 	reconcilertest.MustUpdateStatus(t, fc, "", "test", func(c *tsapi.DNSConfig) {
-		operatorutils.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, nameserver.ReasonNameserverCreated, nameserver.ReasonNameserverCreated, 0, cl, zl.Sugar())
+		reconciler.SetDNSConfigCondition(c, tsapi.NameserverReady, metav1.ConditionTrue, nameserver.ReasonNameserverCreated, nameserver.ReasonNameserverCreated, 0, cl, zl.Sugar())
 	})
 	dnsRR := dnsrecords.NewReconciler(dnsrecords.ReconcilerOptions{
 		Client:             fc,
@@ -183,7 +183,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 			Name:      "external-service",
 			Namespace: "default",
 			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "external-service.example.ts.net",
+				reconciler.AnnotationTailnetTargetFQDN: "external-service.example.ts.net",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -297,7 +297,7 @@ func TestDNSRecordsReconcilerOptimisticLockError(t *testing.T) {
 			Name:      "lock-service",
 			Namespace: "default",
 			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "lock-service.example.ts.net",
+				reconciler.AnnotationTailnetTargetFQDN: "lock-service.example.ts.net",
 			},
 		},
 		Spec: corev1.ServiceSpec{
@@ -433,7 +433,7 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 			Name:      "pg-service",
 			Namespace: "tailscale",
 			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "pg-service.example.ts.net",
+				reconciler.AnnotationTailnetTargetFQDN: "pg-service.example.ts.net",
 			},
 		},
 		Spec: corev1.ServiceSpec{

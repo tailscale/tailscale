@@ -27,12 +27,11 @@ import (
 
 	"tailscale.com/k8s-operator/apis/v1alpha1"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
-	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
 )
 
@@ -1522,8 +1521,8 @@ func Test_isMagicDNSName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isMagicDNSName(tt.in); got != tt.want {
-				t.Errorf("isMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
+			if got := reconciler.IsMagicDNSName(tt.in); got != tt.want {
+				t.Errorf("reconciler.IsMagicDNSName(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -1750,72 +1749,6 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
-	}
-}
-
-func Test_clusterDomainFromResolverConf(t *testing.T) {
-	zl := zap.Must(zap.NewDevelopment())
-	tests := []struct {
-		name      string
-		conf      *resolvconffile.Config
-		namespace string
-		want      string
-	}{
-		{
-			name: "success-custom-domain",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
-			},
-			namespace: "foo",
-			want:      "department.org.io",
-		},
-		{
-			name: "success-default-domain",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.cluster.local."), toFQDN(t, "svc.cluster.local."), toFQDN(t, "cluster.local.")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "only-two-search-domains",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "svc.department.org.io"), toFQDN(t, "department.org.io")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "first-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.bar.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "second-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "foo.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-		{
-			name: "third-search-domain-mismatch",
-			conf: &resolvconffile.Config{
-				SearchDomains: []dnsname.FQDN{toFQDN(t, "foo.svc.department.org.io"), toFQDN(t, "svc.department.org.io"), toFQDN(t, "some.other.fqdn")},
-			},
-			namespace: "foo",
-			want:      "cluster.local",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := clusterDomainFromResolverConf(tt.conf, tt.namespace, zl.Sugar()); got != tt.want {
-				t.Errorf("clusterDomainFromResolverConf() = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }
 
@@ -2093,15 +2026,6 @@ func TestIgnorePGService(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 
 	findNoGenName(t, fc, "default", "test", "svc")
-}
-
-func toFQDN(t *testing.T, s string) dnsname.FQDN {
-	t.Helper()
-	fqdn, err := dnsname.ToFQDN(s)
-	if err != nil {
-		t.Fatalf("error coverting %q to dnsname.FQDN: %v", s, err)
-	}
-	return fqdn
 }
 
 func proxyCreatedCondition(clock tstime.Clock) []metav1.Condition {

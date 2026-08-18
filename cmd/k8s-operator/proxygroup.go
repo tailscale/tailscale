@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/egressservices"
@@ -205,7 +206,7 @@ func (r *ProxyGroupReconciler) reconcilePG(ctx context.Context, tsClient tsclien
 		if err != nil {
 			return r.notReadyErrf(pg, logger, "error getting ProxyGroup's ProxyClass %q: %w", proxyClassName, err)
 		}
-		if !tsoperator.ProxyClassIsReady(proxyClass) {
+		if !reconciler.ProxyClassIsReady(proxyClass) {
 			msg := fmt.Sprintf("the ProxyGroup's ProxyClass %q is not yet in a ready state, waiting...", proxyClassName)
 			logger.Info(msg)
 			return notReady(reasonProxyGroupCreating, msg)
@@ -487,7 +488,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 
 	pg.Status.Devices = devices
 
-	desiredReplicas := int(pgReplicas(pg))
+	desiredReplicas := int(reconciler.ProxyGroupReplicas(pg))
 
 	// Set ProxyGroupAvailable condition.
 	status := metav1.ConditionFalse
@@ -499,10 +500,10 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 			reason = reasonProxyGroupAvailable
 		}
 	}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, status, reason, message, 0, r.clock, logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, status, reason, message, 0, r.clock, logger)
 
 	// Set ProxyGroupReady condition.
-	tsSvcValid, tsSvcSet := tsoperator.KubeAPIServerProxyValid(pg)
+	tsSvcValid, tsSvcSet := reconciler.KubeAPIServerProxyValid(pg)
 	status = metav1.ConditionFalse
 	reason = reasonProxyGroupCreating
 	switch {
@@ -516,7 +517,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 	case len(devices) < desiredReplicas:
 	case len(devices) > desiredReplicas:
 		message = fmt.Sprintf("waiting for %d ProxyGroup pods to shut down", len(devices)-desiredReplicas)
-	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !tsoperator.KubeAPIServerProxyConfigured(pg):
+	case pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer && !reconciler.KubeAPIServerProxyConfigured(pg):
 		reason = reasonProxyGroupCreating
 		message = "waiting for proxies to start advertising the kube-apiserver proxy's hostname"
 	default:
@@ -524,7 +525,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 		reason = reasonProxyGroupReady
 		message = reasonProxyGroupReady
 	}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, status, reason, message, pg.Generation, r.clock, logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.ProxyGroupReady, status, reason, message, pg.Generation, r.clock, logger)
 
 	return nil
 }
@@ -566,14 +567,14 @@ func (e *allocatePortsErr) Error() string {
 }
 
 func (r *ProxyGroupReconciler) allocatePorts(ctx context.Context, pg *tsapi.ProxyGroup, proxyClassName string, portRanges tsapi.PortRanges) (map[string]uint16, error) {
-	replicaCount := int(pgReplicas(pg))
+	replicaCount := int(reconciler.ProxyGroupReplicas(pg))
 	svcToNodePorts, usedPorts, err := getServicePortsForProxyGroups(ctx, r.Client, r.tsNamespace, portRanges)
 	if err != nil {
 		return nil, &allocatePortsErr{msg: fmt.Sprintf("failed to find ports for existing ProxyGroup NodePort Services: %s", err.Error())}
 	}
 
 	replicasAllocated := 0
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		if _, ok := svcToNodePorts[pgNodePortServiceName(pg.Name, i)]; !ok {
 			svcToNodePorts[pgNodePortServiceName(pg.Name, i)] = 0
 		} else {
@@ -605,7 +606,7 @@ func (r *ProxyGroupReconciler) ensureNodePortServiceCreated(ctx context.Context,
 	// NOTE: (ChaosInTheCRD) we want the same TargetPort for every static endpoint NodePort Service for the ProxyGroup
 	tailscaledPort := getRandomPort()
 	svcs := []*corev1.Service{}
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		nodePortSvcName := pgNodePortServiceName(pg.Name, i)
 
 		svc := &corev1.Service{}
@@ -663,7 +664,7 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 	}
 
 	for _, m := range metadata {
-		if m.ordinal+1 <= pgReplicas(pg) {
+		if m.ordinal+1 <= reconciler.ProxyGroupReplicas(pg) {
 			continue
 		}
 
@@ -750,8 +751,8 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 	svcToNodePorts map[string]uint16,
 ) (endpoints map[string][]netip.AddrPort, err error) {
 	logger := r.logger(pg.Name)
-	endpoints = make(map[string][]netip.AddrPort, pgReplicas(pg)) // keyed by Service name.
-	for i := range pgReplicas(pg) {
+	endpoints = make(map[string][]netip.AddrPort, reconciler.ProxyGroupReplicas(pg)) // keyed by Service name.
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		logger = logger.With("Pod", fmt.Sprintf("%s-%d", pg.Name, i))
 		cfgSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1116,7 +1117,7 @@ func (r *ProxyGroupReconciler) ensureStateAddedForProxyGroup(pg *tsapi.ProxyGrou
 	gaugeIngressProxyGroupResources.Set(int64(r.ingressProxyGroups.Len()))
 	gaugeAPIServerProxyGroupResources.Set(int64(r.apiServerProxyGroups.Len()))
 
-	r.reissuer.EnsureState(pg.Name, int(pgReplicas(pg)))
+	r.reissuer.EnsureState(pg.Name, int(reconciler.ProxyGroupReplicas(pg)))
 }
 
 // ensureStateRemovedForProxyGroup ensures the gauge metric for the ProxyGroup resource type is updated when the

@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
@@ -167,9 +166,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	if errs := r.validate(ctx, pc, logger); errs != nil {
 		msg := fmt.Sprintf(messageProxyClassInvalid, errs.ToAggregate().Error())
 		r.recorder.Event(pc, corev1.EventTypeWarning, ReasonProxyClassInvalid, msg)
-		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, ReasonProxyClassInvalid, msg, pc.Generation, r.clock, logger)
+		reconciler.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionFalse, ReasonProxyClassInvalid, msg, pc.Generation, r.clock, logger)
 	} else {
-		tsoperator.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, ReasonProxyClassValid, ReasonProxyClassValid, pc.Generation, r.clock, logger)
+		reconciler.SetProxyClassCondition(pc, tsapi.ProxyClassReady, metav1.ConditionTrue, ReasonProxyClassValid, ReasonProxyClassValid, pc.Generation, r.clock, logger)
 	}
 	if !apiequality.Semantic.DeepEqual(oldPCStatus, &pc.Status) {
 		if err := r.Client.Status().Update(ctx, pc); err != nil {
@@ -480,7 +479,7 @@ func getPortsForProxyClasses(ctx context.Context, c client.Client) (map[string]t
 
 	portRanges := make(map[string]tsapi.PortRanges)
 	for _, i := range pcs.Items {
-		if !tsoperator.ProxyClassIsReady(&i) {
+		if !reconciler.ProxyClassIsReady(&i) {
 			continue
 		}
 		if se := i.Spec.StaticEndpoints; se != nil && se.NodePort != nil {

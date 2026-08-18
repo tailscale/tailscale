@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"context"
@@ -17,37 +17,74 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	xslices "golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/httpm"
 )
 
-const tsEgressReadinessGate = "tailscale.com/egress-services"
+// ReadinessGate is the Pod readiness gate that PodReconciler sets once a proxy Pod has set up routing for its
+// egress services. The ProxyGroup reconciler adds it to egress proxy Pod specs so that a rolling restart doesn't
+// mark a Pod ready, and thus eligible for traffic, before it can actually route.
+const ReadinessGate = "tailscale.com/egress-services"
 
-// egressPodsReconciler is responsible for setting tailscale.com/egress-services condition on egress ProxyGroup Pods.
+const podReconcilerName = "egress-pods-readiness-reconciler"
+
+// PodReconciler is responsible for setting tailscale.com/egress-services condition on egress ProxyGroup Pods.
 // The condition is used as a readiness gate for the Pod, meaning that kubelet will not mark the Pod as ready before the
 // condition is set. The ProxyGroup StatefulSet updates are rolled out in such a way that no Pod is restarted, before
 // the previous Pod is marked as ready, so ensuring that the Pod does not get marked as ready when it is not yet able to
 // route traffic for egress service prevents downtime during restarts caused by no available endpoints left because
 // every Pod has been recreated and is not yet added to endpoints.
 // https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-readiness-gate
-type egressPodsReconciler struct {
+type PodReconciler struct {
 	client.Client
+
 	logger      *zap.SugaredLogger
 	tsNamespace string
 	clock       tstime.Clock
 	httpClient  doer          // http client that can be set to a mock client in tests
 	maxBackoff  time.Duration // max backoff period between health check calls
+}
+
+// NewPodReconciler returns the reconciler that gates egress proxy Pod readiness on the Pod having set up routing.
+func NewPodReconciler(opts Options) *PodReconciler {
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &PodReconciler{
+		Client:      opts.Client,
+		logger:      opts.Logger.Named(podReconcilerName),
+		tsNamespace: opts.TailscaleNamespace,
+		clock:       opts.clock(),
+		httpClient:  httpClient,
+		maxBackoff:  opts.MaxBackoff,
+	}
+}
+
+// Register the PodReconciler onto mgr. It watches proxy Pods and the egress EndpointSlices that tell it which egress
+// services a Pod is expected to be routing.
+func (er *PodReconciler) Register(mgr manager.Manager) error {
+	return builder.
+		ControllerManagedBy(mgr).
+		Named(podReconcilerName).
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(podsFromEndpointSlices(er.Client, er.logger, er.tsNamespace))).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podHandler)).
+		Complete(er)
 }
 
 // Reconcile reconciles an egress ProxyGroup Pods on changes to those Pods and ProxyGroup EndpointSlices. It ensures
@@ -72,7 +109,7 @@ type egressPodsReconciler struct {
 //
 // If the Pod does not appear to be serving the health check endpoint (pre-v1.80 proxies), the reconciler just sets the
 // readiness condition for backwards compatibility reasons.
-func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+func (er *PodReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := er.logger.With("Pod", req.NamespacedName)
 	lg.Debugf("starting reconcile")
 	defer lg.Debugf("reconcile finished")
@@ -90,7 +127,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, nil
 	}
 
-	if pod.Labels[LabelParentType] != proxyTypeProxyGroup {
+	if pod.Labels[reconciler.LabelParentType] != proxyTypeProxyGroup {
 		lg.Warn("reconciler called for a Pod that is not a ProxyGroup Pod")
 		return res, nil
 	}
@@ -98,13 +135,13 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	// If the Pod does not have the readiness gate set, there is no need to add the readiness condition. In practice
 	// this will happen if the user has configured custom TS_LOCAL_ADDR_PORT, thus disabling the graceful failover.
 	if !slices.ContainsFunc(pod.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
-		return r.ConditionType == tsEgressReadinessGate
+		return r.ConditionType == ReadinessGate
 	}) {
 		lg.Debug("Pod does not have egress readiness gate set, skipping")
 		return res, nil
 	}
 
-	proxyGroupName := pod.Labels[LabelParentName]
+	proxyGroupName := pod.Labels[reconciler.LabelParentName]
 	pg := new(tsapi.ProxyGroup)
 	if err := er.Get(ctx, types.NamespacedName{Name: proxyGroupName}, pg); err != nil {
 		return res, fmt.Errorf("error getting ProxyGroup %q: %w", proxyGroupName, err)
@@ -126,10 +163,9 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, fmt.Errorf("error listing ClusterIP Services")
 	}
 
-	idx := xslices.IndexFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
-		return c.Type == tsEgressReadinessGate
-	})
-	if idx != -1 {
+	if slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
+		return c.Type == ReadinessGate
+	}) {
 		lg.Debugf("Pod is already ready, do nothing")
 		return res, nil
 	}
@@ -140,7 +176,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		s := svc
 		go func() {
 			ll := lg.With("service_name", s.Name)
-			d := retrieveClusterDomain(er.tsNamespace, ll)
+			d := reconciler.ClusterDomain(er.tsNamespace, ll)
 			healthCheckAddr := healthCheckForSvc(&s, d)
 			if healthCheckAddr == "" {
 				ll.Debugf("ClusterIP Service does not expose a health check endpoint, unable to verify if routing is set up")
@@ -150,7 +186,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 
 			var routesSetup bool
 			bo := backoff.NewBackoff(s.Name, ll.Infof, er.maxBackoff)
-			for range numCalls(pgReplicas(pg)) {
+			for range numCalls(reconciler.ProxyGroupReplicas(pg)) {
 				if ctx.Err() != nil {
 					errChan <- nil
 					return
@@ -192,15 +228,15 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	return res, nil
 }
 
-func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
+func (er *PodReconciler) setPodReady(ctx context.Context, pod *corev1.Pod, lg *zap.SugaredLogger) error {
 	if slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
-		return c.Type == tsEgressReadinessGate
+		return c.Type == ReadinessGate
 	}) {
 		return nil
 	}
 	lg.Infof("Pod is ready to route traffic to all egress targets")
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
-		Type:               tsEgressReadinessGate,
+		Type:               ReadinessGate,
 		Status:             corev1.ConditionTrue,
 		LastTransitionTime: metav1.Time{Time: er.clock.Now()},
 	})
@@ -221,7 +257,7 @@ const (
 )
 
 // lookupPodRouteViaSvc attempts to reach a Pod using a health check endpoint served by a Service and returns the state of the health check.
-func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, lg *zap.SugaredLogger) (healthCheckState, error) {
+func (er *PodReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, lg *zap.SugaredLogger) (healthCheckState, error) {
 	if !slices.ContainsFunc(pod.Spec.Containers[0].Env, func(e corev1.EnvVar) bool {
 		return e.Name == "TS_ENABLE_HEALTH_CHECK" && e.Value == "true"
 	}) {

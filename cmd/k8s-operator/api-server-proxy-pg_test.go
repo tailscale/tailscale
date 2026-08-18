@@ -18,8 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/client/tailscale/v2"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
@@ -130,8 +130,8 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	}
 	expectReconciled(t, r, "", pgName)
 	pg.ObjectMeta.Finalizers = []string{proxyPGFinalizerName}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, "", 1, r.clock, r.logger)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 	expectMissing[corev1.Secret](t, fc, ns, defaultDomain)
 	expectMissing[rbacv1.Role](t, fc, ns, defaultDomain)
@@ -178,8 +178,8 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	if !reflect.DeepEqual(tsSvc, expectedTSSvc) {
 		t.Fatalf("expected Tailscale Service to be %+v, got %+v", expectedTSSvc, tsSvc)
 	}
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.logger)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
 	expectedCfg.APIServerProxy.ServiceName = new(tailcfg.ServiceName("svc:" + pgName))
@@ -213,7 +213,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	})
 
 	expectReconciled(t, r, "", pgName)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
 	pg.Status.URL = "https://" + defaultDomain
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
@@ -243,7 +243,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectedCfg.APIServerProxy.ServiceName = new(updatedServiceName)
 	expectedCfg.AdvertiseServices = nil
 	expectCfg(&expectedCfg)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
 	pg.Status.URL = ""
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)
 
@@ -262,7 +262,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectReconciled(t, r, "", pgName)
 	expectedCfg.AdvertiseServices = []string{updatedServiceName.String()}
 	expectCfg(&expectedCfg)
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionTrue, reasonKubeAPIServerProxyConfigured, "", 1, r.clock, r.logger)
 	pg.Status.URL = "https://" + updatedDomain
 
 	// Delete the ProxyGroup and verify Tailscale Service and cert resources are cleaned up.

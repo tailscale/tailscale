@@ -21,6 +21,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/reconciler/egress"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
@@ -92,7 +94,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		Labels:          pgLabels(pg.Name, nil),
 		OwnerReferences: pgOwnerReference(pg),
 	}
-	ss.Spec.Replicas = new(pgReplicas(pg))
+	ss.Spec.Replicas = new(reconciler.ProxyGroupReplicas(pg))
 	ss.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: pgLabels(pg.Name, nil),
 	}
@@ -107,13 +109,13 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 	}
 	tmpl.Spec.ServiceAccountName = pg.Name
 	tmpl.Spec.InitContainers[0].Image = image
-	proxyConfigVolName := pgEgressCMName(pg.Name)
+	proxyConfigVolName := egress.CMName(pg.Name)
 	if pg.Spec.Type == tsapi.ProxyGroupTypeIngress {
 		proxyConfigVolName = pgIngressCMName(pg.Name)
 	}
 	tmpl.Spec.Volumes = func() []corev1.Volume {
 		var volumes []corev1.Volume
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			volumes = append(volumes, corev1.Volume{
 				Name: fmt.Sprintf("tailscaledconfig-%d", i),
 				VolumeSource: corev1.VolumeSource{
@@ -147,7 +149,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// TODO(tomhjp): Read config directly from the secret instead. The
 		// mounts change on scaling up/down which causes unnecessary restarts
 		// for pods that haven't meaningfully changed.
-		for i := range pgReplicas(pg) {
+		for i := range reconciler.ProxyGroupReplicas(pg) {
 			mounts = append(mounts, corev1.VolumeMount{
 				Name:      fmt.Sprintf("tailscaledconfig-%d", i),
 				ReadOnly:  true,
@@ -313,7 +315,7 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		// cluster egress traffic. The reconciler sets the corresponding
 		// condition; see egress-pod-readiness.go.
 		tmpl.Spec.ReadinessGates = append(tmpl.Spec.ReadinessGates, corev1.PodReadinessGate{
-			ConditionType: tsEgressReadinessGate,
+			ConditionType: egress.ReadinessGate,
 		})
 	}
 
@@ -329,7 +331,7 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: new(pgReplicas(pg)),
+			Replicas: new(reconciler.ProxyGroupReplicas(pg)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: pgLabels(pg.Name, nil),
 			},
@@ -464,7 +466,7 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string, shareACMEAccount bool) *rbac
 					"update",
 				},
 				ResourceNames: func() (secrets []string) {
-					for i := range pgReplicas(pg) {
+					for i := range reconciler.ProxyGroupReplicas(pg) {
 						secrets = append(secrets,
 							pgConfigSecretName(pg.Name, i), // Config with auth key.
 							pgPodName(pg.Name, i),          // State.
@@ -565,7 +567,7 @@ func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
 }
 
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
-	for i := range pgReplicas(pg) {
+	for i := range reconciler.ProxyGroupReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            pgStateSecretName(pg.Name, i),
@@ -584,7 +586,7 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) (*corev1.ConfigMap, []by
 	hpBs := []byte(strconv.Itoa(hp))
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgEgressCMName(pg.Name),
+			Name:            egress.CMName(pg.Name),
 			Namespace:       namespace,
 			Labels:          pgLabels(pg.Name, nil),
 			OwnerReferences: pgOwnerReference(pg),
@@ -625,14 +627,6 @@ func pgOwnerReference(owner *tsapi.ProxyGroup) []metav1.OwnerReference {
 	return []metav1.OwnerReference{*metav1.NewControllerRef(owner, tsapi.SchemeGroupVersion.WithKind("ProxyGroup"))}
 }
 
-func pgReplicas(pg *tsapi.ProxyGroup) int32 {
-	if pg.Spec.Replicas != nil {
-		return *pg.Spec.Replicas
-	}
-
-	return 2
-}
-
 func pgPodName(pgName string, i int32) string {
 	return fmt.Sprintf("%s-%d", pgName, i)
 }
@@ -653,10 +647,6 @@ func pgStateSecretName(pgName string, i int32) string {
 	return fmt.Sprintf("%s-%d", pgName, i)
 }
 
-func pgEgressCMName(pg string) string {
-	return fmt.Sprintf("%s-egress-config", pg)
-}
-
 // hasLocalAddrPortSet returns true if the proxyclass has the TS_LOCAL_ADDR_PORT env var set. For egress ProxyGroups,
 // currently (2025-01-26) this means that the ProxyGroup does not support graceful failover.
 func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
@@ -671,7 +661,7 @@ func hasLocalAddrPortSet(proxyClass *tsapi.ProxyClass) bool {
 // hepPings returns the number of times a health check endpoint exposed by a Service fronting ProxyGroup replicas should
 // be pinged to ensure that all currently configured backend replicas are hit.
 func hepPings(pg *tsapi.ProxyGroup) int {
-	rc := pgReplicas(pg)
+	rc := reconciler.ProxyGroupReplicas(pg)
 	// Assuming a Service implemented using round robin load balancing, number-of-replica-times should be enough, but in
 	// practice, we cannot assume that the requests will be load balanced perfectly.
 	return int(rc) * 3

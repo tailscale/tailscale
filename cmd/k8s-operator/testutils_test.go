@@ -664,21 +664,6 @@ func mustCreate(t *testing.T, client client.Client, obj client.Object) {
 		t.Fatalf("creating %q: %v", obj.GetName(), err)
 	}
 }
-func mustCreateAll(t *testing.T, client client.Client, objs ...client.Object) {
-	t.Helper()
-	for _, obj := range objs {
-		mustCreate(t, client, obj)
-	}
-}
-
-func mustDeleteAll(t *testing.T, client client.Client, objs ...client.Object) {
-	t.Helper()
-	for _, obj := range objs {
-		if err := client.Delete(context.Background(), obj); err != nil {
-			t.Fatalf("deleting %q: %v", obj.GetName(), err)
-		}
-	}
-}
 
 func mustUpdate[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string, update func(O)) {
 	t.Helper()
@@ -983,19 +968,6 @@ func removeResourceReqs(sts *appsv1.StatefulSet) {
 	if sts != nil {
 		sts.Spec.Template.Spec.Resources = nil
 	}
-}
-
-func removeTargetPortsFromSvc(svc *corev1.Service) {
-	newPorts := make([]corev1.ServicePort, 0)
-	for _, p := range svc.Spec.Ports {
-		newPorts = append(newPorts, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port, Name: p.Name})
-	}
-	svc.Spec.Ports = newPorts
-}
-
-func removeClusterIPsFromSvc(svc *corev1.Service) {
-	svc.Spec.ClusterIP = ""
-	svc.Spec.ClusterIPs = nil
 }
 
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {

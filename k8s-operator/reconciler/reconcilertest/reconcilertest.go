@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -75,6 +76,14 @@ func MustCreate(t *testing.T, c client.Client, obj client.Object) {
 	t.Helper()
 	if err := c.Create(t.Context(), obj); err != nil {
 		t.Fatalf("creating %q: %v", obj.GetName(), err)
+	}
+}
+
+// MustCreateAll creates each of objs in order.
+func MustCreateAll(t *testing.T, c client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, obj := range objs {
+		MustCreate(t, c, obj)
 	}
 }
 
@@ -176,6 +185,27 @@ func ExpectReconciled(t *testing.T, r reconcile.Reconciler, ns, name string) {
 	}
 }
 
+// ExpectRequeue runs a single reconcile for ns/name and asserts it succeeded but asked to be retried later, i.e. the
+// reconciler is waiting on state it doesn't control.
+func ExpectRequeue(t *testing.T, r reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	res, err := r.Reconcile(t.Context(), request(ns, name))
+	if err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected timed requeue, got success")
+	}
+}
+
+// ExpectReconcileError runs a single reconcile for ns/name and asserts it returned an error.
+func ExpectReconcileError(t *testing.T, r reconcile.Reconciler, ns, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(t.Context(), request(ns, name)); err == nil {
+		t.Error("Reconcile: expected error but did not get one")
+	}
+}
+
 func request(ns, name string) reconcile.Request {
 	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
 }
@@ -199,4 +229,21 @@ func ExpectEvents(t *testing.T, rec *record.FakeRecorder, want []string) {
 			t.Errorf("timeout waiting for an event, wants events %+#v, got events %+#v", want, seen)
 		}
 	}
+}
+
+// RemoveTargetPorts is an ExpectEqual modifier that blanks the TargetPort of every port on a Service. Reconcilers that
+// allocate a target port pick it at random, so a test can assert on the rest of the Service without pinning it.
+func RemoveTargetPorts(svc *corev1.Service) {
+	ports := make([]corev1.ServicePort, 0, len(svc.Spec.Ports))
+	for _, p := range svc.Spec.Ports {
+		ports = append(ports, corev1.ServicePort{Protocol: p.Protocol, Port: p.Port, Name: p.Name})
+	}
+	svc.Spec.Ports = ports
+}
+
+// RemoveClusterIPs is an ExpectEqual modifier that blanks a Service's ClusterIPs, which are assigned by the cluster
+// rather than by the reconciler under test.
+func RemoveClusterIPs(svc *corev1.Service) {
+	svc.Spec.ClusterIP = ""
+	svc.Spec.ClusterIPs = nil
 }

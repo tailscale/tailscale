@@ -61,8 +61,8 @@ import (
 	"tailscale.com/client/tailscale/v2"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/tsnet"
 	"tailscale.com/util/must"
 )
@@ -729,7 +729,7 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 		if err := cl.Get(ctx, client.ObjectKeyFromObject(pc), pc); err != nil {
 			return fmt.Errorf("failed to get default ProxyClass: %w", err)
 		}
-		if tsoperator.ProxyClassIsReady(pc) {
+		if reconciler.ProxyClassIsReady(pc) {
 			break
 		}
 		logger.Info("waiting for default ProxyClass to be ready...")

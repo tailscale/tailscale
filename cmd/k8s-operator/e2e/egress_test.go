@@ -11,8 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kube "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/tstest"
 )
 
@@ -33,7 +33,7 @@ func TestEgress(t *testing.T) {
 			"tailscale.com/tailnet-ip": tnTarget.ipv4,
 		})
 		createAndCleanup(t, kubeClient, svc)
-		waitForEgress(t, svc.Name, kube.SvcIsReady)
+		waitForEgress(t, svc.Name, reconciler.SvcIsReady)
 		testEgressIsReachable(t, ns, svc.Name)
 	})
 
@@ -45,7 +45,7 @@ func TestEgress(t *testing.T) {
 			"tailscale.com/tailnet-ip": tnTarget.ipv6,
 		})
 		createAndCleanup(t, kubeClient, svc)
-		waitForEgress(t, svc.Name, kube.SvcIsReady)
+		waitForEgress(t, svc.Name, reconciler.SvcIsReady)
 		testEgressIsReachable(t, ns, svc.Name)
 	})
 
@@ -54,7 +54,7 @@ func TestEgress(t *testing.T) {
 			"tailscale.com/tailnet-fqdn": tnTarget.fqdn,
 		})
 		createAndCleanup(t, kubeClient, svc)
-		waitForEgress(t, svc.Name, kube.SvcIsReady)
+		waitForEgress(t, svc.Name, reconciler.SvcIsReady)
 		testEgressIsReachable(t, ns, svc.Name)
 	})
 }
@@ -165,7 +165,7 @@ func egressService(name string, annotations map[string]string) *corev1.Service {
 }
 
 func pgEgressReady(svc *corev1.Service) bool {
-	cond := kube.GetServiceCondition(svc, tsapi.EgressSvcReady)
+	cond := reconciler.GetServiceCondition(svc, tsapi.EgressSvcReady)
 	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 

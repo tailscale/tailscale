@@ -21,6 +21,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -47,9 +48,6 @@ const (
 	serviceTypeSvc     = "svc"
 
 	shortRequeue = 5 * time.Second
-
-	// AnnotationTailnetTargetFQDN is the annotation used to configure an egress proxy's tailnet target FQDN.
-	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	labelProxyGroup = "tailscale.com/proxy-group"
 	labelSvcType    = "tailscale.com/svc-type"
@@ -150,7 +148,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 		return reconcile.Result{}, nil
 	}
 	dnsCfg := dnsCfgLst.Items[0]
-	if !operatorutils.DNSCfgIsReady(&dnsCfg) {
+	if !nameserverReady(&dnsCfg) {
 		logger.Info("DNSConfig is not ready yet, waiting...")
 		return reconcile.Result{}, nil
 	}
@@ -343,7 +341,7 @@ func (r *Reconciler) fqdnForDNSRecord(ctx context.Context, proxySvc *corev1.Serv
 			return "", err
 		}
 
-		return svc.Annotations[AnnotationTailnetTargetFQDN], nil
+		return svc.Annotations[reconciler.AnnotationTailnetTargetFQDN], nil
 	}
 	return "", nil
 }
@@ -391,7 +389,7 @@ func (r *Reconciler) isSvcForFQDNEgressProxy(ctx context.Context, svc *corev1.Se
 		return false, err
 	}
 	annots := parentSvc.Annotations
-	return annots != nil && annots[AnnotationTailnetTargetFQDN] != "", nil
+	return annots != nil && annots[reconciler.AnnotationTailnetTargetFQDN] != "", nil
 }
 
 // isProxyGroupEgressService reports whether the Service is a ClusterIP Service
@@ -435,7 +433,7 @@ func (r *Reconciler) parentSvcTargetsFQDN(ctx context.Context, svc *corev1.Servi
 	if err := r.Get(ctx, parentName, parentSvc); err != nil {
 		return false
 	}
-	return parentSvc.Annotations[AnnotationTailnetTargetFQDN] != ""
+	return parentSvc.Annotations[reconciler.AnnotationTailnetTargetFQDN] != ""
 }
 
 // getTargetIPs returns the IPv4 and IPv6 addresses that should be used for DNS records
@@ -620,4 +618,11 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 		}
 		return reqs
 	}
+}
+
+// nameserverReady reports whether the DNSConfig's nameserver is ready for the config's current generation, i.e. there
+// is an in-cluster ts.net nameserver to write records for.
+func nameserverReady(cfg *tsapi.DNSConfig) bool {
+	cond := reconciler.Condition(cfg.Status.Conditions, tsapi.NameserverReady)
+	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == cfg.Generation
 }

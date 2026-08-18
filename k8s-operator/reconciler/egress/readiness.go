@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package egress
 
 import (
 	"context"
@@ -19,11 +19,14 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/tstime"
 	"tailscale.com/util/set"
 )
@@ -38,18 +41,42 @@ const (
 	msgReadyToRouteTemplate        = "%d out of %d replicas are ready to route traffic"
 )
 
-type egressSvcsReadinessReconciler struct {
+const readinessReconcilerName = "egress-svcs-readiness-reconciler"
+
+type ReadinessReconciler struct {
 	client.Client
+
 	logger      *zap.SugaredLogger
 	clock       tstime.Clock
 	tsNamespace string
+}
+
+// NewReadinessReconciler returns the reconciler that surfaces egress Service readiness.
+func NewReadinessReconciler(opts Options) *ReadinessReconciler {
+	return &ReadinessReconciler{
+		Client:      opts.Client,
+		logger:      opts.Logger.Named(readinessReconcilerName),
+		clock:       opts.clock(),
+		tsNamespace: opts.TailscaleNamespace,
+	}
+}
+
+// Register the ReadinessReconciler onto mgr. It watches egress Services and the EndpointSlices backing them, since
+// readiness is derived from whether any endpoint is serving.
+func (esrr *ReadinessReconciler) Register(mgr manager.Manager) error {
+	return builder.
+		ControllerManagedBy(mgr).
+		Named(readinessReconcilerName).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(serviceHandler)).
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(serviceFromEndpointSlice)).
+		Complete(esrr)
 }
 
 // Reconcile reconciles an ExternalName Service that defines a tailnet target to be exposed on a ProxyGroup and sets the
 // EgressSvcReady condition on it. The condition gets set to true if at least one of the proxies is currently ready to
 // route traffic to the target. It compares proxy Pod IPs with the endpoints set on the EndpointSlice for the egress
 // service to determine how many replicas are currently able to route traffic.
-func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
+func (esrr *ReadinessReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := esrr.logger.With("Service", req.NamespacedName)
 	lg.Debugf("starting reconcile")
 	defer lg.Debugf("reconcile finished")
@@ -67,13 +94,13 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	)
 	oldStatus := svc.Status.DeepCopy()
 	defer func() {
-		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcReady, st, reason, msg, esrr.clock, lg)
+		reconciler.SetServiceCondition(svc, tsapi.EgressSvcReady, st, reason, msg, esrr.clock, lg)
 		if !apiequality.Semantic.DeepEqual(oldStatus, &svc.Status) {
 			err = errors.Join(err, esrr.Status().Update(ctx, svc))
 		}
 	}()
 
-	crl := egressSvcChildResourceLabels(svc)
+	crl := childResourceLabels(svc)
 	epsList := &discoveryv1.EndpointSliceList{}
 	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
 		err = fmt.Errorf("error listing EndpointSlices: %w", err)
@@ -94,7 +121,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	// recreated when this status change re-triggers a Service reconcile.
 	//
 	// TODO(beckypauley): refactor so EndpointSlice recovery is not dependent on Service status.
-	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
+	clusterIPSvc, err := reconciler.GetSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
 	if err != nil {
 		err = fmt.Errorf("error retrieving ClusterIP Service: %w", err)
 		reason = reasonReadinessCheckFailed
@@ -127,7 +154,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}
 	pg := &tsapi.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: svc.Annotations[AnnotationProxyGroup],
+			Name: svc.Annotations[reconciler.AnnotationProxyGroup],
 		},
 	}
 	err = esrr.Get(ctx, client.ObjectKeyFromObject(pg), pg)
@@ -143,26 +170,26 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		msg = err.Error()
 		return res, err
 	}
-	if !tsoperator.ProxyGroupAvailable(pg) {
+	if !reconciler.ProxyGroupAvailable(pg) {
 		lg.Infof("ProxyGroup for Service is not ready, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
 	}
 
-	replicas := pgReplicas(pg)
+	replicas := reconciler.ProxyGroupReplicas(pg)
 	if replicas == 0 {
 		lg.Infof("ProxyGroup replicas set to 0")
 		reason, msg = reasonNoProxies, reasonNoProxies
 		st = metav1.ConditionFalse
 		return res, nil
 	}
-	podLabels := pgLabels(pg.Name, nil)
+	podLabels := reconciler.Labels("proxygroup", pg.Name, "")
 	var readyReplicas int32
 nextReplica:
 	for i := range replicas {
 		podLabels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", i)
-		pod, err := getSingleObject[corev1.Pod](ctx, esrr.Client, esrr.tsNamespace, podLabels)
+		pod, err := reconciler.GetSingleObject[corev1.Pod](ctx, esrr.Client, esrr.tsNamespace, podLabels)
 		if err != nil {
 			err = fmt.Errorf("error retrieving ProxyGroup Pod: %w", err)
 			reason = reasonReadinessCheckFailed

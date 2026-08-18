@@ -7,11 +7,13 @@ package reconcilertest
 
 import (
 	"testing"
+	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/tstime"
 )
 
 // The condition helpers below take a []metav1.Condition rather than the owning object. Every Tailscale CRD stores its
@@ -56,4 +58,10 @@ func ExpectConditionStatus(t *testing.T, conds []metav1.Condition, conditionType
 		t.Fatalf("unexpected %s condition: got (%s, %s), want (%s, %s)",
 			conditionType, got.Status, got.Reason, status, reason)
 	}
+}
+
+// ConditionTime returns the LastTransitionTime a reconciler using clock would stamp on a condition. The operator
+// truncates to the second, so a test building an expected condition has to do the same.
+func ConditionTime(clock tstime.Clock) metav1.Time {
+	return metav1.NewTime(clock.Now().Truncate(time.Second))
 }

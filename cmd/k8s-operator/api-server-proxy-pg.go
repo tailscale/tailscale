@@ -25,8 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
 
-	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
 	"tailscale.com/kube/kubetypes"
@@ -123,7 +123,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 		// Update the condition based on how many pods are advertising the service
 		conditionStatus := metav1.ConditionFalse
 		conditionReason := reasonKubeAPIServerProxyNoBackends
-		conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", podsAdvertising, pgReplicas(pg))
+		conditionMessage := fmt.Sprintf("%d/%d proxy backends ready and advertising", podsAdvertising, reconciler.ProxyGroupReplicas(pg))
 
 		pg.Status.URL = ""
 		if podsAdvertising > 0 {
@@ -135,7 +135,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 			}
 		}
 
-		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, conditionStatus, conditionReason, conditionMessage, pg.Generation, r.clock, logger)
+		reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, conditionStatus, conditionReason, conditionMessage, pg.Generation, r.clock, logger)
 
 		if !apiequality.Semantic.DeepEqual(oldPGStatus, &pg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
@@ -143,7 +143,7 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 		}
 	}()
 
-	if !tsoperator.ProxyGroupAvailable(pg) {
+	if !reconciler.ProxyGroupAvailable(pg) {
 		return nil
 	}
 
@@ -172,12 +172,12 @@ func (r *KubeAPIServerTSServiceReconciler) maybeProvision(ctx context.Context, s
 		msg := fmt.Sprintf("error ensuring exclusive ownership of Tailscale Service %s: %v. %s", serviceName, err, instr)
 		logger.Warn(msg)
 		r.recorder.Event(pg, corev1.EventTypeWarning, "InvalidTailscaleService", msg)
-		tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, msg, pg.Generation, r.clock, logger)
+		reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionFalse, reasonKubeAPIServerProxyInvalid, msg, pg.Generation, r.clock, logger)
 		return nil
 	}
 
 	// After getting this far, we know the Tailscale Service is valid.
-	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, reasonKubeAPIServerProxyValid, pg.Generation, r.clock, logger)
+	reconciler.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyValid, metav1.ConditionTrue, reasonKubeAPIServerProxyValid, reasonKubeAPIServerProxyValid, pg.Generation, r.clock, logger)
 
 	// Service tags are limited to matching the ProxyGroup's tags until we have
 	// support for querying peer caps for a Service-bound request.
