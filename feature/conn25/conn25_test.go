@@ -1579,6 +1579,7 @@ type testNodeBackend struct {
 	ipnext.NodeBackend
 	peers      []tailcfg.NodeView
 	peerAPIURL string // should be per peer but there's only one peer in our test so this is ok for now
+	self       tailcfg.NodeView
 }
 
 func (nb *testNodeBackend) AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView {
@@ -1596,6 +1597,10 @@ func (nb *testNodeBackend) PeerHasPeerAPI(p tailcfg.NodeView) bool {
 
 func (nb *testNodeBackend) PeerAPIBase(p tailcfg.NodeView) string {
 	return nb.peerAPIURL
+}
+
+func (nb *testNodeBackend) Self() tailcfg.NodeView {
+	return nb.self
 }
 
 type testProfileServices struct {
@@ -3256,25 +3261,33 @@ func TestPickConnector(t *testing.T) {
 
 	nvWithConnectorSet := func(id tailcfg.NodeID, isConnector bool, tags ...string) tailcfg.NodeView {
 		return (&tailcfg.Node{
-			ID:       id,
-			Tags:     tags,
-			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(isConnector)}).View(),
-			Online:   new(true),
+			ID:   id,
+			Tags: tags,
+			Hostinfo: (&tailcfg.Hostinfo{
+				AppConnector: opt.NewBool(isConnector),
+				Location:     &tailcfg.Location{Priority: 100000 - int(id)},
+			}).View(),
+			Online: new(true),
 		}).View()
 	}
 
 	nvWithOnlineSet := func(id tailcfg.NodeID, online bool, tags ...string) tailcfg.NodeView {
 		return (&tailcfg.Node{
-			ID:       id,
-			Tags:     tags,
-			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
-			Online:   new(online),
+			ID:   id,
+			Tags: tags,
+			Hostinfo: (&tailcfg.Hostinfo{
+				AppConnector: opt.NewBool(true),
+				Location:     &tailcfg.Location{Priority: 100000 - int(id)},
+			}).View(),
+			Online: new(online),
 		}).View()
 	}
 
 	nv := func(id tailcfg.NodeID, tags ...string) tailcfg.NodeView {
 		return nvWithConnectorSet(id, true, tags...)
 	}
+
+	self := (&tailcfg.Node{ID: 100}).View()
 
 	for _, tt := range []struct {
 		name       string
@@ -3391,7 +3404,7 @@ func TestPickConnector(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pickConnector(&testNodeBackend{peers: tt.candidates}, tt.app)
+			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("PickConnectors (-want, +got):\n%s", diff)
 			}
