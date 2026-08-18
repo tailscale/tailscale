@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -38,12 +39,18 @@ import (
 )
 
 type fakeOSConfigurator struct {
-	SplitDNS   bool
-	BaseConfig OSConfig
+	SplitDNS bool
 
-	OSConfig         OSConfig
-	ResolverConfig   resolver.Config
-	GetBaseConfigErr *error
+	mu                sync.Mutex // guards BaseConfig/baseConfigErrOnce
+	BaseConfig        OSConfig
+	baseConfigErrOnce error // if non-nil, returned by the next GetBaseConfig then cleared
+	OSConfig          OSConfig
+	ResolverConfig    resolver.Config
+	GetBaseConfigErr  *error
+
+	// onGetBaseConfig, if non-nil, runs at the start of GetBaseConfig, letting
+	// tests count or interleave with config reads.
+	onGetBaseConfig func()
 }
 
 func (c *fakeOSConfigurator) SetDNS(cfg OSConfig) error {
@@ -62,9 +69,34 @@ func (c *fakeOSConfigurator) SupportsSplitDNS() bool {
 	return c.SplitDNS
 }
 
+// setBaseConfig updates BaseConfig, which a retry goroutine may read
+// concurrently via GetBaseConfig.
+func (c *fakeOSConfigurator) setBaseConfig(cfg OSConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.BaseConfig = cfg
+}
+
+// setBaseConfigErrOnce arms GetBaseConfig to return err exactly once, then
+// resume returning BaseConfig.
+func (c *fakeOSConfigurator) setBaseConfigErrOnce(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseConfigErrOnce = err
+}
+
 func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
+	if c.onGetBaseConfig != nil {
+		c.onGetBaseConfig()
+	}
 	if c.GetBaseConfigErr != nil {
 		return OSConfig{}, *c.GetBaseConfigErr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.baseConfigErrOnce; err != nil {
+		c.baseConfigErrOnce = nil
+		return OSConfig{}, err
 	}
 	return c.BaseConfig, nil
 }
@@ -1309,12 +1341,226 @@ func TestConfigRecompilation(t *testing.T) {
 	}
 }
 
+// newEmptyBaseConfigManager returns a Manager whose OS backend can't split DNS
+// and reports an empty base config, so compileConfig takes the blend-in path.
+func newEmptyBaseConfigManager(t *testing.T) (*Manager, *fakeOSConfigurator, *health.Tracker) {
+	t.Helper()
+	f := &fakeOSConfigurator{SplitDNS: false}
+	bus := eventbustest.NewBus(t)
+	ht := health.NewTracker(bus)
+	ht.SetAnyInterfaceUp(true) // else NetworkStatusWarnable suppresses the warning
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(bus)
+	m := NewManager(t.Logf, f, ht, dialer, nil, nil, "linux", bus)
+	m.resolver.TestOnlySetHook(f.SetResolver)
+	t.Cleanup(func() { m.Down() }) // stop the retry goroutine before the test ends
+	return m, f, ht
+}
+
+// baseConfigRetryTotal returns how long a full retry sequence takes, mirroring
+// the backoff in [Manager.retryEmptyBaseConfig].
+func baseConfigRetryTotal() time.Duration {
+	var total time.Duration
+	d := baseConfigRetryInterval
+	for range baseConfigRetryAttempts {
+		total += d
+		d *= 2
+	}
+	return total
+}
+
+// splitDNSOnlyConfig returns a config with a route and MagicDNS but no
+// DefaultResolvers, so the "." route can only come from the OS base config.
+func splitDNSOnlyConfig() Config {
+	return Config{
+		Routes:        upstreams("ts.net", "199.247.155.53"),
+		SearchDomains: fqdns("foo.ts.net"),
+	}
+}
+
+// TestEmptyBaseConfigNoTakeover checks that Set fails, and leaves the OS config
+// alone, when the base config has no upstream resolvers.
+func TestEmptyBaseConfigNoTakeover(t *testing.T) {
+	m, f, _ := newEmptyBaseConfigManager(t)
+	if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+		t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+	}
+	if len(f.OSConfig.Nameservers) != 0 {
+		t.Errorf("OSConfig.Nameservers = %v, want none", f.OSConfig.Nameservers)
+	}
+}
+
+// TestEmptyBaseConfigPlatforms checks which platforms withhold takeover when
+// the OS base config has no resolvers. Sandboxed macOS and iOS are exempt,
+// since their resolvers come from NetworkExtension rather than a file
+// tailscaled reads. A split-DNS-capable backend never reads the base config.
+func TestEmptyBaseConfigPlatforms(t *testing.T) {
+	tests := []struct {
+		name           string
+		goos           string
+		sandboxedMacOS bool
+		split          bool // OSConfigurator.SupportsSplitDNS
+		wantWithhold   bool
+	}{
+		{name: "linux-direct", goos: "linux", wantWithhold: true},
+		{name: "windows", goos: "windows", wantWithhold: true},
+		{name: "freebsd", goos: "freebsd", wantWithhold: true},
+		{name: "darwin-tailscaled", goos: "darwin", wantWithhold: true},
+		// Apple's sandboxed builds do support split DNS, hence split: true.
+		{name: "ios", goos: "ios", split: true},
+		{name: "darwin-sandboxed", goos: "darwin", sandboxedMacOS: true, split: true},
+
+		// A split-DNS-capable backend (e.g. systemd-resolved) doesn't reach
+		// the base config at all; it scopes to its match domains instead.
+		{name: "linux-split", goos: "linux", split: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tstest.Replace(t, &isSandboxedMacOS, func() bool { return test.sandboxedMacOS })
+			f := &fakeOSConfigurator{SplitDNS: test.split}
+			bus := eventbustest.NewBus(t)
+			dialer := tsdial.NewDialer(netmon.NewStatic())
+			dialer.SetBus(bus)
+			m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, test.goos, bus)
+			m.resolver.TestOnlySetHook(f.SetResolver)
+			t.Cleanup(func() { m.Down() })
+
+			err := m.Set(splitDNSOnlyConfig())
+			if got := errors.Is(err, errEmptyBaseConfig); got != test.wantWithhold {
+				t.Fatalf("withheld takeover = %v (err %v), want %v", got, err, test.wantWithhold)
+			}
+			// Where takeover is withheld, the OS config must be untouched.
+			// The exempt platforms still install quad-100 with an empty "."
+			// route, longstanding behavior this change leaves alone.
+			if test.wantWithhold && len(f.OSConfig.Nameservers) != 0 {
+				t.Errorf("OSConfig.Nameservers = %v, want none", f.OSConfig.Nameservers)
+			}
+		})
+	}
+}
+
+// TestEmptyBaseConfigWarnable checks that the health warning is set while
+// waiting and cleared once takeover succeeds.
+func TestEmptyBaseConfigWarnable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, f, ht := newEmptyBaseConfigManager(t)
+		if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+			t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+		}
+		if _, ok := ht.CurrentState().Warnings[emptyBaseConfigWarnable.Code]; !ok {
+			t.Errorf("%s warning not set, want it while withholding takeover", emptyBaseConfigWarnable.Code)
+		}
+
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+		time.Sleep(baseConfigRetryTotal())
+		synctest.Wait()
+
+		if _, ok := ht.CurrentState().Warnings[emptyBaseConfigWarnable.Code]; ok {
+			t.Errorf("%s warning still set after takeover, want cleared", emptyBaseConfigWarnable.Code)
+		}
+	})
+}
+
+// TestEmptyBaseConfigRetryTakesOver checks that the retry installs the config
+// once the OS publishes resolvers.
+func TestEmptyBaseConfigRetryTakesOver(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, f, _ := newEmptyBaseConfigManager(t)
+		if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+			t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+		}
+
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+		time.Sleep(baseConfigRetryTotal())
+		synctest.Wait()
+
+		if got := f.OSConfig.Nameservers; len(got) == 0 {
+			t.Error("OSConfig.Nameservers is empty, want takeover after resolvers appeared")
+		}
+		if rs := f.ResolverConfig.Routes["."]; len(rs) == 0 {
+			t.Error(`resolver "." route is empty, want the OS upstream resolver`)
+		}
+	})
+}
+
+// TestEmptyBaseConfigRetryGivesUp checks that the retry stops if resolvers
+// never appear, after exactly baseConfigRetryAttempts tries. The count also
+// pins that repeated failures share one goroutine rather than each starting
+// another.
+func TestEmptyBaseConfigRetryGivesUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, f, _ := newEmptyBaseConfigManager(t)
+		var reads atomic.Int64
+		f.onGetBaseConfig = func() { reads.Add(1) }
+
+		if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+			t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+		}
+		time.Sleep(2 * baseConfigRetryTotal())
+		synctest.Wait()
+
+		// One read for the initial Set, then one per retry attempt.
+		if got, want := reads.Load(), int64(1+baseConfigRetryAttempts); got != want {
+			t.Errorf("GetBaseConfig calls = %d, want %d", got, want)
+		}
+		m.mu.Lock()
+		waiting := m.waitingForBaseCfg
+		m.mu.Unlock()
+		if waiting {
+			t.Error("still waiting for base config, want the retry to have given up")
+		}
+	})
+}
+
+// TestEmptyBaseConfigRetrySurvivesError checks that a transient GetBaseConfig
+// error doesn't end the retry early.
+func TestEmptyBaseConfigRetrySurvivesError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, f, _ := newEmptyBaseConfigManager(t)
+		if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+			t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+		}
+
+		f.setBaseConfigErrOnce(errors.New("transient resolvconf failure"))
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+		time.Sleep(baseConfigRetryTotal())
+		synctest.Wait()
+
+		if got := f.OSConfig.Nameservers; len(got) == 0 {
+			t.Error("OSConfig.Nameservers is empty, want takeover despite the transient error")
+		}
+	})
+}
+
+// TestEmptyBaseConfigNoTakeoverAfterDown checks that a retry pending when Down
+// runs abandons its apply, rather than reconfiguring DNS during shutdown.
+func TestEmptyBaseConfigNoTakeoverAfterDown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, f, _ := newEmptyBaseConfigManager(t)
+		if err := m.Set(splitDNSOnlyConfig()); !errors.Is(err, errEmptyBaseConfig) {
+			t.Fatalf("Set = %v, want %v", err, errEmptyBaseConfig)
+		}
+
+		// Resolvers appear, so the next attempt would otherwise take over.
+		f.setBaseConfig(OSConfig{Nameservers: mustIPs("8.8.8.8")})
+		if err := m.Down(); err != nil {
+			t.Fatalf("Down: %v", err)
+		}
+
+		time.Sleep(baseConfigRetryTotal())
+		synctest.Wait()
+
+		if got := f.OSConfig.Nameservers; len(got) != 0 {
+			t.Errorf("OSConfig.Nameservers = %v after Down, want none", got)
+		}
+	})
+}
+
 func TestTrampleRetrample(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeOSConfigurator{}
 		f.BaseConfig = OSConfig{
-			Nameservers: mustIPs("1.1.1.1"),
-		}
+			Nameservers: mustIPs("1.1.1.1")}
 
 		config := Config{
 			Routes:        upstreams("ts.net", "69.4.2.0", "foo.ts.net", ""),
