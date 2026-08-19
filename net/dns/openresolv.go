@@ -77,6 +77,12 @@ func (m openresolvManager) GetBaseConfig() (OSConfig, error) {
 	// which we'll exploit later.
 	bs, err := exec.Command("resolvconf", "-i").CombinedOutput()
 	if err != nil {
+		// openresolv exits with status 2 when no interfaces are
+		// configured. In that case there is no base config to
+		// blend, so return an empty OSConfig rather than failing.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+			return OSConfig{}, nil
+		}
 		return OSConfig{}, err
 	}
 
