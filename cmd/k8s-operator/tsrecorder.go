@@ -143,7 +143,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 
 	if err = r.validate(ctx, tsr); err != nil {
 		message := fmt.Sprintf("Recorder is invalid: %s", err)
-		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, message)
+		r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderInvalid, "%s", message)
 		return setStatusReady(tsr, metav1.ConditionFalse, reasonRecorderInvalid, message)
 	}
 
@@ -156,7 +156,7 @@ func (r *RecorderReconciler) Reconcile(ctx context.Context, req reconcile.Reques
 			err = nil
 			logger.Info(message)
 		} else {
-			r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
+			r.recorder.Eventf(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, "%s", message)
 		}
 		return setStatusReady(tsr, metav1.ConditionFalse, reason, message)
 	}
