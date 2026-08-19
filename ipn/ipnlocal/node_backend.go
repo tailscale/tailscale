@@ -1078,6 +1078,10 @@ type netmapDeltaResult struct {
 	// way that requires a WireGuard session reset (see
 	// [nodeBackend.discoChangedLocked]).
 	DiscoChanged set.Set[key.NodePublic]
+
+	// RemovedPeers is a slice of peer stable node IDs (if any) that were
+	// removed by applying the delta.
+	RemovedPeers []tailcfg.StableNodeID
 }
 
 // UpdateNetmapDelta applies the given netmap mutations to the live
@@ -1162,6 +1166,7 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 				nb.removeNodeNameLocked(old.Name())
 				delete(nb.peers, nid)
 				rt.RemovePeer(nid)
+				res.RemovedPeers = append(res.RemovedPeers, old.StableID())
 			}
 			continue
 		}
