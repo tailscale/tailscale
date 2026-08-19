@@ -570,9 +570,9 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 		t.Run(fmt.Sprintf("neverDirectUDP=%v", neverDirectUDP), func(t *testing.T) {
 			prev := envknob.String("TS_DEBUG_NEVER_DIRECT_UDP")
 			if neverDirectUDP {
-				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "true")
+				envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "true")
 			} else {
-				envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", "")
+				envknob.SetenvForTest(t, "TS_DEBUG_NEVER_DIRECT_UDP", "")
 			}
 			t.Cleanup(func() { envknob.Setenv("TS_DEBUG_NEVER_DIRECT_UDP", prev) })
 			now := mono.Now()
