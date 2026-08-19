@@ -2553,13 +2553,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				peersToUpdate = append(peersToUpdate, n)
 			}
 		}
-		var peersToRemove []tailcfg.StableNodeID
-		for id := range removeIDs {
-			if n, ok := cn.NodeByID(id); ok {
-				peersToRemove = append(peersToRemove, n.StableID())
-			}
-		}
-		if err := b.writePeerDeltaToDiskLocked(peersToUpdate, peersToRemove); err != nil {
+		if err := b.writePeerDeltaToDiskLocked(peersToUpdate, deltaRes.RemovedPeers); err != nil {
 			b.logf("update netmap cache for peer deltas: %v", err)
 		}
 	}

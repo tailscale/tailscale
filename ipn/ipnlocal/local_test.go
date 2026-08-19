@@ -619,6 +619,15 @@ func TestUpdateNetMapCache(t *testing.T) {
 					netip.MustParsePrefix("100.2.3.5/32"),
 				},
 			}).View(),
+			(&tailcfg.Node{
+				ID:       602,
+				StableID: "n602FAKE",
+				User:     tailcfg.UserID(1),
+				Key:      makeNodeKeyFromID(602),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.3.4.6/32"),
+				},
+			}).View(),
 		},
 	}
 
@@ -684,6 +693,19 @@ func TestUpdateNetMapCache(t *testing.T) {
 		t.Error("Cache is unexpectedly empty")
 	} else {
 		t.Logf("Cache directory has %d entries (OK)", len(des))
+	}
+
+	// Apply a delta update that removes a node, and verify that this gets
+	// reflected in the cache.
+	clb.UpdateNetmapDelta([]netmap.NodeMutation{
+		netmap.MakeNodeMutationRemove(602),
+	})
+	if got, err := netmapcache.NewCache(netmapcache.FileStore(cacheDir)).Load(t.Context()); err != nil {
+		t.Errorf("Load cached netmap: %v", err)
+	} else if i := slices.IndexFunc(got.Peers, func(n tailcfg.NodeView) bool {
+		return n.ID() == 602
+	}); i >= 0 {
+		t.Errorf("Cache did not get updated, %d (%v) still present", got.Peers[i].ID(), got.Peers[i].StableID())
 	}
 
 	// Now disable the node attribute again, send another update, and verify
