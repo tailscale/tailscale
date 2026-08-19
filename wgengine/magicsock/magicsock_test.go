@@ -2371,7 +2371,7 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 
 	for i := 1; i <= 3; i++ {
 		v := !debugEnableSilentDisco()
-		envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
+		envknob.SetenvForTest(t, "TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
 		c.SetNetworkMap(tailcfg.NodeView{}, nil)
 		if c.lastFlags.heartbeatDisabled != v {
 			t.Fatalf("call %d: didn't store netmap", i)

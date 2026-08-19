@@ -23,7 +23,7 @@ import (
 func TestUserConnectDisconnectNonWindows(t *testing.T) {
 	enableLogging := false
 	if runtime.GOOS == "windows" {
-		setGOOSForTest(t, "linux")
+		envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "linux")
 	}
 
 	ctx := context.Background()
@@ -66,7 +66,7 @@ func TestUserConnectDisconnectNonWindows(t *testing.T) {
 
 func TestUserConnectDisconnectOnWindows(t *testing.T) {
 	enableLogging := false
-	setGOOSForTest(t, "windows")
+	envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "windows")
 
 	ctx := context.Background()
 	server := lapitest.NewServer(t, lapitest.WithLogging(enableLogging))
@@ -88,7 +88,7 @@ func TestUserConnectDisconnectOnWindows(t *testing.T) {
 
 func TestIPNAlreadyInUseOnWindows(t *testing.T) {
 	enableLogging := false
-	setGOOSForTest(t, "windows")
+	envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "windows")
 
 	ctx := context.Background()
 	server := lapitest.NewServer(t, lapitest.WithLogging(enableLogging))
@@ -111,7 +111,7 @@ func TestIPNAlreadyInUseOnWindows(t *testing.T) {
 
 func TestSequentialOSUserSwitchingOnWindows(t *testing.T) {
 	enableLogging := false
-	setGOOSForTest(t, "windows")
+	envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "windows")
 
 	ctx := context.Background()
 	server := lapitest.NewServer(t, lapitest.WithLogging(enableLogging))
@@ -140,7 +140,7 @@ func TestSequentialOSUserSwitchingOnWindows(t *testing.T) {
 
 func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 	enableLogging := false
-	setGOOSForTest(t, "windows")
+	envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "windows")
 
 	ctx := context.Background()
 	server := lapitest.NewServer(t, lapitest.WithLogging(enableLogging))
@@ -212,7 +212,7 @@ func TestConcurrentOSUserSwitchingOnWindows(t *testing.T) {
 
 func TestBlockWhileIdentityInUse(t *testing.T) {
 	enableLogging := false
-	setGOOSForTest(t, "windows")
+	envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", "windows")
 
 	ctx := context.Background()
 	server := lapitest.NewServer(t, lapitest.WithLogging(enableLogging))
@@ -310,12 +310,6 @@ func checkError(tb testing.TB, got, want error) {
 		(want != nil && got != nil && want.Error() != got.Error() && !errors.Is(got, want)) {
 		tb.Fatalf("gotErr: %v; wantErr: %v", got, want)
 	}
-}
-
-func setGOOSForTest(tb testing.TB, goos string) {
-	tb.Helper()
-	envknob.Setenv("TS_DEBUG_FAKE_GOOS", goos)
-	tb.Cleanup(func() { envknob.Setenv("TS_DEBUG_FAKE_GOOS", "") })
 }
 
 func pumpIPNBus(watcher *local.IPNBusWatcher) {

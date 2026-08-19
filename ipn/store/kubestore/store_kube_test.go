@@ -375,8 +375,7 @@ func TestWriteTLSCertAndKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			// Set POD_NAME for testing selectors
-			envknob.Setenv("POD_NAME", "ingress-proxies-1")
-			defer envknob.Setenv("POD_NAME", "")
+			envknob.SetenvForTest(t, "POD_NAME", "ingress-proxies-1")
 
 			secret := tt.initial // track current state
 			client := &kubeclient.FakeClient{
@@ -772,7 +771,7 @@ func TestNewWithClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			envknob.Setenv("TS_CERT_SHARE_MODE", tt.certMode)
+			envknob.SetenvForTest(t, "TS_CERT_SHARE_MODE", tt.certMode)
 
 			t.Setenv("POD_NAME", "ingress-proxies-1")
 
