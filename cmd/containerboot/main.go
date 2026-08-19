@@ -105,6 +105,9 @@
 //     containerboot instance is not running in Kubernetes, autoadvertise any services
 //     defined in the devices serve config, and unadvertise on shutdown. Defaults
 //     to `true`, but can be disabled to allow user specific advertisement configuration.
+//   - TS_BOOT_TIMEOUT: if set, overrides the default 60s timeout for the
+//     initial map response wait during boot. Accepts any time.Duration
+//     string (e.g. "90s", "3m").
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -357,7 +360,7 @@ func run() error {
 	// bootCtx is used for all setup stuff until we're in steady
 	// state, so that if something is hanging we eventually time out
 	// and crashloop the container.
-	bootCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	bootCtx, cancel := context.WithTimeout(ctx, cfg.BootCtxTimeout)
 	defer cancel()
 
 	var tailscaledConfigAuthkey string
