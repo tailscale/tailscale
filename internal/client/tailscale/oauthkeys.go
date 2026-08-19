@@ -16,6 +16,9 @@ type ResolveAuthKeyArgs struct {
 	// OAuth secret case, and required to be the same as the list of tags for which the OAuth
 	// secret is allowed to issue auth keys).
 	Tags []string
+	// RetryTransientAuthErrors enables retrying transient server errors during
+	// token acquisition with exponential backoff.
+	RetryTransientAuthErrors bool
 }
 
 // HookResolveAuthKey resolves to [oauthkey.ResolveAuthKey] when the
