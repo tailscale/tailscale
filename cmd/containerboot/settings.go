@@ -16,6 +16,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"tailscale.com/ipn/conffile"
 	"tailscale.com/kube/kubeclient"
@@ -86,7 +87,8 @@ type settings struct {
 	// logic),  'ro' (for Pods that shold never attempt to issue/renew
 	// certs) and 'rw' for Pods that should manage the TLS certs shared
 	// amongst the replicas.
-	CertShareMode string
+	CertShareMode  string
+	BootCtxTimeout time.Duration
 }
 
 func configFromEnv() (*settings, error) {
@@ -135,6 +137,7 @@ func configFromEnv() (*settings, error) {
 		EgressProxiesCfgPath:                  os.Getenv("TS_EGRESS_PROXIES_CONFIG_PATH"),
 		IngressProxiesCfgPath:                 os.Getenv("TS_INGRESS_PROXIES_CONFIG_PATH"),
 		PodUID:                                os.Getenv("POD_UID"),
+		BootCtxTimeout:                        def.Duration(os.Getenv("TS_BOOT_TIMEOUT"), 60*time.Second),
 	}
 
 	podIPs, ok := os.LookupEnv("POD_IPS")
@@ -348,6 +351,13 @@ func (s *settings) validate() error {
 	}
 	if s.IngressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
 		return errors.New("TS_INGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
+	}
+
+	// Error out when passed a malformed duration in `TS_BOOT_TIMEOUT` env var.
+	if v := os.Getenv("TS_BOOT_TIMEOUT"); v != "" {
+		if _, err := time.ParseDuration(v); err != nil {
+			return fmt.Errorf("error parsing TS_BOOT_TIMEOUT value %q: %w", v, err)
+		}
 	}
 	return nil
 }

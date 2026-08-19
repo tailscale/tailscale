@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func Test_parseAcceptDNS(t *testing.T) {
@@ -325,5 +326,44 @@ func TestHandlesKubeIPV6(t *testing.T) {
 
 	if parsed.Port() != 9002 {
 		t.Errorf("expected port 9002 but got %d", parsed.Port())
+	}
+}
+
+func TestBootCtxTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		// value is the TS_BOOT_TIMEOUT value to set; unset is true to leave
+		// the env var absent entirely.
+		value string
+		unset bool
+		// want is the expected BootCtxTimeout when wantErr is false.
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "unset_defaults_to_60s", unset: true, want: 60 * time.Second},
+		{name: "empty_defaults_to_60s", value: "", want: 60 * time.Second},
+		{name: "valid_override", value: "3m", want: 3 * time.Minute},
+		{name: "invalid_value_is_rejected", value: "90", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TS_BOOT_TIMEOUT", tt.value)
+			if tt.unset {
+				os.Unsetenv("TS_BOOT_TIMEOUT")
+			}
+			cfg, err := configFromEnv()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("configFromEnv() succeeded, want error for TS_BOOT_TIMEOUT=%q", tt.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.BootCtxTimeout != tt.want {
+				t.Errorf("BootCtxTimeout = %v, want %v", cfg.BootCtxTimeout, tt.want)
+			}
+		})
 	}
 }
