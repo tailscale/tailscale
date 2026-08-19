@@ -1765,7 +1765,7 @@ func buildNetmapWithPeers(self tailcfg.NodeView, peers ...tailcfg.NodeView) *net
 	}
 
 	derpmap := &tailcfg.DERPMap{
-		Regions: make(map[int]*tailcfg.DERPRegion),
+		Regions: make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion),
 	}
 	makeDERPRegionForNode := func(n *tailcfg.Node) {
 		if n.HomeDERP == 0 {

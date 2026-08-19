@@ -729,7 +729,7 @@ func TestConfigureExitNode(t *testing.T) {
 	clientNetmap := buildNetmapWithPeers(selfNode, exitNode1, exitNode2)
 
 	report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 5 * time.Millisecond,
 			2: 10 * time.Millisecond,
 		},
@@ -1568,7 +1568,7 @@ func TestExitNodeNotifyOrder(t *testing.T) {
 	const controlURL = "https://localhost:1/"
 
 	report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 5 * time.Millisecond,
 			2: 10 * time.Millisecond,
 		},
@@ -3894,7 +3894,7 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 	peer1 := makePeer(1, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
 	peer2 := makePeer(2, withCap(26), withSuggest(), withOnline(true), withExitRoutes())
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				Nodes: []*tailcfg.DERPNode{
 					{
@@ -3914,7 +3914,7 @@ func TestUpdateNetmapDeltaAutoExitNode(t *testing.T) {
 		},
 	}
 	report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 5 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -4083,7 +4083,7 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 		HomeDERP: 2,
 	}
 	defaultDERPMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				Nodes: []*tailcfg.DERPNode{
 					{
@@ -4125,7 +4125,7 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 	}
 	b.refreshAutoExitNode = true
 	b.sys.MagicSock.Get().AddNetcheckReportForTest(defaultDERPMap, &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 5 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -4142,7 +4142,7 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 	peer1 := makePeer(1, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
 	peer2 := makePeer(2, withCap(26), withSuggest(), withExitRoutes(), withOnline(true), withNodeKey())
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				Nodes: []*tailcfg.DERPNode{
 					{
@@ -4162,7 +4162,7 @@ func TestSetControlClientStatusAutoExitNode(t *testing.T) {
 		},
 	}
 	report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 5 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -5298,7 +5298,7 @@ func makePeer(id tailcfg.NodeID, opts ...peerOptFunc) tailcfg.NodeView {
 		Name:              fmt.Sprintf("peer%d", id),
 		Online:            new(true),
 		MachineAuthorized: true,
-		HomeDERP:          int(id),
+		HomeDERP:          tailcfg.DERPRegionID(id), // reuse node ID as DERP region ID
 	}
 	for _, opt := range opts {
 		opt(node)
@@ -5312,7 +5312,7 @@ func withName(name string) peerOptFunc {
 	}
 }
 
-func withDERP(region int) peerOptFunc {
+func withDERP(region tailcfg.DERPRegionID) peerOptFunc {
 	return func(n *tailcfg.Node) {
 		n.HomeDERP = region
 	}
@@ -5397,14 +5397,14 @@ func withAllowedIPs(prefixes ...netip.Prefix) peerOptFunc {
 	}
 }
 
-func deterministicRegionForTest(t testing.TB, want views.Slice[int], use int) selectRegionFunc {
+func deterministicRegionForTest(t testing.TB, want views.Slice[tailcfg.DERPRegionID], use tailcfg.DERPRegionID) selectRegionFunc {
 	t.Helper()
 
 	if !views.SliceContains(want, use) {
 		t.Errorf("invalid test: use %v is not in want %v", use, want)
 	}
 
-	return func(got views.Slice[int]) int {
+	return func(got views.Slice[tailcfg.DERPRegionID]) tailcfg.DERPRegionID {
 		if !views.SliceEqualAnyOrder(got, want) {
 			t.Errorf("candidate regions = %v, want %v", got, want)
 		}
@@ -5468,7 +5468,7 @@ func TestSuggestExitNode(t *testing.T) {
 	t.Parallel()
 
 	defaultDERPMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				Latitude:  32,
 				Longitude: -97,
@@ -5479,7 +5479,7 @@ func TestSuggestExitNode(t *testing.T) {
 	}
 
 	preferred1Report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 20 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -5487,7 +5487,7 @@ func TestSuggestExitNode(t *testing.T) {
 		PreferredDERP: 1,
 	}
 	noLatency1Report := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 0,
 			2: 0,
 			3: 0,
@@ -5495,7 +5495,7 @@ func TestSuggestExitNode(t *testing.T) {
 		PreferredDERP: 1,
 	}
 	preferredNoneReport := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 20 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -5622,8 +5622,8 @@ func TestSuggestExitNode(t *testing.T) {
 
 		allowPolicy []tailcfg.StableNodeID
 
-		wantRegions []int
-		useRegion   int
+		wantRegions []tailcfg.DERPRegionID
+		useRegion   tailcfg.DERPRegionID
 
 		wantNodes []tailcfg.StableNodeID
 
@@ -5655,7 +5655,7 @@ func TestSuggestExitNode(t *testing.T) {
 			name:        "2-exits-different-regions-unknown-latency",
 			lastReport:  noLatency1Report,
 			netMap:      defaultNetmap,
-			wantRegions: []int{1, 3}, // the only regions with peers
+			wantRegions: []tailcfg.DERPRegionID{1, 3}, // the only regions with peers
 			useRegion:   1,
 			wantName:    "peer2",
 			wantID:      "stable2",
@@ -5663,7 +5663,7 @@ func TestSuggestExitNode(t *testing.T) {
 		{
 			name: "2-derp-exits-different-regions-equal-latency",
 			lastReport: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10,
 					2: 20,
 					3: 10,
@@ -5678,7 +5678,7 @@ func TestSuggestExitNode(t *testing.T) {
 					peer3,
 				},
 			},
-			wantRegions: []int{1, 2},
+			wantRegions: []tailcfg.DERPRegionID{1, 2},
 			useRegion:   1,
 			wantName:    "peer1",
 			wantID:      "stable1",
@@ -5909,7 +5909,7 @@ func TestSuggestExitNode(t *testing.T) {
 			// Regression test for https://github.com/tailscale/tailscale/issues/17661
 			name: "exits-no-home-DERP-random-selection",
 			lastReport: &netcheck.Report{
-				RegionLatency: map[int]time.Duration{
+				RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 					1: 10,
 					2: 20,
 					3: 10,
@@ -5924,7 +5924,7 @@ func TestSuggestExitNode(t *testing.T) {
 					emptyLocationPeer10,
 				},
 			},
-			wantRegions: []int{1, 2},
+			wantRegions: []tailcfg.DERPRegionID{1, 2},
 			wantName:    "peer9",
 			wantNodes:   []tailcfg.StableNodeID{"stable9", "stable10"},
 			wantID:      "stable9",
@@ -5936,7 +5936,7 @@ func TestSuggestExitNode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wantRegions := tt.wantRegions
 			if wantRegions == nil {
-				wantRegions = []int{tt.useRegion}
+				wantRegions = []tailcfg.DERPRegionID{tt.useRegion}
 			}
 			selectRegion := deterministicRegionForTest(t, views.SliceOf(wantRegions), tt.useRegion)
 
@@ -5955,8 +5955,8 @@ func TestSuggestExitNode(t *testing.T) {
 			defer nb.shutdown(errShutdown)
 			nb.SetNetMap(tt.netMap)
 
-			var preferredDERP int
-			var regionLatency map[int]time.Duration
+			var preferredDERP tailcfg.DERPRegionID
+			var regionLatency map[tailcfg.DERPRegionID]time.Duration
 			if tt.lastReport != nil {
 				preferredDERP = tt.lastReport.PreferredDERP
 				regionLatency = tt.lastReport.RegionLatency
@@ -5988,7 +5988,7 @@ func TestSuggestExitNodeUsesRecentDERPLatency(t *testing.T) {
 	t.Parallel()
 
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {Nodes: []*tailcfg.DERPNode{{Name: "1a", RegionID: 1}}},
 			2: {Nodes: []*tailcfg.DERPNode{{Name: "2a", RegionID: 2}}},
 			3: {Nodes: []*tailcfg.DERPNode{{Name: "3a", RegionID: 3}}},
@@ -6015,7 +6015,7 @@ func TestSuggestExitNodeUsesRecentDERPLatency(t *testing.T) {
 	// region 5 (200ms).
 	fullReport := &netcheck.Report{
 		PreferredDERP: 1,
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 20 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -6026,7 +6026,7 @@ func TestSuggestExitNodeUsesRecentDERPLatency(t *testing.T) {
 	// A later incremental netcheck only re-probed the home and fastest regions, so
 	// it has no latency for regions 4 or 5.
 	incrementalReport := &netcheck.Report{
-		RegionLatency: map[int]time.Duration{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
 			1: 10 * time.Millisecond,
 			2: 20 * time.Millisecond,
 			3: 30 * time.Millisecond,
@@ -6554,20 +6554,20 @@ func TestSuggestExitNodeTrafficSteering(t *testing.T) {
 func TestMinLatencyDERPregion(t *testing.T) {
 	tests := []struct {
 		name          string
-		regions       []int
-		regionLatency map[int]time.Duration
-		wantRegion    int
+		regions       []tailcfg.DERPRegionID
+		regionLatency map[tailcfg.DERPRegionID]time.Duration
+		wantRegion    tailcfg.DERPRegionID
 	}{
 		{
 			name:       "regions-no-latency",
-			regions:    []int{1, 2, 3},
+			regions:    []tailcfg.DERPRegionID{1, 2, 3},
 			wantRegion: 0,
 		},
 		{
 			name:       "regions-different-latency",
-			regions:    []int{1, 2, 3},
+			regions:    []tailcfg.DERPRegionID{1, 2, 3},
 			wantRegion: 2,
-			regionLatency: map[int]time.Duration{
+			regionLatency: map[tailcfg.DERPRegionID]time.Duration{
 				1: 10 * time.Millisecond,
 				2: 5 * time.Millisecond,
 				3: 30 * time.Millisecond,
@@ -6575,9 +6575,9 @@ func TestMinLatencyDERPregion(t *testing.T) {
 		},
 		{
 			name:       "regions-same-latency",
-			regions:    []int{1, 2, 3},
+			regions:    []tailcfg.DERPRegionID{1, 2, 3},
 			wantRegion: 1,
-			regionLatency: map[int]time.Duration{
+			regionLatency: map[tailcfg.DERPRegionID]time.Duration{
 				1: 10 * time.Millisecond,
 				2: 10 * time.Millisecond,
 				3: 10 * time.Millisecond,

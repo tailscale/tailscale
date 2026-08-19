@@ -372,7 +372,7 @@ func isTemporaryOrTimeoutErr(err error) bool {
 }
 
 type nodeMeta struct {
-	regionID   int
+	regionID   tailcfg.DERPRegionID
 	regionCode string
 	hostname   string
 	addr       netip.Addr

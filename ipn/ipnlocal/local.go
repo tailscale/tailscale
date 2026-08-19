@@ -2056,7 +2056,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 
 		b.e.SetSelfNode(st.NetMap.SelfNode)
 
-		var cachedHome int
+		var cachedHome tailcfg.DERPRegionID
 		if c == nil && st.NetMap.Cached && st.NetMap.SelfNode.Valid() {
 			cachedHome = st.NetMap.SelfNode.HomeDERP()
 		}
@@ -3972,7 +3972,7 @@ func (b *LocalBackend) DebugPickNewDERP() error {
 
 // DebugForcePreferDERP forwards to netcheck.DebugForcePreferDERP.
 // See its docs.
-func (b *LocalBackend) DebugForcePreferDERP(n int) {
+func (b *LocalBackend) DebugForcePreferDERP(n tailcfg.DERPRegionID) {
 	b.sys.MagicSock.Get().DebugForcePreferDERP(n)
 }
 
@@ -8697,7 +8697,7 @@ func (b *LocalBackend) suggestExitNodeLocked() (response apitype.ExitNodeSuggest
 	}
 
 	mc := b.MagicConn()
-	var preferredDERP int
+	var preferredDERP tailcfg.DERPRegionID
 	if lastReport := mc.GetLastNetcheckReport(b.ctx); lastReport != nil {
 		preferredDERP = lastReport.PreferredDERP
 	}
@@ -8765,7 +8765,7 @@ func (b *LocalBackend) refreshAllowedSuggestions() {
 
 // selectRegionFunc returns a DERP region from the slice of candidate regions.
 // The value is returned, not the slice index.
-type selectRegionFunc func(views.Slice[int]) int
+type selectRegionFunc func(views.Slice[tailcfg.DERPRegionID]) tailcfg.DERPRegionID
 
 // selectNodeFunc returns a node from the slice of candidate nodes. The last
 // selected node is provided for when that information is needed to make a better
@@ -8795,7 +8795,7 @@ func fillAllowedSuggestions(polc policyclient.Client) (set.Set[tailcfg.StableNod
 // netcheck and are only used by the DERP-based algorithm.
 //
 // Errors are always logged. Suggestions are logged if they defer from prevSuggestion.
-func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, rp RouteCheckReport, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNode(preferredDERP tailcfg.DERPRegionID, regionLatency map[tailcfg.DERPRegionID]time.Duration, rp RouteCheckReport, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	switch {
 	case nb.SelfHasCap(nodecap.TrafficSteering):
 		// The traffic-steering feature flag is enabled on this tailnet.
@@ -8831,7 +8831,7 @@ func suggestExitNode(preferredDERP int, regionLatency map[int]time.Duration, rp 
 // this means Mullvad). Peers are selected based on having a DERP home that is
 // the lowest latency to this device. For peers without a DERP home, we look for
 // geographic proximity to this device's DERP home.
-func suggestExitNodeUsingDERP(preferredRegionID int, regionLatency map[int]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
+func suggestExitNodeUsingDERP(preferredRegionID tailcfg.DERPRegionID, regionLatency map[tailcfg.DERPRegionID]time.Duration, nb *nodeBackend, prevSuggestion tailcfg.StableNodeID, selectRegion selectRegionFunc, selectNode selectNodeFunc, allowList set.Set[tailcfg.StableNodeID]) (res apitype.ExitNodeSuggestionResponse, err error) {
 	netMap := nb.NetMap()
 	if preferredRegionID == 0 || netMap == nil || netMap.DERPMap == nil {
 		return res, ErrNoPreferredDERP
@@ -8863,7 +8863,7 @@ func suggestExitNodeUsingDERP(preferredRegionID int, regionLatency map[int]time.
 		return res, nil
 	}
 
-	candidatesByRegion := make(map[int][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
+	candidatesByRegion := make(map[tailcfg.DERPRegionID][]tailcfg.NodeView, len(netMap.DERPMap.Regions))
 	preferredDERP, ok := netMap.DERPMap.Regions[preferredRegionID]
 	if !ok {
 		return res, ErrNoPreferredDERP
@@ -9069,7 +9069,7 @@ func pickWeighted(candidates []tailcfg.NodeView) []tailcfg.NodeView {
 }
 
 // randomRegion is a selectRegionFunc that selects a uniformly random region.
-func randomRegion(regions views.Slice[int]) int {
+func randomRegion(regions views.Slice[tailcfg.DERPRegionID]) tailcfg.DERPRegionID {
 	return regions.At(rand.IntN(regions.Len()))
 }
 
@@ -9090,7 +9090,7 @@ func randomNode(nodes views.Slice[tailcfg.NodeView], prefer tailcfg.StableNodeID
 
 // minLatencyDERPRegion returns the region with the lowest latency value given
 // the per-region latency map. If there are no latency values, it returns 0.
-func minLatencyDERPRegion(regions []int, regionLatency netcheck.RegionLatency) int {
+func minLatencyDERPRegion(regions []tailcfg.DERPRegionID, regionLatency netcheck.RegionLatency) tailcfg.DERPRegionID {
 	min := slices.MinFunc(regions, regionLatency.Compare)
 	latency, ok := regionLatency[min]
 	if !ok || latency == 0 {

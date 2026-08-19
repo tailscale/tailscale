@@ -115,11 +115,11 @@ type Tracker struct {
 	lastMapPollEndedAt          time.Time
 	lastStreamedMapResponse     time.Time
 	lastNoiseDial               time.Time
-	derpHomeRegion              int
+	derpHomeRegion              tailcfg.DERPRegionID
 	derpHomeless                bool
-	derpRegionConnected         map[int]bool
-	derpRegionHealthProblem     map[int]string
-	derpRegionLastFrame         map[int]time.Time
+	derpRegionConnected         map[tailcfg.DERPRegionID]bool
+	derpRegionHealthProblem     map[tailcfg.DERPRegionID]string
+	derpRegionLastFrame         map[tailcfg.DERPRegionID]time.Time
 	derpMap                     *tailcfg.DERPMap // last DERP map from control, could be nil if never received one
 	lastMapRequestHeard         time.Time        // time we got a 200 from control for a MapRequest
 	ipnState                    string
@@ -782,7 +782,7 @@ func (t *Tracker) GetInPollNetMap() bool {
 //
 // The homeless parameter is whether magicsock is running in DERP-disconnected
 // mode, without discovering and maintaining a connection to its home DERP.
-func (t *Tracker) SetMagicSockDERPHome(region int, homeless bool) {
+func (t *Tracker) SetMagicSockDERPHome(region tailcfg.DERPRegionID, homeless bool) {
 	if t.nil() {
 		return
 	}
@@ -809,7 +809,7 @@ func (t *Tracker) NoteMapRequestHeard(mr *tailcfg.MapRequest) {
 	t.selfCheckLocked()
 }
 
-func (t *Tracker) SetDERPRegionConnectedState(region int, connected bool) {
+func (t *Tracker) SetDERPRegionConnectedState(region tailcfg.DERPRegionID, connected bool) {
 	if t.nil() {
 		return
 	}
@@ -821,7 +821,7 @@ func (t *Tracker) SetDERPRegionConnectedState(region int, connected bool) {
 
 // SetDERPRegionHealth sets or clears any problem associated with the
 // provided DERP region.
-func (t *Tracker) SetDERPRegionHealth(region int, problem string) {
+func (t *Tracker) SetDERPRegionHealth(region tailcfg.DERPRegionID, problem string) {
 	if t.nil() {
 		return
 	}
@@ -837,7 +837,7 @@ func (t *Tracker) SetDERPRegionHealth(region int, problem string) {
 
 // NoteDERPRegionReceivedFrame is called to note that a frame was received from
 // the given DERP region at the current time.
-func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
+func (t *Tracker) NoteDERPRegionReceivedFrame(region tailcfg.DERPRegionID) {
 	if t.nil() {
 		return
 	}
@@ -850,7 +850,7 @@ func (t *Tracker) NoteDERPRegionReceivedFrame(region int) {
 // GetDERPRegionReceivedTime returns the last time that a frame was received
 // from the given DERP region, or the zero time if no communication with that
 // region has occurred.
-func (t *Tracker) GetDERPRegionReceivedTime(region int) time.Time {
+func (t *Tracker) GetDERPRegionReceivedTime(region tailcfg.DERPRegionID) time.Time {
 	if t.nil() {
 		return time.Time{}
 	}
@@ -873,7 +873,7 @@ func (t *Tracker) SetDERPMap(dm *tailcfg.DERPMap) {
 
 // derpRegionNameLocked returns the name of the DERP region with the given ID
 // or the empty string if unknown.
-func (t *Tracker) derpRegionNameLocked(regID int) string {
+func (t *Tracker) derpRegionNameLocked(regID tailcfg.DERPRegionID) string {
 	if t.derpMap == nil {
 		return ""
 	}

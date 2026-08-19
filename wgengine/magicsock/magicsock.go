@@ -167,12 +167,12 @@ type Conn struct {
 	derpActiveFunc         func()
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
-	onDERPRecv             func(int, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
-	netMon                 *netmon.Monitor                        // must be non-nil
-	health                 *health.Tracker                        // or nil
-	extraRootCAs           *x509.CertPool                         // additional trusted root CAs; or nil
-	controlKnobs           *controlknobs.Knobs                    // or nil
-	derpAppName            string                                 // or empty, see Options.DERPAppName
+	onDERPRecv             func(tailcfg.DERPRegionID, key.NodePublic, []byte) bool // or nil, see Options.OnDERPRecv
+	netMon                 *netmon.Monitor                                         // must be non-nil
+	health                 *health.Tracker                                         // or nil
+	extraRootCAs           *x509.CertPool                                          // additional trusted root CAs; or nil
+	controlKnobs           *controlknobs.Knobs                                     // or nil
+	derpAppName            string                                                  // or empty, see Options.DERPAppName
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -359,16 +359,16 @@ type Conn struct {
 	self      tailcfg.NodeView                    // from last SetNetworkMap
 	peersByID map[tailcfg.NodeID]tailcfg.NodeView // current peer set, keyed by NodeID. Maintained by SetNetworkMap/UpsertPeer/RemovePeer. Note: per-field NodeMutation patches received in UpdateNetmapDelta are never applied to these snapshots.
 
-	filt               *filter.Filter     // from last SetFilter
-	relayClientEnabled bool               // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
-	lastFlags          debugFlags         // at time of last SetNetworkMap
-	privateKey         key.NodePrivate    // WireGuard private key for this node
-	everHadKey         bool               // whether we ever had a non-zero private key
-	myDerp             int                // nearest DERP region ID; 0 means none/unknown
-	homeless           bool               // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
-	derpStarted        chan struct{}      // closed on first connection to DERP; for tests & cleaner Close
-	activeDerp         map[int]activeDerp // DERP regionID -> connection to a node in that region
-	prevDerp           map[int]*syncs.WaitGroupChan
+	filt               *filter.Filter                      // from last SetFilter
+	relayClientEnabled bool                                // whether we can allocate UDP relay endpoints on UDP relay servers or receive CallMeMaybeVia messages from peers
+	lastFlags          debugFlags                          // at time of last SetNetworkMap
+	privateKey         key.NodePrivate                     // WireGuard private key for this node
+	everHadKey         bool                                // whether we ever had a non-zero private key
+	myDerp             tailcfg.DERPRegionID                // nearest DERP region ID; 0 means none/unknown
+	homeless           bool                                // if true, don't try to find & stay conneted to a DERP home (myDerp will stay 0)
+	derpStarted        chan struct{}                       // closed on first connection to DERP; for tests & cleaner Close
+	activeDerp         map[tailcfg.DERPRegionID]activeDerp // DERP regionID -> connection to a node in that region
+	prevDerp           map[tailcfg.DERPRegionID]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
 	// optimization instead of contacting a peer via their home
@@ -381,7 +381,7 @@ type Conn struct {
 
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
-	peerLastDerp map[key.NodePublic]int
+	peerLastDerp map[key.NodePublic]tailcfg.DERPRegionID
 
 	// wgPinger is the WireGuard only pinger used for latency measurements.
 	wgPinger lazy.SyncValue[*ping.Pinger]
@@ -523,7 +523,7 @@ type Options struct {
 	// true, the packet is considered handled and is not passed to
 	// WireGuard. The pkt slice is borrowed and must be copied if
 	// the callee needs to retain it.
-	OnDERPRecv func(regionID int, src key.NodePublic, pkt []byte) bool
+	OnDERPRecv func(regionID tailcfg.DERPRegionID, src key.NodePublic, pkt []byte) bool
 }
 
 func (o *Options) logf() logger.Logf {
@@ -585,7 +585,7 @@ func newConn(logf logger.Logf) *Conn {
 		logf:          logf,
 		derpRecvCh:    make(chan derpReadResult, 1), // must be buffered, see issue 3736
 		derpStarted:   make(chan struct{}),
-		peerLastDerp:  make(map[key.NodePublic]int),
+		peerLastDerp:  make(map[key.NodePublic]tailcfg.DERPRegionID),
 		peerMap:       newPeerMap(),
 		discoInfo:     make(map[key.DiscoPublic]*discoInfo),
 		cloudInfo:     cloudinfo.New(logf),
@@ -1223,7 +1223,7 @@ func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency t
 		}
 		return
 	}
-	regionID := int(ep.ap.Port())
+	regionID := tailcfg.DERPRegionID(ep.ap.Port())
 	res.DERPRegionID = regionID
 	res.DERPRegionCode = c.derpRegionCodeLocked(regionID)
 }
@@ -1668,7 +1668,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 		return c.sendUDP(addr, b, isDisco, isGeneveEncap)
 	}
 
-	regionID := int(addr.Port())
+	regionID := tailcfg.DERPRegionID(addr.Port())
 	ch := c.derpWriteChanForRegion(regionID, pubKey)
 	if ch == nil {
 		metricSendDERPErrorChan.Add(1)
@@ -3975,7 +3975,7 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		})
 	}
 
-	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
+	c.foreachActiveDerpSortedLocked(func(node tailcfg.DERPRegionID, ad activeDerp) {
 		// TODO(bradfitz): add a method to ipnstate.StatusBuilder
 		// to include all the DERP connections we have open
 		// and add it here. See the other caller of foreachActiveDerpSortedLocked.
@@ -4102,7 +4102,7 @@ func (c *Conn) DebugPickNewDERP() error {
 	return errors.New("too few regions")
 }
 
-func (c *Conn) DebugForcePreferDERP(n int) {
+func (c *Conn) DebugForcePreferDERP(n tailcfg.DERPRegionID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -4371,7 +4371,7 @@ func (c *Conn) AddNetcheckReportForTest(dm *tailcfg.DERPMap, report *netcheck.Re
 // few regions), netcheck's history retains every region measured by the most
 // recent full netcheck, so this can rank regions the latest report did not
 // re-probe. It returns nil if the netcheck client is not yet initialized.
-func (c *Conn) GetDERPRegionLatency() map[int]time.Duration {
+func (c *Conn) GetDERPRegionLatency() map[tailcfg.DERPRegionID]time.Duration {
 	if c.netChecker == nil {
 		return nil
 	}

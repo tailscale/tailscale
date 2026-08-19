@@ -32,7 +32,7 @@ func newCacheTestNetmap() *netmap.NetworkMap {
 			}).View(),
 		},
 		DERPMap: &tailcfg.DERPMap{
-			Regions: map[int]*tailcfg.DERPRegion{
+			Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 				1:  {},
 				2:  {},
 				3:  {},
