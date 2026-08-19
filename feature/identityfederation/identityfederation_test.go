@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"tailscale.com/internal/client/tailscale"
@@ -168,6 +169,152 @@ func TestParseOptionalAttributes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveAuthKeyRetry(t *testing.T) {
+	t.Run("retries-token-exchange-on-503", func(t *testing.T) {
+		var tokenCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.Contains(r.URL.Path, "/oauth/token-exchange"):
+				n := tokenCalls.Add(1)
+				if n < 3 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					w.Write([]byte(`{"error":"service_unavailable"}`))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"access_token":"access-123","token_type":"Bearer","expires_in":3600}`))
+			case strings.Contains(r.URL.Path, "/api/v2/tailnet") && strings.Contains(r.URL.Path, "/keys"):
+				w.Write([]byte(`{"key":"tskey-auth-xyz","created":"2024-01-01T00:00:00Z"}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		authKey, err := resolveAuthKey(context.Background(), tailscale.ResolveAuthKeyWIFArgs{
+			BaseURL:              srv.URL,
+			ClientID:             "client-123",
+			IDToken:              "token",
+			Tags:                 []string{"tag:test"},
+			RetryTransientAuthErrors: true,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if authKey != "tskey-auth-xyz" {
+			t.Errorf("got %q, want %q", authKey, "tskey-auth-xyz")
+		}
+		// The oauth2 library probes two auth styles on the first Exchange() call
+		// (2 HTTP requests, both 503), then caches the style for the retry
+		// (1 HTTP request, succeeds). Total: 3 HTTP requests across 2 Exchange() calls.
+		if got := tokenCalls.Load(); got != 3 {
+			t.Errorf("token exchange called %d times, want 3", got)
+		}
+	})
+
+	t.Run("no-retry-without-flag", func(t *testing.T) {
+		var tokenCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.Contains(r.URL.Path, "/oauth/token-exchange"):
+				tokenCalls.Add(1)
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(`{"error":"rate_limited"}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		_, err := resolveAuthKey(context.Background(), tailscale.ResolveAuthKeyWIFArgs{
+			BaseURL:              srv.URL,
+			ClientID:             "client-123",
+			IDToken:              "token",
+			Tags:                 []string{"tag:test"},
+			RetryTransientAuthErrors: false,
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		// The oauth2 library probes two auth styles per Exchange call, so a single
+		// exchangeJWTForToken invocation sends 2 HTTP requests.
+		if got := tokenCalls.Load(); got != 2 {
+			t.Errorf("token exchange HTTP requests = %d, want 2 (one Exchange call)", got)
+		}
+	})
+
+	t.Run("no-retry-on-createkey-503", func(t *testing.T) {
+		var keyCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.Contains(r.URL.Path, "/oauth/token-exchange"):
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"access_token":"access-123","token_type":"Bearer","expires_in":3600}`))
+			case strings.Contains(r.URL.Path, "/api/v2/tailnet") && strings.Contains(r.URL.Path, "/keys"):
+				keyCalls.Add(1)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"message":"service unavailable"}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		_, err := resolveAuthKey(context.Background(), tailscale.ResolveAuthKeyWIFArgs{
+			BaseURL:              srv.URL,
+			ClientID:             "client-123",
+			IDToken:              "token",
+			Tags:                 []string{"tag:test"},
+			RetryTransientAuthErrors: true,
+		})
+		if err == nil {
+			t.Fatal("expected error on CreateKey 503")
+		}
+		if got := keyCalls.Load(); got != 1 {
+			t.Errorf("CreateKey called %d times, want 1 (no retry)", got)
+		}
+	})
+
+	t.Run("retries-token-exchange-on-429", func(t *testing.T) {
+		var tokenCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.Contains(r.URL.Path, "/oauth/token-exchange"):
+				n := tokenCalls.Add(1)
+				if n < 2 {
+					w.WriteHeader(http.StatusTooManyRequests)
+					w.Write([]byte(`{"error":"rate_limited"}`))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"access_token":"access-123","token_type":"Bearer","expires_in":3600}`))
+			case strings.Contains(r.URL.Path, "/api/v2/tailnet") && strings.Contains(r.URL.Path, "/keys"):
+				w.Write([]byte(`{"key":"tskey-auth-xyz","created":"2024-01-01T00:00:00Z"}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		authKey, err := resolveAuthKey(context.Background(), tailscale.ResolveAuthKeyWIFArgs{
+			BaseURL:              srv.URL,
+			ClientID:             "client-123",
+			IDToken:              "token",
+			Tags:                 []string{"tag:test"},
+			RetryTransientAuthErrors: true,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if authKey != "tskey-auth-xyz" {
+			t.Errorf("got %q, want %q", authKey, "tskey-auth-xyz")
+		}
+		if got := tokenCalls.Load(); got != 2 {
+			t.Errorf("token exchange called %d times, want 2", got)
+		}
+	})
 }
 
 func mockedControlServer(t *testing.T) *httptest.Server {
