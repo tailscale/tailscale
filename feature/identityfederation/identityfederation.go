@@ -19,6 +19,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/util/authretry"
 	"tailscale.com/wif"
 )
 
@@ -58,10 +59,12 @@ func resolveAuthKey(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (
 		return "", fmt.Errorf("failed to parse optional config attributes: %w", err)
 	}
 
-	accessToken, err := exchangeJWTForToken(ctx, tailscale.ExchangeJWTForTokenWIFArgs{
-		BaseURL:  args.BaseURL,
-		ClientID: strippedID,
-		IDToken:  args.IDToken,
+	accessToken, err := authretry.RetryOnTransientFailure(ctx, "exchange-jwt", args.AuthErrorRetries, func() (string, error) {
+		return exchangeJWTForToken(ctx, tailscale.ExchangeJWTForTokenWIFArgs{
+			BaseURL:  args.BaseURL,
+			ClientID: strippedID,
+			IDToken:  args.IDToken,
+		})
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange JWT for access token: %w", err)
@@ -129,16 +132,27 @@ func exchangeJWTForToken(ctx context.Context, args tailscale.ExchangeJWTForToken
 
 	token, err := (&oauth2.Config{
 		Endpoint: oauth2.Endpoint{
-			TokenURL: fmt.Sprintf("%s/api/v2/oauth/token-exchange", args.BaseURL),
+			TokenURL:  fmt.Sprintf("%s/api/v2/oauth/token-exchange", args.BaseURL),
+			AuthStyle: oauth2.AuthStyleInParams,
 		},
 	}).Exchange(ctx, "", oauth2.SetAuthURLParam("client_id", args.ClientID), oauth2.SetAuthURLParam("jwt", args.IDToken))
 	if err != nil {
 		// Try to extract more detailed error message
 		if retrieveErr, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
-			return "", fmt.Errorf("token exchange failed with status %d: %s", retrieveErr.Response.StatusCode, string(retrieveErr.Body))
+			return "", exchangeError{retrieveErr}
 		}
 		return "", fmt.Errorf("unexpected token exchange request error: %w", err)
 	}
 
 	return token.AccessToken, nil
 }
+
+type exchangeError struct {
+	err *oauth2.RetrieveError
+}
+
+func (e exchangeError) Error() string {
+	return fmt.Sprintf("token exchange failed with status %d: %s", e.err.Response.StatusCode, e.err.Body)
+}
+
+func (e exchangeError) Unwrap() error { return e.err }
