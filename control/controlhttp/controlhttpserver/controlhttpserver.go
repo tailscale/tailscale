@@ -31,6 +31,12 @@ import (
 // AcceptHTTP always writes an HTTP response to w. The caller must not attempt
 // their own response after calling AcceptHTTP.
 //
+// The provided ctx bounds the handshake: its deadline, if any, applies to the
+// handshake I/O. The returned conn's lifetime is not otherwise bound to ctx;
+// in particular, it survives net/http's cancellation of the request context
+// when the calling handler returns. The caller owns the returned conn and
+// must close it.
+//
 // earlyWrite optionally specifies a func to write to the noise connection
 // (encrypted). It receives the negotiated version and a writer to write to, if
 // desired.
@@ -150,7 +156,12 @@ func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request
 		return nil, fmt.Errorf("decoding base64 handshake parameter: %v", err)
 	}
 
-	conn := wsconn.NetConn(ctx, c, websocket.MessageBinary, r.RemoteAddr)
+	// Do not bind the conn's lifetime to ctx: it's typically a request
+	// context that net/http cancels once the calling handler returns, and
+	// the conn may be served beyond that (tailscale/corp#46806). The
+	// handshake below is still bounded by any ctx deadline, which
+	// controlbase.Server applies to the conn directly.
+	conn := wsconn.NetConn(context.WithoutCancel(ctx), c, websocket.MessageBinary, r.RemoteAddr)
 	nc, err := controlbase.Server(ctx, conn, private, init)
 	if err != nil {
 		conn.Close()
