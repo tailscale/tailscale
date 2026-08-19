@@ -70,7 +70,7 @@ type LogtailTestServer struct {
 // the default FlushDelay and any other fake timers advance automatically.
 func newTestLogtailServer(t *testing.T) (*LogtailTestServer, *Logger) {
 	// Enable the logtail started message
-	envknob.Setenv("TS_DEBUG_LOGTAIL", "1")
+	envknob.SetenvForTest(t, "TS_DEBUG_LOGTAIL", "1")
 
 	conf, uploaded := newCaptureServer(t, 0)
 	conf.Bus = eventbustest.NewBus(t)
