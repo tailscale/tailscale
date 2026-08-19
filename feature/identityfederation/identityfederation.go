@@ -19,6 +19,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/internal/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/util/authretry"
 	"tailscale.com/wif"
 )
 
@@ -56,10 +57,12 @@ func resolveAuthKey(ctx context.Context, args tailscale.ResolveAuthKeyWIFArgs) (
 		return "", fmt.Errorf("failed to parse optional config attributes: %w", err)
 	}
 
-	accessToken, err := exchangeJWTForToken(ctx, tailscale.ExchangeJWTForTokenWIFArgs{
-		BaseURL:  args.BaseURL,
-		ClientID: strippedID,
-		IDToken:  args.IDToken,
+	accessToken, err := authretry.RetryOnTransientFailure(ctx, "exchange-jwt", args.RetryTransientAuthErrors, func() (string, error) {
+		return exchangeJWTForToken(ctx, tailscale.ExchangeJWTForTokenWIFArgs{
+			BaseURL:  args.BaseURL,
+			ClientID: strippedID,
+			IDToken:  args.IDToken,
+		})
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange JWT for access token: %w", err)
