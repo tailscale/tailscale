@@ -32,10 +32,15 @@ func cmdTestwrapper(t *testing.T, args ...string) *exec.Cmd {
 	cmd := exec.Command(buildPath, args...)
 	// Tests of testwrapper run with a small per-test budget so they don't
 	// take 10 minutes when checking permanent-failure behavior.
+	// Clear the summary env vars so a child testwrapper doesn't write stray output.
 	cmd.Env = append(os.Environ(),
 		"TS_TESTWRAPPER_BUDGET=2s",
 		"TS_TESTWRAPPER_MIN_RETRIES=2",
 		"GITHUB_REPOSITORY=tailscale/tailscale",
+		"GITHUB_STEP_SUMMARY=",
+		"TS_TESTWRAPPER_RESULTS_SUMMARY=",
+		"TS_TESTWRAPPER_RESULTS_JSON=",
+		"TS_TESTWRAPPER_RESULTS_PKG=",
 	)
 	return cmd
 }
@@ -504,4 +509,69 @@ func errExitCode(err error) (int, bool) {
 		return exit.ExitCode(), true
 	}
 	return 0, false
+}
+
+// TestResultsSummary checks the Windows results panel/JSON is written only when gated on.
+func TestResultsSummary(t *testing.T) {
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "results_test.go")
+	code := []byte(`package results_test
+
+import "testing"
+
+func TestPass(t *testing.T) {}
+
+func TestSkip(t *testing.T) { t.Skip("nope") }
+
+func TestSub(t *testing.T) {
+	t.Run("a", func(t *testing.T) {})
+	t.Run("b", func(t *testing.T) { t.Skip() })
+}
+`)
+	if err := os.WriteFile(testfile, code, 0o644); err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	run := func(t *testing.T, gate bool) (summary, jsonOut string) {
+		t.Helper()
+		dir := t.TempDir()
+		summaryPath := filepath.Join(dir, "summary.md")
+		jsonPath := filepath.Join(dir, "results.json")
+		cmd := cmdTestwrapper(t, testfile)
+		cmd.Env = append(cmd.Env, "GITHUB_STEP_SUMMARY="+summaryPath)
+		summaryVal, jsonVal, pkgVal := "", "", ""
+		if gate {
+			summaryVal, jsonVal, pkgVal = "1", jsonPath, testfile
+		}
+		cmd.Env = append(cmd.Env,
+			"TS_TESTWRAPPER_RESULTS_SUMMARY="+summaryVal,
+			"TS_TESTWRAPPER_RESULTS_JSON="+jsonVal,
+			"TS_TESTWRAPPER_RESULTS_PKG="+pkgVal,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("testwrapper: %v\n%s", err, out)
+		}
+		s, _ := os.ReadFile(summaryPath)
+		j, _ := os.ReadFile(jsonPath)
+		return string(s), string(j)
+	}
+
+	summary, jsonOut := run(t, true)
+	for _, want := range []string{"Windows integration test results", "`TestPass`", "`TestSkip`", "`TestSub`", "2 passed, 0 failed, 1 skipped"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q; got:\n%s", want, summary)
+		}
+	}
+	if !strings.Contains(jsonOut, `"Test":"TestSkip"`) || !strings.Contains(jsonOut, `"Outcome":"skip"`) {
+		t.Errorf("results JSON missing skip entry; got:\n%s", jsonOut)
+	}
+
+	summaryOff, jsonOff := run(t, false)
+	if strings.Contains(summaryOff, "integration test results") {
+		t.Errorf("results panel written when gate unset:\n%s", summaryOff)
+	}
+	if jsonOff != "" {
+		t.Errorf("results JSON written when gate unset:\n%s", jsonOff)
+	}
 }
