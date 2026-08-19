@@ -47,7 +47,26 @@ var validUpFlags = set.Of(
 	"client-secret",
 	"id-token",
 	"audience",
+	"auth-error-retries",
 )
+
+func TestAuthErrorRetriesFlag(t *testing.T) {
+	for _, cmd := range []string{"up", "login"} {
+		t.Run(cmd, func(t *testing.T) {
+			var args upArgsT
+			fs := newUpFlagSet("linux", &args, cmd)
+			if args.authErrorRetries != 1 {
+				t.Fatalf("default auth-error-retries = %d, want 1", args.authErrorRetries)
+			}
+			if err := fs.Parse([]string{"--auth-error-retries=4"}); err != nil {
+				t.Fatal(err)
+			}
+			if args.authErrorRetries != 4 {
+				t.Errorf("auth-error-retries = %d, want 4", args.authErrorRetries)
+			}
+		})
+	}
+}
 
 // TestUpFlagSetIsFrozen complains when new flags are added to tailscale up.
 func TestUpFlagSetIsFrozen(t *testing.T) {
