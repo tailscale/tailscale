@@ -7046,6 +7046,15 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 	return false
 }
 
+// ShouldForwardToVia reports whether a flow to the 4via6 destination via may
+// be forwarded to the embedded IPv4 target.
+//
+// The packet filter only sees the outer via address of a 4via6 flow, so this
+// is the sole policy check on the embedded target.
+func (b *LocalBackend) ShouldForwardToVia(via netip.Addr) bool {
+	return viaTargetAllowed(tsaddr.UnmapVia(via))
+}
+
 // Logout logs out the current profile, if any, and waits for the logout to
 // complete.
 func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
