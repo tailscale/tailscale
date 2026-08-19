@@ -384,7 +384,7 @@ func handlersForIngress(ctx context.Context, ing *networkingv1.Ingress, cl clien
 			if *p.PathType == networkingv1.PathTypeExact {
 				msg := "Exact path type strict matching is currently not supported and requests will be routed as for Prefix path type. This behaviour might change in the future."
 				logger.Warnf(fmt.Sprintf("Unsupported Path type exact for path %s. %s", p.Path, msg))
-				rec.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", msg)
+				rec.Eventf(ing, corev1.EventTypeWarning, "UnsupportedPathTypeExact", "%s", msg)
 			}
 			addIngressBackend(&p.Backend, p.Path)
 		}

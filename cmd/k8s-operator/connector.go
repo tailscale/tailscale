@@ -139,7 +139,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if err := a.validate(cn); err != nil {
 		message := fmt.Sprintf(messageConnectorInvalid, err)
-		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
+		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, "%s", message)
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorInvalid, message)
 	}
 
@@ -152,7 +152,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 			err = nil
 			logger.Info(message)
 		} else {
-			a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, message)
+			a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, "%s", message)
 		}
 
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reason, message)
