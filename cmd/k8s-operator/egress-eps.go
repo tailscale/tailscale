@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -130,6 +131,12 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			},
 		})
 	}
+	// Sort endpoints by their stable per-Pod hostname (the Pod UID) so the
+	// slice is deterministic.
+	// TODO - improve
+	slices.SortFunc(newEndpoints, func(a, b discoveryv1.Endpoint) int {
+		return strings.Compare(hostnameForEndpoint(a), hostnameForEndpoint(b))
+	})
 	// Note that Endpoints are being overwritten with the currently valid endpoints so we don't need to explicitly
 	// run a cleanup for deleted Pods etc.
 	eps.Endpoints = newEndpoints
@@ -141,6 +148,15 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	return res, nil
+}
+
+// hostnameForEndpoint returns the Endpoint's Hostname (the Pod UID), or the
+// empty string if unset, for use as a stable sort key.
+func hostnameForEndpoint(e discoveryv1.Endpoint) string {
+	if e.Hostname == nil {
+		return ""
+	}
+	return *e.Hostname
 }
 
 func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, error) {

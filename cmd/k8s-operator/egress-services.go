@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/netip"
 	"reflect"
@@ -24,6 +25,7 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -162,10 +164,12 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	if err := esr.maybeProvision(ctx, svc, lg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			// Requeue so the next pass reconciles against the latest state instead of settling on a
+			// stale False. See tailscale/tailscale#20916.
 			lg.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		return reconcile.Result{}, err
 	}
 
 	return res, nil
@@ -175,6 +179,12 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	r := svcConfiguredReason(svc, false, lg)
 	st := metav1.ConditionFalse
 	defer func() {
+		// if we hit a noptimistic lock with the egress-eps reconciler, leave the
+		// EgressSvcConfigured condition untouched rather than flapping it to
+		// False. See tailscale/tailscale#20916.
+		if err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			return
+		}
 		msg := r
 		if st != metav1.ConditionTrue && err != nil {
 			msg = err.Error()
@@ -244,35 +254,64 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 }
 
 // ensureEndpointSlices ensures that EndpointSlices exist for the egress service
-// for each IP family supported by the cluster, and that their ports are up to
-// date.
+// for each IP family supported by the cluster, and that their ports
+// are up to date.
+//
+// It runs on every reconcile so that a deleted EndpointSlice is recreated (see
+// tailscale/tailscale#20322) and slices are backfilled for existing services
+// when new IP families appear. It only issues a write when a slice is missing or has actually drifted. It
+// never writes the Endpoints field, which is owned by the egress EndpointSlices
+// reconciler. Writing Endpoints (or issuing an unconditional
+// Update) here on every reconcile races that reconciler and causes
+// optimistic-lock conflicts (tailscale/tailscale#20916).
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
+	ports := epsPortsFromSvc(clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
 	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
 	if err != nil {
 		return err
 	}
 	for _, addrType := range addrTypes {
-		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
-				Namespace: esr.tsNamespace,
-				Labels:    crl,
-			},
-			AddressType: addrType,
-			Ports:       epsPortsFromSvc(clusterIPSvc),
-		}
-		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-			e.Labels = eps.Labels
-			e.AddressType = eps.AddressType
-			e.Ports = eps.Ports
-			for _, p := range e.Endpoints {
-				p.Conditions.Ready = nil
+		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
+		existing := &discoveryv1.EndpointSlice{}
+		err := esr.Get(ctx, client.ObjectKey{Namespace: esr.tsNamespace, Name: name}, existing)
+		switch {
+		case apierrors.IsNotFound(err):
+			eps := &discoveryv1.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: esr.tsNamespace,
+					Labels:    crl,
+				},
+				AddressType: addrType,
+				Ports:       epsPortsFromSvc(clusterIPSvc),
 			}
-		}); err != nil {
-			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+			if err := esr.Create(ctx, eps); err != nil {
+				return fmt.Errorf("error creating %s EndpointSlice: %w", addrType, err)
+			}
+			lg.Infof("created %s EndpointSlice %s", addrType, name)
+			continue
+		case err != nil:
+			return fmt.Errorf("error getting %s EndpointSlice: %w", addrType, err)
 		}
+
+		if klabels.SelectorFromSet(crl).Matches(klabels.Set(existing.Labels)) &&
+			existing.AddressType == addrType &&
+			apiequality.Semantic.DeepEqual(existing.Ports, ports) {
+			continue
+		}
+		// TODO: server-side apply rather than simple update
+		if existing.Labels == nil {
+			existing.Labels = make(map[string]string, len(crl))
+		}
+		maps.Copy(existing.Labels, crl)
+		existing.AddressType = addrType
+		existing.Ports = ports
+		if err := esr.Update(ctx, existing); err != nil {
+			return fmt.Errorf("error updating %s EndpointSlice: %w", addrType, err)
+		}
+		lg.Infof("updated %s EndpointSlice %s", addrType, name)
 	}
 	return nil
 }
