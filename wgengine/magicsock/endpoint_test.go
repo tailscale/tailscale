@@ -17,6 +17,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
+	"tailscale.com/types/opt"
 	"tailscale.com/util/ringlog"
 )
 
@@ -774,6 +775,115 @@ func TestUpdateFromNodeUsesControlKeyForComparison(t *testing.T) {
 			}
 			if got := epDisco.key(); got != tt.wantActiveKey {
 				t.Errorf("key(): got %v, want %v", got, tt.wantActiveKey)
+			}
+		})
+	}
+}
+
+func TestSawDiscoKey(t *testing.T) {
+	controlKey := key.NewDisco().Public()
+	tsmpKey := key.NewDisco().Public()
+	unknownKey := key.NewDisco().Public()
+	controlKey2 := key.NewDisco().Public()
+
+	tests := []struct {
+		name           string
+		initial        *endpointDisco
+		seen           key.DiscoPublic
+		hook           func(de *endpoint) // injected between Load and CAS; nil = no hook
+		wantResult     opt.Bool
+		wantTsmpActive bool // checked only when initial != nil
+	}{
+		{
+			name:       "nil-disco",
+			initial:    nil,
+			seen:       controlKey,
+			wantResult: opt.Empty,
+		},
+		{
+			name:           "active-control-key-seen",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           controlKey,
+			wantResult:     opt.True,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "active-tsmp-key-seen",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: true},
+			seen:           tsmpKey,
+			wantResult:     opt.True,
+			wantTsmpActive: true,
+		},
+		{
+			name:           "inactive-tsmp-key-seen-swaps-to-tsmp-active",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           tsmpKey,
+			wantResult:     opt.True,
+			wantTsmpActive: true,
+		},
+		{
+			name:           "inactive-control-key-seen-swaps-to-control-active",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: true},
+			seen:           controlKey,
+			wantResult:     opt.True,
+			wantTsmpActive: false,
+		},
+		{
+			name:           "unknown-key",
+			initial:        &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:           unknownKey,
+			wantResult:     opt.False,
+			wantTsmpActive: false,
+		},
+		{
+			// Hook fires once and replaces the struct (same tsmpKey, different controlKey),
+			// forcing the first CAS to fail. The retry should still find tsmpKey as the
+			// inactive key and succeed.
+			name:    "CAS-retry-on-concurrent-update",
+			initial: &endpointDisco{controlKey: controlKey, tsmpKey: tsmpKey, tsmpActive: false},
+			seen:    tsmpKey,
+			hook: func(de *endpoint) {
+				de.disco.Store(&endpointDisco{
+					controlKey: controlKey2,
+					tsmpKey:    tsmpKey,
+					tsmpActive: false,
+				})
+			},
+			wantResult:     opt.True,
+			wantTsmpActive: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var de endpoint
+			if tt.initial != nil {
+				de.disco.Store(tt.initial)
+			}
+
+			hookFired := false
+			if tt.hook != nil {
+				sawDiscoKeyTestHook = func() {
+					if !hookFired {
+						hookFired = true
+						tt.hook(&de)
+					}
+				}
+				t.Cleanup(func() { sawDiscoKeyTestHook = nil })
+			}
+
+			got := de.sawDiscoKey(tt.seen)
+
+			if got != tt.wantResult {
+				t.Errorf("sawDiscoKey() = %v, want %v", got, tt.wantResult)
+			}
+			if tt.hook != nil && !hookFired {
+				t.Error("test hook was never called; CAS retry path not exercised")
+			}
+			if tt.initial != nil {
+				if active := de.disco.Load(); active.tsmpActive != tt.wantTsmpActive {
+					t.Errorf("after call: tsmpActive = %v, want %v", active.tsmpActive, tt.wantTsmpActive)
+				}
 			}
 		})
 	}

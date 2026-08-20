@@ -32,6 +32,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringlog"
 	"tailscale.com/util/slicesx"
@@ -1581,6 +1582,56 @@ func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) {
 			// since the load).
 			break
 		}
+	}
+}
+
+var sawDiscoKeyTestHook func()
+
+// sawDiscoKey takes a [key.DiscoPublic] and returns the state of knowing the
+// key. The return options are:
+//   - empty - the struct is a nil pointer
+//   - true  - the key was known
+//   - false - the key was unknown
+//
+// As a side effect, if the active key was not the one seen on the wire, swap
+// what key is active.
+func (de *endpoint) sawDiscoKey(seen key.DiscoPublic) opt.Bool {
+	for {
+		current := de.disco.Load()
+		if current == nil {
+			return opt.Empty
+		}
+
+		if !current.key().IsZero() && current.key() == seen {
+			return opt.True
+		}
+
+		var inactiveKey key.DiscoPublic
+		if current.tsmpActive {
+			inactiveKey = current.keyFromControl()
+		} else {
+			inactiveKey = current.keyFromTSMP()
+		}
+
+		// We have seen the inactive key, swap to that one as being active.
+		if !inactiveKey.IsZero() && inactiveKey == seen {
+			if sawDiscoKeyTestHook != nil {
+				sawDiscoKeyTestHook()
+			}
+			if de.disco.CompareAndSwap(current, &endpointDisco{
+				controlKey:   current.controlKey,
+				controlShort: current.controlShort,
+				tsmpKey:      current.tsmpKey,
+				tsmpShort:    current.tsmpShort,
+				tsmpActive:   !current.tsmpActive,
+			}) {
+				return opt.True
+			} else {
+				// The struct changed under us, run the search again.
+				continue
+			}
+		}
+		return opt.False
 	}
 }
 
