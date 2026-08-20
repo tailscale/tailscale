@@ -414,7 +414,10 @@ func run(logger *zap.SugaredLogger) error {
 				return fmt.Errorf("error getting current prefs: %w", err)
 			}
 			if !slices.Equal(currentPrefs.AdvertiseServices, cfg.Parsed.AdvertiseServices) {
-				cfgLogger = cfgLogger.With("AdvertiseServices", fmt.Sprintf("%v -> %v", currentPrefs.AdvertiseServices, cfg.Parsed.AdvertiseServices))
+				cfgLogger = cfgLogger.With(
+					"AdvertiseServices", fmt.Sprintf("%v -> %v", currentPrefs.AdvertiseServices, cfg.Parsed.AdvertiseServices),
+					"previousAdvertiseServicesCount", len(currentPrefs.AdvertiseServices),
+					"advertiseServicesCount", len(cfg.Parsed.AdvertiseServices))
 				prefs.AdvertiseServicesSet = true
 				prefs.Prefs.AdvertiseServices = cfg.Parsed.AdvertiseServices
 			}

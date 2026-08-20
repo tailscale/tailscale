@@ -1111,12 +1111,24 @@ func certResourceLabels(pgName, domain string) map[string]string {
 	}
 }
 
-// hasCerts checks if the TLS Secret for the given service has non-zero cert and key data.
-func hasCerts(ctx context.Context, cl client.Client, ns string, svc tailcfg.ServiceName, pg *tsapi.ProxyGroup) (bool, error) {
+type tlsSecretStatus struct {
+	name            string
+	resourceVersion string
+	exists          bool
+	certPresent     bool
+	keyPresent      bool
+}
+
+func (s tlsSecretStatus) ready() bool {
+	return s.certPresent && s.keyPresent
+}
+
+func tlsSecretStatusForService(ctx context.Context, cl client.Client, ns string, svc tailcfg.ServiceName, pg *tsapi.ProxyGroup) (tlsSecretStatus, error) {
 	domain, err := dnsNameForService(ctx, cl, svc, pg, ns)
 	if err != nil {
-		return false, fmt.Errorf("failed to get DNS name for service: %w", err)
+		return tlsSecretStatus{}, fmt.Errorf("failed to get DNS name for service: %w", err)
 	}
+	status := tlsSecretStatus{name: domain}
 	secret := &corev1.Secret{}
 	err = cl.Get(ctx, client.ObjectKey{
 		Namespace: ns,
@@ -1124,15 +1136,22 @@ func hasCerts(ctx context.Context, cl client.Client, ns string, svc tailcfg.Serv
 	}, secret)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil
+			return status, nil
 		}
-		return false, fmt.Errorf("failed to get TLS Secret: %w", err)
+		return tlsSecretStatus{}, fmt.Errorf("failed to get TLS Secret: %w", err)
 	}
 
-	cert := secret.Data[corev1.TLSCertKey]
-	key := secret.Data[corev1.TLSPrivateKeyKey]
+	status.exists = true
+	status.resourceVersion = secret.ResourceVersion
+	status.certPresent = len(secret.Data[corev1.TLSCertKey]) > 0
+	status.keyPresent = len(secret.Data[corev1.TLSPrivateKeyKey]) > 0
+	return status, nil
+}
 
-	return len(cert) > 0 && len(key) > 0, nil
+// hasCerts checks if the TLS Secret for the given service has non-zero cert and key data.
+func hasCerts(ctx context.Context, cl client.Client, ns string, svc tailcfg.ServiceName, pg *tsapi.ProxyGroup) (bool, error) {
+	status, err := tlsSecretStatusForService(ctx, cl, ns, svc, pg)
+	return status.ready(), err
 }
 
 func tagViolations(obj client.Object) []string {

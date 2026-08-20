@@ -197,11 +197,20 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 		return fmt.Errorf("failed to get config Secret %q: %w", secretName, err)
 	}
 
+	ld.logger.Infow("Loading initial config Secret",
+		"namespace", secretNamespace,
+		"ConfigSecret", secretName,
+		"resourceVersion", secret.ResourceVersion,
+		"configChanged", !bytes.Equal(secret.Data[kubetypes.KubeAPIServerConfigFile], ld.previous))
 	if err := ld.configFromSecret(ctx, secret); err != nil {
 		return fmt.Errorf("error loading initial config: %w", err)
 	}
 
-	ld.logger.Infof("Watching config Secret %q for changes", secretName)
+	lastObservedResourceVersion := secret.ResourceVersion
+	ld.logger.Infow("Watching config Secret for changes",
+		"namespace", secretNamespace,
+		"ConfigSecret", secretName,
+		"resourceVersion", lastObservedResourceVersion)
 	for {
 		var secret *corev1.Secret
 		select {
@@ -209,6 +218,10 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 			return ctx.Err()
 		case ev, ok := <-w.ResultChan():
 			if !ok {
+				ld.logger.Debugw("Config Secret watch closed; re-establishing",
+					"namespace", secretNamespace,
+					"ConfigSecret", secretName,
+					"lastObservedResourceVersion", lastObservedResourceVersion)
 				w.Stop()
 				w, err = secrets.Watch(ctx, metav1.ListOptions{
 					TypeMeta: metav1.TypeMeta{
@@ -222,6 +235,10 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 				if err != nil {
 					return fmt.Errorf("failed to re-watch config Secret %q: %w", secretName, err)
 				}
+				ld.logger.Debugw("Re-established config Secret watch",
+					"namespace", secretNamespace,
+					"ConfigSecret", secretName,
+					"lastObservedResourceVersion", lastObservedResourceVersion)
 				continue
 			}
 
@@ -234,11 +251,39 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 					return fmt.Errorf("unexpected object type %T in watch event for config Secret %q", ev.Object, secretName)
 				}
 				if secret == nil || secret.Data == nil {
+					ld.logger.Warnw("Config Secret watch event has no data; retaining last loaded config",
+						"namespace", secretNamespace,
+						"ConfigSecret", secretName,
+						"eventType", string(ev.Type))
 					continue
+				}
+				configChanged := !bytes.Equal(secret.Data[kubetypes.KubeAPIServerConfigFile], ld.previous)
+				logFields := []any{
+					"namespace", secretNamespace,
+					"ConfigSecret", secretName,
+					"eventType", string(ev.Type),
+					"resourceVersion", secret.ResourceVersion,
+					"configChanged", configChanged,
+				}
+				if configChanged {
+					ld.logger.Infow("Config Secret watch event contains changed config", logFields...)
+				} else {
+					ld.logger.Debugw("Config Secret watch event contains unchanged config", logFields...)
 				}
 				if err := ld.configFromSecret(ctx, secret); err != nil {
 					return fmt.Errorf("error reloading config Secret %q: %v", secret.Name, err)
 				}
+				lastObservedResourceVersion = secret.ResourceVersion
+			case watch.Deleted:
+				resourceVersion := ""
+				if secret, ok := ev.Object.(*corev1.Secret); ok && secret != nil {
+					resourceVersion = secret.ResourceVersion
+				}
+				ld.logger.Warnw("Config Secret was deleted; retaining last loaded config",
+					"namespace", secretNamespace,
+					"ConfigSecret", secretName,
+					"resourceVersion", resourceVersion,
+					"lastObservedResourceVersion", lastObservedResourceVersion)
 			case watch.Error:
 				return fmt.Errorf("error watching config Secret %q: %v", secretName, ev.Object)
 			default:

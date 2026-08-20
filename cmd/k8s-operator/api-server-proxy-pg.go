@@ -348,14 +348,23 @@ func (r *KubeAPIServerTSServiceReconciler) maybeAdvertiseServices(ctx context.Co
 
 	// Only advertise a Tailscale Service once the TLS certs required for
 	// serving it are available.
-	shouldBeAdvertised, err := hasCerts(ctx, r.Client, r.tsNamespace, serviceName, pg)
+	tlsStatus, err := tlsSecretStatusForService(ctx, r.Client, r.tsNamespace, serviceName, pg)
 	if err != nil {
 		return fmt.Errorf("error checking TLS credentials provisioned for Tailscale Service %q: %w", serviceName, err)
 	}
+	shouldBeAdvertised := tlsStatus.ready()
 	var advertiseServices []string
 	if shouldBeAdvertised {
 		advertiseServices = []string{serviceName.String()}
 	}
+	logger.Debugw("Evaluated TLS readiness for Tailscale Service advertisement",
+		"TLSSecret", tlsStatus.name,
+		"tlsSecretResourceVersion", tlsStatus.resourceVersion,
+		"tlsSecretExists", tlsStatus.exists,
+		"tlsCertPresent", tlsStatus.certPresent,
+		"tlsKeyPresent", tlsStatus.keyPresent,
+		"advertiseService", shouldBeAdvertised,
+		"configSecretCount", len(cfgSecrets.Items))
 
 	for _, s := range cfgSecrets.Items {
 		if len(s.Data[kubetypes.KubeAPIServerConfigFile]) == 0 {
@@ -374,19 +383,26 @@ func (r *KubeAPIServerTSServiceReconciler) maybeAdvertiseServices(ctx context.Co
 
 		existingCfgSecret := s.DeepCopy()
 
-		var updated bool
-		if cfg.Parsed.APIServerProxy.ServiceName == nil || *cfg.Parsed.APIServerProxy.ServiceName != serviceName {
+		serviceNameChanged := cfg.Parsed.APIServerProxy.ServiceName == nil || *cfg.Parsed.APIServerProxy.ServiceName != serviceName
+		if serviceNameChanged {
 			cfg.Parsed.APIServerProxy.ServiceName = &serviceName
-			updated = true
 		}
 
 		// Update the services to advertise if required.
-		if !slices.Equal(cfg.Parsed.AdvertiseServices, advertiseServices) {
+		previousAdvertiseServicesCount := len(cfg.Parsed.AdvertiseServices)
+		advertiseServicesChanged := !slices.Equal(cfg.Parsed.AdvertiseServices, advertiseServices)
+		if advertiseServicesChanged {
 			cfg.Parsed.AdvertiseServices = advertiseServices
-			updated = true
 		}
+		configLogger := logger.With("ConfigSecret", s.Name, "namespace", s.Namespace)
+		configLogger.Debugw("Evaluated ProxyGroup config Secret for Tailscale Service advertisement",
+			"resourceVersion", s.ResourceVersion,
+			"serviceNameChanged", serviceNameChanged,
+			"advertiseServicesChanged", advertiseServicesChanged,
+			"previousAdvertiseServicesCount", previousAdvertiseServicesCount,
+			"advertiseServicesCount", len(advertiseServices))
 
-		if !updated {
+		if !serviceNameChanged && !advertiseServicesChanged {
 			continue
 		}
 
@@ -401,10 +417,22 @@ func (r *KubeAPIServerTSServiceReconciler) maybeAdvertiseServices(ctx context.Co
 
 		s.Data[kubetypes.KubeAPIServerConfigFile] = cfgB
 		if !apiequality.Semantic.DeepEqual(existingCfgSecret, s) {
-			logger.Debugf("Updating the Tailscale Services in ProxyGroup config Secret %s", s.Name)
+			previousResourceVersion := s.ResourceVersion
 			if err := r.Update(ctx, &s); err != nil {
 				return err
 			}
+			configLogger.Infow("Updated ProxyGroup config Secret for Tailscale Service",
+				"previousResourceVersion", previousResourceVersion,
+				"resourceVersion", s.ResourceVersion,
+				"serviceNameChanged", serviceNameChanged,
+				"advertiseServicesChanged", advertiseServicesChanged,
+				"previousAdvertiseServicesCount", previousAdvertiseServicesCount,
+				"advertiseServicesCount", len(advertiseServices),
+				"TLSSecret", tlsStatus.name,
+				"tlsSecretResourceVersion", tlsStatus.resourceVersion,
+				"tlsSecretExists", tlsStatus.exists,
+				"tlsCertPresent", tlsStatus.certPresent,
+				"tlsKeyPresent", tlsStatus.keyPresent)
 		}
 	}
 

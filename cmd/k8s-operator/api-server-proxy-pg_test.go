@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,15 +111,53 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	}
 	ft.VIPServices().CreateOrUpdate(t.Context(), ingressTSSvc)
 
+	logCore, observedLogs := observer.New(zap.DebugLevel)
 	r := &KubeAPIServerTSServiceReconciler{
 		Client:      fc,
 		clients:     tsclient.NewProvider(ft),
 		defaultTags: []string{"tag:k8s"},
 		tsNamespace: ns,
-		logger:      zap.Must(zap.NewDevelopment()).Sugar(),
+		logger:      zap.New(logCore).Sugar(),
 		recorder:    record.NewFakeRecorder(10),
 		clock:       tstest.NewClock(tstest.ClockOpts{}),
 		operatorID:  "self-id",
+	}
+	assertConfigUpdateLog := func(tlsReady bool, previousCount, count int64) {
+		t.Helper()
+		entries := observedLogs.FilterMessage("Updated ProxyGroup config Secret for Tailscale Service").All()
+		if len(entries) != 1 {
+			t.Fatalf("got %d config update log entries, want 1: %v", len(entries), entries)
+		}
+		fields := entries[0].ContextMap()
+		got := map[string]any{
+			"ConfigSecret":                   fields["ConfigSecret"],
+			"namespace":                      fields["namespace"],
+			"advertiseServicesChanged":       fields["advertiseServicesChanged"],
+			"previousAdvertiseServicesCount": fields["previousAdvertiseServicesCount"],
+			"advertiseServicesCount":         fields["advertiseServicesCount"],
+			"tlsSecretExists":                fields["tlsSecretExists"],
+			"tlsCertPresent":                 fields["tlsCertPresent"],
+			"tlsKeyPresent":                  fields["tlsKeyPresent"],
+		}
+		want := map[string]any{
+			"ConfigSecret":                   pgConfigSecretName(pgName, 0),
+			"namespace":                      ns,
+			"advertiseServicesChanged":       true,
+			"previousAdvertiseServicesCount": previousCount,
+			"advertiseServicesCount":         count,
+			"tlsSecretExists":                true,
+			"tlsCertPresent":                 tlsReady,
+			"tlsKeyPresent":                  tlsReady,
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("unexpected config update log fields (-want +got):\n%s", diff)
+		}
+		if _, ok := fields["previousResourceVersion"]; !ok {
+			t.Error("config update log is missing previousResourceVersion")
+		}
+		if _, ok := fields["resourceVersion"]; !ok {
+			t.Error("config update log is missing resourceVersion")
+		}
 	}
 
 	// Create a Tailscale Service that will conflict with the initial config.
@@ -189,11 +228,13 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectEqual(t, fc, certSecretRoleBinding(pg, ns, defaultDomain))
 
 	// Simulate certs being issued; should observe AdvertiseServices config change.
+	observedLogs.TakeAll()
 	populateTLSSecret(t, fc, pgName, defaultDomain)
 	expectReconciled(t, r, "", pgName)
 
 	expectedCfg.AdvertiseServices = []string{"svc:" + pgName}
 	expectCfg(&expectedCfg)
+	assertConfigUpdateLog(true, 0, 1)
 
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages) // Unchanged status.
 
@@ -225,6 +266,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	mustUpdate(t, fc, "", pgName, func(p *tsapi.ProxyGroup) {
 		p.Spec.KubeAPIServer = pg.Spec.KubeAPIServer
 	})
+	observedLogs.TakeAll()
 	expectReconciled(t, r, "", pgName)
 	_, err = ft.VIPServices().Get(t.Context(), "svc:"+pgName)
 	if !tailscale.IsNotFound(err) {
@@ -242,6 +284,7 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 	expectedCfg.APIServerProxy.ServiceName = new(updatedServiceName)
 	expectedCfg.AdvertiseServices = nil
 	expectCfg(&expectedCfg)
+	assertConfigUpdateLog(false, 1, 0)
 	tsoperator.SetProxyGroupCondition(pg, tsapi.KubeAPIServerProxyConfigured, metav1.ConditionFalse, reasonKubeAPIServerProxyNoBackends, "", 1, r.clock, r.logger)
 	pg.Status.URL = ""
 	expectEqual(t, fc, pg, omitPGStatusConditionMessages)

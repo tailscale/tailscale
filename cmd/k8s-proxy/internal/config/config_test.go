@@ -5,6 +5,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
@@ -183,7 +185,9 @@ func TestWatchConfigSecret_Rewatches(t *testing.T) {
 	}
 	cl.PrependWatchReactor("secrets", func(action ktesting.Action) (handled bool, ret watch.Interface, err error) {
 		watcher = watch.NewRaceFreeFake()
-		watcher.Add(secretFrom(expected[watchCount]))
+		s := secretFrom(expected[watchCount])
+		s.ResourceVersion = fmt.Sprint(watchCount + 1)
+		watcher.Add(s)
 		if action.GetVerb() == "watch" && action.GetResource().Resource == "secrets" {
 			watchCount++
 		}
@@ -191,7 +195,8 @@ func TestWatchConfigSecret_Rewatches(t *testing.T) {
 	})
 
 	configChan := make(chan *conf.Config)
-	loader := NewConfigLoader(zap.Must(zap.NewDevelopment()).Sugar(), cl.CoreV1(), configChan)
+	logCore, observedLogs := observer.New(zap.DebugLevel)
+	loader := NewConfigLoader(zap.New(logCore).Sugar(), cl.CoreV1(), configChan)
 
 	mustCreateOrUpdate(t, cl, secretFrom(expected[0]))
 
@@ -220,6 +225,34 @@ func TestWatchConfigSecret_Rewatches(t *testing.T) {
 
 	if watchCount != 2 {
 		t.Fatalf("expected 2 watch API calls, got %d", watchCount)
+	}
+
+	entries := observedLogs.FilterMessage("Config Secret watch event contains changed config").All()
+	if len(entries) != 1 {
+		t.Fatalf("got %d changed config log entries, want 1: %v", len(entries), entries)
+	}
+	fields := entries[0].ContextMap()
+	wantFields := map[string]any{
+		"namespace":       "default",
+		"ConfigSecret":    "config-secret",
+		"eventType":       string(watch.Added),
+		"resourceVersion": "2",
+		"configChanged":   true,
+	}
+	gotFields := make(map[string]any, len(wantFields))
+	for key := range wantFields {
+		gotFields[key] = fields[key]
+	}
+	if diff := cmp.Diff(wantFields, gotFields); diff != "" {
+		t.Errorf("unexpected changed config log fields (-want +got):\n%s", diff)
+	}
+	for _, entry := range observedLogs.All() {
+		logged := entry.Message + fmt.Sprint(entry.ContextMap())
+		for _, secret := range []string{"abc123", "def456", "ghi789"} {
+			if strings.Contains(logged, secret) {
+				t.Errorf("log entry contains config Secret data %q: %s", secret, logged)
+			}
+		}
 	}
 }
 
