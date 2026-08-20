@@ -725,3 +725,93 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 		})
 	}
 }
+
+func Test_endpoint_bestAddrConfirmed(t *testing.T) {
+	directA := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}
+	directB := epAddr{ap: netip.MustParseAddrPort("192.0.2.2:8")}
+	derpAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1)
+
+	newEndpoint := func() *endpoint {
+		return &endpoint{
+			c:             &Conn{logf: func(string, ...any) {}},
+			derpAddr:      derpAddr,
+			endpointState: make(map[netip.AddrPort]*endpointState),
+			debugUpdates:  ringlog.New[EndpointChange](10),
+		}
+	}
+
+	// mirrorsToDERP reports whether addrForSendLocked hedges to DERP in
+	// addition to sending over bestAddr.
+	mirrorsToDERP := func(t *testing.T, de *endpoint, now mono.Time) bool {
+		t.Helper()
+		udpAddr, derp, _ := de.addrForSendLocked(now)
+		if !udpAddr.ap.IsValid() {
+			t.Fatal("bestAddr unexpectedly invalid")
+		}
+		return derp.IsValid()
+	}
+
+	t.Run("first-direct-path-is-not-hedged", func(t *testing.T) {
+		now := mono.Now()
+		de := newEndpoint()
+		de.setBestAddrLocked(addrQuality{epAddr: directA})
+		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+
+		if !de.bestAddrConfirmed {
+			t.Error("first direct path of a session should install confirmed")
+		}
+		if mirrorsToDERP(t, de, now) {
+			t.Error("first direct path should not mirror to DERP; duplicating the WireGuard handshake breaks session establishment")
+		}
+	})
+
+	t.Run("replacement-path-is-hedged-until-inbound-data", func(t *testing.T) {
+		now := mono.Now()
+		de := newEndpoint()
+		de.setBestAddrLocked(addrQuality{epAddr: directA})
+		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		de.bestAddrConfirmed = true
+
+		// Displace directA with directB, as handlePongConnLocked does when a
+		// pong arrives while bestAddr is untrusted.
+		de.setBestAddrLocked(addrQuality{epAddr: directB})
+		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+
+		if de.bestAddrConfirmed {
+			t.Error("a path that displaces another should install unconfirmed")
+		}
+		if !mirrorsToDERP(t, de, now) {
+			t.Error("unconfirmed replacement path should mirror to DERP")
+		}
+
+		// Inbound traffic over some other address must not confirm bestAddr.
+		de.noteRecvActivity(directA, now)
+		if de.bestAddrConfirmed {
+			t.Error("inbound over a non-best address should not confirm bestAddr")
+		}
+		if !mirrorsToDERP(t, de, now) {
+			t.Error("hedge should survive inbound over a non-best address")
+		}
+
+		// Inbound traffic over bestAddr retires the hedge.
+		de.noteRecvActivity(directB, now)
+		if !de.bestAddrConfirmed {
+			t.Error("inbound over bestAddr should confirm it")
+		}
+		if mirrorsToDERP(t, de, now) {
+			t.Error("confirmed path should not mirror to DERP")
+		}
+	})
+
+	t.Run("untrusted-path-mirrors-regardless-of-confirmation", func(t *testing.T) {
+		now := mono.Now()
+		de := newEndpoint()
+		de.setBestAddrLocked(addrQuality{epAddr: directA})
+		de.bestAddrConfirmed = true
+		de.trustBestAddrUntil = now.Add(-time.Second)
+
+		if !mirrorsToDERP(t, de, now) {
+			t.Error("untrusted bestAddr should mirror to DERP even once confirmed")
+		}
+	})
+}

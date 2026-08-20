@@ -3164,13 +3164,14 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 	validDerpAddr := netip.MustParseAddrPort("2.2.2.2:222")
 
 	pingTests := []struct {
-		desc            string
-		size            int           // size of ping payload
-		mtu             tstun.WireMTU // The MTU of the path to bestAddr, if any
-		bestAddr        bool          // If the endpoint should have a valid bestAddr
-		bestAddrTrusted bool          // If the bestAddr has not yet expired
-		wantUDP         bool          // Non-zero UDP addr means send to UDP; zero means start discovery
-		wantDERP        bool          // Non-zero DERP addr means send to DERP
+		desc                string
+		size                int           // size of ping payload
+		mtu                 tstun.WireMTU // The MTU of the path to bestAddr, if any
+		bestAddr            bool          // If the endpoint should have a valid bestAddr
+		bestAddrTrusted     bool          // If the bestAddr has not yet expired
+		bestAddrUnconfirmed bool          // If the bestAddr has not yet carried inbound traffic
+		wantUDP             bool          // Non-zero UDP addr means send to UDP; zero means start discovery
+		wantDERP            bool          // Non-zero DERP addr means send to DERP
 	}{
 		{
 			desc:            "ping_size_0_and_invalid_UDP_addr_should_start_discovery_and_send_to_DERP",
@@ -3187,6 +3188,15 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 			bestAddrTrusted: true,
 			wantUDP:         true,
 			wantDERP:        false,
+		},
+		{
+			desc:                "ping_size_0_and_valid_trusted_but_unconfirmed_UDP_addr_should_send_to_both_UDP_and_DERP",
+			size:                0,
+			bestAddr:            true,
+			bestAddrTrusted:     true,
+			bestAddrUnconfirmed: true,
+			wantUDP:             true,
+			wantDERP:            true,
 		},
 		{
 			desc:            "ping_size_0_and_valid_but_expired_UDP_addr_should_send_to_both_UDP_and_DERP",
@@ -3241,8 +3251,9 @@ func TestAddrForPingSizeLocked(t *testing.T) {
 				bestAddr.epAddr.ap = validUdpAddr
 			}
 			ep := &endpoint{
-				derpAddr: validDerpAddr,
-				bestAddr: bestAddr,
+				derpAddr:          validDerpAddr,
+				bestAddr:          bestAddr,
+				bestAddrConfirmed: !test.bestAddrUnconfirmed,
 			}
 			if test.bestAddrTrusted {
 				ep.trustBestAddrUntil = testTime.Add(1 * time.Second)
