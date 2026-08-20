@@ -128,6 +128,7 @@ type testAttempt struct {
 	start, end    time.Time
 	isMarkedFlaky bool   // set if the test is marked as flaky
 	issueURL      string // set if the test is marked as flaky
+	inferredFail  bool   // outcome assumed because the package died, not reported by `go test`
 	// raceDetected is true on a per-test event if that test's output
 	// contained a race report, and true on a pkgFinished event if any
 	// test in the package -- or the package's own output -- did.
@@ -145,6 +146,7 @@ type failedTest struct {
 	attempts          int           // number of retry attempts run so far
 	totalRetryElapsed time.Duration // total time spent across retry attempts
 	everPassed        bool          // a retry attempt passed
+	inferredFail      bool          // the first failure was assumed, not reported by `go test`
 }
 
 // packageTests describes what to run.
@@ -350,6 +352,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, te
 				for _, test := range pkgTests {
 					if test.testName != "" && test.outcome == outcomeUnknown {
 						test.outcome = outcomeFail
+						test.inferredFail = true
 						ch <- test
 					}
 				}
@@ -743,6 +746,9 @@ func writeResultsSummary(summaryPath, jsonPath, pkgOnly string, results map[stri
 	fmt.Fprintf(f, "\n### %s\n\n", title)
 	if len(rows) == 0 {
 		fmt.Fprintln(f, "_No tests ran._")
+		if pkgFatal {
+			fmt.Fprintln(f, "\n_⚠️ A package did not complete (build error or timeout); results may be partial._")
+		}
 		return
 	}
 	var pass, fail, skip int
@@ -915,6 +921,7 @@ func main() {
 				testName:          tr.testName,
 				firstFailDuration: tr.end.Sub(tr.start),
 				issueURL:          tr.issueURL, // real if Mark()'d, else "".
+				inferredFail:      tr.inferredFail,
 			})
 		}
 		failed = append(failed, pkgFailedTests...)
@@ -959,7 +966,13 @@ func main() {
 		if resultsSummary {
 			retried := map[string]bool{}
 			for _, ft := range flaky {
-				retried[ft.pkg+"\t"+ft.testName] = true
+				key := ft.pkg + "\t" + ft.testName
+				if ft.inferredFail {
+					// It never failed on its own, so it isn't a flake.
+					allResults[key] = outcomePass
+					continue
+				}
+				retried[key] = true
 			}
 			writeResultsSummary(path, os.Getenv("TS_TESTWRAPPER_RESULTS_JSON"), os.Getenv("TS_TESTWRAPPER_RESULTS_PKG"), allResults, retried, pkgFatal)
 		}
