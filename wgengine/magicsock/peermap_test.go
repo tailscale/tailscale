@@ -17,6 +17,7 @@ func Test_peerMap_oneRelayEpAddrPerNK(t *testing.T) {
 	ep := &endpoint{
 		nodeID:    1,
 		publicKey: nk,
+		c:         &Conn{logf: func(msg string, args ...any) {}},
 	}
 	ep.updateDiscoKey(key.NewDisco().Public())
 	pm.upsertEndpoint(ep, key.DiscoPublic{}, false)
@@ -41,7 +42,12 @@ func Test_peerMap_nodesOfDisco_upsertCleansOldKey(t *testing.T) {
 	discoK1 := key.NewDisco().Public()
 	discoK2 := key.NewDisco().Public()
 
-	ep := &endpoint{nodeID: 1, publicKey: nk}
+	conn := newTestConn(t)
+	ep := &endpoint{
+		nodeID:    1,
+		publicKey: nk,
+		c:         conn,
+	}
 	ep.updateDiscoKey(discoK1)
 	pm.upsertEndpoint(ep, key.DiscoPublic{}, false) // insert with K1
 

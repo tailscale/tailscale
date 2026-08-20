@@ -2374,12 +2374,12 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("magicsock: disco: ignoring %s from %v; %v is not known to be relay capable", msgType, sender.ShortString(), sender.ShortString())
 			return
 		}
-		epDisco := ep.disco.Load()
+
+		epDisco, knownKey := ep.checkAndUpdateDiscoKey(di.discoKey)
 		if epDisco == nil {
 			return
 		}
-		// TODO(cmol): Switch active keys based on what we see here
-		if epDisco.key() != di.discoKey {
+		if !knownKey {
 			if isVia {
 				metricRecvDiscoCallMeMaybeViaBadDisco.Add(1)
 			} else {
@@ -2440,12 +2440,12 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			c.logf("magicsock: disco: ignoring %s from %v; %v is unknown", msgType, sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
-		epDisco := ep.disco.Load()
+
+		epDisco, knownKey := ep.checkAndUpdateDiscoKey(di.discoKey)
 		if epDisco == nil {
 			return
 		}
-		// TODO(cmol): Switch active keys based on what we see here
-		if epDisco.key() != di.discoKey {
+		if !knownKey {
 			if isResp {
 				metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco.Add(1)
 			} else {
@@ -2509,10 +2509,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 // c.mu must be held.
 func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic, derpNodeSrc key.NodePublic) (nk key.NodePublic, ok bool) {
 	if !derpNodeSrc.IsZero() {
-		// TODO(cmol): Switch active keys based on what we see here
 		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
-			epDisco := ep.disco.Load()
-			if epDisco != nil && epDisco.key() == dk {
+			if _, knownKey := ep.checkAndUpdateDiscoKey(dk); knownKey {
 				return derpNodeSrc, true
 			}
 		}
@@ -2521,9 +2519,7 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	// Pings after 1.16.0 contains its node source. See if it maps back.
 	if !dm.NodeKey.IsZero() {
 		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey); ok {
-			epDisco := ep.disco.Load()
-			// TODO(cmol): Switch active keys based on what we see here
-			if epDisco != nil && epDisco.key() == dk {
+			if _, knownKey := ep.checkAndUpdateDiscoKey(dk); !knownKey {
 				return dm.NodeKey, true
 			}
 		}
@@ -3288,7 +3284,11 @@ func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPer
 		ep.nodeAddr = n.Addresses().At(0).Addr()
 	}
 	ep.initFakeUDPAddr()
-	ep.updateDiscoKey(n.DiscoKey())
+	if ep.updateDiscoKey(n.DiscoKey()) {
+		ep.mu.Lock()
+		ep.changedActiveDiscoLocked()
+		ep.mu.Unlock()
+	}
 
 	if debugPeerMap() {
 		c.logEndpointCreated(n)
@@ -4540,7 +4540,11 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
-	ep.updateTSMPDiscoKey(discoKey)
+	if ep.updateTSMPDiscoKey(discoKey) {
+		ep.mu.Lock()
+		ep.changedActiveDiscoLocked()
+		ep.mu.Unlock()
+	}
 	c.peerMap.upsertEndpoint(ep, oldDiscoKey, true)
 	if !oldDiscoKey.IsZero() && !c.peerMap.knownPeerDiscoKey(oldDiscoKey) {
 		delete(c.discoInfo, oldDiscoKey)
