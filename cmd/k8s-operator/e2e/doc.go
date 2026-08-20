@@ -22,6 +22,11 @@
 // the default base image in build_docker.sh is used. If using a real cluster
 // with --build, --registry must also be set.
 //
+// --registry without --build expects the images to already exist in the
+// registry at the tag derived from the current commit, e.g. pushed by an
+// earlier run of tailscale.com/cmd/k8s-operator/e2e/build. That allows one
+// build to be shared by test runs against multiple clusters.
+//
 // To run with minimal dependencies, use:
 //
 // go test -count=1 -v ./cmd/k8s-operator/e2e/ --build --cluster --devcontrol --skip-cleanup
