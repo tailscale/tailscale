@@ -11,6 +11,13 @@
 // * OAuth client secret in TS_API_CLIENT_SECRET env, with at least auth_keys write scope and tag:k8s tag
 // * Default ProxyClass and operator env vars as appropriate to set the desired default proxy images.
 //
+// Instead of TS_API_CLIENT_SECRET, workload identity federation OAuth clients
+// can be used by setting TS_API_CLIENT_ID (federated with GitHub's OIDC
+// issuer, for the harness's API calls from a GitHub Actions job) and
+// TS_OPERATOR_CLIENT_ID (federated with the target cluster's OIDC issuer, for
+// the operator). SECOND_* variants of all three env vars configure the second
+// tailnet the same way.
+//
 // It also supports running against devcontrol, using the --devcontrol flag,
 // which it expects to reach at http://localhost:31544. Use --cluster to create
 // a dedicated kind cluster for the tests, and --build to build and test the
@@ -21,6 +28,11 @@
 // --base-image=registry.access.redhat.com/ubi9/ubi-minimal:latest. Without it,
 // the default base image in build_docker.sh is used. If using a real cluster
 // with --build, --registry must also be set.
+//
+// --registry without --build expects the images to already exist in the
+// registry at the tag derived from the current commit, e.g. pushed by an
+// earlier run of tailscale.com/cmd/k8s-operator/e2e/build. That allows one
+// build to be shared by test runs against multiple clusters.
 //
 // To run with minimal dependencies, use:
 //

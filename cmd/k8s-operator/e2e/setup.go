@@ -6,15 +6,16 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,7 +34,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"go.uber.org/zap"
-	"golang.org/x/oauth2/clientcredentials"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -57,6 +57,7 @@ import (
 	"sigs.k8s.io/kind/pkg/cmd"
 
 	"tailscale.com/client/tailscale/v2"
+	"tailscale.com/cmd/k8s-operator/e2e/internal/build"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	tsoperator "tailscale.com/k8s-operator"
@@ -72,10 +73,6 @@ const (
 	kindClusterName     = "k8s-operator-e2e"
 	testCAsConfigMap    = "test-cas"
 	testCAsConfigMapKey = "test-cas.pem"
-	imgOperator         = "k8s-operator"
-	imgTailscale        = "tailscale"
-	imgProxy            = "k8s-proxy"
-	imgNameserver       = "k8s-nameserver"
 )
 
 var (
@@ -117,7 +114,7 @@ var (
 	fCluster     = flag.Bool("cluster", false, "if true, create or use a pre-existing kind cluster named k8s-operator-e2e; otherwise assume a usable cluster already exists in kubeconfig")
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already set up")
 	fBaseImage   = flag.String("base-image", "", "if set, use this image as the base for all images built by --build, instead of the default base image in build_docker.sh")
-	fRegistry    = flag.String("registry", "", `if set, build and push images instead of loading them into a kind node. Required with --build when testing against a remote cluster.`)
+	fRegistry    = flag.String("registry", "", `if set, use images from this registry instead of loading them into a kind node. With --build, build and push them first; without --build, expect them to be already pushed at the tag derived from the current commit (see tailscale.com/cmd/k8s-operator/e2e/build). Required with --build when testing against a remote cluster.`)
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -127,15 +124,13 @@ func runTests(m *testing.M) (int, error) {
 	defer cancel()
 
 	switch {
-	case *fRegistry != "" && !*fBuild:
-		return 0, fmt.Errorf("--registry requires --build (there is nothing to push otherwise)")
-	case *fBuild && *fCluster && *fRegistry != "":
-		return 0, fmt.Errorf("--build takes --cluster (side-load into the kind node) or --registry (push to a remote), not both")
+	case *fCluster && *fRegistry != "":
+		return 0, fmt.Errorf("--cluster side-loads images into the kind node and doesn't take --registry")
 	case *fBuild && !*fCluster && *fRegistry == "":
 		return 0, fmt.Errorf("--build without --cluster needs --registry to push images to; there is no kind node to side-load into")
 	}
 
-	ossDir, err := gitRootDir()
+	ossDir, err := build.RepoRoot()
 	if err != nil {
 		return 0, err
 	}
@@ -202,8 +197,8 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	var (
-		clientID, clientSecret             string // OAuth client for the first tailnet (for the operator to use).
-		secondClientID, secondClientSecret string // OAuth client for the second tailnet (for the operator to use).
+		operatorCreds       oauthCreds // OAuth client for the first tailnet (for the operator to use).
+		secondOperatorCreds oauthCreds // OAuth client for the second tailnet (for the operator to use).
 
 		caPaths  []string                      // Extra CA cert file paths to add to images.
 		certsDir = filepath.Join(tmp, "certs") // Directory containing extra CA certs to add to images.
@@ -247,17 +242,21 @@ func runTests(m *testing.M) (int, error) {
 			return 0, fmt.Errorf("failed to create certs dir: %w", err)
 		}
 
-		pebbleCAChainPath := filepath.Join(certsDir, "pebble-ca-chain.crt")
-		if err = os.WriteFile(pebbleCAChainPath, pebbleCAChain, 0644); err != nil {
-			return 0, fmt.Errorf("failed to write pebble CA chain: %w", err)
-		}
-
+		// Only the static minica needs baking into images: it verifies
+		// pebble's ACME directory endpoint via the system roots. The
+		// dynamically-generated issuing CA chain above deliberately isn't
+		// baked in — it changes on every pebble restart, images may be built
+		// before pebble exists (see tailscale.com/cmd/k8s-operator/e2e/build),
+		// and clients don't verify pebble-issued certs against roots anyway
+		// because a non-default TS_DEBUG_ACME_DIRECTORY_URL bypasses the
+		// unknown-authority check (see validateLeaf in feature/acme, added in
+		// tailscale/tailscale#15023).
 		pebbleMiniCACertPath := filepath.Join(certsDir, "pebble.minica.crt")
 		if err = os.WriteFile(pebbleMiniCACertPath, pebbleMiniCACert, 0644); err != nil {
 			return 0, fmt.Errorf("failed to write pebble minica: %w", err)
 		}
 
-		caPaths = []string{pebbleCAChainPath, pebbleMiniCACertPath}
+		caPaths = []string{pebbleMiniCACertPath}
 		if !*fSkipCleanup {
 			defer os.RemoveAll(certsDir)
 		}
@@ -299,7 +298,7 @@ func runTests(m *testing.M) (int, error) {
 		// Address cluster workloads can reach devcontrol at. Must be a private
 		// IP to make sure tailscale client code recognises it shouldn't try an
 		// https fallback. See [controlclient.NewNoiseClient] for details.
-		clusterLoginServer = fmt.Sprintf("http://%s:31544", sshServiceIP)
+		clusterLoginServer = "http://" + net.JoinHostPort(sshServiceIP, "31544")
 
 		b, err := os.ReadFile(filepath.Join(tmp, "api-key.json"))
 		if err != nil {
@@ -336,8 +335,10 @@ func runTests(m *testing.M) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to create OAuth client for first tailnet: %w", err)
 		}
-		clientID = key.ID
-		clientSecret = key.Key
+		operatorCreds = oauthCreds{
+			clientID:     key.ID,
+			clientSecret: key.Key,
+		}
 
 		logger.Info("OAuth credentials set for first tailnet")
 
@@ -373,42 +374,24 @@ func runTests(m *testing.M) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to create OAuth client for second tailnet: %w", err)
 		}
-		secondClientID = secondKey.ID
-		secondClientSecret = secondKey.Key
-
-		secondTSClient, err = tailscaleClientFromSecret(ctx, "http://localhost:31544", secondClientID, secondClientSecret)
-		if err != nil {
-			return 0, fmt.Errorf("failed to set up second tailnet client: %w", err)
+		secondOperatorCreds = oauthCreds{
+			clientID:     secondKey.ID,
+			clientSecret: secondKey.Key,
 		}
 
+		secondTSClient = tailscaleClientFromSecret("http://localhost:31544", secondOperatorCreds.clientID, secondOperatorCreds.clientSecret)
 	} else {
 		if ok := testCAs.AppendCertsFromPEM(leStagingRootX1); !ok {
 			return 0, fmt.Errorf("failed to parse Let's Encrypt staging root")
 		}
 		caPEM = appendPEM(caPEM, leStagingRootX1)
-		clientSecret = os.Getenv("TS_API_CLIENT_SECRET")
-		if clientSecret == "" {
-			return 0, fmt.Errorf("must use --devcontrol or set TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
-		}
-		clientID, err = clientIDFromSecret(clientSecret)
+		tsClient, operatorCreds, err = prodTailnetClients("TS_API_CLIENT_SECRET", "TS_API_CLIENT_ID", "TS_OPERATOR_CLIENT_ID")
 		if err != nil {
-			return 0, fmt.Errorf("failed to get client id from secret: %w", err)
+			return 0, fmt.Errorf("failed to set up first tailnet clients: %w", err)
 		}
-		tsClient, err = tailscaleClientFromSecret(ctx, ipn.DefaultControlURL, clientID, clientSecret)
+		secondTSClient, secondOperatorCreds, err = prodTailnetClients("SECOND_TS_API_CLIENT_SECRET", "SECOND_TS_API_CLIENT_ID", "SECOND_TS_OPERATOR_CLIENT_ID")
 		if err != nil {
-			return 0, fmt.Errorf("failed to set up first tailnet client: %w", err)
-		}
-		secondClientSecret = os.Getenv("SECOND_TS_API_CLIENT_SECRET")
-		if secondClientSecret == "" {
-			return 0, fmt.Errorf("must use --devcontrol or set SECOND_TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
-		}
-		secondClientID, err = clientIDFromSecret(secondClientSecret)
-		if err != nil {
-			return 0, fmt.Errorf("failed to get client id from secret: %w", err)
-		}
-		secondTSClient, err = tailscaleClientFromSecret(ctx, ipn.DefaultControlURL, secondClientID, secondClientSecret)
-		if err != nil {
-			return 0, fmt.Errorf("failed to set up second tailnet client: %w", err)
+			return 0, fmt.Errorf("failed to set up second tailnet clients: %w", err)
 		}
 	}
 
@@ -426,67 +409,75 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	var ossTag string
-	if *fBuild {
-		// TODO(tomhjp): proper support for --build=false and layering pebble certs on top of existing images.
-		// TODO(tomhjp): build tsrecorder as well.
-
-		// Build tailscale/k8s-operator, tailscale/tailscale, tailscale/k8s-proxy, tailscale/k8s-nameserver, with pebble CAs added.
-		ossTag, err = tagForRepo(ossDir)
+	if *fBuild || *fRegistry != "" {
+		var dirty bool
+		ossTag, dirty, err = build.Tag(ossDir)
 		if err != nil {
 			return 0, err
 		}
 		logger.Infof("using OSS image tag: %q", ossTag)
+		if !*fBuild && dirty {
+			// Without --build the images must already exist in the registry,
+			// but a dirty tree gets a random tag suffix that nothing has
+			// pushed.
+			return 0, fmt.Errorf("--registry without --build derives the image tag from the current commit, which requires a clean working tree")
+		}
+	}
+	if *fBuild {
+		// TODO(tomhjp): proper support for --build=false and layering pebble certs on top of existing images.
+		// TODO(tomhjp): build tsrecorder as well.
+
 		if *fBaseImage != "" {
 			logger.Infof("using base image: %q", *fBaseImage)
 		}
-		ossImageToTarget := map[string]string{
-			imgOperator:   "publishdevoperator",
-			imgTailscale:  "publishdevimage",
-			imgProxy:      "publishdevproxy",
-			imgNameserver: "publishdevnameserver",
+		opts := build.Opts{
+			Dir:          ossDir,
+			Registry:     *fRegistry,
+			Tag:          ossTag,
+			BaseImage:    *fBaseImage,
+			ExtraCACerts: caPaths,
+			Logf:         logger.Infof,
 		}
-		var nodeArch string
 		if *fRegistry != "" {
-			nodeArch, err = detectNodeArch(ctx, kubeClient)
+			opts.Arch, err = detectNodeArch(ctx, kubeClient)
 			if err != nil {
 				return 0, fmt.Errorf("failed to detect node architecture: %w", err)
 			}
-			logger.Infof("building images for node architecture %q, pushing to %q", nodeArch, *fRegistry)
-		}
-		for img, target := range ossImageToTarget {
-			repo := imageRepo(img)
-			if err := buildImage(ctx, ossDir, repo, target, ossTag, nodeArch, *fBaseImage, caPaths); err != nil {
+			logger.Infof("building images for node architecture %q, pushing to %q", opts.Arch, *fRegistry)
+			if err := build.EnsurePushed(ctx, opts); err != nil {
 				return 0, err
 			}
-			if *fRegistry != "" {
-				// Image was pushed to the registry, nothing to load into kind.
-				continue
-			}
-			nodes, err := kindProvider.ListInternalNodes(kindClusterName)
-			if err != nil {
-				return 0, fmt.Errorf("failed to list kind nodes: %w", err)
-			}
-			// TODO(tomhjp): can be made more efficient and portable if we
-			// stream built image tarballs straight to the node rather than
-			// going via the daemon.
-			imgRef, err := name.ParseReference(fmt.Sprintf("%s:%s", repo, ossTag))
-			if err != nil {
-				return 0, fmt.Errorf("failed to parse image reference: %w", err)
-			}
-			img, err := daemon.Image(imgRef)
-			if err != nil {
-				return 0, fmt.Errorf("failed to get image from daemon: %w", err)
-			}
-			pr, pw := io.Pipe()
-			go func() {
-				defer pw.Close()
-				if err := tarball.Write(imgRef, img, pw); err != nil {
-					logger.Infof("failed to write image to pipe: %v", err)
+		} else {
+			for imgName := range build.Targets {
+				if err := build.Build(ctx, opts, imgName); err != nil {
+					return 0, err
 				}
-			}()
-			for _, n := range nodes {
-				if err := nodeutils.LoadImageArchive(n, pr); err != nil {
-					return 0, fmt.Errorf("failed to load image into node %q: %w", n.String(), err)
+				nodes, err := kindProvider.ListInternalNodes(kindClusterName)
+				if err != nil {
+					return 0, fmt.Errorf("failed to list kind nodes: %w", err)
+				}
+				// TODO(tomhjp): can be made more efficient and portable if we
+				// stream built image tarballs straight to the node rather than
+				// going via the daemon.
+				imgRef, err := name.ParseReference(fmt.Sprintf("%s:%s", build.ImageRepo("", imgName), ossTag))
+				if err != nil {
+					return 0, fmt.Errorf("failed to parse image reference: %w", err)
+				}
+				img, err := daemon.Image(imgRef)
+				if err != nil {
+					return 0, fmt.Errorf("failed to get image from daemon: %w", err)
+				}
+				pr, pw := io.Pipe()
+				go func() {
+					defer pw.Close()
+					if err := tarball.Write(imgRef, img, pw); err != nil {
+						logger.Infof("failed to write image to pipe: %v", err)
+					}
+				}()
+				for _, n := range nodes {
+					if err := nodeutils.LoadImageArchive(n, pr); err != nil {
+						return 0, fmt.Errorf("failed to load image into node %q: %w", n.String(), err)
+					}
 				}
 			}
 		}
@@ -505,25 +496,30 @@ func runTests(m *testing.M) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to load helm chart: %w", err)
 	}
-	// Image repo/tag are left empty unless we built the images (ossTag is set),
-	// so the chart uses the 'stable' defaults.
+	// Image repo/tag are left empty unless we built or were given prebuilt
+	// images (ossTag is set), so the chart uses the 'stable' defaults.
 	var operatorRepo, proxyRepo, imageTag string
 	var extraEnv []map[string]any
 	if ossTag != "" {
-		operatorRepo, proxyRepo, imageTag = imageRepo(imgOperator), imageRepo(imgTailscale), ossTag
-		extraEnv = append(extraEnv, map[string]any{"name": "K8S_PROXY_IMAGE", "value": imageRepo(imgProxy) + ":" + ossTag})
+		operatorRepo, proxyRepo, imageTag = build.ImageRepo(*fRegistry, build.ImgOperator), build.ImageRepo(*fRegistry, build.ImgTailscale), ossTag
+		extraEnv = append(extraEnv, map[string]any{"name": "K8S_PROXY_IMAGE", "value": build.ImageRepo(*fRegistry, build.ImgProxy) + ":" + ossTag})
 	}
 	if *fDevcontrol {
 		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://pebble:14000/dir"})
 	} else {
 		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://acme-staging-v02.api.letsencrypt.org/directory"})
 	}
+	oauthValues := map[string]any{
+		"clientId": operatorCreds.clientID,
+	}
+	if operatorCreds.audience != "" {
+		oauthValues["audience"] = operatorCreds.audience
+	} else {
+		oauthValues["clientSecret"] = operatorCreds.clientSecret
+	}
 	values := map[string]any{
 		"loginServer": clusterLoginServer,
-		"oauth": map[string]any{
-			"clientId":     clientID,
-			"clientSecret": clientSecret,
-		},
+		"oauth":       oauthValues,
 		"apiServerProxyConfig": map[string]any{
 			"mode": "true",
 		},
@@ -567,7 +563,7 @@ func runTests(m *testing.M) (int, error) {
 	// the operator falls back to the default.
 	nameserverImg := &tsapi.NameserverImage{}
 	if ossTag != "" {
-		nameserverImg.Repo = imageRepo(imgNameserver)
+		nameserverImg.Repo = build.ImageRepo(*fRegistry, build.ImgNameserver)
 		nameserverImg.Tag = ossTag
 	}
 	dnsConfig, err := deployNameserver(ctx, logger, kubeClient, nameserverImg)
@@ -626,15 +622,20 @@ func runTests(m *testing.M) (int, error) {
 	defer secondTNClient.Close()
 
 	// Create the tailnet Secret in the tailscale namespace.
+	secretData := map[string][]byte{
+		"client_id": []byte(secondOperatorCreds.clientID),
+	}
+	if secondOperatorCreds.audience != "" {
+		secretData["audience"] = []byte(secondOperatorCreds.audience)
+	} else {
+		secretData["client_secret"] = []byte(secondOperatorCreds.clientSecret)
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "second-tailnet-credentials",
 			Namespace: "tailscale",
 		},
-		Data: map[string][]byte{
-			"client_id":     []byte(secondClientID),
-			"client_secret": []byte(secondClientSecret),
-		},
+		Data: secretData,
 	}
 	if err := createOrUpdate(ctx, kubeClient, secret); err != nil {
 		return 0, fmt.Errorf("failed to create second-tailnet-credentials Secret: %w", err)
@@ -668,6 +669,96 @@ func clientIDFromSecret(clientSecret string) (string, error) {
 		return "", fmt.Errorf("secret is not valid")
 	}
 	return parts[2], nil
+}
+
+// oauthCreds identifies an OAuth client for the operator to authenticate as.
+// Exactly one of clientSecret or audience is set; audience means a workload
+// identity federation client, and the operator mints ServiceAccount tokens
+// for itself to exchange for API tokens.
+type oauthCreds struct {
+	clientID     string
+	clientSecret string
+	audience     string
+}
+
+// prodTailnetClients returns an API client for the harness plus credentials
+// for the operator to use against one prod tailnet. If secretEnv is set, its
+// static OAuth client is used for both, like before workload identity
+// federation support existed. Otherwise clientIDEnv must name a client
+// federated with GitHub's OIDC issuer for the harness, and operatorClientIDEnv
+// one federated with the target cluster's OIDC issuer for the operator.
+func prodTailnetClients(secretEnv, clientIDEnv, operatorClientIDEnv string) (*tailscale.Client, oauthCreds, error) {
+	if secret := os.Getenv(secretEnv); secret != "" {
+		id, err := clientIDFromSecret(secret)
+		if err != nil {
+			return nil, oauthCreds{}, fmt.Errorf("failed to get client id from %s: %w", secretEnv, err)
+		}
+		creds := oauthCreds{
+			clientID:     id,
+			clientSecret: secret,
+		}
+		return tailscaleClientFromSecret(ipn.DefaultControlURL, id, secret), creds, nil
+	}
+
+	clientID := os.Getenv(clientIDEnv)
+	operatorClientID := os.Getenv(operatorClientIDEnv)
+	if clientID == "" || operatorClientID == "" {
+		return nil, oauthCreds{}, fmt.Errorf("must use --devcontrol, or set %s to a static OAuth client secret, or set both %s and %s to workload identity federation OAuth client IDs", secretEnv, clientIDEnv, operatorClientIDEnv)
+	}
+	client := &tailscale.Client{
+		BaseURL: must.Get(url.Parse(ipn.DefaultControlURL)),
+		Auth: &tailscale.IdentityFederation{
+			ClientID:    clientID,
+			IDTokenFunc: githubIDToken(audienceForClient(clientID)),
+		},
+	}
+	creds := oauthCreds{
+		clientID: operatorClientID,
+		audience: audienceForClient(operatorClientID),
+	}
+	return client, creds, nil
+}
+
+// audienceForClient returns the audience Tailscale generates for a workload
+// identity federation OAuth client.
+// See https://tailscale.com/kb/1581/workload-identity-federation.
+func audienceForClient(clientID string) string {
+	return "api.tailscale.com/" + clientID
+}
+
+// githubIDToken returns a function that fetches an OIDC ID token from the
+// ambient GitHub Actions environment, which requires the job to have the
+// id-token: write permission.
+// See https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect.
+func githubIDToken(audience string) func() (string, error) {
+	return func() (string, error) {
+		reqURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+		reqToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+		if reqURL == "" || reqToken == "" {
+			return "", errors.New("ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN must be set; GitHub OIDC tokens are only available in GitHub Actions jobs with the id-token: write permission")
+		}
+		req, err := http.NewRequest("GET", reqURL+"&audience="+url.QueryEscape(audience), nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+reqToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch GitHub OIDC token: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return "", fmt.Errorf("GitHub OIDC token request failed with status %d: %s", resp.StatusCode, b)
+		}
+		var token struct {
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+			return "", fmt.Errorf("failed to decode GitHub OIDC token response: %w", err)
+		}
+		return token.Value, nil
+	}
 }
 
 func upgraderOrInstaller(cfg *action.Configuration, releaseName string) helmInstallerFunc {
@@ -704,39 +795,6 @@ func helmInstaller(cfg *action.Configuration, releaseName string) helmInstallerF
 }
 
 type helmInstallerFunc func(context.Context, string, *chart.Chart, map[string]any) (*release.Release, error)
-
-// gitRootDir returns the top-level directory of the current git repo. Expects
-// to be run from inside a git repo.
-func gitRootDir() (string, error) {
-	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to find git top level (not in corp git?): %w", err)
-	}
-	return strings.TrimSpace(string(top)), nil
-}
-
-func tagForRepo(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get latest git tag for repo %q: %w", dir, err)
-	}
-	tag := strings.TrimSpace(string(out))
-
-	// If dirty, append an extra random tag to ensure unique image tags.
-	cmd = exec.Command("git", "status", "--porcelain")
-	cmd.Dir = dir
-	out, err = cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to check git status for repo %q: %w", dir, err)
-	}
-	if strings.TrimSpace(string(out)) != "" {
-		tag += "-" + strings.ToLower(rand.Text())
-	}
-
-	return tag, nil
-}
 
 func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	var env []tsapi.Env
@@ -1027,51 +1085,6 @@ func pebbleGet(ctx context.Context, port uint16, path string) ([]byte, error) {
 	return b, nil
 }
 
-func buildImage(ctx context.Context, dir, repo, target, tag, arch, baseImage string, extraCACerts []string) error {
-	var files []string
-	for _, f := range extraCACerts {
-		files = append(files, fmt.Sprintf("%s:/etc/ssl/certs/%s", f, filepath.Base(f)))
-	}
-	// Build only for the specified platform (to reduce build time),
-	// otherwise default to build all platforms.
-	var platform string
-	switch arch {
-	case "":
-		platform = "local"
-	case "amd64":
-		platform = "flyio"
-	default:
-		platform = ""
-	}
-	args := []string{target,
-		fmt.Sprintf("PLATFORM=%s", platform),
-		fmt.Sprintf("TAGS=%s", tag),
-		fmt.Sprintf("REPO=%s", repo),
-		fmt.Sprintf("FILES=%s", strings.Join(files, ",")),
-	}
-	if baseImage != "" {
-		// make exports command line variables to recipes, so this reaches
-		// build_docker.sh as the BASE env var.
-		args = append(args, fmt.Sprintf("BASE=%s", baseImage))
-	}
-	cmd := exec.CommandContext(ctx, "make", args...)
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to build image %q: %w", target, err)
-	}
-
-	return nil
-}
-
-func imageRepo(name string) string {
-	if *fRegistry != "" {
-		return strings.TrimSuffix(*fRegistry, "/") + "/" + name
-	}
-	return "local/" + name
-}
-
 // detectNodeArch returns the CPU architecture of the cluster's nodes.
 // It uses the first node found. Mixed-architecture clusters are not
 // supported.
@@ -1172,24 +1185,17 @@ func createTailnet(ctx context.Context, tsClient *tailscale.Client) (*tailscale.
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
-	return tailscaleClientFromSecret(ctx, tsClient.BaseURL.String(), result.OauthClient.ID, result.OauthClient.Secret)
+	return tailscaleClientFromSecret(tsClient.BaseURL.String(), result.OauthClient.ID, result.OauthClient.Secret), nil
 }
 
-// tailscaleClientFromSecret exchanges OAuth client credentials for an access token and
-// returns a tailscale.Client configured to use it. The token is valid for
-// one hour, which is sufficient for the tests to run. No need for refresh logic.
-func tailscaleClientFromSecret(ctx context.Context, baseURL, clientID, clientSecret string) (*tailscale.Client, error) {
-	cfg := clientcredentials.Config{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		TokenURL:     fmt.Sprintf("%s/api/v2/oauth/token", baseURL),
-	}
-	tk, err := cfg.Token(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OAuth token for client %q: %w", clientID, err)
-	}
+// tailscaleClientFromSecret returns a tailscale.Client that authenticates
+// with OAuth client credentials, exchanging them for access tokens on demand.
+func tailscaleClientFromSecret(baseURL, clientID, clientSecret string) *tailscale.Client {
 	return &tailscale.Client{
-		APIKey:  tk.AccessToken,
 		BaseURL: must.Get(url.Parse(baseURL)),
-	}, nil
+		Auth: &tailscale.OAuth{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+		},
+	}
 }
