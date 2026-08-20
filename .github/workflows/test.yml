@@ -264,7 +264,8 @@ jobs:
       shell: bash
       if: matrix.key != 'win-bench' # skip on bench builder
       working-directory: src
-      run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }}
+      # -count=1: a cached pass is never retried, so flakes can't be reported.
+      run: ./tool/go run ./cmd/testwrapper sharded:${{ matrix.shard }} -count=1
       env:
         NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
         TS_TESTWRAPPER_RESULTS_SUMMARY: "1"
@@ -957,16 +958,34 @@ jobs:
         # head.ref is untrusted on fork PRs; keep it in env and encode via jq --arg, never run: text.
         HEAD_REF: ${{ github.event.pull_request.head.ref }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Non-bench legs of the windows matrix; a missing artifact means a shard never reported.
+        EXPECTED_SHARDS: "2"
       run: |
-        rows=$(find results -name windows-integration-results.json -print0 \
-          | xargs -0 jq -s 'add // []' 2>/dev/null || echo '[]')
+        # Read each artifact separately so one unreadable file can't discard the others.
+        rows='[]'; unreadable=0; reported=0
+        while IFS= read -r -d '' f; do
+          reported=$((reported + 1))
+          [ -s "$f" ] || continue
+          case "$(jq -r 'type' "$f" 2>/dev/null)" in
+            array) rows=$(printf '%s\n%s' "$rows" "$(jq -c . "$f")" | jq -s 'add') ;;
+            null)  ;; # shard ran none of the filtered package
+            *)     unreadable=$((unreadable + 1)) ;;
+          esac
+        done < <(find results -name windows-integration-results.json -print0 2>/dev/null)
+        # Dedupe so a re-shard reporting a test twice can't double every count.
+        rows=$(printf '%s' "$rows" | jq '[ .[] | objects ] | unique_by([.Package, .Test])')
         count() { printf '%s' "$rows" | jq "[ (. // [])[] | select(.Outcome == \"$1\") ] | length"; }
-        passed=$(( $(count pass) + $(count retried) ))
+        retried=$(count retried)
+        passed=$(( $(count pass) + retried ))
         failed=$(count fail)
         skipped=$(count skip)
-        total=$((passed + failed + skipped))
         executed=$((passed + failed))
         if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
+        # Names behind the retried count, capped so one bad run can't flood the message.
+        flaky=$(printf '%s' "$rows" | jq -r '
+          [ .[] | select(.Outcome == "retried") | (.Package | sub("^tailscale\\.com/"; "")) + "." + .Test ]
+          | sort
+          | if length > 5 then (.[:5] | join(", ")) + ", and \(length - 5) more" else join(", ") end')
 
         case "$WINDOWS_RESULT" in
           success)   emoji=":white_check_mark:"; color="good" ;;
@@ -976,13 +995,32 @@ jobs:
           *)         emoji=":question:";         color="warning" ;;
         esac
 
-        integration="${passed} passed, ${failed} failed, ${skipped} skipped (${pct}%)"
-        if { [ "$WINDOWS_RESULT" = "failure" ] && [ "$failed" -eq 0 ]; } || [ "$total" -eq 0 ]; then
-          int_emoji=":warning:"; integration="${integration} — results may be partial (build error or timeout)"
-        elif [ "$failed" -gt 0 ]; then int_emoji=":x:"; else int_emoji=":white_check_mark:"; fi
+        integration="${passed} passed, ${failed} failed, ${skipped} skipped"
+        if [ "$executed" -gt 0 ]; then
+          integration="${integration} (${pct}%)"
+        fi
+        # Anything that makes the numbers incomplete or overstated is said out loud.
+        caveats=""
+        if [ "$unreadable" -gt 0 ]; then
+          caveats="${caveats} — ${unreadable} shard artifact(s) unreadable"
+        fi
+        if [ "$reported" -lt "$EXPECTED_SHARDS" ]; then
+          caveats="${caveats} — only ${reported} of ${EXPECTED_SHARDS} shards reported"
+        fi
+        # Retries get their own line below, so they don't warn the count line.
+        if [ "$executed" -eq 0 ]; then
+          caveats="${caveats} — no tests executed"
+        fi
+        if [ "$WINDOWS_RESULT" = "failure" ] && [ "$failed" -eq 0 ]; then
+          caveats="${caveats} — results may be partial (build error or timeout)"
+        fi
+        integration="${integration}${caveats}"
+        if [ "$failed" -gt 0 ]; then int_emoji=":x:"
+        elif [ -n "$caveats" ]; then int_emoji=":warning:"
+        else int_emoji=":white_check_mark:"; fi
 
         jq -n --arg emoji "$emoji" --arg status "$WINDOWS_RESULT" --arg int_emoji "$int_emoji" \
-          --arg integration "$integration" \
+          --arg integration "$integration" --arg flaky "$flaky" --arg retried "$retried" \
           --arg branch "$HEAD_REF" --arg title "$PR_TITLE" --arg pr_url "$PR_URL" --arg pr_number "$PR_NUMBER" \
           --arg color "$color" --arg run_url "$RUN_URL" \
           '{attachments: [{
@@ -992,6 +1030,7 @@ jobs:
               "<" + $pr_url + "|PR #" + $pr_number + "> · `" + $branch + "`"
               + "\n\n" + $emoji + " Windows CI: " + $status
               + "\n" + $int_emoji + " Windows Integration Tests: " + $integration
+              + (if $flaky == "" then "" else "\n    ↳ :warning: Flaky Tests (" + $retried + " passed on retry): " + $flaky end)
               + "\n\n<" + $run_url + "|View run details>"
             ),
             color: $color,
