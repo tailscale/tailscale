@@ -85,6 +85,7 @@ type endpoint struct {
 	bestAddr           addrQuality // best non-DERP path; zero if none; mutate via setBestAddrLocked()
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
+	bestAddrConfirmed  bool        // whether non-disco traffic has arrived over bestAddr since it was installed; while false, sends are mirrored to DERP
 	sentPing           map[stun.TxID]sentPing
 	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
 	isCallMeMaybeEP    map[netip.AddrPort]bool
@@ -132,6 +133,14 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
+
+		// No data has yet come back over this path carrying real traffic.
+		// Until it proves itself we keep mirroring to DERP.
+		// Cleared by [endpoint.noteRecvActivity].
+		//
+		// The first direct path of a session is exempt, to avoid duplicating
+		// WireGuard handshake and breaking session establishment.
+		de.bestAddrConfirmed = !de.bestAddr.ap.IsValid()
 
 		// Reaching here, if we are upgrading from an invalid (missing) address
 		// to a valid one, record metrics:
@@ -529,8 +538,15 @@ func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
 		// kick off discovery disco pings every trustUDPAddrDuration and mirror
 		// to DERP.
 		de.mu.Lock()
-		if de.heartbeatDisabled && de.bestAddr.epAddr == src {
-			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		if de.bestAddr.epAddr == src {
+			// Non-disco traffic has arrived over bestAddr. Disco is dispatched
+			// before this point (see [Conn.receiveIP]), so this is real data
+			// and the path is carrying packets in both directions. Retire the
+			// DERP hedge. See [endpoint.setBestAddrLocked].
+			de.bestAddrConfirmed = true
+			if de.heartbeatDisabled {
+				de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+			}
 		}
 		de.mu.Unlock()
 	}
@@ -578,6 +594,12 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr n
 	udpAddr = de.bestAddr.epAddr
 
 	if udpAddr.ap.IsValid() && !now.After(de.trustBestAddrUntil) {
+		if !de.bestAddrConfirmed && !de.isWireguardOnly {
+			// bestAddr is trusted on the strength of a disco pong alone and
+			// has not yet returned any non-disco traffic. Send to it, but keep
+			// the DERP hedge up until it does. See [endpoint.setBestAddrLocked].
+			return udpAddr, de.derpAddr, false
+		}
 		return udpAddr, netip.AddrPort{}, false
 	}
 
@@ -2032,7 +2054,12 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.LastWrite = de.lastSendExt.WallTime()
 	ps.Active = now.Sub(de.lastSendExt) < sessionActiveTimeout
 
-	if udpAddr, derpAddr, _ := de.addrForSendLocked(now); udpAddr.ap.IsValid() && !derpAddr.IsValid() {
+	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
+	// An unconfirmed path (see [endpoint.setBestAddrLocked]) is still trusted.
+	// DERP mirrors it, while it remains the current address.
+	// An untrusted bestAddr does not.
+	trusted := !now.After(de.trustBestAddrUntil)
+	if udpAddr.ap.IsValid() && (!derpAddr.IsValid() || trusted) {
 		if udpAddr.vni.IsSet() {
 			ps.PeerRelay = udpAddr.String()
 		} else {
