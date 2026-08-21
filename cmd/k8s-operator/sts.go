@@ -1295,6 +1295,12 @@ func nameForService(svc *corev1.Service) string {
 	return svc.Namespace + "-" + svc.Name
 }
 
+// markedForDeletion reports whether obj has a deletion timestamp, i.e. the API server is waiting on finalizers
+// before it can garbage collect it.
+func markedForDeletion(obj metav1.Object) bool {
+	return !obj.GetDeletionTimestamp().IsZero()
+}
+
 // proxyClassForObject returns the proxy class for the given object. If the
 // object does not have a proxy class label, it returns the default proxy class
 func proxyClassForObject(o client.Object, proxyDefaultClass string) string {

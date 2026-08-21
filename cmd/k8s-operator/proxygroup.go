@@ -1204,7 +1204,7 @@ func getNodeMetadata(ctx context.Context, pg *tsapi.ProxyGroup, cl client.Client
 			stateSecret: &secret,
 		}
 
-		prefs, ok, err := getDevicePrefs(&secret)
+		prefs, ok, err := tailscaled.PrefsFromStateSecret(&secret)
 		if err != nil {
 			return nil, err
 		}

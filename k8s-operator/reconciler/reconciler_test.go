@@ -6,6 +6,8 @@
 package reconciler_test
 
 import (
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"testing"
@@ -138,6 +140,37 @@ func TestEnqueueForChild(t *testing.T) {
 			obj := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Labels: tc.labels}}
 			got := enqueue(t.Context(), obj)
 			if !slices.Equal(got, tc.want) {
+				t.Errorf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestIsOptimisticLockError(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil": {},
+		"conflict": {
+			err:  errors.New("Operation cannot be fulfilled on secrets \"test\": the object has been modified; please apply your changes to the latest version and try again"),
+			want: true,
+		},
+		"unrelated": {
+			err: errors.New("secrets \"test\" not found"),
+		},
+		"wrapped-conflict": {
+			err:  fmt.Errorf("failed to update Secret: %w", errors.New("the object has been modified; please apply your changes to the latest version and try again")),
+			want: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := reconciler.IsOptimisticLockError(tc.err); got != tc.want {
 				t.Errorf("expected %v, got %v", tc.want, got)
 			}
 		})

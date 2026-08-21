@@ -44,6 +44,9 @@ import (
 
 const (
 	vipTestIP = "5.6.7.8"
+
+	// tsNamespace is the namespace the operator is installed in for tests that don't override it.
+	tsNamespace = "tailscale"
 )
 
 // confgOpts contains configuration options for creating cluster resources for
