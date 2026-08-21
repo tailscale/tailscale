@@ -76,6 +76,30 @@ jobs:
           key: ${{ steps.hash.outputs.key }}
           enableCrossOsArchive: true
 
+  apidiff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    needs: gomod-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: src
+      - name: Checkout base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - name: Restore Go module cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: gomodcache
+          key: ${{ needs.gomod-cache.outputs.cache-key }}
+          enableCrossOsArchive: true
+      - name: Check stable APIs
+        working-directory: src
+        run: PATH="$PWD/tool:$PATH" ./tool/go run ./tool/apidiff -base ../base
+
   race-root-integration:
     runs-on: ubuntu-24.04
     needs: gomod-cache
