@@ -512,12 +512,13 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	ingressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(ingressSvcFromEps(mgr.GetClient(), opts.log.Named("service-pg-reconciler")))
+	servicesProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(servicesFromIngressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}, builder.WithPredicates(serviceManagedResourceFilterPredicate())).
 		Named("service-pg-reconciler").
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(HAServicesFromSecret(mgr.GetClient(), startlog))).
-		Watches(&tsapi.ProxyGroup{}, ingressProxyGroupFilter).
+		Watches(&tsapi.ProxyGroup{}, servicesProxyGroupFilter).
 		Watches(&discoveryv1.EndpointSlice{}, ingressSvcFromEpsFilter).
 		Complete(&HAServiceReconciler{
 			recorder:    eventRecorder,
@@ -1573,6 +1574,37 @@ func ingressesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 		}
 		reqs := make([]reconcile.Request, 0)
 		for _, svc := range ingList.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: svc.Namespace,
+					Name:      svc.Name,
+				},
+			})
+		}
+		return reqs
+	}
+}
+
+// servicesFromIngressProxyGroup is an event handler for ingress ProxyGroups. It returns reconcile requests for all
+// user-created Services that should be exposed on this ProxyGroup.
+func servicesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		pg, ok := o.(*tsapi.ProxyGroup)
+		if !ok {
+			logger.Warn("ProxyGroup handler triggered for an object that is not a ProxyGroup")
+			return nil
+		}
+
+		if pg.Spec.Type != tsapi.ProxyGroupTypeIngress {
+			return nil
+		}
+		svcList := &corev1.ServiceList{}
+		if err := cl.List(ctx, svcList, client.MatchingFields{indexIngressProxyGroup: pg.Name}); err != nil {
+			logger.Infof("error listing Services: %v, skipping a reconcile for event on ProxyGroup %s", err, pg.Name)
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0)
+		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Namespace: svc.Namespace,
