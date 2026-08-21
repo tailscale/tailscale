@@ -2095,6 +2095,58 @@ func TestIgnorePGService(t *testing.T) {
 	findNoGenName(t, fc, "default", "test", "svc")
 }
 
+// Regression test: the service-pg-reconciler used to watch ProxyGroups with
+// ingressesFromIngressProxyGroup, which lists Ingresses and returns Ingress
+// keys. Fed to the Service reconciler those keys never match a Service, so a
+// ProxyGroup becoming Available did not re-enqueue the HA Services waiting on
+// it and provisioning only happened on the next operator restart (full
+// re-list).
+func Test_servicesFromIngressProxyGroup(t *testing.T) {
+	ingressPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingress-pg"},
+		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeIngress},
+	}
+	egressPG := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "egress-pg"},
+		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress},
+	}
+	svcForIngressPG := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "svc-1",
+			Namespace:   "ns-1",
+			Annotations: map[string]string{AnnotationProxyGroup: "ingress-pg"},
+		},
+	}
+	svcForOtherPG := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "svc-2",
+			Namespace:   "ns-2",
+			Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(svcForIngressPG, svcForOtherPG).
+		WithIndex(new(corev1.Service), indexIngressProxyGroup, indexPGIngresses).
+		Build()
+	zl := zap.Must(zap.NewDevelopment())
+	h := servicesFromIngressProxyGroup(fc, zl.Sugar())
+
+	// An event on an ingress ProxyGroup enqueues only the Services that are
+	// annotated for it.
+	gotReqs := h(t.Context(), ingressPG)
+	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "svc-1"}}}
+	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
+		t.Errorf("servicesFromIngressProxyGroup(ingress-pg) mismatch (-got +want):\n%s", diff)
+	}
+
+	// An egress ProxyGroup is handled by a different reconciler and must not
+	// enqueue anything here.
+	if gotReqs := h(t.Context(), egressPG); len(gotReqs) != 0 {
+		t.Errorf("servicesFromIngressProxyGroup(egress-pg) = %v, want none", gotReqs)
+	}
+}
+
 func toFQDN(t *testing.T, s string) dnsname.FQDN {
 	t.Helper()
 	fqdn, err := dnsname.ToFQDN(s)
