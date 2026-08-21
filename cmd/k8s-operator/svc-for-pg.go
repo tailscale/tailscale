@@ -232,10 +232,17 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		tags = strings.Split(tstr, ",")
 	}
 
+	ports := []string{"do-not-validate"}
+	if _, ok := serviceProxyProtocolVersion(svc); ok {
+		ports = make([]string, 0, len(svc.Spec.Ports))
+		for _, port := range svc.Spec.Ports {
+			ports = append(ports, fmt.Sprintf("tcp:%d", port.Port))
+		}
+	}
 	tsSvc := tailscale.VIPService{
 		Name:        serviceName.String(),
 		Tags:        tags,
-		Ports:       []string{"do-not-validate"}, // we don't want to validate ports
+		Ports:       ports,
 		Comment:     managedTSServiceComment,
 		Annotations: updatedAnnotations,
 	}
@@ -248,6 +255,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	// with the same generation number has been reconciled ~more than N times and stop attempting to apply updates.
 	if existingTSSvc == nil ||
 		!reflect.DeepEqual(tsSvc.Tags, existingTSSvc.Tags) ||
+		!reflect.DeepEqual(tsSvc.Ports, existingTSSvc.Ports) ||
 		!ownersAreSetAndEqual(tsSvc, *existingTSSvc) {
 		logger.Infof("Ensuring Tailscale Service exists and is up to date")
 		if err = tsClient.VIPServices().CreateOrUpdate(ctx, tsSvc); err != nil {
@@ -312,14 +320,43 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 	}
 
-	existingCfg := cfgs[serviceName.String()]
-	if !reflect.DeepEqual(existingCfg, cfg) {
-		mak.Set(&cfgs, serviceName.String(), cfg)
+	serveCfg, err := serveConfigFromConfigMap(cm)
+	if err != nil {
+		return false, err
+	}
+	proxyProtocol, useProxyProtocol := serviceProxyProtocolVersion(svc)
+	configChanged := false
+	if useProxyProtocol {
+		if _, ok := cfgs[serviceName.String()]; ok {
+			delete(cfgs, serviceName.String())
+			configChanged = true
+		}
+		desired := serviceProxyServeConfig(svc, proxyProtocol, serviceName).Services[serviceName]
+		if !reflect.DeepEqual(serveCfg.Services[serviceName], desired) {
+			mak.Set(&serveCfg.Services, serviceName, desired)
+			configChanged = true
+		}
+	} else {
+		if !reflect.DeepEqual(cfgs[serviceName.String()], cfg) {
+			mak.Set(&cfgs, serviceName.String(), cfg)
+			configChanged = true
+		}
+		if serviceConfigIsTCPForward(serveCfg.Services[serviceName]) {
+			delete(serveCfg.Services, serviceName)
+			configChanged = true
+		}
+	}
+	if configChanged {
 		cfgBytes, err := json.Marshal(cfgs)
 		if err != nil {
 			return false, fmt.Errorf("error marshaling ingress config: %w", err)
 		}
 		mak.Set(&cm.BinaryData, ingressservices.IngressConfigKey, cfgBytes)
+		serveCfgBytes, err := json.Marshal(serveCfg)
+		if err != nil {
+			return false, fmt.Errorf("error marshaling serve config: %w", err)
+		}
+		mak.Set(&cm.BinaryData, serveConfigKey, serveCfgBytes)
 		if err := r.Update(ctx, cm); err != nil {
 			return false, fmt.Errorf("error updating ingress config: %w", err)
 		}
@@ -328,7 +365,11 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 	logger.Infof("updating AdvertiseServices config")
 	// 4. Update tailscaled's AdvertiseServices config, which should add the Tailscale Service
 	// IPs to the ProxyGroup Pods' AllowedIPs in the next netmap update if approved.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, svc, pg.Name, serviceName, &cfg, true, logger); err != nil {
+	var routeCfg *ingressservices.Config
+	if !useProxyProtocol {
+		routeCfg = &cfg
+	}
+	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, svc, pg.Name, serviceName, routeCfg, true, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
 	}
 
@@ -413,13 +454,25 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	if cm == nil || cfgs == nil {
 		return true, nil
 	}
+	serveCfg, err := serveConfigFromConfigMap(cm)
+	if err != nil {
+		return false, err
+	}
 	logger.Infof("Removing Tailscale Service %q from ingress config for ProxyGroup %q", hostname, pgName)
 	delete(cfgs, serviceName.String())
+	if serviceConfigIsTCPForward(serveCfg.Services[serviceName]) {
+		delete(serveCfg.Services, serviceName)
+	}
 	cfgBytes, err := json.Marshal(cfgs)
 	if err != nil {
 		return false, fmt.Errorf("error marshaling ingress config: %w", err)
 	}
 	mak.Set(&cm.BinaryData, ingressservices.IngressConfigKey, cfgBytes)
+	serveCfgBytes, err := json.Marshal(serveCfg)
+	if err != nil {
+		return false, fmt.Errorf("error marshaling serve config: %w", err)
+	}
+	mak.Set(&cm.BinaryData, serveConfigKey, serveCfgBytes)
 	return true, r.Update(ctx, cm)
 }
 
@@ -436,8 +489,25 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 		return false, fmt.Errorf("failed to find Services for ProxyGroup %q: %w", proxyGroupName, err)
 	}
 
-	ingressConfigChanged := false
-	for tsSvcName, cfg := range config {
+	if cm == nil {
+		return false, nil
+	}
+	serveCfg, err := serveConfigFromConfigMap(cm)
+	if err != nil {
+		return false, err
+	}
+	serviceNames := make(map[string]bool)
+	for tsSvcName := range config {
+		serviceNames[tsSvcName] = true
+	}
+	for serviceName, serviceCfg := range serveCfg.Services {
+		if serviceConfigIsTCPForward(serviceCfg) {
+			serviceNames[serviceName.String()] = true
+		}
+	}
+
+	configChanged := false
+	for tsSvcName := range serviceNames {
 		found := false
 		for _, svc := range svcList.Items {
 			if strings.EqualFold(fmt.Sprintf("svc:%s", nameForService(&svc)), tsSvcName) {
@@ -448,37 +518,74 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 		if !found {
 			logger.Infof("Tailscale Service %q is not owned by any Service, cleaning up", tsSvcName)
 
-			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, nil, proxyGroupName, tailcfg.ServiceName(tsSvcName), &cfg, false, logger); err != nil {
+			// Make sure the Tailscale Service is not advertised in tailscaled.
+			var routeCfg *ingressservices.Config
+			if cfg, ok := config[tsSvcName]; ok {
+				routeCfg = &cfg
+			}
+			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, nil, proxyGroupName, tailcfg.ServiceName(tsSvcName), routeCfg, false, logger); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 
-			svcsChanged, err = cleanupTailscaleService(ctx, tsClient, tsSvcName, r.operatorID, logger)
+			changed, err := cleanupTailscaleService(ctx, tsClient, tsSvcName, r.operatorID, logger)
 			if err != nil {
 				return false, fmt.Errorf("deleting Tailscale Service %q: %w", tsSvcName, err)
 			}
+			svcsChanged = svcsChanged || changed
 
-			_, ok := config[tsSvcName]
-			if ok {
-				logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
+			if _, ok := config[tsSvcName]; ok {
+				logger.Infof("Removing Tailscale Service %q from ingress config", tsSvcName)
 				delete(config, tsSvcName)
-				ingressConfigChanged = true
+				configChanged = true
+			}
+			serviceName := tailcfg.ServiceName(tsSvcName)
+			if serviceConfigIsTCPForward(serveCfg.Services[serviceName]) {
+				logger.Infof("Removing Tailscale Service %q from serve config", tsSvcName)
+				delete(serveCfg.Services, serviceName)
+				configChanged = true
 			}
 		}
 	}
 
-	if ingressConfigChanged {
+	if configChanged {
 		configBytes, err := json.Marshal(config)
 		if err != nil {
 			return false, fmt.Errorf("marshaling serve config: %w", err)
 		}
 		mak.Set(&cm.BinaryData, ingressservices.IngressConfigKey, configBytes)
+		serveCfgBytes, err := json.Marshal(serveCfg)
+		if err != nil {
+			return false, fmt.Errorf("marshaling serve config: %w", err)
+		}
+		mak.Set(&cm.BinaryData, serveConfigKey, serveCfgBytes)
 		if err := r.Update(ctx, cm); err != nil {
-			return false, fmt.Errorf("updating serve config: %w", err)
+			return false, fmt.Errorf("updating ingress config: %w", err)
 		}
 	}
 
 	return svcsChanged, nil
+}
+
+func serveConfigFromConfigMap(cm *corev1.ConfigMap) (*ipn.ServeConfig, error) {
+	cfg := new(ipn.ServeConfig)
+	if data := cm.BinaryData[serveConfigKey]; len(data) != 0 {
+		if err := json.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("error unmarshaling ingress serve config %v: %w", data, err)
+		}
+	}
+	return cfg, nil
+}
+
+func serviceConfigIsTCPForward(cfg *ipn.ServiceConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, handler := range cfg.TCP {
+		if handler != nil && handler.TCPForward != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
@@ -676,13 +783,15 @@ func (r *HAServiceReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 					logger.Warnf("unable to determine replica name from config Secret name %q, unable to determine if backend routing has been configured", secret.Name)
 					return nil
 				}
-				ready, err := r.backendRoutesSetup(ctx, serviceName.String(), replicaName, cfg, logger)
-				if err != nil {
-					return fmt.Errorf("error checking backend routes: %w", err)
-				}
-				if !ready {
-					logger.Debugf("service %q is not ready to be advertised", serviceName)
-					continue
+				if cfg != nil {
+					ready, err := r.backendRoutesSetup(ctx, serviceName.String(), replicaName, cfg, logger)
+					if err != nil {
+						return fmt.Errorf("error checking backend routes: %w", err)
+					}
+					if !ready {
+						logger.Debugf("service %q is not ready to be advertised", serviceName)
+						continue
+					}
 				}
 
 				conf.AdvertiseServices = append(conf.AdvertiseServices, serviceName.String())
