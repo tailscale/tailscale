@@ -8,20 +8,121 @@ package main
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/ipn"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstest"
 )
+
+func TestServiceProxyProtocol(t *testing.T) {
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithStatusSubresource(new(corev1.Service)).
+		Build()
+	zl := zap.Must(zap.NewDevelopment())
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(new(fakeTSClient)),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zl.Sugar(),
+		clock:    tstest.NewClock(tstest.ClockOpts{}),
+		recorder: record.NewFakeRecorder(10),
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationProxyProtocol: "2",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: new("tailscale"),
+			Ports: []corev1.ServicePort{{
+				Port:     49152,
+				Protocol: corev1.ProtocolTCP,
+			}},
+		},
+	}
+	mustCreate(t, fc, svc)
+	expectReconciled(t, sr, svc.Namespace, svc.Name)
+
+	serveConfig := new(ipn.ServeConfig)
+	serveConfig.SetTCPForwarding(49152, "10.20.30.40:49152", false, 2, "")
+	fullName, shortName := findGenName(t, fc, svc.Namespace, svc.Name, "svc")
+	opts := configOpts{
+		replicas:    new(int32(1)),
+		stsName:     shortName,
+		secretName:  fullName,
+		namespace:   svc.Namespace,
+		parentType:  "svc",
+		hostname:    "default-test",
+		serveConfig: serveConfig,
+		app:         kubetypes.AppIngressProxy,
+	}
+	expectEqual(t, fc, expectedSecret(t, fc, opts))
+	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
+	expectEqual(t, fc, expectedSTSUserspace(t, fc, opts), removeResourceReqs)
+}
+
+func TestValidateServiceProxyProtocol(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		value     string
+		ports     []corev1.ServicePort
+		tailnetIP string
+		want      string
+	}{
+		{name: "version 1", value: "1", ports: []corev1.ServicePort{{Port: 80, Protocol: corev1.ProtocolTCP}}},
+		{name: "version 2", value: "2", ports: []corev1.ServicePort{{Port: 80, Protocol: corev1.ProtocolTCP}}},
+		{name: "invalid version", value: "3", ports: []corev1.ServicePort{{Port: 80, Protocol: corev1.ProtocolTCP}}, want: "must be either"},
+		{name: "no ports", value: "1", want: "requires at least one"},
+		{name: "UDP", value: "1", ports: []corev1.ServicePort{{Port: 53, Protocol: corev1.ProtocolUDP}}, want: "only supported for TCP"},
+		{name: "egress", value: "1", ports: []corev1.ServicePort{{Port: 80, Protocol: corev1.ProtocolTCP}}, tailnetIP: "100.64.0.1", want: "only supported for ingress"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			annotations := map[string]string{AnnotationProxyProtocol: tt.value}
+			if tt.tailnetIP != "" {
+				annotations[AnnotationTailnetTargetIP] = tt.tailnetIP
+			}
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default", Annotations: annotations},
+				Spec: corev1.ServiceSpec{
+					ClusterIP: "10.20.30.40",
+					Ports:     tt.ports,
+				},
+			}
+			violations := strings.Join(validateService(svc), " ")
+			if tt.want == "" && violations != "" {
+				t.Fatalf("unexpected validation errors: %s", violations)
+			}
+			if tt.want != "" && !strings.Contains(violations, tt.want) {
+				t.Fatalf("validation errors %q do not contain %q", violations, tt.want)
+			}
+		})
+	}
+}
 
 func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
 	pc := &tsapi.ProxyClass{
