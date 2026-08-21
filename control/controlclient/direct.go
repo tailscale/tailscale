@@ -1303,6 +1303,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), mapResIdx)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
+			// If the read failed because the poll's context was
+			// canceled, report that instead of the underlying
+			// transport error. Which error the transport returns for
+			// a read interrupted by cancellation varies by transport
+			// and Go version (Go 1.27's http2 returns the underlying
+			// "use of closed network connection" where earlier
+			// versions returned the context error).
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
 			vlogf("netmap: size read error after %v: %v", time.Since(t0).Round(time.Millisecond), err)
 			return err
 		}
@@ -1310,6 +1320,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		vlogf("netmap: read size %v after %v", size, time.Since(t0).Round(time.Millisecond))
 		msg = append(msg[:0], make([]byte, size)...)
 		if _, err := io.ReadFull(res.Body, msg); err != nil {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
 			vlogf("netmap: body read error: %v", err)
 			return err
 		}
