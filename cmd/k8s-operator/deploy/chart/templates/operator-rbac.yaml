@@ -94,7 +94,7 @@ rules:
   verbs: ["create","delete","deletecollection","get","list","patch","update","watch"]
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]
-  verbs: ["get", "list", "watch", "create", "update", "deletecollection"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "deletecollection"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["roles", "rolebindings"]
   verbs: ["get", "create", "patch", "update", "list", "watch", "deletecollection"]
