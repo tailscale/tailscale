@@ -394,7 +394,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (nettyp
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	if c.mapping != nil {
 		if releaseOld {
-			c.mapping.Release(context.Background())
+			go c.mapping.Release(context.Background())
 		}
 		c.mapping = nil
 	}
