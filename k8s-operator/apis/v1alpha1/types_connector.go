@@ -159,7 +159,7 @@ type AppConnector struct {
 	// also dynamically discover other routes.
 	// https://tailscale.com/kb/1332/apps-best-practices#preconfiguration
 	// +optional
-	Routes Routes `json:"routes"`
+	Routes []Route `json:"routes,omitempty"`
 }
 
 type Tags []Tag
