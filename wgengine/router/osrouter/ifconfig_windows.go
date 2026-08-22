@@ -405,7 +405,15 @@ func configureInterface(cfg *router.Config, tun *tun.NativeTun, ht *health.Track
 			RouteData: winipcfg.RouteData{
 				Destination: route,
 				NextHop:     gateway,
-				Metric:      0,
+				// Explicit route metrics are important on Windows: if we leave the
+				// metric at 0 ("automatic"), Windows will often assign a very low
+				// effective metric to routes on the Tailscale interface (commonly 5),
+				// which can cause a host that is physically on a LAN to prefer the
+				// subnet-router path for that same LAN. When the subnet router is
+				// unavailable, this can blackhole local traffic.
+				//
+				// See https://github.com/tailscale/tailscale/issues/12248.
+				Metric: windowsRouteMetric(route),
 			},
 		}
 
