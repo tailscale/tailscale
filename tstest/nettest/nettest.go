@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"testing"
 
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/netmon"
@@ -24,7 +23,7 @@ var useMemNet = flag.Bool("use-test-memnet", false, "prefer using in-memory netw
 
 // SkipIfNoNetwork skips the test if it looks like there's no network
 // access.
-func SkipIfNoNetwork(t testing.TB) {
+func SkipIfNoNetwork(t testenv.TB) {
 	nm := netmon.NewStatic()
 	if !nm.InterfaceState().AnyInterfaceUp() {
 		t.Skip("skipping; test requires network but no interface is up")
@@ -40,7 +39,7 @@ func PreferMemNetwork() bool {
 // whether the --use-test-memnet flag is set.
 //
 // Each call generates a new network.
-func GetNetwork(tb testing.TB) netx.Network {
+func GetNetwork(tb testenv.TB) netx.Network {
 	var n netx.Network
 	if PreferMemNetwork() {
 		n = &memnet.Network{}
