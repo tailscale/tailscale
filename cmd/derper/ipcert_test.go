@@ -19,6 +19,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -331,7 +333,7 @@ func TestIPCertManager(t *testing.T) {
 	dir := t.TempDir()
 	ca := newFakeIPACME(t)
 
-	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil)
+	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +398,7 @@ func TestIPCertManager(t *testing.T) {
 
 	// A second manager over the same cert directory must use the
 	// on-disk cache rather than creating more orders.
-	m2, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil)
+	m2, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,13 +423,78 @@ func TestIPCertManager(t *testing.T) {
 	}
 }
 
+// TestIPCertManagerHostnameIPs verifies that explicit IPv4 and IPv6 addresses
+// in --hostname are used instead of the post-NAT local addresses of accepted
+// connections.
+func TestIPCertManagerHostnameIPs(t *testing.T) {
+	const publicIPv4 = "198.51.100.42"
+	const privateIPv4 = "172.31.86.204"
+	const publicIPv6 = "2001:db8::42"
+	const privateIPv6 = "fd00::42"
+	dir := t.TempDir()
+	ca := newFakeIPACME(t)
+
+	m, err := newIPCertManager(dir, "test@example.com", ca.directoryURL(), []netip.Addr{
+		netip.MustParseAddr(publicIPv4),
+		netip.MustParseAddr(publicIPv6),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeSrv := httptest.NewServer(m.HTTPHandler(http.NotFoundHandler()))
+	defer challengeSrv.Close()
+	ca.challengeBase = challengeSrv.URL
+
+	for _, tt := range []struct {
+		name      string
+		publicIP  string
+		privateIP string
+	}{
+		{"IPv4", publicIPv4, privateIPv4},
+		{"IPv6", publicIPv6, privateIPv6},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cert, err := m.getCertificate(helloFor(t, tt.privateIP, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cert.Leaf.VerifyHostname(tt.publicIP); err != nil {
+				t.Errorf("issued cert not valid for explicit public IP %v: %v", tt.publicIP, err)
+			}
+			if ca.gotIDType != "ip" || ca.gotIDValue != tt.publicIP {
+				t.Errorf("order identifier = %q %q; want %q %q", ca.gotIDType, ca.gotIDValue, "ip", tt.publicIP)
+			}
+			if _, err := m.getCertificate(helloFor(t, tt.privateIP, tt.publicIP)); err != nil {
+				t.Errorf("getCertificate with configured public IP SNI: %v", err)
+			}
+			if _, err := m.getCertificate(helloFor(t, tt.privateIP, tt.privateIP)); err == nil {
+				t.Error("getCertificate with post-NAT private IP SNI succeeded; want error")
+			}
+		})
+	}
+}
+
+func TestIPCertManagerHostnameIPFamilyFallback(t *testing.T) {
+	const publicIPv4 = "198.51.100.42"
+	const localIPv4 = "172.31.86.204"
+	const localIPv6 = "2001:db8::7"
+	m := &ipCertManager{hostnameIPs: []netip.Addr{netip.MustParseAddr(publicIPv4)}}
+
+	if got := m.certIPForConn(netip.MustParseAddr(localIPv4)); got.String() != publicIPv4 {
+		t.Errorf("IPv4 certificate IP = %v; want %v", got, publicIPv4)
+	}
+	if got := m.certIPForConn(netip.MustParseAddr(localIPv6)); got.String() != localIPv6 {
+		t.Errorf("IPv6 certificate IP = %v; want connection-local %v", got, localIPv6)
+	}
+}
+
 // TestIPCertManagerNextProvider verifies that connections with a DNS
 // name in the SNI are passed through to the next provider.
 func TestIPCertManagerNextProvider(t *testing.T) {
 	dir := t.TempDir()
 	ca := newFakeIPACME(t)
 	stubCert := &tls.Certificate{}
-	m, err := newIPCertManager(dir, "", ca.directoryURL(), &stubCertProvider{cert: stubCert})
+	m, err := newIPCertManager(dir, "", ca.directoryURL(), nil, &stubCertProvider{cert: stubCert})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,18 +514,41 @@ func TestIPCertManagerNextProvider(t *testing.T) {
 // --acme-ip-certs and IP address hostnames.
 func TestCertModeIPCertsGating(t *testing.T) {
 	tests := []struct {
-		name    string
-		mode    string
-		host    string
-		ipCerts bool
-		wantErr string // or empty to expect success
+		name        string
+		mode        string
+		host        string
+		ipCerts     bool
+		wantErr     string // or empty to expect success
+		wantNext    bool
+		wantHostIPs []netip.Addr
 	}{
-		{"letsencrypt_ip_no_flag", "letsencrypt", "1.2.3.4", false, "--acme-ip-certs"},
-		{"gcp_ip", "gcp", "1.2.3.4", false, "--certmode=gcp requires --hostname to be a DNS name"},
-		{"gcp_flag", "gcp", "1.2.3.4", true, "--acme-ip-certs requires --certmode=letsencrypt"},
-		{"manual_flag", "manual", "1.2.3.4", true, "--acme-ip-certs requires --certmode=letsencrypt"},
-		{"letsencrypt_ip_flag", "letsencrypt", "1.2.3.4", true, ""},
-		{"letsencrypt_hostname_flag", "letsencrypt", "derp.example.com", true, ""},
+		{name: "letsencrypt_ip_no_flag", mode: "letsencrypt", host: "1.2.3.4", wantErr: "--acme-ip-certs"},
+		{name: "letsencrypt_ip_pair_no_flag", mode: "letsencrypt", host: "1.2.3.4,2001:db8::1", wantErr: "set --acme-ip-certs"},
+		{name: "gcp_ip", mode: "gcp", host: "1.2.3.4", wantErr: "--certmode=gcp requires --hostname to be a DNS name"},
+		{name: "gcp_flag", mode: "gcp", host: "1.2.3.4", ipCerts: true, wantErr: "--acme-ip-certs requires --certmode=letsencrypt"},
+		{name: "manual_flag", mode: "manual", host: "1.2.3.4", ipCerts: true, wantErr: "--acme-ip-certs requires --certmode=letsencrypt"},
+		{name: "manual_ip_pair", mode: "manual", host: "1.2.3.4,2001:db8::1", wantErr: "--certmode=manual requires --hostname to be a single"},
+		{
+			name:        "letsencrypt_ip_flag",
+			mode:        "letsencrypt",
+			host:        "1.2.3.4",
+			ipCerts:     true,
+			wantHostIPs: []netip.Addr{netip.MustParseAddr("1.2.3.4")},
+		},
+		{
+			name:    "letsencrypt_ip_pair_flag",
+			mode:    "letsencrypt",
+			host:    "1.2.3.4,2001:db8::1",
+			ipCerts: true,
+			wantHostIPs: []netip.Addr{
+				netip.MustParseAddr("1.2.3.4"),
+				netip.MustParseAddr("2001:db8::1"),
+			},
+		},
+		{name: "letsencrypt_two_ipv4", mode: "letsencrypt", host: "1.2.3.4,5.6.7.8", ipCerts: true, wantErr: "at most one IPv4"},
+		{name: "letsencrypt_two_ipv6", mode: "letsencrypt", host: "2001:db8::1,2001:db8::2", ipCerts: true, wantErr: "at most one IPv6"},
+		{name: "letsencrypt_mixed_dns_ip", mode: "letsencrypt", host: "derp.example.com,1.2.3.4", ipCerts: true, wantErr: "is not an IP address"},
+		{name: "letsencrypt_hostname_flag", mode: "letsencrypt", host: "derp.example.com", ipCerts: true, wantNext: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -471,9 +561,11 @@ func TestCertModeIPCertsGating(t *testing.T) {
 				if !ok {
 					t.Fatalf("provider type = %T; want *ipCertManager", cp)
 				}
-				wantNext := net.ParseIP(tt.host) == nil
-				if gotNext := m.next != nil; gotNext != wantNext {
-					t.Errorf("has next provider = %v; want %v", gotNext, wantNext)
+				if gotNext := m.next != nil; gotNext != tt.wantNext {
+					t.Errorf("has next provider = %v; want %v", gotNext, tt.wantNext)
+				}
+				if !slices.Equal(m.hostnameIPs, tt.wantHostIPs) {
+					t.Errorf("hostname IPs = %v; want %v", m.hostnameIPs, tt.wantHostIPs)
 				}
 				return
 			}
