@@ -1518,8 +1518,13 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		de.updateDiscoKey(key)
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
-			What: "updateFromNode-resetLocked",
+			What: "updateFromNode-disco-key-changed",
 		})
+		// The peer rotated its disco key, so any path we currently trust to it is stale.
+		// Invalidate path discovery state so we re-probe, but keep bestAddr so data
+		// keeps flowing until a fresh path is confirmed.
+		de.trustBestAddrUntil = 0
+		de.invalidateDiscoPathLocked()
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {
@@ -2073,9 +2078,17 @@ func (de *endpoint) stopAndReset() {
 // DERP-only endpoint. It does not stop the endpoint's heartbeat
 // timer, if one is running.
 func (de *endpoint) resetLocked() {
+	de.clearBestAddrLocked()
+	de.invalidateDiscoPathLocked()
+}
+
+// invalidateDiscoPathLocked discards in-flight disco/relay state that was
+// established against the peer's current disco identity, so that path
+// discovery re-runs from scratch.
+func (de *endpoint) invalidateDiscoPathLocked() {
 	de.lastSendExt = 0
 	de.lastFullPing = 0
-	de.clearBestAddrLocked()
+	de.lastUDPRelayPathDiscovery = 0
 	for _, es := range de.endpointState {
 		es.lastPing = 0
 	}
