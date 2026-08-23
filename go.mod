@@ -136,7 +136,7 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	go.uber.org/zap v1.27.0
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
-	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
+	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/crypto v0.55.0
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f
 	golang.org/x/image v0.41.0
