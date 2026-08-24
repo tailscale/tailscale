@@ -7,11 +7,13 @@ import (
 	"bufio"
 	"bytes"
 	"net"
+	"net/netip"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 )
@@ -86,6 +88,82 @@ func TestClientRecv(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %#v; want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClientRecvPeerPresent tests that the client can parse peerPresent
+// frames from servers of various eras: old servers that send fewer fields
+// than the client knows about, and newer servers that send trailing fields
+// the client doesn't know about, which it must ignore. This matters during
+// rollouts of new DERP servers, when a region's meshed nodes and watchers
+// run a mix of versions.
+func TestClientRecvPeerPresent(t *testing.T) {
+	keyb := bytes.Repeat([]byte{1}, KeyLen)
+	k := key.NodePublicFromRaw32(mem.B(keyb))
+	ipPort := []byte{
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 1, 2, 3, 4, // ::ffff:1.2.3.4
+		0x12, 0x34, // port 4660
+	}
+	wantIPPort := netip.MustParseAddrPort("1.2.3.4:4660")
+
+	frame := func(fields ...[]byte) []byte {
+		b := []byte{byte(FramePeerPresent), 0, 0, 0, 0}
+		for _, f := range fields {
+			b = append(b, f...)
+		}
+		b[4] = byte(len(b) - FrameHeaderLen)
+		return b
+	}
+
+	tests := []struct {
+		name  string
+		input []byte
+		want  PeerPresentMessage
+	}{
+		{
+			name:  "key_only_from_ancient_server",
+			input: frame(keyb),
+			want:  PeerPresentMessage{Key: k},
+		},
+		{
+			name:  "ip_port_from_old_server",
+			input: frame(keyb, ipPort),
+			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort},
+		},
+		{
+			name:  "flags_from_current_server",
+			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular}),
+			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
+		},
+		{
+			name: "extra_fields_from_newer_server",
+			// A hypothetical newer server sending fields this client
+			// doesn't know about. They must be ignored.
+			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular},
+				[]byte{3, 'a', 'b', 'c'}, []byte{0xde, 0xad}),
+			want: PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				nc:    dummyNetConn{},
+				br:    bufio.NewReader(bytes.NewReader(tt.input)),
+				logf:  t.Logf,
+				clock: &tstest.Clock{},
+			}
+			m, err := c.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := m.(PeerPresentMessage)
+			if !ok {
+				t.Fatalf("message type = %T; want PeerPresentMessage", m)
+			}
+			if got != tt.want {
+				t.Errorf("got %+v; want %+v", got, tt.want)
 			}
 		})
 	}
