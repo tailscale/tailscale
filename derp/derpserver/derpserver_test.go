@@ -12,14 +12,17 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/binary"
+	"encoding/json"
 	"expvar"
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -129,6 +132,72 @@ func TestIsMeshPeer(t *testing.T) {
 				t.Errorf("%f allocations, want %f", allocs, tt.wantAllocs)
 			}
 		})
+	}
+}
+
+func TestVerifyClientDisallowedAppNames(t *testing.T) {
+	ctx := t.Context()
+	s := &Server{}
+	if err := s.SetMeshKey(testMeshKey); err != nil {
+		t.Fatal(err)
+	}
+	s.SetDisallowedAppNames([]string{"badapp", "worseapp"})
+
+	k := key.NewNode().Public()
+	ip := netip.MustParseAddr("2.3.4.5")
+
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "badapp"}, ip); err == nil {
+		t.Error("disallowed app name: got nil error; want error")
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "goodapp"}, ip); err != nil {
+		t.Errorf("allowed app name: unexpected error: %v", err)
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{}, ip); err != nil {
+		t.Errorf("empty app name: unexpected error: %v", err)
+	}
+
+	// Trusted mesh peers are exempt.
+	mk, err := key.ParseDERPMesh(testMeshKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.verifyClient(ctx, k, &derp.ClientInfo{AppName: "badapp", MeshKey: mk}, ip); err != nil {
+		t.Errorf("mesh peer with disallowed app name: unexpected error: %v", err)
+	}
+}
+
+func TestRecvClientKeyAppName(t *testing.T) {
+	serverPriv := key.NewNode()
+	s := New(serverPriv, t.Logf)
+	defer s.Close()
+
+	tests := []struct {
+		appName string
+		wantErr bool
+	}{
+		{"some-client", false},
+		{"", false},
+		{strings.Repeat("x", derp.MaxAppNameLen+1), true},
+		{"new\nline", true},
+	}
+	for _, tt := range tests {
+		clientPriv := key.NewNode()
+		msg, err := json.Marshal(derp.ClientInfo{AppName: tt.appName})
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := clientPriv.Public().AppendTo(nil)
+		payload = append(payload, clientPriv.SealTo(serverPriv.Public(), msg)...)
+
+		var buf bytes.Buffer
+		bw := bufio.NewWriter(&buf)
+		if err := derp.WriteFrame(bw, derp.FrameClientInfo, payload); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = s.recvClientKey(bufio.NewReader(&buf))
+		if gotErr := err != nil; gotErr != tt.wantErr {
+			t.Errorf("recvClientKey with AppName %.40q: err = %v; wantErr = %v", tt.appName, err, tt.wantErr)
+		}
 	}
 }
 

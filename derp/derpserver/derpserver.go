@@ -190,6 +190,10 @@ type Server struct {
 	verifyClientsURL         string
 	verifyClientsURLFailOpen bool
 
+	// disallowedAppNames, if non-nil, is the set of ClientInfo.AppName
+	// values that are not allowed to connect. Mesh peers are exempt.
+	disallowedAppNames set.Set[string]
+
 	perClientSendQueueDepth int // Sets the client send queue depth for the server.
 	tcpWriteTimeout         time.Duration
 	clock                   tstime.Clock
@@ -499,6 +503,15 @@ func (s *Server) SetVerifyClientURL(v string) {
 // admission controller URL is unreachable.
 func (s *Server) SetVerifyClientURLFailOpen(v bool) {
 	s.verifyClientsURLFailOpen = v
+}
+
+// SetDisallowedAppNames sets the list of client app names (as advertised
+// in their ClientInfo.AppName) that are not allowed to connect.
+// Trusted mesh peers are exempt.
+//
+// It must be called before serving begins.
+func (s *Server) SetDisallowedAppNames(names []string) {
+	s.disallowedAppNames = set.Of(names...)
 }
 
 // SetTailscaledSocketPath sets the unix socket path to use to talk to
@@ -813,7 +826,7 @@ func (s *Server) registerClient(c *sclient) {
 	if c.isNotIdealConn {
 		s.curClientsNotIdeal.Add(1)
 	}
-	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), true)
+	s.broadcastPeerStateChangeLocked(c.key, c.remoteIPPort, c.presentFlags(), c.info.AppName, true)
 }
 
 // broadcastPeerStateChangeLocked enqueues a message to all watchers
@@ -821,13 +834,14 @@ func (s *Server) registerClient(c *sclient) {
 // presence changed.
 //
 // s.mu must be held.
-func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, present bool) {
+func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, appName string, present bool) {
 	for w := range s.watchers {
 		w.peerStateChange = append(w.peerStateChange, peerConnState{
 			peer:    peer,
 			present: present,
 			ipPort:  ipPort,
 			flags:   flags,
+			appName: appName,
 		})
 		go w.requestMeshUpdate()
 	}
@@ -865,7 +879,7 @@ func (s *Server) unregisterClient(c *sclient) {
 			delete(s.clientsMesh, c.key)
 			s.notePeerGoneFromRegionLocked(c.key)
 		}
-		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, 0, false)
+		s.broadcastPeerStateChangeLocked(c.key, netip.AddrPort{}, 0, "", false)
 	} else {
 		c.debugLogf("removed duplicate client")
 		if dup.removeClient(c) {
@@ -1001,6 +1015,7 @@ func (s *Server) addWatcher(c *sclient) {
 			present: true,
 			ipPort:  ac.remoteIPPort,
 			flags:   ac.presentFlags(),
+			appName: ac.info.AppName,
 		})
 	}
 
@@ -1586,6 +1601,10 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 		return nil
 	}
 
+	if info != nil && s.disallowedAppNames.Contains(info.AppName) {
+		return fmt.Errorf("disallowed app name %q", info.AppName)
+	}
+
 	// tailscaled-based verification:
 	if s.verifyClientsLocalTailscaled {
 		_, err := s.localClient.WhoIsNodeKey(ctx, clientKey)
@@ -1758,6 +1777,9 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	if err := json.Unmarshal(msg, info); err != nil {
 		return zpub, nil, fmt.Errorf("msg: %v", err)
 	}
+	if !derp.ValidAppName(info.AppName) {
+		return zpub, nil, fmt.Errorf("invalid AppName %.40q", info.AppName)
+	}
 	return clientKey, info, nil
 }
 
@@ -1903,6 +1925,7 @@ type peerConnState struct {
 	ipPort  netip.AddrPort // if present, the peer's IP:port
 	peer    key.NodePublic
 	flags   derp.PeerPresentFlags
+	appName string // if present, the peer's self-reported app name
 	present bool
 }
 
@@ -2118,8 +2141,12 @@ func (c *sclient) sendPong(data [8]byte) error {
 }
 
 const (
-	peerGoneFrameLen    = derp.KeyLen + 1
-	peerPresentFrameLen = derp.KeyLen + 16 + 2 + 1 // 16 byte IP + 2 byte port + 1 byte flags
+	peerGoneFrameLen = derp.KeyLen + 1
+
+	// peerPresentBaseLen is the size of a peerPresent frame before its
+	// variable-length app name suffix: 16 byte IP + 2 byte port + 1 byte
+	// flags + 1 byte app name length.
+	peerPresentBaseLen = derp.KeyLen + 16 + 2 + 1 + 1
 )
 
 // sendPeerGone sends a peerGone frame, without flushing.
@@ -2143,17 +2170,20 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 }
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
-func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags) error {
+func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, appName string) error {
 	c.setWriteDeadline()
-	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, peerPresentFrameLen); err != nil {
+	frameLen := peerPresentBaseLen + len(appName)
+	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, uint32(frameLen)); err != nil {
 		return err
 	}
-	payload := make([]byte, peerPresentFrameLen)
+	payload := make([]byte, frameLen)
 	_ = peer.AppendTo(payload[:0])
 	a16 := ipPort.Addr().As16()
 	copy(payload[derp.KeyLen:], a16[:])
 	binary.BigEndian.PutUint16(payload[derp.KeyLen+16:], ipPort.Port())
 	payload[derp.KeyLen+18] = byte(flags)
+	payload[derp.KeyLen+19] = byte(len(appName))
+	copy(payload[derp.KeyLen+20:], appName)
 	_, err := c.bw.Write(payload)
 	return err
 }
@@ -2189,7 +2219,7 @@ func (c *sclient) sendMeshUpdates() error {
 		for _, pcs := range batch {
 			var err error
 			if pcs.present {
-				err = c.sendPeerPresent(pcs.peer, pcs.ipPort, pcs.flags)
+				err = c.sendPeerPresent(pcs.peer, pcs.ipPort, pcs.flags, pcs.appName)
 			} else {
 				err = c.sendPeerGone(pcs.peer, derp.PeerGoneReasonDisconnected)
 			}

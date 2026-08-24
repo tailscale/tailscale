@@ -93,9 +93,12 @@ const (
 	// The message is at least 32 bytes (the public key of the peer that's
 	// connected). If there are at least 18 bytes remaining after that, it's the
 	// 16 byte IP + 2 byte BE uint16 port of the client. If there's another byte
-	// remaining after that, it's a PeerPresentFlags byte.
-	// While current servers send 41 bytes, old servers will send fewer, and newer
-	// servers might send more.
+	// remaining after that, it's a PeerPresentFlags byte. If there's another
+	// byte remaining after that, it's the length of the client's advertised
+	// app name (see ClientInfo.AppName), followed by that many bytes of app
+	// name.
+	// While current servers send at least 42 bytes, old servers will send
+	// fewer, and newer servers might send more.
 	FramePeerPresent = FrameType(0x09)
 
 	// FrameWatchConns is how one DERP node in a regional mesh

@@ -910,6 +910,76 @@ func TestWatch(t *testing.T) {
 	w3.wantGone(t, c1.pub)
 }
 
+// TestWatchAppName tests that the app name a client advertises in its
+// ClientInfo is relayed to watchers in peerPresent frames.
+func TestWatchAppName(t *testing.T) {
+	ctx := t.Context()
+
+	ts := newTestServer(t, ctx)
+	defer ts.close(t)
+
+	c1 := newTestClient(t, ts, "c1", func(nc net.Conn, priv key.NodePrivate, logf logger.Logf) (*Client, error) {
+		brw := bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc))
+		c, err := derp.NewClient(priv, nc, brw, logf, derp.AppName("test-app"))
+		if err != nil {
+			return nil, err
+		}
+		waitConnect(t, c)
+		return c, nil
+	})
+
+	w := newTestWatcher(t, ts, "w")
+
+	want := map[key.NodePublic]string{
+		c1.pub: "test-app",
+		w.pub:  "",
+	}
+	for len(want) > 0 {
+		m, err := w.c.RecvTimeoutForTest(time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pp, ok := m.(derp.PeerPresentMessage)
+		if !ok {
+			t.Fatalf("unexpected message type %T", m)
+		}
+		wantName, ok := want[pp.Key]
+		if !ok {
+			t.Fatalf("peer present for unexpected peer %v", ts.keyName(pp.Key))
+		}
+		if pp.AppName != wantName {
+			t.Errorf("peer %v AppName = %q; want %q", ts.keyName(pp.Key), pp.AppName, wantName)
+		}
+		delete(want, pp.Key)
+	}
+}
+
+func TestValidAppName(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"", true},
+		{"some-client", true},
+		{"app with spaces 123!", true},
+		{strings.Repeat("x", 32), true},
+		{strings.Repeat("x", 33), false},
+		{"new\nline", false},
+		{"nul\x00", false},
+		{"emoji🐱", false},
+	}
+	for _, tt := range tests {
+		if got := derp.ValidAppName(tt.name); got != tt.want {
+			t.Errorf("ValidAppName(%q) = %v; want %v", tt.name, got, tt.want)
+		}
+	}
+
+	// NewClient should reject an invalid app name before touching the conn.
+	if _, err := derp.NewClient(key.NewNode(), nil, nil, t.Logf, derp.AppName("emoji🐱")); err == nil {
+		t.Error("NewClient with invalid app name: got nil error; want error")
+	}
+}
+
 func waitConnect(t testing.TB, c *Client) {
 	t.Helper()
 	if m, err := c.Recv(); err != nil {
