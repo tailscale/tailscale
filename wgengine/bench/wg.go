@@ -165,16 +165,15 @@ func (t *sourceTun) Write(b [][]byte, ofs int) (int, error) {
 	return len(b), nil
 }
 
-func (t *sourceTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
-	for i, b := range b {
-		// Continually generate "input" packets
-		n := t.traf.Generate(b, ofs)
-		sizes[i] = n
-		if n == 0 {
-			return 0, io.EOF
-		}
+func (t *sourceTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	// Continually generate "input" packets.
+	n := t.traf.Generate(slab, tun.ReadPacketSpacing)
+	packets[0].Size = n
+	packets[0].Offset = tun.ReadPacketSpacing
+	if n == 0 {
+		return 0, io.EOF
 	}
-	return len(b), nil
+	return 1, nil
 }
 
 type sinkTun struct {
@@ -189,7 +188,7 @@ func (t *sinkTun) Flush() error             { return nil }
 func (t *sinkTun) MTU() (int, error)        { return 1500, nil }
 func (t *sinkTun) Name() (string, error)    { return "sink", nil }
 
-func (t *sinkTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
+func (t *sinkTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	// Never returns
 	select {}
 }

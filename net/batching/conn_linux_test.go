@@ -24,16 +24,18 @@ import (
 	"tailscale.com/net/packet"
 )
 
-func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
-	c := &linuxBatchingConn{}
+func Test_fillReceivedPackets(t *testing.T) {
+	const maxDatagramSize = 1<<16 - 1
 
+	source := netip.MustParseAddrPort("192.0.2.1:1234")
 	newMsg := func(n int, gso uint16) ipv6.Message {
 		msg := ipv6.Message{
-			Buffers: [][]byte{make([]byte, 1024)},
+			Buffers: [][]byte{make([]byte, maxDatagramSize)},
 			N:       n,
-			OOB:     gsoControl(gso),
+			Addr:    net.UDPAddrFromAddrPort(source),
 		}
 		if gso > 0 {
+			msg.OOB = gsoControl(gso)
 			msg.NN = len(msg.OOB)
 		}
 		return msg
@@ -42,103 +44,133 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 	cases := []struct {
 		name        string
 		msgs        []ipv6.Message
-		firstMsgAt  int
 		wantNumEval int
-		wantMsgLens []int
+		wantPackets [][2]int // {offset, size}
 		wantErr     bool
 	}{
 		{
-			name: "second-last-split-last-empty",
+			name: "first_split",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(3, 1),
-				newMsg(0, 0),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 3,
-			wantMsgLens: []int{1, 1, 1, 0},
-			wantErr:     false,
+			wantPackets: [][2]int{
+				{0, 1},
+				{1, 1},
+				{2, 1},
+			},
+			wantErr: false,
 		},
 		{
-			name: "second-last-no-split-last-empty",
+			name: "first_no_split",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(1, 0),
-				newMsg(0, 0),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 1,
-			wantMsgLens: []int{1, 0, 0, 0},
-			wantErr:     false,
+			wantPackets: [][2]int{
+				{0, 1},
+			},
+			wantErr: false,
 		},
 		{
-			name: "second-last-no-split-last-no-split",
+			name: "first_no_split_last_no_split",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(1, 0),
 				newMsg(1, 0),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 2,
-			wantMsgLens: []int{1, 1, 0, 0},
-			wantErr:     false,
+			wantPackets: [][2]int{
+				{0, 1},
+				{maxDatagramSize, 1},
+			},
+			wantErr: false,
 		},
 		{
-			name: "second-last-no-split-last-split",
+			name: "first_no_split_last_split",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(1, 0),
 				newMsg(3, 1),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     false,
+			wantPackets: [][2]int{
+				{0, 1},
+				{maxDatagramSize, 1},
+				{maxDatagramSize + 1, 1},
+				{maxDatagramSize + 2, 1},
+			},
+			wantErr: false,
 		},
 		{
-			name: "second-last-split-last-split",
+			name: "first_split_last_split",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(2, 1),
 				newMsg(2, 1),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     false,
+			wantPackets: [][2]int{
+				{0, 1},
+				{1, 1},
+				{maxDatagramSize, 1},
+				{maxDatagramSize + 1, 1},
+			},
+			wantErr: false,
 		},
 		{
-			name: "second-last-no-split-last-split-overflow",
+			name: "first_no_split_last_split_overflow",
 			msgs: []ipv6.Message{
-				newMsg(0, 0),
-				newMsg(0, 0),
 				newMsg(1, 0),
 				newMsg(4, 1),
 			},
-			firstMsgAt:  2,
 			wantNumEval: 4,
-			wantMsgLens: []int{1, 1, 1, 1},
-			wantErr:     true,
+			wantPackets: [][2]int{
+				{0, 1},
+				{maxDatagramSize, 1},
+				{maxDatagramSize + 1, 1},
+				{maxDatagramSize + 2, 1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "split_with_short_tail",
+			msgs: []ipv6.Message{
+				newMsg(5, 2),
+			},
+			wantNumEval: 3,
+			wantPackets: [][2]int{
+				{0, 2},
+				{2, 2},
+				{4, 1},
+			},
 		},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := c.splitCoalescedMessages(tt.msgs, 2)
-			if err != nil && !tt.wantErr {
-				t.Fatalf("err: %v", err)
+			packets := make([]ReceivedPacket, len(tt.wantPackets))
+			got, err := fillReceivedPackets(
+				tt.msgs,
+				maxDatagramSize,
+				packets,
+				true,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err: %v, wantErr: %v", err, tt.wantErr)
 			}
 			if got != tt.wantNumEval {
 				t.Fatalf("got to eval: %d want: %d", got, tt.wantNumEval)
 			}
-			for i, msg := range tt.msgs {
-				if msg.N != tt.wantMsgLens[i] {
-					t.Fatalf("msg[%d].N: %d want: %d", i, msg.N, tt.wantMsgLens[i])
+			if len(packets) != len(tt.wantPackets) {
+				t.Fatalf("got %d packets, want %d", len(packets), len(tt.wantPackets))
+			}
+			for i, want := range tt.wantPackets {
+				got := packets[i]
+				if got.Offset != want[0] ||
+					got.Size != want[1] ||
+					got.Source != source {
+					t.Errorf(
+						"packets[%d] = {Offset: %d, Size: %d, Source: %v}, want {Offset: %d, Size: %d, Source: %v}",
+						i, got.Offset, got.Size, got.Source, want[0], want[1], source,
+					)
 				}
 			}
 		})
@@ -466,7 +498,7 @@ func Test_linuxBatchingConn_WriteBatchTo_resetsBuffersOnGSORetry(t *testing.T) {
 	c := &linuxBatchingConn{
 		pc:  uc,
 		xpc: xpc,
-		sendBatchPool: sync.Pool{New: func() any {
+		msgsPool: sync.Pool{New: func() any {
 			ua := &net.UDPAddr{IP: make([]byte, 16)}
 			msgs := make([]ipv6.Message, 8)
 			for i := range msgs {
@@ -474,7 +506,7 @@ func Test_linuxBatchingConn_WriteBatchTo_resetsBuffersOnGSORetry(t *testing.T) {
 				msgs[i].Addr = ua
 				msgs[i].OOB = make([]byte, controlMessageSize)
 			}
-			return &sendBatch{ua: ua, msgs: msgs}
+			return &msgsBatch{writeBatchToUDPAddr: ua, msgs: msgs}
 		}},
 	}
 	c.txOffload.Store(true) // force the coalesce path on the first pass
@@ -529,7 +561,7 @@ func Test_linuxBatchingConn_WriteBatchTo_offsetStableOnNonCoalesceRetry(t *testi
 	c := &linuxBatchingConn{
 		pc:  uc,
 		xpc: xpc,
-		sendBatchPool: sync.Pool{New: func() any {
+		msgsPool: sync.Pool{New: func() any {
 			ua := &net.UDPAddr{IP: make([]byte, 16)}
 			msgs := make([]ipv6.Message, appendSentinelTailBatchSizeThreshold)
 			for i := range msgs {
@@ -537,7 +569,7 @@ func Test_linuxBatchingConn_WriteBatchTo_offsetStableOnNonCoalesceRetry(t *testi
 				msgs[i].Addr = ua
 				msgs[i].OOB = make([]byte, controlMessageSize)
 			}
-			return &sendBatch{ua: ua, msgs: msgs}
+			return &msgsBatch{writeBatchToUDPAddr: ua, msgs: msgs}
 		}},
 	}
 	c.txOffload.Store(true)
@@ -583,8 +615,8 @@ func TestMinReadBatchMsgsLen(t *testing.T) {
 	// So long as magicsock uses [Conn], and [wireguard-go/conn.Bind] API is
 	// shaped for wireguard-go to control packet memory, these values should be
 	// aligned.
-	if IdealBatchSize != conn.IdealBatchSize {
-		t.Fatalf("IdealBatchSize: %d != conn.IdealBatchSize(): %d", IdealBatchSize, conn.IdealBatchSize)
+	if MaximumWriteBatchSize != conn.IdealBatchSize {
+		t.Fatalf("MaximumWriteBatchSize: %d != conn.IdealBatchSize(): %d", MaximumWriteBatchSize, conn.IdealBatchSize)
 	}
 }
 
@@ -741,12 +773,12 @@ func Test_linuxBatchingConn_handleRXQOverflowCounter(t *testing.T) {
 	}
 	conn.rxqOverflowsMetric.Set(0) // test count > 1 will accumulate, reset
 
-	// n == 0
-	conn.handleRXQOverflowCounter([]ipv6.Message{{}}, 0, nil)
+	// len(msgs) == 0
+	conn.handleRXQOverflowCounter([]ipv6.Message{}, nil)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(0))
 
 	// rxErr non-nil
-	conn.handleRXQOverflowCounter([]ipv6.Message{{}}, 0, io.EOF)
+	conn.handleRXQOverflowCounter([]ipv6.Message{{}}, io.EOF)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(0))
 
 	// nonzero counter
@@ -754,14 +786,14 @@ func Test_linuxBatchingConn_handleRXQOverflowCounter(t *testing.T) {
 	conn.handleRXQOverflowCounter([]ipv6.Message{{
 		OOB: control,
 		NN:  len(control),
-	}}, 1, nil)
+	}}, nil)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(1))
 
 	// nonzero counter, no change
 	conn.handleRXQOverflowCounter([]ipv6.Message{{
 		OOB: control,
 		NN:  len(control),
-	}}, 1, nil)
+	}}, nil)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(1))
 
 	// counter rollover
@@ -769,6 +801,6 @@ func Test_linuxBatchingConn_handleRXQOverflowCounter(t *testing.T) {
 	conn.handleRXQOverflowCounter([]ipv6.Message{{
 		OOB: control,
 		NN:  len(control),
-	}}, 1, nil)
+	}}, nil)
 	c.Assert(conn.rxqOverflowsMetric.Value(), qt.Equals, int64(1+math.MaxUint32))
 }

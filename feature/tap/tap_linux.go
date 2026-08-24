@@ -103,6 +103,7 @@ const (
 
 // handleTAPFrame handles receiving a raw TAP ethernet frame and reports whether
 // it's been handled (that is, whether it should NOT be passed to wireguard).
+// handleTAPFrame returns [consumePacket] (true) if len(ethBuf) < [ethernetFrameSize].
 func (t *tapDevice) handleTAPFrame(ethBuf []byte) bool {
 
 	if len(ethBuf) < ethernetFrameSize {
@@ -419,28 +420,22 @@ func (t *tapDevice) Name() (string, error) {
 	return t.name, nil
 }
 
-// Read reads an IP packet from the TAP device. It strips the ethernet frame header.
-func (t *tapDevice) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
-	n, err := t.ReadEthernet(buffs, sizes, offset)
-	if err != nil || n == 0 {
-		return n, err
-	}
-	// Strip the ethernet frame header.
-	copy(buffs[0][offset:], buffs[0][offset+ethernetFrameSize:offset+sizes[0]])
-	sizes[0] -= ethernetFrameSize
-	return 1, nil
-}
-
-// ReadEthernet reads a raw ethernet frame from the TAP device.
-func (t *tapDevice) ReadEthernet(buffs [][]byte, sizes []int, offset int) (int, error) {
-	n, err := t.file.Read(buffs[0][offset:])
+// Read implements [tun.Device.Read]. Read swallows frames that should not be
+// passed to wireguard-go, as evaluated by [tapDevice.handleTAPFrame]. Read
+// excludes the Ethernet header for returned IP packets described by packets[:n].
+func (t *tapDevice) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	buf := slab[tun.ReadPacketSpacing : len(slab)-tun.ReadPacketSpacing]
+	n, err := t.file.Read(buf)
 	if err != nil {
 		return 0, err
 	}
-	if t.handleTAPFrame(buffs[0][offset : offset+n]) {
+	if t.handleTAPFrame(buf[:n]) {
 		return 0, nil
 	}
-	sizes[0] = n
+	packets[0] = tun.ReadPacket{
+		Offset: tun.ReadPacketSpacing + ethernetFrameSize,
+		Size:   n - ethernetFrameSize,
+	}
 	return 1, nil
 }
 

@@ -2721,12 +2721,13 @@ func (t *chanTUN) Close() error {
 	return nil
 }
 
-func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (t *chanTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	select {
 	case <-t.closed:
 		return 0, io.EOF
 	case pkt := <-t.Outbound:
-		sizes[0] = copy(bufs[0][offset:], pkt)
+		packets[0].Offset = tun.ReadPacketSpacing
+		packets[0].Size = copy(slab[tun.ReadPacketSpacing:len(slab)-tun.ReadPacketSpacing], pkt)
 		return 1, nil
 	}
 }

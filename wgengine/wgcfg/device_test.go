@@ -100,7 +100,7 @@ func (t *nilTun) MTU() (int, error)        { return 1420, nil }
 func (t *nilTun) Name() (string, error)    { return "niltun", nil }
 func (t *nilTun) Events() <-chan tun.Event { return t.events }
 
-func (t *nilTun) Read(data [][]byte, sizes []int, offset int) (int, error) {
+func (t *nilTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	<-t.closed
 	return 0, io.EOF
 }

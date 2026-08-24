@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"runtime"
@@ -58,7 +59,7 @@ type linuxBatchingConn struct {
 	xpc                xnetBatchReaderWriter
 	rxOffload          bool        // supports UDP GRO or similar
 	txOffload          atomic.Bool // supports UDP GSO or similar
-	sendBatchPool      sync.Pool
+	msgsPool           sync.Pool
 	rxqOverflowsMetric *clientmetric.Metric
 	// neverGSOEqualTail, when non-nil and true, enables a sentinel-tail
 	// workaround in the UDP GSO TX path. It points at a
@@ -231,24 +232,31 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 	return base + 1
 }
 
-type sendBatch struct {
-	msgs []ipv6.Message
-	ua   *net.UDPAddr
+// msgsBatch contains recyclable (via [linuxBatchingConn.msgsPool] elements
+// used across [linuxBatchingConn.ReadBatch] & [linuxBatchingConn.WriteBatchTo].
+type msgsBatch struct {
+	msgs                []ipv6.Message
+	writeBatchToUDPAddr *net.UDPAddr
 }
 
-func (c *linuxBatchingConn) getSendBatch() *sendBatch {
-	batch := c.sendBatchPool.Get().(*sendBatch)
+func (c *linuxBatchingConn) getMsgsBatch() *msgsBatch {
+	batch := c.msgsPool.Get().(*msgsBatch)
 	return batch
 }
 
-func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
-	for i := range batch.msgs {
-		// Non coalesced write paths access only batch.msgs[i].Buffers[0],
+// putMsgsBatch resets each message in batch.msgs[:usedMsgs] for reuse, then
+// returns batch to its [sync.Pool].
+func (c *linuxBatchingConn) putMsgsBatch(batch *msgsBatch, usedMsgs int) {
+	// Clear references to previously used packet buffers, otherwise they
+	// may never be GC'd.
+	for i := range batch.msgs[:usedMsgs] {
+		clear((batch.msgs)[i].Buffers)
+		// Non-coalesced write paths access only batch.msgs[i].Buffers[0],
 		// but we append more during [linuxBatchingConn.coalesceMessages].
 		// Leave index zero accessible:
-		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB}
+		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB[:0]}
 	}
-	c.sendBatchPool.Put(batch)
+	c.msgsPool.Put(batch)
 }
 
 // appendSentinelTailBatchSizeThreshold represents the minimum batch size
@@ -273,18 +281,19 @@ func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 const appendSentinelTailBatchSizeThreshold = 8
 
 func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, geneve packet.GeneveHeader, offset int) error {
-	batch := c.getSendBatch()
-	defer c.putSendBatch(batch)
+	batch := c.getMsgsBatch()
+	usedMsgs := len(buffs)
+	defer c.putMsgsBatch(batch, usedMsgs)
 	if addr.Addr().Is6() {
 		as16 := addr.Addr().As16()
-		copy(batch.ua.IP, as16[:])
-		batch.ua.IP = batch.ua.IP[:16]
+		copy(batch.writeBatchToUDPAddr.IP, as16[:])
+		batch.writeBatchToUDPAddr.IP = batch.writeBatchToUDPAddr.IP[:16]
 	} else {
 		as4 := addr.Addr().As4()
-		copy(batch.ua.IP, as4[:])
-		batch.ua.IP = batch.ua.IP[:4]
+		copy(batch.writeBatchToUDPAddr.IP, as4[:])
+		batch.writeBatchToUDPAddr.IP = batch.writeBatchToUDPAddr.IP[:4]
 	}
-	batch.ua.Port = int(addr.Port())
+	batch.writeBatchToUDPAddr.Port = int(addr.Port())
 	// Load the control knob once per write so a single call sees a consistent
 	// value even if the knob flips concurrently.
 	neverGSOEqualTail := c.neverGSOEqualTail != nil && c.neverGSOEqualTail.Load()
@@ -294,7 +303,7 @@ func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, ge
 	)
 retry:
 	if c.txOffload.Load() && (!neverGSOEqualTail || len(buffs) >= appendSentinelTailBatchSizeThreshold) {
-		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset, neverGSOEqualTail)
+		n = c.coalesceMessages(batch.writeBatchToUDPAddr, geneve, buffs, batch.msgs, offset, neverGSOEqualTail)
 	} else {
 		mutableOffset := offset // don't mutate offset across retries
 		vniIsSet := geneve.VNI.IsSet()
@@ -310,7 +319,7 @@ retry:
 			// coalesceMessages during a first pass, and landed here as part of
 			// goto retry.
 			batch.msgs[i].Buffers = batch.msgs[i].Buffers[:1]
-			batch.msgs[i].Addr = batch.ua
+			batch.msgs[i].Addr = batch.writeBatchToUDPAddr
 			batch.msgs[i].OOB = batch.msgs[i].OOB[:0]
 		}
 		n = len(buffs)
@@ -345,55 +354,6 @@ func (c *linuxBatchingConn) writeBatch(msgs []ipv6.Message) error {
 		}
 		head += n
 	}
-}
-
-// splitCoalescedMessages splits coalesced messages from the tail of dst
-// beginning at index 'firstMsgAt' into the head of the same slice. It reports
-// the number of elements to evaluate in msgs for nonzero len (msgs[i].N). An
-// error is returned if a socket control message cannot be parsed or a split
-// operation would overflow msgs.
-func (c *linuxBatchingConn) splitCoalescedMessages(msgs []ipv6.Message, firstMsgAt int) (n int, err error) {
-	for i := firstMsgAt; i < len(msgs); i++ {
-		msg := &msgs[i]
-		if msg.N == 0 {
-			return n, err
-		}
-		var (
-			gsoSize    int
-			start      int
-			end        = msg.N
-			numToSplit = 1
-		)
-		gsoSize, err = getGSOSizeFromControl(msg.OOB[:msg.NN])
-		if err != nil {
-			return n, err
-		}
-		if gsoSize > 0 {
-			numToSplit = (msg.N + gsoSize - 1) / gsoSize
-			end = gsoSize
-		}
-		for j := 0; j < numToSplit; j++ {
-			if n > i {
-				return n, errors.New("splitting coalesced packet resulted in overflow")
-			}
-			copied := copy(msgs[n].Buffers[0], msg.Buffers[0][start:end])
-			msgs[n].N = copied
-			msgs[n].Addr = msg.Addr
-			start = end
-			end += gsoSize
-			if end > msg.N {
-				end = msg.N
-			}
-			n++
-		}
-		if i != n-1 {
-			// It is legal for bytes to move within msg.Buffers[0] as a result
-			// of splitting, so we only zero the source msg len when it is not
-			// the destination of the last split operation above.
-			msg.N = 0
-		}
-	}
-	return n, nil
 }
 
 // getDataFromControl returns the data portion of the first control msg with
@@ -439,11 +399,11 @@ func getRXQOverflowsFromControl(control []byte) (uint32, error) {
 
 // handleRXQOverflowCounter handles any rx queue overflow counter contained in
 // the tail of msgs.
-func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, n int, rxErr error) {
-	if n == 0 || rxErr != nil || c.rxqOverflowsMetric == nil {
+func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, rxErr error) {
+	if len(msgs) == 0 || rxErr != nil || c.rxqOverflowsMetric == nil {
 		return
 	}
-	tailMsg := msgs[n-1] // we only care about the latest value as it's a cumulative counter
+	tailMsg := msgs[len(msgs)-1] // we only care about the latest value as it's a cumulative counter
 	if tailMsg.NN == 0 {
 		return
 	}
@@ -462,22 +422,98 @@ func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, n int,
 	c.rxqOverflows = rxqOverflows
 }
 
-func (c *linuxBatchingConn) ReadBatch(msgs []ipv6.Message, flags int) (n int, err error) {
+const (
+	// groEnabledSlotSize is the size to supply per recvmmsg() slot when GRO is
+	// enabled. If we supply less than this, coalesced datagrams may be silently
+	// truncated by the kernel.
+	groEnabledSlotSize = 1<<16 - 1
+	// groDisabledSlotSize is the size to supply per recvmmsg() slot when GRO is
+	// disabled. It's ~twice the size of max Ethernet MTU, but smaller than
+	// [ReadSlabMultiple]. Without GRO we might as well read more datagrams per
+	// syscall, and it's reasonable to expect datagrams to be no larger than this
+	// size.
+	//
+	// TODO: Reconsider divisor. Older kernels without UDP GRO support may
+	// benefit from more slots per recvmmsg syscall. Run benchmarks to inform.
+	groDisabledSlotSize = groEnabledSlotSize / 4
+)
+
+func (c *linuxBatchingConn) ReadBatch(slab []byte, packets []ReceivedPacket) (n int, err error) {
+	if len(slab) < ReadSlabMultiple {
+		return 0, fmt.Errorf("len(slab): %d < ReadSlabMultiple(%d)", len(slab), ReadSlabMultiple)
+	}
+	if len(packets) < MinimumReadBatchSize {
+		return 0, fmt.Errorf("len(packets): %d < MinimumReadBatchSize(%d)", len(packets), MinimumReadBatchSize)
+	}
 	c.readOpMu.Lock()
 	defer c.readOpMu.Unlock()
-	if !c.rxOffload || len(msgs) < 2 {
-		n, err = c.xpc.ReadBatch(msgs, flags)
-		c.handleRXQOverflowCounter(msgs, n, err)
-		return n, err
+	batch := c.getMsgsBatch()
+	recvmmsgSlotSize := groEnabledSlotSize
+	maxMsgsPerRecvmmsgSlot := udpGROCountMax
+	if !c.rxOffload {
+		recvmmsgSlotSize = groDisabledSlotSize
+		maxMsgsPerRecvmmsgSlot = 1
 	}
-	// Read into the tail of msgs, split into the head.
-	readAt := len(msgs) - 2
-	n, err = c.xpc.ReadBatch(msgs[readAt:], 0)
-	if err != nil || n == 0 {
+	maxMsgCount := min(
+		len(slab)/recvmmsgSlotSize,          // how many slots fit in slab
+		len(packets)/maxMsgsPerRecvmmsgSlot, // how many datagrams fit in packets
+		len(batch.msgs),                     // how many [ipv6.Message] we have
+	)
+	defer c.putMsgsBatch(batch, maxMsgCount)
+	rem := slab
+	for i := range maxMsgCount {
+		end := recvmmsgSlotSize
+		if len(rem) < recvmmsgSlotSize {
+			end = len(rem)
+		}
+		batch.msgs[i].Buffers[0] = rem[:end]
+		batch.msgs[i].OOB = batch.msgs[i].OOB[:cap(batch.msgs[i].OOB)]
+		rem = rem[end:]
+	}
+	n, err = c.xpc.ReadBatch(batch.msgs[:maxMsgCount], 0)
+	if err != nil {
 		return 0, err
 	}
-	c.handleRXQOverflowCounter(msgs[readAt:], n, err)
-	return c.splitCoalescedMessages(msgs, readAt)
+	c.handleRXQOverflowCounter(batch.msgs[:n], err)
+	return fillReceivedPackets(batch.msgs[:n], recvmmsgSlotSize, packets, c.rxOffload)
+}
+
+func fillReceivedPackets(msgs []ipv6.Message, slabOffset int, packets []ReceivedPacket, rxOffload bool) (n int, err error) {
+	for i, msg := range msgs {
+		var (
+			gsoSize    int
+			start      int
+			numToSplit = 1
+		)
+		if rxOffload {
+			gsoSize, err = getGSOSizeFromControl(msg.OOB[:msg.NN])
+			if err != nil {
+				return n, err
+			}
+			if gsoSize > 0 {
+				numToSplit = (msg.N + gsoSize - 1) / gsoSize
+			}
+		}
+		addrPort := msg.Addr.(*net.UDPAddr).AddrPort()
+		regionOffset := i * slabOffset // region may contain multiple coalesced packets
+		for j := 0; j < numToSplit; j++ {
+			if n >= len(packets) {
+				return n, fmt.Errorf("%w: filling received packet metadata resulted in overflow", io.ErrShortBuffer)
+			}
+			end := msg.N
+			if gsoSize > 0 && start+gsoSize < end {
+				end = start + gsoSize
+			}
+			packets[n] = ReceivedPacket{
+				Offset: regionOffset + start,
+				Size:   end - start,
+				Source: addrPort,
+			}
+			n++
+			start = end
+		}
+	}
+	return n, nil
 }
 
 func (c *linuxBatchingConn) LocalAddr() net.Addr {
@@ -603,12 +639,11 @@ func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 }
 
 // TryUpgradeToConn probes the capabilities of the OS and pconn, and upgrades
-// pconn to a [Conn] if appropriate. A batch size of [IdealBatchSize] is
-// suggested for the best performance. If len(rxqOverflowsMetricName) is
+// pconn to a [Conn] if appropriate. If len(rxqOverflowsMetricName) is
 // nonzero, then read ops will propagate the SO_RXQ_OVFL control message counter
 // to a clientmetric with the supplied name. If knobs is non-nil, UDP GSO
 // and/or UDP GRO may be disabled via control-plane node attributes.
-func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
+func TryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -632,20 +667,20 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 	}
 	b := &linuxBatchingConn{
 		pc: uc,
-		sendBatchPool: sync.Pool{
+		msgsPool: sync.Pool{
 			New: func() any {
 				ua := &net.UDPAddr{
 					IP: make([]byte, 16),
 				}
-				msgs := make([]ipv6.Message, batchSize)
+				msgs := make([]ipv6.Message, MaximumWriteBatchSize)
 				for i := range msgs {
 					msgs[i].Buffers = make([][]byte, 1)
 					msgs[i].Addr = ua
 					msgs[i].OOB = make([]byte, controlMessageSize)
 				}
-				return &sendBatch{
-					ua:   ua,
-					msgs: msgs,
+				return &msgsBatch{
+					writeBatchToUDPAddr: ua,
+					msgs:                msgs,
 				}
 			},
 		},
@@ -682,11 +717,3 @@ func init() {
 		unix.CmsgSpace(2) + // UDP_GRO or UDP_SEGMENT gsoSize (uint16)
 			unix.CmsgSpace(4) // SO_RXQ_OVFL counter (uint32)
 }
-
-// MinControlMessageSize returns the minimum control message size required to
-// support read batching via [Conn.ReadBatch].
-func MinControlMessageSize() int {
-	return controlMessageSize
-}
-
-const IdealBatchSize = 128

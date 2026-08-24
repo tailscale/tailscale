@@ -126,7 +126,7 @@ require (
 	github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
-	github.com/tailscale/wireguard-go v0.0.0-20260904023712-e855235c55a2
+	github.com/tailscale/wireguard-go v0.0.0-20260904160635-24b5b6917431
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e
 	github.com/tc-hib/winres v0.2.1
 	github.com/tcnksm/go-httpstat v0.2.0

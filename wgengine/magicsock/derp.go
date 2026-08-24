@@ -708,7 +708,7 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 	}
 }
 
-func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint) (int, error) {
+func (c *connBind) receiveDERP(slab []byte, packets []conn.ReceivedPacket) (int, error) {
 	if s := c.Conn.health.ReceiveFuncStats(health.ReceiveDERP); s != nil {
 		s.Enter()
 		defer s.Exit()
@@ -718,13 +718,14 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 		if c.isClosed() {
 			break
 		}
-		n, ep := c.processDERPReadResult(dm, buffs[0])
+		n, ep := c.processDERPReadResult(dm, slab)
 		if n == 0 {
 			// No data read occurred. Wait for another packet.
 			continue
 		}
-		sizes[0] = n
-		eps[0] = ep
+		packets[0].Size = n
+		packets[0].Offset = 0
+		packets[0].Endpoint = ep
 		return 1, nil
 	}
 	return 0, net.ErrClosed
