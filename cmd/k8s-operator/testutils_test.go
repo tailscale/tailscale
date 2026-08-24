@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale/v2"
 
@@ -765,6 +766,60 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 	}, obj)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("%s %s/%s unexpectedly present, wanted missing", reflect.TypeOf(obj).Elem().Name(), ns, name)
+	}
+}
+
+// ssaMergeInterceptor emulates the operator's egress Server-Side Apply against
+// the fake client so tests pass on both controller-runtime v0.19 (whose fake
+// client rejects apply patches outright) and v0.23.
+// TODO(beckypauley): this can be removed on release version after 1.102.x as
+// will be using controller-urntime v0.23 (includes fake client support).
+func ssaMergeInterceptor() interceptor.Funcs {
+	return interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if patch.Type() != types.ApplyPatchType {
+				return cl.Patch(ctx, obj, patch, opts...)
+			}
+			applied, ok := obj.(*unstructured.Unstructured)
+			if !ok {
+				return fmt.Errorf("ssaMergeInterceptor: expected *unstructured.Unstructured apply, got %T", obj)
+			}
+			// Fields owned by each egress field manager. Keep in sync with
+			// egressEpsReconciler.Reconcile and ensureEndpointSlices.
+			var ownedFields [][]string
+			switch fm := (&client.PatchOptions{}).ApplyOptions(opts).FieldManager; fm {
+			case egressEpsFieldOwner:
+				ownedFields = [][]string{{"endpoints"}}
+			case egressSvcsFieldOwner:
+				ownedFields = [][]string{{"metadata", "labels"}, {"addressType"}, {"ports"}}
+			default:
+				return fmt.Errorf("ssaMergeInterceptor: unexpected field manager %q", fm)
+			}
+
+			existing := &unstructured.Unstructured{}
+			existing.SetGroupVersionKind(applied.GroupVersionKind())
+			switch err := cl.Get(ctx, client.ObjectKeyFromObject(applied), existing); {
+			case apierrors.IsNotFound(err):
+				return cl.Create(ctx, applied.DeepCopy())
+			case err != nil:
+				return err
+			}
+
+			for _, fp := range ownedFields {
+				val, found, err := unstructured.NestedFieldNoCopy(applied.Object, fp...)
+				if err != nil {
+					return err
+				}
+				if !found {
+					unstructured.RemoveNestedField(existing.Object, fp...)
+					continue
+				}
+				if err := unstructured.SetNestedField(existing.Object, val, fp...); err != nil {
+					return err
+				}
+			}
+			return cl.Update(ctx, existing)
+		},
 	}
 }
 

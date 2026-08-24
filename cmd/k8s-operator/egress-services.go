@@ -268,7 +268,7 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 	for _, addrType := range addrTypes {
 		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
 		// Set only the fields this reconciler owns (labels, address type, ports).
-		// (A typed EndpointSlice cannot beused here because its Endpoints field lacks
+		// (A typed EndpointSlice cannot be used here because its Endpoints field lacks
 		// omitempty and would marshal as "endpoints: null", claiming ownership and clobbering them.)
 		// Required to avoid optimistic lock errors seen in tailscale/tailscale#20916.
 		desired := discoveryac.EndpointSlice(name, esr.tsNamespace).

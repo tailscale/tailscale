@@ -148,6 +148,17 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err != nil {
 		return res, err
 	}
+	// When no Pods are ready, apply an explicit empty endpoints list rather than
+	// omitting the field. The apply configuration's endpoints field is
+	// omitempty, so WithEndpoints of an empty set drops it entirely, which under
+	// Server-Side Apply relinquishes ownership. This may have little impact in
+	// practice, but is safer given the potential for resource contention on
+	// endpointslices.
+	if len(newEndpoints) == 0 {
+		if err := unstructured.SetNestedField(u.Object, []any{}, "endpoints"); err != nil {
+			return res, fmt.Errorf("error setting empty endpoints: %w", err)
+		}
+	}
 	if err := er.Patch(ctx, u, client.Apply, client.FieldOwner(egressEpsFieldOwner), client.ForceOwnership); err != nil {
 		return res, fmt.Errorf("error applying EndpointSlice endpoints: %w", err)
 	}

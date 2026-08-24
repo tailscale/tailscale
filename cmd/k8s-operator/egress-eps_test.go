@@ -61,6 +61,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(svc, cm).
 		WithStatusSubresource(svc).
+		WithInterceptorFuncs(ssaMergeInterceptor()).
 		Build()
 	zl, err := zap.NewDevelopment()
 	if err != nil {
