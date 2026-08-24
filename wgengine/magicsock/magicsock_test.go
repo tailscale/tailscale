@@ -49,6 +49,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
@@ -510,13 +511,11 @@ func TestNewConn(t *testing.T) {
 	conn.SetPrivateKey(key.NewNode())
 
 	go func() {
-		pkts := make([][]byte, 1)
-		sizes := make([]int, 1)
-		eps := make([]wgconn.Endpoint, 1)
-		pkts[0] = make([]byte, 64<<10)
+		slab := make([]byte, batching.ReadSlabMultiple)
+		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
 		receiveIPv4 := conn.receiveIPv4()
 		for {
-			_, err := receiveIPv4(pkts, sizes, eps)
+			_, err := receiveIPv4(slab, packets)
 			if err != nil {
 				return
 			}
@@ -1682,16 +1681,14 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	for i := range sendBuf {
 		sendBuf[i] = 'x'
 	}
-	buffs := make([][]byte, 1)
-	buffs[0] = make([]byte, 2<<10)
-	sizes := make([]int, 1)
-	eps := make([]wgconn.Endpoint, 1)
+	slab := make([]byte, batching.ReadSlabMultiple)
+	packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
 	receiveIPv4 := conn.receiveIPv4()
 	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			tb.Fatalf("WriteTo: %v", err)
 		}
-		n, err := receiveIPv4(buffs, sizes, eps)
+		n, err := receiveIPv4(slab, packets)
 		if err != nil {
 			tb.Fatal(err)
 		}
@@ -1918,13 +1915,11 @@ func TestRebindStress(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		buffs := make([][]byte, 1)
-		sizes := make([]int, 1)
-		eps := make([]wgconn.Endpoint, 1)
-		buffs[0] = make([]byte, 1500)
+		slab := make([]byte, batching.ReadSlabMultiple)
+		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
 		receiveIPv4 := conn.receiveIPv4()
 		for {
-			_, err := receiveIPv4(buffs, sizes, eps)
+			_, err := receiveIPv4(slab, packets)
 			if ctx.Err() != nil {
 				errc <- nil
 				return
@@ -2355,8 +2350,8 @@ func TestRebindingUDPConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer realConn.Close()
-	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", 1, nil)
-	c.setConnLocked(newBlockForeverConn(), "", 1, nil)
+	c.setConnLocked(realConn.(nettype.PacketConn), "udp4", nil)
+	c.setConnLocked(newBlockForeverConn(), "", nil)
 }
 
 // https://github.com/tailscale/tailscale/issues/6680: don't ignore
@@ -4217,7 +4212,6 @@ func TestConn_receiveIP(t *testing.T) {
 		// [*lazyEndpoint] and [*lazyEndpoint.maybeEP] is non-nil, we expect
 		// got.maybeEP to also be non-nil. Must not be reused across tests.
 		wantEndpointType  wgconn.Endpoint
-		wantSize          int
 		wantIsGeneveEncap bool
 		wantOk            bool
 		wantMetricInc     *clientmetric.Metric
@@ -4228,7 +4222,6 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:             &epAddrEndpointCache{},
 			wantEndpointType:  nil,
-			wantSize:          0,
 			wantIsGeneveEncap: false,
 			wantOk:            false,
 			wantMetricInc:     metricRecvDiscoBadPeer,
@@ -4239,7 +4232,6 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:             &epAddrEndpointCache{},
 			wantEndpointType:  nil,
-			wantSize:          0,
 			wantIsGeneveEncap: false,
 			wantOk:            false,
 			wantMetricInc:     metricRecvDiscoBadPeer,
@@ -4250,7 +4242,6 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:             &epAddrEndpointCache{},
 			wantEndpointType:  nil,
-			wantSize:          0,
 			wantIsGeneveEncap: false,
 			wantOk:            false,
 			wantMetricInc:     findMetricByName("netcheck_stun_recv_ipv4"),
@@ -4261,7 +4252,6 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:             &epAddrEndpointCache{},
 			wantEndpointType:  &lazyEndpoint{},
-			wantSize:          len(looksLikeNakedWireGuardInit),
 			wantIsGeneveEncap: false,
 			wantOk:            true,
 			wantMetricInc:     nil,
@@ -4274,7 +4264,6 @@ func TestConn_receiveIP(t *testing.T) {
 			insertWantEndpointTypeInPeerMap: true,
 			peerMapEpAddr:                   epAddr{ap: netip.MustParseAddrPort("127.0.0.1:7777")},
 			wantEndpointType:                newPeerMapInsertableEndpoint(0),
-			wantSize:                        len(looksLikeNakedWireGuardInit),
 			wantIsGeneveEncap:               false,
 			wantOk:                          true,
 			wantMetricInc:                   nil,
@@ -4285,7 +4274,6 @@ func TestConn_receiveIP(t *testing.T) {
 			ipp:               netip.MustParseAddrPort("127.0.0.1:7777"),
 			cache:             &epAddrEndpointCache{},
 			wantEndpointType:  &lazyEndpoint{},
-			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
 			wantIsGeneveEncap: true,
 			wantOk:            true,
 			wantMetricInc:     nil,
@@ -4300,7 +4288,6 @@ func TestConn_receiveIP(t *testing.T) {
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(0),
 			},
-			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
 			wantIsGeneveEncap: true,
 			wantOk:            true,
 			wantMetricInc:     nil,
@@ -4315,7 +4302,6 @@ func TestConn_receiveIP(t *testing.T) {
 			wantEndpointType: &lazyEndpoint{
 				maybeEP: newPeerMapInsertableEndpoint(mono.Now().Add(time.Hour * 24)),
 			},
-			wantSize:          len(looksLikeGeneveWireGuardInit) - packet.GeneveFixedHeaderLength,
 			wantIsGeneveEncap: true,
 			wantOk:            true,
 			wantMetricInc:     nil,
@@ -4354,44 +4340,66 @@ func TestConn_receiveIP(t *testing.T) {
 				c.peerMap.setNodeKeyForEpAddr(tt.peerMapEpAddr, insertEPIntoPeerMap.publicKey)
 			}
 
-			// Allow the same input packet to be used across tests, receiveIP()
-			// may mutate.
-			inputPacket := make([]byte, len(tt.b))
-			copy(inputPacket, tt.b)
+			const initialOffset = 13
+			slab := make([]byte, initialOffset+len(tt.b))
+			copy(slab[initialOffset:], tt.b)
+			before := bytes.Clone(slab)
 
-			got, gotSize, gotIsGeneveEncap, gotOk := c.receiveIP(inputPacket, tt.ipp, tt.cache)
-			if (tt.wantEndpointType == nil) != (got == nil) {
-				t.Errorf("receiveIP() (tt.wantEndpointType == nil): %v != (got == nil): %v", tt.wantEndpointType == nil, got == nil)
+			rp := wgconn.ReceivedPacket{Size: len(tt.b), Offset: initialOffset}
+			gotIsGeneveEncap, gotOk := c.receiveIP(rp.Bytes(slab), tt.ipp, tt.cache, &rp)
+			gotEndpoint := rp.Endpoint
+			if (tt.wantEndpointType == nil) != (gotEndpoint == nil) {
+				t.Errorf("receiveIP() (tt.wantEndpointType == nil): %v != (got == nil): %v", tt.wantEndpointType == nil, gotEndpoint == nil)
 			}
-			if tt.wantEndpointType != nil && reflect.TypeOf(got).String() != reflect.TypeOf(tt.wantEndpointType).String() {
-				t.Errorf("receiveIP() got = %v, want %v", reflect.TypeOf(got).String(), reflect.TypeOf(tt.wantEndpointType).String())
+			if tt.wantEndpointType != nil && reflect.TypeOf(gotEndpoint).String() != reflect.TypeOf(tt.wantEndpointType).String() {
+				t.Errorf("receiveIP() got = %v, want %v", reflect.TypeOf(gotEndpoint).String(), reflect.TypeOf(tt.wantEndpointType).String())
 			} else {
 				switch ep := tt.wantEndpointType.(type) {
 				case *endpoint:
-					if ep != got.(*endpoint) {
-						t.Errorf("receiveIP() want [*endpoint]: %p != got [*endpoint]: %p", ep, got)
+					if ep != gotEndpoint.(*endpoint) {
+						t.Errorf("receiveIP() want [*endpoint]: %p != got [*endpoint]: %p", ep, gotEndpoint)
 					}
 				case *lazyEndpoint:
-					if ep.maybeEP != nil && ep.maybeEP != got.(*lazyEndpoint).maybeEP {
-						t.Errorf("receiveIP() want [*lazyEndpoint.maybeEP]: %p != got [*lazyEndpoint.maybeEP] %p", ep, got)
+					if ep.maybeEP != nil && ep.maybeEP != gotEndpoint.(*lazyEndpoint).maybeEP {
+						t.Errorf("receiveIP() want [*lazyEndpoint.maybeEP]: %p != got [*lazyEndpoint.maybeEP] %p", ep, gotEndpoint)
 					}
 				}
 			}
 
-			if gotSize != tt.wantSize {
-				t.Errorf("receiveIP() gotSize = %v, want %v", gotSize, tt.wantSize)
-			}
 			if gotIsGeneveEncap != tt.wantIsGeneveEncap {
 				t.Errorf("receiveIP() gotIsGeneveEncap = %v, want %v", gotIsGeneveEncap, tt.wantIsGeneveEncap)
 			}
 			if gotOk != tt.wantOk {
 				t.Errorf("receiveIP() gotOk = %v, want %v", gotOk, tt.wantOk)
 			}
+
+			if tt.wantOk {
+				wantOffset := initialOffset
+				wantBytes := tt.b
+				if tt.wantIsGeneveEncap {
+					wantOffset += packet.GeneveFixedHeaderLength
+					wantBytes = tt.b[packet.GeneveFixedHeaderLength:]
+				}
+
+				if rp.Offset != wantOffset {
+					t.Errorf("receiveIP() Offset = %d, want %d", rp.Offset, wantOffset)
+				}
+				if rp.Size != len(wantBytes) {
+					t.Errorf("receiveIP() Size = %d, want %d", rp.Size, len(wantBytes))
+				}
+				if got := rp.Bytes(slab); !bytes.Equal(got, wantBytes) {
+					t.Errorf("receiveIP() bytes = %x, want %x", got, wantBytes)
+				}
+				if !bytes.Equal(slab, before) {
+					t.Error("receiveIP() mutated the receive slab")
+				}
+			}
+
 			if tt.wantMetricInc != nil && tt.wantMetricInc.Value() != metricBefore+1 {
 				t.Errorf("receiveIP() metric %v not incremented", tt.wantMetricInc.Name())
 			}
 			if tt.cache.de != nil {
-				switch ep := got.(type) {
+				switch ep := gotEndpoint.(type) {
 				case *endpoint:
 					if tt.cache.de != ep {
 						t.Errorf("receiveIP() cache populated with [*endpoint] %p, want %p", tt.cache.de, ep)
@@ -4417,10 +4425,7 @@ func TestConn_receiveIP(t *testing.T) {
 				wantNonzeroRxStats = true
 			}
 			if tt.wantOk && wantNonzeroRxStats {
-				wantRxBytes := uint64(tt.wantSize)
-				if tt.wantIsGeneveEncap {
-					wantRxBytes += packet.GeneveFixedHeaderLength
-				}
+				wantRxBytes := uint64(len(tt.b))
 				wantPhy := map[netlogtype.Connection]netlogtype.Counts{
 					{Dst: tt.ipp}: {
 						RxPackets: 1,

@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"golang.org/x/net/ipv6"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/batching"
 	"tailscale.com/net/netaddr"
@@ -43,8 +42,8 @@ type RebindingUDPConn struct {
 // intentionally pushed closest to where read/write ops occur in order to avoid
 // disrupting surrounding code that assumes nettype.PacketConn is a
 // *net.UDPConn. knobs may be nil.
-func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, batchSize int, knobs *controlknobs.Knobs) {
-	upc := batching.TryUpgradeToConn(p, network, batchSize, "magicsock_udp_rxq_overflows", knobs)
+func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, knobs *controlknobs.Knobs) {
+	upc := batching.TryUpgradeToConn(p, network, "magicsock_udp_rxq_overflows", knobs)
 	c.pconn = upc
 	c.pconnAtomic.Store(&upc)
 	c.port = uint16(c.localAddrLocked().Port)
@@ -119,20 +118,21 @@ func (c *RebindingUDPConn) WriteWireGuardBatchTo(buffs [][]byte, addr epAddr, of
 
 // ReadBatch is an alias for [batching.Conn.ReadBatch] with fallback to single
 // packet operations if c.pconn is not a [batching.Conn].
-func (c *RebindingUDPConn) ReadBatch(msgs []ipv6.Message, flags int) (int, error) {
+func (c *RebindingUDPConn) ReadBatch(slab []byte, batchingPackets []batching.ReceivedPacket) (int, error) {
 	for {
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(batching.Conn)
 		if !ok {
-			n, ap, err := c.readFromWithInitPconn(pconn, msgs[0].Buffers[0])
+			n, ap, err := c.readFromWithInitPconn(pconn, slab)
 			if err == nil {
-				msgs[0].N = n
-				msgs[0].Addr = net.UDPAddrFromAddrPort(netaddr.Unmap(ap))
+				batchingPackets[0].Offset = 0
+				batchingPackets[0].Size = n
+				batchingPackets[0].Source = netaddr.Unmap(ap)
 				return 1, nil
 			}
 			return 0, err
 		}
-		n, err := b.ReadBatch(msgs, flags)
+		n, err := b.ReadBatch(slab, batchingPackets)
 		if err != nil && pconn != c.currentConn() {
 			continue
 		}

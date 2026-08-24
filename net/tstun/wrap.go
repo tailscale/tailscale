@@ -44,12 +44,16 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-const maxBufferSize = device.MaxMessageSize
-
-// PacketStartOffset is the minimal amount of leading space that must exist
-// before &packet[offset] in a packet passed to Read, Write, or InjectInboundDirect.
-// This is necessary to avoid reallocation in wireguard-go internals.
-const PacketStartOffset = device.MessageTransportHeaderSize
+// WritePacketStartOffset is the minimal amount of leading space that must exist
+// before &packet[offset] in a packet passed to [tun.Device.Write], which includes
+// "injected" packet code paths. This leading space is required by [tun.Device]
+// implementations.
+//
+// TODO(jwhited): consider collapsing with and renaming [tun.ReadPacketSpacing]
+// for simplicity's sake. Exact math between [tun.Device] implementation and
+// direction varies, but we can just pick the maximum value to reduce cognitive
+// burden.
+const WritePacketStartOffset = device.MessageTransportHeaderSize
 
 // MaxPacketSize is the maximum size (in bytes)
 // of a packet that can be injected into a tstun.Wrapper.
@@ -68,7 +72,7 @@ var (
 var (
 	errPacketTooBig   = errors.New("packet too big")
 	errOffsetTooBig   = errors.New("offset larger than buffer length")
-	errOffsetTooSmall = errors.New("offset smaller than PacketStartOffset")
+	errOffsetTooSmall = errors.New("offset smaller than WritePacketStartOffset")
 )
 
 // parsedPacketPool holds a pool of Parsed structs for use in filtering.
@@ -119,17 +123,17 @@ type Wrapper struct {
 	// peerConfig stores the current NAT configuration.
 	peerConfig atomic.Pointer[peerConfigTable]
 
-	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
-	// allocated in wrap() and the underlying arrays should never grow.
-	vectorBuffer [][]byte
+	// startPollingOnce is used to start a [Wrapper.pollVector] goroutine at the
+	// first call to [Wrapper.Read].
+	startPollingOnce sync.Once
 	// bufferConsumedMu protects bufferConsumed from concurrent sends, closes,
 	// and send-after-close (by way of bufferConsumedClosed).
 	bufferConsumedMu sync.Mutex
 	// bufferConsumedClosed is true when bufferConsumed has been closed. This is
 	// read by bufferConsumed writers to prevent send-after-close.
 	bufferConsumedClosed bool
-	// bufferConsumed synchronizes access to vectorBuffer (shared by Read() and
-	// pollVector()).
+	// bufferConsumed synchronizes access to packet bufs and descriptors shared
+	// by [Wrapper.Read] and [Wrapper.pollVector].
 	//
 	// Close closes bufferConsumed and sets bufferConsumedClosed to true.
 	bufferConsumed chan struct{}
@@ -253,17 +257,25 @@ type tunInjectedRead struct {
 	data   []byte
 }
 
-// tunVectorReadResult is the result of a tun.Read(), or an injected packet
-// pretending to be a tun.Read().
+// tunVectorReadResult is the result of a [tun.Device.Read], or an injected
+// packet pretending to be a [tun.Device.Read].
 type tunVectorReadResult struct {
-	// When err AND data are nil, injected will be set with meaningful data
-	// (injected packet). If either err OR data is non-nil, injected should be
-	// ignored (a "real" tun.Read).
-	err      error
-	data     [][]byte
-	injected tunInjectedRead
+	// isInjected indicates if tunVectorReadResult contains a "real" [tun.Device.Read]
+	// result, or an injected packet. When true, injected will be set with meaningful
+	// data, otherwise real will be set with meaningful data.
+	isInjected bool
+	// Result consumer ([Wrapper.Read]) must call a non-nil doneHandlingFn when
+	// they are done with the result. The consumer must not access [tunVectorReadResult]
+	// fields once this func has been called, as it provides synchronization
+	// around shared memory.
+	doneHandlingFn func()
 
-	dataOffset int
+	real struct {
+		err     error
+		slab    []byte
+		packets []tun.ReadPacket
+	}
+	injected tunInjectedRead
 }
 
 // Start unblocks any Wrapper.Read calls that have already started
@@ -317,12 +329,6 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 
 	w.eventClient = bus.Client("net.tstun")
 	w.discoKeyAdvertisementPub = eventbus.Publish[events.DiscoKeyAdvertisement](w.eventClient)
-
-	w.vectorBuffer = make([][]byte, tdev.BatchSize())
-	for i := range w.vectorBuffer {
-		w.vectorBuffer[i] = make([]byte, maxBufferSize)
-	}
-	go w.pollVector()
 
 	go w.pumpEvents()
 	// The buffer starts out consumed.
@@ -461,52 +467,45 @@ func (t *Wrapper) Name() (string, error) {
 	return t.tdev.Name()
 }
 
-const ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
-
-// pollVector polls t.tdev.Read(), placing the oldest unconsumed packet vector
-// into t.vectorBuffer. This is needed because t.tdev.Read() in general may
-// block (it does on Windows), so packets may be stuck in t.vectorOutbound if
-// t.Read() called t.tdev.Read() directly.
-func (t *Wrapper) pollVector() {
-	sizes := make([]int, len(t.vectorBuffer))
-	readOffset := PacketStartOffset
-	reader := t.tdev.Read
-	if t.isTAP {
-		type tapReader interface {
-			ReadEthernet(buffs [][]byte, sizes []int, offset int) (int, error)
-		}
-		if r, ok := t.tdev.(tapReader); ok {
-			readOffset = PacketStartOffset - ethernetFrameSize
-			reader = r.ReadEthernet
-		}
-	}
-
+// pollVector polls [Wrapper.tdev.Read], writing the oldest unconsumed packet
+// slab and packet descriptors into the [Wrapper.vectorOutbound] channel.
+// slabLen and packetsLen should originate from the first call to [Wrapper.Read],
+// and are used for sizing the equivalent arguments pollVector passes to
+// [Wrapper.tdev.Read].
+//
+// [Wrapper.tdev.Read] can block, so we poll tdev in a goroutine independent of
+// wireguard-go's calls to [Wrapper.Read], in order to support native tdev reads
+// alongside packets we inject.
+//
+// pollVector returns when [t.bufferConsumed] is closed, or when [Wrapper.isClosed]
+// returns true.
+func (t *Wrapper) pollVector(slabLen, packetsLen int) {
+	slab := make([]byte, slabLen)
+	packets := make([]tun.ReadPacket, packetsLen)
 	for range t.bufferConsumed {
-		for i := range t.vectorBuffer {
-			t.vectorBuffer[i] = t.vectorBuffer[i][:cap(t.vectorBuffer[i])]
-		}
 		var n int
 		var err error
 		for n == 0 && err == nil {
 			if t.isClosed() {
 				return
 			}
-			n, err = reader(t.vectorBuffer[:], sizes, readOffset)
+			n, err = t.tdev.Read(slab, packets)
 			if t.isTAP && TAPDebug {
-				s := fmt.Sprintf("% x", t.vectorBuffer[0][:])
+				s := fmt.Sprintf("% x", slab)
 				for strings.HasSuffix(s, " 00") {
 					s = strings.TrimSuffix(s, " 00")
 				}
 				t.logf("TAP read %v, %v: %s", n, err, s)
 			}
 		}
-		for i := range sizes[:n] {
-			t.vectorBuffer[i] = t.vectorBuffer[i][:readOffset+sizes[i]]
-		}
 		t.sendVectorOutbound(tunVectorReadResult{
-			data:       t.vectorBuffer[:n],
-			dataOffset: PacketStartOffset,
-			err:        err,
+			isInjected:     false,
+			doneHandlingFn: t.sendBufferConsumed,
+			real: struct {
+				err     error
+				slab    []byte
+				packets []tun.ReadPacket
+			}{err: err, slab: slab, packets: packets[:n]},
 		})
 	}
 }
@@ -529,7 +528,7 @@ func (t *Wrapper) injectOutbound(r tunInjectedRead) {
 		return
 	}
 	select {
-	case t.vectorOutbound <- tunVectorReadResult{injected: r}:
+	case t.vectorOutbound <- tunVectorReadResult{injected: r, isInjected: true}:
 	case <-t.closed:
 	}
 }
@@ -868,32 +867,42 @@ func (t *Wrapper) awaitStart() {
 	}
 }
 
-func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
+// Read implements [tun.Device.Read].
+func (t *Wrapper) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	if !t.started.Load() {
 		t.awaitStart()
 	}
+	t.startPollingOnce.Do(func() {
+		go t.pollVector(len(slab), len(packets))
+	})
 	// packet from OS read and sent to WG
 	res, ok := <-t.vectorOutbound
 	if !ok {
 		return 0, io.EOF
 	}
-	if res.err != nil && len(res.data) == 0 {
-		return 0, res.err
+	defer func() {
+		if res.doneHandlingFn != nil {
+			res.doneHandlingFn()
+		}
+	}()
+	if res.isInjected {
+		return t.injectedRead(res.injected, slab, packets, tun.ReadPacketSpacing)
 	}
-	if res.data == nil {
-		return t.injectedRead(res.injected, buffs, sizes, offset)
+	if res.real.err != nil && len(res.real.packets) == 0 {
+		return 0, res.real.err
 	}
 
-	metricPacketOut.Add(int64(len(res.data)))
+	metricPacketOut.Add(int64(len(res.real.packets)))
 
-	var buffsPos int
+	var numPackets int
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
 	var buffsGRO *gro.GRO
-	for _, data := range res.data {
-		p.Decode(data[res.dataOffset:])
+	for _, meta := range res.real.packets {
+		data := res.real.slab[meta.Offset : meta.Offset+meta.Size]
+		p.Decode(data)
 
 		if buildfeatures.HasCapture && captHook != nil {
 			captHook(packet.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
@@ -915,27 +924,19 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 		// Make sure to do SNAT after filtering, so that any flow tracking in
 		// the filter sees the original source address. See #12133.
 		pc.snat(p)
-		n := copy(buffs[buffsPos][offset:], p.Buffer())
-		if n != len(data)-res.dataOffset {
-			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
+		n := copy(slab[meta.Offset:meta.Offset+meta.Size], p.Buffer())
+		if n != len(data) {
+			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)))
 		}
-		sizes[buffsPos] = n
-		buffsPos++
+		packets[numPackets] = meta
+		numPackets++
 	}
 	if buffsGRO != nil {
 		buffsGRO.Flush()
 	}
 
-	// t.vectorBuffer has a fixed location in memory.
-	// TODO(raggi): add an explicit field and possibly method to the tunVectorReadResult
-	// to signal when sendBufferConsumed should be called.
-	if &res.data[0] == &t.vectorBuffer[0] {
-		// We are done with t.buffer. Let poll() re-use it.
-		t.sendBufferConsumed()
-	}
-
 	t.noteActivity()
-	return buffsPos, res.err
+	return numPackets, res.real.err
 }
 
 const (
@@ -1000,10 +1001,10 @@ func invertGSOChecksum(pkt []byte, gso netstack_GSO) {
 // filter rules, but UDP/SCTP flow state is still recorded via
 // [filter.Filter.UpdateOutboundFlowState] so inbound replies are admitted by
 // [filter.Filter.RunIn].
-func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []int, offset int) (n int, err error) {
+func (t *Wrapper) injectedRead(res tunInjectedRead, slab []byte, packets []tun.ReadPacket, spacing int) (n int, err error) {
 	var gso netstack_GSO
 
-	pkt := outBuffs[0][offset:]
+	pkt := slab[spacing : len(slab)-spacing]
 	if res.packet != nil {
 		if !buildfeatures.HasNetstack {
 			panic("unreachable")
@@ -1015,8 +1016,11 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 		pkt = pkt[:bufN]
 		defer res.packet.DecRef() // defer DecRef so we may continue to reference it
 	} else {
-		sizes[0] = copy(pkt, res.data)
-		pkt = pkt[:sizes[0]]
+		packets[0] = tun.ReadPacket{
+			Offset: tun.ReadPacketSpacing,
+			Size:   copy(pkt, res.data),
+		}
+		pkt = pkt[:packets[0].Size]
 		n = 1
 	}
 
@@ -1078,13 +1082,15 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, outBuffs [][]byte, sizes []i
 		if err != nil {
 			return 0, err
 		}
-		n, err = tun.GSOSplit(pkt, gsoOptions, outBuffs, sizes, offset)
+		n, err = tun.GSOSplit(pkt, gsoOptions, slab, packets, spacing)
 	}
 
 	if buildfeatures.HasNetLog {
 		if update := t.connCounter.Load(); update != nil {
 			for i := 0; i < n; i++ {
-				updateConnCounter(update, outBuffs[i][offset:offset+sizes[i]], false)
+				start := packets[i].Offset
+				end := packets[i].Offset + packets[i].Size
+				updateConnCounter(update, slab[start:end], false)
 			}
 		}
 	}
@@ -1298,27 +1304,29 @@ func (t *Wrapper) SetJailedFilter(filt *filter.Filter) {
 	t.jailedFilter.Store(filt)
 }
 
-// InjectInboundPacketBuffer makes the Wrapper device behave as if a packet
+// InjectInboundPacketBuffer makes the [Wrapper] device behave as if a packet
 // (pkt) with the given contents was received from the network.
 // It takes ownership of one reference count on pkt. The injected
 // packet will not pass through inbound filters.
 //
-// pkt will be copied into buffs before writing to the underlying tun.Device.
-// Therefore, callers must allocate and pass a buffs slice that is sized
-// appropriately for holding pkt.Size() + PacketStartOffset as a single
-// element (buffs[0]) and split across multiple elements if the originating
-// stack supports GSO. sizes must be sized with similar consideration,
-// len(buffs) should be equal to len(sizes). If any len(buffs[<index>]) was
-// mutated by InjectInboundPacketBuffer it will be reset to cap(buffs[<index>])
-// before returning.
+// pkt will be copied into slab, and potentially GSO split, before writing to
+// the underlying [tun.Device]. Therefore, callers must allocate and pass a slab
+// slice that is sized for holding:
+//
+//	pkt.Data.Size() +
+//	(N * network headers len) +
+//	((N+1) * [WritePacketStartOffset])
+//
+// N is 1 when the originating netstack does not support GSO, otherwise N should
+// be [conn.IdealBatchSize].
 //
 // This path is typically used to deliver synthesized packets to the
 // host networking stack.
-func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs [][]byte, sizes []int) error {
+func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, slab []byte) error {
 	if !buildfeatures.HasNetstack {
 		panic("unreachable")
 	}
-	buf := buffs[0][PacketStartOffset:]
+	buf := slab[WritePacketStartOffset:]
 
 	bufN := copy(buf, pkt.NetworkHeader().Slice())
 	bufN += copy(buf[bufN:], pkt.TransportHeader().Slice())
@@ -1348,10 +1356,17 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs []
 		return err
 	}
 
+	// [tun.ReadPacket] is the shape required by [tun.GSOSplit], but is
+	// admittedly confusing in the context of the direction of our eventual
+	// i/o op, [tun.Device.Write]. This is purely historical, as [tun.GSOSplit]
+	// was initially only used post-[tun.Device.Read] heading out to the network,
+	// but we are using it in the opposite direction here.
+	packets := make([]tun.ReadPacket, conn.IdealBatchSize)
+	writeBufs := make([][]byte, conn.IdealBatchSize)
 	// TODO(jwhited): support GSO passthrough to t.tdev. If t.tdev supports
 	//  GSO we don't need to split here and coalesce inside wireguard-go,
 	//  we can pass a coalesced segment all the way through.
-	n, err := tun.GSOSplit(buf, gso, buffs, sizes, PacketStartOffset)
+	n, err := tun.GSOSplit(buf, gso, slab, packets, WritePacketStartOffset)
 	if err != nil {
 		if errors.Is(err, tun.ErrTooManySegments) {
 			t.limitedLogf("InjectInboundPacketBuffer: GSO split overflows buffs")
@@ -1359,15 +1374,10 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs []
 			return err
 		}
 	}
-	for i := range n {
-		buffs[i] = buffs[i][:PacketStartOffset+sizes[i]]
+	for i, meta := range packets[:n] {
+		writeBufs[i] = slab[meta.Offset-WritePacketStartOffset : meta.Offset+meta.Size]
 	}
-	defer func() {
-		for i := range n {
-			buffs[i] = buffs[i][:cap(buffs[i])]
-		}
-	}()
-	_, err = t.tdevWrite(buffs[:n], PacketStartOffset)
+	_, err = t.tdevWrite(writeBufs[:n], WritePacketStartOffset)
 	return err
 }
 
@@ -1377,7 +1387,7 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *netstack_PacketBuffer, buffs []
 // The injected packet will not pass through inbound filters.
 //
 // The packet contents are to start at &buf[offset].
-// offset must be greater or equal to PacketStartOffset.
+// offset must be greater or equal to WritePacketStartOffset.
 // The space before &buf[offset] will be used by WireGuard.
 func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	if len(buf) > MaxPacketSize {
@@ -1386,7 +1396,7 @@ func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	if len(buf) < offset {
 		return errOffsetTooBig
 	}
-	if offset < PacketStartOffset {
+	if offset < WritePacketStartOffset {
 		return errOffsetTooSmall
 	}
 
@@ -1408,10 +1418,10 @@ func (t *Wrapper) InjectInboundCopy(packet []byte) error {
 		return nil
 	}
 
-	buf := make([]byte, PacketStartOffset+len(packet))
-	copy(buf[PacketStartOffset:], packet)
+	buf := make([]byte, WritePacketStartOffset+len(packet))
+	copy(buf[WritePacketStartOffset:], packet)
 
-	return t.InjectInboundDirect(buf, PacketStartOffset)
+	return t.InjectInboundDirect(buf, WritePacketStartOffset)
 }
 
 func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingRequest) {

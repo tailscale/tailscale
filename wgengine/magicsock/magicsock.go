@@ -28,7 +28,6 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"go4.org/mem"
-	"golang.org/x/net/ipv6"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -192,8 +191,6 @@ type Conn struct {
 	// protocols.
 	pconn4 RebindingUDPConn
 	pconn6 RebindingUDPConn
-
-	receiveBatchPool sync.Pool
 
 	// closeDisco4 and closeDisco6 are io.Closers to shut down the raw
 	// disco packet receivers. If nil, no raw disco receiver is
@@ -593,17 +590,6 @@ func newConn(logf logger.Logf) *Conn {
 	}
 	c.discoAtomic.Set(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
-	c.receiveBatchPool = sync.Pool{New: func() any {
-		msgs := make([]ipv6.Message, c.bind.BatchSize())
-		for i := range msgs {
-			msgs[i].Buffers = make([][]byte, 1)
-			msgs[i].OOB = make([]byte, batching.MinControlMessageSize())
-		}
-		batch := &receiveBatch{
-			msgs: msgs,
-		}
-		return batch
-	}}
 	c.muCond = sync.NewCond(&c.mu)
 	c.networkUp.Store(true) // assume up until told otherwise
 	return c
@@ -1705,26 +1691,6 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 	return false, errDropDerpPacket
 }
 
-type receiveBatch struct {
-	msgs []ipv6.Message
-}
-
-func (c *Conn) getReceiveBatchForBuffs(buffs [][]byte) *receiveBatch {
-	batch := c.receiveBatchPool.Get().(*receiveBatch)
-	for i := range buffs {
-		batch.msgs[i].Buffers[0] = buffs[i]
-		batch.msgs[i].OOB = batch.msgs[i].OOB[:cap(batch.msgs[i].OOB)]
-	}
-	return batch
-}
-
-func (c *Conn) putReceiveBatch(batch *receiveBatch) {
-	for i := range batch.msgs {
-		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers, OOB: batch.msgs[i].OOB}
-	}
-	c.receiveBatchPool.Put(batch)
-}
-
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
 		&c.metrics.inboundPacketsIPv4Total,
@@ -1749,8 +1715,9 @@ func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
+	var batchingPackets []batching.ReceivedPacket
 
-	return func(buffs [][]byte, sizes []int, eps []conn.Endpoint) (_ int, retErr error) {
+	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
@@ -1763,11 +1730,12 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 		if ruc == nil {
 			panic("nil RebindingUDPConn")
 		}
+		if len(batchingPackets) != len(packets) {
+			batchingPackets = make([]batching.ReceivedPacket, len(packets))
+		}
 
-		batch := c.getReceiveBatchForBuffs(buffs)
-		defer c.putReceiveBatch(batch)
 		for {
-			numMsgs, err := ruc.ReadBatch(batch.msgs[:len(buffs)], 0)
+			numMsgs, err := ruc.ReadBatch(slab, batchingPackets)
 			if err != nil {
 				if neterror.PacketWasTruncated(err) {
 					continue
@@ -1776,33 +1744,33 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 			}
 
 			reportToCaller := false
-			for i, msg := range batch.msgs[:numMsgs] {
-				if msg.N == 0 {
-					sizes[i] = 0
+			for i, batchingPacket := range batchingPackets[:numMsgs] {
+				if batchingPacket.Size == 0 {
+					packets[i].Size = 0
 					continue
 				}
-				ipp := msg.Addr.(*net.UDPAddr).AddrPort()
-				if ep, size, isGeneveEncap, ok := c.receiveIP(msg.Buffers[0][:msg.N], ipp, &epCache); ok {
+				buf := slab[batchingPacket.Offset : batchingPacket.Offset+batchingPacket.Size]
+				packets[i].Size = batchingPacket.Size
+				packets[i].Offset = batchingPacket.Offset
+				if isGeneveEncap, ok := c.receiveIP(buf, batchingPacket.Source, &epCache, &packets[i]); ok {
 					if isGeneveEncap {
 						if peerRelayPacketMetric != nil {
 							peerRelayPacketMetric.Add(1)
 						}
 						if peerRelayBytesMetric != nil {
-							peerRelayBytesMetric.Add(int64(msg.N))
+							peerRelayBytesMetric.Add(int64(len(buf)))
 						}
 					} else {
 						if directPacketMetric != nil {
 							directPacketMetric.Add(1)
 						}
 						if directBytesMetric != nil {
-							directBytesMetric.Add(int64(msg.N))
+							directBytesMetric.Add(int64(len(buf)))
 						}
 					}
-					eps[i] = ep
-					sizes[i] = size
 					reportToCaller = true
 				} else {
-					sizes[i] = 0
+					packets[i].Size = 0
 				}
 			}
 			if reportToCaller {
@@ -1821,17 +1789,17 @@ func looksLikeInitiationMsg(b []byte) bool {
 
 // receiveIP is the shared bits of ReceiveIPv4 and ReceiveIPv6.
 //
-// size is the length of 'b' to report up to wireguard-go (only relevant if
-// 'ok' is true).
+// rp.Size & rp.Offset are pre-populated by callers. receiveIP must keep them
+// up to date if b's length is mutated, and ok will be true. receiveIP must set
+// rp.Endpoint if ok is true.
 //
 // isGeneveEncap is whether 'b' is encapsulated by a Geneve header (only
 // relevant if 'ok' is true).
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCache) (_ conn.Endpoint, size int, isGeneveEncap bool, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCache, rp *conn.ReceivedPacket) (isGeneveEncap bool, ok bool) {
 	var ep *endpoint
-	size = len(b)
 
 	var geneve packet.GeneveHeader
 	pt, isGeneveEncap := packetLooksLike(b)
@@ -1842,7 +1810,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 			// Decode only returns an error when 'b' is too short, and
 			// 'isGeneveEncap' indicates it's a sufficient length.
 			c.logf("[unexpected] geneve header decoding error: %v", err)
-			return nil, 0, false, false
+			return false, false
 		}
 		src.vni = geneve.VNI
 	}
@@ -1857,10 +1825,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// [disco.MessageType], but we assert it should be handshake-related.
 		shouldByRelayHandshakeMsg := geneve.Control == true
 		c.handleDiscoMessage(b, src, shouldByRelayHandshakeMsg, key.NodePublic{}, discoRXPathUDP)
-		return nil, 0, false, false
+		return false, false
 	case packetLooksLikeSTUNBinding:
 		c.netChecker.ReceiveSTUNPacket(b, ipp)
-		return nil, 0, false, false
+		return false, false
 	default:
 		// Fall through for all other packet types as they are assumed to
 		// be potentially WireGuard.
@@ -1870,7 +1838,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// If we have no private key, we're logged out or
 		// stopped. Don't try to pass these wireguard packets
 		// up to wireguard-go; it'll just complain (issue 1167).
-		return nil, 0, false, false
+		return false, false
 	}
 
 	// geneveInclusivePacketLen holds the packet length prior to any potential
@@ -1879,13 +1847,10 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 	if src.vni.IsSet() {
 		// Strip away the Geneve header before returning the packet to
 		// wireguard-go.
-		//
-		// TODO(jwhited): update [github.com/tailscale/wireguard-go/conn.ReceiveFunc]
-		//  to support returning start offset in order to get rid of this memmove perf
-		//  penalty.
-		size = copy(b, b[packet.GeneveFixedHeaderLength:])
-		b = b[:size]
+		b = b[packet.GeneveFixedHeaderLength:]
+		rp.Offset += packet.GeneveFixedHeaderLength
 	}
+	rp.Size = len(b)
 
 	if cache.epAddr == src && cache.de != nil && cache.gen == cache.de.numStopAndReset() {
 		ep = cache.de
@@ -1896,7 +1861,8 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		if !ok {
 			// TODO(jwhited): reuse [lazyEndpoint] across calls to receiveIP()
 			//  for the same batch & [epAddr] src.
-			return &lazyEndpoint{c: c, src: src}, size, isGeneveEncap, true
+			rp.Endpoint = &lazyEndpoint{c: c, src: src}
+			return isGeneveEncap, true
 		}
 		cache.epAddr = src
 		cache.de = de
@@ -1917,9 +1883,11 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *epAddrEndpointCach
 		// unlucky and fail to JIT configure the "correct" peer.
 		// TODO(jwhited): relax this to include direct connections
 		//  See http://go/corp/29422 & http://go/corp/30042
-		return &lazyEndpoint{c: c, maybeEP: ep, src: src}, size, isGeneveEncap, true
+		rp.Endpoint = &lazyEndpoint{c: c, maybeEP: ep, src: src}
+		return isGeneveEncap, true
 	}
-	return ep, size, isGeneveEncap, true
+	rp.Endpoint = ep
+	return isGeneveEncap, true
 }
 
 // discoLogLevel controls the verbosity of discovery log messages.
@@ -3731,13 +3699,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	defer ruc.mu.Unlock()
 
 	if runtime.GOOS == "js" {
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+		ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
 		return nil
 	}
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
-		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+		ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
 		return nil
 	}
 
@@ -3796,7 +3764,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
-		ruc.setConnLocked(pconn, network, c.bind.BatchSize(), c.controlKnobs)
+		ruc.setConnLocked(pconn, network, c.controlKnobs)
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
@@ -3807,7 +3775,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// Set pconn to a dummy conn whose reads block until closed.
 	// This keeps the receive funcs alive for a future in which
 	// we get a link change and we can try binding again.
-	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+	ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
 	if network == "udp4" {
 		c.health.SetUDP4Unbound(true)
 	}

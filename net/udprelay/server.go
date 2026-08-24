@@ -24,11 +24,9 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/crypto/blake2s"
-	"golang.org/x/net/ipv6"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/net/batching"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -569,13 +567,14 @@ type singlePacketConn struct {
 	*net.UDPConn
 }
 
-func (c *singlePacketConn) ReadBatch(msgs []ipv6.Message, _ int) (int, error) {
-	n, ap, err := c.UDPConn.ReadFromUDPAddrPort(msgs[0].Buffers[0])
+func (c *singlePacketConn) ReadBatch(slab []byte, packets []batching.ReceivedPacket) (int, error) {
+	n, ap, err := c.UDPConn.ReadFromUDPAddrPort(slab)
 	if err != nil {
 		return 0, err
 	}
-	msgs[0].N = n
-	msgs[0].Addr = net.UDPAddrFromAddrPort(netaddr.Unmap(ap))
+	packets[0].Offset = 0
+	packets[0].Size = n
+	packets[0].Source = ap
 	return 1, nil
 }
 
@@ -692,7 +691,7 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 					break SocketsLoop
 				}
 			}
-			pc := batching.TryUpgradeToConn(uc, network, batching.IdealBatchSize, "udprelay_rxq_overflows", s.controlKnobs)
+			pc := batching.TryUpgradeToConn(uc, network, "udprelay_rxq_overflows", s.controlKnobs)
 			bc, ok := pc.(batching.Conn)
 			if !ok {
 				bc = &singlePacketConn{uc}
@@ -874,19 +873,11 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 		s.Close()
 	}()
 
-	msgs := make([]ipv6.Message, batching.IdealBatchSize)
-	for i := range msgs {
-		msgs[i].OOB = make([]byte, batching.MinControlMessageSize())
-		msgs[i].Buffers = make([][]byte, 1)
-		msgs[i].Buffers[0] = make([]byte, 1<<16-1)
-	}
-	writeBuffsByDest := make(map[netip.AddrPort][][]byte, batching.IdealBatchSize)
+	slab := make([]byte, 2*batching.ReadSlabMultiple)
+	packets := make([]batching.ReceivedPacket, 2*batching.MinimumReadBatchSize)
+	writeBuffsByDest := make(map[netip.AddrPort][][]byte, batching.MaximumWriteBatchSize)
 
 	for {
-		for i := range msgs {
-			msgs[i] = ipv6.Message{Buffers: msgs[i].Buffers, OOB: msgs[i].OOB[:cap(msgs[i].OOB)]}
-		}
-
 		// TODO: extract laddr from IP_PKTINFO for use in reply
 		// ReadBatch will split coalesced datagrams before returning, which
 		// WriteBatchTo will re-coalesce further down. We _could_ be more
@@ -894,7 +885,7 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 		// are non-control/handshake packets. We pay the memmove/memcopy
 		// performance penalty for now in the interest of simple single packet
 		// handlers.
-		n, err := readFromSocket.ReadBatch(msgs, 0)
+		n, err := readFromSocket.ReadBatch(slab, packets)
 		if err != nil {
 			s.logf("error reading from socket(%v): %v", readFromSocket.LocalAddr(), err)
 			return
@@ -907,13 +898,12 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 			bytes6   int64
 			packets6 int64
 		}{}
-		for _, msg := range msgs[:n] {
-			if msg.N == 0 {
+		for _, packet := range packets[:n] {
+			if packet.Size == 0 {
 				continue
 			}
-			buf := msg.Buffers[0][:msg.N]
-			from := msg.Addr.(*net.UDPAddr).AddrPort()
-			write, to, isDataPacket := s.handlePacket(from, buf)
+			buf := slab[packet.Offset : packet.Offset+packet.Size]
+			write, to, isDataPacket := s.handlePacket(packet.Source, buf)
 			if !to.IsValid() {
 				continue
 			}
@@ -926,10 +916,10 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 					forwardedByOutAF.packets6++
 				}
 			}
-			if from.Addr().Is4() == to.Addr().Is4() || otherSocket != nil {
+			if packet.Source.Addr().Is4() == to.Addr().Is4() || otherSocket != nil {
 				buffs, ok := writeBuffsByDest[to]
 				if !ok {
-					buffs = make([][]byte, 0, batching.IdealBatchSize)
+					buffs = make([][]byte, 0, batching.MaximumWriteBatchSize)
 				}
 				buffs = append(buffs, write)
 				writeBuffsByDest[to] = buffs
@@ -939,7 +929,7 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 				// [server.handlePacket] has to see a packet from a particular
 				// address family at least once in order for it to return a
 				// packet to write towards a dest for the same address family.
-				s.logf("[unexpected] packet from: %v produced packet to: %v while otherSocket is nil", from, to)
+				s.logf("[unexpected] packet from: %v produced packet to: %v while otherSocket is nil", packet.Source, to)
 			}
 		}
 
