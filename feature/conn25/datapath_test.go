@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	wgtun "github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/netipx"
 	"tailscale.com/net/packet"
@@ -414,17 +415,16 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 				t.Errorf("unexpected packet dst: want %v, got %v", want, got)
 			}
 			if tt.expectedInjectedPkt != nil {
-				var buf [tstun.MaxPacketSize]byte
-				bufs := [][]byte{buf[:]}
-				sizes := []int{0}
-				n, err := tun.Read(bufs, sizes, 0)
+				slab := make([]byte, (2*wgtun.ReadPacketSpacing)+(2*(1<<16-1)))
+				packets := make([]wgtun.ReadPacket, 1)
+				n, err := tun.Read(slab, packets)
 				if err != nil {
 					t.Errorf("error reading injected packet: %v", err)
 				}
 				if n != 1 {
 					t.Errorf("expected to read 1 packet, got %d", n)
 				}
-				if want, got := tt.expectedInjectedPkt, buf[:sizes[0]]; !bytes.Equal(want, got) {
+				if want, got := tt.expectedInjectedPkt, slab[packets[0].Offset:packets[0].Offset+packets[0].Size]; !bytes.Equal(want, got) {
 					t.Errorf("unexpected contents of injected packet: want %+x, got %+x", want, got)
 
 				}

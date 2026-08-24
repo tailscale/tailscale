@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
+	"github.com/tailscale/wireguard-go/tun"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -1020,32 +1021,27 @@ func (ns *Impl) DialContextUDPWithBind(ctx context.Context, localAddr netip.Addr
 	return gonet.DialUDP(ns.ipstack, localAddress, remoteAddress, ipType)
 }
 
-// getInjectInboundBuffsSizes returns packet memory and a sizes slice for usage
-// when calling tstun.Wrapper.InjectInboundPacketBuffer(). These are sized with
-// consideration for MTU and GSO support on ns.linkEP. They should be recycled
+// getInjectInboundPacketSlab returns packet memory and related descriptors to
+// be used when calling [tstun.Wrapper.InjectInboundPacketBuffer]. The returned
+// elements are sized with consideration for MTU and GSO support on [Impl.linkEP],
+// and inter-packet spacing requirements of [tun.GSOSplit]. It should be recycled
 // across subsequent inbound packet injection calls.
-func (ns *Impl) getInjectInboundBuffsSizes() (buffs [][]byte, sizes []int) {
-	batchSize := 1
-	gsoEnabled := ns.linkEP.SupportedGSO() == stack.HostGSOSupported
-	if gsoEnabled {
-		batchSize = conn.IdealBatchSize
+func (ns *Impl) getInjectInboundPacketSlab() (slab []byte, packets []tun.ReadPacket, writeBufs [][]byte) {
+	payloadLen := int(tstun.DefaultTUNMTU())
+	packetCount := 1
+	if ns.linkEP.SupportedGSO() == stack.HostGSOSupported {
+		payloadLen = 2 * int(ns.linkEP.GSOMaxSize())
+		packetCount = conn.IdealBatchSize
 	}
-	buffs = make([][]byte, batchSize)
-	sizes = make([]int, batchSize)
-	for i := 0; i < batchSize; i++ {
-		if i == 0 && gsoEnabled {
-			buffs[i] = make([]byte, tstun.PacketStartOffset+ns.linkEP.GSOMaxSize())
-		} else {
-			buffs[i] = make([]byte, tstun.PacketStartOffset+tstun.DefaultTUNMTU())
-		}
-	}
-	return buffs, sizes
+	return make([]byte, tstun.WritePacketStartOffset+payloadLen+tstun.WritePacketStartOffset),
+		make([]tun.ReadPacket, packetCount),
+		make([][]byte, packetCount)
 }
 
 // The inject goroutine reads in packets that netstack generated, and delivers
 // them to the correct path.
 func (ns *Impl) inject() {
-	inboundBuffs, inboundBuffsSizes := ns.getInjectInboundBuffsSizes()
+	inboundSlab, packets, writeBufs := ns.getInjectInboundPacketSlab()
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
 		if pkt == nil {
@@ -1071,7 +1067,7 @@ func (ns *Impl) inject() {
 		// pkt has a non-zero refcount, so injection methods takes
 		// ownership of one count and will decrement on completion.
 		if sendToHost {
-			if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundBuffs, inboundBuffsSizes); err != nil {
+			if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundSlab, packets, writeBufs); err != nil {
 				ns.logf("netstack inject inbound: %v", err)
 				return
 			}

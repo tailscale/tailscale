@@ -21,6 +21,7 @@ import (
 	"github.com/gaissmai/bart"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	wgtun "github.com/tailscale/wireguard-go/tun"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
@@ -199,6 +200,13 @@ func newFakeTUN(logf logger.Logf, bus *eventbus.Bus, secure bool) (*fakeTUN, *Wr
 	return ftun.(*fakeTUN), tun
 }
 
+// getSinglePacketReadArgs returns a slab and packets slice sized for passing to
+// [tun.Device.Read] where [tun.Device.BatchSize] returns 1.
+func getSinglePacketReadArgs() (slab []byte, packets []wgtun.ReadPacket) {
+	return make([]byte, MaxPacketSize+(2*wgtun.ReadPacketSpacing)),
+		make([]wgtun.ReadPacket, 1)
+}
+
 func TestReadAndInject(t *testing.T) {
 	bus := eventbustest.NewBus(t)
 	chtun, tun := newChannelTUN(t.Logf, bus, false)
@@ -225,21 +233,18 @@ func TestReadAndInject(t *testing.T) {
 		}(packet)
 	}
 
-	var buf [MaxPacketSize]byte
 	seen := make(map[string]bool)
-	sizes := make([]int, 1)
+	slab, packets := getSinglePacketReadArgs()
 	// We expect the same packets back, in no particular order.
 	for i := range len(written) + len(injected) {
-		packet := buf[:]
-		buffs := [][]byte{packet}
-		numPackets, err := tun.Read(buffs, sizes, 0)
+		numPackets, err := tun.Read(slab, packets)
 		if err != nil {
 			t.Errorf("read %d: error: %v", i, err)
 		}
 		if numPackets != 1 {
 			t.Fatalf("read %d packets, expected %d", numPackets, 1)
 		}
-		packet = packet[:sizes[0]]
+		packet := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
 		packetLen := len(packet)
 		if packetLen != size {
 			t.Errorf("read %d: got size %d; want %d", i, packetLen, size)
@@ -373,7 +378,6 @@ func TestFilter(t *testing.T) {
 		}
 	}()
 
-	var buf [MaxPacketSize]byte
 	var stats netlogtype.CountsByConnection
 	tun.SetConnectionCounter(stats.Add)
 	for _, tt := range tests {
@@ -381,7 +385,6 @@ func TestFilter(t *testing.T) {
 			var n int
 			var err error
 			var filtered bool
-			sizes := make([]int, 1)
 
 			tunStats := stats.Clone()
 			stats.Reset()
@@ -399,8 +402,10 @@ func TestFilter(t *testing.T) {
 				_, err = tun.Write([][]byte{tt.data}, 0)
 				filtered = tun.lastActivityAtomic.LoadAtomic() == 0
 			} else {
-				chtun.Outbound <- tt.data
-				n, err = tun.Read([][]byte{buf[:]}, sizes, 0)
+				// chtun.Outbound is unbuffered, and won't be drained until the
+				// first Read call.
+				go func() { chtun.Outbound <- tt.data }()
+				n, err = tun.Read(getSinglePacketReadArgs())
 				// In the read direction, errors are fatal, so we return n = 0 instead.
 				filtered = (n == 0)
 			}
@@ -487,9 +492,7 @@ func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
 
 	// Drain the injected packet via Read. This drives injectedRead, which
 	// is what records the reverse-flow tuple in filter state.
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	if n, err := tun.Read([][]byte{buf[:]}, sizes, 0); err != nil {
+	if n, err := tun.Read(getSinglePacketReadArgs()); err != nil {
 		t.Fatalf("Read: %v", err)
 	} else if n != 1 {
 		t.Fatalf("Read returned %d packets, want 1", n)
@@ -972,12 +975,9 @@ func TestCaptureHook(t *testing.T) {
 	// Loop reading and discarding packets; this ensures that we don't have
 	// packets stuck in vectorOutbound
 	go func() {
-		var (
-			buf   [MaxPacketSize]byte
-			sizes = make([]int, 1)
-		)
+		slab, packets := getSinglePacketReadArgs()
 		for {
-			_, err := w.Read([][]byte{buf[:]}, sizes, 0)
+			_, err := w.Read(slab, packets)
 			if err != nil {
 				return
 			}
@@ -992,10 +992,10 @@ func TestCaptureHook(t *testing.T) {
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
-	buffs := make([][]byte, 1)
-	buffs[0] = make([]byte, PacketStartOffset+packetBuf.Size())
-	sizes := make([]int, 1)
-	w.InjectInboundPacketBuffer(packetBuf, buffs, sizes)
+	slab := make([]byte, packetBuf.Size()+(2*WritePacketStartOffset))
+	packets := make([]wgtun.ReadPacket, 1)
+	writeBufs := make([][]byte, 1)
+	w.InjectInboundPacketBuffer(packetBuf, slab, packets, writeBufs)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),
@@ -1113,11 +1113,12 @@ func TestInterceptOrdering(t *testing.T) {
 	tun.PreFilterPacketOutboundToWireGuardAppConnectorIntercept = orderedFilterFn(3)
 	tun.PostFilterPacketOutboundToWireGuard = orderedFilterFn(4)
 
-	// Read the packet.
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98) // Simulate tun device sending.
-	tun.Read([][]byte{buf[:]}, sizes, 0)
+	// Read the packet. chtun.Outbound is unbuffered, and won't be drained until
+	// first Read call.
+	go func() {
+		chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98) // Simulate tun device sending.
+	}()
+	tun.Read(getSinglePacketReadArgs())
 
 	if seq != numOutboundIntercepts {
 		t.Errorf("got number of intercepts run in Read(): %d; want: %d", seq, numOutboundIntercepts)
@@ -1142,16 +1143,15 @@ func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
 		t.Fatalf("InjectOutbound error: %v", err)
 	}
 
-	var buf [MaxPacketSize]byte
-	sizes := make([]int, 1)
-	tun.Read([][]byte{buf[:]}, sizes, 0)
+	slab, packets := getSinglePacketReadArgs()
+	tun.Read(slab, packets)
 
 	if !called {
 		t.Error("app connector hook was not called in InjectOutbound")
 	}
 
 	wantPkt := udp4("169.254.0.1", "100.25.63.57", 80, 12345)
-	gotPkt := buf[:sizes[0]]
+	gotPkt := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
 	if !bytes.Equal(wantPkt, gotPkt) {
 		t.Errorf("packet mismatch\nwant:\t% x\ngot:\t% x", wantPkt, gotPkt)
 	}

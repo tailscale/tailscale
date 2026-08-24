@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	wgconn "github.com/tailscale/wireguard-go/conn"
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
@@ -944,11 +943,6 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 		return fmt.Errorf("failed to configure tun: %w", err)
 	}
 
-	// Depending on platform, we need some space for headers at the front
-	// of TUN I/O op buffers. The below constant is more than enough space
-	// for any platform that this might run on.
-	tunStartOffset := device.MessageTransportHeaderSize
-
 	// This goroutine reads packets from the TUN device and evaluates if they
 	// are IPv4 packets destined for loopback via DERP. If so, it performs L3 NAT
 	// (swap src/dst) and writes them towards DERP in order to loopback via the
@@ -958,25 +952,21 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 	go func() {
 		defer wg.Done()
 
-		numBufs := wgconn.IdealBatchSize
-		bufs := make([][]byte, 0, numBufs)
-		sizes := make([]int, numBufs)
-		for range numBufs {
-			bufs = append(bufs, make([]byte, mtu+tunStartOffset))
-		}
+		slab := make([]byte, 2*(1<<16-1)+(2*tun.ReadPacketSpacing))
+		packets := make([]tun.ReadPacket, dev.BatchSize())
 
 		destinationAddrBytes := destinationAddr.AsSlice()
 		scratch := make([]byte, 4)
 		toDERPPubKey := toc.SelfPublicKey()
 		for {
-			n, err := dev.Read(bufs, sizes, tunStartOffset)
+			n, err := dev.Read(slab, packets)
 			if err != nil {
 				tunReadErrC <- err
 				return
 			}
 
-			for i := range n {
-				pkt := bufs[i][tunStartOffset : sizes[i]+tunStartOffset]
+			for _, metadata := range packets[:n] {
+				pkt := slab[metadata.Offset : metadata.Offset+metadata.Size]
 				// Skip everything except valid IPv4 packets
 				if len(pkt) < 20 {
 					// Doesn't even have a full IPv4 header
@@ -1011,7 +1001,11 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 	go func() {
 		defer wg.Done()
 
-		buf := make([]byte, mtu+tunStartOffset)
+		// Depending on platform, we need some space for headers at the front
+		// of TUN I/O op buffers. The below constant is more than enough space
+		// for any platform that this might run on.
+		tunWriteStartOffset := device.MessageTransportHeaderSize
+		buf := make([]byte, mtu+tunWriteStartOffset)
 		bufs := make([][]byte, 1)
 
 		fromDERPPubKey := fromc.SelfPublicKey()
@@ -1028,9 +1022,9 @@ func derpProbeBandwidthTUN(ctx context.Context, transferTimeSeconds, totalBytesT
 					return
 				}
 				pkt := v.Data
-				copy(buf[tunStartOffset:], pkt)
-				bufs[0] = buf[:len(pkt)+tunStartOffset]
-				if _, err := dev.Write(bufs, tunStartOffset); err != nil {
+				copy(buf[tunWriteStartOffset:], pkt)
+				bufs[0] = buf[:len(pkt)+tunWriteStartOffset]
+				if _, err := dev.Write(bufs, tunWriteStartOffset); err != nil {
 					recvErrC <- fmt.Errorf("failed to write to TUN device: %w", err)
 					return
 				}
