@@ -138,12 +138,29 @@ func TestClientRecvPeerPresent(t *testing.T) {
 			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
 		},
 		{
+			name:  "app_name_from_current_server",
+			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular}, []byte{3, 'a', 'b', 'c'}),
+			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular, AppName: "abc"},
+		},
+		{
 			name: "extra_fields_from_newer_server",
 			// A hypothetical newer server sending fields this client
 			// doesn't know about. They must be ignored.
 			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular},
 				[]byte{3, 'a', 'b', 'c'}, []byte{0xde, 0xad}),
-			want: PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
+			want: PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular, AppName: "abc"},
+		},
+		{
+			name: "truncated_app_name_ignored",
+			// A buggy or malicious server sending an app name length
+			// that exceeds the frame.
+			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular}, []byte{200, 'a', 'b', 'c'}),
+			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
+		},
+		{
+			name:  "invalid_app_name_ignored",
+			input: frame(keyb, ipPort, []byte{PeerPresentIsRegular}, []byte{3, 0x01, 0x02, 0x03}),
+			want:  PeerPresentMessage{Key: k, IPPort: wantIPPort, Flags: PeerPresentIsRegular},
 		},
 	}
 	for _, tt := range tests {

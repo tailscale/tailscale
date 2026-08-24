@@ -88,9 +88,27 @@ func CanAckPings(v bool) ClientOpt {
 
 // AppName returns a ClientOpt to set an opaque app name string to
 // advertise to the DERP server for stats purposes. It is sent to the
-// server in the ClientInfo.
+// server in the ClientInfo. The name must be valid per [ValidAppName]
+// or NewClient returns an error.
 func AppName(name string) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.AppName = name })
+}
+
+// MaxAppNameLen is the maximum length in bytes of a [ClientInfo.AppName].
+const MaxAppNameLen = 32
+
+// ValidAppName reports whether name is a valid app name: at most
+// [MaxAppNameLen] bytes of printable ASCII. The empty string is valid.
+func ValidAppName(name string) bool {
+	if len(name) > MaxAppNameLen {
+		return false
+	}
+	for i := range len(name) {
+		if b := name[i]; b < ' ' || b > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opts ...ClientOpt) (*Client, error) {
@@ -100,6 +118,9 @@ func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 			return nil, errors.New("nil ClientOpt")
 		}
 		o.update(&opt)
+	}
+	if !ValidAppName(opt.AppName) {
+		return nil, fmt.Errorf("invalid AppName %.40q", opt.AppName)
 	}
 	return newClient(privateKey, nc, brw, logf, opt)
 }
@@ -191,7 +212,9 @@ type ClientInfo struct {
 	IsProber bool `json:",omitempty"`
 
 	// AppName is an optional opaque app name string the client
-	// advertises to the server for stats purposes.
+	// advertises to the server for stats purposes. It must be
+	// valid per [ValidAppName] or the server rejects the
+	// connection.
 	AppName string `json:",omitempty"`
 }
 
@@ -409,6 +432,10 @@ type PeerPresentMessage struct {
 	IPPort netip.AddrPort
 	// Flags is a bitmask of info about the client.
 	Flags PeerPresentFlags
+	// AppName is the optional app name the client advertised in
+	// its ClientInfo, if any. It's empty if the client didn't
+	// send one or the server is too old to relay it.
+	AppName string
 }
 
 func (PeerPresentMessage) msg() {}
@@ -609,12 +636,27 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				binary.BigEndian.Uint16(chunk[ipLen:]),
 			)
 
-			chunk, _, ok = cutLeadingN(remain, 1)
+			chunk, remain, ok = cutLeadingN(remain, 1)
 			if !ok {
 				// Older server which doesn't send PeerPresentFlags.
 				return msg, nil
 			}
 			msg.Flags = PeerPresentFlags(chunk[0])
+
+			chunk, remain, ok = cutLeadingN(remain, 1)
+			if !ok {
+				// Older server which doesn't send the app name.
+				return msg, nil
+			}
+			nameLen := int(chunk[0])
+			chunk, _, ok = cutLeadingN(remain, nameLen)
+			if !ok {
+				c.logf("[unexpected] short peerPresent app name from DERP server")
+				return msg, nil
+			}
+			if name := string(chunk); ValidAppName(name) {
+				msg.AppName = name
+			}
 			return msg, nil
 
 		case FrameRecvPacket:
