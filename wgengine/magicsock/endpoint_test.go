@@ -600,6 +600,81 @@ func Test_endpoint_sendDiscoPingsLocked_neverDirectUDP(t *testing.T) {
 	}
 }
 
+func Test_endpoint_updateFromNodeAfterDiscoKeyChange(t *testing.T) {
+	relayAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}
+	relayAddr.vni.Set(1)
+	directAddr := epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}
+
+	for _, tc := range []struct {
+		name       string
+		bestAddr   epAddr
+		keyChanges bool
+	}{
+		{
+			name:       "relay-bestaddr-key-changed",
+			bestAddr:   relayAddr,
+			keyChanges: true,
+		},
+		{
+			name:       "direct-bestaddr-key-changed",
+			bestAddr:   directAddr,
+			keyChanges: true,
+		},
+		{
+			name:       "relay-bestaddr-key-unchanged",
+			bestAddr:   relayAddr,
+			keyChanges: false,
+		},
+		{
+			name:       "direct-bestaddr-key-unchanged",
+			bestAddr:   directAddr,
+			keyChanges: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := mono.Now()
+			c := &Conn{
+				logf: func(msg string, args ...any) {},
+			}
+			c.discoAtomic.Set(key.NewDisco())
+			c.relayManager.hasPeerRelayServers.Store(true)
+
+			oldKey := key.NewDisco().Public()
+			de := &endpoint{
+				c:                  c,
+				publicKey:          key.NewNode().Public(),
+				bestAddr:           addrQuality{epAddr: tc.bestAddr},
+				trustBestAddrUntil: now.Add(time.Hour),
+				sentPing:           make(map[stun.TxID]sentPing),
+				endpointState:      make(map[netip.AddrPort]*endpointState),
+				debugUpdates:       ringlog.New[EndpointChange](10),
+			}
+			de.lastUDPRelayPathDiscovery = mono.Now()
+			de.disco.Store(&endpointDisco{key: oldKey, short: oldKey.ShortString()})
+
+			incomingKey := oldKey
+			if tc.keyChanges {
+				incomingKey = key.NewDisco().Public()
+			}
+			nv := (&tailcfg.Node{
+				ID:       1,
+				Key:      key.NewNode().Public(),
+				DiscoKey: incomingKey,
+				HomeDERP: 1,
+				Cap:      121, // capVerIsRelayCapable
+			}).View()
+			de.updateFromNode(nv, false, false)
+
+			de.mu.Lock()
+			got := de.wantUDPRelayPathDiscoveryLocked(now)
+			de.mu.Unlock()
+			if got != tc.keyChanges {
+				t.Errorf("wantUDPRelayPathDiscoveryLocked = %v, want %v", got, tc.keyChanges)
+			}
+		})
+	}
+}
+
 func Test_endpoint_handlePongConnLocked(t *testing.T) {
 	goodLatency := 50 * time.Millisecond
 	badLatency := 100 * time.Millisecond
