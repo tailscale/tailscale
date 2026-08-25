@@ -16,6 +16,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
@@ -57,9 +58,26 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 	}
 	port := randomPort()
 	cm := configMapForSvc(t, svc, port)
+	// The egress EndpointSlices reconciler owns the slice's ports, which it
+	// derives from the ClusterIP Service the egress Services reconciler creates.
+	// Provide that Service so the reconciler can find it.
+	clusterIPSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-test-clusterip",
+			Namespace: "operator-ns",
+			Labels:    egressSvcChildResourceLabels(svc),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{Name: "http", Protocol: "TCP", Port: 80, TargetPort: intstr.FromInt(4003)},
+			},
+		},
+	}
+	epsPorts := epsPortsFromSvc(clusterIPSvc)
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
-		WithObjects(svc, cm).
+		WithObjects(svc, cm, clusterIPSvc).
 		WithStatusSubresource(svc).
 		Build()
 	zl, err := zap.NewDevelopment()
@@ -84,6 +102,9 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
 	mustCreate(t, fc, eps)
+	// The reconciler sets ports on the slice from the ClusterIP Service, so the
+	// expected object carries them from here on.
+	eps.Ports = epsPorts
 
 	t.Run("no_proxy_group_resources", func(t *testing.T) {
 		expectReconciled(t, er, "operator-ns", "foo") // should not error
@@ -114,6 +135,20 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectEqual(t, fc, eps)
 	})
+	t.Run("reconciler_owns_ports", func(t *testing.T) {
+		// A port change on the ClusterIP Service must propagate to the slice via
+		// this reconciler - the egress Services reconciler no longer updates the
+		// slice after creation (tailscale/tailscale#20916).
+		mustUpdate(t, fc, "operator-ns", clusterIPSvc.Name, func(s *corev1.Service) {
+			s.Spec.Ports = append(s.Spec.Ports, corev1.ServicePort{Name: "https", Protocol: "TCP", Port: 443, TargetPort: intstr.FromInt(4004)})
+			clusterIPSvc.Spec.Ports = s.Spec.Ports
+		})
+		// Refresh the expected ports for this and all subsequent assertions.
+		epsPorts = epsPortsFromSvc(clusterIPSvc)
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Ports = epsPorts
+		expectEqual(t, fc, eps)
+	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
 		_, stateS := podAndSecretForProxyGroup("foo")                // replica Pod has IP 10.0.0.1
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.2", "", port) // status is for a Pod with IP 10.0.0.2
@@ -140,6 +175,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
 	mustCreate(t, fc, epsV6)
+	epsV6.Ports = epsPorts
 	t.Run("dual_stack_pod_ready_to_route", func(t *testing.T) {
 		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
 		dualPod := &corev1.Pod{

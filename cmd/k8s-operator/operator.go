@@ -573,11 +573,17 @@ func runReconcilers(opts reconcilerOpts) {
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
 	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
+	// Watch EndpointSlices so that a slice deleted out from under us re-enqueues
+	// its egress Service and ensureEndpointSlices recreates it (see
+	// tailscale/tailscale#20322). egressSvcFromEps maps a slice back to its
+	// parent egress Service.
+	egressSvcFromEpsFilterForSvcs := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
 		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilterForSvcs).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,

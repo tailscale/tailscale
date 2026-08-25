@@ -243,9 +243,16 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 	return addrTypes, nil
 }
 
-// ensureEndpointSlices ensures that EndpointSlices exist for the egress service
-// for each IP family supported by the cluster, and that their ports are up to
-// date.
+// ensureEndpointSlices ensures that an EndpointSlice exists for the egress
+// service for each IP family supported by the cluster.
+//
+// It only ever creates a slice; it never updates one that already exists. The
+// egress EndpointSlices reconciler owns every mutable field (labels, ports and
+// endpoints) of an existing slice. Having a single writer avoids the two
+// reconcilers racing Update calls on the same slice, which manifested as
+// optimistic lock errors and a flapping Configured condition (see
+// tailscale/tailscale#20916). AddressType is immutable after creation, so it is
+// set here, at creation, and never changed.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
@@ -263,14 +270,11 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
-		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-			e.Labels = eps.Labels
-			e.AddressType = eps.AddressType
-			e.Ports = eps.Ports
-			for _, p := range e.Endpoints {
-				p.Conditions.Ready = nil
-			}
-		}); err != nil {
+		// Passing a nil update func makes this create-only: if the slice
+		// already exists it is left untouched for the egress EndpointSlices
+		// reconciler to update.
+		// Shoud this just be create instead? we dont keep labels updated here. hen egress-services no longer needs to reconcile on endpointslices. Manages deletion via trigger of service deletion.
+		if _, err := createOrMaybeUpdate(ctx, esr.Client, esr.tsNamespace, eps, nil); err != nil {
 			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
 		}
 	}

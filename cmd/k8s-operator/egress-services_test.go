@@ -158,8 +158,11 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	name := findGenNameForEgressSvcResources(t, fc, svc)
 	expectEqual(t, fc, clusterIPSvc(name, svc), removeTargetPortsFromSvc, removeClusterIPsFromSvc)
 	clusterSvc := mustGetClusterIPSvc(t, fc, name)
-	// Verify that an EndpointSlice has been created.
-	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+	// Verify that an EndpointSlice has been created. The egress Services
+	// reconciler only creates the slice; the egress EndpointSlices reconciler
+	// owns its ports (and endpoints) thereafter, so don't assert ports here -
+	// that ownership is covered in TestTailscaleEgressEndpointSlices.
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4), zeroEndpointSlicePorts)
 	// Verify that ConfigMap contains configuration for the new egress service.
 	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm, zl)
 	r := svcConfiguredReason(svc, true, zl.Sugar())

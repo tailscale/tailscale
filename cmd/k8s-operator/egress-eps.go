@@ -130,9 +130,30 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			},
 		})
 	}
-	// Note that Endpoints are being overwritten with the currently valid endpoints so we don't need to explicitly
-	// run a cleanup for deleted Pods etc.
+	// This reconciler owns the mutable fields of an existing slice - ports and
+	// endpoints. The egress Services reconciler only ever creates the slice
+	// (with its immutable AddressType and labels) and never updates it, so a
+	// single reconciler writes any given slice and the two can't race Update
+	// calls on it (see tailscale/tailscale#20916). Ports are derived from the
+	// ClusterIP Service, so retrieve it to compute the desired state.
+	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, er.Client, er.tsNamespace, egressSvcChildResourceLabels(svc))
+	if err != nil {
+		return res, fmt.Errorf("error retrieving ClusterIP Service: %w", err)
+	}
+	if clusterIPSvc == nil {
+		lg.Debugf("ClusterIP Service not found, waiting...")
+		return res, nil
+	}
+
+	// Note that ports and endpoints are being overwritten with the currently
+	// desired state so we don't need to explicitly run a cleanup for deleted
+	// Pods, removed ports etc.
+	// always sort ports to compare as well R validate not needed.
+	eps.Ports = epsPortsFromSvc(clusterIPSvc)
+	// do labels here as well? we keep labels updated here.
+	// we need to sort endpoints here.
 	eps.Endpoints = newEndpoints
+	// just do a comparison of the fields we care about - not deepequals OR nullify all the fields we dont care about and then deepequals.
 	if !reflect.DeepEqual(eps, oldEps) {
 		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
 		if err = er.Update(ctx, eps); err != nil {

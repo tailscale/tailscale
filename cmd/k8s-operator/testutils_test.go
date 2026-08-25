@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -993,6 +994,14 @@ func removeTargetPortsFromSvc(svc *corev1.Service) {
 func removeClusterIPsFromSvc(svc *corev1.Service) {
 	svc.Spec.ClusterIP = ""
 	svc.Spec.ClusterIPs = nil
+}
+
+// zeroEndpointSlicePorts clears the Ports of an EndpointSlice so assertions can
+// ignore them. The egress Services reconciler only creates a slice; the egress
+// EndpointSlices reconciler owns its ports thereafter, so tests that only run
+// the Services reconciler can't assert an up to date port list.
+func zeroEndpointSlicePorts(eps *discoveryv1.EndpointSlice) {
+	eps.Ports = nil
 }
 
 func removeAuthKeyIfExistsModifier(t *testing.T) func(s *corev1.Secret) {
