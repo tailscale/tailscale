@@ -666,7 +666,16 @@ func (s *Server) close() {
 	}
 
 	wg.Wait()
-	s.sys.Bus.Get().Close()
+	// s.sys is only assigned partway through doInit, so it is still nil if
+	// Start failed before that point. Close is reachable in that state --
+	// Start is idempotent via initOnce and returns the stored initErr, so
+	// callers that `defer Close()` before checking the error land here.
+	// Use GetOK rather than Get so an unset Bus cannot panic either.
+	if s.sys != nil {
+		if bus, ok := s.sys.Bus.GetOK(); ok && bus != nil {
+			bus.Close()
+		}
+	}
 }
 
 func (s *Server) doInit() {

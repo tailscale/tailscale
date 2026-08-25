@@ -3925,3 +3925,14 @@ func TestListenMultipleEphemeralPorts(t *testing.T) {
 		testMultipleEphemeral(t, lt)
 	})
 }
+
+// TestCloseBeforeStart verifies that Close on a Server whose Start never ran
+// (or failed early) does not panic. s.sys is assigned partway through doInit,
+// so it is still nil in that state, and close previously dereferenced
+// s.sys.Bus unconditionally.
+func TestCloseBeforeStart(t *testing.T) {
+	s := &Server{}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
