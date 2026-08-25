@@ -629,14 +629,14 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 	if disco == nil {
 		return
 	}
-	if disco.key.Compare(allocResp.ReqRxFromDiscoKey) != 0 {
+	if disco.key().Compare(allocResp.ReqRxFromDiscoKey) != 0 {
 		return
 	}
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
 	derpAddr := ep.derpAddr
 	if derpAddr.IsValid() {
-		go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key, allocResp.Message, discoVerboseLog)
+		go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key(), allocResp.Message, discoVerboseLog)
 	}
 }
 
@@ -2378,7 +2378,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if epDisco == nil {
 			return
 		}
-		if epDisco.key != di.discoKey {
+		// TODO(cmol): Switch active keys based on what we see here
+		if epDisco.key() != di.discoKey {
 			if isVia {
 				metricRecvDiscoCallMeMaybeViaBadDisco.Add(1)
 			} else {
@@ -2403,13 +2404,13 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		}
 		if isVia {
 			c.dlogf("[v1] magicsock: disco: %v<-%v via %v (%v, %v)  got call-me-maybe-via, %d endpoints",
-				c.discoAtomic.Short(), epDisco.short, via.ServerDisco.ShortString(),
+				c.discoAtomic.Short(), epDisco.shortString(), via.ServerDisco.ShortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				len(via.AddrPorts))
 			c.relayManager.handleCallMeMaybeVia(ep, lastBest, lastBestIsTrusted, via)
 		} else {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
-				c.discoAtomic.Short(), epDisco.short,
+				c.discoAtomic.Short(), epDisco.shortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				len(cmm.MyNumber))
 			go ep.handleCallMeMaybe(cmm)
@@ -2443,7 +2444,8 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		if epDisco == nil {
 			return
 		}
-		if epDisco.key != di.discoKey {
+		// TODO(cmol): Switch active keys based on what we see here
+		if epDisco.key() != di.discoKey {
 			if isResp {
 				metricRecvDiscoAllocUDPRelayEndpointResponseBadDisco.Add(1)
 			} else {
@@ -2455,7 +2457,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 
 		if isResp {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v) got %s, %d endpoints",
-				c.discoAtomic.Short(), epDisco.short,
+				c.discoAtomic.Short(), epDisco.shortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				msgType,
 				len(resp.AddrPorts))
@@ -2469,7 +2471,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			return
 		} else {
 			c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v) got %s disco[0]=%v disco[1]=%v",
-				c.discoAtomic.Short(), epDisco.short,
+				c.discoAtomic.Short(), epDisco.shortString(),
 				ep.publicKey.ShortString(), derpStr(src.String()),
 				msgType,
 				req.ClientDisco[0].ShortString(), req.ClientDisco[1].ShortString())
@@ -2507,9 +2509,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 // c.mu must be held.
 func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic, derpNodeSrc key.NodePublic) (nk key.NodePublic, ok bool) {
 	if !derpNodeSrc.IsZero() {
+		// TODO(cmol): Switch active keys based on what we see here
 		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
 			epDisco := ep.disco.Load()
-			if epDisco != nil && epDisco.key == dk {
+			if epDisco != nil && epDisco.key() == dk {
 				return derpNodeSrc, true
 			}
 		}
@@ -2519,7 +2522,8 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	if !dm.NodeKey.IsZero() {
 		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey); ok {
 			epDisco := ep.disco.Load()
-			if epDisco != nil && epDisco.key == dk {
+			// TODO(cmol): Switch active keys based on what we see here
+			if epDisco != nil && epDisco.key() == dk {
 				return dm.NodeKey, true
 			}
 		}
@@ -2527,6 +2531,9 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 
 	// If there's exactly 1 node in our netmap with DiscoKey dk,
 	// then it's not ambiguous which node key dm was from.
+	c.peerMap.nodesMu.RLock()
+	defer c.peerMap.nodesMu.RUnlock()
+
 	if set := c.peerMap.nodesOfDisco[dk]; len(set) == 1 {
 		for nk = range set {
 			return nk, true
@@ -2657,7 +2664,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		c.dlogf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
 
 		mak.Set(&c.onEndpointRefreshed, de, func() {
-			c.dlogf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", epDisco.short, de.publicKey.ShortString())
+			c.dlogf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", epDisco.shortString(), de.publicKey.ShortString())
 			c.enqueueCallMeMaybe(derpAddr, de)
 		})
 		// TODO(bradfitz): make a new 'reSTUNQuickly' method
@@ -2676,12 +2683,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
 	}
-	go de.c.sendDiscoMessage(epAddr{ap: derpAddr}, de.publicKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	go de.c.sendDiscoMessage(epAddr{ap: derpAddr}, de.publicKey, epDisco.key(), &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	if debugSendCallMeUnknownPeer() {
 		// Send a callMeMaybe packet to a non-existent peer
 		unknownKey := key.NewNode().Public()
 		c.logf("magicsock: sending CallMeMaybe to unknown peer per TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
-		go de.c.sendDiscoMessage(epAddr{ap: derpAddr}, unknownKey, epDisco.key, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+		go de.c.sendDiscoMessage(epAddr{ap: derpAddr}, unknownKey, epDisco.key(), &disco.CallMeMaybe{MyNumber: eps}, discoLog)
 	}
 }
 
@@ -3219,10 +3226,13 @@ func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPer
 		}
 		var oldDiscoKey key.DiscoPublic
 		if epDisco := ep.disco.Load(); epDisco != nil {
-			oldDiscoKey = epDisco.key
+			// Upserted peers originates from control. Compare with the discoKey
+			// learned from control.
+			oldDiscoKey = epDisco.keyFromControl()
 		}
 		ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
-		c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
+		// Maybe update the control learned discokey mappings in peerMap.
+		c.peerMap.upsertEndpoint(ep, oldDiscoKey, false)
 		return
 	}
 
@@ -3285,7 +3295,7 @@ func (c *Conn) upsertPeerLocked(n tailcfg.NodeView, flags debugFlags, entriesPer
 	}
 
 	ep.updateFromNode(n, flags.heartbeatDisabled, flags.probeUDPLifetimeOn)
-	c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
+	c.peerMap.upsertEndpoint(ep, key.DiscoPublic{}, false)
 }
 
 // UpsertPeer adds or updates a single peer in c. It is the efficient
@@ -4520,7 +4530,8 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 
 	oldDiscoKey := key.DiscoPublic{}
 	if epDisco := ep.disco.Load(); epDisco != nil {
-		oldDiscoKey = epDisco.key
+		// Compare with the known key (could be a zero key) learned via TSMP.
+		oldDiscoKey = epDisco.keyFromTSMP()
 	}
 	// If the key did not change, count it and return.
 	if oldDiscoKey.Compare(discoKey) == 0 {
@@ -4529,8 +4540,8 @@ func (c *Conn) HandleDiscoKeyAdvertisement(node tailcfg.NodeView, update packet.
 		return
 	}
 	c.discoInfoForKnownPeerLocked(discoKey)
-	ep.updateDiscoKey(discoKey)
-	c.peerMap.upsertEndpoint(ep, oldDiscoKey)
+	ep.updateTSMPDiscoKey(discoKey)
+	c.peerMap.upsertEndpoint(ep, oldDiscoKey, true)
 	if !oldDiscoKey.IsZero() && !c.peerMap.knownPeerDiscoKey(oldDiscoKey) {
 		delete(c.discoInfo, oldDiscoKey)
 	}
