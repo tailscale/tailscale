@@ -40,7 +40,7 @@ func peerRelayTailscaledConfig(pr *tsapi.PeerRelay, idx int32, endpoints []tsapi
 		AcceptRoutes:    "false",
 		Locked:          "false",
 		Hostname:        new(peerRelayHostname(pr, idx)),
-		RelayServerPort: new(uint16(servicePort)),
+		RelayServerPort: new(peerRelayPort(pr)),
 		AuthKey:         authKey,
 	}
 
