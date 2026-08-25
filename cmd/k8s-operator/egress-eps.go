@@ -6,11 +6,13 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -18,6 +20,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -144,16 +147,29 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		lg.Debugf("ClusterIP Service not found, waiting...")
 		return res, nil
 	}
+	// Endpoints must be in a deterministic order: without sorting an unchanged
+	// set of ready Pods could trigger a needless Update (which, because this reconciler
+	// watches EndpointSlices, would re-trigger itself). Sort by Pod UID
+	// (Hostname), which is stable per Pod.
+	slices.SortFunc(newEndpoints, func(a, b discoveryv1.Endpoint) int {
+		return strings.Compare(ptr.Deref(a.Hostname, ""), ptr.Deref(b.Hostname, ""))
+	})
 
-	// Note that ports and endpoints are being overwritten with the currently
-	// desired state so we don't need to explicitly run a cleanup for deleted
-	// Pods, removed ports etc.
-	// always sort ports to compare as well R validate not needed.
-	eps.Ports = epsPortsFromSvc(clusterIPSvc)
-	// do labels here as well? we keep labels updated here.
-	// we need to sort endpoints here.
+	// Determine the desired ports for this slice from the ClusterIP Service.
+	// Ports are also sorted for the same reason as endpoints.
+	// TODO(becky pauley): determine if this sorting is needed for safety here.
+	newPorts, err := er.portsForEgressSlice(ctx, eps, clusterIPSvc)
+	if err != nil {
+		return res, fmt.Errorf("error determining ports for EndpointSlice: %w", err)
+	}
+	// Note that Endpoints are being overwritten with the currently
+	// desired state so we don't need to explicitly run a cleanup for
+	// deleted Pods etc.
 	eps.Endpoints = newEndpoints
-	// just do a comparison of the fields we care about - not deepequals OR nullify all the fields we dont care about and then deepequals.
+	eps.Ports = newPorts
+	eps.Labels = egressSvcEpsLabels(svc, clusterIPSvc)
+	//TODO(beckypauley): are there any cases where this would result in unneccessary applies?
+	// test.
 	if !reflect.DeepEqual(eps, oldEps) {
 		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
 		if err = er.Update(ctx, eps); err != nil {
@@ -162,6 +178,23 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	return res, nil
+}
+
+// portsForEgressSlice returns the ports the given egress EndpointSlice should
+// carry, derived from the ClusterIP Service it belongs to (identified by the
+// slice's kubernetes.io/service-name label). The result is sorted so that an
+// unchanged Service produces an identical list, keeping the reflect.DeepEqual
+// guard in Reconcile stable (see the endpoint-sort rationale above).
+func (er *egressEpsReconciler) portsForEgressSlice(ctx context.Context, eps *discoveryv1.EndpointSlice, clusterIPSvc *corev1.Service) ([]discoveryv1.EndpointPort, error) {
+	ports := epsPortsFromSvc(clusterIPSvc)
+	slices.SortFunc(ports, func(a, b discoveryv1.EndpointPort) int {
+		if c := cmp.Compare(ptr.Deref(a.Port, 0), ptr.Deref(b.Port, 0)); c != 0 {
+			return c
+		}
+		return strings.Compare(ptr.Deref(a.Name, ""), ptr.Deref(b.Name, ""))
+	})
+
+	return ports, nil
 }
 
 func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, error) {

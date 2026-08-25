@@ -246,13 +246,27 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 // ensureEndpointSlices ensures that an EndpointSlice exists for the egress
 // service for each IP family supported by the cluster.
 //
-// It only ever creates a slice; it never updates one that already exists. The
-// egress EndpointSlices reconciler owns every mutable field (labels, ports and
-// endpoints) of an existing slice. Having a single writer avoids the two
-// reconcilers racing Update calls on the same slice, which manifested as
-// optimistic lock errors and a flapping Configured condition (see
-// tailscale/tailscale#20916). AddressType is immutable after creation, so it is
-// set here, at creation, and never changed.
+// This reconciler owns only the identity of each slice: its name, its own
+// managed labels, and addressType. The slice's mutable content (ports and
+// endpoints) is owned exclusively by the egress EndpointSlices reconciler
+// (egress-eps.go), which is the only writer of those fields. To keep that
+// separation safe, this reconciler never issues a full-object Update: it creates
+// the slice when absent, and repairs its managed labels with a labels-only merge
+// patch (client.MergeFrom, no optimistic-lock precondition) that leaves ports,
+// endpoints and any labels it does not manage untouched, and cannot conflict
+// with egress-eps. This is what avoids the optimistic-lock conflicts of
+// tailscale/tailscale#20916 without needing Server-Side Apply.
+//
+// It runs on every reconcile so that a deleted EndpointSlice is recreated (see
+// tailscale/tailscale#20322) and drift in the managed labels is corrected. The
+// patch is diff-guarded (skipped when the managed labels are already present and
+// correct), so a steady-state reconcile performs no write and does not churn the
+// reconcilers that watch EndpointSlices (egress-eps, the egress readiness
+// reconcilers, dns-records). The set of families does not shrink over a
+// service's lifetime (a Service's ClusterIPs/ipFamilies are immutable after
+// creation), so there is no removed-family slice to garbage-collect here; all of
+// a service's slices are removed together by maybeCleanup when the service is
+// deleted.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
@@ -270,11 +284,9 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
-		// Passing a nil update func makes this create-only: if the slice
-		// already exists it is left untouched for the egress EndpointSlices
-		// reconciler to update.
-		// Shoud this just be create instead? we dont keep labels updated here. hen egress-services no longer needs to reconcile on endpointslices. Manages deletion via trigger of service deletion.
-		if _, err := createOrMaybeUpdate(ctx, esr.Client, esr.tsNamespace, eps, nil); err != nil {
+		// Only create the EndpointSlice if it doesn't already exist.
+		// TODO(beckypauley): validate this can't cause churn.
+		if err := esr.Create(ctx, eps); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
 		}
 	}
