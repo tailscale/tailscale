@@ -116,6 +116,21 @@
 //	})
 //	log.Printf("Listening on https://%s", ln.FQDN)
 //
+// # Using an exit node
+//
+// A tsnet node can route its [Server.Dial] traffic to non-tailnet
+// addresses through an [exit node]. Select the exit node by setting the
+// ExitNodeID pref via [Server.LocalClient]:
+//
+//	lc, _ := srv.LocalClient()
+//	_, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+//		Prefs:         ipn.Prefs{ExitNodeID: "nodeid"},
+//		ExitNodeIDSet: true,
+//	})
+//
+// Dials of addresses outside the tailnet then go through the exit node.
+// Dials within the tailnet are unaffected.
+//
 // # Running multiple nodes in one process
 //
 // Each [Server] instance is an independent node. Give each a unique
@@ -132,6 +147,7 @@
 //	}
 //
 // [Tailscale identity]: https://tailscale.com/docs/concepts/tailscale-identity
+// [exit node]: https://tailscale.com/docs/features/exit-nodes
 // [Tailscale Funnel]: https://tailscale.com/docs/features/tailscale-funnel
 // [Tailscale Service]: https://tailscale.com/docs/features/tailscale-services
 package tsnet

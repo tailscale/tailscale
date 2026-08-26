@@ -94,6 +94,18 @@ Use the WhoIs method on the client returned by [Server.LocalClient](https://pkg.
 	})
 	log.Printf("Listening on https://%s", ln.FQDN)
 
+## Using an exit node
+
+A tsnet node can route its [Server.Dial](https://pkg.go.dev/tailscale.com/tsnet#Server.Dial) traffic to non-tailnet addresses through an [exit node](https://tailscale.com/docs/features/exit-nodes). Select the exit node by setting the ExitNodeID pref via [Server.LocalClient](https://pkg.go.dev/tailscale.com/tsnet#Server.LocalClient):
+
+	lc, _ := srv.LocalClient()
+	_, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:         ipn.Prefs{ExitNodeID: "nodeid"},
+		ExitNodeIDSet: true,
+	})
+
+Dials of addresses outside the tailnet then go through the exit node. Dials within the tailnet are unaffected.
+
 ## Running multiple nodes in one process
 
 Each [Server](https://pkg.go.dev/tailscale.com/tsnet#Server) instance is an independent node. Give each a unique [Server.Dir](https://pkg.go.dev/tailscale.com/tsnet#Server.Dir) and [Server.Hostname](https://pkg.go.dev/tailscale.com/tsnet#Server.Hostname):
