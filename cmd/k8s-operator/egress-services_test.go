@@ -121,6 +121,29 @@ func TestTailscaleEgressServices(t *testing.T) {
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
 	})
 
+	t.Run("existing_slice_not_updated", func(t *testing.T) {
+		// This reconciler creates the slice's identity shell once and, being
+		// Get-first/create-if-absent, must not write it again on subsequent
+		// reconciles. Repeated reconciles with no change must leave the slice's
+		// resourceVersion untouched (no apiserver write, no doomed Create).
+		name := findGenNameForEgressSvcResources(t, fc, svc)
+		epsName := fmt.Sprintf("%s-ipv4", name)
+		before := &discoveryv1.EndpointSlice{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: epsName, Namespace: "operator-ns"}, before); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
+		for range 3 {
+			expectReconciled(t, esr, "default", "test")
+		}
+		after := &discoveryv1.EndpointSlice{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: epsName, Namespace: "operator-ns"}, after); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
+		if before.ResourceVersion != after.ResourceVersion {
+			t.Errorf("existing EndpointSlice rewritten by egress-svcs reconcile: resourceVersion %s -> %s", before.ResourceVersion, after.ResourceVersion)
+		}
+	})
+
 	t.Run("endpointslice_deletion_recovery", func(t *testing.T) {
 		name := findGenNameForEgressSvcResources(t, fc, svc)
 		epsName := fmt.Sprintf("%s-ipv4", name)
@@ -450,6 +473,56 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv6", name))
 		mustNotHaveConfigForSvc(t, fc, svc, cm)
 	})
+}
+
+// TestTailscaleEgressServicesIPv6Only verifies that on a single-stack IPv6
+// cluster exactly one EndpointSlice (IPv6) is created for an egress service, and
+// no IPv4 slice. (The default TestTailscaleEgressServices covers the
+// single-stack IPv4 case via clusterIPInterceptor("10.96.0.1").)
+func TestTailscaleEgressServicesIPv6Only(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		TypeMeta:   metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", UID: types.UID("1234-UID")},
+		Spec:       tsapi.ProxyGroupSpec{Replicas: pointer.To[int32](3), Type: tsapi.ProxyGroupTypeEgress},
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: pgEgressCMName("foo"), Namespace: "operator-ns"}}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, cm).
+		WithStatusSubresource(pg).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: clusterIPInterceptor("fd00::1"), // single-stack IPv6
+		}).
+		Build()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	esr := &egressSvcsReconciler{Client: fc, logger: zl.Sugar(), clock: clock, tsNamespace: "operator-ns"}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Ports:        []corev1.ServicePort{{Protocol: "TCP", Port: 80}},
+		},
+	}
+	mustCreate(t, fc, svc)
+	expectReconciled(t, esr, "default", "test")
+	name := findGenNameForEgressSvcResources(t, fc, svc)
+	clusterSvc := mustGetClusterIPSvc(t, fc, name)
+	// The IPv6 slice exists; the IPv4 slice does not.
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv4", name))
 }
 
 // clusterIPInterceptor returns an interceptor.Funcs Create function that

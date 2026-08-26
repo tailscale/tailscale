@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -78,7 +77,6 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// wasteful. Once we have a Ready condition for ExternalName Services for ProxyGroup, use the condition to
 	// determine if a reconcile is needed.
 
-	oldEps := eps.DeepCopy()
 	tailnetSvc := tailnetSvcName(svc)
 	lg = lg.With("tailnet-service-name", tailnetSvc)
 
@@ -155,32 +153,32 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return strings.Compare(ptr.Deref(a.Hostname, ""), ptr.Deref(b.Hostname, ""))
 	})
 
-	// Note that Endpoints are being overwritten with the currently desired state
-	// so we don't need to explicitly run a cleanup for deleted Pods etc. Ports
-	// are derived directly from the ClusterIP Service and need no sorting: unlike
-	// the Pod list (which is enumerated from a map and so has no stable order),
-	// they come from a single object's ordered field, and kube-proxy matches
-	// ports by name rather than position, so their order is not significant.
-	eps.Endpoints = newEndpoints
-	eps.Ports = epsPortsFromSvc(clusterIPSvc)
-	// Merge the managed labels rather than replacing the whole map, so labels set
-	// on the slice by other actors (e.g. admission webhooks) are preserved.
-	// Replacing the map would strip them and, because this reconciler watches
-	// EndpointSlices, the resulting Update would re-trigger this reconciler and
-	// fight whatever set them.
-	if eps.Labels == nil {
-		eps.Labels = make(map[string]string)
+	newPorts := epsPortsFromSvc(clusterIPSvc)
+
+	// This reconciler owns only the slice's mutable content: endpoints and ports.
+	// Its labels and (immutable) addressType are owned by the egress Services
+	// reconciler, which sets them once when it creates the slice; egress-eps never
+	// writes them. Diff-guard on exactly the fields we own so a steady state is a
+	// no-op: because this reconciler watches EndpointSlices, a needless write
+	// would re-trigger it (endpoints are deterministically sorted above so an
+	// unchanged set of ready Pods compares equal).
+	if reflect.DeepEqual(eps.Endpoints, newEndpoints) && reflect.DeepEqual(eps.Ports, newPorts) {
+		return res, nil
 	}
-	maps.Copy(eps.Labels, egressSvcEpsLabels(svc, clusterIPSvc))
-	// eps was read from the cache and mutated in place above, so it differs from
-	// oldEps only in the fields this reconciler owns (endpoints, ports and its
-	// own managed labels). Fields set by others are identical in both and so do
-	// not trigger an Update.
-	if !reflect.DeepEqual(eps, oldEps) {
-		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
-		if err = er.Update(ctx, eps); err != nil {
-			return res, fmt.Errorf("error updating EndpointSlice: %w", err)
-		}
+
+	// Write only endpoints and ports via a merge patch (client.MergeFrom, no
+	// optimistic-lock precondition). Unlike a full-object Update, this does not
+	// touch labels set on the slice by other actors (e.g. admission webhooks),
+	// does not disturb their server-side-apply field ownership, and cannot 409
+	// against a concurrent writer - avoiding the optimistic-lock conflicts of
+	// tailscale/tailscale#20916. Endpoints are overwritten with the currently
+	// desired state, so deleted Pods drop out without an explicit cleanup.
+	patch := client.MergeFrom(eps.DeepCopy())
+	eps.Endpoints = newEndpoints
+	eps.Ports = newPorts
+	lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
+	if err = er.Patch(ctx, eps, patch); err != nil {
+		return res, fmt.Errorf("error patching EndpointSlice: %w", err)
 	}
 
 	return res, nil
