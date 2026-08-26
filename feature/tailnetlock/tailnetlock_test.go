@@ -22,7 +22,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 			return nil, nil
 		}
 
-		signerKey := key.NewNLPrivate()
+		signerKey := key.NewTLPrivate()
 		key1 := tka.Key{Kind: tka.Key25519, Public: signerKey.Public().Verifier(), Votes: 2}
 		state := tka.CreateStateForTest(key1)
 
@@ -34,7 +34,7 @@ func TestHandleC2NDebugTKA(t *testing.T) {
 
 		for range length - 1 {
 			updater := authority.NewUpdater(signerKey)
-			key2 := tka.Key{Kind: tka.Key25519, Public: key.NewNLPrivate().Public().Verifier(), Votes: 2}
+			key2 := tka.Key{Kind: tka.Key25519, Public: key.NewTLPrivate().Public().Verifier(), Votes: 2}
 			updater.AddKey(key2)
 			aums := must.Get(updater.Finalize(chonk))
 			must.Do(authority.Inform(chonk, aums))
