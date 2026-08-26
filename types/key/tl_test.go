@@ -8,41 +8,41 @@ import (
 	"testing"
 )
 
-func TestNLPrivate(t *testing.T) {
-	p := NewNLPrivate()
+func TestTLPrivate(t *testing.T) {
+	p := NewTLPrivate()
 
 	encoded, err := p.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded NLPrivate
+	var decoded TLPrivate
 	if err := decoded.UnmarshalText(encoded); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(decoded.k[:], p.k[:]) {
-		t.Error("decoded and generated NLPrivate bytes differ")
+		t.Error("decoded and generated TLPrivate bytes differ")
 	}
 
-	// Test NLPublic
+	// Test TLPublic
 	pub := p.Public()
 	encoded, err = pub.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decodedPub NLPublic
+	var decodedPub TLPublic
 	if err := decodedPub.UnmarshalText(encoded); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(decodedPub.k[:], pub.k[:]) {
-		t.Error("decoded and generated NLPublic bytes differ")
+		t.Error("decoded and generated TLPublic bytes differ")
 	}
 
 	// Test decoding with CLI prefix: 'nlpub:' => 'tlpub:'
-	decodedPub = NLPublic{}
+	decodedPub = TLPublic{}
 	if err := decodedPub.UnmarshalText([]byte(pub.CLIString())); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(decodedPub.k[:], pub.k[:]) {
-		t.Error("decoded and generated NLPublic bytes differ (CLI prefix)")
+		t.Error("decoded and generated TLPublic bytes differ (CLI prefix)")
 	}
 }

@@ -1271,9 +1271,9 @@ func (n *TestNode) PublicKey() string {
 	return st.Self.PublicKey
 }
 
-// NLPublicKey returns the hex-encoded tailnet lock public key of
+// TLPublicKey returns the hex-encoded tailnet lock public key of
 // this node, e.g. `tlpub:123456abc`
-func (n *TestNode) NLPublicKey() string {
+func (n *TestNode) TLPublicKey() string {
 	tb := n.env.t
 	tb.Helper()
 	cmd := n.Tailscale("lock", "status", "--json")
@@ -1288,6 +1288,11 @@ func (n *TestNode) NLPublicKey() string {
 		tb.Fatalf("decoding `tailscale lock status` JSON: %v\njson:\n%s", err, out)
 	}
 	return st.PublicKey
+}
+
+// Deprecated: use [TestNode.TLPublicKey] instead.
+func (n *TestNode) NLPublicKey() string {
+	return n.TLPublicKey()
 }
 
 // trafficTrap is an HTTP proxy handler to note whether any

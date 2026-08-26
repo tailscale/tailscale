@@ -2533,7 +2533,7 @@ func TestTailnetLock(t *testing.T) {
 		initCmd := signing1.Tailscale("lock", "init",
 			"--gen-disablements", "10",
 			"--confirm",
-			signing1.NLPublicKey(), signing2.NLPublicKey(),
+			signing1.TLPublicKey(), signing2.TLPublicKey(),
 		)
 		out, err := initCmd.CombinedOutput()
 		if err != nil {

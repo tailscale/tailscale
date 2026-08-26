@@ -46,6 +46,8 @@ var PureIsZeroMethodsInTailscaleModule = map[string]set.Set[string]{
 	"tailscale.com/types/key": set.Of(
 		"NLPrivate",
 		"NLPublic",
+		"TLPrivate",
+		"TLPublic",
 		"DERPMesh",
 		"MachinePrivate",
 		"MachinePublic",
