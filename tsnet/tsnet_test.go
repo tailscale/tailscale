@@ -52,6 +52,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tstest"
@@ -555,6 +556,115 @@ func TestConn(t *testing.T) {
 	}
 	if !saw192DocNetDial.Load() {
 		t.Errorf("expected s1's fallback TCP handler to have been called for 192.0.2.1:8081")
+	}
+}
+
+// TestDialThroughExitNode verifies that a tsnet server configured to use
+// another node as an exit node (via the ExitNodeID pref) routes a Dial of
+// a non-tailnet IP over WireGuard to that exit node rather than dialing
+// it from the host network.
+//
+// The exit node here is itself a tsnet server. tsnet does not forward
+// exit-node traffic onward to the host network (flows with no matching
+// listener are rejected in getTCPHandlerForFlow), so the test stands in
+// for the upstream destination with a fallback TCP handler on the exit
+// node that echoes the connection.
+func TestDialThroughExitNode(t *testing.T) {
+	tstest.ResourceCheck(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	controlURL, c := startControl(t)
+	s1, s1ip, s1PubKey := startServer(t, ctx, controlURL, "s1")
+
+	// dstAddr is a TEST-NET-3 (documentation) address standing in for
+	// an address out on the internet, past the exit node.
+	dstAddr := netip.MustParseAddrPort("203.0.113.42:8080")
+
+	var gotSrc atomic.Value // of netip.AddrPort; src seen by s1's fallback handler
+	s1.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		t.Logf("s1: fallback TCP handler called for %v -> %v", src, dst)
+		if dst != dstAddr {
+			return nil, true // reject with a RST
+		}
+		gotSrc.Store(src)
+		return func(conn net.Conn) {
+			defer conn.Close()
+			io.Copy(conn, conn)
+		}, true
+	})
+
+	lc1 := must.Get(s1.LocalClient())
+	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			AdvertiseRoutes: tsaddr.ExitRoutes(),
+		},
+		AdvertiseRoutesSet: true,
+	}))
+	c.SetSubnetRoutes(s1PubKey, tsaddr.ExitRoutes())
+
+	// Start s2 after s1 is fully set up, so s2's first netmap already
+	// shows s1 offering exit node routes.
+	s2, s2ip, _ := startServer(t, ctx, controlURL, "s2")
+	lc2 := must.Get(s2.LocalClient())
+
+	// Ping to make sure the connection is up.
+	pingCtx, cancelPing := pingTimeout(ctx)
+	defer cancelPing()
+	must.Get(lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP))
+
+	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			ExitNodeID: c.Node(s1PubKey).StableID,
+		},
+		ExitNodeIDSet: true,
+	}))
+
+	// Wait for the exit node's default route to be installed in s2's
+	// route table; it's what UserDial consults to decide that a
+	// non-tailnet IP should be dialed through netstack over WireGuard.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		p, ok := s2.lb.PeerForIP(dstAddr.Addr())
+		if !ok {
+			return fmt.Errorf("no peer for %v yet", dstAddr.Addr())
+		}
+		if p.Node.Key() != s1PubKey {
+			return fmt.Errorf("peer for %v is %v; want s1 %v", dstAddr.Addr(), p.Node.Key(), s1PubKey)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A dial of a non-tailnet IP must go through the exit node, never
+	// the host network.
+	s2dialer := s2.Sys().Dialer.Get()
+	s2dialer.SetSystemDialerForTest(func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		t.Logf("s2: unexpected system dial called for %s %s", netw, addr)
+		return nil, fmt.Errorf("system dialer called unexpectedly for %s %s", netw, addr)
+	})
+
+	conn, err := s2.Dial(ctx, "tcp", dstAddr.String())
+	if err != nil {
+		t.Fatalf("s2.Dial(%v): %v", dstAddr, err)
+	}
+	defer conn.Close()
+
+	const msg = "hello via exit node"
+	if _, err := io.WriteString(conn, msg); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := string(buf); got != msg {
+		t.Fatalf("echo through exit node: got %q, want %q", got, msg)
+	}
+
+	src, _ := gotSrc.Load().(netip.AddrPort)
+	if src.Addr() != s2ip {
+		t.Errorf("exit node saw connection from %v; want s2's tailnet IP %v", src, s2ip)
 	}
 }
 
