@@ -1104,7 +1104,7 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 
 func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeView, string) {
 	nb := e.host.NodeBackend()
-	peers := PickConnector(nb, app)
+	peers := pickConnector(nb, app)
 	var urlBase string
 	var conn tailcfg.NodeView
 	for _, p := range peers {
@@ -1690,12 +1690,15 @@ func sortByPreference(ns []tailcfg.NodeView) {
 	})
 }
 
-// PickConnector returns peers the backend knows about that match the app, in order of preference to use as
+// pickConnector returns peers the backend knows about that match the app, in order of preference to use as
 // a connector.
-func PickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.NodeView {
+func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.NodeView {
 	appTagsSet := set.SetOf(app.Connectors)
 	matches := nb.AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
 		if !isPeerEligibleConnector(n) {
+			return false
+		}
+		if !n.Online().Get() {
 			return false
 		}
 		for _, t := range n.Tags().All() {

@@ -1668,6 +1668,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 		Tags:     []string{"tag:woo"},
 		Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
 		Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 1: 0xff, 31: 0x01})),
+		Online:   new(true),
 	}).View()
 
 	ext := &extension{
@@ -2362,12 +2363,14 @@ func TestHandleAddressAssignmentStoresTransitIPs(t *testing.T) {
 			Tags:     []string{"tag:woo"},
 			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
 			Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x01})),
+			Online:   new(true),
 		}).View(),
 		(&tailcfg.Node{
 			ID:       tailcfg.NodeID(2),
 			Tags:     []string{"tag:hoo"},
 			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
 			Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x02})),
+			Online:   new(true),
 		}).View(),
 	}
 
@@ -3256,6 +3259,16 @@ func TestPickConnector(t *testing.T) {
 			ID:       id,
 			Tags:     tags,
 			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(isConnector)}).View(),
+			Online:   new(true),
+		}).View()
+	}
+
+	nvWithOnlineSet := func(id tailcfg.NodeID, online bool, tags ...string) tailcfg.NodeView {
+		return (&tailcfg.Node{
+			ID:       id,
+			Tags:     tags,
+			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+			Online:   new(online),
 		}).View()
 	}
 
@@ -3318,7 +3331,7 @@ func TestPickConnector(t *testing.T) {
 		},
 		{
 			name:       "not-a-connector",
-			candidates: []tailcfg.NodeView{nvWithConnectorSet(1, false, "tag:example.com"), nv(2, "tag:example")},
+			candidates: []tailcfg.NodeView{nvWithConnectorSet(1, false, "tag:example"), nv(2, "tag:example")},
 			app:        exampleApp,
 			want:       []tailcfg.NodeView{nv(2, "tag:example")},
 		},
@@ -3370,9 +3383,15 @@ func TestPickConnector(t *testing.T) {
 				nv(7, "tag:example1", "tag:example"),
 			},
 		},
+		{
+			name:       "not-online",
+			candidates: []tailcfg.NodeView{nvWithOnlineSet(1, false, "tag:example"), nv(2, "tag:example")},
+			app:        exampleApp,
+			want:       []tailcfg.NodeView{nv(2, "tag:example")},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := PickConnector(&testNodeBackend{peers: tt.candidates}, tt.app)
+			got := pickConnector(&testNodeBackend{peers: tt.candidates}, tt.app)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("PickConnectors (-want, +got):\n%s", diff)
 			}
