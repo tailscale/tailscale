@@ -427,7 +427,13 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		if err != nil {
 			return nil, err
 		}
-		return (<-responses).bs, nil
+		forwarded := (<-responses).bs
+		completed, ok := r.maybeCompleteCNAMEResponse(bs, forwarded)
+		if !ok {
+			return forwarded, nil
+		}
+		metricDNSFwdCNAMECompleted.Add(1)
+		return checkResponseSizeAndSetTC(completed, bs, family, r.logf), nil
 	}
 
 	if err != nil {
@@ -717,6 +723,51 @@ func stubResolverForOS() (ip netip.Addr, err error) {
 	return ip, nil
 }
 
+// lookupLocalHost looks up name in the resolver's host-backed sources. It
+// intentionally excludes synthetic names handled elsewhere by resolveLocal.
+func (r *Resolver) lookupLocalHost(name dnsname.FQDN) (addrs []netip.Addr, found bool) {
+	addrs, found, _ = r.lookupLocalHostWithAuthority(name)
+	return addrs, found
+}
+
+// lookupLocalHostWithAuthority also reports whether name is within a local
+// authoritative suffix. Keeping that decision in the same configuration
+// snapshot as the host lookup preserves resolveLocal's update semantics.
+func (r *Resolver) lookupLocalHostWithAuthority(name dnsname.FQDN) (addrs []netip.Addr, found, authoritative bool) {
+	r.mu.Lock()
+	hosts := r.hostToIP
+	localDomains := r.localDomains
+	subdomainHosts := r.subdomainHosts
+	magicHosts := r.magicHosts
+	r.mu.Unlock()
+
+	addrs, found = hosts[name]
+	if !found && magicHosts != nil {
+		addrs, found = magicHosts.LookupHost(name)
+	}
+	if !found {
+		for parent := name.Parent(); parent != ""; parent = parent.Parent() {
+			if subdomainHosts.Contains(parent) {
+				addrs, found = hosts[parent]
+				break
+			}
+			if magicHosts != nil && magicHosts.SubdomainHost(parent) {
+				addrs, found = magicHosts.LookupHost(parent)
+				break
+			}
+		}
+	}
+	if !found {
+		for _, suffix := range localDomains {
+			if suffix.Contains(name) {
+				authoritative = true
+				break
+			}
+		}
+	}
+	return addrs, found, authoritative
+}
+
 // resolveLocal returns an IP for the given domain, if domain is in
 // the local hosts map and has an IP corresponding to the requested
 // typ (A, AAAA, ALL).
@@ -746,36 +797,12 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 		return ip, dns.RCodeSuccess
 	}
 
-	r.mu.Lock()
-	hosts := r.hostToIP
-	localDomains := r.localDomains
-	subdomainHosts := r.subdomainHosts
-	magicHosts := r.magicHosts
-	r.mu.Unlock()
-
-	addrs, found := hosts[domain]
-	if !found && magicHosts != nil {
-		addrs, found = magicHosts.LookupHost(domain)
-	}
+	addrs, found, authoritative := r.lookupLocalHostWithAuthority(domain)
 	if !found {
-		for parent := domain.Parent(); parent != ""; parent = parent.Parent() {
-			if subdomainHosts.Contains(parent) {
-				addrs, found = hosts[parent]
-				break
-			}
-			if magicHosts != nil && magicHosts.SubdomainHost(parent) {
-				addrs, found = magicHosts.LookupHost(parent)
-				break
-			}
-		}
-	}
-	if !found {
-		for _, suffix := range localDomains {
-			if suffix.Contains(domain) {
-				// We are authoritative for the queried domain.
-				metricDNSResolveLocalErrorMissing.Add(1)
-				return netip.Addr{}, dns.RCodeNameError
-			}
+		if authoritative {
+			// We are authoritative for the queried domain.
+			metricDNSResolveLocalErrorMissing.Add(1)
+			return netip.Addr{}, dns.RCodeNameError
 		}
 		// Not authoritative, signal that forwarding is advisable.
 		metricDNSResolveLocalErrorRefused.Add(1)
@@ -1549,6 +1576,7 @@ var (
 	metricDNSFwdErrorName            = clientmetric.NewCounter("dns_query_fwd_error_name")
 	metricDNSFwdErrorNoUpstream      = clientmetric.NewCounter("dns_query_fwd_error_no_upstream")
 	metricDNSFwdSuccess              = clientmetric.NewCounter("dns_query_fwd_success")
+	metricDNSFwdCNAMECompleted       = clientmetric.NewCounter("dns_query_fwd_cname_completed")
 	metricDNSFwdErrorContext         = clientmetric.NewCounter("dns_query_fwd_error_context")
 	metricDNSFwdErrorContextGotError = clientmetric.NewCounter("dns_query_fwd_error_context_got_error")
 
