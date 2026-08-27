@@ -147,32 +147,20 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 	// Endpoints must be in a deterministic order: without sorting an unchanged
 	// set of ready Pods could trigger a needless Update (which, because this reconciler
-	// watches EndpointSlices, would re-trigger itself). Sort by Pod UID
-	// (Hostname), which is stable per Pod.
+	// watches EndpointSlices, would re-trigger itself: see tailscale/tailscale#20916.).
+	// Sort by Pod UID (Hostname), which is stable per Pod.
 	slices.SortFunc(newEndpoints, func(a, b discoveryv1.Endpoint) int {
 		return strings.Compare(ptr.Deref(a.Hostname, ""), ptr.Deref(b.Hostname, ""))
 	})
-
 	newPorts := epsPortsFromSvc(clusterIPSvc)
-
-	// This reconciler owns only the slice's mutable content: endpoints and ports.
-	// Its labels and (immutable) addressType are owned by the egress Services
-	// reconciler, which sets them once when it creates the slice; egress-eps never
-	// writes them. Diff-guard on exactly the fields we own so a steady state is a
-	// no-op: because this reconciler watches EndpointSlices, a needless write
-	// would re-trigger it (endpoints are deterministically sorted above so an
-	// unchanged set of ready Pods compares equal).
 	if reflect.DeepEqual(eps.Endpoints, newEndpoints) && reflect.DeepEqual(eps.Ports, newPorts) {
 		return res, nil
 	}
 
-	// Write only endpoints and ports via a merge patch (client.MergeFrom, no
-	// optimistic-lock precondition). Unlike a full-object Update, this does not
-	// touch labels set on the slice by other actors (e.g. admission webhooks),
-	// does not disturb their server-side-apply field ownership, and cannot 409
-	// against a concurrent writer - avoiding the optimistic-lock conflicts of
-	// tailscale/tailscale#20916. Endpoints are overwritten with the currently
-	// desired state, so deleted Pods drop out without an explicit cleanup.
+	// Write only endpoints and ports. Labels and addressType are owned by
+	// the egress Services reconciler, which sets them once at creation time.
+	// Because this reconciler watches EndpointSlices, a needless write
+	// would re-trigger it.
 	patch := client.MergeFrom(eps.DeepCopy())
 	eps.Endpoints = newEndpoints
 	eps.Ports = newPorts

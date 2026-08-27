@@ -247,28 +247,10 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 // service for each IP family supported by the cluster.
 //
 // This reconciler owns only the identity of each slice: its name, labels and
-// (immutable) addressType, set once at creation. The slice's mutable content
-// (endpoints, and thereafter ports) is owned exclusively by the egress
-// EndpointSlices reconciler (egress-eps.go), which is the only reconciler that
-// Updates a slice. Splitting ownership this way means no two reconcilers ever
-// Update the same slice, which avoids the optimistic-lock conflicts of
-// tailscale/tailscale#20916 without needing Server-Side Apply.
-//
-// It reads each slice from the cache and only creates the ones that are missing;
-// when a slice already exists it does nothing. This keeps steady-state
-// reconciles free of apiserver writes: mgr.GetClient() serves the Get from the
-// informer cache, so an existing slice costs a cache read and no apiserver call.
-// (An unconditional Create that swallowed AlreadyExists would instead issue a
-// doomed apiserver POST on every reconcile, which matters because this
-// reconciler is now woken by EndpointSlice events - see the slice watch on the
-// egress-svcs-reconciler - so it reconciles often during proxy rollouts.)
-//
-// It runs on every reconcile so that a deleted EndpointSlice is recreated (see
-// tailscale/tailscale#20322). The set of families does not shrink over a
-// service's lifetime (a Service's ClusterIPs/ipFamilies are immutable after
-// creation), so there is no removed-family slice to garbage-collect here; all of
-// a service's slices are removed together by maybeCleanup when the service is
-// deleted.
+// (immutable) addressType, set once at creation. The slice's endpoints and ports
+// are owned by the egress-eps reconciler and should not be modified here.
+// Splitting ownership this way means no two reconcilers ever
+// update the same slice, which avoids tailscale/tailscale#20916.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
@@ -282,7 +264,7 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 		err := esr.Get(ctx, types.NamespacedName{Name: name, Namespace: esr.tsNamespace}, existing)
 		switch {
 		case err == nil:
-			// Slice already exists, so there is nothing for this reconciler to do.
+			// Slice already exists.
 			continue
 		case !apierrors.IsNotFound(err):
 			return fmt.Errorf("error getting %s EndpointSlice: %w", addrType, err)
