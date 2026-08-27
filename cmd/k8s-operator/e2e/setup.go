@@ -72,6 +72,10 @@ const (
 	kindClusterName     = "k8s-operator-e2e"
 	testCAsConfigMap    = "test-cas"
 	testCAsConfigMapKey = "test-cas.pem"
+	imgOperator         = "k8s-operator"
+	imgTailscale        = "tailscale"
+	imgProxy            = "k8s-proxy"
+	imgNameserver       = "k8s-nameserver"
 )
 
 var (
@@ -94,8 +98,8 @@ var (
 	//go:embed certs/letsencrypt-stg-root-x1.pem
 	leStagingRootX1 []byte
 
-	// Either  pebble CAs (if pebble is deployed for devcontrol) or
-	// Let's Encrypt staging when running against real tailnets).
+	// Either pebble CAs (if pebble is deployed for devcontrol) or Let's Encrypt
+	// staging (when running against real tailnets).
 	// pebble has a static "mini" CA that its ACME directory URL serves a cert from,
 	// and also dynamically generates a different CA for issuing certs.
 	testCAs *x509.CertPool
@@ -113,6 +117,7 @@ var (
 	fCluster     = flag.Bool("cluster", false, "if true, create or use a pre-existing kind cluster named k8s-operator-e2e; otherwise assume a usable cluster already exists in kubeconfig")
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already set up")
 	fBaseImage   = flag.String("base-image", "", "if set, use this image as the base for all images built by --build, instead of the default base image in build_docker.sh")
+	fRegistry    = flag.String("registry", "", `if set, build and push images instead of loading them into a kind node. Required with --build when testing against a remote cluster.`)
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -120,6 +125,15 @@ func runTests(m *testing.M) (int, error) {
 	klog.SetLogger(zapr.NewLogger(logger.Desugar()))
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	switch {
+	case *fRegistry != "" && !*fBuild:
+		return 0, fmt.Errorf("--registry requires --build (there is nothing to push otherwise)")
+	case *fBuild && *fCluster && *fRegistry != "":
+		return 0, fmt.Errorf("--build takes --cluster (side-load into the kind node) or --registry (push to a remote), not both")
+	case *fBuild && !*fCluster && *fRegistry == "":
+		return 0, fmt.Errorf("--build without --cluster needs --registry to push images to; there is no kind node to side-load into")
+	}
 
 	ossDir, err := gitRootDir()
 	if err != nil {
@@ -169,8 +183,11 @@ func runTests(m *testing.M) (int, error) {
 		}
 	}
 
-	// Cluster client setup.
-	restCfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		loadingRules.ExplicitPath = kubeconfig
+	}
+	restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
 		return 0, fmt.Errorf("error loading kubeconfig: %w", err)
 	}
@@ -411,10 +428,9 @@ func runTests(m *testing.M) (int, error) {
 	var ossTag string
 	if *fBuild {
 		// TODO(tomhjp): proper support for --build=false and layering pebble certs on top of existing images.
-		// TODO(tomhjp): support non-local platform.
 		// TODO(tomhjp): build tsrecorder as well.
 
-		// Build tailscale/k8s-operator, tailscale/tailscale, tailscale/k8s-proxy, with pebble CAs added.
+		// Build tailscale/k8s-operator, tailscale/tailscale, tailscale/k8s-proxy, tailscale/k8s-nameserver, with pebble CAs added.
 		ossTag, err = tagForRepo(ossDir)
 		if err != nil {
 			return 0, err
@@ -424,14 +440,27 @@ func runTests(m *testing.M) (int, error) {
 			logger.Infof("using base image: %q", *fBaseImage)
 		}
 		ossImageToTarget := map[string]string{
-			"local/k8s-operator":   "publishdevoperator",
-			"local/tailscale":      "publishdevimage",
-			"local/k8s-proxy":      "publishdevproxy",
-			"local/k8s-nameserver": "publishdevnameserver",
+			imgOperator:   "publishdevoperator",
+			imgTailscale:  "publishdevimage",
+			imgProxy:      "publishdevproxy",
+			imgNameserver: "publishdevnameserver",
+		}
+		var nodeArch string
+		if *fRegistry != "" {
+			nodeArch, err = detectNodeArch(ctx, kubeClient)
+			if err != nil {
+				return 0, fmt.Errorf("failed to detect node architecture: %w", err)
+			}
+			logger.Infof("building images for node architecture %q, pushing to %q", nodeArch, *fRegistry)
 		}
 		for img, target := range ossImageToTarget {
-			if err := buildImage(ctx, ossDir, img, target, ossTag, *fBaseImage, caPaths); err != nil {
+			repo := imageRepo(img)
+			if err := buildImage(ctx, ossDir, repo, target, ossTag, nodeArch, *fBaseImage, caPaths); err != nil {
 				return 0, err
+			}
+			if *fRegistry != "" {
+				// Image was pushed to the registry, nothing to load into kind.
+				continue
 			}
 			nodes, err := kindProvider.ListInternalNodes(kindClusterName)
 			if err != nil {
@@ -440,8 +469,7 @@ func runTests(m *testing.M) (int, error) {
 			// TODO(tomhjp): can be made more efficient and portable if we
 			// stream built image tarballs straight to the node rather than
 			// going via the daemon.
-			// TODO(tomhjp): support --build with non-kind clusters.
-			imgRef, err := name.ParseReference(fmt.Sprintf("%s:%s", img, ossTag))
+			imgRef, err := name.ParseReference(fmt.Sprintf("%s:%s", repo, ossTag))
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse image reference: %w", err)
 			}
@@ -477,11 +505,13 @@ func runTests(m *testing.M) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to load helm chart: %w", err)
 	}
-	extraEnv := []map[string]any{
-		{
-			"name":  "K8S_PROXY_IMAGE",
-			"value": "local/k8s-proxy:" + ossTag,
-		},
+	// Image repo/tag are left empty unless we built the images (ossTag is set),
+	// so the chart uses the 'stable' defaults.
+	var operatorRepo, proxyRepo, imageTag string
+	var extraEnv []map[string]any
+	if ossTag != "" {
+		operatorRepo, proxyRepo, imageTag = imageRepo(imgOperator), imageRepo(imgTailscale), ossTag
+		extraEnv = append(extraEnv, map[string]any{"name": "K8S_PROXY_IMAGE", "value": imageRepo(imgProxy) + ":" + ossTag})
 	}
 	if *fDevcontrol {
 		extraEnv = append(extraEnv, map[string]any{"name": "TS_DEBUG_ACME_DIRECTORY_URL", "value": "https://pebble:14000/dir"})
@@ -501,16 +531,16 @@ func runTests(m *testing.M) (int, error) {
 			"logging":  "debug",
 			"extraEnv": extraEnv,
 			"image": map[string]any{
-				"repo":       "local/k8s-operator",
-				"tag":        ossTag,
+				"repo":       operatorRepo,
+				"tag":        imageTag,
 				"pullPolicy": "IfNotPresent",
 			},
 		},
 		"proxyConfig": map[string]any{
 			"defaultProxyClass": "default",
 			"image": map[string]any{
-				"repository": "local/tailscale",
-				"tag":        ossTag,
+				"repo": proxyRepo,
+				"tag":  imageTag,
 			},
 		},
 	}
@@ -535,10 +565,9 @@ func runTests(m *testing.M) (int, error) {
 
 	// Leave the nameserver image unset when nothing was built so
 	// the operator falls back to the default.
-	// TODO(beckypauley): fix for other images where build is false.
 	nameserverImg := &tsapi.NameserverImage{}
 	if ossTag != "" {
-		nameserverImg.Repo = "local/k8s-nameserver"
+		nameserverImg.Repo = imageRepo(imgNameserver)
 		nameserverImg.Tag = ossTag
 	}
 	dnsConfig, err := deployNameserver(ctx, logger, kubeClient, nameserverImg)
@@ -998,13 +1027,24 @@ func pebbleGet(ctx context.Context, port uint16, path string) ([]byte, error) {
 	return b, nil
 }
 
-func buildImage(ctx context.Context, dir, repo, target, tag, baseImage string, extraCACerts []string) error {
+func buildImage(ctx context.Context, dir, repo, target, tag, arch, baseImage string, extraCACerts []string) error {
 	var files []string
 	for _, f := range extraCACerts {
 		files = append(files, fmt.Sprintf("%s:/etc/ssl/certs/%s", f, filepath.Base(f)))
 	}
+	// Build only for the specified platform (to reduce build time),
+	// otherwise default to build all platforms.
+	var platform string
+	switch arch {
+	case "":
+		platform = "local"
+	case "amd64":
+		platform = "flyio"
+	default:
+		platform = ""
+	}
 	args := []string{target,
-		"PLATFORM=local",
+		fmt.Sprintf("PLATFORM=%s", platform),
 		fmt.Sprintf("TAGS=%s", tag),
 		fmt.Sprintf("REPO=%s", repo),
 		fmt.Sprintf("FILES=%s", strings.Join(files, ",")),
@@ -1023,6 +1063,31 @@ func buildImage(ctx context.Context, dir, repo, target, tag, baseImage string, e
 	}
 
 	return nil
+}
+
+func imageRepo(name string) string {
+	if *fRegistry != "" {
+		return strings.TrimSuffix(*fRegistry, "/") + "/" + name
+	}
+	return "local/" + name
+}
+
+// detectNodeArch returns the CPU architecture of the cluster's nodes.
+// It uses the first node found. Mixed-architecture clusters are not
+// supported.
+func detectNodeArch(ctx context.Context, cl client.Client) (string, error) {
+	var nodes corev1.NodeList
+	if err := cl.List(ctx, &nodes); err != nil {
+		return "", fmt.Errorf("listing nodes: %w", err)
+	}
+	if len(nodes.Items) == 0 {
+		return "", fmt.Errorf("cluster has no nodes")
+	}
+	arch := nodes.Items[0].Status.NodeInfo.Architecture
+	if arch == "" {
+		return "", fmt.Errorf("node %q reports no architecture", nodes.Items[0].Name)
+	}
+	return arch, nil
 }
 
 func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) error {

@@ -19,7 +19,8 @@
 // When building with --build, --base-image overrides the base image that all
 // the built images are layered on top of, e.g.
 // --base-image=registry.access.redhat.com/ubi9/ubi-minimal:latest. Without it,
-// the default base image in build_docker.sh is used.
+// the default base image in build_docker.sh is used. If using a real cluster
+// with --build, --registry must also be set.
 //
 // To run with minimal dependencies, use:
 //
