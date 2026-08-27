@@ -20,6 +20,7 @@ import (
 	"github.com/alexbrainman/sspi/negotiate"
 	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"tailscale.com/hostinfo"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
@@ -54,7 +55,7 @@ var (
 )
 
 func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
-	if req.URL == nil {
+	if req.URL == nil || wpadDisabled() {
 		return nil, nil
 	}
 	urlStr := req.URL.String()
@@ -151,6 +152,24 @@ func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err e
 		v = "http://" + v
 	}
 	return url.Parse(v)
+}
+
+const winHTTPSettingsKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp`
+
+// wpadDisabled reports whether Windows has been explicitly configured not to
+// perform WPAD discovery. Check this before invoking WinHTTP because an
+// explicit WinHttpGetProxyForUrl auto-detection request can otherwise cause
+// DNS lookups even when Windows-native WPAD behavior is disabled.
+//
+// See https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/disable-http-proxy-auth-features#how-to-disable-wpad.
+func wpadDisabled() bool {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, winHTTPSettingsKey, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	v, _, err := key.GetIntegerValue("DisableWpad")
+	return err == nil && v == 1
 }
 
 var userAgent = windows.StringToUTF16Ptr("Tailscale")
