@@ -1623,6 +1623,46 @@ func TestPeerConfigUpdatedOnPeerRouteDelta(t *testing.T) {
 	}
 }
 
+func TestShareeKeyChangeDropsStaleMasqueradeFromPeerConfig(t *testing.T) {
+	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	oldMasq := netip.MustParsePrefix("100.95.94.22/32")
+	newMasq := netip.MustParsePrefix("100.112.44.83/32")
+
+	sharee := makePeer(1, withName("sharee"), withAddresses(oldMasq), withAllowedIPs(oldMasq))
+	nm := buildNetmapWithPeers(
+		makePeer(2, withName("self-other"), withAddresses(netip.MustParsePrefix("100.64.1.2/32"))),
+		sharee,
+	)
+
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, false)
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc().authenticated(nm)
+
+	oldKey := sharee.Key()
+	replacement := sharee.AsStruct()
+	replacement.Key = key.NewNode().Public()
+	replacement.Addresses = []netip.Prefix{newMasq}
+	replacement.AllowedIPs = []netip.Prefix{oldMasq}
+	if !lb.UpdateNetmapDelta([]netmap.NodeMutation{netmap.NodeMutationUpsert{Node: replacement.View()}}) {
+		t.Fatal("UpdateNetmapDelta = false, want true")
+	}
+
+	if _, ok := engine.PeerAllowedIPs(oldKey); ok {
+		t.Fatal("old sharee key still in peer config after key change")
+	}
+	ips, ok := engine.PeerAllowedIPs(replacement.Key)
+	if !ok {
+		t.Fatalf("peer config source missing new key %v", replacement.Key.ShortString())
+	}
+	if slices.Contains(ips, oldMasq) {
+		t.Fatalf("AllowedIPs %v still has stale masquerade %v", ips, oldMasq)
+	}
+	if !slices.Contains(ips, newMasq) {
+		t.Fatalf("AllowedIPs %v missing new masquerade %v", ips, newMasq)
+	}
+}
+
 // TestSendPreservesAuthURL tests that wgengine updates arriving in the middle of
 // processing an auth URL doesn't result in the auth URL being cleared.
 func TestSendPreservesAuthURL(t *testing.T) {
@@ -2013,7 +2053,7 @@ func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
 func (e *mockEngine) ResetDevicePeer(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
-func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}
+func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource) {}
 func (e *mockEngine) SetPeerPriorityMessageOnEstablishmentFunc(fn func(key.NodePublic) (msg []byte)) {
 }
 func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}

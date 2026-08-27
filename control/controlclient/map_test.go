@@ -1226,6 +1226,12 @@ func TestPeerChangeDiff(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "miss-change-key",
+			a:    &tailcfg.Node{ID: 1, Key: key.NewNode().Public()},
+			b:    &tailcfg.Node{ID: 1, Key: key.NewNode().Public()},
+			want: nil,
+		},
+		{
 			name: "miss-change-name",
 			a:    &tailcfg.Node{ID: 1, Name: "foo"},
 			b:    &tailcfg.Node{ID: 1, Name: "bar"},

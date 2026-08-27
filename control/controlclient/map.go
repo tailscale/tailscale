@@ -1040,7 +1040,10 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string))
 			}
 		case "Key":
 			if was.Key() != n.Key {
-				pc().Key = new(n.Key)
+				// Key rotation must keep the full Node so AllowedIPs/Addresses
+				// (1-1 NAT masquerade) are replaced, not left on a Key-only patch.
+				onFalse(field)
+				return nil, false
 			}
 		case "KeyExpiry":
 			if !was.KeyExpiry().Equal(n.KeyExpiry) {
