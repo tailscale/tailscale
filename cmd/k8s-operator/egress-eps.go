@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -73,12 +74,41 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return res, fmt.Errorf("error retrieving ExternalName Service: %w", err)
 	}
 
+	tailnetSvc := tailnetSvcName(svc)
+	lg = lg.With("tailnet-service-name", tailnetSvc)
+
+	// Retrieve the current ClusterIP Service. egress-eps is triggered by the slice itself, so it can be handed an orphan - a
+	// slice left behind in some circumstances (for example,  when the ProxyGroup on the parent Service was changed).
+	// In this case, the slice's service-name no longer matches the current ClusterIP Service, and writing to it would
+	// // rebind a stale slice into the live Service, unioning its stale endpoints into cluster traffic.
+	// Fetch the ClusterIP Service first and only proceed for slices bound to it.
+	// Note: editing a Service's ProxyGroup in place is not officially supported, but this ensures if a user
+	// does edit the proxygroup in place it will not erroneously try to migrate an orphaned EndpointSlice in place.
+	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, er.Client, er.tsNamespace, egressSvcChildResourceLabels(svc))
+	if err != nil {
+		return res, fmt.Errorf("error retrieving ClusterIP Service: %w", err)
+	}
+	if clusterIPSvc == nil {
+		lg.Debugf("ClusterIP Service not found, waiting...")
+		return res, nil
+	}
+	if eps.Labels[discoveryv1.LabelServiceName] != clusterIPSvc.Name {
+		lg.Debugf("EndpointSlice %s is bound to non-current ClusterIP Service %q (current %q); skipping",
+			eps.Name, eps.Labels[discoveryv1.LabelServiceName], clusterIPSvc.Name)
+		return res, nil
+	}
+
 	// TODO(irbekrm): currently this reconcile loop runs all the checks every time it's triggered, which is
 	// wasteful. Once we have a Ready condition for ExternalName Services for ProxyGroup, use the condition to
 	// determine if a reconcile is needed.
 
-	tailnetSvc := tailnetSvcName(svc)
-	lg = lg.With("tailnet-service-name", tailnetSvc)
+	// Snapshot the slice after the orphan guard and before any mutation. The
+	// change check below is a whole-object compare (reflect.DeepEqual(eps, oldEps)),
+	// so nothing between here and the Update may mutate eps except the fields this
+	// reconciler owns (labels, endpoints, ports) - otherwise an unrelated field
+	// difference would trigger a needless write which, because this reconciler
+	// watches EndpointSlices, would re-trigger itself (see tailscale/tailscale#20916).
+	oldEps := eps.DeepCopy()
 
 	// Retrieve the desired tailnet service configuration from the ConfigMap.
 	proxyGroupName := eps.Labels[labelProxyGroup]
@@ -105,7 +135,12 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
-	newEndpoints := make([]discoveryv1.Endpoint, 0)
+	// Leave newEndpoints nil (not an empty slice) so that when no Pod is ready it
+	// compares equal to a freshly created slice's nil Endpoints - otherwise the
+	// reflect.DeepEqual guard below would see nil != []Endpoint{} and, because this
+	// reconciler watches EndpointSlices, a needless write would re-trigger it.
+	//TODO(beckypauley): review swapping to nil vs empty.
+	var newEndpoints []discoveryv1.Endpoint
 	for _, pod := range podList.Items {
 		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
@@ -131,20 +166,6 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			},
 		})
 	}
-	// This reconciler owns the mutable fields of an existing slice - ports and
-	// endpoints. The egress Services reconciler only ever creates the slice
-	// (with its immutable AddressType and labels) and never updates it, so a
-	// single reconciler writes any given slice and the two can't race Update
-	// calls on it (see tailscale/tailscale#20916). Ports are derived from the
-	// ClusterIP Service, so retrieve it to compute the desired state.
-	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, er.Client, er.tsNamespace, egressSvcChildResourceLabels(svc))
-	if err != nil {
-		return res, fmt.Errorf("error retrieving ClusterIP Service: %w", err)
-	}
-	if clusterIPSvc == nil {
-		lg.Debugf("ClusterIP Service not found, waiting...")
-		return res, nil
-	}
 	// Endpoints must be in a deterministic order: without sorting an unchanged
 	// set of ready Pods could trigger a needless Update (which, because this reconciler
 	// watches EndpointSlices, would re-trigger itself: see tailscale/tailscale#20916.).
@@ -153,20 +174,35 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return strings.Compare(ptr.Deref(a.Hostname, ""), ptr.Deref(b.Hostname, ""))
 	})
 	newPorts := epsPortsFromSvc(clusterIPSvc)
-	if reflect.DeepEqual(eps.Endpoints, newEndpoints) && reflect.DeepEqual(eps.Ports, newPorts) {
+
+	// This reconciler is the sole writer of a slice after creation (the egress
+	// Services reconciler only ever Creates it), so it owns all mutable state:
+	// endpoints, ports and labels. Re-assert the owned labels to repair drift while
+	// preserving any labels added by other controllers - maps.Copy overwrites only
+	// the keys we own. Because the guard above established this slice is bound to the
+	// current ClusterIP Service, the identity labels we write equal what the slice
+	// already claims (repair, not rebind).
+	// eps.Labels is guaranteed non-nil here: the parent-Service lookup and the
+	// orphan guard above both early-return on a slice lacking our labels, so a
+	// slice that reaches this point carries them. maps.Copy into a nil map panics,
+	// so do not reorder those guards after this point.
+	// TODO(beckypauley): consider still having a nil guard here.
+	maps.Copy(eps.Labels, egressSvcEpsLabels(svc, clusterIPSvc))
+
+	// Apply the owned fields, then compare the whole object against the pre-mutation
+	// snapshot: if nothing this reconciler owns changed, skip the write. A needless
+	// write would re-trigger this reconciler via the EndpointSlice watch (#20916).
+	eps.Endpoints = newEndpoints
+	eps.Ports = newPorts
+	if reflect.DeepEqual(eps, oldEps) {
 		return res, nil
 	}
 
-	// Write only endpoints and ports. Labels and addressType are owned by
-	// the egress Services reconciler, which sets them once at creation time.
-	// Because this reconciler watches EndpointSlices, a needless write
-	// would re-trigger it.
-	patch := client.MergeFrom(eps.DeepCopy())
-	eps.Endpoints = newEndpoints
-	eps.Ports = newPorts
+	// Single writer, so a plain resourceVersion-gated Update is safe (no two-reconciler
+	// Update race - see tailscale/tailscale#20916).
 	lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
-	if err = er.Patch(ctx, eps, patch); err != nil {
-		return res, fmt.Errorf("error patching EndpointSlice: %w", err)
+	if err = er.Update(ctx, eps); err != nil {
+		return res, fmt.Errorf("error updating EndpointSlice: %w", err)
 	}
 
 	return res, nil

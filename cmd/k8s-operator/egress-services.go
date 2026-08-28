@@ -246,11 +246,12 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 // ensureEndpointSlices ensures that an EndpointSlice exists for the egress
 // service for each IP family supported by the cluster.
 //
-// This reconciler owns only the identity of each slice: its name, labels and
-// (immutable) addressType, set once at creation. The slice's endpoints and ports
-// are owned by the egress-eps reconciler and should not be modified here.
-// Splitting ownership this way means no two reconcilers ever
-// update the same slice, which avoids tailscale/tailscale#20916.
+// This reconciler only creates each slice, setting its name, initial labels,
+// addressType and initial ports. After creation the egress-eps reconciler
+// is the sole writer of the slice's mutable state - labels, endpoints
+// and ports - which it re-asserts to repair drift. This reconciler must not
+// modify a slice it did not just create. Splitting ownership so that no two
+// reconcilers ever update the same slice avoids tailscale/tailscale#20916.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
@@ -278,6 +279,12 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
+		// NOTE(pr): this create-only path replaces a createOrUpdate whose mutate fn
+		// ran "for _, p := range e.Endpoints { p.Conditions.Ready = nil }". That loop
+		// was a no-op (range over a []Endpoint value slice - p was a copy, so the
+		// backing array was never modified), and egress-eps is the sole writer of
+		// endpoint Conditions anyway. Flagging in the PR description; safe to delete
+		// this note after review.
 		if err := esr.Create(ctx, eps); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("error creating %s EndpointSlice: %w", addrType, err)
 		}

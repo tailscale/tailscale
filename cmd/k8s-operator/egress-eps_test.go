@@ -94,18 +94,11 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo",
 			Namespace: "operator-ns",
-			// Full managed label set, as the egress Services reconciler would set
-			// at creation. egress-eps does not write labels, so these must be
-			// present on the created object for the reconciler to find the
-			// ClusterIP Service and for the expected object to match.
-			Labels: egressSvcEpsLabels(svc, clusterIPSvc),
+			Labels:    egressSvcEpsLabels(svc, clusterIPSvc),
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
 	mustCreate(t, fc, eps)
-	// The egress EndpointSlices reconciler owns the slice's ports (derived from
-	// the ClusterIP Service); it does not write labels. So the expected object
-	// carries the ports it sets, and the labels it was created with.
 	eps.Ports = epsPorts
 
 	t.Run("no_proxy_group_resources", func(t *testing.T) {
@@ -157,35 +150,52 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			t.Errorf("EndpointSlice rewritten on steady-state reconcile: resourceVersion %s -> %s", before.ResourceVersion, after.ResourceVersion)
 		}
 	})
-	t.Run("labels_not_touched", func(t *testing.T) {
-		// egress-eps owns only endpoints and ports; labels are owned by the egress
-		// Services reconciler. So when it writes endpoints/ports via a merge patch,
-		// it must not touch labels at all: an external label must survive, and a
-		// managed label it does not read as input (LabelManagedBy) must NOT be
-		// re-added by egress-eps (it is not egress-eps's responsibility). This
-		// documents the ownership boundary and proves the merge patch does not
-		// clobber or repair labels.
+	t.Run("label_reasserted_when_dropped", func(t *testing.T) {
+		// egress-eps is the sole writer of the slice after creation, so it owns all
+		// mutable state: labels, endpoints and ports. It re-asserts the owned labels
+		// to repair drift (e.g. a managed label removed out of band) while preserving
+		// labels added by other controllers. Drop a managed label (LabelManagedBy) and
+		// add a foreign label, then reconcile: the managed label must be repaired and
+		// the foreign label must survive.
+		//
+		// This is a label-ONLY change (endpoints and ports are untouched), so it also
+		// exercises that the whole-object change guard detects a label diff: it must
+		// (a) write on the drift and (b) converge (no rewrite on the next reconcile).
 		mustUpdate(t, fc, "operator-ns", "foo", func(e *discoveryv1.EndpointSlice) {
 			e.Labels["example.com/external"] = "keep-me"
 			delete(e.Labels, discoveryv1.LabelManagedBy)
 		})
-		// Trigger a real endpoints change so egress-eps performs a merge patch.
-		// Add asecond port to the ClusterIP Service so the slice's ports change.
-		mustUpdate(t, fc, "operator-ns", clusterIPSvc.Name, func(s *corev1.Service) {
-			s.Spec.Ports = append(s.Spec.Ports, corev1.ServicePort{Name: "extra", Protocol: "TCP", Port: 8443, TargetPort: intstr.FromInt(4005)})
-			clusterIPSvc.Spec.Ports = s.Spec.Ports
-		})
-		epsPorts = epsPortsFromSvc(clusterIPSvc)
+		// Capture resourceVersion AFTER the mutate but BEFORE the reconcile, so a
+		// subsequent bump is attributable to the reconciler's write, not the mutate.
+		drifted := &discoveryv1.EndpointSlice{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: "foo", Namespace: "operator-ns"}, drifted); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
 		expectReconciled(t, er, "operator-ns", "foo")
 		got := &discoveryv1.EndpointSlice{}
 		if err := fc.Get(t.Context(), types.NamespacedName{Name: "foo", Namespace: "operator-ns"}, got); err != nil {
 			t.Fatalf("getting EndpointSlice: %v", err)
 		}
 		if got.Labels["example.com/external"] != "keep-me" {
-			t.Errorf("external label not preserved by merge patch: got %q", got.Labels["example.com/external"])
+			t.Errorf("foreign label not preserved: got %q", got.Labels["example.com/external"])
 		}
-		if _, ok := got.Labels[discoveryv1.LabelManagedBy]; ok {
-			t.Errorf("egress-eps re-added managed label %s it does not own: %q", discoveryv1.LabelManagedBy, got.Labels[discoveryv1.LabelManagedBy])
+		if got.Labels[discoveryv1.LabelManagedBy] != "tailscale.com" {
+			t.Errorf("managed label %s not repaired: got %q, want %q", discoveryv1.LabelManagedBy, got.Labels[discoveryv1.LabelManagedBy], "tailscale.com")
+		}
+		// The label-only drift must have caused the reconciler to write (guards
+		// against a change guard that ignores labels).
+		if got.ResourceVersion == drifted.ResourceVersion {
+			t.Errorf("label drift did not trigger a write: resourceVersion unchanged at %s", got.ResourceVersion)
+		}
+		// A second reconcile with no further change must not rewrite the slice: the
+		// repair converged and the guard sees no diff.
+		rvAfterRepair := got.ResourceVersion
+		expectReconciled(t, er, "operator-ns", "foo")
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: "foo", Namespace: "operator-ns"}, got); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
+		if got.ResourceVersion != rvAfterRepair {
+			t.Errorf("label repair did not converge: resourceVersion %s -> %s on no-op reconcile", rvAfterRepair, got.ResourceVersion)
 		}
 		eps.Labels = got.Labels
 		eps.Ports = epsPorts
@@ -211,7 +221,9 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
 		expectReconciled(t, er, "operator-ns", "foo")
-		eps.Endpoints = []discoveryv1.Endpoint{}
+		// No ready Pod: egress-eps writes nil Endpoints (not an empty slice) so a
+		// no-ready-Pods result compares equal to a freshly created slice's nil field.
+		eps.Endpoints = nil
 		expectEqual(t, fc, eps)
 	})
 
@@ -220,10 +232,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo-ipv6",
 			Namespace: "operator-ns",
-			// Full managed label set, as the egress Services reconciler would set
-			// at creation (egress-eps does not write labels).
-			// TODO(beckypauley): specify.
-			Labels: egressSvcEpsLabels(svc, clusterIPSvc),
+			Labels:    egressSvcEpsLabels(svc, clusterIPSvc),
 		},
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
@@ -282,7 +291,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectReconciled(t, er, "operator-ns", "foo-ipv6")
 		// IPv4-only pod should not appear in the IPv6 EndpointSlice.
-		epsV6.Endpoints = []discoveryv1.Endpoint{}
+		epsV6.Endpoints = nil
 		expectEqual(t, fc, epsV6)
 	})
 	ipv6Pod := &corev1.Pod{
@@ -304,7 +313,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
 		expectReconciled(t, er, "operator-ns", "foo-ipv6")
-		epsV6.Endpoints = []discoveryv1.Endpoint{}
+		epsV6.Endpoints = nil
 		expectEqual(t, fc, epsV6)
 	})
 	t.Run("ipv6_pod_ready_to_route", func(t *testing.T) {
@@ -436,6 +445,135 @@ func TestEgressEndpointSliceEndpointsSorted(t *testing.T) {
 	if got.ResourceVersion != rvBefore {
 		t.Errorf("second reconcile rewrote the slice: resourceVersion %s -> %s", rvBefore, got.ResourceVersion)
 	}
+}
+
+// TestEgressEndpointSliceOrphanGuard verifies that the egress EndpointSlices
+// reconciler does not write to an orphaned slice - one whose
+// kubernetes.io/service-name no longer matches the current ClusterIP Service.
+// Such a slice can be left behind when the ClusterIP Service is recreated (new
+// GenerateName) or the ProxyGroup on the parent Service is changed. Writing to it
+// would rebind a stale slice (with frozen endpoints) into the live ClusterIP
+// Service, unioning dead endpoints into cluster traffic. The reconciler must skip
+// it entirely, leaving it byte-for-byte unchanged.
+func TestEgressEndpointSliceOrphanGuard(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Ports:        []corev1.ServicePort{{Name: "http", Protocol: "TCP", Port: 80}},
+		},
+	}
+	port := randomPort()
+	cm := configMapForSvc(t, svc, port)
+	// The current ClusterIP Service - its name is the slice identity the guard
+	// checks against.
+	clusterIPSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ts-test-clusterip",
+			Namespace: "operator-ns",
+			Labels:    egressSvcChildResourceLabels(svc),
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Name: "http", Protocol: "TCP", Port: 80, TargetPort: intstr.FromInt(4003)}},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(svc, cm, clusterIPSvc).
+		WithStatusSubresource(svc).
+		Build()
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	er := &egressEpsReconciler{Client: fc, logger: zl.Sugar(), tsNamespace: "operator-ns"}
+
+	// Seed a ready Pod so that, absent the guard, the reconciler WOULD write an
+	// endpoint - making an unchanged orphan slice a meaningful assertion.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns", Labels: pgLabels("foo", nil), UID: types.UID("pod-uid")},
+		Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}},
+	}
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns", Labels: pgSecretLabels("foo", kubetypes.LabelSecretTypeState)}}
+	mustCreate(t, fc, pod)
+	mustCreate(t, fc, sec)
+	stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "", port)
+	mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
+		mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
+	})
+
+	// assertUnchanged reconciles the named slice and asserts it was not written.
+	assertUnchanged := func(t *testing.T, name string) {
+		t.Helper()
+		before := &discoveryv1.EndpointSlice{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "operator-ns"}, before); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
+		expectReconciled(t, er, "operator-ns", name)
+		after := &discoveryv1.EndpointSlice{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "operator-ns"}, after); err != nil {
+			t.Fatalf("getting EndpointSlice: %v", err)
+		}
+		if before.ResourceVersion != after.ResourceVersion {
+			t.Errorf("orphan slice %s was written: resourceVersion %s -> %s", name, before.ResourceVersion, after.ResourceVersion)
+		}
+		if len(after.Endpoints) != 0 {
+			t.Errorf("orphan slice %s gained endpoints: %+v", name, after.Endpoints)
+		}
+	}
+
+	t.Run("orphan_by_service_name_not_touched", func(t *testing.T) {
+		// Same-PG ClusterIP recreation: proxy-group MATCHES the current PG, but
+		// service-name points at a dead ClusterIP Service. A proxy-group-keyed guard
+		// would miss this, so it is the load-bearing case.
+		orphan := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stale-clusterip-ipv4",
+				Namespace: "operator-ns",
+				Labels: map[string]string{
+					LabelParentName:              "test",
+					LabelParentNamespace:         "default",
+					labelSvcType:                 typeEgress,
+					labelProxyGroup:              "foo", // current PG
+					discoveryv1.LabelServiceName: "ts-test-clusterip-OLD",
+				},
+			},
+			AddressType: discoveryv1.AddressTypeIPv4,
+		}
+		mustCreate(t, fc, orphan)
+		assertUnchanged(t, orphan.Name)
+	})
+
+	t.Run("orphan_by_proxy_group_not_touched", func(t *testing.T) {
+		// ProxyGroup rename: both proxy-group and service-name diverge from the
+		// current identity. Documents the rename path explicitly.
+		orphan := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "old-pg-clusterip-ipv4",
+				Namespace: "operator-ns",
+				Labels: map[string]string{
+					LabelParentName:              "test",
+					LabelParentNamespace:         "default",
+					labelSvcType:                 typeEgress,
+					labelProxyGroup:              "old-pg",
+					discoveryv1.LabelServiceName: "ts-test-clusterip-old-pg",
+				},
+			},
+			AddressType: discoveryv1.AddressTypeIPv4,
+		}
+		mustCreate(t, fc, orphan)
+		assertUnchanged(t, orphan.Name)
+	})
 }
 
 func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.ConfigMap {
