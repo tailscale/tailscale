@@ -39,7 +39,7 @@ type egressEpsReconciler struct {
 // It compares tailnet service state stored in egress proxy state Secrets by containerboot with the desired
 // configuration stored in proxy-cfg ConfigMap to determine if the endpoint is ready.
 func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
-	lg := er.logger.With("Service", req.NamespacedName)
+	lg := er.logger.With("EndpointSlice", req.NamespacedName)
 	lg.Debugf("starting reconcile")
 	defer lg.Debugf("reconcile finished")
 

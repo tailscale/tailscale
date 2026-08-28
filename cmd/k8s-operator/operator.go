@@ -617,7 +617,7 @@ func runReconcilers(opts reconcilerOpts) {
 	epsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsHandler)
 	podsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGPods(mgr.GetClient(), opts.tailscaleNamespace))
 	secretsFilter := handler.EnqueueRequestsFromMapFunc(egressEpsFromPGStateSecrets(mgr.GetClient(), opts.tailscaleNamespace))
-	epsFromExtNSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromExternalNameService(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
+	epsFromClusterIPSvcFilter := handler.EnqueueRequestsFromMapFunc(epsFromClusterIPService(mgr.GetClient(), opts.log, opts.tailscaleNamespace))
 
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -625,7 +625,7 @@ func runReconcilers(opts reconcilerOpts) {
 		Watches(&discoveryv1.EndpointSlice{}, epsFilter).
 		Watches(&corev1.Pod{}, podsFilter).
 		Watches(&corev1.Secret{}, secretsFilter).
-		Watches(&corev1.Service{}, epsFromExtNSvcFilter).
+		Watches(&corev1.Service{}, epsFromClusterIPSvcFilter).
 		Complete(&egressEpsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -1622,23 +1622,31 @@ func servicesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger) 
 	}
 }
 
-// epsFromExternalNameService is an event handler for ExternalName Services that define a Tailscale egress service that
-// should be exposed on a ProxyGroup. It returns reconcile requests for EndpointSlices created for this Service.
-func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
+// epsFromClusterIPService is an event handler for the ClusterIP Services created for egress services
+// exposed on a ProxyGroup. It returns reconcile requests for the EndpointSlices bound to the ClusterIP
+// Service.
+func epsFromClusterIPService(cl client.Client, logger *zap.SugaredLogger, ns string) handler.MapFunc {
 	return func(ctx context.Context, o client.Object) []reconcile.Request {
 		svc, ok := o.(*corev1.Service)
 		if !ok {
 			logger.Warn("Service handler triggered for an object that is not a Service")
 			return nil
 		}
-
-		if !isEgressSvcForProxyGroup(svc) {
+		l := svc.Labels
+		if l[kubetypes.LabelManaged] != "true" || l[LabelParentType] != "svc" ||
+			l[labelSvcType] != typeEgress || l[labelProxyGroup] == "" {
 			return nil
 		}
 		epsList := &discoveryv1.EndpointSliceList{}
-		if err := cl.List(ctx, epsList, client.InNamespace(ns),
-			client.MatchingLabels(egressSvcChildResourceLabels(svc))); err != nil {
-			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on Service %s", err, svc.Name)
+		if err := cl.List(ctx, epsList, client.InNamespace(ns), client.MatchingLabels{
+			kubetypes.LabelManaged: "true",
+			LabelParentType:        "svc",
+			LabelParentName:        l[LabelParentName],
+			LabelParentNamespace:   l[LabelParentNamespace],
+			labelProxyGroup:        l[labelProxyGroup],
+			labelSvcType:           typeEgress,
+		}); err != nil {
+			logger.Infof("error listing EndpointSlices: %v, skipping a reconcile for event on ClusterIP Service %s", err, svc.Name)
 			return nil
 		}
 		reqs := make([]reconcile.Request, 0)
