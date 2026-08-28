@@ -244,7 +244,7 @@ func buildWasm(dev bool) ([]byte, error) {
 		}
 		// Omit long paths and debug symbols in release builds, to reduce the
 		// generated WASM binary size.
-		args = append(args, "-trimpath", "-ldflags", wasmbuild.ProdLDFlags)
+		args = append(args, "-trimpath", "-ldflags", wasmbuild.ProdLDFlags())
 	} else if *devControl != "" {
 		args = append(args, "-ldflags", fmt.Sprintf("-X 'main.ControlURL=%v'", *devControl))
 	}
