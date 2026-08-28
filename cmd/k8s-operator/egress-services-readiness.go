@@ -74,20 +74,6 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}()
 
 	crl := egressSvcChildResourceLabels(svc)
-	epsList := &discoveryv1.EndpointSliceList{}
-	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
-		err = fmt.Errorf("error listing EndpointSlices: %w", err)
-		reason = reasonReadinessCheckFailed
-		msg = err.Error()
-		return res, err
-	}
-	if len(epsList.Items) == 0 {
-		lg.Infof("EndpointSlices for Service do not yet exist, waiting...")
-		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
-		st = metav1.ConditionFalse
-		return res, nil
-	}
-	// If an EndpointSlice for an expected family is missing, we mark the Service as NotReady.
 	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
 	if err != nil {
 		err = fmt.Errorf("error retrieving ClusterIP Service: %w", err)
@@ -97,6 +83,26 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}
 	if clusterIPSvc == nil {
 		lg.Infof("ClusterIP Service for egress Service does not yet exist, waiting...")
+		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
+		st = metav1.ConditionFalse
+		return res, nil
+	}
+	// EndpointSlice list can also contain orphans (e.g. if an ExternalName Service's ProxyGroup is edited in place).
+	// We don't support editing ProxyGroup on ExternalName Services, but should guard against this case.
+	// We use the current ClusterIP Service's name to filter those out, mirroring the orphan guard in the egress EndpointSlices
+	// reconciler. Otherwise, an orphan slice could block the readiness condition.
+	epsList := &discoveryv1.EndpointSliceList{}
+	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
+		err = fmt.Errorf("error listing EndpointSlices: %w", err)
+		reason = reasonReadinessCheckFailed
+		msg = err.Error()
+		return res, err
+	}
+	epsList.Items = slices.DeleteFunc(epsList.Items, func(eps discoveryv1.EndpointSlice) bool {
+		return eps.Labels[discoveryv1.LabelServiceName] != clusterIPSvc.Name
+	})
+	if len(epsList.Items) == 0 {
+		lg.Infof("EndpointSlices for Service do not yet exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
