@@ -87,7 +87,19 @@ func init() {
 // ProdLDFlags is the -ldflags value used in production wasm builds.
 // -s strips the symbol table, -w strips DWARF, both to shrink the
 // shipped artifact.
-const ProdLDFlags = "-s -w"
+//
+// It also sets the version stamps to VERSION_LONG and VERSION_SHORT,
+// if those env variables are present.
+func ProdLDFlags() string {
+	ldflags := "-s -w"
+	if long := os.Getenv("VERSION_LONG"); long != "" {
+		ldflags += " -X tailscale.com/version.longStamp=" + long
+	}
+	if short := os.Getenv("VERSION_SHORT"); short != "" {
+		ldflags += " -X tailscale.com/version.shortStamp=" + short
+	}
+	return ldflags
+}
 
 // BuildInfoFile is the basename of the JSON manifest that build-pkg
 // writes alongside main.wasm, recording the sha256 of the raw
@@ -144,7 +156,7 @@ func ProdCommand(goBin, outputPath string) *exec.Cmd {
 	cmd := exec.Command(goBin, "build",
 		"-tags", Tags(),
 		"-trimpath",
-		"-ldflags", ProdLDFlags,
+		"-ldflags", ProdLDFlags(),
 		"-o", outputPath,
 		"tailscale.com/cmd/tsconnect/wasm",
 	)
