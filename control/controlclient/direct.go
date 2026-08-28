@@ -52,7 +52,6 @@ import (
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
-	"tailscale.com/types/events"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -287,15 +286,6 @@ type UserProfileUpdater interface {
 	UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool
 }
 
-// DiscoKeyUpdater is an optional interface that can be implemented by an [Observer] to be
-// notified about node disco keys received out-of-band from control, via
-// existing connection state.
-type DiscoKeyUpdater interface {
-	// PatchDiscoKey reports to the receiver that the specified disco key
-	// for node was obtained out-of-band from control.
-	PatchDiscoKey(key.NodePublic, key.DiscoPublic)
-}
-
 var nextControlClientID atomic.Int64
 
 // NewDirect returns a new Direct client.
@@ -425,38 +415,6 @@ func NewDirect(opts Options) (*Direct, error) {
 	c.clientVersionPub = eventbus.Publish[tailcfg.ClientVersion](c.busClient)
 	c.autoUpdatePub = eventbus.Publish[AutoUpdate](c.busClient)
 	c.controlTimePub = eventbus.Publish[ControlTime](c.busClient)
-	discoKeyPub := eventbus.Publish[events.PeerDiscoKeyUpdate](c.busClient)
-	eventbus.SubscribeFunc(c.busClient, func(update events.DiscoKeyAdvertisement) {
-		c.logf("[v1] controlclient direct: got TSMP disco key advertisement from %v via eventbus", update.Src)
-		var peerID tailcfg.NodeID
-		var peerKey key.NodePublic
-		var ok bool
-		c.mu.Lock()
-		sess := c.streamingMapSession
-		c.mu.Unlock()
-		if sess != nil {
-			peerID, peerKey, ok = sess.PeerIDAndKeyByTailscaleIP(update.Src)
-		}
-
-		if sess != nil && ok {
-			c.logf("[v1] controlclient direct: updating discoKey for %v via mapSession", update.Src)
-
-			// If we update without error, return. If the err indicates that the
-			// mapSession has gone away, we want to fall back to pushing the key
-			// further down the chain.
-			if err := sess.updateDiscoForNode(
-				peerID, peerKey, update.Key, time.Now(), false); err == nil ||
-				!errors.Is(err, ErrChangeQueueClosed) {
-				return
-			}
-		}
-
-		// We need to push the update further down the chain. Either because we do
-		// not have a mapSession (we are not connected to control) or because the
-		// mapSession queue has closed.
-		c.logf("[v1] controlclient direct: updating discoKey for %v via magicsock", update.Src)
-		discoKeyPub.Publish(events.PeerDiscoKeyUpdate(update))
-	})
 
 	return c, nil
 }
@@ -972,8 +930,6 @@ func (c *Direct) PollNetMap(ctx context.Context, nu NetmapUpdater) error {
 // It will report only the first netmap seen.
 type rememberLastNetmapUpdater struct {
 	last          *netmap.NetworkMap
-	lastTSMPKey   key.NodePublic
-	lastTSMPDisco key.DiscoPublic
 	done          chan any
 }
 
@@ -983,11 +939,6 @@ func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	case nu.done <- nil:
 	default:
 	}
-}
-
-func (nu *rememberLastNetmapUpdater) PatchDiscoKey(key key.NodePublic, disco key.DiscoPublic) {
-	nu.lastTSMPKey = key
-	nu.lastTSMPDisco = disco
 }
 
 // FetchNetMapForTest fetches the netmap once.

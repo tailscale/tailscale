@@ -801,7 +801,6 @@ func Test_endpoint_handlePongConnLocked(t *testing.T) {
 // TestUpdateFromNodeUsesControlKeyForComparison verifies that updateFromNode
 // compares the netmap-provided disco key against the endpoint's control-learned
 // key (keyFromControl), not the currently active key (key()).
-// Some of this is scaffold for later changes.
 func TestUpdateFromNodeUsesControlKeyForComparison(t *testing.T) {
 	dk1 := key.NewDisco().Public() // initial control key
 	dk2 := key.NewDisco().Public() // TSMP key
@@ -818,7 +817,7 @@ func TestUpdateFromNodeUsesControlKeyForComparison(t *testing.T) {
 			netmapDiscoKey: dk2,
 			wantControlKey: dk2,
 			wantActiveKey:  dk2,
-			wantTsmpActive: false,
+			wantTsmpActive: true,
 		},
 		{
 			name:           "unchanged_netmap_key_preserves_active",
@@ -1041,7 +1040,7 @@ func TestUpdateDiscoKey(t *testing.T) {
 			},
 			newKey:        dk3,
 			wantChanged:   true,
-			wantActiveKey: dk3,
+			wantActiveKey: dk2,
 		},
 		{
 			name: "control-key-cleared-tsmp-present",
