@@ -9179,6 +9179,332 @@ func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
 	})
 }
 
+// exitNodeHealthTestNetMap returns a netmap with two peers: "exit1"
+// ("my-vps"), which offers exit routes, and "plain1" ("laptop"), which does
+// not.
+func exitNodeHealthTestNetMap() *netmap.NetworkMap {
+	hi := (&tailcfg.Hostinfo{}).View()
+	return &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:                10,
+			StableID:          "self",
+			Key:               makeNodeKeyFromID(10),
+			Name:              "self.example.ts.net.",
+			Hostinfo:          hi,
+			Addresses:         []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+			MachineAuthorized: true,
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:                1,
+				StableID:          "exit1",
+				Key:               makeNodeKeyFromID(1),
+				DiscoKey:          makeDiscoKeyFromID(1),
+				Name:              "my-vps.example.ts.net.",
+				Hostinfo:          hi,
+				Addresses:         []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+				AllowedIPs:        append([]netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, tsaddr.ExitRoutes()...),
+				MachineAuthorized: true,
+				HomeDERP:          1,
+			}).View(),
+			(&tailcfg.Node{
+				ID:                2,
+				StableID:          "plain1",
+				Key:               makeNodeKeyFromID(2),
+				DiscoKey:          makeDiscoKeyFromID(2),
+				Name:              "laptop.example.ts.net.",
+				Hostinfo:          hi,
+				Addresses:         []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
+				AllowedIPs:        []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
+				MachineAuthorized: true,
+				HomeDERP:          1,
+			}).View(),
+		},
+	}
+}
+
+// newExitNodeHealthTestBackend returns a backend with
+// [exitNodeHealthTestNetMap] installed, ready to run
+// [LocalBackend.authReconfig]. If sys is nil, a default one is used.
+func newExitNodeHealthTestBackend(t *testing.T, sys *tsd.System) *LocalBackend {
+	var b *LocalBackend
+	if sys == nil {
+		b = newTestLocalBackend(t)
+	} else {
+		b = newTestLocalBackendWithSys(t, sys)
+	}
+
+	// authReconfigLocked reads Persist, and setPrefsLocked doesn't let callers
+	// set it, so seed it through the profile manager.
+	b.mu.Lock()
+	p := b.pm.CurrentPrefs().AsStruct()
+	p.Persist = &persist.Persist{}
+	err := b.pm.SetPrefs(p.View(), ipn.NetworkProfile{})
+	b.mu.Unlock()
+	if err != nil {
+		t.Fatalf("seeding Persist: %v", err)
+	}
+
+	b.ForTest().SetNetMap(exitNodeHealthTestNetMap())
+	return b
+}
+
+// TestExitNodeUnavailableWarning tests that selecting an exit node that can't
+// carry internet traffic — because it left the tailnet, because it isn't
+// offering exit node service, or because none has been chosen yet — raises
+// [exitNodeUnavailableWarnable] rather than silently blackholing traffic.
+func TestExitNodeUnavailableWarning(t *testing.T) {
+	tests := []struct {
+		name       string
+		prefs      *ipn.Prefs
+		wantReason exitNodeHealthReason
+		wantName   string
+	}{
+		{
+			name:       "no-exit-node",
+			prefs:      &ipn.Prefs{WantRunning: true},
+			wantReason: exitNodeOK,
+		},
+		{
+			name:       "good-exit-node-by-id",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeID: "exit1"},
+			wantReason: exitNodeOK,
+		},
+		{
+			name:       "good-exit-node-by-ip",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeIP: netip.MustParseAddr("100.64.0.2")},
+			wantReason: exitNodeOK,
+		},
+		{
+			name:       "id-not-in-tailnet",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeID: "no-such-node"},
+			wantReason: exitNodeNotInTailnet,
+			wantName:   "no-such-node",
+		},
+		{
+			name:       "ip-never-resolved",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeIP: netip.MustParseAddr("100.64.9.9")},
+			wantReason: exitNodeNotInTailnet,
+			wantName:   "100.64.9.9",
+		},
+		{
+			name:       "peer-offers-no-exit-routes",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeID: "plain1"},
+			wantReason: exitNodeNoExitRoutes,
+			wantName:   "laptop",
+		},
+		{
+			name:       "auto-exit-node-not-yet-selected",
+			prefs:      &ipn.Prefs{WantRunning: true, ExitNodeID: unresolvedExitNodeID},
+			wantReason: exitNodeNotYetSelected,
+		},
+		{
+			// Tailscale is stopped, so we're not dropping anything and
+			// health.IPNStateWarnable is the relevant warning.
+			name:       "not-running",
+			prefs:      &ipn.Prefs{WantRunning: false, ExitNodeID: "no-such-node"},
+			wantReason: exitNodeOK,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newExitNodeHealthTestBackend(t, nil)
+			b.ForTest().SetPrefs(tt.prefs)
+			b.authReconfig()
+
+			b.mu.Lock()
+			gotReason := b.exitNodeHealth.reason
+			b.mu.Unlock()
+			if gotReason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", gotReason, tt.wantReason)
+			}
+
+			wantUnhealthy := tt.wantReason != exitNodeOK
+			if got := b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable); got != wantUnhealthy {
+				t.Errorf("IsUnhealthy = %v, want %v", got, wantUnhealthy)
+			}
+			if !wantUnhealthy {
+				return
+			}
+
+			b.mu.Lock()
+			args := b.exitNodeHealthArgsLocked(gotReason, b.exitNodeHealth.lastKnownName)
+			_, gotName := b.exitNodeHealthLocked(b.currentNode().NetMap(), b.pm.CurrentPrefs())
+			b.mu.Unlock()
+			if gotName != tt.wantName {
+				t.Errorf("exit node name = %q, want %q", gotName, tt.wantName)
+			}
+			if got := args[health.ArgExitNodePolicyForced]; got != "" {
+				t.Errorf("ArgExitNodePolicyForced = %q, want empty without a policy", got)
+			}
+		})
+	}
+}
+
+// TestExitNodeUnavailableWarningNamesDepartedNode tests that once the selected
+// exit node leaves the tailnet, the warning still names it rather than falling
+// back to its stable ID.
+func TestExitNodeUnavailableWarningNamesDepartedNode(t *testing.T) {
+	b := newExitNodeHealthTestBackend(t, nil)
+	nm := exitNodeHealthTestNetMap()
+	b.ForTest().SetPrefs(&ipn.Prefs{WantRunning: true, ExitNodeID: "exit1"})
+	b.authReconfig()
+	if b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning set while the exit node is present and offering exit routes")
+	}
+
+	// The exit node leaves the tailnet.
+	nm.Peers = nm.Peers[1:]
+	b.ForTest().SetNetMap(nm)
+	b.authReconfig()
+	if !b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning not set after the exit node left the tailnet")
+	}
+
+	b.mu.Lock()
+	reason, _ := b.exitNodeHealthLocked(b.currentNode().NetMap(), b.pm.CurrentPrefs())
+	args := b.exitNodeHealthArgsLocked(reason, b.exitNodeHealth.lastKnownName)
+	b.mu.Unlock()
+	if reason != exitNodeNotInTailnet {
+		t.Errorf("reason = %q, want %q", reason, exitNodeNotInTailnet)
+	}
+	if got := args[health.ArgExitNodeName]; got != "my-vps" {
+		t.Errorf("ArgExitNodeName = %q, want %q", got, "my-vps")
+	}
+
+	// And it clears once the exit node comes back.
+	b.ForTest().SetNetMap(exitNodeHealthTestNetMap())
+	b.authReconfig()
+	if b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning not cleared after the exit node returned")
+	}
+}
+
+// TestExitNodeUnavailableWarningOnNetmapDelta tests the scenario the warning
+// exists for: the selected exit node is removed from the tailnet via an
+// incremental netmap update, which is the path a real client takes. The
+// warning must be raised without anyone calling authReconfig by hand.
+func TestExitNodeUnavailableWarningOnNetmapDelta(t *testing.T) {
+	b := newExitNodeHealthTestBackend(t, nil)
+	b.ForTest().SetPrefs(&ipn.Prefs{WantRunning: true, ExitNodeID: "exit1"})
+	b.authReconfig()
+	if b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning set while the exit node is present and offering exit routes")
+	}
+
+	// Control removes the exit node (node ID 1) from the tailnet.
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersRemoved: []tailcfg.NodeID{1},
+	}, time.Unix(123, 0))
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+	if !b.UpdateNetmapDelta(muts) {
+		t.Fatal("UpdateNetmapDelta returned false")
+	}
+
+	if !b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning not set after the exit node was removed by a netmap delta")
+	}
+	b.mu.Lock()
+	gotReason := b.exitNodeHealth.reason
+	b.mu.Unlock()
+	if gotReason != exitNodeNotInTailnet {
+		t.Errorf("reason = %q, want %q", gotReason, exitNodeNotInTailnet)
+	}
+}
+
+// TestExitNodeUnavailableWarningPolicyForced tests that an exit node mandated
+// by the ExitNodeID policy setting produces a warning telling the user to
+// contact their administrator, since they can't change the selection.
+func TestExitNodeUnavailableWarningPolicyForced(t *testing.T) {
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(policytest.Config{pkey.ExitNodeID: "no-such-node"})
+	b := newExitNodeHealthTestBackend(t, sys)
+	b.ForTest().SetPrefs(&ipn.Prefs{WantRunning: true})
+	b.authReconfig()
+
+	if !b.HealthTracker().IsUnhealthy(exitNodeUnavailableWarnable) {
+		t.Fatal("warning not set for a policy-forced exit node that isn't in the tailnet")
+	}
+	b.mu.Lock()
+	if got := b.pm.CurrentPrefs().ExitNodeID(); got != "no-such-node" {
+		b.mu.Unlock()
+		t.Fatalf("ExitNodeID = %q; policy did not take effect", got)
+	}
+	reason, name := b.exitNodeHealthLocked(b.currentNode().NetMap(), b.pm.CurrentPrefs())
+	args := b.exitNodeHealthArgsLocked(reason, name)
+	b.mu.Unlock()
+
+	if got := args[health.ArgExitNodePolicyForced]; got != "true" {
+		t.Errorf("ArgExitNodePolicyForced = %q, want %q", got, "true")
+	}
+	if text := exitNodeUnavailableText(args); !strings.Contains(text, "network administrator") {
+		t.Errorf("text = %q; want it to mention the network administrator", text)
+	}
+}
+
+func TestExitNodeUnavailableText(t *testing.T) {
+	tests := []struct {
+		name string
+		args health.Args
+		want string
+	}{
+		{
+			name: "not-in-tailnet",
+			args: health.Args{
+				health.ArgExitNodeReason: string(exitNodeNotInTailnet),
+				health.ArgExitNodeName:   "my-vps",
+			},
+			want: `The selected exit node "my-vps" is no longer available on your tailnet. ` +
+				"Internet traffic is being dropped to avoid leaking it to the local network. " +
+				"Select a different exit node, or turn off exit node use.",
+		},
+		{
+			name: "no-exit-routes",
+			args: health.Args{
+				health.ArgExitNodeReason: string(exitNodeNoExitRoutes),
+				health.ArgExitNodeName:   "laptop",
+			},
+			want: `The selected exit node "laptop" is not offering exit node service. ` +
+				"Internet traffic is being dropped to avoid leaking it to the local network. " +
+				"Select a different exit node, or turn off exit node use.",
+		},
+		{
+			name: "not-yet-selected",
+			args: health.Args{health.ArgExitNodeReason: string(exitNodeNotYetSelected)},
+			want: "An exit node is required, but no exit node is available to use. " +
+				"Internet traffic is being dropped to avoid leaking it to the local network. " +
+				"Select a different exit node, or turn off exit node use.",
+		},
+		{
+			name: "policy-forced",
+			args: health.Args{
+				health.ArgExitNodeReason:       string(exitNodeNotInTailnet),
+				health.ArgExitNodeName:         "corp-exit",
+				health.ArgExitNodePolicyForced: "true",
+			},
+			want: `The selected exit node "corp-exit" is no longer available on your tailnet. ` +
+				"Internet traffic is being dropped to avoid leaking it to the local network. " +
+				"This exit node is required by your network administrator; contact them for help.",
+		},
+		{
+			name: "unnamed",
+			args: health.Args{health.ArgExitNodeReason: string(exitNodeNotInTailnet)},
+			want: "The selected exit node is no longer available on your tailnet. " +
+				"Internet traffic is being dropped to avoid leaking it to the local network. " +
+				"Select a different exit node, or turn off exit node use.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitNodeUnavailableText(tt.args); got != tt.want {
+				t.Errorf("exitNodeUnavailableText() =\n %q\nwant\n %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestStartPreservesLoginFlags is a regression test for a bug where the
 // LoginEphemeral flag stored on LocalBackend was silently dropped by the
 // auto-login paths in Start() and setPrefsLocked(). The user-visible symptom

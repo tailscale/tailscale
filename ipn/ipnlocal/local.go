@@ -72,6 +72,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tsconst"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
@@ -463,6 +464,20 @@ type LocalBackend struct {
 	//
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
+
+	// exitNodeHealth is the state behind [exitNodeUnavailableWarnable],
+	// maintained by [LocalBackend.updateExitNodeHealthLocked].
+	exitNodeHealth struct {
+		// reason is the reason last reported (or [exitNodeOK]), so that we
+		// only log transitions rather than every reconfiguration.
+		reason exitNodeHealthReason
+
+		// lastKnownID and lastKnownName are the stable ID and display name of
+		// the last exit node we saw as a peer, so the warning can still name
+		// the exit node after it leaves the tailnet.
+		lastKnownID   tailcfg.StableNodeID
+		lastKnownName string
+	}
 
 	// hardwareAttested is whether backend should use a hardware-backed key to
 	// bind the node identity to this device.
@@ -6068,12 +6083,18 @@ func (b *LocalBackend) authReconfigLocked() {
 	// below needs them; per-peer work rides the incremental route
 	// manager and engine paths instead.
 	nm := cn.NetMap()
+	prefs := b.pm.CurrentPrefs()
+
+	// Warn if the selected exit node can't carry internet traffic. This runs
+	// before the early returns below so that the warning is cleared, rather
+	// than left stale, when the netmap goes away or Tailscale is stopped.
+	b.updateExitNodeHealthLocked(nm, prefs)
+
 	if nm == nil {
 		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
 		return
 	}
 
-	prefs := b.pm.CurrentPrefs()
 	hasPAC := b.interfaceState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(nodecap.DisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
@@ -8178,6 +8199,208 @@ var warnNoSNATWithExitNode = health.Register(&health.Warnable{
 	Severity: health.SeverityMedium,
 	Text:     health.StaticMessage("snat-subnet-routes is disabled while advertising as an exit node; internet traffic through this exit node may not work as expected"),
 })
+
+// exitNodeUnavailableWarnable is a Warnable for when the selected exit node
+// cannot carry internet traffic, either because it is no longer part of the
+// tailnet, because it isn't offering exit node service, or because an exit
+// node is required but none has been selected yet. In all of those cases the
+// blackhole routes described on [ipn.Prefs.ExitNodeID] are installed and
+// internet traffic is dropped, which is safe but otherwise silent.
+//
+// It is distinct from an exit node that is present and selected but which we
+// cannot reach; that is a connectivity problem rather than a configuration
+// one.
+var exitNodeUnavailableWarnable = health.Register(&health.Warnable{
+	Code:     tsconst.HealthWarnableExitNodeUnavailable,
+	Title:    "Exit node unavailable",
+	Severity: health.SeverityHigh,
+	// Don't warn about the exit node when Tailscale is off or the network is
+	// down; those are the root cause and have their own warnings.
+	DependsOn:           []*health.Warnable{health.IPNStateWarnable, health.NetworkStatusWarnable},
+	ImpactsConnectivity: true,
+	// Suppress the transient window after a netmap arrives but before an
+	// automatically chosen exit node has been resolved.
+	TimeToVisible: 15 * time.Second,
+	Text:          exitNodeUnavailableText,
+})
+
+// exitNodeHealthReason describes why the selected exit node cannot carry
+// internet traffic. It is reported as [health.ArgExitNodeReason].
+type exitNodeHealthReason string
+
+const (
+	// exitNodeOK means the exit node configuration is fine: either no exit
+	// node is selected, or the selected one is a peer offering exit routes.
+	exitNodeOK exitNodeHealthReason = ""
+
+	// exitNodeNotInTailnet means the selected exit node is not among the
+	// current peers, so it has presumably left the tailnet.
+	exitNodeNotInTailnet exitNodeHealthReason = "not-in-tailnet"
+
+	// exitNodeNoExitRoutes means the selected exit node is a current peer but
+	// doesn't contribute the default routes, so it either stopped advertising
+	// them or its routes are not approved.
+	exitNodeNoExitRoutes exitNodeHealthReason = "no-exit-routes"
+
+	// exitNodeNotYetSelected means an exit node is required but none has been
+	// chosen yet, so [unresolvedExitNodeID] is holding the blackhole routes
+	// in place.
+	exitNodeNotYetSelected exitNodeHealthReason = "not-yet-selected"
+)
+
+// exitNodeUnavailableText renders the message for [exitNodeUnavailableWarnable]
+// from its args: what's wrong, what it means, and what to do about it.
+func exitNodeUnavailableText(args health.Args) string {
+	var sb strings.Builder
+	name := args[health.ArgExitNodeName]
+	switch exitNodeHealthReason(args[health.ArgExitNodeReason]) {
+	case exitNodeNoExitRoutes:
+		if name == "" {
+			sb.WriteString("The selected exit node is not offering exit node service.")
+		} else {
+			fmt.Fprintf(&sb, "The selected exit node %q is not offering exit node service.", name)
+		}
+	case exitNodeNotYetSelected:
+		sb.WriteString("An exit node is required, but no exit node is available to use.")
+	default: // exitNodeNotInTailnet
+		if name == "" {
+			sb.WriteString("The selected exit node is no longer available on your tailnet.")
+		} else {
+			fmt.Fprintf(&sb, "The selected exit node %q is no longer available on your tailnet.", name)
+		}
+	}
+	sb.WriteString(" Internet traffic is being dropped to avoid leaking it to the local network.")
+	if args[health.ArgExitNodePolicyForced] == "true" {
+		sb.WriteString(" This exit node is required by your network administrator; contact them for help.")
+	} else {
+		sb.WriteString(" Select a different exit node, or turn off exit node use.")
+	}
+	return sb.String()
+}
+
+// exitNodeHealthLocked reports whether the exit node selected by prefs can
+// carry internet traffic, and a human-readable name for it.
+//
+// The returned name is the selected exit node's display name if it is a
+// current peer, otherwise its stable ID or IP address, or empty if no
+// particular exit node has been selected.
+//
+// b.mu must be held.
+func (b *LocalBackend) exitNodeHealthLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) (exitNodeHealthReason, string) {
+	if !buildfeatures.HasUseExitNode {
+		return exitNodeOK, ""
+	}
+	if nm == nil || !prefs.WantRunning() {
+		// We don't know the peers yet, or aren't routing any traffic at all,
+		// so there's nothing to warn about.
+		return exitNodeOK, ""
+	}
+	switch id := prefs.ExitNodeID(); {
+	case id == unresolvedExitNodeID:
+		return exitNodeNotYetSelected, ""
+	case id != "":
+		// Look the peer up in the live peer map rather than nm.Peers, which
+		// authReconfigLocked doesn't populate.
+		peer, ok := b.currentNode().PeerByStableID(id)
+		if !ok {
+			return exitNodeNotInTailnet, string(id)
+		}
+		if !tsaddr.ContainsExitRoutes(peer.AllowedIPs()) {
+			return exitNodeNoExitRoutes, exitNodeDisplayName(peer, id)
+		}
+		return exitNodeOK, exitNodeDisplayName(peer, id)
+	case prefs.ExitNodeIP().IsValid():
+		// [LocalBackend.resolveExitNodeIPLocked] clears ExitNodeIP once it
+		// finds the peer at that address, so a still-set ExitNodeIP means no
+		// current peer has it.
+		return exitNodeNotInTailnet, prefs.ExitNodeIP().String()
+	}
+	return exitNodeOK, ""
+}
+
+// exitNodeDisplayName returns a short name to show the user for the exit node
+// peer, falling back to its stable ID if the peer carries no usable name.
+func exitNodeDisplayName(peer tailcfg.NodeView, id tailcfg.StableNodeID) string {
+	if name, _, _ := strings.Cut(peer.Name(), "."); name != "" {
+		return name
+	}
+	if hi := peer.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
+		return hi.Hostname()
+	}
+	return string(id)
+}
+
+// exitNodeForcedByPolicyLocked reports whether the current exit node selection
+// is mandated by the ExitNodeID or ExitNodeIP policy settings, in which case
+// the user can't fix an unusable exit node themselves.
+//
+// b.mu must be held.
+func (b *LocalBackend) exitNodeForcedByPolicyLocked() bool {
+	if !buildfeatures.HasSystemPolicy || b.overrideExitNodePolicy {
+		return false
+	}
+	if v, _ := b.polc.GetString(pkey.ExitNodeID, ""); v != "" {
+		return true
+	}
+	v, _ := b.polc.GetString(pkey.ExitNodeIP, "")
+	return v != ""
+}
+
+// updateExitNodeHealthLocked raises or clears [exitNodeUnavailableWarnable] to
+// reflect whether the exit node selected by prefs can carry internet traffic.
+//
+// b.mu must be held.
+func (b *LocalBackend) updateExitNodeHealthLocked(nm *netmap.NetworkMap, prefs ipn.PrefsView) {
+	if !buildfeatures.HasUseExitNode {
+		return
+	}
+	reason, name := b.exitNodeHealthLocked(nm, prefs)
+	id := prefs.ExitNodeID()
+
+	// Remember the exit node's display name while it is still a peer, so that
+	// the warning can name it once it disappears and only its stable ID is
+	// left in the prefs.
+	if reason == exitNodeOK {
+		if name != "" {
+			b.exitNodeHealth.lastKnownID, b.exitNodeHealth.lastKnownName = id, name
+		}
+	} else if name == string(id) && b.exitNodeHealth.lastKnownID == id && b.exitNodeHealth.lastKnownName != "" {
+		name = b.exitNodeHealth.lastKnownName
+	}
+
+	if reason != b.exitNodeHealth.reason {
+		switch {
+		case reason != exitNodeOK && name != "":
+			b.logf("exit node %q is unusable (%s); dropping internet traffic", name, reason)
+		case reason != exitNodeOK:
+			b.logf("selected exit node is unusable (%s); dropping internet traffic", reason)
+		default:
+			b.logf("exit node selection is usable again")
+		}
+		b.exitNodeHealth.reason = reason
+	}
+
+	if reason == exitNodeOK {
+		b.health.SetHealthy(exitNodeUnavailableWarnable)
+		return
+	}
+	b.health.SetUnhealthy(exitNodeUnavailableWarnable, b.exitNodeHealthArgsLocked(reason, name))
+}
+
+// exitNodeHealthArgsLocked builds the [health.Args] describing an unusable
+// exit node for [exitNodeUnavailableWarnable].
+//
+// b.mu must be held.
+func (b *LocalBackend) exitNodeHealthArgsLocked(reason exitNodeHealthReason, name string) health.Args {
+	args := health.Args{health.ArgExitNodeReason: string(reason)}
+	if name != "" {
+		args[health.ArgExitNodeName] = name
+	}
+	if b.exitNodeForcedByPolicyLocked() {
+		args[health.ArgExitNodePolicyForced] = "true"
+	}
+	return args
+}
 
 func (b *LocalBackend) updateSELinuxHealthWarning() {
 	if hostinfo.IsSELinuxEnforcing() {

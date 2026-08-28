@@ -40,4 +40,22 @@ const (
 	// ArgDomains provides a Warnable with a comma-delimited list of domain
 	// names involved in the unhealthy state.
 	ArgDomains Arg = "domains"
+
+	// ArgExitNodeName provides a Warnable with a human-readable identifier for
+	// the selected exit node: its display name if it is (or recently was) a
+	// known peer, otherwise its stable node ID or IP address. It is empty if
+	// no particular exit node has been selected.
+	ArgExitNodeName Arg = "exit-node-name"
+
+	// ArgExitNodeReason provides a Warnable with the reason the selected exit
+	// node cannot carry internet traffic: "not-in-tailnet", "no-exit-routes",
+	// or "not-yet-selected". It lets GUIs distinguish the cases without
+	// parsing the rendered message.
+	ArgExitNodeReason Arg = "exit-node-reason"
+
+	// ArgExitNodePolicyForced is "true" when the selected exit node is
+	// mandated by the ExitNodeID or ExitNodeIP policy settings, meaning the
+	// user cannot resolve the problem themselves and should contact their
+	// network administrator.
+	ArgExitNodePolicyForced Arg = "exit-node-policy-forced"
 )
