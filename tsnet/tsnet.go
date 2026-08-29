@@ -413,12 +413,16 @@ func (s *Server) awaitRunning(ctx context.Context) error {
 //
 // This is useful if you need to have your tsnet services connect to other devices on
 // your tailnet.
+//
+// The returned client's transport has the same settings as
+// [http.DefaultTransport], except its DialContext dials over Tailscale
+// and it has no Proxy set, as HTTP proxies from the environment are
+// unlikely to be reachable over the tailnet.
 func (s *Server) HTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: s.Dial,
-		},
-	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = s.Dial
+	tr.Proxy = nil
+	return &http.Client{Transport: tr}
 }
 
 // LocalClient returns a LocalClient that speaks to s.
