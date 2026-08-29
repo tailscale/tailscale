@@ -1,0 +1,47 @@
+name: tailcat
+
+# This workflow tests the tailscale/tailcat repo against the tailscale.com
+# module at head, rather than the version tailcat pins in its go.mod. It
+# exists as an early warning that a change here breaks tailcat's API or
+# behavior expectations. A failure might be fine if it's an intentional,
+# coordinated change, but it's here to prevent accidental breakage.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/tailcat.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  tailcat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tailscale
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: tailscale
+
+      - name: Check out tailcat
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tailscale/tailcat
+          path: tailcat
+
+      - name: Set up Go workspace
+        working-directory: tailcat
+        run: |
+          ../tailscale/tool/go work init . ../tailscale
+          ../tailscale/tool/go work sync
+
+      - name: Run tailcat tests
+        working-directory: tailcat
+        run: ../tailscale/tool/go test ./...
