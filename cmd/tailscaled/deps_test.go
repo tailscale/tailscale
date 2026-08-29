@@ -72,6 +72,17 @@ func TestOmitSyslog(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitDNSResolveCache(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_dnsresolvecache,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/dnsresolvecache": "unexpected dnsresolvecache usage with ts_omit_dnsresolvecache",
+		},
+	}.Check(t)
+}
+
 func TestOmitSyspolicy(t *testing.T) {
 	const msg = "unexpected syspolicy usage with ts_omit_syspolicy"
 	deptest.DepChecker{
