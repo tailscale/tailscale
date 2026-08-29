@@ -4046,3 +4046,55 @@ func TestCloseBeforeStart(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// TestHTTPClientDefaultTransport verifies that the transport returned by
+// HTTPClient matches http.DefaultTransport's settings, except for the
+// fields that HTTPClient intentionally overrides.
+func TestHTTPClientDefaultTransport(t *testing.T) {
+	s := &Server{}
+	tr, ok := s.HTTPClient().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport is %T; want *http.Transport", s.HTTPClient().Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext is nil; want it set to Server.Dial")
+	}
+	if tr.Proxy != nil {
+		t.Error("Proxy is non-nil; want nil, as environment proxies are unreachable over the tailnet")
+	}
+
+	want := http.DefaultTransport.(*http.Transport).Clone()
+	gotv := reflect.ValueOf(tr).Elem()
+	wantv := reflect.ValueOf(want).Elem()
+	for i := range gotv.NumField() {
+		f := gotv.Type().Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		switch f.Name {
+		case "DialContext", "Proxy":
+			// Intentionally different; checked above.
+		case "TLSNextProto":
+			// A map containing funcs, which reflect.DeepEqual can't
+			// compare, so just check that the sizes match.
+			if got, want := gotv.Field(i).Len(), wantv.Field(i).Len(); got != want {
+				t.Errorf("TLSNextProto has %d entries; want %d", got, want)
+			}
+		case "OnProxyConnectResponse", "Dial", "DialTLSContext", "DialTLS",
+			"TLSClientConfig", "TLSHandshakeTimeout",
+			"DisableKeepAlives", "DisableCompression",
+			"MaxIdleConns", "MaxIdleConnsPerHost", "MaxConnsPerHost",
+			"IdleConnTimeout", "ResponseHeaderTimeout", "ExpectContinueTimeout",
+			"ProxyConnectHeader", "GetProxyConnectHeader",
+			"MaxResponseHeaderBytes", "WriteBufferSize", "ReadBufferSize",
+			"ForceAttemptHTTP2", "HTTP2", "Protocols":
+			// Expected to be equal from Clone.
+			g, w := gotv.Field(i).Interface(), wantv.Field(i).Interface()
+			if !reflect.DeepEqual(g, w) {
+				t.Errorf("field %s = %v; want %v (as in http.DefaultTransport)", f.Name, g, w)
+			}
+		default:
+			t.Errorf("unexpected http.Transport field %q; decide how HTTPClient should handle it and update this test", f.Name)
+		}
+	}
+}
