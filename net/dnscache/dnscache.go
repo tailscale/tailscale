@@ -20,12 +20,49 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/netx"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
+)
+
+// HookSetCacheDir optionally points to the dnsresolvecache feature's
+// function to configure the directory in which resolved IPs are
+// persisted to disk. It is called by tailscaled at startup, if the
+// feature is linked in.
+var HookSetCacheDir feature.Hook[func(dir string, logf logger.Logf)]
+
+// HookPersistResolution optionally points to the dnsresolvecache
+// feature's function to record a successful DNS resolution of host
+// to disk. The resolver argument is one of the "forward", "cloud",
+// or "fallback" resolver source names.
+var HookPersistResolution feature.Hook[func(host, resolver string, ips []netip.Addr)]
+
+// HookLookupDiskCache optionally points to the dnsresolvecache
+// feature's function to load previously persisted IPs for host from
+// disk. It is consulted only after regular DNS resolution has
+// failed, before falling back to the DERP-based bootstrap DNS.
+var HookLookupDiskCache feature.Hook[func(host string) ([]netip.Addr, bool)]
+
+// Resolver source names, as passed to [HookPersistResolution] and
+// used for deciding fallback behavior in Resolver.lookupIP.
+const (
+	srcForward  = "forward"  // Resolver.Forward (or the test hook)
+	srcCloud    = "cloud"    // cloud host resolver (e.g. GCP metadata resolver)
+	srcDisk     = "disk"     // dnsresolvecache disk cache of an earlier resolution
+	srcFallback = "fallback" // Resolver.LookupIPFallback (DERP-based bootstrap DNS)
+)
+
+var (
+	metricDiskFallbackHit    = clientmetric.NewCounter("dnscache_disk_fallback_hit")
+	metricDiskFallbackMiss   = clientmetric.NewCounter("dnscache_disk_fallback_miss")
+	metricDERPFallbackOK     = clientmetric.NewCounter("dnscache_derp_fallback_ok")
+	metricDERPFallbackDialOK = clientmetric.NewCounter("dnscache_derp_fallback_dial_ok")
 )
 
 var zaddr netip.Addr
@@ -295,15 +332,28 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 	defer lookupCancel()
 
 	var ips []netip.Addr
+	src := srcForward
 	if r.LookupIPForTest != nil && testenv.InTest() {
 		ips, err = r.LookupIPForTest(ctx, host)
 	} else {
 		ips, err = r.fwd().LookupNetIP(lookupCtx, "ip", host)
+		if err != nil || len(ips) == 0 {
+			if resolver, ok := r.cloudHostResolver(); ok {
+				r.dlogf("resolving %q via cloud resolver", host)
+				src = srcCloud
+				ips, err = resolver.LookupNetIP(lookupCtx, "ip", host)
+			}
+		}
 	}
-	if err != nil || len(ips) == 0 {
-		if resolver, ok := r.cloudHostResolver(); ok {
-			r.dlogf("resolving %q via cloud resolver", host)
-			ips, err = resolver.LookupNetIP(lookupCtx, "ip", host)
+	if buildfeatures.HasDNSResolveCache && (err != nil || len(ips) == 0) {
+		if f, ok := HookLookupDiskCache.GetOk(); ok {
+			if cached, ok := f(host); ok {
+				r.dlogf("resolving %q from disk cache after error", host)
+				metricDiskFallbackHit.Add(1)
+				ips, err, src = cached, nil, srcDisk
+			} else {
+				metricDiskFallbackMiss.Add(1)
+			}
 		}
 	}
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
@@ -314,7 +364,11 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 		} else {
 			r.dlogf("resolving %q using fallback resolver due to no returned IPs", host)
 		}
+		src = srcFallback
 		ips, err = r.LookupIPFallback(lookupCtx, host)
+		if err == nil && len(ips) > 0 {
+			metricDERPFallbackOK.Add(1)
+		}
 	}
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, nil, err
@@ -344,16 +398,24 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 			}
 		}
 	}
-	r.addIPCache(host, ip, ip6, ips, r.ttl())
+	r.addIPCache(host, src, ip, ip6, ips, r.ttl())
 	return ip, ip6, ips, nil
 }
 
-func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Addr, d time.Duration) {
+func (r *Resolver) addIPCache(host, src string, ip, ip6 netip.Addr, allIPs []netip.Addr, d time.Duration) {
 	if ip.IsPrivate() {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
 		r.dlogf("%q resolved to private IP %v; using but not caching", host, ip)
 		return
+	}
+
+	// Skip persisting disk-sourced results to avoid rewriting the
+	// disk cache files with their own contents.
+	if buildfeatures.HasDNSResolveCache && src != srcDisk {
+		if f, ok := HookPersistResolution.GetOk(); ok {
+			f(host, src, allIPs)
+		}
 	}
 
 	r.dlogf("%q resolved to IP %v; caching", host, ip)
@@ -416,6 +478,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 			return
 		}
 		if c, err := dc.raceDial(ctx, ips); err == nil {
+			metricDERPFallbackDialOK.Add(1)
 			retConn = c
 			ret = nil
 			return

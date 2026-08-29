@@ -298,3 +298,113 @@ func TestSingleHostStaticResult(t *testing.T) {
 		})
 	}
 }
+
+type persistCall struct {
+	host, resolver string
+	ips            []netip.Addr
+}
+
+func TestDiskCacheHooks(t *testing.T) {
+	mustIPs := func(ss ...string) (ips []netip.Addr) {
+		for _, s := range ss {
+			ips = append(ips, netip.MustParseAddr(s))
+		}
+		return ips
+	}
+	errFailed := errors.New("some resolution failure")
+
+	t.Run("persist-on-success", func(t *testing.T) {
+		var calls []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			calls = append(calls, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return mustIPs("1.1.1.1", "2600::1"), nil
+			},
+		}
+		if _, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com"); err != nil {
+			t.Fatal(err)
+		}
+		want := []persistCall{{"ctrl.example.com", "forward", mustIPs("1.1.1.1", "2600::1")}}
+		if !reflect.DeepEqual(calls, want) {
+			t.Errorf("persist calls = %+v; want %+v", calls, want)
+		}
+	})
+
+	t.Run("disk-hit-before-derp", func(t *testing.T) {
+		defer HookLookupDiskCache.SetForTest(func(host string) ([]netip.Addr, bool) {
+			if host != "ctrl.example.com" {
+				t.Errorf("disk lookup host = %q; want ctrl.example.com", host)
+			}
+			return mustIPs("2.2.2.2"), true
+		})()
+		var persisted []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			persisted = append(persisted, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, errFailed
+			},
+			LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				t.Error("DERP fallback used despite disk cache hit")
+				return nil, errFailed
+			},
+		}
+		hits0 := metricDiskFallbackHit.Value()
+		ip, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := netip.MustParseAddr("2.2.2.2"); ip != want {
+			t.Errorf("ip = %v; want %v", ip, want)
+		}
+		if d := metricDiskFallbackHit.Value() - hits0; d != 1 {
+			t.Errorf("disk fallback hit metric delta = %d; want 1", d)
+		}
+		if len(persisted) != 0 {
+			t.Errorf("disk-sourced result was re-persisted: %+v", persisted)
+		}
+	})
+
+	t.Run("disk-miss-uses-derp", func(t *testing.T) {
+		defer HookLookupDiskCache.SetForTest(func(host string) ([]netip.Addr, bool) {
+			return nil, false
+		})()
+		var persisted []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			persisted = append(persisted, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, errFailed
+			},
+			LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return mustIPs("3.3.3.3"), nil
+			},
+		}
+		miss0 := metricDiskFallbackMiss.Value()
+		derp0 := metricDERPFallbackOK.Value()
+		ip, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := netip.MustParseAddr("3.3.3.3"); ip != want {
+			t.Errorf("ip = %v; want %v", ip, want)
+		}
+		if d := metricDiskFallbackMiss.Value() - miss0; d != 1 {
+			t.Errorf("disk fallback miss metric delta = %d; want 1", d)
+		}
+		if d := metricDERPFallbackOK.Value() - derp0; d != 1 {
+			t.Errorf("DERP fallback ok metric delta = %d; want 1", d)
+		}
+		want := []persistCall{{"ctrl.example.com", "fallback", mustIPs("3.3.3.3")}}
+		if !reflect.DeepEqual(persisted, want) {
+			t.Errorf("persist calls = %+v; want %+v", persisted, want)
+		}
+	})
+}

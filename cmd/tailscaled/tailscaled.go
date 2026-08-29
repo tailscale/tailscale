@@ -45,6 +45,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -726,6 +727,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	}
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
+		if f, ok := dnscache.HookSetCacheDir.GetOk(); ok {
+			f(filepath.Join(root, "dns-cache"), logf)
+		}
 	}
 	if f, ok := hookConfigureWebClient.GetOk(); ok {
 		f(lb)

@@ -40,6 +40,7 @@ import (
 	_ "tailscale.com/logpolicy"
 	_ "tailscale.com/logtail"
 	_ "tailscale.com/net/dns"
+	_ "tailscale.com/net/dnscache"
 	_ "tailscale.com/net/dnsfallback"
 	_ "tailscale.com/net/netmon"
 	_ "tailscale.com/net/netns"
