@@ -158,6 +158,7 @@ var Features = map[FeatureTag]FeatureMeta{
 		Deps: []FeatureTag{"portmapper"},
 	},
 	"desktop_sessions": {Sym: "DesktopSessions", Desc: "Desktop sessions support"},
+	"dnsresolvecache":  {Sym: "DNSResolveCache", Desc: "Persist successful DNS resolutions to disk for use on later boots with broken DNS"},
 	"doctor":           {Sym: "Doctor", Desc: "Diagnose possible issues with Tailscale and its host environment"},
 	"drive":            {Sym: "Drive", Desc: "Tailscale Drive (file server) support"},
 	"flashappliance":   {Sym: "FlashAppliance", Desc: "'tailscale configure flash-appliance' and 'pve-appliance' CLI commands for deploying Tailscale appliance images"},
