@@ -80,7 +80,8 @@ main() {
 				if [ -z "${VERSION_ID:-}" ]; then
 					# rolling release. If you haven't kept current, that's on you.
 					APT_KEY_TYPE="keyring"
-				# Parrot Security is a special case that uses ID=debian
+				# Parrot 6 is a special case that uses ID=debian. Parrot 5 and
+				# Parrot 7 use ID=parrot and are handled in the parrot case below.
 				elif [ "$NAME" = "Parrot Security" ]; then
 					# All versions new enough to have this behaviour prefer keyring
 					# and their VERSION_ID is not consistent with Debian.
@@ -133,7 +134,59 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			parrot|mendel)
+			parrot)
+				OS="debian"
+				PACKAGETYPE="apt"
+				# Parrot uses its own codenames, so VERSION_CODENAME can't be
+				# used to pick a Debian release: Parrot 7.3 reports "echo", not
+				# "trixie". Parrot 7 and later do report the Debian release they
+				# are based on in DEBIAN_VERSION_FULL, but earlier releases don't,
+				# so fall back to mapping Parrot's own major version. Note that
+				# /etc/debian_version is not usable here either, as Parrot sets it
+				# to its own version ("6.4") or to a non-version string ("parrot").
+				DEBIAN_MAJOR="${DEBIAN_VERSION_FULL:-}"
+				DEBIAN_MAJOR="${DEBIAN_MAJOR%%.*}"
+				if [ -z "$DEBIAN_MAJOR" ]; then
+					# Parrot's major version tracks Debian's: Parrot 5 is
+					# based on Debian 11, 6 on 12, and 7 on 13. Match on
+					# the known versions so that an absent or unparseable
+					# VERSION_ID falls through to the newest release rather
+					# than erroring on a numeric comparison.
+					case "$VERSION_MAJOR" in
+						1|2|3|4)
+							DEBIAN_MAJOR="10"
+							;;
+						5)
+							DEBIAN_MAJOR="11"
+							;;
+						6)
+							DEBIAN_MAJOR="12"
+							;;
+						*)
+							DEBIAN_MAJOR="13"
+							;;
+					esac
+				fi
+				case "$DEBIAN_MAJOR" in
+					10)
+						VERSION="buster"
+						APT_KEY_TYPE="legacy"
+						;;
+					11)
+						VERSION="bullseye"
+						APT_KEY_TYPE="keyring"
+						;;
+					12)
+						VERSION="bookworm"
+						APT_KEY_TYPE="keyring"
+						;;
+					*)
+						VERSION="trixie"
+						APT_KEY_TYPE="keyring"
+						;;
+				esac
+				;;
+			mendel)
 				OS="debian"
 				PACKAGETYPE="apt"
 				if [ "$VERSION_MAJOR" -lt 5 ]; then
