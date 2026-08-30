@@ -65,6 +65,7 @@ type setArgsT struct {
 	remoteConfig               bool
 	snat                       bool
 	statefulFiltering          bool
+	exitNodeSplitTunnel        bool
 	sync                       bool
 	netfilterMode              string
 	relayServerPort            string
@@ -116,6 +117,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	case "linux":
 		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
 		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, and so on)")
+		setf.BoolVar(&setArgs.exitNodeSplitTunnel, "exit-node-split-tunnel", false, "do not install Tailscale policy-routing rules for exit node traffic")
 		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
 	case "windows":
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
@@ -155,6 +157,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
 			NoSNAT:                 !setArgs.snat,
+			ExitNodeSplitTunnel:    setArgs.exitNodeSplitTunnel,
 			ForceDaemon:            setArgs.forceDaemon,
 			Sync:                   opt.NewBool(setArgs.sync),
 			AutoUpdate: ipn.AutoUpdatePrefs{

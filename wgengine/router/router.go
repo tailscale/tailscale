@@ -134,6 +134,7 @@ type Config struct {
 	// Linux-only things below, ignored on other platforms.
 	SNATSubnetRoutes    bool                   // SNAT traffic to local subnets
 	StatefulFiltering   bool                   // Apply stateful filtering to inbound connections
+	ManageIPRules       bool                   // manage policy-routing rules for the Tailscale route table
 	NetfilterMode       preftype.NetfilterMode // how much to manage netfilter rules
 	NetfilterKind       string                 // what kind of netfilter to use ("nftables", "iptables", or "" to auto-detect)
 	RemoveCGNATDropRule bool                   // whether to remove the firewall rule to drop non-Tailscale inbound traffic from CGNAT IPs

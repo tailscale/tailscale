@@ -75,6 +75,7 @@ type linuxRouter struct {
 	// restore deleted ip rules.
 	ruleRestorePending atomic.Bool
 	ipRuleFixLimiter   *rate.Limiter
+	ipRulesSet         bool // guarded by mu; whether Tailscale policy-routing rules should be present
 
 	// Various feature checks for the network stack.
 	ipRuleAvailable bool     // whether kernel was built with IP_MULTIPLE_TABLES
@@ -347,6 +348,12 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		// Not our rule.
 		return
 	}
+	r.mu.Lock()
+	ipRulesSet := r.ipRulesSet
+	r.mu.Unlock()
+	if !ipRulesSet {
+		return
+	}
 	if r.ruleRestorePending.Swap(true) {
 		// Another timer is already pending.
 		return
@@ -360,7 +367,10 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 	r.rulesAddedPub.Publish(AddIPRules{})
 
 	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
-		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
+		r.mu.Lock()
+		ipRulesSet := r.ipRulesSet
+		r.mu.Unlock()
+		if r.ruleRestorePending.Swap(false) && !r.closed.Load() && ipRulesSet {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
 		}
@@ -372,9 +382,6 @@ func (r *linuxRouter) Up() error {
 	defer r.mu.Unlock()
 	if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
 		return fmt.Errorf("setting netfilter mode: %w", err)
-	}
-	if err := r.addIPRules(); err != nil {
-		return fmt.Errorf("adding IP rules: %w", err)
 	}
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
@@ -403,6 +410,7 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
+	r.ipRulesSet = false
 	if err := r.setNetfilterModeLocked(netfilterOff); err != nil {
 		return err
 	}
@@ -459,6 +467,10 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 
 	if err := r.setNetfilterModeLocked(cfg.NetfilterMode); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := r.setIPRulesLocked(cfg.ManageIPRules); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -1514,6 +1526,33 @@ func (r *linuxRouter) addIPRules() error {
 	}
 
 	return r.justAddIPRules()
+}
+
+// setIPRulesLocked reconciles whether Tailscale's policy-routing rules are
+// installed. When disabled, Tailscale routes remain in the Tailscale route
+// table, but the host must add its own policy rules to use that table.
+//
+// [linuxRouter.mu] must be held.
+func (r *linuxRouter) setIPRulesLocked(want bool) error {
+	if !r.ipRuleAvailable {
+		r.ipRulesSet = false
+		return nil
+	}
+	if want {
+		if r.ipRulesSet {
+			return nil
+		}
+		if err := r.addIPRules(); err != nil {
+			return fmt.Errorf("adding IP rules: %w", err)
+		}
+		r.ipRulesSet = true
+		return nil
+	}
+	if err := r.delIPRules(); err != nil {
+		return fmt.Errorf("deleting IP rules: %w", err)
+	}
+	r.ipRulesSet = false
+	return nil
 }
 
 // RouteTable is a Linux routing table: both its name and number.

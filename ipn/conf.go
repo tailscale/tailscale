@@ -31,6 +31,7 @@ type ConfigVAlpha struct {
 
 	ExitNode                   *string  `json:"exitNode,omitempty"` // IP, StableID, or MagicDNS base name
 	AllowLANWhileUsingExitNode opt.Bool `json:"allowLANWhileUsingExitNode,omitempty"`
+	ExitNodeSplitTunnel        opt.Bool `json:"exitNodeSplitTunnel,omitempty"`
 
 	AdvertiseRoutes   []netip.Prefix `json:",omitempty"`
 	AdvertiseExitNode opt.Bool       `json:",omitzero"`
@@ -113,6 +114,10 @@ func (c *ConfigVAlpha) ToPrefs() (MaskedPrefs, error) {
 	if c.AllowLANWhileUsingExitNode != "" {
 		mp.ExitNodeAllowLANAccess = c.AllowLANWhileUsingExitNode.EqualBool(true)
 		mp.ExitNodeAllowLANAccessSet = true
+	}
+	if c.ExitNodeSplitTunnel != "" {
+		mp.ExitNodeSplitTunnel = c.ExitNodeSplitTunnel.EqualBool(true)
+		mp.ExitNodeSplitTunnelSet = true
 	}
 	if c.AdvertiseRoutes != nil {
 		var routeErrs []error

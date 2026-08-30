@@ -58,7 +58,7 @@ ip rule add -6 pref 5270 table 52
 			name: "no-config",
 			in:   nil,
 			want: `
-up` + basic,
+up`,
 		},
 		{
 			name: "local-addr-only",
@@ -538,7 +538,12 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 
 	testState := func(t *testing.T, i int) {
 		t.Helper()
-		if err := router.Set(states[i].in); err != nil {
+		cfg := states[i].in
+		if cfg != nil {
+			cfg = cfg.Clone()
+			cfg.ManageIPRules = true
+		}
+		if err := router.Set(cfg); err != nil {
 			t.Fatalf("failed to set router config: %v", err)
 		}
 		got := fake.String()
@@ -559,6 +564,56 @@ v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 		i := rand.Intn(len(states))
 		state := states[i]
 		t.Run(state.name, func(t *testing.T) { testState(t, i) })
+	}
+}
+
+func TestRouterSetWithoutIPRules(t *testing.T) {
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, logger.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mon.Start()
+	defer mon.Close()
+
+	fake := NewFakeOS(t)
+	ht := health.NewTracker(bus)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake, ht, bus)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	lr := router.(*linuxRouter)
+	lr.nfr = fake.nfr
+	lr.interfaceV6Usable = func() bool { return true }
+	if err := lr.Up(); err != nil {
+		t.Fatalf("failed to up router: %v", err)
+	}
+
+	cfg := &Config{
+		LocalAddrs:    mustCIDRs("100.101.102.103/10"),
+		Routes:        mustCIDRs("100.100.100.100/32", "0.0.0.0/0"),
+		NetfilterMode: netfilterOff,
+		ManageIPRules: true,
+	}
+	if err := lr.Set(cfg); err != nil {
+		t.Fatalf("Set with IP rules: %v", err)
+	}
+	if got := fake.String(); !strings.Contains(got, "ip rule add -4 pref 5270 table 52") {
+		t.Fatalf("expected Tailscale policy rule in OS state, got:\n%s", got)
+	}
+
+	cfg = cfg.Clone()
+	cfg.ManageIPRules = false
+	if err := lr.Set(cfg); err != nil {
+		t.Fatalf("Set without IP rules: %v", err)
+	}
+	got := fake.String()
+	if strings.Contains(got, "ip rule add") {
+		t.Fatalf("unexpected policy rule in OS state, got:\n%s", got)
+	}
+	if !strings.Contains(got, "ip route add 0.0.0.0/0 dev tailscale0 table 52") {
+		t.Fatalf("expected Tailscale route table to remain populated, got:\n%s", got)
 	}
 }
 
@@ -1152,6 +1207,15 @@ func (o *fakeOS) run(args ...string) error {
 				break
 			}
 		}
+		if !found && args[1] == "rule" {
+			for i, el := range *ls {
+				if ruleMatchesDelete(el, rest) {
+					found = true
+					*ls = append((*ls)[:i], (*ls)[i+1:]...)
+					break
+				}
+			}
+		}
 		if !found {
 			o.t.Logf("note: can't delete %q, not present", rest)
 			// 'ip rule del' exits with code 2 when a row is
@@ -1172,6 +1236,27 @@ func (o *fakeOS) run(args ...string) error {
 	}
 
 	return nil
+}
+
+func ruleMatchesDelete(rule, del string) bool {
+	ruleFields := strings.Fields(rule)
+	delFields := strings.Fields(del)
+	pos := 0
+	for _, want := range delFields {
+		found := false
+		for pos < len(ruleFields) {
+			if ruleFields[pos] == want {
+				found = true
+				pos++
+				break
+			}
+			pos++
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func (o *fakeOS) output(args ...string) ([]byte, error) {

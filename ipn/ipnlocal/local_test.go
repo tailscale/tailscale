@@ -9782,6 +9782,29 @@ func TestRouterConfigExitNodeBlackhole(t *testing.T) {
 	}
 }
 
+func TestRouterConfigExitNodeSplitTunnel(t *testing.T) {
+	lb := newTestLocalBackend(t)
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name:      "test-node",
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+		}).View(),
+	}
+	cfg := &wgcfg.Config{}
+
+	prefs := ipn.Prefs{}
+	rcfg := lb.routerConfigLocked(cfg, prefs.View(), nm)
+	if !rcfg.ManageIPRules {
+		t.Errorf("ManageIPRules = false; want true")
+	}
+
+	prefs.ExitNodeSplitTunnel = true
+	rcfg = lb.routerConfigLocked(cfg, prefs.View(), nm)
+	if rcfg.ManageIPRules {
+		t.Errorf("ManageIPRules = true; want false with ExitNodeSplitTunnel")
+	}
+}
+
 func TestApplyPrefsToHostinfoDedup(t *testing.T) {
 	t.Parallel()
 

@@ -916,6 +916,7 @@ func init() {
 	addPrefFlagMapping("shields-up", "ShieldsUp")
 	addPrefFlagMapping("snat-subnet-routes", "NoSNAT")
 	addPrefFlagMapping("stateful-filtering", "NoStatefulFiltering")
+	addPrefFlagMapping("exit-node-split-tunnel", "ExitNodeSplitTunnel")
 	addPrefFlagMapping("exit-node-allow-lan-access", "ExitNodeAllowLANAccess")
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
@@ -1122,7 +1123,7 @@ func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
 
 func flagAppliesToOS(flag, goos string) bool {
 	switch flag {
-	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering":
+	case "netfilter-mode", "snat-subnet-routes", "stateful-filtering", "exit-node-split-tunnel":
 		return goos == "linux"
 	case "unattended":
 		return goos == "windows"
@@ -1174,6 +1175,8 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 			set(exitNodeIPStr())
 		case "exit-node-allow-lan-access":
 			set(prefs.ExitNodeAllowLANAccess)
+		case "exit-node-split-tunnel":
+			set(prefs.ExitNodeSplitTunnel)
 		case "advertise-tags":
 			set(strings.Join(prefs.AdvertiseTags, ","))
 		case "hostname":

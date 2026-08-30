@@ -291,6 +291,14 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 // routed directly or via the exit node.
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
+// ExitNodeSplitTunnel indicates whether Tailscale should avoid installing
+// Linux policy routing rules for the Tailscale route table. When enabled,
+// Tailscale still populates its routing table, but the host is responsible
+// for adding policy rules that select which traffic uses it.
+//
+// Linux-only.
+func (v PrefsView) ExitNodeSplitTunnel() bool { return v.ж.ExitNodeSplitTunnel }
+
 // CorpDNS specifies whether to install the Tailscale network's
 // DNS configuration, if it exists. It is the internal name for
 // the "tailscale set --accept-dns=" flag.
@@ -498,6 +506,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	AutoExitNode               ExitNodeExpression
 	InternalExitNodePrior      tailcfg.StableNodeID
 	ExitNodeAllowLANAccess     bool
+	ExitNodeSplitTunnel        bool
 	CorpDNS                    bool
 	RunSSH                     bool
 	RunWebClient               bool
