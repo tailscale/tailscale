@@ -4063,7 +4063,9 @@ func TestHTTPClientDefaultTransport(t *testing.T) {
 		t.Error("Proxy is non-nil; want nil, as environment proxies are unreachable over the tailnet")
 	}
 
-	want := http.DefaultTransport.(*http.Transport).Clone()
+	// It is safe for a test to assume that no application has replaced or
+	// modified http.DefaultTransport. Production tsnet code cannot assume that.
+	want := http.DefaultTransport.(*http.Transport)
 	gotv := reflect.ValueOf(tr).Elem()
 	wantv := reflect.ValueOf(want).Elem()
 	for i := range gotv.NumField() {
@@ -4074,21 +4076,21 @@ func TestHTTPClientDefaultTransport(t *testing.T) {
 		switch f.Name {
 		case "DialContext", "Proxy":
 			// Intentionally different; checked above.
-		case "TLSNextProto":
-			// A map containing funcs, which reflect.DeepEqual can't
-			// compare, so just check that the sizes match.
-			if got, want := gotv.Field(i).Len(), wantv.Field(i).Len(); got != want {
-				t.Errorf("TLSNextProto has %d entries; want %d", got, want)
+		case "TLSClientConfig", "TLSNextProto", "HTTP2":
+			// net/http may populate these lazily on http.DefaultTransport
+			// when another test uses HTTP/2. They are nil in its definition.
+			if !gotv.Field(i).IsNil() {
+				t.Errorf("field %s is non-nil; want nil (as defined in http.DefaultTransport)", f.Name)
 			}
 		case "OnProxyConnectResponse", "Dial", "DialTLSContext", "DialTLS",
-			"TLSClientConfig", "TLSHandshakeTimeout",
+			"TLSHandshakeTimeout",
 			"DisableKeepAlives", "DisableCompression",
 			"MaxIdleConns", "MaxIdleConnsPerHost", "MaxConnsPerHost",
 			"IdleConnTimeout", "ResponseHeaderTimeout", "ExpectContinueTimeout",
 			"ProxyConnectHeader", "GetProxyConnectHeader",
 			"MaxResponseHeaderBytes", "WriteBufferSize", "ReadBufferSize",
-			"ForceAttemptHTTP2", "HTTP2", "Protocols":
-			// Expected to be equal from Clone.
+			"ForceAttemptHTTP2", "Protocols":
+			// Expected to match http.DefaultTransport.
 			g, w := gotv.Field(i).Interface(), wantv.Field(i).Interface()
 			if !reflect.DeepEqual(g, w) {
 				t.Errorf("field %s = %v; want %v (as in http.DefaultTransport)", f.Name, g, w)
