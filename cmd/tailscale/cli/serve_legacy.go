@@ -499,13 +499,12 @@ func expandProxyTarget(source string) (string, error) {
 	switch host {
 	case "localhost", "127.0.0.1":
 		host = "127.0.0.1"
+	case "::1":
+		// ok
 	default:
-		return "", fmt.Errorf("only localhost or 127.0.0.1 proxies are currently supported")
+		return "", fmt.Errorf("only localhost, 127.0.0.1, or ::1 proxies are currently supported")
 	}
-	url := u.Scheme + "://" + host
-	if u.Port() != "" {
-		url += ":" + u.Port()
-	}
+	url := u.Scheme + "://" + net.JoinHostPort(host, u.Port())
 	url += u.Path
 	return url, nil
 }
@@ -541,11 +540,11 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 	}
 
 	switch host {
-	case "localhost", "127.0.0.1":
+	case "localhost", "127.0.0.1", "::1":
 		// ok
 	default:
 		fmt.Fprintf(Stderr, "error: invalid TCP source %q\n", dest)
-		fmt.Fprint(Stderr, "must be one of: localhost or 127.0.0.1\n\n", dest)
+		fmt.Fprint(Stderr, "must be one of: localhost, 127.0.0.1, or ::1\n\n", dest)
 		return errHelp
 	}
 
@@ -563,7 +562,10 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 		sc = new(ipn.ServeConfig)
 	}
 
-	fwdAddr := "127.0.0.1:" + dstPortStr
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
+	fwdAddr := net.JoinHostPort(host, dstPortStr)
 
 	dnsName, err := e.getSelfDNSName(ctx)
 	if err != nil {

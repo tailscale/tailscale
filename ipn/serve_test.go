@@ -285,6 +285,8 @@ func TestExpandProxyTargetDev(t *testing.T) {
 	}{
 		{name: "port-only", input: "8080", expected: "http://127.0.0.1:8080"},
 		{name: "hostname-and-port", input: "localhost:8080", expected: "http://localhost:8080"},
+		{name: "IPv6-localhost", input: "http://[::1]:8080", expected: "http://[::1]:8080"},
+		{name: "IPv6-localhost-path", input: "http://[::1]:8080/foo", expected: "http://[::1]:8080/foo"},
 		{name: "no-change", input: "http://127.0.0.1:8080", expected: "http://127.0.0.1:8080"},
 		{name: "include-path", input: "http://127.0.0.1:8080/foo", expected: "http://127.0.0.1:8080/foo"},
 		{name: "https-scheme", input: "https://localhost:8080", expected: "https://localhost:8080"},
