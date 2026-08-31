@@ -12,6 +12,7 @@ import (
 	"cmp"
 	"container/list"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,6 +135,14 @@ func (e *extension) Init(host ipnext.Host) error {
 		return nil
 	}
 	e.host = host
+
+	store, _ := e.backend.Sys().StateStore.GetOK()
+	// if we can't get a store, we'll create an ephemeral signing key
+	key, err := loadOrCreateSigningKey(store)
+	if err != nil {
+		return fmt.Errorf("loading conn25 signing key: %w", err)
+	}
+	e.conn25.connector.signingKey = key
 
 	dph := newDatapathHandler(e.conn25, e.conn25.logf)
 	if err := e.installHooks(dph); err != nil {
@@ -1472,6 +1481,9 @@ type connector struct {
 	logf      logger.Logf
 	getIPSets func() ipSets
 	clock     tstime.Clock
+	// signingKey is used to mint/authenticate tokens passed with [ConnectorTransitIPRequest]
+	// it is written once during extension Init and so does not need to be protected by mu.
+	signingKey signingKey
 
 	// Remember to add new fields to [connector.reset] if needed.
 	mu sync.Mutex // protects the fields below
@@ -1710,4 +1722,43 @@ func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 	})
 	sortByPreference(matches)
 	return matches
+}
+
+type signingKey []byte
+
+const signingKeyLen = 32
+const connectorSigningKeyStateKey = ipn.StateKey("_conn25-transit-signing-key")
+
+func generateSigningKey() ([]byte, error) {
+	k := make(signingKey, signingKeyLen)
+	if _, err := rand.Read(k); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+// loadOrCreateSigningKey returns [signingKeyLen] random bytes. If a store is
+// provided it will try to read the signingKey from the store, and if it
+// doesn't find one will write the one it creates to the store. It will return
+// an error if the store returns an error other then [ipn.ErrStateNotExist].
+func loadOrCreateSigningKey(store ipn.StateStore) (signingKey, error) {
+	if store == nil {
+		return generateSigningKey()
+	}
+	bs, err := store.ReadState(connectorSigningKeyStateKey)
+	if err != nil && !errors.Is(err, ipn.ErrStateNotExist) {
+		return nil, err
+	}
+	if len(bs) != signingKeyLen {
+		// we need to make and store a new key
+		k, err := generateSigningKey()
+		if err != nil {
+			return nil, err
+		}
+		if err := ipn.WriteState(store, connectorSigningKeyStateKey, k); err != nil {
+			return nil, err
+		}
+		bs = k
+	}
+	return bs, nil
 }

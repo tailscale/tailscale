@@ -21,6 +21,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
+	memstore "tailscale.com/ipn/store/mem"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
@@ -3397,4 +3398,85 @@ func TestPickConnector(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadOrCreateSigningKey(t *testing.T) {
+	// test it creates and returns a key
+	store := new(memstore.Store)
+	key, err := loadOrCreateSigningKey(store)
+	if err != nil {
+		t.Fatalf("error using memstore err: %v", err)
+	}
+	if len(key) != signingKeyLen {
+		t.Fatalf("expected key of length %d, but got: %v", signingKeyLen, key)
+	}
+
+	// test it returns the same key
+	keyAgain, err := loadOrCreateSigningKey(store)
+	if err != nil {
+		t.Fatalf("error using memstore: %v", err)
+	}
+	if diff := cmp.Diff(key, keyAgain); diff != "" {
+		t.Fatalf("want key to be the same, diff: %s", diff)
+	}
+
+	// test it treats a bad value like a missing value
+	if err := ipn.WriteState(store, connectorSigningKeyStateKey, []byte{0, 1, 2}); err != nil {
+		t.Fatalf("error using memstore: %v", err)
+	}
+	key, err = loadOrCreateSigningKey(store)
+	if err != nil {
+		t.Fatalf("error using memstore: %v", err)
+	}
+	if len(key) != signingKeyLen {
+		t.Fatalf("expected key of length %d, but got: %v", signingKeyLen, key)
+	}
+
+	// test it returns an error if the store returns an error
+	errorToReturn := errors.New("test")
+	key, err = loadOrCreateSigningKey(storeThatErrors{err: errorToReturn, errorOnWrite: true})
+	if key != nil {
+		t.Fatalf("store errored, wanted nil key, got: %v", key)
+	}
+	if err != errorToReturn {
+		t.Fatalf("store errored, wanted errorToReturn, got: %v", err)
+	}
+	key, err = loadOrCreateSigningKey(storeThatErrors{err: errorToReturn, errorOnRead: true})
+	if key != nil {
+		t.Fatalf("store errored, wanted nil key, got: %v", key)
+	}
+	if err != errorToReturn {
+		t.Fatalf("store errored, wanted errorToReturn, got: %v", err)
+	}
+
+	// test we generate a key anyway if there's no store
+	key, err = loadOrCreateSigningKey(nil)
+	if err != nil {
+		t.Fatalf("wanted no err, got: %v", err)
+	}
+	if len(key) != signingKeyLen {
+		t.Fatalf("expected key of length %d, but got: %v", signingKeyLen, key)
+	}
+}
+
+type storeThatErrors struct {
+	err          error
+	val          []byte
+	errorOnRead  bool
+	errorOnWrite bool
+}
+
+func (s storeThatErrors) ReadState(ipn.StateKey) ([]byte, error) {
+	if s.errorOnRead {
+		return nil, s.err
+	}
+	return s.val, nil
+}
+
+func (s storeThatErrors) WriteState(_ ipn.StateKey, val []byte) error {
+	if s.errorOnWrite {
+		return s.err
+	}
+	s.val = val
+	return nil
 }
