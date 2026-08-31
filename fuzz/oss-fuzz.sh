@@ -15,8 +15,48 @@ set -euxo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." # repository root
 
+# go-118-fuzz-build_v2 (used by compile_native_go_fuzzer_v2) overlays a custom
+# testing/fuzz.go onto $GOROOT. When GOTOOLCHAIN=auto downloads the toolchain that gomod
+# requires into GOMODCACHE, Go refuses to overlay any file beneath it. Copy such a downloaded
+# toolchain to a writable temp dir so overlays work for any go.mod version.
+#
+# The copy is also rebuilt below against the same toolchain, so this script stays correct as
+# tailscale's required Go version changes without editing anything here.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Pin go-118-fuzz-build to an immutable commit. Fetch by SHA rather than tracking the v2
+# branch so upstream rewrites can't silently change or break this build.
+#
+# Keep in sync with oss-fuzz's infra/base-images/base-builder/install_go.sh (the v2 checkout).
+fuzzbuild_ref=fc5dc53b9db8a38c394c53d6e439a1410cf8fc19
+
+goroot=$(go env GOROOT)
+gomodcache=$(go env GOMODCACHE)
+if [[ "$goroot" == "$gomodcache"* ]]; then
+	cp -r "$goroot/." "$tmpdir/goroot"
+	# Toolchain files are read-only; make them writable so cleanup works for any user.
+	chmod -R u+rwX "$tmpdir/goroot"
+	export GOROOT="$tmpdir/goroot"
+	export PATH="$GOROOT/bin:$PATH"
+	export GOTOOLCHAIN=local
+fi
+
+# go-118-fuzz-build_v2 embeds x/tools/go/packages compiled with whatever Go built it. If that
+# differs from the active toolchain (e.g. after a GOTOOLCHAIN download), its source-processing
+# packages diverge from `go list`/the compiler, producing errors like "unknown field rfd".
+# Rebuild it with the now-active toolchain so they always match.
 prepare() {
-	go get github.com/AdamKorcz/go-118-fuzz-build/testing
+	git clone --depth 1 https://github.com/AdamKorcz/go-118-fuzz-build "$tmpdir/v2"
+	(
+		cd "$tmpdir/v2"
+		git fetch --depth 1 origin "$fuzzbuild_ref"
+		git checkout -q FETCH_HEAD
+		GOFLAGS=-mod=mod go build -o "$tmpdir/bin/go-118-fuzz-build_v2" .
+	)
+	export PATH="$tmpdir/bin:$PATH"
+
+	GOFLAGS=-mod=mod go get github.com/AdamKorcz/go-118-fuzz-build/testing@$fuzzbuild_ref
 }
 
 build_fuzzers() {
