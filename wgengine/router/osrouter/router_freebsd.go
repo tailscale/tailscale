@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/health"
@@ -256,8 +257,21 @@ func ensurePFAnchorRef() error {
 
 	// Prepend our anchor references so they're evaluated, then include
 	// all existing rules so we don't disrupt the user's configuration.
-	return loadPFMainRuleset(additions + natRules + filterRules)
+	if err := loadPFMainRuleset(additions + natRules + filterRules); err != nil {
+		return err
+	}
+	addedPFAnchorRef.Store(true)
+	return nil
 }
+
+// addedPFAnchorRef records whether this process inserted the "tailscale"
+// anchor references into the main PF ruleset. removePFAnchorRef only removes
+// references we added: an operator who configured them statically in
+// /etc/pf.conf (the durable setup the ensurePFAnchorRef error recommends)
+// must not have tailscaled strip them from the running ruleset, drifting it
+// from their config, on every shutdown. This is process-local by design; a
+// fresh process (including the startup cleanUp hook) never removes them.
+var addedPFAnchorRef atomic.Bool
 
 // pfTableRx matches a table reference in "pfctl -sn"/"-sr" output, e.g. the
 // "<zabbix_proxies>" in "pass in on em0 from <zabbix_proxies> to any".
@@ -281,7 +295,17 @@ func pfTablesReferenced(rules string) []string {
 // removePFAnchorRef removes the nat-anchor and anchor references for
 // "tailscale" from the main PF ruleset via read-modify-write, leaving
 // all other rules intact.
+//
+// It only removes references this process added (see addedPFAnchorRef), and
+// even then leaves them in place if the ruleset now references PF tables,
+// since the reload cannot preserve their contents (see ensurePFAnchorRef).
+// Skipped removal is not an error: callers flush the anchor's contents first,
+// and a reference to an empty anchor has no effect on traffic.
 func removePFAnchorRef() error {
+	if !addedPFAnchorRef.Load() {
+		return nil
+	}
+
 	filterRules, natRules := getPFMainRuleset()
 
 	natAnchorRef := fmt.Sprintf("nat-anchor \"%s\"", pfAnchorName)
@@ -294,7 +318,15 @@ func removePFAnchorRef() error {
 		return nil // nothing to remove
 	}
 
-	return loadPFMainRuleset(newNat + newFilter)
+	if len(pfTablesReferenced(natRules+filterRules)) > 0 {
+		return nil // reload would empty the tables; leave the inert refs
+	}
+
+	if err := loadPFMainRuleset(newNat + newFilter); err != nil {
+		return err
+	}
+	addedPFAnchorRef.Store(false)
+	return nil
 }
 
 // removeLines removes all lines from s that contain substr.
