@@ -413,6 +413,29 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "IPv6_localhost",
+			steps: []step{{
+				command: cmd("serve --bg --https=443 http://[::1]:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					Web: map[ipn.HostPort]*ipn.WebServerConfig{
+						"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+							"/": {Proxy: "http://[::1]:3000"},
+						}},
+					},
+				},
+			}},
+		},
+		{
+			name: "IPv6_localhost_TCP",
+			steps: []step{{
+				command: cmd("serve --tcp=5432 --bg tcp://[::1]:3000"),
+				want: &ipn.ServeConfig{
+					TCP: map[uint16]*ipn.TCPPortHandler{5432: {TCPForward: "[::1]:3000"}},
+				},
+			}},
+		},
+		{
 			name: "path_in_dest",
 			steps: []step{{
 				command: cmd("serve --bg --https=443 http://127.0.0.1:3000/foo/bar"),

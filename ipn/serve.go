@@ -831,7 +831,7 @@ func ExpandProxyTargetValue(target string, supportedSchemes []string, defaultSch
 		return "", fmt.Errorf("invalid port %q", u.Port())
 	}
 
-	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(int(port)))
 
 	return u.String(), nil
 }
