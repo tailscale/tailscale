@@ -211,3 +211,28 @@ func TestConfigVAlphaToPrefsRemoteConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigVAlphaToPrefsExitNodeSplitTunnel(t *testing.T) {
+	for name, tt := range map[string]struct {
+		cfg     ConfigVAlpha
+		wantSet bool
+		wantVal bool
+	}{
+		"absent": {ConfigVAlpha{Version: "alpha0"}, false, false},
+		"true":   {ConfigVAlpha{Version: "alpha0", ExitNodeSplitTunnel: "true"}, true, true},
+		"false":  {ConfigVAlpha{Version: "alpha0", ExitNodeSplitTunnel: "false"}, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mp, err := tt.cfg.ToPrefs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mp.ExitNodeSplitTunnelSet != tt.wantSet {
+				t.Errorf("ExitNodeSplitTunnelSet = %v; want %v", mp.ExitNodeSplitTunnelSet, tt.wantSet)
+			}
+			if mp.ExitNodeSplitTunnel != tt.wantVal {
+				t.Errorf("ExitNodeSplitTunnel = %v; want %v", mp.ExitNodeSplitTunnel, tt.wantVal)
+			}
+		})
+	}
+}

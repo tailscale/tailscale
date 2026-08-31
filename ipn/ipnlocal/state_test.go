@@ -1305,6 +1305,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
@@ -1362,6 +1363,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node2.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
@@ -1411,6 +1413,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
@@ -1439,6 +1442,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node3.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(netip.MustParsePrefix("100.64.1.1/32"), netip.MustParsePrefix("100.64.1.2/32")),
@@ -1485,6 +1489,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),
@@ -1516,6 +1521,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			},
 			wantRouterCfg: &router.Config{
 				SNATSubnetRoutes: true,
+				ManageIPRules:    true,
 				NetfilterMode:    preftype.NetfilterOn,
 				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
 				Routes:           routesWithQuad100(),

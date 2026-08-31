@@ -44,6 +44,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AutoExitNode",
 		"InternalExitNodePrior",
 		"ExitNodeAllowLANAccess",
+		"ExitNodeSplitTunnel",
 		"CorpDNS",
 		"RunSSH",
 		"RunWebClient",
@@ -183,6 +184,16 @@ func TestPrefsEqual(t *testing.T) {
 		{
 			&Prefs{ExitNodeAllowLANAccess: true},
 			&Prefs{ExitNodeAllowLANAccess: true},
+			true,
+		},
+		{
+			&Prefs{},
+			&Prefs{ExitNodeSplitTunnel: true},
+			false,
+		},
+		{
+			&Prefs{ExitNodeSplitTunnel: true},
+			&Prefs{ExitNodeSplitTunnel: true},
 			true,
 		},
 
@@ -595,6 +606,13 @@ func TestPrefsPretty(t *testing.T) {
 			},
 			"linux",
 			`Prefs{ra=false dns=false want=false routes=[] nf=off update=off Persist=nil}`,
+		},
+		{
+			Prefs{
+				ExitNodeSplitTunnel: true,
+			},
+			"linux",
+			`Prefs{ra=false dns=false want=false exitSplit=true routes=[] nf=off update=off Persist=nil}`,
 		},
 		{
 			Prefs{

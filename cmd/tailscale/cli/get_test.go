@@ -71,6 +71,12 @@ func TestPrefValue(t *testing.T) {
 			want:  true,
 		},
 		{
+			name:  "exit-node-split-tunnel",
+			flag:  "exit-node-split-tunnel",
+			prefs: &ipn.Prefs{ExitNodeSplitTunnel: true},
+			want:  true,
+		},
+		{
 			name:  "shields-up",
 			flag:  "shields-up",
 			prefs: &ipn.Prefs{ShieldsUp: true},

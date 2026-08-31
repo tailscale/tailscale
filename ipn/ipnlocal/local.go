@@ -6538,6 +6538,7 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		SubnetRoutes:        unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes:    !prefs.NoSNAT(),
 		StatefulFiltering:   doStatefulFiltering,
+		ManageIPRules:       !prefs.ExitNodeSplitTunnel(),
 		NetfilterMode:       prefs.NetfilterMode(),
 		Routes:              b.currentNode().osRoutes(),
 		NetfilterKind:       netfilterKind,

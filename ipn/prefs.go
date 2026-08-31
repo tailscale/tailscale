@@ -129,6 +129,14 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitNodeSplitTunnel indicates whether Tailscale should avoid installing
+	// Linux policy routing rules for the Tailscale route table. When enabled,
+	// Tailscale still populates its routing table, but the host is responsible
+	// for adding policy rules that select which traffic uses it.
+	//
+	// Linux-only.
+	ExitNodeSplitTunnel bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists. It is the internal name for
 	// the "tailscale set --accept-dns=" flag.
@@ -363,6 +371,7 @@ type MaskedPrefs struct {
 	AutoExitNodeSet               bool                `json:",omitempty"`
 	InternalExitNodePriorSet      bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet     bool                `json:",omitempty"`
+	ExitNodeSplitTunnelSet        bool                `json:",omitempty"`
 	CorpDNSSet                    bool                `json:",omitempty"`
 	RunSSHSet                     bool                `json:",omitempty"`
 	RunWebClientSet               bool                `json:",omitempty"`
@@ -582,6 +591,9 @@ func (p *Prefs) pretty(goos string) string {
 		} else if !p.ExitNodeID.IsZero() {
 			fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
 		}
+		if p.ExitNodeSplitTunnel {
+			sb.WriteString("exitSplit=true ")
+		}
 		if p.AutoExitNode.IsSet() {
 			fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
 		}
@@ -674,6 +686,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoExitNode == p2.AutoExitNode &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		p.ExitNodeSplitTunnel == p2.ExitNodeSplitTunnel &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.Sync.Normalized() == p2.Sync.Normalized() &&
