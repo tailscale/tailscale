@@ -419,9 +419,17 @@ func (s *Server) awaitRunning(ctx context.Context) error {
 // and it has no Proxy set, as HTTP proxies from the environment are
 // unlikely to be reachable over the tailnet.
 func (s *Server) HTTPClient() *http.Client {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.DialContext = s.Dial
-	tr.Proxy = nil
+	// Keep this in sync with http.DefaultTransport. Do not clone
+	// http.DefaultTransport here: applications are permitted to replace or
+	// modify that package-level variable.
+	tr := &http.Transport{
+		DialContext:           s.Dial,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &http.Client{Transport: tr}
 }
 
