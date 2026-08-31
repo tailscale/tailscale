@@ -762,10 +762,14 @@ func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {
 		close(done)
 	})
 
+	// The dialer runs on netstack-owned goroutines that can outlive the
+	// test, so it must not log via tb directly. (tailscale/tailscale#21052)
+	logf := tstest.WhileTestRunningLogger(tb)
+
 	gotConn := make(chan struct{}, 1)
 	fn := func(ctx context.Context, network, address string) (net.Conn, error) {
 		// Signal that we have a new connection
-		tb.Logf("hangDialer: called with network=%q address=%q", network, address)
+		logf("hangDialer: called with network=%q address=%q", network, address)
 		select {
 		case gotConn <- struct{}{}:
 		default:
@@ -774,9 +778,9 @@ func makeHangDialer(tb testing.TB) (netx.DialFunc, chan struct{}) {
 		// Hang until the test is done.
 		select {
 		case <-ctx.Done():
-			tb.Logf("context done")
+			logf("context done")
 		case <-done:
-			tb.Logf("function completed")
+			logf("function completed")
 		}
 		return nil, fmt.Errorf("canceled")
 	}
