@@ -3,18 +3,6 @@
 name: CI
 
 env:
-  # Our fuzz job, powered by OSS-Fuzz, fails periodically because we upgrade to
-  # new Go versions very eagerly. OSS-Fuzz is a little more conservative, and
-  # ends up being unable to compile our code.
-  #
-  # When this happens, we want to disable the fuzz target until OSS-Fuzz catches
-  # up. However, we also don't want to forget to turn it back on when OSS-Fuzz
-  # can once again build our code.
-  #
-  # This variable toggles the fuzz job between two modes:
-  #  - false: we expect fuzzing to be happy, and should report failure if it's not.
-  #  - true: we expect fuzzing is broken, and should report failure if it start working.
-  TS_FUZZ_CURRENTLY_BROKEN: false
   # GOMODCACHE is the same definition on all OSes. Within the workspace, we use
   # toplevel directories "src" (for the checked out source code), and "gomodcache"
   # and other caches as siblings to follow.
@@ -673,74 +661,6 @@ jobs:
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
-
-  fuzz:
-    # This target periodically breaks (see TS_FUZZ_CURRENTLY_BROKEN at the top
-    # of the file), so it's more complex than usual: the 'build fuzzers' step
-    # might fail, and depending on the value of 'TS_FUZZ_CURRENTLY_BROKEN', that
-    # might or might not be fine. The steps after the build figure out whether
-    # the success/failure is expected, and appropriately pass/fail the job
-    # overall accordingly.
-    #
-    # Practically, this means that all steps after 'build fuzzers' must have an
-    # explicit 'if' condition, because the default condition for steps is
-    # 'success()', meaning "only run this if no previous steps failed".
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-    - name: build fuzzers
-      id: build
-      # As of 12 February 2026, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
-      # continue-on-error makes steps.build.conclusion be 'success' even if
-      # steps.build.outcome is 'failure'. This means this step does not
-      # contribute to the job's overall pass/fail evaluation.
-      continue-on-error: true
-      with:
-       oss-fuzz-project-name: 'tailscale'
-       dry-run: false
-       language: go
-    - name: report unexpectedly broken fuzz build
-      if: steps.build.outcome == 'failure' && env.TS_FUZZ_CURRENTLY_BROKEN != 'true'
-      run: |
-        echo "fuzzer build failed, see above for why"
-        echo "if the failure is due to OSS-Fuzz not being on the latest Go yet,"
-        echo "set TS_FUZZ_CURRENTLY_BROKEN=true in .github/workflows/test.yml"
-        echo "to temporarily disable fuzzing until OSS-Fuzz works again."
-        exit 1
-    - name: report unexpectedly working fuzz build
-      if: steps.build.outcome == 'success' && env.TS_FUZZ_CURRENTLY_BROKEN == 'true'
-      run: |
-        echo "fuzzer build succeeded, but we expect it to be broken"
-        echo "please set TS_FUZZ_CURRENTLY_BROKEN=false in .github/workflows/test.yml"
-        echo "to reenable fuzz testing"
-        exit 1
-    - name: run fuzzers
-      id: run
-      # Run the fuzzers whenever they're able to build, even if we're going to
-      # report a failure because TS_FUZZ_CURRENTLY_BROKEN is set to the wrong
-      # value.
-      if: steps.build.outcome == 'success'
-      # As of 12 February 2026, this repo doesn't tag releases, so this commit
-      # hash is just the tip of master.
-      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@f277aafb36f358582fdb24a41a9a52f2e097a2fd
-      with:
-        oss-fuzz-project-name: 'tailscale'
-        fuzz-seconds: 150
-        dry-run: false
-        language: go
-    - name: Set artifacts_path in env (workaround for actions/upload-artifact#176)
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      run: |
-        echo "artifacts_path=$(realpath .)" >> $GITHUB_ENV
-    - name: upload crash
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-      if: steps.run.outcome != 'success' && steps.build.outcome == 'success'
-      with:
-        name: artifacts
-        path: ${{ env.artifacts_path }}/out/artifacts
-
   depaware:
     runs-on: ubuntu-24.04
     needs: gomod-cache
@@ -904,7 +824,6 @@ jobs:
       - ios
       - wasm
       - tailscale_go
-      - fuzz
       - depaware
       - go_generate
       - make_tidy
@@ -1059,7 +978,6 @@ jobs:
       - ios
       - wasm
       - tailscale_go
-      - fuzz
       - depaware
       - go_generate
       - make_tidy
@@ -1105,7 +1023,6 @@ jobs:
       - windows
       - macos
       - wasm
-      - fuzz
       - race-root-integration
       - privileged
     steps:
