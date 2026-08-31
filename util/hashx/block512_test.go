@@ -128,7 +128,7 @@ func TestAllocations(t *testing.T) {
 	})
 }
 
-func Fuzz(f *testing.F) {
+func FuzzBlock512(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed int64) {
 		c := qt.New(t)
 
