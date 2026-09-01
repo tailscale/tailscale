@@ -223,6 +223,8 @@ type Wrapper struct {
 
 	captureHook syncs.AtomicValue[packet.CaptureCallback]
 
+	packetMetricCounters atomic.Pointer[bart.Table[PacketMetricCounters]]
+
 	metrics *metrics
 
 	eventClient              *eventbus.Client
@@ -911,6 +913,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				updateConnCounter(update, p.Buffer(), false)
 			}
 		}
+		t.countOutboundPacketMetrics(p)
 
 		// Make sure to do SNAT after filtering, so that any flow tracking in
 		// the filter sees the original source address. See #12133.
@@ -1233,8 +1236,17 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
 	var buffsGRO *gro.GRO
+	packetCounters := t.packetMetricCounters.Load()
 	for _, buff := range buffs {
 		p.Decode(buff[offset:])
+		var inboundCounter PacketMetricCounter
+		var inboundBytes int64
+		if packetCounters != nil {
+			if counters, ok := packetCounters.Lookup(p.Dst.Addr()); ok && counters.Inbound != nil {
+				inboundCounter = counters.Inbound
+				inboundBytes = int64(len(p.Buffer()))
+			}
+		}
 		pc.dnat(p)
 		if !t.disableFilter {
 			var res filter.Response
@@ -1244,17 +1256,17 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 			res, buffsGRO = t.filterPacketInboundFromWireGuard(p, captHook, pc, buffsGRO)
 			if res != filter.Accept {
 				metricPacketInDrop.Add(1)
-			} else {
-				buffs[i] = buff
-				i++
+				continue
 			}
 		}
+		if inboundCounter != nil {
+			inboundCounter.Add(inboundBytes)
+		}
+		buffs[i] = buff
+		i++
 	}
 	if buffsGRO != nil {
 		buffsGRO.Flush()
-	}
-	if t.disableFilter {
-		i = len(buffs)
 	}
 	buffs = buffs[:i]
 
@@ -1522,6 +1534,42 @@ func (t *Wrapper) InstallCaptureHook(cb packet.CaptureCallback) {
 		return
 	}
 	t.captureHook.Store(cb)
+}
+
+// PacketMetricCounter counts IP packet bytes. Add must be safe for concurrent
+// use and cheap enough to call inline while processing packets.
+type PacketMetricCounter interface {
+	Add(int64)
+}
+
+// PacketMetricCounters contains byte counters for packets attributed to an IP
+// prefix. Inbound packets are matched by destination before DNAT and counted
+// after filtering accepts them for delivery to the TUN. Outbound packets are
+// matched by source after filtering and before SNAT. A nil counter disables
+// accounting for that direction.
+type PacketMetricCounters struct {
+	Inbound  PacketMetricCounter
+	Outbound PacketMetricCounter
+}
+
+// SetPacketMetricCounters atomically replaces the prefix-to-counter table used
+// for packet accounting. Each packet is attributed exclusively to the
+// longest-prefix match. The caller must not mutate the table after calling
+// this method. Passing nil disables packet accounting.
+func (t *Wrapper) SetPacketMetricCounters(counters *bart.Table[PacketMetricCounters]) {
+	t.packetMetricCounters.Store(counters)
+}
+
+func (t *Wrapper) countOutboundPacketMetrics(p *packet.Parsed) {
+	countersByPrefix := t.packetMetricCounters.Load()
+	if countersByPrefix == nil {
+		return
+	}
+	counters, ok := countersByPrefix.Lookup(p.Src.Addr())
+	if !ok || counters.Outbound == nil {
+		return
+	}
+	counters.Outbound.Add(int64(len(p.Buffer())))
 }
 
 func updateConnCounter(update netlogfunc.ConnectionCounter, b []byte, receive bool) {
