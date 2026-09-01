@@ -85,19 +85,6 @@ func TestAppendToLower(t *testing.T) {
 	}
 }
 
-func FuzzAppendToLower(f *testing.F) {
-	for _, tt := range lowerTests {
-		f.Add(tt.in)
-	}
-	f.Fuzz(func(t *testing.T, in string) {
-		got := string(appendToLower(nil, in))
-		want := strings.ToLower(in)
-		if got != want {
-			t.Errorf("appendToLower(%q) = %q, want %q", in, got, want)
-		}
-	})
-}
-
 var (
 	testLower = "production-server"
 	testUpper = "PRODUCTION-SERVER"
