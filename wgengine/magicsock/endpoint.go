@@ -1604,6 +1604,9 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		key := n.DiscoKey()
 		de.updateDiscoKey(key)
+		// A changed disco key can mean the peer restarted and its UDP endpoints
+		// moved. Keep the old path as a fallback, but stop trusting it exclusively.
+		de.trustBestAddrUntil = 0
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-disco-key-changed",
