@@ -4,6 +4,8 @@
 package controlhttp
 
 import (
+	"strings"
+
 	"tailscale.com/control/controlbase"
 )
 
@@ -14,4 +16,20 @@ import (
 type ClientConn struct {
 	// Conn is the noise connection.
 	*controlbase.Conn
+}
+
+// Appends server base path to the left, the same way as
+// `/base + /endpoint`.
+func appendServerBasePath(serverPath string, urlPath string) string {
+	serverPath = strings.TrimSuffix(serverPath, "/")
+	serverPath = strings.TrimPrefix(serverPath, "/")
+
+	if serverPath == "" {
+		return urlPath
+	}
+
+	urlPath = strings.TrimSuffix(urlPath, "/")
+	urlPath = strings.TrimPrefix(urlPath, "/")
+
+	return "/" + serverPath + "/" + urlPath
 }

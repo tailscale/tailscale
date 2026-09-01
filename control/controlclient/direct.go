@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime"
@@ -837,7 +838,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if err != nil {
 		return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: %w", err)
 	}
-	url := fmt.Sprintf("%s/machine/register", c.serverURL)
+	serverUrlParsed, err := url.Parse(c.serverURL)
+	if err != nil {
+		return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: failed parse server url: %w", err)
+	}
+	url := fmt.Sprintf("%s://%s/machine/register", serverUrlParsed.Scheme, serverUrlParsed.Host)
 	url = strings.Replace(url, "http:", "https:", 1)
 
 	bodyData, err := encode(request)
@@ -1191,7 +1196,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	if err != nil {
 		return fmt.Errorf("getNoiseClient: %w", err)
 	}
-	url := fmt.Sprintf("%s/machine/map", serverURL)
+	serverUrlParsed, err := url.Parse(serverURL)
+	if err != nil {
+		return fmt.Errorf("getNoiseClient: failed parse server url: %w", err)
+	}
+	url := fmt.Sprintf("%s://%s/machine/map", serverUrlParsed.Scheme, serverUrlParsed.Host)
 	url = strings.Replace(url, "http:", "https:", 1)
 
 	// Create a watchdog timer that breaks the connection if we don't receive a
