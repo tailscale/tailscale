@@ -26,7 +26,6 @@ and past bump commits (e.g. "go.toolchain.branch: switch to Go 1.26",
 
 ## Version strings elsewhere
 
-- [ ] `Dockerfile`: `FROM golang:1.NN-alpine` in the build stage.
 - [ ] `README.md`: "We always require the latest Go release, currently Go 1.NN".
 - [ ] `.github/workflows/`: grep for hardcoded Go versions. As of Go
   1.27 the workflows use `go-version-file: go.mod` and need no
