@@ -279,12 +279,6 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
-		// NOTE(pr): this create-only path replaces a createOrUpdate whose mutate fn
-		// ran "for _, p := range e.Endpoints { p.Conditions.Ready = nil }". That loop
-		// was a no-op (range over a []Endpoint value slice - p was a copy, so the
-		// backing array was never modified), and egress-eps is the sole writer of
-		// endpoint Conditions anyway. Flagging in the PR description; safe to delete
-		// this note after review.
 		if err := esr.Create(ctx, eps); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("error creating %s EndpointSlice: %w", addrType, err)
 		}

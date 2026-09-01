@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -25,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"tailscale.com/kube/egressservices"
+	"tailscale.com/util/mak"
 )
 
 // egressEpsReconciler reconciles EndpointSlices for tailnet services exposed to cluster via egress ProxyGroup proxies.
@@ -80,7 +80,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// Retrieve the current ClusterIP Service. egress-eps is triggered by the slice itself, so it can be handed an orphan - a
 	// slice left behind in some circumstances (for example,  when the ProxyGroup on the parent Service was changed).
 	// In this case, the slice's service-name no longer matches the current ClusterIP Service, and writing to it would
-	// // rebind a stale slice into the live Service, unioning its stale endpoints into cluster traffic.
+	// rebind a stale slice into the live Service, unioning its stale endpoints into cluster traffic.
 	// Fetch the ClusterIP Service first and only proceed for slices bound to it.
 	// Note: editing a Service's ProxyGroup in place is not officially supported, but this ensures if a user
 	// does edit the proxygroup in place it will not erroneously try to migrate an orphaned EndpointSlice in place.
@@ -173,15 +173,14 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// This reconciler is the sole writer of a slice after creation (the egress
 	// Services reconciler only ever Creates it), so it owns all mutable state:
 	// endpoints, ports and labels. Re-assert the owned labels to repair drift while
-	// preserving any labels added by other controllers - maps.Copy overwrites only
-	// the keys we own. Because the guard above established this slice is bound to the
-	// current ClusterIP Service, the identity labels we write equal what the slice
-	// already claims (repair, not rebind).
-	// eps.Labels is guaranteed non-nil here: the parent-Service lookup and the
-	// orphan guard above both early-return on a slice lacking our labels, so a
-	// slice that reaches this point carries them. maps.Copy into a nil map panics,
-	// so do not reorder those guards after this point.
-	maps.Copy(eps.Labels, egressSvcEpsLabels(svc, clusterIPSvc))
+	// preserving any labels added by other controllers. mak.Set initializes
+	// eps.Labels if it is nil, matching how labels are merged elsewhere (e.g. sts.go).
+	// Because the guard above established this slice is bound to the current ClusterIP
+	// Service, the identity labels we write equal what the slice already claims
+	// (repair, not rebind).
+	for k, v := range egressSvcEpsLabels(svc, clusterIPSvc) {
+		mak.Set(&eps.Labels, k, v)
+	}
 
 	// Apply the owned fields, then compare the whole object against the pre-mutation
 	// snapshot: if nothing this reconciler owns changed, skip the write. A needless
