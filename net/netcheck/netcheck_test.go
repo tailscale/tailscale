@@ -6,14 +6,17 @@ package netcheck
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
 	"net/http"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -156,6 +159,81 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)
+	}
+}
+
+// TestIPv4SendAttempted checks that IPv4SendAttempted separates an IPv4 STUN
+// send that failed from one that was never planned. The no_v4_node case stands
+// in for a link with no usable IPv4 address, which empties p4 at the same gate
+// in makeProbePlan; TestMakeProbePlan covers that half.
+func TestIPv4SendAttempted(t *testing.T) {
+	tests := []struct {
+		name        string
+		stunAddr    string
+		sendErr     error
+		linuxOnly   bool
+		wantAttempt bool
+		wantCanSend bool
+	}{
+		{
+			name:        "v4_send_ok",
+			stunAddr:    "127.0.0.1:3478",
+			wantAttempt: true,
+			wantCanSend: true,
+		},
+		{
+			name:        "v4_send_fails",
+			stunAddr:    "127.0.0.1:3478",
+			sendErr:     errors.New("sendto: network is unreachable"),
+			wantAttempt: true,
+			wantCanSend: false,
+		},
+		{
+			// TreatAsLostUDP counts an OUTPUT firewall reject (EPERM) as sent,
+			// not as a send failure. Preserving the behavior described in
+			// #16755.
+			name:        "v4_send_eperm",
+			stunAddr:    "127.0.0.1:3478",
+			sendErr:     &net.OpError{Op: "write", Err: syscall.EPERM},
+			linuxOnly:   true,
+			wantAttempt: true,
+			wantCanSend: true,
+		},
+		{
+			name:        "no_v4_node",
+			stunAddr:    "[::1]:3478",
+			wantAttempt: false,
+			wantCanSend: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.linuxOnly && runtime.GOOS != "linux" {
+				t.Skipf("TreatAsLostUDP only tolerates EPERM on linux")
+			}
+			// Each case waits out stunProbeTimeout.
+			t.Parallel()
+
+			c := newTestClient(t)
+			c.SendPacket = func(pkt []byte, dst netip.AddrPort) (int, error) {
+				if tt.sendErr != nil {
+					return 0, tt.sendErr
+				}
+				return len(pkt), nil
+			}
+
+			r, err := c.GetReport(t.Context(), stuntest.DERPMapOf(tt.stunAddr), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.IPv4SendAttempted; got != tt.wantAttempt {
+				t.Errorf("IPv4SendAttempted = %v; want %v", got, tt.wantAttempt)
+			}
+			if got := r.IPv4CanSend; got != tt.wantCanSend {
+				t.Errorf("IPv4CanSend = %v; want %v", got, tt.wantCanSend)
+			}
+		})
 	}
 }
 
