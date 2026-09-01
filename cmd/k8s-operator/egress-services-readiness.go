@@ -88,9 +88,8 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		return res, nil
 	}
 	// EndpointSlice list can also contain orphans (e.g. if an ExternalName Service's ProxyGroup is edited in place).
-	// We don't support editing ProxyGroup on ExternalName Services, but should guard against this case.
-	// We use the current ClusterIP Service's name to filter those out, mirroring the orphan guard in the egress EndpointSlices
-	// reconciler. Otherwise, an orphan slice could block the readiness condition.
+	// We don't support editing ProxyGroup on ExternalName Services, but should guard against this case. Otherwise,
+	// an orphan slice could block the readiness condition.
 	epsList := &discoveryv1.EndpointSliceList{}
 	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
 		err = fmt.Errorf("error listing EndpointSlices: %w", err)

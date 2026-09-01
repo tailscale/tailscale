@@ -221,9 +221,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
 		expectReconciled(t, er, "operator-ns", "foo")
-		// No ready Pod: egress-eps writes nil Endpoints (not an empty slice) so a
-		// no-ready-Pods result compares equal to a freshly created slice's nil field.
-		eps.Endpoints = nil
+		eps.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, eps)
 	})
 
@@ -291,7 +289,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectReconciled(t, er, "operator-ns", "foo-ipv6")
 		// IPv4-only pod should not appear in the IPv6 EndpointSlice.
-		epsV6.Endpoints = nil
+		epsV6.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, epsV6)
 	})
 	ipv6Pod := &corev1.Pod{
@@ -313,7 +311,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 			mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
 		})
 		expectReconciled(t, er, "operator-ns", "foo-ipv6")
-		epsV6.Endpoints = nil
+		epsV6.Endpoints = []discoveryv1.Endpoint{}
 		expectEqual(t, fc, epsV6)
 	})
 	t.Run("ipv6_pod_ready_to_route", func(t *testing.T) {

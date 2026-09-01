@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -578,12 +579,21 @@ func runReconcilers(opts reconcilerOpts) {
 	// tailscale/tailscale#20322). egressSvcFromEps maps a slice back to its
 	// parent egress Service.
 	egressSvcFromEpsFilterForSvcs := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
+	// This reconciler only needs slice events to recreate a missing or deleted slice.
+	// A nil predicate.Funcs field means "allow", so the other event types must be set
+	// explicitly to filter them out.
+	egressSliceDeletedOnly := predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		UpdateFunc:  func(event.UpdateEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+	}
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
 		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
-		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilterForSvcs).
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilterForSvcs, builder.WithPredicates(egressSliceDeletedOnly)).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,

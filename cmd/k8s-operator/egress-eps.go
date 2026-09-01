@@ -135,12 +135,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
-	// Leave newEndpoints nil (not an empty slice) so that when no Pod is ready it
-	// compares equal to a freshly created slice's nil Endpoints - otherwise the
-	// reflect.DeepEqual guard below would see nil != []Endpoint{} and, because this
-	// reconciler watches EndpointSlices, a needless write would re-trigger it.
-	//TODO(beckypauley): review swapping to nil vs empty.
-	var newEndpoints []discoveryv1.Endpoint
+	newEndpoints := make([]discoveryv1.Endpoint, 0)
 	for _, pod := range podList.Items {
 		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
@@ -186,7 +181,6 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// orphan guard above both early-return on a slice lacking our labels, so a
 	// slice that reaches this point carries them. maps.Copy into a nil map panics,
 	// so do not reorder those guards after this point.
-	// TODO(beckypauley): consider still having a nil guard here.
 	maps.Copy(eps.Labels, egressSvcEpsLabels(svc, clusterIPSvc))
 
 	// Apply the owned fields, then compare the whole object against the pre-mutation
