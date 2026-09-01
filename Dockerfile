@@ -36,9 +36,33 @@
 #     $ docker exec tailscaled tailscale status
 
 
-FROM golang:1.27-alpine AS build-env
+# Use Tailscale's Go toolchain (a fork of Go) as specified by the
+# go.toolchain.rev file, matching how everything else in this repo is
+# built, rather than the golang Docker image. This avoids this
+# Dockerfile breaking for a day or two after each Go minor version
+# bump, when go.mod requires a Go version that the official golang
+# Docker image doesn't yet ship. See
+# https://github.com/tailscale/tailscale/issues/21072
+FROM alpine:3.22 AS build-env
 
 WORKDIR /go/src/tailscale
+
+RUN apk add --no-cache curl tar
+
+COPY go.toolchain.rev ./
+RUN read -r REV <go.toolchain.rev && \
+    case "$(apk --print-arch)" in \
+        x86_64) ARCH=amd64 ;; \
+        aarch64) ARCH=arm64 ;; \
+        *) echo "unsupported architecture" >&2; exit 1 ;; \
+    esac && \
+    curl --retry 3 -f -L -o /tmp/go.tar.gz "https://github.com/tailscale/go/releases/download/build-${REV}/linux-${ARCH}.tar.gz" && \
+    mkdir -p /usr/local/go && \
+    tar -C /usr/local/go --strip-components=1 -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+ENV GOPATH=/go
+ENV PATH=/usr/local/go/bin:$GOPATH/bin:$PATH
 
 COPY go.mod go.sum ./
 RUN go mod download
