@@ -56,7 +56,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `routes` _[Routes](#routes)_ | Routes are optional preconfigured routes for the domains routed via the app connector.<br />If not set, routes for the domains will be discovered dynamically.<br />If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may<br />also dynamically discover other routes.<br />https://tailscale.com/kb/1332/apps-best-practices#preconfiguration |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
+| `routes` _[Route](#route) array_ | Routes are optional preconfigured routes for the domains routed via the app connector.<br />If not set, routes for the domains will be discovered dynamically.<br />If set, the app connector will immediately be able to route traffic using the preconfigured routes, but may<br />also dynamically discover other routes.<br />https://tailscale.com/kb/1332/apps-best-practices#preconfiguration |  | Format: cidr <br />Type: string <br /> |
 
 
 
@@ -1204,6 +1204,7 @@ _Validation:_
 - Type: string
 
 _Appears in:_
+- [AppConnector](#appconnector)
 - [Routes](#routes)
 
 
@@ -1220,7 +1221,6 @@ _Validation:_
 - Type: string
 
 _Appears in:_
-- [AppConnector](#appconnector)
 - [SubnetRouter](#subnetrouter)
 
 
