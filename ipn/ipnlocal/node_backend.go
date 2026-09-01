@@ -859,12 +859,13 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 
 func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
 	nm := nb.netMap
-	oldIDs := slices.Collect(maps.Keys(nb.peers))
+	oldPeers := maps.Clone(nb.peers)
+	oldIDs := slices.Collect(maps.Keys(oldPeers))
 
 	// Snapshot the previous disco keys (by node key) before the peers
 	// map is repopulated, to detect restarted peers below.
 	var prevDisco map[key.NodePublic]key.DiscoPublic
-	for _, p := range nb.peers {
+	for _, p := range oldPeers {
 		if !p.DiscoKey().IsZero() {
 			mak.Set(&prevDisco, p.Key(), p.DiscoKey())
 		}
@@ -902,10 +903,95 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 		}
 	}
 	for _, p := range nb.peers {
+		p = nb.reconcileMasqueradeAfterIdentityChangeLocked(oldPeers, p)
+		nb.peers[p.ID()] = p
 		rt.UpsertPeer(p)
 	}
 	res := rt.Commit()
 	return discoChanged, res.AllowedIPs
+}
+
+// dropStaleMasqueradeAllowedIPs removes 1-1 NAT masquerade prefixes that were
+// bound to old's node key and adds n's current Addresses into AllowedIPs.
+func dropStaleMasqueradeAllowedIPs(old, n tailcfg.NodeView) tailcfg.NodeView {
+	if !old.Valid() || !n.Valid() {
+		return n
+	}
+	oldSelf := make(set.Set[netip.Addr], old.Addresses().Len())
+	for _, a := range old.Addresses().All() {
+		if a.IsSingleIP() {
+			oldSelf.Add(a.Addr())
+		}
+	}
+	newSelf := make(set.Set[netip.Addr], n.Addresses().Len())
+	for _, a := range n.Addresses().All() {
+		if a.IsSingleIP() {
+			newSelf.Add(a.Addr())
+		}
+	}
+	var aips []netip.Prefix
+	changed := false
+	for _, aip := range n.AllowedIPs().All() {
+		if oldSelf.Contains(aip.Addr()) && !newSelf.Contains(aip.Addr()) {
+			changed = true
+			continue
+		}
+		aips = append(aips, aip)
+	}
+	for _, a := range n.Addresses().All() {
+		if !slices.Contains(aips, a) {
+			aips = append(aips, a)
+			changed = true
+		}
+	}
+	if !changed {
+		return n
+	}
+	nn := n.AsStruct()
+	nn.AllowedIPs = aips
+	return nn.View()
+}
+
+// reconcileMasqueradeAfterIdentityChangeLocked returns p with stale 1-1 NAT
+// masquerade AllowedIPs dropped when the sharee node key/ID changed.
+func (nb *nodeBackend) reconcileMasqueradeAfterIdentityChangeLocked(oldPeers map[tailcfg.NodeID]tailcfg.NodeView, p tailcfg.NodeView) tailcfg.NodeView {
+	if old, ok := oldPeers[p.ID()]; ok {
+		if old.Key() != p.Key() {
+			return dropStaleMasqueradeAllowedIPs(old, p)
+		}
+		return p
+	}
+	for id, old := range oldPeers {
+		if _, still := nb.peers[id]; still {
+			continue
+		}
+		if old.Key() == p.Key() {
+			continue
+		}
+		if !masqueradeIPOverlap(old, p) {
+			continue
+		}
+		p = dropStaleMasqueradeAllowedIPs(old, p)
+	}
+	return p
+}
+
+func masqueradeIPOverlap(old, n tailcfg.NodeView) bool {
+	if !old.Valid() || !n.Valid() {
+		return false
+	}
+	oldSelf := make(set.Set[netip.Addr], old.Addresses().Len())
+	for _, a := range old.Addresses().All() {
+		if a.IsSingleIP() {
+			oldSelf.Add(a.Addr())
+		}
+	}
+	for _, aip := range n.AllowedIPs().All() {
+		if oldSelf.Contains(aip.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordTSMPLearnedDisco notes that a peer's new disco key was learned via
@@ -1109,15 +1195,35 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 		res.ChangedAllowedIPs = rt.Commit().AllowedIPs
 	}()
 
+	oldPeers := maps.Clone(nb.peers)
+	var removed []tailcfg.NodeView
+	for _, m := range muts {
+		if r, ok := m.(netmap.NodeMutationRemove); ok {
+			if old, ok := oldPeers[r.NodeIDBeingMutated()]; ok {
+				removed = append(removed, old)
+			}
+		}
+	}
+
 	for _, m := range muts {
 		switch m := m.(type) {
 		case netmap.NodeMutationUpsert:
-			nid := m.Node.ID()
+			node := m.Node
+			if old, ok := nb.peers[node.ID()]; ok && old.Key() != node.Key() {
+				node = dropStaleMasqueradeAllowedIPs(old, node)
+			} else if _, exists := nb.peers[node.ID()]; !exists {
+				for _, old := range removed {
+					if masqueradeIPOverlap(old, node) {
+						node = dropStaleMasqueradeAllowedIPs(old, node)
+					}
+				}
+			}
+			nid := node.ID()
 			if old, ok := nb.peers[nid]; ok {
-				if old.Key() == m.Node.Key() {
-					if nb.discoChangedLocked(m.Node.Key(), old.DiscoKey(), m.Node.DiscoKey()) {
+				if old.Key() == node.Key() {
+					if nb.discoChangedLocked(node.Key(), old.DiscoKey(), node.DiscoKey()) {
 						res.DiscoChanged.Make()
-						res.DiscoChanged.Add(m.Node.Key())
+						res.DiscoChanged.Add(node.Key())
 					}
 				} else {
 					delete(nb.tsmpLearnedDisco, old.Key())
@@ -1139,17 +1245,17 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 				delete(nb.nodeByStableID, old.StableID())
 				nb.removeNodeNameLocked(old.Name())
 			}
-			mak.Set(&nb.peers, nid, m.Node)
-			for _, ipp := range m.Node.Addresses().All() {
+			mak.Set(&nb.peers, nid, node)
+			for _, ipp := range node.Addresses().All() {
 				if ipp.IsSingleIP() {
 					mak.Set(&nb.nodeByAddr, ipp.Addr(), nid)
 				}
 			}
-			mak.Set(&nb.nodeByKey, m.Node.Key(), nid)
-			mak.Set(&nb.nodeByWGString, m.Node.Key().WireGuardGoString(), nid)
-			mak.Set(&nb.nodeByStableID, m.Node.StableID(), nid)
-			nb.addNodeNameLocked(m.Node.Name(), nid)
-			rt.UpsertPeer(m.Node)
+			mak.Set(&nb.nodeByKey, node.Key(), nid)
+			mak.Set(&nb.nodeByWGString, node.Key().WireGuardGoString(), nid)
+			mak.Set(&nb.nodeByStableID, node.StableID(), nid)
+			nb.addNodeNameLocked(node.Name(), nid)
+			rt.UpsertPeer(node)
 			continue
 		case netmap.NodeMutationRemove:
 			nid := m.NodeIDBeingMutated()

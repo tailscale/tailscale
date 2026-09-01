@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"maps"
 	"net/netip"
@@ -368,6 +369,112 @@ func TestNodeBackendRouteManager(t *testing.T) {
 	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{p2}})
 	wantPeerFor("100.64.0.3", tailcfg.NodeView{})
 	wantPeerFor("100.64.0.2", p2)
+}
+
+func TestShareeRecreateDropsStaleMasqueradeAllowedIPs(t *testing.T) {
+	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+
+	oldMasq := netip.MustParsePrefix("100.95.94.22/32")
+	newMasq := netip.MustParsePrefix("100.112.44.83/32")
+	vip := netip.MustParsePrefix("100.99.99.99/32")
+
+	sharee := func(id tailcfg.NodeID, k key.NodePublic, addr, allowed netip.Prefix) tailcfg.NodeView {
+		n := &tailcfg.Node{
+			ID:         id,
+			StableID:   tailcfg.StableNodeID(fmt.Sprintf("sharee-%d", id)),
+			Key:        k,
+			User:       7,
+			HomeDERP:   1,
+			Addresses:  []netip.Prefix{addr},
+			AllowedIPs: []netip.Prefix{allowed, vip},
+			Hostinfo:   (&tailcfg.Hostinfo{ShareeNode: true}).View(),
+		}
+		return n.View()
+	}
+
+	oldKey := key.NewNode().Public()
+	oldPeer := sharee(1, oldKey, oldMasq, oldMasq)
+	nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{oldPeer}})
+	got, ok := nb.PeerAllowedIPs(oldKey)
+	if !ok || !slices.Contains(got, oldMasq) {
+		t.Fatalf("initial AllowedIPs = %v, %v; want %v", got, ok, oldMasq)
+	}
+
+	t.Run("same_id_key_change", func(t *testing.T) {
+		newKey := key.NewNode().Public()
+		// Control updated Addresses to the new masquerade but left AllowedIPs stale.
+		rotated := sharee(1, newKey, newMasq, oldMasq)
+		deltaRes, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{
+			netmap.NodeMutationUpsert{Node: rotated},
+		})
+		if !handled {
+			t.Fatal("UpdateNetmapDelta not handled")
+		}
+		if _, ok := nb.PeerAllowedIPs(oldKey); ok {
+			t.Fatal("old node key still has AllowedIPs after key change")
+		}
+		got, ok := nb.PeerAllowedIPs(newKey)
+		if !ok {
+			t.Fatal("new node key missing AllowedIPs")
+		}
+		if slices.Contains(got, oldMasq) {
+			t.Fatalf("AllowedIPs %v still has stale masquerade %v", got, oldMasq)
+		}
+		if !slices.Contains(got, newMasq) {
+			t.Fatalf("AllowedIPs %v missing new masquerade %v", got, newMasq)
+		}
+		if !slices.Contains(got, vip) {
+			t.Fatalf("AllowedIPs %v dropped VIP %v", got, vip)
+		}
+		if v, ok := deltaRes.ChangedAllowedIPs[oldKey]; !ok || v != nil {
+			t.Errorf("ChangedAllowedIPs[%v] = %v, %v; want nil, true", oldKey, v, ok)
+		}
+		if deltaRes.ChangedAllowedIPs[newKey] == nil {
+			t.Errorf("ChangedAllowedIPs missing new key %v", newKey)
+		}
+	})
+
+	t.Run("new_id_replaces_old", func(t *testing.T) {
+		nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+		oldKey := key.NewNode().Public()
+		oldPeer := sharee(1, oldKey, oldMasq, oldMasq)
+		nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{oldPeer}})
+
+		newKey := key.NewNode().Public()
+		newPeer := sharee(2, newKey, newMasq, oldMasq)
+		deltaRes, handled := nb.UpdateNetmapDelta([]netmap.NodeMutation{
+			netmap.MakeNodeMutationRemove(1),
+			netmap.NodeMutationUpsert{Node: newPeer},
+		})
+		if !handled {
+			t.Fatal("UpdateNetmapDelta not handled")
+		}
+		if _, ok := nb.PeerAllowedIPs(oldKey); ok {
+			t.Fatal("old node key still has AllowedIPs after ID change")
+		}
+		got, ok := nb.PeerAllowedIPs(newKey)
+		if !ok || slices.Contains(got, oldMasq) || !slices.Contains(got, newMasq) {
+			t.Fatalf("AllowedIPs = %v, %v; want %v without %v", got, ok, newMasq, oldMasq)
+		}
+		if v, ok := deltaRes.ChangedAllowedIPs[oldKey]; !ok || v != nil {
+			t.Errorf("ChangedAllowedIPs[%v] = %v, %v; want nil, true", oldKey, v, ok)
+		}
+	})
+
+	t.Run("full_netmap_id_change", func(t *testing.T) {
+		nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
+		oldKey := key.NewNode().Public()
+		nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{sharee(1, oldKey, oldMasq, oldMasq)}})
+		newKey := key.NewNode().Public()
+		nb.SetNetMap(&netmap.NetworkMap{Peers: []tailcfg.NodeView{sharee(2, newKey, newMasq, oldMasq)}})
+		if _, ok := nb.PeerAllowedIPs(oldKey); ok {
+			t.Fatal("old node key still has AllowedIPs after full netmap ID change")
+		}
+		got, ok := nb.PeerAllowedIPs(newKey)
+		if !ok || slices.Contains(got, oldMasq) || !slices.Contains(got, newMasq) {
+			t.Fatalf("AllowedIPs = %v, %v; want %v without %v", got, ok, newMasq, oldMasq)
+		}
+	})
 }
 
 // TestNodeBackendDiscoChanged exercises the full-netmap disco change
