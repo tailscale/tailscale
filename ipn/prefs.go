@@ -203,6 +203,14 @@ type Prefs struct {
 	// node.
 	AdvertiseRoutes []netip.Prefix
 
+	// IgnoredRoutes specifies CIDR prefixes whose routes should be
+	// carved out when installing routes from other nodes (e.g., exit nodes
+	// or subnet routers). If a route advertised by another node overlaps
+	// with any prefix in this list, that route will be carved out. This
+	// option applies to advertised routes and exit nodes, allows excluding
+	// certain routes despite the network configuration.
+	IgnoredRoutes []netip.Prefix
+
 	// AdvertiseServices specifies the list of services that this
 	// node can serve as a destination for. Note that an advertised
 	// service must still go through the approval process from the
@@ -375,6 +383,7 @@ type MaskedPrefs struct {
 	ForceDaemonSet                bool                `json:",omitempty"`
 	EggSet                        bool                `json:",omitempty"`
 	AdvertiseRoutesSet            bool                `json:",omitempty"`
+	IgnoredRoutesSet              bool                `json:",omitempty"`
 	AdvertiseServicesSet          bool                `json:",omitempty"`
 	SyncSet                       bool                `json:",omitzero"`
 	NoSNATSet                     bool                `json:",omitempty"`
@@ -689,6 +698,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Hostname == p2.Hostname &&
 		p.ForceDaemon == p2.ForceDaemon &&
 		slices.Equal(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
+		slices.Equal(p.IgnoredRoutes, p2.IgnoredRoutes) &&
 		slices.Equal(p.AdvertiseTags, p2.AdvertiseTags) &&
 		slices.Equal(p.AdvertiseServices, p2.AdvertiseServices) &&
 		p.Persist.Equals(p2.Persist) &&
