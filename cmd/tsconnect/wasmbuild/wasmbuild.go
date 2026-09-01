@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"tailscale.com/feature/featuretags"
+	"tailscale.com/version/mkversion"
 )
 
 // baseTags are the non-featuretag build tags always set for the wasm
@@ -88,14 +89,14 @@ func init() {
 // -s strips the symbol table, -w strips DWARF, both to shrink the
 // shipped artifact.
 //
-// It also sets the version stamps to VERSION_LONG and VERSION_SHORT,
-// if those env variables are present.
+// Also sets the flags for client version to be stamped on the build.
 func ProdLDFlags() string {
 	ldflags := "-s -w"
-	if long := os.Getenv("VERSION_LONG"); long != "" {
+	info := mkversion.Info()
+	if long := info.Long; long != "" {
 		ldflags += " -X tailscale.com/version.longStamp=" + long
 	}
-	if short := os.Getenv("VERSION_SHORT"); short != "" {
+	if short := info.Short; short != "" {
 		ldflags += " -X tailscale.com/version.shortStamp=" + short
 	}
 	return ldflags
