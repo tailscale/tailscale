@@ -950,15 +950,23 @@ func (c *Conn) updateEndpoints(why string) {
 		return
 	}
 
-	if c.setEndpoints(endpoints) {
+	changedEndpoints, changedSTUN := c.setEndpoints(endpoints)
+	if changedEndpoints {
 		c.logEndpointChange(endpoints)
+		if changedSTUN {
+			// An upstream NAT change can leave the old TCP connections blackholed without
+			// changing any local interface.
+			c.logf("magicsock: STUN endpoint changed; rebinding")
+			c.Rebind()
+			go c.ReSTUN("stun-endpoint-changed")
+		}
 		c.epFunc(endpoints)
 	}
 }
 
 // setEndpoints records the new endpoints, reporting whether they're changed.
 // It takes ownership of the slice.
-func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
+func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changedEndpoints bool, changedSTUN bool) {
 	anySTUN := false
 	for _, ep := range endpoints {
 		if ep.Type == tailcfg.EndpointSTUN {
@@ -980,7 +988,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 		// too much on the exact sequence of updates.  Fix the
 		// tests. But a protocol rewrite might happen first.
 		c.dlogf("[v1] magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
-		return false
+		return false, false
 	}
 
 	c.lastEndpointsTime = time.Now()
@@ -990,10 +998,12 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	}
 
 	if endpointSetsEqual(endpoints, c.lastEndpoints) {
-		return false
+		return false, false
 	}
+	hadBaseline := len(c.lastEndpoints) > 0
+	equalSTUN := hadBaseline && endpointSetsSTUNEqual(endpoints, c.lastEndpoints)
 	c.lastEndpoints = endpoints
-	return true
+	return true, hadBaseline && !equalSTUN
 }
 
 // SetStaticEndpoints sets static endpoints to the provided value and triggers
@@ -1463,6 +1473,38 @@ func endpointSetsEqual(x, y []tailcfg.Endpoint) bool {
 	}
 	for _, v := range y {
 		m[v] |= 2
+	}
+	for _, n := range m {
+		if n != 3 {
+			return false
+		}
+	}
+	return true
+}
+
+// endpointSetsSTUNEqual reports whether endpoints contain a new or disappeared
+// public IPv4 address (port-only changes doesn't count). The order doesn't
+// matter.
+//
+// Should be called only after endpointSetsEqual determined the sets are
+// different.
+//
+// It does not mutate the slices.
+func endpointSetsSTUNEqual(x, y []tailcfg.Endpoint) bool {
+	m := map[netip.Addr]int{}
+	for _, v := range x {
+		if v.Type == tailcfg.EndpointSTUN {
+			if ip := v.Addr.Addr().Unmap(); ip.Is4() {
+				m[ip] |= 1
+			}
+		}
+	}
+	for _, v := range y {
+		if v.Type == tailcfg.EndpointSTUN {
+			if ip := v.Addr.Addr().Unmap(); ip.Is4() {
+				m[ip] |= 2
+			}
+		}
 	}
 	for _, n := range m {
 		if n != 3 {

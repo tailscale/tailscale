@@ -2023,6 +2023,148 @@ func TestEndpointSetsEqual(t *testing.T) {
 	}
 }
 
+func TestEndpointSetsSTUNEqual(t *testing.T) {
+	stun := func(addr string) tailcfg.Endpoint {
+		return tailcfg.Endpoint{
+			Addr: netip.MustParseAddrPort(addr),
+			Type: tailcfg.EndpointSTUN,
+		}
+	}
+
+	local := func(addr string) tailcfg.Endpoint {
+		return tailcfg.Endpoint{
+			Addr: netip.MustParseAddrPort(addr),
+			Type: tailcfg.EndpointLocal,
+		}
+	}
+
+	tests := []struct {
+		a, b []tailcfg.Endpoint
+		want bool
+	}{
+		{ // same-IPs
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				stun("203.0.113.20:42345"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:51234"),
+				stun("203.0.113.20:42999"),
+			},
+			want: true,
+		},
+		{ // same-IPs-different-order
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				stun("203.0.113.20:42345"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("203.0.113.20:42999"),
+				stun("198.51.100.10:51234"),
+			},
+			want: true,
+		},
+		{ // different-IP
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("203.0.113.20:41641"),
+			},
+			want: false,
+		},
+		{ // missing-IP
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				stun("203.0.113.20:42345"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:51234"),
+			},
+			want: false,
+		},
+		{ // extra-IP
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:51234"),
+				stun("203.0.113.20:42999"),
+			},
+			want: false,
+		},
+		{ // empty
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{ // one-empty
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+			},
+			b:    nil,
+			want: false,
+		},
+		{ // local-only
+			a: []tailcfg.Endpoint{
+				local("192.0.2.10:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				local("192.0.2.20:41641"),
+			},
+			want: true,
+		},
+		{ // local-endpoints-ignored
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				local("192.0.2.10:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:51234"),
+				local("192.0.2.20:51234"),
+			},
+			want: true,
+		},
+		{ // IPv6-ignored
+			a: []tailcfg.Endpoint{
+				stun("[2001:db8::10]:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("[2001:db8::20]:41641"),
+			},
+			want: true,
+		},
+		{ // IPv6-does-not-affect-IPv4
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				stun("[2001:db8::10]:41641"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:51234"),
+				stun("[2001:db8::20]:51234"),
+			},
+			want: true,
+		},
+		{ // duplicate-IP
+			a: []tailcfg.Endpoint{
+				stun("198.51.100.10:41641"),
+				stun("198.51.100.10:51234"),
+			},
+			b: []tailcfg.Endpoint{
+				stun("198.51.100.10:42999"),
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		if got := endpointSetsSTUNEqual(tt.a, tt.b); got != tt.want {
+			t.Errorf("endpointSetsSTUNEqual() = %v, want %v", got, tt.want)
+			t.Errorf("%q vs %q = %v; want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
 	al := func(ipps string, d time.Duration) addrQuality {
