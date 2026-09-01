@@ -4194,6 +4194,7 @@ func TestConn_receiveIP(t *testing.T) {
 			nodeID:     1,
 			publicKey:  key.NewNode().Public(),
 			lastRecvWG: lastRecvWG,
+			c:          &Conn{logf: func(msg string, args ...any) {}},
 		}
 		ep.updateDiscoKey(key.NewDisco().Public())
 		return ep
@@ -4472,10 +4473,10 @@ func Test_lazyEndpoint_InitiationMessagePublicKey(t *testing.T) {
 				nodeID:    1,
 				publicKey: key.NewNode().Public(),
 			}
-			ep.updateDiscoKey(key.NewDisco().Public())
-
 			conn := newConn(t.Logf)
 			ep.c = conn
+
+			ep.updateDiscoKey(key.NewDisco().Public())
 
 			var pubKey [32]byte
 			if tt.callWithPeerMapKey {
@@ -4532,9 +4533,10 @@ func Test_lazyEndpoint_FromPeer(t *testing.T) {
 				nodeID:    1,
 				publicKey: key.NewNode().Public(),
 			}
-			ep.updateDiscoKey(key.NewDisco().Public())
 			conn := newConn(t.Logf)
 			ep.c = conn
+
+			ep.updateDiscoKey(key.NewDisco().Public())
 
 			var pubKey [32]byte
 			if tt.callWithPeerMapKey {
@@ -4665,9 +4667,9 @@ func TestReceiveTSMPDiscoKeyAdvertisement(t *testing.T) {
 				publicKey: peerKey,
 				nodeAddr:  netip.MustParseAddr("100.64.0.1"),
 			}
+			ep.c = conn
 			discoKey := key.NewDisco().Public()
 			ep.updateDiscoKey(discoKey)
-			ep.c = conn
 			conn.mu.Lock()
 			nodeView := (&tailcfg.Node{
 				Key: ep.publicKey,
@@ -4732,11 +4734,10 @@ func TestPriorityMessageForPeer(t *testing.T) {
 		publicKey: key.NewNode().Public(),
 		nodeAddr:  ip4,
 	}
+	ep.c = conn
 
 	discoKey := key.NewDisco().Public()
 	ep.updateDiscoKey(discoKey)
-
-	ep.c = conn
 
 	// Test the EP missing from the peerMap.
 	if res := conn.PriorityMessageForPeer(ep.publicKey); res != nil {
@@ -4826,6 +4827,7 @@ func BenchmarkPriorityMessageForPeer(b *testing.B) {
 					nodeID:    nodeID,
 					publicKey: nodeKey,
 					nodeAddr:  ip4,
+					c:         conn,
 				}
 
 				discoKey := key.NewDisco().Public()

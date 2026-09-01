@@ -30,6 +30,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
+	"tailscale.com/types/bools"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
@@ -70,7 +71,12 @@ type endpoint struct {
 	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using
 	nodeAddr     netip.Addr     // the node's first tailscale address; used for logging & wireguard rate-limiting (Issue 6686)
 
-	disco atomic.Pointer[endpointDisco] // if the peer supports disco, the key and short string
+	// disco is non-nil if the peer supports disco, and in that case holds
+	// the peer's disco key and short string.
+	// It is safe to load and read the contents of the value, but the caller
+	// must not store directly into this field. Instead, use
+	// [updateDiscoKey] and [updateTSMPDiscoKey].
+	disco atomic.Pointer[endpointDisco]
 
 	// mu protects all following fields.
 	mu syncs.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -373,8 +379,7 @@ func (de *endpoint) setProbeUDPLifetimeConfigLocked(desired *ProbeUDPLifetimeCon
 
 // endpointDisco is the current disco key and short string for an endpoint for
 // keys learned both from controlClient and via TSMP. Only one key is active at
-// a time for sending. Currently the controlClient learned key is always
-// considered active as TSMP writes keys through this route.
+// a time for sending.
 //
 // This structure is immutable.
 type endpointDisco struct {
@@ -409,6 +414,15 @@ func (e *endpointDisco) keyFromTSMP() key.DiscoPublic {
 		return key.DiscoPublic{}
 	}
 	return e.tsmpKey
+}
+
+// tsmpIsActive reports whether the TSMP learned key is currently the active
+// disco key. Safe to call on a nil receiver (returns false).
+func (e *endpointDisco) tsmpIsActive() bool {
+	if e == nil {
+		return false
+	}
+	return e.tsmpActive
 }
 
 // shortString returns the ShortString of the key currently regarded as active
@@ -1523,10 +1537,19 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 // Should both keys be zero, nil out the saved key.
 // The loop here ensures another update did not occur during the interval
 // between load and store (based on pointer identity).
-func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
+//
+// It reports whether the active disco key changed. If it reports true, the
+// caller must call [changeActiveDIscoLocked] to reset the state of the
+// disco connection.
+func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
 	epDisco := &endpointDisco{}
 	for {
 		old := de.disco.Load()
+		// Control key did not change and control is already active
+		// TODO(cmol): Do not test the active condition when routing TSMP through magicsock.
+		if old.keyFromControl() == key && !old.tsmpIsActive() && !key.IsZero() {
+			return false
+		}
 		if old != nil {
 			epDisco.tsmpKey = old.tsmpKey
 			epDisco.tsmpShort = old.tsmpShort
@@ -1535,14 +1558,15 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
 		if !key.IsZero() {
 			epDisco.controlKey = key
 			epDisco.controlShort = key.ShortString()
-			epDisco.tsmpActive = false
+			epDisco.tsmpActive = false // TODO(cmol): Set conditional when routing TSMP through magicsock.
 		}
 		// We have no key material, nil out key.
 		if epDisco.controlKey.IsZero() && epDisco.tsmpKey.IsZero() {
 			epDisco = nil
 		}
 		if de.disco.CompareAndSwap(old, epDisco) {
-			return
+			de.logKeyChange(old, epDisco, "tsmpUpdate")
+			return true
 		}
 	}
 }
@@ -1554,10 +1578,18 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) {
 // Should both keys be zero, nil out the saved key.
 // The loop here ensures another update did not occur during the interval
 // between load and store (based on pointer identity).
-func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) {
+//
+// Returns wether the active was swapped to the TSMP key, or if the TSMP key
+// changed. If the key has changed, call [changedActiveDiscoLocked] to reset
+// state of the disco connection.
+func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) bool {
 	epDisco := &endpointDisco{}
 	for {
 		old := de.disco.Load()
+		// TSMP key did not change and TSMP is already active
+		if old.keyFromTSMP() == key && old.tsmpIsActive() && !key.IsZero() {
+			return false
+		}
 		if old != nil {
 			epDisco.controlKey = old.controlKey
 			epDisco.controlShort = old.controlShort
@@ -1572,12 +1604,82 @@ func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) {
 		if epDisco.controlKey.IsZero() && epDisco.tsmpKey.IsZero() {
 			epDisco = nil
 		}
+
+		// At this point, we know the relevant parts have changed enough to make an
+		// update.
 		if de.disco.CompareAndSwap(old, epDisco) {
-			// Fall out of the loop if the swap was successful (no change was made
-			// since the load).
-			break
+			de.logKeyChange(old, epDisco, "tsmpUpdate")
+			return true
 		}
 	}
+}
+
+func (de *endpoint) logKeyChange(oldDisco, newDisco *endpointDisco, reason string) {
+	de.c.logf("[v1] magicsock: disco: node %s changed key from %s to %s, tsmpActive=%t -> %t, reason=%s",
+		de.publicKey.ShortString(), oldDisco.key(), newDisco.key(),
+		oldDisco.tsmpIsActive(), newDisco.tsmpIsActive(), reason)
+}
+
+// sawDiscoKeyTestHook is a test only hook to create a race on writing to
+// [disco]. It is never safe to use outside the contexts of tests.
+var sawDiscoKeyTestHook func()
+
+// checkAndUpdateDiscoKey reports whether key is one of the known disco keys
+// for de. If so, and it's not already the active disco key for de, it is
+// made the active key. In either case, the resulting disco key bundle for
+// de is returned (it may be nil, if de has no disco keys).
+func (de *endpoint) checkAndUpdateDiscoKey(key key.DiscoPublic) (*endpointDisco, bool) {
+	epDisco := &endpointDisco{}
+	for {
+		current := de.disco.Load()
+		if current == nil {
+			return nil, false
+		}
+
+		if !current.key().IsZero() && current.key() == key {
+			return current, true
+		}
+
+		inactiveKey := bools.IfElse(current.tsmpActive, current.keyFromControl(),
+			current.keyFromTSMP())
+
+		// No reason to swap to a zero key or not the key we are seeing.
+		if inactiveKey.IsZero() || inactiveKey != key {
+			return current, false
+		}
+
+		// Hook used for testing update conflict for the CompareAndSwap operation.
+		// Only used in testing, not safe to use in production.
+		if sawDiscoKeyTestHook != nil {
+			sawDiscoKeyTestHook()
+		}
+
+		// We have seen the inactive key, swap to that one as being active.
+		epDisco.controlKey = current.controlKey
+		epDisco.controlShort = current.controlShort
+		epDisco.tsmpKey = current.tsmpKey
+		epDisco.tsmpShort = current.tsmpShort
+		epDisco.tsmpActive = !current.tsmpActive
+		if de.disco.CompareAndSwap(current, epDisco) {
+			de.mu.Lock()
+			de.changedActiveDiscoLocked()
+			de.mu.Unlock()
+			de.logKeyChange(current, epDisco, "keySeen")
+			return epDisco, true
+		} else {
+			// The struct changed under us, run the search again.
+			continue
+		}
+	}
+}
+
+// changedActiveDiscoLocked invalidates the current disco path for a re-probe,
+// but keeps the bestAddr so data keeps flowing until a new path is confirmed.
+//
+// de.mu must be held.
+func (de *endpoint) changedActiveDiscoLocked() {
+	de.trustBestAddrUntil = 0
+	de.invalidateDiscoPathLocked()
 }
 
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
@@ -1601,18 +1703,16 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	discoKey := de.disco.Load().keyFromControl()
 
 	if discoKey != n.DiscoKey() {
-		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
+		de.c.logf("[v1] magicsock: disco: node %s changed control learned key from %s to %s",
+			de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		key := n.DiscoKey()
-		de.updateDiscoKey(key)
+		if de.updateDiscoKey(key) {
+			de.changedActiveDiscoLocked()
+		}
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
 			What: "updateFromNode-disco-key-changed",
 		})
-		// The peer rotated its disco key, so any path we currently trust to it is stale.
-		// Invalidate path discovery state so we re-probe, but keep bestAddr so data
-		// keeps flowing until a fresh path is confirmed.
-		de.trustBestAddrUntil = 0
-		de.invalidateDiscoPathLocked()
 	}
 	if n.HomeDERP() == 0 {
 		if de.derpAddr.IsValid() {
@@ -2186,7 +2286,9 @@ func (de *endpoint) invalidateDiscoPathLocked() {
 		}
 	}
 	de.probeUDPLifetime.resetCycleEndpointLocked()
-	de.c.relayManager.stopWork(de)
+	if de.c != nil {
+		de.c.relayManager.stopWork(de)
+	}
 }
 
 func (de *endpoint) numStopAndReset() int64 {
