@@ -357,11 +357,16 @@ func (r *freebsdRouter) delPFNATRules() error {
 }
 
 func (r *freebsdRouter) Close() error {
-	cleanUp(r.logf, r.tunname)
+	// Don't destroy the interface here: this process still holds the tun
+	// open, and FreeBSD's tun(4) blocks destroy until the last close, which
+	// deadlocks shutdown. The next startup's cleanUp destroys leftovers.
+	cleanUpPF(r.logf)
 	return nil
 }
 
-func cleanUp(logf logger.Logf, interfaceName string) {
+// cleanUpPF undoes this process's PF changes: it flushes the tailscale
+// anchor's contents and removes the anchor references if we added them.
+func cleanUpPF(logf logger.Logf) {
 	// Flush only the tailscale PF anchor, leaving user rules intact.
 	if out, err := cmd("pfctl", "-a", pfAnchorName, "-F", "all").CombinedOutput(); err != nil {
 		logf("pfctl flush anchor %s: %v (%s)", pfAnchorName, err, strings.TrimSpace(string(out)))
@@ -370,6 +375,12 @@ func cleanUp(logf logger.Logf, interfaceName string) {
 	if err := removePFAnchorRef(); err != nil {
 		logf("removing PF anchor ref: %v", err)
 	}
+}
+
+// cleanUp cleans up after a previous tailscaled process. It runs at startup
+// (via router.HookCleanUp), when nothing holds the interface open.
+func cleanUp(logf logger.Logf, interfaceName string) {
+	cleanUpPF(logf)
 
 	// If the interface was left behind, ifconfig down will not remove it.
 	// In fact, this will leave a system in a tainted state where starting tailscaled
