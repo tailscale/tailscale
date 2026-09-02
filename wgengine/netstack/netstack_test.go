@@ -1891,10 +1891,14 @@ func TestIsSelfDst(t *testing.T) {
 	}
 }
 
+func alwaysOutboundToWireGuard(*stack.PacketBuffer) outboundQueue {
+	return outboundToWireGuard
+}
+
 // TestDeliverLoopback verifies that DeliverLoopback correctly re-serializes an
 // outbound packet and delivers it back into gVisor's inbound path.
 func TestDeliverLoopback(t *testing.T) {
-	ep := newLinkEndpoint(64, 1280, "", groNotSupported)
+	ep := newLinkEndpoint(64, 1280, "", groNotSupported, alwaysOutboundToWireGuard)
 
 	// Track delivered packets via a mock dispatcher.
 	type delivered struct {
@@ -1961,7 +1965,7 @@ func TestDeliverLoopback(t *testing.T) {
 	})
 
 	t.Run("nil_dispatcher", func(t *testing.T) {
-		ep2 := newLinkEndpoint(64, 1280, "", groNotSupported)
+		ep2 := newLinkEndpoint(64, 1280, "", groNotSupported, alwaysOutboundToWireGuard)
 		// Don't attach a dispatcher.
 		selfAddr := netip.MustParseAddrPort("100.64.1.2:8081")
 		pkt := makeUDP4PacketBuffer(selfAddr, selfAddr)
@@ -2081,7 +2085,7 @@ func TestLinkEndpointInjectInboundIPv4Fragments(t *testing.T) {
 	})
 	defer s.Close()
 
-	ep := newLinkEndpoint(64, 1280, "", groNotSupported)
+	ep := newLinkEndpoint(64, 1280, "", groNotSupported, alwaysOutboundToWireGuard)
 	if err := s.CreateNIC(nicID, ep); err != nil {
 		t.Fatalf("CreateNIC: %v", err)
 	}
@@ -2128,10 +2132,10 @@ func TestLinkEndpointInjectInboundIPv4Fragments(t *testing.T) {
 	}
 }
 
-// TestInjectLoopback verifies that the inject goroutine delivers self-addressed
-// packets back into gVisor (via DeliverLoopback) instead of sending them to
-// WireGuard outbound. This is a regression test for a bug where self-dial
-// packets were sent to WireGuard and silently dropped.
+// TestInjectLoopback verifies that [linkEndpoint] routes self-addressed packets
+// to the loopback queue and that [Impl.injectLoopback] delivers them back into
+// gVisor. This is a regression test for a bug where self-dial packets were sent
+// to WireGuard and silently dropped.
 func TestInjectLoopback(t *testing.T) {
 	selfIP4 := netip.MustParseAddr("100.64.1.2")
 
@@ -2173,21 +2177,30 @@ func TestInjectLoopback(t *testing.T) {
 		ReserveHeaderBytes: header.IPv4MinimumSize + header.UDPMinimumSize,
 		Payload:            buffer.MakeWithData(payload),
 	})
+	defer pkt.DecRef()
 	copy(pkt.TransportHeader().Push(header.UDPMinimumSize),
 		raw[header.IPv4MinimumSize:header.IPv4MinimumSize+header.UDPMinimumSize])
 	pkt.TransportProtocolNumber = header.UDPProtocolNumber
 	copy(pkt.NetworkHeader().Push(header.IPv4MinimumSize), raw[:header.IPv4MinimumSize])
 	pkt.NetworkProtocolNumber = header.IPv4ProtocolNumber
 
-	if err := ns.linkEP.q.Write(pkt); err != nil {
-		t.Fatalf("queue.Write: %v", err)
+	var pkts stack.PacketBufferList
+	pkts.PushBack(pkt)
+	n, tcpipErr := ns.linkEP.WritePackets(pkts)
+	if tcpipErr != nil {
+		t.Fatalf("WritePackets: %v", tcpipErr)
+	}
+	if n != 1 {
+		t.Fatalf("WritePackets wrote %d packets, want 1", n)
 	}
 
-	// The inject goroutine should detect the self-addressed packet via
-	// isSelfDst and deliver it back into gVisor via DeliverLoopback.
+	// [linkEndpoint.WritePackets] should detect the self-addressed packet via
+	// [Impl.outboundQueueForPacket], place it on the [outboundLoopback] queue,
+	// which [Impl.injectLoopback] should deliver back into gVisor via
+	// [linkEndpoint.DeliverLoopback].
 	pc.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 256)
-	n, _, err := pc.ReadFrom(buf)
+	n, _, err = pc.ReadFrom(buf)
 	if err != nil {
 		t.Fatalf("ReadFrom: %v (self-addressed packet was not looped back)", err)
 	}
