@@ -7,9 +7,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"slices"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
@@ -905,6 +908,13 @@ func mustConfig(t *testing.T, selfNode tailcfg.NodeView) *config {
 	return cfg
 }
 
+var arbitraryPools = appctype.Conn25PoolsAttr{
+	V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10"), v4RangeFrom("20", "30")},
+	V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
+	V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
+	V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "50")},
+}
+
 func v4RangeFrom(from, to string) netipx.IPRange {
 	return netipx.IPRangeFrom(
 		netip.MustParseAddr("100.64.0."+from),
@@ -1256,12 +1266,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 				Name:       "app1",
 				Connectors: []string{"tag:woo"},
 				Domains:    tt.appDomains,
-			}}, appctype.Conn25PoolsAttr{
-				V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10"), v4RangeFrom("20", "30")},
-				V6MagicIPPool:   []netipx.IPRange{v6RangeFrom("0", "10"), v6RangeFrom("20", "30")},
-				V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
-				V6TransitIPPool: []netipx.IPRange{v6RangeFrom("40", "50")},
-			}, tt.selfTags)
+			}}, arbitraryPools, tt.selfTags)
 
 			c := newConn25(logger.Discard)
 			cfg := mustConfig(t, sn)
@@ -1290,12 +1295,7 @@ func TestMapDNSResponseSetsExpiryBasedOnTTL(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{configuredDomain},
-	}}, appctype.Conn25PoolsAttr{
-		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
-		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
-		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
-		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}, nil)
+	}}, arbitraryPools, nil)
 
 	c := newConn25(logger.Discard)
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
@@ -1388,12 +1388,7 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
-	}}, appctype.Conn25PoolsAttr{
-		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
-		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
-		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
-		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}, nil)
+	}}, arbitraryPools, nil)
 	cfg := mustConfig(t, sn)
 
 	const wantTTL uint32 = 300
@@ -2298,12 +2293,7 @@ func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:connector"},
 		Domains:    []string{configuredDomain},
-	}}, appctype.Conn25PoolsAttr{
-		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
-		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
-		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
-		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}, []string{})
+	}}, arbitraryPools, []string{})
 	cfg := mustConfig(t, sn)
 
 	unhandled := []struct {
@@ -3061,12 +3051,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 		Name:       "app1",
 		Connectors: []string{"tag:woo"},
 		Domains:    []string{configuredDomain},
-	}}, appctype.Conn25PoolsAttr{
-		V4MagicIPPool:   []netipx.IPRange{v4RangeFrom("0", "10")},
-		V4TransitIPPool: []netipx.IPRange{v4RangeFrom("40", "50")},
-		V6MagicIPPool:   []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6812:100"), netip.MustParseAddr("2606:4700::6812:1ff"))},
-		V6TransitIPPool: []netipx.IPRange{netipx.IPRangeFrom(netip.MustParseAddr("2606:4700::6813:100"), netip.MustParseAddr("2606:4700::6813:1ff"))},
-	}, nil)
+	}}, arbitraryPools, nil)
 
 	var ttlSecs uint32 = 300
 	ttlDur := time.Duration(ttlSecs) * time.Second
@@ -3407,6 +3392,401 @@ func TestPickConnector(t *testing.T) {
 			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("PickConnectors (-want, +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestMakeNameChecker(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		domains []string
+		queries map[string]bool
+	}{
+		{
+			name:    "single-wildcard",
+			domains: []string{"*.example.com"},
+			queries: map[string]bool{
+				"example.com":           true,
+				"something.example.com": true,
+				"notexample.com":        false,
+				"com":                   false,
+				"tailscale.com":         false,
+			},
+		},
+		{
+			name:    "single-exact",
+			domains: []string{"example.com"},
+			queries: map[string]bool{
+				"example.com":           true,
+				"something.example.com": true,
+				"notexample.com":        false,
+				"com":                   false,
+				"tailscale.com":         false,
+			},
+		},
+		{
+			name:    "exact-and-wildcard",
+			domains: []string{"example.com", "*.example.com"},
+			queries: map[string]bool{
+				"example.com":           true,
+				"something.example.com": true,
+				"notexample.com":        false,
+				"com":                   false,
+				"tailscale.com":         false,
+			},
+		},
+		{
+			name:    "subdomains",
+			domains: []string{"a.example.com", "*.b.example.com"},
+			queries: map[string]bool{
+				"a.example.com":         true,
+				"x.a.example.com":       true,
+				"b.example.com":         true,
+				"x.b.example.com":       true,
+				"example.com":           false,
+				"something.example.com": false,
+				"notexample.com":        false,
+				"com":                   false,
+				"tailscale.com":         false,
+				"a.com":                 false,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := appctype.Conn25Attr{
+				Name:       "testApp",
+				Domains:    tt.domains,
+				Connectors: []string{"tag:connector"},
+			}
+
+			checker := makeNameChecker(app)
+
+			for q, want := range tt.queries {
+				got := checker(q)
+				if got != want {
+					t.Errorf("%s: got %v, want %v", q, got, want)
+				}
+			}
+		})
+	}
+}
+
+type fakePeerAPIHandler struct {
+	peerCaps tailcfg.PeerCapMap
+}
+
+func (fakePeerAPIHandler) Peer() tailcfg.NodeView {
+	panic("unimplemented")
+}
+func (m fakePeerAPIHandler) PeerCaps() tailcfg.PeerCapMap {
+	return m.peerCaps
+}
+func (fakePeerAPIHandler) CanDebug() bool {
+	panic("unimplemented")
+}
+func (fakePeerAPIHandler) Self() tailcfg.NodeView {
+	panic("unimplemented")
+}
+func (fakePeerAPIHandler) LocalBackend() *ipnlocal.LocalBackend {
+	panic("unimplemented")
+}
+func (fakePeerAPIHandler) IsSelfUntagged() bool {
+	panic("unimplemented")
+}
+func (fakePeerAPIHandler) RemoteAddr() netip.AddrPort {
+	panic("unimplemented")
+}
+func (fakePeerAPIHandler) Logf(format string, a ...any) {
+	panic("unimplemented")
+}
+
+func TestHandleHookReplyToDNSQueries(t *testing.T) {
+	t.Parallel()
+
+	exampleApp := appctype.Conn25Attr{
+		Name:       "example",
+		Connectors: []string{"tag:example"},
+		Domains:    []string{"example.com", "*.example.com"},
+	}
+	bypassApp := appctype.Conn25Attr{
+		Name:                        "bypass",
+		Connectors:                  []string{"tag:bypass"},
+		Domains:                     []string{"bypass.example.net"},
+		TemporaryUnsafeBypassFilter: true,
+	}
+	exactApp := appctype.Conn25Attr{
+		Name:       "exact",
+		Connectors: []string{"tag:exact"},
+		Domains:    []string{"exact.example.net"},
+	}
+	wildcardApp := appctype.Conn25Attr{
+		Name:       "wildcard",
+		Connectors: []string{"tag:wildcard"},
+		Domains:    []string{"*.wildcard.example.net"},
+	}
+
+	exampleAppPeerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{`"*"`},
+	}
+	// This is to verify that it's not picky about which ports are allowed for
+	// the app.
+	exampleAppPeerCapRestrictive := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute("example"): []tailcfg.RawMessage{},
+	}
+	exactAppPeerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute("exact"): []tailcfg.RawMessage{`"*"`},
+	}
+	wildcardAppPeerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute("wildcard"): []tailcfg.RawMessage{`"*"`},
+	}
+	allAppPeerCap := tailcfg.PeerCapMap{
+		peercap.Conn25Prefix.ToAttribute("example"):  []tailcfg.RawMessage{`"*"`},
+		peercap.Conn25Prefix.ToAttribute("exact"):    []tailcfg.RawMessage{`"*"`},
+		peercap.Conn25Prefix.ToAttribute("wildcard"): []tailcfg.RawMessage{`"*"`},
+	}
+
+	tests := []struct {
+		name                 string
+		noAdvertiseConnector bool
+		apps                 []appctype.Conn25Attr
+		tags                 []string
+		peerCap              tailcfg.PeerCapMap
+		noQueryString        bool
+		requestedApp         string
+		wantSourceAllowed    bool
+		wantNameChecks       map[string]bool // does not need to be exhaustive, TestMakeNameChecker covers this more
+	}{
+		{
+			name:              "normal",
+			apps:              []appctype.Conn25Attr{exampleApp},
+			tags:              []string{"tag:example"},
+			peerCap:           exampleAppPeerCap,
+			requestedApp:      "example",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":              true,
+				"eXaMpLe.CoM":              true,
+				"example.COM":              true,
+				"EXAMPLE.com":              true,
+				"test.example.com":         true,
+				"TEST.Example.Com":         true,
+				"TEST.example.com":         true,
+				"a.b.c.d.example.com":      true,
+				"notexample.com":           false,
+				"example2.com":             false,
+				"example.net":              false,
+				"com":                      false,
+				"exact.example.net":        false,
+				"wildcard.example.net":     false,
+				"foo.wildcard.example.net": false,
+			},
+		},
+		{
+			name:              "exact",
+			apps:              []appctype.Conn25Attr{exactApp},
+			tags:              []string{"tag:exact"},
+			peerCap:           exactAppPeerCap,
+			requestedApp:      "exact",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 false,
+				"net":                         false,
+				"exact.example.net":           true,
+				"subdomain.exact.example.net": true,
+				"wildcard.example.net":        false,
+				"foo.wildcard.example.net":    false,
+			},
+		},
+		{
+			name:              "wildcard",
+			apps:              []appctype.Conn25Attr{wildcardApp},
+			tags:              []string{"tag:wildcard"},
+			peerCap:           wildcardAppPeerCap,
+			requestedApp:      "wildcard",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 false,
+				"net":                         false,
+				"exact.example.net":           false,
+				"subdomain.exact.example.net": false,
+				"wildcard.example.net":        true,
+				"foo.wildcard.example.net":    true,
+			},
+		},
+		{
+			name:              "multi-example",
+			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
+			peerCap:           allAppPeerCap,
+			requestedApp:      "example",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 true,
+				"subdomain.example.com":       true,
+				"com":                         false,
+				"exact.example.net":           false,
+				"subdomain.exact.example.net": false,
+				"wildcard.example.net":        false,
+				"foo.wildcard.example.net":    false,
+			},
+		},
+		{
+			name:              "multi-exact",
+			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
+			peerCap:           allAppPeerCap,
+			requestedApp:      "exact",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 false,
+				"net":                         false,
+				"exact.example.net":           true,
+				"subdomain.exact.example.net": true,
+				"wildcard.example.net":        false,
+				"foo.wildcard.example.net":    false,
+			},
+		},
+		{
+			name:              "wildcard",
+			apps:              []appctype.Conn25Attr{exampleApp, exactApp, wildcardApp},
+			tags:              []string{"tag:example", "tag:exact", "tag:wildcard"},
+			peerCap:           allAppPeerCap,
+			requestedApp:      "wildcard",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 false,
+				"net":                         false,
+				"exact.example.net":           false,
+				"subdomain.exact.example.net": false,
+				"wildcard.example.net":        true,
+				"foo.wildcard.example.net":    true,
+			},
+		},
+		{
+			name:              "restricted-grant",
+			apps:              []appctype.Conn25Attr{exampleApp},
+			tags:              []string{"tag:example"},
+			peerCap:           exampleAppPeerCapRestrictive,
+			requestedApp:      "example",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                 true,
+				"subdomain.example.com":       true,
+				"com":                         false,
+				"exact.example.net":           false,
+				"subdomain.exact.example.net": false,
+				"wildcard.example.net":        false,
+				"foo.wildcard.example.net":    false,
+			},
+		},
+		{
+			name:                 "not-advertised",
+			noAdvertiseConnector: true,
+			apps:                 []appctype.Conn25Attr{exampleApp},
+			tags:                 []string{"tag:example"},
+			peerCap:              allAppPeerCap,
+			requestedApp:         "example",
+			wantSourceAllowed:    false,
+		},
+		{
+			name:              "no-apps",
+			apps:              []appctype.Conn25Attr{},
+			tags:              []string{"tag:example"},
+			peerCap:           allAppPeerCap,
+			requestedApp:      "example",
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "not-connector-for-app",
+			apps:              []appctype.Conn25Attr{exampleApp, exactApp},
+			tags:              []string{"tag:exact"},
+			peerCap:           allAppPeerCap,
+			requestedApp:      "example",
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "no-permission-for-app",
+			apps:              []appctype.Conn25Attr{exampleApp, exactApp},
+			tags:              []string{"tag:example", "tag:exact"},
+			peerCap:           exampleAppPeerCap,
+			requestedApp:      "exact",
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "bypass-filter",
+			apps:              []appctype.Conn25Attr{exampleApp, bypassApp},
+			tags:              []string{"tag:example", "tag:bypass"},
+			requestedApp:      "bypass",
+			wantSourceAllowed: true,
+			wantNameChecks: map[string]bool{
+				"example.com":                  false,
+				"bypass.example.net":           true,
+				"subdomain.bypass.example.net": true,
+				"example.net":                  false,
+			},
+		},
+		{
+			name:              "bypass-filter-is-selective",
+			apps:              []appctype.Conn25Attr{exampleApp, bypassApp},
+			tags:              []string{"tag:example", "tag:bypass"},
+			requestedApp:      "example",
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "no-query-string",
+			apps:              []appctype.Conn25Attr{exampleApp},
+			tags:              []string{"tag:example"},
+			peerCap:           exampleAppPeerCap,
+			noQueryString:     true,
+			wantSourceAllowed: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			sn := makeSelfNode(t, tt.apps, arbitraryPools, tt.tags)
+			c.reconfig(mustConfig(t, sn))
+			if !tt.noAdvertiseConnector {
+				c.prefsAdvertiseConnector.Store(true)
+			}
+
+			fph := fakePeerAPIHandler{
+				peerCaps: tt.peerCap,
+			}
+			requestURL := "http://peerapi:1234/dns-query"
+			if !tt.noQueryString {
+				requestURL = fmt.Sprintf("%s?app=%s", requestURL, url.QueryEscape(tt.requestedApp))
+			} else if tt.requestedApp != "" {
+				t.Error("broken test case: noQueryString is true but requestedApp is not empty")
+			}
+			// No body is necessary because the handler is not permitted to look
+			// at the body.
+			r := must.Get(http.NewRequest("POST", requestURL, nil))
+
+			gotSourceAllowed, gotNameAllowed := c.handleHookReplyToDNSQueries(fph, r)
+			if gotSourceAllowed != tt.wantSourceAllowed {
+				t.Errorf("sourceAllowed = %v, want %v", gotSourceAllowed, tt.wantSourceAllowed)
+			}
+			if gotSourceAllowed && gotNameAllowed == nil {
+				t.Error("nameAllowed is nil, want not-nil whenever sourceAllowed is true")
+				return
+			}
+			if !gotSourceAllowed && gotNameAllowed != nil {
+				t.Error("nameAllowed is not nil, want nil whenever sourceAllowed is false")
+				return
+			}
+			if !tt.wantSourceAllowed && len(tt.wantNameChecks) > 0 {
+				// This is redundant: !sourceAllowed implies all names will be rejected
+				t.Error("broken test case: wantSourceAllowed is false but there are name checks")
+			}
+			for name, want := range tt.wantNameChecks {
+				if got := gotNameAllowed(name); got != want {
+					t.Errorf("nameAllowed(%q) = %v, want %v", name, got, want)
+				}
 			}
 		})
 	}
