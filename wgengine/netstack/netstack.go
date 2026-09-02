@@ -680,6 +680,14 @@ func (ns *Impl) addSubnetAddress(ip netip.Addr) {
 func (ns *Impl) removeSubnetAddress(ip netip.Addr) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
+	// A decrement with no matching prior increment must not drive the
+	// count negative: a negative count would make a later addSubnetAddress
+	// bring it to 0 instead of 1, so the address would never be
+	// re-registered with netstack and forwarding to it would fail.
+	if ns.connsOpenBySubnetIP[ip] <= 0 {
+		delete(ns.connsOpenBySubnetIP, ip)
+		return
+	}
 	ns.connsOpenBySubnetIP[ip]--
 	// Only unregister address from netstack after last concurrent connection.
 	if ns.connsOpenBySubnetIP[ip] == 0 {
@@ -1560,6 +1568,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
 
+	// subnetAddrKey and removeSubnetAddr capture, before the 4via6 rewrite
+	// of dialIP below, the same address and condition that
+	// wrapTCPProtocolHandler used to call addSubnetAddress for this
+	// connection. The deferred removeSubnetAddress call must use this key
+	// and condition rather than the post-rewrite dialIP/isTailscaleIP:
+	// decrementing a different key than was incremented drives that key's
+	// count negative and leaks the one that was actually incremented.
+	subnetAddrKey := dialIP
+	removeSubnetAddr := !isLocal && !ns.isVIPServiceIP(subnetAddrKey)
+
 	isVia := viaRange.Contains(dialIP)
 	var viaIP netip.Addr
 	if isVia {
@@ -1569,10 +1587,10 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	defer func() {
-		if !isTailscaleIP {
+		if removeSubnetAddr {
 			// if this is a subnet IP, we added this in before the TCP handshake
 			// so netstack is happy TCP-handshaking as a subnet IP
-			ns.removeSubnetAddress(dialIP)
+			ns.removeSubnetAddress(subnetAddrKey)
 		}
 	}()
 

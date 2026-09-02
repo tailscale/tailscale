@@ -2195,3 +2195,44 @@ func TestInjectLoopback(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "loopback test")
 	}
 }
+
+// TestRemoveSubnetAddressUnderflow verifies that a removeSubnetAddress call
+// with no matching prior addSubnetAddress does not drive
+// connsOpenBySubnetIP negative. This is a regression test for
+// https://github.com/tailscale/tailscale/issues/20730, where acceptTCP's
+// deferred removeSubnetAddress call used a different address (the
+// post-4via6-rewrite dialIP) than wrapTCPProtocolHandler's addSubnetAddress
+// call had incremented (the pre-rewrite, on-the-wire destination). The
+// unmatched decrement drove the raw-IPv4 key negative, so a later genuine
+// addSubnetAddress for that key only brought the count to 0 instead of 1,
+// and the address was never re-registered with netstack.
+func TestRemoveSubnetAddressUnderflow(t *testing.T) {
+	ns := makeNetstack(t, nil)
+
+	addr := netip.MustParseAddr("172.16.1.1")
+
+	subnetCount := func() (int, bool) {
+		ns.mu.Lock()
+		defer ns.mu.Unlock()
+		n, ok := ns.connsOpenBySubnetIP[addr]
+		return n, ok
+	}
+
+	// A remove with no matching add must be a no-op, not go negative.
+	ns.removeSubnetAddress(addr)
+	if n, ok := subnetCount(); ok {
+		t.Fatalf("connsOpenBySubnetIP[%v] = %d after unmatched remove; want no entry", addr, n)
+	}
+
+	// A later add must still register the address (count reaches 1).
+	ns.addSubnetAddress(addr)
+	if n, ok := subnetCount(); !ok || n != 1 {
+		t.Fatalf("connsOpenBySubnetIP[%v] = %d (present=%v) after add; want 1", addr, n, ok)
+	}
+
+	// The paired remove drops the entry.
+	ns.removeSubnetAddress(addr)
+	if n, ok := subnetCount(); ok {
+		t.Fatalf("connsOpenBySubnetIP[%v] = %d after paired remove; want no entry", addr, n)
+	}
+}
