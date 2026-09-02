@@ -24,7 +24,7 @@ func FuzzNodeIsRouter(f *testing.F) {
 		for p := range strings.FieldsSeq(prefixes) {
 			pfx, err := netip.ParsePrefix(p)
 			if err != nil {
-				t.Skipf("%q: %v", prefixes, err)
+				continue // t.Skipf unsupported by go-118-fuzz-build
 			}
 			out = append(out, pfx)
 		}
