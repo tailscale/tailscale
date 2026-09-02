@@ -48,6 +48,11 @@ type Detector struct {
 	// interception probes. It is set by tests.
 	lookupIPFn func(ctx context.Context, host string) ([]netip.Addr, error)
 
+	// dialFn, if non-nil, replaces the dialer used for the HTTP probes,
+	// bypassing the interface binding in [Detector.dialContext]. It is set by
+	// tests to route probes through a virtual network.
+	dialFn func(ctx context.Context, network, addr string) (net.Conn, error)
+
 	// httpClient is the HTTP client that is used for captive portal detection. It is configured
 	// to not follow redirects, have a short timeout and no keep-alive.
 	httpClient *http.Client
@@ -195,6 +200,9 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 	probedAny := false
 	gotAnyResponse := false
 	var portal *Result
+	// Signals from every interface, so an inconclusive result still carries the
+	// evidence behind it for the caller's logs and metrics.
+	var signals []Signal
 	for ifName, i := range ifState.Interface {
 		if !i.IsUp() || i.IsLoopback() || interfaceNameDoesNotNeedCaptiveDetection(ifName, goos) {
 			continue
@@ -213,6 +221,7 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 		if gotResponse {
 			gotAnyResponse = true
 		}
+		signals = append(signals, res.Signals...)
 		switch res.Verdict {
 		case VerdictNoPortal:
 			d.logf("DetectCaptivePortal(verdict=%s,ifName=%s,signals=%v)", res.Verdict, ifName, res.Signals)
@@ -234,8 +243,8 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 		// Either we had nothing to probe, or something answered us and it just
 		// wasn't conclusive. The escalation below is aimed at networks that
 		// drop our probes entirely, so it wouldn't tell us anything new here.
-		d.logf("DetectCaptivePortal(verdict=%s)", VerdictUnknown)
-		return Result{Verdict: VerdictUnknown}
+		d.logf("DetectCaptivePortal(verdict=%s,signals=%v)", VerdictUnknown, signals)
+		return Result{Verdict: VerdictUnknown, Signals: signals}
 	}
 
 	// Every Tailscale-operated endpoint was blackholed. That is what a walled
@@ -430,6 +439,10 @@ func (d *Detector) probeEndpoint(ctx context.Context, e Endpoint, ifIndex int) (
 }
 
 func (d *Detector) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if d.dialFn != nil {
+		return d.dialFn(ctx, network, addr)
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

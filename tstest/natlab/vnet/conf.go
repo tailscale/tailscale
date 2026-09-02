@@ -359,6 +359,8 @@ type Network struct {
 	latency  time.Duration // latency applied to interface writes
 	lossRate float64       // chance of packet loss (0.0 to 1.0)
 
+	portal *CaptivePortal // non-nil if this network is behind a captive portal
+
 	// ...
 	err error // carried error
 }
@@ -464,6 +466,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			breakWAN4:  conf.breakWAN4,
 			latency:    conf.latency,
 			lossRate:   conf.lossRate,
+			portal:     conf.portal,
 			nodesByIP4: map[netip.Addr]*node{},
 			nodesByMAC: map[MAC]*node{},
 			logf:       logger.WithPrefix(s.logf, fmt.Sprintf("[net-%v] ", conf.mac)),

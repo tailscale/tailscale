@@ -97,6 +97,20 @@ func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }
 // accepts uploads over HTTPS on port 443 and over plain HTTP on port 80.
 func FakeLogCatcherIPv4() netip.Addr { return fakeLogCatcher.v4 }
 
+// FakeDERP1IPv4 returns the IPv4 address of the first fake DERP server, which
+// serves /generate_204 on port 80 as well as DERP on 443.
+func FakeDERP1IPv4() netip.Addr { return fakeDERP1.v4 }
+
+// FakeDERP2IPv4 returns the IPv4 address of the second fake DERP server.
+func FakeDERP2IPv4() netip.Addr { return fakeDERP2.v4 }
+
+// FakeDERP1Hostname returns the DNS name that resolves to [FakeDERP1IPv4] on
+// the virtual network's DNS server.
+func FakeDERP1Hostname() string { return "derp1.tailscale" }
+
+// FakeDERP2Hostname returns the DNS name that resolves to [FakeDERP2IPv4].
+func FakeDERP2Hostname() string { return "derp2.tailscale" }
+
 // FakeDNSIPv6 returns the fake DNS IPv6 address.
 func FakeDNSIPv6() netip.Addr { return fakeDNS.v6 }
 

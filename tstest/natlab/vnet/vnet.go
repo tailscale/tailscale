@@ -435,6 +435,20 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 
+	// A captive portal answers port 80 on behalf of whatever the client was
+	// actually trying to reach, so this comes before the branches that dispatch
+	// on destination. See [CaptivePortal].
+	if n.portal != nil && destPort == 80 {
+		r.Complete(false)
+		tc := gonet.NewTCPConn(&wq, ep)
+		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
+		hs := &http.Server{Handler: n.portalHandler()}
+		n.s.wg.Go(func() {
+			hs.Serve(netutil.NewOneConnListener(tc, nil))
+		})
+		return
+	}
+
 	if destPort == TestDriverPort && fakeTestAgent.Match(destIP) {
 		node, ok := n.nodeByIP(clientRemoteIP)
 		if !ok {
@@ -697,6 +711,7 @@ type network struct {
 	blackholeControl bool                 // blackhole control connectivity
 	latency          time.Duration        // latency applied to interface writes
 	lossRate         float64              // probability of dropping a packet (0.0 to 1.0)
+	portal           *CaptivePortal       // non-nil if behind a captive portal; see [CaptivePortal]
 	nodesByIP4       map[netip.Addr]*node // by LAN IPv4
 	nodesByMAC       map[MAC]*node
 	logf             func(format string, args ...any)
@@ -1899,7 +1914,10 @@ func (n *network) HandleEthernetPacketForRouter(ep EthernetPacket) {
 		return
 	}
 
-	if toForward && n.s.shouldInterceptTCP(packet) {
+	// A captive portal also answers traffic addressed to the router itself,
+	// since that's where it lives and where a hijacked resolver points clients;
+	// see [CaptivePortal]. Everything else is only intercepted on its way out.
+	if (toForward || n.portal != nil) && n.shouldInterceptTCP(packet) {
 		if (flow.dst.Is4() && n.breakWAN4) ||
 			(n.blackholeControl && fakeControl.Match(flow.dst)) {
 			// Blackhole the packet.
@@ -2619,6 +2637,22 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		}
 
 		if q.Type == layers.DNSTypeA || q.Type == layers.DNSTypeAAAA {
+			// A DNS-hijacking captive portal answers every name with its own
+			// address, including names that don't exist, which is how it gets a
+			// browser to arrive at its login page.
+			if hijackTo := s.portalDNSHijackAddr(ethLayer.SrcMAC); hijackTo.IsValid() {
+				if q.Type == layers.DNSTypeA {
+					response.ANCount++
+					response.Answers = append(response.Answers, layers.DNSResourceRecord{
+						Name:  q.Name,
+						Type:  q.Type,
+						Class: q.Class,
+						IP:    hijackTo.AsSlice(),
+						TTL:   60,
+					})
+				}
+				continue
+			}
 			if v, ok := vips[string(q.Name)]; ok {
 				ip := v.v4
 				if q.Type == layers.DNSTypeAAAA {
