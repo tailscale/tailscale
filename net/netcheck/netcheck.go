@@ -820,7 +820,13 @@ func (c *Client) SetForcePreferredDERP(region tailcfg.DERPRegionID) {
 // The returned done channel is closed when detection has finished (and
 // setCaptivePortal has been called with the result, if it ran); the returned
 // stop function cancels a detection that has not yet started.
-var HookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, c *Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func())]
+//
+// setCaptivePortal takes an [opt.Bool] because detection has three possible
+// outcomes: a portal was found, none was found, or nothing conclusive could be
+// determined. Passing the unset value for the last case leaves
+// [Report.CaptivePortal] unset, so that an inconclusive check isn't recorded as
+// a definite absence.
+var HookStartCaptivePortalDetection feature.Hook[func(ctx context.Context, c *Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(opt.Bool)) (done <-chan struct{}, stop func())]
 
 // GetReport gets a report. The 'opts' argument is optional and can be nil.
 // Callers are discouraged from passing a ctx with an arbitrary deadline as this
@@ -950,8 +956,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	captivePortalStop := func() {}
 	if buildfeatures.HasCaptivePortal && !rs.incremental && !onlySTUN {
 		if start, ok := HookStartCaptivePortalDetection.GetOk(); ok {
-			captivePortalDone, captivePortalStop = start(ctx, c, dm, preferredDERP, func(found bool) {
-				rs.report.CaptivePortal.Set(found)
+			captivePortalDone, captivePortalStop = start(ctx, c, dm, preferredDERP, func(found opt.Bool) {
+				rs.report.CaptivePortal = found
 			})
 		}
 	}

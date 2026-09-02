@@ -10,6 +10,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"runtime"
 	"strconv"
 	"strings"
@@ -17,15 +19,34 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/feature"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
+// HookPlatformHint, if set, reports whether the host OS has itself detected a
+// captive portal on the current network.
+//
+// The OS is in a better position to know than we are: it sees the association
+// and DHCP exchange, and on some platforms it has already run its own probe by
+// the time we look. Where available this is both the cheapest and the most
+// reliable signal we have, so a positive answer is taken as conclusive.
+//
+// A negative answer is recorded but not acted upon, because the OS probes have
+// their own blind spots and we don't want their false negatives to become ours.
+//
+// ok reports whether the platform could answer at all.
+var HookPlatformHint feature.Hook[func(ctx context.Context) (found, ok bool)]
+
 // Detector checks whether the system is behind a captive portal.
 type Detector struct {
 	clock func() time.Time
+
+	// lookupIPFn, if non-nil, replaces the system resolver for the DNS
+	// interception probes. It is set by tests.
+	lookupIPFn func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	// httpClient is the HTTP client that is used for captive portal detection. It is configured
 	// to not follow redirects, have a short timeout and no keep-alive.
@@ -62,36 +83,118 @@ func (d *Detector) Now() time.Time {
 	return time.Now()
 }
 
+// lookupIP resolves host, using the injected resolver if a test set one.
+func (d *Detector) lookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	if d.lookupIPFn != nil {
+		return d.lookupIPFn(ctx, host)
+	}
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+	return net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
+}
+
 // Timeout is the timeout for captive portal detection requests. Because the captive portal intercepting our requests
 // is usually located on the LAN, this is a relatively short timeout.
 const Timeout = 3 * time.Second
 
-// Detect is the entry point to the API. It attempts to detect if the system is behind a captive portal
-// by making HTTP requests to known captive portal detection Endpoints. If any of the requests return a response code
-// or body that looks like a captive portal, Detect returns true. It returns false in all other cases, including when any
-// error occurs during a detection attempt.
+// Detect reports whether it detected a captive portal.
+//
+// It is a convenience wrapper around [Detector.DetectResult] that collapses the
+// three possible outcomes to two. Prefer DetectResult: callers that treat an
+// inconclusive result as "no captive portal" will clear warnings they
+// shouldn't, and will stop looking for a portal that is in fact there.
+func (d *Detector) Detect(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID) (found bool) {
+	return d.DetectResult(ctx, netMon, derpMap, preferredDERPRegionID).Verdict == VerdictPortal
+}
+
+// DetectResult attempts to detect whether the system is behind a captive portal,
+// and reports what it found along with the evidence behind it. See [Result].
 //
 // This function might take a while to return, as it will attempt to detect a captive portal on all available interfaces
 // by performing multiple HTTP requests. It should be called in a separate goroutine if you want to avoid blocking.
-func (d *Detector) Detect(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID) (found bool) {
-	return d.detectCaptivePortalWithGOOS(ctx, netMon, derpMap, preferredDERPRegionID, runtime.GOOS)
+func (d *Detector) DetectResult(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID) Result {
+	res := d.detectCaptivePortalWithGOOS(ctx, netMon, derpMap, preferredDERPRegionID, runtime.GOOS)
+	d.annotatePortalLocality(ctx, &res)
+	return res
 }
 
-func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID, goos string) (found bool) {
+// annotatePortalLocality fills in [Result.PortalURLIsLocal] for a portal we
+// found a login URL for.
+//
+// Whether that URL is on the local network decides whether a client using an
+// exit node can be helped at all: a login page on the LAN becomes reachable if
+// the LAN is taken back out of the tunnel, while one on the public Internet does
+// not, because the default route stays pointed at the exit node either way.
+//
+// Resolving the host through the system resolver is not a guess at where the
+// page lives. It is the same lookup the user's browser is about to perform, so
+// it predicts what the browser will actually be able to reach — including when
+// the resolver is hijacked and answers with the portal's own address, which is
+// precisely the case we want to report as local.
+//
+// Anything we cannot determine is left unset rather than guessed at; see the
+// callers for why unknown is treated as local.
+func (d *Detector) annotatePortalLocality(ctx context.Context, res *Result) {
+	if res.Verdict != VerdictPortal || res.PortalURL == "" {
+		return
+	}
+	u, err := url.Parse(res.PortalURL)
+	if err != nil || u.Hostname() == "" {
+		// A 511's Location header is not required to be absolute, and a
+		// relative one tells us nothing about where the portal lives.
+		return
+	}
+	host := u.Hostname()
+
+	// Portals commonly redirect straight to an IP, which needs no lookup.
+	if ip, err := netip.ParseAddr(host); err == nil {
+		res.PortalURLIsLocal.Set(isLocalAddr(ip))
+		return
+	}
+
+	got, err := d.lookupIP(ctx, host)
+	if err != nil || len(got) == 0 {
+		d.logf("[v1] captivedetection: could not resolve portal host %q: %v", host, err)
+		return
+	}
+	res.PortalURLIsLocal.Set(isLocalAddr(got[0]))
+}
+
+func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID, goos string) Result {
+	// Ask the OS first: it's cheaper and more reliable than anything we can
+	// probe ourselves.
+	if hint, ok := HookPlatformHint.GetOk(); ok {
+		if found, answered := hint(ctx); answered && found {
+			d.logf("captivedetection: the OS reports a captive portal on this network")
+			var ev evidence
+			ev.add(SignalPlatformHint, "")
+			return ev.result()
+		}
+	}
+
 	ifState := netMon.InterfaceState()
 	if !ifState.AnyInterfaceUp() {
-		d.logf("[v2] DetectCaptivePortal: no interfaces up, returning false")
-		return false
+		d.logf("[v2] DetectCaptivePortal: no interfaces up, returning unknown")
+		return Result{Verdict: VerdictUnknown}
 	}
 
 	endpoints := availableEndpoints(derpMap, preferredDERPRegionID, d.logf, goos)
 
 	// Here we try detecting a captive portal using *all* available interfaces on the system
-	// that have a IPv4 address. We consider to have found a captive portal when any interface
-	// reports one may exists. This is necessary because most systems have multiple interfaces,
+	// that have a IPv4 address. This is necessary because most systems have multiple interfaces,
 	// and most importantly on macOS no default route interface is set until the user has accepted
 	// the captive portal alert thrown by the system. If no default route interface is known,
 	// we need to try with anything that might remotely resemble a Wi-Fi interface.
+	//
+	// Interfaces are considered in turn. A clean result from any of them ends the search: it
+	// proves traffic is flowing, so nothing another interface could report would change the
+	// answer. A portal result does not end it, for the same reason a portal signal doesn't end a
+	// single interface's probe pass — a clean result elsewhere outranks it. Warning a user with
+	// a working Ethernet connection about the portal on the Wi-Fi they're also associated with
+	// would send them chasing a login page they don't need.
+	probedAny := false
+	gotAnyResponse := false
+	var portal *Result
 	for ifName, i := range ifState.Interface {
 		if !i.IsUp() || i.IsLoopback() || interfaceNameDoesNotNeedCaptiveDetection(ifName, goos) {
 			continue
@@ -105,15 +208,101 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 			continue
 		}
 		d.logf("[v2] attempting to do captive portal detection on interface %s", ifName)
-		res := d.detectOnInterface(ctx, i.Index, endpoints)
-		if res {
-			d.logf("DetectCaptivePortal(found=true,ifName=%s)", ifName)
-			return true
+		probedAny = true
+		res, gotResponse := d.detectOnInterface(ctx, i.Index, endpoints)
+		if gotResponse {
+			gotAnyResponse = true
+		}
+		switch res.Verdict {
+		case VerdictNoPortal:
+			d.logf("DetectCaptivePortal(verdict=%s,ifName=%s,signals=%v)", res.Verdict, ifName, res.Signals)
+			return res
+		case VerdictPortal:
+			d.logf("captivedetection: interface %s looks intercepted (signals=%v); checking the remaining interfaces before reporting", ifName, res.Signals)
+			if portal == nil {
+				portal = &res
+			}
 		}
 	}
 
-	d.logf("DetectCaptivePortal(found=false)")
-	return false
+	if portal != nil {
+		d.logf("DetectCaptivePortal(verdict=%s,signals=%v)", portal.Verdict, portal.Signals)
+		return *portal
+	}
+
+	if !probedAny || gotAnyResponse {
+		// Either we had nothing to probe, or something answered us and it just
+		// wasn't conclusive. The escalation below is aimed at networks that
+		// drop our probes entirely, so it wouldn't tell us anything new here.
+		d.logf("DetectCaptivePortal(verdict=%s)", VerdictUnknown)
+		return Result{Verdict: VerdictUnknown}
+	}
+
+	// Every Tailscale-operated endpoint was blackholed. That is what a walled
+	// garden looks like from the inside, and it is also what a network with no
+	// Internet at all looks like, so we can't conclude anything yet. Escalate
+	// to the probes that a portal has to answer in order to function: a
+	// hijacked resolver, and the detection URLs that portals are built to
+	// intercept.
+	d.logf("captivedetection: all endpoints blackholed; escalating to DNS and third-party probes")
+	res := d.detectEscalated(ctx, derpMap, endpoints)
+	d.logf("DetectCaptivePortal(verdict=%s,escalated,signals=%v)", res.Verdict, res.Signals)
+	return res
+}
+
+// detectEscalated runs the last-resort probes: DNS interception, plus the OS
+// vendors' captive portal detection URLs.
+//
+// It is only reached when every Tailscale-operated endpoint was blackholed, so
+// on a working network these third parties are never contacted.
+func (d *Detector) detectEscalated(ctx context.Context, derpMap *tailcfg.DERPMap, endpoints []Endpoint) Result {
+	defer d.httpClient.CloseIdleConnections()
+
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+
+	var (
+		ev   evidence
+		evMu sync.Mutex
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		signals := d.probeDNS(ctx, derpMap)
+		evMu.Lock()
+		defer evMu.Unlock()
+		for _, s := range signals {
+			ev.add(s, "")
+		}
+	}()
+
+	// The escalated HTTP probes are not interface-scoped: by this point we've
+	// established that no interface could reach a Tailscale endpoint, and
+	// picking one to blame would be guesswork.
+	thirdParty := endpointsOfTier(endpoints, TierThirdParty, len(endpoints))
+	for _, e := range thirdParty {
+		wg.Add(1)
+		go func(endpoint Endpoint) {
+			defer wg.Done()
+			s, portalURL, err := d.probeEndpoint(ctx, endpoint, 0)
+			if err != nil {
+				if ctx.Err() == nil {
+					d.logf("[v1] captivedetection: third-party probe of %v failed: %v", endpoint.URL, err)
+				}
+				return
+			}
+			evMu.Lock()
+			defer evMu.Unlock()
+			ev.add(s, portalURL)
+		}(e)
+	}
+	wg.Wait()
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	return ev.result()
 }
 
 // interfaceNameDoesNotNeedCaptiveDetection returns true if an interface does not require captive portal detection
@@ -138,62 +327,74 @@ func interfaceNameDoesNotNeedCaptiveDetection(ifName string, goos string) bool {
 	return false
 }
 
-// detectOnInterface reports whether or not we think the system is behind a
-// captive portal, detected by making a request to a URL that we know should
-// return a "204 No Content" response and checking if that's what we get.
+// detectOnInterface probes the given interface for signs of a captive portal.
 //
-// The boolean return is whether we think we have a captive portal.
-func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint) bool {
+// It probes a mix of IP-addressed and hostname-addressed endpoints (see
+// [probeSet]) concurrently and combines what they report. gotResponse tells the
+// caller whether anything answered at all, which distinguishes an inconclusive
+// network from one that is dropping our probes on the floor.
+func (d *Detector) detectOnInterface(ctx context.Context, ifIndex int, endpoints []Endpoint) (res Result, gotResponse bool) {
 	defer d.httpClient.CloseIdleConnections()
 
-	use := min(len(endpoints), 5)
-	endpoints = endpoints[:use]
-	d.logf("[v2] %d available captive portal detection endpoints; trying %v", len(endpoints), use)
+	probes := probeSet(endpoints)
+	d.logf("[v2] %d available captive portal detection endpoints; trying %d", len(endpoints), len(probes))
 
 	// We try to detect the captive portal more quickly by making requests to multiple endpoints concurrently.
-	var wg sync.WaitGroup
-	resultCh := make(chan bool, len(endpoints))
-
-	// Once any goroutine detects a captive portal, we shut down the others.
+	//
+	// Only a clean response cuts the pass short. It's conclusive: nothing a
+	// slower probe could report would change the answer. A portal signal is
+	// not, because a clean response from another endpoint outranks it (see
+	// [evidence.result]), so aborting the remaining probes there would let a
+	// portal verdict stand only because we stopped listening — turning the
+	// clean-wins rule into a race. The probes are bounded by [Timeout] anyway.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for _, e := range endpoints {
+	var (
+		ev   evidence
+		evMu sync.Mutex
+	)
+
+	var wg sync.WaitGroup
+	for _, e := range probes {
 		wg.Add(1)
 		go func(endpoint Endpoint) {
 			defer wg.Done()
-			found, err := d.verifyCaptivePortalEndpoint(ctx, endpoint, ifIndex)
+			s, portalURL, err := d.probeEndpoint(ctx, endpoint, ifIndex)
 			if err != nil {
 				if ctx.Err() == nil {
 					d.logf("[v1] checkCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
 				}
-				return
+				s, portalURL = SignalNoResponse, ""
 			}
-			if found {
-				cancel() // one match is good enough
-				resultCh <- true
+
+			evMu.Lock()
+			ev.add(s, portalURL)
+			conclusive := ev.result().Verdict == VerdictNoPortal
+			evMu.Unlock()
+
+			if conclusive {
+				// One match is good enough; don't make the caller wait on the
+				// remaining probes.
+				cancel()
 			}
 		}(e)
 	}
+	wg.Wait()
 
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	for result := range resultCh {
-		if result {
-			// If any of the endpoints seems to be a captive portal, we consider the system to be behind one.
-			return true
-		}
+	evMu.Lock()
+	defer evMu.Unlock()
+	if ev.hasConflict() {
+		metricCleanConflict.Add(1)
+		d.logf("captivedetection: some endpoints look intercepted but another was provably not; reporting no portal (signals=%v)", ev.signals)
 	}
-
-	return false
+	return ev.result(), ev.gotAnyResponse()
 }
 
-// verifyCaptivePortalEndpoint checks if the given Endpoint is a captive portal by making an HTTP request to the
-// given Endpoint URL using the interface with index ifIndex, and checking if the response looks like a captive portal.
-func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, ifIndex int) (found bool, err error) {
+// probeEndpoint makes an HTTP request to e using the interface with index
+// ifIndex, and reports what the response says about interception. See
+// [classify].
+func (d *Detector) probeEndpoint(ctx context.Context, e Endpoint, ifIndex int) (s Signal, portalURL string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 
@@ -204,18 +405,14 @@ func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, 
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
-		return false, err
+		return SignalNoResponse, "", err
 	}
 	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate, no-transform, max-age=0")
 
 	// Attach the Tailscale challenge header if the endpoint supports it. Not all captive portal detection endpoints
 	// support this, so we only attach it if the endpoint does.
 	if e.SupportsTailscaleChallenge {
-		// Note: the set of valid characters in a challenge and the total
-		// length is limited; see isChallengeChar in cmd/derper for more
-		// details.
-		chal := "ts_" + e.URL.Host
-		req.Header.Set("X-Tailscale-Challenge", chal)
+		req.Header.Set("X-Tailscale-Challenge", challengeFor(e))
 	}
 
 	d.mu.Lock()
@@ -225,10 +422,11 @@ func (d *Detector) verifyCaptivePortalEndpoint(ctx context.Context, e Endpoint, 
 	// Make the actual request, and check if the response looks like a captive portal or not.
 	r, err := d.httpClient.Do(req)
 	if err != nil {
-		return false, err
+		return SignalNoResponse, "", err
 	}
 
-	return e.responseLooksLikeCaptive(r, d.logf), nil
+	s, portalURL = classify(e, r, d.logf)
+	return s, portalURL, nil
 }
 
 func (d *Detector) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -5,6 +5,8 @@
 package apitype
 
 import (
+	"time"
+
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/ctxkey"
@@ -109,6 +111,26 @@ type OptionalFeatures struct {
 	// contains them. A name listed here that is absent from Features
 	// either named an unknown feature or one not linked into this build.
 	Disabled []string `json:",omitempty"`
+}
+
+// CaptivePortalAllowLANRequest is the request body for a POST to the LocalAPI
+// endpoint /localapi/v0/captive-portal-allow-lan.
+type CaptivePortalAllowLANRequest struct {
+	// The requested duration for the local network exception. A zero value requests
+	// the maximum the backend is willing to grant, which is also the ceiling any
+	// longer duration is clamped to.
+	Duration string
+}
+
+// CaptivePortalAllowLANResponse is the response from a POST to the LocalAPI
+// endpoint /localapi/v0/captive-portal-allow-lan.
+//
+// The exemption time is capped by the backend to a maximum duration, which is returned
+// in the Until field.
+type CaptivePortalAllowLANResponse struct {
+	// Until is when the local network exception expires, at the latest. It may
+	// end sooner: logging in to the captive portal revokes it.
+	Until time.Time
 }
 
 // ServiceClientPrefRequest is the body POSTed to the LocalAPI endpoint /localapi/v0/prefs/service-clients.

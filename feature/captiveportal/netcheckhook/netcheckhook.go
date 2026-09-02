@@ -14,6 +14,7 @@ import (
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 )
 
 func init() {
@@ -25,7 +26,15 @@ func init() {
 // the probe if it's unnecessary. Chosen semi-arbitrarily.
 const captivePortalDelay = 200 * time.Millisecond
 
-func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
+// startCaptivePortalDetection runs a detection attempt alongside a netcheck.
+//
+// It is a best-effort check: ctx carries netcheck's overall report deadline
+// ([netcheck.ReportTimeout]), which is shorter than a full detection run can
+// take, so the escalated probes usually get cut off here and the result comes
+// back inconclusive. That's fine — this exists to populate
+// [netcheck.Report.CaptivePortal] cheaply. The thorough, retried detection
+// happens in the captiveportal extension, whose runs aren't on a report budget.
+func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(opt.Bool)) (done <-chan struct{}, stop func()) {
 	logf := c.Logf
 	if logf == nil {
 		logf = log.Printf
@@ -41,7 +50,17 @@ func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *ta
 	tmr := time.AfterFunc(captivePortalDelay, func() {
 		defer close(ch)
 		d := captivedetection.NewDetector(logf)
-		found := d.Detect(ctx, c.NetMon, dm, preferredDERP)
+		res := d.DetectResult(ctx, c.NetMon, dm, preferredDERP)
+		var found opt.Bool
+		switch res.Verdict {
+		case captivedetection.VerdictPortal:
+			found.Set(true)
+		case captivedetection.VerdictNoPortal:
+			found.Set(false)
+		default:
+			// Leave found unset: we learned nothing, and reporting that as
+			// "no captive portal" would be a claim we can't support.
+		}
 		setCaptivePortal(found)
 	})
 

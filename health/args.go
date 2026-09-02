@@ -40,4 +40,14 @@ const (
 	// ArgDomains provides a Warnable with a comma-delimited list of domain
 	// names involved in the unhealthy state.
 	ArgDomains Arg = "domains"
+
+	// ArgURL provides a Warnable with a URL the user should open to resolve the
+	// unhealthy state, such as the login page of a captive portal.
+	ArgURL Arg = "url"
+
+	// ArgExitNodeBlocksPortal is set on a captive portal Warnable when an exit
+	// node is routing LAN traffic over the tunnel, so the login page named by
+	// ArgURL cannot be reached until LAN access is allowed. It exists so that
+	// GUIs can offer to allow it without parsing the rendered message.
+	ArgExitNodeBlocksPortal Arg = "exit-node-blocks-portal"
 )

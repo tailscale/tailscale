@@ -6684,19 +6684,37 @@ func (b *LocalBackend) routerConfigLocked(cfg *wgcfg.Config, prefs ipn.PrefsView
 		if err != nil {
 			b.logf("failed to discover interface ips: %v", err)
 		}
+		// An extension may temporarily open up the local network even though the
+		// pref says otherwise, so that a captive portal login page hosted there
+		// can be reached; see [ipnext.Hooks.ExitNodeAllowLANOverride]. Note this
+		// only affects the local network's prefixes below: the default routes
+		// added above stay pointed at the exit node either way.
+		allowLAN := prefs.ExitNodeAllowLANAccess()
+		overridden := false
+		if !allowLAN {
+			if allowLANFx, ok := b.extHost.hooks.ExitNodeAllowLANOverride.GetOk(); ok && allowLANFx() {
+				allowLAN, overridden = true, true
+			}
+		}
 		switch runtime.GOOS {
 		case "linux", "windows", "darwin", "ios", "android", "openbsd":
 			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
-			if prefs.ExitNodeAllowLANAccess() {
+			if allowLAN {
 				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
 			} else {
 				// Explicitly add routes to the local network so that we do not
 				// leak any traffic.
 				rs.Routes = append(rs.Routes, externalIPs...)
 			}
-			b.logf("allowing exit node access to local IPs: %v", rs.LocalRoutes)
+			if overridden {
+				b.logf("allowing exit node access to local IPs (temporary override, not the pref): %v", rs.LocalRoutes)
+			} else {
+				b.logf("allowing exit node access to local IPs: %v", rs.LocalRoutes)
+			}
 		default:
-			if prefs.ExitNodeAllowLANAccess() {
+			if overridden {
+				b.logf("warning: temporary local network access has no effect on " + runtime.GOOS)
+			} else if allowLAN {
 				b.logf("warning: ExitNodeAllowLANAccess has no effect on " + runtime.GOOS)
 			}
 		}

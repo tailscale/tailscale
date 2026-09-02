@@ -37,6 +37,42 @@ func TestAvailableEndpointsAlwaysAtLeastTwo(t *testing.T) {
 	}
 }
 
+// TestProbeSetIncludesHostnameEndpoints guards the property that a detection
+// pass always probes by hostname as well as by IP. Portals that intercept on
+// the HTTP Host header blackhole the IP-addressed probes, so a probe set made
+// up only of those sees nothing at all.
+func TestProbeSetIncludesHostnameEndpoints(t *testing.T) {
+	endpoints := availableEndpoints(nil, 0, t.Logf, runtime.GOOS)
+	probes := probeSet(endpoints)
+
+	var byTier map[Tier]int = map[Tier]int{}
+	for _, e := range probes {
+		byTier[e.Tier]++
+	}
+	if got := byTier[TierDERPIP]; got != numDERPIPProbes {
+		t.Errorf("probe set has %d TierDERPIP endpoints, want %d", got, numDERPIPProbes)
+	}
+	if got := byTier[TierHostname]; got != numHostnameProbes {
+		t.Errorf("probe set has %d TierHostname endpoints, want %d", got, numHostnameProbes)
+	}
+	if got := byTier[TierThirdParty]; got != 0 {
+		t.Errorf("probe set has %d TierThirdParty endpoints, want 0; they are escalation-only", got)
+	}
+}
+
+// TestPreferredRegionProbedFirst checks that the probe budget for IP endpoints
+// goes to the preferred DERP region when we know it.
+func TestPreferredRegionProbedFirst(t *testing.T) {
+	endpoints := availableEndpoints(nil, 1, t.Logf, runtime.GOOS)
+	probes := probeSet(endpoints)
+	if len(probes) == 0 {
+		t.Fatal("no probes")
+	}
+	if got := probes[0].Provider; got != DERPMapPreferred {
+		t.Errorf("first probe provider = %v, want %v", got, DERPMapPreferred)
+	}
+}
+
 func TestDetectCaptivePortalReturnsFalse(t *testing.T) {
 	d := NewDetector(t.Logf)
 	found := d.Detect(context.Background(), netmon.NewStatic(), nil, 0)
@@ -59,6 +95,11 @@ func TestEndpointsAreUpAndReturnExpectedResponse(t *testing.T) {
 	var wg sync.WaitGroup
 	sem := syncs.NewSemaphore(5)
 	for _, e := range endpoints {
+		if !e.SupportsTailscaleChallenge {
+			// Only the challenge-echoing endpoints can produce a provably
+			// clean response, which is what this test is checking for.
+			continue
+		}
 		wg.Add(1)
 		go func(endpoint Endpoint) {
 			defer wg.Done()
@@ -68,12 +109,12 @@ func TestEndpointsAreUpAndReturnExpectedResponse(t *testing.T) {
 			}
 			defer sem.Release()
 
-			found, err := d.verifyCaptivePortalEndpoint(ctx, endpoint, 0)
+			s, _, err := d.probeEndpoint(ctx, endpoint, 0)
 			if err != nil && ctx.Err() == nil {
-				t.Logf("verifyCaptivePortalEndpoint failed with endpoint %v: %v", endpoint, err)
+				t.Logf("probeEndpoint failed with endpoint %v: %v", endpoint, err)
 			}
-			if found {
-				t.Logf("verifyCaptivePortalEndpoint with endpoint %v says we're behind a captive portal, but we aren't", endpoint)
+			if s != SignalClean {
+				t.Logf("probeEndpoint with endpoint %v reported %v, but we aren't behind a captive portal", endpoint, s)
 				return
 			}
 			good.Store(true)
@@ -120,12 +161,12 @@ func TestCaptivePortalRequest(t *testing.T) {
 		SupportsTailscaleChallenge: true,
 	}
 
-	found, err := d.verifyCaptivePortalEndpoint(ctx, e, 0)
+	got, _, err := d.probeEndpoint(ctx, e, 0)
 	if err != nil {
-		t.Fatalf("verifyCaptivePortalEndpoint = %v, %v", found, err)
+		t.Fatalf("probeEndpoint = %v, %v", got, err)
 	}
-	if found {
-		t.Errorf("verifyCaptivePortalEndpoint = %v, want false", found)
+	if got != SignalClean {
+		t.Errorf("probeEndpoint = %v, want %v", got, SignalClean)
 	}
 }
 
@@ -142,11 +183,11 @@ func TestAgainstDERPHandler(t *testing.T) {
 		ExpectedContent:            "",
 		SupportsTailscaleChallenge: true,
 	}
-	found, err := d.verifyCaptivePortalEndpoint(ctx, e, 0)
+	got, _, err := d.probeEndpoint(ctx, e, 0)
 	if err != nil {
-		t.Fatalf("verifyCaptivePortalEndpoint = %v, %v", found, err)
+		t.Fatalf("probeEndpoint = %v, %v", got, err)
 	}
-	if found {
-		t.Errorf("verifyCaptivePortalEndpoint = %v, want false", found)
+	if got != SignalClean {
+		t.Errorf("probeEndpoint = %v, want %v", got, SignalClean)
 	}
 }

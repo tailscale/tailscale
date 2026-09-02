@@ -516,6 +516,20 @@ type Hooks struct {
 	// The hook is called with LocalBackend's mutex locked. It must not
 	// call back into LocalBackend or block.
 	ExtraDNSRoutes feature.Hook[func() map[string][]*dnstype.Resolver]
+
+	// ExitNodeAllowLANOverride reports whether local network access should be
+	// allowed while an exit node is in use, even though
+	// [ipn.Prefs.ExitNodeAllowLANAccess] is false.
+	//
+	// It exists so that a captive portal login page hosted on the local network
+	// can be reached while an exit node holds the default route, which would
+	// otherwise blackhole it. See [tailscale.com/feature/captiveportal].
+	//
+	// This only ever moves the local network's own prefixes out of the tunnel.
+	// The default route stays pointed at the exit node regardless.
+	//
+	// The hook is called with LocalBackend's mutex locked.
+	ExitNodeAllowLANOverride feature.Hook[func() bool]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -82,6 +83,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/filter/filtertype"
+	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -10303,5 +10305,137 @@ func TestExtensionStateHooksWhileBlocked(t *testing.T) {
 	}
 	if !slices.Equal(configured, []bool{false}) {
 		t.Errorf("network configuration events = %v, want [false]", configured)
+	}
+}
+
+// TestRouterConfigExitNodeAllowLANOverride checks that the captive portal
+// escape hatch moves the local network out of the tunnel and nothing else.
+//
+// The whole point of the override is to be narrower than turning the exit node
+// off: a portal login page on the local network becomes reachable, while all
+// other traffic stays pointed at the exit node. If it ever widened to drop the
+// default routes it would be a full traffic leak, so that half is asserted
+// explicitly rather than left implied.
+func TestRouterConfigExitNodeAllowLANOverride(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "windows", "darwin", "ios", "android", "openbsd":
+	default:
+		t.Skipf("ExitNodeAllowLANAccess has no effect on %s", runtime.GOOS)
+	}
+	// The prefixes that move are this host's own, so on a machine with no
+	// external interfaces there is nothing here to observe. Skip loudly rather
+	// than pass while asserting nothing.
+	if _, external, err := internalAndExternalInterfaces(); err != nil || len(external) == 0 {
+		t.Skipf("no external interfaces to move (err=%v); nothing to test", err)
+	}
+
+	// routes returns what routerConfigLocked programs with the override hook
+	// reporting allow.
+	routes := func(t *testing.T, hook func() bool) (rs, local []netip.Prefix) {
+		t.Helper()
+		lb := newTestLocalBackend(t)
+		if hook != nil {
+			restore := lb.extHost.hooks.ExitNodeAllowLANOverride.SetForTest(hook)
+			t.Cleanup(restore)
+		}
+		nm := &netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				Name:      "test-node",
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+			}).View(),
+		}
+		lb.currentNode().SetNetMap(nm)
+
+		prefs := ipn.Prefs{
+			ExitNodeID: "exit-node-1",
+			// Explicitly off: the override exists to act despite this.
+			ExitNodeAllowLANAccess: false,
+		}
+		rcfg := lb.routerConfigLocked(&wgcfg.Config{}, prefs.View(), nm)
+		return rcfg.Routes, rcfg.LocalRoutes
+	}
+
+	offRoutes, offLocal := routes(t, nil)
+	onRoutes, onLocal := routes(t, func() bool { return true })
+	denyRoutes, denyLocal := routes(t, func() bool { return false })
+
+	// The default routes must stay in the tunnel in every case, or the override
+	// has stopped being an exception for the local network and become a leak.
+	for _, tc := range []struct {
+		name string
+		rs   []netip.Prefix
+	}{
+		{"hook absent", offRoutes},
+		{"hook allows", onRoutes},
+		{"hook denies", denyRoutes},
+	} {
+		for _, def := range []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()} {
+			if !slices.Contains(tc.rs, def) {
+				t.Errorf("%s: Routes is missing %v; the default route must always stay on the tunnel", tc.name, def)
+			}
+		}
+	}
+
+	// A hook that declines must behave exactly as if it weren't there.
+	if !slices.Equal(offRoutes, denyRoutes) || !slices.Equal(offLocal, denyLocal) {
+		t.Errorf("a declining hook changed the config:\n routes %v vs %v\n local %v vs %v",
+			offRoutes, denyRoutes, offLocal, denyLocal)
+	}
+
+	// The local network's prefixes are whatever this host happens to have, so
+	// rather than hardcoding them, assert they moved: out of Routes and into
+	// LocalRoutes. That difference is the entire behavior change.
+	moved := false
+	for _, p := range offRoutes {
+		if p == tsaddr.AllIPv4() || p == tsaddr.AllIPv6() {
+			continue
+		}
+		if slices.Contains(onRoutes, p) {
+			continue
+		}
+		moved = true
+		if !slices.Contains(onLocal, p) {
+			t.Errorf("%v left Routes but did not appear in LocalRoutes; it is now unroutable rather than local", p)
+		}
+	}
+	if !moved && len(offRoutes) != len(onRoutes) {
+		t.Errorf("Routes changed size (%d -> %d) without any prefix moving", len(offRoutes), len(onRoutes))
+	}
+	// Whatever was already excluded from the tunnel stays excluded.
+	for _, p := range offLocal {
+		if !slices.Contains(onLocal, p) {
+			t.Errorf("%v was in LocalRoutes without the override and is missing with it", p)
+		}
+	}
+}
+
+// TestRouterConfigNoExitNodeIgnoresOverride checks the override is inert when
+// there's no exit node holding the default route, so it can't be used to open
+// up the local network in the ordinary case.
+func TestRouterConfigNoExitNodeIgnoresOverride(t *testing.T) {
+	cfg := func(t *testing.T, hook func() bool) *router.Config {
+		t.Helper()
+		lb := newTestLocalBackend(t)
+		if hook != nil {
+			t.Cleanup(lb.extHost.hooks.ExitNodeAllowLANOverride.SetForTest(hook))
+		}
+		nm := &netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				Name:      "test-node",
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+			}).View(),
+		}
+		lb.currentNode().SetNetMap(nm)
+		return lb.routerConfigLocked(&wgcfg.Config{}, (&ipn.Prefs{}).View(), nm)
+	}
+
+	without := cfg(t, nil)
+	with := cfg(t, func() bool { return true })
+
+	if !slices.Equal(without.Routes, with.Routes) {
+		t.Errorf("Routes = %v with the override, want %v", with.Routes, without.Routes)
+	}
+	if !slices.Equal(without.LocalRoutes, with.LocalRoutes) {
+		t.Errorf("LocalRoutes = %v with the override, want %v", with.LocalRoutes, without.LocalRoutes)
 	}
 }
