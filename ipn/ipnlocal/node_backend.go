@@ -794,16 +794,17 @@ func (nb *nodeBackend) addNodeNameLocked(name string, nid tailcfg.NodeID) {
 }
 
 // removeNodeNameLocked removes both the FQDN and short-name keys for the
-// given node from nb.nodeByName. nb.mu must be held.
-func (nb *nodeBackend) removeNodeNameLocked(name string) {
+// given node from nb.nodeByName, unless another node has since claimed
+// them (see [deleteIfOwned]). nb.mu must be held.
+func (nb *nodeBackend) removeNodeNameLocked(name string, nid tailcfg.NodeID) {
 	if name == "" {
 		// We might support name-less nodes in the future; tailscale/corp#43949
 		return
 	}
 	canon := strings.ToLower(strings.TrimSuffix(name, "."))
-	delete(nb.nodeByName, canon)
+	deleteIfOwned(nb.nodeByName, canon, nid)
 	if suffix := nb.netMap.MagicDNSSuffix(); dnsname.HasSuffix(canon, suffix) {
-		delete(nb.nodeByName, dnsname.TrimSuffix(canon, suffix))
+		deleteIfOwned(nb.nodeByName, dnsname.TrimSuffix(canon, suffix), nid)
 	}
 }
 
@@ -1066,6 +1067,22 @@ func (nb *nodeBackend) mergeUserProfiles(profiles map[tailcfg.UserID]tailcfg.Use
 	}
 }
 
+// deleteIfOwned deletes m[k] only if the entry still maps to nid.
+//
+// It exists because a node index entry derived from a node's last-known
+// value may have since been claimed by another node. For example, control
+// can reassign a churning ephemeral peer's Tailscale IP to a newer peer
+// and deliver the new peer's upsert before the old peer's removal, either
+// in an earlier MapResponse or reordered within one batch by the NodeID
+// sort in [netmap.MutationsFromMapResponse]. Deleting unconditionally
+// would then evict the new owner's entry, breaking lookups by IP (WhoIs,
+// and thus PeerAPI and App Connector DNS) until the next full netmap.
+func deleteIfOwned[K comparable](m map[K]tailcfg.NodeID, k K, nid tailcfg.NodeID) {
+	if m[k] == nid {
+		delete(m, k)
+	}
+}
+
 // netmapDeltaResult describes the side effects of applying netmap
 // delta mutations that the caller must propagate.
 type netmapDeltaResult struct {
@@ -1128,15 +1145,17 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 				// console arrives as an upsert with a new Name, and a
 				// stale nodeByName entry would keep serving MagicDNS
 				// answers for the old name (tailscale/corp#45631).
+				// Evictions are conditional (see [deleteIfOwned]) so
+				// entries already claimed by another node are kept.
 				for _, ipp := range old.Addresses().All() {
 					if ipp.IsSingleIP() {
-						delete(nb.nodeByAddr, ipp.Addr())
+						deleteIfOwned(nb.nodeByAddr, ipp.Addr(), nid)
 					}
 				}
-				delete(nb.nodeByKey, old.Key())
-				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
-				delete(nb.nodeByStableID, old.StableID())
-				nb.removeNodeNameLocked(old.Name())
+				deleteIfOwned(nb.nodeByKey, old.Key(), nid)
+				deleteIfOwned(nb.nodeByWGString, old.Key().WireGuardGoString(), nid)
+				deleteIfOwned(nb.nodeByStableID, old.StableID(), nid)
+				nb.removeNodeNameLocked(old.Name(), nid)
 			}
 			mak.Set(&nb.peers, nid, m.Node)
 			for _, ipp := range m.Node.Addresses().All() {
@@ -1155,14 +1174,14 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 			if old, ok := nb.peers[nid]; ok {
 				for _, ipp := range old.Addresses().All() {
 					if ipp.IsSingleIP() {
-						delete(nb.nodeByAddr, ipp.Addr())
+						deleteIfOwned(nb.nodeByAddr, ipp.Addr(), nid)
 					}
 				}
-				delete(nb.nodeByKey, old.Key())
-				delete(nb.nodeByWGString, old.Key().WireGuardGoString())
-				delete(nb.nodeByStableID, old.StableID())
+				deleteIfOwned(nb.nodeByKey, old.Key(), nid)
+				deleteIfOwned(nb.nodeByWGString, old.Key().WireGuardGoString(), nid)
+				deleteIfOwned(nb.nodeByStableID, old.StableID(), nid)
 				delete(nb.tsmpLearnedDisco, old.Key())
-				nb.removeNodeNameLocked(old.Name())
+				nb.removeNodeNameLocked(old.Name(), nid)
 				delete(nb.peers, nid)
 				rt.RemovePeer(nid)
 				res.RemovedPeers = append(res.RemovedPeers, old.StableID())
