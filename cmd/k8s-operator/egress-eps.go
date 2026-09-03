@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -69,6 +70,25 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 	if err != nil {
 		return res, fmt.Errorf("error retrieving ExternalName Service: %w", err)
+	}
+
+	// Retrieve the current ClusterIP Service. This reconciler is triggered by the slice itself, so it can be
+	// handed an orphan - a slice left behind in some circumstances (for example, when the ProxyGroup on the
+	// parent Service was changed). In that case the slice's service-name label no longer matches the current
+	// ClusterIP Service, and writing to it would rebind a stale slice into the live Service, unioning its stale
+	// endpoints into cluster traffic. Fetch the ClusterIP Service first and only proceed for slices bound to it.
+	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, er.Client, er.tsNamespace, egressSvcChildResourceLabels(svc))
+	if err != nil {
+		return res, fmt.Errorf("error retrieving ClusterIP Service: %w", err)
+	}
+	if clusterIPSvc == nil {
+		lg.Debugf("ClusterIP Service not found, waiting...")
+		return res, nil
+	}
+	if eps.Labels[discoveryv1.LabelServiceName] != clusterIPSvc.Name {
+		lg.Debugf("EndpointSlice %s is bound to non-current ClusterIP Service %q (current %q); skipping",
+			eps.Name, eps.Labels[discoveryv1.LabelServiceName], clusterIPSvc.Name)
+		return res, nil
 	}
 
 	// TODO(irbekrm): currently this reconcile loop runs all the checks every time it's triggered, which is
@@ -130,6 +150,18 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 			},
 		})
 	}
+	// Endpoints must be in a deterministic order: without sorting, an unchanged set of ready Pods returned in a
+	// different order would trigger a needless Update which, because this reconciler watches EndpointSlices,
+	// would re-trigger itself (see tailscale/tailscale#20916). Sort by Pod UID (Hostname), which is stable per Pod.
+	hostname := func(e discoveryv1.Endpoint) string {
+		if e.Hostname == nil {
+			return ""
+		}
+		return *e.Hostname
+	}
+	slices.SortFunc(newEndpoints, func(a, b discoveryv1.Endpoint) int {
+		return strings.Compare(hostname(a), hostname(b))
+	})
 	// Note that Endpoints are being overwritten with the currently valid endpoints so we don't need to explicitly
 	// run a cleanup for deleted Pods etc.
 	eps.Endpoints = newEndpoints

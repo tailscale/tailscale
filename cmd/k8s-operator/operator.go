@@ -578,6 +578,9 @@ func runReconcilers(opts reconcilerOpts) {
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
 		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
+		// TODO remove the deletion filter - basically just always reconcile on eps here
+		// use the service condition to reconcile less
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsDeleteFilter, builder.WithPredicates(egressSliceDeletedOnly)).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,

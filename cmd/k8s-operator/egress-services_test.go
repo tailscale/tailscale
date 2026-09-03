@@ -111,6 +111,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 		})
 		expectReconciled(t, esr, "default", "test")
 		validateReadyService(t, fc, esr, svc, clock, zl, cm)
+		// check old and new ports match
 	})
 	t.Run("service_change_protocol", func(t *testing.T) {
 		svc.Spec.Ports = []corev1.ServicePort{{Protocol: "TCP", Port: 80, Name: "http"}, {Protocol: "TCP", Port: 443, Name: "https"}, {Port: 53, Protocol: "TCP", Name: "tcp_dns"}}

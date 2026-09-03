@@ -162,10 +162,10 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	if err := esr.maybeProvision(ctx, svc, lg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
-			lg.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+			lg.Infof("optimistic lock error, requeueing: %s", err)
+			return reconcile.Result{Requeue: true}, nil
 		}
+		return reconcile.Result{}, err
 	}
 
 	return res, nil
@@ -191,7 +191,7 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	if clusterIPSvc == nil {
 		clusterIPSvc = esr.clusterIPSvcForEgress(crl)
 	}
-	upToDate := svcConfigurationUpToDate(svc, lg)
+	upToDate := svcConfigurationUpToDate(svc, lg) // try removing this - see if the ipv6 eps is created. OR add an eps up to date condition.
 	provisioned := true
 	if !upToDate {
 		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, lg); err != nil {
@@ -203,8 +203,9 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 		return nil
 	}
 
-	if err := esr.ensureEndpointSlices(ctx, svc, clusterIPSvc, lg); err != nil {
+	if err := esr.ensureEndpointSliceExists(ctx, svc, clusterIPSvc, lg); err != nil {
 		return err
+		// why isnt it just using the svcconfigured reason thing and re-entering provision?
 	}
 
 	// Update ExternalName Service to point at the ClusterIP Service.
@@ -243,10 +244,13 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 	return addrTypes, nil
 }
 
-// ensureEndpointSlices ensures that EndpointSlices exist for the egress service
-// for each IP family supported by the cluster, and that their ports are up to
-// date.
-func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
+// ensureEndpointSliceExists ensures that an EndpointSlice exists for the egress
+// service for each IP family supported by the cluster, creating any that are
+// missing.
+//
+// We only handle creation here: provision owns labels, addressType and ports,
+// and the egress EndpointSlices reconciler owns endpoints (see tailscale/tailscale#20916).
+func (esr *egressSvcsReconciler) ensureEndpointSliceExists(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
 	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
@@ -254,29 +258,34 @@ func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, 
 		return err
 	}
 	for _, addrType := range addrTypes {
+		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
+		existing := new(discoveryv1.EndpointSlice)
+		err := esr.Get(ctx, types.NamespacedName{Name: name, Namespace: esr.tsNamespace}, existing)
+		switch {
+		case err == nil:
+			continue // Slice already exists; do not touch it.
+		case !apierrors.IsNotFound(err):
+			return fmt.Errorf("error getting %s EndpointSlice: %w", addrType, err)
+		}
 		eps := &discoveryv1.EndpointSlice{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+				Name:      name,
 				Namespace: esr.tsNamespace,
 				Labels:    crl,
 			},
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
-		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-			e.Labels = eps.Labels
-			e.AddressType = eps.AddressType
-			e.Ports = eps.Ports
-			for _, p := range e.Endpoints {
-				p.Conditions.Ready = nil
-			}
-		}); err != nil {
-			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+		if err := esr.Create(ctx, eps); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("error creating %s EndpointSlice: %w", addrType, err)
 		}
+		lg.Debugf("created %s EndpointSlice %s", addrType, name)
 	}
+	// chec if remove condition check it creates an ipv6 eps.
 	return nil
 }
 
+// test upgrade. what happens to operator on older version and check settles. check reconiling on eps is ok.
 func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName string, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) (*corev1.Service, bool, error) {
 	lg.Infof("updating configuration...")
 	usedPorts, err := esr.usedPortsForPG(ctx, proxyGroupName)
@@ -372,6 +381,29 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 			svc.Spec = clusterIPSvc.Spec
 		}); err != nil {
 			return nil, false, fmt.Errorf("error ensuring ClusterIP Service: %v", err)
+		}
+	}
+	crl := egressSvcEpsLabels(svc, clusterIPSvc)
+	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, addrType := range addrTypes {
+		eps := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+				Namespace: esr.tsNamespace,
+				Labels:    crl,
+			},
+			AddressType: addrType,
+			Ports:       epsPortsFromSvc(clusterIPSvc),
+		}
+		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
+			e.Labels = eps.Labels
+			e.AddressType = eps.AddressType
+			e.Ports = eps.Ports
+		}); err != nil {
+			return nil, false, fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
 		}
 	}
 
@@ -748,6 +780,7 @@ func svcConfigurationUpToDate(svc *corev1.Service, lg *zap.SugaredLogger) bool {
 	if cond.Status != metav1.ConditionTrue {
 		return false
 	}
+	// some sort of status that goes we have provisioned for both address types correclty - should be the only place the condition is used? check if endpointslices uses it.
 	wantsReadyReason := svcConfiguredReason(svc, true, lg)
 	return strings.EqualFold(wantsReadyReason, cond.Reason)
 }
@@ -787,7 +820,9 @@ func svcConfiguredReason(svc *corev1.Service, configured bool, lg *zap.SugaredLo
 		Ports:         svc.Spec.Ports,
 		TailnetTarget: tt,
 		ProxyGroup:    svc.Annotations[AnnotationProxyGroup],
+		// add the address types- will be a diff for all so all will rbe reconciled
 	}
+
 	r += fmt.Sprintf(":Config:%s", cfgHash(s, lg))
 	return r
 }

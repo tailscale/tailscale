@@ -74,26 +74,6 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}()
 
 	crl := egressSvcChildResourceLabels(svc)
-	epsList := &discoveryv1.EndpointSliceList{}
-	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
-		err = fmt.Errorf("error listing EndpointSlices: %w", err)
-		reason = reasonReadinessCheckFailed
-		msg = err.Error()
-		return res, err
-	}
-	if len(epsList.Items) == 0 {
-		lg.Infof("EndpointSlices for Service do not yet exist, waiting...")
-		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
-		st = metav1.ConditionFalse
-		return res, nil
-	}
-	// If an EndpointSlice for an expected family is missing, we mark the Service as NotReady.
-	//
-	// Setting the NotReady condition here is also used for best-effort recovery. The
-	// egress-svcs-reconciler does not watch EndpointSlices, so a deleted EndpointSlice is only
-	// recreated when this status change re-triggers a Service reconcile.
-	//
-	// TODO(beckypauley): refactor so EndpointSlice recovery is not dependent on Service status.
 	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
 	if err != nil {
 		err = fmt.Errorf("error retrieving ClusterIP Service: %w", err)
@@ -103,6 +83,27 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 	}
 	if clusterIPSvc == nil {
 		lg.Infof("ClusterIP Service for egress Service does not yet exist, waiting...")
+		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
+		st = metav1.ConditionFalse
+		return res, nil
+	}
+
+	epsList := &discoveryv1.EndpointSliceList{}
+	if err = esrr.List(ctx, epsList, client.InNamespace(esrr.tsNamespace), client.MatchingLabels(crl)); err != nil {
+		err = fmt.Errorf("error listing EndpointSlices: %w", err)
+		reason = reasonReadinessCheckFailed
+		msg = err.Error()
+		return res, err
+	}
+	// Note: with dual-stack we List EndpointSlices by the shared child-resource labels (crl), which do not
+	// include the ClusterIP Service name, so in principle a stale/orphaned slice (its service-name label no
+	// longer matching the current ClusterIP Service) could be included here. That only arises if the internal
+	// ClusterIP Service is deleted out-of-band and later re-provisioned under a new generated name while the old
+	// slice lingers (no ownerRefs) — a rare, unsupported state whose primary failure (broken egress + no
+	// self-heal) this reconciler does not address anyway. We deliberately do not filter it out here. The proper
+	// fix is an ownerReference from the ClusterIP Service to its EndpointSlices; TODO(tailscale/tailscale#20916).
+	if len(epsList.Items) == 0 {
+		lg.Infof("EndpointSlices for Service do not yet exist, waiting...")
 		reason, msg = reasonClusterResourcesNotReady, reasonClusterResourcesNotReady
 		st = metav1.ConditionFalse
 		return res, nil
