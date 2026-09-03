@@ -50,7 +50,7 @@ type dataChannelRW struct {
 type peerState struct {
 	peer          magicsock.WebRTCPeer
 	peerConn      *webrtc.PeerConnection
-	dataChannel   *webrtc.DataChannel
+	dataChannel   atomic.Pointer[webrtc.DataChannel]
 	dcRW          atomic.Pointer[dataChannelRW] // non-nil once the DataChannel is open
 	remoteDisco   key.DiscoPublic
 	remoteNodeKey key.NodePublic // peer's node public key (for WireGuard)

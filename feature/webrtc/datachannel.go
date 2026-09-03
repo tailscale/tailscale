@@ -36,7 +36,7 @@ func (m *manager) SendPacket(dst key.DiscoPublic, b []byte) error {
 	}
 
 	// JS/fallback path: use DataChannel.Send() directly.
-	dc := ps.dataChannel
+	dc := ps.dataChannel.Load()
 	if dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
 		return errors.New("data channel not ready")
 	}

@@ -77,9 +77,25 @@ func (m *manager) retryFailedConnections() {
 
 // handleStartConnection creates a new WebRTC connection to a peer.
 func (m *manager) handleStartConnection(p magicsock.WebRTCPeer) {
-	m.mu.Lock()
+	// Query the endpoint before taking m.mu: DiscoKey/DERPReady/NodeAddr acquire
+	// the endpoint lock, and populatePeerStatus acquires the endpoint lock and
+	// then m.mu (via GetRemoteAddr), so holding m.mu across these would invert
+	// the lock order and can deadlock.
+	remoteDisco, ok := p.DiscoKey()
+	if !ok {
+		m.logf("webrtc: cannot start connection, peer has no disco key")
+		return
+	}
+	// If the peer's DERP address isn't known yet, the signaling offer will fail
+	// immediately. This can happen on startup or after a disco-key rotation
+	// before the DERP connection to the new key is established. The next netmap
+	// update will re-trigger startConnection once the peer is reachable.
+	if !p.DERPReady() {
+		return
+	}
 
-	// Check if we already have a connection
+	m.mu.Lock()
+	// Check if we already have a connection.
 	if ps, exists := m.peerConnectionsByPeer[p]; exists {
 		switch ps.state {
 		case stateConnecting, stateConnected:
@@ -93,27 +109,9 @@ func (m *manager) handleStartConnection(p magicsock.WebRTCPeer) {
 			delete(m.peerConnectionsByDisco, ps.remoteDisco)
 		}
 	}
-
-	remoteDisco, ok := p.DiscoKey()
-	if !ok {
-		m.mu.Unlock()
-		m.logf("webrtc: cannot start connection, peer has no disco key")
-		return
-	}
-
-	// Check that the peer's DERP address is known before proceeding.
-	// If it isn't, the signaling offer will fail immediately. This can
-	// happen on startup or after a disco-key rotation before the DERP
-	// connection to the new key is established. The next netmap update
-	// will re-trigger startConnection once the peer is reachable.
-	if !p.DERPReady() {
-		m.mu.Unlock()
-		return
-	}
+	m.mu.Unlock()
 
 	m.logf("webrtc: starting connection to peer %v (disco %v)", p.NodeAddr(), remoteDisco.ShortString())
-
-	m.mu.Unlock()
 
 	peerConn, err := m.api.NewPeerConnection(iceConfig)
 	if err != nil {
@@ -129,8 +127,21 @@ func (m *manager) handleStartConnection(p magicsock.WebRTCPeer) {
 		state:         stateConnecting,
 	}
 
-	// Store peer state
+	// Publish the peer state. Re-check under the lock: NewPeerConnection was slow
+	// and released m.mu, so the manager may have closed (nil maps) or a
+	// concurrent incoming offer may have created an answerer conn for this peer.
+	// In either case discard this attempt rather than leak or clobber it.
 	m.mu.Lock()
+	if m.peerConnectionsByPeer == nil {
+		m.mu.Unlock()
+		peerConn.Close()
+		return
+	}
+	if _, exists := m.peerConnectionsByPeer[p]; exists {
+		m.mu.Unlock()
+		peerConn.Close()
+		return
+	}
 	m.peerConnectionsByPeer[p] = ps
 	m.peerConnectionsByDisco[remoteDisco] = ps
 	m.mu.Unlock()
@@ -158,7 +169,7 @@ func (m *manager) handleStartConnection(p magicsock.WebRTCPeer) {
 		return
 	}
 
-	ps.dataChannel = dataChannel
+	ps.dataChannel.Store(dataChannel)
 	m.setupDataChannel(ps, dataChannel, remoteDisco, p)
 
 	// Create and send the offer on a separate goroutine, NOT on the runLoop.
@@ -181,30 +192,37 @@ func (m *manager) createAndSendOffer(ps *peerState, peerConn *webrtc.PeerConnect
 	if err != nil {
 		m.logf("webrtc: failed to create offer: %v", err)
 		peerConn.Close()
+		m.removeIfCurrent(p, remoteDisco, ps)
 		return
 	}
 
 	if err := peerConn.SetLocalDescription(offer); err != nil {
 		m.logf("webrtc: failed to set local description: %v", err)
 		peerConn.Close()
+		m.removeIfCurrent(p, remoteDisco, ps)
 		return
 	}
 
 	if err := m.sendOffer(remoteDisco, &offer); err != nil {
 		m.logf("webrtc: failed to send offer: %v", err)
 		peerConn.Close()
-		m.mu.Lock()
-		// Only delete if this attempt still owns the map slot; a concurrent
-		// glare rebuild may have replaced it with an answerer conn.
-		if cur, ok := m.peerConnectionsByPeer[p]; ok && cur == ps {
-			delete(m.peerConnectionsByPeer, p)
-			delete(m.peerConnectionsByDisco, remoteDisco)
-		}
-		m.mu.Unlock()
+		m.removeIfCurrent(p, remoteDisco, ps)
 		return
 	}
 
 	m.logf("webrtc: sent offer to peer %v", remoteDisco.ShortString())
+}
+
+// removeIfCurrent deletes ps from the peer maps if it is still the current
+// entry for p, so a concurrent rebuild that already replaced it is not
+// clobbered. Safe to call after the manager is closed (maps are nil).
+func (m *manager) removeIfCurrent(p magicsock.WebRTCPeer, remoteDisco key.DiscoPublic, ps *peerState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.peerConnectionsByPeer[p]; ok && cur == ps {
+		delete(m.peerConnectionsByPeer, p)
+		delete(m.peerConnectionsByDisco, remoteDisco)
+	}
 }
 
 // setupPeerConnHandlers wires the connection-state and ICE-candidate callbacks
@@ -245,16 +263,10 @@ func (m *manager) setupDataChannel(ps *peerState, dc *webrtc.DataChannel, remote
 		}
 		m.logf("webrtc: data channel opened for peer %v", remoteDisco.ShortString())
 
-		// Mark the WebRTC path ready directly from this pion callback goroutine.
-		// We deliberately do NOT hop through the runLoop: the runLoop can be
-		// busy (e.g. blocked in a pion CreateOffer during glare) while this
-		// side's answerer channel is already open, and routing readiness through
-		// it would strand the path on DERP. SetWebRTCChannelReady only takes the
-		// endpoint lock, not m.mu, so it's safe to call here.
 		if m.b.DisableWebRTC() {
 			return
 		}
-		p.SetWebRTCChannelReady(true)
+		m.setChannelReady(ps, p, true)
 		m.logf("webrtc: marked WebRTC channel ready for peer %v", remoteDisco.ShortString())
 	})
 }
@@ -311,9 +323,24 @@ func (m *manager) handleConnectionStateChange(ps *peerState, state webrtc.PeerCo
 
 	m.mu.Unlock()
 
-	// SetWebRTCChannelReady acquires the endpoint lock; call it without m.mu
-	// held. Clearing the ready flag stops the heartbeat re-probing a dead path.
 	if channelDown {
-		ps.peer.SetWebRTCChannelReady(false)
+		m.setChannelReady(ps, ps.peer, false)
 	}
+}
+
+// setChannelReady updates the peer's WebRTC channel-ready flag, but only if ps
+// is still the current peerState for p. Pion fires open/close callbacks for
+// different peerStates on unordered goroutines; without this a stale
+// connection's close (ready=false) could clobber a newer connection's open
+// (ready=true) and strand a live channel on DERP. It takes the endpoint lock
+// via SetWebRTCChannelReady, so it must be called without m.mu held.
+func (m *manager) setChannelReady(ps *peerState, p magicsock.WebRTCPeer, ready bool) {
+	m.mu.RLock()
+	cur, ok := m.peerConnectionsByPeer[p]
+	current := ok && cur == ps
+	m.mu.RUnlock()
+	if !current {
+		return
+	}
+	p.SetWebRTCChannelReady(ready)
 }

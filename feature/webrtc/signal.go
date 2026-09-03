@@ -11,6 +11,12 @@ import (
 	"tailscale.com/types/key"
 )
 
+// maxPendingCandidates bounds how many remote ICE candidates we buffer before
+// the remote description is set, so a peer that never answers cannot make us
+// buffer without bound. ICE gathering for a single DataChannel yields well
+// under this many candidates.
+const maxPendingCandidates = 32
+
 // dispatchPayload unmarshals a JSON-encoded signaling message received over
 // disco and invokes dispatch with the sender's disco key. It is the shared body
 // of the three kinds handled by [manager.HandleSignal].
@@ -111,6 +117,8 @@ func (m *manager) handleRemoteOffer(remoteDisco key.DiscoPublic, offer *webrtc.S
 
 	if err := ps.peerConn.SetRemoteDescription(*offer); err != nil {
 		m.logf("webrtc: failed to set remote description: %v", err)
+		ps.peerConn.Close()
+		m.removeIfCurrent(ps.peer, remoteDisco, ps)
 		return
 	}
 	m.markRemoteDescSet(ps)
@@ -119,17 +127,23 @@ func (m *manager) handleRemoteOffer(remoteDisco key.DiscoPublic, offer *webrtc.S
 	answer, err := ps.peerConn.CreateAnswer(nil)
 	if err != nil {
 		m.logf("webrtc: failed to create answer: %v", err)
+		ps.peerConn.Close()
+		m.removeIfCurrent(ps.peer, remoteDisco, ps)
 		return
 	}
 
 	if err := ps.peerConn.SetLocalDescription(answer); err != nil {
 		m.logf("webrtc: failed to set local description: %v", err)
+		ps.peerConn.Close()
+		m.removeIfCurrent(ps.peer, remoteDisco, ps)
 		return
 	}
 
 	// Send answer via signaling
 	if err := m.sendAnswer(remoteDisco, &answer); err != nil {
 		m.logf("webrtc: failed to send answer: %v", err)
+		ps.peerConn.Close()
+		m.removeIfCurrent(ps.peer, remoteDisco, ps)
 		return
 	}
 
@@ -172,7 +186,7 @@ func (m *manager) newAnswererConn(remoteDisco key.DiscoPublic) (*peerState, bool
 	// For the answerer, we wait for the data channel from the offerer.
 	peerConn.OnDataChannel(func(dc *webrtc.DataChannel) {
 		m.logf("webrtc: received data channel from peer %v", remoteDisco.ShortString())
-		ps.dataChannel = dc
+		ps.dataChannel.Store(dc)
 		m.setupDataChannel(ps, dc, remoteDisco, peer)
 	})
 
@@ -205,7 +219,14 @@ func (m *manager) handleRemoteCandidate(remoteDisco key.DiscoPublic, candidate *
 	ps, exists := m.peerConnectionsByDisco[remoteDisco]
 	if exists && !ps.remoteDescSet {
 		// Remote description not set yet, so buffer the candidate and apply it
-		// once SetRemoteDescription is called (see markRemoteDescSet).
+		// once SetRemoteDescription is called (see markRemoteDescSet). Cap the
+		// buffer so a peer that streams candidates but never sends an answer
+		// cannot grow it without bound.
+		if len(ps.pendingCandidates) >= maxPendingCandidates {
+			m.mu.Unlock()
+			m.logf("webrtc: dropping ICE candidate for peer %v (pending buffer full)", remoteDisco.ShortString())
+			return
+		}
 		ps.pendingCandidates = append(ps.pendingCandidates, *candidate)
 		m.mu.Unlock()
 		m.logf("webrtc: buffered ICE candidate for peer %v (remote desc not yet set)", remoteDisco.ShortString())
