@@ -1621,10 +1621,11 @@ type testHost struct {
 	authReconfigAsync func()
 }
 
-func (h *testHost) NodeBackend() ipnext.NodeBackend  { return h.nb }
-func (h *testHost) Hooks() *ipnext.Hooks             { return &h.hooks }
-func (h *testHost) Profiles() ipnext.ProfileServices { return &testProfileServices{prefs: h.prefs} }
-func (h *testHost) AuthReconfigAsync()               { h.authReconfigAsync() }
+func (h *testHost) NodeBackend() ipnext.NodeBackend      { return h.nb }
+func (h *testHost) Hooks() *ipnext.Hooks                 { return &h.hooks }
+func (h *testHost) Profiles() ipnext.ProfileServices     { return &testProfileServices{prefs: h.prefs} }
+func (h *testHost) AuthReconfigAsync()                   { h.authReconfigAsync() }
+func (h *testHost) Extensions() ipnext.ExtensionServices { return nil }
 
 type testSafeBackend struct {
 	ipnext.SafeBackend
@@ -3404,7 +3405,7 @@ func TestPickConnector(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app)
+			got := pickConnector(&testNodeBackend{self: self, peers: tt.candidates}, tt.app, nil)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("PickConnectors (-want, +got):\n%s", diff)
 			}

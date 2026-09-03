@@ -79,6 +79,7 @@ func (rt *RouterTracker) Close() error {
 // StartStopWatcher reports whether the watcher goroutine was started,
 // either because it was previously stopped or because it needed restarting.
 func (rt *RouterTracker) StartStopWatcher(self tailcfg.NodeView) (started bool, _ error) {
+	fmt.Println("RouterTracker StartStopWatcher")
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
@@ -111,13 +112,16 @@ func sameNode(a, b tailcfg.NodeView) bool {
 // startWatcherLocked launches the goroutine that watches the IPN bus.
 // rt.mu must be held and the watcher must not already be running.
 func (rt *RouterTracker) startWatcherLocked(self tailcfg.NodeView) error {
+	fmt.Println("RouterTracker startWatcherLocked")
 	syncs.RequiresMutex(&rt.mu)
 	if rt.closed {
 		return fmt.Errorf("cannot start, tracker was closed")
 	}
+	fmt.Println("RouterTracker startWatcherLocked 1")
 	if rt.cancel != nil || rt.done != nil {
 		return fmt.Errorf("cannot start, already watching IPN bus")
 	}
+	fmt.Println("RouterTracker startWatcherLocked 2")
 
 	if !routecheck.IsEnabled(self) {
 		if !self.Valid() {
@@ -125,6 +129,7 @@ func (rt *RouterTracker) startWatcherLocked(self tailcfg.NodeView) error {
 		}
 		return fmt.Errorf("%w for %v on %v", ErrRouteCheckNotEnabled, self.User(), self.ID())
 	}
+	fmt.Println("RouterTracker startWatcherLocked 3")
 	rt.self = self
 
 	ctx, cancel := context.WithCancel(rt.ctx)
@@ -172,11 +177,13 @@ func (rt *RouterTracker) stopWatcherLocked() {
 // To avoid stalls, these notifications must be processed promptly
 // because we enabled [ipn.NotifyInProcessNoDisconnect] which blocks the caller.
 func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, self tailcfg.NodeView) {
+	fmt.Println("RouterTracker watchIPNBus")
 	defer close(done)
 
 	routers := make(set.Set[tailcfg.NodeID])
 	const mask = ipn.NotifyInProcessNoDisconnect | ipn.NotifyInitialStatus | ipn.NotifyPeerChanges
 	rt.ipnbus.WatchNotifications(ctx, mask, nil, func(n *ipn.Notify) bool {
+		fmt.Println("RouterTracker watchIPNBus 1")
 		var added, modified, removed []tailcfg.NodeID
 		if s := n.InitialStatus; s != nil {
 			if rt.OnNetMapAvailable != nil {
@@ -215,6 +222,7 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 				removed = append(removed, nid)
 			}
 		}
+		fmt.Println("RouterTracker watchIPNBus 2: added modified removed:", len(added), len(modified), len(removed))
 
 		if added != nil || modified != nil || removed != nil {
 			if rt.OnRoutersChange != nil {

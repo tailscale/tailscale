@@ -29,11 +29,13 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/appc"
 	"tailscale.com/feature"
+	"tailscale.com/feature/routecheck"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routecheck/peernode"
 	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
@@ -1104,7 +1106,7 @@ func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string
 
 func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeView, string) {
 	nb := e.host.NodeBackend()
-	peers := pickConnector(nb, app)
+	peers := pickConnector(nb, app, e.getRouteCheckReport())
 	var urlBase string
 	var conn tailcfg.NodeView
 	for _, p := range peers {
@@ -1114,7 +1116,29 @@ func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeV
 			break
 		}
 	}
+	fmt.Println("pickConnectorURLBase", urlBase)
 	return conn, urlBase
+}
+
+func (e *extension) getRouteCheckReport() *routecheck.Report {
+	fmt.Println("getRouteCheckReport")
+	h := e.host
+	if h == nil {
+		return nil
+	}
+	fmt.Println("getRouteCheckReport 1")
+	extensions := h.Extensions()
+	if extensions == nil {
+		return nil
+	}
+	fmt.Println("getRouteCheckReport 2")
+	var routeCheckExt *routecheck.Extension
+	extensions.FindMatchingExtension(&routeCheckExt)
+	if routeCheckExt == nil || routeCheckExt.Client == nil {
+		return nil
+	}
+	fmt.Println("getRouteCheckReport 3")
+	return routeCheckExt.Client.Report()
 }
 
 func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
@@ -1692,10 +1716,13 @@ func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
 
 // pickConnector returns peers the backend knows about that match the app, in order of preference to use as
 // a connector.
-func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.NodeView {
+func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr, rp *routecheck.Report) []tailcfg.NodeView {
 	appTagsSet := set.SetOf(app.Connectors)
 	matches := nb.AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
 		if !isPeerEligibleConnector(n) {
+			return false
+		}
+		if !peerIsReachable(nb, rp, n) {
 			return false
 		}
 		if !n.Online().Get() {
@@ -1710,4 +1737,17 @@ func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 	})
 	sortByPreference(nb.Self(), matches)
 	return matches
+}
+
+func peerIsReachable(nb ipnext.NodeBackend, rp *routecheck.Report, n tailcfg.NodeView) bool {
+	if rp == nil {
+		fmt.Println("FRAN rp nil")
+		return n.Online().Get()
+	}
+	r := rp.IsReachable(n.ID())
+	if r == peernode.Unknown {
+		fmt.Println("FRAN it was unknown")
+		return n.Online().Get()
+	}
+	return r.IsReachable()
 }

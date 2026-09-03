@@ -69,6 +69,7 @@ func (e *Extension) Name() string {
 
 // Init implements the [ipnext.Extension.Init] interface method.
 func (e *Extension) Init(h ipnext.Host) error {
+	fmt.Println("routecheck Init")
 	if routecheck.DebugForceClientSideReachabilityRoutecheck().EqualBool(false) {
 		return ipnext.SkipExtension
 	}
@@ -102,6 +103,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 	e.ec = bus.Client("routecheck")
 	eventbus.SubscribeFunc(e.ec, e.Client.WatchForNetMonRebind)
 
+	fmt.Println("routecheck Init boutta reconcileLoop")
 	// Watch for changes to the self node that would toggle the routecheck feature.
 	e.reconcile.args = make(chan tailcfg.NodeView, 1)
 	e.reconcile.done = make(chan struct{})

@@ -37,12 +37,14 @@ var DebugForceClientSideReachabilityRoutecheck = envknob.RegisterOptBool("TS_DEB
 
 // IsEnabled reports whether routecheck probing has been enabled for this client.
 func IsEnabled(self tailcfg.NodeView) bool {
+	fmt.Println("routecheck IsEnabled")
 	if v, ok := DebugForceClientSideReachabilityRoutecheck().Get(); ok {
 		return v // forced
 	}
 	if !self.Valid() {
 		return false
 	}
+	fmt.Println("routecheck IsEnabled has cap", self.HasCap(nodecap.ClientSideReachability), self.HasCap(nodecap.ClientSideReachabilityRouteCheck))
 	// TODO(sfllaw): We intend to eventually enable this behaviour by default.
 	return self.HasCap(nodecap.ClientSideReachability) &&
 		self.HasCap(nodecap.ClientSideReachabilityRouteCheck)
@@ -205,6 +207,7 @@ func (c *Client) waitForNetMap(ctx context.Context) (*netmap.NetworkMap, error) 
 // If the cached Client.Report is newer than the report that it just generated,
 // Refresh will return the cached report instead of clobbering it report.
 func (c *Client) Refresh(ctx context.Context, timeout time.Duration) (*Report, error) {
+	fmt.Println("routecheck Refresh")
 	metricRefresh.Add(1)
 	c.vlogf("refreshing report")
 	r, err := c.ProbeAllHARouters(ctx, 5, timeout)
@@ -226,6 +229,7 @@ func (c *Client) Refresh(ctx context.Context, timeout time.Duration) (*Report, e
 // NeedsRefresh signals the need for a [Client.Refresh] to probe for a new report,
 // which will be done in the background by [Client.Start].
 func (c *Client) NeedsRefresh() {
+	fmt.Println("routecheck NeedsRefresh")
 	if !IsEnabled(c.nb.NodeBackend().Self()) {
 		return
 	}
@@ -261,14 +265,17 @@ func (c *Client) WatchForNetMonRebind(delta netmon.ChangeDelta) {
 // Use [Client.Close] to stop probing.
 // Returns an error if the client has already been closed.
 func (c *Client) Start() error {
+	fmt.Println("routecheck Start")
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()
 	}
+	fmt.Println("routecheck Start 1")
 
 	needsBootstrap := true
 	for {
 		select {
 		case <-c.needsRefresh:
+			fmt.Println("routecheck Start in select 3")
 			nm := c.nm.NetMapWithPeers()
 			if nm == nil {
 				// There is no netmap: clear the cached report.
@@ -292,6 +299,7 @@ func (c *Client) Start() error {
 				c.logf("%v", err)
 			}
 		case <-c.ctx.Done(): // closed
+			fmt.Println("routecheck Start in select 4")
 			return nil
 		}
 	}
