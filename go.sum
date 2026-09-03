@@ -981,6 +981,8 @@ github.com/otiai10/mint v1.3.0/go.mod h1:F5AjcsTsWUqX+Na9fpHb52P8pcRX2CI6A3ctIT9
 github.com/otiai10/mint v1.3.1/go.mod h1:/yxELlJQ0ufhjUwhshSj+wFjZ78CnZ48/1wtmBH1OTc=
 github.com/palantir/policy-bot v1.41.1 h1:1v/v+fmXhbSyPWOfxhxF1UWmYWuRCNK+VYKIalj+KRY=
 github.com/palantir/policy-bot v1.41.1/go.mod h1:iGHKNjbH341YjtpYUHMAzQy5SjghL3BXplNg6TRRvt0=
+github.com/parsnips/gliderssh v0.3.4-0.20260903233315-8564a8290d49 h1:3M6LuE4mrR77XIRQa5VPHc4a5MfPLqUGWXK8pNl50rk=
+github.com/parsnips/gliderssh v0.3.4-0.20260903233315-8564a8290d49/go.mod h1:wn16Km1EZOX4UEAyaZa3dBwfFGOJ7neck40NcwosJUw=
 github.com/pascaldekloe/goe v0.1.0 h1:cBOtyMzM9HTpWjXfbbunk26uA6nG3a8n06Wieeh0MwY=
 github.com/pascaldekloe/goe v0.1.0/go.mod h1:lzWF7FIEvWOWxwDKqyGYQf6ZUaNfKdP144TG7ZOy1lc=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
@@ -1191,8 +1193,6 @@ github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d h1:JcGKBZAL7
 github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d/go.mod h1:XrBNfAFN+pwoWuksbFS9Ccxnopa15zJGgXRFN90l3K4=
 github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f h1:PDPGJtm9PFBLNudHGwkfUGp/FWvP+kXXJ0D1pB35F40=
 github.com/tailscale/depaware v0.0.0-20251001183927-9c2ad255ef3f/go.mod h1:p9lPsd+cx33L3H9nNoecRRxPssFKUwwI50I3pZ0yT+8=
-github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28 h1:Azz5ILxxVsHN/KjIu3wkJPAmmtiijucZw4Ax5Ye8n+s=
-github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28/go.mod h1:wn16Km1EZOX4UEAyaZa3dBwfFGOJ7neck40NcwosJUw=
 github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 h1:Gzfnfk2TWrk8Jj4P4c1a3CtQyMaTVCznlkLZI++hok4=
 github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55/go.mod h1:4k4QO+dQ3R5FofL+SanAUZe+/QfeK0+OIuwDIRu2vSg=
 github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41 h1:/V2rCMMWcsjYaYO2MeovLw+ClP63OtXgCF2Y1eb8+Ns=
