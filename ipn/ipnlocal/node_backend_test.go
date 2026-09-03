@@ -372,8 +372,7 @@ func TestNodeBackendRouteManager(t *testing.T) {
 
 // TestNodeBackendDiscoChanged exercises the full-netmap disco change
 // detection: a peer whose disco key changes has restarted and needs its
-// WireGuard session reset, unless the new key was already learned over
-// TSMP (that is, over a working WireGuard session with the peer).
+// WireGuard session to send an opportunistic handshake.
 func TestNodeBackendDiscoChanged(t *testing.T) {
 	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
@@ -404,41 +403,6 @@ func TestNodeBackendDiscoChanged(t *testing.T) {
 	// An unchanged disco key does not.
 	if got, _ := nb.SetNetMap(mkNetMap(d2)); len(got) != 0 {
 		t.Errorf("SetNetMap(same disco) discoChanged = %v; want none", got)
-	}
-
-	// A change already learned via TSMP is suppressed...
-	d3 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d3)
-	if got, _ := nb.SetNetMap(mkNetMap(d3)); len(got) != 0 {
-		t.Errorf("SetNetMap(TSMP-learned disco) discoChanged = %v; want none", got)
-	}
-
-	// ...but the TSMP entry is consumed, so the next change resets again.
-	d4 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d4)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(after TSMP entry consumed) discoChanged = %v; want %v", got, nk)
-	}
-
-	// A TSMP-learned key that doesn't match the netmap's new key still
-	// resets the session and bumps the mismatch metric.
-	before := metricTSMPLearnedKeyMismatch.Value()
-	nb.recordTSMPLearnedDisco(nk, newDisco())
-	d5 := newDisco()
-	if got, _ := nb.SetNetMap(mkNetMap(d5)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(TSMP mismatch) discoChanged = %v; want %v", got, nk)
-	}
-	if delta := metricTSMPLearnedKeyMismatch.Value() - before; delta != 1 {
-		t.Errorf("metricTSMPLearnedKeyMismatch delta = %d; want 1", delta)
-	}
-
-	// Removing the peer garbage-collects its TSMP entry: after the peer
-	// comes back, a change to the once-recorded key is a normal reset.
-	d6 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d6)
-	nb.SetNetMap(&netmap.NetworkMap{})
-	nb.SetNetMap(mkNetMap(d5))
-	if got, _ := nb.SetNetMap(mkNetMap(d6)); !slices.Contains(got, nk) {
-		t.Errorf("SetNetMap(after TSMP entry GC) discoChanged = %v; want %v", got, nk)
 	}
 
 	// Transitions to or from a zero disco key never reset.
@@ -484,28 +448,11 @@ func TestNodeBackendDiscoChangedDelta(t *testing.T) {
 		t.Errorf("upsert(same disco) discoChanged = %v; want none", got)
 	}
 
-	// A change already learned via TSMP is suppressed.
-	d3 := newDisco()
-	nb.recordTSMPLearnedDisco(nk, d3)
-	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk, d3)}); len(got) != 0 {
-		t.Errorf("upsert(TSMP-learned disco) discoChanged = %v; want none", got)
-	}
-
 	// A node key rotation replaces the WireGuard peer outright, so no
 	// disco-based reset is reported.
 	nk2 := key.NewNode().Public()
 	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())}); len(got) != 0 {
 		t.Errorf("upsert(rotated node key) discoChanged = %v; want none", got)
-	}
-
-	// Removing the peer garbage-collects its TSMP entry: after the peer
-	// comes back, a change to the once-recorded key is a normal reset.
-	d4 := newDisco()
-	nb.recordTSMPLearnedDisco(nk2, d4)
-	apply(netmap.MakeNodeMutationRemove(1))
-	apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, newDisco())})
-	if got := apply(netmap.NodeMutationUpsert{Node: mkNode(nk2, d4)}); !got.Contains(nk2) {
-		t.Errorf("upsert(after TSMP entry GC) discoChanged = %v; want %v", got, nk2)
 	}
 }
 

@@ -2010,7 +2010,7 @@ func (e *mockEngine) PeerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool
 }
 
 func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
-func (e *mockEngine) ResetDevicePeer(key.NodePublic) {}
+func (e *mockEngine) MarkDevicePeerForHandshake(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
 func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}

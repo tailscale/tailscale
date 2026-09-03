@@ -575,28 +575,6 @@ func (mrs mapRoutineState) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcf
 	}
 }
 
-var _ DiscoKeyUpdater = mapRoutineState{}
-
-func (mrs mapRoutineState) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
-	c := mrs.c
-	c.mu.Lock()
-	goodState := c.loggedIn && c.inMapPoll
-	dun, ok := c.observer.(DiscoKeyUpdater)
-	mapCtx := c.mapCtx
-	c.mu.Unlock()
-
-	if !goodState || !ok {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(mapCtx, 2*time.Second)
-	defer cancel()
-
-	c.observerQueue.RunSync(ctx, func() {
-		dun.PatchDiscoKey(pub, disco)
-	})
-}
-
 // mapRoutine is responsible for keeping a read-only streaming connection to the
 // control server, and keeping the netmap up to date.
 func (c *Auto) mapRoutine() {

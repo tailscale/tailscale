@@ -2126,13 +2126,6 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	b.authReconfigLocked()
 }
 
-// PatchDiscoKey records that a peer's new disco key was learned via TSMP,
-// so the netmap update carrying the same change need not reset the peer's
-// WireGuard session. It implements [controlclient.DiscoKeyUpdater].
-func (b *LocalBackend) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
-	b.currentNode().recordTSMPLearnedDisco(pub, disco)
-}
-
 type preferencePolicyInfo struct {
 	key pkey.Key
 	get func(ipn.PrefsView) bool
@@ -2413,7 +2406,6 @@ var (
 	_ controlclient.NetmapDeltaUpdater  = (*LocalBackend)(nil)
 	_ controlclient.PacketFilterUpdater = (*LocalBackend)(nil)
 	_ controlclient.UserProfileUpdater  = (*LocalBackend)(nil)
-	_ controlclient.DiscoKeyUpdater     = (*LocalBackend)(nil)
 )
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
@@ -2494,11 +2486,11 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 	b.setDataPlanePeerRoutes()
 
-	// Reset the WireGuard session for peers whose disco key changed in
-	// a way that indicates a restart, flushing their dead session keys;
-	// each such peer is lazily re-created on demand with current state.
+	// Mark the WireGuard session for an opportunistic handshake for peers whose
+	// disco key changed in a way that indicates a restart, flushing their dead
+	// session keys; or control catching up to a TSMP learned key.
 	for k := range deltaRes.DiscoChanged {
-		b.e.ResetDevicePeer(k)
+		b.e.MarkDevicePeerForHandshake(k)
 	}
 
 	// Force a full authReconfig + SetSelfNode on any peer add or
@@ -7326,7 +7318,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// a way that indicates a restart, flushing their dead session keys;
 	// each such peer is lazily re-created on demand with current state.
 	for _, k := range discoChanged {
-		b.e.ResetDevicePeer(k)
+		b.e.MarkDevicePeerForHandshake(k)
 	}
 	// Converge the wireguard-go device for peers whose routes changed
 	// (or that were removed) in the full-netmap resync above; peers not
@@ -9186,11 +9178,6 @@ var (
 	metricNetmapDeltaPeerPatched  = clientmetric.NewCounter("localbackend_netmap_delta_peer_patched")
 	metricUpdatePacketFilter      = clientmetric.NewCounter("localbackend_update_packet_filter")
 	metricUpdateUserProfiles      = clientmetric.NewCounter("localbackend_update_user_profiles")
-
-	// metricTSMPLearnedKeyMismatch counts netmap updates carrying a peer
-	// disco key that doesn't match the one previously learned via TSMP
-	// for the same peer. See [nodeBackend.discoChangedLocked].
-	metricTSMPLearnedKeyMismatch = clientmetric.NewCounter("magicsock_tsmp_learned_key_mismatch")
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
