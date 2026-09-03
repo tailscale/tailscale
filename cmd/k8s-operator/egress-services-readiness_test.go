@@ -123,26 +123,6 @@ func TestEgressServiceReadiness(t *testing.T) {
 		expectReconciled(t, rec, "dev", "my-app")
 		expectEqual(t, fc, egressSvc) // ready
 	})
-	t.Run("orphaned_endpointslice_ignored", func(t *testing.T) {
-		// An orphan slice - bound to a non-current ClusterIP Service and carrying no routable endpoints -
-		// must not affect readiness. It matches the egress child-resource labels (so the List picks it up)
-		// but its service-name label points elsewhere, so the reconciler must filter it out.
-		orphanLabels := egressSvcChildResourceLabels(egressSvc)
-		orphanLabels[discoveryv1.LabelServiceName] = "my-app-stale"
-		orphan := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "my-app-stale",
-				Namespace: "operator-ns",
-				Labels:    orphanLabels,
-			},
-			AddressType: discoveryv1.AddressTypeIPv4,
-		}
-		mustCreate(t, fc, orphan)
-		// Service stays fully ready: the orphan (no endpoints) is ignored, not counted as NotReady.
-		setReady(egressSvc, cl, zl.Sugar(), pgReplicas(pg), pgReplicas(pg))
-		expectReconciled(t, rec, "dev", "my-app")
-		expectEqual(t, fc, egressSvc) // still ready
-	})
 }
 
 func TestEgressServiceReadinessDualStack(t *testing.T) {

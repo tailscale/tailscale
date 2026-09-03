@@ -572,15 +572,18 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
+	egressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
 	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
 		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
-		// TODO remove the deletion filter - basically just always reconcile on eps here
-		// use the service condition to reconcile less
-		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsDeleteFilter, builder.WithPredicates(egressSliceDeletedOnly)).
+		// Reconcile on all EndpointSlice events (not just deletions): the
+		// EgressSvcConfigured condition gates whether provision actually does any
+		// work, so steady-state events are cheap no-ops, while a slice that is
+		// missing or belongs to a newly added IP family triggers a re-provision.
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilter).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -595,7 +598,6 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("failed setting up indexer for egress Services: %v", err)
 	}
 
-	egressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-readiness-reconciler").

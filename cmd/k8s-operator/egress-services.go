@@ -143,7 +143,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
 		if err := esr.updateSvcSpec(ctx, svc); err != nil {
 			err := fmt.Errorf("failed to add finalizer: %w", err)
-			r := svcConfiguredReason(svc, false, lg)
+			r := svcConfiguredReason(svc, false, nil, lg)
 			tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, lg)
 			return res, err
 		}
@@ -155,7 +155,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 
 	if err := esr.maybeCleanupProxyGroupConfig(ctx, svc, lg); err != nil {
 		err = fmt.Errorf("cleaning up resources for previous ProxyGroup failed: %w", err)
-		r := svcConfiguredReason(svc, false, lg)
+		r := svcConfiguredReason(svc, false, nil, lg)
 		tsoperator.SetServiceCondition(svc, tsapi.EgressSvcConfigured, metav1.ConditionFalse, r, err.Error(), esr.clock, lg)
 		return res, err
 	}
@@ -172,7 +172,7 @@ func (esr *egressSvcsReconciler) Reconcile(ctx context.Context, req reconcile.Re
 }
 
 func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1.Service, lg *zap.SugaredLogger) (err error) {
-	r := svcConfiguredReason(svc, false, lg)
+	r := svcConfiguredReason(svc, false, nil, lg)
 	st := metav1.ConditionFalse
 	defer func() {
 		msg := r
@@ -191,21 +191,35 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	if clusterIPSvc == nil {
 		clusterIPSvc = esr.clusterIPSvcForEgress(crl)
 	}
-	upToDate := svcConfigurationUpToDate(svc, lg) // try removing this - see if the ipv6 eps is created. OR add an eps up to date condition.
+	// The IP families the current ClusterIP Service supports determine which
+	// EndpointSlices must exist. They are folded into the configured reason, so
+	// if the family set has changed (for example the ClusterIP Service has become
+	// dual-stack since it was last provisioned) the service is no longer up to
+	// date and provision runs again to create the missing family's slice.
+	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		return err
+	}
 	provisioned := true
-	if !upToDate {
+	if !svcConfigurationUpToDate(svc, addrTypes, lg) {
 		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, lg); err != nil {
+			return err
+		}
+		// On first provision clusterIPSvc was a bare template with no ClusterIPs
+		// (so addrTypes above was empty); provision creates the Service and the
+		// apiserver assigns the ClusterIPs, which createOrUpdate returns. Recompute
+		// addrTypes from that populated Service so the reason we store below records
+		// the real family set. Without this the reason would hash an empty family
+		// set and the next reconcile would need an extra pass to correct it. For an
+		// already-existing Service this is a no-op (provision only changes ports,
+		// never families).
+		if addrTypes, err = addrTypesForClusterIPSvc(clusterIPSvc); err != nil {
 			return err
 		}
 	}
 	if !provisioned {
 		lg.Infof("unable to provision cluster resources")
 		return nil
-	}
-
-	if err := esr.ensureEndpointSliceExists(ctx, svc, clusterIPSvc, lg); err != nil {
-		return err
-		// why isnt it just using the svcconfigured reason thing and re-entering provision?
 	}
 
 	// Update ExternalName Service to point at the ClusterIP Service.
@@ -219,7 +233,7 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 			return err
 		}
 	}
-	r = svcConfiguredReason(svc, true, lg)
+	r = svcConfiguredReason(svc, true, addrTypes, lg)
 	st = metav1.ConditionTrue
 	return nil
 }
@@ -244,48 +258,6 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 	return addrTypes, nil
 }
 
-// ensureEndpointSliceExists ensures that an EndpointSlice exists for the egress
-// service for each IP family supported by the cluster, creating any that are
-// missing.
-//
-// We only handle creation here: provision owns labels, addressType and ports,
-// and the egress EndpointSlices reconciler owns endpoints (see tailscale/tailscale#20916).
-func (esr *egressSvcsReconciler) ensureEndpointSliceExists(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
-	crl := egressSvcEpsLabels(svc, clusterIPSvc)
-	// Only create EndpointSlices for IP families supported by the cluster.
-	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
-	if err != nil {
-		return err
-	}
-	for _, addrType := range addrTypes {
-		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
-		existing := new(discoveryv1.EndpointSlice)
-		err := esr.Get(ctx, types.NamespacedName{Name: name, Namespace: esr.tsNamespace}, existing)
-		switch {
-		case err == nil:
-			continue // Slice already exists; do not touch it.
-		case !apierrors.IsNotFound(err):
-			return fmt.Errorf("error getting %s EndpointSlice: %w", addrType, err)
-		}
-		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: esr.tsNamespace,
-				Labels:    crl,
-			},
-			AddressType: addrType,
-			Ports:       epsPortsFromSvc(clusterIPSvc),
-		}
-		if err := esr.Create(ctx, eps); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("error creating %s EndpointSlice: %w", addrType, err)
-		}
-		lg.Debugf("created %s EndpointSlice %s", addrType, name)
-	}
-	// chec if remove condition check it creates an ipv6 eps.
-	return nil
-}
-
-// test upgrade. what happens to operator on older version and check settles. check reconiling on eps is ok.
 func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName string, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) (*corev1.Service, bool, error) {
 	lg.Infof("updating configuration...")
 	usedPorts, err := esr.usedPortsForPG(ctx, proxyGroupName)
@@ -772,7 +744,13 @@ func egressSvcEpsLabels(extNSvc, clusterIPSvc *corev1.Service) map[string]string
 	return lbels
 }
 
-func svcConfigurationUpToDate(svc *corev1.Service, lg *zap.SugaredLogger) bool {
+// svcConfigurationUpToDate reports whether the egress service has already been
+// provisioned for its current desired configuration, including the given set of
+// IP families (addrTypes). It compares the EgressSvcConfigured condition's stored
+// reason against the reason that would be set for the current spec + families; a
+// mismatch (spec change, or a change in the family set such as single-stack
+// becoming dual-stack) means provision needs to run again.
+func svcConfigurationUpToDate(svc *corev1.Service, addrTypes []discoveryv1.AddressType, lg *zap.SugaredLogger) bool {
 	cond := tsoperator.GetServiceCondition(svc, tsapi.EgressSvcConfigured)
 	if cond == nil {
 		return false
@@ -780,8 +758,7 @@ func svcConfigurationUpToDate(svc *corev1.Service, lg *zap.SugaredLogger) bool {
 	if cond.Status != metav1.ConditionTrue {
 		return false
 	}
-	// some sort of status that goes we have provisioned for both address types correclty - should be the only place the condition is used? check if endpointslices uses it.
-	wantsReadyReason := svcConfiguredReason(svc, true, lg)
+	wantsReadyReason := svcConfiguredReason(svc, true, addrTypes, lg)
 	return strings.EqualFold(wantsReadyReason, cond.Reason)
 }
 
@@ -805,9 +782,21 @@ type cfg struct {
 	Ports         []corev1.ServicePort         `json:"ports"`
 	TailnetTarget egressservices.TailnetTarget `json:"tailnetTarget"`
 	ProxyGroup    string                       `json:"proxyGroup"`
+	// AddrTypes are the IP families (from the ClusterIP Service's ClusterIPs)
+	// for which EndpointSlices should exist. Including them in the configured
+	// reason means a change in the set of families (for example a single-stack
+	// Service becoming dual-stack) is detected as a configuration change, so
+	// provision re-runs and creates the EndpointSlice for the new family.
+	AddrTypes []discoveryv1.AddressType `json:"addrTypes"`
 }
 
-func svcConfiguredReason(svc *corev1.Service, configured bool, lg *zap.SugaredLogger) string {
+// svcConfiguredReason returns the reason string set on the EgressSvcConfigured
+// condition. addrTypes is the set of IP families the EndpointSlices should
+// cover (derived from the ClusterIP Service via addrTypesForClusterIPSvc); it is
+// folded into the hashed config so that a change in the family set is detected as
+// a configuration change. Pass nil addrTypes for the failure ("not configured")
+// reasons, where only the ConfigurationFailed prefix needs to differ.
+func svcConfiguredReason(svc *corev1.Service, configured bool, addrTypes []discoveryv1.AddressType, lg *zap.SugaredLogger) string {
 	var r string
 	if configured {
 		r = "ConfiguredFor:"
@@ -816,11 +805,15 @@ func svcConfiguredReason(svc *corev1.Service, configured bool, lg *zap.SugaredLo
 	}
 	r += fmt.Sprintf("ProxyGroup:%s", svc.Annotations[AnnotationProxyGroup])
 	tt := tailnetTargetFromSvc(svc)
+	// Sort so the hash is deterministic regardless of the order the families
+	// were listed in.
+	sortedAddrTypes := slices.Clone(addrTypes)
+	slices.Sort(sortedAddrTypes)
 	s := cfg{
 		Ports:         svc.Spec.Ports,
 		TailnetTarget: tt,
 		ProxyGroup:    svc.Annotations[AnnotationProxyGroup],
-		// add the address types- will be a diff for all so all will rbe reconciled
+		AddrTypes:     sortedAddrTypes,
 	}
 
 	r += fmt.Sprintf(":Config:%s", cfgHash(s, lg))

@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/tstest"
@@ -163,7 +164,11 @@ func validateReadyService(t *testing.T, fc client.WithWatch, esr *egressSvcsReco
 	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
 	// Verify that ConfigMap contains configuration for the new egress service.
 	mustHaveConfigForSvc(t, fc, svc, clusterSvc, cm, zl)
-	r := svcConfiguredReason(svc, true, zl.Sugar())
+	addrTypes, err := addrTypesForClusterIPSvc(clusterSvc)
+	if err != nil {
+		t.Fatalf("error determining address types for ClusterIP Service: %v", err)
+	}
+	r := svcConfiguredReason(svc, true, addrTypes, zl.Sugar())
 	// Verify that the user-created ExternalName Service has Configured set to true and ExternalName pointing to the
 	// CluterIP Service.
 	svc.Status.Conditions = []metav1.Condition{
@@ -448,6 +453,125 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", fmt.Sprintf("%s-ipv6", name))
 		mustNotHaveConfigForSvc(t, fc, svc, cm)
 	})
+}
+
+// TestEgressServiceConfiguredGate exercises the EgressSvcConfigured condition
+// gate: once a service is provisioned and the condition persists (which requires
+// the ProxyGroup to be Available), a subsequent reconcile must be a no-op (the
+// EndpointSlice is not rewritten), but a change in the ClusterIP Service's IP
+// families must be detected via the address types folded into the condition
+// reason, causing provision to run again and create the new family's slice.
+func TestEgressServiceConfiguredGate(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "foo",
+			UID:  types.UID("1234-UID"),
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Replicas: pointer.To[int32](3),
+			Type:     tsapi.ProxyGroupTypeEgress,
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pgEgressCMName("foo"),
+			Namespace: "operator-ns",
+		},
+	}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := tstest.NewClock(tstest.ClockOpts{})
+	// Mark the ProxyGroup Available so validateClusterResources does not strip
+	// the EgressSvcConfigured condition; without this the gate would always be
+	// false and provision would run every reconcile (masking the gate).
+	tsoperator.SetProxyGroupCondition(pg, tsapi.ProxyGroupAvailable, metav1.ConditionTrue, "foo", "foo", pg.Generation, clock, zl.Sugar())
+
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg, cm).
+		// Both the ProxyGroup and the ExternalName Service need a status
+		// subresource so the Available condition and the persisted
+		// EgressSvcConfigured condition survive across reconciles.
+		WithStatusSubresource(pg, &corev1.Service{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: clusterIPInterceptor("10.96.0.1"), // start single-stack
+		}).
+		Build()
+
+	esr := &egressSvcsReconciler{
+		Client:      fc,
+		logger:      zl.Sugar(),
+		clock:       clock,
+		tsNamespace: "operator-ns",
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+				AnnotationProxyGroup:        "foo",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "placeholder",
+			Type:         corev1.ServiceTypeExternalName,
+			Ports: []corev1.ServicePort{
+				{Protocol: "TCP", Port: 80},
+			},
+		},
+	}
+	mustCreate(t, fc, svc)
+
+	// First reconcile: provisions the single-stack (IPv4) EndpointSlice and sets
+	// EgressSvcConfigured=True.
+	expectReconciled(t, esr, "default", "test")
+	name := findGenNameForEgressSvcResources(t, fc, svc)
+	v4Name := fmt.Sprintf("%s-ipv4", name)
+	v6Name := fmt.Sprintf("%s-ipv6", name)
+	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", v6Name)
+	gotSvc := &corev1.Service{}
+	if err := fc.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "test"}, gotSvc); err != nil {
+		t.Fatalf("getting Service: %v", err)
+	}
+	if cond := tsoperator.GetServiceCondition(gotSvc, tsapi.EgressSvcConfigured); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("EgressSvcConfigured condition not True after first reconcile: %+v", cond)
+	}
+
+	// Second reconcile: the service is up to date (same single family), so the
+	// gate must skip provision and NOT rewrite the IPv4 EndpointSlice.
+	v4Before := mustGetEndpointSlice(t, fc, v4Name)
+	expectReconciled(t, esr, "default", "test")
+	v4After := mustGetEndpointSlice(t, fc, v4Name)
+	if v4Before.ResourceVersion != v4After.ResourceVersion {
+		t.Errorf("IPv4 EndpointSlice was rewritten on a no-op reconcile: resourceVersion %s -> %s", v4Before.ResourceVersion, v4After.ResourceVersion)
+	}
+	expectMissing[discoveryv1.EndpointSlice](t, fc, "operator-ns", v6Name)
+
+	// The ClusterIP Service gains a second (IPv6) family, simulating the cluster
+	// becoming dual-stack. The address types folded into the configured reason
+	// now differ from the stored condition, so the gate reports not-up-to-date
+	// and provision runs again to create the IPv6 EndpointSlice.
+	mustUpdate(t, fc, "operator-ns", name, func(s *corev1.Service) {
+		s.Spec.ClusterIPs = []string{"10.96.0.1", "fd00::1"}
+	})
+	expectReconciled(t, esr, "default", "test")
+	clusterSvc := mustGetClusterIPSvc(t, fc, name)
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv6))
+	expectEqual(t, fc, endpointSlice(name, svc, clusterSvc, discoveryv1.AddressTypeIPv4))
+}
+
+func mustGetEndpointSlice(t *testing.T, cl client.Client, name string) *discoveryv1.EndpointSlice {
+	t.Helper()
+	eps := &discoveryv1.EndpointSlice{}
+	if err := cl.Get(context.Background(), client.ObjectKey{Namespace: "operator-ns", Name: name}, eps); err != nil {
+		t.Fatalf("getting EndpointSlice %s: %v", name, err)
+	}
+	return eps
 }
 
 // clusterIPInterceptor returns an interceptor.Funcs Create function that
