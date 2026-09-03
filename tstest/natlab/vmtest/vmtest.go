@@ -1491,24 +1491,18 @@ func (e *Env) DumpStatus(n *Node) {
 		return
 	}
 	var selfAllowed []string
-	if st.Self.AllowedIPs != nil {
-		for i := range st.Self.AllowedIPs.Len() {
-			selfAllowed = append(selfAllowed, st.Self.AllowedIPs.At(i).String())
-		}
+	for i := range st.Self.AllowedIPs.Len() {
+		selfAllowed = append(selfAllowed, st.Self.AllowedIPs.At(i).String())
 	}
 	var selfPrimary []string
-	if st.Self.PrimaryRoutes != nil {
-		for i := range st.Self.PrimaryRoutes.Len() {
-			selfPrimary = append(selfPrimary, st.Self.PrimaryRoutes.At(i).String())
-		}
+	for i := range st.Self.PrimaryRoutes.Len() {
+		selfPrimary = append(selfPrimary, st.Self.PrimaryRoutes.At(i).String())
 	}
 	e.t.Logf("[%s] self: %v, backend=%s, AllowedIPs=%v, PrimaryRoutes=%v", n.name, st.Self.TailscaleIPs, st.BackendState, selfAllowed, selfPrimary)
 	for _, peer := range st.Peer {
 		var aips []string
-		if peer.AllowedIPs != nil {
-			for i := range peer.AllowedIPs.Len() {
-				aips = append(aips, peer.AllowedIPs.At(i).String())
-			}
+		for i := range peer.AllowedIPs.Len() {
+			aips = append(aips, peer.AllowedIPs.At(i).String())
 		}
 		e.t.Logf("[%s] peer %s (%s): AllowedIPs=%v, Online=%v, Relay=%q, CurAddr=%q",
 			n.name, peer.HostName, peer.TailscaleIPs,
@@ -1528,11 +1522,9 @@ func (e *Env) waitForPeerRoute(n *Node, prefix string, timeout time.Duration) bo
 			return false
 		}
 		for _, peer := range st.Peer {
-			if peer.AllowedIPs != nil {
-				for i := range peer.AllowedIPs.Len() {
-					if peer.AllowedIPs.At(i).String() == prefix {
-						return true
-					}
+			for i := range peer.AllowedIPs.Len() {
+				if peer.AllowedIPs.At(i).String() == prefix {
+					return true
 				}
 			}
 		}

@@ -286,9 +286,7 @@ func nodeFromPeerStatus(ps *ipnstate.PeerStatus) *tailcfg.Node {
 	for _, ip := range ps.TailscaleIPs {
 		n.Addresses = append(n.Addresses, netip.PrefixFrom(ip, ip.BitLen()))
 	}
-	if ps.AllowedIPs != nil {
-		n.AllowedIPs = ps.AllowedIPs.AsSlice()
-	}
+	n.AllowedIPs = ps.AllowedIPs.AsSlice()
 	return n
 }
 
