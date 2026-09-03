@@ -1545,8 +1545,11 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
 	epDisco := &endpointDisco{}
 	for {
 		old := de.disco.Load()
+		// Nothing to update
+		if old == nil && key.IsZero() {
+			return false
+		}
 		// Control key did not change and control is already active
-		// TODO(cmol): Do not test the active condition when routing TSMP through magicsock.
 		if old.keyFromControl() == key && !old.tsmpIsActive() && !key.IsZero() {
 			return false
 		}
@@ -1564,7 +1567,7 @@ func (de *endpoint) updateDiscoKey(key key.DiscoPublic) bool {
 			epDisco = nil
 		}
 		if de.disco.CompareAndSwap(old, epDisco) {
-			de.logKeyChange(old, epDisco, "tsmpUpdate")
+			de.logKeyChange(old, epDisco, "controlClientUpdate")
 			return true
 		}
 	}
@@ -1585,6 +1588,10 @@ func (de *endpoint) updateTSMPDiscoKey(key key.DiscoPublic) bool {
 	epDisco := &endpointDisco{}
 	for {
 		old := de.disco.Load()
+		// Nothing to update
+		if old == nil && key.IsZero() {
+			return false
+		}
 		// TSMP key did not change and TSMP is already active
 		if old.keyFromTSMP() == key && old.tsmpIsActive() && !key.IsZero() {
 			return false
