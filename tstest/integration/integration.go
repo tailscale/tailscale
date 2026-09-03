@@ -152,6 +152,12 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 // It fails tb if the build or binary copies fail.
 func GetBinaries(tb testing.TB) *Binaries {
 	dir := tb.TempDir()
+	// Run before tb.TempDir's own cleanup, which gives up after a fixed 2s; see #21099.
+	tb.Cleanup(func() {
+		if err := tstest.WaitFor(30*time.Second, func() error { return os.RemoveAll(dir) }); err != nil {
+			tb.Logf("removing %s: %v", dir, err)
+		}
+	})
 	buildOnce.Do(func() {
 		buildErr = buildTestBinaries(dir)
 	})
