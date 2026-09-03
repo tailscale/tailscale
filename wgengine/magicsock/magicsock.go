@@ -2650,7 +2650,14 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpN
 
 	// Remember this route if not present.
 	var dup bool
-	if isDerp {
+	isWebRTC := src.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	if isDerp || isWebRTC {
+		// Both DERP and WebRTC carry the sender's node key out of band
+		// (derpNodeSrc), so we resolve the endpoint by node key and reply to
+		// src directly. Unlike a real UDP ping, we must NOT addCandidateEndpoint
+		// the magic address: it isn't a discoverable UDP endpoint, and a
+		// synthetic endpointState entry would be clobbered on the next netmap
+		// update. WebRTC liveness is bestAddr-only, like a peer-relay path.
 		if _, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
 			numNodes = 1
 		}

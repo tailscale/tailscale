@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/disco"
@@ -131,13 +130,18 @@ func (de *endpoint) DERPReady() bool {
 }
 
 // SetWebRTCPath implements [WebRTCPeer]. It promotes the WebRTC magic address
-// to the endpoint's best path if it beats the current best path.
+// to the endpoint's best path if it beats the current best path. This is the
+// initial promotion on data-channel open, analogous to udpRelayEndpointReady
+// for a peer-relay path: it seeds bestAddr with a short trust window, after
+// which the disco heartbeat ping/pong sustains (or expires) the path just like
+// any other. When the pongs stop, trustBestAddrUntil lapses and traffic falls
+// back to DERP.
 func (de *endpoint) SetWebRTCPath() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
 	// The magic IP identifies this as WebRTC, not UDP. Latency starts at zero
-	// and is refined by disco pings, same as DERP.
+	// and is refined by the disco heartbeat pongs, same as a peer-relay path.
 	webrtcAddr := addrQuality{
 		epAddr: epAddr{
 			ap: netip.AddrPortFrom(tailcfg.WebRTCMagicIPAddr, webrtcMagicPort),
@@ -147,19 +151,7 @@ func (de *endpoint) SetWebRTCPath() {
 	if betterAddr(webrtcAddr, de.bestAddr) {
 		de.bestAddr = webrtcAddr
 		de.bestAddrAt = now
-		de.trustBestAddrUntil = now.Add(5 * time.Minute)
-	}
-}
-
-// ClearWebRTCPath implements [WebRTCPeer]. If the endpoint's best path is
-// currently the WebRTC magic address, it resets it so traffic falls back to
-// DERP.
-func (de *endpoint) ClearWebRTCPath() {
-	de.mu.Lock()
-	defer de.mu.Unlock()
-	if de.bestAddr.ap.Addr() == tailcfg.WebRTCMagicIPAddr {
-		de.bestAddr = addrQuality{}
-		de.trustBestAddrUntil = 0
+		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
 	}
 }
 

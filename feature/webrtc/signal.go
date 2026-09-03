@@ -82,15 +82,16 @@ func (m *manager) handleRemoteOffer(remoteDisco key.DiscoPublic, offer *webrtc.S
 			// because a stale/dead ICE connection hasn't surfaced as Failed yet,
 			// which is exactly how we can get wedged (we ignore the peer's
 			// recovery offer while black-holing traffic on a dead path). So the
-			// peer's re-offer always wins: tear down our entry, drop the WebRTC
-			// path, and answer fresh below.
+			// peer's re-offer always wins: tear down our entry and answer fresh
+			// below. bestAddr is left to the disco machinery: with the channel
+			// gone the heartbeat pongs stop and the trust window lapses to DERP,
+			// and the rebuilt channel promotes WebRTC again via SetWebRTCPath.
 			m.logf("webrtc: peer %v re-offered while %v; rebuilding connection", remoteDisco.ShortString(), state)
 			ps.peerConn.Close()
 			m.mu.Lock()
 			delete(m.peerConnectionsByPeer, ps.peer)
 			delete(m.peerConnectionsByDisco, remoteDisco)
 			m.mu.Unlock()
-			ps.peer.ClearWebRTCPath()
 			exists = false
 		default:
 			// Any other transitional signaling state; ignore, let it settle.

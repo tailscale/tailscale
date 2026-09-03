@@ -98,13 +98,11 @@ type WebRTCPeer interface {
 	// which is required before signaling can succeed.
 	DERPReady() bool
 
-	// SetWebRTCPath marks the WebRTC magic address as the peer's best path if
-	// it is better than the peer's current best path.
+	// SetWebRTCPath seeds the WebRTC magic address as the peer's best path (if
+	// better than the current best) when the data channel opens. The disco
+	// heartbeat ping/pong then sustains the path: if pongs stop, the trust
+	// window lapses and traffic falls back to DERP.
 	SetWebRTCPath()
-
-	// ClearWebRTCPath resets the peer's best path if it is currently the
-	// WebRTC magic address, so traffic falls back to DERP.
-	ClearWebRTCPath()
 }
 
 // WebRTCBatchMagic is the first byte of a batched WebRTC SCTP message, framed

@@ -923,12 +923,14 @@ func (de *endpoint) heartbeat() {
 	}
 
 	udpAddr, _, _ := de.addrForSendLocked(now)
-	if udpAddr.ap.IsValid() && udpAddr.ap.Addr() != tailcfg.WebRTCMagicIPAddr {
+	if udpAddr.ap.IsValid() {
 		// We have a preferred path. Ping that every 'heartbeatInterval'.
-		// The WebRTC magic address is excluded: it has no entry in
-		// de.endpointState (WebRTC paths don't go through disco endpoint
-		// discovery), and its liveness is managed by the data channel and
-		// pion's ICE agent, not by disco pings.
+		// This includes the WebRTC magic address: like a peer-relay (VNI)
+		// path, WebRTC is bestAddr-only (never in de.endpointState) but its
+		// liveness is driven by these disco pings over the data channel, not
+		// by pion's connection-state callbacks. startDiscoPingLocked and
+		// handlePongConnLocked special-case the magic address the same way
+		// they special-case vni.IsSet().
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil)
 	}
 
@@ -1365,7 +1367,12 @@ const (
 // is interested in the result (such as a CLI "tailscale ping" or a c2n ping
 // request, etc)
 func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose discoPingPurpose, size int, resCB *pingResultAndCallback) {
-	if runtime.GOOS == "js" {
+	isWebRTC := ep.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	if runtime.GOOS == "js" && !isWebRTC {
+		// A browser has no UDP socket, so it can't disco-ping a real endpoint.
+		// The WebRTC data channel is a usable transport though, so a ping to
+		// the WebRTC magic address is valid on js: sendAddr routes it over the
+		// data channel and never touches a UDP socket.
 		return
 	}
 	if debugNeverDirectUDP() && !ep.vni.IsSet() && ep.ap.Addr() != tailcfg.DerpMagicIPAddr {
@@ -1376,7 +1383,7 @@ func (de *endpoint) startDiscoPingLocked(ep epAddr, now mono.Time, purpose disco
 		return
 	}
 	if purpose != pingCLI &&
-		!ep.vni.IsSet() { // de.endpointState is only relevant for direct/non-vni epAddr's
+		!ep.vni.IsSet() && !isWebRTC { // de.endpointState is only relevant for direct/non-vni, non-WebRTC epAddr's
 		st, ok := de.endpointState[ep.ap]
 		if !ok {
 			// Shouldn't happen. But don't ping an endpoint that's
@@ -1953,9 +1960,11 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
-	if !isDerp && !src.vni.IsSet() {
-		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
-		// endpointState, they are either de.bestAddr or not.
+	isWebRTC := src.ap.Addr() == tailcfg.WebRTCMagicIPAddr
+	if !isDerp && !src.vni.IsSet() && !isWebRTC {
+		// Note: we skip vni.isSet() and the WebRTC magic address as those
+		// [epAddr]'s are not stored in endpointState; they are either
+		// de.bestAddr or not. The promotion block below still runs for them.
 		st, ok := de.endpointState[sp.to.ap]
 		if !ok {
 			// This is no longer an endpoint we care about.

@@ -242,7 +242,6 @@ func (m *manager) handleConnectionStateChange(ps *peerState, state webrtc.PeerCo
 
 	m.mu.Lock()
 
-	var clearBestAddr bool
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		ps.state = stateConnected
@@ -273,28 +272,18 @@ func (m *manager) handleConnectionStateChange(ps *peerState, state webrtc.PeerCo
 	case webrtc.PeerConnectionStateFailed:
 		ps.state = stateFailed
 		ps.dcRW.Store(nil)
-		clearBestAddr = true
 	case webrtc.PeerConnectionStateClosed:
 		ps.state = stateClosed
 		ps.dcRW.Store(nil)
-		clearBestAddr = true
 	case webrtc.PeerConnectionStateDisconnected:
-		// Disconnected is recoverable in principle, but no traffic flows while
-		// we're in it. Give up the WebRTC bestAddr immediately so magicsock
-		// falls back to DERP instead of black-holing packets for the (up to
-		// ~seconds) it takes pion to reach Failed. If ICE recovers to Connected,
-		// SetWebRTCPath re-promotes the path. We do not clear dcRW here since the
-		// channel may still resume.
-		clearBestAddr = true
+		// Recoverable in principle; nothing to do. WebRTC liveness is driven by
+		// disco heartbeat pongs, so when traffic stops flowing the trust window
+		// lapses (~6.5s) and magicsock falls back to DERP. bestAddr is left to
+		// the disco machinery rather than demoted on this pion state edge, which
+		// keeps the two sides in agreement.
 	}
 
 	m.mu.Unlock()
-
-	// ClearWebRTCPath acquires the endpoint lock; must be called without m.mu held.
-	if clearBestAddr {
-		ps.peer.ClearWebRTCPath()
-		m.logf("webrtc: cleared WebRTC bestAddr for peer %v, falling back to DERP", ps.remoteDisco.ShortString())
-	}
 }
 
 // handleConnectionReady marks a WebRTC connection as ready and updates the peer.
