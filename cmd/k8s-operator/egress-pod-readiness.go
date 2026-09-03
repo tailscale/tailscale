@@ -149,7 +149,7 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 			}
 
 			var routesSetup bool
-			bo := backoff.NewBackoff(s.Name, ll.Infof, er.maxBackoff)
+			bo := backoff.NewBackoff(s.Name, ll.Debugf, er.maxBackoff)
 			for range numCalls(pgReplicas(pg)) {
 				if ctx.Err() != nil {
 					errChan <- nil
