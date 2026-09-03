@@ -108,6 +108,28 @@ func TestMultiGlobalAddressMapping(t *testing.T) {
 	}
 }
 
+func TestSTUNResponseProvesCanSend(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		addr string
+		got  func(*Report) bool
+	}{
+		{"IPv4", "192.0.2.1:1234", func(r *Report) bool { return r.IPv4CanSend }},
+		{"IPv6", "[2001:db8::1]:1234", func(r *Report) bool { return r.IPv6CanSend }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rs := &reportState{
+				c:      newTestClient(t),
+				report: newReport(),
+			}
+			rs.addNodeLatency(&tailcfg.DERPNode{RegionID: 1}, netip.MustParseAddrPort(test.addr), time.Millisecond)
+			if !test.got(rs.report) {
+				t.Errorf("STUN response from %v did not set %sCanSend", test.addr, test.name)
+			}
+		})
+	}
+}
+
 func TestWorksWhenUDPBlocked(t *testing.T) {
 	blackhole, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
