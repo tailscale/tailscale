@@ -40,6 +40,12 @@ const (
 	// (osConfigurationReadWarnable in net/dns/manager.go).
 	orDNSReadHealth = "failed to fetch the DNS configuration"
 
+	// A name that no route covers and that only vnet's default DNS server
+	// answers. Resolving it proves the query reached the base config's
+	// nameservers instead of being answered by quad-100.
+	orUpstreamOnlyName = "dualstack-web.example.com"
+	orUpstreamOnlyIP   = "5.0.0.100"
+
 	// Tailscale's own resolver. tailscaled points resolv.conf at it once it has
 	// configured DNS.
 	orQuad100 = "100.100.100.100"
@@ -114,6 +120,62 @@ func TestOpenresolvDNS(t *testing.T) {
 			"resolvconf snippet, so openresolv has no OS config to report "+
 			"(tailscale/tailscale#20825)", *base)
 	}
+}
+
+// TestOpenresolvDNSOtherSnippet is the counterweight to TestOpenresolvDNS.
+// When another snippet is present, its nameservers must still become quad-100's
+// default upstream. Without this test, the fix for #20825 could return early on
+// every host and still look correct.
+func TestOpenresolvDNSOtherSnippet(t *testing.T) {
+	env, node := newOpenresolvEnv(t)
+
+	// Register a second snippet, the way a DHCP client would. It points at
+	// vnet's default DNS server, the only thing that answers
+	// orUpstreamOnlyName.
+	cmd := fmt.Sprintf("printf 'nameserver %s\\n' | resolvconf -a eth0.inet", vnet.FakeDNSIPv4())
+	if out, err := env.SSHExec(node, cmd); err != nil {
+		t.Fatalf("%s: %v (%s)", cmd, err, strings.TrimSpace(out))
+	}
+
+	// tailscaled has no reason to re-read the OS config on its own, so force a
+	// full reapply. This is also how the reporter of #20825 reproduced the bug.
+	env.SetAcceptDNS(node, false)
+	env.SetAcceptDNS(node, true)
+
+	// Both snippets are registered.
+	if out, err := env.SSHExec(node, "resolvconf -i"); err != nil {
+		t.Errorf("resolvconf -i: %v (%s)", err, strings.TrimSpace(out))
+	} else {
+		for _, want := range []string{"eth0.inet", "tailscale"} {
+			if !slicesContainsField(out, want) {
+				t.Errorf("resolvconf -i = %q, want it to list %q", strings.TrimSpace(out), want)
+			}
+		}
+	}
+
+	// Tailscale still owns resolv.conf, so the OS asks quad-100 rather than the
+	// other snippet directly. Check that before the lookup at the end of the
+	// test. Otherwise a successful lookup might only mean libc went straight to
+	// the other snippet's nameserver during the toggle above.
+	assertOpenresolvResolvConf(t, env, node,
+		[]string{orSignature, orQuad100},
+		[]string{vnet.FakeDNSIPv4().String()})
+
+	assertNoDNSReadWarning(t, env, node)
+
+	// tailscaled must read back the other snippet's nameserver and nothing else.
+	// An empty config would mean the #20825 early return fired when it should
+	// not have, and our own snippet would mean the quad-100 filter did not
+	// (tailscale/tailscale#7816).
+	if base := openresolvBaseConfig(t, env, node); base != nil {
+		if want := vnet.FakeDNSIPv4().String(); !slices.Equal(base.Nameservers, []string{want}) {
+			t.Errorf("OS base config nameservers = %q, want just %s", base.Nameservers, want)
+		}
+	}
+
+	// An answer here can only come from quad-100 forwarding to that base config,
+	// since nothing else on the guest answers this name.
+	assertResolves(t, env, node, orUpstreamOnlyName, orUpstreamOnlyIP)
 }
 
 // assertOpenresolvResolvConf waits for the guest's /etc/resolv.conf to contain
@@ -207,4 +269,16 @@ func assertResolves(t *testing.T, env *vmtest.Env, n *vmtest.Node, name, want st
 		out, _ := env.SSHExec(n, "cat /etc/resolv.conf; resolvconf -i")
 		t.Errorf("%v\nresolver state:\n%s", err, out)
 	}
+}
+
+// slicesContainsField reports whether field appears in out as a complete
+// whitespace-separated word, so "tailscale" does not match a longer snippet
+// name.
+func slicesContainsField(out, field string) bool {
+	for _, f := range strings.Fields(out) {
+		if f == field {
+			return true
+		}
+	}
+	return false
 }

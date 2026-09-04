@@ -1127,6 +1127,27 @@ func (e *Env) SetAcceptRoutes(n *Node, on bool) {
 	e.t.Logf("[%s] accept-routes=%v", n.name, on)
 }
 
+// SetAcceptDNS toggles the node's CorpDNS preference (the --accept-dns flag),
+// controlling whether it applies the DNS configuration control sends it.
+//
+// Toggling it off and back on makes tailscaled tear down and reapply its whole
+// DNS configuration, including re-reading the OS's own config, without
+// rebooting the guest. A test can therefore change the OS resolver state
+// mid-run and be sure tailscaled re-reads it.
+func (e *Env) SetAcceptDNS(n *Node, on bool) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:      ipn.Prefs{CorpDNS: on},
+		CorpDNSSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetAcceptDNS(%s, %v): %v", n.name, on, err)
+	}
+	e.t.Logf("[%s] accept-dns=%v", n.name, on)
+}
+
 // ApproveRoutes tells the test control server to approve subnet routes
 // for the given node. The routes should be CIDR strings.
 func (e *Env) ApproveRoutes(n *Node, routes ...string) {
