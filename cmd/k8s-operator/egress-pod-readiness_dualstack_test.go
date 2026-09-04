@@ -39,6 +39,18 @@ func TestHealthCheckTargetsForReadinessSingleStack(t *testing.T) {
 	}
 }
 
+func TestHealthCheckTargetsForReadinessDNSFallback(t *testing.T) {
+	svc := &corev1.Service{}
+	svc.Name = "egress"
+	svc.Namespace = "tailscale"
+	svc.Spec.Ports = []corev1.ServicePort{{Name: tsHealthCheckPortName, Port: 9002}}
+
+	got := healthCheckTargetsForReadiness(svc, "cluster.local")
+	if len(got) != 1 || got[0].addr != "http://egress.tailscale.svc.cluster.local:9002/healthz" {
+		t.Fatalf("got %#v, want DNS health-check target", got)
+	}
+}
+
 func TestPodIPForHealthCheckFamily(t *testing.T) {
 	pod := &corev1.Pod{}
 	pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
@@ -51,6 +63,16 @@ func TestPodIPForHealthCheckFamily(t *testing.T) {
 	got, ok = podIPForHealthCheckFamily(pod, "http://[fd00::10]:9002/healthz")
 	if !ok || got != "fd00::2" {
 		t.Fatalf("IPv6 lookup = %q, %v; want fd00::2, true", got, ok)
+	}
+}
+
+func TestPodIPForHealthCheckFamilyDNSFallback(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
+
+	got, ok := podIPForHealthCheckFamily(pod, "http://egress.tailscale.svc.cluster.local:9002/healthz")
+	if !ok || got != "10.0.0.2" {
+		t.Fatalf("DNS lookup = %q, %v; want primary Pod IP 10.0.0.2, true", got, ok)
 	}
 }
 
