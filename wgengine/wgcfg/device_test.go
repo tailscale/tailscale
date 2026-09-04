@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/wireguard-go/conn"
@@ -28,12 +29,13 @@ func TestNewPeerLookupFunc(t *testing.T) {
 
 	// peers is the live per-peer config source, standing in for what
 	// LocalBackend provides via wgengine.Engine.SetPeerConfigFunc.
-	peers := map[device.NoisePublicKey][]netip.Prefix{
-		k2.Raw32(): {ip2},
+	psk2 := device.NoisePresharedKey{1, 2, 3}
+	peers := map[device.NoisePublicKey]PeerConfig{
+		k2.Raw32(): {AllowedIPs: []netip.Prefix{ip2}, PresharedKey: psk2},
 	}
-	dev.SetPeerLookupFunc(NewPeerLookupFunc(dev.Bind(), t.Logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
-		ips, ok := peers[pubk]
-		return ips, ok
+	dev.SetPeerLookupFunc(NewPeerLookupFunc(dev.Bind(), t.Logf, func(pubk device.NoisePublicKey) (PeerConfig, bool) {
+		conf, ok := peers[pubk]
+		return conf, ok
 	}))
 
 	t.Run("lazy-creation", func(t *testing.T) {
@@ -41,6 +43,13 @@ func TestNewPeerLookupFunc(t *testing.T) {
 		// demand via LookupPeer.
 		if p := dev.LookupPeer(k2.Raw32()); p == nil {
 			t.Fatal("expected peer k2 to exist via LookupPeer")
+		}
+		got, err := dev.IpcGet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "preshared_key=0102030000000000000000000000000000000000000000000000000000000000"; !strings.Contains(got, want) {
+			t.Fatalf("device config does not contain %q:\n%s", want, got)
 		}
 		// An unknown peer should not be found.
 		if p := dev.LookupPeer(k3.Raw32()); p != nil {

@@ -1884,7 +1884,7 @@ type mockEngine struct {
 
 	filter, jailedFilter *filter.Filter
 
-	peerConfigFn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)
+	peerConfigFn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)
 
 	statusCb wgengine.StatusCallback
 }
@@ -1991,7 +1991,7 @@ func (e *mockEngine) InstallCaptureHook(packet.CaptureCallback) {}
 
 func (e *mockEngine) SetPeerByIPPacketFunc(func(netip.Addr) (_ key.NodePublic, ok bool)) {}
 func (e *mockEngine) SetPeerForIPFunc(func(netip.Addr) (_ wgengine.PeerForIP, ok bool))  {}
-func (e *mockEngine) SetPeerConfigFunc(fn func(key.NodePublic) (allowedIPs []netip.Prefix, ok bool)) {
+func (e *mockEngine) SetPeerConfigFunc(fn func(key.NodePublic) (config wgcfg.PeerConfig, ok bool)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.peerConfigFn = fn
@@ -2006,14 +2006,15 @@ func (e *mockEngine) PeerAllowedIPs(k key.NodePublic) (_ []netip.Prefix, ok bool
 	if fn == nil {
 		return nil, false
 	}
-	return fn(k)
+	conf, ok := fn(k)
+	return conf.AllowedIPs, ok
 }
 
-func (e *mockEngine) SyncDevicePeer(key.NodePublic)  {}
+func (e *mockEngine) SyncDevicePeer(key.NodePublic)             {}
 func (e *mockEngine) MarkDevicePeerForHandshake(key.NodePublic) {}
 func (e *mockEngine) SetPeerSessionStateFunc(func(key.NodePublic, wgengine.PeerWireGuardState)) {
 }
-func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource)                            {}
+func (e *mockEngine) SetNetLogSource(wgengine.NetLogSource) {}
 func (e *mockEngine) SetPeerPriorityMessageOnEstablishmentFunc(fn func(key.NodePublic) (msg []byte)) {
 }
 func (e *mockEngine) SetWGPeerLookup(func(wgString string) (tsString string, ok bool)) {}

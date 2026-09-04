@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"slices"
 
+	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/types/key"
 )
 
@@ -17,11 +18,21 @@ import (
 // It only supports the set of things Tailscale uses.
 //
 // Peers are not part of the config: wireguard-go learns the peer set
-// and each peer's allowed IPs from the live per-peer config source
+// and each peer's configuration from the live per-peer config source
 // installed via [tailscale.com/wgengine.Engine.SetPeerConfigFunc].
 type Config struct {
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
+}
+
+// PeerConfig is the WireGuard configuration for one peer.
+type PeerConfig struct {
+	// AllowedIPs is the set of prefixes the peer may originate traffic from.
+	AllowedIPs []netip.Prefix
+
+	// PresharedKey is the optional WireGuard pre-shared key. The zero value
+	// disables the pre-shared-key layer.
+	PresharedKey device.NoisePresharedKey
 }
 
 func (c *Config) Equal(o *Config) bool {
