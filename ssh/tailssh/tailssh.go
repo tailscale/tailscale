@@ -567,6 +567,22 @@ func (c *conn) mayForwardLocalUnixTo(ctx gliderssh.Context, socketPath string) (
 	return nil, gliderssh.ErrRejected
 }
 
+// parseChownID parses the decimal uid or gid in s for use with chown(2). It
+// rejects values that do not fit in an int, which on 32-bit platforms would
+// otherwise wrap negative; in particular 1<<32-1 would wrap to -1, which
+// chown(2) reads as "leave this field unchanged" and would silently leave the
+// socket owned by root.
+func parseChownID(s string) (int, error) {
+	id, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	if uint64(int(id)) != id {
+		return 0, errors.New("does not fit in int")
+	}
+	return int(id), nil
+}
+
 // mayReverseUnixForwardTo is the server-side handler for
 // streamlocal-forward@openssh.com (SSH -R with Unix sockets). It returns a
 // listener for the specified Unix domain socket path if reverse forwarding is
@@ -577,8 +593,23 @@ func (c *conn) mayReverseUnixForwardTo(ctx gliderssh.Context, socketPath string)
 	}
 	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
 		metricRemotePortForward.Add(1)
-		cb := gliderssh.NewReverseUnixForwardingCallback(c.unixForwardingOptions())
-		return cb(ctx, socketPath)
+		opts := c.unixForwardingOptions()
+		if runtime.GOOS == "plan9" {
+			return gliderssh.NewReverseUnixForwardingCallback(opts)(ctx, socketPath)
+		}
+		uid, err := parseChownID(c.localUser.Uid)
+		if err != nil {
+			return nil, fmt.Errorf("invalid local user UID %q: %w", c.localUser.Uid, err)
+		}
+		gid, err := parseChownID(c.localUser.Gid)
+		if err != nil {
+			return nil, fmt.Errorf("invalid local user GID %q: %w", c.localUser.Gid, err)
+		}
+		opts.BindOwner = &gliderssh.UnixSocketOwner{
+			UID: uid,
+			GID: gid,
+		}
+		return gliderssh.NewReverseUnixForwardingCallback(opts)(ctx, socketPath)
 	}
 	return nil, gliderssh.ErrRejected
 }
