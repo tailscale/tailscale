@@ -34,44 +34,15 @@ import (
 
 const tsEgressReadinessGate = "tailscale.com/egress-services"
 
-// egressPodsReconciler is responsible for setting tailscale.com/egress-services condition on egress ProxyGroup Pods.
-// The condition is used as a readiness gate for the Pod, meaning that kubelet will not mark the Pod as ready before the
-// condition is set. The ProxyGroup StatefulSet updates are rolled out in such a way that no Pod is restarted, before
-// the previous Pod is marked as ready, so ensuring that the Pod does not get marked as ready when it is not yet able to
-// route traffic for egress service prevents downtime during restarts caused by no available endpoints left because
-// every Pod has been recreated and is not yet added to endpoints.
-// https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-readiness-gate
 type egressPodsReconciler struct {
 	client.Client
 	logger      *zap.SugaredLogger
 	tsNamespace string
 	clock       tstime.Clock
-	httpClient  doer          // http client that can be set to a mock client in tests
-	maxBackoff  time.Duration // max backoff period between health check calls
+	httpClient  doer
+	maxBackoff  time.Duration
 }
 
-// Reconcile reconciles an egress ProxyGroup Pods on changes to those Pods and ProxyGroup EndpointSlices. It ensures
-// that for each Pod who is ready to route traffic to all egress services for the ProxyGroup, the Pod has a
-// tailscale.com/egress-services condition to set, so that kubelet will mark the Pod as ready.
-//
-// For the Pod to be ready
-// to route traffic to the egress service, the kube proxy needs to have set up the Pod's IP as an endpoint for the
-// ClusterIP Service corresponding to the egress service.
-//
-// Note that the endpoints for the ClusterIP Service are configured by the operator itself using custom
-// EndpointSlices(egress-eps-reconciler), so the routing is not blocked on Pod's readiness.
-//
-// Each egress service has a corresponding ClusterIP Service, that exposes all user configured
-// tailnet ports, as well as a health check port for the proxy.
-//
-// The reconciler calls the health check endpoint of each Service up to N number of times, where N is the number of
-// replicas for the ProxyGroup x 3, and checks if the received response is healthy response from the Pod being reconciled.
-//
-// The health check response contains a header with the
-// Pod's IP address- this is used to determine whether the response is received from this Pod.
-//
-// If the Pod does not appear to be serving the health check endpoint (pre-v1.80 proxies), the reconciler just sets the
-// readiness condition for backwards compatibility reasons.
 func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
 	lg := er.logger.With("Pod", req.NamespacedName)
 	lg.Debugf("starting reconcile")
@@ -95,8 +66,6 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, nil
 	}
 
-	// If the Pod does not have the readiness gate set, there is no need to add the readiness condition. In practice
-	// this will happen if the user has configured custom TS_LOCAL_ADDR_PORT, thus disabling the graceful failover.
 	if !slices.ContainsFunc(pod.Spec.ReadinessGates, func(r corev1.PodReadinessGate) bool {
 		return r.ConditionType == tsEgressReadinessGate
 	}) {
@@ -115,7 +84,6 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		return res, nil
 	}
 
-	// Get all ClusterIP Services for all egress targets exposed to cluster via this ProxyGroup.
 	lbls := map[string]string{
 		kubetypes.LabelManaged: "true",
 		labelProxyGroup:        proxyGroupName,
@@ -141,8 +109,8 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		go func() {
 			ll := lg.With("service_name", s.Name)
 			d := retrieveClusterDomain(er.tsNamespace, ll)
-			healthCheckAddr := healthCheckForSvc(&s, d)
-			if healthCheckAddr == "" {
+			targets := healthCheckTargetsForReadiness(&s, d)
+			if len(targets) == 0 {
 				ll.Debugf("ClusterIP Service does not expose a health check endpoint, unable to verify if routing is set up")
 				errChan <- nil
 				return
@@ -155,18 +123,29 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 					errChan <- nil
 					return
 				}
-				state, err := er.lookupPodRouteViaSvc(ctx, pod, healthCheckAddr, ll)
-				if err != nil {
-					errChan <- fmt.Errorf("error validating if routing has been set up for Pod: %w", err)
-					return
+
+				allFamiliesHealthy := true
+				for _, target := range targets {
+					state, err := er.lookupPodRouteViaSvc(ctx, pod, target.addr, target.podIP, ll)
+					if err != nil {
+						errChan <- fmt.Errorf("error validating if routing has been set up for Pod: %w", err)
+						return
+					}
+					if state == cannotVerify {
+						routesSetup = true
+						allFamiliesHealthy = true
+						break
+					}
+					if state != healthy {
+						allFamiliesHealthy = false
+						break
+					}
 				}
-				if state == healthy || state == cannotVerify {
+				if allFamiliesHealthy {
 					routesSetup = true
 					break
 				}
-				if state == unreachable || state == unhealthy || state == podNotReady {
-					bo.BackOff(ctx, errors.New("backoff"))
-				}
+				bo.BackOff(ctx, errors.New("backoff"))
 			}
 			if !routesSetup {
 				ll.Debugf("Pod is not yet configured as Service endpoint")
@@ -207,37 +186,90 @@ func (er *egressPodsReconciler) setPodReady(ctx context.Context, pod *corev1.Pod
 	return er.Status().Update(ctx, pod)
 }
 
-// healthCheckState is the result of a single request to an egress Service health check endpoint with a goal to hit a
-// specific backend Pod.
 type healthCheckState int8
 
 const (
-	cannotVerify healthCheckState = iota // not verifiable for this setup (i.e earlier proxy version)
-	unreachable                          // no backends or another network error
-	notFound                             // hit another backend
-	unhealthy                            // not 200
-	podNotReady                          // Pod is not ready, i.e does not have an IP address yet
-	healthy                              // 200
+	cannotVerify healthCheckState = iota
+	unreachable
+	notFound
+	unhealthy
+	podNotReady
+	healthy
 )
 
-// lookupPodRouteViaSvc attempts to reach a Pod using a health check endpoint served by a Service and returns the state of the health check.
-func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, lg *zap.SugaredLogger) (healthCheckState, error) {
+type healthCheckTarget struct {
+	addr  string
+	podIP string
+}
+
+// healthCheckTargetsForReadiness returns one health-check target per Service
+// ClusterIP. Targeting ClusterIPs directly pins the request to an address
+// family, which is necessary for dual-stack Services: DNS does not guarantee
+// which family the HTTP client will select.
+func healthCheckTargetsForReadiness(svc *corev1.Service, clusterDomain string) []healthCheckTarget {
+	i := slices.IndexFunc(svc.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == tsHealthCheckPortName
+	})
+	if i == -1 {
+		return nil
+	}
+
+	port := uint16(svc.Spec.Ports[i].Port)
+	targets := make([]healthCheckTarget, 0, len(svc.Spec.ClusterIPs))
+	for _, clusterIP := range svc.Spec.ClusterIPs {
+		ip, err := netip.ParseAddr(clusterIP)
+		if err != nil {
+			continue
+		}
+		targets = append(targets, healthCheckTarget{
+			addr:  fmt.Sprintf("http://%s/healthz", netip.AddrPortFrom(ip, port)),
+			podIP: "",
+		})
+	}
+
+	if len(targets) == 0 {
+		// During an upgrade there can briefly be a Service object without
+		// ClusterIPs. Keep the existing DNS behavior as a compatibility fallback.
+		if clusterDomain == "" {
+			return nil
+		}
+		return []healthCheckTarget{{
+			addr:  healthCheckForSvc(svc, clusterDomain),
+			podIP: "",
+		}}
+	}
+	return targets
+}
+
+func podIPForHealthCheckFamily(pod *corev1.Pod, targetAddr string) (string, bool) {
+	host, _, err := netip.ParseAddrPort(strings.TrimPrefix(strings.TrimSuffix(targetAddr, "/healthz"), "http://"))
+	if err != nil {
+		return "", false
+	}
+	for _, podIP := range pod.Status.PodIPs {
+		ip, err := netip.ParseAddr(podIP.IP)
+		if err == nil && ip.Is6() == host.Is6() {
+			return podIP.IP, true
+		}
+	}
+	return "", false
+}
+
+func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr, wantsIP string, lg *zap.SugaredLogger) (healthCheckState, error) {
 	if !slices.ContainsFunc(pod.Spec.Containers[0].Env, func(e corev1.EnvVar) bool {
 		return e.Name == "TS_ENABLE_HEALTH_CHECK" && e.Value == "true"
 	}) {
 		lg.Debugf("Pod does not have health check enabled, unable to verify if it is currently routable via Service")
 		return cannotVerify, nil
 	}
-	// Use the Pod's primary IP (PodIPs[0]) to identify this Pod in the health check
-	// response. The primary IP family is determined by the cluster's IP family configuration.
 
-	// Note: we do not control which IP family the request uses, so on a dual-stack
-	// cluster either IPv4 or IPv6 could be used. In either case, a matching IP header
-	// comfirms the request reached this Pod.
-	if len(pod.Status.PodIPs) == 0 || pod.Status.PodIPs[0].IP == "" {
-		return podNotReady, nil
+	if wantsIP == "" {
+		var ok bool
+		wantsIP, ok = podIPForHealthCheckFamily(pod, healthCheckAddr)
+		if !ok {
+			return podNotReady, nil
+		}
 	}
-	wantsIP := pod.Status.PodIPs[0].IP
 	parsed, err := netip.ParseAddr(wantsIP)
 	if err != nil {
 		return -1, fmt.Errorf("error parsing Pod IP %q: %w", wantsIP, err)
@@ -253,12 +285,9 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 	if err != nil {
 		return -1, fmt.Errorf("error creating new HTTP request: %w", err)
 	}
-	// Do not re-use the same connection for the next request so to maximize the chance of hitting all backends equally.
 	req.Close = true
 	resp, err := er.httpClient.Do(req)
 	if err != nil {
-		// This is most likely because this is the first Pod and is not yet added to service endpoints. Other
-		// error types are possible, but checking for those would likely make the system too fragile.
 		return unreachable, nil
 	}
 	defer resp.Body.Close()
@@ -276,15 +305,10 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 	return healthy, nil
 }
 
-// numCalls return the number of times an endpoint on a ProxyGroup Service should be called till it can be safely
-// assumed that, if none of the responses came back from a specific Pod then traffic for the Service is currently not
-// being routed to that Pod. This assumes that traffic for the Service is routed via round robin, so
-// InternalTrafficPolicy must be 'Cluster' and session affinity must be None.
 func numCalls(replicas int32) int32 {
 	return replicas * 3
 }
 
-// doer is an interface for HTTP client that can be set to a mock client in tests.
 type doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
