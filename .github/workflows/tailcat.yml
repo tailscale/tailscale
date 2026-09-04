@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   tailcat:
+    name: heads-up-hypothetical-tailcat-build-using-this-commit
     runs-on: ubuntu-latest
     steps:
       - name: Check out tailscale
@@ -45,3 +46,20 @@ jobs:
       - name: Run tailcat tests
         working-directory: tailcat
         run: ../tailscale/tool/go test ./...
+
+      - name: Explain failure
+        if: failure()
+        run: |
+          cat <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          Don't panic!
+
+          This job builds the tailscale/tailcat repo against the tailscale.com
+          module at this commit, not the version tailcat actually pins in its
+          go.mod. A failure here does NOT break tailcat today; nothing breaks
+          until tailcat bumps its tailscale.com dependency to include this
+          change.
+
+          This is only an early heads-up. Be concerned only if this API or
+          behavior breakage is unexpected. If the breakage is intentional,
+          proceed and coordinate a matching tailcat update.
+          EOF
