@@ -52,3 +52,43 @@ func TestTreatAsLostUDP(t *testing.T) {
 	}
 
 }
+
+func TestShouldDisableUDPGSO(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "eio",
+			err: &os.SyscallError{
+				Syscall: "sendmmsg",
+				Err:     syscall.EIO,
+			},
+			want: true,
+		},
+		{
+			name: "emsgsize",
+			err: &os.SyscallError{
+				Syscall: "sendmmsg",
+				Err:     syscall.EMSGSIZE,
+			},
+			want: true,
+		},
+		{
+			name: "other",
+			err: &os.SyscallError{
+				Syscall: "sendmmsg",
+				Err:     syscall.EINVAL,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShouldDisableUDPGSO(tt.err); got != tt.want {
+				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
