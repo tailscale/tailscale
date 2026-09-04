@@ -222,8 +222,7 @@ func healthCheckTargetsForReadiness(svc *corev1.Service, clusterDomain string) [
 			continue
 		}
 		targets = append(targets, healthCheckTarget{
-			addr:  fmt.Sprintf("http://%s/healthz", netip.AddrPortFrom(ip, port)),
-			podIP: "",
+			addr: fmt.Sprintf("http://%s/healthz", netip.AddrPortFrom(ip, port)),
 		})
 	}
 
@@ -233,10 +232,7 @@ func healthCheckTargetsForReadiness(svc *corev1.Service, clusterDomain string) [
 		if clusterDomain == "" {
 			return nil
 		}
-		return []healthCheckTarget{{
-			addr:  healthCheckForSvc(svc, clusterDomain),
-			podIP: "",
-		}}
+		return []healthCheckTarget{{addr: healthCheckForSvc(svc, clusterDomain)}}
 	}
 	return targets
 }
@@ -244,7 +240,13 @@ func healthCheckTargetsForReadiness(svc *corev1.Service, clusterDomain string) [
 func podIPForHealthCheckFamily(pod *corev1.Pod, targetAddr string) (string, bool) {
 	host, _, err := netip.ParseAddrPort(strings.TrimPrefix(strings.TrimSuffix(targetAddr, "/healthz"), "http://"))
 	if err != nil {
-		return "", false
+		// The compatibility target is the Service DNS name, so there is no
+		// address family to derive from the URL. Preserve the old behavior by
+		// identifying the Pod using its primary IP.
+		if len(pod.Status.PodIPs) == 0 || pod.Status.PodIPs[0].IP == "" {
+			return "", false
+		}
+		return pod.Status.PodIPs[0].IP, true
 	}
 	for _, podIP := range pod.Status.PodIPs {
 		ip, err := netip.ParseAddr(podIP.IP)
