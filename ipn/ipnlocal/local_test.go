@@ -9414,6 +9414,30 @@ func TestShouldUseOneCGNATRoute(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:      "iOS/tailscale-cgnat",
+			versionOS: "iOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "10.203.33.114/23"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    true,
+		},
+		{
+			name:      "iOS/multiple-cgnats",
+			versionOS: "iOS",
+			ifaces: []netmon.Interface{
+				makeInterface(1, "lo0", "127.0.0.1/8"),
+				makeInterface(2, "en0", "100.124.0.1/32"),
+				makeInterface(3, "utun0", "100.95.71.186/32"),
+			},
+			tsName:  "utun0",
+			tsIndex: 3,
+			want:    false,
+		},
+		{
 			name:      "plan9/tailscale-cgnat",
 			versionOS: "plan9",
 			ifaces: []netmon.Interface{
