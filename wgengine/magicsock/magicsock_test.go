@@ -305,10 +305,11 @@ func (s *magicStack) Reconfig(cfg *wgcfg.Config, peers []tailcfg.NodeView) error
 	})
 
 	// The live per-peer config source backing lazy peer creation, as
-	// LocalBackend's peerAllowedIPs does via PeerAllowedIPs, and the
+	// LocalBackend's peerConfig does via PeerAllowedIPs, and the
 	// per-peer device convergence that Engine.SyncDevicePeer does.
-	s.dev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(s.conn.Bind(), s.conn.logf, func(pubk device.NoisePublicKey) ([]netip.Prefix, bool) {
-		return peerAllowedIPs(key.NodePublicFromRaw32(mem.B(pubk[:])))
+	s.dev.SetPeerLookupFunc(wgcfg.NewPeerLookupFunc(s.conn.Bind(), s.conn.logf, func(pubk device.NoisePublicKey) (wgcfg.PeerConfig, bool) {
+		ips, ok := peerAllowedIPs(key.NodePublicFromRaw32(mem.B(pubk[:])))
+		return wgcfg.PeerConfig{AllowedIPs: ips}, ok
 	}))
 	s.dev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey))
 	s.dev.RemoveMatchingPeers(func(pk device.NoisePublicKey) bool {

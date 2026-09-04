@@ -92,17 +92,17 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	e2.SetPeerByIPPacketFunc(func(dst netip.Addr) (_ key.NodePublic, ok bool) {
 		return k1pub, a1.Contains(dst)
 	})
-	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+	e1.SetPeerConfigFunc(func(pubk key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 		if pubk == k2pub {
-			return []netip.Prefix{a2}, true
+			return wgcfg.PeerConfig{AllowedIPs: []netip.Prefix{a2}}, true
 		}
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	})
-	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ []netip.Prefix, ok bool) {
+	e2.SetPeerConfigFunc(func(pubk key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 		if pubk == k1pub {
-			return []netip.Prefix{a1}, true
+			return wgcfg.PeerConfig{AllowedIPs: []netip.Prefix{a1}}, true
 		}
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	})
 
 	var wait sync.WaitGroup
