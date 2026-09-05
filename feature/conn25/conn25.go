@@ -104,12 +104,12 @@ func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, 
 	e.handleConnectorTransitIP(h, w, r)
 }
 
-func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
+func handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler, r *http.Request) (allowSource bool, allowName ipnlocal.DNSNameFilter) {
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
-		return false
+		return false, nil
 	}
-	return e.handleHookReplyToDNSQueries(h)
+	return e.conn25.handleHookReplyToDNSQueries(h, r)
 }
 
 // extension is an [ipnext.Extension] managing the connector on platforms
@@ -370,13 +370,72 @@ func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.R
 	w.Write(bs)
 }
 
-func (e *extension) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler) bool {
-	if !e.conn25.isConfigured() {
+func (c *Conn25) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler, r *http.Request) (sourceAllowed bool, nameAllowed ipnlocal.DNSNameFilter) {
+	if !c.prefsAdvertiseConnector.Load() {
+		// We are not a connector.
+		return false, nil
+	}
+
+	cfg, isConfigured := c.getConfig()
+	if !isConfigured {
+		// We have no connector config.
+		return false, nil
+	}
+
+	// Determine which app the query is for
+	var app appctype.Conn25Attr
+	if appName, hasApp := r.URL.Query()["app"]; !hasApp || len(appName) != 1 {
+		return false, nil
+	} else {
+		a, ok := cfg.appsByName[appName[0]]
+		if !ok {
+			// We have no config for the requested app.
+			return false, nil
+		}
+		app = a
+	}
+
+	if !cfg.selfAppNames.Contains(app.Name) {
+		// We are not a connector for the requested app.
+		return false, nil
+	}
+
+	if !app.TemporaryUnsafeBypassFilter && !h.PeerCaps().HasCapability(peercap.Conn25Prefix.ToAttribute(app.Name)) {
+		// The peer does not have access to the requested app.
+		return false, nil
+	}
+
+	return true, makeNameChecker(app)
+}
+
+func makeNameChecker(app appctype.Conn25Attr) ipnlocal.DNSNameFilter {
+	// TODO(tailscale/corp#40076): optimize the comparison; if the func is
+	// generated when the app config is created, that will avoid allocating
+	// temporary instances. Some of the work (e.g. conversion to [dnsname.FQDN])
+	// can also be precomputed.
+	return func(name string) bool {
+		fqdn, err := dnsname.ToFQDN(strings.ToLower(name))
+		if err != nil {
+			return false
+		}
+		for _, domain := range app.Domains {
+			appFQDN, err := dnsname.ToFQDN(strings.TrimPrefix(strings.ToLower(domain), "*."))
+			if err != nil {
+				continue
+			}
+			// Allow both exact matches and suffix matches, even when the app
+			// does not specify a wildcard. This is because of limitations in
+			// the Split DNS implementation: we treat all split DNS rules as
+			// wildcard even when the app specifies exact matching. The conn25
+			// client will only perform address mapping for more strictly
+			// matched names but the connector needs to allow queries for any
+			// subdomain of an exact match.
+			if appFQDN.Contains(fqdn) {
+				return true
+			}
+		}
 		return false
 	}
-	// TODO(tailscale/corp#40076): verify the peer has access to the query's
-	// app (if any) domain.
-	return true
 }
 
 // onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.

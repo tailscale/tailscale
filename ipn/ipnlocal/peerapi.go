@@ -40,6 +40,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -676,33 +677,89 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 	dh.ServeHTTP(w, r)
 }
 
+// DNSNameFilter allows extensions to conditionally allow PeerAPI DNS queries
+// based on the name being queried, in addition to the source of the query. It
+// is used by [HookReplyToDNSQueries].
+type DNSNameFilter func(name string) (allowed bool)
+
 // HookReplyToDNSQueries allows extensions to register a willingness to allow
-// handling PeerAPI DNS queries for the peer making this request.
-var HookReplyToDNSQueries = feature.Hooks[func(PeerAPIHandler) bool]{
+// handling PeerAPI DNS queries for the peer making this request, optionally
+// depending on the name being queried. The [http.Request.Body] must not be read
+// by the handler.
+// When sourceAllowed is false, the query is disallowed and nameAllowed is
+// ignored (recommendation: nameAllowed should be nil in this case).
+// When sourceAllowed is true, the peer is permitted to send queries but the
+// final decision depends on the name being queried. When nameAllowed is nil,
+// all names are allowed. Otherwise, nameAllowed is called after parsing the
+// query to determine if it should be accepted.
+// While separating the decisions complicates this hook, it permits optimizing
+// the common case where all names are allowed for exit nodes and appc.
+var HookReplyToDNSQueries = feature.Hooks[func(PeerAPIHandler, *http.Request) (sourceAllowed bool, nameAllowed DNSNameFilter)]{
 	offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet,
 }
 
-func (h *peerAPIHandler) replyToDNSQueries() bool {
+// isPeerAPIDNSAllowed determines if any of the default or extension hooks
+// permit PeerAPI DNS lookups for the current request.
+// nameAllowed will never be nil when sourceAllowed is true, as required by
+// [tailscale.com/net/dns/resolver.Resolver.HandlePeerDNSQuery], so it is not
+// quite the same as a [DNSNameFilter].
+func (h *peerAPIHandler) isPeerAPIDNSAllowed(r *http.Request) (sourceAllowed bool, nameAllowed func(string) bool) {
 	if !buildfeatures.HasDNS {
-		return false
+		return false, nil
 	}
-	if h.isSelf {
+	if h.IsSelfUntagged() {
 		// If the peer is owned by the same user, just allow it
 		// without further checks.
-		return true
+		return true, h.allowExitNodeDNSProxyToServeName
 	}
 	if !h.remoteAddr.IsValid() {
 		// This should never be the case if the peerAPIHandler
 		// was wired up correctly, but just in case.
-		return false
+		return false, nil
 	}
 
+	nameFilters := make([]DNSNameFilter, 0, len(HookReplyToDNSQueries))
 	for _, hook := range HookReplyToDNSQueries {
-		if hook(h) {
-			return true
+		allow, allowedName := hook(h, r)
+		if !allow {
+			continue
 		}
+		if allowedName == nil {
+			// Allow all names by default (still subject to names restricted by
+			// the netmap).
+			return true, h.allowExitNodeDNSProxyToServeName
+		}
+		nameFilters = append(nameFilters, allowedName)
 	}
-	return false
+
+	if len(nameFilters) == 0 {
+		return false, nil
+	}
+
+	return true, func(name string) bool {
+		// Always filter out names restricted by the netmap.
+		if !h.allowExitNodeDNSProxyToServeName(name) {
+			return false
+		}
+		// Now, only allow names permitted by at least one extension.
+		for _, f := range nameFilters {
+			if f(name) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// exitNodeDNSFilterForTest overrides
+// peerAPIHandler.allowExitNodeDNSProxyToServeName if set during test execution.
+var exitNodeDNSFilterForTest func(name string) bool
+
+func (h *peerAPIHandler) allowExitNodeDNSProxyToServeName(name string) bool {
+	if testenv.InTest() && exitNodeDNSFilterForTest != nil {
+		return exitNodeDNSFilterForTest(name)
+	}
+	return h.ps.b.allowExitNodeDNSProxyToServeName(name)
 }
 
 // offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet is run as part of
@@ -714,12 +771,12 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 //     to peers that have access to a relevant app.
 //
 // Further details about how these are accomplished are in inline comments.
-func offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet(h PeerAPIHandler) bool {
+func offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet(h PeerAPIHandler, _ *http.Request) (bool, DNSNameFilter) {
 	b := h.LocalBackend()
 	if !b.OfferingExitNode() && !b.OfferingAppConnector() {
 		// If we're not an exit node or app connector, this hook
 		// doesn't apply.
-		return false
+		return false, nil
 	}
 	// Otherwise, we're an exit node but the peer is not us, so
 	// we need to check if they're allowed access to the internet.
@@ -736,7 +793,7 @@ func offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet(h PeerAPIHandler) b
 	// in LocalBackend).
 	f := b.currentNode().filter()
 	if f == nil {
-		return false
+		return false, nil
 	}
 	// Note: we check TCP here because the Filter type already had
 	// a CheckTCP method (for unit tests), but it's pretty
@@ -750,7 +807,7 @@ func offersExitNodeOrAppConnectorAndPeerHasAutogroupInternet(h PeerAPIHandler) b
 		dstIP = netip.MustParseAddr("2000::")
 	}
 	verdict := f.CheckTCP(remoteIP, dstIP, 53)
-	return verdict == filter.Accept
+	return verdict == filter.Accept, nil
 }
 
 // handleDNSQuery implements a DoH server (RFC 8484) over the peerapi.
@@ -760,7 +817,8 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "DNS not wired up", http.StatusNotImplemented)
 		return
 	}
-	if !h.replyToDNSQueries() {
+	sourceAllowed, nameAllowed := h.isPeerAPIDNSAllowed(r)
+	if !sourceAllowed {
 		http.Error(w, "DNS access denied", http.StatusForbidden)
 		return
 	}
@@ -784,7 +842,7 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 
 	ctx, cancel := context.WithTimeout(r.Context(), arbitraryTimeout)
 	defer cancel()
-	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, h.ps.b.allowExitNodeDNSProxyToServeName)
+	res, err := h.ps.resolver.HandlePeerDNSQuery(ctx, q, h.remoteAddr, nameAllowed)
 	if err != nil {
 		h.logf("handleDNS fwd error: %v", err)
 		if err := ctx.Err(); err != nil {
