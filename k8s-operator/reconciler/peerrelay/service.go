@@ -36,9 +36,9 @@ const (
 	// once a Service has more than one port; using a stable name keeps the door open for that.
 	servicePortName = "peerrelay"
 
-	// servicePort is the UDP port that each peer relay container will listen on and that the LoadBalancer Service
-	// exposes externally.
-	servicePort = 41641
+	// defaultServicePort is the UDP port that each peer relay container will listen on and that the LoadBalancer
+	// Service exposes externally when spec.service.port is unset.
+	defaultServicePort = 41641
 
 	annotationEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	annotationSubnets        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
@@ -84,6 +84,15 @@ func replicaName(prName string, idx int32) string {
 	return fmt.Sprintf("%s-%d", resourceName(prName), idx)
 }
 
+// peerRelayPort returns the UDP port the peer relay listens on and is exposed externally on. The two are always
+// equal: the relay advertises address:port to peers, so the load balancer must forward without rewriting the port.
+func peerRelayPort(pr *tsapi.PeerRelay) uint16 {
+	if pr.Spec.Service != nil && pr.Spec.Service.Port != nil {
+		return *pr.Spec.Service.Port
+	}
+	return defaultServicePort
+}
+
 func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]string {
 	annotations := make(map[string]string, len(cloudAnnotations))
 
@@ -115,6 +124,7 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]stri
 
 func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Service {
 	name := replicaName(pr.Name, idx)
+	port := int32(peerRelayPort(pr))
 
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -138,8 +148,8 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 				{
 					Name:       servicePortName,
 					Protocol:   corev1.ProtocolUDP,
-					Port:       servicePort,
-					TargetPort: intstr.FromInt32(servicePort),
+					Port:       port,
+					TargetPort: intstr.FromInt32(port),
 				},
 			},
 		},
@@ -167,7 +177,7 @@ func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
 //
 // prev is the set of endpoints last published for this replica, returned unchanged when a lookup fails so a
 // transient DNS error doesn't empty status.endpoints.
-func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service, prev []tsapi.PeerRelayEndpoint) []tsapi.PeerRelayEndpoint {
+func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service, prev []tsapi.PeerRelayEndpoint, port int32) []tsapi.PeerRelayEndpoint {
 	idx, ok := replicaIndexFromLabels(svc.Labels)
 	if !ok {
 		return nil
@@ -176,7 +186,7 @@ func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.Sugared
 	var endpoints []tsapi.PeerRelayEndpoint
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP != "" {
-			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: servicePort})
+			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: ing.IP, Port: port})
 		}
 	}
 	if len(endpoints) > 0 {
@@ -209,7 +219,7 @@ func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.Sugared
 
 		slices.SortFunc(addrs, netip.Addr.Compare)
 		for _, addr := range addrs {
-			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: addr.String(), Port: servicePort})
+			endpoints = append(endpoints, tsapi.PeerRelayEndpoint{Replica: idx, Address: addr.String(), Port: port})
 		}
 
 		return endpoints
