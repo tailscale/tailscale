@@ -345,6 +345,10 @@ type forwarder struct {
 	// queries directly - but we didn't configure it with any upstream resolvers.
 	// That's an error, but not a health error if the user has disabled CorpDNS.
 	acceptDNS bool
+
+	// singleLabelResolvers are used for single-label queries when set.
+	// See [Config.SingleLabelResolvers].
+	singleLabelResolvers []resolverAndDelay
 }
 
 func (f *forwarder) probeLocks() {
@@ -461,7 +465,9 @@ func cloudResolvers() []resolverAndDelay {
 // Resolver.SetConfig on reconfig.
 //
 // The memory referenced by routesBySuffix should not be modified.
-func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver, acceptDNS bool) {
+// singleLabel, if non-empty, is used for single-label queries; see
+// [Config.SingleLabelResolvers].
+func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver, acceptDNS bool, singleLabel []*dnstype.Resolver) {
 	routes := make([]route, 0, len(routesBySuffix))
 
 	cloudHostFallback := cloudResolvers()
@@ -498,6 +504,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.acceptDNS = acceptDNS
 	f.routes = routes
 	f.cloudHostFallback = cloudHostFallback
+	f.singleLabelResolvers = resolversWithDelays(singleLabel)
 }
 
 var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
@@ -1101,10 +1108,16 @@ func applySchemes(logf logger.Logf, rrs []resolverAndDelay, schemes views.Map[st
 }
 
 // resolvers returns the resolvers to use for domain.
-func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
+//
+// Routes are tried most-specific first; a matching non-"." route wins.
+// At the "." route, if allowSingleLabel is set, single-label names may use
+// SingleLabelResolvers instead of the default resolvers. Peer/Exit DNS
+// passes allowSingleLabel=false.
+func (f *forwarder) resolvers(domain dnsname.FQDN, allowSingleLabel bool) []resolverAndDelay {
 	f.mu.Lock()
 	routes := f.routes
 	cloudHostFallback := f.cloudHostFallback
+	singleLabel := f.singleLabelResolvers
 	schemes := f.schemeCacheLocked()
 	f.mu.Unlock()
 
@@ -1112,10 +1125,24 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 		if route.Suffix != "." && !route.Suffix.Contains(domain) {
 			continue
 		}
+
+		if route.Suffix != "." {
+			resolved := applySchemes(f.logf, route.Resolvers, schemes)
+			// If scheme resolution filtered out all resolvers from a non-empty
+			// route, fall through to the next matching route. If the resolvers
+			// were configured to be empty allow resolved to be empty.
+			if len(resolved) > 0 || len(route.Resolvers) == 0 {
+				return resolved
+			}
+			continue
+		}
+
+		// Catch-all "." route: prefer SingleLabelResolvers for local
+		// single-label queries so DefaultResolvers are not used for those.
+		if allowSingleLabel && domain.NumLabels() == 1 && len(singleLabel) > 0 {
+			return applySchemes(f.logf, singleLabel, schemes)
+		}
 		resolved := applySchemes(f.logf, route.Resolvers, schemes)
-		// If scheme resolution filtered out all resolvers from a non-empty
-		// route, fall through to the next matching route. If the resolvers
-		// were configured to be empty allow resolved to be empty.
 		if len(resolved) > 0 || len(route.Resolvers) == 0 {
 			return resolved
 		}
@@ -1123,10 +1150,9 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	return cloudHostFallback // or nil if no fallback
 }
 
-// GetUpstreamResolvers returns the resolvers that would be used to resolve
-// the given FQDN.
+// GetUpstreamResolvers returns the resolvers used for a local query for name.
 func (f *forwarder) GetUpstreamResolvers(name dnsname.FQDN) []*dnstype.Resolver {
-	resolvers := f.resolvers(name)
+	resolvers := f.resolvers(name, true)
 	upstreamResolvers := make([]*dnstype.Resolver, 0, len(resolvers))
 	for _, r := range resolvers {
 		upstreamResolvers = append(upstreamResolvers, r.name)
@@ -1200,8 +1226,10 @@ type forwardQuery struct {
 // non-nil error (without sending to the channel).
 //
 // If resolvers is non-empty, it's used explicitly (notably, for exit
-// node DNS proxy queries), otherwise f.resolvers is used.
-func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
+// node DNS proxy queries that already chose an upstream). Otherwise
+// f.resolvers is used. allowSingleLabel enables SingleLabelResolvers for
+// local queries; peer/Exit DNS must pass false.
+func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, allowSingleLabel bool, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, typ, err := nameFromQuery(query.bs)
 	if err != nil {
@@ -1238,7 +1266,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	clampEDNSSize(query.bs, maxResponseBytes)
 
 	if len(resolvers) == 0 {
-		resolvers = f.resolvers(domain)
+		resolvers = f.resolvers(domain, allowSingleLabel)
 		if len(resolvers) == 0 {
 			// No upstream resolver for this name isn't a forwarder failure:
 			// it's split DNS / a name we weren't asked to handle. Count it

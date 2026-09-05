@@ -357,6 +357,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
 		ocfg.Nameservers = cfg.serviceIPs(m.knobs)
+		// Preserve Docker's 127.0.0.11 for single-label names without
+		// replacing DefaultResolvers. See issue #15401.
+		m.setSingleLabelResolversFromBase(&rcfg)
 		return rcfg, ocfg, nil
 	}
 
@@ -476,6 +479,26 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 
 	return rcfg, ocfg, nil
+}
+
+// dockerEmbeddedDNS is Docker's embedded DNS on user-defined networks.
+// It resolves container/Compose names; other queries go to ExtServers.
+var dockerEmbeddedDNS = netip.AddrFrom4([4]byte{127, 0, 0, 11})
+
+// setSingleLabelResolversFromBase sets SingleLabelResolvers when the
+// pre-Tailscale base config includes 127.0.0.11. GetBaseConfig errors are
+// ignored; this is best-effort and must not fail DNS configuration.
+func (m *Manager) setSingleLabelResolversFromBase(rcfg *resolver.Config) {
+	base, err := m.os.GetBaseConfig()
+	if err != nil {
+		return
+	}
+	for _, ip := range base.Nameservers {
+		if ip == dockerEmbeddedDNS {
+			rcfg.SingleLabelResolvers = []*dnstype.Resolver{{Addr: ip.String()}}
+			return
+		}
+	}
 }
 
 func (m *Manager) disableSplitDNSOptimization() bool {
