@@ -28,7 +28,7 @@ func TestPersistEqual(t *testing.T) {
 	}
 
 	k1 := key.NewNode()
-	nl1 := key.NewNLPrivate()
+	nl1 := key.NewTLPrivate()
 	tests := []struct {
 		a, b *Persist
 		want bool
@@ -86,7 +86,7 @@ func TestPersistEqual(t *testing.T) {
 		},
 		{
 			&Persist{NetworkLockKey: nl1},
-			&Persist{NetworkLockKey: key.NewNLPrivate()},
+			&Persist{NetworkLockKey: key.NewTLPrivate()},
 			false,
 		},
 		{

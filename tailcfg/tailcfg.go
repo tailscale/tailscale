@@ -1307,7 +1307,7 @@ type RegisterRequest struct {
 
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
-	NLKey      key.NLPublic
+	NLKey      key.TLPublic
 	Auth       *RegisterResponseAuth `json:",omitempty"`
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.

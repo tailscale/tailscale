@@ -707,7 +707,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 	if persist.NetworkLockKey.IsZero() {
-		persist.NetworkLockKey = key.NewNLPrivate()
+		persist.NetworkLockKey = key.NewTLPrivate()
 	}
 
 	nlPub := persist.NetworkLockKey.Public()
