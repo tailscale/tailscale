@@ -140,6 +140,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	},
 	"completion": {Sym: "Completion", Desc: "CLI shell completion"},
 	"conn25":     {Sym: "Conn25", Desc: "Route traffic for configured domains through connector devices"},
+	"cpucaps":    {Sym: "CPUCaps", Desc: "CPU capability and GOAMD64 microarchitecture level detection and reporting"},
 	"completion_scripts": {
 		Sym: "CompletionScripts", Desc: "embed CLI shell completion scripts",
 		Deps: []FeatureTag{"completion"},

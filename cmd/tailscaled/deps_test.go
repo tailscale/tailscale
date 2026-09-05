@@ -37,6 +37,18 @@ func TestOmitFavorites(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitCPUCaps(t *testing.T) {
+	const msg = "unexpected with ts_omit_cpucaps"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_cpucaps,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/util/cpucaps": msg,
+		},
+	}.Check(t)
+}
+
 func TestOmitSSH(t *testing.T) {
 	const msg = "unexpected with ts_omit_ssh"
 	deptest.DepChecker{
