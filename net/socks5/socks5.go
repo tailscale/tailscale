@@ -131,7 +131,7 @@ func (s *Server) Serve(ln net.Listener) error {
 		}
 		go func() {
 			defer c.Close()
-			conn := &Conn{logf: s.Logf, clientConn: c, srv: s}
+			conn := &Conn{logf: s.logf, clientConn: c, srv: s}
 			err := conn.Run()
 			if err != nil {
 				s.logf("client connection failed: %v", err)
