@@ -30,6 +30,7 @@ import (
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
@@ -563,7 +564,7 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
 	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
-		var p prefs
+		var p tailscaled.Prefs
 		var err error
 		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
 			t.Errorf("failed to unmarshal preferences: %v", err)
@@ -689,7 +690,7 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 
 	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
 	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
-		var p prefs
+		var p tailscaled.Prefs
 		var err error
 		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
 			t.Errorf("failed to unmarshal preferences: %v", err)
@@ -824,7 +825,7 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 
 	// Add the Tailscale Service to prefs to have the Ingress recognised as ready.
 	mustUpdate(t, fc, "operator-ns", "test-pg-0", func(o *corev1.Secret) {
-		var p prefs
+		var p tailscaled.Prefs
 		var err error
 		if err = json.Unmarshal(o.Data["test"], &p); err != nil {
 			t.Errorf("failed to unmarshal preferences: %v", err)
@@ -1151,7 +1152,7 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 	}
 	mustCreate(t, fc, pgCfgSecret)
 
-	pr := prefs{}
+	pr := tailscaled.Prefs{}
 	pr.Config.UserProfile.LoginName = "test.ts.net"
 	pr.Config.NodeID = "test"
 
@@ -1168,8 +1169,8 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
 		},
 		Data: map[string][]byte{
-			currentProfileKey: []byte("test"),
-			"test":            p,
+			string(ipn.CurrentProfileStateKey): []byte("test"),
+			"test":                             p,
 		},
 	}
 	mustCreate(t, fc, pgStateSecret)

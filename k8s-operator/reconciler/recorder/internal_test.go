@@ -3,17 +3,23 @@
 
 //go:build !plan9
 
-package main
+package recorder
 
 import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
+)
+
+const (
+	tsNamespace   = "tailscale"
+	tsLoginServer = "example.tailscale.com"
 )
 
 func TestRecorderSpecs(t *testing.T) {
@@ -151,6 +157,44 @@ func TestRecorderSpecs(t *testing.T) {
 
 		if len(ss.Spec.Template.Spec.Containers[0].VolumeMounts) != int(*tsr.Spec.Replicas)+1 {
 			t.Errorf("expected %d volume mounts, got %d", *tsr.Spec.Replicas+1, len(ss.Spec.Template.Spec.Containers[0].VolumeMounts))
+		}
+	})
+
+	t.Run("role-grants-access-to-every-replica-secret", func(t *testing.T) {
+		tsr := &tsapi.Recorder{
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			Spec:       tsapi.RecorderSpec{Replicas: new(int32(2))},
+		}
+
+		// The replica needs get/patch/update on its own state and auth Secrets so containerboot can persist
+		// device state, plus event creation so it can report problems against itself.
+		want := []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				Verbs:         []string{"get", "patch", "update"},
+				ResourceNames: []string{"test-0", "test-auth-0", "test-1", "test-auth-1"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs:     []string{"get", "create", "patch"},
+			},
+		}
+		if diff := cmp.Diff(tsrRole(tsr, tsNamespace).Rules, want); diff != "" {
+			t.Errorf("(-got +want):\n%s", diff)
+		}
+	})
+
+	t.Run("service-account-name-defaults-to-recorder-name", func(t *testing.T) {
+		tsr := &tsapi.Recorder{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
+		if got := tsrServiceAccountName(tsr); got != "test" {
+			t.Errorf("got %q, want %q", got, "test")
+		}
+
+		tsr.Spec.StatefulSet.Pod.ServiceAccount.Name = "custom"
+		if got := tsrServiceAccountName(tsr); got != "custom" {
+			t.Errorf("got %q, want %q", got, "custom")
 		}
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,7 +41,19 @@ const (
 	// LabelParentNamespace identifies the namespace of the owning Tailscale CRD. It is only stamped when the parent
 	// CRD is namespaced; cluster-scoped parents omit it.
 	LabelParentNamespace = "tailscale.com/parent-resource-ns"
+
+	// optimisticLockErrorMsg is the message the API server returns when an Update is rejected because the object
+	// has been modified since it was read. The API server does not give us a typed error for the conflict in all
+	// cases, so callers match on the message via IsOptimisticLockError.
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
+
+// IsOptimisticLockError reports whether err was caused by an optimistic locking conflict, i.e. the object being
+// updated was modified after the reconciler read it. Such an error is transient: the reconciler should requeue and
+// retry against a freshly read object rather than surface the error.
+func IsOptimisticLockError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), optimisticLockErrorMsg)
+}
 
 // SetFinalizer adds name to obj's finalizers if not already present. Most CRD reconcilers pass Finalizer; per-
 // reconciler names are used when a single resource may carry finalizers from multiple reconcilers that each need to run
