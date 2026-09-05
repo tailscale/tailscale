@@ -1100,6 +1100,26 @@ type ClientMetric struct {
 	Value int64  // the gauge or counter value
 }
 
+// SetAcceptDNS toggles the node's CorpDNS preference (the --accept-dns flag),
+// controlling whether tailscaled applies the tailnet's DNS config to the OS.
+//
+// Toggling it off and back on makes tailscaled recompile its DNS config, which
+// re-reads the OS resolver config. Nodes run with --state=mem:, so restarting
+// tailscaled instead would need a fresh login, which itself needs DNS.
+func (e *Env) SetAcceptDNS(n *Node, on bool) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:      ipn.Prefs{CorpDNS: on},
+		CorpDNSSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetAcceptDNS(%s, %v): %v", n.name, on, err)
+	}
+	e.t.Logf("[%s] accept-dns=%v", n.name, on)
+}
+
 // SetAcceptRoutes toggles the node's RouteAll preference (the
 // --accept-routes flag), controlling whether it installs subnet routes
 // advertised by peers.
