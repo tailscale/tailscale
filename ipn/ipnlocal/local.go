@@ -9192,7 +9192,7 @@ var (
 )
 
 func (b *LocalBackend) stateEncrypted() opt.Bool {
-	switch runtime.GOOS {
+	switch envknob.GOOS() {
 	case "android", "ios":
 		return opt.NewBool(true)
 	case "darwin":
@@ -9202,13 +9202,11 @@ func (b *LocalBackend) stateEncrypted() opt.Bool {
 		case version.IsMacSysExt():
 			sp, _ := b.polc.GetBoolean(pkey.EncryptState, true)
 			return opt.NewBool(sp)
-		default:
-			// Probably self-compiled tailscaled, we don't use the Keychain
-			// there.
-			return opt.NewBool(false)
 		}
-	default:
-		_, ok := b.store.(ipn.EncryptedStateStore)
-		return opt.NewBool(ok)
+		// Not a Tailscale-shipped macOS app (self-compiled tailscaled, tsnet,
+		// or another embedder): we don't manage the Keychain for it, so defer
+		// to whatever its state store reports, as on other platforms.
 	}
+	_, ok := b.store.(ipn.EncryptedStateStore)
+	return opt.NewBool(ok)
 }
