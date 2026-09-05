@@ -350,23 +350,21 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if dialer == nil {
 		return nil, errors.New("nil Dialer")
 	}
+	var clockResolution time.Duration
+	if runtime.GOOS == "windows" {
+		// Windows monotonic timestamps have a 500 microsecond resolution. Tell
+		// netstack so RACK can account for that quantization when detecting loss.
+		clockResolution = 500 * time.Microsecond
+	}
 	ipstack := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
+		ClockResolution:    clockResolution,
 	})
 	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
 	tcpipErr := ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
-	}
-	// See https://github.com/tailscale/tailscale/issues/9707
-	// gVisor's RACK performs poorly. ACKs do not appear to be handled in a
-	// timely manner, leading to spurious retransmissions and a reduced
-	// congestion window.
-	tcpRecoveryOpt := tcpip.TCPRecovery(0)
-	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRecoveryOpt)
-	if tcpipErr != nil {
-		return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
 	}
 	// gVisor defaults to reno at the time of writing. We explicitly set reno
 	// congestion control in order to prevent unexpected changes. Netstack
