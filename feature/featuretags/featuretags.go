@@ -95,6 +95,7 @@ type FeatureMeta struct {
 var Features = map[FeatureTag]FeatureMeta{
 	"ace":           {Sym: "ACE", Desc: "Alternate Connectivity Endpoints"},
 	"acme":          {Sym: "ACME", Desc: "ACME TLS certificate management"},
+	"androiddns":    {Sym: "AndroidDNS", Desc: "DNS resolution via Android's dnsproxyd for standalone (non-app) binaries on Android"},
 	"appconnectors": {Sym: "AppConnectors", Desc: "App Connectors support"},
 	"aws":           {Sym: "AWS", Desc: "AWS integration"},
 	"advertiseexitnode": {
