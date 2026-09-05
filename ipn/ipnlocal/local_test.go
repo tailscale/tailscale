@@ -6703,6 +6703,29 @@ func TestEnableAutoUpdates(t *testing.T) {
 	}
 }
 
+func TestAutoUpdateApplyRequiresCheck(t *testing.T) {
+	lb := newTestLocalBackend(t)
+
+	// Enabling auto-updates while update checks are disabled violates the
+	// AutoUpdatePrefs invariant ("Check must also be set when Apply is set")
+	// and must be rejected instead of silently accepted. See #17770.
+	_, err := lb.EditPrefs(&ipn.MaskedPrefs{
+		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
+			CheckSet: true,
+			ApplySet: true,
+		},
+		Prefs: ipn.Prefs{
+			AutoUpdate: ipn.AutoUpdatePrefs{
+				Check: false,
+				Apply: opt.NewBool(true),
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "update checks") {
+		t.Fatalf("enabling auto-updates with update checks disabled: got error %v; want an error requiring update checks", err)
+	}
+}
+
 func TestReadWriteRouteInfo(t *testing.T) {
 	// set up a backend with more than one profile
 	b := newTestBackend(t)

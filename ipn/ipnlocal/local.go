@@ -5072,6 +5072,11 @@ func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkAutoUpdatePrefsLocked(p *ipn.Prefs) error {
+	// Apply requires Check: applying updates you never check for is
+	// contradictory (see AutoUpdatePrefs).
+	if p.AutoUpdate.Apply.EqualBool(true) && !p.AutoUpdate.Check {
+		return errors.New("Auto-updates require update checks to be enabled.")
+	}
 	if !buildfeatures.HasClientUpdate {
 		if p.AutoUpdate.Apply.EqualBool(true) {
 			return errors.New("Auto-update support is disabled in this build")
