@@ -6,6 +6,7 @@ package tsdial
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -231,4 +232,73 @@ func (c *closingPipeConn) Close() error {
 		close(c.closed)
 	}
 	return c.Conn.Close()
+}
+
+func TestSystemDialCloseWritePreservesTracking(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	serverConn := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			serverConn <- c
+		}
+	}()
+
+	d := &Dialer{}
+	d.SetSystemDialerForTest((&net.Dialer{}).DialContext)
+	c, err := d.SystemDial(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	peer := <-serverConn
+	defer peer.Close()
+
+	cw, ok := c.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("SystemDial connection does not expose CloseWrite")
+	}
+	if err := cw.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	if got := len(d.activeSysConns); got != 1 {
+		t.Fatalf("active system connections after CloseWrite = %d, want 1", got)
+	}
+
+	if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1)
+	if n, err := peer.Read(buf); n != 0 || err != io.EOF {
+		t.Fatalf("peer Read after CloseWrite = %d, %v; want 0, EOF", n, err)
+	}
+}
+
+func TestSystemDialCloseWriteUnsupported(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	d := &Dialer{}
+	d.SetSystemDialerForTest(func(context.Context, string, string) (net.Conn, error) {
+		return a, nil
+	})
+	c, err := d.SystemDial(context.Background(), "tcp", "unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	cw, ok := c.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("SystemDial connection does not expose CloseWrite")
+	}
+	if err := cw.CloseWrite(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("CloseWrite error = %v, want errors.ErrUnsupported", err)
+	}
+	if got := len(d.activeSysConns); got != 1 {
+		t.Fatalf("active system connections after unsupported CloseWrite = %d, want 1", got)
+	}
 }
