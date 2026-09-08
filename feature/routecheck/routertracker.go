@@ -12,7 +12,6 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -21,8 +20,6 @@ import (
 )
 
 var ErrRouteCheckNotEnabled = errors.New("routecheck not enabled")
-
-var ShouldBeTracked feature.Hook[func(tailcfg.NodeView, *ipnstate.PeerStatus) bool]
 
 type RouterTracker struct {
 	// OnNetMapAvailable is called when the initial network map is received
@@ -33,9 +30,10 @@ type RouterTracker struct {
 	// have been added, removed, or change their routes.
 	OnRoutersChange func(added, modified, removed []tailcfg.NodeID)
 
-	ctx    context.Context // root context
-	logf   logger.Logf
-	ipnbus ipnext.NotifyWatcher
+	ctx      context.Context // root context
+	logf     logger.Logf
+	ipnbus   ipnext.NotifyWatcher
+	shouldbe feature.Hook[ShouldTrackFn]
 
 	mu     sync.Mutex
 	closed bool
@@ -46,11 +44,12 @@ type RouterTracker struct {
 
 // TrackRouters returns a tracker for keeping track of which nodes are routers
 // by watching the IPN bus for netmap changes.
-func TrackRouters(ctx context.Context, logf logger.Logf, ipnbus ipnext.NotifyWatcher) *RouterTracker {
+func TrackRouters(ctx context.Context, logf logger.Logf, ipnbus ipnext.NotifyWatcher, shouldbe feature.Hook[ShouldTrackFn]) *RouterTracker {
 	return &RouterTracker{
-		ctx:    ctx,
-		logf:   logf,
-		ipnbus: ipnbus,
+		ctx:      ctx,
+		logf:     logf,
+		ipnbus:   ipnbus,
+		shouldbe: shouldbe,
 	}
 }
 
@@ -196,7 +195,7 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 			// Bootstrap the router set from the initial Status.
 			// This will trigger the initial probe for all routers.
 			for _, ps := range s.Peer {
-				fxShouldBeTracked, fxsbtok := ShouldBeTracked.GetOk()
+				fxShouldBeTracked, fxsbtok := rt.shouldbe.GetOk()
 				if ps.IsRouter() || (fxsbtok && fxShouldBeTracked(self, ps)) {
 					nid := ps.NodeID
 					routers.Add(nid)

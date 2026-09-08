@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"sync"
 
+	"tailscale.com/feature"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -41,9 +43,12 @@ func init() {
 	ipnlocal.HookRouteCheckReport.Set(routeCheckReport)
 }
 
+type ShouldTrackFn func(tailcfg.NodeView, *ipnstate.PeerStatus) bool
+
 // Extension implements the [ipnext.Extension] interface.
 type Extension struct {
-	Client *routecheck.Client
+	Client              *routecheck.Client
+	ShouldBeTrackedHook feature.Hook[ShouldTrackFn]
 
 	logf    logger.Logf
 	backend ipnext.SafeBackend
@@ -95,7 +100,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 	}
 	e.Client = c
 
-	e.routers = TrackRouters(context.Background(), e.logf, ipnbus)
+	e.routers = TrackRouters(context.Background(), e.logf, ipnbus, e.ShouldBeTrackedHook)
 	e.routers.OnNetMapAvailable = e.Client.NotifyNetMapAvailable
 	e.routers.OnRoutersChange = e.Client.NeedsIncrRefresh
 

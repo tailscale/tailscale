@@ -33,6 +33,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/routecheck/peernode"
@@ -93,6 +94,15 @@ func init() {
 	ipnlocal.RegisterC2N("GET /conn25/state", serveC2NStateGet)
 }
 
+func (e *extension) shouldPeerBeRouteTracked(sn tailcfg.NodeView, peer *ipnstate.PeerStatus) bool {
+	fmt.Println("CONN25 SHOULD BE ROUTE TRACKED!!!!", peer.HostName)
+	if !e.conn25.isConfigured() {
+		return false
+	}
+
+	return false
+}
+
 func handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
 	e, ok := ipnlocal.GetExt[*extension](h.LocalBackend())
 	if !ok {
@@ -137,6 +147,8 @@ func (e *extension) Init(host ipnext.Host) error {
 	}
 	e.host = host
 
+	host.NodeBackend()
+
 	dph := newDatapathHandler(e.conn25, e.conn25.logf)
 	if err := e.installHooks(dph); err != nil {
 		return err
@@ -149,6 +161,7 @@ func (e *extension) Init(host ipnext.Host) error {
 	go e.sendLoop(ctx)
 	dph.StartFlowExpirySweepers(ctx)
 	e.conn25.connector.startExpirySweeper(ctx)
+
 	return nil
 }
 
@@ -166,6 +179,13 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	if resolver == nil {
 		return errors.New("dns manager resolver not ready")
 	}
+
+	var rtCheck *routecheck.Extension
+	if !e.host.Extensions().FindMatchingExtension(rtCheck) {
+		return errors.New("did not found route check extension")
+	}
+
+	rtCheck.ShouldBeTrackedHook.Set(e.shouldPeerBeRouteTracked)
 
 	if err := resolver.RegisterCustomScheme(appc.DNSAddrScheme, func(addr string) (string, error) {
 		scheme, appName, ok := strings.Cut(addr, ":")
