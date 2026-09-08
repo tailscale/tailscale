@@ -53,6 +53,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/typewalk"
+	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -619,6 +620,15 @@ func TestUpdateNetMapCache(t *testing.T) {
 					netip.MustParsePrefix("100.2.3.5/32"),
 				},
 			}).View(),
+			(&tailcfg.Node{
+				ID:       602,
+				StableID: "n602FAKE",
+				User:     tailcfg.UserID(1),
+				Key:      makeNodeKeyFromID(602),
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.3.4.6/32"),
+				},
+			}).View(),
 		},
 	}
 
@@ -684,6 +694,19 @@ func TestUpdateNetMapCache(t *testing.T) {
 		t.Error("Cache is unexpectedly empty")
 	} else {
 		t.Logf("Cache directory has %d entries (OK)", len(des))
+	}
+
+	// Apply a delta update that removes a node, and verify that this gets
+	// reflected in the cache.
+	clb.UpdateNetmapDelta([]netmap.NodeMutation{
+		netmap.MakeNodeMutationRemove(602),
+	})
+	if got, err := netmapcache.NewCache(netmapcache.FileStore(cacheDir)).Load(t.Context()); err != nil {
+		t.Errorf("Load cached netmap: %v", err)
+	} else if i := slices.IndexFunc(got.Peers, func(n tailcfg.NodeView) bool {
+		return n.ID() == 602
+	}); i >= 0 {
+		t.Errorf("Cache did not get updated, %d (%v) still present", got.Peers[i].ID(), got.Peers[i].StableID())
 	}
 
 	// Now disable the node attribute again, send another update, and verify
@@ -2483,6 +2506,77 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 	}
 	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
 	nw.check()
+}
+
+type expiryCallbackClock struct {
+	tstime.StdClock
+	now       time.Time
+	afterFunc func()
+}
+
+type expiryCallbackTimer struct{}
+
+func (*expiryCallbackTimer) Reset(time.Duration) bool { return false }
+func (*expiryCallbackTimer) Stop() bool               { return true }
+
+func (c *expiryCallbackClock) Now() time.Time { return c.now }
+
+func (c *expiryCallbackClock) AfterFunc(_ time.Duration, f func()) tstime.TimerController {
+	c.afterFunc = f
+	return new(expiryCallbackTimer)
+}
+
+func TestNetmapExpiryTimerPreservesPeerDeltas(t *testing.T) {
+	b := newTestLocalBackend(t)
+	now := time.Unix(1770000000, 0)
+	clock := &expiryCallbackClock{now: now}
+	b.ForTest().SetClock(clock)
+
+	oldPeer := makePeer(1, func(n *tailcfg.Node) {
+		n.KeyExpiry = now.Add(time.Minute)
+	})
+	nm := &netmap.NetworkMap{
+		SelfNode: makePeer(2),
+		Peers:    []tailcfg.NodeView{oldPeer},
+	}
+	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm})
+	if clock.afterFunc == nil {
+		t.Fatal("expiry timer was not scheduled")
+	}
+	expiryFunc := clock.afterFunc
+
+	newPeer := oldPeer.AsStruct()
+	newPeer.Key = makeNodeKeyFromID(3)
+	newPeer.KeyExpiry = now.Add(time.Hour)
+	b.UpdateNetmapDelta([]netmap.NodeMutation{
+		netmap.NodeMutationUpsert{Node: newPeer.View()},
+	})
+
+	clock.now = now.Add(time.Minute + 10*time.Second)
+	expiryFunc()
+
+	got, ok := b.PeerByID(oldPeer.ID())
+	if !ok {
+		t.Fatal("peer disappeared when expiry timer fired")
+	}
+	if got.Key() != newPeer.Key {
+		t.Errorf("peer key reverted when expiry timer fired: got %v, want %v", got.Key(), newPeer.Key)
+	}
+	if got.Expired() {
+		t.Error("re-authenticated peer was marked expired when expiry timer fired")
+	}
+}
+
+func TestNetmapExpiryIgnoredDuringControlClientShutdown(t *testing.T) {
+	b := newTestLocalBackend(t)
+	call := b.numClientStatusCalls.Load()
+	b.ignoreControlClientUpdates.Store(true)
+
+	b.handleNetmapExpiry(b.cc, controlclient.Status{}, call, 0)
+
+	if got := b.numClientStatusCalls.Load(); got != call {
+		t.Errorf("status calls = %d, want %d", got, call)
+	}
 }
 
 // TestNotifyForSessionUserProfilesGating verifies that

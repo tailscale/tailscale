@@ -1376,6 +1376,105 @@ func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
 	}
 }
 
+type profileRecordingUpdater struct {
+	countingDeltaNetmapUpdater
+	profiles        []map[tailcfg.UserID]tailcfg.UserProfileView
+	profilesAtDelta int
+}
+
+func (nu *profileRecordingUpdater) UpdateUserProfiles(profiles map[tailcfg.UserID]tailcfg.UserProfileView) bool {
+	nu.profiles = append(nu.profiles, profiles)
+	return true
+}
+
+func (nu *profileRecordingUpdater) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
+	nu.profilesAtDelta = len(nu.profiles)
+	return nu.countingDeltaNetmapUpdater.UpdateNetmapDelta(muts)
+}
+
+// TestUpsertReplaysUserProfiles verifies that a peer upsert delivered as a
+// delta also replays the peer's user and sharer profiles from the map
+// session's profile store, even when the MapResponse carries no UserProfiles
+// (control only resends changed profiles). A full netmap installed while the
+// user had no visible peers drops the profile downstream, and without the
+// replay a WhoIs on the returned peer fails at the user profile lookup.
+func TestUpsertReplaysUserProfiles(t *testing.T) {
+	nu := &profileRecordingUpdater{}
+	ms := newTestMapSession(t, nu)
+	ctx := t.Context()
+
+	peer := &tailcfg.Node{
+		ID:         1,
+		StableID:   "peer",
+		Name:       "peer.example.ts.net.",
+		User:       100,
+		Sharer:     200,
+		Key:        key.NewNode().Public(),
+		DiscoKey:   key.NewDisco().Public(),
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
+	}
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
+		Peers: []*tailcfg.Node{peer},
+		UserProfiles: []tailcfg.UserProfile{
+			{ID: 0, LoginName: "invalid@example.com"},
+			{ID: 100, LoginName: "user@example.com"},
+			{ID: 200, LoginName: "sharer@example.com"},
+		},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Fatalf("full updates after initial response = %d; want 1", got)
+	}
+
+	// An upsert with no UserProfiles in the response must still deliver
+	// both profiles, before the delta lands.
+	replacement := peer.Clone()
+	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{replacement},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := nu.full.Load(); got != 1 {
+		t.Fatalf("full updates after peer upsert = %d; want 1", got)
+	}
+	if got := nu.delta.Load(); got != 1 {
+		t.Fatalf("delta updates after peer upsert = %d; want 1", got)
+	}
+	if got := len(nu.profiles); got != 2 {
+		t.Fatalf("UpdateUserProfiles calls = %d; want 2 (one initial, one replayed)", got)
+	}
+	if got := nu.profilesAtDelta; got != 2 {
+		t.Errorf("profiles delivered before delta = %d; want 2", got)
+	}
+	replayed := nu.profiles[1]
+	if _, ok := replayed[0]; ok {
+		t.Error("replayed profiles contains zero user ID")
+	}
+	for _, id := range []tailcfg.UserID{100, 200} {
+		up, ok := replayed[id]
+		if !ok || !up.Valid() {
+			t.Errorf("replayed profiles missing valid profile for user %d", id)
+		}
+	}
+
+	// A patch-only change (no upsert) must not replay any profiles.
+	patched := replacement.Clone()
+	patched.Endpoints = eps("10.0.0.1:1111")
+	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+		PeersChanged: []*tailcfg.Node{patched},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(nu.profiles); got != 2 {
+		t.Errorf("UpdateUserProfiles calls after patch-only change = %d; want still 2", got)
+	}
+}
+
 // tests (*mapSession).patchifyPeersChanged; smaller tests are in TestPeerChangeDiff
 func TestPatchifyPeersChanged(t *testing.T) {
 	hi := (&tailcfg.Hostinfo{}).View()

@@ -1857,19 +1857,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		if !nextExpiry.IsZero() {
 			tmrDuration := nextExpiry.Sub(now) + 10*time.Second
 			b.nmExpiryTimer = b.clock.AfterFunc(tmrDuration, func() {
-				// Skip if the world has moved on past the
-				// saved call (e.g. if we race stopping this
-				// timer).
-				if b.numClientStatusCalls.Load() != currCall {
-					return
-				}
-
-				b.logf("setClientStatus: netmap expiry timer triggered after %v", tmrDuration)
-
-				// Call ourselves with the current status again; the logic in
-				// setClientStatus will take care of updating the expired field
-				// of peers in the netmap.
-				b.SetControlClientStatus(c, st)
+				b.handleNetmapExpiry(c, st, currCall, tmrDuration)
 			})
 		}
 	}
@@ -2118,6 +2106,29 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 // WireGuard session. It implements [controlclient.DiscoKeyUpdater].
 func (b *LocalBackend) PatchDiscoKey(pub key.NodePublic, disco key.DiscoPublic) {
 	b.currentNode().recordTSMPLearnedDisco(pub, disco)
+}
+
+// handleNetmapExpiry reruns netmap status handling when a node may have
+// expired. The status captured when the timer was created has a Peers slice
+// that delta updates do not change, so replace it with the live peers first.
+// Hold b.mu across the generation check, snapshot, and status handling so a
+// concurrent delta cannot be overwritten.
+func (b *LocalBackend) handleNetmapExpiry(c controlclient.Client, st controlclient.Status, call uint32, after time.Duration) {
+	defer b.CheckDeadlocks()()
+
+	if b.ignoreControlClientUpdates.Load() {
+		b.logf("ignoring netmap expiry during controlclient shutdown")
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.numClientStatusCalls.Load() != call {
+		return
+	}
+
+	b.logf("setClientStatus: netmap expiry timer triggered after %v", after)
+	st.NetMap = b.currentNode().netMapWithPeers()
+	b.setControlClientStatusLocked(c, st)
 }
 
 type preferencePolicyInfo struct {
@@ -2553,13 +2564,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 				peersToUpdate = append(peersToUpdate, n)
 			}
 		}
-		var peersToRemove []tailcfg.StableNodeID
-		for id := range removeIDs {
-			if n, ok := cn.NodeByID(id); ok {
-				peersToRemove = append(peersToRemove, n.StableID())
-			}
-		}
-		if err := b.writePeerDeltaToDiskLocked(peersToUpdate, peersToRemove); err != nil {
+		if err := b.writePeerDeltaToDiskLocked(peersToUpdate, deltaRes.RemovedPeers); err != nil {
 			b.logf("update netmap cache for peer deltas: %v", err)
 		}
 	}
