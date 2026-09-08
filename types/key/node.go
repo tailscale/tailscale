@@ -156,6 +156,15 @@ func (k NodePrivate) OpenFrom(p NodePublic, ciphertext []byte) (cleartext []byte
 	return box.Open(nil, ciphertext[len(nonce):], nonce, &p.k, &k.k)
 }
 
+// UntypedHexString returns k, encoded as an untyped 64-character hex
+// string.
+//
+// Warning: this function is risky to use, because it produces
+// serialized values that do not identify themselves as a
+// NodePrivate, allowing other code to potentially parse it back in
+// as the wrong key type. For new uses that don't require backwards
+// compatibility with the untyped string format, please use
+// MarshalText/UnmarshalText.
 func (k NodePrivate) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
 }
@@ -300,7 +309,7 @@ func (k NodePublic) Less(other NodePublic) bool {
 // UntypedHexString returns k, encoded as an untyped 64-character hex
 // string.
 //
-// Deprecated: this function is risky to use, because it produces
+// Warning: this function is risky to use, because it produces
 // serialized values that do not identify themselves as a
 // NodePublic, allowing other code to potentially parse it back in
 // as the wrong key type. For new uses that don't require backwards

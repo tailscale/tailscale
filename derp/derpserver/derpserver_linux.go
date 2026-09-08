@@ -63,6 +63,9 @@ func (c *sclient) tcpConn() *net.TCPConn {
 			return v
 		case *tls.Conn:
 			nc = v.NetConn()
+		case interface{ NetConn() net.Conn }:
+			// Wrappers such as cmd/derper's connection close hook.
+			nc = v.NetConn()
 		default:
 			return nil
 		}
