@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"sync"
 
-	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -30,10 +30,11 @@ type RouterTracker struct {
 	// have been added, removed, or change their routes.
 	OnRoutersChange func(added, modified, removed []tailcfg.NodeID)
 
-	ctx      context.Context // root context
-	logf     logger.Logf
-	ipnbus   ipnext.NotifyWatcher
-	shouldbe feature.Hook[ShouldTrackFn]
+	ShouldBeTracked func(tailcfg.NodeView, *ipnstate.PeerStatus) bool
+
+	ctx    context.Context // root context
+	logf   logger.Logf
+	ipnbus ipnext.NotifyWatcher
 
 	mu     sync.Mutex
 	closed bool
@@ -44,12 +45,11 @@ type RouterTracker struct {
 
 // TrackRouters returns a tracker for keeping track of which nodes are routers
 // by watching the IPN bus for netmap changes.
-func TrackRouters(ctx context.Context, logf logger.Logf, ipnbus ipnext.NotifyWatcher, shouldbe feature.Hook[ShouldTrackFn]) *RouterTracker {
+func TrackRouters(ctx context.Context, logf logger.Logf, ipnbus ipnext.NotifyWatcher) *RouterTracker {
 	return &RouterTracker{
-		ctx:      ctx,
-		logf:     logf,
-		ipnbus:   ipnbus,
-		shouldbe: shouldbe,
+		ctx:    ctx,
+		logf:   logf,
+		ipnbus: ipnbus,
 	}
 }
 
@@ -195,8 +195,7 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 			// Bootstrap the router set from the initial Status.
 			// This will trigger the initial probe for all routers.
 			for _, ps := range s.Peer {
-				fxShouldBeTracked, fxsbtok := rt.shouldbe.GetOk()
-				if ps.IsRouter() || (fxsbtok && fxShouldBeTracked(self, ps)) {
+				if ps.IsRouter() || rt.ShouldBeTracked(self, ps) {
 					nid := ps.NodeID
 					routers.Add(nid)
 					added = append(added, nid)
@@ -206,7 +205,7 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 		for _, p := range n.PeersChanged {
 			nid := p.ID
 			wasRouter := routers.Contains(p.ID)
-			isRouter := p.IsRouter()
+			isRouter := p.IsRouter() || rt.ShouldBeTracked(self, &ipnstate.PeerStatus{})
 			switch {
 			case !wasRouter && isRouter:
 				routers.Add(nid)

@@ -100,9 +100,16 @@ func (e *Extension) Init(h ipnext.Host) error {
 	}
 	e.Client = c
 
-	e.routers = TrackRouters(context.Background(), e.logf, ipnbus, e.ShouldBeTrackedHook)
+	e.routers = TrackRouters(context.Background(), e.logf, ipnbus)
 	e.routers.OnNetMapAvailable = e.Client.NotifyNetMapAvailable
 	e.routers.OnRoutersChange = e.Client.NeedsIncrRefresh
+	e.routers.ShouldBeTracked = func(self tailcfg.NodeView, ps *ipnstate.PeerStatus) bool {
+		hook, ok := e.ShouldBeTrackedHook.GetOk()
+		if !ok {
+			return false
+		}
+		return hook(self, ps)
+	}
 
 	bus := e.backend.Sys().Bus.Get()
 	e.ec = bus.Client("routecheck")

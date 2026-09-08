@@ -181,11 +181,13 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	}
 
 	var rtCheck *routecheck.Extension
-	if !e.host.Extensions().FindMatchingExtension(rtCheck) {
+	if !e.host.Extensions().FindMatchingExtension(&rtCheck) {
 		return errors.New("did not found route check extension")
 	}
 
+	fmt.Println("FRANN about to register hook")
 	rtCheck.ShouldBeTrackedHook.Set(e.shouldPeerBeRouteTracked)
+	fmt.Println("FRANN hook registered")
 
 	if err := resolver.RegisterCustomScheme(appc.DNSAddrScheme, func(addr string) (string, error) {
 		scheme, appName, ok := strings.Cut(addr, ":")
