@@ -93,6 +93,19 @@ type PeerRelaySpec struct {
 	// +optional
 	Service *PeerRelayService `json:"service,omitzero"`
 
+	// StaticEndpoints is an optional list of address:port pairs on which every replica of this PeerRelay is
+	// reachable from outside the cluster, for example the public side of a NAT or firewall in front of the
+	// cluster. These supplement the endpoints discovered from each replica's LoadBalancer Service: they are
+	// added to every replica's entries in status.endpoints and advertised to peers alongside them. If an entry
+	// names an address a replica's load balancer already provides, the entry's port takes precedence for that
+	// address. Each address may appear at most once across all entries.
+	// Entries take the form accepted by Go's net/netip.ParseAddrPort, e.g. 203.0.113.1:41641. IPv6
+	// addresses must be enclosed in brackets, e.g. [2001:db8::1]:41641.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:items:Pattern=`^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-fA-F:.]+\]):\d{1,5}$`
+	StaticEndpoints []string `json:"staticEndpoints,omitempty"`
+
 	// AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful
 	// when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any
 	// aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.
@@ -114,6 +127,16 @@ type PeerRelayService struct {
 	// cloud providers to ensure IP addresses rather than DNS names are ignored.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Port is the UDP port each peer relay replica listens on and that its LoadBalancer Service exposes
+	// externally. The two are always equal: the relay advertises address:port to peers, so the load balancer
+	// must forward without rewriting the port. Changing the port on an existing PeerRelay briefly interrupts
+	// relay traffic while the load balancer updates. Defaults to 41641.
+	// +optional
+	// +kubebuilder:default=41641
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port *uint16 `json:"port,omitzero"`
 }
 
 // PeerRelayAWS contains AWS-specific configuration for a PeerRelay.
@@ -170,7 +193,8 @@ type PeerRelayStatus struct {
 	// Endpoints lists the public address:port pairs each peer relay replica is reachable on. Entries appear as the
 	// underlying cloud provisions each Service. A replica has one entry per address its LoadBalancer Service was
 	// given, which is usually one, but a load balancer spanning several availability zones has an address in each
-	// and every one of them is listed.
+	// and every one of them is listed. Entries from spec.staticEndpoints are listed for every replica in addition
+	// to the load balancer addresses.
 	// +listType=map
 	// +listMapKey=replica
 	// +listMapKey=address
@@ -182,8 +206,8 @@ type PeerRelayEndpoint struct {
 	// Replica is the zero-based index of the peer relay replica this endpoint targets.
 	Replica int32 `json:"replica"`
 
-	// Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.
-	// Peers reach this relay by connecting to Address:Port over UDP.
+	// Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service, or
+	// an address supplied via spec.staticEndpoints. Peers reach this relay by connecting to Address:Port over UDP.
 	Address string `json:"address"`
 
 	// Port is the UDP port the peer relay listens on.

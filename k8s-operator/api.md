@@ -610,7 +610,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `replica` _integer_ | Replica is the zero-based index of the peer relay replica this endpoint targets. |  |  |
-| `address` _string_ | Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service.<br />Peers reach this relay by connecting to Address:Port over UDP. |  |  |
+| `address` _string_ | Address is the public IP or hostname the cloud has allocated for this replica's LoadBalancer Service, or<br />an address supplied via spec.staticEndpoints. Peers reach this relay by connecting to Address:Port over UDP. |  |  |
 | `port` _integer_ | Port is the UDP port the peer relay listens on. |  |  |
 
 
@@ -648,6 +648,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `annotations` _object (keys:string, values:string)_ | Annotations to apply to the LoadBalancer service. Any annotations that conflict with those used by known<br />cloud providers to ensure IP addresses rather than DNS names are ignored. |  |  |
+| `port` _integer_ | Port is the UDP port each peer relay replica listens on and that its LoadBalancer Service exposes<br />externally. The two are always equal: the relay advertises address:port to peers, so the load balancer<br />must forward without rewriting the port. Changing the port on an existing PeerRelay briefly interrupts<br />relay traffic while the load balancer updates. Defaults to 41641. | 41641 | Maximum: 65535 <br />Minimum: 1 <br /> |
 
 
 #### PeerRelaySpec
@@ -669,6 +670,7 @@ _Appears in:_
 | `replicas` _integer_ | Replicas specifies how many devices to create. Set this to enable<br />high availability for peer relays.<br />https://tailscale.com/kb/1115/high-availability. Defaults to 1. | 1 | Minimum: 0 <br /> |
 | `tailnet` _string_ | Tailnet specifies the tailnet this PeerRelay should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
 | `service` _[PeerRelayService](#peerrelayservice)_ | Service contains configuration values to modify the LoadBalancer service used to expose the peer relay. |  |  |
+| `staticEndpoints` _string array_ | StaticEndpoints is an optional list of address:port pairs on which every replica of this PeerRelay is<br />reachable from outside the cluster, for example the public side of a NAT or firewall in front of the<br />cluster. These supplement the endpoints discovered from each replica's LoadBalancer Service: they are<br />added to every replica's entries in status.endpoints and advertised to peers alongside them. If an entry<br />names an address a replica's load balancer already provides, the entry's port takes precedence for that<br />address. Each address may appear at most once across all entries.<br />Entries take the form accepted by Go's net/netip.ParseAddrPort, e.g. 203.0.113.1:41641. IPv6<br />addresses must be enclosed in brackets, e.g. [2001:db8::1]:41641. |  | items:Pattern: ^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-fA-F:.]+\]):\d{1,5}$ <br /> |
 | `aws` _[PeerRelayAWS](#peerrelayaws)_ | AWS contains configuration for pinning each replica to a specific AWS Elastic IP and subnet. Only meaningful<br />when running on EKS with the AWS Load Balancer Controller. When set, the per-replica values override any<br />aws-load-balancer-eip-allocations or aws-load-balancer-subnets values supplied via spec.service.annotations.<br />Leave this unset unless the peer relays must be reachable on addresses you control. Pinning a subnet<br />confines a replica's load balancer to that subnet's availability zone, and an AWS Network Load Balancer<br />only forwards to targets in a zone that is enabled on it, so a replica whose pod is scheduled into any<br />other zone stops receiving traffic. Setting this field therefore also requires pinning the pods to the<br />matching zone with a ProxyClass, as described on ElasticIPs. Without this field the AWS Load Balancer<br />Controller instead provisions each load balancer across every zone it discovers, and the operator turns on<br />cross-zone load balancing so the replica is reachable wherever it happens to be scheduled, with no<br />scheduling constraints needed. |  |  |
 
 
@@ -686,7 +688,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
-| `endpoints` _[PeerRelayEndpoint](#peerrelayendpoint) array_ | Endpoints lists the public address:port pairs each peer relay replica is reachable on. Entries appear as the<br />underlying cloud provisions each Service. A replica has one entry per address its LoadBalancer Service was<br />given, which is usually one, but a load balancer spanning several availability zones has an address in each<br />and every one of them is listed. |  |  |
+| `endpoints` _[PeerRelayEndpoint](#peerrelayendpoint) array_ | Endpoints lists the public address:port pairs each peer relay replica is reachable on. Entries appear as the<br />underlying cloud provisions each Service. A replica has one entry per address its LoadBalancer Service was<br />given, which is usually one, but a load balancer spanning several availability zones has an address in each<br />and every one of them is listed. Entries from spec.staticEndpoints are listed for every replica in addition<br />to the load balancer addresses. |  |  |
 
 
 #### Pod
