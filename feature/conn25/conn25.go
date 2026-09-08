@@ -94,12 +94,42 @@ func init() {
 	ipnlocal.RegisterC2N("GET /conn25/state", serveC2NStateGet)
 }
 
-func (e *extension) shouldPeerBeRouteTracked(sn tailcfg.NodeView, peer *ipnstate.PeerStatus) bool {
-	fmt.Println("CONN25 SHOULD BE ROUTE TRACKED!!!!", peer.HostName)
-	if !e.conn25.isConfigured() {
+// this function is called every time the route checker does a peer calculation
+func (e *extension) shouldPeerBeRouteTracked(peer *ipnstate.PeerStatus) bool {
+	cfg, ok := e.conn25.getConfig()
+	if !ok {
 		return false
 	}
 
+	if len(cfg.selfAppNames) > 0 {
+		return false
+	}
+
+	nvs := e.host.NodeBackend().AppendMatchingPeers(nil, func(n tailcfg.NodeView) bool {
+		return n.StableID() == peer.ID
+	})
+
+	if len(nvs) == 0 {
+		return false
+	}
+	n := nvs[0]
+
+	// find all the apps
+	// for each app, build up app tag set
+	var appTagsSet set.Set[string]
+	for _, appAttr := range cfg.apps {
+		appTagsSet.AddSlice(appAttr.Connectors)
+	}
+
+	if !isPeerEligibleConnector(n) {
+		return false
+	}
+
+	for _, t := range peer.Tags.All() {
+		if appTagsSet.Contains(t) {
+			return true
+		}
+	}
 	return false
 }
 
