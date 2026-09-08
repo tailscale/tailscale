@@ -11,6 +11,7 @@
 package main // import "tailscale.com/cmd/derper"
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -34,6 +35,7 @@ import (
 	runtimemetrics "runtime/metrics"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -377,7 +379,21 @@ func main() {
 				}
 				tlsRequestVersion.Add(label, 1)
 				tlsActiveVersion.Add(label, 1)
-				defer tlsActiveVersion.Add(label, -1)
+				// Handlers that hijack the connection (DERP, its
+				// WebSocket flavor, CONNECT) return before the
+				// connection is done, so the active gauge must be
+				// held until the hijacked connection closes rather
+				// than until the handler returns.
+				htw := &hijackTrackingResponseWriter{
+					ResponseWriter: w,
+					onConnClose:    func() { tlsActiveVersion.Add(label, -1) },
+				}
+				w = htw
+				defer func() {
+					if !htw.hijacked {
+						tlsActiveVersion.Add(label, -1)
+					}
+				}()
 
 				if r.Method == "CONNECT" {
 					serveConnect(s, w, r)
@@ -627,3 +643,58 @@ func getHomeHandler(val string) (_ http.Handler, ok bool) {
 	}
 	return nil, false
 }
+
+// hijackTrackingResponseWriter wraps an http.ResponseWriter and watches
+// for the handler hijacking the connection, in which case it arranges
+// for onConnClose to run once when the hijacked connection is closed.
+// It exists so the TLS active-connection gauge tracks the lifetime of
+// hijacked connections (DERP and CONNECT), whose handlers return well
+// before the connection is done.
+type hijackTrackingResponseWriter struct {
+	http.ResponseWriter
+	onConnClose func()
+
+	// hijacked reports whether Hijack was called successfully. It is
+	// only used from the handler's goroutine, so it needs no locking.
+	hijacked bool
+}
+
+// Unwrap supports http.ResponseController.
+func (w *hijackTrackingResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *hijackTrackingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *hijackTrackingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
+	}
+	c, brw, err := hj.Hijack()
+	if err != nil {
+		return c, brw, err
+	}
+	w.hijacked = true
+	return &closeHookConn{Conn: c, onClose: w.onConnClose}, brw, nil
+}
+
+// closeHookConn is a net.Conn wrapper that runs onClose once when the
+// connection is closed.
+type closeHookConn struct {
+	net.Conn
+	onClose   func()
+	closeOnce sync.Once
+}
+
+func (c *closeHookConn) Close() error {
+	c.closeOnce.Do(c.onClose)
+	return c.Conn.Close()
+}
+
+// NetConn returns the underlying connection, letting code that walks
+// connection wrappers (such as derpserver's TCP RTT stats) reach the
+// *net.TCPConn below.
+func (c *closeHookConn) NetConn() net.Conn { return c.Conn }

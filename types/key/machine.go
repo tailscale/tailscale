@@ -216,7 +216,7 @@ func (k MachinePublic) ShortString() string {
 // UntypedHexString returns k, encoded as an untyped 64-character hex
 // string.
 //
-// Deprecated: this function is risky to use, because it produces
+// Warning: this function is risky to use, because it produces
 // serialized values that do not identify themselves as a
 // MachinePublic, allowing other code to potentially parse it back in
 // as the wrong key type. For new uses that don't require backwards

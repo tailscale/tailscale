@@ -663,6 +663,9 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 // Accept adds a new connection to the server and serves it.
 //
 // The provided bufio ReadWriter must be already connected to nc.
+// brw.Writer may be nil, in which case Accept writes to nc through
+// pooled buffers held only during writes, which keeps the per-client
+// standing memory lower for mostly idle connections.
 // Accept blocks until the Server is closed or the connection closes
 // on its own.
 //
