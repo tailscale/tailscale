@@ -17,8 +17,8 @@ import (
 
 func TestMain(m *testing.M) {
 	flag.Parse()
-	if !*fDevcontrol && os.Getenv("TS_API_CLIENT_SECRET") == "" {
-		log.Printf("Skipping setup: devcontrol is false and TS_API_CLIENT_SECRET is not set")
+	if !*fDevcontrol && os.Getenv("TS_API_CLIENT_SECRET") == "" && os.Getenv("TS_API_CLIENT_ID") == "" {
+		log.Printf("Skipping setup: devcontrol is false and neither TS_API_CLIENT_SECRET nor TS_API_CLIENT_ID is set")
 		os.Exit(m.Run())
 	}
 	code, err := runTests(m)
