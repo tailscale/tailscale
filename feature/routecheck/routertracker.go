@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"sync"
 
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/routecheck"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -19,6 +21,8 @@ import (
 )
 
 var ErrRouteCheckNotEnabled = errors.New("routecheck not enabled")
+
+var ShouldBeTracked feature.Hook[func(tailcfg.NodeView, *ipnstate.PeerStatus) bool]
 
 type RouterTracker struct {
 	// OnNetMapAvailable is called when the initial network map is received
@@ -192,7 +196,8 @@ func (rt *RouterTracker) watchIPNBus(ctx context.Context, done chan<- struct{}, 
 			// Bootstrap the router set from the initial Status.
 			// This will trigger the initial probe for all routers.
 			for _, ps := range s.Peer {
-				if ps.IsRouter() {
+				fxShouldBeTracked, fxsbtok := ShouldBeTracked.GetOk()
+				if ps.IsRouter() || (fxsbtok && fxShouldBeTracked(self, ps)) {
 					nid := ps.NodeID
 					routers.Add(nid)
 					added = append(added, nid)

@@ -1751,3 +1751,5 @@ func peerIsReachable(nb ipnext.NodeBackend, rp *routecheck.Report, n tailcfg.Nod
 	}
 	return r.IsReachable()
 }
+
+// TODO add a function that says for a selfNode could a given peer be a conn25 connector for ANY app
