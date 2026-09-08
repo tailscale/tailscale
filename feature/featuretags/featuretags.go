@@ -93,8 +93,13 @@ type FeatureMeta struct {
 // Features are the known Tailscale features that can be selectively included or
 // excluded via build tags, and a description of each.
 var Features = map[FeatureTag]FeatureMeta{
-	"ace":           {Sym: "ACE", Desc: "Alternate Connectivity Endpoints"},
-	"acme":          {Sym: "ACME", Desc: "ACME TLS certificate management"},
+	"ace":  {Sym: "ACE", Desc: "Alternate Connectivity Endpoints"},
+	"acme": {Sym: "ACME", Desc: "ACME TLS certificate management"},
+	"androidbin": {
+		Sym:  "AndroidBin",
+		Desc: "Support for running raw (non-GUI app) binaries on Android: netmon interface discovery under the app sandbox",
+		Deps: []FeatureTag{"androiddns"},
+	},
 	"androiddns":    {Sym: "AndroidDNS", Desc: "DNS resolution via Android's dnsproxyd for standalone (non-app) binaries on Android"},
 	"appconnectors": {Sym: "AppConnectors", Desc: "App Connectors support"},
 	"aws":           {Sym: "AWS", Desc: "AWS integration"},

@@ -826,6 +826,14 @@ func RegisterInterfaceGetter(getInterfaces func() ([]Interface, error)) {
 	altNetInterfaces = getInterfaces
 }
 
+// HookInterfacesFallback is a hook for the androidbin feature to
+// provide a last-resort interface list when the OS denies
+// net.Interfaces to the process, as Android does to app UIDs. It is
+// consulted only when no getter was registered with
+// RegisterInterfaceGetter and net.Interfaces failed; if it returns an
+// error, the net.Interfaces error is returned instead.
+var HookInterfacesFallback feature.Hook[func() ([]Interface, error)]
+
 // InterfaceList is a list of interfaces on the machine.
 type InterfaceList []Interface
 
@@ -845,6 +853,11 @@ func netInterfaces() ([]Interface, error) {
 	}
 	ifs, err := net.Interfaces()
 	if err != nil {
+		if f, ok := HookInterfacesFallback.GetOk(); ok {
+			if ret, err := f(); err == nil {
+				return ret, nil
+			}
+		}
 		return nil, err
 	}
 	ret := make([]Interface, len(ifs))
