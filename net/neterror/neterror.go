@@ -68,6 +68,15 @@ func ShouldDisableUDPGSO(err error) bool {
 	return shouldDisableUDPGSO(err)
 }
 
+var shouldRetryWithoutUDPGSO func(error) bool // non-nil on Linux
+
+func ShouldRetryWithoutUDPGSO(err error) bool {
+	if shouldRetryWithoutUDPGSO == nil {
+		return false
+	}
+	return shouldRetryWithoutUDPGSO(err)
+}
+
 type ErrUDPGSODisabled struct {
 	OnLaddr  string
 	RetryErr error
