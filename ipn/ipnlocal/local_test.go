@@ -3115,18 +3115,22 @@ type expiryCallbackClock struct {
 	tstime.StdClock
 	now       time.Time
 	afterFunc func()
+	resets    []time.Duration // durations passed to the timer's Reset
 }
 
-type expiryCallbackTimer struct{}
+type expiryCallbackTimer struct{ c *expiryCallbackClock }
 
-func (*expiryCallbackTimer) Reset(time.Duration) bool { return false }
-func (*expiryCallbackTimer) Stop() bool               { return true }
+func (t *expiryCallbackTimer) Reset(d time.Duration) bool {
+	t.c.resets = append(t.c.resets, d)
+	return false
+}
+func (*expiryCallbackTimer) Stop() bool { return true }
 
 func (c *expiryCallbackClock) Now() time.Time { return c.now }
 
 func (c *expiryCallbackClock) AfterFunc(_ time.Duration, f func()) tstime.TimerController {
 	c.afterFunc = f
-	return new(expiryCallbackTimer)
+	return &expiryCallbackTimer{c}
 }
 
 func TestNetmapExpiryTimerPreservesPeerDeltas(t *testing.T) {
