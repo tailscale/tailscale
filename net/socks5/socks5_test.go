@@ -361,20 +361,23 @@ func TestUDPConcurrent(t *testing.T) {
 	}
 	defer udpConn.Close()
 
-	// Drain responses so the target->client goroutines keep writing.
-	var (
-		wg       sync.WaitGroup
-		gotReply int // written by the drain goroutine, read after wg.Wait
-	)
+	// Drain responses so the target->client goroutines keep writing. The drain
+	// goroutine closes replied once it has seen a response come back.
+	var wg sync.WaitGroup
+	replied := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		rbuf := make([]byte, 1024)
+		var n int
 		for {
 			if _, err := udpConn.Read(rbuf); err != nil {
 				return
 			}
-			gotReply++
+			n++
+			if n == 1 {
+				close(replied)
+			}
 		}
 	}()
 
@@ -394,14 +397,22 @@ func TestUDPConcurrent(t *testing.T) {
 		}
 	}
 
+	// UDP is lossy, so don't require every reply. One reply is enough to show
+	// the proxy relayed something. Wait for it before closing the connection.
+	// With GOMAXPROCS=1 the whole send loop can finish before the proxy's relay
+	// goroutines run at all, so closing right away drops every response.
+	//
+	// A reply arrives within about 20ms locally. The timeout sits above the
+	// relay's own readTimeout so that a stuck read there gets one full retry
+	// before this test gives up.
+	select {
+	case <-replied:
+	case <-time.After(10 * time.Second):
+		t.Error("timed out waiting for a response back through the proxy")
+	}
+
 	udpConn.Close()
 	wg.Wait()
-
-	// UDP is lossy, so don't require every reply. One reply is enough to show
-	// the proxy relayed something.
-	if gotReply == 0 {
-		t.Error("got no responses back through the proxy")
-	}
 }
 
 // syncBuffer is a bytes.Buffer that is safe for concurrent use.
