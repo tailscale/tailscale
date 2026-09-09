@@ -206,6 +206,56 @@ func TestConnectorMultiTailnet(t *testing.T) {
 	}
 }
 
+// See [TestMain] for test requirements. Additionally, the cluster's Nodes must
+// have ExternalIP addresses, so this test skips on kind clusters.
+func TestConnectorStaticEndpoints(t *testing.T) {
+	if tnClient == nil {
+		t.Skip("TestConnectorStaticEndpoints requires a working tailnet client")
+	}
+	externalIPs := requireNodeExternalIPs(t)
+
+	t.Parallel()
+
+	// The port ranges of ProxyClasses must not clash, so each static
+	// endpoints test uses its own range.
+	ports := tsapi.PortRange{Port: 32750, EndPort: 32758}
+	pc := applyStaticEndpointsProxyClass(t, ports)
+
+	cn := &tsapi.Connector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: generateName("static-endpoints"),
+		},
+		Spec: tsapi.ConnectorSpec{
+			// A route in 10.0.0.0/8 so it is auto-approved by the ACL in acl.hujson.
+			SubnetRouter: &tsapi.SubnetRouter{
+				AdvertiseRoutes: []tsapi.Route{"10.60.0.0/16"},
+			},
+			ProxyClass: pc.Name,
+			Replicas:   new(int32(2)),
+		},
+	}
+	createAndCleanup(t, kubeClient, cn)
+
+	waitForConnectorReady(t, cn.Name)
+	devices := waitForConnectorDevices(t, cn.Name, 2, true)
+	verifyStaticEndpoints(t, "connector", cn.Name, 2, ports, externalIPs, devices)
+
+	// Scaling down must delete the NodePort Service of the removed replica.
+	patchObject(t, &tsapi.Connector{ObjectMeta: metav1.ObjectMeta{Name: cn.Name}}, func(cn *tsapi.Connector) {
+		cn.Spec.Replicas = new(int32(1))
+	})
+	waitForNodePortServices(t, "connector", cn.Name, 1)
+	devices = waitForConnectorDevices(t, cn.Name, 1, true)
+	verifyStaticEndpoints(t, "connector", cn.Name, 1, ports, externalIPs, devices)
+
+	// Removing static endpoints from the ProxyClass must delete the remaining
+	// NodePort Service and stop advertising static endpoints.
+	removeStaticEndpoints(t, pc.Name)
+	waitForNodePortServices(t, "connector", cn.Name, 0)
+	waitForConnectorDevices(t, cn.Name, 1, false)
+	waitForNoPortEnv(t, "connector", cn.Name)
+}
+
 func waitForConnectorReady(t *testing.T, name string) *tsapi.Connector {
 	t.Helper()
 	forceReconcile := triggerReconcile(t,
@@ -268,4 +318,28 @@ func deviceIDForConnector(t *testing.T, name string) string {
 		t.Fatalf("waiting for Connector %s state Secret: %v", name, err)
 	}
 	return id
+}
+
+// waitForConnectorDevices waits for the Connector's status to report the
+// given number of devices, and for every device to report static endpoints
+// if wantStaticEndpoints is true, or none if it is false.
+func waitForConnectorDevices(t *testing.T, name string, replicas int, wantStaticEndpoints bool) []staticEndpointsDevice {
+	t.Helper()
+
+	var devices []staticEndpointsDevice
+	if err := tstest.WaitFor(5*time.Minute, func() error {
+		cn := &tsapi.Connector{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := get(t.Context(), kubeClient, cn); err != nil {
+			return err
+		}
+		devices = devices[:0]
+		for _, d := range cn.Status.Devices {
+			devices = append(devices, staticEndpointsDevice{tailnetIPs: d.TailnetIPs, staticEndpoints: d.StaticEndpoints})
+		}
+		return checkDevices("Connector", name, devices, replicas, wantStaticEndpoints)
+	}); err != nil {
+		t.Fatalf("waiting for Connector %s devices: %v", name, err)
+	}
+
+	return devices
 }

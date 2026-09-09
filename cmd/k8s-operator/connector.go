@@ -269,6 +269,13 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 			Hostname:   dev.hostname,
 			TailnetIPs: dev.ips,
 		}
+		if eps := sts.staticEndpointsPerReplica[dev.ordinal]; len(eps) > 0 {
+			staticEndpoints := make([]string, len(eps))
+			for j, ep := range eps {
+				staticEndpoints[j] = ep.String()
+			}
+			cn.Status.Devices[i].StaticEndpoints = staticEndpoints
+		}
 	}
 
 	if len(cn.Status.Devices) > 0 {
