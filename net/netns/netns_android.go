@@ -106,3 +106,10 @@ func controlC(network, address string, c syscall.RawConn) error {
 	}
 	return sockErr
 }
+
+// ControlFuncForDNS returns the Android-specific socket control function that
+// calls VpnService.protect() and bindSocketToNetwork(). This must be used for
+// DNS forwarder sockets to prevent them from being routed through the VPN.
+func ControlFuncForDNS() func(network, address string, c syscall.RawConn) error {
+	 return controlC
+}
