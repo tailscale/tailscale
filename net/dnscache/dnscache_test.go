@@ -5,9 +5,16 @@ package dnscache
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"flag"
 	"fmt"
+	"math/big"
 	"net"
 	"net/netip"
 	"reflect"
@@ -405,6 +412,164 @@ func TestDiskCacheHooks(t *testing.T) {
 		want := []persistCall{{"ctrl.example.com", "fallback", mustIPs("3.3.3.3")}}
 		if !reflect.DeepEqual(persisted, want) {
 			t.Errorf("persist calls = %+v; want %+v", persisted, want)
+		}
+	})
+}
+
+func newTestCert(t *testing.T, dnsName string) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: dnsName},
+		DNSNames:              []string{dnsName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, parsed
+}
+
+// startTLSServer starts a TLS server on 127.0.0.1 serving cert and
+// returns its port.
+func startTLSServer(t *testing.T, cert tls.Certificate) (port string) {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				c.(*tls.Conn).Handshake()
+				c.Close()
+			}()
+		}
+	}()
+	_, port, err = net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func TestTLSDialerHostVerifiedHook(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	resolver := &Resolver{
+		Logf: t.Logf,
+		LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return []netip.Addr{lo}, nil
+		},
+	}
+	var std net.Dialer
+
+	type verifiedCall struct {
+		host string
+		ip   netip.Addr
+	}
+	var got []verifiedCall
+	defer HookHostVerified.SetForTest(func(host string, ip netip.Addr) {
+		got = append(got, verifiedCall{host, ip})
+	})()
+
+	t.Run("verified", func(t *testing.T) {
+		got = nil
+		cert, parsed := newTestCert(t, "ctrl.example.com")
+		port := startTLSServer(t, cert)
+		pool := x509.NewCertPool()
+		pool.AddCert(parsed)
+
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{RootCAs: pool})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		want := []verifiedCall{{"ctrl.example.com", lo}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("verified calls = %+v; want %+v", got, want)
+		}
+	})
+
+	t.Run("insecure-no-hook", func(t *testing.T) {
+		got = nil
+		cert, _ := newTestCert(t, "other.example.com")
+		port := startTLSServer(t, cert)
+
+		// Handshake succeeds due to InsecureSkipVerify, but without
+		// certificate verification the hook must not fire.
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{InsecureSkipVerify: true})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if len(got) != 0 {
+			t.Errorf("hook fired despite InsecureSkipVerify: %+v", got)
+		}
+	})
+
+	t.Run("intercepted-no-hook", func(t *testing.T) {
+		got = nil
+		cert, _ := newTestCert(t, "ctrl.example.com")
+		port := startTLSServer(t, cert)
+
+		// An interception-tolerant config in the style of controlhttp:
+		// a VerifyConnection hook that swallows all verification
+		// errors, because Noise doesn't need TLS to be honest. The
+		// handshake succeeds even though the cert chain is untrusted,
+		// and the hook must not fire. (Regression test for the review
+		// concern that VerifyConnection != nil was treated as proof of
+		// verification.)
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyConnection:   func(tls.ConnectionState) error { return nil },
+		})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if len(got) != 0 {
+			t.Errorf("hook fired on intercepted connection: %+v", got)
+		}
+	})
+
+	t.Run("bad-cert-no-hook", func(t *testing.T) {
+		got = nil
+		cert, parsed := newTestCert(t, "other.example.com")
+		port := startTLSServer(t, cert)
+		pool := x509.NewCertPool()
+		pool.AddCert(parsed)
+
+		// Cert is trusted but for the wrong name: handshake fails and
+		// the hook must not fire.
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{RootCAs: pool})
+		if c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port); err == nil {
+			c.Close()
+			t.Fatal("dial unexpectedly succeeded with wrong-name cert")
+		}
+		if len(got) != 0 {
+			t.Errorf("hook fired despite failed verification: %+v", got)
 		}
 	})
 }

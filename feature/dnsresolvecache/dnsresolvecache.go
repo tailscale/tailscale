@@ -8,6 +8,22 @@
 // plane. It is intended to eventually replace the DERP-based
 // bootstrap DNS in net/dnsfallback.
 //
+// To keep bogus answers (say, from a captive portal's DNS server) off
+// disk, a resolution is not written when it happens. It is instead
+// held in memory as pending until a TLS connection to one of the
+// resolution's IPs presents a certificate chain that is valid for
+// that hostname; only then is the record flushed to disk. The chain
+// is checked independently of the connection's own TLS configuration,
+// which for the control plane's Noise connection deliberately
+// tolerates interception. A captive portal cannot present a valid
+// certificate for a hostname it is impersonating, so its answers are
+// never persisted. That is also the
+// invalidation contract: a hostname's file is only ever written or
+// replaced by a newer resolution that was itself verified this way;
+// there is no expiry. Verification currently comes from
+// [dnscache.TLSDialer] (used by the control plane connection), so
+// other hostnames resolve normally but are not persisted.
+//
 // A file is rewritten only when its contents change, so its
 // modification time records when the answer last changed, not when
 // it was last confirmed.
@@ -40,6 +56,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 func init() {
@@ -47,14 +64,23 @@ func init() {
 	dnscache.HookSetCacheDir.Set(setCacheDir)
 	dnscache.HookPersistResolution.Set(persist)
 	dnscache.HookLookupDiskCache.Set(lookup)
+	dnscache.HookHostVerified.Set(hostVerified)
 }
 
 var (
-	mu          sync.Mutex        // guards the variables below
-	cacheDir    string            // empty until the first successful setCacheDir call
-	logf        logger.Logf       // non-nil once cacheDir is set
-	lastWritten map[string]string // hostname => digest of last JSON written
+	mu          sync.Mutex            // guards the variables below
+	cacheDir    string                // empty until the first successful setCacheDir call
+	logf        logger.Logf           // non-nil once cacheDir is set
+	lastWritten map[string]string     // hostname => digest of last JSON written
+	pending     map[string]pendingRec // hostname => resolution awaiting TLS verification
 )
+
+// pendingRec is a marshaled resolution awaiting TLS verification of
+// one of its IPs before being written to disk.
+type pendingRec struct {
+	j   []byte // marshaled record
+	ips set.Set[netip.Addr]
+}
 
 // record is the JSON structure of each persisted per-hostname file.
 type record struct {
@@ -95,18 +121,20 @@ func filePath(host string) string {
 	return filepath.Join(cacheDir, "dns-"+host+".json")
 }
 
-// persist writes the resolution of host to disk, unless the on-disk
-// contents would be unchanged. It implements
-// [dnscache.HookPersistResolution].
+// persist records the resolution of host as pending, to be written to
+// disk by hostVerified once one of its IPs passes TLS certificate
+// verification for host. It implements [dnscache.HookPersistResolution].
 func persist(host, resolver string, ips []netip.Addr) {
 	host = strings.ToLower(host)
 	if !validHostname(host) || len(ips) == 0 {
 		return
 	}
 	rec := record{Resolver: resolver}
+	ipSet := make(set.Set[netip.Addr])
 	ips = slices.Clone(ips)
 	slices.SortFunc(ips, netip.Addr.Compare)
 	for _, ip := range slices.Compact(ips) {
+		ipSet.Add(ip)
 		if ip.Is4() {
 			rec.A = append(rec.A, ip)
 		} else {
@@ -117,20 +145,48 @@ func persist(host, resolver string, ips []netip.Addr) {
 	if err != nil {
 		return
 	}
-	digest := sha256.Sum256(j)
 
 	mu.Lock()
 	defer mu.Unlock()
 	if cacheDir == "" {
 		return
 	}
+	mak.Set(&pending, host, pendingRec{j: j, ips: ipSet})
+}
+
+// hostVerified flushes the pending resolution of host to disk if ip
+// is one of its addresses. It implements [dnscache.HookHostVerified].
+func hostVerified(host string, ip netip.Addr) {
+	host = strings.ToLower(host)
+	if !validHostname(host) {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := pending[host]
+	if !ok || !p.ips.Contains(ip.Unmap()) {
+		// Nothing pending, or the verified connection didn't use an
+		// IP from the pending resolution (e.g. an older resolution's
+		// IP, or a bogus record whose IPs never verify). Keep any
+		// pending record for a later handshake on a member IP.
+		return
+	}
+	delete(pending, host)
+	writeLocked(host, p.j)
+}
+
+// writeLocked writes j to host's cache file, unless the contents
+// would be unchanged. The caller must hold mu, and cacheDir must be
+// non-empty.
+func writeLocked(host string, j []byte) {
+	digest := sha256.Sum256(j)
 	path := filePath(host)
 	if last, ok := lastWritten[host]; ok {
 		if last == string(digest[:]) {
 			return
 		}
 	} else if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, j) {
-		// First resolution since process start and the file already
+		// First write since process start and the file already
 		// matches; skip the write to preserve its modtime.
 		mak.Set(&lastWritten, host, string(digest[:]))
 		return
