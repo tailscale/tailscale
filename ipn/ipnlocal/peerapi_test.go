@@ -188,6 +188,53 @@ func TestHandlePeerAPI(t *testing.T) {
 	}
 }
 
+func TestPeerAPIIsAddressValid(t *testing.T) {
+	selfNode := &tailcfg.Node{
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+			netip.MustParsePrefix("fd7a:115c:a1e0::1/128"),
+		},
+	}
+	tests := []struct {
+		name   string
+		masqV4 string // SelfNodeV4MasqAddrForThisPeer, if non-empty
+		masqV6 string // SelfNodeV6MasqAddrForThisPeer, if non-empty
+		addr   string
+		want   bool
+	}{
+		{"no_masq_native_v4", "", "", "100.64.0.1", true},
+		{"no_masq_native_v6", "", "", "fd7a:115c:a1e0::1", true},
+		{"no_masq_other_addr", "", "", "100.64.0.9", false},
+		{"masq_v4_masq_addr", "100.99.1.1", "", "100.99.1.1", true},
+		{"masq_v4_native_v4", "100.99.1.1", "", "100.64.0.1", false},
+		{"masq_v4_native_v6", "100.99.1.1", "", "fd7a:115c:a1e0::1", true},
+		{"masq_v6_masq_addr", "", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::99", true},
+		{"masq_v6_native_v6", "", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::1", false},
+		{"masq_v6_native_v4", "", "fd7a:115c:a1e0::99", "100.64.0.1", true},
+		{"masq_both_native_v4", "100.99.1.1", "fd7a:115c:a1e0::99", "100.64.0.1", false},
+		{"masq_both_masq_v4", "100.99.1.1", "fd7a:115c:a1e0::99", "100.99.1.1", true},
+		{"masq_both_masq_v6", "100.99.1.1", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::99", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peerNode := &tailcfg.Node{}
+			if tt.masqV4 != "" {
+				peerNode.SelfNodeV4MasqAddrForThisPeer = new(netip.MustParseAddr(tt.masqV4))
+			}
+			if tt.masqV6 != "" {
+				peerNode.SelfNodeV6MasqAddrForThisPeer = new(netip.MustParseAddr(tt.masqV6))
+			}
+			h := &peerAPIHandler{
+				selfNode: selfNode.View(),
+				peerNode: peerNode.View(),
+			}
+			if got := h.isAddressValid(netip.MustParseAddr(tt.addr)); got != tt.want {
+				t.Errorf("isAddressValid(%v) = %v; want %v", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsPeerAPIDNSAllowed(t *testing.T) {
 	// This test can not be run in parallel because it modifies
 	// HookReplyToDNSQueries and exitNodeDNSFilterForTest.

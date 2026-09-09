@@ -266,10 +266,16 @@ func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
 	if !addr.IsValid() {
 		return false
 	}
-	v4MasqAddr, hasMasqV4 := h.peerNode.SelfNodeV4MasqAddrForThisPeer().GetOk()
-	v6MasqAddr, hasMasqV6 := h.peerNode.SelfNodeV6MasqAddrForThisPeer().GetOk()
-	if hasMasqV4 || hasMasqV6 {
-		return addr == v4MasqAddr || addr == v6MasqAddr
+	// A masquerade address for a family, if set, replaces this node's
+	// native address of that family from the peer's point of view.
+	// A masquerade address for one family says nothing about the other
+	// family, so the other family still falls through to the self
+	// address check below.
+	if v4MasqAddr, ok := h.peerNode.SelfNodeV4MasqAddrForThisPeer().GetOk(); ok && addr.Is4() {
+		return addr == v4MasqAddr
+	}
+	if v6MasqAddr, ok := h.peerNode.SelfNodeV6MasqAddrForThisPeer().GetOk(); ok && addr.Is6() {
+		return addr == v6MasqAddr
 	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
 	return views.SliceContains(h.selfNode.Addresses(), pfx)
