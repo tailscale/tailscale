@@ -31,6 +31,14 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "plan9" {
 		return "/srv/tailscaled.sock"
 	}
+	if runtime.GOOS == "android" {
+		// Android (e.g. a userspace tailscaled under Termux) has no /var,
+		// and the cwd-relative fallback below only works when the daemon
+		// and the CLI happen to be started from the same directory
+		// (see #21161). Use the shared per-app temp directory so both
+		// agree on an absolute path.
+		return filepath.Join(os.TempDir(), "tailscaled.sock")
+	}
 	switch distro.Get() {
 	case distro.Synology:
 		if distro.DSMVersion() == 6 {
