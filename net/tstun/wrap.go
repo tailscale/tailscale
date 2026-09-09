@@ -980,6 +980,17 @@ func stackGSOToTunGSO(pkt []byte, gso netstack_GSO) (tun.GSOOptions, error) {
 	}
 	tcphLen := uint16(pkt[int(gso.L3HdrLen)+12] >> 4 * 4)
 	options.HdrLen = gso.L3HdrLen + tcphLen
+	payloadLen := len(pkt) - int(options.HdrLen)
+	if gso.MSS == 0 {
+		// gVisor can emit a zero value MSS with non-GSONone GSOType before TCP
+		// handshake completes. Normalize options.GSOType to [tun.GSONone] if
+		// this is the case.
+		// See tailscale/corp#47917
+		if payloadLen != 0 {
+			return tun.GSOOptions{}, errors.New("gVisor emitted zero GSO MSS with nonempty TCP payload")
+		}
+		options.GSOType = tun.GSONone
+	}
 	return options, nil
 }
 
