@@ -132,7 +132,7 @@ func (s *Server) Serve(ln net.Listener) error {
 		}
 		go func() {
 			defer c.Close()
-			conn := &Conn{logf: s.Logf, clientConn: c, srv: s}
+			conn := &Conn{clientConn: c, srv: s}
 			err := conn.Run()
 			if err != nil {
 				s.logf("client connection failed: %v", err)
@@ -147,7 +147,6 @@ type Conn struct {
 	// The struct is filled by each of the internal
 	// methods in turn as the transaction progresses.
 
-	logf       logger.Logf
 	srv        *Server
 	clientConn net.Conn
 	request    *request
@@ -158,6 +157,12 @@ type Conn struct {
 	udpClientAddr syncs.MutexValue[net.Addr]
 
 	udpTargetConns map[socksAddr]net.Conn
+}
+
+// logf logs to the server's logger, which falls back to the standard logger
+// when Server.Logf is nil.
+func (c *Conn) logf(format string, args ...any) {
+	c.srv.logf(format, args...)
 }
 
 // Run starts the new connection.
