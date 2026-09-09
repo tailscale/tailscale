@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"time"
 
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
@@ -151,7 +152,11 @@ type Conn struct {
 	clientConn net.Conn
 	request    *request
 
-	udpClientAddr  net.Addr
+	// udpClientAddr is the address the client sends its UDP datagrams from.
+	// The goroutine reading from the client writes it, and a goroutine per
+	// target reads it to address the responses, so it needs a lock.
+	udpClientAddr syncs.MutexValue[net.Addr]
+
 	udpTargetConns map[socksAddr]net.Conn
 }
 
@@ -411,7 +416,7 @@ func (c *Conn) handleUDPRequest(
 	if err != nil {
 		return fmt.Errorf("read from client: %w", err)
 	}
-	c.udpClientAddr = addr
+	c.udpClientAddr.Store(addr)
 	req, data, err := parseUDPRequest(buf[:n])
 	if err != nil {
 		return fmt.Errorf("parse udp request: %w", err)
@@ -451,7 +456,7 @@ func (c *Conn) handleUDPResponse(
 	}
 	data := append(pkt, buf[:n]...)
 	// use addr from client to send back
-	nn, err := clientConn.WriteTo(data, c.udpClientAddr)
+	nn, err := clientConn.WriteTo(data, c.udpClientAddr.Load())
 	if err != nil {
 		return fmt.Errorf("write to client: %w", err)
 	}
