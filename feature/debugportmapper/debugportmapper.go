@@ -109,10 +109,11 @@ func serveDebugPortmap(h *localapi.Handler, w http.ResponseWriter, r *http.Reque
 
 	var c *portmapper.Client
 	c = portmapper.NewClient(portmapper.Config{
-		Logf:       logger.WithPrefix(logf, "portmapper: "),
-		NetMon:     h.LocalBackend().NetMon(),
-		DebugKnobs: debugKnobs,
-		EventBus:   h.LocalBackend().EventBus(),
+		ShutdownCtx: ctx,
+		Logf:        logger.WithPrefix(logf, "portmapper: "),
+		NetMon:      h.LocalBackend().NetMon(),
+		DebugKnobs:  debugKnobs,
+		EventBus:    h.LocalBackend().EventBus(),
 		OnChange: func() {
 			logf("portmapping changed.")
 			logf("have mapping: %v", c.HaveMapping())
