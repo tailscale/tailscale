@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 
 	"golang.org/x/net/proxy"
@@ -285,5 +286,141 @@ func TestUDP(t *testing.T) {
 		if !bytes.Equal(requestBody, responseBody) {
 			t.Fatalf("got: %q want: %q", responseBody, requestBody)
 		}
+	}
+}
+
+func udpEchoServerLoop(conn net.PacketConn) {
+	var buf [1024]byte
+	for {
+		n, addr, err := conn.ReadFrom(buf[:])
+		if err != nil {
+			return
+		}
+		if _, err := conn.WriteTo(buf[:n], addr); err != nil {
+			return
+		}
+	}
+}
+
+// TestUDPConcurrent keeps datagrams in flight to several targets at once so
+// the client->target goroutine writes Conn.udpClientAddr while the per-target
+// target->client goroutines read it.
+func TestUDPConcurrent(t *testing.T) {
+	const echoServerNumber = 4
+
+	echo := make([]net.PacketConn, echoServerNumber)
+	for i := range echo {
+		ln, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		echo[i] = ln
+		go udpEchoServerLoop(ln)
+	}
+	defer func() {
+		for _, ln := range echo {
+			ln.Close()
+		}
+	}()
+
+	socks5ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socks5ln.Close()
+	socks5Port := socks5ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		var server Server
+		// The response goroutines outlive the test body and log once the echo
+		// servers close, so t.Logf would panic here.
+		server.Logf = func(string, ...any) {}
+		server.Serve(socks5ln)
+	}()
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", socks5Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte{socks5Version, 0x01, noAuthRequired}); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || buf[0] != socks5Version || buf[1] != noAuthRequired {
+		t.Fatalf("got %q, want 0x05 0x00", buf[:n])
+	}
+	targetAddrPkt, err := socksAddr{addrType: ipv4, addr: "0.0.0.0", port: 0}.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(append([]byte{socks5Version, byte(udpAssociate), 0x00}, targetAddrPkt...)); err != nil {
+		t.Fatal(err)
+	}
+	n, err = conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 3 || !bytes.Equal(buf[:3], []byte{socks5Version, 0x00, 0x00}) {
+		t.Fatalf("got %q, want 0x05 0x00 0x00", buf[:n])
+	}
+	udpProxySocksAddr, err := parseSocksAddr(bytes.NewReader(buf[3:n]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	udpProxyAddr, err := net.ResolveUDPAddr("udp", udpProxySocksAddr.hostPort())
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpConn, err := net.DialUDP("udp", nil, udpProxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpConn.Close()
+
+	// Drain responses so the target->client goroutines keep writing.
+	var (
+		wg       sync.WaitGroup
+		gotReply int // written by the drain goroutine, read after wg.Wait
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rbuf := make([]byte, 1024)
+		for {
+			if _, err := udpConn.Read(rbuf); err != nil {
+				return
+			}
+			gotReply++
+		}
+	}()
+
+	const rounds = 200
+	for range rounds {
+		for i := range echo {
+			port := echo[i].LocalAddr().(*net.UDPAddr).Port
+			addr := socksAddr{addrType: ipv4, addr: "127.0.0.1", port: uint16(port)}
+			pkt, err := (&udpRequest{addr: addr}).marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkt = fmt.Appendf(pkt, "Test %d", i)
+			if _, err := udpConn.Write(pkt); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	udpConn.Close()
+	wg.Wait()
+
+	// UDP is lossy, so don't require every reply. One reply is enough to show
+	// the proxy relayed something.
+	if gotReply == 0 {
+		t.Error("got no responses back through the proxy")
 	}
 }
