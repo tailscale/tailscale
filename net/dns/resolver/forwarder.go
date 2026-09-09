@@ -504,16 +504,28 @@ var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketLis
 
 func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
 	if f.linkSel == nil || initListenConfig == nil {
+		f.logf(
+			"packetListener(%v): using stdNetPacketListener; linkSelNil=%v initListenConfigNil=%v",
+			ip,
+			f.linkSel == nil,
+			initListenConfig == nil,
+		)
 		return stdNetPacketListener, nil
 	}
+
 	linkName := f.linkSel.PickLink(ip)
 	if linkName == "" {
+		f.logf("packetListener(%v): no link selected; using stdNetPacketListener", ip)
 		return stdNetPacketListener, nil
 	}
+
+	f.logf("packetListener(%v): using link-specific listener for %q", ip, linkName)
+
 	lc := new(net.ListenConfig)
 	if err := initListenConfig(lc, f.netMon, linkName); err != nil {
 		return nil, err
 	}
+
 	return nettype.MakePacketListenerWithNetIP(lc), nil
 }
 
@@ -880,10 +892,15 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 // dialUDP returns a UDP conn to ipp, over netstack if that's the only way to
 // reach it. Same dispatch as [tsdial.Dialer.dialOneUser].
 func (f *forwarder) dialUDP(ctx context.Context, ipp netip.AddrPort) (nettype.PacketConn, error) {
+	f.logf("dialUDP: destination=%v", ipp)
+
 	if f.dialer.UseNetstackForIP != nil && f.dialer.UseNetstackForIP(ipp.Addr()) {
+		f.logf("dialUDP(%v): using netstack", ipp)
+
 		if f.dialer.NetstackDialUDP == nil {
 			return nil, errors.New("dialer not initialized correctly: no NetstackDialUDP")
 		}
+
 		conn, err := f.dialer.NetstackDialUDP(ctx, ipp)
 		if err != nil {
 			return nil, err
@@ -896,18 +913,20 @@ func (f *forwarder) dialUDP(ctx context.Context, ipp netip.AddrPort) (nettype.Pa
 		return nil, err
 	}
 
-	// Name the family explicitly: netns looks for a "6" in this string to
-	// choose between IP_BOUND_IF and IPV6_BOUND_IF on macOS, and "udp" would
-	// give a v6 socket bound with the v4 option.
 	udpFam := "udp4"
 	if ipp.Addr().Is6() {
 		udpFam = "udp6"
 	}
+
+	f.logf("dialUDP(%v): ListenPacket network=%s", ipp, udpFam)
+
 	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
 	if err != nil {
 		f.logf("ListenPacket failed: %v", err)
 		return nil, err
 	}
+
+	f.logf("dialUDP(%v): ListenPacket succeeded", ipp)
 	return conn, nil
 }
 

@@ -61,32 +61,42 @@ func SetAndroidBindToNetworkFunc(f func(fd int) error) {
 	androidBindToNetworkFunc = f
 }
 
-func control(logger.Logf, *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
-	return controlC
+func control(logf logger.Logf, *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, c syscall.RawConn) error {
+		return controlC(logf, network, address, c)
+	}
 }
 
 // controlC marks c as necessary to dial in a separate network namespace.
 //
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
-func controlC(network, address string, c syscall.RawConn) error {
+func controlC(logf logger.Logf, network, address string, c syscall.RawConn) error {
 	var sockErr error
 
 	err := c.Control(func(fd uintptr) {
 		fdInt := int(fd)
+
+		logf("netns: control fd=%d network=%s address=%s", fdInt, network, address)
 
 		// Protect from VPN loops
 		androidProtectFuncMu.Lock()
 		pf := androidProtectFunc
 		androidProtectFuncMu.Unlock()
 		if pf != nil {
+			logf("netns: protect fd=%d", fdInt)
 			if err := pf(fdInt); err != nil {
+				logf("netns: protect fd=%d failed: %v", fdInt, err)
 				sockErr = err
 				return
 			}
+			logf("netns: protect fd=%d succeeded", fdInt)
+		} else {
+			logf("netns: no protect func for fd=%d", fdInt)
 		}
 
 		if disableAndroidBindToActiveNetwork.Load() {
+			logf("netns: bind disabled fd=%d", fdInt)
 			return
 		}
 
@@ -94,10 +104,15 @@ func controlC(network, address string, c syscall.RawConn) error {
 		bf := androidBindToNetworkFunc
 		androidBindToNetworkFuncMu.Unlock()
 		if bf != nil {
+			logf("netns: bind fd=%d", fdInt)
 			if err := bf(fdInt); err != nil {
+				logf("netns: bind fd=%d failed: %v", fdInt, err)
 				sockErr = err
 				return
 			}
+			logf("netns: bind fd=%d succeeded", fdInt)
+		} else {
+			logf("netns: no bind func for fd=%d", fdInt)
 		}
 	})
 
