@@ -107,6 +107,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `hostname` _string_ | Hostname is the fully qualified domain name of the Connector replica.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />node. |  | Optional: \{\} <br /> |
 | `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the Connector replica. |  | Optional: \{\} <br /> |
+| `staticEndpoints` _string array_ | StaticEndpoints are user configured, 'static' endpoints by which<br />tailnet peers can reach this device. |  | Optional: \{\} <br /> |
 
 
 #### ConnectorList
@@ -542,7 +543,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `ports` _[PortRange](#portrange) array_ | The port ranges from which the operator will select NodePorts for the Services.<br />You must ensure that firewall rules allow UDP ingress traffic for these ports<br />to the node's external IPs.<br />The ports must be in the range of service node ports for the cluster (default `30000-32767`).<br />See https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport. |  | MinItems: 1 <br /> |
-| `selector` _object (keys:string, values:string)_ | A selector which will be used to select the node's that will have their `ExternalIP`'s advertised<br />by the ProxyGroup as Static Endpoints. |  |  |
+| `selector` _object (keys:string, values:string)_ | A selector which will be used to select the node's that will have their `ExternalIP`'s advertised<br />by the ProxyGroup or Connector as Static Endpoints. |  |  |
 
 
 #### PeerRelay
