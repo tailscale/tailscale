@@ -110,6 +110,17 @@ type endpoint struct {
 // be installed as de.bestAddr. It is only called by [relayManager] once it has
 // determined maybeBest is functional via [disco.Pong] reception.
 func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
+	installed := false
+	// This deferred func is registered before the de.mu.Unlock defer below
+	// so that it runs after de.mu has been released.
+	defer func() {
+		if !installed {
+			return
+		}
+		if hook := de.c.testOnlyRelayEndpointReadyHook.Load(); hook != nil {
+			hook(de.publicKey, maybeBest)
+		}
+	}()
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	now := mono.Now()
@@ -132,6 +143,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 		de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v", de.publicKey.ShortString(), de.discoShort(), maybeBest.epAddr, maybeBest.wireMTU)
 		de.setBestAddrLocked(maybeBest)
 		de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
+		installed = true
 	}
 }
 
