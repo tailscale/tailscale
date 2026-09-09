@@ -8,6 +8,7 @@ package dnscache
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/bakedroots"
 	"tailscale.com/net/netx"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
@@ -40,7 +42,9 @@ var HookSetCacheDir feature.Hook[func(dir string, logf logger.Logf)]
 // HookPersistResolution optionally points to the dnsresolvecache
 // feature's function to record a successful DNS resolution of host
 // to disk. The resolver argument is one of the "forward", "cloud",
-// or "fallback" resolver source names.
+// or "fallback" resolver source names. The feature defers the actual
+// disk write until [HookHostVerified] confirms one of the
+// resolution's IPs.
 var HookPersistResolution feature.Hook[func(host, resolver string, ips []netip.Addr)]
 
 // HookLookupDiskCache optionally points to the dnsresolvecache
@@ -48,6 +52,16 @@ var HookPersistResolution feature.Hook[func(host, resolver string, ips []netip.A
 // disk. It is consulted only after regular DNS resolution has
 // failed, before falling back to the DERP-based bootstrap DNS.
 var HookLookupDiskCache feature.Hook[func(host string) ([]netip.Addr, bool)]
+
+// HookHostVerified optionally points to the dnsresolvecache
+// feature's function to record that a TLS connection to host, at the
+// given remote IP, presented a certificate chain that is valid for
+// host. That is checked independently of the connection's own TLS
+// config, which may deliberately tolerate interception (as the
+// control plane Noise connection does). The feature uses this to
+// flush a pending resolution of host to disk only once one of its
+// IPs has been cryptographically verified to be host.
+var HookHostVerified feature.Hook[func(host string, ip netip.Addr)]
 
 // Resolver source names, as passed to [HookPersistResolution] and
 // used for deciding fallback behavior in Resolver.lookupIP.
@@ -669,8 +683,52 @@ func TLSDialer(fwd netx.DialFunc, dnsCache *Resolver, tlsConfigBase *tls.Config)
 			// DNS mechanism.
 			return nil, err
 		}
+		// Tell the dnsresolvecache feature (if linked in) that the
+		// remote IP presented a valid certificate for host. The chain
+		// is checked here, independently of whatever verification the
+		// tls.Config did during the handshake, because some callers
+		// (notably controlhttp, which runs Noise atop whatever
+		// transport it gets) deliberately tolerate invalid TLS
+		// certificates; an intercepted connection must not mark the
+		// DNS resolution as verified.
+		if buildfeatures.HasDNSResolveCache {
+			if f, ok := HookHostVerified.GetOk(); ok && certValidForHost(tlsConn.ConnectionState(), host, cfg.RootCAs) {
+				if ap, err := netip.ParseAddrPort(tcpConn.RemoteAddr().String()); err == nil {
+					f(host, ap.Addr().Unmap())
+				}
+			}
+		}
 		return tlsConn, nil
 	}
+}
+
+// certValidForHost reports whether cs's peer certificate chain is
+// valid for host, verifying against roots if non-nil (a caller's
+// explicitly configured trust anchors), else against the system
+// roots. In either case the baked-in Let's Encrypt roots are also
+// tried, as net/tlsdial's Config does.
+func certValidForHost(cs tls.ConnectionState, host string, roots *x509.CertPool) bool {
+	if len(cs.PeerCertificates) == 0 {
+		return false
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       host,
+		Roots:         roots, // nil means system roots
+		Intermediates: x509.NewCertPool(),
+	}
+	for _, cert := range cs.PeerCertificates[1:] {
+		opts.Intermediates.AddCert(cert)
+	}
+	if _, err := cs.PeerCertificates[0].Verify(opts); err == nil {
+		return true
+	}
+	if buildfeatures.HasBakedRoots {
+		opts.Roots = bakedroots.Get()
+		if _, err := cs.PeerCertificates[0].Verify(opts); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneTLSConfig(cfg *tls.Config) *tls.Config {
