@@ -191,7 +191,25 @@ func (esr *egressSvcsReconciler) maybeProvision(ctx context.Context, svc *corev1
 	if clusterIPSvc == nil {
 		clusterIPSvc = esr.clusterIPSvcForEgress(crl)
 	}
+	// Detect which IP families the ClusterIP Service supports to determine which
+	// EndpointSlices must exist.
+	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
+	if err != nil {
+		return err
+	}
 	upToDate := svcConfigurationUpToDate(svc, lg)
+	if upToDate && clusterIPSvc.Name != "" {
+		// The configuration can still match while an expected-family EndpointSlice
+		// is missing - check expected EndpointSlices exist.
+		missing, err := esr.missingEndpointSliceFamilies(ctx, clusterIPSvc, addrTypes)
+		if err != nil {
+			return err
+		}
+		if missing {
+			lg.Infof("an expected EndpointSlice is missing, reprovisioning")
+			upToDate = false
+		}
+	}
 	provisioned := true
 	if !upToDate {
 		if clusterIPSvc, provisioned, err = esr.provision(ctx, svc.Annotations[AnnotationProxyGroup], svc, clusterIPSvc, lg); err != nil {
@@ -781,6 +799,23 @@ func svcConfiguredReason(svc *corev1.Service, configured bool, lg *zap.SugaredLo
 // service from other tailnet services exposed to cluster workloads.
 func tailnetSvcName(extNSvc *corev1.Service) string {
 	return fmt.Sprintf("%s-%s", extNSvc.Namespace, extNSvc.Name)
+}
+
+// missingEndpointSliceFamilies reports whether any EndpointSlice expected for the given ClusterIP Service (one per addrType)
+// does not exist. Slices are looked up by name rather than labels so an orphaned EndpointSlice cannot satisfy the check.
+func (esr *egressSvcsReconciler) missingEndpointSliceFamilies(ctx context.Context, clusterIPSvc *corev1.Service, addrTypes []discoveryv1.AddressType) (bool, error) {
+	for _, addrType := range addrTypes {
+		eps := &discoveryv1.EndpointSlice{}
+		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
+		err := esr.Get(ctx, types.NamespacedName{Namespace: esr.tsNamespace, Name: name}, eps)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("error retrieving %s EndpointSlice: %w", addrType, err)
+		}
+	}
+	return false, nil
 }
 
 // epsPortsFromSvc takes the ClusterIP Service created for an egress service and
