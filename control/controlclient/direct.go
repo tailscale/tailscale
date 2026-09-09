@@ -619,6 +619,18 @@ func parseRateLimitError(res *http.Response) *rateLimitError {
 	return ret
 }
 
+// isRateLimitedResponse reports whether a non-200 response should be
+// treated as a rate limit rather than a generic failure subject to backoff.
+func isRateLimitedResponse(res *http.Response) bool {
+	switch res.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusServiceUnavailable:
+		return res.Header.Get("Retry-After") != ""
+	}
+	return false
+}
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	if c.panicOnUse {
 		panic("tainted client")
@@ -814,7 +826,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
 	}
 	// Handle 429 Too Many Requests with a specific error type that includes the retry-after duration.
-	if res.StatusCode == 429 {
+	if isRateLimitedResponse(res) {
 		rle := parseRateLimitError(res)
 		msg := fmt.Sprintf("node registration rate limited; will retry after %v", rle.retryAfter)
 		return false, "", nil, vizerror.WrapWithMessage(rle, msg)
@@ -929,8 +941,8 @@ func (c *Direct) PollNetMap(ctx context.Context, nu NetmapUpdater) error {
 // update it observed. It is used by tests and [NetmapFromMapResponseForDebug].
 // It will report only the first netmap seen.
 type rememberLastNetmapUpdater struct {
-	last          *netmap.NetworkMap
-	done          chan any
+	last *netmap.NetworkMap
+	done chan any
 }
 
 func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
@@ -1182,6 +1194,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	}
 	vlogf("netmap: Do = %v after %v", res.StatusCode, time.Since(t0).Round(time.Millisecond))
 	if res.StatusCode != 200 {
+		if isRateLimitedResponse(res) {
+			rle := parseRateLimitError(res)
+			return fmt.Errorf("initial fetch failed %d: %w", res.StatusCode, rle)
+		}
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return fmt.Errorf("initial fetch failed %d: %.200s",

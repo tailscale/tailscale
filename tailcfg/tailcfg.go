@@ -195,7 +195,8 @@ type CapabilityVersion int
 //   - 144: 2026-07-31: Client sends [packet.TSMPDiscoKeyAdvertisement] around WireGuard handshakes
 //   - 145: 2026-08-04: Client understands [NodeAttrScopeQuad100OnMacOS]
 //   - 146: 2026-09-02: Client understands [NodeAttrConnReject]; can handle C2N /debug/rejects.
-const CurrentCapabilityVersion CapabilityVersion = 146
+//   - 147: 2026-09-09: Client handles 429/503 responses with retry-after headers to /machine/ endpoints
+const CurrentCapabilityVersion CapabilityVersion = 147
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.

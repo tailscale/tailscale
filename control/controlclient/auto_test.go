@@ -7,9 +7,11 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 )
 
 type userProfileUpdateObserver struct{}
@@ -63,4 +65,56 @@ func TestMapRoutineStateUpdateUserProfilesConcurrentCancelMapCtx(t *testing.T) {
 	}
 	c.observerQueue.Shutdown()
 	c.mapCancel()
+}
+
+func TestWaitRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		retryAfter  time.Duration
+		cancelAfter time.Duration
+		want        time.Duration
+	}{
+		{
+			name:        "returns_on_context_cancellation",
+			retryAfter:  time.Minute,
+			cancelAfter: time.Second,
+			want:        time.Second,
+		},
+		{
+			name:       "returns_on_specified_retry_time",
+			retryAfter: time.Minute,
+			want:       time.Minute,
+		},
+		{
+			name:       "does_not_exceed_max_wait_time",
+			retryAfter: maxRetryWindow + 1,
+			want:       maxRetryWindow,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+
+				if tt.cancelAfter != 0 {
+					time.AfterFunc(tt.cancelAfter, cancel)
+				}
+
+				c := &Auto{
+					clock: tstime.StdClock{},
+					logf:  t.Logf,
+				}
+				start := time.Now()
+				c.waitRetryAfter(ctx, "test", &rateLimitError{retryAfter: tt.retryAfter})
+				if got := time.Since(start); got != tt.want {
+					t.Errorf("waitRetryAfter; got = %v, want %v", got, tt.want)
+				}
+			})
+		})
+	}
 }
