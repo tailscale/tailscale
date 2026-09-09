@@ -300,6 +300,13 @@ spec:
                                                 If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
                                                 node.
                                             type: string
+                                        staticEndpoints:
+                                            description: |-
+                                                StaticEndpoints are user configured, 'static' endpoints by which
+                                                tailnet peers can reach this device.
+                                            items:
+                                                type: string
+                                            type: array
                                         tailnetIPs:
                                             description: |-
                                                 TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
@@ -4111,7 +4118,7 @@ spec:
                                                     type: string
                                                 description: |-
                                                     A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
-                                                    by the ProxyGroup as Static Endpoints.
+                                                    by the ProxyGroup or Connector as Static Endpoints.
                                                 type: object
                                         required:
                                             - ports

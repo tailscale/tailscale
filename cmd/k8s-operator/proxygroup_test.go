@@ -33,6 +33,7 @@ import (
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
+	"tailscale.com/k8s-operator/reconciler/staticendpoints"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/k8s-proxy/conf"
@@ -717,8 +718,8 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 								t.Fatalf("could not unmarshal config from secret data for replica %d", j)
 							}
 
-							if len(config.StaticEndpoints) > staticEndpointsMaxAddrs {
-								t.Fatalf("expected %d StaticEndpoints in config Secret, but got %d for replica %d. Found Static Endpoints: %v", staticEndpointsMaxAddrs, len(config.StaticEndpoints), j, config.StaticEndpoints)
+							if len(config.StaticEndpoints) > staticendpoints.MaxAddrs {
+								t.Fatalf("expected %d StaticEndpoints in config Secret, but got %d for replica %d. Found Static Endpoints: %v", staticendpoints.MaxAddrs, len(config.StaticEndpoints), j, config.StaticEndpoints)
 							}
 
 							for _, e := range config.StaticEndpoints {
@@ -808,7 +809,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 	}
 }
 
-// TestFindStaticEndpointsStableOrder verifies that findStaticEndpoints returns
+// TestFindStaticEndpointsStableOrder verifies that staticendpoints.FindEndpoints returns
 // the existing endpoint order from the config Secret when the resulting set of
 // addresses is unchanged. nodes.Items from r.List is not order-stable across
 // calls, so without this guarantee the slice can permute on each reconcile,
@@ -835,7 +836,7 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 
 	// Existing config Secret already pins the order [B, A]. The fake client
 	// lists nodes in name order ([node-a, node-b]) so without the stable-order
-	// guard findStaticEndpoints would return [A, B], differing from currAddrs
+	// guard FindEndpoints would return [A, B], differing from currAddrs
 	// and causing a spurious Secret rewrite.
 	currAddrs := []netip.AddrPort{
 		netip.MustParseAddrPort(addrB + ":30001"),
@@ -872,23 +873,22 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 		Build()
 
 	zl, _ := zap.NewDevelopment()
-	r := &ProxyGroupReconciler{Client: fc}
 
-	got, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got, err := staticendpoints.FindEndpoints(t.Context(), fc, staticEndpointsFromConfigSecret(existingSecret, zl.Sugar()), pc, port, zl.Sugar())
 	if err != nil {
-		t.Fatalf("findStaticEndpoints: %v", err)
+		t.Fatalf("FindEndpoints: %v", err)
 	}
 	if !slices.Equal(got, currAddrs) {
-		t.Errorf("findStaticEndpoints returned %v, want %v (order must match currAddrs to avoid reconcile churn)", got, currAddrs)
+		t.Errorf("FindEndpoints returned %v, want %v (order must match currAddrs to avoid reconcile churn)", got, currAddrs)
 	}
 
 	// Repeat to confirm the result is stable across calls.
-	got2, err := r.findStaticEndpoints(t.Context(), existingSecret, pc, port, zl.Sugar())
+	got2, err := staticendpoints.FindEndpoints(t.Context(), fc, staticEndpointsFromConfigSecret(existingSecret, zl.Sugar()), pc, port, zl.Sugar())
 	if err != nil {
-		t.Fatalf("findStaticEndpoints (2nd call): %v", err)
+		t.Fatalf("FindEndpoints (2nd call): %v", err)
 	}
 	if !slices.Equal(got, got2) {
-		t.Errorf("findStaticEndpoints not stable across calls: first=%v second=%v", got, got2)
+		t.Errorf("FindEndpoints not stable across calls: first=%v second=%v", got, got2)
 	}
 }
 
