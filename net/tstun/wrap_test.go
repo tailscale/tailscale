@@ -96,6 +96,28 @@ func tcp4syn(src, dst string, sport, dport uint16) []byte {
 	return both
 }
 
+func tcp6syn(src, dst string, sport, dport uint16) []byte {
+	sip, err := netip.ParseAddr(src)
+	if err != nil {
+		panic(err)
+	}
+	dip, err := netip.ParseAddr(dst)
+	if err != nil {
+		panic(err)
+	}
+	ipHeader := packet.IP6Header{
+		IPProto: ipproto.TCP,
+		Src:     sip,
+		Dst:     dip,
+	}
+	tcpHeader := make([]byte, 20)
+	binary.BigEndian.PutUint16(tcpHeader[0:], sport)
+	binary.BigEndian.PutUint16(tcpHeader[2:], dport)
+	tcpHeader[13] |= 2 // SYN
+
+	return packet.Generate(ipHeader, tcpHeader)
+}
+
 func nets(nets ...string) (ret []netip.Prefix) {
 	for _, s := range nets {
 		if found := strings.Contains(s, "/"); !found {
@@ -263,6 +285,68 @@ func TestReadAndInject(t *testing.T) {
 		if !seen[packet] {
 			t.Errorf("%s not received", packet)
 		}
+	}
+}
+
+// TestReadGSOWithZeroMSS reproduces a netstack-mode fault seen in
+// production (rogitproxy, 2026-09-09): a GSO descriptor with a
+// segmenting GSOType but zero MSS reaches the TUN read path, both as
+// GSOTCPv4 and GSOTCPv6. [stackGSOToTunGSO] passes MSS through as
+// GSOSize without validating it, and wireguard-go's RoutineReadFromTUN
+// treats the resulting read error as terminal — unlike
+// [tun.ErrTooManySegments] it does not drop and continue — so the whole
+// data plane dies while the process stays up.
+func TestReadGSOWithZeroMSS(t *testing.T) {
+	tests := []struct {
+		name    string
+		pkt     []byte
+		gso     stack.GSO
+		wantErr string
+	}{
+		{
+			name: "GSOTCPv4",
+			pkt:  tcp4syn("100.64.0.1", "100.64.0.2", 1234, 80),
+			gso: stack.GSO{
+				Type:     stack.GSOTCPv4,
+				L3HdrLen: 20,
+			},
+			wantErr: "invalid GSOType (GSOTCPv4) with zero GSOSize",
+		},
+		{
+			name: "GSOTCPv6",
+			pkt:  tcp6syn("fd7a:115c:a1e0::1", "fd7a:115c:a1e0::2", 1234, 80),
+			gso: stack.GSO{
+				Type:     stack.GSOTCPv6,
+				L3HdrLen: 40,
+			},
+			wantErr: "invalid GSOType (GSOTCPv6) with zero GSOSize",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			_, tun := newFakeTUN(t.Logf, bus, false)
+			defer tun.Close()
+			tun.Start()
+
+			// stackGSOToTunGSO reads the TCP data offset from the packet
+			// itself, so give it a well-formed 20-byte TCP header.
+			tt.pkt[tt.gso.L3HdrLen+12] = 5 << 4
+			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+				Payload: buffer.MakeWithData(tt.pkt),
+			})
+			packetBuf.NetworkHeader().Consume(int(tt.gso.L3HdrLen))
+			packetBuf.TransportHeader().Consume(20)
+			packetBuf.GSOOptions = tt.gso
+			if err := tun.InjectOutboundPacketBuffer(packetBuf); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := tun.Read(getSinglePacketReadArgs())
+			if got, want := fmt.Sprint(err), tt.wantErr; got != want {
+				t.Fatalf("Read error = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
