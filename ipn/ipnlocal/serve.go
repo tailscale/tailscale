@@ -1002,6 +1002,7 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
 	return rp.httpTransport.Get(func() *http.Transport {
+		// Zero preserves http.Transport's default MaxIdleConnsPerHost value.
 		maxIdleConnsPerHost, _ := envknob.LookupInt("TS_DEBUG_SERVE_MAX_IDLE_CONNS_PER_HOST")
 		dial := rp.lb.dialer.SystemDial
 		if rp.socketPath != "" {
