@@ -22,4 +22,15 @@ func init() {
 		}
 		return false
 	}
+
+	shouldRetryWithoutUDPGSO = func(err error) bool {
+		if serr, ok := errors.AsType[*os.SyscallError](err); ok {
+			// EMSGSIZE is returned when the packet cannot fit the path MTU.
+			// EINVAL is returned by older kernels for the same constrained-path
+			// UDP GSO case. Both errors are recoverable by retrying this batch
+			// without GSO; they should not disable GSO for the whole socket.
+			return serr.Err == unix.EIO || serr.Err == unix.EMSGSIZE || serr.Err == unix.EINVAL
+		}
+		return false
+	}
 }
