@@ -1120,7 +1120,7 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 
 	// The Service host must have the 'service-host' capability, which
 	// is a mapping from the Service name to the Service VIP.
-	cm := host.lb.NetMap().SelfNode.CapMap()
+	cm := host.lb.NetMapNoPeers().SelfNode.CapMap()
 	svcIPMap := make(tailcfg.ServiceIPMappings)
 	if cm.Contains(nodecap.ServiceHost) {
 		parsed := must.Get(tailcfg.UnmarshalNodeCapViewJSON[tailcfg.ServiceIPMappings](cm, nodecap.ServiceHost))
@@ -1137,8 +1137,8 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 
 	// The Service host must be allowed to advertise the Service VIP.
 	subnetRoutes := []netip.Prefix{netip.MustParsePrefix(ip + `/32`)}
-	selfAddresses := host.lb.NetMap().SelfNode.Addresses()
-	for _, existingRoute := range host.lb.NetMap().SelfNode.AllowedIPs().All() {
+	selfAddresses := host.lb.NetMapNoPeers().SelfNode.Addresses()
+	for _, existingRoute := range host.lb.NetMapNoPeers().SelfNode.AllowedIPs().All() {
 		if views.SliceContains(selfAddresses, existingRoute) {
 			continue
 		}
