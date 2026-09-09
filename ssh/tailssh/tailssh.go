@@ -764,6 +764,11 @@ type sshSession struct {
 	// either it exits itself or is terminated
 	exitOnce sync.Once
 
+	// stdinCloseOnce guards closeStdin, which may fire from both the stdin
+	// copier goroutine and killProcessOnContextDone. A double Close on an
+	// *os.File risks closing an unrelated reused fd.
+	stdinCloseOnce sync.Once
+
 	// exitHandled is closed when killProcessOnContextDone finishes writing any
 	// termination message to the client. run() waits on this before calling
 	// ss.Exit to ensure the message is flushed before the SSH channel is torn
@@ -913,6 +918,17 @@ func (ss *sshSession) killProcessOnContextDone() {
 		// implicitly via PTY-master close (session.c:2246), we send it
 		// explicitly because non-PTY sessions use pipes.
 		ss.cmd.Process.Signal(syscall.SIGHUP)
+
+		// SIGHUP above reaches only the direct child. For pty sessions the
+		// user's login shell lives in its own session under the login/su
+		// helper and survives it, keeping the pty slave open; the stdout
+		// copier then never sees EOF, teardown wedges, and the pty master
+		// is never closed - so the shell blocks forever on a pty read that
+		// can never return EOF (see #21150). Closing the pty master makes
+		// the kernel SIGHUP the slave's foreground process group, reaping
+		// the orphaned shell. For non-pty sessions the child instead
+		// observes stdin EOF, matching disconnect semantics.
+		ss.closeStdin()
 	})
 }
 
@@ -1144,7 +1160,7 @@ func (ss *sshSession) run() {
 	var wg sync.WaitGroup
 
 	go func() {
-		defer ss.wrStdin.Close()
+		defer ss.closeStdin()
 		if _, err := io.Copy(rec.writer("i", ss.wrStdin), ss); err != nil {
 			logf("stdin copy: %v", err)
 			ss.cancelCtx(err)
@@ -1726,6 +1742,18 @@ func (ue userVisibleError) SSHTerminationMessage() string { return ue.msg }
 type SSHTerminationError interface {
 	error
 	SSHTerminationMessage() string
+}
+
+// closeStdin closes the session's stdin writer exactly once. For pty
+// sessions, wrStdin is the pty master: closing it is what makes the kernel
+// deliver SIGHUP to the slave's foreground process group, the same
+// mechanism OpenSSH relies on implicitly (session.c).
+func (ss *sshSession) closeStdin() {
+	ss.stdinCloseOnce.Do(func() {
+		if ss.wrStdin != nil {
+			ss.wrStdin.Close()
+		}
+	})
 }
 
 func closeAll(cs ...io.Closer) {
