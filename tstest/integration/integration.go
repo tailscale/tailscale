@@ -1019,7 +1019,12 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill() })
+	// Wait too: Kill only requests termination, and Windows holds the executable
+	// until the process is gone. See #21099.
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Process.Wait()
+	})
 	return &Daemon{
 		Process: cmd.Process,
 		node:    n,
