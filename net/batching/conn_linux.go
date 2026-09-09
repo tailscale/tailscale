@@ -178,32 +178,16 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 		}
 		if i > 0 {
 			msgLen := len(buff)
-			// okToCoalesceWithSentinel ensures we never coalesce if a sentinel
-			// 1-byte payload might be required, but gsoSize (or more specifically
-			// UDP payload length) is also 1. The whole point of appending a sentinel
-			// 1-byte payload is to append a smaller-than-GSO tail.
-			//
-			// This is defensive as a 1-byte payload, at the time of writing
-			// (2026-05-28), is unlikely to occur. The smallest WireGuard
-			// message size is 32 bytes ([device.MinMessageSize]), and the
-			// [disco.Message] header is 62 bytes.
-			//
-			// It's also overly conservative as it checks for msgLen == 1, but a
-			// msgLen of 1 on the tail where gsoSize is greater would also be fine.
 			okToCoalesceWithSentinel := !neverGSOEqualTail || msgLen > len(neverGSOEqualTailSentinelPayload)
 			if msgLen+coalescedLen <= maxPayloadLen &&
 				msgLen <= gsoSize &&
 				dgramCnt < maxDatagramsPerGSOBatch &&
 				!endBatchDueToSmallerTail &&
 				okToCoalesceWithSentinel {
-				// msgs[base].Buffers[0] is set to buff[i] when a new base is set.
-				// This appends a struct iovec element in the underlying struct msghdr (scatter-gather).
 				msgs[base].Buffers = append(msgs[base].Buffers, buff)
 				dgramCnt++
 				coalescedLen += msgLen
 				if msgLen < gsoSize {
-					// A smaller than gsoSize packet on the tail is legal, but
-					// it must end the batch.
 					endBatchDueToSmallerTail = true
 				}
 				if i == len(buffs)-1 {
@@ -217,8 +201,6 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 			maybeAppendSentinelTail()
 			setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
 		}
-		// Reset prior to incrementing base since we are preparing to start a
-		// new potential batch.
 		endBatchDueToSmallerTail = false
 		base++
 		gsoSize = len(buff)
@@ -285,18 +267,17 @@ func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, ge
 		batch.ua.IP = batch.ua.IP[:4]
 	}
 	batch.ua.Port = int(addr.Port())
-	// Load the control knob once per write so a single call sees a consistent
-	// value even if the knob flips concurrently.
 	neverGSOEqualTail := c.neverGSOEqualTail != nil && c.neverGSOEqualTail.Load()
 	var (
 		n       int
 		retried bool
+		disable bool
 	)
 retry:
 	if c.txOffload.Load() && (!neverGSOEqualTail || len(buffs) >= appendSentinelTailBatchSizeThreshold) {
 		n = c.coalesceMessages(batch.ua, geneve, buffs, batch.msgs, offset, neverGSOEqualTail)
 	} else {
-		mutableOffset := offset // don't mutate offset across retries
+		mutableOffset := offset
 		vniIsSet := geneve.VNI.IsSet()
 		if vniIsSet {
 			mutableOffset -= packet.GeneveFixedHeaderLength
@@ -306,9 +287,6 @@ retry:
 				geneve.Encode(buffs[i])
 			}
 			batch.msgs[i].Buffers[0] = buffs[i][mutableOffset:]
-			// Buffers length may be > 1 (scatter-gather) if we passed through
-			// coalesceMessages during a first pass, and landed here as part of
-			// goto retry.
 			batch.msgs[i].Buffers = batch.msgs[i].Buffers[:1]
 			batch.msgs[i].Addr = batch.ua
 			batch.msgs[i].OOB = batch.msgs[i].OOB[:0]
@@ -317,12 +295,15 @@ retry:
 	}
 
 	err := c.writeBatch(batch.msgs[:n])
-	if err != nil && c.txOffload.Load() && neterror.ShouldDisableUDPGSO(err) {
-		c.txOffload.Store(false)
+	if err != nil && c.txOffload.Load() && neterror.ShouldRetryWithoutUDPGSO(err) {
+		disable = neterror.ShouldDisableUDPGSO(err)
+		if disable {
+			c.txOffload.Store(false)
+		}
 		retried = true
 		goto retry
 	}
-	if retried {
+	if retried && disable {
 		return neterror.ErrUDPGSODisabled{OnLaddr: c.pc.LocalAddr().String(), RetryErr: err}
 	}
 	return err
@@ -337,10 +318,6 @@ func (c *linuxBatchingConn) writeBatch(msgs []ipv6.Message) error {
 	for {
 		n, err := c.xpc.WriteBatch(msgs[head:], 0)
 		if err != nil || n == len(msgs[head:]) {
-			// Returning the number of packets written would require
-			// unraveling individual msg len and gso size during a coalesced
-			// write. The top of the call stack disregards partial success,
-			// so keep this simple for now.
 			return err
 		}
 		head += n
@@ -387,9 +364,6 @@ func (c *linuxBatchingConn) splitCoalescedMessages(msgs []ipv6.Message, firstMsg
 			n++
 		}
 		if i != n-1 {
-			// It is legal for bytes to move within msg.Buffers[0] as a result
-			// of splitting, so we only zero the source msg len when it is not
-			// the destination of the last split operation above.
 			msg.N = 0
 		}
 	}
@@ -443,7 +417,7 @@ func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, n int,
 	if n == 0 || rxErr != nil || c.rxqOverflowsMetric == nil {
 		return
 	}
-	tailMsg := msgs[n-1] // we only care about the latest value as it's a cumulative counter
+	tailMsg := msgs[n-1]
 	if tailMsg.NN == 0 {
 		return
 	}
@@ -451,9 +425,6 @@ func (c *linuxBatchingConn) handleRXQOverflowCounter(msgs []ipv6.Message, n int,
 	if err != nil {
 		return
 	}
-	// The counter is always present once nonzero on the kernel side. Compare it
-	// with our previous view, push the delta to the clientmetric, and update
-	// our view.
 	if rxqOverflows == c.rxqOverflows {
 		return
 	}
@@ -470,7 +441,6 @@ func (c *linuxBatchingConn) ReadBatch(msgs []ipv6.Message, flags int) (n int, er
 		c.handleRXQOverflowCounter(msgs, n, err)
 		return n, err
 	}
-	// Read into the tail of msgs, split into the head.
 	readAt := len(msgs) - 2
 	n, err = c.xpc.ReadBatch(msgs[readAt:], 0)
 	if err != nil || n == 0 {
@@ -580,10 +550,6 @@ var (
 	rxqOverflowsMetricsByName map[string]*clientmetric.Metric
 )
 
-// getRXQOverflowsMetric returns a counter-based [*clientmetric.Metric] for the
-// provided name in a thread-safe manner. Callers may pass the same metric name
-// multiple times, which is common across rebinds of the underlying, associated
-// [Conn].
 func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 	if len(name) == 0 {
 		return nil
@@ -610,7 +576,6 @@ func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 // and/or UDP GRO may be disabled via control-plane node attributes.
 func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
-		// Exclude Android.
 		return pconn
 	}
 	if network != "udp4" && network != "udp6" {
@@ -618,12 +583,6 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 	}
 	osVer := hostinfo.GetOSVersion()
 	if strings.HasPrefix(osVer, "2.") {
-		// recvmmsg/sendmmsg were added in 2.6.33, but we support down to
-		// 2.6.32 for old NAS devices. See https://github.com/tailscale/tailscale/issues/6807.
-		// As a cheap heuristic: if the Linux kernel starts with "2", just
-		// consider it too old for mmsg. Nobody who cares about performance runs
-		// such ancient kernels. UDP offload was added much later, so no
-		// upgrades are available.
 		return pconn
 	}
 	uc, ok := pconn.(*net.UDPConn)
@@ -665,26 +624,19 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 		b.neverGSOEqualTail = &knobs.NeverGSOEqualTail
 	}
 	if len(rxqOverflowsMetricName) > 0 && tryEnableRXQOverflowsCounter(uc) {
-		// Don't register the metric unless the socket option has been
-		// successfully set, otherwise we will report a misleading zero value
-		// counter on the wire. This is one reason why we prefer to handle
-		// clientmetric instantiation internally, vs letting callers pass them
-		// to TryUpgradeToConn.
 		b.rxqOverflowsMetric = getRXQOverflowsMetric(rxqOverflowsMetricName)
 	}
 	return b
 }
 
-var controlMessageSize = -1 // bomb if used for allocation before init
+var controlMessageSize = -1
 
 func init() {
 	controlMessageSize =
-		unix.CmsgSpace(2) + // UDP_GRO or UDP_SEGMENT gsoSize (uint16)
-			unix.CmsgSpace(4) // SO_RXQ_OVFL counter (uint32)
+		unix.CmsgSpace(2) +
+			unix.CmsgSpace(4)
 }
 
-// MinControlMessageSize returns the minimum control message size required to
-// support read batching via [Conn.ReadBatch].
 func MinControlMessageSize() int {
 	return controlMessageSize
 }
