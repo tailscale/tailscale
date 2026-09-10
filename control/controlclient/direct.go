@@ -115,9 +115,8 @@ type Direct struct {
 	netinfo                 *tailcfg.NetInfo
 	endpoints               []tailcfg.Endpoint
 	tkaHead                 string
-	lastPingURL             string      // last PingRequest.URL received, for dup suppression
-	connectionHandleForTest string      // sent in MapRequest.ConnectionHandleForTest
-	streamingMapSession     *mapSession // the one streaming mapSession instance
+	lastPingURL             string // last PingRequest.URL received, for dup suppression
+	connectionHandleForTest string // sent in MapRequest.ConnectionHandleForTest
 
 	controlClientID int64 // Random ID used to differentiate clients for consumers of messages.
 }
@@ -929,8 +928,8 @@ func (c *Direct) PollNetMap(ctx context.Context, nu NetmapUpdater) error {
 // update it observed. It is used by tests and [NetmapFromMapResponseForDebug].
 // It will report only the first netmap seen.
 type rememberLastNetmapUpdater struct {
-	last          *netmap.NetworkMap
-	done          chan any
+	last *netmap.NetworkMap
+	done chan any
 }
 
 func (nu *rememberLastNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
@@ -1197,22 +1196,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return nil
 	}
 
-	if isStreaming && c.streamingMapSession != nil {
-		panic("mapSession is already set")
-	}
-
 	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
-	if isStreaming {
-		c.streamingMapSession = sess
-		defer func() {
-			sess.Close()
-			c.mu.Lock()
-			c.streamingMapSession = nil
-			c.mu.Unlock()
-		}()
-	} else {
-		defer sess.Close()
-	}
+	defer sess.Close()
 	sess.cancel = cancel
 	sess.logf = c.logf
 	sess.vlogf = vlogf

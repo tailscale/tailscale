@@ -98,10 +98,6 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
-	cqmu                   sync.Mutex
-	changeQueue            chan *tailcfg.MapResponse
-	changeQueueClosed      bool
-	processQueue           sync.WaitGroup
 
 	// mu protects the peers map.
 	peersMu sync.RWMutex
@@ -128,46 +124,9 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnob
 		cancel:            func() {},
 		onDebug:           func(context.Context, *tailcfg.Debug) error { return nil },
 		onSelfNodeChanged: func(*netmap.NetworkMap) {},
-		changeQueue:       make(chan *tailcfg.MapResponse),
-		changeQueueClosed: false,
 	}
 	ms.sessionAliveCtx, ms.sessionAliveCtxClose = context.WithCancel(context.Background())
-	ms.processQueue.Add(1)
-	go ms.run()
 	return ms
-}
-
-// run starts the mapSession processing a queue of tailcfg.MapResponse one by
-// one until close() is called on the mapSession.
-// When the mapSession is closed, the remaining queue is locked and processed
-// before the mapSession is done processing.
-func (ms *mapSession) run() {
-	defer ms.processQueue.Done()
-
-	for {
-		select {
-		case change := <-ms.changeQueue:
-			ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change)
-		case <-ms.sessionAliveCtx.Done():
-			// Drain any remaining items in the queue before exiting.
-			// Lock the queue during this time to avoid updates through other channels
-			// to be overwritten. This is especially relevant for calls to
-			// updateDiscoForNode.
-			ms.cqmu.Lock()
-			ms.changeQueueClosed = true
-			ms.cqmu.Unlock()
-			for {
-				select {
-				case change := <-ms.changeQueue:
-					ms.handleNonKeepAliveMapResponse(ms.sessionAliveCtx, change)
-				default:
-					// Queue is empty, close it and exit
-					close(ms.changeQueue)
-					return
-				}
-			}
-		}
-	}
 }
 
 // occasionallyPrintSummary logs summary at most once very 5 minutes. The
@@ -190,7 +149,6 @@ func (ms *mapSession) clock() tstime.Clock {
 
 func (ms *mapSession) Close() {
 	ms.sessionAliveCtxClose()
-	ms.processQueue.Wait()
 }
 
 var ErrChangeQueueClosed = errors.New("change queue closed")
@@ -203,44 +161,15 @@ var ErrChangeQueueClosed = errors.New("change queue closed")
 //
 // Debug messages are handled first, followed by pushing the response onto a
 // queue for new updates handled sequentially.
+//
+// TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
+// is [re]factoring progress enough.
 func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
 	if debug := resp.Debug; debug != nil {
 		if err := ms.onDebug(ctx, debug); err != nil {
 			return err
 		}
 	}
-
-	ms.cqmu.Lock()
-
-	if ms.changeQueueClosed {
-		ms.cqmu.Unlock()
-		ms.processQueue.Wait()
-		return ErrChangeQueueClosed
-	}
-
-	defer ms.cqmu.Unlock()
-
-	return ms.addRespToQueue(resp)
-}
-
-func (ms *mapSession) addRespToQueue(resp *tailcfg.MapResponse) error {
-	select {
-	case ms.changeQueue <- resp:
-		return nil
-	case <-ms.sessionAliveCtx.Done():
-		return ErrChangeQueueClosed
-	}
-}
-
-// handleNonKeepAliveMapResponse handles a non-KeepAlive MapResponse (full or
-// incremental).
-//
-// All fields that are valid on a KeepAlive MapResponse have already been
-// handled.
-//
-// TODO(bradfitz): make this handle all fields later. For now (2023-08-20) this
-// is [re]factoring progress enough.
-func (ms *mapSession) handleNonKeepAliveMapResponse(ctx context.Context, resp *tailcfg.MapResponse) error {
 	if DevKnob.StripEndpoints() {
 		for _, p := range resp.Peers {
 			p.Endpoints = nil
