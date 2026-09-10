@@ -282,7 +282,10 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 	return hosts
 }
 
-var osConfigurationReadWarnable = health.Register(&health.Warnable{
+// OSConfigurationReadWarnable is a Warnable set when Tailscale cannot read the
+// DNS configuration the OS was using before Tailscale took over. It is
+// exported so that a test can name it rather than repeat its wording.
+var OSConfigurationReadWarnable = health.Register(&health.Warnable{
 	Code:  "dns-read-os-config-failed",
 	Title: "Failed to read system DNS configuration",
 	Text: func(args health.Args) string {
@@ -436,14 +439,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			// config instead of erroring and leaving the old OS config.
 			// Sandboxed macOS is excluded: it does have a base config
 			// (/etc/resolv.conf), so this error is a real read failure there.
-			m.health.SetHealthy(osConfigurationReadWarnable)
+			m.health.SetHealthy(OSConfigurationReadWarnable)
 			ocfg.MatchDomains = cfg.matchDomains()
 			return rcfg, ocfg, nil
 		}
-		m.health.SetUnhealthy(osConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
+		m.health.SetUnhealthy(OSConfigurationReadWarnable, health.Args{health.ArgError: err.Error()})
 		return resolver.Config{}, OSConfig{}, err
 	}
-	m.health.SetHealthy(osConfigurationReadWarnable)
+	m.health.SetHealthy(OSConfigurationReadWarnable)
 
 	// On iOS only (for now), check if all route names point to resources inside the tailnet.
 	// If so, we can set those names as MatchDomains to enable a split DNS configuration
