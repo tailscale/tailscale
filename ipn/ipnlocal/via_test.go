@@ -5,10 +5,15 @@ package ipnlocal
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
+
+	"go4.org/netipx"
 )
 
 func TestViaTargetAllowed(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		ip   string
 		want bool
@@ -62,5 +67,151 @@ func TestViaTargetAllowed(t *testing.T) {
 		if got := viaTargetAllowed(ip); got != tc.want {
 			t.Errorf("viaTargetAllowed(%v) = %v, want %v", ip, got, tc.want)
 		}
+	}
+}
+
+func TestGenerateViaTargetAdditions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		v        string
+		want     []netipx.IPRange
+		wantErrs []string
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "space",
+			v:    " ",
+		},
+		{
+			name:     "invalid-without-comma",
+			v:        "asdf",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " value \"asdf\": not a range, prefix, or address"},
+		},
+		{
+			name: "empty-with-comma",
+			v:    " , ",
+		},
+		{
+			name: "invalid-with-comma",
+			v:    "asdf,fdsa",
+			wantErrs: []string{
+				"rejecting " + viaAdditionsEnv + " value \"asdf\": not a range, prefix, or address",
+				"rejecting " + viaAdditionsEnv + " value \"fdsa\": not a range, prefix, or address",
+			},
+		},
+		{
+			name: "single-range",
+			v:    "100.0.0.0-100.1.0.0",
+			want: []netipx.IPRange{netipx.MustParseIPRange("100.0.0.0-100.1.0.0")},
+		},
+		{
+			name: "single-prefix",
+			v:    "127.1.0.0/16",
+			want: []netipx.IPRange{netipx.MustParseIPRange("127.1.0.0-127.1.255.255")},
+		},
+		{
+			name: "single-addr",
+			v:    "255.255.255.255",
+			want: []netipx.IPRange{netipx.MustParseIPRange("255.255.255.255-255.255.255.255")},
+		},
+		{
+			name:     "single-ipv6-range",
+			v:        "fe80::-fe80::ffff",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " range fe80::-fe80::ffff: not IPv4"},
+		},
+		{
+			name:     "single-ipv6-prefix",
+			v:        "fe80::/120",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " prefix fe80::/120: not IPv4"},
+		},
+		{
+			name:     "single-ipv6-addr-bracket",
+			v:        "[fe80::]",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " value \"[fe80::]\": not a range, prefix, or address"},
+		},
+		{
+			name:     "single-ipv6-addr-bare",
+			v:        "fe80::",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " address fe80::: not IPv4"},
+		},
+		{
+			name:     "mixed-ipv4-ipv6",
+			v:        "127.1.0.0/16, fd7a:115c:a1e0:b1a:0:4:7f00:0/120",
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " prefix fd7a:115c:a1e0:b1a:0:4:7f00:0/120: not IPv4"},
+			want:     []netipx.IPRange{netipx.MustParseIPRange("127.1.0.0-127.1.255.255")},
+		},
+		{
+			name: "multiple",
+			v:    "192.0.0.5-192.0.0.10,127.1.0.0/16,8.8.8.8",
+			want: []netipx.IPRange{
+				netipx.MustParseIPRange("8.8.8.8-8.8.8.8"),
+				netipx.MustParseIPRange("127.1.0.0-127.1.255.255"),
+				netipx.MustParseIPRange("192.0.0.5-192.0.0.10"),
+			},
+		},
+		{
+			name: "invalid-in-middle",
+			v:    "192.0.0.5-192.0.0.10,asdf,127.1.0.0/16,8.8.8.8",
+			want: []netipx.IPRange{
+				netipx.MustParseIPRange("8.8.8.8-8.8.8.8"),
+				netipx.MustParseIPRange("127.1.0.0-127.1.255.255"),
+				netipx.MustParseIPRange("192.0.0.5-192.0.0.10"),
+			},
+			wantErrs: []string{"rejecting " + viaAdditionsEnv + " value \"asdf\": not a range, prefix, or address"},
+		},
+		{
+			name: "spaces-tabs-newline",
+			v:    "\n\n192.0.0.5-192.0.0.10\n ,\t127.1.0.0/16,      8.8.8.8\t\t",
+			want: []netipx.IPRange{
+				netipx.MustParseIPRange("8.8.8.8-8.8.8.8"),
+				netipx.MustParseIPRange("127.1.0.0-127.1.255.255"),
+				netipx.MustParseIPRange("192.0.0.5-192.0.0.10"),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := generateViaTargetAdditions(tt.v)
+			if err == nil {
+				if len(tt.wantErrs) > 0 {
+					t.Error("returned no errors, want some errors")
+				}
+			} else {
+				var gotErrors []error
+				if unwrapper, ok := err.(interface{ Unwrap() []error }); ok {
+					gotErrors = unwrapper.Unwrap()
+				} else {
+					gotErrors = []error{err}
+				}
+
+				for i, e := range gotErrors {
+					if i >= len(tt.wantErrs) {
+						t.Errorf("error[%d] = %v, want no more errors", i, e)
+						continue
+					}
+					if e.Error() != tt.wantErrs[i] {
+						t.Errorf("error[%d] = %v, want %v", i, e, tt.wantErrs[i])
+					}
+				}
+				if len(gotErrors) < len(tt.wantErrs) {
+					t.Errorf("%d errors found, want %d", len(gotErrors), len(tt.wantErrs))
+				}
+			}
+
+			if got != nil {
+				gotRanges := got.Ranges()
+				if !slices.Equal(tt.want, gotRanges) {
+					t.Errorf("ipset.Ranges() = %v, want %v", gotRanges, tt.want)
+				}
+				return
+			}
+			if tt.want != nil {
+				t.Errorf("nil ipset, want ranges to be %v", tt.want)
+			}
+		})
 	}
 }
