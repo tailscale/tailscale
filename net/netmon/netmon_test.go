@@ -219,6 +219,16 @@ func TestInterfaceIPDisappeared(t *testing.T) {
 	}
 }
 
+func TestHasIPDoesNotMatchSibling(t *testing.T) {
+	target := netip.MustParseAddr("2001:db8::1")
+	state := &State{InterfaceIPs: map[string][]netip.Prefix{
+		"eth0": {netip.PrefixFrom(netip.MustParseAddr("2001:db8::2"), 64)},
+	}}
+	if state.HasIP(target) {
+		t.Fatalf("HasIP(%v) matched a different address in the same subnet", target)
+	}
+}
+
 // tests (*ChangeDelta).RebindRequired
 func TestRebindRequired(t *testing.T) {
 	// s1 must not be nil by definition
