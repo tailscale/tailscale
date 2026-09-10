@@ -418,7 +418,7 @@ func (s *State) HasIP(ip netip.Addr) bool {
 	}
 	for _, pv := range s.InterfaceIPs {
 		for _, p := range pv {
-			if p.Contains(ip) {
+			if p.Addr() == ip {
 				return true
 			}
 		}
