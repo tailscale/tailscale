@@ -180,6 +180,13 @@ func TestDumpHTMLEmpty(t *testing.T) {
 	new(Limiter[string]).DumpHTML(io.Discard, false) // should not panic
 }
 
+func TestZeroValueRejects(t *testing.T) {
+	// The zero value is documented to be a valid limiter that rejects
+	// all requests. With no RefillInterval set it must not panic.
+	var lm Limiter[string]
+	denied(t, &lm, "foo", 3, time.Now())
+}
+
 func allowed(t *testing.T, limiter *Limiter[string], key string, count int, now time.Time) {
 	t.Helper()
 	for i := range count {
