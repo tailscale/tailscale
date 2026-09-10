@@ -597,6 +597,8 @@ type TestNode struct {
 	allowUpdates bool
 	tunMode      bool // TUN rather than userspace networking
 
+	svcStarted bool // whether this node has started its Windows service before
+
 	mu        sync.Mutex
 	onLogLine []func([]byte)
 	lc        *local.Client
@@ -886,6 +888,10 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 		t.Error("tailscaled did not exit within 30s of being asked to stop; killing")
 		d.Process.Kill()
 		<-done
+	}
+	if d.svc != nil {
+		// Uninstall so the node can start a fresh service; its state dir persists.
+		d.svc.uninstallService()
 	}
 }
 

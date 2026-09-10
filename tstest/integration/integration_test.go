@@ -206,9 +206,6 @@ func TestExpectedFeaturesLinked(t *testing.T) {
 }
 
 func TestCollectPanic(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("has a Windows panic-capture race; see #20443")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n := NewTestNode(t, env)
@@ -848,16 +845,14 @@ func TestOneNodeUpInterruptedDeviceApproval(t *testing.T) {
 }
 
 func TestConfigFileAuthKey(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("--config is unsupported by the Windows service; see #20871")
-	}
 	t.Parallel()
 	const authKey = "opensesame"
 	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
 		control.RequireAuthKey = authKey
 	}))
 
-	n1 := NewTestNode(t, env)
+	// A userspace node, because the Windows service can't be passed --config.
+	n1 := NewTestNode(t, env, TUNMode(false))
 	n1.configFile = filepath.Join(n1.dir, "config.json")
 	authKeyFile := filepath.Join(n1.dir, "my-auth-key")
 	must.Do(os.WriteFile(authKeyFile, fmt.Appendf(nil, "%s\n", authKey), 0666))
@@ -1274,9 +1269,6 @@ func TestC2NPingRequest(t *testing.T) {
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("restarting the daemon with preserved state needs harness support; see #20750")
-	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
 	n1 := NewTestNode(t, env)
@@ -1644,9 +1636,6 @@ func TestAutoUpdateDefaults_cap(t *testing.T) { testAutoUpdateDefaults(t, true) 
 // useCap is whether to use NodeAttrDefaultAutoUpdate (as opposed to the old
 // DeprecatedDefaultAutoUpdate top-level MapResponse field).
 func testAutoUpdateDefaults(t *testing.T, useCap bool) {
-	if runtime.GOOS == "windows" {
-		t.Skip("multiple nodes need the userspace-peer harness; see #20711")
-	}
 	t.Cleanup(feature.HookCanAutoUpdate.SetForTest(func() bool { return true }))
 
 	env := NewTestEnv(t)
@@ -2128,9 +2117,6 @@ func TestNetstackUDPLoopback(t *testing.T) {
 }
 
 func TestEncryptStateMigration(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("--encrypt-state is unsupported by the Windows service; see #20872")
-	}
 	if !hostinfo.New().TPM.Present() {
 		t.Skip("TPM not available")
 	}
@@ -2139,7 +2125,8 @@ func TestEncryptStateMigration(t *testing.T) {
 	}
 	tstest.Parallel(t)
 	env := NewTestEnv(t)
-	n := NewTestNode(t, env)
+	// A userspace node, because runNode reads the state file from the test's own dir.
+	n := NewTestNode(t, env, TUNMode(false))
 
 	runNode := func(t *testing.T, wantStateKeys []string) {
 		t.Helper()
