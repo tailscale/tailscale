@@ -18,6 +18,7 @@ import (
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/util/must"
 )
@@ -34,6 +35,27 @@ func TestAvailableEndpointsAlwaysAtLeastTwo(t *testing.T) {
 		if e.URL.Scheme != "http" {
 			t.Errorf("Expected HTTP URL in Endpoint, got HTTPS")
 		}
+	}
+}
+
+func TestAvailableEndpointsOmitDefaultRegions(t *testing.T) {
+	derpMap := &tailcfg.DERPMap{
+		OmitDefaultRegions: true,
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+			1: {
+				RegionID: 1,
+				Nodes: []*tailcfg.DERPNode{
+					{Name: "1a", RegionID: 1, HostName: "derp1.example.com", IPv4: "1.2.3.4", CanPort80: true},
+				},
+			},
+		},
+	}
+	endpoints := availableEndpoints(derpMap, 1, t.Logf, runtime.GOOS)
+	if len(endpoints) != 1 {
+		t.Fatalf("got %d endpoints, want 1 (the custom DERP node only): %v", len(endpoints), endpoints)
+	}
+	if got := endpoints[0].Provider; got != DERPMapPreferred {
+		t.Errorf("got endpoint provider %v, want %v", got, DERPMapPreferred)
 	}
 }
 
