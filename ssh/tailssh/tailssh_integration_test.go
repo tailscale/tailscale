@@ -23,8 +23,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -599,9 +601,27 @@ func TestReverseUnixForwarding(t *testing.T) {
 	}
 	t.Cleanup(func() { ln.Close() })
 
-	// Verify the socket file was created on the server side.
-	if _, err := os.Stat(remoteSocketPath); err != nil {
+	// Verify the socket file was created on the server side and is owned by
+	// the authenticated local user rather than by tailscaled.
+	fi, err := os.Stat(remoteSocketPath)
+	if err != nil {
 		t.Fatalf("reverse forwarded socket not created: %s", err)
+	}
+	lu, err := userLookup("testuser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, err := strconv.ParseUint(lu.Uid, 10, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, err := strconv.ParseUint(lu.Gid, 10, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := fi.Sys().(*syscall.Stat_t)
+	if stat.Uid != uint32(uid) || stat.Gid != uint32(gid) {
+		t.Errorf("socket owner = %d:%d, want %d:%d", stat.Uid, stat.Gid, uid, gid)
 	}
 
 	// Accept a connection from the tunnel (client side) and write data.
