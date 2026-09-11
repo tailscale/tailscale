@@ -840,7 +840,7 @@ func TestServeHTTPProxyHeaders(t *testing.T) {
 func TestServeHTTPProxyGrantHeader(t *testing.T) {
 	b := newTestBackend(t)
 
-	nm := b.NetMap()
+	nm := b.NetMapWithPeers()
 	matches, err := filter.MatchesFromFilterRules([]tailcfg.FilterRule{
 		{
 			SrcIPs: []string{"100.150.151.152"},
