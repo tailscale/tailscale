@@ -138,10 +138,9 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 	}
 
 	// Finally, start mainloop to configure app connector based on information
-	// in the self node's CapMap. We set NotifyInitialNetMap so the first
-	// Notify carries the current self node (now via Notify.SelfChange);
-	// subsequent self changes wake us up too.
-	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates|ipn.NotifyInitialNetMap)
+	// in the self node's CapMap. The initial status carries the current
+	// self node; subsequent self changes arrive via Notify.SelfChange.
+	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates|ipn.NotifyInitialStatus)
 	if err != nil {
 		log.Fatalf("watching IPN bus: %v", err)
 	}
@@ -155,13 +154,16 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 			log.Fatalf("reading IPN bus: %v", err)
 		}
 
-		self := msg.SelfChange
-		if self == nil {
+		var capMap tailcfg.NodeCapMap
+		if self := msg.SelfChange; self != nil {
+			capMap = self.CapMap
+		} else if st := msg.InitialStatus; st != nil && st.Self != nil {
+			capMap = st.Self.CapMap
+		} else {
 			continue
 		}
 		var c appctype.AppConnectorConfig
-		// View() lets us reuse the existing CapView decoder.
-		nmConf, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorConfig](self.View().CapMap(), configCapKey)
+		nmConf, err := tailcfg.UnmarshalNodeCapJSON[appctype.AppConnectorConfig](capMap, configCapKey)
 		if err != nil {
 			log.Printf("failed to read app connector configuration from coordination server: %v", err)
 		} else if len(nmConf) > 0 {
