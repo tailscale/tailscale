@@ -110,6 +110,11 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 			mask:    ObsoleteNotifyRateLimit | NotifyPeerChanges,
 			wantErr: true,
 		},
+		{
+			name:    "obsolete-initial-netmap",
+			mask:    ObsoleteNotifyInitialNetMap,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -154,8 +154,8 @@ type nodeBackend struct {
 	// by mergeUserProfiles as deltas arrive. It parallels the peers map:
 	// netMap.UserProfiles is the frozen snapshot from the last full install,
 	// while this field reflects incremental updates. Readers that need a
-	// snapshot (e.g. the initial-Notify NetMap or [LocalClient.NetMap]
-	// paths) must clone this map.
+	// snapshot (e.g. [LocalBackend.NetMapWithPeers] callers such as the
+	// c2n and debug netmap handlers) must clone this map.
 	userProfiles map[tailcfg.UserID]tailcfg.UserProfileView
 
 	// packetFilterRules and packetFilter are the live packet filter state,

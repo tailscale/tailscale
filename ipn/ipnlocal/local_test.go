@@ -2470,9 +2470,6 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 			if n.SelfChange == nil {
 				return false
 			}
-			if n.NetMap != nil {
-				t.Errorf("NetMap was delivered to NotifyNoNetMap watcher")
-			}
 			if got, want := len(n.PeersChanged), 2; got != want {
 				t.Errorf("PeersChanged len = %d; want %d", got, want)
 				return false
@@ -2508,6 +2505,55 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 	}
 	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
 	nw.check()
+}
+
+// TestWatchNotificationsInitialStatusPeers verifies that the initial
+// status is sized to the subscription: Status.Peer entries are only
+// populated for watchers that subscribed to peer deltas, while
+// Status.Self is populated either way.
+func TestWatchNotificationsInitialStatusPeers(t *testing.T) {
+	tests := []struct {
+		name      string
+		mask      ipn.NotifyWatchOpt
+		wantPeers bool
+	}{
+		{"self-only", ipn.NotifyInitialStatus, false},
+		{"peer-changes", ipn.NotifyInitialStatus | ipn.NotifyPeerChanges, true},
+		{"peer-patches", ipn.NotifyInitialStatus | ipn.NotifyPeerPatches, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestLocalBackend(t)
+			b.currentNode().SetNetMap(&netmap.NetworkMap{
+				SelfNode: (&tailcfg.Node{
+					ID:   1,
+					User: 1,
+					Key:  makeNodeKeyFromID(1),
+				}).View(),
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{ID: 10, User: 1, Key: makeNodeKeyFromID(10)}).View(),
+				},
+			})
+
+			nw := newNotificationWatcher(t, b, ipnauth.Self)
+			nw.watch(tt.mask, []wantedNotification{{
+				name: "initial status",
+				cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+					if n.InitialStatus == nil {
+						return false
+					}
+					if n.InitialStatus.Self == nil {
+						t.Errorf("InitialStatus.Self = nil; want non-nil")
+					}
+					if got := len(n.InitialStatus.Peer); (got > 0) != tt.wantPeers {
+						t.Errorf("len(InitialStatus.Peer) = %d; wantPeers = %v", got, tt.wantPeers)
+					}
+					return true
+				},
+			}})
+			nw.check()
+		})
+	}
 }
 
 type expiryCallbackClock struct {
@@ -5248,6 +5294,11 @@ func TestDriveManageShares(t *testing.T) {
 				0,
 				func() { wg.Done() },
 				func(n *ipn.Notify) bool {
+					if n.DriveShares.IsNil() {
+						// Skip unrelated notifications, such as the
+						// initial SelfChange sent to every watcher.
+						return true
+					}
 					select {
 					case result <- n.DriveShares:
 					default:
