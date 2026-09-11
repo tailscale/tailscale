@@ -49,6 +49,13 @@ const (
 	// [FakeSplitDNSIPv4], not by a route for that domain.
 	SplitDNSBareName = "bare-upstream-only"
 	SplitDNSBareAddr = "10.99.1.2"
+
+	// SplitDNSRefusedName is answered REFUSED by fakeSplitDNS instead of with an
+	// address, for tests that need an upstream rcode rather than a resolution
+	// failure. Nothing in vnet serves DNS over TCP, and TCP to a DNS VIP is
+	// dropped rather than refused, so a forwarder that retries this rcode over
+	// TCP waits on an answer that never comes.
+	SplitDNSRefusedName = "refused." + SplitDNSDomain
 )
 
 // splitDNSZone holds the names served only by fakeSplitDNS.

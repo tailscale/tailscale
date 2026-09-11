@@ -100,6 +100,134 @@ func TestSplitDNSToTailnetResolverUDP(t *testing.T) {
 	}
 }
 
+// TestRefusingUpstreamAnswersPromptly checks the whole daemon DNS path — control
+// pushing a resolver, dns.Manager, the forwarder — against an upstream that
+// answers REFUSED over UDP and accepts TCP without ever answering. The client
+// must get the REFUSED, not a stall that ends in no answer at all.
+//
+// See tailscale/tailscale#20826.
+func TestRefusingUpstreamAnswersPromptly(t *testing.T) {
+	ctx := t.Context()
+	controlURL, control := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	// A host-loopback upstream, so this is the ordinary "system upstream" case
+	// rather than a tailnet address reached over netstack.
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	upstream := netip.MustParseAddrPort(pc.LocalAddr().String())
+	go serveRefusedDNS(pc)
+	// Bound so the forwarder's TCP retry, if it makes one, connects and then
+	// waits rather than failing fast.
+	tcpLn, err := net.Listen("tcp", upstream.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpLn.Close()
+	go func() {
+		for {
+			c, err := tcpLn.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+
+	if !control.AddRawMapResponse(s1.lb.NodeKey(), &tailcfg.MapResponse{
+		DNSConfig: &tailcfg.DNSConfig{
+			Proxied:   true,
+			Resolvers: []*dnstype.Resolver{{Addr: upstream.String()}},
+		},
+	}) {
+		t.Fatal("AddRawMapResponse failed")
+	}
+
+	mgr := s1.Sys().DNSManager.Get()
+	query := mustDNSQuery(t, "refused.example.com.")
+	from := netip.MustParseAddrPort("127.0.0.1:12345")
+
+	// Wait for the pushed resolver to take effect: until it lands there's no
+	// upstream at all and the forwarder synthesizes its own SERVFAIL.
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		resp, err := mgr.Query(ctx, query, "udp", from)
+		if err != nil {
+			return err
+		}
+		if got := rcodeOf(t, resp); got != dns.RCodeRefused {
+			return fmt.Errorf("rcode = %v, want %v", got, dns.RCodeRefused)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the REFUSED upstream to take effect: %v", err)
+	}
+
+	for i := range 3 {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		start := time.Now()
+		resp, err := mgr.Query(ctx, query, "udp", from)
+		elapsed := time.Since(start)
+		cancel()
+		if err != nil {
+			t.Fatalf("query %d: %v", i, err)
+		}
+		if got := rcodeOf(t, resp); got != dns.RCodeRefused {
+			t.Errorf("query %d: rcode = %v, want %v", i, got, dns.RCodeRefused)
+		}
+		t.Logf("query %d: %v", i, elapsed)
+		// The regression returned nothing after the full 10s dnsQueryTimeout.
+		if elapsed >= time.Second {
+			t.Errorf("query %d took %v; the upstream's REFUSED should not wait on TCP", i, elapsed)
+		}
+	}
+}
+
+// serveRefusedDNS answers every query on pc with REFUSED, until pc is closed.
+func serveRefusedDNS(pc net.PacketConn) {
+	buf := make([]byte, 1500)
+	for {
+		n, from, err := pc.ReadFrom(buf)
+		if err != nil {
+			return // listener closed
+		}
+		var p dns.Parser
+		hdr, err := p.Start(buf[:n])
+		if err != nil {
+			continue
+		}
+		q, err := p.Question()
+		if err != nil {
+			continue
+		}
+		hdr.Response = true
+		hdr.RCode = dns.RCodeRefused
+		b := dns.NewBuilder(nil, hdr)
+		b.StartQuestions()
+		b.Question(q)
+		resp, err := b.Finish()
+		if err != nil {
+			continue
+		}
+		pc.WriteTo(resp, from)
+	}
+}
+
+// rcodeOf returns the response code in resp.
+func rcodeOf(tb testing.TB, resp []byte) dns.RCode {
+	tb.Helper()
+	var p dns.Parser
+	h, err := p.Start(resp)
+	if err != nil {
+		tb.Fatalf("parsing response: %v", err)
+	}
+	return h.RCode
+}
+
 // serveOneAnswerDNS answers every A query on pc with addr, until pc is closed.
 func serveOneAnswerDNS(pc net.PacketConn, addr netip.Addr) {
 	buf := make([]byte, 1500)
