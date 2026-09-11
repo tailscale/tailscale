@@ -35,6 +35,7 @@ import (
 
 	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
@@ -1001,6 +1002,8 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
 	return rp.httpTransport.Get(func() *http.Transport {
+		// Zero preserves http.Transport's default MaxIdleConnsPerHost value.
+		maxIdleConnsPerHost, _ := envknob.LookupInt("TS_DEBUG_SERVE_MAX_IDLE_CONNS_PER_HOST")
 		dial := rp.lb.dialer.SystemDial
 		if rp.socketPath != "" {
 			dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -1017,6 +1020,7 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 			// Values for the following parameters have been copied from http.DefaultTransport.
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
