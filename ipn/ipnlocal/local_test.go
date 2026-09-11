@@ -36,6 +36,7 @@ import (
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/drive"
 	"tailscale.com/drive/driveimpl"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	_ "tailscale.com/feature/condregister/portmapper"
 	"tailscale.com/health"
@@ -9910,6 +9911,70 @@ func TestApplyPrefsToHostinfoDedup(t *testing.T) {
 			}
 			if !slices.Equal(tt.wantTags, hi.RequestTags) {
 				t.Errorf("RequestTags mismatch, got %v; want %v", hi.RequestTags, tt.wantTags)
+			}
+		})
+	}
+}
+
+// encryptedTestStore is an [ipn.StateStore] that opts into the
+// [ipn.EncryptedStateStore] marker interface, as an out-of-tree store backed by
+// e.g. the Keychain would.
+type encryptedTestStore struct {
+	ipn.EncryptedStateStore
+	*mem.Store
+}
+
+func TestStateEncrypted(t *testing.T) {
+	tests := []struct {
+		name  string
+		goos  string
+		store ipn.StateStore
+		want  bool
+	}{
+		{
+			name:  "linux-plain-store",
+			goos:  "linux",
+			store: new(mem.Store),
+			want:  false,
+		},
+		{
+			name:  "linux-encrypted-store",
+			goos:  "linux",
+			store: &encryptedTestStore{Store: new(mem.Store)},
+			want:  true,
+		},
+		{
+			// Self-compiled tailscaled with a file store: unchanged.
+			name:  "darwin-plain-store",
+			goos:  "darwin",
+			store: new(mem.Store),
+			want:  false,
+		},
+		{
+			// An embedder (tsnet or a custom client) whose store encrypts at
+			// rest gets to say so, as on every other platform.
+			name:  "darwin-encrypted-store",
+			goos:  "darwin",
+			store: &encryptedTestStore{Store: new(mem.Store)},
+			want:  true,
+		},
+		{
+			name:  "android",
+			goos:  "android",
+			store: new(mem.Store),
+			want:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envknob.SetenvForTest(t, "TS_DEBUG_FAKE_GOOS", tt.goos)
+
+			sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+			sys.Set(tt.store)
+			b := newTestLocalBackendWithSys(t, sys)
+
+			if got := b.stateEncrypted(); got != opt.NewBool(tt.want) {
+				t.Errorf("stateEncrypted() = %v; want %v", got, opt.NewBool(tt.want))
 			}
 		})
 	}
