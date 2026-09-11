@@ -198,6 +198,13 @@ type Server struct {
 	tcpWriteTimeout         time.Duration
 	clock                   tstime.Clock
 
+	// sendQueueRingPool holds released pktQueue ring buffers, each a
+	// *[]pkt of length perClientSendQueueDepth. Most clients are idle
+	// at any given moment, so pooling the rings and allocating them
+	// only while packets are actually queued keeps the standing
+	// per-client memory low; see pktQueue.
+	sendQueueRingPool sync.Pool
+
 	mu       syncs.Mutex // guards the following fields
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
@@ -404,6 +411,10 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	genDroppedCounters()
 
 	s.perClientSendQueueDepth = getPerClientSendQueueDepth()
+	s.sendQueueRingPool.New = func() any {
+		ring := make([]pkt, s.perClientSendQueueDepth)
+		return &ring
+	}
 	return s
 }
 
@@ -1064,8 +1075,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
-		sendQueue:      make(chan pkt, s.perClientSendQueueDepth),
-		discoSendQueue: make(chan pkt, s.perClientSendQueueDepth),
+		sendWake:       make(chan struct{}, 1),
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan peerGoneMsg),
 		canMesh:        s.isMeshPeer(clientInfo),
@@ -1507,41 +1517,33 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	s := c.s
 	dstKey := dst.key
 
-	// Attempt to queue for sending up to 3 times. On each attempt, if
-	// the queue is full, try to drop from queue head to prioritize
-	// fresher packets.
-	sendQueue := dst.sendQueue
+	q := &dst.sendQueue
 	if disco.LooksLikeDiscoWrapper(p.bs) {
-		sendQueue = dst.discoSendQueue
+		q = &dst.discoSendQueue
 	}
-	for attempt := range 3 {
-		select {
-		case <-dst.ctx.Done():
-			s.recordDrop(p.bs, c.key, dstKey, dropReasonGoneDisconnected)
-			dst.debugLogf("sendPkt attempt %d dropped, dst gone", attempt)
-			return nil
-		default:
+	dropped, ok := q.enqueue(s, p)
+	if !ok {
+		// The queue is closed (the client is gone) or has zero
+		// capacity.
+		reason := dropReasonGoneDisconnected
+		if s.perClientSendQueueDepth == 0 {
+			reason = dropReasonQueueTail
 		}
-		select {
-		case sendQueue <- p:
-			dst.debugLogf("sendPkt attempt %d enqueued", attempt)
-			return nil
-		default:
-		}
-
-		select {
-		case pkt := <-sendQueue:
-			s.recordDrop(pkt.bs, c.key, dstKey, dropReasonQueueHead)
-			c.recordQueueTime(pkt.enqueuedAt)
-		default:
-		}
+		s.recordDrop(p.bs, c.key, dstKey, reason)
+		dst.debugLogf("sendPkt dropped, reason=%s", reason)
+		return nil
 	}
-	// Failed to make room for packet. This can happen in a heavily
-	// contended queue with racing writers. Give up and tail-drop in
-	// this case to keep reader unblocked.
-	s.recordDrop(p.bs, c.key, dstKey, dropReasonQueueTail)
-	dst.debugLogf("sendPkt attempt %d dropped, queue full")
-
+	if dropped.bs != nil {
+		// The queue was full; the packet at its head was dropped to
+		// make room, prioritizing fresher packets.
+		s.recordDrop(dropped.bs, c.key, dstKey, dropReasonQueueHead)
+		c.recordQueueTime(dropped.enqueuedAt)
+	}
+	select {
+	case dst.sendWake <- struct{}{}:
+	default: // a wake-up is already pending
+	}
+	dst.debugLogf("sendPkt enqueued")
 	return nil
 }
 
@@ -1855,8 +1857,9 @@ type sclient struct {
 	logf           logger.Logf
 	ctx            context.Context  // closed when connection closes
 	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
-	sendQueue      chan pkt         // packets queued to this client; never closed
-	discoSendQueue chan pkt         // important packets queued to this client; never closed
+	sendQueue      pktQueue         // packets queued to this client
+	discoSendQueue pktQueue         // important packets queued to this client
+	sendWake       chan struct{}    // wakes sendLoop after an enqueue to sendQueue or discoSendQueue; cap 1
 	sendPongCh     chan [8]byte     // pong replies to send to the client; never closed
 	peerGone       chan peerGoneMsg // write request that a peer is not at this server (not used by mesh peers)
 	meshUpdate     chan struct{}    // write request to write peerStateChange
@@ -1946,6 +1949,96 @@ type pkt struct {
 	src key.NodePublic
 }
 
+// pktQueue is a bounded FIFO of packets waiting to be written to a
+// client. Each sclient has two, one for regular packets and one for
+// disco packets.
+//
+// It replaces what was once a buffered channel per queue so that an
+// idle client doesn't pin a channel buffer of perClientSendQueueDepth
+// pkts for the lifetime of its connection: the ring is taken from
+// Server.sendQueueRingPool on first enqueue and returned whenever the
+// queue drains empty. Enqueuers wake the client's sendLoop through
+// sclient.sendWake.
+type pktQueue struct {
+	mu     sync.Mutex
+	ring   *[]pkt // nil while empty; length Server.perClientSendQueueDepth otherwise
+	head   int    // ring index of the oldest queued packet; meaningful only when n > 0
+	n      int    // number of queued packets
+	closed bool   // set by close; enqueues fail once set
+}
+
+// enqueue adds p to the back of the queue, dropping the packet at the
+// head to make room if the queue is full. It reports whether p was
+// enqueued; it is not when the queue is closed (the client is gone) or
+// has zero capacity. When a head drop made room, the dropped packet is
+// returned with a non-nil bs for the caller to record.
+func (q *pktQueue) enqueue(s *Server, p pkt) (dropped pkt, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return pkt{}, false
+	}
+	if q.ring == nil {
+		q.ring = s.sendQueueRingPool.Get().(*[]pkt)
+	}
+	ring := *q.ring
+	if len(ring) == 0 {
+		return pkt{}, false
+	}
+	if q.n == len(ring) {
+		dropped = ring[q.head]
+		q.head = (q.head + 1) % len(ring)
+		q.n--
+	}
+	ring[(q.head+q.n)%len(ring)] = p
+	q.n++
+	return dropped, true
+}
+
+// dequeue removes and returns the packet at the head of the queue,
+// reporting whether one was queued. When the queue drains empty its
+// ring is returned to the pool.
+func (q *pktQueue) dequeue(s *Server) (p pkt, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.n == 0 {
+		return pkt{}, false
+	}
+	ring := *q.ring
+	p = ring[q.head]
+	ring[q.head] = pkt{} // don't retain p.bs past delivery
+	q.head = (q.head + 1) % len(ring)
+	q.n--
+	if q.n == 0 {
+		s.sendQueueRingPool.Put(q.ring)
+		q.ring = nil
+	}
+	return p, true
+}
+
+// close marks the queue closed so that no further packets can be
+// enqueued, calls drop for each packet still queued, and releases the
+// ring. Closing keeps stragglers in sendPkt from enqueueing onto a
+// gone client, which matters because the rings are pooled: a packet
+// enqueued after the drain here would otherwise surface in some other
+// client's queue when the ring is reused.
+func (q *pktQueue) close(s *Server, drop func(pkt)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	if q.ring == nil {
+		return
+	}
+	ring := *q.ring
+	for ; q.n > 0; q.n-- {
+		drop(ring[q.head])
+		ring[q.head] = pkt{}
+		q.head = (q.head + 1) % len(ring)
+	}
+	s.sendQueueRingPool.Put(q.ring)
+	q.ring = nil
+}
+
 // peerGoneMsg is a request to write a peerGone frame to an sclient
 type peerGoneMsg struct {
 	peer   key.NodePublic
@@ -2010,18 +2103,13 @@ func (c *sclient) onSendLoopDone() {
 		c.s.removePeerGoneFromRegionWatcher(peer, h)
 	}
 
-	// Drain the send queue to count dropped packets
-	for {
-		select {
-		case pkt := <-c.sendQueue:
-			c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
-		case pkt := <-c.discoSendQueue:
-			c.s.recordDrop(pkt.bs, pkt.src, c.key, dropReasonGoneDisconnected)
-		default:
-			return
-		}
+	// Close the send queues so nothing more can be enqueued for this
+	// client, and drain them to count dropped packets.
+	drop := func(p pkt) {
+		c.s.recordDrop(p.bs, p.src, c.key, dropReasonGoneDisconnected)
 	}
-
+	c.sendQueue.close(c.s, drop)
+	c.discoSendQueue.close(c.s, drop)
 }
 
 func (c *sclient) sendLoop(ctx context.Context) error {
@@ -2051,14 +2139,6 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case <-c.meshUpdate:
 			werr = c.sendMeshUpdates()
 			continue
-		case msg := <-c.sendQueue:
-			werr = c.sendPacket(msg.src, msg.bs)
-			c.recordQueueTime(msg.enqueuedAt)
-			continue
-		case msg := <-c.discoSendQueue:
-			werr = c.sendPacket(msg.src, msg.bs)
-			c.recordQueueTime(msg.enqueuedAt)
-			continue
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 			continue
@@ -2066,7 +2146,19 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			werr = c.sendKeepAlive()
 			continue
 		default:
-			// Flush any writes from the 3 sends above, or from
+			// The pktQueues aren't selectable, so poll them here,
+			// disco packets first.
+			if msg, ok := c.discoSendQueue.dequeue(c.s); ok {
+				werr = c.sendPacket(msg.src, msg.bs)
+				c.recordQueueTime(msg.enqueuedAt)
+				continue
+			}
+			if msg, ok := c.sendQueue.dequeue(c.s); ok {
+				werr = c.sendPacket(msg.src, msg.bs)
+				c.recordQueueTime(msg.enqueuedAt)
+				continue
+			}
+			// Flush any writes from the sends above, or from
 			// the blocking loop below.
 			if werr = c.bw.Flush(); werr != nil {
 				return werr
@@ -2085,12 +2177,9 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			werr = c.sendPeerGone(msg.peer, msg.reason)
 		case <-c.meshUpdate:
 			werr = c.sendMeshUpdates()
-		case msg := <-c.sendQueue:
-			werr = c.sendPacket(msg.src, msg.bs)
-			c.recordQueueTime(msg.enqueuedAt)
-		case msg := <-c.discoSendQueue:
-			werr = c.sendPacket(msg.src, msg.bs)
-			c.recordQueueTime(msg.enqueuedAt)
+		case <-c.sendWake:
+			// Packets were enqueued; the next loop iteration
+			// dequeues them above.
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 		case <-keepAliveTickChannel:
