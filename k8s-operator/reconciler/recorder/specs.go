@@ -3,7 +3,7 @@
 
 //go:build !plan9
 
-package main
+package recorder
 
 import (
 	"fmt"
@@ -115,7 +115,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 			Name: volumeName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+					SecretName: authSecretName(tsr.Name, replica),
 					Items:      []corev1.KeyToPath{{Key: authKeySecretKey, Path: authKeySecretKey}},
 				},
 			},
@@ -156,8 +156,8 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 	resourceNames := make([]string, 0)
 	for replica := range replicas {
 		resourceNames = append(resourceNames,
-			fmt.Sprintf("%s-%d", tsr.Name, replica),      // State secret.
-			fmt.Sprintf("%s-auth-%d", tsr.Name, replica), // Auth key secret.
+			stateSecretName(tsr.Name, replica), // State secret.
+			authSecretName(tsr.Name, replica),  // Auth key secret.
 		)
 	}
 
@@ -218,7 +218,7 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replic
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       namespace,
-			Name:            fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+			Name:            authSecretName(tsr.Name, replica),
 			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
@@ -231,12 +231,23 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replic
 func tsrStateSecret(tsr *tsapi.Recorder, namespace string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s-%d", tsr.Name, replica),
+			Name:            stateSecretName(tsr.Name, replica),
 			Namespace:       namespace,
 			Labels:          tsrLabels("recorder", tsr.Name, nil),
 			OwnerReferences: tsrOwnerReference(tsr),
 		},
 	}
+}
+
+// stateSecretName returns the name of the tailscaled state Secret for the given Recorder replica. It matches the
+// replica's Pod name, which is what tsrecorder reads from TS_STATE.
+func stateSecretName(tsrName string, replica int32) string {
+	return fmt.Sprintf("%s-%d", tsrName, replica)
+}
+
+// authSecretName returns the name of the Secret holding the auth key for the given Recorder replica.
+func authSecretName(tsrName string, replica int32) string {
+	return fmt.Sprintf("%s-auth-%d", tsrName, replica)
 }
 
 func tsrEnv(tsr *tsapi.Recorder, loginServer string) []corev1.EnvVar {

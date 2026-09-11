@@ -12,7 +12,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,8 +49,6 @@ const (
 
 	defaultNameserverImageRepo = "tailscale/k8s-nameserver"
 	defaultNameserverImageTag  = "stable"
-
-	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
 var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
@@ -161,7 +158,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 		return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, msg)
 	}
 	if err = r.maybeProvision(ctx, &dnsCfg); err != nil {
-		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+		if reconciler.IsOptimisticLockError(err) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
 			return reconcile.Result{}, nil
 		} else {
@@ -246,13 +243,13 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	replicas     int32
-	imageRepo    string
-	imageTag     string
-	labels       map[string]string
-	ownerRefs    []metav1.OwnerReference
-	namespace    string
-	clusterIP    string
+	replicas         int32
+	imageRepo        string
+	imageTag         string
+	labels           map[string]string
+	ownerRefs        []metav1.OwnerReference
+	namespace        string
+	clusterIP        string
 	tolerations      []corev1.Toleration
 	affinity         *corev1.Affinity
 	nodeSelector     map[string]string
