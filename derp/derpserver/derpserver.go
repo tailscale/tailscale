@@ -51,6 +51,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -1300,7 +1301,7 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 
 	return c.sendPkt(dst, pkt{
 		bs:         contents,
-		enqueuedAt: c.s.clock.Now(),
+		enqueuedAt: mono.Now(),
 		src:        srcKey,
 	})
 }
@@ -1375,7 +1376,7 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 
 	p := pkt{
 		bs:         contents,
-		enqueuedAt: c.s.clock.Now(),
+		enqueuedAt: mono.Now(),
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
@@ -1936,7 +1937,7 @@ type peerConnState struct {
 type pkt struct {
 	// enqueuedAt is when a packet was put onto a queue before it was sent,
 	// and is used for reporting metrics on the duration of packets in the queue.
-	enqueuedAt time.Time
+	enqueuedAt mono.Time
 
 	// bs is the data packet bytes.
 	// The memory is owned by pkt.
@@ -1985,8 +1986,8 @@ func expMovingAverage(prev, newValue, alpha float64) float64 {
 }
 
 // recordQueueTime updates the average queue duration metric after a packet has been sent.
-func (c *sclient) recordQueueTime(enqueuedAt time.Time) {
-	elapsed := float64(c.s.clock.Since(enqueuedAt).Milliseconds())
+func (c *sclient) recordQueueTime(enqueuedAt mono.Time) {
+	elapsed := float64(mono.Since(enqueuedAt).Milliseconds())
 	for {
 		old := atomic.LoadUint64(c.s.avgQueueDuration)
 		newAvg := expMovingAverage(math.Float64frombits(old), elapsed, 0.1)
