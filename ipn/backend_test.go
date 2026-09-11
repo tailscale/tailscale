@@ -93,11 +93,7 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "legacy-rate-limit-only",
-			mask: NotifyRateLimit,
-		},
-		{
-			name: "peer-changes-without-rate-limit",
+			name: "peer-changes",
 			mask: NotifyPeerChanges | NotifyPeerPatches | NotifyNoNetMap | NotifyInitialStatus,
 		},
 		{
@@ -105,23 +101,13 @@ func TestValidateNotifyWatchOpt(t *testing.T) {
 			mask: NotifyInProcessNoDisconnect | NotifyPeerChanges,
 		},
 		{
-			name:    "rate-limit-with-peer-changes",
-			mask:    NotifyRateLimit | NotifyPeerChanges,
+			name:    "removed-rate-limit-only",
+			mask:    NotifyRateLimitRemoved,
 			wantErr: true,
 		},
 		{
-			name:    "rate-limit-with-peer-patches",
-			mask:    NotifyRateLimit | NotifyPeerPatches,
-			wantErr: true,
-		},
-		{
-			name:    "rate-limit-with-no-netmap",
-			mask:    NotifyRateLimit | NotifyNoNetMap,
-			wantErr: true,
-		},
-		{
-			name:    "rate-limit-with-initial-status",
-			mask:    NotifyRateLimit | NotifyInitialStatus,
+			name:    "removed-rate-limit-with-peer-changes",
+			mask:    NotifyRateLimitRemoved | NotifyPeerChanges,
 			wantErr: true,
 		},
 	}
