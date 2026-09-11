@@ -51,6 +51,12 @@ var (
 	// metricPortalURLFound counts detections where we learned a login URL to
 	// show the user, as opposed to only being able to tell them a portal exists.
 	metricPortalURLFound = clientmetric.NewCounter("captiveportal_portal_url_found")
+
+	// metricExitNodeSuspended counts the times we took a user's exit node out
+	// of the way to reach a login page. It is the one thing this package does
+	// that the user did not ask for at the moment it happens, so it is worth
+	// being able to see how often it happens in the field.
+	metricExitNodeSuspended = clientmetric.NewCounter("captiveportal_exit_node_suspended")
 )
 
 // metricSignal returns the counter for a detection signal, registering it on
@@ -102,11 +108,13 @@ var captivePortalRetrySchedule = []time.Duration{
 
 // captivePortalWarnable is a Warnable which is set to an unhealthy state when a captive portal is detected.
 //
-// It covers the two cases where the user can get themselves logged in: no exit
-// node is in the way, or one is but the login page lives on the local network,
-// so we can offer to take the LAN back out of the tunnel. Those are told apart
-// by [health.ArgExitNodeBlocksPortal]. The third case, where the login page is
-// somewhere we cannot reach at all, is [captivePortalBlockedWarnable].
+// It covers every case where the user can get themselves logged in: no exit
+// node is in the way; one is, but the login page lives on the local network, so
+// we can offer to take the LAN back out of the tunnel
+// ([health.ArgExitNodeBlocksPortal]); or one is and we have stood it down
+// ourselves ([health.ArgExitNodeSuspended]). The remaining case, where the login
+// page is somewhere only the user can make reachable, is
+// [captivePortalBlockedWarnable].
 //
 // We name the URL here, but GUI's should special-case this warnable and provide
 // an easy way for the user to open the login page directly and temporaily
@@ -118,6 +126,15 @@ var captivePortalWarnable = health.Register(&health.Warnable{
 	Severity: health.SeverityHigh,
 	Text: func(args health.Args) string {
 		u := args[health.ArgURL]
+		if args[health.ArgExitNodeSuspended] != "" {
+			// Worth saying out loud: the user asked for their traffic to go via
+			// an exit node and for the moment it isn't, which they would rather
+			// hear from us than discover.
+			if u != "" {
+				return fmt.Sprintf("This network requires you to log in at %s. Your exit node is paused for a few minutes so that you can.", u)
+			}
+			return "This network requires you to log in using your web browser. Your exit node is paused for a few minutes so that you can."
+		}
 		if args[health.ArgExitNodeBlocksPortal] != "" {
 			// Naming the URL on its own would be actively misleading here: the
 			// exit node holds the route to it, so the page will not load until
@@ -223,6 +240,23 @@ type Extension struct {
 	// lanBypassTimer expires lanBypassUntil, or nil if none is active.
 	lanBypassTimer tstime.TimerController
 
+	// exitNodeSuspendUntil is when the exit node, taken out of the way so that
+	// an off-LAN login page can be reached, comes back. It is the zero time
+	// when the exit node is in force as usual. While it is in the future,
+	// [Extension.exitNodeSuspended] reports true and LocalBackend configures
+	// the node as though no exit node were selected.
+	exitNodeSuspendUntil time.Time
+
+	// exitNodeSuspendTimer expires exitNodeSuspendUntil, or nil if the exit
+	// node is not suspended.
+	exitNodeSuspendTimer tstime.TimerController
+
+	// exitNodeSuspendSpent records that this portal has already had its one
+	// suspension. It is cleared only when the portal warnings come down, so a
+	// portal the user never logs in to costs them their exit node once, rather
+	// than every time detection runs.
+	exitNodeSuspendSpent bool
+
 	// lastPortalResult is the most recent result that found a portal, kept so
 	// that [Extension.refreshPortalWarning] can restate the warning when what
 	// we can reach changes. Nil until a portal is found.
@@ -237,6 +271,16 @@ type Extension struct {
 	// [Extension.exitNodeBlocksLAN]. It is set by tests, which have no
 	// LocalBackend to read prefs from.
 	exitNodeBlocksLANFn func() bool
+
+	// usingExitNodeFn, if non-nil, replaces the real prefs check in
+	// [Extension.usingExitNode]. It is set by tests, which have no
+	// LocalBackend to read prefs from.
+	usingExitNodeFn func() bool
+
+	// autoDisableExitNodeFn, if non-nil, replaces the real prefs check in
+	// [Extension.autoDisableExitNode]. It is set by tests, which have no
+	// LocalBackend to read prefs from.
+	autoDisableExitNodeFn func() bool
 
 	// reconfigFn, if non-nil, replaces the call that asks LocalBackend to
 	// reprogram routes. It is set by tests, which have no [ipnext.Host].
@@ -368,15 +412,183 @@ func (e *Extension) exitNodeBlocksLAN() bool {
 	if e.exitNodeBlocksLANFn != nil {
 		return e.exitNodeBlocksLANFn()
 	}
-	if e.host == nil {
+	prefs, ok := e.prefs()
+	if !ok {
 		return false
+	}
+	return e.usingExitNode() && !prefs.ExitNodeAllowLANAccess()
+}
+
+// usingExitNode reports whether an exit node is selected, which is what puts
+// the default route — and so anything on the public Internet, login pages
+// included — on the far side of the tunnel.
+//
+// It does not matter here whether the exit node resolves to a peer: an
+// unresolved selection blackholes internet traffic instead of carrying it, so
+// the login page is just as unreachable either way.
+func (e *Extension) usingExitNode() bool {
+	if e.usingExitNodeFn != nil {
+		return e.usingExitNodeFn()
+	}
+	prefs, ok := e.prefs()
+	if !ok {
+		return false
+	}
+	return prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid()
+}
+
+// autoDisableExitNode reports whether the user has agreed that we may take the
+// exit node out of the way to reach a login page it is blocking. See
+// [ipn.Prefs.ExitNodeAutoDisableForCaptivePortal].
+func (e *Extension) autoDisableExitNode() bool {
+	if e.autoDisableExitNodeFn != nil {
+		return e.autoDisableExitNodeFn()
+	}
+	prefs, ok := e.prefs()
+	if !ok {
+		return false
+	}
+	return prefs.ExitNodeAutoDisableForCaptivePortal()
+}
+
+// prefs returns the current profile's preferences, and whether there are any to
+// read. There are none before [Extension.Init], and in tests.
+func (e *Extension) prefs() (ipn.PrefsView, bool) {
+	if e.host == nil {
+		return ipn.PrefsView{}, false
 	}
 	prefs := e.host.Profiles().CurrentPrefs()
-	if !prefs.Valid() {
+	return prefs, prefs.Valid()
+}
+
+// maxExitNodeSuspend is the longest the exit node is left out of the way.
+//
+// It is short, and shorter than [maxLANBypass], because this is the more
+// disruptive of the two remedies: the LAN exception only opens up the local
+// network, while this puts everything the user asked to tunnel back out onto
+// the network they are trying to log in to. It has to last long enough for
+// someone standing at a login page to work through it, and no longer.
+const maxExitNodeSuspend = 3 * time.Minute
+
+// exitNodeSuspended reports whether the exit node is currently being held out
+// of the network configuration.
+//
+// It is registered as [ipnext.Hooks.ExitNodeSuspended] and so is called with
+// LocalBackend's mutex held. It must not call back into LocalBackend.
+//
+// As with [Extension.lanBypassActive], the deadline is checked here rather than
+// trusted to the timer alone, so that a timer which failed to fire cannot stand
+// the user's exit node down indefinitely.
+func (e *Extension) exitNodeSuspended() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.exitNodeSuspendedLocked()
+}
+
+func (e *Extension) exitNodeSuspendedLocked() bool {
+	return !e.exitNodeSuspendUntil.IsZero() && e.clock.Now().Before(e.exitNodeSuspendUntil)
+}
+
+// suspendExitNode takes the exit node out of the network configuration for
+// [maxExitNodeSuspend], so that a login page it is holding the route to can be
+// reached, and reports whether it did.
+//
+// It declines if the exit node is already suspended, or if this portal has
+// already had its one suspension; see [Extension.exitNodeSuspendSpent]. Callers
+// are responsible for deciding that a suspension is warranted at all; see
+// [Extension.maybeSuspendExitNode].
+//
+// It does not touch the warning, because the only caller raises it immediately
+// afterwards with the suspension already in effect.
+func (e *Extension) suspendExitNode() bool {
+	e.mu.Lock()
+	if e.exitNodeSuspendedLocked() || e.exitNodeSuspendSpent {
+		e.mu.Unlock()
 		return false
 	}
-	usingExitNode := prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid()
-	return usingExitNode && !prefs.ExitNodeAllowLANAccess()
+	e.exitNodeSuspendSpent = true
+	e.exitNodeSuspendUntil = e.clock.Now().Add(maxExitNodeSuspend)
+	var timer tstime.TimerController
+	timer = e.clock.AfterFunc(maxExitNodeSuspend, func() {
+		e.mu.Lock()
+		if e.exitNodeSuspendTimer != timer {
+			// We're either not the most recent timer, or we lost the race with
+			// a Stop. Either way someone else owns the state now.
+			e.mu.Unlock()
+			return
+		}
+		e.exitNodeSuspendTimer = nil
+		e.exitNodeSuspendUntil = time.Time{}
+		e.mu.Unlock()
+
+		// Deliberately leaves exitNodeSuspendSpent set: the login page was
+		// reachable for three minutes and the portal is still there, so either
+		// the user isn't at the keyboard or this isn't going to work. Taking
+		// their exit node away again, over and over, would not help.
+		e.logf("captiveportal: restoring the exit node after %v", maxExitNodeSuspend)
+		e.reconfig()
+		e.refreshPortalWarning()
+	})
+	e.exitNodeSuspendTimer = timer
+	e.mu.Unlock()
+
+	e.logf("captiveportal: suspending the exit node for up to %v to reach a login page it is blocking", maxExitNodeSuspend)
+	e.reconfig()
+	return true
+}
+
+// resumeExitNode puts the exit node back. It is a no-op if it was never taken
+// away, and is safe to call repeatedly.
+//
+// It also clears the record of having suspended, so a portal encountered later
+// gets a suspension of its own.
+func (e *Extension) resumeExitNode() {
+	e.mu.Lock()
+	if e.exitNodeSuspendUntil.IsZero() && e.exitNodeSuspendTimer == nil && !e.exitNodeSuspendSpent {
+		e.mu.Unlock()
+		return
+	}
+	wasSuspended := e.exitNodeSuspendedLocked()
+	if e.exitNodeSuspendTimer != nil {
+		e.exitNodeSuspendTimer.Stop()
+		e.exitNodeSuspendTimer = nil
+	}
+	e.exitNodeSuspendUntil = time.Time{}
+	e.exitNodeSuspendSpent = false
+	e.mu.Unlock()
+
+	if !wasSuspended {
+		return
+	}
+	e.logf("captiveportal: restoring the exit node")
+	e.reconfig()
+	e.refreshPortalWarning()
+}
+
+// maybeSuspendExitNode takes the exit node out of the way if that is what
+// stands between the user and the login page, and they have said we may.
+//
+// The conditions are the same ones that decide on
+// [captivePortalBlockedWarnable]: an exit node is in use and the login page is
+// known to be somewhere other than the local network. A page we could not
+// locate is not enough — see [Extension.setPortalWarning] for why unknown
+// counts as on-LAN — and neither is one we know to be on the LAN, which the
+// far less disruptive local network exception can reach instead.
+func (e *Extension) maybeSuspendExitNode(res captivedetection.Result) {
+	if !e.usingExitNode() {
+		return
+	}
+	if onLAN, known := res.PortalURLIsLocal.Get(); !known || onLAN {
+		return
+	}
+	if !e.autoDisableExitNode() {
+		// The user hasn't agreed to this, so all we can do is tell them their
+		// exit node is in the way; see [captivePortalBlockedWarnable].
+		return
+	}
+	if e.suspendExitNode() {
+		metricExitNodeSuspended.Add(1)
+	}
 }
 
 // detect runs one detection attempt and reports the verdict.
@@ -410,6 +622,7 @@ func (e *Extension) Init(h ipnext.Host) error {
 	e.host = h
 	h.Hooks().BackendStateChange.Add(e.onBackendStateChange)
 	h.Hooks().ExitNodeAllowLANOverride.Set(e.lanBypassActive)
+	h.Hooks().ExitNodeSuspended.Set(e.exitNodeSuspended)
 	e.ec = e.sb.Sys().Bus.Get().Client("captiveportal")
 	eventbus.SubscribeFunc(e.ec, e.onHealthChange)
 	eventbus.SubscribeFunc(e.ec, e.onLinkChange)
@@ -422,6 +635,15 @@ func (e *Extension) Shutdown() error {
 		e.captiveCancel()
 		e.captiveCancel = nil
 	}
+	// Stop holding the exit node down. The hook we registered outlives us, and
+	// on a profile switch the next profile would otherwise spend the rest of
+	// this deadline without the exit node it asked for.
+	if e.exitNodeSuspendTimer != nil {
+		e.exitNodeSuspendTimer.Stop()
+		e.exitNodeSuspendTimer = nil
+	}
+	e.exitNodeSuspendUntil = time.Time{}
+	e.exitNodeSuspendSpent = false
 	e.mu.Unlock()
 	if e.ec != nil {
 		e.ec.Close()
@@ -759,6 +981,9 @@ func (e *Extension) applyResult(res captivedetection.Result) {
 		e.mu.Lock()
 		e.lastPortalResult = &res
 		e.mu.Unlock()
+		// Before raising the warning, so that it describes the situation the
+		// user is actually in rather than the one they were in a moment ago.
+		e.maybeSuspendExitNode(res)
 		e.setPortalWarning(res)
 	case captivedetection.VerdictNoPortal:
 		e.clearPortalWarnings()
@@ -771,11 +996,18 @@ func (e *Extension) applyResult(res captivedetection.Result) {
 // situation, and clears the others so that only one portal warning is ever up.
 //
 // Which one depends on whether the user can act on it at all. With no exit node
-// in the way, or with one that already permits local network access, the login
-// page is simply reachable. With an exit node swallowing local traffic, it
-// depends on where the login page lives: on the local network we can offer to
-// open that up, while out on the Internet we cannot help, because the default
-// route stays pointed at the exit node either way.
+// in the way the login page is simply reachable. With one, it depends on where
+// the login page lives.
+//
+// A page out on the Internet sits behind the default route, which the exit node
+// holds whatever ExitNodeAllowLANAccess says, so no amount of local network
+// access reaches it. Either we have taken the exit node out of the way
+// ourselves, in which case the page is reachable now and the warning just names
+// it, or we have not and the only remedy left is the user's to apply. Both
+// carry [health.ArgExitNodeSuspect] so a GUI can point at the exit node.
+//
+// A page on the local network is reachable as soon as the LAN comes out of the
+// tunnel, which is what [health.ArgExitNodeBlocksPortal] offers.
 //
 // A login page we could not locate counts as local. That is the recoverable way
 // to be wrong: if opening the local network turns out not to help, the user can
@@ -788,10 +1020,17 @@ func (e *Extension) setPortalWarning(res captivedetection.Result) {
 	}
 
 	w := captivePortalWarnable
-	if e.exitNodeBlocksLAN() && !e.lanBypassActive() {
-		if onLAN, known := res.PortalURLIsLocal.Get(); known && !onLAN {
-			w = captivePortalBlockedWarnable
-		} else {
+	if e.usingExitNode() {
+		onLAN, known := res.PortalURLIsLocal.Get()
+		switch {
+		case known && !onLAN:
+			args[health.ArgExitNodeSuspect] = "true"
+			if e.exitNodeSuspended() {
+				args[health.ArgExitNodeSuspended] = "true"
+			} else {
+				w = captivePortalBlockedWarnable
+			}
+		case e.exitNodeBlocksLAN() && !e.lanBypassActive():
 			args[health.ArgExitNodeBlocksPortal] = "true"
 		}
 	}
@@ -837,16 +1076,18 @@ func (e *Extension) portalWarningUp() bool {
 	return false
 }
 
-// clearPortalWarnings lowers every captive portal warning and revokes any
-// temporary local network access granted to get past one.
+// clearPortalWarnings lowers every captive portal warning and undoes whatever
+// was temporarily given up to get past the portal: the local network exception,
+// and the exit node's turn standing aside.
 //
-// This is the only thing that lowers the warning, and revoking here is what
-// implements "the exception lasts until the portal is actioned": a detection
-// run coming back clean is exactly the evidence that the user got themselves
-// logged in and no longer needs the local network opened up.
+// This is the only thing that lowers the warning, and undoing them here is what
+// implements "until the portal is actioned": a detection run coming back clean
+// is exactly the evidence that the user got themselves logged in, and so that
+// their network can go back to the shape they asked for.
 func (e *Extension) clearPortalWarnings() {
 	for _, w := range portalWarnables {
 		e.health.SetHealthy(w)
 	}
 	e.revokeLANBypass()
+	e.resumeExitNode()
 }

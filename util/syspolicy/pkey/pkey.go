@@ -79,6 +79,17 @@ const (
 	EnableTailscaleDNS        Key = "UseTailscaleDNSSettings"
 	EnableTailscaleSubnets    Key = "UseTailscaleSubnets"
 
+	// ExitNodeAutoDisableForCaptivePortal controls whether the client may
+	// suspend the exit node for a few minutes so that the user can reach a
+	// captive portal login page the exit node is holding the route to. See
+	// [tailscale.com/ipn.Prefs.ExitNodeAutoDisableForCaptivePortal].
+	//
+	// It is "user-decides" by default, and the preference it controls defaults
+	// to off, so an administrator who wants this behavior has to ask for it.
+	// Setting it to "never" is how an administrator keeps traffic in the tunnel
+	// even at the cost of the user not being able to log in to the network.
+	ExitNodeAutoDisableForCaptivePortal Key = "ExitNodeAutoDisableForCaptivePortal"
+
 	// EnableDNSRegistration is a string value that can be set to "always", "never"
 	// or "user-decides". It controls whether DNS registration and dynamic DNS
 	// updates are enabled for the Tailscale interface. For historical reasons

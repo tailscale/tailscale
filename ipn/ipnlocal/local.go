@@ -2235,6 +2235,11 @@ var preferencePolicies = []preferencePolicyInfo{
 		set: func(p *ipn.Prefs, v bool) { p.ExitNodeAllowLANAccess = v },
 	},
 	{
+		key: pkey.ExitNodeAutoDisableForCaptivePortal,
+		get: func(p ipn.PrefsView) bool { return p.ExitNodeAutoDisableForCaptivePortal() },
+		set: func(p *ipn.Prefs, v bool) { p.ExitNodeAutoDisableForCaptivePortal = v },
+	},
+	{
 		key: pkey.EnableTailscaleDNS,
 		get: func(p ipn.PrefsView) bool { return p.CorpDNS() },
 		set: func(p *ipn.Prefs, v bool) { p.CorpDNS = v },
@@ -6112,6 +6117,44 @@ func (b *LocalBackend) readvertiseAppConnectorRoutes() {
 	}
 }
 
+// withSuspendedExitNodeLocked returns prefs as the network should be configured
+// right now, which is with the exit node taken out if an extension has asked for
+// it to stand aside; see [ipnext.Hooks.ExitNodeSuspended]. It returns prefs
+// unchanged in the usual case, where nothing has.
+//
+// The result is for programming the network only, and is deliberately not what
+// anything else sees: the stored preferences still name the exit node, so the
+// user's selection survives, is still reported to clients, and takes effect
+// again on the next reconfigure after the suspension ends.
+//
+// Clearing the selection here is what makes one hook enough. Everything that
+// puts an exit node into effect reads it from these prefs — the default routes
+// and the local network's prefixes in [LocalBackend.routerConfigLocked], the
+// exit node's DoH resolver in dnsConfigForNetmap, the exit routes and the peer's
+// allowed IPs in the route manager — so all of it steps aside together, and
+// none of it has to know that suspending is a thing.
+//
+// b.mu must be held.
+func (b *LocalBackend) withSuspendedExitNodeLocked(prefs ipn.PrefsView) ipn.PrefsView {
+	if !buildfeatures.HasUseExitNode {
+		return prefs
+	}
+	syncs.RequiresMutex(&b.mu)
+	if prefs.ExitNodeID() == "" && !prefs.ExitNodeIP().IsValid() && !prefs.AutoExitNode().IsSet() {
+		return prefs
+	}
+	suspended, ok := b.extHost.Hooks().ExitNodeSuspended.GetOk()
+	if !ok || !suspended() {
+		return prefs
+	}
+	b.logf("authReconfig: exit node suspended; configuring as though none were selected")
+	p := prefs.AsStruct()
+	p.ExitNodeID = ""
+	p.ExitNodeIP = netip.Addr{}
+	p.AutoExitNode = ""
+	return p.View()
+}
+
 // authReconfig pushes a new configuration into wgengine, if engine
 // updates are not currently blocked, based on the cached netmap and
 // user prefs. Callers may experience an early return with no work
@@ -6162,6 +6205,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	}
 
 	prefs := b.pm.CurrentPrefs()
+	prefs = b.withSuspendedExitNodeLocked(prefs)
 	hasPAC := b.interfaceState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(nodecap.DisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())

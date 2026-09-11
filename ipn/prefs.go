@@ -129,6 +129,21 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitNodeAutoDisableForCaptivePortal indicates whether the exit node may be
+	// suspended automatically, for a few minutes, to let the user reach a
+	// captive portal login page that the exit node is holding the route to.
+	//
+	// It defaults to false, and is meant to stay that way unless the user says
+	// otherwise: suspending the exit node sends traffic out the local network
+	// that the user asked to be tunneled, which is a trade they have to make
+	// knowingly. When it is false we can only tell the user their exit node is
+	// in the way and leave turning it off to them.
+	//
+	// The exit node selection itself is never modified. It is withheld while
+	// the suspension lasts and restored as soon as the portal is dealt with, or
+	// after a few minutes, whichever comes first.
+	ExitNodeAutoDisableForCaptivePortal bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists. It is the internal name for
 	// the "tailscale set --accept-dns=" flag.
@@ -356,40 +371,41 @@ type AppConnectorPrefs struct {
 type MaskedPrefs struct {
 	Prefs
 
-	ControlURLSet                 bool                `json:",omitempty"`
-	RouteAllSet                   bool                `json:",omitempty"`
-	ExitNodeIDSet                 bool                `json:",omitempty"`
-	ExitNodeIPSet                 bool                `json:",omitempty"`
-	AutoExitNodeSet               bool                `json:",omitempty"`
-	InternalExitNodePriorSet      bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
-	ExitNodeAllowLANAccessSet     bool                `json:",omitempty"`
-	CorpDNSSet                    bool                `json:",omitempty"`
-	RunSSHSet                     bool                `json:",omitempty"`
-	RunWebClientSet               bool                `json:",omitempty"`
-	WantRunningSet                bool                `json:",omitempty"`
-	LoggedOutSet                  bool                `json:",omitempty"`
-	ShieldsUpSet                  bool                `json:",omitempty"`
-	AdvertiseTagsSet              bool                `json:",omitempty"`
-	HostnameSet                   bool                `json:",omitempty"`
-	NotepadURLsSet                bool                `json:",omitempty"`
-	ForceDaemonSet                bool                `json:",omitempty"`
-	EggSet                        bool                `json:",omitempty"`
-	AdvertiseRoutesSet            bool                `json:",omitempty"`
-	AdvertiseServicesSet          bool                `json:",omitempty"`
-	SyncSet                       bool                `json:",omitzero"`
-	NoSNATSet                     bool                `json:",omitempty"`
-	NoStatefulFilteringSet        bool                `json:",omitempty"`
-	NetfilterModeSet              bool                `json:",omitempty"`
-	OperatorUserSet               bool                `json:",omitempty"`
-	ProfileNameSet                bool                `json:",omitempty"`
-	AutoUpdateSet                 AutoUpdatePrefsMask `json:",omitzero"`
-	AppConnectorSet               bool                `json:",omitempty"`
-	PostureCheckingSet            bool                `json:",omitempty"`
-	NetfilterKindSet              bool                `json:",omitempty"`
-	RemoteConfigSet               bool                `json:",omitempty"`
-	DriveSharesSet                bool                `json:",omitempty"`
-	RelayServerPortSet            bool                `json:",omitempty"`
-	RelayServerStaticEndpointsSet bool                `json:",omitzero"`
+	ControlURLSet                          bool                `json:",omitempty"`
+	RouteAllSet                            bool                `json:",omitempty"`
+	ExitNodeIDSet                          bool                `json:",omitempty"`
+	ExitNodeIPSet                          bool                `json:",omitempty"`
+	AutoExitNodeSet                        bool                `json:",omitempty"`
+	InternalExitNodePriorSet               bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
+	ExitNodeAllowLANAccessSet              bool                `json:",omitempty"`
+	ExitNodeAutoDisableForCaptivePortalSet bool                `json:",omitempty"`
+	CorpDNSSet                             bool                `json:",omitempty"`
+	RunSSHSet                              bool                `json:",omitempty"`
+	RunWebClientSet                        bool                `json:",omitempty"`
+	WantRunningSet                         bool                `json:",omitempty"`
+	LoggedOutSet                           bool                `json:",omitempty"`
+	ShieldsUpSet                           bool                `json:",omitempty"`
+	AdvertiseTagsSet                       bool                `json:",omitempty"`
+	HostnameSet                            bool                `json:",omitempty"`
+	NotepadURLsSet                         bool                `json:",omitempty"`
+	ForceDaemonSet                         bool                `json:",omitempty"`
+	EggSet                                 bool                `json:",omitempty"`
+	AdvertiseRoutesSet                     bool                `json:",omitempty"`
+	AdvertiseServicesSet                   bool                `json:",omitempty"`
+	SyncSet                                bool                `json:",omitzero"`
+	NoSNATSet                              bool                `json:",omitempty"`
+	NoStatefulFilteringSet                 bool                `json:",omitempty"`
+	NetfilterModeSet                       bool                `json:",omitempty"`
+	OperatorUserSet                        bool                `json:",omitempty"`
+	ProfileNameSet                         bool                `json:",omitempty"`
+	AutoUpdateSet                          AutoUpdatePrefsMask `json:",omitzero"`
+	AppConnectorSet                        bool                `json:",omitempty"`
+	PostureCheckingSet                     bool                `json:",omitempty"`
+	NetfilterKindSet                       bool                `json:",omitempty"`
+	RemoteConfigSet                        bool                `json:",omitempty"`
+	DriveSharesSet                         bool                `json:",omitempty"`
+	RelayServerPortSet                     bool                `json:",omitempty"`
+	RelayServerStaticEndpointsSet          bool                `json:",omitzero"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -585,6 +601,9 @@ func (p *Prefs) pretty(goos string) string {
 		if p.AutoExitNode.IsSet() {
 			fmt.Fprintf(&sb, "auto=%v ", p.AutoExitNode)
 		}
+		if p.ExitNodeAutoDisableForCaptivePortal {
+			sb.WriteString("portalautodisable=true ")
+		}
 	}
 	if buildfeatures.HasAdvertiseRoutes {
 		if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
@@ -674,6 +693,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.AutoExitNode == p2.AutoExitNode &&
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		p.ExitNodeAutoDisableForCaptivePortal == p2.ExitNodeAutoDisableForCaptivePortal &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.Sync.Normalized() == p2.Sync.Normalized() &&

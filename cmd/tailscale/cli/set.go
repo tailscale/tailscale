@@ -44,31 +44,32 @@ Only settings explicitly mentioned will be set. There are no default values.`,
 }
 
 type setArgsT struct {
-	acceptRoutes               bool
-	acceptDNS                  bool
-	exitNodeIP                 string
-	exitNodeAllowLANAccess     bool
-	shieldsUp                  bool
-	runSSH                     bool
-	runWebClient               bool
-	hostname                   string
-	advertiseRoutes            string
-	advertiseDefaultRoute      bool
-	advertiseConnector         bool
-	opUser                     string
-	acceptedRisks              string
-	profileName                string
-	forceDaemon                bool
-	updateCheck                bool
-	updateApply                bool
-	reportPosture              bool
-	remoteConfig               bool
-	snat                       bool
-	statefulFiltering          bool
-	sync                       bool
-	netfilterMode              string
-	relayServerPort            string
-	relayServerStaticEndpoints string
+	acceptRoutes                        bool
+	acceptDNS                           bool
+	exitNodeIP                          string
+	exitNodeAllowLANAccess              bool
+	exitNodeAutoDisableForCaptivePortal bool
+	shieldsUp                           bool
+	runSSH                              bool
+	runWebClient                        bool
+	hostname                            string
+	advertiseRoutes                     string
+	advertiseDefaultRoute               bool
+	advertiseConnector                  bool
+	opUser                              string
+	acceptedRisks                       string
+	profileName                         string
+	forceDaemon                         bool
+	updateCheck                         bool
+	updateApply                         bool
+	reportPosture                       bool
+	remoteConfig                        bool
+	snat                                bool
+	statefulFiltering                   bool
+	sync                                bool
+	netfilterMode                       string
+	relayServerPort                     string
+	relayServerStaticEndpoints          string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -79,6 +80,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP, base name, or auto:any) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "allow direct access to the local network when routing traffic via an exit node")
+	setf.BoolVar(&setArgs.exitNodeAutoDisableForCaptivePortal, "exit-node-auto-disable-for-captive-portal", false, "allow the exit node to be suspended briefly to reach a captive portal login page it is blocking")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
@@ -147,18 +149,19 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	// See updateMaskedPrefsFromUpOrSetFlag.
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
-			ProfileName:            setArgs.profileName,
-			RouteAll:               setArgs.acceptRoutes,
-			CorpDNS:                setArgs.acceptDNS,
-			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
-			ShieldsUp:              setArgs.shieldsUp,
-			RunSSH:                 setArgs.runSSH,
-			RunWebClient:           setArgs.runWebClient,
-			Hostname:               setArgs.hostname,
-			OperatorUser:           setArgs.opUser,
-			NoSNAT:                 !setArgs.snat,
-			ForceDaemon:            setArgs.forceDaemon,
-			Sync:                   opt.NewBool(setArgs.sync),
+			ProfileName:                         setArgs.profileName,
+			RouteAll:                            setArgs.acceptRoutes,
+			CorpDNS:                             setArgs.acceptDNS,
+			ExitNodeAllowLANAccess:              setArgs.exitNodeAllowLANAccess,
+			ExitNodeAutoDisableForCaptivePortal: setArgs.exitNodeAutoDisableForCaptivePortal,
+			ShieldsUp:                           setArgs.shieldsUp,
+			RunSSH:                              setArgs.runSSH,
+			RunWebClient:                        setArgs.runWebClient,
+			Hostname:                            setArgs.hostname,
+			OperatorUser:                        setArgs.opUser,
+			NoSNAT:                              !setArgs.snat,
+			ForceDaemon:                         setArgs.forceDaemon,
+			Sync:                                opt.NewBool(setArgs.sync),
 			AutoUpdate: ipn.AutoUpdatePrefs{
 				Check: setArgs.updateCheck,
 				Apply: opt.NewBool(setArgs.updateApply),

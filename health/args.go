@@ -50,4 +50,21 @@ const (
 	// ArgURL cannot be reached until LAN access is allowed. It exists so that
 	// GUIs can offer to allow it without parsing the rendered message.
 	ArgExitNodeBlocksPortal Arg = "exit-node-blocks-portal"
+
+	// ArgExitNodeSuspect is set on a captive portal Warnable when the exit node
+	// in use is what stands between the user and the login page named by
+	// ArgURL: the page is out on the Internet, so it sits behind the default
+	// route that the exit node holds.
+	//
+	// It is the signal for badging the exit node in a GUI as the thing to look
+	// at, and is set whether or not we are able to do anything about it
+	// ourselves. ArgExitNodeSuspended says which of those two it is.
+	ArgExitNodeSuspect Arg = "exit-node-suspect"
+
+	// ArgExitNodeSuspended is set on a captive portal Warnable when the client
+	// has temporarily taken the exit node out of the network configuration so
+	// that the login page can be reached, which it does only if the user opted
+	// in. The exit node comes back on its own, so a GUI should present this as
+	// a state the node is passing through rather than a setting that changed.
+	ArgExitNodeSuspended Arg = "exit-node-suspended"
 )

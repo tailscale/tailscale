@@ -671,8 +671,13 @@ func TestNoWarningStopsChecking(t *testing.T) {
 }
 
 // bypassTestExtension returns an Extension with a real health tracker and a
-// controllable clock, for exercising the local network exception without a
+// controllable clock, for exercising the temporary remedies without a
 // LocalBackend to reconfigure.
+//
+// exitNodeBlocksLAN stands for the whole configuration it implies: an exit node
+// in use, with local network access off. Tests that need the other exit node
+// configuration — one in use with local network access already allowed — pass
+// false and set usingExitNodeFn themselves.
 func bypassTestExtension(t *testing.T, clock *fakeClock, exitNodeBlocksLAN bool) (*Extension, *health.Tracker, *int) {
 	t.Helper()
 	var reconfigs int
@@ -681,6 +686,7 @@ func bypassTestExtension(t *testing.T, clock *fakeClock, exitNodeBlocksLAN bool)
 		health:              health.NewTracker(eventbustest.NewBus(t)),
 		clock:               clock,
 		exitNodeBlocksLANFn: func() bool { return exitNodeBlocksLAN },
+		usingExitNodeFn:     func() bool { return exitNodeBlocksLAN },
 		reconfigFn:          func() { reconfigs++ },
 	}
 	return e, e.health, &reconfigs
@@ -958,6 +964,7 @@ func TestUnknownVerdictKeepsLANBypass(t *testing.T) {
 func TestBlockedWarnableDoesNotLookLikeOtherBreakage(t *testing.T) {
 	e := onHealthChangeTestExtension(t)
 	e.exitNodeBlocksLANFn = func() bool { return true }
+	e.usingExitNodeFn = func() bool { return true }
 	e.clock = newFakeClock()
 
 	e.applyResult(captivedetection.Result{
@@ -994,5 +1001,302 @@ func TestPortalWarningUpSeesBothWarnables(t *testing.T) {
 				t.Errorf("portalWarningUp is false with %s unhealthy", w.Code)
 			}
 		})
+	}
+}
+
+// suspendTestExtension returns an Extension configured the way the auto-disable
+// feature cares about: an exit node in use, and the user's answer on whether we
+// may take it out of the way.
+//
+// exitNodeBlocksLAN is left false, so these tests cover the configuration where
+// the local network is already reachable and the exit node is nonetheless in
+// the way of a login page out on the Internet.
+func suspendTestExtension(t *testing.T, clock *fakeClock, optedIn bool) (*Extension, *health.Tracker, *int) {
+	t.Helper()
+	e, ht, reconfigs := bypassTestExtension(t, clock, false)
+	e.usingExitNodeFn = func() bool { return true }
+	e.autoDisableExitNodeFn = func() bool { return optedIn }
+	return e, ht, reconfigs
+}
+
+// offLANPortal is a portal whose login page the exit node is holding the route
+// to: the one situation the auto-disable exists for.
+var offLANPortal = captivedetection.Result{
+	Verdict:          captivedetection.VerdictPortal,
+	PortalURL:        "http://login.airline.example/",
+	PortalURLIsLocal: opt.NewBool(false),
+}
+
+// TestExitNodeSuspendNeedsTheUsersConsent is the whole point of the preference
+// defaulting to off.
+//
+// Suspending puts traffic the user asked to have tunneled back out onto the
+// network they're standing on. That is a trade only they can make, so without
+// their agreement we do nothing but tell them their exit node is in the way.
+func TestExitNodeSuspendNeedsTheUsersConsent(t *testing.T) {
+	tests := []struct {
+		name        string
+		optedIn     bool
+		wantSuspend bool
+		wantWarn    *health.Warnable
+	}{
+		{
+			name:        "opted_in_suspends",
+			optedIn:     true,
+			wantSuspend: true,
+			wantWarn:    captivePortalWarnable,
+		},
+		{
+			name:        "not_opted_in_only_advises",
+			optedIn:     false,
+			wantSuspend: false,
+			wantWarn:    captivePortalBlockedWarnable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := newFakeClock()
+			e, ht, _ := suspendTestExtension(t, clock, tt.optedIn)
+
+			e.applyResult(offLANPortal)
+
+			if got := e.exitNodeSuspended(); got != tt.wantSuspend {
+				t.Errorf("exitNodeSuspended = %v, want %v", got, tt.wantSuspend)
+			}
+			if !ht.IsUnhealthy(tt.wantWarn) {
+				t.Fatalf("%s is not unhealthy, want it to be", tt.wantWarn.Code)
+			}
+
+			// Either way the exit node is what the user should be looking at,
+			// so the badge argument is set in both.
+			ws := ht.CurrentState().Warnings[tt.wantWarn.Code]
+			if ws.Args[health.ArgExitNodeSuspect] == "" {
+				t.Errorf("%s not set, want it on both the blocked and the suspended warning", health.ArgExitNodeSuspect)
+			}
+			if got := ws.Args[health.ArgExitNodeSuspended] != ""; got != tt.wantSuspend {
+				t.Errorf("%s set = %v, want %v", health.ArgExitNodeSuspended, got, tt.wantSuspend)
+			}
+		})
+	}
+}
+
+// TestExitNodeSuspendOnlyForUnreachablePages checks we don't take the exit node
+// away when it isn't the problem.
+//
+// A page on the local network is reachable through the far less disruptive
+// local network exception, and a page we could not locate might be on the LAN
+// too — see setPortalWarning on why unknown counts as local. Suspending on
+// either would cost the user their exit node for nothing.
+func TestExitNodeSuspendOnlyForUnreachablePages(t *testing.T) {
+	tests := []struct {
+		name          string
+		usingExitNode bool
+		isLocal       opt.Bool
+		want          bool
+	}{
+		{name: "off_lan_page", usingExitNode: true, isLocal: opt.NewBool(false), want: true},
+		{name: "page_on_the_lan", usingExitNode: true, isLocal: opt.NewBool(true)},
+		{name: "page_we_could_not_locate", usingExitNode: true},
+		{name: "no_exit_node_to_suspend", isLocal: opt.NewBool(false)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := newFakeClock()
+			e, _, _ := suspendTestExtension(t, clock, true)
+			e.usingExitNodeFn = func() bool { return tt.usingExitNode }
+
+			e.applyResult(captivedetection.Result{
+				Verdict:          captivedetection.VerdictPortal,
+				PortalURL:        "http://portal.example/login",
+				PortalURLIsLocal: tt.isLocal,
+			})
+
+			if got := e.exitNodeSuspended(); got != tt.want {
+				t.Errorf("exitNodeSuspended = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExitNodeSuspendExpires checks the suspension is bounded in time. It is
+// sending traffic somewhere the user didn't ask for it to go, so it must not
+// outlive the login attempt it exists for.
+func TestExitNodeSuspendExpires(t *testing.T) {
+	clock := newFakeClock()
+	e, ht, reconfigs := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	if !e.exitNodeSuspended() {
+		t.Fatal("exit node is not suspended right after an off-LAN portal was found")
+	}
+	if *reconfigs != 1 {
+		t.Errorf("reconfigs = %d, want 1 after suspending", *reconfigs)
+	}
+
+	af := clock.nextAfterFunc(t)
+	if af.d != maxExitNodeSuspend {
+		t.Errorf("timer armed for %v, want %v", af.d, maxExitNodeSuspend)
+	}
+	af.fn()
+
+	if e.exitNodeSuspended() {
+		t.Error("exit node is still suspended after its timer fired")
+	}
+	if *reconfigs != 2 {
+		t.Errorf("reconfigs = %d, want 2 after the exit node came back", *reconfigs)
+	}
+	// The page is out of reach again, so the warning has to say so rather than
+	// keep telling the user to go and log in.
+	if !ht.IsUnhealthy(captivePortalBlockedWarnable) {
+		t.Error("want the blocked warning back once the exit node returned")
+	}
+}
+
+// TestExitNodeSuspendRespectsDeadlineWithoutTimer checks the deadline is honored
+// on its own, so a timer that never runs cannot leave the user's traffic off the
+// exit node indefinitely.
+func TestExitNodeSuspendRespectsDeadlineWithoutTimer(t *testing.T) {
+	clock := newFakeClock()
+	e, _, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	clock.nextAfterFunc(t) // arm but never fire it
+
+	if !e.exitNodeSuspended() {
+		t.Fatal("exit node is not suspended right after an off-LAN portal was found")
+	}
+	clock.advance(maxExitNodeSuspend + time.Second)
+	if e.exitNodeSuspended() {
+		t.Error("exit node still reports suspended past its deadline")
+	}
+}
+
+// TestNoPortalRestoresTheExitNode checks that logging in is what ends the
+// suspension, which is the "until the portal is actioned" half of its lifetime
+// and the case we expect to hit in practice.
+func TestNoPortalRestoresTheExitNode(t *testing.T) {
+	clock := newFakeClock()
+	e, ht, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	clock.nextAfterFunc(t)
+	if !e.exitNodeSuspended() {
+		t.Fatal("exit node is not suspended")
+	}
+
+	// A clean run is the evidence that the user got themselves logged in.
+	e.applyResult(captivedetection.Result{Verdict: captivedetection.VerdictNoPortal})
+
+	if e.exitNodeSuspended() {
+		t.Error("exit node is still suspended after a clean detection run")
+	}
+	for _, w := range portalWarnables {
+		if ht.IsUnhealthy(w) {
+			t.Errorf("%s is still unhealthy after a clean run", w.Code)
+		}
+	}
+}
+
+// TestUnknownVerdictKeepsTheExitNodeSuspended checks an inconclusive run does
+// not cut the suspension short.
+//
+// That run is the common case seconds after a login, while authorization is
+// still propagating. Putting the exit node back there would break the very page
+// the user is in the middle of.
+func TestUnknownVerdictKeepsTheExitNodeSuspended(t *testing.T) {
+	clock := newFakeClock()
+	e, _, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	clock.nextAfterFunc(t)
+
+	e.applyResult(captivedetection.Result{Verdict: captivedetection.VerdictUnknown})
+
+	if !e.exitNodeSuspended() {
+		t.Error("an inconclusive run put the exit node back")
+	}
+}
+
+// TestExitNodeSuspendIsOncePerPortal checks a portal the user never logs in to
+// costs them their exit node once rather than forever.
+//
+// Detection keeps running while the warning stands, so without this the same
+// portal would suspend the exit node again on the next pass, and the user would
+// spend the rest of their time on that network flipping between tunneled and
+// not.
+func TestExitNodeSuspendIsOncePerPortal(t *testing.T) {
+	clock := newFakeClock()
+	e, _, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	clock.nextAfterFunc(t).fn() // let the suspension run out
+	if e.exitNodeSuspended() {
+		t.Fatal("exit node is still suspended after its timer fired")
+	}
+
+	// The portal is still there, and we're still finding it.
+	e.applyResult(offLANPortal)
+	if e.exitNodeSuspended() {
+		t.Error("the same portal suspended the exit node a second time")
+	}
+
+	// A different network later on is a fresh start, which a clean run in
+	// between is what marks.
+	e.applyResult(captivedetection.Result{Verdict: captivedetection.VerdictNoPortal})
+	e.applyResult(offLANPortal)
+	if !e.exitNodeSuspended() {
+		t.Error("a portal found after a clean run did not get a suspension of its own")
+	}
+}
+
+// TestSuspendedWarningNamesTheURLPlainly checks the wording follows the state.
+//
+// While the exit node is out of the way the page really is reachable, so
+// telling the user it cannot be reached — the blocked warning's whole message —
+// would send them to fix something that isn't broken.
+func TestSuspendedWarningNamesTheURLPlainly(t *testing.T) {
+	clock := newFakeClock()
+	e, ht, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+
+	ws, ok := ht.CurrentState().Warnings[captivePortalWarnable.Code]
+	if !ok {
+		t.Fatal("no captive portal warning raised")
+	}
+	if !strings.Contains(ws.Text, offLANPortal.PortalURL) {
+		t.Errorf("text = %q, want it to name %q", ws.Text, offLANPortal.PortalURL)
+	}
+	if !strings.Contains(ws.Text, "exit node is paused") {
+		t.Errorf("text = %q, want it to say the exit node is paused", ws.Text)
+	}
+	if ht.IsUnhealthy(captivePortalBlockedWarnable) {
+		t.Error("the blocked warning is up as well, want only one portal warning at a time")
+	}
+}
+
+// TestShutdownRestoresTheExitNode checks we don't leave the exit node held down
+// on our way out.
+//
+// The hook we register outlives the extension, so on a profile switch the next
+// profile would otherwise go without the exit node it asked for until our
+// deadline happened to pass.
+func TestShutdownRestoresTheExitNode(t *testing.T) {
+	clock := newFakeClock()
+	e, _, _ := suspendTestExtension(t, clock, true)
+
+	e.applyResult(offLANPortal)
+	clock.nextAfterFunc(t)
+	if !e.exitNodeSuspended() {
+		t.Fatal("exit node is not suspended")
+	}
+
+	if err := e.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if e.exitNodeSuspended() {
+		t.Error("exit node is still suspended after the extension shut down")
 	}
 }

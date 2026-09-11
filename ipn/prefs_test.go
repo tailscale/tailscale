@@ -44,6 +44,7 @@ func TestPrefsEqual(t *testing.T) {
 		"AutoExitNode",
 		"InternalExitNodePrior",
 		"ExitNodeAllowLANAccess",
+		"ExitNodeAutoDisableForCaptivePortal",
 		"CorpDNS",
 		"RunSSH",
 		"RunWebClient",

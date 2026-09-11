@@ -74,41 +74,42 @@ func (src *Prefs) Clone() *Prefs {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
-	ControlURL                 string
-	RouteAll                   bool
-	ExitNodeID                 tailcfg.StableNodeID
-	ExitNodeIP                 netip.Addr
-	AutoExitNode               ExitNodeExpression
-	InternalExitNodePrior      tailcfg.StableNodeID
-	ExitNodeAllowLANAccess     bool
-	CorpDNS                    bool
-	RunSSH                     bool
-	RunWebClient               bool
-	WantRunning                bool
-	LoggedOut                  bool
-	ShieldsUp                  bool
-	AdvertiseTags              []string
-	Hostname                   string
-	NotepadURLs                bool
-	ForceDaemon                bool
-	Egg                        bool
-	AdvertiseRoutes            []netip.Prefix
-	AdvertiseServices          []string
-	Sync                       opt.Bool
-	NoSNAT                     bool
-	NoStatefulFiltering        opt.Bool
-	NetfilterMode              preftype.NetfilterMode
-	OperatorUser               string
-	ProfileName                string
-	AutoUpdate                 AutoUpdatePrefs
-	AppConnector               AppConnectorPrefs
-	PostureChecking            bool
-	NetfilterKind              string
-	RemoteConfig               bool
-	DriveShares                []*drive.Share
-	RelayServerPort            *uint16
-	RelayServerStaticEndpoints []netip.AddrPort
-	Persist                    *persist.Persist
+	ControlURL                          string
+	RouteAll                            bool
+	ExitNodeID                          tailcfg.StableNodeID
+	ExitNodeIP                          netip.Addr
+	AutoExitNode                        ExitNodeExpression
+	InternalExitNodePrior               tailcfg.StableNodeID
+	ExitNodeAllowLANAccess              bool
+	ExitNodeAutoDisableForCaptivePortal bool
+	CorpDNS                             bool
+	RunSSH                              bool
+	RunWebClient                        bool
+	WantRunning                         bool
+	LoggedOut                           bool
+	ShieldsUp                           bool
+	AdvertiseTags                       []string
+	Hostname                            string
+	NotepadURLs                         bool
+	ForceDaemon                         bool
+	Egg                                 bool
+	AdvertiseRoutes                     []netip.Prefix
+	AdvertiseServices                   []string
+	Sync                                opt.Bool
+	NoSNAT                              bool
+	NoStatefulFiltering                 opt.Bool
+	NetfilterMode                       preftype.NetfilterMode
+	OperatorUser                        string
+	ProfileName                         string
+	AutoUpdate                          AutoUpdatePrefs
+	AppConnector                        AppConnectorPrefs
+	PostureChecking                     bool
+	NetfilterKind                       string
+	RemoteConfig                        bool
+	DriveShares                         []*drive.Share
+	RelayServerPort                     *uint16
+	RelayServerStaticEndpoints          []netip.AddrPort
+	Persist                             *persist.Persist
 }{})
 
 // Clone makes a deep copy of ServeConfig.

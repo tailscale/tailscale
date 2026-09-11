@@ -145,6 +145,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 		return ""
 	case "exit-node-allow-lan-access":
 		return prefs.ExitNodeAllowLANAccess
+	case "exit-node-auto-disable-for-captive-portal":
+		return prefs.ExitNodeAutoDisableForCaptivePortal
 	case "shields-up":
 		return prefs.ShieldsUp
 	case "ssh":

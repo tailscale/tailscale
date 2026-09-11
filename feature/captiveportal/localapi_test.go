@@ -35,6 +35,7 @@ func gateTestExtension(t *testing.T, policy map[pkey.Key]string) *Extension {
 		health:              health.NewTracker(eventbustest.NewBus(t)),
 		clock:               newFakeClock(),
 		exitNodeBlocksLANFn: func() bool { return true },
+		usingExitNodeFn:     func() bool { return true },
 		reconfigFn:          func() {},
 	}
 }

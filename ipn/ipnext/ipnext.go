@@ -530,6 +530,27 @@ type Hooks struct {
 	//
 	// The hook is called with LocalBackend's mutex locked.
 	ExitNodeAllowLANOverride feature.Hook[func() bool]
+
+	// ExitNodeSuspended reports whether the exit node named by the preferences
+	// should be left out of the network configuration for the time being.
+	//
+	// It is the stronger form of [Hooks.ExitNodeAllowLANOverride], for a captive
+	// portal whose login page is not on the local network at all: no amount of
+	// local network access reaches a page that lives behind the default route,
+	// so the exit node itself has to step aside. While this reports true, the
+	// node is configured as though no exit node were selected, which takes the
+	// exit node out of the default route, the DNS configuration and the
+	// WireGuard allowed IPs alike. See [tailscale.com/feature/captiveportal].
+	//
+	// The preferences are not modified: the user's exit node selection stands,
+	// is still what a GUI displays, and takes effect again as soon as this
+	// reports false. Suspending sends traffic out the local network that the
+	// user asked to have tunneled, so it happens only when they have opted in
+	// via [ipn.Prefs.ExitNodeAutoDisableForCaptivePortal], and only for as long
+	// as it takes them to log in.
+	//
+	// The hook is called with LocalBackend's mutex locked.
+	ExitNodeSuspended feature.Hook[func() bool]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet

@@ -4740,6 +4740,35 @@ func TestApplySysPolicy(t *testing.T) {
 			},
 		},
 		{
+			// An administrator can turn the captive portal auto-disable on for
+			// a fleet that would otherwise never opt in.
+			name:          "exit-node-auto-disable-for-captive-portal-always",
+			wantPrefs:     ipn.Prefs{ExitNodeAutoDisableForCaptivePortal: true},
+			wantAnyChange: true,
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeAutoDisableForCaptivePortal: "always",
+			},
+		},
+		{
+			// And can take it away from a user who turned it on, for a fleet
+			// that would rather lose the login page than leak the traffic.
+			name:      "exit-node-auto-disable-for-captive-portal-never",
+			prefs:     ipn.Prefs{ExitNodeAutoDisableForCaptivePortal: true},
+			wantPrefs: ipn.Prefs{ExitNodeAutoDisableForCaptivePortal: false},
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeAutoDisableForCaptivePortal: "never",
+			},
+			wantAnyChange: true,
+		},
+		{
+			name:      "exit-node-auto-disable-for-captive-portal-user-decides",
+			prefs:     ipn.Prefs{ExitNodeAutoDisableForCaptivePortal: true},
+			wantPrefs: ipn.Prefs{ExitNodeAutoDisableForCaptivePortal: true},
+			stringPolicies: map[pkey.Key]string{
+				pkey.ExitNodeAutoDisableForCaptivePortal: "user-decides",
+			},
+		},
+		{
 			name: "ControlURL",
 			wantPrefs: ipn.Prefs{
 				ControlURL: "set",
@@ -10437,5 +10466,153 @@ func TestRouterConfigNoExitNodeIgnoresOverride(t *testing.T) {
 	}
 	if !slices.Equal(without.LocalRoutes, with.LocalRoutes) {
 		t.Errorf("LocalRoutes = %v with the override, want %v", with.LocalRoutes, without.LocalRoutes)
+	}
+}
+
+// TestWithSuspendedExitNode checks the one place suspension is read: the prefs
+// view that authReconfig programs the network from.
+//
+// The point of masking the selection here, rather than teaching each consumer
+// about suspension, is that everything downstream then follows on its own. The
+// two consumers that matter are asserted below.
+func TestWithSuspendedExitNode(t *testing.T) {
+	selected := (&ipn.Prefs{
+		ExitNodeID:   "exit-node-1",
+		ExitNodeIP:   netip.MustParseAddr("100.64.9.9"),
+		AutoExitNode: ipn.AnyExitNode,
+	}).View()
+
+	tests := []struct {
+		name        string
+		hook        func() bool
+		wantSuspend bool
+	}{
+		{name: "no hook registered"},
+		{name: "hook declines", hook: func() bool { return false }},
+		{name: "hook suspends", hook: func() bool { return true }, wantSuspend: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lb := newTestLocalBackend(t)
+			if tt.hook != nil {
+				t.Cleanup(lb.extHost.hooks.ExitNodeSuspended.SetForTest(tt.hook))
+			}
+
+			lb.mu.Lock()
+			got := lb.withSuspendedExitNodeLocked(selected)
+			lb.mu.Unlock()
+
+			if !tt.wantSuspend {
+				if got.ExitNodeID() != selected.ExitNodeID() || got.ExitNodeIP() != selected.ExitNodeIP() ||
+					got.AutoExitNode() != selected.AutoExitNode() {
+					t.Errorf("prefs were changed with no suspension in force: %v", got.Pretty())
+				}
+				return
+			}
+			if got.ExitNodeID() != "" || got.ExitNodeIP().IsValid() || got.AutoExitNode().IsSet() {
+				t.Errorf("exit node still selected while suspended: %v", got.Pretty())
+			}
+			// The stored preferences are what the user chose and what a GUI
+			// reports; suspending must not rewrite them.
+			if selected.ExitNodeID() != "exit-node-1" {
+				t.Error("the caller's prefs were mutated; the user's selection must survive a suspension")
+			}
+		})
+	}
+}
+
+// TestSuspendedExitNodeLeavesTheTunnel checks what suspension is actually for:
+// with the exit node masked out, the default route is no longer the tunnel and
+// the local network is not swallowed either.
+//
+// This drives routerConfigLocked with the same prefs authReconfig would hand it,
+// which is the only way to observe the masking's effect on routing.
+func TestSuspendedExitNodeLeavesTheTunnel(t *testing.T) {
+	lb := newTestLocalBackend(t)
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name:      "test-node",
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+		}).View(),
+	}
+	lb.currentNode().SetNetMap(nm)
+
+	// Local network access off, so the exit node is holding both the default
+	// route and the LAN. Suspension has to release both.
+	prefs := (&ipn.Prefs{
+		ExitNodeID:             "exit-node-1",
+		ExitNodeAllowLANAccess: false,
+	}).View()
+
+	inForce := lb.routerConfigLocked(&wgcfg.Config{}, prefs, nm)
+
+	t.Cleanup(lb.extHost.hooks.ExitNodeSuspended.SetForTest(func() bool { return true }))
+	lb.mu.Lock()
+	masked := lb.withSuspendedExitNodeLocked(prefs)
+	lb.mu.Unlock()
+	suspended := lb.routerConfigLocked(&wgcfg.Config{}, masked, nm)
+
+	for _, def := range []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()} {
+		if !slices.Contains(inForce.Routes, def) {
+			t.Fatalf("Routes is missing %v without a suspension; the test is not exercising an exit node", def)
+		}
+		if slices.Contains(suspended.Routes, def) {
+			t.Errorf("Routes still contains %v while suspended; the tunnel is still the default route", def)
+		}
+	}
+
+	// Everything the exit node had pulled into the tunnel is released, not just
+	// the default routes. Anything left would be a hole in the local network
+	// the user is trying to log in to.
+	for _, p := range inForce.Routes {
+		if slices.Contains(suspended.Routes, p) {
+			t.Errorf("%v is still routed into the tunnel while suspended", p)
+		}
+	}
+}
+
+// TestSuspendedExitNodeReleasesDNS checks that suspension takes DNS off the exit
+// node too.
+//
+// Withholding only the default route would not be enough: a login page named by
+// hostname still has to be resolved, and an exit node's DoH proxy is reached
+// over the same tunnel the portal has cut off. The lookup would fail and the
+// user would be sent to a page they cannot load.
+func TestSuspendedExitNodeReleasesDNS(t *testing.T) {
+	netResolvers := []*dnstype.Resolver{{Addr: "1.1.1.1"}}
+	peers := []tailcfg.NodeView{
+		(&tailcfg.Node{
+			Cap:      26, // new enough to proxy DNS
+			ID:       2,
+			StableID: "exit-node-1",
+			Hostinfo: (&tailcfg.Hostinfo{}).View(),
+		}).View(),
+	}
+	nm := &netmap.NetworkMap{
+		Peers: peers,
+		DNS:   tailcfg.DNSConfig{Resolvers: netResolvers},
+	}
+	exitDOH := peerAPIBase(nm, peers[0]) + "/dns-query"
+
+	prefs := &ipn.Prefs{ExitNodeID: "exit-node-1", CorpDNS: true}
+	inForce := dnsConfigForNetmap(nm, peersMap(peers), prefs.View(), false, t.Logf, "")
+	if len(inForce.DefaultResolvers) != 1 || inForce.DefaultResolvers[0].Addr != exitDOH {
+		t.Fatalf("DefaultResolvers = %v without a suspension, want the exit node's %q; the test is not exercising exit node DNS",
+			inForce.DefaultResolvers, exitDOH)
+	}
+
+	// What authReconfig hands it while suspended.
+	masked := prefs.Clone()
+	masked.ExitNodeID = ""
+	suspended := dnsConfigForNetmap(nm, peersMap(peers), masked.View(), false, t.Logf, "")
+
+	for _, r := range suspended.DefaultResolvers {
+		if r.Addr == exitDOH {
+			t.Errorf("DefaultResolvers still contains the exit node's %q while suspended", exitDOH)
+		}
+	}
+	if len(suspended.DefaultResolvers) != 1 || suspended.DefaultResolvers[0].Addr != netResolvers[0].Addr {
+		t.Errorf("DefaultResolvers = %v while suspended, want the tailnet's %v", suspended.DefaultResolvers, netResolvers)
 	}
 }

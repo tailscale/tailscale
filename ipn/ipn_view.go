@@ -291,6 +291,23 @@ func (v PrefsView) InternalExitNodePrior() tailcfg.StableNodeID { return v.ж.In
 // routed directly or via the exit node.
 func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANAccess }
 
+// ExitNodeAutoDisableForCaptivePortal indicates whether the exit node may be
+// suspended automatically, for a few minutes, to let the user reach a
+// captive portal login page that the exit node is holding the route to.
+//
+// It defaults to false, and is meant to stay that way unless the user says
+// otherwise: suspending the exit node sends traffic out the local network
+// that the user asked to be tunneled, which is a trade they have to make
+// knowingly. When it is false we can only tell the user their exit node is
+// in the way and leave turning it off to them.
+//
+// The exit node selection itself is never modified. It is withheld while
+// the suspension lasts and restored as soon as the portal is dealt with, or
+// after a few minutes, whichever comes first.
+func (v PrefsView) ExitNodeAutoDisableForCaptivePortal() bool {
+	return v.ж.ExitNodeAutoDisableForCaptivePortal
+}
+
 // CorpDNS specifies whether to install the Tailscale network's
 // DNS configuration, if it exists. It is the internal name for
 // the "tailscale set --accept-dns=" flag.
@@ -491,41 +508,42 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PrefsViewNeedsRegeneration = Prefs(struct {
-	ControlURL                 string
-	RouteAll                   bool
-	ExitNodeID                 tailcfg.StableNodeID
-	ExitNodeIP                 netip.Addr
-	AutoExitNode               ExitNodeExpression
-	InternalExitNodePrior      tailcfg.StableNodeID
-	ExitNodeAllowLANAccess     bool
-	CorpDNS                    bool
-	RunSSH                     bool
-	RunWebClient               bool
-	WantRunning                bool
-	LoggedOut                  bool
-	ShieldsUp                  bool
-	AdvertiseTags              []string
-	Hostname                   string
-	NotepadURLs                bool
-	ForceDaemon                bool
-	Egg                        bool
-	AdvertiseRoutes            []netip.Prefix
-	AdvertiseServices          []string
-	Sync                       opt.Bool
-	NoSNAT                     bool
-	NoStatefulFiltering        opt.Bool
-	NetfilterMode              preftype.NetfilterMode
-	OperatorUser               string
-	ProfileName                string
-	AutoUpdate                 AutoUpdatePrefs
-	AppConnector               AppConnectorPrefs
-	PostureChecking            bool
-	NetfilterKind              string
-	RemoteConfig               bool
-	DriveShares                []*drive.Share
-	RelayServerPort            *uint16
-	RelayServerStaticEndpoints []netip.AddrPort
-	Persist                    *persist.Persist
+	ControlURL                          string
+	RouteAll                            bool
+	ExitNodeID                          tailcfg.StableNodeID
+	ExitNodeIP                          netip.Addr
+	AutoExitNode                        ExitNodeExpression
+	InternalExitNodePrior               tailcfg.StableNodeID
+	ExitNodeAllowLANAccess              bool
+	ExitNodeAutoDisableForCaptivePortal bool
+	CorpDNS                             bool
+	RunSSH                              bool
+	RunWebClient                        bool
+	WantRunning                         bool
+	LoggedOut                           bool
+	ShieldsUp                           bool
+	AdvertiseTags                       []string
+	Hostname                            string
+	NotepadURLs                         bool
+	ForceDaemon                         bool
+	Egg                                 bool
+	AdvertiseRoutes                     []netip.Prefix
+	AdvertiseServices                   []string
+	Sync                                opt.Bool
+	NoSNAT                              bool
+	NoStatefulFiltering                 opt.Bool
+	NetfilterMode                       preftype.NetfilterMode
+	OperatorUser                        string
+	ProfileName                         string
+	AutoUpdate                          AutoUpdatePrefs
+	AppConnector                        AppConnectorPrefs
+	PostureChecking                     bool
+	NetfilterKind                       string
+	RemoteConfig                        bool
+	DriveShares                         []*drive.Share
+	RelayServerPort                     *uint16
+	RelayServerStaticEndpoints          []netip.AddrPort
+	Persist                             *persist.Persist
 }{})
 
 // View returns a read-only view of ServeConfig.
