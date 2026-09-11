@@ -88,12 +88,6 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		return res, nil
 	}
 	// If an EndpointSlice for an expected family is missing, we mark the Service as NotReady.
-	//
-	// Setting the NotReady condition here is also used for best-effort recovery. The
-	// egress-svcs-reconciler does not watch EndpointSlices, so a deleted EndpointSlice is only
-	// recreated when this status change re-triggers a Service reconcile.
-	//
-	// TODO(beckypauley): refactor so EndpointSlice recovery is not dependent on Service status.
 	clusterIPSvc, err := getSingleObject[corev1.Service](ctx, esrr.Client, esrr.tsNamespace, crl)
 	if err != nil {
 		err = fmt.Errorf("error retrieving ClusterIP Service: %w", err)
