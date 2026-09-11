@@ -2085,9 +2085,6 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 				notify.PeersChanged = append(notify.PeersChanged, p.AsStruct())
 			}
 		}
-		if goosGetsLegacyNetmapNotify {
-			notify.NetMap = st.NetMap
-		}
 		b.sendLocked(notify)
 
 		// The error here is unimportant as is the result.  This will recalculate the suggested exit node
@@ -2594,9 +2591,6 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 			notify.PeerChangedPatch = patches
 		} else if !ok {
 			b.logf("[unexpected] got mutations worthy of telling IPN bus but failed to convert to peer changes")
-		}
-		if goosGetsLegacyNetmapNotify {
-			notify.NetMap = cn.netMapWithPeers()
 		}
 	} else if testenv.InTest() {
 		// In tests, send an empty Notify as a wake-up so end-to-end
@@ -3886,14 +3880,16 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	// TODO(marwan-at-work): streaming background logs?
 	defer b.DeleteForegroundSession(sessionID)
 
-	sender := &rateLimitingBusSender{fn: fn}
-	defer sender.close()
-
-	if mask&ipn.NotifyRateLimit != 0 {
-		sender.interval = 3 * time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case n, ok := <-ch:
+			if !ok || !fn(n) {
+				return
+			}
+		}
 	}
-
-	sender.Run(ctx, ch)
 }
 
 // appendHealthActions returns an IPN listener func that wraps the supplied IPN
@@ -4150,7 +4146,6 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	// the watcher doesn't have to handle the patch shape.
 	wantsPeerChanges := sess.mask&(ipn.NotifyPeerChanges|ipn.NotifyPeerPatches) != 0
 	wantsPeerPatches := sess.mask&ipn.NotifyPeerPatches != 0
-	stripNetMap := goosGetsLegacyNetmapNotify && n.NetMap != nil && sess.mask&ipn.NotifyNoNetMap != 0
 	stripPeersChanged := len(n.PeersChanged) > 0 && !wantsPeerChanges
 	stripPeersRemoved := len(n.PeersRemoved) > 0 && !wantsPeerChanges
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
@@ -4185,13 +4180,10 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripNetMap && !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
+	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
 		return n
 	}
 	nCopy := *n
-	if stripNetMap {
-		nCopy.NetMap = nil
-	}
 	if stripPeersChanged {
 		nCopy.PeersChanged = nil
 	}
