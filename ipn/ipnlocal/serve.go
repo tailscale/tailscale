@@ -1067,8 +1067,13 @@ func isGRPCContentType(contentType string) bool {
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
+	// Set X-Forwarded-Proto unconditionally: the outbound request starts as a
+	// copy of the inbound one, so leaving it alone for plaintext requests would
+	// pass a client-supplied value through to the backend.
 	if r.In.TLS != nil {
 		r.Out.Header.Set("X-Forwarded-Proto", "https")
+	} else {
+		r.Out.Header.Set("X-Forwarded-Proto", "http")
 	}
 	if c, ok := serveHTTPContextKey.ValueOk(r.Out.Context()); ok {
 		r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
