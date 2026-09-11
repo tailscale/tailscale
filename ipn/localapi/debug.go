@@ -283,6 +283,13 @@ func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "debug access denied", http.StatusForbidden)
 		return
 	}
+	// state keys are otherwise gated by their own handlers, e.g. serve-config
+	// requires a local admin for Unix-socket targets; writing a _serve/<profile>
+	// key here would bypass that, so require a local admin too
+	if !h.Actor.IsLocalAdmin(h.b.OperatorUserID()) {
+		http.Error(w, "dev-set-state-store access denied; must be a local admin", http.StatusUnauthorized)
+		return
+	}
 	if r.Method != httpm.POST {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
