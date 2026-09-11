@@ -121,7 +121,6 @@ func main() {
 			log.Fatal(err)
 		}
 		*dir = filepath.Join(d, "go-cacher")
-		log.Printf("Defaulting to cache dir %v ...", *dir)
 	}
 	if err := os.MkdirAll(*dir, 0750); err != nil {
 		log.Fatal(err)
