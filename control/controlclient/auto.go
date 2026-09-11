@@ -36,6 +36,10 @@ type LoginGoal struct {
 
 var _ Client = (*Auto)(nil)
 
+// maxRetryWindow defines the upper bound on how long control is allowed
+// to tell the client to wait before retrying a request.
+const maxRetryWindow = 5 * time.Minute
+
 // waitUnpause waits until either the client is unpaused or the Auto client is
 // shut down. It reports whether the client should keep running (i.e. it's not
 // closed).
@@ -90,7 +94,11 @@ func (c *Auto) updateRoutine() {
 			if ctx.Err() == nil {
 				c.direct.logf("lite map update error after %v: %v", d, err)
 			}
-			bo.BackOff(ctx, err)
+			if rle, rateLimited := errors.AsType[*rateLimitError](err); rateLimited {
+				c.waitRetryAfter(ctx, "updateRoutine", rle)
+			} else {
+				bo.BackOff(ctx, err)
+			}
 			continue
 		}
 		bo.Reset()
@@ -359,11 +367,7 @@ func (c *Auto) authRoutine() {
 			c.direct.health.SetAuthRoutineInError(err)
 			report(err, f)
 			if rle, ok := errors.AsType[*rateLimitError](err); ok {
-				c.logf("authRoutine: %s", rle)
-				select {
-				case <-ctx.Done():
-				case <-time.After(rle.retryAfter):
-				}
+				c.waitRetryAfter(ctx, "authRoutine", rle)
 			} else {
 				bo.BackOff(ctx, err)
 			}
@@ -624,10 +628,11 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
+		rle, rateLimited := errors.AsType[*rateLimitError](err)
 
 		if paused {
 			mrs.bo.Reset()
-		} else {
+		} else if !rateLimited {
 			mrs.bo.BackOff(ctx, err)
 		}
 		c.mu.Unlock()
@@ -638,6 +643,28 @@ func (c *Auto) mapRoutine() {
 		} else {
 			report(err, "PollNetMap")
 		}
+
+		if rateLimited {
+			c.waitRetryAfter(ctx, "mapRoutine", rle)
+		}
+	}
+}
+
+// waitRetryAfter sleeps for the delay the server requested in rle, capped at
+// [maxRetryWindow] or until ctx is done, whichever comes first.
+func (c *Auto) waitRetryAfter(ctx context.Context, routine string, rle *rateLimitError) {
+	if rle.retryAfter > maxRetryWindow {
+		rle.retryAfter = maxRetryWindow
+	}
+
+	c.logf("%s: %s", routine, rle)
+
+	t, ch := c.clock.NewTimer(rle.retryAfter)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-ch:
 	}
 }
 

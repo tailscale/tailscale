@@ -220,6 +220,35 @@ func TestParseRateLimitError(t *testing.T) {
 	}
 }
 
+func TestIsRateLimitedResponse(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		retryAfter string
+		want       bool
+	}{
+		{name: "429-no-header", statusCode: 429, want: true},
+		{name: "429-with-header", statusCode: 429, retryAfter: "30", want: true},
+		{name: "503-with-header", statusCode: 503, retryAfter: "30", want: true},
+		{name: "503-no-header", statusCode: 503, want: false},
+		{name: "500-with-header", statusCode: 500, retryAfter: "30", want: false},
+		{name: "200", statusCode: 200, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if tt.retryAfter != "" {
+				rec.Header().Set("Retry-After", tt.retryAfter)
+			}
+			rec.WriteHeader(tt.statusCode)
+
+			if got := isRateLimitedResponse(rec.Result()); got != tt.want {
+				t.Errorf("shouldHonorRetryAfter; got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRateLimitErrorIsError(t *testing.T) {
 	err := &rateLimitError{msg: "test", retryAfter: 5 * time.Second}
 	var target *rateLimitError

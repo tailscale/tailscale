@@ -127,10 +127,10 @@ type Server struct {
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
 
-	// MaybeRateLimitRegister, if non-nil, is called before processing
-	// register requests. If it returns true, a 429 response is sent
-	// with the given Retry-After header value and body string.
-	MaybeRateLimitRegister func() (reject bool, retryAfter string, msg string)
+	// MaybeRejectRequest, if non-nil, is called before processing
+	// machine requests. If it returns a non-zero status, the request is rejected
+	// with that status code, the given Retry-After header value, and body string.
+	MaybeRejectRequest func(*http.Request) (status int, retryAfter string, msg string)
 
 	// ModifyFirstMapResponse, if non-nil, is called exactly once per
 	// MapResponse stream to modify the first MapResponse sent in response to it.
@@ -538,6 +538,16 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 	mkey, ok := ctx.Value(peerMachinePublicContextKey{}).(key.MachinePublic)
 	if !ok {
 		panic("no peer machine public key in context")
+	}
+
+	if fn := s.MaybeRejectRequest; fn != nil {
+		if status, retryAfter, msg := fn(r); status != 0 {
+			if retryAfter != "" {
+				w.Header().Set("Retry-After", retryAfter)
+			}
+			http.Error(w, msg, status)
+			return
+		}
 	}
 
 	switch r.URL.Path {
@@ -953,16 +963,6 @@ func (s *Server) CompleteDeviceApproval(controlUrl string, urlStr string, nodeKe
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
-	if fn := s.MaybeRateLimitRegister; fn != nil {
-		if reject, retryAfter, msg := fn(); reject {
-			if retryAfter != "" {
-				w.Header().Set("Retry-After", retryAfter)
-			}
-			http.Error(w, msg, http.StatusTooManyRequests)
-			return
-		}
-	}
-
 	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
 	if err != nil {
@@ -1983,4 +1983,16 @@ func breakSameNodeMapResponseStreams(req *tailcfg.MapRequest) bool {
 		return false
 	}
 	return true
+}
+
+// RejectRequestForPath returns a request rejection for requests matching
+// the given path.
+func RejectRequestForPath(path string, fn func() (status int, retryAfter string, msg string)) func(*http.Request) (status int, retryAfter string, msg string) {
+	return func(r *http.Request) (status int, retryAfter string, msg string) {
+		if r.URL.Path != path {
+			return 0, "", ""
+		}
+
+		return fn()
+	}
 }
