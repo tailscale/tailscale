@@ -24,14 +24,119 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"tailscale.com/client/tailscale/v2"
 
+	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/ingressservices"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
+
+func TestServicePGReconcilerProxyProtocol(t *testing.T) {
+	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)
+	svc, _ := setupTestService(t, "test-svc", "", "1.2.3.4", fc, stateSecret)
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		mak.Set(&s.Annotations, AnnotationProxyProtocol, "2")
+		s.Spec.Ports = []corev1.ServicePort{{Port: 49152, Protocol: corev1.ProtocolTCP}}
+	})
+
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+	serviceName := "svc:default-test-svc"
+	verifyTailscaleService(t, ft, serviceName, []string{"tcp:49152"})
+	verifyTailscaledConfig(t, fc, "test-pg", []string{serviceName})
+	verifyServiceProxyConfig(t, fc, serviceName, "1.2.3.4:49152", 2)
+
+	// Removing the annotation switches the Service back to the L3 forwarding
+	// path and removes the TCP forwarding entry from the shared ServeConfig.
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		delete(s.Annotations, AnnotationProxyProtocol)
+	})
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+	verifyTailscaleService(t, ft, serviceName, []string{"do-not-validate"})
+	verifyNoServiceProxyConfig(t, fc, serviceName)
+
+	// Re-enable the TCP proxy, then ensure Service deletion cleans it out of
+	// both shared ProxyGroup configurations.
+	mustUpdate(t, fc, svc.Namespace, svc.Name, func(s *corev1.Service) {
+		mak.Set(&s.Annotations, AnnotationProxyProtocol, "2")
+	})
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+	if err := fc.Delete(t.Context(), svc); err != nil {
+		t.Fatal(err)
+	}
+	expectReconciled(t, svcPGR, svc.Namespace, svc.Name)
+	verifyServiceConfigAbsent(t, fc, serviceName)
+}
+
+func verifyServiceProxyConfig(t *testing.T, fc client.Client, serviceName, target string, proxyProtocol int) {
+	t.Helper()
+	cm := new(corev1.ConfigMap)
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test-pg-ingress-config", Namespace: "operator-ns"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	serveConfig := new(ipn.ServeConfig)
+	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], serveConfig); err != nil {
+		t.Fatal(err)
+	}
+	handler := serveConfig.Services[tailcfg.ServiceName(serviceName)].TCP[49152]
+	if handler == nil || handler.TCPForward != target || handler.ProxyProtocol != proxyProtocol {
+		t.Fatalf("unexpected TCP handler: %#v", handler)
+	}
+	ingressConfig := ingressservices.Configs{}
+	if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &ingressConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ingressConfig[serviceName]; ok {
+		t.Fatalf("Service %q unexpectedly has both TCP and L3 forwarding config", serviceName)
+	}
+}
+
+func verifyNoServiceProxyConfig(t *testing.T, fc client.Client, serviceName string) {
+	t.Helper()
+	cm := new(corev1.ConfigMap)
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test-pg-ingress-config", Namespace: "operator-ns"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	serveConfig := new(ipn.ServeConfig)
+	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], serveConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := serveConfig.Services[tailcfg.ServiceName(serviceName)]; ok {
+		t.Fatalf("Service %q still has TCP forwarding config", serviceName)
+	}
+	ingressConfig := ingressservices.Configs{}
+	if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &ingressConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ingressConfig[serviceName]; !ok {
+		t.Fatalf("Service %q is missing L3 forwarding config", serviceName)
+	}
+}
+
+func verifyServiceConfigAbsent(t *testing.T, fc client.Client, serviceName string) {
+	t.Helper()
+	cm := new(corev1.ConfigMap)
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test-pg-ingress-config", Namespace: "operator-ns"}, cm); err != nil {
+		t.Fatal(err)
+	}
+	serveConfig := new(ipn.ServeConfig)
+	if err := json.Unmarshal(cm.BinaryData[serveConfigKey], serveConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := serveConfig.Services[tailcfg.ServiceName(serviceName)]; ok {
+		t.Fatalf("Service %q still has TCP forwarding config", serviceName)
+	}
+	ingressConfig := ingressservices.Configs{}
+	if err := json.Unmarshal(cm.BinaryData[ingressservices.IngressConfigKey], &ingressConfig); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ingressConfig[serviceName]; ok {
+		t.Fatalf("Service %q still has L3 forwarding config", serviceName)
+	}
+}
 
 func TestServicePGReconciler(t *testing.T) {
 	svcPGR, stateSecret, fc, ft, _ := setupServiceTest(t)

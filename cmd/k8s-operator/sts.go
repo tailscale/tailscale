@@ -65,6 +65,10 @@ const (
 	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
 	// MagicDNS name of tailnet node.
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
+	// AnnotationProxyProtocol enables PROXY protocol headers for TCP
+	// connections forwarded by an ingress Service. Supported values are "1"
+	// and "2".
+	AnnotationProxyProtocol = "tailscale.com/proxy-protocol"
 
 	AnnotationProxyGroup = "tailscale.com/proxy-group"
 
@@ -817,6 +821,9 @@ func appInfoForProxy(cfg *tailscaleSTSConfig) (string, error) {
 		return kubetypes.AppEgressProxy, nil
 	}
 	if cfg.ServeConfig != nil {
+		if cfg.proxyType == proxyTypeIngressService {
+			return kubetypes.AppIngressProxy, nil
+		}
 		return kubetypes.AppIngressResource, nil
 	}
 	if cfg.Connector != nil {
