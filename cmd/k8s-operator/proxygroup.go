@@ -263,6 +263,18 @@ func (r *ProxyGroupReconciler) validate(ctx context.Context, pg *tsapi.ProxyGrou
 	}
 
 	var errs []error
+
+	// The ProxyGroup's name is used verbatim as its StatefulSet's name, and the
+	// StatefulSet controller stamps each Pod with a controller-revision-hash
+	// label whose value is "<StatefulSet name>-<10 char revision hash>". Label
+	// values are limited to 63 bytes, so a longer ProxyGroup name means no Pods
+	// can be created at all. Kubernetes reports that as a FailedCreate event
+	// naming metadata.labels, which does not point back at the name, so catch
+	// it here where we can say what actually needs to change.
+	if len(pg.Name) > maxStatefulSetNameLength {
+		errs = append(errs, fmt.Errorf("name is %d characters, but must be at most %d so that the controller-revision-hash label Kubernetes derives for its Pods stays within the 63 byte limit for label values", len(pg.Name), maxStatefulSetNameLength))
+	}
+
 	if isAuthAPIServerProxy(pg) {
 		// Validate that the static ServiceAccount already exists.
 		sa := &corev1.ServiceAccount{}
