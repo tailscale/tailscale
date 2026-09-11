@@ -583,7 +583,7 @@ func (b *LocalBackend) TailnetLockStatus() *ipnstate.TailnetLockStatus {
 
 	var (
 		nodeKey *key.NodePublic
-		nlPriv  key.NLPrivate
+		nlPriv  key.TLPrivate
 	)
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		nkp := p.Persist().PublicNodeKey()
@@ -624,7 +624,7 @@ func (b *LocalBackend) TailnetLockStatus() *ipnstate.TailnetLockStatus {
 	for i, k := range keys {
 		outKeys[i] = ipnstate.TKAKey{
 			Kind:     k.Kind.String(),
-			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
+			Key:      key.TLPublicFromEd25519Unsafe(k.Public),
 			Metadata: k.Meta,
 			Votes:    k.Votes,
 		}
@@ -696,7 +696,7 @@ func tkaStateFromPeer(p tailcfg.NodeView) ipnstate.TKAPeer {
 // Control has everything it needs to atomically enable tailnet lock.
 func (b *LocalBackend) TailnetLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
 	var ourNodeKey key.NodePublic
-	var nlPriv key.NLPrivate
+	var nlPriv key.TLPrivate
 
 	b.mu.Lock()
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
@@ -838,7 +838,7 @@ func (b *LocalBackend) TailnetLockSign(nodeKey key.NodePublic, rotationPublic []
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		var nlPriv key.NLPrivate
+		var nlPriv key.TLPrivate
 		if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
 			nlPriv = p.Persist().NetworkLockKey()
 		}
@@ -905,7 +905,7 @@ func (b *LocalBackend) TailnetLockModify(addKeys, removeKeys []tka.Key) (err err
 		return errors.New("no node-key: is tailscale logged in?")
 	}
 
-	var nlPriv key.NLPrivate
+	var nlPriv key.TLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
 		nlPriv = p.Persist().NetworkLockKey()
 	}
@@ -1124,7 +1124,7 @@ func (b *LocalBackend) TailnetLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID
 	if b.tka == nil {
 		return nil, errTailnetLockNotActive
 	}
-	var nlPriv key.NLPrivate
+	var nlPriv key.TLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
 		nlPriv = p.Persist().NetworkLockKey()
 	}
@@ -1162,7 +1162,7 @@ func (b *LocalBackend) TailnetLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, err
 	if b.tka == nil {
 		return nil, errTailnetLockNotActive
 	}
-	var nlPriv key.NLPrivate
+	var nlPriv key.TLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
 		nlPriv = p.Persist().NetworkLockKey()
 	}
@@ -1223,7 +1223,7 @@ var tkaSuffixEncoder = base64.RawStdEncoding
 // The provided trusted tailnet-lock key is used to sign
 // a SigCredential structure, which is encoded along with the
 // private key and appended to the pre-auth key.
-func (b *LocalBackend) TailnetLockWrapPreauthKey(preauthKey string, tkaKey key.NLPrivate) (string, error) {
+func (b *LocalBackend) TailnetLockWrapPreauthKey(preauthKey string, tkaKey key.TLPrivate) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
@@ -1250,7 +1250,7 @@ func (b *LocalBackend) TailnetLockWrapPreauthKey(preauthKey string, tkaKey key.N
 }
 
 // Deprecated: use [LocalBackend.TailnetLockWrapPreauthKey] instead.
-func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.NLPrivate) (string, error) {
+func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.TLPrivate) (string, error) {
 	return b.TailnetLockWrapPreauthKey(preauthKey, tkaKey)
 }
 
@@ -1271,7 +1271,7 @@ func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.Deeplink
 	return b.TailnetLockVerifySigningDeeplink(url)
 }
 
-func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
+func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.TLPrivate) (*tka.NodeKeySignature, error) {
 	p, err := nodeInfo.NodePublic.MarshalBinary()
 	if err != nil {
 		return nil, err

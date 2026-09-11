@@ -492,10 +492,10 @@ func TestAuthorityInformLinear(t *testing.T) {
 }
 
 func TestInteropWithNLKey(t *testing.T) {
-	priv1 := key.NewNLPrivate()
+	priv1 := key.NewTLPrivate()
 	pub1 := priv1.Public()
-	pub2 := key.NewNLPrivate().Public()
-	pub3 := key.NewNLPrivate().Public()
+	pub2 := key.NewTLPrivate().Public()
+	pub3 := key.NewTLPrivate().Public()
 
 	state := CreateStateForTest(
 		Key{Kind: Key25519, Votes: 1, Public: pub1.KeyID()},

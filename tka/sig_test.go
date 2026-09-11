@@ -506,7 +506,7 @@ func TestResignNKS(t *testing.T) {
 	authKey := Key{Kind: Key25519, Public: authPub, Votes: 2}
 
 	// Node's own tailnet lock key used to sign rotation signatures.
-	tlPriv := key.NewNLPrivate()
+	tlPriv := key.NewTLPrivate()
 
 	// The original (oldest) node key, signed by a signing node.
 	origNode := key.NewNode()
