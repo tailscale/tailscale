@@ -657,9 +657,9 @@ func TestServeWatchIPNBus(t *testing.T) {
 			wantStatus:  http.StatusOK,
 		},
 		{
-			desc:       "invalid-rate-limit-mask",
+			desc:       "removed-rate-limit-mask",
 			permitRead: true,
-			mask:       ipn.NotifyRateLimit | ipn.NotifyPeerChanges,
+			mask:       ipn.NotifyRateLimitRemoved,
 			wantStatus: http.StatusBadRequest,
 		},
 		{

@@ -910,12 +910,6 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// NotifyInitialNetMap is permitted alongside NotifyPeerChanges /
-	// NotifyPeerPatches for backwards compatibility with clients that
-	// set both (e.g. the Apple client). On platforms where
-	// goosGetsLegacyNetmapNotify is true, the initial netmap is
-	// delivered regardless; peer-change subscribers simply receive
-	// deltas after that point.
 
 	w.Header().Set("Content-Type", "application/json")
 	ctx := r.Context()

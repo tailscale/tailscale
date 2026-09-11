@@ -14,7 +14,6 @@ import (
 	"sync"
 
 	"tailscale.com/client/local"
-	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/types/logger"
 )
@@ -60,7 +59,7 @@ func (h *Healthz) Update(healthy bool) {
 }
 
 func (h *Healthz) MonitorHealth(ctx context.Context, lc *local.Client) error {
-	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	w, err := lc.WatchIPNBus(ctx, 0)
 	if err != nil {
 		return fmt.Errorf("failed to watch IPN bus: %w", err)
 	}

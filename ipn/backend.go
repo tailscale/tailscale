@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -16,7 +17,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
-	"tailscale.com/types/netmap"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/views"
 	"tailscale.com/util/syspolicy/policyclient"
@@ -85,9 +85,19 @@ const (
 	// each one via Engine.RequestStatus.
 	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << 0
 
-	NotifyInitialState  NotifyWatchOpt = 1 << 1 // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
-	NotifyInitialPrefs  NotifyWatchOpt = 1 << 2 // if set, the first Notify message (sent immediately) will contain the current Prefs
-	NotifyInitialNetMap NotifyWatchOpt = 1 << 3 // if set, the first Notify message (sent immediately) will contain the current NetMap
+	NotifyInitialState NotifyWatchOpt = 1 << 1 // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL + SessionID
+	NotifyInitialPrefs NotifyWatchOpt = 1 << 2 // if set, the first Notify message (sent immediately) will contain the current Prefs
+
+	// NotifyInitialNetMapRemoved is a formerly valid bit (previously named
+	// NotifyInitialNetMap) that asked for the first Notify message to
+	// carry the full netmap in the since-removed Notify.NetMap field.
+	// Subscription requests that set it are now rejected by
+	// [ValidateNotifyWatchOpt]. The self node is now always delivered in
+	// [Notify.SelfChange] at the start of a watch session instead, and
+	// watchers that need more than self info fetch the netmap on demand
+	// via LocalClient.NetMap. The bit value remains reserved so it is
+	// never reused with a different meaning.
+	NotifyInitialNetMapRemoved NotifyWatchOpt = 1 << 3
 
 	NotifyNoPrivateKeys        NotifyWatchOpt = 1 << 4 // (no-op) it used to redact private keys; now they always are and this does nothing
 	NotifyInitialDriveShares   NotifyWatchOpt = 1 << 5 // if set, the first Notify message (sent immediately) will contain the current Taildrive Shares
@@ -95,7 +105,14 @@ const (
 
 	NotifyInitialHealthState NotifyWatchOpt = 1 << 7 // if set, the first Notify message (sent immediately) will contain the current health.State of the client
 
-	NotifyRateLimit NotifyWatchOpt = 1 << 8 // if set, rate limit spammy netmap updates to every few seconds
+	// NotifyRateLimitRemoved is a formerly valid bit (previously named
+	// NotifyRateLimit) that asked tailscaled to rate limit spammy netmap
+	// updates to every few seconds. It became meaningless once tailscaled
+	// stopped emitting [Notify.NetMap] on runtime (non-initial) bus
+	// messages, so subscription requests that set it are now rejected by
+	// [ValidateNotifyWatchOpt]. The bit value remains reserved so it is
+	// never reused with a different meaning.
+	NotifyRateLimitRemoved NotifyWatchOpt = 1 << 8
 
 	NotifyHealthActions NotifyWatchOpt = 1 << 9 // if set, include PrimaryActions in health.State. Otherwise append the action URL to the text
 
@@ -109,7 +126,7 @@ const (
 	//
 	// Without this bit, peer adds/removes/replacements are not delivered
 	// over the bus at all (consumers fall back to fetching the netmap on
-	// demand or, on legacy-emit platforms, to watching [Notify.NetMap]).
+	// demand).
 	//
 	// Watchers that want narrower per-field updates as well (Online,
 	// LastSeen, DERPHome, Endpoints) should additionally set
@@ -120,19 +137,15 @@ const (
 	// observes every per-peer mutation; it just receives them as full
 	// Nodes rather than narrow patches. The cost is bus bandwidth.
 	//
-	// On platforms where the legacy [Notify.NetMap] is still emitted
-	// (Windows, macOS, iOS, Android), it is permitted to combine this
-	// with [NotifyInitialNetMap] for backwards compatibility. New code
-	// should pair this with [NotifyInitialStatus] instead.
+	// Watchers typically pair this with [NotifyInitialStatus] to seed
+	// their initial state.
 	NotifyPeerChanges NotifyWatchOpt = 1 << 12
 
-	// NotifyNoNetMap, if set, suppresses the legacy [Notify.NetMap] field on
-	// runtime (non-initial) Notify messages delivered to this watcher. It
-	// only matters on platforms where tailscaled still emits NetMap on the
-	// bus by default — Windows, macOS, and iOS — and is intended for GUI
-	// clients on those platforms that have migrated to read peers via
-	// [Notify.PeersChanged] / [LocalClient.NetMap]. The initial-state NetMap
-	// (sent when [NotifyInitialNetMap] is set) is unaffected.
+	// NotifyNoNetMap historically suppressed the legacy Notify.NetMap
+	// field on runtime (non-initial) Notify messages on platforms where
+	// tailscaled still emitted it by default. That field no longer
+	// exists, so this bit is now a no-op. It remains accepted for
+	// compatibility with clients that set it.
 	NotifyNoNetMap NotifyWatchOpt = 1 << 13
 
 	// NotifyInitialStatus, if set, causes the first Notify message (sent
@@ -219,12 +232,12 @@ func (o NotifyWatchOpt) String() string {
 	try(NotifyWatchEngineUpdates, "NotifyWatchEngineUpdates")
 	try(NotifyInitialState, "NotifyInitialState")
 	try(NotifyInitialPrefs, "NotifyInitialPrefs")
-	try(NotifyInitialNetMap, "NotifyInitialNetMap")
+	try(NotifyInitialNetMapRemoved, "NotifyInitialNetMapRemoved")
 	try(NotifyNoPrivateKeys, "NotifyNoPrivateKeys")
 	try(NotifyInitialDriveShares, "NotifyInitialDriveShares")
 	try(NotifyInitialOutgoingFiles, "NotifyInitialOutgoingFiles")
 	try(NotifyInitialHealthState, "NotifyInitialHealthState")
-	try(NotifyRateLimit, "NotifyRateLimit")
+	try(NotifyRateLimitRemoved, "NotifyRateLimitRemoved")
 	try(NotifyHealthActions, "NotifyHealthActions")
 	try(NotifyInitialSuggestedExitNode, "NotifyInitialSuggestedExitNode")
 	try(NotifyInitialClientVersion, "NotifyInitialClientVersion")
@@ -270,21 +283,14 @@ func (o *NotifyWatchOpt) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// NotifyRateLimitIncompatibleBits is the set of new-style IPN bus
-// subscription bits that cannot be combined with [NotifyRateLimit].
-//
-// Those bits describe stateful delta streams. Randomly delaying or merging
-// messages in those streams would break the consumer's ability to maintain a
-// coherent local view.
-const NotifyRateLimitIncompatibleBits = NotifyPeerChanges | NotifyNoNetMap | NotifyInitialStatus | NotifyPeerPatches
-
 // ValidateNotifyWatchOpt reports whether mask is a valid WatchIPNBus
 // subscription mask.
 func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
-	if mask&NotifyRateLimit != 0 {
-		if bad := mask & NotifyRateLimitIncompatibleBits; bad != 0 {
-			return fmt.Errorf("NotifyRateLimit is incompatible with new-style IPN bus subscription bits %v", bad)
-		}
+	if mask&NotifyRateLimitRemoved != 0 {
+		return errors.New("the NotifyRateLimit IPN bus subscription bit is no longer supported")
+	}
+	if mask&NotifyInitialNetMapRemoved != 0 {
+		return errors.New("the NotifyInitialNetMap IPN bus subscription bit is no longer supported; the self node is always delivered at the start of a watch session and LocalClient.NetMap serves on-demand netmap fetches")
 	}
 	return nil
 }
@@ -321,6 +327,10 @@ type Notify struct {
 	// sniproxy, etc.) can read the current self state without watching the
 	// full netmap.
 	//
+	// It is not gated by any subscription bit: every watcher receives self
+	// changes, including one at the start of the watch session carrying
+	// the current self node (if any), so watchers can seed their view.
+	//
 	// Consumers that need additional state (peers, DNS config, packet
 	// filter) should react to SelfChange by fetching the full netmap on
 	// demand via [LocalClient.NetMap].
@@ -332,24 +342,6 @@ type Notify struct {
 	// and [Notify.PeerChanges] messages, it lets a watcher stitch together
 	// a continuous view of node state without fetching the netmap.
 	InitialStatus *ipnstate.Status `json:",omitzero"`
-
-	// NetMap, if non-nil, is the full network map. New consumers should prefer
-	// [LocalClient.NetMap] for one-shot fetches and [Notify.SelfChange] /
-	// [Notify.PeerChanges] for incremental reactive updates; NetMap on the bus
-	// is the legacy path retained for hosts whose GUIs have not yet finished
-	// migrating. It is delivered:
-	//
-	//   - On the initial Notify if the watcher requested
-	//     [NotifyInitialNetMap] (any platform).
-	//   - On subsequent Notify messages, only when tailscaled is running
-	//     on Windows. On all other platforms it is always nil after the
-	//     initial notify.
-	//
-	// Deprecated: this field is only populated on Windows and
-	// is slated for removal in favor of [Notify.InitialStatus] +
-	// [Notify.SelfChange] / [Notify.PeerChanges], etc, as this field
-	// doesn't scale.
-	NetMap *netmap.NetworkMap
 
 	// PeerChangedPatch, if non-empty, lists narrow per-field peer patches
 	// since the last Notify (currently Online, LastSeen, DERPHome,
@@ -401,8 +393,8 @@ type Notify struct {
 	// The producer guarantees that any UserID referenced by a peer in
 	// a [Notify.PeersChanged] / [Notify.PeerChangedPatch] entry will
 	// have its profile delivered either earlier on this same session
-	// (e.g. via the initial NetMap or via an earlier Notify carrying
-	// UserProfiles) or in this same Notify. A consumer that sees a
+	// (via an earlier Notify carrying UserProfiles) or in this same
+	// Notify. A consumer that sees a
 	// UserID it doesn't recognize on a session that opted in to
 	// peer-change notifications can treat it as a bug; the
 	// [LocalClient.UserProfile] LocalAPI fallback exists for sessions
