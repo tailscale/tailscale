@@ -8,7 +8,7 @@
 // * Kubernetes cluster with local kubeconfig for it (direct connection, no API server proxy)
 // * Tailscale operator installed with --set apiServerProxyConfig.mode="true"
 // * ACLs from acl.hujson
-// * OAuth client secret in TS_API_CLIENT_SECRET env, with at least auth_keys write scope and tag:k8s tag
+// * OAuth client secret in TS_API_CLIENT_SECRET env, with at least auth_keys write and services read scopes, and tag:k8s tag
 // * Default ProxyClass and operator env vars as appropriate to set the desired default proxy images.
 //
 // It also supports running against devcontrol, using the --devcontrol flag,
