@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/storage/names"
+	discoveryac "k8s.io/client-go/applyconfigurations/discovery/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -243,36 +244,45 @@ func addrTypesForClusterIPSvc(clusterIPSvc *corev1.Service) ([]discoveryv1.Addre
 	return addrTypes, nil
 }
 
-// ensureEndpointSlices ensures that EndpointSlices exist for the egress service
-// for each IP family supported by the cluster, and that their ports are up to
-// date.
+// egressSvcsFieldOwner is the field manager used by the egress Services
+// reconciler when it Server-Side Applies EndpointSlices. It must differ from the
+// egress EndpointSlices reconciler's field owner so that each reconciler owns a
+// disjoint set of fields on the shared slice.
+const egressSvcsFieldOwner = "tailscale-egress-svcs-reconciler"
+
+// ensureEndpointSlices ensures that an EndpointSlice exists for the egress
+// service for each IP family supported by the cluster, with up to date labels,
+// address type and ports.
+//
+// It runs on every reconcile so that a deleted EndpointSlice is recreated (see
+// tailscale/tailscale#20322) and slices are backfilled for existing services
+// when new IP families appear.
 func (esr *egressSvcsReconciler) ensureEndpointSlices(ctx context.Context, svc, clusterIPSvc *corev1.Service, lg *zap.SugaredLogger) error {
 	crl := egressSvcEpsLabels(svc, clusterIPSvc)
+	ports := epsPortsFromSvc(clusterIPSvc)
 	// Only create EndpointSlices for IP families supported by the cluster.
 	addrTypes, err := addrTypesForClusterIPSvc(clusterIPSvc)
 	if err != nil {
 		return err
 	}
 	for _, addrType := range addrTypes {
-		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
-				Namespace: esr.tsNamespace,
-				Labels:    crl,
-			},
-			AddressType: addrType,
-			Ports:       epsPortsFromSvc(clusterIPSvc),
+		name := fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType)))
+		// Set only the fields this reconciler owns (labels, address type, ports).
+		// (A typed EndpointSlice cannot be used here because its Endpoints field lacks
+		// omitempty and would marshal as "endpoints: null", claiming ownership and clobbering them.)
+		// Required to avoid optimistic lock errors seen in tailscale/tailscale#20916.
+		desired := discoveryac.EndpointSlice(name, esr.tsNamespace).
+			WithLabels(crl).
+			WithAddressType(addrType).
+			WithPorts(ports...)
+		u, err := applyConfigToUnstructured(desired)
+		if err != nil {
+			return err
 		}
-		if _, err := createOrUpdate(ctx, esr.Client, esr.tsNamespace, eps, func(e *discoveryv1.EndpointSlice) {
-			e.Labels = eps.Labels
-			e.AddressType = eps.AddressType
-			e.Ports = eps.Ports
-			for _, p := range e.Endpoints {
-				p.Conditions.Ready = nil
-			}
-		}); err != nil {
-			return fmt.Errorf("error ensuring %s EndpointSlice: %w", addrType, err)
+		if err := esr.Patch(ctx, u, client.Apply, client.FieldOwner(egressSvcsFieldOwner), client.ForceOwnership); err != nil {
+			return fmt.Errorf("error applying %s EndpointSlice: %w", addrType, err)
 		}
+		lg.Debugf("applied %s EndpointSlice %s", addrType, name)
 	}
 	return nil
 }
@@ -799,14 +809,14 @@ func tailnetSvcName(extNSvc *corev1.Service) string {
 }
 
 // epsPortsFromSvc takes the ClusterIP Service created for an egress service and
-// returns its Port array in a form that can be used for an EndpointSlice.
-func epsPortsFromSvc(svc *corev1.Service) (ep []discoveryv1.EndpointPort) {
+// returns its Port array as EndpointSlice port apply configurations, for use in
+// a Server-Side Apply of the EndpointSlice.
+func epsPortsFromSvc(svc *corev1.Service) (ep []*discoveryac.EndpointPortApplyConfiguration) {
 	for _, p := range svc.Spec.Ports {
-		ep = append(ep, discoveryv1.EndpointPort{
-			Protocol: &p.Protocol,
-			Port:     &p.TargetPort.IntVal,
-			Name:     &p.Name,
-		})
+		ep = append(ep, discoveryac.EndpointPort().
+			WithProtocol(p.Protocol).
+			WithPort(p.TargetPort.IntVal).
+			WithName(p.Name))
 	}
 	return ep
 }

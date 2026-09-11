@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -18,6 +19,9 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	discoveryac "k8s.io/client-go/applyconfigurations/discovery/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -75,7 +79,6 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// wasteful. Once we have a Ready condition for ExternalName Services for ProxyGroup, use the condition to
 	// determine if a reconcile is needed.
 
-	oldEps := eps.DeepCopy()
 	tailnetSvc := tailnetSvcName(svc)
 	lg = lg.With("tailnet-service-name", tailnetSvc)
 
@@ -104,7 +107,7 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	if err := er.List(ctx, podList, client.MatchingLabels(pgLabels(proxyGroupName, nil))); err != nil {
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
-	newEndpoints := make([]discoveryv1.Endpoint, 0)
+	newEndpoints := make([]*discoveryac.EndpointApplyConfiguration, 0)
 	for _, pod := range podList.Items {
 		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
@@ -120,27 +123,73 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if podIP == "" {
 			continue // Pod doesn't have an IP for this address family
 		}
-		newEndpoints = append(newEndpoints, discoveryv1.Endpoint{
-			Hostname:  (*string)(&pod.UID),
-			Addresses: []string{podIP},
-			Conditions: discoveryv1.EndpointConditions{
-				Ready:       new(true),
-				Serving:     new(true),
-				Terminating: new(false),
-			},
-		})
+		newEndpoints = append(newEndpoints, discoveryac.Endpoint().
+			WithHostname(string(pod.UID)).
+			WithAddresses(podIP).
+			WithConditions(discoveryac.EndpointConditions().
+				WithReady(true).
+				WithServing(true).
+				WithTerminating(false)))
 	}
-	// Note that Endpoints are being overwritten with the currently valid endpoints so we don't need to explicitly
-	// run a cleanup for deleted Pods etc.
-	eps.Endpoints = newEndpoints
-	if !reflect.DeepEqual(eps, oldEps) {
-		lg.Info("Updating EndpointSlice to ensure traffic is routed to ready proxy Pods")
-		if err = er.Update(ctx, eps); err != nil {
-			return res, fmt.Errorf("error updating EndpointSlice: %w", err)
+	// Endpoints must be in a deterministic order. EndpointSlice.Endpoints is a
+	// +listType=atomic field, so Server-Side Apply (below) compares the whole
+	// list as a single value. Sort by the endpoint's address so an
+	// unchanged set of ready Pods always produces an identical apply.
+	slices.SortFunc(newEndpoints, func(a, b *discoveryac.EndpointApplyConfiguration) int {
+		return strings.Compare(firstAddress(a), firstAddress(b))
+	})
+
+	// Apply only the Endpoints field under this reconciler's own field manager.
+	// The egress Services reconciler owns labels/addressType/ports on the same
+	// slice via its own field manager- see (tailscale/tailscale#20916).
+	desired := discoveryac.EndpointSlice(eps.Name, eps.Namespace).
+		WithEndpoints(newEndpoints...)
+	u, err := applyConfigToUnstructured(desired)
+	if err != nil {
+		return res, err
+	}
+	// When no Pods are ready, apply an explicit empty endpoints list rather than
+	// omitting the field. The apply configuration's endpoints field is
+	// omitempty, so WithEndpoints of an empty set drops it entirely, which under
+	// Server-Side Apply relinquishes ownership. This may have little impact in
+	// practice, but is safer given the potential for resource contention on
+	// endpointslices.
+	if len(newEndpoints) == 0 {
+		if err := unstructured.SetNestedField(u.Object, []any{}, "endpoints"); err != nil {
+			return res, fmt.Errorf("error setting empty endpoints: %w", err)
 		}
+	}
+	if err := er.Patch(ctx, u, client.Apply, client.FieldOwner(egressEpsFieldOwner), client.ForceOwnership); err != nil {
+		return res, fmt.Errorf("error applying EndpointSlice endpoints: %w", err)
 	}
 
 	return res, nil
+}
+
+// applyConfigToUnstructured converts a typed apply configuration into an
+// *unstructured.Unstructured suitable for a server-side-apply Patch
+// (client.Apply) on controller-runtime v0.19.4, which has no typed
+// client.Client.Apply method.
+// TODO(beckypauley): remove when upgraded to v0.23.
+func applyConfigToUnstructured(ac any) (*unstructured.Unstructured, error) {
+	contents, err := runtime.DefaultUnstructuredConverter.ToUnstructured(ac)
+	if err != nil {
+		return nil, fmt.Errorf("error converting apply configuration to unstructured: %w", err)
+	}
+	return &unstructured.Unstructured{Object: contents}, nil
+}
+
+// egressEpsFieldOwner is the field manager used by the egress EndpointSlices
+// reconciler when it Server-Side Applies the Endpoints of a slice.
+const egressEpsFieldOwner = "tailscale-egress-eps-reconciler"
+
+// firstAddress returns the endpoint's first address, or the empty string if it
+// has none, for use as a stable sort key.
+func firstAddress(e *discoveryac.EndpointApplyConfiguration) string {
+	if e == nil || len(e.Addresses) == 0 {
+		return ""
+	}
+	return e.Addresses[0]
 }
 
 func podIPForFamily(pod *corev1.Pod, addrType discoveryv1.AddressType) (string, error) {
