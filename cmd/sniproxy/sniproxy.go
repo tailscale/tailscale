@@ -138,10 +138,9 @@ func run(ctx context.Context, ts *tsnet.Server, wgPort int, hostname string, pro
 	}
 
 	// Finally, start mainloop to configure app connector based on information
-	// in the self node's CapMap. We set NotifyInitialNetMap so the first
-	// Notify carries the current self node (now via Notify.SelfChange);
-	// subsequent self changes wake us up too.
-	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates|ipn.NotifyInitialNetMap)
+	// in the self node's CapMap. The first Notify carries the current self
+	// node via Notify.SelfChange; subsequent self changes wake us up too.
+	bus, err := lc.WatchIPNBus(ctx, ipn.NotifyWatchEngineUpdates)
 	if err != nil {
 		log.Fatalf("watching IPN bus: %v", err)
 	}

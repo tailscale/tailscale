@@ -3756,11 +3756,10 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 
 	var policyUID string
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
-		ipn.NotifyInitialNetMap | ipn.NotifyInitialStatus |
+		ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
 		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
 	if mask&initialBits != 0 {
-		cn := b.currentNode()
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
 			ini.SessionID = sessionID
@@ -3771,16 +3770,6 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		}
 		if mask&ipn.NotifyInitialPrefs != 0 {
 			ini.Prefs = new(b.sanitizedPrefsLocked())
-		}
-		if mask&ipn.NotifyInitialNetMap != 0 {
-			if nm := cn.NetMap(); nm != nil && nm.SelfNode.Valid() {
-				ini.SelfChange = nm.SelfNode.AsStruct()
-			}
-			// The legacy initial NetMap is delivered cross-platform: it
-			// is what watchers asked for by setting NotifyInitialNetMap
-			// and is always a one-shot, so the cost of building it is
-			// paid once per bus subscription.
-			ini.NetMap = cn.netMapWithPeers()
 		}
 		if statusSB != nil {
 			b.updateStatusLocked(statusSB)
@@ -3811,6 +3800,22 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			if err != nil {
 				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
 			}
+		}
+	}
+
+	// Always deliver the current self node (if any) at the start of the
+	// watch session, regardless of mask. [ipn.Notify.SelfChange] is not
+	// gated by any subscription bit; runtime self changes go to every
+	// watcher, and the initial one lets watchers seed their view without
+	// requesting a full netmap. Load the node backend directly rather
+	// than via currentNode, whose lazy test-only construction needs more
+	// of LocalBackend than zero-value test instances have.
+	if cn := b.currentNodeAtomic.Load(); cn != nil {
+		if nm := cn.NetMap(); nm != nil && nm.SelfNode.Valid() {
+			if ini == nil {
+				ini = &ipn.Notify{Version: version.Long()}
+			}
+			ini.SelfChange = nm.SelfNode.AsStruct()
 		}
 	}
 

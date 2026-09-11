@@ -48,7 +48,7 @@ func SetInitialKeys(store ipn.StateStore, podUID string) error {
 // notifications (which fire whenever the self node changes) and reads
 // the new self node directly from the notify.
 func KeepKeysUpdated(ctx context.Context, store ipn.StateStore, lc klc.LocalClient) error {
-	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	w, err := lc.WatchIPNBus(ctx, 0)
 	if err != nil {
 		return fmt.Errorf("error watching IPN bus: %w", err)
 	}

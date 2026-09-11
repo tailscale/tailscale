@@ -2470,9 +2470,6 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 			if n.SelfChange == nil {
 				return false
 			}
-			if n.NetMap != nil {
-				t.Errorf("NetMap was delivered to NotifyNoNetMap watcher")
-			}
 			if got, want := len(n.PeersChanged), 2; got != want {
 				t.Errorf("PeersChanged len = %d; want %d", got, want)
 				return false
@@ -2507,6 +2504,29 @@ func TestSetControlClientStatusSendsFullNetmapAsPeerChanges(t *testing.T) {
 		},
 	}
 	b.SetControlClientStatus(b.cc, controlclient.Status{NetMap: nm, LoggedIn: true})
+	nw.check()
+}
+
+// TestWatchNotificationsInitialSelfChange verifies that a watcher with no
+// initial-state bits set still receives the current self node in
+// Notify.SelfChange at the start of the session.
+func TestWatchNotificationsInitialSelfChange(t *testing.T) {
+	b := newTestLocalBackend(t)
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:   1,
+			User: 1,
+			Key:  makeNodeKeyFromID(1),
+		}).View(),
+	})
+
+	nw := newNotificationWatcher(t, b, ipnauth.Self)
+	nw.watch(0, []wantedNotification{{
+		name: "initial self node",
+		cond: func(t testing.TB, _ ipnauth.Actor, n *ipn.Notify) bool {
+			return n.SelfChange != nil && n.SelfChange.ID == 1
+		},
+	}})
 	nw.check()
 }
 
@@ -5248,6 +5268,11 @@ func TestDriveManageShares(t *testing.T) {
 				0,
 				func() { wg.Done() },
 				func(n *ipn.Notify) bool {
+					if n.DriveShares.IsNil() {
+						// Skip unrelated notifications, such as the
+						// initial SelfChange sent to every watcher.
+						return true
+					}
 					select {
 					case result <- n.DriveShares:
 					default:
