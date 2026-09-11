@@ -150,7 +150,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		res = reconcile.Result{RequeueAfter: requeueInterval()}
 	}
 
-	return reconcile.Result{}, nil
+	return res, nil
 }
 
 // maybeProvision ensures that a Tailscale Service for this Ingress exists and is up to date and that the serve config for the
