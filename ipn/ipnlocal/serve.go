@@ -1811,21 +1811,6 @@ func validateServeConfigUpdate(existing, incoming ipn.ServeConfigView) error {
 			}
 		}
 
-		existingHasTCP := existingSvcCfg.TCP().Len() > 0
-		existingHasWeb := existingSvcCfg.Web().Len() > 0
-
-		// A Service cannot turn on TUN mode if TCP or web handlers exist.
-		if incomingSvcCfg.Tun() && (existingHasTCP || existingHasWeb) {
-			return fmt.Errorf("cannot turn on TUN mode with existing TCP or web handlers for %s", svcName)
-		}
-
-		incomingHasTCP := incomingSvcCfg.TCP().Len() > 0
-		incomingHasWeb := incomingSvcCfg.Web().Len() > 0
-
-		// A Service cannot add TCP or web handlers if TUN mode is enabled.
-		if (incomingHasTCP || incomingHasWeb) && existingSvcCfg.Tun() {
-			return fmt.Errorf("cannot add TCP or web handlers as TUN mode is enabled for %s", svcName)
-		}
 	}
 
 	return nil
