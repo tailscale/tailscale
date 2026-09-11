@@ -43,6 +43,12 @@ const (
 	PortalSilent PortalStyle = "silent"
 )
 
+// PortalLoginHost is the host of the login page a [CaptivePortal] sends clients
+// to. The network's DNS server resolves it to an address on the public
+// Internet, unless [CaptivePortal.HijackDNS] is set, in which case it resolves
+// to the portal itself like every other name.
+const PortalLoginHost = "portal.example.net"
+
 // CaptivePortal makes a network behave like one behind a captive portal.
 //
 // A portalled network drops traffic to everything on the virtual Internet —

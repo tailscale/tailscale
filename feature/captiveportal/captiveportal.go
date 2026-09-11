@@ -9,11 +9,13 @@ package captiveportal
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
 	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/captiveportal/netcheckhook" // install the netcheck probe hook too
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -693,6 +695,7 @@ func (e *Extension) performCaptiveDetection(ctx context.Context) captivedetectio
 	}
 
 	d := captivedetection.NewDetector(e.logf)
+	d.SetLocalNetworkResolvers(e.localNetworkResolvers)
 	dm := e.host.NodeBackend().DERPMap()
 	var preferredDERP tailcfg.DERPRegionID
 	if mc, ok := e.sb.Sys().MagicSock.GetOK(); ok {
@@ -704,6 +707,33 @@ func (e *Extension) performCaptiveDetection(ctx context.Context) captivedetectio
 	res := d.DetectResult(ctx, netMon, dm, preferredDERP)
 	e.applyResult(res)
 	return res.Verdict
+}
+
+// localNetworkResolvers reports the DNS servers the physical network handed us,
+// which is what the OS was using before Tailscale took DNS over.
+//
+// Detection asks them directly rather than going through the system resolver,
+// which on a node using an exit node leads into the tunnel and therefore
+// nowhere at all from behind a portal. See
+// [captivedetection.Detector.SetLocalNetworkResolvers].
+//
+// Returning nil is fine: the detector falls back to the default gateway, and
+// then to the system resolver.
+func (e *Extension) localNetworkResolvers() []netip.Addr {
+	if !buildfeatures.HasDNS {
+		return nil
+	}
+	dm, ok := e.sb.Sys().DNSManager.GetOK()
+	if !ok {
+		return nil
+	}
+	cfg, err := dm.GetBaseConfig()
+	if err != nil {
+		// Expected on the platforms that don't expose the base configuration.
+		e.logf("[v1] captiveportal: no base DNS config to take resolvers from: %v", err)
+		return nil
+	}
+	return cfg.Nameservers
 }
 
 // applyResult records a detection result in the health tracker and the client

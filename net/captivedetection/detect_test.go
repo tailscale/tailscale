@@ -225,7 +225,7 @@ func TestPlatformHint(t *testing.T) {
 			d := NewDetector(t.Logf)
 			// No resolver and no reachable endpoints, so anything other than
 			// the platform hint leaves us with no evidence.
-			d.lookupIPFn = func(context.Context, string) ([]netip.Addr, error) {
+			d.lookupIPFn = func(context.Context, netip.Addr, string) ([]netip.Addr, error) {
 				return nil, errNXDOMAIN
 			}
 			res := d.detectCaptivePortalWithGOOS(t.Context(), netmon.NewStatic(), deadDERPMap(t), 0, "linux")

@@ -31,11 +31,12 @@ const numWildcardProbes = 2
 // distinguish from legitimate CDN or geo-DNS behavior, and acting on it would
 // mean warning users about portals that don't exist.
 //
-// Unlike the HTTP probes, this cannot be scoped to a particular interface:
-// [net.Resolver] offers no way to bind its queries to one. It therefore runs
-// once per detection attempt against whatever resolver the system would use,
-// which on a machine with several active networks may not be the one belonging
-// to the network we're investigating.
+// The queries go to the physical network's own resolvers; see
+// [Detector.lookupIP]. They are not bound to a particular interface, because by
+// the time we escalate this far no interface has reached anything and picking
+// one to blame would be guesswork. On a machine with several active networks
+// that means the answering resolver may not belong to the network we're
+// investigating.
 func (d *Detector) probeDNS(ctx context.Context, derpMap *tailcfg.DERPMap) []Signal {
 	logf := d.logf
 
@@ -77,7 +78,7 @@ func (d *Detector) probeDNSHijack(ctx context.Context, derpMap *tailcfg.DERPMap,
 		return false
 	}
 
-	got, err := d.lookupIP(ctx, host)
+	got, err := d.lookupIP(ctx, host, 0)
 	if err != nil || len(got) == 0 {
 		logf("[v1] captivedetection: DNS hijack probe: lookup of %q failed: %v", host, err)
 		return false
@@ -108,7 +109,7 @@ func (d *Detector) probeDNSHijack(ctx context.Context, derpMap *tailcfg.DERPMap,
 //
 // The probe names are in the .invalid TLD, which RFC 6761 reserves and
 // guarantees will never resolve, so a real answer can only have been
-// fabricated. The queries go only to the local network's resolver.
+// fabricated.
 func (d *Detector) probeDNSWildcard(ctx context.Context, logf logger.Logf) bool {
 	var first netip.Addr
 	for i := range numWildcardProbes {
@@ -116,7 +117,7 @@ func (d *Detector) probeDNSWildcard(ctx context.Context, logf logger.Logf) bool 
 		// won't append search domains, which could otherwise turn it into a
 		// name that legitimately resolves.
 		name := "ts-portal-probe-" + strconv.Itoa(int(d.Now().UnixNano())+i) + ".invalid."
-		got, err := d.lookupIP(ctx, name)
+		got, err := d.lookupIP(ctx, name, 0)
 		if err != nil || len(got) == 0 {
 			// The expected outcome: NXDOMAIN.
 			return false

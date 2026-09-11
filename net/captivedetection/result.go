@@ -187,6 +187,11 @@ type Result struct {
 	// Signals is every signal gathered during detection, in no particular
 	// order. Callers use it for logging and metrics.
 	Signals []Signal
+
+	// ifIndex is the index of the interface whose probes reported the portal,
+	// or zero if no single interface did. It is used to scope the lookup in
+	// [Detector.annotatePortalLocality] to the network that intercepted us.
+	ifIndex int
 }
 
 // evidence accumulates the signals gathered by the probes of one detection

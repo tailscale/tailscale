@@ -23,6 +23,13 @@ var (
 	fakeFiles             = newVIP("files.tailscale", 6)      // serves binary files (tta, tailscale, tailscaled) to VMs
 	fakeACME              = newVIP("acme.example", 7)         // fake ACME CA for vmtests
 
+	// fakePortalLogin is the host a [CaptivePortal] sends clients to. It
+	// deliberately resolves to an address out on the Internet rather than one
+	// on the LAN, which is how a real hosted portal is set up and what makes it
+	// unreachable to a client whose default route points at an exit node.
+	// A portal with HijackDNS on answers for it with its own address instead.
+	fakePortalLogin = newVIP(PortalLoginHost, "203.0.113.10")
+
 	// fakeSplitDNS is a second DNS server, distinct from fakeDNS, serving only
 	// splitDNSZone.
 	fakeSplitDNS = newVIP("split-dns", "4.11.4.12", "2411::412")
@@ -63,6 +70,10 @@ var splitDNSZone = map[string]netip.Addr{
 	SplitDNSName:     netip.MustParseAddr(SplitDNSAddr),
 	SplitDNSBareName: netip.MustParseAddr(SplitDNSBareAddr),
 }
+
+// FakePortalLoginIPv4 returns the public IPv4 address that [PortalLoginHost]
+// resolves to on a network whose portal is not hijacking DNS.
+func FakePortalLoginIPv4() netip.Addr { return fakePortalLogin.v4 }
 
 // FakeSplitDNSIPv4 returns the IPv4 address of the secondary (split-DNS) fake
 // DNS server. It answers only [SplitDNSName] and [SplitDNSBareName].

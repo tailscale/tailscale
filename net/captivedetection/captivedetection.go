@@ -21,6 +21,7 @@ import (
 
 	"tailscale.com/feature"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -44,13 +45,14 @@ var HookPlatformHint feature.Hook[func(ctx context.Context) (found, ok bool)]
 type Detector struct {
 	clock func() time.Time
 
-	// lookupIPFn, if non-nil, replaces the system resolver for the DNS
-	// interception probes. It is set by tests.
-	lookupIPFn func(ctx context.Context, host string) ([]netip.Addr, error)
+	// lookupIPFn, if non-nil, replaces the actual DNS query made by
+	// [Detector.lookupIP]. server is the resolver to ask, or the zero Addr to
+	// mean the system resolver. It is set by tests.
+	lookupIPFn func(ctx context.Context, server netip.Addr, host string) ([]netip.Addr, error)
 
-	// dialFn, if non-nil, replaces the dialer used for the HTTP probes,
-	// bypassing the interface binding in [Detector.dialContext]. It is set by
-	// tests to route probes through a virtual network.
+	// dialFn, if non-nil, replaces the dialer used for the HTTP probes and the
+	// DNS queries, bypassing the interface binding in [Detector.dialTo]. It is
+	// set by tests to route both through a virtual network.
 	dialFn func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// httpClient is the HTTP client that is used for captive portal detection. It is configured
@@ -58,7 +60,14 @@ type Detector struct {
 	httpClient *http.Client
 	// currIfIndex is the index of the interface that is currently being used by the httpClient.
 	currIfIndex int
-	// mu guards currIfIndex.
+	// netMon is the network monitor for the current detection attempt, used to
+	// keep our sockets out of the Tailscale tunnel and to find the default
+	// gateway. It is nil until a detection attempt sets it, and in tests.
+	netMon *netmon.Monitor
+	// localResolversFn, if non-nil, reports the DNS servers the physical
+	// network handed us. See [Detector.SetLocalNetworkResolvers].
+	localResolversFn func() []netip.Addr
+	// mu guards currIfIndex, netMon and localResolversFn.
 	mu syncs.Mutex
 	// logf is the logger used for logging messages. If it is nil, log.Printf is used.
 	logf logger.Logf
@@ -88,14 +97,18 @@ func (d *Detector) Now() time.Time {
 	return time.Now()
 }
 
-// lookupIP resolves host, using the injected resolver if a test set one.
-func (d *Detector) lookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	if d.lookupIPFn != nil {
-		return d.lookupIPFn(ctx, host)
-	}
-	ctx, cancel := context.WithTimeout(ctx, Timeout)
-	defer cancel()
-	return net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
+// SetLocalNetworkResolvers tells the detector which DNS servers the physical
+// network handed us, so that [Detector.lookupIP] can ask them directly rather
+// than going through whatever resolver the system would pick. fn is called once
+// per detection attempt, and may return nil.
+//
+// This matters because on a node using an exit node the system resolver leads
+// into the tunnel, which is exactly where a captive portal has cut us off. See
+// [Detector.lookupIP].
+func (d *Detector) SetLocalNetworkResolvers(fn func() []netip.Addr) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.localResolversFn = fn
 }
 
 // Timeout is the timeout for captive portal detection requests. Because the captive portal intercepting our requests
@@ -131,11 +144,12 @@ func (d *Detector) DetectResult(ctx context.Context, netMon *netmon.Monitor, der
 // the LAN is taken back out of the tunnel, while one on the public Internet does
 // not, because the default route stays pointed at the exit node either way.
 //
-// Resolving the host through the system resolver is not a guess at where the
-// page lives. It is the same lookup the user's browser is about to perform, so
-// it predicts what the browser will actually be able to reach — including when
-// the resolver is hijacked and answers with the portal's own address, which is
-// precisely the case we want to report as local.
+// The lookup goes to the physical network's own resolvers, off the tunnel, which
+// is both the only way to get an answer at all when an exit node is up and the
+// authoritative word on where the page lives: it is the portal's network that
+// decided to send us there. A hijacked resolver answering with the portal's own
+// address is not a wrong answer for our purposes — it is precisely the case we
+// want to report as local.
 //
 // Anything we cannot determine is left unset rather than guessed at; see the
 // callers for why unknown is treated as local.
@@ -157,7 +171,9 @@ func (d *Detector) annotatePortalLocality(ctx context.Context, res *Result) {
 		return
 	}
 
-	got, err := d.lookupIP(ctx, host)
+	// Bound to the interface the portal answered on, so that on a machine with
+	// several networks up we ask the one that intercepted us.
+	got, err := d.lookupIP(ctx, host, res.ifIndex)
 	if err != nil || len(got) == 0 {
 		d.logf("[v1] captivedetection: could not resolve portal host %q: %v", host, err)
 		return
@@ -166,6 +182,12 @@ func (d *Detector) annotatePortalLocality(ctx context.Context, res *Result) {
 }
 
 func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netmon.Monitor, derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.DERPRegionID, goos string) Result {
+	// Remember the monitor for the sockets we're about to open: they have to
+	// stay out of the tunnel, and the resolvers we prefer come from it.
+	d.mu.Lock()
+	d.netMon = netMon
+	d.mu.Unlock()
+
 	// Ask the OS first: it's cheaper and more reliable than anything we can
 	// probe ourselves.
 	if hint, ok := HookPlatformHint.GetOk(); ok {
@@ -229,6 +251,7 @@ func (d *Detector) detectCaptivePortalWithGOOS(ctx context.Context, netMon *netm
 		case VerdictPortal:
 			d.logf("captivedetection: interface %s looks intercepted (signals=%v); checking the remaining interfaces before reporting", ifName, res.Signals)
 			if portal == nil {
+				res.ifIndex = i.Index
 				portal = &res
 			}
 		}
@@ -439,21 +462,73 @@ func (d *Detector) probeEndpoint(ctx context.Context, e Endpoint, ifIndex int) (
 }
 
 func (d *Detector) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.mu.Lock()
+	ifIndex := d.currIfIndex
+	d.mu.Unlock()
+
+	return d.dialTo(ctx, network, addr, ifIndex)
+}
+
+// dialTo dials addr on the interface with the given index, or on whichever one
+// the system picks if ifIndex is zero.
+func (d *Detector) dialTo(ctx context.Context, network, addr string, ifIndex int) (net.Conn, error) {
 	if d.dialFn != nil {
 		return d.dialFn(ctx, network, addr)
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	netMon := d.netMon
+	d.mu.Unlock()
 
-	ifIndex := d.currIfIndex
+	return d.dialer(netMon, ifIndex).DialContext(ctx, network, addr)
+}
 
-	dl := &net.Dialer{
-		Timeout: Timeout,
-		Control: func(network, address string, c syscall.RawConn) error {
+// dialer returns a dialer for a probe that must reach the physical network.
+//
+// Everything captive portal detection does is a question about the network the
+// machine is physically attached to, so none of it may go through Tailscale.
+// That is not just a matter of tidiness: a node using an exit node routes the
+// default route, and with ExitNodeAllowLANAccess off the local subnets too, into
+// the tunnel — which behind a portal goes nowhere. Probes sent that way can only
+// ever time out, and we would report that a network we never touched is fine.
+//
+// netns is the same escape hatch the rest of the client uses (a bypass fwmark on
+// Linux, binding to the default interface elsewhere). On top of it we keep the
+// existing per-interface binding, which has to be applied second so that it wins
+// on Darwin: netns binds to the default interface, while the probe loop exists
+// precisely because macOS often has no default route interface until the user
+// accepts the captive portal alert.
+func (d *Detector) dialer(netMon *netmon.Monitor, ifIndex int) netns.Dialer {
+	dl := &net.Dialer{Timeout: Timeout}
+
+	if netMon == nil {
+		// No monitor to consult, as in tests. Fall back to a plain dialer
+		// rather than panicking in netns.
+		dl.Control = func(network, address string, c syscall.RawConn) error {
 			return setSocketInterfaceIndex(c, ifIndex, d.logf)
-		},
+		}
+		return dl
 	}
 
-	return dl.DialContext(ctx, network, addr)
+	wrapped := netns.FromDialer(d.logf, netMon, dl)
+	if netns.IsSOCKSDialer(wrapped) {
+		// All traffic is going to a SOCKS proxy, so there is no socket of ours
+		// left to bind to an interface.
+		return wrapped
+	}
+	if ifIndex == 0 {
+		// No interface in particular, so leave netns's own choice in place.
+		// Binding to index zero would clear it.
+		return wrapped
+	}
+	bypass := dl.Control // installed by FromDialer, unless netns is disabled
+	dl.Control = func(network, address string, c syscall.RawConn) error {
+		if bypass != nil {
+			if err := bypass(network, address, c); err != nil {
+				return err
+			}
+		}
+		return setSocketInterfaceIndex(c, ifIndex, d.logf)
+	}
+	return wrapped
 }

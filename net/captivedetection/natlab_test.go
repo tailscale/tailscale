@@ -4,6 +4,7 @@
 package captivedetection
 
 import (
+	"net/netip"
 	"runtime"
 	"slices"
 	"testing"
@@ -22,7 +23,7 @@ import (
 // conditions the detector is built for, and they can't be faked with a local
 // listener.
 
-const portalLoginURL = "http://portal.example.net/login?ap=natlab"
+const portalLoginURL = "http://" + vnet.PortalLoginHost + "/login?ap=natlab"
 
 // natlabEnv is a virtual network with one in-process node, plus a DERP map
 // pointing at the network's fake DERP servers.
@@ -98,13 +99,23 @@ func (e *natlabEnv) detect(t *testing.T) Result {
 
 	d := NewDetector(t.Logf)
 	d.dialFn = e.node.DialContext
-	d.lookupIPFn = e.node.LookupIP
+	// What DHCP would have told a real client on this network, and the only
+	// resolver detection is allowed to ask: the host's own would answer from
+	// the real Internet, about a network it knows nothing about.
+	d.SetLocalNetworkResolvers(func() []netip.Addr {
+		return []netip.Addr{vnet.FakeDNSIPv4()}
+	})
 
 	netMon := netmon.NewStatic()
 	if !hasProbeableInterface(netMon) {
 		t.Skip("no usable network interface on this host to iterate over")
 	}
-	return d.detectCaptivePortalWithGOOS(t.Context(), netMon, e.derpMap, 0, runtime.GOOS)
+	res := d.detectCaptivePortalWithGOOS(t.Context(), netMon, e.derpMap, 0, runtime.GOOS)
+	// [Detector.DetectResult] annotates before handing the result back, and
+	// where the login page lives is decided by this network's resolver, so it
+	// belongs on this side of the virtual network too.
+	d.annotatePortalLocality(t.Context(), &res)
+	return res
 }
 
 // hasProbeableInterface reports whether detection would probe at all on this
@@ -281,5 +292,66 @@ func TestNatlabProxyBlockPageIsNotAPortal(t *testing.T) {
 	// It should have been noticed and recorded, just not acted on.
 	if !hasSignal(res, SignalUnexpectedStatus) {
 		t.Errorf("signals = %v, want a %v among them", res.Signals, SignalUnexpectedStatus)
+	}
+}
+
+// TestNatlabPortalLoginPageOffTheLAN is the case a client using an exit node
+// cannot be helped out of, and so must be told about accurately.
+//
+// The gateway intercepts HTTP and sends us to a login page by name. That name
+// belongs to a machine out on the Internet, as hosted portals normally do, which
+// means the page sits behind the default route — the one the exit node holds.
+// Taking the LAN back out of the tunnel would not bring it any closer; only
+// turning the exit node off will. Getting this wrong is worse than saying
+// nothing: it sends the user to open up their local network for no benefit.
+//
+// The name has to be resolved to find that out, and the only resolver that can
+// answer is this network's, one hop away. The system resolver leads through the
+// tunnel to the exit node, which is precisely what the portal has cut off.
+func TestNatlabPortalLoginPageOffTheLAN(t *testing.T) {
+	res := newNatlabEnv(t, &vnet.CaptivePortal{
+		Style:         vnet.PortalRedirect,
+		LoginURL:      portalLoginURL,
+		InterceptHTTP: true,
+	}).detect(t)
+
+	if res.Verdict != VerdictPortal {
+		t.Fatalf("verdict = %v, want %v (signals=%v)", res.Verdict, VerdictPortal, res.Signals)
+	}
+	if res.PortalURL != portalLoginURL {
+		t.Fatalf("PortalURL = %q, want %q", res.PortalURL, portalLoginURL)
+	}
+	local, known := res.PortalURLIsLocal.Get()
+	if !known {
+		t.Fatalf("PortalURLIsLocal = %q, want it to be known: %v resolves to %v on this network",
+			res.PortalURLIsLocal, vnet.PortalLoginHost, vnet.FakePortalLoginIPv4())
+	}
+	if local {
+		t.Errorf("PortalURLIsLocal = true, want false: %v is out on the Internet at %v",
+			vnet.PortalLoginHost, vnet.FakePortalLoginIPv4())
+	}
+}
+
+// TestNatlabPortalLoginPageOnTheLAN is the other half: the same login URL, on a
+// network whose resolver answers for it with the gateway's own address. The
+// page is on the LAN, so a client using an exit node can be offered its local
+// network back and reach it.
+func TestNatlabPortalLoginPageOnTheLAN(t *testing.T) {
+	res := newNatlabEnv(t, &vnet.CaptivePortal{
+		Style:         vnet.PortalRedirect,
+		LoginURL:      portalLoginURL,
+		InterceptHTTP: false,
+		HijackDNS:     true,
+	}).detect(t)
+
+	if res.Verdict != VerdictPortal {
+		t.Fatalf("verdict = %v, want %v (signals=%v)", res.Verdict, VerdictPortal, res.Signals)
+	}
+	local, known := res.PortalURLIsLocal.Get()
+	if !known {
+		t.Fatalf("PortalURLIsLocal = %q, want it to be known", res.PortalURLIsLocal)
+	}
+	if !local {
+		t.Errorf("PortalURLIsLocal = false, want true: the resolver points %v at the gateway", vnet.PortalLoginHost)
 	}
 }

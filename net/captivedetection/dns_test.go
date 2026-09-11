@@ -6,6 +6,7 @@ package captivedetection
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -15,7 +16,14 @@ import (
 	"tailscale.com/types/opt"
 )
 
-var errNXDOMAIN = errors.New("no such host")
+// errNXDOMAIN is what a resolver that answered returns for a name that doesn't
+// exist, as opposed to one that didn't answer at all. [isNotFound] tells them
+// apart, so the distinction has to survive into the fakes.
+var errNXDOMAIN = &net.DNSError{Err: "no such host", IsNotFound: true}
+
+// errNoAnswer is a resolver that could not be reached at all, which is what a
+// tunneled query to the LAN looks like from behind a captive portal.
+var errNoAnswer = errors.New("i/o timeout")
 
 // testDERPMap is a minimal DERP map with one node whose real address we know,
 // which is what the hijack probe compares answers against.
@@ -32,29 +40,35 @@ func testDERPMap() *tailcfg.DERPMap {
 	}
 }
 
-// detectorWithResolver returns a Detector whose DNS lookups are served by
-// answers, keyed by hostname. A host not present in the map gets NXDOMAIN.
+// detectorWithResolver returns a Detector where every resolver, local or
+// system, serves answers, keyed by hostname. A host not present in the map gets
+// NXDOMAIN.
 //
 // The wildcard probe's names are randomized, so the key "x.invalid" stands in
 // for any name in that domain.
 func detectorWithResolver(t *testing.T, answers map[string][]string) *Detector {
 	d := NewDetector(t.Logf)
-	d.lookupIPFn = func(_ context.Context, host string) ([]netip.Addr, error) {
-		host = strings.TrimSuffix(host, ".")
-		strs, ok := answers[host]
-		if !ok && strings.HasSuffix(host, ".invalid") {
-			strs, ok = answers["x.invalid"]
-		}
-		if !ok {
-			return nil, errNXDOMAIN
-		}
-		var out []netip.Addr
-		for _, s := range strs {
-			out = append(out, netip.MustParseAddr(s))
-		}
-		return out, nil
+	d.lookupIPFn = func(_ context.Context, _ netip.Addr, host string) ([]netip.Addr, error) {
+		return answerFrom(answers, host)
 	}
 	return d
+}
+
+// answerFrom serves host out of answers, in the shape a resolver would.
+func answerFrom(answers map[string][]string, host string) ([]netip.Addr, error) {
+	host = strings.TrimSuffix(host, ".")
+	strs, ok := answers[host]
+	if !ok && strings.HasSuffix(host, ".invalid") {
+		strs, ok = answers["x.invalid"]
+	}
+	if !ok {
+		return nil, errNXDOMAIN
+	}
+	var out []netip.Addr
+	for _, s := range strs {
+		out = append(out, netip.MustParseAddr(s))
+	}
+	return out, nil
 }
 
 func TestProbeDNSHijack(t *testing.T) {
@@ -161,7 +175,7 @@ func TestProbeDNSWildcard(t *testing.T) {
 func TestProbeDNSWildcardNeedsAgreement(t *testing.T) {
 	d := NewDetector(t.Logf)
 	var n int
-	d.lookupIPFn = func(_ context.Context, host string) ([]netip.Addr, error) {
+	d.lookupIPFn = func(_ context.Context, _ netip.Addr, host string) ([]netip.Addr, error) {
 		n++
 		// Answer each probe with a different LAN address.
 		return []netip.Addr{netip.AddrFrom4([4]byte{192, 168, 1, byte(n)})}, nil
@@ -180,7 +194,7 @@ func TestProbeDNSWildcardNeedsAgreement(t *testing.T) {
 func TestProbeDNSWildcardNamesAreFQDNs(t *testing.T) {
 	d := NewDetector(t.Logf)
 	var names []string
-	d.lookupIPFn = func(_ context.Context, host string) ([]netip.Addr, error) {
+	d.lookupIPFn = func(_ context.Context, _ netip.Addr, host string) ([]netip.Addr, error) {
 		names = append(names, host)
 		return nil, errNXDOMAIN
 	}
