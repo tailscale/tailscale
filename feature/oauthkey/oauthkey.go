@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/feature"
 	"tailscale.com/internal/client/tailscale"
+	"tailscale.com/util/authretry"
 )
 
 func init() {
@@ -52,9 +54,15 @@ func resolveAuthKey(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (str
 		TokenURL:     baseURL + "/api/v2/oauth/token",
 	}
 
+	tokenSource := retryTokenSource{
+		ctx:          ctx,
+		source:       credentials.TokenSource(ctx),
+		retryEnabled: args.RetryTransientAuthErrors,
+	}
+
 	tsClient := tailscale.NewClient("-", nil)
 	tsClient.UserAgent = "tailscale-cli"
-	tsClient.HTTPClient = credentials.Client(ctx)
+	tsClient.HTTPClient = oauth2.NewClient(ctx, tokenSource)
 	tsClient.BaseURL = baseURL
 
 	caps := tailscale.KeyCapabilities{
@@ -73,6 +81,21 @@ func resolveAuthKey(ctx context.Context, args tailscale.ResolveAuthKeyArgs) (str
 		return "", err
 	}
 	return authkey, nil
+}
+
+type retryTokenSource struct {
+	ctx          context.Context
+	source       oauth2.TokenSource
+	retryEnabled bool
+}
+
+func (s retryTokenSource) Token() (token *oauth2.Token, err error) {
+	_, err = authretry.RetryOnTransientFailure(s.ctx, "oauth-token", s.retryEnabled, func() (string, error) {
+		var tokenErr error
+		token, tokenErr = s.source.Token()
+		return "", tokenErr
+	})
+	return token, err
 }
 
 func parseOptionalAttributes(clientSecret string) (strippedSecret string, ephemeral bool, preauth bool, baseURL string, err error) {

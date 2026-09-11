@@ -20,6 +20,9 @@ type ResolveAuthKeyWIFArgs struct {
 	Audience string
 	// Tags is the list of tags to be associated with the auth key.
 	Tags []string
+	// RetryTransientAuthErrors enables retrying transient server errors during
+	// token exchange with exponential backoff.
+	RetryTransientAuthErrors bool
 }
 
 type ExchangeJWTForTokenWIFArgs struct {
