@@ -71,17 +71,24 @@ type settings struct {
 	// when setting up rules to proxy cluster traffic to cluster ingress
 	// target.
 	// Deprecated: use PodIPv4, PodIPv6 instead to support dual stack clusters
-	PodIP                 string
-	PodIPv4               string
-	PodIPv6               string
-	PodUID                string
-	HealthCheckAddrPort   string
-	LocalAddrPort         string
-	MetricsEnabled        bool
-	HealthCheckEnabled    bool
-	DebugAddrPort         string
-	EgressProxiesCfgPath  string
-	IngressProxiesCfgPath string
+	PodIP   string
+	PodIPv4 string
+	PodIPv6 string
+	PodUID  string
+	// RelayServerPort and RelayServerStaticEndpoints configure the node to
+	// run as a peer relay server. They are "set"-only settings, so they are
+	// applied via 'tailscale set' rather than 'tailscale up'.
+	RelayServerPort               string
+	RelayServerPortSet            bool
+	RelayServerStaticEndpoints    string
+	RelayServerStaticEndpointsSet bool
+	HealthCheckAddrPort           string
+	LocalAddrPort                 string
+	MetricsEnabled                bool
+	HealthCheckEnabled            bool
+	DebugAddrPort                 string
+	EgressProxiesCfgPath          string
+	IngressProxiesCfgPath         string
 	// CertShareMode is set for Kubernetes Pods running cert share mode.
 	// Possible values are empty (containerboot doesn't run any certs
 	// logic),  'ro' (for Pods that shold never attempt to issue/renew
@@ -93,24 +100,26 @@ type settings struct {
 
 func configFromEnv() (*settings, error) {
 	cfg := &settings{
-		AuthKey:            cmp.Or(os.Getenv("TS_AUTHKEY"), os.Getenv("TS_AUTH_KEY")),
-		ClientID:           os.Getenv("TS_CLIENT_ID"),
-		ClientSecret:       os.Getenv("TS_CLIENT_SECRET"),
-		IDToken:            os.Getenv("TS_ID_TOKEN"),
-		Audience:           os.Getenv("TS_AUDIENCE"),
-		Hostname:           os.Getenv("TS_HOSTNAME"),
-		Routes:             defaultEnvStringPointer("TS_ROUTES"),
-		ServeConfigPath:    os.Getenv("TS_SERVE_CONFIG"),
-		ProxyTargetIP:      os.Getenv("TS_DEST_IP"),
-		ProxyTargetDNSName: os.Getenv("TS_EXPERIMENTAL_DEST_DNS_NAME"),
-		TailnetTargetIP:    os.Getenv("TS_TAILNET_TARGET_IP"),
-		TailnetTargetFQDN:  os.Getenv("TS_TAILNET_TARGET_FQDN"),
-		DaemonExtraArgs:    os.Getenv("TS_TAILSCALED_EXTRA_ARGS"),
-		ExtraArgs:          os.Getenv("TS_EXTRA_ARGS"),
-		InKubernetes:       os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:      def.Bool(os.Getenv("TS_USERSPACE"), true),
-		StateDir:           os.Getenv("TS_STATE_DIR"),
-		AcceptDNS:          defaultEnvBoolPointer("TS_ACCEPT_DNS"),
+		AuthKey:                    cmp.Or(os.Getenv("TS_AUTHKEY"), os.Getenv("TS_AUTH_KEY")),
+		ClientID:                   os.Getenv("TS_CLIENT_ID"),
+		ClientSecret:               os.Getenv("TS_CLIENT_SECRET"),
+		IDToken:                    os.Getenv("TS_ID_TOKEN"),
+		Audience:                   os.Getenv("TS_AUDIENCE"),
+		Hostname:                   os.Getenv("TS_HOSTNAME"),
+		Routes:                     defaultEnvStringPointer("TS_ROUTES"),
+		ServeConfigPath:            os.Getenv("TS_SERVE_CONFIG"),
+		ProxyTargetIP:              os.Getenv("TS_DEST_IP"),
+		ProxyTargetDNSName:         os.Getenv("TS_EXPERIMENTAL_DEST_DNS_NAME"),
+		TailnetTargetIP:            os.Getenv("TS_TAILNET_TARGET_IP"),
+		TailnetTargetFQDN:          os.Getenv("TS_TAILNET_TARGET_FQDN"),
+		DaemonExtraArgs:            os.Getenv("TS_TAILSCALED_EXTRA_ARGS"),
+		ExtraArgs:                  os.Getenv("TS_EXTRA_ARGS"),
+		RelayServerPort:            os.Getenv("TS_RELAY_SERVER_PORT"),
+		RelayServerStaticEndpoints: os.Getenv("TS_RELAY_SERVER_STATIC_ENDPOINTS"),
+		InKubernetes:               os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:              def.Bool(os.Getenv("TS_USERSPACE"), true),
+		StateDir:                   os.Getenv("TS_STATE_DIR"),
+		AcceptDNS:                  defaultEnvBoolPointer("TS_ACCEPT_DNS"),
 		KubeSecret: func() string {
 			if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
 				return os.Getenv("TS_KUBE_SECRET")
@@ -180,6 +189,12 @@ func configFromEnv() (*settings, error) {
 		cfg.AcceptDNS = &acceptDNSNew
 	}
 
+	// The peer relay server flags are accepted by 'tailscale set' but not by
+	// 'tailscale up'. Pull them out of TS_EXTRA_ARGS so that they can be
+	// applied separately, while also honouring the dedicated env vars.
+	cfg.ExtraArgs, cfg.RelayServerPortSet, cfg.RelayServerPort = parseAndRemoveSetFlag(cfg.ExtraArgs, "--relay-server-port", cfg.RelayServerPort)
+	cfg.ExtraArgs, cfg.RelayServerStaticEndpointsSet, cfg.RelayServerStaticEndpoints = parseAndRemoveSetFlag(cfg.ExtraArgs, "--relay-server-static-endpoints", cfg.RelayServerStaticEndpoints)
+
 	// In Kubernetes clusters, people like to use the "$(POD_IP):PORT" combination to configure the TS_LOCAL_ADDR_PORT
 	// environment variable (we even do this by default in the operator when enabling metrics), leading to a v6 address
 	// and port combo we cannot parse, as netip.ParseAddrPort expects the host segment to be enclosed in square brackets.
@@ -243,6 +258,44 @@ func parseAcceptDNS(extraArgs string, acceptDNS bool) (string, bool) {
 	return strings.Join(append(argsArr[:i], argsArr[i+1:]...), " "), acceptDNSFromExtraArgs
 }
 
+// parseAndRemoveSetFlag pulls flagName out of extraArgs so that it can be
+// passed to 'tailscale set' instead of 'tailscale up'. If the flag is present
+// in extraArgs its value takes precedence over envValue; otherwise envValue is
+// used. The returned set reports whether the flag should be applied (i.e. it
+// was found in extraArgs or envValue is non-empty).
+func parseAndRemoveSetFlag(extraArgs, flagName, envValue string) (string, bool, string) {
+	if !strings.Contains(extraArgs, flagName) {
+		return extraArgs, envValue != "", envValue
+	}
+	argsArr := strings.Fields(extraArgs)
+	newArgs := make([]string, 0, len(argsArr))
+	flagSeen := false
+	flagValue := envValue
+	for i := 0; i < len(argsArr); i++ {
+		arg := argsArr[i]
+		if arg == flagName {
+			flagSeen = true
+			if i+1 < len(argsArr) && !strings.HasPrefix(argsArr[i+1], "-") {
+				flagValue = argsArr[i+1]
+				i++
+			} else {
+				flagValue = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, flagName+"=") {
+			flagSeen = true
+			flagValue = strings.TrimPrefix(arg, flagName+"=")
+			continue
+		}
+		newArgs = append(newArgs, arg)
+	}
+	if flagSeen {
+		log.Printf("TS_EXTRA_ARGS contains %s=%q; applying it via 'tailscale set' instead of 'tailscale up'", flagName, flagValue)
+	}
+	return strings.Join(newArgs, " "), flagSeen || envValue != "", flagValue
+}
+
 func (s *settings) validate() error {
 	if s.TailscaledConfigFilePath != "" {
 		dir, file := path.Split(s.TailscaledConfigFilePath)
@@ -283,7 +336,9 @@ func (s *settings) validate() error {
 			s.ClientID != "" ||
 			s.ClientSecret != "" ||
 			s.IDToken != "" ||
-			s.Audience != "") {
+			s.Audience != "" ||
+			s.RelayServerPortSet ||
+			s.RelayServerStaticEndpointsSet) {
 		conflictingArgs := []string{
 			"TS_HOSTNAME",
 			"TS_EXTRA_ARGS",
@@ -294,6 +349,8 @@ func (s *settings) validate() error {
 			"TS_CLIENT_SECRET",
 			"TS_ID_TOKEN",
 			"TS_AUDIENCE",
+			"TS_RELAY_SERVER_PORT",
+			"TS_RELAY_SERVER_STATIC_ENDPOINTS",
 		}
 		return fmt.Errorf("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR cannot be set in combination with %s.", strings.Join(conflictingArgs, ", "))
 	}

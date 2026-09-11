@@ -42,7 +42,15 @@
 //   - TS_TAILNET_TARGET_FQDN: proxy all incoming non-Tailscale traffic to the given
 //     destination defined by a MagicDNS name.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'. Note that set-only
+//     flags such as --relay-server-port and --relay-server-static-endpoints
+//     should be passed via the dedicated TS_RELAY_SERVER_PORT and
+//     TS_RELAY_SERVER_STATIC_ENDPOINTS environment variables instead.
+//   - TS_RELAY_SERVER_PORT: UDP port number (0 will pick a random unused port)
+//     for the peer relay server to bind to, on all interfaces. Setting this
+//     enables peer relay server functionality.
+//   - TS_RELAY_SERVER_STATIC_ENDPOINTS: static IP:port endpoints to advertise
+//     as candidates for relay connections (comma-separated).
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -591,6 +599,15 @@ authLoop:
 		// settings that we need to.
 		if err := tailscaleSet(ctx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %w", err)
+		}
+	} else if isTwoStepConfigAlwaysAuth(cfg) && (cfg.RelayServerPortSet || cfg.RelayServerStaticEndpointsSet) {
+		// The peer relay server settings are "set"-only flags, so they
+		// cannot be passed to 'tailscale up'. In the default (non
+		// TS_AUTH_ONCE) mode apply them with a dedicated 'tailscale set'
+		// once the node has reached Running state. In TS_AUTH_ONCE mode
+		// they are already applied by tailscaleSet above.
+		if err := tailscaleSetRelayServer(ctx, cfg); err != nil {
+			return fmt.Errorf("failed to apply peer relay server settings: %w", err)
 		}
 	}
 
