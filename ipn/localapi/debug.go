@@ -25,6 +25,7 @@ import (
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
@@ -95,6 +96,10 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
+	if !buildfeatures.HasDebug {
+		http.Error(w, "debug not supported in this build", http.StatusNotImplemented)
+		return
+	}
 	if !h.PermitWrite {
 		http.Error(w, "debug-dial-types access denied", http.StatusForbidden)
 		return
@@ -108,10 +113,18 @@ func (h *Handler) serveDebugDialTypes(w http.ResponseWriter, r *http.Request) {
 	port := r.FormValue("port")
 	network := r.FormValue("network")
 
-	addr := ip + ":" + port
-	if _, err := netip.ParseAddrPort(addr); err != nil {
+	addr := net.JoinHostPort(ip, port)
+	ipp, err := netip.ParseAddrPort(addr)
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "invalid address %q: %v", addr, err)
+		return
+	}
+
+	// Probe tailnet-assigned IPs only: SystemDial and BareDial skip
+	// Tailscale entirely, so anything else is a root-dial reachability oracle.
+	if !tsaddr.IsTailscaleIP(ipp.Addr()) {
+		http.Error(w, "refusing to dial non-Tailscale address "+addr, http.StatusBadRequest)
 		return
 	}
 
@@ -522,7 +535,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
 		return
 	}
-	if !h.PermitRead {
+	if !h.PermitWrite {
 		http.Error(w, "debug-log access denied", http.StatusForbidden)
 		return
 	}
