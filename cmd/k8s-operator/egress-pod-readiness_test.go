@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -144,7 +146,14 @@ func TestEgressPodReadiness(t *testing.T) {
 			state: map[string][]fakeResponse{hep: resps},
 		}
 		rec.httpClient = &httpCl
+		// Backing off between health checks is routine during a rollout and must not be logged at info level.
+		core, logs := observer.New(zapcore.InfoLevel)
+		rec.logger = zap.New(core).Sugar()
+		defer func() { rec.logger = zl.Sugar() }()
 		expectReconciled(t, rec, "operator-ns", pod.Name)
+		if n := logs.FilterMessageSnippet("backoff").Len(); n != 0 {
+			t.Errorf("got %d info-level backoff log entries, want 0", n)
+		}
 
 		// Pod should have readiness gate condition set.
 		podSetReady(pod, cl)
