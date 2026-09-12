@@ -538,7 +538,7 @@ func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify
 	rchan := make(chan packet, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	tb.Cleanup(cancel)
-	err = fwd.forwardWithDestChan(ctx, rpkt, rchan, resolvers...)
+	err = fwd.forwardWithDestChan(ctx, rpkt, rchan, true, resolvers...)
 	select {
 	case res := <-rchan:
 		return res.bs, err
@@ -1214,7 +1214,7 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 			defer cancel()
 
 			start := time.Now()
-			err = fwd.forwardWithDestChan(ctx, rpkt, rchan,
+			err = fwd.forwardWithDestChan(ctx, rpkt, rchan, true,
 				resolverAndDelay{name: &dnstype.Resolver{Addr: netstackUpstream.String()}})
 			if err != nil {
 				t.Fatalf("forwardWithDestChan: %v", err)
@@ -1306,7 +1306,7 @@ func TestForwarderNetstackUpstreamTruncated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := fwd.forwardWithDestChan(ctx, rpkt, rchan,
+	if err := fwd.forwardWithDestChan(ctx, rpkt, rchan, true,
 		resolverAndDelay{name: &dnstype.Resolver{Addr: netstackUpstream.String()}}); err != nil {
 		t.Fatalf("forwardWithDestChan: %v", err)
 	}
@@ -1718,7 +1718,7 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 				cancel()
 			}()
 
-			fwd.forwardWithDestChan(ctx, rpkt, responseChan, resolvers...)
+			fwd.forwardWithDestChan(ctx, rpkt, responseChan, true, resolvers...)
 
 			if got := ht.IsUnhealthy(dnsForwarderFailing); got != tt.wantUnhealthy {
 				t.Errorf("IsUnhealthy = %v, want %v", got, tt.wantUnhealthy)
@@ -1762,7 +1762,7 @@ func TestForwarderHealthNoUpstreamResolvers(t *testing.T) {
 			// Buffered so the SERVFAIL response can be sent without a reader.
 			responseChan := make(chan packet, 1)
 
-			if err := fwd.forwardWithDestChan(context.Background(), rpkt, responseChan); err != nil {
+			if err := fwd.forwardWithDestChan(context.Background(), rpkt, responseChan, true); err != nil {
 				t.Fatalf("forwardWithDestChan: %v", err)
 			}
 
@@ -1898,9 +1898,117 @@ func TestResolversCustomScheme(t *testing.T) {
 				}
 			}
 
-			fwd.setRoutes(tt.routes, false)
+			fwd.setRoutes(tt.routes, false, nil)
 
-			got := fwd.resolvers(tt.domain)
+			got := fwd.resolvers(tt.domain, true)
+			var gotAddrs []string
+			for _, r := range got {
+				gotAddrs = append(gotAddrs, r.name.Addr)
+			}
+			if !slices.Equal(gotAddrs, tt.wantAddrs) {
+				t.Errorf("got %v, want %v", gotAddrs, tt.wantAddrs)
+			}
+		})
+	}
+}
+
+// TestResolversSingleLabel covers SingleLabelResolvers selection for issue #15401.
+func TestResolversSingleLabel(t *testing.T) {
+	t.Parallel()
+	docker := []*dnstype.Resolver{{Addr: "127.0.0.11"}}
+	// Use documentation IPs so resolversWithDelays does not upgrade them to DoH.
+	defaultRes := []*dnstype.Resolver{{Addr: "192.0.2.1"}}
+	splitRes := []*dnstype.Resolver{{Addr: "198.51.100.1"}}
+	specificRes := []*dnstype.Resolver{{Addr: "203.0.113.1"}}
+
+	tests := []struct {
+		name             string
+		domain           dnsname.FQDN
+		routes           map[dnsname.FQDN][]*dnstype.Resolver
+		singleLabel      []*dnstype.Resolver
+		allowSingleLabel bool
+		wantAddrs        []string
+	}{
+		{
+			name:             "local-single-label-with-docker",
+			domain:           "database.",
+			routes:           map[dnsname.FQDN][]*dnstype.Resolver{".": defaultRes},
+			singleLabel:      docker,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"127.0.0.11"},
+		},
+		{
+			name:             "peer-single-label-skips-docker",
+			domain:           "database.",
+			routes:           map[dnsname.FQDN][]*dnstype.Resolver{".": defaultRes},
+			singleLabel:      docker,
+			allowSingleLabel: false,
+			wantAddrs:        []string{"192.0.2.1"},
+		},
+		{
+			name:   "specific-single-label-route-beats-docker",
+			domain: "database.",
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				"database.": specificRes,
+				".":         defaultRes,
+			},
+			singleLabel:      docker,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"203.0.113.1"},
+		},
+		{
+			name:             "multi-label-uses-default",
+			domain:           "example.com.",
+			routes:           map[dnsname.FQDN][]*dnstype.Resolver{".": defaultRes},
+			singleLabel:      docker,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"192.0.2.1"},
+		},
+		{
+			name:   "split-dns-multi-label",
+			domain: "internal.example.com.",
+			routes: map[dnsname.FQDN][]*dnstype.Resolver{
+				".":                     defaultRes,
+				"internal.example.com.": splitRes,
+			},
+			singleLabel:      docker,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"198.51.100.1"},
+		},
+		{
+			name:             "single-label-without-docker-uses-default",
+			domain:           "database.",
+			routes:           map[dnsname.FQDN][]*dnstype.Resolver{".": defaultRes},
+			singleLabel:      nil,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"192.0.2.1"},
+		},
+		{
+			name:             "two-label-not-treated-as-docker",
+			domain:           "database.proxy.",
+			routes:           map[dnsname.FQDN][]*dnstype.Resolver{".": defaultRes},
+			singleLabel:      docker,
+			allowSingleLabel: true,
+			wantAddrs:        []string{"192.0.2.1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logf := tstest.WhileTestRunningLogger(t)
+			bus := eventbustest.NewBus(t)
+			netMon, err := netmon.New(bus, logf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var dialer tsdial.Dialer
+			dialer.SetNetMon(netMon)
+			dialer.SetBus(bus)
+
+			fwd := newForwarder(logf, netMon, nil, &dialer, health.NewTracker(bus), nil)
+			fwd.setRoutes(tt.routes, true, tt.singleLabel)
+
+			got := fwd.resolvers(tt.domain, tt.allowSingleLabel)
 			var gotAddrs []string
 			for _, r := range got {
 				gotAddrs = append(gotAddrs, r.name.Addr)

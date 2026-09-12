@@ -344,6 +344,85 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// With DefaultResolvers and base 127.0.0.11, keep DefaultResolvers
+			// as Routes["."] and expose 127.0.0.11 only via SingleLabelResolvers.
+			// Issue #15401.
+			name: "corp-magic-docker-single-label",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", ""),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+			bs: OSConfig{
+				Nameservers: mustIPs("127.0.0.11"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				LocalDomains:         fqdns("ts.com."),
+				SingleLabelResolvers: mustRes("127.0.0.11"),
+			},
+		},
+		{
+			// Base nameserver other than 127.0.0.11 must not set SingleLabelResolvers.
+			name: "corp-magic-non-docker-base",
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
+				Routes:           upstreams("ts.com", ""),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+			bs: OSConfig{
+				Nameservers: mustIPs("8.8.8.8"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				LocalDomains: fqdns("ts.com."),
+			},
+		},
+		{
+			// No DefaultResolvers: 127.0.0.11 is blended into Routes["."] as
+			// before; SingleLabelResolvers stays unset.
+			name: "magic-only-docker-base-no-global",
+			in: Config{
+				SearchDomains: fqdns("tailscale.com"),
+				Routes:        upstreams("ts.com", ""),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4"),
+			},
+			bs: OSConfig{
+				Nameservers: mustIPs("127.0.0.11"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "127.0.0.11"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4"),
+				LocalDomains: fqdns("ts.com."),
+			},
+		},
+		{
 			name: "corp-magic-split",
 			in: Config{
 				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
