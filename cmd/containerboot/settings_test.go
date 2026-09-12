@@ -367,3 +367,77 @@ func TestBootCtxTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRouteAcceptor(t *testing.T) {
+	kube := func(s *settings) *settings {
+		s.InKubernetes = true
+		s.KubeSecret = "tailscale"
+		return s
+	}
+	tests := []struct {
+		name        string
+		settings    *settings
+		errContains string
+	}{
+		{
+			name:     "valid",
+			settings: kube(&settings{RouteAcceptor: true}),
+		},
+		{
+			name:        "userspace",
+			settings:    kube(&settings{RouteAcceptor: true, UserspaceMode: true}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR is not supported with TS_USERSPACE",
+		},
+		{
+			name:        "not_in_kubernetes",
+			settings:    &settings{RouteAcceptor: true},
+			errContains: "only supported for Tailscale running on Kubernetes",
+		},
+		{
+			name:        "no_kube_secret",
+			settings:    &settings{RouteAcceptor: true, InKubernetes: true},
+			errContains: "only supported for Tailscale running on Kubernetes",
+		},
+		{
+			name:        "with_tailnet_target_ip",
+			settings:    kube(&settings{RouteAcceptor: true, TailnetTargetIP: "100.64.0.2"}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with",
+		},
+		{
+			name:        "with_dest_ip",
+			settings:    kube(&settings{RouteAcceptor: true, ProxyTargetIP: "10.0.0.2"}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with",
+		},
+		{
+			name:        "with_serve_config",
+			settings:    kube(&settings{RouteAcceptor: true, ServeConfigPath: "/etc/serve.json"}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with",
+		},
+		{
+			name:        "with_routes",
+			settings:    kube(&settings{RouteAcceptor: true, Routes: new("10.0.0.0/24")}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with",
+		},
+		{
+			name:        "with_egress_proxies_config",
+			settings:    kube(&settings{RouteAcceptor: true, EgressProxiesCfgPath: "/etc/proxies", LocalAddrPort: "[::]:9002"}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.settings.validate()
+			if tt.errContains != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errContains)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}

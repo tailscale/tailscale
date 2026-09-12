@@ -262,6 +262,11 @@ func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 									Protocol:      corev1.ProtocolTCP,
 								},
 								{
+									Name:          "derp-port-fwd",
+									ContainerPort: derpTunnelPort,
+									Protocol:      corev1.ProtocolTCP,
+								},
+								{
 									Name:          "ssh",
 									ContainerPort: 8022,
 									Protocol:      corev1.ProtocolTCP,
@@ -344,6 +349,12 @@ func sshService() *corev1.Service {
 				{
 					Name:     "tunnel",
 					Port:     31544,
+					Protocol: corev1.ProtocolTCP,
+				},
+				{
+					// Used by the Cilium spike to expose a DERP server running in the test process.
+					Name:     "derp",
+					Port:     derpTunnelPort,
 					Protocol: corev1.ProtocolTCP,
 				},
 			},

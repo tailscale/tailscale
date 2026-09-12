@@ -108,6 +108,16 @@
 //   - TS_BOOT_TIMEOUT: if set, overrides the default 60s timeout for the
 //     initial map response wait during boot. Accepts any time.Duration
 //     string (e.g. "90s", "3m").
+//   - TS_EXPERIMENTAL_ROUTE_ACCEPTOR: if set to true, configure this node so
+//     that traffic it forwards (for example from Pods on the same Kubernetes
+//     node, when running in the host network namespace) can reach the tailnet:
+//     IP forwarding is enabled, forwarded traffic leaving via tailscale0 is
+//     masqueraded to this node's tailnet IP and the MSS of forwarded TCP
+//     handshakes is clamped. The subnet routes that this node accepts from its
+//     peers are written to the 'accepted_routes' field of the state Secret.
+//     Requires kernel networking and a Kubernetes state Secret. Accepting
+//     routes itself must be enabled via the tailscaled config file. This is
+//     only meant to be configured by the Kubernetes operator.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -153,6 +163,7 @@ import (
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/metrics"
 	"tailscale.com/kube/services"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -321,6 +332,25 @@ func (s netmapState) peers() iter.Seq[tailcfg.NodeView] {
 	}
 }
 
+// acceptedRoutes returns the subnet routes advertised by this node's peers,
+// i.e. the routes that this node accepts when accept-routes is enabled: every
+// AllowedIPs prefix of a peer that is neither one of the peer's own addresses
+// nor an exit route. The result is sorted and deduplicated, so that it is
+// stable across netmap updates that do not change the routes.
+func acceptedRoutes(s netmapState) []netip.Prefix {
+	var routes []netip.Prefix
+	for p := range s.peers() {
+		for _, pfx := range p.AllowedIPs().All() {
+			if tsaddr.IsExitRoute(pfx) || views.SliceContains(p.Addresses(), pfx) {
+				continue
+			}
+			routes = append(routes, pfx)
+		}
+	}
+	tsaddr.SortPrefixes(routes)
+	return slices.Compact(routes)
+}
+
 func main() {
 	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
@@ -339,8 +369,14 @@ func run() error {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			return fmt.Errorf("unable to create tuntap device file: %w", err)
 		}
-		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes); err != nil {
+		if cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.Routes != nil || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.RouteAcceptor {
+			var err error
+			if cfg.RouteAcceptor {
+				err = ensureIPForwardingForRouteAcceptor(cfg.Root)
+			} else {
+				err = ensureIPForwarding(cfg.Root, cfg.ProxyTargetIP, cfg.TailnetTargetIP, cfg.TailnetTargetFQDN, cfg.Routes)
+			}
+			if err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -391,6 +427,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to bring up tailscale: %w", err)
 	}
+	// nfr is only set for L3 proxies, see below. It is declared here so that
+	// killTailscaled can use it for cleanup.
+	var nfr linuxfw.NetfilterRunner
 	killTailscaled := func() {
 		// The default termination grace period for a Pod is 30s. We wait 25s at
 		// most so that we still reserve some of that budget for tailscaled
@@ -412,6 +451,15 @@ func run() error {
 			err := kc.waitForConsistentState(ctx)
 			if err != nil {
 				log.Printf("Error waiting for consistent state on shutdown: %v", err)
+			}
+		}
+		if cfg.RouteAcceptor && nfr != nil {
+			// The rules live in the host network namespace and would
+			// otherwise outlive this process. Best effort: tailscaled
+			// removes the tailscale interface on shutdown, so stale rules
+			// referencing it are harmless.
+			if err := removeRouteAcceptorRules(nfr); err != nil {
+				log.Printf("Error removing route acceptor rules on shutdown: %v", err)
 			}
 		}
 		log.Printf("Sending SIGTERM to tailscaled")
@@ -634,6 +682,8 @@ authLoop:
 
 		currentEgressIPs deephash.Sum
 
+		currentAcceptedRoutes deephash.Sum // subnet routes accepted from peers, route acceptors only
+
 		addrs        []netip.Prefix
 		backendAddrs []net.IP
 
@@ -643,7 +693,6 @@ authLoop:
 		triggerWatchServeConfigChanges sync.Once
 	)
 
-	var nfr linuxfw.NetfilterRunner
 	if isL3Proxy(cfg) {
 		nfr, err = newNetfilterRunner(log.Printf)
 		if err != nil {
@@ -865,6 +914,15 @@ runLoop:
 					return fmt.Errorf("installing egress proxy rules: %w", err)
 				}
 			}
+			// If this is a route acceptor (set up by the Kubernetes
+			// operator), install the rules that let traffic forwarded by
+			// this node reach the tailnet once the node has tailnet IPs.
+			if cfg.RouteAcceptor && ipsHaveChanged && len(addrs) != 0 {
+				log.Printf("Installing rules to forward traffic into the tailnet via %s", tailscaleTunName)
+				if err := installRouteAcceptorRules(nfr); err != nil {
+					return err
+				}
+			}
 			// If this is a L7 cluster ingress proxy (set up
 			// by Kubernetes operator) and proxying of
 			// cluster traffic to the ingress target is
@@ -894,6 +952,18 @@ runLoop:
 			if hasKubeStateStore(cfg) && deephash.Update(&currentDeviceEndpoints, &deviceEndpoints) {
 				if err := kc.storeDeviceEndpoints(ctx, self.Name(), addrs); err != nil {
 					return fmt.Errorf("storing device IPs and FQDN in Kubernetes Secret: %w", err)
+				}
+			}
+
+			// Route acceptors report the subnet routes they currently
+			// accept from their peers, so that the operator can surface
+			// them.
+			if cfg.RouteAcceptor && hasKubeStateStore(cfg) {
+				routes := acceptedRoutes(nmState)
+				if deephash.Update(&currentAcceptedRoutes, &routes) {
+					if err := kc.storeAcceptedRoutes(ctx, routes); err != nil {
+						return fmt.Errorf("storing accepted routes in Kubernetes Secret: %w", err)
+					}
 				}
 			}
 

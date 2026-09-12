@@ -40,6 +40,8 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
+	"helm.sh/helm/v3/pkg/strvals"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,6 +87,7 @@ var (
 	clusterLoginServer string
 	clusterIPv4Support bool // whether the test cluster supports IPv4.
 	clusterIPv6Support bool // whether the test cluster supports IPv6.
+	cniIsCilium        bool // whether the test cluster runs Cilium (--cni=cilium).
 
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
@@ -115,6 +118,27 @@ var (
 	fBuild       = flag.Bool("build", false, "if true, build and deploy the operator and container images from the current checkout; otherwise assume the operator is already running and the required images are available in the registry")
 	fBaseImage   = flag.String("base-image", "", "if set, use this image as the base for all images built by --build, instead of the default base image in build_docker.sh")
 	fRegistry    = flag.String("registry", "", `if set, use images from this registry instead of loading them into a kind node. Required with --build when testing against a remote cluster.`)
+	fCNI         = flag.String("cni", "kindnet", "with --cluster, the CNI to install in the kind cluster: kindnet (kind's default) or cilium")
+	fCiliumSet   repeatedFlag
+	fCiliumSpike = flag.Bool("cilium-spike", false, "with --cluster --cni=cilium --build, run only the Cilium data-plane spike (TestCiliumSpike) against a test control server started by the test process, without devcontrol, a tailnet or the operator")
+)
+
+func init() {
+	flag.Var(&fCiliumSet, "cilium-set", "with --cni=cilium, a key=value Helm value for the Cilium chart, e.g. bpf.hostLegacyRouting=true; repeatable")
+}
+
+// repeatedFlag collects the values of a flag given several times.
+type repeatedFlag []string
+
+func (f *repeatedFlag) String() string     { return strings.Join(*f, ",") }
+func (f *repeatedFlag) Set(v string) error { *f = append(*f, v); return nil }
+
+const (
+	ciliumHelmRepo    = "https://helm.cilium.io"
+	ciliumReleaseName = "cilium"
+	ciliumNamespace   = "kube-system"
+	// kindPodSubnet is kind's default IPv4 Pod subnet; Cilium needs to know it for native routing.
+	kindPodSubnet = "10.244.0.0/16"
 )
 
 func runTests(m *testing.M) (int, error) {
@@ -128,7 +152,19 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("--cluster side-loads images into the kind node and doesn't take --registry")
 	case *fBuild && !*fCluster && *fRegistry == "":
 		return 0, fmt.Errorf("--build without --cluster needs --registry to push images to; there is no kind node to side-load into")
+	case *fCNI != "kindnet" && *fCNI != "cilium":
+		return 0, fmt.Errorf("--cni must be kindnet or cilium, got %q", *fCNI)
+	case *fCNI == "cilium" && !*fCluster:
+		return 0, fmt.Errorf("--cni=cilium needs --cluster: the CNI is only installed into a kind cluster the tests create")
+	case len(fCiliumSet) > 0 && *fCNI != "cilium":
+		return 0, fmt.Errorf("--cilium-set needs --cni=cilium")
+	case *fCiliumSpike && (!*fCluster || *fCNI != "cilium" || !*fBuild):
+		return 0, fmt.Errorf("--cilium-spike needs --cluster, --cni=cilium and --build")
+	case *fCiliumSpike && *fDevcontrol:
+		return 0, fmt.Errorf("--cilium-spike runs its own control server and doesn't take --devcontrol")
 	}
+	cniIsCilium = *fCNI == "cilium"
+	ciliumSpike = *fCiliumSpike
 
 	ossDir, err := build.RepoRoot()
 	if err != nil {
@@ -158,16 +194,30 @@ func runTests(m *testing.M) (int, error) {
 		}
 
 		if !slices.Contains(clusters, kindClusterName) {
-			if err := kindProvider.Create(kindClusterName,
-				cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
-					Networking: v1alpha4.Networking{
-						IPFamily: v1alpha4.DualStackFamily,
-					},
-				}),
-				cluster.CreateWithWaitForReady(5*time.Minute),
+			kindCfg := &v1alpha4.Cluster{
+				Networking: v1alpha4.Networking{
+					IPFamily: v1alpha4.DualStackFamily,
+				},
+			}
+			createOpts := []cluster.CreateOption{
 				cluster.CreateWithKubeconfigPath(kubeconfig),
 				cluster.CreateWithNodeImage("kindest/node:v1.35.0"),
-			); err != nil {
+			}
+			if cniIsCilium {
+				// Cilium replaces both the default CNI and kube-proxy. Nodes only become Ready once it is
+				// installed, so readiness is awaited after the install instead of here. IPv4 only keeps the
+				// Cilium configuration small.
+				kindCfg.Networking = v1alpha4.Networking{
+					IPFamily:          v1alpha4.IPv4Family,
+					DisableDefaultCNI: true,
+					KubeProxyMode:     v1alpha4.ProxyMode("none"),
+					PodSubnet:         kindPodSubnet,
+				}
+			} else {
+				createOpts = append(createOpts, cluster.CreateWithWaitForReady(5*time.Minute))
+			}
+			createOpts = append(createOpts, cluster.CreateWithV1Alpha4Config(kindCfg))
+			if err := kindProvider.Create(kindClusterName, createOpts...); err != nil {
 				return 0, fmt.Errorf("failed to create kind cluster: %w", err)
 			}
 		}
@@ -192,6 +242,12 @@ func runTests(m *testing.M) (int, error) {
 		return 0, fmt.Errorf("error creating Kubernetes client: %w", err)
 	}
 
+	if cniIsCilium {
+		if err := installCilium(ctx, logger, kubeconfig, kubeClient, fCiliumSet); err != nil {
+			return 0, fmt.Errorf("failed to install Cilium: %w", err)
+		}
+	}
+
 	if err := detectClusterIPFamilies(ctx, logger, kubeClient); err != nil {
 		return 0, fmt.Errorf("error detecting cluster IP families: %w", err)
 	}
@@ -203,7 +259,9 @@ func runTests(m *testing.M) (int, error) {
 		imageCAPaths  []string // Extra CAs the image needs in its system trust store to issue certs; it is only populated for pebble.
 		pebbleCAChain []byte
 	)
-	if *fDevcontrol {
+	if ciliumSpike {
+		// No tailnet: the spike brings up its own control server after the images are built.
+	} else if *fDevcontrol {
 		// Deploy pebble and get its certs.
 		if err = applyPebbleResources(ctx, kubeClient); err != nil {
 			return 0, fmt.Errorf("failed to apply pebble resources: %w", err)
@@ -444,7 +502,12 @@ func runTests(m *testing.M) (int, error) {
 				return 0, err
 			}
 		} else {
-			for imgName := range build.Targets {
+			imgNames := slices.Sorted(maps.Keys(build.Targets))
+			if ciliumSpike {
+				// Only the tailscale image is deployed.
+				imgNames = []string{build.ImgTailscale}
+			}
+			for _, imgName := range imgNames {
 				if err := build.Build(ctx, opts, imgName); err != nil {
 					return 0, err
 				}
@@ -477,6 +540,18 @@ func runTests(m *testing.M) (int, error) {
 				}
 			}
 		}
+	}
+
+	if ciliumSpike {
+		builtTailscaleImage = build.ImageRepo("", build.ImgTailscale) + ":" + ossTag
+		cleanup, err := setupCiliumSpike(ctx, logger, restCfg, kubeClient)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set up the Cilium spike: %w", err)
+		}
+		if !*fSkipCleanup {
+			defer cleanup()
+		}
+		return m.Run(), nil
 	}
 
 	// Generate CRDs for the helm chart.
@@ -546,7 +621,7 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	const relName = "tailscale-operator" // TODO(tomhjp): maybe configurable if others use a different value.
-	f := upgraderOrInstaller(helmCfg, relName)
+	f := upgraderOrInstaller(helmCfg, relName, "tailscale")
 	if _, err := f(ctx, relName, chart, values); err != nil {
 		return 0, fmt.Errorf("failed to install %q via helm: %w", relName, err)
 	}
@@ -756,29 +831,29 @@ func githubIDToken(audience string) func() (string, error) {
 	}
 }
 
-func upgraderOrInstaller(cfg *action.Configuration, releaseName string) helmInstallerFunc {
+func upgraderOrInstaller(cfg *action.Configuration, releaseName, namespace string) helmInstallerFunc {
 	hist := action.NewHistory(cfg)
 	hist.Max = 1
 	helmVersions, err := hist.Run(releaseName)
 	if err == driver.ErrReleaseNotFound || (len(helmVersions) > 0 && helmVersions[0].Info.Status == release.StatusUninstalled) {
-		return helmInstaller(cfg, releaseName)
+		return helmInstaller(cfg, releaseName, namespace)
 	} else {
-		return helmUpgrader(cfg)
+		return helmUpgrader(cfg, namespace)
 	}
 }
 
-func helmUpgrader(cfg *action.Configuration) helmInstallerFunc {
+func helmUpgrader(cfg *action.Configuration, namespace string) helmInstallerFunc {
 	upgrade := action.NewUpgrade(cfg)
-	upgrade.Namespace = "tailscale"
+	upgrade.Namespace = namespace
 	upgrade.Install = true
 	upgrade.Wait = true
 	upgrade.Timeout = 5 * time.Minute
 	return upgrade.RunWithContext
 }
 
-func helmInstaller(cfg *action.Configuration, releaseName string) helmInstallerFunc {
+func helmInstaller(cfg *action.Configuration, releaseName, namespace string) helmInstallerFunc {
 	install := action.NewInstall(cfg)
-	install.Namespace = "tailscale"
+	install.Namespace = namespace
 	install.CreateNamespace = true
 	install.ReleaseName = releaseName
 	install.Wait = true
@@ -790,6 +865,215 @@ func helmInstaller(cfg *action.Configuration, releaseName string) helmInstallerF
 }
 
 type helmInstallerFunc func(context.Context, string, *chart.Chart, map[string]any) (*release.Release, error)
+
+// ciliumRelease is the Cilium Helm release the harness installed, kept so that the Cilium spike can reconfigure
+// it in place.
+type ciliumRelease struct {
+	cfg        *action.Configuration
+	chart      *chart.Chart
+	baseValues func() map[string]any
+	cl         client.Client
+}
+
+// ciliumHelm is set once Cilium has been installed by the harness.
+var ciliumHelm *ciliumRelease
+
+// apply installs or upgrades the release with the base values plus the given key=value overrides, waiting for
+// the rollout to complete.
+func (r *ciliumRelease) apply(ctx context.Context, logger *zap.SugaredLogger, sets []string) error {
+	values := r.baseValues()
+	for _, set := range sets {
+		if err := strvals.ParseInto(set, values); err != nil {
+			return fmt.Errorf("parsing Cilium value %q: %w", set, err)
+		}
+	}
+	logger.Infof("applying Cilium with values %v", values)
+	cmKey := client.ObjectKey{Namespace: ciliumNamespace, Name: "cilium-config"}
+	var before corev1.ConfigMap
+	hadConfig := r.cl.Get(ctx, cmKey, &before) == nil
+	f := upgraderOrInstaller(r.cfg, ciliumReleaseName, ciliumNamespace)
+	if _, err := f(ctx, ciliumReleaseName, r.chart, values); err != nil {
+		return fmt.Errorf("applying Cilium via helm: %w", err)
+	}
+	if !hadConfig {
+		return nil
+	}
+	var after corev1.ConfigMap
+	if err := r.cl.Get(ctx, cmKey, &after); err != nil {
+		return fmt.Errorf("getting the cilium-config ConfigMap: %w", err)
+	}
+	if after.ResourceVersion == before.ResourceVersion {
+		return nil
+	}
+	// Cilium's agent DaemonSet carries no checksum of its ConfigMap, so an upgrade that only changes agent flags
+	// (bpf.hostLegacyRouting, devices, installNoConntrackIptablesRules, ...) leaves the running agents on their old
+	// flags; they merely log config-drift warnings. Roll them so that the new configuration takes effect.
+	return r.restartAgents(ctx, logger)
+}
+
+// restartAgents restarts the Cilium agent DaemonSet and waits for the rollout to complete.
+func (r *ciliumRelease) restartAgents(ctx context.Context, logger *zap.SugaredLogger) error {
+	key := client.ObjectKey{Namespace: ciliumNamespace, Name: "cilium"}
+	var ds appsv1.DaemonSet
+	if err := r.cl.Get(ctx, key, &ds); err != nil {
+		return fmt.Errorf("getting the Cilium DaemonSet: %w", err)
+	}
+	patch := client.MergeFrom(ds.DeepCopy())
+	if ds.Spec.Template.Annotations == nil {
+		ds.Spec.Template.Annotations = map[string]string{}
+	}
+	ds.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339Nano)
+	if err := r.cl.Patch(ctx, &ds, patch); err != nil {
+		return fmt.Errorf("restarting the Cilium DaemonSet: %w", err)
+	}
+	logger.Infof("restarting the Cilium agents to pick up the new configuration")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	for {
+		if err := r.cl.Get(ctx, key, &ds); err != nil {
+			return fmt.Errorf("getting the Cilium DaemonSet: %w", err)
+		}
+		st := ds.Status
+		if st.ObservedGeneration >= ds.Generation && st.DesiredNumberScheduled > 0 &&
+			st.UpdatedNumberScheduled == st.DesiredNumberScheduled &&
+			st.NumberReady == st.DesiredNumberScheduled && st.NumberUnavailable == 0 {
+			logger.Infof("Cilium agents restarted")
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for the Cilium agents to restart (%d/%d updated, %d ready)", st.UpdatedNumberScheduled, st.DesiredNumberScheduled, st.NumberReady)
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+// patchCoreDNSUpstreams makes CoreDNS forward external names to public resolvers instead of the node's
+// /etc/resolv.conf. kind nodes resolve through their container runtime's internal resolver (for example Docker
+// Desktop's 192.168.65.7 or OrbStack's 0.250.250.254), which only answers from the node's own network namespace;
+// with kind's default CNI that works out because forwarded Pod traffic traverses the node's netfilter rules, but
+// on Cilium's BPF data path CoreDNS's queries to it are black-holed and nothing in the cluster can resolve
+// external names.
+func patchCoreDNSUpstreams(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
+	var cm corev1.ConfigMap
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: "kube-system", Name: "coredns"}, &cm); err != nil {
+		return fmt.Errorf("getting the coredns ConfigMap: %w", err)
+	}
+	const from, to = "forward . /etc/resolv.conf", "forward . 1.1.1.1 8.8.8.8"
+	corefile := cm.Data["Corefile"]
+	if !strings.Contains(corefile, from) {
+		logger.Infof("coredns Corefile does not forward to /etc/resolv.conf, leaving it alone")
+		return nil
+	}
+	cm.Data["Corefile"] = strings.Replace(corefile, from, to, 1)
+	if err := cl.Update(ctx, &cm); err != nil {
+		return fmt.Errorf("patching the coredns ConfigMap: %w", err)
+	}
+	logger.Infof("patched CoreDNS to forward external names to public resolvers")
+	return nil
+}
+
+// installCilium installs Cilium from its Helm repository into a kind cluster created without a CNI and without
+// kube-proxy, configured for its default data path (kube-proxy replacement, BPF masquerading and hence eBPF host
+// routing, native routing) with the egress gateway feature enabled and tailscale0 among its devices, so that both
+// RouteAcceptor modes can be exercised. sets are key=value Helm overrides applied on top, e.g.
+// bpf.hostLegacyRouting=true. It returns once the nodes are Ready.
+func installCilium(ctx context.Context, logger *zap.SugaredLogger, kubeconfig string, cl client.Client, sets []string) error {
+	// Without kube-proxy the in-cluster API Service is not reachable, so Cilium talks to the API server directly.
+	var nodes corev1.NodeList
+	if err := cl.List(ctx, &nodes); err != nil {
+		return fmt.Errorf("listing nodes: %w", err)
+	}
+	var apiHost string
+	for _, n := range nodes.Items {
+		if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; !ok {
+			continue
+		}
+		for _, a := range n.Status.Addresses {
+			if a.Type == corev1.NodeInternalIP && net.ParseIP(a.Address).To4() != nil {
+				apiHost = a.Address
+			}
+		}
+	}
+	if apiHost == "" {
+		return errors.New("no control-plane node with an IPv4 internal address found")
+	}
+
+	settings := cli.New()
+	settings.KubeConfig = kubeconfig
+	settings.SetNamespace(ciliumNamespace)
+	helmCfg := &action.Configuration{}
+	if err := helmCfg.Init(settings.RESTClientGetter(), ciliumNamespace, "", logger.Infof); err != nil {
+		return fmt.Errorf("initializing helm: %w", err)
+	}
+
+	pull := action.NewPullWithOpts(action.WithConfig(helmCfg))
+	pull.Settings = settings
+	pull.RepoURL = ciliumHelmRepo
+	pull.DestDir = tmp
+	if out, err := pull.Run(ciliumReleaseName); err != nil {
+		return fmt.Errorf("pulling the Cilium chart: %v: %s", err, out)
+	}
+	tgzs, err := filepath.Glob(filepath.Join(tmp, "cilium-*.tgz"))
+	if err != nil || len(tgzs) == 0 {
+		return fmt.Errorf("finding the pulled Cilium chart in %s: %v", tmp, err)
+	}
+	slices.Sort(tgzs)
+	chart, err := loader.Load(tgzs[len(tgzs)-1])
+	if err != nil {
+		return fmt.Errorf("loading the Cilium chart: %w", err)
+	}
+
+	ciliumHelm = &ciliumRelease{
+		cfg:   helmCfg,
+		chart: chart,
+		cl:    cl,
+		baseValues: func() map[string]any {
+			return map[string]any{
+				"kubeProxyReplacement":  true,
+				"k8sServiceHost":        apiHost,
+				"k8sServicePort":        6443,
+				"routingMode":           "native",
+				"ipv4NativeRoutingCIDR": kindPodSubnet,
+				"autoDirectNodeRoutes":  true,
+				"bpf":                   map[string]any{"masquerade": true},
+				"ipam":                  map[string]any{"mode": "kubernetes"},
+				"egressGateway":         map[string]any{"enabled": true},
+				"devices":               []any{"eth0", "tailscale0"},
+				"operator":              map[string]any{"replicas": 1},
+			}
+		},
+	}
+	if err := ciliumHelm.apply(ctx, logger, sets); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	for {
+		if err := cl.List(ctx, &nodes); err != nil {
+			return fmt.Errorf("listing nodes: %w", err)
+		}
+		ready := 0
+		for _, n := range nodes.Items {
+			for _, c := range n.Status.Conditions {
+				if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+					ready++
+				}
+			}
+		}
+		if ready == len(nodes.Items) && ready > 0 {
+			logger.Infof("Cilium installed, %d node(s) ready", ready)
+			return patchCoreDNSUpstreams(ctx, logger, cl)
+		}
+		logger.Infof("waiting for nodes to become ready with Cilium (%d/%d)...", ready, len(nodes.Items))
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for nodes to become ready with Cilium")
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
 
 func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	var env []tsapi.Env
