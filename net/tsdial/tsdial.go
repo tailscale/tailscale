@@ -125,6 +125,16 @@ func (c sysConn) Close() error {
 	return nil
 }
 
+// CloseWrite closes the write half of the underlying connection without
+// removing it from the dialer's active connection tracking.
+func (c sysConn) CloseWrite() error {
+	cw, ok := c.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return cw.CloseWrite()
+}
+
 // SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
 // etc). This is needed on some platforms to set sockopts to bind
 // to the same interface index.

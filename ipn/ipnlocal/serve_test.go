@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -25,9 +26,11 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/pires/go-proxyproto"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -47,6 +50,258 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
+
+func TestServiceMeteredConnCloseWriteUnsupported(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	c := &serviceMeteredConn{Conn: a}
+	if err := c.CloseWrite(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("CloseWrite error = %v, want errors.ErrUnsupported", err)
+	}
+}
+
+func TestForwardTCPWithProxyProtocolHalfClose(t *testing.T) {
+	const (
+		requestSize  = 8 << 20
+		responseSize = 1 << 20
+	)
+	request := bytes.Repeat([]byte("request-payload-"), requestSize/len("request-payload-")+1)[:requestSize]
+	response := bytes.Repeat([]byte("response-payload-"), responseSize/len("response-payload-")+1)[:responseSize]
+	requestDigest := sha256.Sum256(request)
+	responseDigest := sha256.Sum256(response)
+
+	frontLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer frontLn.Close()
+	backendLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backendLn.Close()
+
+	client, err := net.Dial("tcp", frontLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	serveConn, err := frontLn.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serveConn.Close()
+
+	backConn, err := net.Dial("tcp", backendLn.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backConn.Close()
+	backend, err := backendLn.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for _, c := range []net.Conn{client, serveConn, backConn, backend} {
+		if err := c.SetDeadline(deadline); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	src := netip.MustParseAddrPort("192.0.2.10:4242")
+	dst := backendLn.Addr().(*net.TCPAddr)
+	b := newTestBackend(t)
+	destIP := netip.AddrFrom4([4]byte{127, 0, 0, 1})
+	if self := b.currentNode().Self(); self.Valid() {
+		destIP = nodeIP(self, netip.Addr.Is4)
+	}
+	wantHeader, err := (&proxyproto.Header{
+		Version:           2,
+		Command:           proxyproto.PROXY,
+		TransportProtocol: proxyproto.TCPv4,
+		SourceAddr:        net.TCPAddrFromAddrPort(src),
+		DestinationAddr:   &net.TCPAddr{IP: destIP.AsSlice(), Port: dst.Port},
+	}).Format()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type backendResult struct {
+		header        []byte
+		requestDigest [sha256.Size]byte
+		requestBytes  int
+		err           error
+	}
+	backendDone := make(chan backendResult, 1)
+	go func() {
+		gotHeader := make([]byte, len(wantHeader))
+		if _, err := io.ReadFull(backend, gotHeader); err != nil {
+			backendDone <- backendResult{err: fmt.Errorf("read PROXY v2 header: %w", err)}
+			return
+		}
+		gotRequest, err := io.ReadAll(backend)
+		result := backendResult{
+			header:        gotHeader,
+			requestDigest: sha256.Sum256(gotRequest),
+			requestBytes:  len(gotRequest),
+			err:           err,
+		}
+		if err == nil {
+			if _, err = backend.Write(response); err == nil {
+				err = backend.(*net.TCPConn).CloseWrite()
+			}
+			result.err = err
+		}
+		backendDone <- result
+	}()
+
+	forwardDone := make(chan error, 1)
+	go func() {
+		forwardDone <- b.forwardTCPWithProxyProtocol(serveConn, backConn, 2, src, 443, backendLn.Addr().String())
+	}()
+
+	if _, err := client.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	gotResponse, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatalf("read response after request half-close: %v", err)
+	}
+	if got, want := len(gotResponse), len(response); got != want {
+		t.Fatalf("response bytes = %d, want %d", got, want)
+	}
+	if got := sha256.Sum256(gotResponse); got != responseDigest {
+		t.Fatalf("response digest = %x, want %x", got, responseDigest)
+	}
+
+	result := <-backendDone
+	if result.err != nil {
+		t.Fatalf("backend: %v", result.err)
+	}
+	if !bytes.Equal(result.header, wantHeader) {
+		t.Fatalf("PROXY v2 header = %x, want %x", result.header, wantHeader)
+	}
+	if result.requestBytes != len(request) || result.requestDigest != requestDigest {
+		t.Fatalf("request = %d bytes/%x, want %d bytes/%x", result.requestBytes, result.requestDigest, len(request), requestDigest)
+	}
+	if err := <-forwardDone; err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+}
+
+type pumpTestConn struct {
+	net.Conn
+	closeWriteErr error
+	readErr       error
+	closed        chan struct{}
+	closeOnce     sync.Once
+}
+
+func (c *pumpTestConn) Read(p []byte) (int, error) {
+	if c.readErr != nil {
+		return 0, c.readErr
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *pumpTestConn) CloseWrite() error { return c.closeWriteErr }
+
+func (c *pumpTestConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func TestForwardTCPHardFailureClosesBothAndWaits(t *testing.T) {
+	errCloseWrite := errors.New("injected CloseWrite failure")
+	errCopy := errors.New("injected copy failure")
+	tests := []struct {
+		name            string
+		connCloseWrite  error
+		backCloseWrite  error
+		connRead        error
+		closeClientPeer bool
+		closeBackPeer   bool
+		want            error
+	}{
+		{
+			name:           "client_direction_unsupported",
+			connCloseWrite: errors.ErrUnsupported,
+			closeBackPeer:  true,
+		},
+		{
+			name:            "backend_direction_unsupported",
+			backCloseWrite:  errors.ErrUnsupported,
+			closeClientPeer: true,
+		},
+		{
+			name:            "CloseWrite_error",
+			backCloseWrite:  errCloseWrite,
+			closeClientPeer: true,
+			want:            errCloseWrite,
+		},
+		{
+			name:     "copy_error",
+			connRead: errCopy,
+			want:     errCopy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			connRaw, clientPeer := net.Pipe()
+			backRaw, backPeer := net.Pipe()
+			defer clientPeer.Close()
+			defer backPeer.Close()
+			conn := &pumpTestConn{
+				Conn:          connRaw,
+				closeWriteErr: tt.connCloseWrite,
+				readErr:       tt.connRead,
+				closed:        make(chan struct{}),
+			}
+			backConn := &pumpTestConn{
+				Conn:          backRaw,
+				closeWriteErr: tt.backCloseWrite,
+				closed:        make(chan struct{}),
+			}
+			if tt.closeClientPeer {
+				clientPeer.Close()
+			}
+			if tt.closeBackPeer {
+				backPeer.Close()
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				done <- (&LocalBackend{}).forwardTCPWithProxyProtocol(conn, backConn, 0, netip.AddrPort{}, 0, "")
+			}()
+
+			select {
+			case err := <-done:
+				if tt.want == nil && err != nil || tt.want != nil && !errors.Is(err, tt.want) {
+					t.Fatalf("forward error = %v, want %v", err, tt.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("forward did not wait for and release both pumps")
+			}
+			for name, closed := range map[string]<-chan struct{}{
+				"client":  conn.closed,
+				"backend": backConn.closed,
+			} {
+				select {
+				case <-closed:
+				default:
+					t.Errorf("%s connection was not fully closed", name)
+				}
+			}
+		})
+	}
+}
 
 func TestExpandProxyArg(t *testing.T) {
 	type res struct {
