@@ -151,6 +151,9 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 //
 // It fails tb if the build or binary copies fail.
 func GetBinaries(tb testing.TB) *Binaries {
+	if runtime.GOOS == "windows" {
+		return sharedBinaries(tb)
+	}
 	dir := tb.TempDir()
 	buildOnce.Do(func() {
 		buildErr = buildTestBinaries(dir)
@@ -176,7 +179,37 @@ func GetBinaries(tb testing.TB) *Binaries {
 	}
 }
 
+// sharedBinaries builds the binaries once into a dir outliving every test, so none deletes an executable provjobd.exe still holds. See #21099.
+func sharedBinaries(tb testing.TB) *Binaries {
+	sharedOnce.Do(func() {
+		sharedDir, sharedErr = os.MkdirTemp("", "tailscale-test-binaries")
+		if sharedErr != nil {
+			return
+		}
+		if sharedErr = buildTestBinaries(sharedDir); sharedErr != nil {
+			return
+		}
+		sharedBins = binariesCache
+	})
+	if sharedErr != nil {
+		tb.Fatalf("staging test binaries: %v", sharedErr)
+	}
+	return sharedBins
+}
+
+// removeSharedBinaries deletes the directory sharedBinaries staged, if any.
+func removeSharedBinaries() {
+	if sharedDir != "" {
+		os.RemoveAll(sharedDir)
+	}
+}
+
 var (
+	sharedOnce sync.Once
+	sharedDir  string
+	sharedErr  error
+	sharedBins *Binaries
+
 	buildOnce     sync.Once
 	buildErr      error
 	binariesCache *Binaries
