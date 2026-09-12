@@ -16,3 +16,7 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 func (n *TestNode) stopService() {
 	n.env.t.Fatal("Windows service daemon is only supported on Windows")
 }
+
+func (n *TestNode) uninstallService() {
+	n.env.t.Fatal("Windows service daemon is only supported on Windows")
+}
