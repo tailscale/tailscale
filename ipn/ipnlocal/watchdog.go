@@ -7,8 +7,6 @@ import (
 	"log"
 	"runtime"
 	"time"
-
-	"tailscale.com/tstime"
 )
 
 // deadlockProbeDelay is how long a watched call must be in flight before we
@@ -37,19 +35,14 @@ func (b *LocalBackend) CheckDeadlocks() (done func()) {
 		return b.doneDeadlockCheck
 	}
 
-	// Fast path to avoid the deadlockTimerMu+Timer.Reset cost when
-	// CheckDeadlocks is called many times per second by non-overlapping
-	// callers: re-arm the probe timer at most once per wall-clock second.
-	// We use a unix-seconds timestamp (+1 so 0 can mean "never") and a CAS
-	// so that only one caller per second proceeds to touch the timer; the
-	// rest return early.
-	nowUnix := tstime.DefaultClock{Clock: b.Clock()}.Now().Unix() + 1
-	lastUnix := b.lastDeadlockCheckUnix.Load()
-	if lastUnix == nowUnix || !b.lastDeadlockCheckUnix.CompareAndSwap(lastUnix, nowUnix) {
-		return b.doneDeadlockCheck
-	}
-
-	// Slow path: (re)arm the probe timer. Lazily create it on first use.
+	// This is the 0->1 transition, so doneDeadlockCheck has stopped the probe
+	// timer and nothing else will re-arm it: the count only returns to zero
+	// once this region closes, and until then every other caller takes the
+	// early return above. Arming here is therefore mandatory. Skipping it,
+	// even to save a Timer.Reset, leaves this region unwatched for as long as
+	// it runs, which is exactly the case the watchdog exists to catch.
+	//
+	// (Re)arm the probe timer, lazily creating it on first use.
 	b.deadlockTimerMu.Lock()
 	defer b.deadlockTimerMu.Unlock()
 
