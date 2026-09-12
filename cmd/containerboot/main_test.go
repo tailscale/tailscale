@@ -465,6 +465,96 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"route_acceptor": func(env *testEnv) testCase {
+			subnetRouter := &tailcfg.Node{
+				ID:        tailcfg.NodeID(2),
+				StableID:  tailcfg.StableNodeID("routerID"),
+				Name:      "router.test.ts.net.",
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("100.64.0.2/32"),
+					netip.MustParsePrefix("10.20.0.0/16"),
+					// Exit routes are only used when an exit node is
+					// selected, so they must not be reported.
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
+				},
+			}
+			otherRouter := &tailcfg.Node{
+				ID:        tailcfg.NodeID(3),
+				StableID:  tailcfg.StableNodeID("otherRouterID"),
+				Name:      "other-router.test.ts.net.",
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
+				AllowedIPs: []netip.Prefix{
+					netip.MustParsePrefix("100.64.0.3/32"),
+					netip.MustParsePrefix("10.30.0.0/24"),
+					// Also advertised by subnetRouter (HA), reported once.
+					netip.MustParsePrefix("10.20.0.0/16"),
+				},
+			}
+			return testCase{
+				Env: map[string]string{
+					"KUBERNETES_SERVICE_HOST":        env.kube.Host,
+					"KUBERNETES_SERVICE_PORT_HTTPS":  env.kube.Port,
+					"TS_USERSPACE":                   "false",
+					"TS_EXPERIMENTAL_ROUTE_ACCEPTOR": "true",
+				},
+				KubeSecret: map[string]string{
+					"authkey": "tskey-key",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+						// A route acceptor forwards traffic of both families.
+						WantFiles: map[string]string{
+							"proc/sys/net/ipv4/ip_forward":          "1",
+							"proc/sys/net/ipv6/conf/all/forwarding": "1",
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":           "tskey-key",
+							kubetypes.KeyCapVer: capver,
+						},
+					},
+					{
+						Notify: &ipn.Notify{
+							State: new(ipn.Running),
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+							PeersChanged: []*tailcfg.Node{subnetRouter, otherRouter},
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":                   "tskey-key",
+							"device_fqdn":               "test-node.test.ts.net.",
+							"device_id":                 "myID",
+							"device_ips":                `["100.64.0.1"]`,
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyAcceptedRoutes: `["10.20.0.0/16","10.30.0.0/24"]`,
+						},
+					},
+					{
+						// A subnet router leaving the tailnet withdraws its
+						// routes.
+						Notify: &ipn.Notify{
+							PeersRemoved: []tailcfg.NodeID{otherRouter.ID},
+						},
+						WantKubeSecret: map[string]string{
+							"authkey":                   "tskey-key",
+							"device_fqdn":               "test-node.test.ts.net.",
+							"device_id":                 "myID",
+							"device_ips":                `["100.64.0.1"]`,
+							kubetypes.KeyCapVer:         capver,
+							kubetypes.KeyAcceptedRoutes: `["10.20.0.0/16"]`,
+						},
+					},
+				},
+			}
+		},
 		"kube_storage": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{

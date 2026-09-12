@@ -260,6 +260,7 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyCapVer:              capver,
 				kubetypes.KeyPodUID:              []byte("1234"),
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 			},
@@ -269,6 +270,7 @@ func TestResetContainerbootState(t *testing.T) {
 			expected: map[string][]byte{
 				kubetypes.KeyCapVer:              capver,
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 			},
@@ -296,6 +298,7 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyPodUID: []byte("1234"),
 				// Cleared keys.
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 				// Tailscaled keys not included in patch.
@@ -311,6 +314,7 @@ func TestResetContainerbootState(t *testing.T) {
 				kubetypes.KeyReissueAuthkey: nil,
 				// Cleared keys.
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 			},
@@ -325,6 +329,7 @@ func TestResetContainerbootState(t *testing.T) {
 				// reissue_authkey not cleared.
 				// Cleared keys.
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 			},
@@ -339,6 +344,7 @@ func TestResetContainerbootState(t *testing.T) {
 				// reissue_authkey not cleared.
 				// Cleared keys.
 				kubetypes.KeyHTTPSEndpoint:       nil,
+				kubetypes.KeyAcceptedRoutes:      nil,
 				egressservices.KeyEgressServices: nil,
 				ingressservices.IngressConfigKey: nil,
 			},

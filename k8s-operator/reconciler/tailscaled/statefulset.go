@@ -36,6 +36,13 @@ const (
 	// containerName is the single container inside each pod that runs tailscaled.
 	containerName = "tailscaled"
 
+	// initContainerName is the privileged init container that enables IP forwarding for workloads that forward
+	// traffic (see NewDaemonSet). ProxyClass.spec.statefulSet.pod.tailscaleInitContainer applies to it.
+	initContainerName = "sysctler"
+
+	// NodeNameEnvVar is the env var that holds the name of the node a DaemonSet pod runs on.
+	NodeNameEnvVar = "NODE_NAME"
+
 	// HealthCheckPort is the port containerboot serves /healthz on when TS_ENABLE_HEALTH_CHECK is set. It
 	// reports 200 once the device has tailnet addresses and 503 until then, so it is a meaningful readiness
 	// signal for a load balancer fronting the pod.
@@ -238,4 +245,137 @@ func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
 // should be a state Secret populated by containerboot; the device ID is the value stored under kubetypes.KeyDeviceID.
 func DeviceIDFromStateSecret(secret *corev1.Secret) string {
 	return string(secret.Data[kubetypes.KeyDeviceID])
+}
+
+// DaemonSetOptions describes a DaemonSet of tailscaled pods that run in the host network namespace of every selected
+// node. The zero value is not valid; Name, Namespace, Image, Labels, ServiceAccountName and ConfigSecretName must be
+// set.
+type DaemonSetOptions struct {
+	// Name is the DaemonSet's metadata name. It is also the name of the directory the config Secret is mounted at
+	// and the prefix of the per-node state Secret names, see DaemonSetStateSecretName.
+	Name string
+
+	// Namespace is the namespace the DaemonSet lives in.
+	Namespace string
+
+	// Labels are applied to the DaemonSet, its pod template, and used as the label selector. Callers must include
+	// enough labels to uniquely identify the workload, typically at least tailscale.com/parent-resource and
+	// tailscale.com/parent-resource-type.
+	Labels map[string]string
+
+	// Image is the tailscale container image used for every pod.
+	Image string
+
+	// ServiceAccountName is the ServiceAccount used by every pod. Must have get/create/patch/update permission on
+	// the per-node state Secrets (containerboot's TS_KUBE_SECRET).
+	ServiceAccountName string
+
+	// ConfigSecretName is the name of the config Secret containing the tailscaled config shared by every pod. As
+	// every pod reads the same config, the config must not contain per-device settings such as a hostname, and
+	// its auth key must be reusable.
+	ConfigSecretName string
+}
+
+// DaemonSetStateSecretName returns the name of the state Secret used by the pod of the DaemonSet named dsName that
+// runs on the node named node. Keying state by node rather than by pod gives a device an identity that survives
+// restarts of its pod. Node names are valid DNS subdomain names and so are Secret names, but the caller must ensure
+// that the result does not exceed the 253 character limit of Secret names.
+func DaemonSetStateSecretName(dsName, node string) string {
+	return dsName + "-" + node
+}
+
+// NewDaemonSet returns a *appsv1.DaemonSet configured to run tailscaled in the host network namespace of every
+// selected node, with kernel networking. Every pod reads its config from the shared config Secret mounted at
+// <ConfigVolumeMountPath>/<Name> and persists its state in a Secret named after its node. The pods run privileged
+// with an init container that enables IP forwarding, matching the operator's other kernel-mode proxies. The caller
+// is responsible for setting the mode-specific env vars, resource requests/limits, ProxyClass overrides, etc. after
+// the fact.
+func NewDaemonSet(opts DaemonSetOptions) *appsv1.DaemonSet {
+	const volName = "tailscaledconfig"
+	privileged := true
+	return &appsv1.DaemonSet{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "DaemonSet",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.Name,
+			Namespace: opts.Namespace,
+			Labels:    opts.Labels,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: opts.Labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: opts.Labels},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: opts.ServiceAccountName,
+					HostNetwork:        true,
+					// A host-network Pod uses the node's resolver unless told otherwise, and that resolver does not know
+					// the cluster's Service names that containerboot uses to reach the API server.
+					DNSPolicy: corev1.DNSClusterFirstWithHostNet,
+					Volumes: []corev1.Volume{{
+						Name: volName,
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{SecretName: opts.ConfigSecretName},
+						},
+					}},
+					InitContainers: []corev1.Container{{
+						Name:            initContainerName,
+						Image:           opts.Image,
+						SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+						Command:         []string{"/bin/sh", "-c"},
+						// Write to /proc/sys directly rather than shelling out to sysctl, which is not present in
+						// all base images (e.g. Red Hat's UBI).
+						Args: []string{"echo 1 > /proc/sys/net/ipv4/ip_forward && if [ -e /proc/sys/net/ipv6/conf/all/forwarding ]; then echo 1 > /proc/sys/net/ipv6/conf/all/forwarding; fi"},
+					}},
+					Containers: []corev1.Container{{
+						Name:            containerName,
+						Image:           opts.Image,
+						SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+						VolumeMounts: []corev1.VolumeMount{{
+							Name:      volName,
+							ReadOnly:  true,
+							MountPath: fmt.Sprintf("%s/%s", ConfigVolumeMountPath, opts.Name),
+						}},
+						Env: []corev1.EnvVar{
+							{
+								Name: "POD_NAME",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+								},
+							},
+							{
+								Name: "POD_UID",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"},
+								},
+							},
+							{
+								Name: NodeNameEnvVar,
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+								},
+							},
+							{
+								Name:  "TS_USERSPACE",
+								Value: "false",
+							},
+							{
+								// Every pod reads the shared config from this directory.
+								Name:  ConfigDirEnvVar,
+								Value: fmt.Sprintf("%s/%s", ConfigVolumeMountPath, opts.Name),
+							},
+							{
+								// tailscaled persists device/machine keys in this Secret so a pod restart doesn't
+								// force reauth. Naming it after the node gives each node its own device identity;
+								// Kubernetes expands the reference to the NODE_NAME env var defined above.
+								Name:  "TS_KUBE_SECRET",
+								Value: DaemonSetStateSecretName(opts.Name, "$("+NodeNameEnvVar+")"),
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
 }
