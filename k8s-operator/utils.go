@@ -7,16 +7,25 @@
 package kube
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 )
 
 const (
@@ -39,6 +48,48 @@ type Records struct {
 	// It enables dual-stack DNS support in Kubernetes clusters.
 	// +optional
 	IP6 map[string][]string `json:"ip6,omitempty"`
+	// Forwards maps DNS name suffixes (without a trailing dot) to the ip:port
+	// addresses of the nameservers that queries for names under those
+	// suffixes are forwarded to, in order of preference. It is populated from
+	// the tailnet's split DNS configuration.
+	// +optional
+	Forwards map[string][]string `json:"forwards,omitempty"`
+}
+
+// ErrNoDNSRecordsConfigMap is returned by UpdateDNSRecords if the dnsrecords
+// ConfigMap does not exist.
+var ErrNoDNSRecordsConfigMap = errors.New("dnsrecords ConfigMap not found")
+
+// UpdateDNSRecords runs update against the Records stored in the dnsrecords
+// ConfigMap in namespace ns and writes the result back if it changed. It
+// returns ErrNoDNSRecordsConfigMap if the ConfigMap does not exist. Callers
+// must be prepared to retry on optimistic lock conflicts, as several
+// reconcilers update the ConfigMap.
+func UpdateDNSRecords(ctx context.Context, cl client.Client, ns string, update func(*Records)) error {
+	var cm corev1.ConfigMap
+	err := cl.Get(ctx, types.NamespacedName{Name: DNSRecordsCMName, Namespace: ns}, &cm)
+	switch {
+	case apierrors.IsNotFound(err):
+		return ErrNoDNSRecordsConfigMap
+	case err != nil:
+		return fmt.Errorf("failed to retrieve dnsrecords ConfigMap: %w", err)
+	}
+	dnsRecords := Records{Version: Alpha1Version, IP4: map[string][]string{}}
+	if cm.Data != nil && cm.Data[DNSRecordsCMKey] != "" {
+		if err := json.Unmarshal([]byte(cm.Data[DNSRecordsCMKey]), &dnsRecords); err != nil {
+			return fmt.Errorf("error unmarshalling DNS records: %w", err)
+		}
+	}
+	update(&dnsRecords)
+	dnsRecordsBs, err := json.Marshal(dnsRecords)
+	if err != nil {
+		return fmt.Errorf("error marshalling DNS records: %w", err)
+	}
+	if cm.Data != nil && cm.Data[DNSRecordsCMKey] == string(dnsRecordsBs) {
+		return nil
+	}
+	mak.Set(&cm.Data, DNSRecordsCMKey, string(dnsRecordsBs))
+	return cl.Update(ctx, &cm)
 }
 
 // TailscaledConfigFileName returns a tailscaled config file name in
