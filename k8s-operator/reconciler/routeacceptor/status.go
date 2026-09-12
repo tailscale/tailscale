@@ -28,6 +28,13 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
+// conditionSpec is a condition's status, reason and message.
+type conditionSpec struct {
+	status  metav1.ConditionStatus
+	reason  string
+	message string
+}
+
 // collectStatus fills in the RouteAcceptor's status fields from the DaemonSet's status and the devices' state
 // Secrets: the per-node device status, the accepted routes, and the node counts. It does not set conditions or
 // update the resource.
@@ -68,9 +75,9 @@ func (r *Reconciler) collectStatus(ctx context.Context, ra *tsapi.RouteAcceptor,
 	return nil
 }
 
-// writeStatus sets the RouteAcceptorReady and RouteAcceptorRoutesValid conditions from the collected status and
-// updates the resource if anything changed since prevStatus.
-func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger, ra *tsapi.RouteAcceptor, prevStatus *tsapi.RouteAcceptorStatus, clusterCIDRs []netip.Prefix) error {
+// writeStatus sets the RouteAcceptorReady, RouteAcceptorRoutesValid and RouteAcceptorDataPlaneSupported
+// conditions from the collected status and updates the resource if anything changed since prevStatus.
+func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger, ra *tsapi.RouteAcceptor, prevStatus *tsapi.RouteAcceptorStatus, clusterCIDRs []netip.Prefix, dataPlane conditionSpec) error {
 	var routes []netip.Prefix
 	for _, route := range ra.Status.AcceptedRoutes {
 		if pfx, err := netip.ParsePrefix(route); err == nil {
@@ -98,6 +105,11 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 	} else {
 		operatorutils.SetRouteAcceptorCondition(ra, tsapi.RouteAcceptorRoutesValid, metav1.ConditionTrue, ReasonRoutesValid, ReasonRoutesValid, r.clock, logger)
 	}
+
+	if dataPlane.status == metav1.ConditionFalse && !hasCondition(ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse) {
+		r.event(ra, corev1.EventTypeWarning, dataPlane.reason, dataPlane.message)
+	}
+	operatorutils.SetRouteAcceptorCondition(ra, tsapi.RouteAcceptorDataPlaneSupported, dataPlane.status, dataPlane.reason, dataPlane.message, r.clock, logger)
 
 	if reflect.DeepEqual(prevStatus, &ra.Status) {
 		return nil

@@ -15,11 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -722,4 +726,311 @@ func (d *fakeDevices) List(_ context.Context, _ ...tailscaleclient.ListDevicesOp
 
 func (d *fakeDevices) Get(_ context.Context, _ string) (*tailscaleclient.Device, error) {
 	return nil, nil
+}
+
+func ciliumConfig(data map[string]string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "cilium-config", Namespace: "kube-system"},
+		Data:       data,
+	}
+}
+
+func ciliumEgressGatewayCRD() *apiextensionsv1.CustomResourceDefinition {
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "ciliumegressgatewaypolicies.cilium.io"},
+	}
+}
+
+func getEgressGatewayPolicy(t *testing.T, cl client.Client) *unstructured.Unstructured {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumEgressGatewayPolicy"})
+	err := cl.Get(context.Background(), types.NamespacedName{Name: dsName}, u)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("getting CiliumEgressGatewayPolicy: %v", err)
+	}
+	return u
+}
+
+func TestReconcile_CiliumEBPFHostRoutingBlocks(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{}),
+		newNode("node-a", nil),
+		ciliumConfig(map[string]string{"enable-bpf-masquerade": "true", "kube-proxy-replacement": "true"}),
+	)
+
+	res := mustReconcile(t, r, raName)
+	if res.RequeueAfter != 10*time.Minute {
+		t.Errorf("RequeueAfter = %v, want 10m to re-check the CNI configuration", res.RequeueAfter)
+	}
+	ra := getRouteAcceptor(t, cl)
+	expectCondition(t, ra, tsapi.RouteAcceptorReady, metav1.ConditionFalse, routeacceptor.ReasonCiliumEBPFHostRouting)
+	expectCondition(t, ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, routeacceptor.ReasonCiliumEBPFHostRouting)
+	if daemonSetExists(t, cl) {
+		t.Error("DaemonSet was created despite Cilium eBPF host routing")
+	}
+	if got := len(tsc.CreateAuthKeyCalls()); got != 0 {
+		t.Errorf("got %d CreateAuthKey calls, want 0", got)
+	}
+
+	// Legacy host routing makes the host-routing data plane work.
+	cm := ciliumConfig(map[string]string{"enable-bpf-masquerade": "true", "kube-proxy-replacement": "true", "enable-host-legacy-routing": "true"})
+	if err := cl.Update(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	if !daemonSetExists(t, cl) {
+		t.Error("DaemonSet was not created with Cilium legacy host routing")
+	}
+	expectCondition(t, getRouteAcceptor(t, cl), tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, routeacceptor.ReasonDataPlaneSupported)
+}
+
+func TestReconcile_CiliumUnsafeAllow(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{UnsafeAllowIncompatibleCNI: true}),
+		newNode("node-a", nil),
+		ciliumConfig(map[string]string{"install-no-conntrack-iptables-rules": "true"}),
+	)
+	mustReconcile(t, r, raName)
+	if !daemonSetExists(t, cl) {
+		t.Error("DaemonSet was not created with spec.unsafeAllowIncompatibleCNI set")
+	}
+}
+
+func TestReconcile_CiliumEgressGateway(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: tailscaleNamespace, Labels: reconciler.Labels("routeacceptor", raName, "")},
+		Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, NumberReady: 2},
+	}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{
+			Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{
+				Selectors: []tsapi.CiliumEgressGatewaySelector{{
+					PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"needs-tailnet": "true"}},
+				}},
+			}},
+		}),
+		newNode("node-a", nil),
+		newNode("node-b", nil),
+		// eBPF host routing does not matter in this mode.
+		ciliumConfig(map[string]string{
+			"enable-bpf-masquerade":  "true",
+			"kube-proxy-replacement": "true",
+			"enable-egress-gateway":  "true",
+			"devices":                "eth0,tailscale0",
+		}),
+		ciliumEgressGatewayCRD(),
+		ds,
+		newStateSecret("node-a", map[string]string{
+			kubetypes.KeyDeviceID:       "dev-a",
+			kubetypes.KeyDeviceIPs:      `["100.64.0.1"]`,
+			kubetypes.KeyAcceptedRoutes: `["10.20.0.0/16"]`,
+		}),
+		// node-b's device has not joined yet: not a gateway.
+		newStateSecret("node-b", map[string]string{}),
+	)
+
+	res := mustReconcile(t, r, raName)
+	if res.RequeueAfter <= 0 || res.RequeueAfter > 5*time.Minute {
+		t.Errorf("RequeueAfter = %v, want at most 5m to re-check the policy", res.RequeueAfter)
+	}
+	ra := getRouteAcceptor(t, cl)
+	expectCondition(t, ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, routeacceptor.ReasonCiliumEgressGateway)
+	expectCondition(t, ra, tsapi.RouteAcceptorReady, metav1.ConditionTrue, routeacceptor.ReasonReady)
+	if !daemonSetExists(t, cl) {
+		t.Fatal("DaemonSet missing")
+	}
+
+	pol := getEgressGatewayPolicy(t, cl)
+	if pol == nil {
+		t.Fatal("CiliumEgressGatewayPolicy was not created")
+	}
+	if pol.GetLabels()[reconciler.LabelParentName] != raName {
+		t.Errorf("policy labels = %v", pol.GetLabels())
+	}
+	spec := pol.Object["spec"].(map[string]any)
+	wantSpec := map[string]any{
+		"selectors": []any{map[string]any{
+			"podSelector": map[string]any{"matchLabels": map[string]any{"needs-tailnet": "true"}},
+		}},
+		"destinationCIDRs": []any{"10.20.0.0/16"},
+		"egressGateway": map[string]any{
+			"nodeSelector": map[string]any{
+				"matchExpressions": []any{map[string]any{"key": "kubernetes.io/hostname", "operator": "In", "values": []any{"node-a"}}},
+			},
+			"interface": "tailscale0",
+		},
+	}
+	if diff := cmp.Diff(wantSpec, spec); diff != "" {
+		t.Errorf("policy spec mismatch (-want +got):\n%s", diff)
+	}
+
+	// node-b joins and accepts a route: the policy follows.
+	mustUpdateSecret(t, cl, dsName+"-node-b", map[string]string{
+		kubetypes.KeyDeviceID:       "dev-b",
+		kubetypes.KeyDeviceIPs:      `["100.64.0.2"]`,
+		kubetypes.KeyAcceptedRoutes: `["10.20.0.0/16","10.30.0.0/24"]`,
+	})
+	mustReconcile(t, r, raName)
+	spec = getEgressGatewayPolicy(t, cl).Object["spec"].(map[string]any)
+	if diff := cmp.Diff([]any{"10.20.0.0/16", "10.30.0.0/24"}, spec["destinationCIDRs"]); diff != "" {
+		t.Errorf("destinationCIDRs mismatch (-want +got):\n%s", diff)
+	}
+	values := spec["egressGateway"].(map[string]any)["nodeSelector"].(map[string]any)["matchExpressions"].([]any)[0].(map[string]any)["values"]
+	if diff := cmp.Diff([]any{"node-a", "node-b"}, values); diff != "" {
+		t.Errorf("gateway nodes mismatch (-want +got):\n%s", diff)
+	}
+
+	// High availability lists every gateway.
+	ra = getRouteAcceptor(t, cl)
+	ra.Spec.Cilium.EgressGateway.HighAvailability = true
+	if err := cl.Update(context.Background(), ra); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	spec = getEgressGatewayPolicy(t, cl).Object["spec"].(map[string]any)
+	if _, ok := spec["egressGateway"]; ok {
+		t.Error("egressGateway still set in HA mode")
+	}
+	gws, _ := spec["egressGateways"].([]any)
+	if len(gws) != 2 || gws[1].(map[string]any)["nodeSelector"].(map[string]any)["matchLabels"].(map[string]any)["kubernetes.io/hostname"] != "node-b" {
+		t.Errorf("egressGateways = %v, want one per ready node", gws)
+	}
+
+	// Deleting the RouteAcceptor deletes the policy.
+	ra = getRouteAcceptor(t, cl)
+	if err := cl.Delete(context.Background(), ra); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	if getEgressGatewayPolicy(t, cl) != nil {
+		t.Error("CiliumEgressGatewayPolicy still exists after deleting the RouteAcceptor")
+	}
+}
+
+func TestReconcile_CiliumEgressGatewayPreconditions(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		objs       []client.Object
+		wantReason string
+	}{
+		{
+			name:       "no-cilium",
+			wantReason: routeacceptor.ReasonCiliumNotDetected,
+		},
+		{
+			name:       "crd-missing",
+			objs:       []client.Object{ciliumConfig(map[string]string{"enable-egress-gateway": "true", "devices": "tailscale0"})},
+			wantReason: routeacceptor.ReasonCiliumEgressGatewayCRDMissing,
+		},
+		{
+			name:       "feature-disabled",
+			objs:       []client.Object{ciliumConfig(map[string]string{"devices": "tailscale0"}), ciliumEgressGatewayCRD()},
+			wantReason: routeacceptor.ReasonCiliumEgressGatewayDisabled,
+		},
+		{
+			name:       "tailscale0-not-managed",
+			objs:       []client.Object{ciliumConfig(map[string]string{"enable-egress-gateway": "true", "devices": "eth0"}), ciliumEgressGatewayCRD()},
+			wantReason: routeacceptor.ReasonCiliumDevicesMissingTailscale0,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tsc := &fakeTSClient{loginURL: testLoginURL}
+			objs := append([]client.Object{
+				newRouteAcceptor(tsapi.RouteAcceptorSpec{Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{}}}),
+				newNode("node-a", nil),
+			}, tt.objs...)
+			r, cl := newTestReconciler(t, tsc, objs...)
+			mustReconcile(t, r, raName)
+			ra := getRouteAcceptor(t, cl)
+			expectCondition(t, ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, tt.wantReason)
+			// The devices are still deployed: they are needed once the precondition is met.
+			if !daemonSetExists(t, cl) {
+				t.Error("DaemonSet missing")
+			}
+		})
+	}
+}
+
+func TestReconcile_CiliumEgressGatewayNoRoutes(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	pol := &unstructured.Unstructured{}
+	pol.SetGroupVersionKind(schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumEgressGatewayPolicy"})
+	pol.SetName(dsName)
+	pol.Object["spec"] = map[string]any{"destinationCIDRs": []any{"10.20.0.0/16"}}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{}}}),
+		newNode("node-a", nil),
+		ciliumConfig(map[string]string{"enable-egress-gateway": "true", "devices": "eth0,tailscale0"}),
+		ciliumEgressGatewayCRD(),
+		// A stale policy from before the routes were withdrawn.
+		pol,
+		newStateSecret("node-a", map[string]string{kubetypes.KeyDeviceIPs: `["100.64.0.1"]`}),
+	)
+	mustReconcile(t, r, raName)
+	expectCondition(t, getRouteAcceptor(t, cl), tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, routeacceptor.ReasonCiliumEgressGateway)
+	if getEgressGatewayPolicy(t, cl) != nil {
+		t.Error("policy without routes should have been deleted")
+	}
+}
+
+func mustUpdateSecret(t *testing.T, cl client.Client, name string, data map[string]string) {
+	t.Helper()
+	s := getSecret(t, cl, name)
+	if s.Data == nil {
+		s.Data = map[string][]byte{}
+	}
+	for k, v := range data {
+		s.Data[k] = []byte(v)
+	}
+	if err := cl.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcile_CiliumManagedDevice(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{}),
+		newNode("node-a", nil),
+		// eBPF host routing, but Cilium manages tailscale0 and masquerades on it.
+		ciliumConfig(map[string]string{
+			"enable-bpf-masquerade":  "true",
+			"kube-proxy-replacement": "true",
+			"enable-ipv4-masquerade": "true",
+			"devices":                "eth0,tailscale0",
+		}),
+	)
+	mustReconcile(t, r, raName)
+	if !daemonSetExists(t, cl) {
+		t.Fatal("DaemonSet was not created")
+	}
+	expectCondition(t, getRouteAcceptor(t, cl), tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, routeacceptor.ReasonCiliumManagedDevice)
+
+	// Enabling ip-masq-agent defeats the masquerading on tailscale0.
+	cm := ciliumConfig(map[string]string{
+		"enable-bpf-masquerade":  "true",
+		"kube-proxy-replacement": "true",
+		"enable-ip-masq-agent":   "true",
+		"devices":                "eth0,tailscale0",
+	})
+	if err := cl.Update(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	ra := getRouteAcceptor(t, cl)
+	expectCondition(t, ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, routeacceptor.ReasonCiliumIPMasqAgent)
+	expectCondition(t, ra, tsapi.RouteAcceptorReady, metav1.ConditionFalse, routeacceptor.ReasonCiliumIPMasqAgent)
 }

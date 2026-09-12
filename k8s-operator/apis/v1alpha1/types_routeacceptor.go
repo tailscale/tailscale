@@ -38,9 +38,14 @@ var RouteAcceptorKind = "RouteAcceptor"
 //   - The nodes must not already run tailscaled.
 //   - The cluster's CNI must route Pod traffic to destinations outside the
 //     cluster through the node's network stack, which is the case for most
-//     CNIs (Calico, Flannel, kindnet and the cloud providers' CNIs), but not
-//     for Cilium's default eBPF host routing: set bpf.hostLegacyRouting=true
-//     there.
+//     CNIs (Calico, Flannel, kindnet and the cloud providers' CNIs). Cilium's
+//     eBPF host routing bypasses it; there, tailscale0 must be listed in
+//     Cilium's devices (for example devices={eth0,tailscale0}) so that Cilium
+//     routes and masquerades the traffic on it itself. The operator detects
+//     Cilium's configuration and refuses to deploy otherwise, unless Cilium is
+//     switched to legacy host routing (bpf.hostLegacyRouting=true) or
+//     spec.cilium.egressGateway is used. The mode in effect is reported by the
+//     RouteAcceptorDataPlaneSupported condition.
 //   - The devices run privileged (or with NET_ADMIN and /dev/net/tun), see
 //     ProxyClass for reducing their permissions.
 //   - Tailscale ACLs must allow the devices' tags to access the subnets, and
@@ -124,6 +129,73 @@ type RouteAcceptorSpec struct {
 	// node attribute.
 	// +optional
 	UnsafeAllowCGNATClusterCIDR bool `json:"unsafeAllowCGNATClusterCIDR,omitempty"`
+
+	// UnsafeAllowIncompatibleCNI deploys the route acceptor even if the
+	// cluster's CNI is detected to be configured in a way that keeps Pod
+	// traffic from reaching the accepted routes. Today this covers Cilium's
+	// eBPF host routing without tailscale0 among Cilium's devices (fix: add
+	// it, set bpf.hostLegacyRouting=true, or use spec.cilium.egressGateway),
+	// Cilium's ip-masq-agent, whose nonMasqueradeCIDRs exempt typical subnet
+	// routes from masquerading, and Cilium's installNoConntrackIptablesRules
+	// without tailscale0 among Cilium's devices, which prevents netfilter from
+	// masquerading Pod traffic. Set this if Cilium actually runs with legacy
+	// host routing, for example because the kernel lacks eBPF host routing
+	// support.
+	// +optional
+	UnsafeAllowIncompatibleCNI bool `json:"unsafeAllowIncompatibleCNI,omitempty"`
+
+	// Cilium configures the integration with the Cilium CNI.
+	// +optional
+	Cilium *RouteAcceptorCilium `json:"cilium,omitempty"`
+}
+
+// RouteAcceptorCilium configures the integration with the Cilium CNI.
+type RouteAcceptorCilium struct {
+	// EgressGateway makes the operator maintain a CiliumEgressGatewayPolicy
+	// that steers traffic from the selected Pods to the accepted routes
+	// through the route acceptor devices: Cilium forwards the traffic to a
+	// node running a device, masquerades it to the device's tailnet IP (the
+	// first address of tailscale0) and routes it via the tailnet. Use this to
+	// route the traffic through dedicated gateway nodes rather than each
+	// Pod's own node, or when Cilium's ip-masq-agent is in use; with eBPF
+	// host routing it is otherwise enough to list tailscale0 in Cilium's
+	// devices. It works with any Cilium data path.
+	// Requires Cilium's egress gateway feature (egressGateway.enabled=true,
+	// which needs BPF masquerading and kube-proxy replacement) and
+	// tailscale0 to be listed in Cilium's devices (for example
+	// devices={eth0,tailscale0}), so that Cilium handles the replies.
+	// The policy is created once the devices on the gateway nodes are ready
+	// and routes have been accepted, and lists the ready devices as gateways.
+	// +optional
+	EgressGateway *CiliumEgressGateway `json:"egressGateway,omitempty"`
+}
+
+// CiliumEgressGateway configures the CiliumEgressGatewayPolicy maintained for
+// a RouteAcceptor.
+type CiliumEgressGateway struct {
+	// Selectors select the Pods whose traffic to the accepted routes is
+	// steered through the route acceptor devices. They are passed through as
+	// the policy's spec.selectors. Defaults to all Pods.
+	// +optional
+	Selectors []CiliumEgressGatewaySelector `json:"selectors,omitempty"`
+	// HighAvailability lists every ready device as a gateway (the policy's
+	// spec.egressGateways) instead of a single one. Cilium assigns Pods to
+	// gateways and reassigns them if a gateway fails. Requires a Cilium
+	// version that supports spec.egressGateways. Changing gateways breaks
+	// the existing connections through them.
+	// +optional
+	HighAvailability bool `json:"highAvailability,omitempty"`
+}
+
+// CiliumEgressGatewaySelector selects Pods, as in a CiliumEgressGatewayPolicy.
+type CiliumEgressGatewaySelector struct {
+	// PodSelector selects Pods by their labels. An empty selector selects
+	// all Pods.
+	// +optional
+	PodSelector *metav1.LabelSelector `json:"podSelector,omitempty"`
+	// NamespaceSelector selects the namespaces whose Pods are selected.
+	// +optional
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
 }
 
 type RouteAcceptorStatus struct {
@@ -191,4 +263,7 @@ const (
 	// RouteAcceptorRoutesValid is set to False if a route accepted from the tailnet overlaps an IP range used by the
 	// cluster.
 	RouteAcceptorRoutesValid ConditionType = `RouteAcceptorRoutesValid`
+	// RouteAcceptorDataPlaneSupported is set to False if the cluster's CNI is configured in a way that keeps Pod
+	// traffic from reaching the accepted routes.
+	RouteAcceptorDataPlaneSupported ConditionType = `RouteAcceptorDataPlaneSupported`
 )

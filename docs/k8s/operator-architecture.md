@@ -536,6 +536,71 @@ after its node, so its identity survives Pod restarts. The devices report the
 routes they accept in their state Secrets; the operator surfaces them on the
 RouteAcceptor's status.
 
+### Cilium
+
+With its default eBPF host routing (`bpf.masquerade=true` together with
+`kubeProxyReplacement=true`), Cilium bypasses the node's netfilter rules for
+Pod traffic and makes the routing decision in BPF. The route lookup it performs
+(`bpf_lxc.c` → `fib_redirect_v4` with a full lookup) still honours tailscaled's
+`ip rule`s, so the traffic is steered to `tailscale0`; what is missing is the
+masquerade, which Cilium only performs on the devices it manages. No custom
+eBPF program is needed to fix that: listing `tailscale0` in Cilium's `devices`
+(for example `devices={eth0,tailscale0}`, keeping the devices Cilium detected
+before) makes Cilium's own programs masquerade the traffic to the device's
+tailnet IP and reverse-translate the replies, per node and without any
+hairpin. This is the recommended Cilium configuration. Cilium attaches to
+`tailscale0` when the device appears, so the agents do not need to be running
+before the route acceptor Pods or vice versa. Note, however, that Cilium's Helm
+chart does not restart the agents when only their configuration changes: after
+changing `devices` (or `bpf.hostLegacyRouting`, below) restart them with
+`kubectl -n kube-system rollout restart ds/cilium`, otherwise they keep
+running with their old flags and only log configuration-drift warnings.
+
+The operator reads Cilium's configuration from the `kube-system/cilium-config`
+ConfigMap and reports the mode in effect in the
+`RouteAcceptorDataPlaneSupported` condition (`CiliumManagedDevice` above). It
+refuses to deploy, with the reason and the fix in the condition, when:
+
+- eBPF host routing is on but `tailscale0` is not among Cilium's devices
+  (`CiliumEBPFHostRouting`);
+- Cilium's ip-masq-agent is enabled (`CiliumIPMasqAgent`): its
+  `nonMasqueradeCIDRs` (RFC 1918 ranges by default) would exempt traffic to
+  typical subnet routes from masquerading. Remove the accepted routes from that
+  list, or use the egress gateway mode, which forces masquerading;
+- `installNoConntrackIptablesRules=true` with legacy host routing and
+  `tailscale0` not among Cilium's devices (`CiliumNoConntrackRules`): the rules
+  exempt Pod traffic from connection tracking, which netfilter masquerading
+  needs. With `tailscale0` among the devices Cilium's BPF masquerading, which
+  needs no conntrack, still applies and the route acceptor works.
+
+Alternatives:
+
+- **Egress gateway** (`spec.cilium.egressGateway`): the operator maintains a
+  `CiliumEgressGatewayPolicy` that steers traffic from the selected Pods to the
+  accepted routes via the nodes running a ready device; Cilium masquerades it
+  to the device's tailnet IP and routes it with a full route lookup. Use it to
+  send the traffic through dedicated gateway nodes, or with ip-masq-agent. It
+  needs Cilium's egress gateway feature (`egressGateway.enabled=true`) and, as
+  above, `tailscale0` in Cilium's `devices`. With `highAvailability: true`
+  every ready device is listed as a gateway.
+- **Legacy host routing** (`bpf.hostLegacyRouting=true`): Pod traffic
+  traverses the host stack and the route acceptor works exactly as on other
+  CNIs.
+
+If Cilium is known to run with legacy host routing despite its configuration
+(for example because the kernel lacks eBPF host routing support),
+`spec.unsafeAllowIncompatibleCNI` skips the check. Note that on the BPF paths
+the MSS clamp the route acceptor installs in netfilter is not applied. Downloads
+from the subnet are unaffected (the sender's MSS is already bounded by its own
+tailscale interface); if large uploads from Pods stall, lower Cilium's `mtu`
+to `tailscale0`'s (1280).
+
+These modes were validated on a kind cluster with Cilium 1.20 using the e2e
+harness's `--cilium-spike` mode (see `cmd/k8s-operator/e2e/doc.go`): with
+`tailscale0` among Cilium's devices, Pods reach the subnet and a 1 MiB download
+completes; with ip-masq-agent enabled they do not, unless an egress gateway
+policy is in place; with `tailscale0` not among the devices they do not.
+
 ### Split DNS
 
 Pods resolve names through the cluster DNS, so hosts in the accepted subnets
@@ -565,8 +630,7 @@ Requirements and caveats:
 - The nodes must not already run tailscaled.
 - The CNI must route Pod traffic for destinations outside the cluster through
   the node's network stack (true for Calico, Flannel, kindnet and the cloud
-  providers' CNIs). Cilium's default eBPF host routing bypasses it; set
-  `bpf.hostLegacyRouting=true` there.
+  providers' CNIs). See the Cilium section below for the exception.
 - Because tailscaled also routes all tailnet addresses via `tailscale0`, Pods
   can reach any tailnet peer that the devices' tags are allowed to reach. The
   tailnet sees the node's device as the source, not the Pod.

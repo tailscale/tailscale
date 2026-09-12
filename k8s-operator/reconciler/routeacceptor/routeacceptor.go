@@ -116,6 +116,13 @@ const (
 
 	// notReadyRequeue is how long to wait before checking again whether all nodes are ready.
 	notReadyRequeue = 30 * time.Second
+
+	// dataPlaneRequeue is how long to wait before re-checking the CNI's configuration while it keeps the route
+	// acceptor from being deployed. It is not watched, as it lives outside the operator's namespace.
+	dataPlaneRequeue = 10 * time.Minute
+
+	// egressGatewayRequeue is how often the CiliumEgressGatewayPolicy is re-checked for drift, as it is not watched.
+	egressGatewayRequeue = 5 * time.Minute
 )
 
 // Constants for condition reasons.
@@ -129,6 +136,19 @@ const (
 	ReasonClusterCIDROverlapsCGNAT = "ClusterCIDROverlapsCGNAT"
 	ReasonRoutesValid              = "RoutesValid"
 	ReasonRouteOverlapsClusterCIDR = "RouteOverlapsClusterCIDR"
+
+	// Reasons for the RouteAcceptorDataPlaneSupported condition.
+	ReasonDataPlaneSupported              = "DataPlaneSupported"
+	ReasonCiliumManagedDevice             = "CiliumManagedDevice"
+	ReasonCiliumEBPFHostRouting           = "CiliumEBPFHostRouting"
+	ReasonCiliumNoConntrackRules          = "CiliumNoConntrackRules"
+	ReasonCiliumIPMasqAgent               = "CiliumIPMasqAgent"
+	ReasonCiliumEgressGateway             = "CiliumEgressGateway"
+	ReasonCiliumNotDetected               = "CiliumNotDetected"
+	ReasonCiliumEgressGatewayCRDMissing   = "CiliumEgressGatewayCRDMissing"
+	ReasonCiliumEgressGatewayDisabled     = "CiliumEgressGatewayDisabled"
+	ReasonCiliumDevicesMissingTailscale0  = "CiliumDevicesMissingTailscale0"
+	ReasonCiliumEgressGatewayPolicyFailed = "CiliumEgressGatewayPolicyFailed"
 )
 
 var (
@@ -341,6 +361,24 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		}
 	}
 
+	dp, err := r.detectDataPlane(ctx)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	// In the egress gateway mode Cilium steers and masquerades the traffic itself; the condition is set once
+	// the policy has been ensured, below.
+	dataPlane := conditionSpec{metav1.ConditionTrue, ReasonDataPlaneSupported, ReasonDataPlaneSupported}
+	if !ciliumEgressGatewayEnabled(ra) {
+		dataPlane = dp.classify(ra)
+		if dataPlane.status == metav1.ConditionFalse {
+			r.event(ra, corev1.EventTypeWarning, dataPlane.reason, dataPlane.message)
+			operatorutils.SetRouteAcceptorCondition(ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, dataPlane.reason, dataPlane.message, r.clock, logger)
+			res, err := r.setNotReady(ctx, logger, ra, dataPlane.reason, dataPlane.message)
+			res.RequeueAfter = dataPlaneRequeue
+			return res, err
+		}
+	}
+
 	for _, n := range selected {
 		if err = r.ensureStateSecret(ctx, logger, ra, n.Name); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to apply state Secret for RouteAcceptor %q node %q: %w", ra.Name, n.Name, err)
@@ -368,8 +406,12 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 
 	// Come back when the auth key needs rotating, and sooner while nodes are still joining.
 	requeueAfter := rotateIn
+	if ciliumEgressGatewayEnabled(ra) {
+		dataPlane = r.ensureCiliumEgressGatewayPolicy(ctx, logger, ra, dp)
+		requeueAfter = minRequeue(requeueAfter, egressGatewayRequeue)
+	}
 
-	if err = r.writeStatus(ctx, logger, ra, prevStatus, clusterCIDRs); err != nil {
+	if err = r.writeStatus(ctx, logger, ra, prevStatus, clusterCIDRs, dataPlane); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update RouteAcceptor status for %q: %w", ra.Name, err)
 	}
 
@@ -400,6 +442,10 @@ func (r *Reconciler) delete(ctx context.Context, logger *zap.SugaredLogger, ra *
 
 	if err := r.deleteConfigSecret(ctx, logger, ra); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to delete config Secret for RouteAcceptor %q: %w", ra.Name, err)
+	}
+
+	if err := r.deleteCiliumEgressGatewayPolicy(ctx, logger, ra); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to delete CiliumEgressGatewayPolicy for RouteAcceptor %q: %w", ra.Name, err)
 	}
 
 	if err := reconciler.ClearFinalizer(ctx, r.Client, ra, reconciler.Finalizer); err != nil {
