@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -743,9 +744,14 @@ func ciliumEgressGatewayCRD() *apiextensionsv1.CustomResourceDefinition {
 
 func getEgressGatewayPolicy(t *testing.T, cl client.Client) *unstructured.Unstructured {
 	t.Helper()
+	return getEgressGatewayPolicyNamed(t, cl, dsName)
+}
+
+func getEgressGatewayPolicyNamed(t *testing.T, cl client.Client, name string) *unstructured.Unstructured {
+	t.Helper()
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumEgressGatewayPolicy"})
-	err := cl.Get(context.Background(), types.NamespacedName{Name: dsName}, u)
+	err := cl.Get(context.Background(), types.NamespacedName{Name: name}, u)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -1091,5 +1097,84 @@ func TestReconcile_SourcesNeedPodCIDRs(t *testing.T) {
 	mustReconcile(t, r, raName)
 	if !daemonSetExists(t, cl) {
 		t.Error("DaemonSet not created with spec.clusterCIDRs set")
+	}
+}
+
+func TestReconcile_CiliumEgressGatewayFollowsSources(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: dsName, Namespace: tailscaleNamespace, Labels: reconciler.Labels("routeacceptor", raName, "")},
+		Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 1, NumberReady: 1},
+	}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{
+			Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{}},
+			Sources: []tsapi.RouteAcceptorSource{
+				{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}},
+				{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "data"}}, Routes: tsapi.Routes{"10.20.0.0/16"}},
+				// No accepted route within these: no policy.
+				{Routes: tsapi.Routes{"192.168.0.0/16"}},
+			},
+		}),
+		newNode("node-a", nil, "10.244.0.0/24"),
+		ciliumConfig(map[string]string{
+			"enable-bpf-masquerade":  "true",
+			"kube-proxy-replacement": "true",
+			"enable-egress-gateway":  "true",
+			"devices":                "eth0,tailscale0",
+		}),
+		ciliumEgressGatewayCRD(),
+		ds,
+		newStateSecret("node-a", map[string]string{
+			kubetypes.KeyDeviceID:       "dev-a",
+			kubetypes.KeyDeviceIPs:      `["100.64.0.1"]`,
+			kubetypes.KeyAcceptedRoutes: `["10.20.5.0/24", "10.30.0.0/16"]`,
+		}),
+	)
+	mustReconcile(t, r, raName)
+	expectCondition(t, getRouteAcceptor(t, cl), tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, routeacceptor.ReasonCiliumEgressGateway)
+
+	if pol := getEgressGatewayPolicy(t, cl); pol != nil {
+		t.Errorf("the unscoped policy %q exists although spec.sources is set", dsName)
+	}
+	web := getEgressGatewayPolicyNamed(t, cl, dsName+"-0")
+	if web == nil {
+		t.Fatal("policy for spec.sources[0] missing")
+	}
+	spec := web.Object["spec"].(map[string]any)
+	if got, want := spec["selectors"], []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "web"}}}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sources[0] selectors = %v, want %v", got, want)
+	}
+	if got, want := spec["destinationCIDRs"], []any{"10.20.5.0/24", "10.30.0.0/16"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sources[0] destinationCIDRs = %v, want every accepted route %v", got, want)
+	}
+	data := getEgressGatewayPolicyNamed(t, cl, dsName+"-1")
+	if data == nil {
+		t.Fatal("policy for spec.sources[1] missing")
+	}
+	spec = data.Object["spec"].(map[string]any)
+	if got, want := spec["selectors"], []any{map[string]any{"namespaceSelector": map[string]any{"matchLabels": map[string]any{"team": "data"}}}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sources[1] selectors = %v, want %v", got, want)
+	}
+	if got, want := spec["destinationCIDRs"], []any{"10.20.5.0/24"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sources[1] destinationCIDRs = %v, want the accepted routes within 10.20.0.0/16 %v", got, want)
+	}
+	if pol := getEgressGatewayPolicyNamed(t, cl, dsName+"-2"); pol != nil {
+		t.Errorf("policy for spec.sources[2] exists although no accepted route falls within its routes")
+	}
+
+	// Dropping an entry deletes its policy.
+	ra := getRouteAcceptor(t, cl)
+	ra.Spec.Sources = ra.Spec.Sources[:1]
+	if err := cl.Update(context.Background(), ra); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	if pol := getEgressGatewayPolicyNamed(t, cl, dsName+"-1"); pol != nil {
+		t.Errorf("policy for the removed spec.sources[1] still exists")
+	}
+	if pol := getEgressGatewayPolicyNamed(t, cl, dsName+"-0"); pol == nil {
+		t.Errorf("policy for spec.sources[0] disappeared")
 	}
 }
