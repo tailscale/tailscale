@@ -70,7 +70,12 @@ func (rb *RingLog[T]) Len() int {
 }
 
 // Clear will empty the ring log.
+//
+// It does nothing if rb is nil.
 func (rb *RingLog[T]) Clear() {
+	if rb == nil {
+		return
+	}
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	rb.pos = 0
