@@ -17,6 +17,13 @@
 		},
 	},
 	"grants": [
+		// Lets RouteAcceptor devices reach subnets advertised by the subnet
+		// routers the e2e tests deploy.
+		{
+			"src": ["tag:k8s"],
+			"dst": ["10.0.0.0/8"],
+			"ip":  ["tcp:80"],
+		},
 		{
 			"src": ["tag:k8s"],
 			"dst": ["tag:k8s", "tag:k8s-operator"],
