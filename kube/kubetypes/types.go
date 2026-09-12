@@ -35,6 +35,7 @@ const (
 	MetricProxyGroupAPIServerCount       = "k8s_proxygroup_kube_apiserver_resources"
 	MetricTailnetCount                   = "k8s_tailnet_resources"
 	MetricPeerRelayCount                 = "k8s_peerrelay_resources"
+	MetricRouteAcceptorCount             = "k8s_routeacceptor_resources"
 
 	// Keys that containerboot writes to state file that can be used to determine its state.
 	// fields set in Tailscale state Secret. These are mostly used by the Tailscale Kubernetes operator to determine
