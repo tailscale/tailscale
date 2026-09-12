@@ -916,3 +916,31 @@ func BenchmarkString(b *testing.B) {
 		})
 	}
 }
+
+// Regression test for a panic in Payload. The IPv4 total length field is
+// attacker-controlled and independent of the sub-protocol header length, so
+// it can claim a packet that ends before the transport header does. That
+// left dataofs past length while both stayed inside the buffer, and the
+// Payload slice bounds came out inverted.
+func TestPayloadShortIPTotalLength(t *testing.T) {
+	tests := []struct {
+		name string
+		buf  []byte
+	}{
+		// Each of these declares an IPv4 total length of 20 (the IP header
+		// alone) and then carries a full sub-protocol header after it.
+		{"icmp4", mustHexDecode("4500 0014 0000 0000 4001 0000 0102 0304 0506 0708 0800 0000")},
+		{"udp4", mustHexDecode("4500 0014 0000 0000 4011 0000 0102 0304 0506 0708 3039 04d2 0008 0000")},
+		{"tcp4", mustHexDecode("4500 0014 0000 0000 4006 0000 0102 0304 0506 0708 3039 04d2 0000 0000 0000 0000 5002 0000 0000 0000")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var p Parsed
+			p.Decode(tt.buf)
+			if got := p.Payload(); got != nil {
+				t.Errorf("Payload = %x; want nil (dataofs=%d, length=%d, len(b)=%d)",
+					got, p.dataofs, p.length, len(tt.buf))
+			}
+		})
+	}
+}
