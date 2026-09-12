@@ -7,6 +7,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"net/netip"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,9 +26,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"tailscale.com/ipn"
+	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
@@ -519,5 +528,278 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 	names = findGenNames(t, fc, "", "test", "connector")
 	if len(names) != 2 {
 		t.Fatalf("expected 2 secrets, got %d", len(names))
+	}
+}
+
+func TestConnectorWithStaticEndpoints(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 30001, EndPort: 30003}},
+					Selector: map[string]string{"zone": "eu"},
+				},
+			},
+		},
+	}
+	cn := &tsapi.Connector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+			UID:  types.UID("1234-UID"),
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       tsapi.ConnectorKind,
+			APIVersion: "tailscale.com/v1alpha1",
+		},
+		Spec: tsapi.ConnectorSpec{
+			Replicas:       new(int32(2)),
+			HostnamePrefix: "test-connector",
+			ExitNode:       true,
+			ProxyClass:     pc.Name,
+		},
+	}
+	nodes := []*corev1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "10.0.0.1"},
+				{Type: corev1.NodeExternalIP, Address: "152.88.10.11"},
+			}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"zone": "eu"}},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: "152.88.10.12"},
+			}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-c", Labels: map[string]string{"zone": "us"}},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeExternalIP, Address: "152.88.10.13"},
+			}},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, cn, nodes[0], nodes[1], nodes[2]).
+		WithStatusSubresource(pc, cn).
+		Build()
+	mustUpdateStatus(t, fc, "", pc.Name, func(pc *tsapi.ProxyClass) {
+		pc.Status = tsapi.ProxyClassStatus{
+			Conditions: []metav1.Condition{{
+				Status:             metav1.ConditionTrue,
+				Type:               string(tsapi.ProxyClassReady),
+				ObservedGeneration: pc.Generation,
+			}}}
+	})
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := tstest.NewClock(tstest.ClockOpts{})
+	fr := record.NewFakeRecorder(10)
+	cr := &ConnectorReconciler{
+		Client: fc,
+		clock:  cl,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:   zl.Sugar(),
+		recorder: fr,
+	}
+
+	// 1. A NodePort Service gets created for each replica, targeting a
+	// shared tailscaled port, with a NodePort from the ProxyClass's
+	// configured ranges and a selector matching only that replica's Pod.
+	expectReconciled(t, cr, "", "test")
+	names := findGenNames(t, fc, "", "test", "connector")
+	if int32(len(names)) != *cn.Spec.Replicas {
+		t.Fatalf("expected %d secrets, got %d", *cn.Spec.Replicas, len(names))
+	}
+	shortName := strings.TrimSuffix(names[0], "-0")
+
+	var tailscaledPort int32
+	nodePorts := make(map[int32]int32) // replica ordinal -> NodePort
+	for i := range *cn.Spec.Replicas {
+		svc := &corev1.Service{}
+		svcName := fmt.Sprintf("test-%d-nodeport", i)
+		if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: svcName}, svc); err != nil {
+			t.Fatalf("failed to get NodePort Service %q: %v", svcName, err)
+		}
+		if svc.Spec.Type != corev1.ServiceTypeNodePort {
+			t.Errorf("expected Service %q to be of type NodePort, got %q", svcName, svc.Spec.Type)
+		}
+		if len(svc.Spec.Ports) != 1 {
+			t.Fatalf("expected Service %q to have 1 port, got %d", svcName, len(svc.Spec.Ports))
+		}
+		port := svc.Spec.Ports[0]
+		if port.Protocol != corev1.ProtocolUDP {
+			t.Errorf("expected Service %q port to be UDP, got %q", svcName, port.Protocol)
+		}
+		if port.NodePort < 30001 || port.NodePort > 30003 {
+			t.Errorf("expected Service %q NodePort to be in range [30001, 30003], got %d", svcName, port.NodePort)
+		}
+		nodePorts[i] = port.NodePort
+		if tailscaledPort == 0 {
+			tailscaledPort = port.Port
+		} else if port.Port != tailscaledPort {
+			t.Errorf("expected all NodePort Services to share target port %d, but Service %q has %d", tailscaledPort, svcName, port.Port)
+		}
+		wantSelector := map[string]string{appsv1.StatefulSetPodNameLabel: fmt.Sprintf("%s-%d", shortName, i)}
+		if !reflect.DeepEqual(svc.Spec.Selector, wantSelector) {
+			t.Errorf("expected Service %q selector to be %v, got %v", svcName, wantSelector, svc.Spec.Selector)
+		}
+	}
+	if nodePorts[0] == nodePorts[1] {
+		t.Errorf("expected replicas to get distinct NodePorts, both got %d", nodePorts[0])
+	}
+
+	// 2. Each replica's tailscaled config gets the Node ExternalIPs of the
+	// selected Nodes combined with its NodePort as static endpoints.
+	endpointsForReplica := func(i int32) []netip.AddrPort {
+		return []netip.AddrPort{
+			netip.AddrPortFrom(netip.MustParseAddr("152.88.10.11"), uint16(nodePorts[i])),
+			netip.AddrPortFrom(netip.MustParseAddr("152.88.10.12"), uint16(nodePorts[i])),
+		}
+	}
+	staticEndpointsFromSecret := func(name string, capver tailcfg.CapabilityVersion) []netip.AddrPort {
+		t.Helper()
+		sec := &corev1.Secret{}
+		if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: name}, sec); err != nil {
+			t.Fatalf("failed to get config Secret %q: %v", name, err)
+		}
+		// The fake client stores StringData as written rather than
+		// converting it to Data like the real API server would.
+		confB, ok := sec.StringData[tsoperator.TailscaledConfigFileName(capver)]
+		if !ok {
+			t.Fatalf("config Secret %q does not contain a capver %d config, keys: %v", name, capver, slices.Collect(maps.Keys(sec.StringData)))
+		}
+		conf := &ipn.ConfigVAlpha{}
+		if err := json.Unmarshal([]byte(confB), conf); err != nil {
+			t.Fatalf("failed to unmarshal config from Secret %q: %v", name, err)
+		}
+		return conf.StaticEndpoints
+	}
+	for i, name := range names {
+		want := endpointsForReplica(int32(i))
+		if got := staticEndpointsFromSecret(name, 107); !reflect.DeepEqual(got, want) {
+			t.Errorf("expected replica %d static endpoints %v, got %v", i, want, got)
+		}
+	}
+
+	// 3. tailscaled listens on the target port of the NodePort Services.
+	sts := &appsv1.StatefulSet{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: shortName}, sts); err != nil {
+		t.Fatalf("failed to get StatefulSet %q: %v", shortName, err)
+	}
+	findPortEnv := func(sts *appsv1.StatefulSet) *corev1.EnvVar {
+		for _, env := range sts.Spec.Template.Spec.Containers[0].Env {
+			if env.Name == "PORT" {
+				return &env
+			}
+		}
+		return nil
+	}
+	if env := findPortEnv(sts); env == nil || env.Value != strconv.Itoa(int(tailscaledPort)) {
+		t.Errorf("expected StatefulSet %q to have PORT env %d, got %v", shortName, tailscaledPort, env)
+	}
+
+	// 4. Reconciling again does not change the endpoints or their order.
+	expectReconciled(t, cr, "", "test")
+	for i, name := range names {
+		if got := staticEndpointsFromSecret(name, 107); !reflect.DeepEqual(got, endpointsForReplica(int32(i))) {
+			t.Errorf("static endpoints for replica %d changed across reconciles: %v", i, got)
+		}
+	}
+
+	// 5. The Connector's device statuses report the static endpoints.
+	for i, name := range names {
+		mustUpdate(t, fc, "operator-ns", name, func(secret *corev1.Secret) {
+			mak.Set(&secret.Data, "device_id", []byte(fmt.Sprintf("1234-%d", i)))
+			mak.Set(&secret.Data, "device_fqdn", []byte(fmt.Sprintf("test-connector-%d.tailnetxyz.ts.net", i)))
+			mak.Set(&secret.Data, "device_ips", []byte(`["127.0.0.1"]`))
+		})
+	}
+	expectReconciled(t, cr, "", "test")
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test"}, cn); err != nil {
+		t.Fatalf("failed to get Connector: %v", err)
+	}
+	if len(cn.Status.Devices) != 2 {
+		t.Fatalf("expected 2 devices in Connector status, got %d", len(cn.Status.Devices))
+	}
+	for i, dev := range cn.Status.Devices {
+		want := make([]string, 0, 2)
+		for _, ep := range endpointsForReplica(int32(i)) {
+			want = append(want, ep.String())
+		}
+		if !reflect.DeepEqual(dev.StaticEndpoints, want) {
+			t.Errorf("expected device %d status static endpoints %v, got %v", i, want, dev.StaticEndpoints)
+		}
+	}
+
+	// 6. Scaling down deletes the excess NodePort Services and keeps the
+	// remaining replica's allocated NodePort.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.Replicas = new(int32(1))
+	})
+	expectReconciled(t, cr, "", "test")
+	expectMissing[corev1.Service](t, fc, "operator-ns", "test-1-nodeport")
+	svc := &corev1.Service{}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: "test-0-nodeport"}, svc); err != nil {
+		t.Fatalf("failed to get NodePort Service after scale down: %v", err)
+	}
+	if svc.Spec.Ports[0].NodePort != nodePorts[0] {
+		t.Errorf("expected replica 0 to keep NodePort %d after scale down, got %d", nodePorts[0], svc.Spec.Ports[0].NodePort)
+	}
+
+	// 7. If there are not enough free ports in the configured ranges for
+	// all replicas, provisioning fails with an event and the Connector is
+	// not ready.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.Replicas = new(int32(4))
+	})
+	expectError(t, cr, "", "test")
+	expectEvents(t, fr, []string{"Warning ConnectorCreationFailed Failed creating Connector: failed to reconcile static endpoints: error provisioning NodePort Services for static endpoints: failed to allocate NodePorts to Connector Services: not enough available ports to allocate all replicas (needed 4, got 3). Field 'spec.staticEndpoints.nodePort.ports' on ProxyClass \"static-endpoints\" must have bigger range allocated"})
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test"}, cn); err != nil {
+		t.Fatalf("failed to get Connector: %v", err)
+	}
+	readyIdx := slices.IndexFunc(cn.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(tsapi.ConnectorReady)
+	})
+	if readyIdx == -1 || cn.Status.Conditions[readyIdx].Status != metav1.ConditionFalse {
+		t.Errorf("expected ConnectorReady condition to be False after port allocation failure, got %+v", cn.Status.Conditions)
+	}
+
+	// 8. Removing static endpoints from the ProxyClass deletes the
+	// NodePort Services and removes the static endpoints from the
+	// tailscaled configs, but keeps the headless Service.
+	mustUpdate[tsapi.Connector](t, fc, "", "test", func(conn *tsapi.Connector) {
+		conn.Spec.Replicas = new(int32(1))
+	})
+	mustUpdate[tsapi.ProxyClass](t, fc, "", pc.Name, func(pc *tsapi.ProxyClass) {
+		pc.Spec.StaticEndpoints = nil
+	})
+	mustUpdateStatus(t, fc, "", pc.Name, func(pc *tsapi.ProxyClass) {
+		pc.Status.Conditions[0].ObservedGeneration = pc.Generation
+	})
+	expectReconciled(t, cr, "", "test")
+	expectMissing[corev1.Service](t, fc, "operator-ns", "test-0-nodeport")
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: shortName}, &corev1.Service{}); err != nil {
+		t.Fatalf("expected headless Service %q to still exist: %v", shortName, err)
+	}
+	if eps := staticEndpointsFromSecret(names[0], 107); eps != nil {
+		t.Errorf("expected no static endpoints in config after removal, got %v", eps)
+	}
+	if err := fc.Get(t.Context(), types.NamespacedName{Namespace: "operator-ns", Name: shortName}, sts); err != nil {
+		t.Fatalf("failed to get StatefulSet %q: %v", shortName, err)
+	}
+	if env := findPortEnv(sts); env != nil {
+		t.Errorf("expected StatefulSet %q to no longer have a PORT env, got %v", shortName, env)
 	}
 }
