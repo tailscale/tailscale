@@ -16,6 +16,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -38,6 +40,39 @@ const (
 	testDNSName   = "db." + testDNSDomain
 )
 
+// ciliumHostRoutingGate returns the RouteAcceptorDataPlaneSupported reason the operator is expected to refuse the
+// host-routing data plane with on the Cilium cluster the harness configured, or "" if it is expected to work. The
+// harness installs Cilium with eBPF host routing and tailscale0 among its devices, which works; --cilium-set
+// overrides can switch to legacy host routing (works), drop tailscale0 from the devices (refused) or enable
+// ip-masq-agent (refused).
+func ciliumHostRoutingGate() string {
+	legacy, tailscaleManaged, ipMasqAgent, noConntrack := false, true, false, false
+	for _, set := range fCiliumSet {
+		k, v, _ := strings.Cut(set, "=")
+		switch k {
+		case "bpf.hostLegacyRouting":
+			legacy = v == "true"
+		case "devices":
+			tailscaleManaged = strings.Contains(v, "tailscale")
+		case "ipMasqAgent.enabled":
+			ipMasqAgent = v == "true"
+		case "installNoConntrackIptablesRules":
+			noConntrack = v == "true"
+		}
+	}
+	switch {
+	case legacy && noConntrack && !(tailscaleManaged && !ipMasqAgent):
+		return "CiliumNoConntrackRules"
+	case legacy:
+		return ""
+	case !tailscaleManaged:
+		return "CiliumEBPFHostRouting"
+	case ipMasqAgent:
+		return "CiliumIPMasqAgent"
+	}
+	return ""
+}
+
 // TestRouteAcceptor verifies that a RouteAcceptor makes a subnet route advertised
 // to the tailnet reachable from Pods, that the tailnet's split DNS for a domain
 // served from that subnet can be resolved by Pods through the DNSConfig
@@ -54,7 +89,7 @@ func TestRouteAcceptor(t *testing.T) {
 	routeAcceptorMu.Lock()
 	defer routeAcceptorMu.Unlock()
 
-	router := subnetRouterPod(t, generateName("subnet-router"), testSubnet, testSubnetIP)
+	router := subnetRouterPod(t, generateName("subnet-router"), testSubnet, testSubnetIP, routerOpts{})
 	createAndCleanup(t, kubeClient, router)
 
 	ra := &tsapi.RouteAcceptor{
@@ -74,6 +109,17 @@ func TestRouteAcceptor(t *testing.T) {
 			t.Errorf("error cleaning up RouteAcceptor %s: %v", ra.Name, err)
 		}
 	})
+
+	if gate := ciliumHostRoutingGate(); cniIsCilium && gate != "" {
+		// This Cilium configuration keeps Pod traffic from reaching the routes: the operator must refuse to
+		// deploy and say why.
+		waitForRouteAcceptorCondition(t, ra.Name, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, gate)
+		var ds appsv1.DaemonSet
+		if err := kubeClient.Get(t.Context(), client.ObjectKey{Namespace: "tailscale", Name: "routeacceptor-" + ra.Name}, &ds); !apierrors.IsNotFound(err) {
+			t.Fatalf("DaemonSet exists (err=%v) despite the %s gate", err, gate)
+		}
+		return
+	}
 
 	ready := waitForRouteAcceptorRoute(t, ra.Name, testSubnet)
 
@@ -134,7 +180,6 @@ func TestRouteAcceptor(t *testing.T) {
 	}
 }
 
-// routerOpts configures subnetRouterPod.
 // testSplitDNS configures testDNSDomain as a split DNS domain in the tailnet,
 // served by the nameserver in the subnet router Pod, enables split DNS
 // forwarding on the DNSConfig, points the cluster DNS at the nameserver for the
@@ -221,26 +266,108 @@ func patchClusterDNSStubDomain(ctx context.Context, domain, nameserverIP string)
 	return nil, fmt.Errorf("cluster DNS is not a patchable CoreDNS")
 }
 
-// subnetRouterPod returns a Pod that joins the tailnet as an ephemeral subnet
-// router for subnet, answers HTTP requests on subnetIP port 80 (containerboot's
-// health check endpoint) and answers DNS queries for testDNSDomain on subnetIP
-// port 53 (a CoreDNS sidecar resolving testDNSName to subnetIP), so that tests
-// can tell whether the subnet is reachable by IP and by name. The device
-// disappears from the tailnet with the Pod.
-func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
+// TestRouteAcceptorCiliumEgressGateway verifies the RouteAcceptor's Cilium
+// egress gateway mode: with a CiliumEgressGatewayPolicy maintained by the
+// operator, Pods reach the subnet even with Cilium's eBPF host routing.
+//
+// See [TestMain] for test requirements; needs --cni=cilium.
+func TestRouteAcceptorCiliumEgressGateway(t *testing.T) {
+	if tnClient == nil {
+		t.Skip("TestRouteAcceptorCiliumEgressGateway requires a working tailnet client")
+	}
+	if !cniIsCilium {
+		t.Skip("TestRouteAcceptorCiliumEgressGateway requires --cni=cilium")
+	}
+
+	t.Parallel()
+	routeAcceptorMu.Lock()
+	defer routeAcceptorMu.Unlock()
+
+	router := subnetRouterPod(t, generateName("subnet-router"), testSubnet, testSubnetIP, routerOpts{})
+	createAndCleanup(t, kubeClient, router)
+
+	ra := &tsapi.RouteAcceptor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: generateName("route-acceptor-cilium"),
+		},
+		Spec: tsapi.RouteAcceptorSpec{
+			ProxyClass: "default",
+			Cilium:     &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{}},
+		},
+	}
+	createAndCleanup(t, kubeClient, ra)
+
+	waitForRouteAcceptorRoute(t, ra.Name, testSubnet)
+	waitForRouteAcceptorCondition(t, ra.Name, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionTrue, "CiliumEgressGateway")
+
+	pol := &unstructured.Unstructured{}
+	pol.SetGroupVersionKind(schema.GroupVersionKind{Group: "cilium.io", Version: "v2", Kind: "CiliumEgressGatewayPolicy"})
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: "routeacceptor-" + ra.Name}, pol); err != nil {
+		t.Fatalf("getting CiliumEgressGatewayPolicy: %v", err)
+	}
+	cidrs, _, _ := unstructured.NestedStringSlice(pol.Object, "spec", "destinationCIDRs")
+	if !slices.Contains(cidrs, testSubnet) {
+		t.Fatalf("CiliumEgressGatewayPolicy destinationCIDRs = %v, want %s", cidrs, testSubnet)
+	}
+
+	requireTargetIsReachable(t, fmt.Sprintf("http://%s/healthz", testSubnetIP))
+}
+
+// routerOpts configures subnetRouterPod.
+type routerOpts struct {
+	// loginServer, if set, is the control server the router logs in to without an auth key (the spike's test
+	// control server). Otherwise the router joins the test tailnet with an ephemeral auth key.
+	loginServer string
+	// image overrides the tailscale image, which defaults to the operator's proxy image.
+	image string
+}
+
+// largeFileSize is the size of the file the subnet router Pod serves for MTU checks.
+const largeFileSize = 1 << 20
+
+// subnetRouterPod returns a Pod that joins the tailnet as a subnet router for
+// subnet and answers HTTP requests on subnetIP port 80 (containerboot's health
+// check endpoint), serves a largeFileSize-byte file at subnetIP port 8080
+// (/large.bin), and answers DNS queries for testDNSDomain on subnetIP port 53
+// (a CoreDNS sidecar resolving testDNSName to subnetIP). With the default
+// options the device is ephemeral, so it disappears from the tailnet with the
+// Pod.
+func subnetRouterPod(t *testing.T, name, subnet, subnetIP string, opts routerOpts) *corev1.Pod {
 	t.Helper()
 
-	caps := tailscale.KeyCapabilities{}
-	caps.Devices.Create.Preauthorized = true
-	caps.Devices.Create.Ephemeral = true
-	caps.Devices.Create.Tags = []string{"tag:k8s"}
-	authKey, err := tsClient.Keys().CreateAuthKey(t.Context(), tailscale.CreateKeyRequest{Capabilities: caps})
-	if err != nil {
-		t.Fatalf("creating auth key: %v", err)
+	env := []corev1.EnvVar{
+		{Name: "TS_HOSTNAME", Value: name},
+		{Name: "TS_ROUTES", Value: subnet},
+		{Name: "TS_USERSPACE", Value: "false"},
+		// Keep state on disk: the Pod's ServiceAccount cannot
+		// write Secrets.
+		{Name: "TS_KUBE_SECRET", Value: ""},
+		{Name: "TS_STATE_DIR", Value: "/tmp"},
+		{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
+		{Name: "TS_LOCAL_ADDR_PORT", Value: "[::]:80"},
 	}
-	t.Cleanup(func() { tsClient.Keys().Delete(context.Background(), authKey.ID) })
+	if opts.loginServer != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "TS_EXTRA_ARGS", Value: "--login-server=" + opts.loginServer},
+			corev1.EnvVar{Name: "TS_NO_LOGS_NO_SUPPORT", Value: "true"},
+		)
+	} else {
+		caps := tailscale.KeyCapabilities{}
+		caps.Devices.Create.Preauthorized = true
+		caps.Devices.Create.Ephemeral = true
+		caps.Devices.Create.Tags = []string{"tag:k8s"}
+		authKey, err := tsClient.Keys().CreateAuthKey(t.Context(), tailscale.CreateKeyRequest{Capabilities: caps})
+		if err != nil {
+			t.Fatalf("creating auth key: %v", err)
+		}
+		t.Cleanup(func() { tsClient.Keys().Delete(context.Background(), authKey.ID) })
+		env = append(env, corev1.EnvVar{Name: "TS_AUTHKEY", Value: authKey.Key})
+	}
 
-	image := proxyImage(t)
+	image := opts.image
+	if image == "" {
+		image = proxyImage(t)
+	}
 	privileged := true
 	corefile := fmt.Sprintf(`%s:53 {
     hosts {
@@ -248,11 +375,14 @@ func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
     }
 }
 `, testDNSDomain, subnetIP, testDNSName)
+	nginxConf := `server { listen 8080; root /srv; }`
 	return &corev1.Pod{
 		ObjectMeta: objectMeta(ns, name),
 		Spec: corev1.PodSpec{
 			Volumes: []corev1.Volume{
 				{Name: "coredns-config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "nginx-config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "srv", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			},
 			InitContainers: []corev1.Container{{
 				Name:            "subnet",
@@ -260,8 +390,14 @@ func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 				Command:         []string{"/bin/sh", "-c"},
-				Args:            []string{fmt.Sprintf("ip addr add %s/32 dev lo && printf '%%s' %s > /etc/coredns/Corefile", subnetIP, shellQuote(corefile))},
-				VolumeMounts:    []corev1.VolumeMount{{Name: "coredns-config", MountPath: "/etc/coredns"}},
+				Args: []string{fmt.Sprintf("ip addr add %s/32 dev lo && printf '%%s' %s > /etc/coredns/Corefile && "+
+					"printf '%%s' %s > /etc/nginx/conf.d/default.conf && head -c %d /dev/urandom > /srv/large.bin",
+					subnetIP, shellQuote(corefile), shellQuote(nginxConf), largeFileSize)},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "coredns-config", MountPath: "/etc/coredns"},
+					{Name: "nginx-config", MountPath: "/etc/nginx/conf.d"},
+					{Name: "srv", MountPath: "/srv"},
+				},
 			}},
 			Containers: []corev1.Container{
 				{
@@ -269,18 +405,7 @@ func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
 					Image:           image,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
-					Env: []corev1.EnvVar{
-						{Name: "TS_AUTHKEY", Value: authKey.Key},
-						{Name: "TS_HOSTNAME", Value: name},
-						{Name: "TS_ROUTES", Value: subnet},
-						{Name: "TS_USERSPACE", Value: "false"},
-						// Keep state on disk: the Pod's ServiceAccount cannot
-						// write Secrets.
-						{Name: "TS_KUBE_SECRET", Value: ""},
-						{Name: "TS_STATE_DIR", Value: "/tmp"},
-						{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
-						{Name: "TS_LOCAL_ADDR_PORT", Value: "[::]:80"},
-					},
+					Env:             env,
 				},
 				{
 					Name:            "coredns",
@@ -288,6 +413,15 @@ func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Args:            []string{"-conf", "/etc/coredns/Corefile"},
 					VolumeMounts:    []corev1.VolumeMount{{Name: "coredns-config", MountPath: "/etc/coredns", ReadOnly: true}},
+				},
+				{
+					Name:            "nginx",
+					Image:           "nginx:alpine",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "nginx-config", MountPath: "/etc/nginx/conf.d", ReadOnly: true},
+						{Name: "srv", MountPath: "/srv", ReadOnly: true},
+					},
 				},
 			},
 		},
