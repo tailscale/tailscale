@@ -62,6 +62,7 @@ import (
 	"tailscale.com/k8s-operator/reconciler/routeacceptor"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
+	"tailscale.com/k8s-operator/tailnetdns"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
@@ -578,12 +579,19 @@ func runReconcilers(opts reconcilerOpts) {
 	// TODO (irbekrm): switch to metadata-only watches for resources whose
 	// spec we don't need to inspect to reduce memory consumption.
 	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
+	// The tailnet's split DNS configuration is read from the operator's own device and published to the
+	// in-cluster nameserver by the DNSConfig reconciler.
+	splitDNS := tailnetdns.New(lc, opts.log)
+	if err = mgr.Add(splitDNS); err != nil {
+		startlog.Fatalf("could not add tailnet DNS watcher to manager: %v", err)
+	}
 	nameserverOptions := nameserver.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		Recorder:           eventRecorder,
 		TailscaleNamespace: opts.tailscaleNamespace,
 		Logger:             opts.log,
 		Clock:              tstime.DefaultClock{},
+		SplitDNS:           splitDNS,
 	}
 	if err = nameserver.NewReconciler(nameserverOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create nameserver reconciler: %v", err)

@@ -49,6 +49,15 @@ func SetDNSConfigCondition(dnsCfg *tsapi.DNSConfig, conditionType tsapi.Conditio
 	dnsCfg.Status.Conditions = conds
 }
 
+// DNSConfigConditionIs reports whether the DNSConfig has a condition of the
+// given type with the given status.
+func DNSConfigConditionIs(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConditionType, status metav1.ConditionStatus) bool {
+	idx := xslices.IndexFunc(dnsCfg.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(conditionType)
+	})
+	return idx != -1 && dnsCfg.Status.Conditions[idx].Status == status
+}
+
 // SetServiceCondition ensures that Service status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.

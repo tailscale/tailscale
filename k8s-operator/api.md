@@ -291,6 +291,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ |  |  |  |
 | `nameserver` _[NameserverStatus](#nameserverstatus)_ | Nameserver describes the status of nameserver cluster resources. |  |  |
+| `splitDNSDomains` _string array_ | SplitDNSDomains lists the split DNS domains that the nameserver<br />currently forwards queries for. Configure these as stub domains in the<br />cluster DNS, pointing at status.nameserver.ip, in the same way as ts.net. |  |  |
 
 
 #### Debug
@@ -456,6 +457,7 @@ _Appears in:_
 | `service` _[NameserverService](#nameserverservice)_ | Service configuration. |  |  |
 | `pod` _[NameserverPod](#nameserverpod)_ | Pod configuration. |  |  |
 | `replicas` _integer_ | Replicas specifies how many Pods to create. Defaults to 1. |  | Minimum: 0 <br /> |
+| `splitDNS` _[NameserverSplitDNS](#nameserversplitdns)_ | SplitDNS configures forwarding of queries for the tailnet's split DNS<br />domains to the nameservers the tailnet configures for them. |  |  |
 
 
 #### NameserverImage
@@ -508,6 +510,23 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `clusterIP` _string_ | ClusterIP sets the static IP of the service used by the nameserver. |  |  |
+
+
+#### NameserverSplitDNS
+
+
+
+
+
+
+
+_Appears in:_
+- [Nameserver](#nameserver)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `enabled` _boolean_ | Enabled makes the nameserver forward queries for the domains configured<br />as split DNS in the tailnet to the nameservers the tailnet configures<br />for them, so that cluster workloads can resolve names in those domains.<br />Those nameservers must be reachable from the nameserver Pod: a<br />RouteAcceptor provides that for nameservers in subnets routed via the<br />tailnet and for nameservers on the tailnet. Only nameservers configured<br />with plain IP addresses are used, not DNS-over-HTTPS resolvers.<br />The cluster DNS must be configured to send queries for the domains to<br />the nameserver, in the same way as for ts.net; the domains are listed<br />in status.splitDNSDomains. |  |  |
+| `domains` _string array_ | Domains restricts forwarding to these split DNS domains. Defaults to<br />all of the tailnet's split DNS domains. |  |  |
 
 
 #### NameserverStatus

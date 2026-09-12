@@ -1394,6 +1394,34 @@ spec:
                                                 description: ClusterIP sets the static IP of the service used by the nameserver.
                                                 type: string
                                         type: object
+                                    splitDNS:
+                                        description: |-
+                                            SplitDNS configures forwarding of queries for the tailnet's split DNS
+                                            domains to the nameservers the tailnet configures for them.
+                                        properties:
+                                            domains:
+                                                description: |-
+                                                    Domains restricts forwarding to these split DNS domains. Defaults to
+                                                    all of the tailnet's split DNS domains.
+                                                items:
+                                                    type: string
+                                                type: array
+                                            enabled:
+                                                description: |-
+                                                    Enabled makes the nameserver forward queries for the domains configured
+                                                    as split DNS in the tailnet to the nameservers the tailnet configures
+                                                    for them, so that cluster workloads can resolve names in those domains.
+                                                    Those nameservers must be reachable from the nameserver Pod: a
+                                                    RouteAcceptor provides that for nameservers in subnets routed via the
+                                                    tailnet and for nameservers on the tailnet. Only nameservers configured
+                                                    with plain IP addresses are used, not DNS-over-HTTPS resolvers.
+                                                    The cluster DNS must be configured to send queries for the domains to
+                                                    the nameserver, in the same way as for ts.net; the domains are listed
+                                                    in status.splitDNSDomains.
+                                                type: boolean
+                                        required:
+                                            - enabled
+                                        type: object
                                 type: object
                         required:
                             - nameserver
@@ -1474,6 +1502,15 @@ spec:
                                             The IP address will change if you delete and recreate the DNSConfig.
                                         type: string
                                 type: object
+                            splitDNSDomains:
+                                description: |-
+                                    SplitDNSDomains lists the split DNS domains that the nameserver
+                                    currently forwards queries for. Configure these as stub domains in the
+                                    cluster DNS, pointing at status.nameserver.ip, in the same way as ts.net.
+                                items:
+                                    type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
                         type: object
                 required:
                     - spec

@@ -536,6 +536,30 @@ after its node, so its identity survives Pod restarts. The devices report the
 routes they accept in their state Secrets; the operator surfaces them on the
 RouteAcceptor's status.
 
+### Split DNS
+
+Pods resolve names through the cluster DNS, so hosts in the accepted subnets
+are reachable by IP only unless the tailnet's split DNS is re-published in the
+cluster. Setting `spec.nameserver.splitDNS.enabled: true` on the `DNSConfig`
+makes the operator read the tailnet's split DNS configuration (domain →
+nameservers) from its own device, publish it to the `dnsrecords` ConfigMap, and
+the nameserver forward queries for those domains to those nameservers. The
+nameserver Pod reaches them through the RouteAcceptor on its node. As for
+`ts.net`, the cluster DNS must be told to send the domains to the nameserver;
+they are listed in `status.splitDNSDomains`. For CoreDNS, add one block per
+domain:
+
+```
+corp.internal:53 {
+    errors
+    cache 30
+    forward . <status.nameserver.ip>
+}
+```
+
+Only nameservers configured with plain IP addresses are forwarded to;
+DNS-over-HTTPS resolvers and domains served by MagicDNS itself are skipped.
+
 Requirements and caveats:
 
 - The nodes must not already run tailscaled.
