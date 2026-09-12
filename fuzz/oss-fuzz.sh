@@ -124,6 +124,7 @@ build_fuzzers() {
 	build_fuzzer tailscale.com/net/dnscache FuzzAsciiLowerName dnscache_ascii_lower_name
 	build_fuzzer tailscale.com/net/dns/resolver FuzzClampEDNSSize dns_clamp_edns_size
 	build_fuzzer tailscale.com/net/packet FuzzParsedDecode packet_parsed_decode
+	build_fuzzer tailscale.com/net/packet FuzzParsedPayload packet_parsed_payload
 	build_fuzzer tailscale.com/net/packet FuzzDecode4 packet_decode4
 	build_fuzzer tailscale.com/net/packet FuzzDecode6 packet_decode6
 	build_fuzzer tailscale.com/net/packet FuzzDecode6Fragment packet_decode6_fragment
