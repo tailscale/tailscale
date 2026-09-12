@@ -5,7 +5,8 @@
 
 // k8s-nameserver is a simple nameserver implementation meant to be used with
 // k8s-operator to allow to resolve magicDNS names associated with tailnet
-// proxies in cluster.
+// proxies in cluster, and to forward queries for the tailnet's split DNS
+// domains to the tailnet's nameservers for them.
 package main
 
 import (
@@ -14,11 +15,14 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/miekg/dns"
@@ -34,6 +38,9 @@ const (
 	// defaultTTL is the default TTL for DNS records in seconds.
 	// Set to 0 to disable caching. Can be increased when usage patterns are better understood.
 	defaultTTL = 0
+	// forwardTimeout is how long a forwarded query may take per upstream
+	// nameserver before the next one is tried.
+	forwardTimeout = 2 * time.Second
 
 	// The following constants are specific to the nameserver configuration
 	// provided by a mounted Kubernetes Configmap. The Configmap mounted at
@@ -44,10 +51,12 @@ const (
 
 // nameserver is a simple nameserver that responds to DNS queries for A and AAAA records
 // for ts.net domain names over UDP or TCP. It serves DNS responses from
-// in-memory IPv4 and IPv6 host records. It is intended to be deployed on Kubernetes with
-// a ConfigMap mounted at /config that should contain the host records. It
-// dynamically reconfigures its in-memory mappings as the contents of the
-// mounted ConfigMap changes.
+// in-memory IPv4 and IPv6 host records. It also forwards queries for
+// configured domains (the tailnet's split DNS domains) to the nameservers
+// configured for them. It is intended to be deployed on Kubernetes with
+// a ConfigMap mounted at /config that should contain the host records and
+// forwards. It dynamically reconfigures its in-memory mappings as the
+// contents of the mounted ConfigMap changes.
 type nameserver struct {
 	// configReader returns the latest desired configuration (host records)
 	// for the nameserver. By default it gets set to a reader that reads
@@ -66,6 +75,9 @@ type nameserver struct {
 	// ip6 are the in-memory hostname -> IP6 mappings that the nameserver
 	// uses to respond to AAAA record queries.
 	ip6 map[dnsname.FQDN][]net.IP
+	// forwards are the in-memory domain -> upstream nameserver mappings that
+	// the nameserver uses to forward queries for names under those domains.
+	forwards map[dnsname.FQDN][]netip.AddrPort
 }
 
 func main() {
@@ -84,11 +96,11 @@ func main() {
 	// reset when the configuration changes.
 	ns.runRecordsReconciler(ctx)
 
-	// Register a DNS server handle for ts.net domain names. Not having a
-	// handle registered for any other domain names is how we enforce that
-	// this nameserver can only be used for ts.net domains - querying any
-	// other domain names returns Rcode Refused.
+	// Register a DNS server handle for ts.net domain names, and a catch-all
+	// handle that forwards queries for the configured domains and refuses
+	// everything else. The ts.net handle takes precedence for ts.net names.
 	dns.HandleFunc(tsNetDomain, ns.handleFunc())
+	dns.HandleFunc(".", ns.handleForward())
 
 	// Listen for DNS queries over UDP and TCP.
 	udpSig := make(chan os.Signal)
@@ -191,6 +203,84 @@ func (n *nameserver) handleFunc() func(w dns.ResponseWriter, r *dns.Msg) {
 	return h
 }
 
+// handleForward is a DNS query handler that forwards queries for names under
+// one of the configured forward domains to the upstream nameservers configured
+// for the longest matching domain, and relays the upstream's response. Queries
+// for any other names are refused, as this nameserver is only meant to serve
+// ts.net names and the tailnet's split DNS domains.
+func (n *nameserver) handleForward() func(w dns.ResponseWriter, r *dns.Msg) {
+	return func(w dns.ResponseWriter, r *dns.Msg) {
+		if len(r.Question) < 1 {
+			log.Print("[unexpected] nameserver received a request with no questions")
+			w.WriteMsg(new(dns.Msg).SetRcodeFormatError(r))
+			return
+		}
+		fqdn, err := dnsname.ToFQDN(r.Question[0].Name)
+		if err != nil {
+			w.WriteMsg(new(dns.Msg).SetRcodeFormatError(r))
+			return
+		}
+		upstreams := n.lookupForward(fqdn)
+		if len(upstreams) == 0 {
+			w.WriteMsg(new(dns.Msg).SetRcode(r, dns.RcodeRefused))
+			return
+		}
+		network := "udp"
+		if ra := w.RemoteAddr(); ra != nil && ra.Network() == "tcp" {
+			network = "tcp"
+		}
+		w.WriteMsg(forward(r, upstreams, network))
+	}
+}
+
+// forward sends r to the upstreams in order over the given network until one
+// answers, and returns that answer. A truncated answer over UDP is retried over
+// TCP. If no upstream answers, a SERVFAIL response is returned.
+func forward(r *dns.Msg, upstreams []netip.AddrPort, network string) *dns.Msg {
+	req := r.Copy()
+	for _, upstream := range upstreams {
+		resp, err := exchange(req, upstream.String(), network)
+		if err == nil && resp.Truncated && network == "udp" {
+			resp, err = exchange(req, upstream.String(), "tcp")
+		}
+		if err != nil {
+			log.Printf("error forwarding query for %s to %s: %v", r.Question[0].Name, upstream, err)
+			continue
+		}
+		resp.Id = r.Id
+		return resp
+	}
+	return new(dns.Msg).SetRcode(r, dns.RcodeServerFailure)
+}
+
+// exchange sends req to the upstream at addr over the given network and returns
+// the response.
+func exchange(req *dns.Msg, addr, network string) (*dns.Msg, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), forwardTimeout)
+	defer cancel()
+	c := &dns.Client{Net: network, Timeout: forwardTimeout}
+	resp, _, err := c.ExchangeContext(ctx, req, addr)
+	return resp, err
+}
+
+// lookupForward returns the upstream nameservers for the longest configured
+// forward domain that fqdn is under (or equal to), if any.
+func (n *nameserver) lookupForward(fqdn dnsname.FQDN) []netip.AddrPort {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	name := strings.ToLower(string(fqdn))
+	for {
+		if upstreams, ok := n.forwards[dnsname.FQDN(name)]; ok {
+			return upstreams
+		}
+		i := strings.IndexByte(name, '.')
+		if i < 0 || i == len(name)-1 {
+			return nil
+		}
+		name = name[i+1:]
+	}
+}
+
 // runRecordsReconciler ensures that nameserver's in-memory records are
 // reset when the provided configuration changes.
 func (n *nameserver) runRecordsReconciler(ctx context.Context) {
@@ -236,6 +326,7 @@ func (n *nameserver) resetRecords() error {
 		n.mu.Lock()
 		n.ip4 = make(map[dnsname.FQDN][]net.IP)
 		n.ip6 = make(map[dnsname.FQDN][]net.IP)
+		n.forwards = make(map[dnsname.FQDN][]netip.AddrPort)
 		n.mu.Unlock()
 		return nil
 	}
@@ -251,16 +342,39 @@ func (n *nameserver) resetRecords() error {
 
 	ip4 := make(map[dnsname.FQDN][]net.IP)
 	ip6 := make(map[dnsname.FQDN][]net.IP)
+	forwards := make(map[dnsname.FQDN][]netip.AddrPort)
 	defer func() {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		n.ip4 = ip4
 		n.ip6 = ip6
+		n.forwards = forwards
 	}()
 
-	if len(dnsCfg.IP4) == 0 && len(dnsCfg.IP6) == 0 {
+	if len(dnsCfg.IP4) == 0 && len(dnsCfg.IP6) == 0 && len(dnsCfg.Forwards) == 0 {
 		log.Print("nameserver's configuration contains no records, any in-memory records will be unset")
 		return nil
+	}
+
+	// Process forwards
+	for domain, upstreams := range dnsCfg.Forwards {
+		fqdn, err := dnsname.ToFQDN(domain)
+		if err != nil {
+			log.Printf("invalid nameserver's configuration: forward domain %s is not a valid FQDN: %v; skipping this forward", domain, err)
+			continue
+		}
+		var validUpstreams []netip.AddrPort
+		for _, u := range upstreams {
+			ap, err := netip.ParseAddrPort(u)
+			if err != nil {
+				log.Printf("invalid nameserver's configuration: %q is not a valid ip:port nameserver address for forward domain %s; skipping it", u, domain)
+				continue
+			}
+			validUpstreams = append(validUpstreams, ap)
+		}
+		if len(validUpstreams) > 0 {
+			forwards[dnsname.FQDN(strings.ToLower(string(fqdn)))] = validUpstreams
+		}
 	}
 
 	// Process IPv4 records

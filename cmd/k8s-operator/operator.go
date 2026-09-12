@@ -59,8 +59,10 @@ import (
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
+	"tailscale.com/k8s-operator/reconciler/routeacceptor"
 	"tailscale.com/k8s-operator/reconciler/tailnet"
 	"tailscale.com/k8s-operator/reconciler/tailscaled"
+	"tailscale.com/k8s-operator/tailnetdns"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
@@ -340,6 +342,7 @@ func runReconcilers(opts reconcilerOpts) {
 				&corev1.ConfigMap{}:                         nsFilter,
 				&appsv1.StatefulSet{}:                       nsFilter,
 				&appsv1.Deployment{}:                        nsFilter,
+				&appsv1.DaemonSet{}:                         nsFilter,
 				&rbacv1.Role{}:                              nsFilter,
 				&rbacv1.RoleBinding{}:                       nsFilter,
 				&apiextensionsv1.CustomResourceDefinition{}: serviceMonitorSelector,
@@ -400,6 +403,48 @@ func runReconcilers(opts reconcilerOpts) {
 	))
 
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
+
+	routeAcceptorOptions := routeacceptor.ReconcilerOptions{
+		Client:                 mgr.GetClient(),
+		APIReader:              mgr.GetAPIReader(),
+		TailscaleNamespace:     opts.tailscaleNamespace,
+		ProxyImage:             opts.proxyImage,
+		ProxyPriorityClassName: opts.proxyPriorityClassName,
+		DefaultTags:            strings.Split(opts.proxyTags, ","),
+		Clients:                clients,
+		Recorder:               eventRecorder,
+		Logger:                 opts.log,
+	}
+
+	if err = routeacceptor.NewReconciler(routeAcceptorOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register routeacceptor reconciler: %v", err)
+	}
+	// RouteAcceptor spec.sources needs every Pod and Namespace in the cluster, stripped down to what it reads;
+	// the manager's cache keeps Pods scoped to the operator's namespace and holds them in full.
+	sourcesCache, err := cache.New(opts.restConfig, cache.Options{
+		HTTPClient: mgr.GetHTTPClient(),
+		Scheme:     tsapi.GlobalScheme,
+		Mapper:     mgr.GetRESTMapper(),
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Pod{}:       {Transform: routeacceptor.StripPod},
+			&corev1.Namespace{}: {Transform: routeacceptor.StripNamespace},
+		},
+	})
+	if err != nil {
+		startlog.Fatalf("could not create the Pod cache for RouteAcceptor sources: %v", err)
+	}
+	if err = mgr.Add(sourcesCache); err != nil {
+		startlog.Fatalf("could not add the Pod cache for RouteAcceptor sources to manager: %v", err)
+	}
+	sourcesOptions := routeacceptor.SourcesReconcilerOptions{
+		Client:             mgr.GetClient(),
+		PodCache:           sourcesCache,
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
+	}
+	if err = routeacceptor.NewSourcesReconciler(sourcesOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register routeacceptor sources reconciler: %v", err)
+	}
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
 		tsnetServer:            opts.tsServer,
@@ -560,12 +605,19 @@ func runReconcilers(opts reconcilerOpts) {
 	// TODO (irbekrm): switch to metadata-only watches for resources whose
 	// spec we don't need to inspect to reduce memory consumption.
 	// https://github.com/kubernetes-sigs/controller-runtime/issues/1159
+	// The tailnet's split DNS configuration is read from the operator's own device and published to the
+	// in-cluster nameserver by the DNSConfig reconciler.
+	splitDNS := tailnetdns.New(lc, opts.log)
+	if err = mgr.Add(splitDNS); err != nil {
+		startlog.Fatalf("could not add tailnet DNS watcher to manager: %v", err)
+	}
 	nameserverOptions := nameserver.ReconcilerOptions{
 		Client:             mgr.GetClient(),
 		Recorder:           eventRecorder,
 		TailscaleNamespace: opts.tailscaleNamespace,
 		Logger:             opts.log,
 		Clock:              tstime.DefaultClock{},
+		SplitDNS:           splitDNS,
 	}
 	if err = nameserver.NewReconciler(nameserverOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not create nameserver reconciler: %v", err)

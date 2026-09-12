@@ -9,7 +9,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
@@ -30,6 +33,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/nameserver"
+	"tailscale.com/k8s-operator/tailnetdns"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
@@ -202,6 +206,12 @@ func TestNameserverReconciler(t *testing.T) {
 			Reason:             nameserver.ReasonNameserverCreated,
 			Message:            nameserver.ReasonNameserverCreated,
 			LastTransitionTime: metav1.Time{Time: clock.Now().Truncate(time.Second)},
+		}, metav1.Condition{
+			Type:               string(tsapi.SplitDNSReady),
+			Status:             metav1.ConditionFalse,
+			Reason:             nameserver.ReasonSplitDNSDisabled,
+			Message:            "split DNS forwarding is not enabled",
+			LastTransitionTime: metav1.Time{Time: clock.Now().Truncate(time.Second)},
 		})
 
 		expectEqual(t, fc, dnsConfig)
@@ -299,4 +309,217 @@ func expectEqual[T any, O reconciler.PtrObject[T]](t *testing.T, c client.Client
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
 	}
+}
+
+type fakeSplitDNS struct {
+	routes map[string][]netip.AddrPort
+	events chan event.TypedGenericEvent[tailnetdns.Change]
+}
+
+func (f *fakeSplitDNS) Routes() map[string][]netip.AddrPort { return f.routes }
+func (f *fakeSplitDNS) Events() <-chan event.TypedGenericEvent[tailnetdns.Change] {
+	return f.events
+}
+
+func TestNameserverReconcilerSplitDNS(t *testing.T) {
+	dnsConfig := &tsapi.DNSConfig{
+		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec: tsapi.DNSConfigSpec{
+			Nameserver: &tsapi.Nameserver{
+				SplitDNS: &tsapi.NameserverSplitDNS{Enabled: true, Domains: []string{"Corp.Internal."}},
+			},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(dnsConfig).
+		WithStatusSubresource(dnsConfig).
+		Build()
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	splitDNS := &fakeSplitDNS{
+		routes: map[string][]netip.AddrPort{
+			"corp.internal": {netip.MustParseAddrPort("10.20.0.53:53"), netip.MustParseAddrPort("[fd7a:115c:a1e0::53]:53")},
+			"eng.example":   {netip.MustParseAddrPort("10.30.0.53:53")},
+		},
+		events: make(chan event.TypedGenericEvent[tailnetdns.Change], 1),
+	}
+	recorder := record.NewFakeRecorder(10)
+	r := nameserver.NewReconciler(nameserver.ReconcilerOptions{
+		Client:             fc,
+		Recorder:           recorder,
+		TailscaleNamespace: tsNamespace,
+		Logger:             logger.Sugar(),
+		Clock:              tstest.NewClock(tstest.ClockOpts{}),
+		SplitDNS:           splitDNS,
+	})
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}
+
+	// The first reconcile creates the nameserver resources; the fake API server does not allocate a ClusterIP,
+	// so nothing is configured until it has one.
+	mustReconcile(t, r, req)
+	mustUpdate(t, fc, tsNamespace, "nameserver", func(svc *corev1.Service) {
+		svc.Spec.ClusterIP = "1.2.3.4"
+	})
+	mustReconcile(t, r, req)
+
+	recordsCM := func(t *testing.T) operatorutils.Records {
+		t.Helper()
+		var cm corev1.ConfigMap
+		if err := fc.Get(context.Background(), types.NamespacedName{Namespace: tsNamespace, Name: operatorutils.DNSRecordsCMName}, &cm); err != nil {
+			t.Fatal(err)
+		}
+		var rec operatorutils.Records
+		if raw := cm.Data[operatorutils.DNSRecordsCMKey]; raw != "" {
+			if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return rec
+	}
+	getCfg := func(t *testing.T) *tsapi.DNSConfig {
+		t.Helper()
+		var cfg tsapi.DNSConfig
+		if err := fc.Get(context.Background(), types.NamespacedName{Name: "test"}, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		return &cfg
+	}
+	condition := func(cfg *tsapi.DNSConfig, typ tsapi.ConditionType) *metav1.Condition {
+		for i := range cfg.Status.Conditions {
+			if cfg.Status.Conditions[i].Type == string(typ) {
+				return &cfg.Status.Conditions[i]
+			}
+		}
+		return nil
+	}
+
+	t.Run("forwards-configured-for-selected-domains", func(t *testing.T) {
+		rec := recordsCM(t)
+		want := map[string][]string{"corp.internal": {"10.20.0.53:53", "[fd7a:115c:a1e0::53]:53"}}
+		if !reflect.DeepEqual(rec.Forwards, want) {
+			t.Errorf("Forwards = %v, want %v (eng.example is not in spec.nameserver.splitDNS.domains)", rec.Forwards, want)
+		}
+		cfg := getCfg(t)
+		if !reflect.DeepEqual(cfg.Status.SplitDNSDomains, []string{"corp.internal"}) {
+			t.Errorf("SplitDNSDomains = %v, want [corp.internal]", cfg.Status.SplitDNSDomains)
+		}
+		if c := condition(cfg, tsapi.SplitDNSReady); c == nil || c.Status != metav1.ConditionTrue || c.Reason != nameserver.ReasonSplitDNSConfigured {
+			t.Errorf("SplitDNSReady = %+v, want True/%s", c, nameserver.ReasonSplitDNSConfigured)
+		}
+		// No RouteAcceptor exists, so the user is warned once.
+		select {
+		case ev := <-recorder.Events:
+			if !strings.Contains(ev, "NoRouteAcceptor") {
+				t.Errorf("event = %q, want a NoRouteAcceptor warning", ev)
+			}
+		default:
+			t.Error("no NoRouteAcceptor event recorded")
+		}
+	})
+
+	t.Run("other-writers-records-are-kept", func(t *testing.T) {
+		// The dnsrecords reconciler shares the ConfigMap.
+		if err := operatorutils.UpdateDNSRecords(context.Background(), fc, tsNamespace, func(rec *operatorutils.Records) {
+			rec.IP4["foo.ts.net"] = []string{"100.64.0.1"}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		mustReconcile(t, r, req)
+		rec := recordsCM(t)
+		if rec.IP4["foo.ts.net"] == nil || rec.Forwards["corp.internal"] == nil {
+			t.Errorf("records = %+v, want both the ts.net record and the forwards", rec)
+		}
+	})
+
+	t.Run("no-matching-domains", func(t *testing.T) {
+		mustUpdate(t, fc, "", "test", func(cfg *tsapi.DNSConfig) {
+			cfg.Spec.Nameserver.SplitDNS.Domains = []string{"other.example"}
+		})
+		mustReconcile(t, r, req)
+		if rec := recordsCM(t); len(rec.Forwards) != 0 {
+			t.Errorf("Forwards = %v, want none", rec.Forwards)
+		}
+		cfg := getCfg(t)
+		if c := condition(cfg, tsapi.SplitDNSReady); c == nil || c.Status != metav1.ConditionFalse || c.Reason != nameserver.ReasonNoSplitDNSDomains {
+			t.Errorf("SplitDNSReady = %+v, want False/%s", c, nameserver.ReasonNoSplitDNSDomains)
+		}
+		if len(cfg.Status.SplitDNSDomains) != 0 {
+			t.Errorf("SplitDNSDomains = %v, want none", cfg.Status.SplitDNSDomains)
+		}
+	})
+
+	t.Run("all-domains-when-unrestricted", func(t *testing.T) {
+		mustUpdate(t, fc, "", "test", func(cfg *tsapi.DNSConfig) {
+			cfg.Spec.Nameserver.SplitDNS.Domains = nil
+		})
+		mustReconcile(t, r, req)
+		if got := getCfg(t).Status.SplitDNSDomains; !reflect.DeepEqual(got, []string{"corp.internal", "eng.example"}) {
+			t.Errorf("SplitDNSDomains = %v, want both domains, sorted", got)
+		}
+	})
+
+	t.Run("disabled-clears-forwards", func(t *testing.T) {
+		mustUpdate(t, fc, "", "test", func(cfg *tsapi.DNSConfig) {
+			cfg.Spec.Nameserver.SplitDNS.Enabled = false
+		})
+		mustReconcile(t, r, req)
+		if rec := recordsCM(t); len(rec.Forwards) != 0 {
+			t.Errorf("Forwards = %v after disabling, want none", rec.Forwards)
+		}
+		cfg := getCfg(t)
+		if c := condition(cfg, tsapi.SplitDNSReady); c == nil || c.Status != metav1.ConditionFalse || c.Reason != nameserver.ReasonSplitDNSDisabled {
+			t.Errorf("SplitDNSReady = %+v, want False/%s", c, nameserver.ReasonSplitDNSDisabled)
+		}
+	})
+}
+
+func TestNameserverReconcilerSplitDNSUnavailable(t *testing.T) {
+	dnsConfig := &tsapi.DNSConfig{
+		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig", APIVersion: "tailscale.com/v1alpha1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec: tsapi.DNSConfigSpec{
+			Nameserver: &tsapi.Nameserver{SplitDNS: &tsapi.NameserverSplitDNS{Enabled: true}},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(dnsConfig).
+		WithStatusSubresource(dnsConfig).
+		Build()
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No SplitDNS source: the operator cannot read the tailnet's DNS configuration.
+	r := nameserver.NewReconciler(nameserver.ReconcilerOptions{
+		Client:             fc,
+		Recorder:           record.NewFakeRecorder(10),
+		TailscaleNamespace: tsNamespace,
+		Logger:             logger.Sugar(),
+		Clock:              tstest.NewClock(tstest.ClockOpts{}),
+	})
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}
+	mustReconcile(t, r, req)
+	mustUpdate(t, fc, tsNamespace, "nameserver", func(svc *corev1.Service) {
+		svc.Spec.ClusterIP = "1.2.3.4"
+	})
+	mustReconcile(t, r, req)
+
+	var cfg tsapi.DNSConfig
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test"}, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cfg.Status.Conditions {
+		if c.Type == string(tsapi.SplitDNSReady) {
+			if c.Status != metav1.ConditionFalse || c.Reason != nameserver.ReasonSplitDNSUnavailable {
+				t.Errorf("SplitDNSReady = %+v, want False/%s", c, nameserver.ReasonSplitDNSUnavailable)
+			}
+			return
+		}
+	}
+	t.Error("SplitDNSReady condition not set")
 }
