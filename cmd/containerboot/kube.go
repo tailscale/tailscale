@@ -112,6 +112,17 @@ func (kc *kubeClient) storeAcceptedRoutes(ctx context.Context, routes []netip.Pr
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
+// getRouteSources returns the 'route_sources' field of the client's state Secret, which the Kubernetes operator sets
+// on route acceptor devices to the Pods that may be routed via the tailnet (see kube/routesources). It returns nil if
+// the field is not set.
+func (kc *kubeClient) getRouteSources(ctx context.Context) ([]byte, error) {
+	s, err := kc.GetSecret(ctx, kc.stateSecret)
+	if err != nil {
+		return nil, err
+	}
+	return s.Data[kubetypes.KeyRouteSources], nil
+}
+
 // storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the client's state
 // Secret. In practice this will be the same value that gets written to 'device_fqdn', but this should only be called
 // when the serve config has been successfully set up.

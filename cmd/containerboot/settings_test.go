@@ -384,6 +384,15 @@ func TestValidateRouteAcceptor(t *testing.T) {
 			settings: kube(&settings{RouteAcceptor: true}),
 		},
 		{
+			name:     "valid_with_sources",
+			settings: kube(&settings{RouteAcceptor: true, RouteAcceptorSources: true}),
+		},
+		{
+			name:        "sources_without_route_acceptor",
+			settings:    kube(&settings{RouteAcceptorSources: true}),
+			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES requires TS_EXPERIMENTAL_ROUTE_ACCEPTOR",
+		},
+		{
 			name:        "userspace",
 			settings:    kube(&settings{RouteAcceptor: true, UserspaceMode: true}),
 			errContains: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR is not supported with TS_USERSPACE",

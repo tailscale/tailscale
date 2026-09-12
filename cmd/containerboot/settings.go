@@ -87,6 +87,11 @@ type settings struct {
 	// when running in the host network namespace) can reach the tailnet. See
 	// TS_EXPERIMENTAL_ROUTE_ACCEPTOR.
 	RouteAcceptor bool
+	// RouteAcceptorSources is set to true if only the Pods the Kubernetes
+	// operator lists in the route_sources field of the state Secret may be
+	// routed via the tailnet, each to the routes listed for it. See
+	// TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES.
+	RouteAcceptorSources bool
 	// CertShareMode is set for Kubernetes Pods running cert share mode.
 	// Possible values are empty (containerboot doesn't run any certs
 	// logic),  'ro' (for Pods that shold never attempt to issue/renew
@@ -142,6 +147,7 @@ func configFromEnv() (*settings, error) {
 		EgressProxiesCfgPath:                  os.Getenv("TS_EGRESS_PROXIES_CONFIG_PATH"),
 		IngressProxiesCfgPath:                 os.Getenv("TS_INGRESS_PROXIES_CONFIG_PATH"),
 		RouteAcceptor:                         def.Bool(os.Getenv("TS_EXPERIMENTAL_ROUTE_ACCEPTOR"), false),
+		RouteAcceptorSources:                  def.Bool(os.Getenv("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES"), false),
 		PodUID:                                os.Getenv("POD_UID"),
 		BootCtxTimeout:                        def.Duration(os.Getenv("TS_BOOT_TIMEOUT"), 60*time.Second),
 	}
@@ -369,6 +375,9 @@ func (s *settings) validate() error {
 			s.ServeConfigPath != "" || s.Routes != nil || s.EgressProxiesCfgPath != "" || s.IngressProxiesCfgPath != "" {
 			return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with TS_DEST_IP, TS_EXPERIMENTAL_DEST_DNS_NAME, TS_TAILNET_TARGET_IP, TS_TAILNET_TARGET_FQDN, TS_SERVE_CONFIG, TS_ROUTES, TS_EGRESS_PROXIES_CONFIG_PATH or TS_INGRESS_PROXIES_CONFIG_PATH")
 		}
+	}
+	if s.RouteAcceptorSources && !s.RouteAcceptor {
+		return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES requires TS_EXPERIMENTAL_ROUTE_ACCEPTOR")
 	}
 
 	// Error out when passed a malformed duration in `TS_BOOT_TIMEOUT` env var.

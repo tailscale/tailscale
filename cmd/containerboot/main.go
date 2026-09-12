@@ -118,6 +118,12 @@
 //     Requires kernel networking and a Kubernetes state Secret. Accepting
 //     routes itself must be enabled via the tailscaled config file. This is
 //     only meant to be configured by the Kubernetes operator.
+//   - TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES: if set to true with
+//     TS_EXPERIMENTAL_ROUTE_ACCEPTOR, only the Pods that the Kubernetes
+//     operator lists in the 'route_sources' field of the state Secret are
+//     routed via the tailnet, each to the routes listed for it; traffic from
+//     other Pods follows the node's normal routes. Enforced with policy routing
+//     rules, see routesources.go. Only meant to be configured by the operator.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -423,6 +429,15 @@ func run() error {
 		}
 	}
 
+	// With route sources, the policy routing rules that keep Pods off the
+	// tailnet unless the operator lists them go in before tailscaled starts,
+	// so that no Pod is routed via the tailnet by mistake.
+	var rsm *routeSources
+	if cfg.RouteAcceptorSources {
+		rsm = newRouteSources(realNetlink{}, tailscaleTunName)
+		go rsm.run(ctx, kc)
+	}
+
 	client, daemonProcess, err := startTailscaled(bootCtx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to bring up tailscale: %w", err)
@@ -460,6 +475,11 @@ func run() error {
 			// referencing it are harmless.
 			if err := removeRouteAcceptorRules(nfr); err != nil {
 				log.Printf("Error removing route acceptor rules on shutdown: %v", err)
+			}
+		}
+		if rsm != nil {
+			if err := rsm.cleanup(); err != nil {
+				log.Printf("Error removing route source rules on shutdown: %v", err)
 			}
 		}
 		log.Printf("Sending SIGTERM to tailscaled")
@@ -963,6 +983,11 @@ runLoop:
 				if deephash.Update(&currentAcceptedRoutes, &routes) {
 					if err := kc.storeAcceptedRoutes(ctx, routes); err != nil {
 						return fmt.Errorf("storing accepted routes in Kubernetes Secret: %w", err)
+					}
+					if rsm != nil {
+						if err := rsm.setAcceptedRoutes(routes); err != nil {
+							log.Printf("route sources: %v", err)
+						}
 					}
 				}
 			}
