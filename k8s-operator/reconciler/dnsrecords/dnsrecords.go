@@ -9,7 +9,7 @@ package dnsrecords
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -353,28 +353,12 @@ func (r *Reconciler) fqdnForDNSRecord(ctx context.Context, proxySvc *corev1.Serv
 // ConfigMap. At this point the in-cluster ts.net nameserver is expected to be
 // successfully created together with the ConfigMap.
 func (r *Reconciler) updateDNSConfig(ctx context.Context, update func(*operatorutils.Records)) error {
-	var cm corev1.ConfigMap
-	err := r.Get(ctx, types.NamespacedName{Name: operatorutils.DNSRecordsCMName, Namespace: r.tsNamespace}, &cm)
-	switch {
-	case apierrors.IsNotFound(err):
+	err := operatorutils.UpdateDNSRecords(ctx, r.Client, r.tsNamespace, update)
+	if errors.Is(err, operatorutils.ErrNoDNSRecordsConfigMap) {
 		r.logger.Warn("dnsrecords ConfigMap not found in cluster. Not updating DNS records. Please open an issue and attach operator logs.")
 		return nil
-	case err != nil:
-		return fmt.Errorf("failed to retrieve dnsrecords ConfigMap: %w", err)
 	}
-	dnsRecords := operatorutils.Records{Version: operatorutils.Alpha1Version, IP4: map[string][]string{}}
-	if cm.Data != nil && cm.Data[operatorutils.DNSRecordsCMKey] != "" {
-		if err := json.Unmarshal([]byte(cm.Data[operatorutils.DNSRecordsCMKey]), &dnsRecords); err != nil {
-			return err
-		}
-	}
-	update(&dnsRecords)
-	dnsRecordsBs, err := json.Marshal(dnsRecords)
-	if err != nil {
-		return fmt.Errorf("error marshalling DNS records: %w", err)
-	}
-	mak.Set(&cm.Data, operatorutils.DNSRecordsCMKey, string(dnsRecordsBs))
-	return r.Update(ctx, &cm)
+	return err
 }
 
 // isSvcForFQDNEgressProxy returns true if the Service is a headless Service

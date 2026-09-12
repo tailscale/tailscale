@@ -92,9 +92,10 @@ func (r *Reissuer) setReissuingLocked(parentName, replicaName string, reissuing 
 
 // Kind names of the CRDs that use a Reissuer, used only in its log and error messages.
 const (
-	KindProxyGroup = "ProxyGroup"
-	KindRecorder   = "Recorder"
-	KindPeerRelay  = "PeerRelay"
+	KindProxyGroup    = "ProxyGroup"
+	KindRecorder      = "Recorder"
+	KindPeerRelay     = "PeerRelay"
+	KindRouteAcceptor = "RouteAcceptor"
 )
 
 // ReissueInput describes a single replica's re-issuance check.

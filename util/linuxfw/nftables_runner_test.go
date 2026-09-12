@@ -1421,3 +1421,44 @@ func TestGetOrCreateChainNilHooknum(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNFTAddAndDelForwardToTunRules(t *testing.T) {
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunnerWithConn(t, conn, false)
+	const tun = "tailscale0"
+
+	chainRules := func(table, chain string) *nftables.Chain {
+		t.Helper()
+		tbl, err := getTableIfExists(conn, nftables.TableFamilyIPv4, table)
+		if err != nil {
+			t.Fatalf("getTableIfExists(%q): %v", table, err)
+		}
+		if tbl == nil {
+			t.Fatalf("table %q does not exist", table)
+		}
+		ch, err := getChainFromTable(conn, tbl, chain)
+		if err != nil {
+			t.Fatalf("getChainFromTable(%q/%q): %v", table, chain, err)
+		}
+		return ch
+	}
+
+	// Adding the rules twice must result in a single set of rules, as the
+	// netfilter state can outlive the process that installs them.
+	for range 2 {
+		if err := runner.AddForwardToTunRules(tun); err != nil {
+			t.Fatalf("AddForwardToTunRules: %v", err)
+		}
+	}
+	checkChainRules(t, conn, chainRules("nat", "POSTROUTING"), 1)
+	checkChainRules(t, conn, chainRules("filter", "ts-clamp"), 2)
+
+	// Deleting the rules removes them; deleting again is not an error.
+	for range 2 {
+		if err := runner.DelForwardToTunRules(tun); err != nil {
+			t.Fatalf("DelForwardToTunRules: %v", err)
+		}
+	}
+	checkChainRules(t, conn, chainRules("nat", "POSTROUTING"), 0)
+	checkChainRules(t, conn, chainRules("filter", "ts-clamp"), 0)
+}

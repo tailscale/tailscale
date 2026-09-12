@@ -260,3 +260,39 @@ func installIngressForwardingRuleForDNSTarget(_ context.Context, backendAddrs []
 	}
 	return nil
 }
+
+// tailscaleTunName is the name of the tun interface tailscaled creates when
+// running with kernel networking.
+const tailscaleTunName = "tailscale0"
+
+// ensureIPForwardingForRouteAcceptor enables IPv4 forwarding and, if the
+// kernel has IPv6 enabled, IPv6 forwarding: a route acceptor forwards traffic
+// of both families into the tailnet.
+func ensureIPForwardingForRouteAcceptor(root string) error {
+	_, err := os.Stat(filepath.Join(root, "proc/sys/net/ipv6/conf/all/forwarding"))
+	return enableIPForwarding(true, err == nil, root)
+}
+
+// installRouteAcceptorRules sets up the netfilter rules that let traffic
+// forwarded by this node (for example from Pods on the same Kubernetes node,
+// when running in the host network namespace) reach the tailnet: forwarded
+// traffic leaving via the tailscale interface is masqueraded to this node's
+// tailnet IP, so that the receiving peer accepts it, and the MSS of forwarded
+// TCP handshakes is clamped to the tailscale interface's MTU. The rules are
+// idempotent, as netfilter state in the host network namespace outlives this
+// process.
+func installRouteAcceptorRules(nfr linuxfw.NetfilterRunner) error {
+	if err := nfr.AddForwardToTunRules(tailscaleTunName); err != nil {
+		return fmt.Errorf("installing route acceptor rules: %w", err)
+	}
+	return nil
+}
+
+// removeRouteAcceptorRules removes the rules installed by
+// installRouteAcceptorRules.
+func removeRouteAcceptorRules(nfr linuxfw.NetfilterRunner) error {
+	if err := nfr.DelForwardToTunRules(tailscaleTunName); err != nil {
+		return fmt.Errorf("removing route acceptor rules: %w", err)
+	}
+	return nil
+}

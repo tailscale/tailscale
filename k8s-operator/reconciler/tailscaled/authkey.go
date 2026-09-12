@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -39,6 +40,32 @@ func NewAuthKey(ctx context.Context, client tsclient.Client, tags []string) (str
 		return "", fmt.Errorf("failed to create auth key: %w", err)
 	}
 	return key.Key, nil
+}
+
+// NewReusableAuthKey mints a reusable, preauthorized, non-ephemeral tailnet auth key with the given tags, expiry and
+// description. Unlike the key minted by NewAuthKey, it can register any number of devices until it expires, so it
+// is meant for workloads whose device count is not known up front, such as DaemonSets. Callers must store it
+// securely and rotate it before it expires. It returns the key and the time it expires at.
+func NewReusableAuthKey(ctx context.Context, client tsclient.Client, tags []string, expiry time.Duration, description string) (string, time.Time, error) {
+	var caps tailscaleclient.KeyCapabilities
+	caps.Devices.Create.Reusable = true
+	caps.Devices.Create.Preauthorized = true
+	caps.Devices.Create.Ephemeral = false
+	caps.Devices.Create.Tags = tags
+
+	key, err := client.Keys().CreateAuthKey(ctx, tailscaleclient.CreateKeyRequest{
+		Capabilities:  caps,
+		ExpirySeconds: int64(expiry / time.Second),
+		Description:   description,
+	})
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to create reusable auth key: %w", err)
+	}
+	expires := key.Expires
+	if expires.IsZero() {
+		expires = time.Now().Add(expiry)
+	}
+	return key.Key, expires, nil
 }
 
 // EnsureDeviceDeleted deletes the tailnet device with the given stable node ID from control, treating a
