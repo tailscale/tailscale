@@ -9,6 +9,7 @@
 package routeacceptor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -134,6 +135,7 @@ const (
 	ReasonTailnetUnavailable       = "TailnetUnavailable"
 	ReasonNodeNameTooLong          = "NodeNameTooLong"
 	ReasonClusterCIDROverlapsCGNAT = "ClusterCIDROverlapsCGNAT"
+	ReasonPodCIDRsUnknown          = "PodCIDRsUnknown"
 	ReasonRoutesValid              = "RoutesValid"
 	ReasonRouteOverlapsClusterCIDR = "RouteOverlapsClusterCIDR"
 
@@ -203,11 +205,36 @@ func (r *Reconciler) Register(mgr manager.Manager) error {
 		ControllerManagedBy(mgr).
 		For(&tsapi.RouteAcceptor{}).
 		Watches(&appsv1.DaemonSet{}, enqueue).
-		Watches(&corev1.Secret{}, enqueue).
+		Watches(&corev1.Secret{}, enqueue, builder.WithPredicates(stateSecretPredicate)).
 		Watches(&tsapi.ProxyClass{}, handler.EnqueueRequestsFromMapFunc(r.enqueueForProxyClass)).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.enqueueAll), builder.WithPredicates(nodePredicate)).
 		Named(reconcilerName).
 		Complete(r)
+}
+
+// stateSecretPredicate ignores Secret updates that only change the route sources document, which the sources
+// reconciler writes on every Pod change and which this reconciler does not read.
+var stateSecretPredicate = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldSecret, ok := e.ObjectOld.(*corev1.Secret)
+		if !ok {
+			return true
+		}
+		newSecret, ok := e.ObjectNew.(*corev1.Secret)
+		if !ok {
+			return true
+		}
+		if !maps.Equal(oldSecret.Labels, newSecret.Labels) || !maps.Equal(oldSecret.Annotations, newSecret.Annotations) {
+			return true
+		}
+		return !maps.EqualFunc(withoutKey(oldSecret.Data, kubetypes.KeyRouteSources), withoutKey(newSecret.Data, kubetypes.KeyRouteSources), bytes.Equal)
+	},
+}
+
+func withoutKey(data map[string][]byte, key string) map[string][]byte {
+	out := maps.Clone(data)
+	delete(out, key)
+	return out
 }
 
 // nodePredicate limits Node events to those that can change which nodes are selected or which IP ranges the
@@ -360,6 +387,12 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 			return r.setNotReady(ctx, logger, ra, ReasonClusterCIDROverlapsCGNAT, message)
 		}
 	}
+	if len(ra.Spec.Sources) > 0 && !podCIDRsKnown(allNodes, ra) {
+		message := "spec.sources keeps unselected Pods off the tailnet by their IP range, but no Node reports a Pod CIDR and spec.clusterCIDRs is not set: " +
+			"set spec.clusterCIDRs to the cluster's Pod CIDRs"
+		r.event(ra, corev1.EventTypeWarning, ReasonPodCIDRsUnknown, message)
+		return r.setNotReady(ctx, logger, ra, ReasonPodCIDRsUnknown, message)
+	}
 
 	dp, err := r.detectDataPlane(ctx)
 	if err != nil {
@@ -419,6 +452,20 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		requeueAfter = minRequeue(requeueAfter, notReadyRequeue)
 	}
 	return reconcile.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// podCIDRsKnown reports whether the cluster's Pod IP ranges can be determined: from the Nodes, or from
+// spec.clusterCIDRs for IPAMs that do not record them on the Nodes.
+func podCIDRsKnown(nodes []corev1.Node, ra *tsapi.RouteAcceptor) bool {
+	if len(ra.Spec.ClusterCIDRs) > 0 {
+		return true
+	}
+	for _, n := range nodes {
+		if n.Spec.PodCIDR != "" || len(n.Spec.PodCIDRs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // minRequeue returns the shorter of the two requeue intervals, treating a non-positive interval as "none".

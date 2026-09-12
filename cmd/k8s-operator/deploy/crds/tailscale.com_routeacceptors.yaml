@@ -123,6 +123,9 @@ spec:
                         devices={eth0,tailscale0}), so that Cilium handles the replies.
                         The policy is created once the devices on the gateway nodes are ready
                         and routes have been accepted, and lists the ready devices as gateways.
+                        It steers the Pods that spec.sources selects, each to the routes of
+                        its entries, or every Pod to every accepted route when spec.sources is
+                        unset.
                       type: object
                       properties:
                         highAvailability:
@@ -133,106 +136,6 @@ spec:
                             version that supports spec.egressGateways. Changing gateways breaks
                             the existing connections through them.
                           type: boolean
-                        selectors:
-                          description: |-
-                            Selectors select the Pods whose traffic to the accepted routes is
-                            steered through the route acceptor devices. They are passed through as
-                            the policy's spec.selectors. Defaults to all Pods.
-                          type: array
-                          items:
-                            description: CiliumEgressGatewaySelector selects Pods, as in a CiliumEgressGatewayPolicy.
-                            type: object
-                            properties:
-                              namespaceSelector:
-                                description: NamespaceSelector selects the namespaces whose Pods are selected.
-                                type: object
-                                properties:
-                                  matchExpressions:
-                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
-                                    type: array
-                                    items:
-                                      description: |-
-                                        A label selector requirement is a selector that contains values, a key, and an operator that
-                                        relates the key and values.
-                                      type: object
-                                      required:
-                                        - key
-                                        - operator
-                                      properties:
-                                        key:
-                                          description: key is the label key that the selector applies to.
-                                          type: string
-                                        operator:
-                                          description: |-
-                                            operator represents a key's relationship to a set of values.
-                                            Valid operators are In, NotIn, Exists and DoesNotExist.
-                                          type: string
-                                        values:
-                                          description: |-
-                                            values is an array of string values. If the operator is In or NotIn,
-                                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                                            the values array must be empty. This array is replaced during a strategic
-                                            merge patch.
-                                          type: array
-                                          items:
-                                            type: string
-                                          x-kubernetes-list-type: atomic
-                                    x-kubernetes-list-type: atomic
-                                  matchLabels:
-                                    description: |-
-                                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                                      map is equivalent to an element of matchExpressions, whose key field is "key", the
-                                      operator is "In", and the values array contains only "value". The requirements are ANDed.
-                                    type: object
-                                    additionalProperties:
-                                      type: string
-                                x-kubernetes-map-type: atomic
-                              podSelector:
-                                description: |-
-                                  PodSelector selects Pods by their labels. An empty selector selects
-                                  all Pods.
-                                type: object
-                                properties:
-                                  matchExpressions:
-                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
-                                    type: array
-                                    items:
-                                      description: |-
-                                        A label selector requirement is a selector that contains values, a key, and an operator that
-                                        relates the key and values.
-                                      type: object
-                                      required:
-                                        - key
-                                        - operator
-                                      properties:
-                                        key:
-                                          description: key is the label key that the selector applies to.
-                                          type: string
-                                        operator:
-                                          description: |-
-                                            operator represents a key's relationship to a set of values.
-                                            Valid operators are In, NotIn, Exists and DoesNotExist.
-                                          type: string
-                                        values:
-                                          description: |-
-                                            values is an array of string values. If the operator is In or NotIn,
-                                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                                            the values array must be empty. This array is replaced during a strategic
-                                            merge patch.
-                                          type: array
-                                          items:
-                                            type: string
-                                          x-kubernetes-list-type: atomic
-                                    x-kubernetes-list-type: atomic
-                                  matchLabels:
-                                    description: |-
-                                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                                      map is equivalent to an element of matchExpressions, whose key field is "key", the
-                                      operator is "In", and the values array contains only "value". The requirements are ANDed.
-                                    type: object
-                                    additionalProperties:
-                                      type: string
-                                x-kubernetes-map-type: atomic
                 clusterCIDRs:
                   description: |-
                     ClusterCIDRs are additional IP ranges used by the cluster, such as its
@@ -258,6 +161,126 @@ spec:
                     that should run a route acceptor device. If unset, the operator will
                     create resources with the default configuration, on every node.
                   type: string
+                sources:
+                  description: |-
+                    Sources restricts which Pods are routed via the tailnet. When unset,
+                    every Pod on the selected nodes is: the node forwards their traffic to
+                    the accepted routes. When set, only Pods matching at least one entry
+                    are, each to the routes of the entries it matches; traffic from other
+                    Pods follows the node's normal routes, as if there were no
+                    RouteAcceptor. Pods in the host network namespace share the node's
+                    addresses and are always routed. Requires the cluster's Pod CIDRs to be
+                    known, from the Nodes' podCIDRs or from spec.clusterCIDRs for IPAMs
+                    that do not set them.
+                  type: array
+                  items:
+                    description: |-
+                      RouteAcceptorSource selects Pods that are routed via the tailnet, and the
+                      routes they may reach.
+                    type: object
+                    properties:
+                      namespaceSelector:
+                        description: |-
+                          NamespaceSelector selects, by their labels, the namespaces whose Pods
+                          are selected. Unset selects every namespace.
+                        type: object
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                            type: array
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              type: object
+                              required:
+                                - key
+                                - operator
+                              properties:
+                                key:
+                                  description: key is the label key that the selector applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  type: array
+                                  items:
+                                    type: string
+                                  x-kubernetes-list-type: atomic
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                            additionalProperties:
+                              type: string
+                        x-kubernetes-map-type: atomic
+                      podSelector:
+                        description: |-
+                          PodSelector selects Pods by their labels. Unset selects every Pod in
+                          the selected namespaces.
+                        type: object
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                            type: array
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              type: object
+                              required:
+                                - key
+                                - operator
+                              properties:
+                                key:
+                                  description: key is the label key that the selector applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  type: array
+                                  items:
+                                    type: string
+                                  x-kubernetes-list-type: atomic
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                            additionalProperties:
+                              type: string
+                        x-kubernetes-map-type: atomic
+                      routes:
+                        description: |-
+                          Routes restricts the selected Pods to these destinations: of the
+                          routes accepted from the tailnet, those that fall within them are
+                          routable. Unset means every accepted route and every tailnet peer.
+                        type: array
+                        minItems: 1
+                        items:
+                          type: string
+                          format: cidr
                 tags:
                   description: |-
                     Tags that the Tailscale devices will be tagged with.
@@ -315,6 +338,17 @@ spec:
                     AcceptedRoutes is the union of the subnet routes that the devices
                     currently accept from the tailnet, i.e. the routes that are routable
                     from Pods on the nodes that run a ready device.
+                  type: array
+                  items:
+                    type: string
+                  x-kubernetes-list-type: atomic
+                clusterCIDRs:
+                  description: |-
+                    ClusterCIDRs lists the IP ranges the operator knows the cluster's Pods
+                    and Services use: the Nodes' Pod CIDRs, the Service CIDR and
+                    spec.clusterCIDRs. Accepted routes must not overlap them, and with
+                    spec.sources they are the ranges whose traffic is kept off the tailnet
+                    unless its Pod is selected.
                   type: array
                   items:
                     type: string

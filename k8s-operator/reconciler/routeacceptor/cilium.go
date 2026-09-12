@@ -17,7 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -44,29 +43,8 @@ var ciliumEgressGatewayPolicyGVK = schema.GroupVersionKind{Group: "cilium.io", V
 func ciliumEgressGatewayPolicy(ra *tsapi.RouteAcceptor, routes, gatewayNodes []string) (*unstructured.Unstructured, error) {
 	cfg := ra.Spec.Cilium.EgressGateway
 
-	var selectors []any
-	for _, sel := range cfg.Selectors {
-		m := map[string]any{}
-		if sel.PodSelector != nil {
-			ps, err := runtime.DefaultUnstructuredConverter.ToUnstructured(sel.PodSelector)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert podSelector: %w", err)
-			}
-			m["podSelector"] = ps
-		}
-		if sel.NamespaceSelector != nil {
-			ns, err := runtime.DefaultUnstructuredConverter.ToUnstructured(sel.NamespaceSelector)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert namespaceSelector: %w", err)
-			}
-			m["namespaceSelector"] = ns
-		}
-		selectors = append(selectors, m)
-	}
-	if len(selectors) == 0 {
-		// An empty podSelector selects every Pod.
-		selectors = []any{map[string]any{"podSelector": map[string]any{}}}
-	}
+	// An empty podSelector selects every Pod.
+	selectors := []any{map[string]any{"podSelector": map[string]any{}}}
 
 	spec := map[string]any{
 		"selectors":        selectors,

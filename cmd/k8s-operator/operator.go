@@ -419,6 +419,32 @@ func runReconcilers(opts reconcilerOpts) {
 	if err = routeacceptor.NewReconciler(routeAcceptorOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not register routeacceptor reconciler: %v", err)
 	}
+	// RouteAcceptor spec.sources needs every Pod and Namespace in the cluster, stripped down to what it reads;
+	// the manager's cache keeps Pods scoped to the operator's namespace and holds them in full.
+	sourcesCache, err := cache.New(opts.restConfig, cache.Options{
+		HTTPClient: mgr.GetHTTPClient(),
+		Scheme:     tsapi.GlobalScheme,
+		Mapper:     mgr.GetRESTMapper(),
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Pod{}:       {Transform: routeacceptor.StripPod},
+			&corev1.Namespace{}: {Transform: routeacceptor.StripNamespace},
+		},
+	})
+	if err != nil {
+		startlog.Fatalf("could not create the Pod cache for RouteAcceptor sources: %v", err)
+	}
+	if err = mgr.Add(sourcesCache); err != nil {
+		startlog.Fatalf("could not add the Pod cache for RouteAcceptor sources to manager: %v", err)
+	}
+	sourcesOptions := routeacceptor.SourcesReconcilerOptions{
+		Client:             mgr.GetClient(),
+		PodCache:           sourcesCache,
+		TailscaleNamespace: opts.tailscaleNamespace,
+		Logger:             opts.log,
+	}
+	if err = routeacceptor.NewSourcesReconciler(sourcesOptions).Register(mgr); err != nil {
+		startlog.Fatalf("could not register routeacceptor sources reconciler: %v", err)
+	}
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
 		tsnetServer:            opts.tsServer,

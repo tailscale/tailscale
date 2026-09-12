@@ -144,9 +144,39 @@ type RouteAcceptorSpec struct {
 	// +optional
 	UnsafeAllowIncompatibleCNI bool `json:"unsafeAllowIncompatibleCNI,omitempty"`
 
+	// Sources restricts which Pods are routed via the tailnet. When unset,
+	// every Pod on the selected nodes is: the node forwards their traffic to
+	// the accepted routes. When set, only Pods matching at least one entry
+	// are, each to the routes of the entries it matches; traffic from other
+	// Pods follows the node's normal routes, as if there were no
+	// RouteAcceptor. Pods in the host network namespace share the node's
+	// addresses and are always routed. Requires the cluster's Pod CIDRs to be
+	// known, from the Nodes' podCIDRs or from spec.clusterCIDRs for IPAMs
+	// that do not set them.
+	// +optional
+	Sources []RouteAcceptorSource `json:"sources,omitempty"`
+
 	// Cilium configures the integration with the Cilium CNI.
 	// +optional
 	Cilium *RouteAcceptorCilium `json:"cilium,omitempty"`
+}
+
+// RouteAcceptorSource selects Pods that are routed via the tailnet, and the
+// routes they may reach.
+type RouteAcceptorSource struct {
+	// PodSelector selects Pods by their labels. Unset selects every Pod in
+	// the selected namespaces.
+	// +optional
+	PodSelector *metav1.LabelSelector `json:"podSelector,omitempty"`
+	// NamespaceSelector selects, by their labels, the namespaces whose Pods
+	// are selected. Unset selects every namespace.
+	// +optional
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
+	// Routes restricts the selected Pods to these destinations: of the
+	// routes accepted from the tailnet, those that fall within them are
+	// routable. Unset means every accepted route and every tailnet peer.
+	// +optional
+	Routes Routes `json:"routes,omitempty"`
 }
 
 // RouteAcceptorCilium configures the integration with the Cilium CNI.
@@ -166,6 +196,9 @@ type RouteAcceptorCilium struct {
 	// devices={eth0,tailscale0}), so that Cilium handles the replies.
 	// The policy is created once the devices on the gateway nodes are ready
 	// and routes have been accepted, and lists the ready devices as gateways.
+	// It steers the Pods that spec.sources selects, each to the routes of
+	// its entries, or every Pod to every accepted route when spec.sources is
+	// unset.
 	// +optional
 	EgressGateway *CiliumEgressGateway `json:"egressGateway,omitempty"`
 }
@@ -173,11 +206,6 @@ type RouteAcceptorCilium struct {
 // CiliumEgressGateway configures the CiliumEgressGatewayPolicy maintained for
 // a RouteAcceptor.
 type CiliumEgressGateway struct {
-	// Selectors select the Pods whose traffic to the accepted routes is
-	// steered through the route acceptor devices. They are passed through as
-	// the policy's spec.selectors. Defaults to all Pods.
-	// +optional
-	Selectors []CiliumEgressGatewaySelector `json:"selectors,omitempty"`
 	// HighAvailability lists every ready device as a gateway (the policy's
 	// spec.egressGateways) instead of a single one. Cilium assigns Pods to
 	// gateways and reassigns them if a gateway fails. Requires a Cilium
@@ -185,17 +213,6 @@ type CiliumEgressGateway struct {
 	// the existing connections through them.
 	// +optional
 	HighAvailability bool `json:"highAvailability,omitempty"`
-}
-
-// CiliumEgressGatewaySelector selects Pods, as in a CiliumEgressGatewayPolicy.
-type CiliumEgressGatewaySelector struct {
-	// PodSelector selects Pods by their labels. An empty selector selects
-	// all Pods.
-	// +optional
-	PodSelector *metav1.LabelSelector `json:"podSelector,omitempty"`
-	// NamespaceSelector selects the namespaces whose Pods are selected.
-	// +optional
-	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
 }
 
 type RouteAcceptorStatus struct {
@@ -207,6 +224,14 @@ type RouteAcceptorStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions"`
 
+	// ClusterCIDRs lists the IP ranges the operator knows the cluster's Pods
+	// and Services use: the Nodes' Pod CIDRs, the Service CIDR and
+	// spec.clusterCIDRs. Accepted routes must not overlap them, and with
+	// spec.sources they are the ranges whose traffic is kept off the tailnet
+	// unless its Pod is selected.
+	// +listType=atomic
+	// +optional
+	ClusterCIDRs []string `json:"clusterCIDRs,omitempty"`
 	// AcceptedRoutes is the union of the subnet routes that the devices
 	// currently accept from the tailnet, i.e. the routes that are routable
 	// from Pods on the nodes that run a ready device.

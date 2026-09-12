@@ -84,6 +84,10 @@ func (r *Reconciler) writeStatus(ctx context.Context, logger *zap.SugaredLogger,
 			routes = append(routes, pfx)
 		}
 	}
+	ra.Status.ClusterCIDRs = nil
+	for _, cidr := range clusterCIDRs {
+		ra.Status.ClusterCIDRs = append(ra.Status.ClusterCIDRs, cidr.String())
+	}
 
 	switch {
 	case ra.Status.DesiredNodes == 0:

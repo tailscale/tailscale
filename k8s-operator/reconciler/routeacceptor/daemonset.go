@@ -93,6 +93,9 @@ func (r *Reconciler) routeAcceptorDaemonSet(ra *tsapi.RouteAcceptor, pc *tsapi.P
 
 	c := &ds.Spec.Template.Spec.Containers[0]
 	c.Env = append(c.Env, corev1.EnvVar{Name: routeAcceptorEnvVar, Value: "true"})
+	if len(ra.Spec.Sources) > 0 {
+		c.Env = append(c.Env, corev1.EnvVar{Name: routeAcceptorSourcesEnvVar, Value: "true"})
+	}
 
 	ds = tailscaled.ApplyProxyClassToDaemonSet(ds, pc, managedLabelKeys, nil)
 	if ds.Spec.Template.Spec.PriorityClassName == "" {

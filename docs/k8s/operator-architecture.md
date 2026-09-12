@@ -536,6 +536,56 @@ after its node, so its identity survives Pod restarts. The devices report the
 routes they accept in their state Secrets; the operator surfaces them on the
 RouteAcceptor's status.
 
+### Selecting Pods and routes
+
+By default every Pod on a node that runs a device reaches every route the
+tailnet approves for it. `spec.sources` restricts that to selected Pods, each
+to selected routes:
+
+```yaml
+spec:
+  sources:
+    # Pods labelled tailscale.com/accept-routes=true, in any namespace, may
+    # reach every accepted route (and every tailnet peer).
+    - podSelector:
+        matchLabels:
+          tailscale.com/accept-routes: "true"
+    # Every Pod in namespaces labelled team=data may reach 10.20.0.0/16 only.
+    - namespaceSelector:
+        matchLabels:
+          team: data
+      routes:
+        - 10.20.0.0/16
+```
+
+Entries are OR-ed; within an entry both selectors must match, and an unset
+selector matches everything. A Pod selected by several entries gets the union
+of their routes. Traffic from Pods that no entry selects follows the node's
+normal routes, as if there were no RouteAcceptor, so a network that shares the
+subnet's address space keeps working for them. Pods in the host network
+namespace share the node's addresses and are always routed.
+
+The operator computes, for every node, the addresses of the selected Pods
+grouped by their routes, and writes them into the node's state Secret
+(`route_sources`, see `kube/routesources`). containerboot polls that field
+every five seconds and enforces it with policy routing rules just before
+tailscaled's own: a rule per selected Pod address that looks up tailscaled's
+table 52, or a per-group table holding the accepted routes within the group's
+routes, and rules that send every other Pod-sourced packet to the main table
+(then `default`, then `unreachable`). Rules are used rather than netfilter
+because CNIs with a BPF data path, such as Cilium's eBPF host routing, bypass
+netfilter for Pod traffic but still perform a full route lookup that honours
+them. A new Pod can use the routes within about ten seconds of getting an
+address; an address reassigned to another Pod right after a deletion may keep
+access for as long.
+
+The Pod CIDRs of the cluster must be known to keep unselected Pods off the
+tailnet: from the Nodes' `podCIDRs`, or from `spec.clusterCIDRs` for IPAMs that
+do not record them on Nodes (Cilium cluster-pool, for example). The operator
+refuses to deploy otherwise (`PodCIDRsUnknown`). In the Cilium egress gateway
+mode the policies follow `spec.sources`, and every gateway node lists every
+selected Pod, as any of them may be steered through it.
+
 ### Cilium
 
 With its default eBPF host routing (`bpf.masquerade=true` together with

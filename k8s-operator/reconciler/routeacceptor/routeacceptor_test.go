@@ -813,11 +813,7 @@ func TestReconcile_CiliumEgressGateway(t *testing.T) {
 	}
 	r, cl := newTestReconciler(t, tsc,
 		newRouteAcceptor(tsapi.RouteAcceptorSpec{
-			Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{
-				Selectors: []tsapi.CiliumEgressGatewaySelector{{
-					PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"needs-tailnet": "true"}},
-				}},
-			}},
+			Cilium: &tsapi.RouteAcceptorCilium{EgressGateway: &tsapi.CiliumEgressGateway{}},
 		}),
 		newNode("node-a", nil),
 		newNode("node-b", nil),
@@ -859,9 +855,7 @@ func TestReconcile_CiliumEgressGateway(t *testing.T) {
 	}
 	spec := pol.Object["spec"].(map[string]any)
 	wantSpec := map[string]any{
-		"selectors": []any{map[string]any{
-			"podSelector": map[string]any{"matchLabels": map[string]any{"needs-tailnet": "true"}},
-		}},
+		"selectors":        []any{map[string]any{"podSelector": map[string]any{}}},
 		"destinationCIDRs": []any{"10.20.0.0/16"},
 		"egressGateway": map[string]any{
 			"nodeSelector": map[string]any{
@@ -1033,4 +1027,69 @@ func TestReconcile_CiliumManagedDevice(t *testing.T) {
 	ra := getRouteAcceptor(t, cl)
 	expectCondition(t, ra, tsapi.RouteAcceptorDataPlaneSupported, metav1.ConditionFalse, routeacceptor.ReasonCiliumIPMasqAgent)
 	expectCondition(t, ra, tsapi.RouteAcceptorReady, metav1.ConditionFalse, routeacceptor.ReasonCiliumIPMasqAgent)
+}
+
+func TestReconcile_SourcesEnableEnforcement(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{
+			Sources: []tsapi.RouteAcceptorSource{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}}},
+		}),
+		newNode("node-a", nil, "10.244.0.0/24"),
+	)
+	mustReconcile(t, r, raName)
+	ds := getDaemonSet(t, cl)
+	var found bool
+	for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES" && e.Value == "true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES=true missing from the DaemonSet env: %v", ds.Spec.Template.Spec.Containers[0].Env)
+	}
+	ra := getRouteAcceptor(t, cl)
+	if !slices.Contains(ra.Status.ClusterCIDRs, "10.244.0.0/24") {
+		t.Errorf("status.clusterCIDRs = %v, want the node's Pod CIDR", ra.Status.ClusterCIDRs)
+	}
+
+	// Without sources the env var is absent.
+	ra.Spec.Sources = nil
+	if err := cl.Update(context.Background(), ra); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	for _, e := range getDaemonSet(t, cl).Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES" {
+			t.Errorf("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES still set without spec.sources")
+		}
+	}
+}
+
+func TestReconcile_SourcesNeedPodCIDRs(t *testing.T) {
+	t.Parallel()
+	tsc := &fakeTSClient{loginURL: testLoginURL}
+	r, cl := newTestReconciler(t, tsc,
+		newRouteAcceptor(tsapi.RouteAcceptorSpec{
+			Sources: []tsapi.RouteAcceptorSource{{}},
+		}),
+		newNode("node-a", nil), // no Pod CIDR, as with IPAMs that do not record them on Nodes
+	)
+	mustReconcile(t, r, raName)
+	if daemonSetExists(t, cl) {
+		t.Error("DaemonSet created although the Pod CIDRs are unknown")
+	}
+	expectCondition(t, getRouteAcceptor(t, cl), tsapi.RouteAcceptorReady, metav1.ConditionFalse, routeacceptor.ReasonPodCIDRsUnknown)
+
+	// spec.clusterCIDRs supplies them.
+	ra := getRouteAcceptor(t, cl)
+	ra.Spec.ClusterCIDRs = tsapi.Routes{"10.0.0.0/8"}
+	if err := cl.Update(context.Background(), ra); err != nil {
+		t.Fatal(err)
+	}
+	mustReconcile(t, r, raName)
+	if !daemonSetExists(t, cl) {
+		t.Error("DaemonSet not created with spec.clusterCIDRs set")
+	}
 }

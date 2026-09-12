@@ -75,25 +75,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `selectors` _[CiliumEgressGatewaySelector](#ciliumegressgatewayselector) array_ | Selectors select the Pods whose traffic to the accepted routes is<br />steered through the route acceptor devices. They are passed through as<br />the policy's spec.selectors. Defaults to all Pods. |  |  |
 | `highAvailability` _boolean_ | HighAvailability lists every ready device as a gateway (the policy's<br />spec.egressGateways) instead of a single one. Cilium assigns Pods to<br />gateways and reassigns them if a gateway fails. Requires a Cilium<br />version that supports spec.egressGateways. Changing gateways breaks<br />the existing connections through them. |  |  |
-
-
-#### CiliumEgressGatewaySelector
-
-
-
-CiliumEgressGatewaySelector selects Pods, as in a CiliumEgressGatewayPolicy.
-
-
-
-_Appears in:_
-- [CiliumEgressGateway](#ciliumegressgateway)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `podSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#labelselector-v1-meta)_ | PodSelector selects Pods by their labels. An empty selector selects<br />all Pods. |  |  |
-| `namespaceSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#labelselector-v1-meta)_ | NamespaceSelector selects the namespaces whose Pods are selected. |  |  |
 
 
 
@@ -1334,7 +1316,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `egressGateway` _[CiliumEgressGateway](#ciliumegressgateway)_ | EgressGateway makes the operator maintain a CiliumEgressGatewayPolicy<br />that steers traffic from the selected Pods to the accepted routes<br />through the route acceptor devices: Cilium forwards the traffic to a<br />node running a device, masquerades it to the device's tailnet IP (the<br />first address of tailscale0) and routes it via the tailnet. Use this to<br />route the traffic through dedicated gateway nodes rather than each<br />Pod's own node, or when Cilium's ip-masq-agent is in use; with eBPF<br />host routing it is otherwise enough to list tailscale0 in Cilium's<br />devices. It works with any Cilium data path.<br />Requires Cilium's egress gateway feature (egressGateway.enabled=true,<br />which needs BPF masquerading and kube-proxy replacement) and<br />tailscale0 to be listed in Cilium's devices (for example<br />devices={eth0,tailscale0}), so that Cilium handles the replies.<br />The policy is created once the devices on the gateway nodes are ready<br />and routes have been accepted, and lists the ready devices as gateways. |  |  |
+| `egressGateway` _[CiliumEgressGateway](#ciliumegressgateway)_ | EgressGateway makes the operator maintain a CiliumEgressGatewayPolicy<br />that steers traffic from the selected Pods to the accepted routes<br />through the route acceptor devices: Cilium forwards the traffic to a<br />node running a device, masquerades it to the device's tailnet IP (the<br />first address of tailscale0) and routes it via the tailnet. Use this to<br />route the traffic through dedicated gateway nodes rather than each<br />Pod's own node, or when Cilium's ip-masq-agent is in use; with eBPF<br />host routing it is otherwise enough to list tailscale0 in Cilium's<br />devices. It works with any Cilium data path.<br />Requires Cilium's egress gateway feature (egressGateway.enabled=true,<br />which needs BPF masquerading and kube-proxy replacement) and<br />tailscale0 to be listed in Cilium's devices (for example<br />devices={eth0,tailscale0}), so that Cilium handles the replies.<br />The policy is created once the devices on the gateway nodes are ready<br />and routes have been accepted, and lists the ready devices as gateways.<br />It steers the Pods that spec.sources selects, each to the routes of<br />its entries, or every Pod to every accepted route when spec.sources is<br />unset. |  |  |
 
 
 #### RouteAcceptorList
@@ -1377,6 +1359,25 @@ _Appears in:_
 | `ready` _boolean_ | Ready is true if the device on the node has joined the tailnet. |  |  |
 
 
+#### RouteAcceptorSource
+
+
+
+RouteAcceptorSource selects Pods that are routed via the tailnet, and the
+routes they may reach.
+
+
+
+_Appears in:_
+- [RouteAcceptorSpec](#routeacceptorspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `podSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#labelselector-v1-meta)_ | PodSelector selects Pods by their labels. Unset selects every Pod in<br />the selected namespaces. |  |  |
+| `namespaceSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#labelselector-v1-meta)_ | NamespaceSelector selects, by their labels, the namespaces whose Pods<br />are selected. Unset selects every namespace. |  |  |
+| `routes` _[Routes](#routes)_ | Routes restricts the selected Pods to these destinations: of the<br />routes accepted from the tailnet, those that fall within them are<br />routable. Unset means every accepted route and every tailnet peer. |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
+
+
 #### RouteAcceptorSpec
 
 
@@ -1396,6 +1397,7 @@ _Appears in:_
 | `clusterCIDRs` _[Routes](#routes)_ | ClusterCIDRs are additional IP ranges used by the cluster, such as its<br />Pod and Service CIDRs, that the operator cannot discover on its own.<br />The operator discovers the Pod CIDRs recorded on the Nodes and the<br />ServiceCIDR resources, if the cluster has them; add ranges here if your<br />CNI does not record Pod CIDRs on the Nodes. The ranges are only used to<br />warn, via the RouteAcceptorRoutesValid condition, when an accepted<br />route overlaps them, as tailscaled would then route cluster traffic<br />into the tailnet. |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
 | `unsafeAllowCGNATClusterCIDR` _boolean_ | UnsafeAllowCGNATClusterCIDR allows the route acceptor to be deployed<br />even if a cluster IP range overlaps the Tailscale IP range<br />100.64.0.0/10. By default the operator refuses to do so, because<br />tailscaled drops traffic from that range that does not arrive via the<br />tailnet, which would break traffic from Pods to the nodes. Set this only<br />if the tailnet grants the devices' tags the disable-linux-cgnat-drop-rule<br />node attribute. |  |  |
 | `unsafeAllowIncompatibleCNI` _boolean_ | UnsafeAllowIncompatibleCNI deploys the route acceptor even if the<br />cluster's CNI is detected to be configured in a way that keeps Pod<br />traffic from reaching the accepted routes. Today this covers Cilium's<br />eBPF host routing without tailscale0 among Cilium's devices (fix: add<br />it, set bpf.hostLegacyRouting=true, or use spec.cilium.egressGateway),<br />Cilium's ip-masq-agent, whose nonMasqueradeCIDRs exempt typical subnet<br />routes from masquerading, and Cilium's installNoConntrackIptablesRules<br />without tailscale0 among Cilium's devices, which prevents netfilter from<br />masquerading Pod traffic. Set this if Cilium actually runs with legacy<br />host routing, for example because the kernel lacks eBPF host routing<br />support. |  |  |
+| `sources` _[RouteAcceptorSource](#routeacceptorsource) array_ | Sources restricts which Pods are routed via the tailnet. When unset,<br />every Pod on the selected nodes is: the node forwards their traffic to<br />the accepted routes. When set, only Pods matching at least one entry<br />are, each to the routes of the entries it matches; traffic from other<br />Pods follows the node's normal routes, as if there were no<br />RouteAcceptor. Pods in the host network namespace share the node's<br />addresses and are always routed. Requires the cluster's Pod CIDRs to be<br />known, from the Nodes' podCIDRs or from spec.clusterCIDRs for IPAMs<br />that do not set them. |  |  |
 | `cilium` _[RouteAcceptorCilium](#routeacceptorcilium)_ | Cilium configures the integration with the Cilium CNI. |  |  |
 
 
@@ -1413,6 +1415,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the RouteAcceptor.<br />Known condition types are RouteAcceptorReady and<br />RouteAcceptorRoutesValid. |  |  |
+| `clusterCIDRs` _string array_ | ClusterCIDRs lists the IP ranges the operator knows the cluster's Pods<br />and Services use: the Nodes' Pod CIDRs, the Service CIDR and<br />spec.clusterCIDRs. Accepted routes must not overlap them, and with<br />spec.sources they are the ranges whose traffic is kept off the tailnet<br />unless its Pod is selected. |  |  |
 | `acceptedRoutes` _string array_ | AcceptedRoutes is the union of the subnet routes that the devices<br />currently accept from the tailnet, i.e. the routes that are routable<br />from Pods on the nodes that run a ready device. |  |  |
 | `desiredNodes` _integer_ | DesiredNodes is the number of nodes selected to run a route acceptor<br />device. |  |  |
 | `readyNodes` _integer_ | ReadyNodes is the number of nodes on which the route acceptor device is<br />ready. |  |  |
@@ -1432,6 +1435,7 @@ _Validation:_
 
 _Appears in:_
 - [AppConnector](#appconnector)
+- [RouteAcceptorSource](#routeacceptorsource)
 - [RouteAcceptorSpec](#routeacceptorspec)
 - [SubnetRouter](#subnetrouter)
 

@@ -20,3 +20,14 @@ spec:
   # clusterCIDRs:
   #   - 10.244.0.0/16
   #   - 10.96.0.0/12
+  # Optional: route only selected Pods, each to selected routes. Traffic from
+  # other Pods follows the node's normal routes.
+  # sources:
+  #   - podSelector:
+  #       matchLabels:
+  #         tailscale.com/accept-routes: "true"
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         team: data
+  #     routes:
+  #       - 10.20.0.0/16
