@@ -590,3 +590,55 @@ func TestDelLoopbackRuleMissing(t *testing.T) {
 		t.Error("loopback rule still present after DelLoopbackRule")
 	}
 }
+
+func TestAddAndDelForwardToTunRules_ipt(t *testing.T) {
+	iptr := newFakeIPTablesRunner()
+	const tun = "tailscale0"
+
+	// Adding the rules twice must result in a single set of rules, as the
+	// netfilter state can outlive the process that installs them.
+	for range 2 {
+		if err := iptr.AddForwardToTunRules(tun); err != nil {
+			t.Fatalf("AddForwardToTunRules: %v", err)
+		}
+	}
+	wantMasq := strings.Join(forwardToTunMasqArgs(tun), " ")
+	for _, ipt := range iptr.getNATTables() {
+		rules := ipt.(*fakeIPTables).n["nat/POSTROUTING"]
+		if len(rules) != 1 || rules[0] != wantMasq {
+			t.Errorf("nat/POSTROUTING rules = %v, want [%q]", rules, wantMasq)
+		}
+	}
+	var wantClamp []string
+	for _, args := range forwardToTunClampArgs(tun) {
+		wantClamp = append(wantClamp, strings.Join(args, " "))
+	}
+	for _, ipt := range iptr.getTables() {
+		rules := ipt.(*fakeIPTables).n["mangle/FORWARD"]
+		if len(rules) != len(wantClamp) {
+			t.Fatalf("mangle/FORWARD rules = %v, want %v", rules, wantClamp)
+		}
+		for i := range rules {
+			if rules[i] != wantClamp[i] {
+				t.Errorf("mangle/FORWARD rule %d = %q, want %q", i, rules[i], wantClamp[i])
+			}
+		}
+	}
+
+	// Deleting the rules removes them; deleting again is not an error.
+	for range 2 {
+		if err := iptr.DelForwardToTunRules(tun); err != nil {
+			t.Fatalf("DelForwardToTunRules: %v", err)
+		}
+	}
+	for _, ipt := range iptr.getNATTables() {
+		if rules := ipt.(*fakeIPTables).n["nat/POSTROUTING"]; len(rules) != 0 {
+			t.Errorf("nat/POSTROUTING rules after delete = %v, want none", rules)
+		}
+	}
+	for _, ipt := range iptr.getTables() {
+		if rules := ipt.(*fakeIPTables).n["mangle/FORWARD"]; len(rules) != 0 {
+			t.Errorf("mangle/FORWARD rules after delete = %v, want none", rules)
+		}
+	}
+}
