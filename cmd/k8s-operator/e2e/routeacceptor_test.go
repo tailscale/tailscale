@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"tailscale.com/client/tailscale/v2"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -28,15 +30,19 @@ import (
 var routeAcceptorMu sync.Mutex
 
 // A subnet in 10.0.0.0/8 so that its route is auto-approved and reachable on
-// port 80 per the ACL in acl.hujson.
+// port 80 per the ACL in acl.hujson, and a split DNS domain served from it.
 const (
-	testSubnet   = "10.99.0.0/24"
-	testSubnetIP = "10.99.0.1"
+	testSubnet    = "10.99.0.0/24"
+	testSubnetIP  = "10.99.0.1"
+	testDNSDomain = "test.internal"
+	testDNSName   = "db." + testDNSDomain
 )
 
 // TestRouteAcceptor verifies that a RouteAcceptor makes a subnet route advertised
-// to the tailnet reachable from Pods, and that its devices are removed from the
-// tailnet when it is deleted.
+// to the tailnet reachable from Pods, that the tailnet's split DNS for a domain
+// served from that subnet can be resolved by Pods through the DNSConfig
+// nameserver, and that its devices are removed from the tailnet when it is
+// deleted.
 //
 // See [TestMain] for test requirements.
 func TestRouteAcceptor(t *testing.T) {
@@ -88,6 +94,10 @@ func TestRouteAcceptor(t *testing.T) {
 	// Pods reach the subnet through the tailnet.
 	requireTargetIsReachable(t, fmt.Sprintf("http://%s/healthz", testSubnetIP))
 
+	t.Run("split-dns", func(t *testing.T) {
+		testSplitDNS(t)
+	})
+
 	// Deleting the RouteAcceptor removes its devices from the tailnet.
 	deviceIDs := deviceIDsForRouteAcceptor(t, ra.Name)
 	if len(deviceIDs) == 0 {
@@ -125,10 +135,98 @@ func TestRouteAcceptor(t *testing.T) {
 }
 
 // routerOpts configures subnetRouterPod.
+// testSplitDNS configures testDNSDomain as a split DNS domain in the tailnet,
+// served by the nameserver in the subnet router Pod, enables split DNS
+// forwarding on the DNSConfig, points the cluster DNS at the nameserver for the
+// domain and verifies that a Pod can reach the subnet by name. It expects a
+// ready RouteAcceptor.
+func testSplitDNS(t *testing.T) {
+	t.Helper()
+	ctx := t.Context()
+
+	if _, err := tsClient.DNS().UpdateSplitDNS(ctx, tailscale.SplitDNSRequest{testDNSDomain: {testSubnetIP}}); err != nil {
+		t.Fatalf("configuring split DNS: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := tsClient.DNS().UpdateSplitDNS(context.Background(), tailscale.SplitDNSRequest{testDNSDomain: nil}); err != nil {
+			t.Errorf("removing split DNS domain: %v", err)
+		}
+	})
+
+	var dnsCfgs tsapi.DNSConfigList
+	if err := kubeClient.List(ctx, &dnsCfgs); err != nil || len(dnsCfgs.Items) != 1 {
+		t.Fatalf("expected exactly one DNSConfig, got %d (err=%v)", len(dnsCfgs.Items), err)
+	}
+	dnsCfgName := dnsCfgs.Items[0].Name
+	setSplitDNS := func(ctx context.Context, cfg *tsapi.NameserverSplitDNS) error {
+		var dnsCfg tsapi.DNSConfig
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: dnsCfgName}, &dnsCfg); err != nil {
+			return err
+		}
+		dnsCfg.Spec.Nameserver.SplitDNS = cfg
+		return kubeClient.Update(ctx, &dnsCfg)
+	}
+	if err := setSplitDNS(ctx, &tsapi.NameserverSplitDNS{Enabled: true, Domains: []string{testDNSDomain}}); err != nil {
+		t.Fatalf("enabling split DNS forwarding: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := setSplitDNS(context.Background(), nil); err != nil {
+			t.Errorf("disabling split DNS forwarding: %v", err)
+		}
+	})
+
+	var nameserverIP string
+	if err := tstest.WaitFor(3*time.Minute, func() error {
+		var dnsCfg tsapi.DNSConfig
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: dnsCfgName}, &dnsCfg); err != nil {
+			return err
+		}
+		if !slices.Contains(dnsCfg.Status.SplitDNSDomains, testDNSDomain) {
+			return fmt.Errorf("DNSConfig does not forward %s yet, forwards: %v", testDNSDomain, dnsCfg.Status.SplitDNSDomains)
+		}
+		for _, c := range dnsCfg.Status.Conditions {
+			if c.Type == string(tsapi.SplitDNSReady) && c.Status == metav1.ConditionTrue {
+				nameserverIP = dnsCfg.Status.Nameserver.IP
+				return nil
+			}
+		}
+		return fmt.Errorf("SplitDNSReady is not true yet")
+	}); err != nil {
+		t.Fatalf("waiting for split DNS forwarding: %v", err)
+	}
+
+	// Send the domain to the nameserver, as the harness does for ts.net.
+	restore, err := patchClusterDNSStubDomain(ctx, testDNSDomain, nameserverIP)
+	if err != nil {
+		t.Fatalf("configuring the cluster DNS: %v", err)
+	}
+	t.Cleanup(restore)
+
+	requireTargetIsReachable(t, fmt.Sprintf("http://%s/healthz", testDNSName))
+}
+
+// patchClusterDNSStubDomain adds a stub zone for domain forwarding to nameserverIP to the cluster's CoreDNS or
+// kube-dns configuration and returns a function that restores the original configuration.
+func patchClusterDNSStubDomain(ctx context.Context, domain, nameserverIP string) (func(), error) {
+	if cm := getDNSConfigMap(ctx, "coredns"); cm != nil && cm.Data["Corefile"] != "" {
+		corefile := cm.Data["Corefile"] + fmt.Sprintf(`
+%s:53 {
+    errors
+    cache 30
+    forward . %s
+}
+`, domain, nameserverIP)
+		return patchDNSConfigMap(kzap.NewRaw().Sugar(), cm, "Corefile", corefile)
+	}
+	return nil, fmt.Errorf("cluster DNS is not a patchable CoreDNS")
+}
+
 // subnetRouterPod returns a Pod that joins the tailnet as an ephemeral subnet
-// router for subnet and answers HTTP requests on subnetIP port 80
-// (containerboot's health check endpoint), so that tests can tell whether the
-// subnet is reachable. The device disappears from the tailnet with the Pod.
+// router for subnet, answers HTTP requests on subnetIP port 80 (containerboot's
+// health check endpoint) and answers DNS queries for testDNSDomain on subnetIP
+// port 53 (a CoreDNS sidecar resolving testDNSName to subnetIP), so that tests
+// can tell whether the subnet is reachable by IP and by name. The device
+// disappears from the tailnet with the Pod.
 func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
 	t.Helper()
 
@@ -144,37 +242,61 @@ func subnetRouterPod(t *testing.T, name, subnet, subnetIP string) *corev1.Pod {
 
 	image := proxyImage(t)
 	privileged := true
+	corefile := fmt.Sprintf(`%s:53 {
+    hosts {
+        %s %s
+    }
+}
+`, testDNSDomain, subnetIP, testDNSName)
 	return &corev1.Pod{
 		ObjectMeta: objectMeta(ns, name),
 		Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{
+				{Name: "coredns-config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			},
 			InitContainers: []corev1.Container{{
 				Name:            "subnet",
 				Image:           image,
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 				Command:         []string{"/bin/sh", "-c"},
-				Args:            []string{fmt.Sprintf("ip addr add %s/32 dev lo", subnetIP)},
+				Args:            []string{fmt.Sprintf("ip addr add %s/32 dev lo && printf '%%s' %s > /etc/coredns/Corefile", subnetIP, shellQuote(corefile))},
+				VolumeMounts:    []corev1.VolumeMount{{Name: "coredns-config", MountPath: "/etc/coredns"}},
 			}},
-			Containers: []corev1.Container{{
-				Name:            "tailscale",
-				Image:           image,
-				ImagePullPolicy: corev1.PullIfNotPresent,
-				SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
-				Env: []corev1.EnvVar{
-					{Name: "TS_AUTHKEY", Value: authKey.Key},
-					{Name: "TS_HOSTNAME", Value: name},
-					{Name: "TS_ROUTES", Value: subnet},
-					{Name: "TS_USERSPACE", Value: "false"},
-					// Keep state on disk: the Pod's ServiceAccount cannot
-					// write Secrets.
-					{Name: "TS_KUBE_SECRET", Value: ""},
-					{Name: "TS_STATE_DIR", Value: "/tmp"},
-					{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
-					{Name: "TS_LOCAL_ADDR_PORT", Value: "[::]:80"},
+			Containers: []corev1.Container{
+				{
+					Name:            "tailscale",
+					Image:           image,
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+					Env: []corev1.EnvVar{
+						{Name: "TS_AUTHKEY", Value: authKey.Key},
+						{Name: "TS_HOSTNAME", Value: name},
+						{Name: "TS_ROUTES", Value: subnet},
+						{Name: "TS_USERSPACE", Value: "false"},
+						// Keep state on disk: the Pod's ServiceAccount cannot
+						// write Secrets.
+						{Name: "TS_KUBE_SECRET", Value: ""},
+						{Name: "TS_STATE_DIR", Value: "/tmp"},
+						{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"},
+						{Name: "TS_LOCAL_ADDR_PORT", Value: "[::]:80"},
+					},
 				},
-			}},
+				{
+					Name:            "coredns",
+					Image:           "coredns/coredns:1.12.2",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Args:            []string{"-conf", "/etc/coredns/Corefile"},
+					VolumeMounts:    []corev1.VolumeMount{{Name: "coredns-config", MountPath: "/etc/coredns", ReadOnly: true}},
+				},
+			},
 		},
 	}
+}
+
+// shellQuote single-quotes s for use in a POSIX shell command.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // proxyImage returns the image the operator uses for its proxies, from the
