@@ -57,48 +57,7 @@ func TestCiliumSpike(t *testing.T) {
 	}
 	ctx := t.Context()
 
-	applySpikeRBAC(t)
-
-	router := subnetRouterPod(t, "spike-router", testSubnet, testSubnetIP, routerOpts{loginServer: clusterLoginServer, image: builtTailscaleImage})
-	createAndCleanup(t, kubeClient, router)
-	// The acceptors keep their tailscaled state in per-node Secrets that outlive the DaemonSet; a stale one from an
-	// earlier run against a previous control server would satisfy the wait below before the device has re-joined.
-	var nodes corev1.NodeList
-	if err := kubeClient.List(ctx, &nodes); err != nil {
-		t.Fatalf("listing nodes: %v", err)
-	}
-	for _, n := range nodes.Items {
-		stale := &corev1.Secret{ObjectMeta: objectMeta(ns, spikeAcceptorName+"-"+n.Name)}
-		if err := kubeClient.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
-			t.Fatalf("deleting the stale state Secret %s: %v", stale.Name, err)
-		}
-	}
-	ds := spikeAcceptorDaemonSet()
-	createAndCleanup(t, kubeClient, ds)
-
-	// The acceptor reports the routes it accepts in its state Secret once tailscaled has installed them.
-	if err := tstest.WaitFor(5*time.Minute, func() error {
-		if err := kubeClient.List(ctx, &nodes); err != nil {
-			return err
-		}
-		for _, n := range nodes.Items {
-			var s corev1.Secret
-			if err := kubeClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: spikeAcceptorName + "-" + n.Name}, &s); err != nil {
-				return fmt.Errorf("state Secret for %s: %w", n.Name, err)
-			}
-			var routes []string
-			if raw := s.Data[kubetypes.KeyAcceptedRoutes]; len(raw) > 0 {
-				json.Unmarshal(raw, &routes)
-			}
-			if !slices.Contains(routes, testSubnet) {
-				return fmt.Errorf("device on %s does not accept %s yet: %v (device IPs %s)", n.Name, testSubnet, routes, s.Data[kubetypes.KeyDeviceIPs])
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("waiting for the route acceptor devices to accept %s: %v", testSubnet, err)
-	}
-	t.Logf("control server knows %d nodes", spikeControl.NumNodes())
+	spikeDeploy(t, false)
 
 	rows := []spikeRow{
 		{name: "ebpf-host-routing-managed-tailscale0", wantReachable: true, largeDownload: true},
@@ -172,6 +131,55 @@ func TestCiliumSpike(t *testing.T) {
 	t.Log(sb.String())
 }
 
+// spikeDeploy deploys the subnet router and the route acceptor DaemonSet (with route sources enforcement if
+// sources is set) against the test control server, and waits for the devices to accept the router's subnet.
+func spikeDeploy(t *testing.T, sources bool) {
+	t.Helper()
+	ctx := t.Context()
+	applySpikeRBAC(t)
+
+	router := subnetRouterPod(t, "spike-router", testSubnet, testSubnetIP, routerOpts{loginServer: clusterLoginServer, image: builtTailscaleImage})
+	createAndCleanup(t, kubeClient, router)
+	// The acceptors keep their tailscaled state in per-node Secrets that outlive the DaemonSet; a stale one from an
+	// earlier run against a previous control server would satisfy the wait below before the device has re-joined.
+	var nodes corev1.NodeList
+	if err := kubeClient.List(ctx, &nodes); err != nil {
+		t.Fatalf("listing nodes: %v", err)
+	}
+	for _, n := range nodes.Items {
+		stale := &corev1.Secret{ObjectMeta: objectMeta(ns, spikeAcceptorName+"-"+n.Name)}
+		if err := kubeClient.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("deleting the stale state Secret %s: %v", stale.Name, err)
+		}
+	}
+	ds := spikeAcceptorDaemonSet(sources)
+	createAndCleanup(t, kubeClient, ds)
+
+	// The acceptor reports the routes it accepts in its state Secret once tailscaled has installed them.
+	if err := tstest.WaitFor(5*time.Minute, func() error {
+		if err := kubeClient.List(ctx, &nodes); err != nil {
+			return err
+		}
+		for _, n := range nodes.Items {
+			var s corev1.Secret
+			if err := kubeClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: spikeAcceptorName + "-" + n.Name}, &s); err != nil {
+				return fmt.Errorf("state Secret for %s: %w", n.Name, err)
+			}
+			var routes []string
+			if raw := s.Data[kubetypes.KeyAcceptedRoutes]; len(raw) > 0 {
+				json.Unmarshal(raw, &routes)
+			}
+			if !slices.Contains(routes, testSubnet) {
+				return fmt.Errorf("device on %s does not accept %s yet: %v (device IPs %s)", n.Name, testSubnet, routes, s.Data[kubetypes.KeyDeviceIPs])
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the route acceptor devices to accept %s: %v", testSubnet, err)
+	}
+	t.Logf("control server knows %d nodes", spikeControl.NumNodes())
+}
+
 // applySpikeRBAC lets the acceptor Pods keep their tailscaled state in Secrets, as the operator's proxies Role does.
 func applySpikeRBAC(t *testing.T) {
 	t.Helper()
@@ -200,7 +208,9 @@ func applySpikeRBAC(t *testing.T) {
 
 // spikeAcceptorDaemonSet is what the operator deploys for a RouteAcceptor, configured for the test control
 // server: a host-network tailscaled per node that accepts routes, with containerboot in route acceptor mode.
-func spikeAcceptorDaemonSet() *appsv1.DaemonSet {
+// spikeAcceptorDaemonSet returns the route acceptor DaemonSet the operator would create, enforcing route sources
+// if sources is set.
+func spikeAcceptorDaemonSet(sources bool) *appsv1.DaemonSet {
 	labels := map[string]string{"app": spikeAcceptorName}
 	privileged := true
 	return &appsv1.DaemonSet{
@@ -233,6 +243,7 @@ func spikeAcceptorDaemonSet() *appsv1.DaemonSet {
 							{Name: "TS_USERSPACE", Value: "false"},
 							{Name: "TS_KUBE_SECRET", Value: spikeAcceptorName + "-$(NODE_NAME)"},
 							{Name: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR", Value: "true"},
+							{Name: "TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES", Value: fmt.Sprint(sources)},
 							{Name: "TS_ACCEPT_DNS", Value: "false"},
 							{Name: "TS_EXTRA_ARGS", Value: "--login-server=" + clusterLoginServer + " --accept-routes"},
 							{Name: "TS_NO_LOGS_NO_SUPPORT", Value: "true"},

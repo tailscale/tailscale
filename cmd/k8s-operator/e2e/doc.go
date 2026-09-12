@@ -30,7 +30,7 @@
 // values, e.g. --cilium-set bpf.hostLegacyRouting=true.
 //
 // --cilium-spike (with --cluster --cni=cilium --build) runs only
-// TestCiliumSpike: it validates the RouteAcceptor's data plane under Cilium
+// TestCiliumSpike and TestCiliumSpikeSources: they validate the RouteAcceptor's data plane under Cilium
 // without devcontrol, a tailnet or the operator, by starting this repository's
 // test control server in the test process and deploying the route acceptor
 // DaemonSet and a subnet router directly, then trying the Cilium

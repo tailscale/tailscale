@@ -144,6 +144,10 @@ func TestRouteAcceptor(t *testing.T) {
 		testSplitDNS(t)
 	})
 
+	t.Run("sources", func(t *testing.T) {
+		testSources(t, ra.Name)
+	})
+
 	// Deleting the RouteAcceptor removes its devices from the tailnet.
 	deviceIDs := deviceIDsForRouteAcceptor(t, ra.Name)
 	if len(deviceIDs) == 0 {
@@ -264,6 +268,91 @@ func patchClusterDNSStubDomain(ctx context.Context, domain, nameserverIP string)
 		return patchDNSConfigMap(kzap.NewRaw().Sugar(), cm, "Corefile", corefile)
 	}
 	return nil, fmt.Errorf("cluster DNS is not a patchable CoreDNS")
+}
+
+// testSources restricts the RouteAcceptor to Pods labelled tailscale.com/accept-routes=true, verifies that only
+// such Pods reach the subnet, and lifts the restriction again. It expects a ready RouteAcceptor.
+func testSources(t *testing.T, raName string) {
+	t.Helper()
+	ctx := t.Context()
+	url := fmt.Sprintf("http://%s/healthz", testSubnetIP)
+	label := map[string]string{"tailscale.com/accept-routes": "true"}
+
+	setSources := func(sources []tsapi.RouteAcceptorSource) {
+		t.Helper()
+		var ra tsapi.RouteAcceptor
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: raName}, &ra); err != nil {
+			t.Fatalf("getting RouteAcceptor: %v", err)
+		}
+		ra.Spec.Sources = sources
+		if err := kubeClient.Update(ctx, &ra); err != nil {
+			t.Fatalf("updating RouteAcceptor: %v", err)
+		}
+	}
+
+	setSources([]tsapi.RouteAcceptorSource{{PodSelector: &metav1.LabelSelector{MatchLabels: label}}})
+	waitForRouteAcceptorRollout(t, raName, true)
+
+	// Every device gets a document once the operator has evaluated the selectors.
+	if err := tstest.WaitFor(2*time.Minute, func() error {
+		var secrets corev1.SecretList
+		if err := kubeClient.List(ctx, &secrets, client.InNamespace("tailscale"), client.MatchingLabels{
+			kubetypes.LabelSecretType:            kubetypes.LabelSecretTypeState,
+			"tailscale.com/parent-resource-type": "routeacceptor",
+			"tailscale.com/parent-resource":      raName,
+		}); err != nil {
+			return err
+		}
+		for _, s := range secrets.Items {
+			if s.Data[kubetypes.KeyRouteSources] == nil {
+				return fmt.Errorf("state Secret %s has no route sources yet", s.Name)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for route sources: %v", err)
+	}
+
+	if !targetIsReachableWith(t, url, 40, curlPodOptions{labels: label}) {
+		t.Errorf("a selected Pod cannot reach %s", url)
+	}
+	if targetIsReachableWith(t, url, 15, curlPodOptions{}) {
+		t.Errorf("an unselected Pod reaches %s", url)
+	}
+
+	setSources(nil)
+	waitForRouteAcceptorRollout(t, raName, false)
+	requireTargetIsReachable(t, url)
+}
+
+// waitForRouteAcceptorRollout waits until the RouteAcceptor's DaemonSet enforces (or, with wantSources false, no
+// longer enforces) route sources on every node and the RouteAcceptor is ready again.
+func waitForRouteAcceptorRollout(t *testing.T, raName string, wantSources bool) {
+	t.Helper()
+	if err := tstest.WaitFor(5*time.Minute, func() error {
+		var ds appsv1.DaemonSet
+		if err := kubeClient.Get(t.Context(), client.ObjectKey{Namespace: "tailscale", Name: "routeacceptor-" + raName}, &ds); err != nil {
+			return err
+		}
+		hasSources := false
+		for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES" && e.Value == "true" {
+				hasSources = true
+			}
+		}
+		if hasSources != wantSources {
+			return fmt.Errorf("DaemonSet template enforces route sources: %v, want %v", hasSources, wantSources)
+		}
+		st := ds.Status
+		if st.ObservedGeneration < ds.Generation || st.DesiredNumberScheduled == 0 ||
+			st.UpdatedNumberScheduled != st.DesiredNumberScheduled || st.NumberReady != st.DesiredNumberScheduled {
+			return fmt.Errorf("DaemonSet rollout in progress: %d/%d updated, %d ready", st.UpdatedNumberScheduled, st.DesiredNumberScheduled, st.NumberReady)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the DaemonSet rollout: %v", err)
+	}
+	waitForRouteAcceptorCondition(t, raName, tsapi.RouteAcceptorReady, metav1.ConditionTrue, "RouteAcceptorReady")
 }
 
 // TestRouteAcceptorCiliumEgressGateway verifies the RouteAcceptor's Cilium
