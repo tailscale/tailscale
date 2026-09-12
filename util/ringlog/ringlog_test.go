@@ -53,3 +53,18 @@ func TestRingLog(t *testing.T) {
 		}
 	})
 }
+
+// TestNil verifies that every method tolerates a nil *RingLog, which is how
+// callers that opt out of logging represent a disabled log. For example,
+// magicsock leaves endpoint.debugUpdates nil on iOS and Android to save memory.
+func TestNil(t *testing.T) {
+	var rb *RingLog[int]
+	rb.Add(1)
+	if got := rb.Len(); got != 0 {
+		t.Errorf("Len() = %d, want 0", got)
+	}
+	if got := rb.GetAll(); got != nil {
+		t.Errorf("GetAll() = %v, want nil", got)
+	}
+	rb.Clear()
+}
