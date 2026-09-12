@@ -7,6 +7,8 @@ package main
 
 import (
 	"net"
+	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -295,3 +297,208 @@ func (fr *fakeResponseWriter) TsigStatus() error {
 }
 func (fr *fakeResponseWriter) TsigTimersOnly(bool) {}
 func (fr *fakeResponseWriter) Hijack()             {}
+
+// startUpstream starts an in-process DNS server answering with handler over
+// both UDP and TCP on the same loopback port and returns its address.
+func startUpstream(t *testing.T, handler dns.HandlerFunc) netip.AddrPort {
+	t.Helper()
+	var (
+		pc  net.PacketConn
+		l   net.Listener
+		err error
+	)
+	// UDP and TCP must share a port: the forwarder retries a truncated UDP
+	// answer over TCP at the same address. Bind UDP on a random port and
+	// then TCP on the same one, retrying if that port happens to be busy.
+	for range 10 {
+		pc, err = net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err = net.Listen("tcp", pc.LocalAddr().String())
+		if err == nil {
+			break
+		}
+		pc.Close()
+	}
+	if err != nil {
+		t.Fatalf("listening on tcp: %v", err)
+	}
+	udp := &dns.Server{PacketConn: pc, Handler: handler}
+	tcp := &dns.Server{Listener: l, Handler: handler}
+	go udp.ActivateAndServe()
+	go tcp.ActivateAndServe()
+	t.Cleanup(func() {
+		udp.Shutdown()
+		tcp.Shutdown()
+	})
+	return netip.MustParseAddrPort(pc.LocalAddr().String())
+}
+
+// upstreamHandler answers A queries for names in zone with ip, TXT queries
+// with a fixed text, and truncates UDP answers for names starting with "big."
+// so that the forwarder has to retry over TCP.
+func upstreamHandler(ip net.IP, text string) dns.HandlerFunc {
+	return func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Authoritative = true
+		m.RecursionAvailable = true
+		q := r.Question[0]
+		if strings.HasPrefix(q.Name, "big.") && w.RemoteAddr().Network() == "udp" {
+			m.Truncated = true
+			w.WriteMsg(m)
+			return
+		}
+		switch q.Qtype {
+		case dns.TypeA:
+			m.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: ip}}
+		case dns.TypeTXT:
+			m.Answer = []dns.RR{&dns.TXT{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 300}, Txt: []string{text}}}
+		default:
+			m.Rcode = dns.RcodeNameError
+		}
+		w.WriteMsg(m)
+	}
+}
+
+func TestForward(t *testing.T) {
+	corp := startUpstream(t, upstreamHandler(net.IP{10, 20, 0, 7}, "corp"))
+	eng := startUpstream(t, upstreamHandler(net.IP{10, 30, 0, 7}, "eng"))
+	// Nothing listens on this port; queries to it fail fast.
+	dead := netip.MustParseAddrPort("127.0.0.1:1")
+
+	ns := &nameserver{
+		ip4: map[dnsname.FQDN][]net.IP{"foo.ts.net.": {{100, 64, 0, 1}}},
+		forwards: map[dnsname.FQDN][]netip.AddrPort{
+			"corp.internal.":     {dead, corp},
+			"eng.corp.internal.": {eng},
+			"down.example.":      {dead},
+		},
+	}
+	handler := ns.handleForward()
+
+	query := func(name string, qtype uint16) *dns.Msg {
+		return &dns.Msg{
+			Question: []dns.Question{{Name: name, Qtype: qtype, Qclass: dns.ClassINET}},
+			MsgHdr:   dns.MsgHdr{Id: 42, RecursionDesired: true},
+		}
+	}
+	ask := func(t *testing.T, name string, qtype uint16) *dns.Msg {
+		t.Helper()
+		w := &fakeResponseWriter{}
+		handler(w, query(name, qtype))
+		if w.msg == nil {
+			t.Fatal("no response written")
+		}
+		if w.msg.Id != 42 {
+			t.Errorf("response ID = %d, want 42", w.msg.Id)
+		}
+		return w.msg
+	}
+	wantA := func(t *testing.T, m *dns.Msg, ip net.IP) {
+		t.Helper()
+		if m.Rcode != dns.RcodeSuccess {
+			t.Fatalf("rcode = %s, want NOERROR", dns.RcodeToString[m.Rcode])
+		}
+		if len(m.Answer) != 1 {
+			t.Fatalf("answer = %v, want one A record", m.Answer)
+		}
+		a, ok := m.Answer[0].(*dns.A)
+		if !ok || !a.A.Equal(ip) {
+			t.Fatalf("answer = %v, want A %s", m.Answer[0], ip)
+		}
+		if a.Hdr.Ttl != 300 {
+			t.Errorf("TTL = %d, want the upstream's 300", a.Hdr.Ttl)
+		}
+		if !m.RecursionAvailable || !m.Authoritative {
+			t.Errorf("flags RA=%v AA=%v, want the upstream's (true, true)", m.RecursionAvailable, m.Authoritative)
+		}
+	}
+
+	t.Run("forwards-and-fails-over", func(t *testing.T) {
+		// The first upstream for corp.internal is dead; the second answers.
+		wantA(t, ask(t, "db.corp.internal.", dns.TypeA), net.IP{10, 20, 0, 7})
+	})
+	t.Run("domain-itself", func(t *testing.T) {
+		wantA(t, ask(t, "corp.internal.", dns.TypeA), net.IP{10, 20, 0, 7})
+	})
+	t.Run("longest-suffix-wins", func(t *testing.T) {
+		wantA(t, ask(t, "ci.eng.corp.internal.", dns.TypeA), net.IP{10, 30, 0, 7})
+	})
+	t.Run("case-insensitive", func(t *testing.T) {
+		wantA(t, ask(t, "DB.Corp.Internal.", dns.TypeA), net.IP{10, 20, 0, 7})
+	})
+	t.Run("any-qtype", func(t *testing.T) {
+		m := ask(t, "txt.corp.internal.", dns.TypeTXT)
+		if len(m.Answer) != 1 || m.Answer[0].(*dns.TXT).Txt[0] != "corp" {
+			t.Fatalf("answer = %v, want TXT corp", m.Answer)
+		}
+	})
+	t.Run("truncated-retried-over-tcp", func(t *testing.T) {
+		m := ask(t, "big.corp.internal.", dns.TypeA)
+		if m.Truncated {
+			t.Fatal("response is truncated: not retried over TCP")
+		}
+		wantA(t, m, net.IP{10, 20, 0, 7})
+	})
+	t.Run("all-upstreams-down", func(t *testing.T) {
+		if m := ask(t, "x.down.example.", dns.TypeA); m.Rcode != dns.RcodeServerFailure {
+			t.Fatalf("rcode = %s, want SERVFAIL", dns.RcodeToString[m.Rcode])
+		}
+	})
+	t.Run("unknown-domain-refused", func(t *testing.T) {
+		if m := ask(t, "example.com.", dns.TypeA); m.Rcode != dns.RcodeRefused {
+			t.Fatalf("rcode = %s, want REFUSED", dns.RcodeToString[m.Rcode])
+		}
+		// A parent of a forward domain is not forwarded either.
+		if m := ask(t, "internal.", dns.TypeA); m.Rcode != dns.RcodeRefused {
+			t.Fatalf("rcode = %s, want REFUSED", dns.RcodeToString[m.Rcode])
+		}
+	})
+	t.Run("invalid-name", func(t *testing.T) {
+		if m := ask(t, "a..corp.internal.", dns.TypeA); m.Rcode != dns.RcodeFormatError {
+			t.Fatalf("rcode = %s, want FORMERR", dns.RcodeToString[m.Rcode])
+		}
+	})
+}
+
+func TestResetRecordsForwards(t *testing.T) {
+	ns := &nameserver{
+		configReader: func() ([]byte, error) {
+			return []byte(`{"version": "v1alpha1", "ip4": {"foo.ts.net": ["100.64.0.1"]}, "forwards": {"Corp.Internal": ["10.20.0.53:53", "not-an-address", "[fd7a:115c:a1e0::53]:53"], "bad..domain": ["10.0.0.1:53"], "empty.example": ["nope"]}}`), nil
+		},
+	}
+	if err := ns.resetRecords(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[dnsname.FQDN][]netip.AddrPort{
+		"corp.internal.": {netip.MustParseAddrPort("10.20.0.53:53"), netip.MustParseAddrPort("[fd7a:115c:a1e0::53]:53")},
+	}
+	if len(ns.forwards) != len(want) {
+		t.Fatalf("forwards = %v, want %v", ns.forwards, want)
+	}
+	for domain, ups := range want {
+		got := ns.forwards[domain]
+		if len(got) != len(ups) {
+			t.Fatalf("forwards[%q] = %v, want %v", domain, got, ups)
+		}
+		for i := range ups {
+			if got[i] != ups[i] {
+				t.Errorf("forwards[%q][%d] = %v, want %v", domain, i, got[i], ups[i])
+			}
+		}
+	}
+	if len(ns.ip4) != 1 {
+		t.Errorf("ip4 = %v, want the ts.net record", ns.ip4)
+	}
+
+	// A configuration without forwards clears them.
+	ns.configReader = func() ([]byte, error) { return []byte(`{"version": "v1alpha1", "ip4": {}}`), nil }
+	if err := ns.resetRecords(); err != nil {
+		t.Fatal(err)
+	}
+	if len(ns.forwards) != 0 {
+		t.Errorf("forwards = %v after reset, want none", ns.forwards)
+	}
+}
