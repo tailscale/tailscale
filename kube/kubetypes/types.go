@@ -45,6 +45,9 @@ const (
 	KeyPodUID         = "pod_uid"          // Pod UID
 	KeyCapVer         = "tailscale_capver" // tailcfg.CurrentCapabilityVersion of this proxy instance.
 	KeyReissueAuthkey = "reissue_authkey"  // Proxies will set this to the authkey that failed, or "no-authkey", if they can't log in.
+	// KeyAcceptedRoutes is set by containerboot instances running in route acceptor mode to a JSON array of the
+	// subnet routes (CIDRs) that the device currently accepts from its tailnet peers.
+	KeyAcceptedRoutes = "accepted_routes"
 	// KeyHTTPSEndpoint is a name of a field that can be set to the value of any HTTPS endpoint currently exposed by
 	// this device to the tailnet. This is used by the Kubernetes operator Ingress proxy to communicate to the operator
 	// that cluster workloads behind the Ingress can now be accessed via the given DNS name over HTTPS.
