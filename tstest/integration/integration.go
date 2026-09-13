@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -113,29 +114,16 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 		// full copy of the binary. We can't use os.Link(b.Path, ret.Path)
 		// because b.Path is in the first test's TempDir, which may be
 		// cleaned up before later tests call CopyTo. The open FD keeps the
-		// inode alive after the path is deleted.
+		// inode alive after the path is deleted, but only for reading:
+		// once the inode's link count drops to zero the kernel refuses
+		// to hardlink it again, so this fails and we fall through to
+		// copying the bytes instead.
 		if err := tryLinkat(b.FD, ret.Path); err == nil {
 			return ret, nil
 		}
 		fallthrough
 	case "darwin", "freebsd", "openbsd", "netbsd":
-		f, err := os.OpenFile(ret.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
-		if err != nil {
-			return BinaryInfo{}, err
-		}
-		b.FDMu.Lock()
-		b.FD.Seek(0, 0)
-		size, err := io.Copy(f, b.FD)
-		b.FDMu.Unlock()
-		if err != nil {
-			f.Close()
-			return BinaryInfo{}, fmt.Errorf("copying %q: %w", b.Path, err)
-		}
-		if size != b.Size {
-			f.Close()
-			return BinaryInfo{}, fmt.Errorf("copy %q: size mismatch: %d != %d", b.Path, size, b.Size)
-		}
-		if err := f.Close(); err != nil {
+		if err := b.writeCopy(ret.Path); err != nil {
 			return BinaryInfo{}, err
 		}
 		return ret, nil
@@ -144,6 +132,38 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 	default:
 		return BinaryInfo{}, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 	}
+}
+
+// writeCopy writes the binary's contents from b.FD to path.
+//
+// It holds syscall.ForkLock for reading for the duration of the write
+// so that no concurrently forked child inherits the transient write
+// FD. A forked child holds inherited FDs (even O_CLOEXEC ones) until
+// it execs, and an exec of the new copy fails with ETXTBSY as long as
+// any process holds a write FD on it (golang.org/issue/22315). This
+// was the cause of the once-mysterious ETXTBSY errors
+// (https://github.com/tailscale/tailscale/issues/15868) that
+// [TestNode.awaitTailscaledRunnable] retries around.
+func (b BinaryInfo) writeCopy(path string) error {
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b.FDMu.Lock()
+	b.FD.Seek(0, 0)
+	size, err := io.Copy(f, b.FD)
+	b.FDMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("copying %q: %w", b.Path, err)
+	}
+	if size != b.Size {
+		return fmt.Errorf("copy %q: size mismatch: %d != %d", b.Path, size, b.Size)
+	}
+	return f.Close()
 }
 
 // GetBinaries create a temp directory using tb and builds (or copies previously
@@ -890,10 +910,11 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 }
 
 // awaitTailscaledRunnable tries to run `tailscaled --version` until it
-// works. This is an unsatisfying workaround for ETXTBSY we were seeing
-// on GitHub Actions that aren't understood. It's not clear what's holding
-// a writable fd to tailscaled after `go install` completes.
-// See https://github.com/tailscale/tailscale/issues/15868.
+// works. It began as a workaround for mysterious ETXTBSY errors on
+// GitHub Actions (https://github.com/tailscale/tailscale/issues/15868),
+// whose cause is now understood and fixed (see [BinaryInfo.writeCopy]).
+// It remains as cheap insurance against any other transient exec
+// failure.
 func (n *TestNode) awaitTailscaledRunnable() error {
 	t := n.env.t
 	t.Helper()
