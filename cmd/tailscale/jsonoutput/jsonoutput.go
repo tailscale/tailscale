@@ -140,6 +140,10 @@ import (
 	"strings"
 )
 
+// packageAPIIsStable marks this package for compatibility checks by tool/apidiff.
+//lint:ignore U1000 read by tool/apidiff
+const packageAPIIsStable = true
+
 var _ flag.Value = &SchemaVersion{}
 
 // SchemaVersion implements the [flag.Value] interface,
