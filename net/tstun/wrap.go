@@ -1193,6 +1193,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 		p.TCPFlags&packet.TCPSyn != 0 &&
 		t.PeerAPIPort != nil {
 		if port, ok := t.PeerAPIPort(p.Dst.Addr()); ok && port == p.Dst.Port() {
+			metricPeerAPISynAdmitted.Add(1)
 			outcome = filter.Accept
 		}
 	}
@@ -1540,6 +1541,12 @@ var (
 	metricPacketInDrop          = clientmetric.NewCounter("tstun_in_from_wg_drop")
 	metricPacketInDropFilter    = clientmetric.NewCounter("tstun_in_from_wg_drop_filter")
 	metricPacketInDropSelfDisco = clientmetric.NewCounter("tstun_in_from_wg_drop_self_disco")
+
+	// metricPeerAPISynAdmitted counts inbound TCP SYNs to the peerapi port
+	// that the filter rejected and the peerapi exemption above then allowed.
+	// Funnel ingress is the main source. Taildrop and other peerapi callers
+	// also count when the sending peer has no ACL rule to this node.
+	metricPeerAPISynAdmitted = clientmetric.NewCounter("tstun_in_from_wg_peerapi_syn_admitted")
 
 	metricPacketOut              = clientmetric.NewCounter("tstun_out_to_wg")
 	metricPacketOutDrop          = clientmetric.NewCounter("tstun_out_to_wg_drop")

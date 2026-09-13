@@ -596,6 +596,7 @@ func TestAtomic64Alignment(t *testing.T) {
 }
 
 func TestPeerAPIBypass(t *testing.T) {
+	tstest.AssertNotParallel(t) // reads the package-level metricPeerAPISynAdmitted
 	reg := new(usermetric.Registry)
 	wrapperWithPeerAPI := &Wrapper{
 		PeerAPIPort: func(ip netip.Addr) (port uint16, ok bool) {
@@ -613,6 +614,8 @@ func TestPeerAPIBypass(t *testing.T) {
 		filter *filter.Filter
 		pkt    []byte
 		want   filter.Response
+		// wantAdmitted is the expected increase in metricPeerAPISynAdmitted.
+		wantAdmitted int64
 	}{
 		{
 			name: "reject_nil_filter",
@@ -635,11 +638,12 @@ func TestPeerAPIBypass(t *testing.T) {
 			want:   filter.Drop,
 		},
 		{
-			name:   "peerapi_bypass_filter",
-			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
-			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
-			want:   filter.Accept,
+			name:         "peerapi_bypass_filter",
+			w:            wrapperWithPeerAPI,
+			filter:       filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
+			pkt:          tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
+			want:         filter.Accept,
+			wantAdmitted: 1,
 		},
 		{
 			name:   "peerapi_dont_bypass_filter_wrong_port",
@@ -658,13 +662,18 @@ func TestPeerAPIBypass(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tstest.AssertNotParallel(t) // reads the package-level metricPeerAPISynAdmitted
 			p := new(packet.Parsed)
 			p.Decode(tt.pkt)
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
 			tt.w.logf = t.Logf
+			admittedBefore := metricPeerAPISynAdmitted.Value()
 			if got, _ := tt.w.filterPacketInboundFromWireGuard(p, nil, nil, nil); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
+			}
+			if got := metricPeerAPISynAdmitted.Value() - admittedBefore; got != tt.wantAdmitted {
+				t.Errorf("metricPeerAPISynAdmitted delta = %v; want %v", got, tt.wantAdmitted)
 			}
 		})
 	}

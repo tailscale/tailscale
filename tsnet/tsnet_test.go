@@ -64,6 +64,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/filter"
@@ -928,6 +929,7 @@ func TestStartStopStartGetsSameIP(t *testing.T) {
 }
 
 func TestFunnel(t *testing.T) {
+	tstest.AssertNotParallel(t) // reads process-wide clientmetric counters
 	ctx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer dialCancel()
 
@@ -989,6 +991,9 @@ func TestFunnel(t *testing.T) {
 			},
 		},
 	}
+	admittedBefore := clientMetricValue(t, "tstun_in_from_wg_peerapi_syn_admitted")
+	failedBefore := clientMetricValue(t, "netstack_peerapi_handshake_failed")
+
 	resp, err := c.Get("https://s1.tail-scale.ts.net:443")
 	if err != nil {
 		t.Fatal(err)
@@ -997,6 +1002,15 @@ func TestFunnel(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("unexpected status code: %v", resp.StatusCode)
 		return
+	}
+
+	// The ingress connection reached the peerapi through the filter's peerapi
+	// exemption, and its handshake completed.
+	if got := clientMetricValue(t, "tstun_in_from_wg_peerapi_syn_admitted") - admittedBefore; got < 1 {
+		t.Errorf("tstun_in_from_wg_peerapi_syn_admitted rose by %d; want at least 1", got)
+	}
+	if got := clientMetricValue(t, "netstack_peerapi_handshake_failed") - failedBefore; got != 0 {
+		t.Errorf("netstack_peerapi_handshake_failed rose by %d; want 0", got)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1774,6 +1788,19 @@ func TestListenerClose(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for Accept to return")
 	}
+}
+
+// clientMetricValue returns the current value of the named clientmetric,
+// failing the test if no metric by that name is registered.
+func clientMetricValue(t *testing.T, name string) int64 {
+	t.Helper()
+	for _, m := range clientmetric.Metrics() {
+		if m.Name() == name {
+			return m.Value()
+		}
+	}
+	t.Fatalf("no clientmetric named %q", name)
+	return 0
 }
 
 func dialIngressConn(from, to *Server, target string) (net.Conn, error) {

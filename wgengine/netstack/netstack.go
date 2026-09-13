@@ -1477,6 +1477,16 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) 
 // metricViaHostScopedDrop counts refused 4via6 forwards to host-scoped targets.
 var metricViaHostScopedDrop = clientmetric.NewCounter("netstack_via_host_scoped_dropped")
 
+var (
+	// metricPeerAPIHandshakeFailed counts inbound peerapi connections whose
+	// TCP handshake did not complete.
+	metricPeerAPIHandshakeFailed = clientmetric.NewCounter("netstack_peerapi_handshake_failed")
+
+	// metricTCPHandshakeFailed counts the same for every other inbound
+	// connection netstack handles.
+	metricTCPHandshakeFailed = clientmetric.NewCounter("netstack_tcp_handshake_failed")
+)
+
 // shouldForwardToVia reports whether a flow to the 4via6 destination via may
 // be forwarded to the embedded IPv4 target. The packet filter only sees the
 // outer via address, so this is the sole check on the embedded target.
@@ -1593,6 +1603,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
 
+	// isPeerAPI reports whether this connection is to the peerapi port on one
+	// of this node's own addresses. Funnel ingress and Taildrop arrive that
+	// way.
+	var isPeerAPI bool
+	if ns.lb != nil && isLocal {
+		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
+			isPeerAPI = port == reqDetails.LocalPort
+		}
+	}
+
 	isVia := viaRange.Contains(dialIP)
 	var viaIP netip.Addr
 	if isVia {
@@ -1627,6 +1647,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	getConnOrReset := func(opts ...tcpip.SettableSocketOption) *gonet.TCPConn {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
+			// CreateEndpoint performs the passive half of the three-way
+			// handshake, so any error here is a handshake that did not
+			// complete.
+			if isPeerAPI {
+				metricPeerAPIHandshakeFailed.Add(1)
+			} else {
+				metricTCPHandshakeFailed.Add(1)
+			}
 			ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
 			r.Complete(true) // sends a RST
 			return nil
