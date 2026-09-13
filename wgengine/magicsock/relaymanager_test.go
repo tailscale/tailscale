@@ -46,6 +46,19 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	<-rm.runLoopStoppedCh
 }
 
+// TestRelayManagerZeroServerDisco verifies that a [disco.CallMeMaybeVia] with
+// a zero ServerDisco is dropped rather than crashing the process in
+// [relayManager.ensureDiscoInfoFor]'s DiscoPrivate.Shared call, which rejects
+// zero keys. A malicious peer can zero the key, or send an unknown message
+// version, which parses to a zero-valued message.
+func TestRelayManagerZeroServerDisco(t *testing.T) {
+	rm := relayManager{}
+	c := &Conn{logf: t.Logf}
+	c.discoAtomic.Set(key.NewDisco())
+	rm.handleCallMeMaybeVia(&endpoint{c: c}, addrQuality{}, false, &disco.CallMeMaybeVia{})
+	<-rm.runLoopStoppedCh
+}
+
 func TestRelayManagerHandleDERPHomeChange(t *testing.T) {
 	rm := relayManager{}
 	servers := make(set.Set[candidatePeerRelay], 1)
