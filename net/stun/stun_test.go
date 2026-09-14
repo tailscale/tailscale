@@ -14,8 +14,6 @@ import (
 	"tailscale.com/util/must"
 )
 
-// TODO(bradfitz): fuzz this.
-
 func ExampleRequest() {
 	txID := stun.NewTxID()
 	req := stun.Request(txID)
