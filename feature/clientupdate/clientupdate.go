@@ -36,7 +36,9 @@ import (
 )
 
 func init() {
-	feature.Register("clientupdate")
+	if !feature.Register("clientupdate") {
+		return
+	}
 	ipnext.RegisterExtension("clientupdate", newExt)
 
 	// C2N

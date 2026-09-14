@@ -14,6 +14,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
@@ -23,8 +24,11 @@ import (
 const featureName = "favorites"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
+	localapi.Register("pins", servePins)
 }
 
 // newExtension is the [ipnext.NewExtensionFn] for this feature.

@@ -40,7 +40,9 @@ import (
 const featureName = "acme"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 
 	ipnlocal.HookGetCertPEM.Set(getCertPEMHook)

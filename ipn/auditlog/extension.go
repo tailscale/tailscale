@@ -25,7 +25,9 @@ import (
 const featureName = "auditlog"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 }
 

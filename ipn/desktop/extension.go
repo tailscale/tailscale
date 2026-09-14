@@ -31,7 +31,9 @@ import (
 const featureName = "desktop-sessions"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newDesktopSessionsExt)
 }
 

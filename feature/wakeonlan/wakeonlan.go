@@ -25,7 +25,9 @@ import (
 )
 
 func init() {
-	feature.Register("wakeonlan")
+	if !feature.Register("wakeonlan") {
+		return
+	}
 	ipnlocal.RegisterC2N("POST /wol", handleC2NWoL)
 	ipnlocal.RegisterPeerAPIHandler("/v0/wol", handlePeerAPIWakeOnLAN)
 	hostinfo.RegisterHostinfoNewHook(func(h *tailcfg.Hostinfo) {

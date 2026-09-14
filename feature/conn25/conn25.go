@@ -78,7 +78,9 @@ func normalizeDNSName(name string) (dnsname.FQDN, error) {
 }
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, func(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
 		return &extension{
 			conn25:  newConn25(logger.WithPrefix(logf, "conn25: ")),

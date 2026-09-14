@@ -14,6 +14,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/localapi"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
@@ -25,8 +26,11 @@ const featureName = "serviceclientprefs"
 const storeKey = "service-client-prefs"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
+	localapi.Register("prefs/service-clients", serveServiceClientPrefs)
 }
 
 // newExtension is the [ipnext.NewExtensionFn] for this feature.
