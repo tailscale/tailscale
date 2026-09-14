@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 
 	"tailscale.com/appc"
@@ -485,6 +486,46 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				},
 				MagicDNSHostsUnrouted: true,
 			},
+		},
+		{
+			// Regression test for malicious control server DNS values:
+			// search domains and route suffixes that dnsname.ToFQDN
+			// rejects must be dropped, not appended as the empty FQDN,
+			// which panics in FQDN.WithoutTrailingDot when OS DNS config
+			// is written. The newline domain is the resolv.conf and
+			// hosts directive injection case.
+			name: "drop_invalid_search_domains_and_route_suffixes",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					Domains: []string{
+						strings.Repeat("a", 64) + ".com", // label too long
+						"evil.com\nnameserver 6.6.6.6",
+						"good.example.com",
+					},
+					Routes: map[string][]*dnstype.Resolver{
+						strings.Repeat("a", 64) + ".com": {{Addr: "1.2.3.4"}},
+						"good.route.example.com":         {{Addr: "1.2.3.4"}},
+					},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				AcceptDNS: true,
+				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
+					"good.route.example.com.": {{Addr: "1.2.3.4"}},
+				},
+				SearchDomains: []dnsname.FQDN{
+					"good.example.com.",
+				},
+			},
+			wantLog: strings.Join([]string{
+				`[unexpected] non-FQDN search domain "` + strings.Repeat("a", 64) + `.com"`,
+				`[unexpected] non-FQDN search domain "evil.com\nnameserver 6.6.6.6"`,
+				`[unexpected] non-FQDN route suffix "` + strings.Repeat("a", 64) + `.com"`,
+			}, "\n") + "\n",
 		},
 	}
 	for _, tt := range tests {

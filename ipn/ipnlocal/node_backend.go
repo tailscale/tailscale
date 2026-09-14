@@ -1526,7 +1526,12 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	for _, dom := range nm.DNS.Domains {
 		fqdn, err := dnsname.ToFQDN(dom)
 		if err != nil {
+			// Drop the domain rather than appending the zero FQDN:
+			// FQDN.WithoutTrailingDot panics on the empty FQDN, taking
+			// down tailscaled on every netmap until control sends a
+			// valid domain.
 			logf("[unexpected] non-FQDN search domain %q", dom)
+			continue
 		}
 		dcfg.SearchDomains = append(dcfg.SearchDomains, fqdn)
 	}
@@ -1552,7 +1557,13 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		for suffix, resolvers := range routes {
 			fqdn, err := dnsname.ToFQDN(suffix)
 			if err != nil {
+				// Drop the suffix rather than inserting the zero FQDN as a
+				// route key: FQDN.WithoutTrailingDot panics on the empty
+				// FQDN when the route is written to the OS resolver config,
+				// taking down tailscaled on every netmap until control
+				// sends a valid suffix.
 				logf("[unexpected] non-FQDN route suffix %q", suffix)
+				continue
 			}
 
 			// Create map entry even if len(resolvers) == 0; Issue 2706.
