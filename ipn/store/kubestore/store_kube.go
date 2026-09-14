@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
@@ -29,6 +30,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("kube") {
+		return
+	}
 	store.Register("kube:", func(logf logger.Logf, path string) (ipn.StateStore, error) {
 		secretName := strings.TrimPrefix(path, "kube:")
 		return New(logf, secretName)

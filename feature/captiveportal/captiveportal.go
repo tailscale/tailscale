@@ -26,7 +26,9 @@ import (
 const featureName = "captiveportal"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 }
 

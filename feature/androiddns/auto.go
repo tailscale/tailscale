@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"runtime"
+
+	"tailscale.com/feature"
 )
 
 // This init runs in GOOS=android builds without cgo and in all
@@ -24,6 +26,9 @@ import (
 // Android (see onAndroid) plus a successful connection to the
 // dnsproxyd socket before touching the default resolver.
 func init() {
+	if !feature.Register("androiddns") {
+		return
+	}
 	if resolvConfExists() || !onAndroid() || !available() {
 		return
 	}

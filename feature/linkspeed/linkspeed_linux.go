@@ -10,10 +10,14 @@ import (
 	"github.com/mdlayher/netlink"
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
+	"tailscale.com/feature"
 	"tailscale.com/net/tstun"
 )
 
 func init() {
+	if !feature.Register("linkspeed") {
+		return
+	}
 	tstun.HookSetLinkAttrs.Set(setLinkAttrs)
 }
 

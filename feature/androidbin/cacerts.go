@@ -5,7 +5,11 @@
 
 package androidbin
 
-import "os"
+import (
+	"os"
+
+	"tailscale.com/feature"
+)
 
 // Android keeps its CA roots in /system/etc/security/cacerts as PEM
 // files, a path Go's crypto/x509 knows about in GOOS=android builds
@@ -18,6 +22,9 @@ import "os"
 // Termux does when its ca-certificates package is installed), leave
 // their configuration alone.
 func init() {
+	if feature.Disabled("androidbin") {
+		return
+	}
 	if !onAndroid() {
 		return
 	}

@@ -115,7 +115,14 @@ var extensions mapx.OrderedMap[string, *Definition]
 //
 // It panics if newExt is nil or if an extension with the same name
 // has already been registered.
+//
+// As a backstop for feature packages that forget to consult
+// feature.Register, it does nothing if the named feature was disabled
+// via the TS_DISABLE_FEATURE environment variable.
 func RegisterExtension(name string, newExt NewExtensionFn) {
+	if feature.Disabled(name) {
+		return
+	}
 	if newExt == nil {
 		panic(fmt.Sprintf("ipnext: newExt is nil: %q", name))
 	}

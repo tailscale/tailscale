@@ -31,7 +31,10 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func init() {
+// registerIncubator registers the incubator child process handlers.
+// It is called from [Register], which is called from the init of
+// tailscale.com/feature/ssh.
+func registerIncubator() {
 	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
 	childproc.Add("plan9-netshell", beNetshell)

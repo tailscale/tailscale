@@ -19,7 +19,9 @@ import (
 )
 
 func init() {
-	feature.Register("oauthkey")
+	if !feature.Register("oauthkey") {
+		return
+	}
 	tailscale.HookResolveAuthKey.Set(resolveAuthKey)
 }
 

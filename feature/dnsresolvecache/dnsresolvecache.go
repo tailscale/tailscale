@@ -60,7 +60,9 @@ import (
 )
 
 func init() {
-	feature.Register("dnsresolvecache")
+	if !feature.Register("dnsresolvecache") {
+		return
+	}
 	dnscache.HookSetCacheDir.Set(setCacheDir)
 	dnscache.HookPersistResolution.Set(persist)
 	dnscache.HookLookupDiskCache.Set(lookup)

@@ -41,7 +41,9 @@ var (
 )
 
 func init() {
-	feature.Register("tpm")
+	if !feature.Register("tpm") {
+		return
+	}
 	feature.HookTPMAvailable.Set(tpmSupportedOnce)
 	feature.HookHardwareAttestationAvailable.Set(tpmSupportedOnce)
 

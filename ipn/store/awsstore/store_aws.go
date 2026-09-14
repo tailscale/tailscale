@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
@@ -26,6 +27,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("aws") {
+		return
+	}
 	store.Register("arn:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
 		ssmARN, opts, err := ParseARNAndOpts(arg)
 		if err != nil {

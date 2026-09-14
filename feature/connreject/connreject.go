@@ -33,7 +33,9 @@ import (
 const featureName = "connreject"
 
 func init() {
-	feature.Register(featureName)
+	if !feature.Register(featureName) {
+		return
+	}
 	ipnext.RegisterExtension(featureName, newExtension)
 	localapi.Register("debug-rejects", serveDebugRejects)
 	ipnlocal.RegisterC2N("GET /debug/rejects", handleC2NDebugRejects)

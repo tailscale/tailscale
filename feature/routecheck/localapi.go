@@ -19,11 +19,6 @@ import (
 	"tailscale.com/util/httpm"
 )
 
-func init() {
-	localapi.Register("routecheck", serveRouteCheck)
-	localapi.HookRouteCheckRefresh.Set(routeCheckRefresh)
-}
-
 // ServeRouteCheck handles the API endpoint that serves the routecheck Report.
 // If the probe form field is true, then this handler will refresh the Report
 // before serving it.

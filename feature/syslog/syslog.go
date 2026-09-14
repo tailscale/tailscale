@@ -18,7 +18,9 @@ import (
 )
 
 func init() {
-	feature.Register("syslog")
+	if !feature.Register("syslog") {
+		return
+	}
 	feature.HookRegisterLogSinkFlags.Set(registerFlags)
 	feature.HookLogSink.Set(logSink)
 }
