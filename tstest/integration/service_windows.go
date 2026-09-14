@@ -40,7 +40,11 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 		t.Fatal("existing Tailscale service found; run only on a disposable/CI machine")
 	}
 
-	n.cleanupServiceState()
+	// Only on a node's first start: a restart keeps its state, and so its identity.
+	if !n.svcStarted {
+		n.cleanupServiceState()
+	}
+	n.svcStarted = true
 	stageWintun(t, filepath.Dir(n.env.daemon))
 	n.writeServiceEnvFile()
 
@@ -48,8 +52,7 @@ func (n *TestNode) startWindowsServiceDaemon() *Daemon {
 		t.Fatalf("install-system-daemon: %v\n%s", err, out)
 	}
 	var proc *os.Process
-	// Teardown: stop, wait for the process to exit so it releases the files below,
-	// uninstall, then wipe state for the next test.
+	// Safety net for tests that never call MustCleanShutdown, plus the final state wipe.
 	t.Cleanup(func() {
 		n.stopService()
 		if proc != nil {
