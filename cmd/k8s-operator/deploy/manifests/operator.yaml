@@ -6669,6 +6669,12 @@ rules:
     - apiGroups:
         - tailscale.com
       resources:
+        - dnsconfigs/finalizers
+      verbs:
+        - update
+    - apiGroups:
+        - tailscale.com
+      resources:
         - tailnets
         - tailnets/status
       verbs:
