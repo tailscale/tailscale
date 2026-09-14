@@ -4,6 +4,7 @@
 package portmapper
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net/netip"
 	"testing"
@@ -24,6 +25,19 @@ func TestParsePCPMapResponse(t *testing.T) {
 	expectedAddr := netip.MustParseAddrPort("135.180.175.246:1234")
 	if mapping.external != expectedAddr {
 		t.Errorf("mismatched external address, got: %v, want: %v", mapping.external, expectedAddr)
+	}
+	if got, want := mapping.nonce[:], examplePCPMapResponse[24:36]; !bytes.Equal(got, want) {
+		t.Errorf("mismatched mapping nonce, got %x, want %x", got, want)
+	}
+}
+
+func TestBuildPCPRequestMappingPacketWithNonce(t *testing.T) {
+	nonce := [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	pkt := buildPCPRequestMappingPacketWithNonce(
+		netip.MustParseAddr("192.0.2.1"), 41641, 4242, 0, netip.MustParseAddr("198.51.100.1"), nonce,
+	)
+	if got := pkt[24:36]; !bytes.Equal(got, nonce[:]) {
+		t.Errorf("mismatched mapping nonce, got %x, want %x", got, nonce)
 	}
 }
 

@@ -55,6 +55,7 @@ type pcpMapping struct {
 	goodUntil  time.Time
 
 	epoch uint32
+	nonce [12]byte
 }
 
 func (p *pcpMapping) MappingType() string      { return "pcp" }
@@ -73,7 +74,7 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr())
+	pkt := buildPCPRequestMappingPacketWithNonce(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr(), p.nonce)
 	uc.WriteToUDPAddrPort(pkt, p.gw)
 }
 
@@ -86,6 +87,18 @@ func buildPCPRequestMappingPacket(
 	localPort, prevPort uint16,
 	lifetimeSec uint32,
 	prevExternalIP netip.Addr,
+) []byte {
+	var nonce [12]byte
+	rand.Read(nonce[:])
+	return buildPCPRequestMappingPacketWithNonce(myIP, localPort, prevPort, lifetimeSec, prevExternalIP, nonce)
+}
+
+func buildPCPRequestMappingPacketWithNonce(
+	myIP netip.Addr,
+	localPort, prevPort uint16,
+	lifetimeSec uint32,
+	prevExternalIP netip.Addr,
+	nonce [12]byte,
 ) (pkt []byte) {
 	// 24 byte common PCP header + 36 bytes of MAP-specific fields
 	pkt = make([]byte, 24+36)
@@ -96,7 +109,7 @@ func buildPCPRequestMappingPacket(
 	copy(pkt[8:24], myIP16[:])
 
 	mapOp := pkt[24:]
-	rand.Read(mapOp[:12]) // 96 bit mapping nonce
+	copy(mapOp[:12], nonce[:])
 
 	// TODO: should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
 	// also doesn't support a local port then.
@@ -125,7 +138,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if res.ResultCode != pcpCodeOK {
 		return nil, fmt.Errorf("PCP response not ok, code %d", res.ResultCode)
 	}
-	// TODO: don't ignore the nonce and make sure it's the same?
+	// The nonce identifies the PCP mapping and must be reused when releasing it.
 	externalPort := binary.BigEndian.Uint16(resp[42:44])
 	externalIPBytes := [16]byte{}
 	copy(externalIPBytes[:], resp[44:])
@@ -141,6 +154,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 		goodUntil:  now.Add(lifetime),
 		epoch:      res.Epoch,
 	}
+	copy(mapping.nonce[:], resp[24:36])
 
 	return mapping, nil
 }
