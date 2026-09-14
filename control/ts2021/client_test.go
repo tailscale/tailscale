@@ -4,13 +4,18 @@
 package ts2021
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +28,7 @@ import (
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/httpbody"
 	"tailscale.com/util/must"
 )
 
@@ -54,6 +60,96 @@ func TestNoiseClientHTTP2Upgrade_earlyPayload(t *testing.T) {
 	noiseClientTest{
 		sendEarlyPayload: true,
 	}.run(t)
+}
+
+// TestNoiseClientMaxResponseBodySize verifies that Client.Do caps response
+// bodies at DefaultMaxResponseBodySize by default, so a malicious or buggy
+// control server can't make us buffer an unbounded response, and that
+// WithMaxResponseBodySize can change or remove the cap per request. Reads
+// past the cap must fail with httpbody.ErrTooLarge rather than silently
+// truncating.
+func TestNoiseClientMaxResponseBodySize(t *testing.T) {
+	serverPrivate := key.NewMachine()
+	clientPrivate := key.NewMachine()
+
+	h2 := &http2.Server{}
+	nw := nettest.GetNetwork(t)
+	hs := nettest.NewHTTPServer(nw, &Upgrader{
+		h2srv:        h2,
+		noiseKeyPriv: serverPrivate,
+		httpBaseConfig: &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The requested body size arrives as the path.
+				n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Write(bytes.Repeat([]byte("a"), n))
+			}),
+		},
+	})
+	defer hs.Close()
+
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	if nettest.PreferMemNetwork() {
+		dialer.SetSystemDialerForTest(nw.Dial)
+	}
+
+	nc, err := NewClient(ClientOpts{
+		PrivKey:      clientPrivate,
+		ServerPubKey: serverPrivate.Public(),
+		ServerURL:    hs.URL,
+		Dialer:       dialer,
+		Logf:         t.Logf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { nc.Close() })
+
+	const noOverride = int64(-1)
+	tests := []struct {
+		name    string
+		bodyLen int
+		max     int64 // cap override, or noOverride for the default
+		wantOK  bool
+	}{
+		{name: "under-default-cap", bodyLen: 100, max: noOverride, wantOK: true},
+		{name: "exactly-default-cap", bodyLen: int(httpbody.DefaultMaxSize), max: noOverride, wantOK: true},
+		{name: "over-default-cap", bodyLen: int(httpbody.DefaultMaxSize) + 1, max: noOverride},
+		{name: "override-larger", bodyLen: int(httpbody.DefaultMaxSize) + 1, max: httpbody.DefaultMaxSize * 2, wantOK: true},
+		{name: "override-smaller", bodyLen: 100, max: 10},
+		{name: "override-unlimited", bodyLen: int(httpbody.DefaultMaxSize) + 1, max: 0, wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			if tt.max != noOverride {
+				ctx = httpbody.WithMaxSize(ctx, tt.max)
+			}
+			req := must.Get(http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://unused.example/%d", tt.bodyLen), nil))
+			res, err := nc.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("reading body of %d bytes: %v", tt.bodyLen, err)
+				}
+				if len(got) != tt.bodyLen {
+					t.Errorf("got %d bytes, want %d", len(got), tt.bodyLen)
+				}
+				return
+			}
+			if !errors.Is(err, httpbody.ErrTooLarge) {
+				t.Fatalf("reading body of %d bytes: err = %v, want httpbody.ErrTooLarge", tt.bodyLen, err)
+			}
+		})
+	}
 }
 
 var (

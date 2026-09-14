@@ -38,6 +38,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/httpbody"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/testenv"
@@ -49,6 +50,13 @@ var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
 	errTailnetLockNotActive = errors.New("tailnet-lock is not active")
 )
+
+// tkaMaxResponseBodySize is the response body cap for tka RPCs whose
+// responses can carry per-node key signatures or missing AUMs. At 100,000
+// peers and a few hundred bytes per signature, those responses reach tens
+// of MB, so the cap sits far above that while still bounding what a
+// malicious control server can make us buffer.
+const tkaMaxResponseBodySize = 512 << 20
 
 // IsTailnetLockNotActive reports whether the given error indicates that
 // tailnet-lock is not active. Stop-gap for feature/tailnetlock to check this
@@ -1302,6 +1310,8 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// The response carries key signatures for every node in the tailnet.
+	ctx = httpbody.WithMaxSize(ctx, tkaMaxResponseBodySize)
 	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/init/begin", &req)
 	if err != nil {
 		return nil, fmt.Errorf("req: %w", err)
@@ -1316,7 +1326,7 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitBeginResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1353,7 +1363,7 @@ func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitFinishResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1401,7 +1411,7 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKABootstrapResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1431,6 +1441,8 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// The response carries AUMs the control plane believes we're missing.
+	ctx = httpbody.WithMaxSize(ctx, tkaMaxResponseBodySize)
 	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/sync/offer", &req)
 	if err != nil {
 		return nil, fmt.Errorf("req: %w", err)
@@ -1445,7 +1457,7 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncOfferResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1494,7 +1506,7 @@ func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, head tka.AUMHash
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncSendResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1536,7 +1548,7 @@ func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMH
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKADisableResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1572,7 +1584,7 @@ func (b *LocalBackend) tkaSubmitSignature(ourNodeKey key.NodePublic, sig tkatype
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASubmitSignatureResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(res.Body).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -1593,6 +1605,8 @@ func (b *LocalBackend) tkaReadAffectedSigs(ourNodeKey key.NodePublic, key tkatyp
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// The response carries every signature made with the key.
+	ctx = httpbody.WithMaxSize(ctx, tkaMaxResponseBodySize)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/affected-sigs", &encodedReq)
 	if err != nil {
@@ -1608,7 +1622,7 @@ func (b *LocalBackend) tkaReadAffectedSigs(ourNodeKey key.NodePublic, key tkatyp
 		return nil, fmt.Errorf("request returned (%d): %s", resp.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASignaturesUsingKeyResponse)
-	err = json.NewDecoder(&io.LimitedReader{R: resp.Body, N: 1024 * 1024}).Decode(a)
+	err = json.NewDecoder(resp.Body).Decode(a)
 	resp.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
