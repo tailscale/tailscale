@@ -181,6 +181,9 @@ func serveDebugPortmap(h *localapi.Handler, w http.ResponseWriter, r *http.Reque
 		logf("no mapping")
 	}
 
+	time.Sleep(500 * time.Millisecond) // initial mapping is async
+	c.DebugRenewMapping()
+
 	select {
 	case <-done:
 	case <-ctx.Done():

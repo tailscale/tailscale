@@ -6,7 +6,9 @@
 package portmapper
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -394,6 +396,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (nettyp
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	if c.mapping != nil {
 		if releaseOld {
+			c.vlogf("releasing %s mapping", c.mapping.MappingType())
 			c.mapping.Release(context.Background())
 		}
 		c.mapping = nil
@@ -491,6 +494,30 @@ func (c *Client) GetCachedMappingOrStartCreatingOne() (external netip.AddrPort, 
 
 	c.maybeStartMappingLocked()
 	return netip.AddrPort{}, false
+}
+
+// DebugRenewMapping forces a synchronous renewal of the current port mapping.
+func (c *Client) DebugRenewMapping() {
+	c.mu.Lock()
+	m := c.mapping
+	if m == nil {
+		c.mu.Unlock()
+		return
+	}
+	c.vlogf("renewing %s mapping now", m.MappingType())
+
+	// hack to force createOrGetMapping to renew rather than reuse the cached mapping
+	switch tm := m.(type) {
+	case *pmpMapping:
+		tm.renewAfter = time.Time{}
+	case *pcpMapping:
+		tm.renewAfter = time.Time{}
+	case *upnpMapping:
+		tm.renewAfter = time.Time{}
+	}
+	c.mu.Unlock()
+
+	c.createOrGetMapping(context.Background())
 }
 
 // maybeStartMappingLocked starts a createMapping goroutine up, if one isn't already running.
@@ -683,11 +710,20 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 
 	preferPCP := !c.debug.DisablePCP() && (c.debug.DisablePMP() || (!haveRecentPMP && haveRecentPCP))
 
+	var pcpNonce pcpNonce
+	if m, ok := c.mapping.(*pcpMapping); ok {
+		// Reuse the existing mapping's nonce so renewals target the same mapping.
+		pcpNonce = m.nonce
+	} else {
+		// New mappings need a random nonce.
+		rand.Read(pcpNonce[:])
+	}
+
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
 	if preferPCP {
 		// TODO replace wildcardIP here with previous external if known.
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
-		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP)
+		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP, pcpNonce)
 		if _, err := uc.WriteToUDPAddrPort(pkt, pxpAddr); err != nil {
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
@@ -755,6 +791,11 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 					m.epoch = pres.SecondsSinceEpoch
 				}
 			case pcpVersion:
+				// Ignore responses related to another client.
+				if n < 36 || !bytes.Equal(res[24:36], pcpNonce[:]) {
+					c.logf("ignoring PCP response with missing or mismatched nonce")
+					continue
+				}
 				pcpMapping, err := parsePCPMapResponse(res[:n])
 				if err != nil {
 					c.logf("failed to get PCP mapping: %v", err)
