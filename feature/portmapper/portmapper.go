@@ -6,6 +6,8 @@
 package portmapper
 
 import (
+	"context"
+
 	"tailscale.com/feature"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
@@ -20,16 +22,18 @@ func init() {
 }
 
 func newPortMapper(
+	ctx context.Context,
 	logf logger.Logf,
 	bus *eventbus.Bus,
 	netMon *netmon.Monitor,
 	disableUPnPOrNil func() bool,
-	onlyTCP443OrNil func() bool) portmappertype.Client {
-
+	onlyTCP443OrNil func() bool,
+) portmappertype.Client {
 	pm := portmapper.NewClient(portmapper.Config{
-		EventBus: bus,
-		Logf:     logf,
-		NetMon:   netMon,
+		ShutdownCtx: ctx,
+		EventBus:    bus,
+		Logf:        logf,
+		NetMon:      netMon,
 		DebugKnobs: &portmapper.DebugKnobs{
 			DisableAll:      onlyTCP443OrNil,
 			DisableUPnPFunc: disableUPnPOrNil,
