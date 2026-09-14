@@ -860,10 +860,12 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, err
 		}
 
-		if runtime.GOOS == "plan9" {
+		if runtime.GOOS == "plan9" || runtime.GOOS == "linux" {
 			// TODO(bradfitz): why don't we do this on all platforms?
 			// TODO(barnstar): we do it on sandboxed darwin now
-			// We should. Doing it just on plan9 for now conservatively.
+			// We should. Doing it just on plan9 and Linux for now conservatively.
+			// Linux needs it for the serve and web client listeners, which
+			// require the Tailscale interface index to bind to.
 			netmon.SetTailscaleInterfaceProps(devName, 0)
 		}
 
