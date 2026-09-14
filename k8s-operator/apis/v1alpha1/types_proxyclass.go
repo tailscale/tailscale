@@ -107,7 +107,7 @@ type NodePortConfig struct {
 	// +kubebuilder:validation:MinItems=1
 	Ports []PortRange `json:"ports"`
 	// A selector which will be used to select the node's that will have their `ExternalIP`'s advertised
-	// by the ProxyGroup as Static Endpoints.
+	// by the ProxyGroup or Connector as Static Endpoints.
 	Selector map[string]string `json:"selector,omitempty"`
 }
 
