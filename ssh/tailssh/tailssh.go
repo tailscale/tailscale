@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9 || windows
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
@@ -799,7 +799,15 @@ func (c *conn) isStillValid() bool {
 	if !a.Accept && a.HoldAndDelegate == "" {
 		return false
 	}
-	return c.localUser.Username == localUser
+	if c.localUser.Username == localUser {
+		return true
+	}
+	// The policy's spelling of the user can differ from the looked-up
+	// account name, notably on Windows, where the name is case-insensitive
+	// and lookups return it with a MACHINE\ prefix. Compare the accounts
+	// themselves.
+	lu, err := userLookup(localUser)
+	return err == nil && lu.Uid == c.localUser.Uid
 }
 
 // checkStillValid checks that the conn is still valid per the latest SSHPolicy.
@@ -1228,6 +1236,16 @@ func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser st
 
 func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser string) {
 	v, ok := ruleSSHUsers[reqSSHUser]
+	if !ok && runtime.GOOS == "windows" {
+		// Windows account names are case-insensitive, so match the policy's
+		// spelling of the user regardless of how the client typed it.
+		for k, kv := range ruleSSHUsers {
+			if k != "*" && strings.EqualFold(k, reqSSHUser) {
+				v, ok = kv, true
+				break
+			}
+		}
+	}
 	if !ok {
 		v = ruleSSHUsers["*"]
 	}
@@ -1601,7 +1619,6 @@ func envValFromList(env []string, wantKey string) (v string) {
 // envEq reports whether environment variable a == b for the current
 // operating system.
 func envEq(a, b string) bool {
-	//lint:ignore SA4032 in case this func moves elsewhere, permit the GOOS check
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
 	}
