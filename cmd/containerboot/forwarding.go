@@ -212,8 +212,7 @@ func installIngressForwardingRuleForDNSTarget(_ context.Context, backendAddrs []
 	for _, ip := range backendAddrs {
 		if ip.To4() != nil {
 			v4Backends = append(v4Backends, netip.AddrFrom4([4]byte(ip.To4())))
-		}
-		if ip.To16() != nil {
+		} else if ip.To16() != nil {
 			v6Backends = append(v6Backends, netip.AddrFrom16([16]byte(ip.To16())))
 		}
 	}
@@ -249,7 +248,7 @@ func installIngressForwardingRuleForDNSTarget(_ context.Context, backendAddrs []
 			return fmt.Errorf("Installing IPv4 firewall rules: %w", err)
 		}
 	}
-	if len(v6Backends) != 0 && !tsv6.IsValid() {
+	if len(v6Backends) != 0 {
 		if !tsv6.IsValid() {
 			log.Printf("backend targets %v contain at least one IPv6 address, but this node's Tailscale IPs do not contain a valid IPv6 address: %v", backendAddrs, tsIPs)
 		} else if !nfr.HasIPV6NAT() {
