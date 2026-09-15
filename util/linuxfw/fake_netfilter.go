@@ -21,6 +21,8 @@ type FakeNetfilterRunner struct {
 	}
 	// clampedAddrs tracks addresses passed to ClampMSSToPMTU.
 	clampedAddrs []netip.Addr
+	// forwardToTun tracks the tun name passed to AddForwardToTunRules.
+	forwardToTun string
 }
 
 // NewFakeNetfilterRunner creates a new FakeNetfilterRunner.
@@ -107,3 +109,19 @@ func (f *FakeNetfilterRunner) EnsurePortMapRuleForSvc(svc, tun string, targetIP 
 }
 func (f *FakeNetfilterRunner) AddExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }
 func (f *FakeNetfilterRunner) DelExternalCGNATRules(mode CGNATMode, tunname string) error { return nil }
+
+func (f *FakeNetfilterRunner) AddForwardToTunRules(tun string) error {
+	f.forwardToTun = tun
+	return nil
+}
+
+func (f *FakeNetfilterRunner) DelForwardToTunRules(tun string) error {
+	f.forwardToTun = ""
+	return nil
+}
+
+// GetForwardToTun returns the tun name passed to AddForwardToTunRules, or ""
+// if the rules have not been added or have been deleted since.
+func (f *FakeNetfilterRunner) GetForwardToTun() string {
+	return f.forwardToTun
+}

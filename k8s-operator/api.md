@@ -23,6 +23,8 @@ Package v1alpha1 documents the k8s-operator API.
 - [ProxyGroupPolicyList](#proxygrouppolicylist)
 - [Recorder](#recorder)
 - [RecorderList](#recorderlist)
+- [RouteAcceptor](#routeacceptor)
+- [RouteAcceptorList](#routeacceptorlist)
 - [Tailnet](#tailnet)
 - [TailnetList](#tailnetlist)
 
@@ -1210,6 +1212,136 @@ _Appears in:_
 
 
 
+#### RouteAcceptor
+
+
+
+RouteAcceptor makes subnet routes advertised to the tailnet routable from
+every Pod in the cluster, without a per-destination egress Service.
+
+The operator runs a tailscaled device in the host network namespace of every
+selected node (a DaemonSet), configured to accept routes. The subnet routes
+that the tailnet approves for those devices are installed in each node's
+routing table, so traffic from Pods on that node to those subnets is
+forwarded through the tailnet, with the node's tailnet IP as its source.
+Because the devices route all tailnet addresses via the tailnet as well, Pods
+can also reach any tailnet peer that the devices' tags are allowed to reach.
+
+Requirements:
+  - The nodes must not already run tailscaled.
+  - The cluster's CNI must route Pod traffic to destinations outside the
+    cluster through the node's network stack, which is the case for most
+    CNIs (Calico, Flannel, kindnet and the cloud providers' CNIs), but not
+    for Cilium's default eBPF host routing: set bpf.hostLegacyRouting=true
+    there.
+  - The devices run privileged (or with NET_ADMIN and /dev/net/tun), see
+    ProxyClass for reducing their permissions.
+  - Tailscale ACLs must allow the devices' tags to access the subnets, and
+    the subnet routers' routes must be approved.
+  - The Pod and Service CIDRs of the cluster must not overlap
+    100.64.0.0/10, see spec.unsafeAllowCGNATClusterCIDR.
+
+The devices are named after the nodes they run on. Their identity is
+persisted per node, so a device survives restarts of its Pod.
+
+RouteAcceptor is a cluster-scoped resource.
+
+
+
+_Appears in:_
+- [RouteAcceptorList](#routeacceptorlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `RouteAcceptor` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[RouteAcceptorSpec](#routeacceptorspec)_ | Spec describes the desired state of the RouteAcceptor.<br />More info:<br />https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+| `status` _[RouteAcceptorStatus](#routeacceptorstatus)_ | Status describes the status of the RouteAcceptor. This is set<br />and managed by the Tailscale operator. |  |  |
+
+
+#### RouteAcceptorList
+
+
+
+
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `tailscale.com/v1alpha1` | | |
+| `kind` _string_ | `RouteAcceptorList` | | |
+| `kind` _string_ | Kind is a string value representing the REST resource this object represents.<br />Servers may infer this from the endpoint the client submits requests to.<br />Cannot be updated.<br />In CamelCase.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds |  |  |
+| `apiVersion` _string_ | APIVersion defines the versioned schema of this representation of an object.<br />Servers should convert recognized schemas to the latest internal value, and<br />may reject unrecognized values.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources |  |  |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[RouteAcceptor](#routeacceptor) array_ |  |  |  |
+
+
+#### RouteAcceptorNode
+
+
+
+RouteAcceptorNode describes the route acceptor device running on a node.
+
+
+
+_Appears in:_
+- [RouteAcceptorStatus](#routeacceptorstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name is the name of the Kubernetes node. |  |  |
+| `hostname` _string_ | Hostname is the fully qualified domain name of the device on the node.<br />If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the<br />device. |  |  |
+| `tailnetIPs` _string array_ | TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)<br />assigned to the device on the node. |  |  |
+| `acceptedRoutes` _string array_ | AcceptedRoutes are the subnet routes that the device on the node<br />currently accepts from the tailnet. |  |  |
+| `ready` _boolean_ | Ready is true if the device on the node has joined the tailnet. |  |  |
+
+
+#### RouteAcceptorSpec
+
+
+
+
+
+
+
+_Appears in:_
+- [RouteAcceptor](#routeacceptor)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `tags` _[Tags](#tags)_ | Tags that the Tailscale devices will be tagged with.<br />Defaults to [tag:k8s].<br />Configure Tailscale ACLs to allow these tags to access the subnets that<br />should be reachable from the cluster.<br />If you specify custom tags here, you must also make the operator an owner of these tags.<br />See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.<br />Tags cannot be changed once the devices have been created.<br />Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$. |  | Pattern: `^tag:[a-zA-Z][a-zA-Z0-9-]*$` <br />Type: string <br /> |
+| `proxyClass` _string_ | ProxyClass is the name of the ProxyClass custom resource that<br />contains configuration options that should be applied to the<br />resources created for this RouteAcceptor. The ProxyClass's statefulSet<br />section applies to the DaemonSet and its Pods in the same way; use its<br />pod.nodeSelector, pod.tolerations and pod.affinity to select the nodes<br />that should run a route acceptor device. If unset, the operator will<br />create resources with the default configuration, on every node. |  |  |
+| `tailnet` _string_ | Tailnet specifies the tailnet the devices should join. If blank, the default tailnet is used. When set, this<br />name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set. |  |  |
+| `clusterCIDRs` _[Routes](#routes)_ | ClusterCIDRs are additional IP ranges used by the cluster, such as its<br />Pod and Service CIDRs, that the operator cannot discover on its own.<br />The operator discovers the Pod CIDRs recorded on the Nodes and the<br />ServiceCIDR resources, if the cluster has them; add ranges here if your<br />CNI does not record Pod CIDRs on the Nodes. The ranges are only used to<br />warn, via the RouteAcceptorRoutesValid condition, when an accepted<br />route overlaps them, as tailscaled would then route cluster traffic<br />into the tailnet. |  | Format: cidr <br />MinItems: 1 <br />Type: string <br /> |
+| `unsafeAllowCGNATClusterCIDR` _boolean_ | UnsafeAllowCGNATClusterCIDR allows the route acceptor to be deployed<br />even if a cluster IP range overlaps the Tailscale IP range<br />100.64.0.0/10. By default the operator refuses to do so, because<br />tailscaled drops traffic from that range that does not arrive via the<br />tailnet, which would break traffic from Pods to the nodes. Set this only<br />if the tailnet grants the devices' tags the disable-linux-cgnat-drop-rule<br />node attribute. |  |  |
+
+
+#### RouteAcceptorStatus
+
+
+
+
+
+
+
+_Appears in:_
+- [RouteAcceptor](#routeacceptor)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#condition-v1-meta) array_ | List of status conditions to indicate the status of the RouteAcceptor.<br />Known condition types are RouteAcceptorReady and<br />RouteAcceptorRoutesValid. |  |  |
+| `acceptedRoutes` _string array_ | AcceptedRoutes is the union of the subnet routes that the devices<br />currently accept from the tailnet, i.e. the routes that are routable<br />from Pods on the nodes that run a ready device. |  |  |
+| `desiredNodes` _integer_ | DesiredNodes is the number of nodes selected to run a route acceptor<br />device. |  |  |
+| `readyNodes` _integer_ | ReadyNodes is the number of nodes on which the route acceptor device is<br />ready. |  |  |
+| `nodes` _[RouteAcceptorNode](#routeacceptornode) array_ | Nodes describes the device on each node. |  |  |
+
+
 #### Routes
 
 _Underlying type:_ _[Route](#route)_
@@ -1223,6 +1355,7 @@ _Validation:_
 
 _Appears in:_
 - [AppConnector](#appconnector)
+- [RouteAcceptorSpec](#routeacceptorspec)
 - [SubnetRouter](#subnetrouter)
 
 
@@ -1391,6 +1524,7 @@ _Appears in:_
 - [PeerRelaySpec](#peerrelayspec)
 - [ProxyGroupSpec](#proxygroupspec)
 - [RecorderSpec](#recorderspec)
+- [RouteAcceptorSpec](#routeacceptorspec)
 
 
 

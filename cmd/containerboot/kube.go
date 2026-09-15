@@ -92,6 +92,26 @@ func (kc *kubeClient) storeDeviceEndpoints(ctx context.Context, fqdn string, add
 	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
 }
 
+// storeAcceptedRoutes writes the subnet routes that this device currently accepts from its tailnet peers to the
+// 'accepted_routes' field of the client's state Secret, as a JSON array of CIDR strings. The Tailscale Kubernetes
+// operator surfaces these on the status of the resource that manages this device.
+func (kc *kubeClient) storeAcceptedRoutes(ctx context.Context, routes []netip.Prefix) error {
+	strs := make([]string, 0, len(routes))
+	for _, r := range routes {
+		strs = append(strs, r.String())
+	}
+	b, err := json.Marshal(strs)
+	if err != nil {
+		return err
+	}
+	s := &kubeapi.Secret{
+		Data: map[string][]byte{
+			kubetypes.KeyAcceptedRoutes: b,
+		},
+	}
+	return kc.StrategicMergePatchSecret(ctx, kc.stateSecret, s, fieldManager)
+}
+
 // storeHTTPSEndpoint writes an HTTPS endpoint exposed by this device via 'tailscale serve' to the client's state
 // Secret. In practice this will be the same value that gets written to 'device_fqdn', but this should only be called
 // when the serve config has been successfully set up.
@@ -144,6 +164,7 @@ func (kc *kubeClient) resetContainerbootState(ctx context.Context, podUID string
 		Data: map[string][]byte{
 			kubetypes.KeyCapVer:              fmt.Appendf(nil, "%d", tailcfg.CurrentCapabilityVersion),
 			kubetypes.KeyHTTPSEndpoint:       nil,
+			kubetypes.KeyAcceptedRoutes:      nil,
 			egressservices.KeyEgressServices: nil,
 			ingressservices.IngressConfigKey: nil,
 		},
