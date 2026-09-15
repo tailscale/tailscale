@@ -813,33 +813,54 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
-	n, _, err := conn.ReadFromUDPAddrPort(out)
-	if err != nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+
+	// The conn is unconnected (see dialUDP), so datagrams can arrive from
+	// any address, not just the resolver we queried. A reply must come
+	// from the resolver's address and carry the transaction ID we sent.
+	// Datagrams that are neither are dropped rather than acted on, so
+	// neither a spoofed reply nor a single stray datagram can decide the
+	// query. The loop ends when the conn is closed, which the query's
+	// context cancellation does via fq.closeOnCtxDone.
+	var n int
+	for {
+		var src netip.AddrPort
+		var err error
+		n, src, err = conn.ReadFromUDPAddrPort(out)
+		if err != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if !neterror.PacketWasTruncated(err) {
+				metricDNSFwdUDPErrorRead.Add(1)
+				return nil, err
+			}
+			// Windows reports a datagram larger than out as a
+			// truncation error, returning the bytes that fit in
+			// out but no source address. Fall through and let the
+			// txid check decide, since the source can't be checked.
+		} else if src != ipp {
+			// Not from the resolver we asked, so not a reply to
+			// this query.
+			metricDNSFwdUDPDropSrc.Add(1)
+			continue
 		}
-		if neterror.PacketWasTruncated(err) {
-			err = nil
-		} else {
-			metricDNSFwdUDPErrorRead.Add(1)
-			return nil, err
+		if n < headerBytes {
+			f.logf("recv: packet too small (%d bytes)", n)
+			continue
 		}
+		if getTxID(out[:n]) != fq.txid {
+			metricDNSFwdUDPErrorTxID.Add(1)
+			continue
+		}
+		break
 	}
 	truncated := n > maxResponseBytes
 	if truncated {
 		n = maxResponseBytes
 	}
-	if n < headerBytes {
-		f.logf("recv: packet too small (%d bytes)", n)
-	}
 	out = out[:n]
 	tcFlagAlreadySet := truncatedFlagSet(out)
 
-	txid := getTxID(out)
-	if txid != fq.txid {
-		metricDNSFwdUDPErrorTxID.Add(1)
-		return nil, errTxIDMismatch
-	}
 	rcode := getRCode(out)
 
 	// don't forward transient errors back to the client when the server fails
