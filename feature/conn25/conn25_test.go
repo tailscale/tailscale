@@ -103,7 +103,6 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 		ctipReqPeers   []tailcfg.NodeView          // One entry per request and the other
 		ctipReqs       []ConnectorTransitIPRequest // arrays in this struct must have the same
 		missingPeerCap bool
-		bypassFilter   bool
 		wants          []ConnectorTransitIPResponse // cardinality
 		// For checking lookups:
 		//	The outer array needs to correspond to the number of requests,
@@ -349,37 +348,6 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				{{pipV4_2, tipV4_1, netip.Addr{}}},
 			},
 		},
-		// Missing PeerCap but BypassFilter is set
-		{
-			name:         "missing-peercap-bypass",
-			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
-			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-			},
-			missingPeerCap: true,
-			bypassFilter:   true,
-			wants: []ConnectorTransitIPResponse{
-				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
-			},
-			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}},
-			},
-		},
-		// Has PeerCap and BypassFilter is set
-		{
-			name:         "has-peercap-bypass",
-			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
-			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-			},
-			bypassFilter: true,
-			wants: []ConnectorTransitIPResponse{
-				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
-			},
-			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}},
-			},
-		},
 		{
 			name:         "invalid-app-with-peercap",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
@@ -429,8 +397,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				isConfigured: true,
 				appsByName: map[string]appctype.Conn25Attr{
 					appName: {
-						Name:                        appName,
-						TemporaryUnsafeBypassFilter: tt.bypassFilter,
+						Name: appName,
 					},
 				},
 			})
@@ -3512,12 +3479,6 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 		Connectors: []string{"tag:example"},
 		Domains:    []string{"example.com", "*.example.com"},
 	}
-	bypassApp := appctype.Conn25Attr{
-		Name:                        "bypass",
-		Connectors:                  []string{"tag:bypass"},
-		Domains:                     []string{"bypass.example.net"},
-		TemporaryUnsafeBypassFilter: true,
-	}
 	exactApp := appctype.Conn25Attr{
 		Name:       "exact",
 		Connectors: []string{"tag:exact"},
@@ -3714,26 +3675,6 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 			tags:              []string{"tag:example", "tag:exact"},
 			peerCap:           exampleAppPeerCap,
 			requestedApp:      "exact",
-			wantSourceAllowed: false,
-		},
-		{
-			name:              "bypass-filter",
-			apps:              []appctype.Conn25Attr{exampleApp, bypassApp},
-			tags:              []string{"tag:example", "tag:bypass"},
-			requestedApp:      "bypass",
-			wantSourceAllowed: true,
-			wantNameChecks: map[string]bool{
-				"example.com":                  false,
-				"bypass.example.net":           true,
-				"subdomain.bypass.example.net": true,
-				"example.net":                  false,
-			},
-		},
-		{
-			name:              "bypass-filter-is-selective",
-			apps:              []appctype.Conn25Attr{exampleApp, bypassApp},
-			tags:              []string{"tag:example", "tag:bypass"},
-			requestedApp:      "example",
 			wantSourceAllowed: false,
 		},
 		{
