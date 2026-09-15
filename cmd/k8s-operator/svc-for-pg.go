@@ -48,6 +48,41 @@ const (
 	reasonIngressSvcNoBackendsConfigured = "IngressSvcNoBackendsConfigured"
 )
 
+// finalizerForProxyGroup returns the finalizer to set on a Service exposed on
+// the named ProxyGroup. The ProxyGroup name is encoded into the finalizer's DNS
+// subdomain prefix (e.g. "my-pg.tailscale.com/service-pg-finalizer") so that
+// cleanup can recover it after the tailscale.com/proxy-group annotation has been
+// removed from the Service, which is otherwise the only place it is recorded.
+// The name is placed in the prefix rather than the name part because a
+// finalizer's name part is limited to 63 characters whereas the prefix (a DNS
+// subdomain) allows 253, comfortably fitting any ProxyGroup name.
+func finalizerForProxyGroup(pgName string) string {
+	return pgName + "." + svcPGFinalizerName
+}
+
+// isServicePGFinalizer reports whether f is one of this reconciler's finalizers,
+// in either the ProxyGroup-encoded form or the bare legacy form set by older
+// operators.
+func isServicePGFinalizer(f string) bool {
+	return f == svcPGFinalizerName || strings.HasSuffix(f, "."+svcPGFinalizerName)
+}
+
+// proxyGroupFromServiceFinalizers returns the ProxyGroup name encoded in svc's
+// service-pg finalizer, reporting whether such a finalizer is present. It
+// returns ("", true) for the bare legacy finalizer, which does not encode a
+// ProxyGroup name.
+func proxyGroupFromServiceFinalizers(svc *corev1.Service) (pgName string, ok bool) {
+	for _, f := range svc.Finalizers {
+		if f == svcPGFinalizerName {
+			return "", true
+		}
+		if pgName, ok = strings.CutSuffix(f, "."+svcPGFinalizerName); ok {
+			return pgName, true
+		}
+	}
+	return "", false
+}
+
 var gaugePGServiceResources = clientmetric.NewGauge(kubetypes.MetricServicePGResourceCount)
 
 // HAServiceReconciler is a controller that reconciles Tailscale Kubernetes
@@ -99,7 +134,20 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	pgName := svc.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
-		return res, nil
+		// If we hold a finalizer, the annotation was removed after we
+		// provisioned this Service and we still need to clean up; recover the
+		// ProxyGroup name from the finalizer it was encoded into.
+		recovered, ok := proxyGroupFromServiceFinalizers(svc)
+		if !ok {
+			return res, nil
+		}
+		if recovered == "" {
+			// Bare legacy finalizer from an older operator; it does not encode
+			// the ProxyGroup name so there is nothing to clean up against.
+			logger.Warnf("ProxyGroup annotation removed but finalizer %q does not record a ProxyGroup; unable to clean up Tailscale Service, remove the finalizer manually if the Service is stuck", svcPGFinalizerName)
+			return res, nil
+		}
+		pgName = recovered
 	}
 
 	logger = logger.With("ProxyGroup", pgName)
@@ -130,7 +178,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if !svc.DeletionTimestamp.IsZero() || !r.isTailscaleService(svc) {
 		logger.Debugf("Service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
-		_, err = r.maybeCleanup(ctx, hostname, svc, logger, tsClient)
+		_, err = r.maybeCleanup(ctx, hostname, pgName, svc, logger, tsClient)
 		return res, err
 	}
 
@@ -176,13 +224,19 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 		return false, nil
 	}
 
-	if !slices.Contains(svc.Finalizers, svcPGFinalizerName) {
-		// This log line is printed exactly once during initial provisioning,
-		// because once the finalizer is in place this block gets skipped. So,
-		// this is a nice place to tell the operator that the high level,
-		// multi-reconcile operation is underway.
-		logger.Infof("exposing Service over tailscale")
-		svc.Finalizers = append(svc.Finalizers, svcPGFinalizerName)
+	wantFinalizer := finalizerForProxyGroup(pg.Name)
+	if !slices.Contains(svc.Finalizers, wantFinalizer) {
+		if !slices.ContainsFunc(svc.Finalizers, isServicePGFinalizer) {
+			// This log line is printed exactly once during initial provisioning,
+			// because once the finalizer is in place this block gets skipped. So,
+			// this is a nice place to tell the operator that the high level,
+			// multi-reconcile operation is underway.
+			logger.Infof("exposing Service over tailscale")
+		}
+		// Drop any bare legacy finalizer set by an older operator; it does not
+		// encode the ProxyGroup name needed for cleanup.
+		svc.Finalizers = slices.DeleteFunc(svc.Finalizers, isServicePGFinalizer)
+		svc.Finalizers = append(svc.Finalizers, wantFinalizer)
 		if err := r.Update(ctx, svc); err != nil {
 			return false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
@@ -374,10 +428,9 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 // Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Service.
-func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger, tsClient tsclient.Client) (svcChanged bool, err error) {
+func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname, pgName string, svc *corev1.Service, logger *zap.SugaredLogger, tsClient tsclient.Client) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Service are cleaned up")
-	ix := slices.Index(svc.Finalizers, svcPGFinalizerName)
-	if ix < 0 {
+	if !slices.ContainsFunc(svc.Finalizers, isServicePGFinalizer) {
 		logger.Debugf("no finalizer, nothing to do")
 		return false, nil
 	}
@@ -398,7 +451,6 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 2. Unadvertise the Tailscale Service.
-	pgName := svc.Annotations[AnnotationProxyGroup]
 	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, svc, pgName, serviceName, nil, false, logger); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 	}
@@ -482,9 +534,7 @@ func (r *HAServiceReconciler) maybeCleanupProxyGroup(ctx context.Context, proxyG
 }
 
 func (r *HAServiceReconciler) deleteFinalizer(ctx context.Context, svc *corev1.Service, logger *zap.SugaredLogger) error {
-	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, func(f string) bool {
-		return f == svcPGFinalizerName
-	})
+	svc.Finalizers = slices.DeleteFunc(svc.Finalizers, isServicePGFinalizer)
 	logger.Debugf("ensure %q finalizer is removed", svcPGFinalizerName)
 
 	if err := r.Update(ctx, svc); err != nil {
