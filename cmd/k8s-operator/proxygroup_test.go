@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -1770,6 +1771,15 @@ func TestValidateProxyGroup(t *testing.T) {
 		"init_container_for_egress_pg": {
 			typ:           tsapi.ProxyGroupTypeEgress,
 			initContainer: true,
+		},
+		"name_at_max_length": {
+			typ:    tsapi.ProxyGroupTypeEgress,
+			pgName: strings.Repeat("a", maxStatefulSetNameLength),
+		},
+		"name_one_over_max_length": {
+			typ:          tsapi.ProxyGroupTypeEgress,
+			pgName:       strings.Repeat("a", maxStatefulSetNameLength+1),
+			expectedErrs: 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
