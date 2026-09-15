@@ -5,39 +5,73 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"testing"
 
+	"github.com/tailscale/hujson"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/logger"
 )
 
 var (
-	flagNFake = flag.Int("nfake", 0, "number of fake nodes to add to network")
+	flagNFake     = flag.Int("nfake", 0, "number of fake nodes to add to network")
+	flagAddr      = flag.String("addr", "127.0.0.1:9911", "IP:port to listen on; the DERP and STUN servers also run on that IP")
+	flagSSHPolicy = flag.String("ssh-policy", "", "optional path to a JSON (or HuJSON) file holding a tailcfg.SSHPolicy to send to all nodes; it also grants them the SSH capability")
 )
 
 func main() {
 	flag.Parse()
 
+	host, _, err := net.SplitHostPort(*flagAddr)
+	if err != nil {
+		log.Fatalf("invalid --addr %q: %v", *flagAddr, err)
+	}
+
 	var t fakeTB
-	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, host)
 
 	control := &testcontrol.Server{
 		DERPMap:         derpMap,
-		ExplicitBaseURL: "http://127.0.0.1:9911",
+		ExplicitBaseURL: "http://" + *flagAddr,
+	}
+	if *flagSSHPolicy != "" {
+		pol, err := loadSSHPolicy(*flagSSHPolicy)
+		if err != nil {
+			log.Fatalf("loading --ssh-policy: %v", err)
+		}
+		control.SSHPolicy = pol
 	}
 	for range *flagNFake {
 		control.AddFakeNode()
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", control)
-	addr := "127.0.0.1:9911"
-	log.Printf("listening on %s", addr)
-	err := http.ListenAndServe(addr, mux)
+	log.Printf("listening on %s", *flagAddr)
+	err = http.ListenAndServe(*flagAddr, mux)
 	log.Fatal(err)
+}
+
+func loadSSHPolicy(path string) (*tailcfg.SSHPolicy, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	b, err = hujson.Standardize(b)
+	if err != nil {
+		return nil, err
+	}
+	pol := new(tailcfg.SSHPolicy)
+	if err := json.Unmarshal(b, pol); err != nil {
+		return nil, err
+	}
+	return pol, nil
 }
 
 type fakeTB struct {
