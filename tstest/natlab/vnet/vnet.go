@@ -150,10 +150,11 @@ func (n *network) initStack() error {
 			icmp.NewProtocol4,
 		},
 	})
-	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
-	tcpipErr := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
-	if tcpipErr != nil {
-		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
+	// Cubic is the default congestion control on Linux and matches
+	// wgengine/netstack's configuration; gVisor defaults to reno.
+	cubicOpt := tcpip.CongestionControlOption("cubic")
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption cubic: %v", err)
 	}
 	// Raise the TCP buffer limits (defaults: 1 MB send, 1 MB receive)
 	// so that netstack-terminated connections (the fake control plane,
@@ -179,12 +180,6 @@ func (n *network) initStack() error {
 	rcvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
 	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBufOpt); err != nil {
 		return fmt.Errorf("SetTransportProtocolOption recv buf: %v", err)
-	}
-	// Enable receive buffer moderation (auto-tuning) so idle
-	// connections don't hold the full 4 MB.
-	modRcvBufOpt := tcpip.TCPModerateReceiveBufferOption(true)
-	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &modRcvBufOpt); err != nil {
-		return fmt.Errorf("SetTransportProtocolOption moderate recv buf: %v", err)
 	}
 	// The queue is sized to hold a full TCP send buffer's worth of
 	// 1500-byte frames (see the send buffer sizing above) so that a
