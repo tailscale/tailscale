@@ -20,6 +20,9 @@ func TestGoMod(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(f.Replace) > 0 {
+		for _, r := range f.Replace {
+			t.Errorf("go.mod has replace directive: %s => %s", r.Old.Path, r.New.Path)
+		}
 		t.Errorf("go.mod has %d replace directives; expect zero in this repo", len(f.Replace))
 	}
 }
