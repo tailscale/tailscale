@@ -671,6 +671,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
+	// Subscribe before taking the initial snapshot so a link change cannot be lost.
+	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
+	b.eventClient = ec
+	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) { b.linkChange(&cd) })
+
 	b.interfaceState = netMon.InterfaceState()
 
 	// Call our linkChange code once with the current state.
@@ -702,15 +707,15 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		}
 	}
 
-	// Start the event bus late, once all the assignments above are done.
+	// Subscribe to the remaining event bus updates after the initial netmon snapshot.
 	// (See previous race in tailscale/tailscale#17252)
-	ec := b.Sys().Bus.Get().Client("ipnlocal.LocalBackend")
-	b.eventClient = ec
+	
+	
 	eventbus.SubscribeFunc(ec, b.onClientVersion)
 	eventbus.SubscribeFunc(ec, func(au controlclient.AutoUpdate) {
 		b.onTailnetDefaultAutoUpdate(au.Value)
 	})
-	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) { b.linkChange(&cd) })
+	
 	if buildfeatures.HasHealth {
 		eventbus.SubscribeFunc(ec, b.onHealthChange)
 	}
