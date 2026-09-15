@@ -26,6 +26,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 )
 
@@ -425,6 +426,7 @@ func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
 // e.mu must be held.
 func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[string]string) (string, bool) {
 	var isRouted bool
+	var seen set.Set[string]
 	for {
 		_, isRouted = e.domains[domain]
 		if isRouted {
@@ -444,7 +446,12 @@ func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[stri
 		if !ok {
 			break
 		}
+		if seen.Contains(next) {
+			break
+		}
 		domain = next
+		seen.Make()
+		seen.Add(domain)
 	}
 	return domain, isRouted
 }

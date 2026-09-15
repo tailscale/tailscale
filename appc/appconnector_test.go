@@ -255,6 +255,16 @@ func TestObserveDNSResponse(t *testing.T) {
 			t.Errorf("got %v; want %v", got, want)
 		}
 
+		// a CNAME record chain with a cycle terminates and does not
+		// add any new routes.
+		if err := a.ObserveDNSResponse(dnsCNAMEResponse("192.0.0.11", "a.example.org.", "b.example.org.", "a.example.org.")); err != nil {
+			t.Errorf("ObserveDNSResponse: %v", err)
+		}
+		a.Wait(ctx)
+		if got, want := rc.Routes(), wantRoutes; !slices.Equal(got, want) {
+			t.Errorf("got %v; want %v", got, want)
+		}
+
 		wantRoutes = append(wantRoutes, netip.MustParsePrefix("2001:db8::1/128"))
 
 		if err := a.ObserveDNSResponse(dnsResponse("example.com.", "2001:db8::1")); err != nil {
