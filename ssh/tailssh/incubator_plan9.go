@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 
 	"github.com/go4org/plan9netshell"
-	"github.com/pkg/sftp"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -145,21 +144,6 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 }
 
 var debugTest atomic.Bool
-
-type stdRWC struct{}
-
-func (stdRWC) Read(p []byte) (n int, err error) {
-	return os.Stdin.Read(p)
-}
-
-func (stdRWC) Write(b []byte) (n int, err error) {
-	return os.Stdout.Write(b)
-}
-
-func (stdRWC) Close() error {
-	os.Exit(0)
-	return nil
-}
 
 type incubatorArgs struct {
 	localUser          string
@@ -328,24 +312,6 @@ func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	dlogf("handling sftp")
 
 	return serveSFTP()
-}
-
-// beSFTP serves SFTP in-process.
-func beSFTP(args []string) error {
-	return serveSFTP()
-}
-
-func serveSFTP() error {
-	server, err := sftp.NewServer(stdRWC{})
-	if err != nil {
-		return err
-	}
-	// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
-	// when sftp is patched to report clean termination.
-	if err := server.Serve(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 // handleSSHInProcess is a last resort if we couldn't use login or su. It
