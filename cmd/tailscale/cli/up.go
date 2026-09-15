@@ -1016,12 +1016,16 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		return false, nil
 	}
 
+	skipFlagCheck := true
 	flagIsSet := map[string]bool{}
 	env.flagSet.Visit(func(f *flag.Flag) {
 		flagIsSet[f.Name] = true
+		if f.Name != "accept-risk" {
+			skipFlagCheck = false
+		}
 	})
 
-	if len(flagIsSet) == 0 &&
+	if skipFlagCheck &&
 		curPrefs.Persist != nil &&
 		curPrefs.Persist.UserProfile.LoginName != "" &&
 		env.backendState != ipn.NeedsLogin.String() {
