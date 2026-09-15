@@ -106,7 +106,24 @@ func (n *nftablesRunner) AddDNATRule(origDst netip.Addr, dst netip.Addr) error {
 	if err != nil {
 		return err
 	}
-	rule := dnatRuleForChain(nat, preroutingCh, origDst, dst, nil)
+	rules, err := n.conn.GetRules(nat, preroutingCh)
+	if err != nil {
+		return fmt.Errorf("error listing DNAT rules: %w", err)
+	}
+	dnatRulePrefixMatch := fmt.Sprintf("dnat:%s,dst:", origDst.String())
+	dnatRuleFullMatch := fmt.Sprintf("%s%s", dnatRulePrefixMatch, dst.String())
+	for _, rule := range rules {
+		current := string(rule.UserData)
+		if strings.HasPrefix(current, dnatRulePrefixMatch) {
+			if strings.EqualFold(current, dnatRuleFullMatch) {
+				return nil
+			}
+			if err := n.conn.DelRule(rule); err != nil {
+				return fmt.Errorf("error deleting DNAT rule: %w", err)
+			}
+		}
+	}
+	rule := dnatRuleForChain(nat, preroutingCh, origDst, dst, []byte(dnatRuleFullMatch))
 	n.conn.InsertRule(rule)
 	return n.conn.Flush()
 }
