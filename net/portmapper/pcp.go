@@ -5,7 +5,6 @@ package portmapper
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net/netip"
@@ -45,6 +44,10 @@ const (
 	pcpTCPMapping = 6  // portmap TCP
 )
 
+// A pcpNonce is a cookie assigned by the router when issuing a mapping, that
+// the client retains in order to release or update the mapping later.
+type pcpNonce [12]byte
+
 type pcpMapping struct {
 	c        *Client
 	gw       netip.AddrPort
@@ -55,6 +58,7 @@ type pcpMapping struct {
 	goodUntil  time.Time
 
 	epoch uint32
+	nonce pcpNonce
 }
 
 func (p *pcpMapping) MappingType() string      { return "pcp" }
@@ -62,9 +66,9 @@ func (p *pcpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pcpMapping) RenewAfter() time.Time    { return p.renewAfter }
 func (p *pcpMapping) External() netip.AddrPort { return p.external }
 func (p *pcpMapping) MappingDebug() string {
-	return fmt.Sprintf("pcpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d}",
+	return fmt.Sprintf("pcpMapping{gw:%v, external:%v, internal:%v, renewAfter:%d, goodUntil:%d, nonce:%x}",
 		p.gw, p.external, p.internal,
-		p.renewAfter.Unix(), p.goodUntil.Unix())
+		p.renewAfter.Unix(), p.goodUntil.Unix(), p.nonce)
 }
 
 func (p *pcpMapping) Release(ctx context.Context) {
@@ -73,7 +77,7 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr())
+	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr(), p.nonce)
 	uc.WriteToUDPAddrPort(pkt, p.gw)
 }
 
@@ -81,11 +85,13 @@ func (p *pcpMapping) Release(ctx context.Context) {
 // To create a packet which deletes a mapping, lifetimeSec should be set to 0.
 // If prevPort is not known, it should be set to 0.
 // If prevExternalIP is not known, it should be set to 0.0.0.0.
+// Renewing or deleting a mapping must reuse the nonce from the original response.
 func buildPCPRequestMappingPacket(
 	myIP netip.Addr,
 	localPort, prevPort uint16,
 	lifetimeSec uint32,
 	prevExternalIP netip.Addr,
+	nonce pcpNonce,
 ) (pkt []byte) {
 	// 24 byte common PCP header + 36 bytes of MAP-specific fields
 	pkt = make([]byte, 24+36)
@@ -96,7 +102,7 @@ func buildPCPRequestMappingPacket(
 	copy(pkt[8:24], myIP16[:])
 
 	mapOp := pkt[24:]
-	rand.Read(mapOp[:12]) // 96 bit mapping nonce
+	copy(mapOp[:12], nonce[:])
 
 	// TODO: should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
 	// also doesn't support a local port then.
@@ -125,7 +131,6 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if res.ResultCode != pcpCodeOK {
 		return nil, fmt.Errorf("PCP response not ok, code %d", res.ResultCode)
 	}
-	// TODO: don't ignore the nonce and make sure it's the same?
 	externalPort := binary.BigEndian.Uint16(resp[42:44])
 	externalIPBytes := [16]byte{}
 	copy(externalIPBytes[:], resp[44:])
@@ -141,6 +146,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 		goodUntil:  now.Add(lifetime),
 		epoch:      res.Epoch,
 	}
+	copy(mapping.nonce[:], resp[24:36])
 
 	return mapping, nil
 }
