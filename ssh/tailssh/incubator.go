@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/pkg/sftp"
 	gliderssh "github.com/tailscale/gliderssh"
 	"github.com/u-root/u-root/pkg/termios"
 	"golang.org/x/crypto/ssh"
@@ -262,21 +261,6 @@ var (
 	debugTest      atomic.Bool
 )
 
-type stdRWC struct{}
-
-func (stdRWC) Read(p []byte) (n int, err error) {
-	return os.Stdin.Read(p)
-}
-
-func (stdRWC) Write(b []byte) (n int, err error) {
-	return os.Stdout.Write(b)
-}
-
-func (stdRWC) Close() error {
-	os.Exit(0)
-	return nil
-}
-
 type incubatorArgs struct {
 	loginShell         string
 	uid                int
@@ -488,24 +472,6 @@ func handleSFTPInProcess(dlogf logger.Logf, ia incubatorArgs) error {
 	}
 
 	return serveSFTP()
-}
-
-// beSFTP serves SFTP in-process.
-func beSFTP(args []string) error {
-	return serveSFTP()
-}
-
-func serveSFTP() error {
-	server, err := sftp.NewServer(stdRWC{})
-	if err != nil {
-		return err
-	}
-	// TODO(https://github.com/pkg/sftp/pull/554): Revert the check for io.EOF,
-	// when sftp is patched to report clean termination.
-	if err := server.Serve(); err != nil && err != io.EOF {
-		return err
-	}
-	return nil
 }
 
 // shouldAttemptLoginShell decides whether we should attempt to get a full

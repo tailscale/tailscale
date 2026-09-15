@@ -23,11 +23,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	gliderssh "github.com/tailscale/gliderssh"
@@ -749,11 +747,11 @@ type sshSession struct {
 	agentListener net.Listener // non-nil if agent-forwarding requested+allowed
 
 	// initialized by launchProcess:
-	cmd      *exec.Cmd
-	wrStdin  io.WriteCloser
-	rdStdout io.ReadCloser
-	rdStderr io.ReadCloser  // rdStderr is nil for pty sessions
-	ptyReq   *gliderssh.Pty // non-nil for pty sessions
+	osSessionState // the process itself; see process_*.go
+	wrStdin        io.WriteCloser
+	rdStdout       io.ReadCloser
+	rdStderr       io.ReadCloser  // rdStderr is nil for pty sessions
+	ptyReq         *gliderssh.Pty // non-nil for pty sessions
 
 	// childPipes is a list of pipes that need to be closed when the process exits.
 	// For pty sessions, this is the tty fd.
@@ -769,35 +767,6 @@ type sshSession struct {
 	// ss.Exit to ensure the message is flushed before the SSH channel is torn
 	// down. It is initialized by run() before starting killProcessOnContextDone.
 	exitHandled chan struct{}
-}
-
-// forwardedEnvChildFD is the fd the incubator child reads the forwarded environment from, sent via
-// --env-fd. It must match the payload file's index in launchProcess's ExtraFiles (fd = 3 + index).
-const forwardedEnvChildFD = 3
-
-// forwardedEnvFile returns the read end of a pipe holding the JSON-encoded forwarded pairs.
-// The read end is passed to the incubator child via exec.Cmd.ExtraFiles to communicate
-// secrets and config; the payload only ever exists in memory, never on any filesystem. A
-// goroutine writes the payload and closes the write end. Caller must close the read end
-// after the child starts.
-func forwardedEnvFile(forwardedEnv []string) (*os.File, error) {
-	if len(forwardedEnv) == 0 {
-		return nil, errors.New("no forwarded environment")
-	}
-	b, err := json.Marshal(forwardedEnv)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling forwarded environment: %w", err)
-	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("creating forwarded environment pipe: %w", err)
-	}
-	go func() {
-		defer w.Close()
-		// A short read fails the session child-side
-		_, _ = w.Write(b)
-	}()
-	return r, nil
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -906,13 +875,9 @@ func (ss *sshSession) killProcessOnContextDone() {
 			}
 		}
 		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
-		// We don't need to Process.Wait here, sshSession.run() does
-		// the waiting regardless of termination reason.
-
-		// SIGHUP = POSIX terminal-disconnect semantics; OpenSSH gets it
-		// implicitly via PTY-master close (session.c:2246), we send it
-		// explicitly because non-PTY sessions use pipes.
-		ss.cmd.Process.Signal(syscall.SIGHUP)
+		// We don't need to wait for the process here, sshSession.run()
+		// does the waiting regardless of termination reason.
+		ss.hangupProcess()
 	})
 }
 
@@ -947,57 +912,6 @@ func (c *conn) detachSession(ss *sshSession) {
 }
 
 var errSessionDone = errors.New("session is done")
-
-// handleSSHAgentForwarding starts a Unix socket listener and in the background
-// forwards agent connections between the listener and the gliderssh.Session.
-// On success, it assigns ss.agentListener.
-func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta) error {
-	if !gliderssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
-		return nil
-	}
-	if sshDisableForwarding() {
-		// TODO(bradfitz): or do we want to return an error here instead so the user
-		// gets an error if they ran with ssh -A? But for now we just silently
-		// don't work, like the condition above.
-		return nil
-	}
-	ss.logf("ssh: agent forwarding requested")
-	ln, err := gliderssh.NewAgentListener()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil && ln != nil {
-			ln.Close()
-		}
-	}()
-
-	uid, err := strconv.ParseUint(lu.Uid, 10, 32)
-	if err != nil {
-		return err
-	}
-	gid, err := strconv.ParseUint(lu.Gid, 10, 32)
-	if err != nil {
-		return err
-	}
-	socket := ln.Addr().String()
-	dir := filepath.Dir(socket)
-	// Make sure the socket is accessible only by the user.
-	if err := os.Chmod(socket, 0600); err != nil {
-		return err
-	}
-	if err := os.Chown(socket, int(uid), int(gid)); err != nil {
-		return err
-	}
-	// Make sure the dir is also accessible.
-	if err := os.Chmod(dir, 0755); err != nil {
-		return err
-	}
-
-	go gliderssh.ForwardAgentConnections(ln, s)
-	ss.agentListener = ln
-	return nil
-}
 
 // run is the entrypoint for a newly accepted SSH session.
 //
@@ -1039,15 +953,13 @@ func (ss *sshSession) run() {
 		defer t.Stop()
 	}
 
-	if euid := os.Geteuid(); euid != 0 && runtime.GOOS != "plan9" {
-		if lu.Uid != fmt.Sprint(euid) {
-			ss.logf("can't switch to user %q from process euid %v", lu.Username, euid)
-			fmt.Fprintf(ss, "can't switch user\r\n")
-			// 255: SSH-layer failure, no user command ever ran. See the
-			// attachSession branch above for the full citation.
-			ss.Exit(255)
-			return
-		}
+	if err := canSwitchToLocalUser(lu); err != nil {
+		ss.logf("%v", err)
+		fmt.Fprintf(ss, "can't switch user\r\n")
+		// 255: SSH-layer failure, no user command ever ran. See the
+		// attachSession branch above for the full citation.
+		ss.Exit(255)
+		return
 	}
 
 	// Take control of the PTY so that we can configure it below.
@@ -1168,7 +1080,7 @@ func (ss *sshSession) run() {
 		})
 	}
 
-	err = ss.cmd.Wait()
+	exitCode, err := ss.waitProcess()
 
 	if ss.ctx.Err() != nil {
 		// Cancellation (e.g. recording upload failure) wrote a
@@ -1182,16 +1094,14 @@ func (ss *sshSession) run() {
 	// aforementioned goroutine.
 	ss.exitOnce.Do(func() {})
 
-	var exitCode int
-	if err == nil {
-		ss.logf("Session complete")
-		exitCode = 0
-	} else if ee, ok := err.(*exec.ExitError); ok {
-		exitCode = ee.ProcessState.ExitCode()
-		ss.logf("Wait: code=%v", exitCode)
-	} else {
+	switch {
+	case err != nil:
 		ss.logf("Wait: %v", err)
 		exitCode = 1
+	case exitCode == 0:
+		ss.logf("Session complete")
+	default:
+		ss.logf("Wait: code=%v", exitCode)
 	}
 
 	// Order on the wire: exit-status, remaining output, EOF,
@@ -1335,7 +1245,7 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 			return ""
 		}
 		// Don't match as root for autogroup:nonroot
-		if lu.Uid == "0" || lu.Username == "root" {
+		if isRootUser(lu) {
 			return ""
 		}
 		return reqSSHUser
