@@ -65,6 +65,8 @@ func TestMain(m *testing.M) {
 		envknob.Setenv("TS_SERIAL_TESTS", "true")
 	}
 	v := m.Run()
+	// Before any os.Exit below, which would skip a deferred call.
+	removeSharedBinaries()
 	if v != 0 {
 		os.Exit(v)
 	}

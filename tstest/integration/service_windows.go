@@ -8,7 +8,6 @@ package integration
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -113,19 +112,20 @@ func (n *TestNode) stopService() {
 	n.waitServiceState(s, svc.Stopped, 60*time.Second)
 }
 
-// uninstallService removes the service via tailscaled's uninstall-system-daemon
-// and waits until it's gone; a missing service is fine.
+// uninstallService deletes the service and waits until it's gone.
 func (n *TestNode) uninstallService() {
 	t := n.env.t
 	t.Helper()
-	if !serviceExists(t) {
+	m := connectSCM(t)
+	defer m.Disconnect()
+	s, err := m.OpenService(serviceName)
+	if err != nil {
 		return
 	}
-	// Not t.Context(): this also runs from t.Cleanup, where it's canceled.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, n.env.daemon, "uninstall-system-daemon").CombinedOutput(); err != nil {
-		t.Fatalf("uninstall-system-daemon: %v\n%s", err, out)
+	err = s.Delete()
+	s.Close() // deletion completes only once every handle is closed
+	if err != nil {
+		t.Fatalf("delete service %q: %v", serviceName, err)
 	}
 	n.waitServiceGone(30 * time.Second)
 }
@@ -240,6 +240,11 @@ func connectSCM(t testing.TB) *mgr.Mgr {
 // from its executable's dir (cmd/tailscaled.fullyQualifiedWintunPath).
 func stageWintun(t testing.TB, dir string) {
 	t.Helper()
+	dst := filepath.Join(dir, "wintun.dll")
+	// dir is shared, and os.Create below would truncate a DLL a running service has loaded.
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
 	req, err := http.NewRequestWithContext(t.Context(), "GET", wintun.URL, nil)
 	if err != nil {
 		t.Fatalf("wintun request: %v", err)
@@ -269,7 +274,7 @@ func stageWintun(t testing.TB, dir string) {
 		t.Fatalf("wintun zip missing %q: %v", member, err)
 	}
 	defer f.Close()
-	out, err := os.Create(filepath.Join(dir, "wintun.dll"))
+	out, err := os.Create(dst)
 	if err != nil {
 		t.Fatalf("creating wintun.dll: %v", err)
 	}
