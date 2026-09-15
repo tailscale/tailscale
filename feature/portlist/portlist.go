@@ -111,6 +111,7 @@ func (e *Extension) runPollLoop() {
 	defer close(e.pollerDone)
 
 	var poller portlist.Poller
+	defer poller.Close()
 
 	ticker, tickerChannel := e.sb.Clock().NewTicker(portlist.PollInterval())
 	defer ticker.Stop()
