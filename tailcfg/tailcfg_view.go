@@ -1343,7 +1343,7 @@ func (v *RegisterRequestView) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
 func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
 func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
-func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
+func (v RegisterRequestView) NLKey() key.TLPublic            { return v.ж.NLKey }
 func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
 
 // Expiry optionally specifies the requested key expiry.
@@ -1406,7 +1406,7 @@ var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
 	Version          CapabilityVersion
 	NodeKey          key.NodePublic
 	OldNodeKey       key.NodePublic
-	NLKey            key.NLPublic
+	NLKey            key.TLPublic
 	Auth             *RegisterResponseAuth
 	Expiry           time.Time
 	Followup         string

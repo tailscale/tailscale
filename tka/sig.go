@@ -122,11 +122,11 @@ func (s NodeKeySignature) String() string {
 			b.WriteString(indent + "Pubkey: " + pubKey + "\n")
 		}
 		if len(sig.KeyID) > 0 {
-			keyID := key.NLPublicFromEd25519Unsafe(sig.KeyID).CLIString()
+			keyID := key.TLPublicFromEd25519Unsafe(sig.KeyID).CLIString()
 			b.WriteString(indent + "KeyID: " + keyID + "\n")
 		}
 		if len(sig.WrappingPubkey) > 0 {
-			pubKey := key.NLPublicFromEd25519Unsafe(sig.WrappingPubkey).CLIString()
+			pubKey := key.TLPublicFromEd25519Unsafe(sig.WrappingPubkey).CLIString()
 			b.WriteString(indent + "WrappingPubkey: " + pubKey + "\n")
 		}
 		if sig.Nested != nil {
@@ -357,7 +357,7 @@ func (s *NodeKeySignature) rotationDetails() (*RotationDetails, error) {
 // The signature itself is a SigRotation signature, which embeds the old signature
 // and certifies the new node-key as a replacement for the old by signing the new
 // signature with RotationPubkey (which is the node's own tailnet-lock key).
-func ResignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.MarshaledSignature) (tkatype.MarshaledSignature, error) {
+func ResignNKS(priv key.TLPrivate, nodeKey key.NodePublic, oldNKS tkatype.MarshaledSignature) (tkatype.MarshaledSignature, error) {
 	var oldSig NodeKeySignature
 	if err := oldSig.Unserialize(oldNKS); err != nil {
 		return nil, fmt.Errorf("decoding NKS: %w", err)
@@ -393,7 +393,7 @@ func ResignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 
 // maybeTrimRotationSignatureChain truncates rotation signature chain to ensure
 // it contains no more than 15 node keys.
-func maybeTrimRotationSignatureChain(sig NodeKeySignature, priv key.NLPrivate) (NodeKeySignature, error) {
+func maybeTrimRotationSignatureChain(sig NodeKeySignature, priv key.TLPrivate) (NodeKeySignature, error) {
 	if sig.SigKind != SigRotation {
 		return sig, nil
 	}

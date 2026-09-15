@@ -618,7 +618,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 						NodeID:            "12345",
 						PrivateNodeKey:    key.NewNode(),
 						OldPrivateNodeKey: key.NewNode(),
-						NetworkLockKey:    key.NewNLPrivate(),
+						NetworkLockKey:    key.NewTLPrivate(),
 						UserProfile: tailcfg.UserProfile{
 							ID:            12345,
 							LoginName:     "test@example.com",
@@ -635,7 +635,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 						NodeID:            "12345",
 						PrivateNodeKey:    key.NodePrivate{}, // stripped
 						OldPrivateNodeKey: key.NodePrivate{}, // stripped
-						NetworkLockKey:    key.NLPrivate{},   // stripped
+						NetworkLockKey:    key.TLPrivate{},   // stripped
 						UserProfile: tailcfg.UserProfile{
 							ID:            12345,
 							LoginName:     "test@example.com",
@@ -690,7 +690,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 							NodeID:            "12345",
 							PrivateNodeKey:    key.NewNode(),
 							OldPrivateNodeKey: key.NewNode(),
-							NetworkLockKey:    key.NewNLPrivate(),
+							NetworkLockKey:    key.NewTLPrivate(),
 							UserProfile: tailcfg.UserProfile{
 								ID:            12345,
 								LoginName:     "test@example.com",
@@ -706,7 +706,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 							NodeID:            "12345",
 							PrivateNodeKey:    key.NewNode(),
 							OldPrivateNodeKey: key.NewNode(),
-							NetworkLockKey:    key.NewNLPrivate(),
+							NetworkLockKey:    key.NewTLPrivate(),
 							UserProfile: tailcfg.UserProfile{
 								ID:            12345,
 								LoginName:     "test@example.com",
@@ -727,7 +727,7 @@ func TestExtensionHostProfileStateChangeCallback(t *testing.T) {
 							NodeID:            "12345",
 							PrivateNodeKey:    key.NodePrivate{}, // stripped
 							OldPrivateNodeKey: key.NodePrivate{}, // stripped
-							NetworkLockKey:    key.NLPrivate{},   // stripped
+							NetworkLockKey:    key.TLPrivate{},   // stripped
 							UserProfile: tailcfg.UserProfile{
 								ID:            12345,
 								LoginName:     "test@example.com",
