@@ -583,6 +583,7 @@ func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Sec
 		"tailscale.com/parent-resource":      "test",
 		"tailscale.com/parent-resource-ns":   "default",
 		"tailscale.com/parent-resource-type": opts.parentType,
+		"tailscale.com/secret-type":          "state",
 	}
 	if opts.parentType == "connector" {
 		labels["tailscale.com/parent-resource-ns"] = "" // Connector is cluster scoped
