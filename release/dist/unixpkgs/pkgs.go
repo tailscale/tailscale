@@ -289,6 +289,11 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 				// installed anyway and it's useful for debugging. But
 				// we can live without it, so it's not Depends.
 				"iproute2",
+				// Lets glibc resolve MagicDNS names through
+				// systemd-resolved. Not installed by default on
+				// Ubuntu minimal images. Recommends rather than
+				// Depends, since not every install needs it.
+				"libnss-resolve",
 			},
 			Replaces:  []string{"tailscale-relay"},
 			Conflicts: []string{"tailscale-relay"},
