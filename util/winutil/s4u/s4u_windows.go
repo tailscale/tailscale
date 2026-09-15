@@ -124,10 +124,18 @@ const (
 // characters.
 //
 // The current OS thread's access token must have SeTcbPrivilege.
+//
+// When capLevel is CapCreateProcess and u is a member of the Administrators
+// group whose logon would produce a UAC-filtered token, the session uses the
+// linked full token instead, as OpenSSH for Windows does: there is no way to
+// answer a UAC elevation prompt from a remote session.
 func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLevel) (sess *Session, err error) {
 	token, err := createToken(srcName, u, tokenTypeImpersonation, capLevel)
 	if err != nil {
 		return nil, err
+	}
+	if capLevel == CapCreateProcess {
+		token = maybeLinkedToken(token)
 	}
 	tokenCloseOnce := sync.OnceFunc(func() { token.Close() })
 	defer func() {
@@ -179,6 +187,23 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 	}
 
 	return &Session{logf: logf, token: sessToken, userProfile: userProfile, capLevel: capLevel}, nil
+}
+
+// maybeLinkedToken returns token's linked (unfiltered) token if token is a
+// UAC-filtered token, closing token, and otherwise returns token unchanged.
+// The caller must hold SeTcbPrivilege for the linked token to be a usable
+// primary token rather than an identification-level one.
+func maybeLinkedToken(token windows.Token) windows.Token {
+	limited, err := winutil.IsTokenLimited(token)
+	if err != nil || !limited {
+		return token
+	}
+	linked, err := token.GetLinkedToken()
+	if err != nil {
+		return token
+	}
+	token.Close()
+	return linked
 }
 
 // Close unloads the user profile and S4U access token associated with the
@@ -284,9 +309,8 @@ type startProcessOpts struct {
 }
 
 // StartProcess creates a new process running under ss via cmdLineInfo.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -306,9 +330,8 @@ func (ss *Session) StartProcess(cmdLineInfo winutil.CommandLineInfo, extraEnv ma
 // StartProcessWithPTY creates a new process running under ss via cmdLineInfo
 // with a pseudoconsole initialized to initialPtySize. The resulting Process
 // will return non-nil values from Stdin and Stdout, but Stderr will return nil.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -329,9 +352,8 @@ func (ss *Session) StartProcessWithPTY(cmdLineInfo winutil.CommandLineInfo, extr
 // StartProcessWithPipes creates a new process running under ss via cmdLineInfo
 // with all standard handles set to pipes. The resulting Process will return
 // non-nil values from Stdin, Stdout, and Stderr.
-// The process will either be started with its working directory set to the S4U
-// user's profile directory, or for Administrative users, the system32
-// directory. The child process will receive the S4U user's environment.
+// The process is started with its working directory set to the S4U user's
+// profile directory. The child process will receive the S4U user's environment.
 // extraEnv, when specified, contains any additional environment
 // variables to be inserted into the environment.
 //
@@ -347,6 +369,39 @@ func (ss *Session) StartProcessWithPipes(cmdLineInfo winutil.CommandLineInfo, ex
 		pipes:    true,
 	}
 	return startProcessInternal(ss, ss.logf, cmdLineInfo, opts)
+}
+
+// StartCurrentUserProcessWithPTY is like [Session.StartProcessWithPTY], but
+// runs the process as the current user, with no S4U logon and thus no
+// SeTcbPrivilege requirement. The child inherits the current environment,
+// with extraEnv merged in, and starts in the current user's home directory.
+// Logs are written to logf, if non-nil.
+func StartCurrentUserProcessWithPTY(logf logger.Logf, cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string, initialPtySize windows.Coord) (*Process, error) {
+	opts := startProcessOpts{
+		extraEnv: extraEnv,
+		ptySize:  initialPtySize,
+	}
+	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
+}
+
+// StartCurrentUserProcessWithPipes is like [Session.StartProcessWithPipes], but
+// runs the process as the current user, with no S4U logon and thus no
+// SeTcbPrivilege requirement. The child inherits the current environment,
+// with extraEnv merged in, and starts in the current user's home directory.
+// Logs are written to logf, if non-nil.
+func StartCurrentUserProcessWithPipes(logf logger.Logf, cmdLineInfo winutil.CommandLineInfo, extraEnv map[string]string) (*Process, error) {
+	opts := startProcessOpts{
+		extraEnv: extraEnv,
+		pipes:    true,
+	}
+	return startProcessInternal(nil, logfOrDiscard(logf), cmdLineInfo, opts)
+}
+
+func logfOrDiscard(logf logger.Logf) logger.Logf {
+	if logf == nil {
+		return logger.Discard
+	}
+	return logf
 }
 
 // startProcessInternal is the common implementation behind Session's exported
@@ -377,7 +432,6 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 	useToken := opts.token != 0
 	usePty := ptySizeValid && !useToken
 	useRelay := ptySizeValid && useToken
-	useSystem32WD := useToken && opts.token.IsElevated()
 
 	if usePty {
 		sp.pty, err = conpty.NewPseudoConsole(opts.ptySize)
@@ -448,28 +502,30 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 	}
 	logf("starting %s", cmdLineStr)
 
+	// The child starts in its user's profile directory, like a shell
+	// started by OpenSSH. For the current user this is os.UserHomeDir; if
+	// that is unknown the child inherits our working directory instead.
 	var env []string
-	var wd16 *uint16
+	var wd string
 	if useToken {
 		env, err = opts.token.Environ(false)
 		if err != nil {
 			return nil, err
 		}
-
-		folderID := windows.FOLDERID_Profile
-		if useSystem32WD {
-			folderID = windows.FOLDERID_System
-		}
-		wd, err := opts.token.KnownFolderPath(folderID, windows.KF_FLAG_DEFAULT)
-		if err != nil {
-			return nil, err
-		}
-		wd16, err = windows.UTF16PtrFromString(wd)
+		wd, err = opts.token.KnownFolderPath(windows.FOLDERID_Profile, windows.KF_FLAG_DEFAULT)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		env = os.Environ()
+		wd, _ = os.UserHomeDir()
+	}
+	var wd16 *uint16
+	if wd != "" {
+		wd16, err = windows.UTF16PtrFromString(wd)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	env = mergeEnv(env, opts.extraEnv)
@@ -512,11 +568,27 @@ func startProcessInternal(ss *Session, logf logger.Logf, cmdLineInfo winutil.Com
 		return nil, err
 	}
 
+	switch {
+	case useRelay:
+		// DETACHED_PROCESS so that the relay does not receive a console;
+		// it creates a pseudoconsole for the process it runs.
+		creationFlags |= windows.DETACHED_PROCESS
+	case opts.pipes:
+		// Give the child a console of its own, with no window. It must
+		// have some console: a console process with none causes each
+		// console program it starts to allocate a new console, and their
+		// C runtimes then point their standard handles at that console
+		// rather than at our inherited pipes, so their output is lost.
+		// (For a shell, that would be the output of every command.)
+		// Sharing our console instead would tie the child to our
+		// console's lifetime and Ctrl-C events.
+		creationFlags |= windows.CREATE_NO_WINDOW
+	}
+
 	var pi windows.ProcessInformation
 	if useToken {
-		// DETACHED_PROCESS so that the child does not receive a console.
 		// CREATE_NEW_PROCESS_GROUP so that the child's console group is isolated from ours.
-		creationFlags |= windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP
+		creationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 		doCreate := func() {
 			err = windows.CreateProcessAsUser(opts.token, exePath, cmdLine, nil, nil, inheritHandles, creationFlags, env16, wd16, si, &pi)
 		}
@@ -711,12 +783,28 @@ func (sp *Process) Terminate() {
 // If the process was created with a pseudoconsole then the caller must continue
 // concurrently draining sp's stdout until either Close finishes executing, or EOF.
 func (sp *Process) Close() error {
-	for _, pc := range []*io.WriteCloser{&sp.wStdin, &sp.wResize} {
-		if *pc == nil {
-			continue
-		}
-		(*pc).Close()
-		(*pc) = nil
+	return sp.close(true)
+}
+
+// Release is like Close, but leaves the pipes returned by Stdin, Stdout, and
+// Stderr open. It is for callers that copy those pipes concurrently and want
+// to drain them to EOF after the process exits; they own the pipes afterwards
+// and must close them.
+//
+// If the process was created with a pseudoconsole then the caller must continue
+// concurrently draining sp's stdout until either Release finishes executing, or EOF.
+func (sp *Process) Release() error {
+	return sp.close(false)
+}
+
+func (sp *Process) close(closeStdio bool) error {
+	if sp.wResize != nil {
+		sp.wResize.Close()
+		sp.wResize = nil
+	}
+	if closeStdio && sp.wStdin != nil {
+		sp.wStdin.Close()
+		sp.wStdin = nil
 	}
 
 	if sp.pty != nil {
@@ -739,6 +827,9 @@ func (sp *Process) Close() error {
 		}
 	}
 
+	if !closeStdio {
+		return nil
+	}
 	// Order is important here. Do not close sp.rStdout until _after_
 	// ss.pty (when present) has been closed! We're going to do one better by
 	// doing this after the process is done.
@@ -895,6 +986,11 @@ func beRelay(args []string) error {
 		logf("s4u.Process.Close error: %v", err)
 		return err
 	}
+	// The relay stands in for the process it ran, so its exit code is
+	// that process's exit code.
+	if exitCode != 0 {
+		os.Exit(int(exitCode))
+	}
 	return nil
 }
 
@@ -923,25 +1019,33 @@ func mergeEnv(existingEnv []string, extraEnv map[string]string) []string {
 		return existingEnv
 	}
 
-	mergedMap := make(map[string]string, len(existingEnv)+len(extraEnv))
+	// Windows environment variable names are case-insensitive, so the merge
+	// is keyed by upper-cased name, but each variable keeps the spelling it
+	// was first seen with so that the child sees the names it expects.
+	type kv struct{ k, v string }
+	mergedMap := make(map[string]kv, len(existingEnv)+len(extraEnv))
 	for _, line := range existingEnv {
 		k, v, _ := strings.Cut(line, "=")
-		mergedMap[strings.ToUpper(k)] = v
+		mergedMap[strings.ToUpper(k)] = kv{k, v}
 	}
 
 	for k, v := range extraEnv {
-		mergedMap[strings.ToUpper(k)] = v
+		uk := strings.ToUpper(k)
+		if old, ok := mergedMap[uk]; ok {
+			k = old.k
+		}
+		mergedMap[uk] = kv{k, v}
 	}
 
 	result := make([]string, 0, len(mergedMap))
-	for k, v := range mergedMap {
-		result = append(result, strings.Join([]string{k, v}, "="))
+	for _, e := range mergedMap {
+		result = append(result, e.k+"="+e.v)
 	}
 
 	slices.SortFunc(result, func(a, b string) int {
 		ka, _, _ := strings.Cut(a, "=")
 		kb, _, _ := strings.Cut(b, "=")
-		return strings.Compare(ka, kb)
+		return strings.Compare(strings.ToUpper(ka), strings.ToUpper(kb))
 	})
 	return result
 }
