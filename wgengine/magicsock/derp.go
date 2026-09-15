@@ -925,13 +925,25 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 			if err := dc.Ping(ctx); err != nil {
 				c.mu.Lock()
 				defer c.mu.Unlock()
-				c.closeOrReconnectDERPLocked(regionID, "rebind-ping-fail")
+				c.closeOrReconnectDERPIfCurrentLocked(regionID, dc, "rebind-ping-fail")
 				return
 			}
 			c.logf("post-rebind ping of DERP region %d okay", regionID)
 		}()
 	}
 	c.logActiveDerpLocked()
+}
+
+// closeOrReconnectDERPIfCurrentLocked closes the DERP connection to regionID
+// if dc is still the active connection for that region.
+//
+// c.mu must be held.
+func (c *Conn) closeOrReconnectDERPIfCurrentLocked(regionID tailcfg.DERPRegionID, dc *derphttp.Client, why string) {
+	ad, ok := c.activeDerp[regionID]
+	if !ok || ad.c != dc {
+		return
+	}
+	c.closeOrReconnectDERPLocked(regionID, why)
 }
 
 // closeOrReconnectDERPLocked closes the DERP connection to the
