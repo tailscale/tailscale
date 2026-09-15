@@ -29,9 +29,12 @@ import (
 	"time"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
@@ -1088,6 +1091,25 @@ func Test_reverseProxyConfiguration(t *testing.T) {
 			wantsURL:      mustCreateURL(t, "https://example3.com"),
 		},
 	})
+}
+
+func TestServeMaxIdleConnsPerHost(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		env  string
+		want int
+	}{
+		{name: "default", want: 0},
+		{name: "configured", env: "100", want: 100},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			envknob.SetenvForTest(t, "TS_DEBUG_SERVE_MAX_IDLE_CONNS_PER_HOST", tt.env)
+			rp := &reverseProxy{lb: &LocalBackend{dialer: tsdial.NewDialer(netmon.NewStatic())}}
+			if got := rp.getTransport().MaxIdleConnsPerHost; got != tt.want {
+				t.Errorf("MaxIdleConnsPerHost = %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
 
 func mustCreateURL(t *testing.T, u string) url.URL {
