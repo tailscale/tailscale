@@ -49,6 +49,15 @@ func SetDNSConfigCondition(dnsCfg *tsapi.DNSConfig, conditionType tsapi.Conditio
 	dnsCfg.Status.Conditions = conds
 }
 
+// DNSConfigConditionIs reports whether the DNSConfig has a condition of the
+// given type with the given status.
+func DNSConfigConditionIs(dnsCfg *tsapi.DNSConfig, conditionType tsapi.ConditionType, status metav1.ConditionStatus) bool {
+	idx := xslices.IndexFunc(dnsCfg.Status.Conditions, func(cond metav1.Condition) bool {
+		return cond.Type == string(conditionType)
+	})
+	return idx != -1 && dnsCfg.Status.Conditions[idx].Status == status
+}
+
 // SetServiceCondition ensures that Service status has a condition with the
 // given attributes. LastTransitionTime gets set every time condition's status
 // changes.
@@ -106,6 +115,14 @@ func SetTailnetCondition(tn *tsapi.Tailnet, conditionType tsapi.ConditionType, s
 func SetPeerRelayCondition(pr *tsapi.PeerRelay, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
 	conds := updateCondition(pr.Status.Conditions, conditionType, status, reason, message, pr.Generation, clock, logger)
 	pr.Status.Conditions = conds
+}
+
+// SetRouteAcceptorCondition ensures that RouteAcceptor status has a condition
+// with the given attributes. LastTransitionTime gets set every time condition's
+// status changes.
+func SetRouteAcceptorCondition(ra *tsapi.RouteAcceptor, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, clock tstime.Clock, logger *zap.SugaredLogger) {
+	conds := updateCondition(ra.Status.Conditions, conditionType, status, reason, message, ra.Generation, clock, logger)
+	ra.Status.Conditions = conds
 }
 
 func updateCondition(conds []metav1.Condition, conditionType tsapi.ConditionType, status metav1.ConditionStatus, reason, message string, gen int64, clock tstime.Clock, logger *zap.SugaredLogger) []metav1.Condition {

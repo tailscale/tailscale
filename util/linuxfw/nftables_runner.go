@@ -6,6 +6,7 @@
 package linuxfw
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -271,88 +272,13 @@ func (n *nftablesRunner) EnsureSNATForDst(src, dst netip.Addr) error {
 // functionality is currently invoked from outside wgengine (containerboot), so
 // we don't want to race with wgengine for rule ordering within chains.
 func (n *nftablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
-	polAccept := nftables.ChainPolicyAccept
 	table, err := n.getNFTByAddr(addr)
 	if err != nil {
 		return fmt.Errorf("error setting up nftables for IP family of %v: %w", addr, err)
 	}
-	filterTable, err := createTableIfNotExist(n.conn, table.Proto, "filter")
+	filterTable, fwChain, err := ensureClampChain(n.conn, table.Proto)
 	if err != nil {
-		return fmt.Errorf("error ensuring filter table: %w", err)
-	}
-
-	// ensure ts-clamp chain exists
-	fwChain, err := getOrCreateChain(n.conn, chainInfo{
-		table:         filterTable,
-		name:          "ts-clamp",
-		chainType:     nftables.ChainTypeFilter,
-		chainHook:     nftables.ChainHookForward,
-		chainPriority: nftables.ChainPriorityMangle,
-		chainPolicy:   &polAccept,
-	})
-	if err != nil {
-		return fmt.Errorf("error ensuring forward chain: %w", err)
-	}
-
-	// clampRuleForIface builds a rule that clamps the MSS of forwarded TCP
-	// handshake packets matching tun on the given interface-name meta key.
-	// ifaceKey is either expr.MetaKeyOIFNAME (packets leaving via tun) or
-	// expr.MetaKeyIIFNAME (packets arriving on tun).
-	clampRuleForIface := func(ifaceKey expr.MetaKey) *nftables.Rule {
-		return &nftables.Rule{
-			Table: filterTable,
-			Chain: fwChain,
-			Exprs: []expr.Any{
-				&expr.Meta{Key: ifaceKey, Register: 1},
-				&expr.Cmp{
-					Op:       expr.CmpOpEq,
-					Register: 1,
-					Data:     []byte(tun),
-				},
-				&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-				&expr.Cmp{
-					Op:       expr.CmpOpEq,
-					Register: 1,
-					Data:     []byte{unix.IPPROTO_TCP},
-				},
-				&expr.Payload{
-					DestRegister: 1,
-					Base:         expr.PayloadBaseTransportHeader,
-					Offset:       13,
-					Len:          1,
-				},
-				&expr.Bitwise{
-					DestRegister:   1,
-					SourceRegister: 1,
-					Len:            1,
-					Mask:           []byte{0x02},
-					Xor:            []byte{0x00},
-				},
-				&expr.Cmp{
-					Op:       expr.CmpOpNeq, // match any packet with a TCP flag set (SYN, ACK, RST)
-					Register: 1,
-					Data:     []byte{0x00},
-				},
-				&expr.Rt{
-					Register: 1,
-					Key:      expr.RtTCPMSS,
-				},
-				&expr.Byteorder{
-					DestRegister:   1,
-					SourceRegister: 1,
-					Op:             expr.ByteorderHton,
-					Len:            2,
-					Size:           2,
-				},
-				&expr.Exthdr{
-					SourceRegister: 1,
-					Type:           2,
-					Offset:         2,
-					Len:            2,
-					Op:             expr.ExthdrOpTcpopt,
-				},
-			},
-		}
+		return err
 	}
 
 	// Clamp both directions of the forwarded handshake: the SYN leaving via
@@ -361,9 +287,92 @@ func (n *nftablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	// output interface leaves the endpoint on the other side advertising an MSS
 	// that is too large for the tun MTU, which black-holes large segments when
 	// PMTU discovery is broken.
-	n.conn.AddRule(clampRuleForIface(expr.MetaKeyOIFNAME))
-	n.conn.AddRule(clampRuleForIface(expr.MetaKeyIIFNAME))
+	n.conn.AddRule(clampMSSRule(filterTable, fwChain, tun, expr.MetaKeyOIFNAME))
+	n.conn.AddRule(clampMSSRule(filterTable, fwChain, tun, expr.MetaKeyIIFNAME))
 	return n.conn.Flush()
+}
+
+// ensureClampChain ensures that the filter table for the given family and the
+// ts-clamp base chain within it exist, and returns both.
+func ensureClampChain(conn *nftables.Conn, family nftables.TableFamily) (*nftables.Table, *nftables.Chain, error) {
+	polAccept := nftables.ChainPolicyAccept
+	filterTable, err := createTableIfNotExist(conn, family, "filter")
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring filter table: %w", err)
+	}
+	fwChain, err := getOrCreateChain(conn, chainInfo{
+		table:         filterTable,
+		name:          "ts-clamp",
+		chainType:     nftables.ChainTypeFilter,
+		chainHook:     nftables.ChainHookForward,
+		chainPriority: nftables.ChainPriorityMangle,
+		chainPolicy:   &polAccept,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring forward chain: %w", err)
+	}
+	return filterTable, fwChain, nil
+}
+
+// clampMSSRule builds a rule that clamps the MSS of forwarded TCP handshake
+// packets matching tun on the given interface-name meta key. ifaceKey is
+// either expr.MetaKeyOIFNAME (packets leaving via tun) or expr.MetaKeyIIFNAME
+// (packets arriving on tun).
+func clampMSSRule(filterTable *nftables.Table, fwChain *nftables.Chain, tun string, ifaceKey expr.MetaKey) *nftables.Rule {
+	return &nftables.Rule{
+		Table: filterTable,
+		Chain: fwChain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: ifaceKey, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte(tun),
+			},
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_TCP},
+			},
+			&expr.Payload{
+				DestRegister: 1,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       13,
+				Len:          1,
+			},
+			&expr.Bitwise{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Len:            1,
+				Mask:           []byte{0x02},
+				Xor:            []byte{0x00},
+			},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq, // match any packet with a TCP flag set (SYN, ACK, RST)
+				Register: 1,
+				Data:     []byte{0x00},
+			},
+			&expr.Rt{
+				Register: 1,
+				Key:      expr.RtTCPMSS,
+			},
+			&expr.Byteorder{
+				DestRegister:   1,
+				SourceRegister: 1,
+				Op:             expr.ByteorderHton,
+				Len:            2,
+				Size:           2,
+			},
+			&expr.Exthdr{
+				SourceRegister: 1,
+				Type:           2,
+				Offset:         2,
+				Len:            2,
+				Op:             expr.ExthdrOpTcpopt,
+			},
+		},
+	}
 }
 
 // deleteTableIfExists deletes a nftables table via connection c if it exists
@@ -607,6 +616,17 @@ type NetfilterRunner interface {
 	// packets in both directions (entering and leaving the provided tun
 	// interface), so both endpoints negotiate an MSS that fits the tun MTU.
 	ClampMSSToPMTU(tun string, addr netip.Addr) error
+
+	// AddForwardToTunRules installs the rules needed for this host to forward
+	// locally received traffic (for example from containers or Pods on the
+	// same host) into the tailnet via tun: a masquerade rule for traffic
+	// leaving via tun, and MSS clamping for forwarded TCP handshakes in both
+	// directions. The rules are only added if they do not already exist.
+	AddForwardToTunRules(tun string) error
+
+	// DelForwardToTunRules removes the rules added by AddForwardToTunRules,
+	// if they exist.
+	DelForwardToTunRules(tun string) error
 
 	// AddMagicsockPortRule adds a rule to the ts-input chain to accept
 	// incoming traffic on the specified port, to allow magicsock to
@@ -2485,4 +2505,178 @@ func snatRule(t *nftables.Table, ch *nftables.Chain, src, dst netip.Addr, meta [
 		},
 		UserData: meta,
 	}
+}
+
+// forwardToTunUserData returns the UserData tag used to identify a rule
+// installed by AddForwardToTunRules, so that it can be found again regardless
+// of how the kernel represents its expressions.
+func forwardToTunUserData(kind, tun string) []byte {
+	return []byte("forward-to-tun:" + kind + ":" + tun)
+}
+
+// forwardToTunMasqRule returns the nat/POSTROUTING rule that masquerades
+// traffic leaving via tun.
+func forwardToTunMasqRule(nat *nftables.Table, ch *nftables.Chain, tun string) *nftables.Rule {
+	return &nftables.Rule{
+		Table:    nat,
+		Chain:    ch,
+		UserData: forwardToTunUserData("masq", tun),
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte(tun),
+			},
+			&expr.Masq{},
+		},
+	}
+}
+
+// ensureNATPostroutingChain ensures that the nat table for the given family
+// and the POSTROUTING chain within it exist, and returns both.
+func ensureNATPostroutingChain(conn *nftables.Conn, family nftables.TableFamily) (*nftables.Table, *nftables.Chain, error) {
+	polAccept := nftables.ChainPolicyAccept
+	nat, err := createTableIfNotExist(conn, family, "nat")
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring nat table exists: %w", err)
+	}
+	postRoutingCh, err := getOrCreateChain(conn, chainInfo{
+		table:         nat,
+		name:          "POSTROUTING",
+		chainType:     nftables.ChainTypeNAT,
+		chainHook:     nftables.ChainHookPostrouting,
+		chainPriority: nftables.ChainPriorityNATSource,
+		chainPolicy:   &polAccept,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error ensuring postrouting chain: %w", err)
+	}
+	return nat, postRoutingCh, nil
+}
+
+// forwardToTunClampRule returns the filter/ts-clamp MSS clamp rule for tun on
+// the given interface-name meta key, tagged so it can be found again.
+func forwardToTunClampRule(filterTable *nftables.Table, ch *nftables.Chain, tun string, ifaceKey expr.MetaKey) *nftables.Rule {
+	rule := clampMSSRule(filterTable, ch, tun, ifaceKey)
+	kind := "clamp-out"
+	if ifaceKey == expr.MetaKeyIIFNAME {
+		kind = "clamp-in"
+	}
+	rule.UserData = forwardToTunUserData(kind, tun)
+	return rule
+}
+
+// findTaggedRule returns the rule in rule's chain whose UserData equals
+// rule.UserData, or nil if there is none. Matching on UserData rather than on
+// expressions is robust against the kernel representing expressions
+// differently from how they were sent.
+func findTaggedRule(conn *nftables.Conn, rule *nftables.Rule) (*nftables.Rule, error) {
+	if len(rule.UserData) == 0 {
+		return nil, errors.New("rule has no UserData tag")
+	}
+	rules, err := conn.GetRules(rule.Table, rule.Chain)
+	if err != nil {
+		return nil, fmt.Errorf("get nftables rules: %w", err)
+	}
+	for _, r := range rules {
+		if bytes.Equal(r.UserData, rule.UserData) {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// ensureNFTRuleExists adds the tagged rule unless a rule with the same tag
+// already exists in its chain. It does not flush the connection.
+func ensureNFTRuleExists(conn *nftables.Conn, rule *nftables.Rule) error {
+	existing, err := findTaggedRule(conn, rule)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+	conn.AddRule(rule)
+	return nil
+}
+
+// deleteNFTRuleIfExists deletes the rule with the same tag as rule from its
+// chain, if one exists. It does not flush the connection.
+func deleteNFTRuleIfExists(conn *nftables.Conn, rule *nftables.Rule) error {
+	existing, err := findTaggedRule(conn, rule)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return nil
+	}
+	return conn.DelRule(existing)
+}
+
+// AddForwardToTunRules installs the rules needed for this host to forward
+// locally received traffic (for example from containers or Pods on the same
+// host) into the tailnet via tun:
+//   - nat/POSTROUTING: masquerade traffic leaving via tun, so that the peer
+//     receiving it sees this node's Tailscale IP as the source.
+//   - filter/ts-clamp: clamp the MSS of forwarded TCP handshakes to the path
+//     MTU in both directions (see ClampMSSToPMTU for why this chain is used).
+//
+// The rules are only added if they do not already exist, so it is safe to call
+// this on every start of a process whose netfilter state outlives it (i.e. one
+// running in the host network namespace).
+func (n *nftablesRunner) AddForwardToTunRules(tun string) error {
+	for _, table := range n.getTables() {
+		nat, postRoutingCh, err := ensureNATPostroutingChain(n.conn, table.Proto)
+		if err != nil {
+			return err
+		}
+		if err := ensureNFTRuleExists(n.conn, forwardToTunMasqRule(nat, postRoutingCh, tun)); err != nil {
+			return fmt.Errorf("error adding masquerade rule for %s: %w", tun, err)
+		}
+
+		filterTable, clampCh, err := ensureClampChain(n.conn, table.Proto)
+		if err != nil {
+			return err
+		}
+		for _, key := range []expr.MetaKey{expr.MetaKeyOIFNAME, expr.MetaKeyIIFNAME} {
+			if err := ensureNFTRuleExists(n.conn, forwardToTunClampRule(filterTable, clampCh, tun, key)); err != nil {
+				return fmt.Errorf("error adding MSS clamp rule for %s: %w", tun, err)
+			}
+		}
+	}
+	return n.conn.Flush()
+}
+
+// DelForwardToTunRules removes the rules added by AddForwardToTunRules. Missing
+// tables, chains or rules are not an error.
+func (n *nftablesRunner) DelForwardToTunRules(tun string) error {
+	for _, table := range n.getTables() {
+		nat, err := getTableIfExists(n.conn, table.Proto, "nat")
+		if err != nil {
+			return fmt.Errorf("error getting nat table: %w", err)
+		}
+		if nat != nil {
+			if postRoutingCh, err := getChainFromTable(n.conn, nat, "POSTROUTING"); err == nil {
+				if err := deleteNFTRuleIfExists(n.conn, forwardToTunMasqRule(nat, postRoutingCh, tun)); err != nil {
+					return fmt.Errorf("error deleting masquerade rule for %s: %w", tun, err)
+				}
+			}
+		}
+
+		filterTable, err := getTableIfExists(n.conn, table.Proto, "filter")
+		if err != nil {
+			return fmt.Errorf("error getting filter table: %w", err)
+		}
+		if filterTable != nil {
+			if clampCh, err := getChainFromTable(n.conn, filterTable, "ts-clamp"); err == nil {
+				for _, key := range []expr.MetaKey{expr.MetaKeyOIFNAME, expr.MetaKeyIIFNAME} {
+					if err := deleteNFTRuleIfExists(n.conn, forwardToTunClampRule(filterTable, clampCh, tun, key)); err != nil {
+						return fmt.Errorf("error deleting MSS clamp rule for %s: %w", tun, err)
+					}
+				}
+			}
+		}
+	}
+	return n.conn.Flush()
 }

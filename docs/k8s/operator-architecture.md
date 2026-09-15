@@ -517,6 +517,125 @@ flowchart TD
 
 ```
 
+## RouteAcceptor
+
+A RouteAcceptor makes subnet routes advertised to the tailnet (by subnet
+routers anywhere in the tailnet) routable from every Pod in the cluster,
+without a per-destination egress Service. The operator deploys a DaemonSet that
+runs a tailscaled device in the host network namespace of every selected node,
+configured to accept routes. tailscaled installs the routes the tailnet
+approves for the device in the node's routing table (table 52, with `ip rule`s
+that apply to forwarded traffic too), so a Pod's traffic to an accepted subnet
+is forwarded by its node via `tailscale0`. containerboot masquerades that
+traffic to the node's tailnet IP (the peer would otherwise drop packets from an
+unknown source) and clamps the MSS of forwarded TCP handshakes.
+
+Every device reads the same config Secret, which holds a reusable auth key the
+operator rotates before it expires, and persists its state in a Secret named
+after its node, so its identity survives Pod restarts. The devices report the
+routes they accept in their state Secrets; the operator surfaces them on the
+RouteAcceptor's status.
+
+### Split DNS
+
+Pods resolve names through the cluster DNS, so hosts in the accepted subnets
+are reachable by IP only unless the tailnet's split DNS is re-published in the
+cluster. Setting `spec.nameserver.splitDNS.enabled: true` on the `DNSConfig`
+makes the operator read the tailnet's split DNS configuration (domain →
+nameservers) from its own device, publish it to the `dnsrecords` ConfigMap, and
+the nameserver forward queries for those domains to those nameservers. The
+nameserver Pod reaches them through the RouteAcceptor on its node. As for
+`ts.net`, the cluster DNS must be told to send the domains to the nameserver;
+they are listed in `status.splitDNSDomains`. For CoreDNS, add one block per
+domain:
+
+```
+corp.internal:53 {
+    errors
+    cache 30
+    forward . <status.nameserver.ip>
+}
+```
+
+Only nameservers configured with plain IP addresses are forwarded to;
+DNS-over-HTTPS resolvers and domains served by MagicDNS itself are skipped.
+
+Requirements and caveats:
+
+- The nodes must not already run tailscaled.
+- The CNI must route Pod traffic for destinations outside the cluster through
+  the node's network stack (true for Calico, Flannel, kindnet and the cloud
+  providers' CNIs). Cilium's default eBPF host routing bypasses it; set
+  `bpf.hostLegacyRouting=true` there.
+- Because tailscaled also routes all tailnet addresses via `tailscale0`, Pods
+  can reach any tailnet peer that the devices' tags are allowed to reach. The
+  tailnet sees the node's device as the source, not the Pod.
+- If the cluster's Pod or Service CIDR overlaps `100.64.0.0/10`, tailscaled's
+  firewall drops traffic from Pods to the nodes. The operator refuses to deploy
+  in that case unless the tailnet grants the devices' tags the
+  `disable-linux-cgnat-drop-rule` node attribute and
+  `spec.unsafeAllowCGNATClusterCIDR` is set.
+
+```mermaid
+%%{ init: { 'theme':'neutral' } }%%
+
+flowchart TD
+    classDef tsnode color:#fff,fill:#000;
+    classDef pod fill:#fff;
+    classDef hidden display:none;
+
+    subgraph Key
+        ts[Tailscale device]:::tsnode
+        pod((Pod)):::pod
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
+    end
+
+    subgraph grouping[" "]
+        subgraph k8s[Kubernetes cluster]
+            subgraph tailscale-ns[namespace=tailscale]
+                operator((operator)):::tsnode
+                ra-ds[DaemonSet]
+                cfg-secret["config Secret (shared)"]
+                state-secret["state Secret (per node)"]
+            end
+
+            subgraph cluster-scope["Cluster scoped resources"]
+                ra["RouteAcceptor"]
+            end
+
+            subgraph node1["node"]
+                ra-pod(("tailscale (host network)")):::tsnode
+                pod1((Pod)):::pod
+            end
+        end
+
+        router["subnet router"]:::tsnode
+        subnet["10.20.0.0/16"]
+    end
+
+    pod1 -->|"forwarded by the node (masqueraded)"| ra-pod
+    ra-pod --> router
+    router --> subnet
+    operator -.->|watches| ra
+    operator -.->|creates| ra-ds
+    ra-ds -.->|manages| ra-pod
+    operator -.->|creates| cfg-secret
+    cfg-secret -.->|mounted| ra-pod
+    ra-pod -.->|stores state, accepted routes| state-secret
+    state-secret -.->|status| ra
+
+    class grouping hidden
+
+    linkStyle 0 stroke:red;
+    linkStyle 3 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
+    linkStyle 4 stroke:blue;
+
+```
+
 ## Recorder nodes
 
 [Documentation][kb-operator-recorder]

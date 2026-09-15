@@ -92,6 +92,28 @@ type Nameserver struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	Replicas *int32 `json:"replicas,omitempty"`
+	// SplitDNS configures forwarding of queries for the tailnet's split DNS
+	// domains to the nameservers the tailnet configures for them.
+	// +optional
+	SplitDNS *NameserverSplitDNS `json:"splitDNS,omitempty"`
+}
+
+type NameserverSplitDNS struct {
+	// Enabled makes the nameserver forward queries for the domains configured
+	// as split DNS in the tailnet to the nameservers the tailnet configures
+	// for them, so that cluster workloads can resolve names in those domains.
+	// Those nameservers must be reachable from the nameserver Pod: a
+	// RouteAcceptor provides that for nameservers in subnets routed via the
+	// tailnet and for nameservers on the tailnet. Only nameservers configured
+	// with plain IP addresses are used, not DNS-over-HTTPS resolvers.
+	// The cluster DNS must be configured to send queries for the domains to
+	// the nameserver, in the same way as for ts.net; the domains are listed
+	// in status.splitDNSDomains.
+	Enabled bool `json:"enabled"`
+	// Domains restricts forwarding to these split DNS domains. Defaults to
+	// all of the tailnet's split DNS domains.
+	// +optional
+	Domains []string `json:"domains,omitempty"`
 }
 
 type NameserverImage struct {
@@ -133,6 +155,12 @@ type DNSConfigStatus struct {
 	// Nameserver describes the status of nameserver cluster resources.
 	// +optional
 	Nameserver *NameserverStatus `json:"nameserver"`
+	// SplitDNSDomains lists the split DNS domains that the nameserver
+	// currently forwards queries for. Configure these as stub domains in the
+	// cluster DNS, pointing at status.nameserver.ip, in the same way as ts.net.
+	// +listType=atomic
+	// +optional
+	SplitDNSDomains []string `json:"splitDNSDomains,omitempty"`
 }
 
 type NameserverStatus struct {
@@ -146,6 +174,11 @@ type NameserverStatus struct {
 	IP string `json:"ip"`
 }
 
-// NameserverReady is set to True if the nameserver has been successfully
-// deployed to cluster.
-const NameserverReady ConditionType = `NameserverReady`
+const (
+	// NameserverReady is set to True if the nameserver has been successfully
+	// deployed to cluster.
+	NameserverReady ConditionType = `NameserverReady`
+	// SplitDNSReady is set to True if the nameserver forwards queries for the
+	// tailnet's split DNS domains.
+	SplitDNSReady ConditionType = `SplitDNSReady`
+)
