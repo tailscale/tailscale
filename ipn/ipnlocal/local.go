@@ -1177,6 +1177,17 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 
 	b.interfaceState = delta.CurrentState()
 
+	if delta.TimeJumped() {
+		nm := b.currentNode().NetMap()
+		if nm != nil {
+			expiry := nm.SelfKeyExpiry()
+			if !expiry.IsZero() && expiry.Before(b.clock.Now()) {
+				b.keyExpired = true
+				b.stateMachineLocked()
+			}
+		}
+	}
+
 	b.pauseOrResumeControlClientLocked()
 	prefs := b.pm.CurrentPrefs()
 	if delta.RebindLikelyRequired && prefs.AutoExitNode().IsSet() {
@@ -1892,7 +1903,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		b.blockEngineUpdatesLocked(false)
 	}
 
-	if st.LoggedIn && (wasBlocked || authWasInProgress) {
+	if st.LoggedIn && !b.keyExpired && (wasBlocked || authWasInProgress) {
 		if wasBlocked {
 			// Auth completed, unblock the engine
 			b.blockEngineUpdatesLocked(false)
