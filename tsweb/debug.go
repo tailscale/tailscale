@@ -41,6 +41,11 @@ type DebugHandler struct {
 // tailscale.com/tsweb/promvarz package to enable this feature.
 var PrometheusHandler feature.Hook[func(*DebugHandler)]
 
+// hookRuntimeMetrics registers the Go runtime/metrics debug page on a
+// DebugHandler. It is set by runtimemetrics.go, which is excluded from
+// js/wasm builds to keep them small.
+var hookRuntimeMetrics feature.Hook[func(*DebugHandler)]
+
 // Debugger returns the DebugHandler registered on mux at /debug/,
 // creating it if necessary.
 func Debugger(mux *http.ServeMux) *DebugHandler {
@@ -57,6 +62,9 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
+	if f, ok := hookRuntimeMetrics.GetOk(); ok {
+		f(ret)
+	}
 	if PrometheusHandler.IsSet() {
 		PrometheusHandler.Get()(ret)
 	} else {
