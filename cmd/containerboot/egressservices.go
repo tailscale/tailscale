@@ -488,6 +488,10 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netm
 		log.Printf("error fetching backend addresses for %q: %v", svc.TailnetTarget.FQDN, err)
 		return addrs, nil
 	}
+	// Egress target endpoints configured via FQDN are stored, so
+	// that we can determine if a netmap update should trigger a
+	// resync.
+	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
 	if len(egressAddrs) == 0 {
 		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)
 		return addrs, nil
@@ -500,10 +504,6 @@ func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netm
 		}
 		addrs = append(addrs, addr.Addr())
 	}
-	// Egress target endpoints configured via FQDN are stored, so
-	// that we can determine if a netmap update should trigger a
-	// resync.
-	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
 	return addrs, nil
 }
 
