@@ -402,7 +402,7 @@ func (c *Conn25) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler, r *http.
 		return false, nil
 	}
 
-	if !app.TemporaryUnsafeBypassFilter && !h.PeerCaps().HasCapability(peercap.Conn25Prefix.ToAttribute(app.Name)) {
+	if !h.PeerCaps().HasCapability(peercap.Conn25Prefix.ToAttribute(app.Name)) {
 		// The peer does not have access to the requested app.
 		return false, nil
 	}
@@ -595,22 +595,15 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 			continue
 		}
 
-		authorized := peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App))
-
-		app, ok := cfg.appsByName[each.App]
-		if !authorized && !(ok && app.TemporaryUnsafeBypassFilter) {
-			// Ideally this check should occur immediately after setting
-			// authorized above, but for development we have a bypass in the app
-			// config. For unknown apps that are not authorized, we should
-			// present the authorization error to prevent enumeration of apps.
-			// TODO(tailscale/corp#40076): simplify after temporary bypass is removed
+		if !peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App)) {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    MissingAppPermission,
 				Message: missingAppPermissionMessage,
 			})
 			continue
 		}
-		if !ok {
+
+		if _, ok := cfg.appsByName[each.App]; !ok {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    UnknownAppName,
 				Message: unknownAppNameMessage,
