@@ -6,30 +6,23 @@
 package nameserver_test
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
-	"reflect"
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	operatorutils "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/nameserver"
+	"tailscale.com/k8s-operator/reconciler/reconcilertest"
 	"tailscale.com/tstest"
 	"tailscale.com/util/mak"
 )
@@ -96,8 +89,7 @@ func TestNameserverReconciler(t *testing.T) {
 		},
 	}
 
-	fc := fake.NewClientBuilder().
-		WithScheme(tsapi.GlobalScheme).
+	fc := reconcilertest.NewClientBuilder().
 		WithObjects(dnsConfig).
 		WithStatusSubresource(dnsConfig).
 		Build()
@@ -115,7 +107,7 @@ func TestNameserverReconciler(t *testing.T) {
 		Logger:             logger.Sugar(),
 		Clock:              clock,
 	})
-	mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+	reconcilertest.ExpectReconciled(t, r, "", "test")
 
 	ownerReference := metav1.NewControllerRef(dnsConfig, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))
 	nameserverLabels := map[string]string{
@@ -169,7 +161,7 @@ func TestNameserverReconciler(t *testing.T) {
 			{Name: "some-secret"},
 		}
 
-		expectEqual(t, fc, wantsDeploy)
+		reconcilertest.ExpectEqual(t, fc, wantsDeploy)
 	})
 
 	wantsSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: tsNamespace}, TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: corev1.SchemeGroupVersion.Identifier()}}
@@ -181,16 +173,16 @@ func TestNameserverReconciler(t *testing.T) {
 		wantsSvc.OwnerReferences = []metav1.OwnerReference{*ownerReference}
 		wantsSvc.Namespace = tsNamespace
 		wantsSvc.ObjectMeta.Labels = nameserverLabels
-		expectEqual(t, fc, wantsSvc)
+		reconcilertest.ExpectEqual(t, fc, wantsSvc)
 	})
 
 	t.Run("dns-config-status-is-set", func(t *testing.T) {
 		// Verify that DNSConfig advertises the nameserver's Service IP address,
 		// has the ready status condition and tailscale finalizer.
-		mustUpdate(t, fc, "tailscale", "nameserver", func(svc *corev1.Service) {
+		reconcilertest.MustUpdate(t, fc, "tailscale", "nameserver", func(svc *corev1.Service) {
 			svc.Spec.ClusterIP = "1.2.3.4"
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		reconcilertest.ExpectReconciled(t, r, "", "test")
 
 		dnsConfig.Finalizers = []string{reconciler.Finalizer}
 		dnsConfig.Status.Nameserver = &tsapi.NameserverStatus{
@@ -204,17 +196,17 @@ func TestNameserverReconciler(t *testing.T) {
 			LastTransitionTime: metav1.Time{Time: clock.Now().Truncate(time.Second)},
 		})
 
-		expectEqual(t, fc, dnsConfig)
+		reconcilertest.ExpectEqual(t, fc, dnsConfig)
 	})
 
 	t.Run("nameserver-image-updated", func(t *testing.T) {
 		// Verify that nameserver image gets updated to match DNSConfig spec.
-		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
+		reconcilertest.MustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image.Tag = "v0.0.2"
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		reconcilertest.ExpectReconciled(t, r, "", "test")
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "test:v0.0.2"
-		expectEqual(t, fc, wantsDeploy)
+		reconcilertest.ExpectEqual(t, fc, wantsDeploy)
 	})
 
 	t.Run("reconciler-preserves-custom-config", func(t *testing.T) {
@@ -226,11 +218,11 @@ func TestNameserverReconciler(t *testing.T) {
 			t.Fatalf("error marshalling ConfigMap contents: %v", err)
 		}
 
-		mustUpdate(t, fc, "tailscale", "dnsrecords", func(cm *corev1.ConfigMap) {
+		reconcilertest.MustUpdate(t, fc, "tailscale", "dnsrecords", func(cm *corev1.ConfigMap) {
 			mak.Set(&cm.Data, "records.json", string(bs))
 		})
 
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		reconcilertest.ExpectReconciled(t, r, "", "test")
 
 		wantCm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -243,60 +235,17 @@ func TestNameserverReconciler(t *testing.T) {
 			Data:     map[string]string{"records.json": string(bs)},
 		}
 
-		expectEqual(t, fc, wantCm)
+		reconcilertest.ExpectEqual(t, fc, wantCm)
 	})
 
 	t.Run("uses-default-nameserver-image", func(t *testing.T) {
 		// Verify that if dnsconfig.spec.nameserver.image.{repo,tag} are unset,
 		// the nameserver image defaults to tailscale/k8s-nameserver:stable.
-		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
+		reconcilertest.MustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image = nil
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		reconcilertest.ExpectReconciled(t, r, "", "test")
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:stable"
-		expectEqual(t, fc, wantsDeploy)
+		reconcilertest.ExpectEqual(t, fc, wantsDeploy)
 	})
-}
-
-func mustReconcile(t *testing.T, r *nameserver.Reconciler, req reconcile.Request) {
-	t.Helper()
-	if _, err := r.Reconcile(context.Background(), req); err != nil {
-		t.Fatalf("unexpected reconcile error: %v", err)
-	}
-}
-
-func mustUpdate[T any, O reconciler.PtrObject[T]](t *testing.T, c client.Client, ns, name string, update func(O)) {
-	t.Helper()
-	obj := O(new(T))
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, obj); err != nil {
-		t.Fatalf("getting object: %v", err)
-	}
-	update(obj)
-	if err := c.Update(context.Background(), obj); err != nil {
-		t.Fatalf("updating object: %v", err)
-	}
-}
-
-func expectEqual[T any, O reconciler.PtrObject[T]](t *testing.T, c client.Client, want O) {
-	t.Helper()
-	got := O(new(T))
-	if err := c.Get(context.Background(), types.NamespacedName{
-		Name:      want.GetName(),
-		Namespace: want.GetNamespace(),
-	}, got); err != nil {
-		t.Fatalf("getting %q: %v", want.GetName(), err)
-	}
-	// The resource version changes eagerly whenever the operator does even a
-	// no-op update. Asserting a specific value leads to overly brittle tests,
-	// so just remove it from both got and want.
-	got.SetResourceVersion("")
-	want.SetResourceVersion("")
-	// controller-runtime v0.20+ populates TypeMeta on objects returned by the
-	// fake client. Strip it so tests can continue to build expected objects
-	// without setting Kind/APIVersion explicitly.
-	got.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
-	want.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{})
-	if diff := cmp.Diff(got, want); diff != "" {
-		t.Fatalf("unexpected %s (-got +want):\n%s", reflect.TypeOf(want).Elem().Name(), diff)
-	}
 }

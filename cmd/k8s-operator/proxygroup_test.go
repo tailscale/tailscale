@@ -2189,10 +2189,10 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 		}
 		mustUpdate(t, fc, tsNamespace, pgStateSecretName(pg.Name, i), func(s *corev1.Secret) {
 			s.Data = map[string][]byte{
-				currentProfileKey:       []byte(key),
-				key:                     bytes,
-				kubetypes.KeyDeviceIPs:  []byte(`["1.2.3.4", "::1"]`),
-				kubetypes.KeyDeviceFQDN: fmt.Appendf(nil, "hostname-nodeid-%d.tails-scales.ts.net", i),
+				string(ipn.CurrentProfileStateKey): []byte(key),
+				key:                                bytes,
+				kubetypes.KeyDeviceIPs:             []byte(`["1.2.3.4", "::1"]`),
+				kubetypes.KeyDeviceFQDN:            fmt.Appendf(nil, "hostname-nodeid-%d.tails-scales.ts.net", i),
 				// TODO(tomhjp): We have two different mechanisms to retrieve device IDs.
 				// Consolidate on this one.
 				kubetypes.KeyDeviceID: fmt.Appendf(nil, "nodeid-%d", i),
