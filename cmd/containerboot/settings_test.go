@@ -113,6 +113,186 @@ func Test_parseAcceptDNS(t *testing.T) {
 	}
 }
 
+func Test_parseAndRemoveSetFlag(t *testing.T) {
+	tests := []struct {
+		name          string
+		extraArgs     string
+		flagName      string
+		envValue      string
+		wantExtraArgs string
+		wantSet       bool
+		wantValue     string
+	}{
+		{
+			name:          "unset",
+			flagName:      "--relay-server-port",
+			wantExtraArgs: "",
+			wantSet:       false,
+			wantValue:     "",
+		},
+		{
+			name:          "env_only",
+			flagName:      "--relay-server-port",
+			envValue:      "44000",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "extra_args_eq_form",
+			extraArgs:     "--relay-server-port=44000",
+			flagName:      "--relay-server-port",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "extra_args_space_form",
+			extraArgs:     "--relay-server-port 44000",
+			flagName:      "--relay-server-port",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "extra_args_overrides_env",
+			extraArgs:     "--relay-server-port=44000",
+			flagName:      "--relay-server-port",
+			envValue:      "55000",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "extra_args_with_unrelated_args",
+			extraArgs:     "--accept-routes --relay-server-port=44000 --widget=rotated",
+			flagName:      "--relay-server-port",
+			wantExtraArgs: "--accept-routes --widget=rotated",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "bare_flag_no_value",
+			extraArgs:     "--relay-server-port",
+			flagName:      "--relay-server-port",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "",
+		},
+		{
+			name:          "env_only_with_unrelated_args",
+			extraArgs:     "--accept-routes",
+			flagName:      "--relay-server-port",
+			envValue:      "44000",
+			wantExtraArgs: "--accept-routes",
+			wantSet:       true,
+			wantValue:     "44000",
+		},
+		{
+			name:          "static_endpoints_flag",
+			extraArgs:     "--relay-server-static-endpoints=[2001:db8::1]:40000",
+			flagName:      "--relay-server-static-endpoints",
+			wantExtraArgs: "",
+			wantSet:       true,
+			wantValue:     "[2001:db8::1]:40000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotExtraArgs, gotSet, gotValue := parseAndRemoveSetFlag(tt.extraArgs, tt.flagName, tt.envValue)
+			if gotExtraArgs != tt.wantExtraArgs {
+				t.Errorf("parseAndRemoveSetFlag() gotExtraArgs = %q, want %q", gotExtraArgs, tt.wantExtraArgs)
+			}
+			if gotSet != tt.wantSet {
+				t.Errorf("parseAndRemoveSetFlag() gotSet = %v, want %v", gotSet, tt.wantSet)
+			}
+			if gotValue != tt.wantValue {
+				t.Errorf("parseAndRemoveSetFlag() gotValue = %q, want %q", gotValue, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestConfigFromEnvRelayServer(t *testing.T) {
+	tests := []struct {
+		name                       string
+		relayServerPort            string
+		relayServerStaticEndpoints string
+		extraArgs                  string
+		wantPort                   string
+		wantPortSet                bool
+		wantEndpoints              string
+		wantEndpointsSet           bool
+		wantExtraArgs              string
+	}{
+		{
+			name: "unset",
+		},
+		{
+			name:            "port_env_only",
+			relayServerPort: "44000",
+			wantPort:        "44000",
+			wantPortSet:     true,
+		},
+		{
+			name:        "port_via_extra_args",
+			extraArgs:   "--relay-server-port=44000",
+			wantPort:    "44000",
+			wantPortSet: true,
+		},
+		{
+			name:                       "endpoints_env_only",
+			relayServerStaticEndpoints: "[2001:db8::1]:40000",
+			wantEndpoints:              "[2001:db8::1]:40000",
+			wantEndpointsSet:           true,
+		},
+		{
+			name:          "extra_args_stripped",
+			extraArgs:     "--accept-routes --relay-server-port=44000",
+			wantPort:      "44000",
+			wantPortSet:   true,
+			wantExtraArgs: "--accept-routes",
+		},
+		{
+			name:            "port_env_with_unrelated_args",
+			relayServerPort: "44000",
+			extraArgs:       "--accept-routes",
+			wantPort:        "44000",
+			wantPortSet:     true,
+			wantExtraArgs:   "--accept-routes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR", "")
+			t.Setenv("TS_RELAY_SERVER_PORT", tt.relayServerPort)
+			t.Setenv("TS_RELAY_SERVER_STATIC_ENDPOINTS", tt.relayServerStaticEndpoints)
+			t.Setenv("TS_EXTRA_ARGS", tt.extraArgs)
+			cfg, err := configFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.RelayServerPort != tt.wantPort {
+				t.Errorf("RelayServerPort = %q, want %q", cfg.RelayServerPort, tt.wantPort)
+			}
+			if cfg.RelayServerPortSet != tt.wantPortSet {
+				t.Errorf("RelayServerPortSet = %v, want %v", cfg.RelayServerPortSet, tt.wantPortSet)
+			}
+			if cfg.RelayServerStaticEndpoints != tt.wantEndpoints {
+				t.Errorf("RelayServerStaticEndpoints = %q, want %q", cfg.RelayServerStaticEndpoints, tt.wantEndpoints)
+			}
+			if cfg.RelayServerStaticEndpointsSet != tt.wantEndpointsSet {
+				t.Errorf("RelayServerStaticEndpointsSet = %v, want %v", cfg.RelayServerStaticEndpointsSet, tt.wantEndpointsSet)
+			}
+			if cfg.ExtraArgs != tt.wantExtraArgs {
+				t.Errorf("ExtraArgs = %q, want %q", cfg.ExtraArgs, tt.wantExtraArgs)
+			}
+		})
+	}
+}
+
 func TestValidateAuthMethods(t *testing.T) {
 	tests := []struct {
 		name         string

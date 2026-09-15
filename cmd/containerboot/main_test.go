@@ -756,6 +756,119 @@ func TestContainerBoot(t *testing.T) {
 				},
 			}
 		},
+		"relay_server_port_env": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":           "tskey-key",
+					"TS_RELAY_SERVER_PORT": "44000",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					}, {
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --relay-server-port=44000",
+						},
+					},
+				},
+			}
+		},
+		"relay_server_port_extra_args": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":    "tskey-key",
+					"TS_EXTRA_ARGS": "--relay-server-port=44000",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					}, {
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --relay-server-port=44000",
+						},
+					},
+				},
+			}
+		},
+		"relay_server_static_endpoints_env": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":                       "tskey-key",
+					"TS_RELAY_SERVER_STATIC_ENDPOINTS": "[2001:db8::1]:40000,192.0.2.1:40000",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					}, {
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --relay-server-static-endpoints=[2001:db8::1]:40000,192.0.2.1:40000",
+						},
+					},
+				},
+			}
+		},
+		"relay_server_both_env": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":                       "tskey-key",
+					"TS_RELAY_SERVER_PORT":             "44000",
+					"TS_RELAY_SERVER_STATIC_ENDPOINTS": "[2001:db8::1]:40000",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					}, {
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --relay-server-port=44000 --relay-server-static-endpoints=[2001:db8::1]:40000",
+						},
+					},
+				},
+			}
+		},
+		"relay_server_port_auth_once": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_AUTHKEY":           "tskey-key",
+					"TS_AUTH_ONCE":         "true",
+					"TS_RELAY_SERVER_PORT": "44000",
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						},
+					}, {
+						Notify: &ipn.Notify{
+							State: new(ipn.NeedsLogin),
+						},
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						},
+					}, {
+						Notify: runningNotify,
+						WantCmds: []string{
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --relay-server-port=44000",
+						},
+					},
+				},
+			}
+		},
 		"hostname": func(env *testEnv) testCase {
 			return testCase{
 				Env: map[string]string{
