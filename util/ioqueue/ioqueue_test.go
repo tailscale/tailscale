@@ -74,7 +74,7 @@ func TestBufferBasic(t *testing.T) {
 		}
 
 		_, err = b.Read(got)
-		if !errors.Is(err, ErrEmpty) {
+		if err != ErrEmpty {
 			t.Fatalf("Read empty = %v, want ErrEmpty", err)
 		}
 	})
@@ -86,7 +86,7 @@ func TestBufferDiscardPastEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		n, err := b.DiscardUntil(100)
-		if n != 3 || !errors.Is(err, ErrEmpty) {
+		if n != 3 || err != ErrEmpty {
 			t.Fatalf("DiscardUntil(100) = (%d, %v), want (3, ErrEmpty)", n, err)
 		}
 		if b.ReadOffset() != 3 || b.WriteOffset() != 3 || b.Len() != 0 {
@@ -196,11 +196,11 @@ func TestBufferCloseWrite(t *testing.T) {
 			t.Fatalf("Read before drain = (%d, %v, %q)", n, err, p[:n])
 		}
 		n, err = b.Read(p)
-		if n != 0 || !errors.Is(err, io.EOF) {
+		if n != 0 || err != io.EOF {
 			t.Fatalf("Read after drain = (%d, %v), want (0, EOF)", n, err)
 		}
 		_, _, err = b.Peek(p)
-		if !errors.Is(err, io.EOF) {
+		if err != io.EOF {
 			t.Fatalf("Peek after drain = %v, want EOF", err)
 		}
 
@@ -210,7 +210,7 @@ func TestBufferCloseWrite(t *testing.T) {
 		}
 
 		// Discard past end after close → EOF.
-		if _, err := b.DiscardUntil(b.WriteOffset() + 1); !errors.Is(err, io.EOF) {
+		if _, err := b.DiscardUntil(b.WriteOffset() + 1); err != io.EOF {
 			t.Fatalf("DiscardUntil past end after close = %v, want EOF", err)
 		}
 
@@ -288,14 +288,14 @@ func TestBufferConcurrent(t *testing.T) {
 			defer close(done)
 			p := make([]byte, 16)
 			for b.Len() > 0 {
-				if _, err := b.Read(p); err != nil && !errors.Is(err, ErrEmpty) {
+				if _, err := b.Read(p); err != nil && err != ErrEmpty {
 					t.Errorf("Read: %v", err)
 					return
 				}
 			}
 		})
 		for b.Len() > 0 {
-			if _, err := b.DiscardUntil(b.ReadOffset() + 7); err != nil && !errors.Is(err, ErrEmpty) {
+			if _, err := b.DiscardUntil(b.ReadOffset() + 7); err != nil && err != ErrEmpty {
 				t.Fatalf("DiscardUntil: %v", err)
 			}
 		}
