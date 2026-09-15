@@ -215,29 +215,10 @@ func (m *resolvedManager) run(ctx context.Context) {
 				}
 				continue
 			}
-			// In theory the signal was filtered by DBus, but if
-			// AddMatchSignal in the constructor failed, we may be
-			// getting other spam.
-			if signal.Path != dbusPath || signal.Name != dbusInterface+"."+dbusOwnerSignal {
-				continue
-			}
 			if lastConfig.IsZero() {
 				continue
 			}
-			// signal.Body is a []any of 3 strings: bus name, previous owner, new owner.
-			if len(signal.Body) != 3 {
-				m.logf("[unexpected] DBus NameOwnerChanged len(Body) = %d, want 3")
-			}
-			if name, ok := signal.Body[0].(string); !ok || name != dbusResolvedObject {
-				continue
-			}
-			newOwner, ok := signal.Body[2].(string)
-			if !ok {
-				m.logf("[unexpected] DBus NameOwnerChanged.new_owner is a %T, not a string", signal.Body[2])
-			}
-			if newOwner == "" {
-				// systemd-resolved left the bus, no current owner,
-				// nothing to do.
+			if !m.isResolvedRestartSignal(signal) {
 				continue
 			}
 			// The resolved bus name has a new owner, meaning resolved
@@ -256,6 +237,35 @@ func (m *resolvedManager) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// isResolvedRestartSignal reports whether signal says that systemd-resolved
+// has acquired a new D-Bus owner.
+func (m *resolvedManager) isResolvedRestartSignal(signal *dbus.Signal) bool {
+	// In theory the signal was filtered by DBus, but if AddMatchSignal in the
+	// constructor failed, we may be getting other spam.
+	if signal == nil {
+		m.logf("[unexpected] received nil DBus signal")
+		return false
+	}
+	if signal.Path != dbusPath || signal.Name != dbusInterface+"."+dbusOwnerSignal {
+		return false
+	}
+
+	// signal.Body is a []any of 3 strings: bus name, previous owner, new owner.
+	if len(signal.Body) != 3 {
+		m.logf("[unexpected] DBus NameOwnerChanged len(Body) = %d, want 3", len(signal.Body))
+		return false
+	}
+	if name, ok := signal.Body[0].(string); !ok || name != dbusResolvedObject {
+		return false
+	}
+	newOwner, ok := signal.Body[2].(string)
+	if !ok {
+		m.logf("[unexpected] DBus NameOwnerChanged.new_owner is a %T, not a string", signal.Body[2])
+		return false
+	}
+	return newOwner != ""
 }
 
 // setConfigOverDBus updates resolved DBus config and is only called from the run goroutine.
