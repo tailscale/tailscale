@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
+	wintunconst "tailscale.com/tsconst/wintun"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -101,20 +102,32 @@ func init() {
 	tstunNew = tstunNewWithWindowsRetries
 }
 
-// tstunNewOrRetry is a wrapper around tstun.New that retries on Windows for certain
-// errors.
+// tstunNewWithWindowsRetries is a wrapper around tstun.New that retries on
+// Windows for certain errors.
+//
+// It gives up immediately if wintun.dll cannot be found, which is the usual
+// failure when running a plain "go build" tailscaled.exe outside the MSI
+// install; retrying can't fix that.
 //
 // TODO(bradfitz): move this into tstun and/or just fix the problems so it doesn't
 // require a few tries to work.
 func tstunNewWithWindowsRetries(logf logger.Logf, tunName string) (_ tun.Device, devName string, _ error) {
+	const timeout = 5 * time.Minute
 	bo := backoff.NewBackoff("tstunNew", logf, 10*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for {
 		dev, devName, err := tstun.New(logf, tunName)
 		if err == nil {
 			return dev, devName, err
 		}
+		if errors.Is(err, windows.ERROR_MOD_NOT_FOUND) {
+			// wintun-go only looks for wintun.dll in the application
+			// directory and System32.
+			return nil, "", fmt.Errorf("creating TUN device %q requires wintun.dll (%s) at %s or in System32, downloadable from %s, or use --tun=userspace-networking: %w",
+				tunName, wintunconst.Version, fullyQualifiedWintunPath(logf), wintunconst.URL, err)
+		}
+		logf("tstun.New(%q): %v", tunName, err)
 		if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) || windowsUptime() < 10*time.Minute {
 			// Wintun is not installing correctly. Dump the state of NetSetupSvc
 			// (which is a user-mode service that must be active for network devices
@@ -123,7 +136,7 @@ func tstunNewWithWindowsRetries(logf logger.Logf, tunName string) (_ tun.Device,
 		}
 		bo.BackOff(ctx, err)
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, "", fmt.Errorf("creating TUN device %q: gave up after %v; last error: %w", tunName, timeout, err)
 		}
 	}
 }
