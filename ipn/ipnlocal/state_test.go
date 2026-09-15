@@ -634,7 +634,7 @@ func TestStateMachine(t *testing.T) {
 		// Verify login finished but need machine auth using backend state
 		c.Assert(isFullyAuthenticated(b), qt.IsTrue)
 		c.Assert(needsMachineAuth(b), qt.IsTrue)
-		nm := b.NetMap()
+		nm := b.NetMapNoPeers()
 		c.Assert(nm, qt.IsNotNil)
 		// For an empty netmap (after initial login), SelfNode may not be valid yet.
 		// In this case, we can't check MachineAuthorized, but needsMachineAuth already verified the state.
@@ -661,7 +661,7 @@ func TestStateMachine(t *testing.T) {
 		// nn[0] is a state notification after machine auth granted
 		c.Assert(len(nn), qt.Equals, 1)
 		// Verify machine authorized using backend state
-		nm := b.NetMap()
+		nm := b.NetMapNoPeers()
 		c.Assert(nm, qt.IsNotNil)
 		c.Assert(nm.SelfNode.Valid(), qt.IsTrue)
 		c.Assert(nm.SelfNode.MachineAuthorized(), qt.IsTrue)
@@ -2036,7 +2036,7 @@ func (e *mockEngine) Done() <-chan struct{} {
 
 // hasValidNetMap returns true if the backend has a valid network map with a valid self node.
 func hasValidNetMap(b *LocalBackend) bool {
-	nm := b.NetMap()
+	nm := b.NetMapNoPeers()
 	return nm != nil && nm.SelfNode.Valid()
 }
 
@@ -2055,8 +2055,8 @@ func needsLogin(b *LocalBackend) bool {
 // needsMachineAuth returns true if the user has logged in but the machine is not yet authorized.
 // This includes the case where we have a netmap but no valid SelfNode yet (empty netmap after initial login).
 func needsMachineAuth(b *LocalBackend) bool {
-	// Note: b.NetMap() and b.Prefs() handle their own locking
-	nm := b.NetMap()
+	// Note: b.NetMapNoPeers() and b.Prefs() handle their own locking
+	nm := b.NetMapNoPeers()
 	prefs := b.Prefs()
 	if prefs.LoggedOut() || nm == nil {
 		return false
@@ -2080,8 +2080,8 @@ func hasAuthURL(b *LocalBackend) bool {
 // canRouteTraffic returns true if the backend is capable of routing traffic.
 // This requires a valid netmap, machine authorization, and WantRunning preference.
 func canRouteTraffic(b *LocalBackend) bool {
-	// Note: b.NetMap() and b.Prefs() handle their own locking
-	nm := b.NetMap()
+	// Note: b.NetMapNoPeers() and b.Prefs() handle their own locking
+	nm := b.NetMapNoPeers()
 	prefs := b.Prefs()
 	return nm != nil &&
 		nm.SelfNode.Valid() &&
