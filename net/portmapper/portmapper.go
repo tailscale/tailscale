@@ -792,6 +792,9 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 				}
 			case pcpVersion:
 				// Ignore responses related to another client.
+				// A response packet is a 24-byte header followed by an operation
+				// specific payload. For a MAP operation, the first 12 bytes of
+				// the payload are the client-generated nonce.
 				if n < 36 || !bytes.Equal(res[24:36], pcpNonce[:]) {
 					c.logf("ignoring PCP response with missing or mismatched nonce")
 					continue
