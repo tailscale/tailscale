@@ -28,6 +28,7 @@ import (
 	_ "tailscale.com/feature"
 	_ "tailscale.com/feature/buildfeatures"
 	_ "tailscale.com/feature/condregister"
+	_ "tailscale.com/feature/ssh"
 	_ "tailscale.com/health"
 	_ "tailscale.com/hostinfo"
 	_ "tailscale.com/ipn"

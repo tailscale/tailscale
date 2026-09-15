@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd || plan9 || windows
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
@@ -1442,7 +1442,8 @@ var errSessionDone = errors.New("session is done")
 //
 // The listener and its containing directory come from the platform's
 // conn.fwdListenAgent: on the monitor platforms a user-cred child creates
-// them, on plan9 tailscaled does. See the docs there for the modes.
+// them, on plan9 tailscaled does, and on Windows it is refused. See the
+// docs there for the modes.
 func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta) error {
 	if !gliderssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
 		return nil
@@ -1480,7 +1481,7 @@ func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta
 // session. The removal rules are platform-specific: on the monitor
 // platforms the directory was created by a user-cred child while the
 // removal runs with the daemon's credentials; see
-// removeAgentForwardingDir in fwdmonitor.go and fwdplan9.go.
+// removeAgentForwardingDir in fwdmonitor.go, fwdplan9.go, and fwd_windows.go.
 func (ss *sshSession) closeAgentForwarding() {
 	ln := ss.agentListener
 	if ln == nil {
@@ -1793,6 +1794,16 @@ func (c *conn) matchRuleWithUserLookup(r *tailcfg.SSHRule, lookup func(string) (
 
 func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string, lookup func(string) (*userMeta, error)) (localUser string) {
 	v, ok := ruleSSHUsers[reqSSHUser]
+	if !ok && runtime.GOOS == "windows" {
+		// Windows account names are case-insensitive, so match the policy's
+		// spelling of the user regardless of how the client typed it.
+		for k, kv := range ruleSSHUsers {
+			if k != "*" && strings.EqualFold(k, reqSSHUser) {
+				v, ok = kv, true
+				break
+			}
+		}
+	}
 	if !ok {
 		v = ruleSSHUsers["*"]
 	}
@@ -2199,7 +2210,6 @@ func envValFromList(env []string, wantKey string) (v string) {
 // envEq reports whether environment variable a == b for the current
 // operating system.
 func envEq(a, b string) bool {
-	//lint:ignore SA4032 in case this func moves elsewhere, permit the GOOS check
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(a, b)
 	}
