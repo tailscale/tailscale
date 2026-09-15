@@ -1457,13 +1457,20 @@ func (lc *Client) DebugPeerRelaySessions(ctx context.Context) (*status.ServerSta
 
 // StreamDebugCapture streams a pcap-formatted packet capture.
 //
+// snapLen is the maximum number of bytes to capture from each packet; a value
+// <= 0 uses the server default.
+//
 // The provided context does not determine the lifetime of the
 // returned [io.ReadCloser].
 //
 // API maturity: this method is not considered a stable API and is
 // subject to change between releases.
-func (lc *Client) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-capture", nil)
+func (lc *Client) StreamDebugCapture(ctx context.Context, snapLen int) (io.ReadCloser, error) {
+	url := "http://" + apitype.LocalAPIHost + "/localapi/v0/debug-capture"
+	if snapLen > 0 {
+		url += "?snaplen=" + strconv.Itoa(snapLen)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
 	if err != nil {
 		return nil, err
 	}
