@@ -1,5 +1,8 @@
 module tailscale.com
 
+// TODO: remove this replace after https://github.com/tailscale/gliderssh/pull/13 merges.
+replace github.com/tailscale/gliderssh => github.com/parsnips/gliderssh v0.3.4-0.20260903233315-8564a8290d49
+
 go 1.27.1
 
 require (
