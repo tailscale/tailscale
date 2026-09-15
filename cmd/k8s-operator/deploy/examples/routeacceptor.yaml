@@ -1,0 +1,22 @@
+# A RouteAcceptor makes the subnet routes that subnet routers advertise to the
+# tailnet routable from every Pod in the cluster: the operator runs a tailscaled
+# device in the host network namespace of every selected node, configured to
+# accept routes.
+#
+# Traffic from Pods to the accepted subnets (and to tailnet peers the devices'
+# tags are allowed to reach) leaves the node via the tailnet with the node's
+# tailnet IP as its source. Tailscale ACLs must allow the devices' tags (tag:k8s
+# by default) to access the subnets.
+apiVersion: tailscale.com/v1alpha1
+kind: RouteAcceptor
+metadata:
+  name: tailnet-routes
+spec:
+  # Optional: an existing ProxyClass whose statefulSet.pod section selects the
+  # nodes (nodeSelector, tolerations, affinity) and configures the Pods.
+  # proxyClass: prod
+  # Optional: IP ranges used by the cluster that the operator cannot discover
+  # itself, so it can warn when an accepted route overlaps them.
+  # clusterCIDRs:
+  #   - 10.244.0.0/16
+  #   - 10.96.0.0/12

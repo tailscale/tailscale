@@ -517,6 +517,189 @@ flowchart TD
 
 ```
 
+## RouteAcceptor
+
+A RouteAcceptor makes subnet routes advertised to the tailnet (by subnet
+routers anywhere in the tailnet) routable from every Pod in the cluster,
+without a per-destination egress Service. The operator deploys a DaemonSet that
+runs a tailscaled device in the host network namespace of every selected node,
+configured to accept routes. tailscaled installs the routes the tailnet
+approves for the device in the node's routing table (table 52, with `ip rule`s
+that apply to forwarded traffic too), so a Pod's traffic to an accepted subnet
+is forwarded by its node via `tailscale0`. containerboot masquerades that
+traffic to the node's tailnet IP (the peer would otherwise drop packets from an
+unknown source) and clamps the MSS of forwarded TCP handshakes.
+
+Every device reads the same config Secret, which holds a reusable auth key the
+operator rotates before it expires, and persists its state in a Secret named
+after its node, so its identity survives Pod restarts. The devices report the
+routes they accept in their state Secrets; the operator surfaces them on the
+RouteAcceptor's status.
+
+### Cilium
+
+With its default eBPF host routing (`bpf.masquerade=true` together with
+`kubeProxyReplacement=true`), Cilium bypasses the node's netfilter rules for
+Pod traffic and makes the routing decision in BPF. The route lookup it performs
+(`bpf_lxc.c` → `fib_redirect_v4` with a full lookup) still honours tailscaled's
+`ip rule`s, so the traffic is steered to `tailscale0`; what is missing is the
+masquerade, which Cilium only performs on the devices it manages. No custom
+eBPF program is needed to fix that: listing `tailscale0` in Cilium's `devices`
+(for example `devices={eth0,tailscale0}`, keeping the devices Cilium detected
+before) makes Cilium's own programs masquerade the traffic to the device's
+tailnet IP and reverse-translate the replies, per node and without any
+hairpin. This is the recommended Cilium configuration. Cilium attaches to
+`tailscale0` when the device appears, so the agents do not need to be running
+before the route acceptor Pods or vice versa. Note, however, that Cilium's Helm
+chart does not restart the agents when only their configuration changes: after
+changing `devices` (or `bpf.hostLegacyRouting`, below) restart them with
+`kubectl -n kube-system rollout restart ds/cilium`, otherwise they keep
+running with their old flags and only log configuration-drift warnings.
+
+The operator reads Cilium's configuration from the `kube-system/cilium-config`
+ConfigMap and reports the mode in effect in the
+`RouteAcceptorDataPlaneSupported` condition (`CiliumManagedDevice` above). It
+refuses to deploy, with the reason and the fix in the condition, when:
+
+- eBPF host routing is on but `tailscale0` is not among Cilium's devices
+  (`CiliumEBPFHostRouting`);
+- Cilium's ip-masq-agent is enabled (`CiliumIPMasqAgent`): its
+  `nonMasqueradeCIDRs` (RFC 1918 ranges by default) would exempt traffic to
+  typical subnet routes from masquerading. Remove the accepted routes from that
+  list, or use the egress gateway mode, which forces masquerading;
+- `installNoConntrackIptablesRules=true` with legacy host routing and
+  `tailscale0` not among Cilium's devices (`CiliumNoConntrackRules`): the rules
+  exempt Pod traffic from connection tracking, which netfilter masquerading
+  needs. With `tailscale0` among the devices Cilium's BPF masquerading, which
+  needs no conntrack, still applies and the route acceptor works.
+
+Alternatives:
+
+- **Egress gateway** (`spec.cilium.egressGateway`): the operator maintains a
+  `CiliumEgressGatewayPolicy` that steers traffic from the selected Pods to the
+  accepted routes via the nodes running a ready device; Cilium masquerades it
+  to the device's tailnet IP and routes it with a full route lookup. Use it to
+  send the traffic through dedicated gateway nodes, or with ip-masq-agent. It
+  needs Cilium's egress gateway feature (`egressGateway.enabled=true`) and, as
+  above, `tailscale0` in Cilium's `devices`. With `highAvailability: true`
+  every ready device is listed as a gateway.
+- **Legacy host routing** (`bpf.hostLegacyRouting=true`): Pod traffic
+  traverses the host stack and the route acceptor works exactly as on other
+  CNIs.
+
+If Cilium is known to run with legacy host routing despite its configuration
+(for example because the kernel lacks eBPF host routing support),
+`spec.unsafeAllowIncompatibleCNI` skips the check. Note that on the BPF paths
+the MSS clamp the route acceptor installs in netfilter is not applied. Downloads
+from the subnet are unaffected (the sender's MSS is already bounded by its own
+tailscale interface); if large uploads from Pods stall, lower Cilium's `mtu`
+to `tailscale0`'s (1280).
+
+These modes were validated on a kind cluster with Cilium 1.20 using the e2e
+harness's `--cilium-spike` mode (see `cmd/k8s-operator/e2e/doc.go`): with
+`tailscale0` among Cilium's devices, Pods reach the subnet and a 1 MiB download
+completes; with ip-masq-agent enabled they do not, unless an egress gateway
+policy is in place; with `tailscale0` not among the devices they do not.
+
+### Split DNS
+
+Pods resolve names through the cluster DNS, so hosts in the accepted subnets
+are reachable by IP only unless the tailnet's split DNS is re-published in the
+cluster. Setting `spec.nameserver.splitDNS.enabled: true` on the `DNSConfig`
+makes the operator read the tailnet's split DNS configuration (domain →
+nameservers) from its own device, publish it to the `dnsrecords` ConfigMap, and
+the nameserver forward queries for those domains to those nameservers. The
+nameserver Pod reaches them through the RouteAcceptor on its node. As for
+`ts.net`, the cluster DNS must be told to send the domains to the nameserver;
+they are listed in `status.splitDNSDomains`. For CoreDNS, add one block per
+domain:
+
+```
+corp.internal:53 {
+    errors
+    cache 30
+    forward . <status.nameserver.ip>
+}
+```
+
+Only nameservers configured with plain IP addresses are forwarded to;
+DNS-over-HTTPS resolvers and domains served by MagicDNS itself are skipped.
+
+Requirements and caveats:
+
+- The nodes must not already run tailscaled.
+- The CNI must route Pod traffic for destinations outside the cluster through
+  the node's network stack (true for Calico, Flannel, kindnet and the cloud
+  providers' CNIs). See the Cilium section below for the exception.
+- Because tailscaled also routes all tailnet addresses via `tailscale0`, Pods
+  can reach any tailnet peer that the devices' tags are allowed to reach. The
+  tailnet sees the node's device as the source, not the Pod.
+- If the cluster's Pod or Service CIDR overlaps `100.64.0.0/10`, tailscaled's
+  firewall drops traffic from Pods to the nodes. The operator refuses to deploy
+  in that case unless the tailnet grants the devices' tags the
+  `disable-linux-cgnat-drop-rule` node attribute and
+  `spec.unsafeAllowCGNATClusterCIDR` is set.
+
+```mermaid
+%%{ init: { 'theme':'neutral' } }%%
+
+flowchart TD
+    classDef tsnode color:#fff,fill:#000;
+    classDef pod fill:#fff;
+    classDef hidden display:none;
+
+    subgraph Key
+        ts[Tailscale device]:::tsnode
+        pod((Pod)):::pod
+        blank[" "]-->|WireGuard traffic| blank2[" "]
+        blank3[" "]-->|Other network traffic| blank4[" "]
+    end
+
+    subgraph grouping[" "]
+        subgraph k8s[Kubernetes cluster]
+            subgraph tailscale-ns[namespace=tailscale]
+                operator((operator)):::tsnode
+                ra-ds[DaemonSet]
+                cfg-secret["config Secret (shared)"]
+                state-secret["state Secret (per node)"]
+            end
+
+            subgraph cluster-scope["Cluster scoped resources"]
+                ra["RouteAcceptor"]
+            end
+
+            subgraph node1["node"]
+                ra-pod(("tailscale (host network)")):::tsnode
+                pod1((Pod)):::pod
+            end
+        end
+
+        router["subnet router"]:::tsnode
+        subnet["10.20.0.0/16"]
+    end
+
+    pod1 -->|"forwarded by the node (masqueraded)"| ra-pod
+    ra-pod --> router
+    router --> subnet
+    operator -.->|watches| ra
+    operator -.->|creates| ra-ds
+    ra-ds -.->|manages| ra-pod
+    operator -.->|creates| cfg-secret
+    cfg-secret -.->|mounted| ra-pod
+    ra-pod -.->|stores state, accepted routes| state-secret
+    state-secret -.->|status| ra
+
+    class grouping hidden
+
+    linkStyle 0 stroke:red;
+    linkStyle 3 stroke:red;
+
+    linkStyle 1 stroke:blue;
+    linkStyle 2 stroke:blue;
+    linkStyle 4 stroke:blue;
+
+```
+
 ## Recorder nodes
 
 [Documentation][kb-operator-recorder]
