@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -269,6 +270,24 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	expectReconciled(t, ingPGR, ing3.Namespace, ing3.Name)
 	expectMissing[networkingv1.Ingress](t, fc, ing3.Namespace, ing3.Name)
+}
+
+func TestIngressPGReconcilerIgnoresUnannotatedIngress(t *testing.T) {
+	ingPGR, fc, _ := setupIngressTest(t)
+	core, logs := observer.New(zap.InfoLevel)
+	ingPGR.logger = zap.New(core).Sugar()
+
+	mustCreate(t, fc, &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-ingress", Namespace: "default"},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: new("nginx"),
+			TLS:              []networkingv1.IngressTLS{{Hosts: []string{"example.com"}}},
+		},
+	})
+	expectReconciled(t, ingPGR, "default", "nginx-ingress")
+	if logs.Len() != 0 {
+		t.Fatalf("unexpected info logs: %v", logs.All())
+	}
 }
 
 func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {

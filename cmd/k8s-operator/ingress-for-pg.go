@@ -116,6 +116,9 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	logger = logger.With("hostname", hostname)
 
 	pgName := ing.Annotations[AnnotationProxyGroup]
+	if pgName == "" {
+		return res, nil
+	}
 	pg := &tsapi.ProxyGroup{}
 
 	err = r.Get(ctx, client.ObjectKey{Name: pgName}, pg)
