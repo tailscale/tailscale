@@ -12,7 +12,9 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,17 +22,20 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/yaml"
 
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
+	"tailscale.com/k8s-operator/tailnetdns"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
@@ -45,6 +50,15 @@ const (
 	// ReasonNameserverCreated is the condition reason set when nameserver resources have been created successfully.
 	ReasonNameserverCreated = "NameserverCreated"
 
+	// Reasons for the SplitDNSReady condition.
+	ReasonSplitDNSConfigured  = "SplitDNSConfigured"
+	ReasonSplitDNSDisabled    = "SplitDNSDisabled"
+	ReasonSplitDNSUnavailable = "SplitDNSUnavailable"
+	ReasonNoSplitDNSDomains   = "NoSplitDNSDomains"
+	// reasonNoRouteAcceptor is the reason of the Event recorded when split DNS forwarding is configured but no
+	// RouteAcceptor is ready to route the nameserver's queries to the tailnet.
+	reasonNoRouteAcceptor = "NoRouteAcceptor"
+
 	messageNameserverCreationFailed  = "Failed creating nameserver resources: %v"
 	messageMultipleDNSConfigsPresent = "Multiple DNSConfig resources found in cluster. Please ensure no more than one is present."
 
@@ -52,6 +66,10 @@ const (
 	defaultNameserverImageTag  = "stable"
 
 	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
+
+	// shortRequeue is how long to wait before retrying after an optimistic lock conflict on the dnsrecords
+	// ConfigMap, which the dnsrecords reconciler updates too.
+	shortRequeue = 5 * time.Second
 )
 
 var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
@@ -63,6 +81,9 @@ type ReconcilerOptions struct {
 	TailscaleNamespace string
 	Logger             *zap.SugaredLogger
 	Clock              tstime.Clock
+	// SplitDNS provides the tailnet's split DNS routes and notifies of changes to them. Optional: without it,
+	// split DNS forwarding cannot be configured.
+	SplitDNS tailnetdns.Source
 }
 
 // Reconciler knows how to create nameserver resources in cluster in
@@ -74,6 +95,7 @@ type Reconciler struct {
 	clock       tstime.Clock
 	tsNamespace string
 	tracker     *reconciler.ResourceTracker
+	splitDNS    tailnetdns.Source
 }
 
 // NewReconciler creates a new Reconciler.
@@ -89,20 +111,39 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		logger:      options.Logger.Named(reconcilerName),
 		clock:       clock,
 		tracker:     reconciler.NewResourceTracker(gaugeNameserverResources),
+		splitDNS:    options.SplitDNS,
 	}
 }
 
 // Register registers the nameserver reconciler with the controller manager.
 func (r *Reconciler) Register(mgr manager.Manager) error {
 	nameserverFilter := handler.EnqueueRequestsFromMapFunc(reconciler.EnqueueForChild("nameserver"))
-	return builder.ControllerManagedBy(mgr).
+	b := builder.ControllerManagedBy(mgr).
 		For(&tsapi.DNSConfig{}).
 		Named(reconcilerName).
 		Watches(&appsv1.Deployment{}, nameserverFilter).
 		Watches(&corev1.ConfigMap{}, nameserverFilter).
 		Watches(&corev1.Service{}, nameserverFilter).
-		Watches(&corev1.ServiceAccount{}, nameserverFilter).
-		Complete(r)
+		Watches(&corev1.ServiceAccount{}, nameserverFilter)
+	if r.splitDNS != nil {
+		// Changes to the tailnet's split DNS routes are not Kubernetes events; the watcher delivers them on a
+		// channel and every DNSConfig (there is at most one) is reconciled.
+		b = b.WatchesRawSource(source.Channel(r.splitDNS.Events(), handler.TypedEnqueueRequestsFromMapFunc(r.enqueueDNSConfigs)))
+	}
+	return b.Complete(r)
+}
+
+func (r *Reconciler) enqueueDNSConfigs(ctx context.Context, _ tailnetdns.Change) []reconcile.Request {
+	var list tsapi.DNSConfigList
+	if err := r.List(ctx, &list); err != nil {
+		r.logger.Errorf("failed to list DNSConfigs for split DNS change: %v", err)
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, dnsCfg := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: dnsCfg.Name}})
+	}
+	return reqs
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res reconcile.Result, err error) {
@@ -177,14 +218,111 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
 		return res, fmt.Errorf("error getting Service: %w", err)
 	}
-	if ip := svc.Spec.ClusterIP; ip != "" && ip != "None" {
-		dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
-			IP: ip,
-		}
-		return setStatus(&dnsCfg, metav1.ConditionTrue, ReasonNameserverCreated, ReasonNameserverCreated)
+	ip := svc.Spec.ClusterIP
+	if ip == "" || ip == "None" {
+		logger.Info("nameserver Service does not have an IP address allocated, waiting...")
+		return reconcile.Result{}, nil
 	}
-	logger.Info("nameserver Service does not have an IP address allocated, waiting...")
+	dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
+		IP: ip,
+	}
+	tsoperator.SetDNSConfigCondition(&dnsCfg, tsapi.NameserverReady, metav1.ConditionTrue, ReasonNameserverCreated, ReasonNameserverCreated, dnsCfg.Generation, r.clock, logger)
+
+	if err := r.reconcileSplitDNS(ctx, logger, &dnsCfg); err != nil {
+		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
+			logger.Infof("optimistic lock error, retrying: %s", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
+		}
+		return reconcile.Result{}, fmt.Errorf("error configuring split DNS forwarding: %w", err)
+	}
+
+	if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
+		if err := r.Client.Status().Update(ctx, &dnsCfg); err != nil {
+			return reconcile.Result{}, fmt.Errorf("error updating DNSConfig status: %w", err)
+		}
+	}
 	return reconcile.Result{}, nil
+}
+
+// reconcileSplitDNS publishes the tailnet's split DNS routes to the nameserver through the dnsrecords ConfigMap
+// when spec.nameserver.splitDNS is enabled (and removes them when it is not), and sets status.splitDNSDomains and
+// the SplitDNSReady condition.
+func (r *Reconciler) reconcileSplitDNS(ctx context.Context, logger *zap.SugaredLogger, dnsCfg *tsapi.DNSConfig) error {
+	spec := dnsCfg.Spec.Nameserver.SplitDNS
+	enabled := spec != nil && spec.Enabled
+
+	var forwards map[string][]string
+	var domains []string
+	if enabled && r.splitDNS != nil {
+		for domain, addrs := range r.splitDNS.Routes() {
+			if len(spec.Domains) > 0 && !slices.ContainsFunc(spec.Domains, func(d string) bool {
+				return strings.EqualFold(strings.TrimSuffix(d, "."), domain)
+			}) {
+				continue
+			}
+			var strs []string
+			for _, a := range addrs {
+				strs = append(strs, a.String())
+			}
+			if forwards == nil {
+				forwards = make(map[string][]string)
+			}
+			forwards[domain] = strs
+			domains = append(domains, domain)
+		}
+		slices.Sort(domains)
+	}
+
+	err := tsoperator.UpdateDNSRecords(ctx, r.Client, r.tsNamespace, func(rec *tsoperator.Records) {
+		rec.Forwards = forwards
+	})
+	if err != nil && !errors.Is(err, tsoperator.ErrNoDNSRecordsConfigMap) {
+		return err
+	}
+
+	wasConfigured := tsoperator.DNSConfigConditionIs(dnsCfg, tsapi.SplitDNSReady, metav1.ConditionTrue)
+	dnsCfg.Status.SplitDNSDomains = domains
+	setCond := func(status metav1.ConditionStatus, reason, message string) {
+		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.SplitDNSReady, status, reason, message, dnsCfg.Generation, r.clock, logger)
+	}
+	switch {
+	case !enabled:
+		setCond(metav1.ConditionFalse, ReasonSplitDNSDisabled, "split DNS forwarding is not enabled")
+	case r.splitDNS == nil:
+		setCond(metav1.ConditionFalse, ReasonSplitDNSUnavailable, "the operator has no access to the tailnet's DNS configuration")
+	case len(domains) == 0:
+		message := "the tailnet has no split DNS domains with nameservers that have plain IP addresses"
+		if len(spec.Domains) > 0 {
+			message += " matching spec.nameserver.splitDNS.domains"
+		}
+		setCond(metav1.ConditionFalse, ReasonNoSplitDNSDomains, message)
+	default:
+		setCond(metav1.ConditionTrue, ReasonSplitDNSConfigured, fmt.Sprintf("forwarding queries for %s", strings.Join(domains, ", ")))
+		if !wasConfigured {
+			r.warnIfNoRouteAcceptor(ctx, logger, dnsCfg)
+		}
+	}
+	return nil
+}
+
+// warnIfNoRouteAcceptor records a warning Event if no RouteAcceptor is ready: without one, the nameserver Pod most
+// likely cannot reach the tailnet's nameservers.
+func (r *Reconciler) warnIfNoRouteAcceptor(ctx context.Context, logger *zap.SugaredLogger, dnsCfg *tsapi.DNSConfig) {
+	var ras tsapi.RouteAcceptorList
+	if err := r.List(ctx, &ras); err != nil {
+		logger.Debugf("failed to list RouteAcceptors: %v", err)
+		return
+	}
+	for _, ra := range ras.Items {
+		for _, c := range ra.Status.Conditions {
+			if c.Type == string(tsapi.RouteAcceptorReady) && c.Status == metav1.ConditionTrue {
+				return
+			}
+		}
+	}
+	if r.recorder != nil {
+		r.recorder.Event(dnsCfg, corev1.EventTypeWarning, reasonNoRouteAcceptor, "split DNS forwarding is configured, but no RouteAcceptor is ready: the nameserver can only reach the tailnet's nameservers through one")
+	}
 }
 
 func nameserverResourceLabels(name, namespace string) map[string]string {
@@ -246,13 +384,13 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	replicas     int32
-	imageRepo    string
-	imageTag     string
-	labels       map[string]string
-	ownerRefs    []metav1.OwnerReference
-	namespace    string
-	clusterIP    string
+	replicas         int32
+	imageRepo        string
+	imageTag         string
+	labels           map[string]string
+	ownerRefs        []metav1.OwnerReference
+	namespace        string
+	clusterIP        string
 	tolerations      []corev1.Toleration
 	affinity         *corev1.Affinity
 	nodeSelector     map[string]string

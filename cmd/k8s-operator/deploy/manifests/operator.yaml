@@ -1394,6 +1394,34 @@ spec:
                                                 description: ClusterIP sets the static IP of the service used by the nameserver.
                                                 type: string
                                         type: object
+                                    splitDNS:
+                                        description: |-
+                                            SplitDNS configures forwarding of queries for the tailnet's split DNS
+                                            domains to the nameservers the tailnet configures for them.
+                                        properties:
+                                            domains:
+                                                description: |-
+                                                    Domains restricts forwarding to these split DNS domains. Defaults to
+                                                    all of the tailnet's split DNS domains.
+                                                items:
+                                                    type: string
+                                                type: array
+                                            enabled:
+                                                description: |-
+                                                    Enabled makes the nameserver forward queries for the domains configured
+                                                    as split DNS in the tailnet to the nameservers the tailnet configures
+                                                    for them, so that cluster workloads can resolve names in those domains.
+                                                    Those nameservers must be reachable from the nameserver Pod: a
+                                                    RouteAcceptor provides that for nameservers in subnets routed via the
+                                                    tailnet and for nameservers on the tailnet. Only nameservers configured
+                                                    with plain IP addresses are used, not DNS-over-HTTPS resolvers.
+                                                    The cluster DNS must be configured to send queries for the domains to
+                                                    the nameserver, in the same way as for ts.net; the domains are listed
+                                                    in status.splitDNSDomains.
+                                                type: boolean
+                                        required:
+                                            - enabled
+                                        type: object
                                 type: object
                         required:
                             - nameserver
@@ -1474,6 +1502,15 @@ spec:
                                             The IP address will change if you delete and recreate the DNSConfig.
                                         type: string
                                 type: object
+                            splitDNSDomains:
+                                description: |-
+                                    SplitDNSDomains lists the split DNS domains that the nameserver
+                                    currently forwards queries for. Configure these as stub domains in the
+                                    cluster DNS, pointing at status.nameserver.ip, in the same way as ts.net.
+                                items:
+                                    type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
                         type: object
                 required:
                     - spec
@@ -6444,6 +6481,480 @@ kind: CustomResourceDefinition
 metadata:
     annotations:
         controller-gen.kubebuilder.io/version: v0.17.0
+    name: routeacceptors.tailscale.com
+spec:
+    group: tailscale.com
+    names:
+        kind: RouteAcceptor
+        listKind: RouteAcceptorList
+        plural: routeacceptors
+        shortNames:
+            - ra
+        singular: routeacceptor
+    scope: Cluster
+    versions:
+        - additionalPrinterColumns:
+            - description: Subnet routes currently accepted from the tailnet and routable from the cluster.
+              jsonPath: .status.acceptedRoutes
+              name: AcceptedRoutes
+              type: string
+            - description: Number of nodes on which the route acceptor is ready.
+              jsonPath: .status.readyNodes
+              name: Ready
+              type: integer
+            - description: Number of nodes selected to run the route acceptor.
+              jsonPath: .status.desiredNodes
+              name: Desired
+              type: integer
+            - description: Status of the deployed RouteAcceptor resources.
+              jsonPath: .status.conditions[?(@.type == "RouteAcceptorReady")].reason
+              name: Status
+              type: string
+            - jsonPath: .metadata.creationTimestamp
+              name: Age
+              type: date
+          name: v1alpha1
+          schema:
+            openAPIV3Schema:
+                description: |-
+                    RouteAcceptor makes subnet routes advertised to the tailnet routable from
+                    every Pod in the cluster, without a per-destination egress Service.
+
+                    The operator runs a tailscaled device in the host network namespace of every
+                    selected node (a DaemonSet), configured to accept routes. The subnet routes
+                    that the tailnet approves for those devices are installed in each node's
+                    routing table, so traffic from Pods on that node to those subnets is
+                    forwarded through the tailnet, with the node's tailnet IP as its source.
+                    Because the devices route all tailnet addresses via the tailnet as well, Pods
+                    can also reach any tailnet peer that the devices' tags are allowed to reach.
+
+                    Requirements:
+                      - The nodes must not already run tailscaled.
+                      - The cluster's CNI must route Pod traffic to destinations outside the
+                        cluster through the node's network stack, which is the case for most
+                        CNIs (Calico, Flannel, kindnet and the cloud providers' CNIs). Cilium's
+                        eBPF host routing bypasses it; there, tailscale0 must be listed in
+                        Cilium's devices (for example devices={eth0,tailscale0}) so that Cilium
+                        routes and masquerades the traffic on it itself. The operator detects
+                        Cilium's configuration and refuses to deploy otherwise, unless Cilium is
+                        switched to legacy host routing (bpf.hostLegacyRouting=true) or
+                        spec.cilium.egressGateway is used. The mode in effect is reported by the
+                        RouteAcceptorDataPlaneSupported condition.
+                      - The devices run privileged (or with NET_ADMIN and /dev/net/tun), see
+                        ProxyClass for reducing their permissions.
+                      - Tailscale ACLs must allow the devices' tags to access the subnets, and
+                        the subnet routers' routes must be approved.
+                      - The Pod and Service CIDRs of the cluster must not overlap
+                        100.64.0.0/10, see spec.unsafeAllowCGNATClusterCIDR.
+
+                    The devices are named after the nodes they run on. Their identity is
+                    persisted per node, so a device survives restarts of its Pod.
+
+                    RouteAcceptor is a cluster-scoped resource.
+                properties:
+                    apiVersion:
+                        description: |-
+                            APIVersion defines the versioned schema of this representation of an object.
+                            Servers should convert recognized schemas to the latest internal value, and
+                            may reject unrecognized values.
+                            More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                        type: string
+                    kind:
+                        description: |-
+                            Kind is a string value representing the REST resource this object represents.
+                            Servers may infer this from the endpoint the client submits requests to.
+                            Cannot be updated.
+                            In CamelCase.
+                            More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                        type: string
+                    metadata:
+                        type: object
+                    spec:
+                        description: |-
+                            Spec describes the desired state of the RouteAcceptor.
+                            More info:
+                            https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+                        properties:
+                            cilium:
+                                description: Cilium configures the integration with the Cilium CNI.
+                                properties:
+                                    egressGateway:
+                                        description: |-
+                                            EgressGateway makes the operator maintain a CiliumEgressGatewayPolicy
+                                            that steers traffic from the selected Pods to the accepted routes
+                                            through the route acceptor devices: Cilium forwards the traffic to a
+                                            node running a device, masquerades it to the device's tailnet IP (the
+                                            first address of tailscale0) and routes it via the tailnet. Use this to
+                                            route the traffic through dedicated gateway nodes rather than each
+                                            Pod's own node, or when Cilium's ip-masq-agent is in use; with eBPF
+                                            host routing it is otherwise enough to list tailscale0 in Cilium's
+                                            devices. It works with any Cilium data path.
+                                            Requires Cilium's egress gateway feature (egressGateway.enabled=true,
+                                            which needs BPF masquerading and kube-proxy replacement) and
+                                            tailscale0 to be listed in Cilium's devices (for example
+                                            devices={eth0,tailscale0}), so that Cilium handles the replies.
+                                            The policy is created once the devices on the gateway nodes are ready
+                                            and routes have been accepted, and lists the ready devices as gateways.
+                                            It steers the Pods that spec.sources selects, each to the routes of
+                                            its entries, or every Pod to every accepted route when spec.sources is
+                                            unset.
+                                        properties:
+                                            highAvailability:
+                                                description: |-
+                                                    HighAvailability lists every ready device as a gateway (the policy's
+                                                    spec.egressGateways) instead of a single one. Cilium assigns Pods to
+                                                    gateways and reassigns them if a gateway fails. Requires a Cilium
+                                                    version that supports spec.egressGateways. Changing gateways breaks
+                                                    the existing connections through them.
+                                                type: boolean
+                                        type: object
+                                type: object
+                            clusterCIDRs:
+                                description: |-
+                                    ClusterCIDRs are additional IP ranges used by the cluster, such as its
+                                    Pod and Service CIDRs, that the operator cannot discover on its own.
+                                    The operator discovers the Pod CIDRs recorded on the Nodes and the
+                                    ServiceCIDR resources, if the cluster has them; add ranges here if your
+                                    CNI does not record Pod CIDRs on the Nodes. The ranges are only used to
+                                    warn, via the RouteAcceptorRoutesValid condition, when an accepted
+                                    route overlaps them, as tailscaled would then route cluster traffic
+                                    into the tailnet.
+                                items:
+                                    format: cidr
+                                    type: string
+                                minItems: 1
+                                type: array
+                            proxyClass:
+                                description: |-
+                                    ProxyClass is the name of the ProxyClass custom resource that
+                                    contains configuration options that should be applied to the
+                                    resources created for this RouteAcceptor. The ProxyClass's statefulSet
+                                    section applies to the DaemonSet and its Pods in the same way; use its
+                                    pod.nodeSelector, pod.tolerations and pod.affinity to select the nodes
+                                    that should run a route acceptor device. If unset, the operator will
+                                    create resources with the default configuration, on every node.
+                                type: string
+                            sources:
+                                description: |-
+                                    Sources restricts which Pods are routed via the tailnet. When unset,
+                                    every Pod on the selected nodes is: the node forwards their traffic to
+                                    the accepted routes. When set, only Pods matching at least one entry
+                                    are, each to the routes of the entries it matches; traffic from other
+                                    Pods follows the node's normal routes, as if there were no
+                                    RouteAcceptor. Pods in the host network namespace share the node's
+                                    addresses and are always routed. Requires the cluster's Pod CIDRs to be
+                                    known, from the Nodes' podCIDRs or from spec.clusterCIDRs for IPAMs
+                                    that do not set them.
+                                items:
+                                    description: |-
+                                        RouteAcceptorSource selects Pods that are routed via the tailnet, and the
+                                        routes they may reach.
+                                    properties:
+                                        namespaceSelector:
+                                            description: |-
+                                                NamespaceSelector selects, by their labels, the namespaces whose Pods
+                                                are selected. Unset selects every namespace.
+                                            properties:
+                                                matchExpressions:
+                                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                    items:
+                                                        description: |-
+                                                            A label selector requirement is a selector that contains values, a key, and an operator that
+                                                            relates the key and values.
+                                                        properties:
+                                                            key:
+                                                                description: key is the label key that the selector applies to.
+                                                                type: string
+                                                            operator:
+                                                                description: |-
+                                                                    operator represents a key's relationship to a set of values.
+                                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                                type: string
+                                                            values:
+                                                                description: |-
+                                                                    values is an array of string values. If the operator is In or NotIn,
+                                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                                    the values array must be empty. This array is replaced during a strategic
+                                                                    merge patch.
+                                                                items:
+                                                                    type: string
+                                                                type: array
+                                                                x-kubernetes-list-type: atomic
+                                                        required:
+                                                            - key
+                                                            - operator
+                                                        type: object
+                                                    type: array
+                                                    x-kubernetes-list-type: atomic
+                                                matchLabels:
+                                                    additionalProperties:
+                                                        type: string
+                                                    description: |-
+                                                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                        map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                        operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                    type: object
+                                            type: object
+                                            x-kubernetes-map-type: atomic
+                                        podSelector:
+                                            description: |-
+                                                PodSelector selects Pods by their labels. Unset selects every Pod in
+                                                the selected namespaces.
+                                            properties:
+                                                matchExpressions:
+                                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                                                    items:
+                                                        description: |-
+                                                            A label selector requirement is a selector that contains values, a key, and an operator that
+                                                            relates the key and values.
+                                                        properties:
+                                                            key:
+                                                                description: key is the label key that the selector applies to.
+                                                                type: string
+                                                            operator:
+                                                                description: |-
+                                                                    operator represents a key's relationship to a set of values.
+                                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                                                type: string
+                                                            values:
+                                                                description: |-
+                                                                    values is an array of string values. If the operator is In or NotIn,
+                                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                                                    the values array must be empty. This array is replaced during a strategic
+                                                                    merge patch.
+                                                                items:
+                                                                    type: string
+                                                                type: array
+                                                                x-kubernetes-list-type: atomic
+                                                        required:
+                                                            - key
+                                                            - operator
+                                                        type: object
+                                                    type: array
+                                                    x-kubernetes-list-type: atomic
+                                                matchLabels:
+                                                    additionalProperties:
+                                                        type: string
+                                                    description: |-
+                                                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                                        map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                                        operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                                    type: object
+                                            type: object
+                                            x-kubernetes-map-type: atomic
+                                        routes:
+                                            description: |-
+                                                Routes restricts the selected Pods to these destinations: of the
+                                                routes accepted from the tailnet, those that fall within them are
+                                                routable. Unset means every accepted route and every tailnet peer.
+                                            items:
+                                                format: cidr
+                                                type: string
+                                            minItems: 1
+                                            type: array
+                                    type: object
+                                type: array
+                            tags:
+                                description: |-
+                                    Tags that the Tailscale devices will be tagged with.
+                                    Defaults to [tag:k8s].
+                                    Configure Tailscale ACLs to allow these tags to access the subnets that
+                                    should be reachable from the cluster.
+                                    If you specify custom tags here, you must also make the operator an owner of these tags.
+                                    See  https://tailscale.com/kb/1236/kubernetes-operator/#setting-up-the-kubernetes-operator.
+                                    Tags cannot be changed once the devices have been created.
+                                    Tag values must be in form ^tag:[a-zA-Z][a-zA-Z0-9-]*$.
+                                items:
+                                    pattern: ^tag:[a-zA-Z][a-zA-Z0-9-]*$
+                                    type: string
+                                type: array
+                            tailnet:
+                                description: |-
+                                    Tailnet specifies the tailnet the devices should join. If blank, the default tailnet is used. When set, this
+                                    name must match that of a valid Tailnet resource. This field is immutable and cannot be changed once set.
+                                type: string
+                                x-kubernetes-validations:
+                                    - message: RouteAcceptor tailnet is immutable
+                                      rule: self == oldSelf
+                            unsafeAllowCGNATClusterCIDR:
+                                description: |-
+                                    UnsafeAllowCGNATClusterCIDR allows the route acceptor to be deployed
+                                    even if a cluster IP range overlaps the Tailscale IP range
+                                    100.64.0.0/10. By default the operator refuses to do so, because
+                                    tailscaled drops traffic from that range that does not arrive via the
+                                    tailnet, which would break traffic from Pods to the nodes. Set this only
+                                    if the tailnet grants the devices' tags the disable-linux-cgnat-drop-rule
+                                    node attribute.
+                                type: boolean
+                            unsafeAllowIncompatibleCNI:
+                                description: |-
+                                    UnsafeAllowIncompatibleCNI deploys the route acceptor even if the
+                                    cluster's CNI is detected to be configured in a way that keeps Pod
+                                    traffic from reaching the accepted routes. Today this covers Cilium's
+                                    eBPF host routing without tailscale0 among Cilium's devices (fix: add
+                                    it, set bpf.hostLegacyRouting=true, or use spec.cilium.egressGateway),
+                                    Cilium's ip-masq-agent, whose nonMasqueradeCIDRs exempt typical subnet
+                                    routes from masquerading, and Cilium's installNoConntrackIptablesRules
+                                    without tailscale0 among Cilium's devices, which prevents netfilter from
+                                    masquerading Pod traffic. Set this if Cilium actually runs with legacy
+                                    host routing, for example because the kernel lacks eBPF host routing
+                                    support.
+                                type: boolean
+                        type: object
+                    status:
+                        description: |-
+                            Status describes the status of the RouteAcceptor. This is set
+                            and managed by the Tailscale operator.
+                        properties:
+                            acceptedRoutes:
+                                description: |-
+                                    AcceptedRoutes is the union of the subnet routes that the devices
+                                    currently accept from the tailnet, i.e. the routes that are routable
+                                    from Pods on the nodes that run a ready device.
+                                items:
+                                    type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            clusterCIDRs:
+                                description: |-
+                                    ClusterCIDRs lists the IP ranges the operator knows the cluster's Pods
+                                    and Services use: the Nodes' Pod CIDRs, the Service CIDR and
+                                    spec.clusterCIDRs. Accepted routes must not overlap them, and with
+                                    spec.sources they are the ranges whose traffic is kept off the tailnet
+                                    unless its Pod is selected.
+                                items:
+                                    type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            conditions:
+                                description: |-
+                                    List of status conditions to indicate the status of the RouteAcceptor.
+                                    Known condition types are RouteAcceptorReady and
+                                    RouteAcceptorRoutesValid.
+                                items:
+                                    description: Condition contains details for one aspect of the current state of this API Resource.
+                                    properties:
+                                        lastTransitionTime:
+                                            description: |-
+                                                lastTransitionTime is the last time the condition transitioned from one status to another.
+                                                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                                            format: date-time
+                                            type: string
+                                        message:
+                                            description: |-
+                                                message is a human readable message indicating details about the transition.
+                                                This may be an empty string.
+                                            maxLength: 32768
+                                            type: string
+                                        observedGeneration:
+                                            description: |-
+                                                observedGeneration represents the .metadata.generation that the condition was set based upon.
+                                                For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                                                with respect to the current state of the instance.
+                                            format: int64
+                                            minimum: 0
+                                            type: integer
+                                        reason:
+                                            description: |-
+                                                reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                                                Producers of specific condition types may define expected values and meanings for this field,
+                                                and whether the values are considered a guaranteed API.
+                                                The value should be a CamelCase string.
+                                                This field may not be empty.
+                                            maxLength: 1024
+                                            minLength: 1
+                                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                                            type: string
+                                        status:
+                                            description: status of the condition, one of True, False, Unknown.
+                                            enum:
+                                                - "True"
+                                                - "False"
+                                                - Unknown
+                                            type: string
+                                        type:
+                                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                                            maxLength: 316
+                                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                                            type: string
+                                    required:
+                                        - lastTransitionTime
+                                        - message
+                                        - reason
+                                        - status
+                                        - type
+                                    type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                    - type
+                                x-kubernetes-list-type: map
+                            desiredNodes:
+                                description: |-
+                                    DesiredNodes is the number of nodes selected to run a route acceptor
+                                    device.
+                                format: int32
+                                type: integer
+                            nodes:
+                                description: Nodes describes the device on each node.
+                                items:
+                                    description: RouteAcceptorNode describes the route acceptor device running on a node.
+                                    properties:
+                                        acceptedRoutes:
+                                            description: |-
+                                                AcceptedRoutes are the subnet routes that the device on the node
+                                                currently accepts from the tailnet.
+                                            items:
+                                                type: string
+                                            type: array
+                                            x-kubernetes-list-type: atomic
+                                        hostname:
+                                            description: |-
+                                                Hostname is the fully qualified domain name of the device on the node.
+                                                If MagicDNS is enabled in your tailnet, it is the MagicDNS name of the
+                                                device.
+                                            type: string
+                                        name:
+                                            description: Name is the name of the Kubernetes node.
+                                            type: string
+                                        ready:
+                                            description: Ready is true if the device on the node has joined the tailnet.
+                                            type: boolean
+                                        tailnetIPs:
+                                            description: |-
+                                                TailnetIPs is the set of tailnet IP addresses (both IPv4 and IPv6)
+                                                assigned to the device on the node.
+                                            items:
+                                                type: string
+                                            type: array
+                                    required:
+                                        - name
+                                        - ready
+                                    type: object
+                                type: array
+                                x-kubernetes-list-map-keys:
+                                    - name
+                                x-kubernetes-list-type: map
+                            readyNodes:
+                                description: |-
+                                    ReadyNodes is the number of nodes on which the route acceptor device is
+                                    ready.
+                                format: int32
+                                type: integer
+                        type: object
+                required:
+                    - metadata
+                    - spec
+                type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+    annotations:
+        controller-gen.kubebuilder.io/version: v0.17.0
     name: tailnets.tailscale.com
 spec:
     group: tailscale.com
@@ -6635,6 +7146,41 @@ rules:
         - list
         - watch
     - apiGroups:
+        - networking.k8s.io
+      resources:
+        - servicecidrs
+      verbs:
+        - get
+        - list
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+        - namespaces
+      verbs:
+        - get
+        - list
+        - watch
+    - apiGroups:
+        - ""
+      resourceNames:
+        - cilium-config
+      resources:
+        - configmaps
+      verbs:
+        - get
+    - apiGroups:
+        - cilium.io
+      resources:
+        - ciliumegressgatewaypolicies
+      verbs:
+        - get
+        - list
+        - create
+        - update
+        - patch
+        - delete
+    - apiGroups:
         - discovery.k8s.io
       resources:
         - endpointslices
@@ -6689,6 +7235,16 @@ rules:
     - apiGroups:
         - tailscale.com
       resources:
+        - routeacceptors
+        - routeacceptors/status
+      verbs:
+        - get
+        - list
+        - watch
+        - update
+    - apiGroups:
+        - tailscale.com
+      resources:
         - proxygrouppolicies
         - proxygrouppolicies/status
       verbs:
@@ -6710,6 +7266,7 @@ rules:
         - apiextensions.k8s.io
       resourceNames:
         - servicemonitors.monitoring.coreos.com
+        - ciliumegressgatewaypolicies.cilium.io
       resources:
         - customresourcedefinitions
       verbs:
@@ -6791,6 +7348,7 @@ rules:
       resources:
         - statefulsets
         - deployments
+        - daemonsets
       verbs:
         - create
         - delete

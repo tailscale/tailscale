@@ -10,58 +10,81 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 )
 
 // ApplyProxyClass overlays the settings in pc onto ss. It's the generic slice of ProxyClass application used by
-// any reconciler that produces a tailscaled StatefulSet (peer relay, connector, proxy group, etc.).
+// any reconciler that produces a tailscaled StatefulSet (peer relay, connector, proxy group, etc).
 func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels, managedAnnotations []string) *appsv1.StatefulSet {
-	if pc == nil || ss == nil || pc.Spec.StatefulSet == nil {
+	if pc == nil || ss == nil {
 		return ss
+	}
+	applyProxyClass(&ss.ObjectMeta, &ss.Spec.Template, pc, managedLabels, managedAnnotations, true)
+	return ss
+}
+
+// ApplyProxyClassToDaemonSet overlays the settings in pc onto ds. The ProxyClass's statefulSet section applies to
+// the DaemonSet and its pod template in the same way as to a StatefulSet, except that pod.nodeName is ignored as
+// it would pin every pod of the DaemonSet to a single node.
+func ApplyProxyClassToDaemonSet(ds *appsv1.DaemonSet, pc *tsapi.ProxyClass, managedLabels, managedAnnotations []string) *appsv1.DaemonSet {
+	if pc == nil || ds == nil {
+		return ds
+	}
+	applyProxyClass(&ds.ObjectMeta, &ds.Spec.Template, pc, managedLabels, managedAnnotations, false)
+	return ds
+}
+
+// applyProxyClass overlays the settings in pc onto the workload with the given object meta and pod template.
+func applyProxyClass(meta *metav1.ObjectMeta, tmpl *corev1.PodTemplateSpec, pc *tsapi.ProxyClass, managedLabels, managedAnnotations []string, applyNodeName bool) {
+	if pc.Spec.StatefulSet == nil {
+		return
 	}
 
 	if wantsLabels := pc.Spec.StatefulSet.Labels.Parse(); len(wantsLabels) > 0 {
-		ss.ObjectMeta.Labels = mergeProtected(ss.ObjectMeta.Labels, wantsLabels, managedLabels)
+		meta.Labels = mergeProtected(meta.Labels, wantsLabels, managedLabels)
 	}
 
 	if wantsAnnots := pc.Spec.StatefulSet.Annotations; len(wantsAnnots) > 0 {
-		ss.ObjectMeta.Annotations = mergeProtected(ss.ObjectMeta.Annotations, wantsAnnots, managedAnnotations)
+		meta.Annotations = mergeProtected(meta.Annotations, wantsAnnots, managedAnnotations)
 	}
 
 	if pc.Spec.StatefulSet.Pod == nil {
-		return ss
+		return
 	}
 	wantsPod := pc.Spec.StatefulSet.Pod
 
 	if wantsPodLabels := wantsPod.Labels.Parse(); len(wantsPodLabels) > 0 {
-		ss.Spec.Template.ObjectMeta.Labels = mergeProtected(ss.Spec.Template.ObjectMeta.Labels, wantsPodLabels, managedLabels)
+		tmpl.ObjectMeta.Labels = mergeProtected(tmpl.ObjectMeta.Labels, wantsPodLabels, managedLabels)
 	}
 
 	if wantsPodAnnots := wantsPod.Annotations; len(wantsPodAnnots) > 0 {
-		ss.Spec.Template.ObjectMeta.Annotations = mergeProtected(ss.Spec.Template.ObjectMeta.Annotations, wantsPodAnnots, managedAnnotations)
+		tmpl.ObjectMeta.Annotations = mergeProtected(tmpl.ObjectMeta.Annotations, wantsPodAnnots, managedAnnotations)
 	}
 
-	ss.Spec.Template.Spec.SecurityContext = wantsPod.SecurityContext
-	ss.Spec.Template.Spec.ImagePullSecrets = wantsPod.ImagePullSecrets
-	ss.Spec.Template.Spec.NodeName = wantsPod.NodeName
-	ss.Spec.Template.Spec.NodeSelector = wantsPod.NodeSelector
-	ss.Spec.Template.Spec.Affinity = wantsPod.Affinity
-	ss.Spec.Template.Spec.Tolerations = wantsPod.Tolerations
-	ss.Spec.Template.Spec.PriorityClassName = wantsPod.PriorityClassName
-	ss.Spec.Template.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
+	tmpl.Spec.SecurityContext = wantsPod.SecurityContext
+	tmpl.Spec.ImagePullSecrets = wantsPod.ImagePullSecrets
+	if applyNodeName {
+		tmpl.Spec.NodeName = wantsPod.NodeName
+	}
+	tmpl.Spec.NodeSelector = wantsPod.NodeSelector
+	tmpl.Spec.Affinity = wantsPod.Affinity
+	tmpl.Spec.Tolerations = wantsPod.Tolerations
+	tmpl.Spec.PriorityClassName = wantsPod.PriorityClassName
+	tmpl.Spec.TopologySpreadConstraints = wantsPod.TopologySpreadConstraints
 
 	if wantsPod.DNSPolicy != nil {
-		ss.Spec.Template.Spec.DNSPolicy = *wantsPod.DNSPolicy
+		tmpl.Spec.DNSPolicy = *wantsPod.DNSPolicy
 	}
 
 	if wantsPod.DNSConfig != nil {
-		ss.Spec.Template.Spec.DNSConfig = wantsPod.DNSConfig
+		tmpl.Spec.DNSConfig = wantsPod.DNSConfig
 	}
 
 	if wantsPod.TailscaleContainer != nil {
-		for i := range ss.Spec.Template.Spec.Containers {
-			c := &ss.Spec.Template.Spec.Containers[i]
+		for i := range tmpl.Spec.Containers {
+			c := &tmpl.Spec.Containers[i]
 			if c.Name != containerName {
 				continue
 			}
@@ -71,7 +94,17 @@ func ApplyProxyClass(ss *appsv1.StatefulSet, pc *tsapi.ProxyClass, managedLabels
 		}
 	}
 
-	return ss
+	if wantsPod.TailscaleInitContainer != nil {
+		for i := range tmpl.Spec.InitContainers {
+			c := &tmpl.Spec.InitContainers[i]
+			if c.Name != initContainerName {
+				continue
+			}
+
+			applyContainerOverlay(c, wantsPod.TailscaleInitContainer)
+			break
+		}
+	}
 }
 
 func mergeProtected(current, custom map[string]string, protected []string) map[string]string {

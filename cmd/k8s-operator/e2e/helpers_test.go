@@ -30,6 +30,55 @@ func generateName(prefix string) string {
 
 func requireTargetIsReachable(t *testing.T, url string) {
 	t.Helper()
+	if !targetIsReachable(t, url, 40) {
+		t.Fatalf("%s not reachable in-cluster", url)
+	}
+}
+
+// curlPodOptions customizes the probe Pod that curlPodSucceeds runs.
+type curlPodOptions struct {
+	// labels are added to the Pod, for tests of Pod selection.
+	labels map[string]string
+	// onPodIP is called once with the Pod's address as soon as it has one, while the probe is still running.
+	onPodIP func(ip string)
+}
+
+// targetIsReachable reports whether a Pod can fetch url with HTTP status 200 within the given number of attempts,
+// two seconds apart. It fails the test only if the probe Pod itself cannot be run.
+func targetIsReachable(t *testing.T, url string, attempts int) bool {
+	t.Helper()
+	return targetIsReachableWith(t, url, attempts, curlPodOptions{})
+}
+
+// targetIsReachableWith is targetIsReachable with options for the probe Pod.
+func targetIsReachableWith(t *testing.T, url string, attempts int, opts curlPodOptions) bool {
+	t.Helper()
+	return curlPodSucceeds(t, url, fmt.Sprintf(
+		`for i in $(seq 1 %d); do `+
+			`code=$(curl -s %%s-o /dev/null -w "%%%%{http_code}" --max-time 5 %%q); `+
+			`[ "$code" = "200" ] && exit 0; sleep 2; done; exit 1`, attempts), opts)
+}
+
+// targetDownloadsBytes reports whether a Pod can download exactly size bytes from url.
+func targetDownloadsBytes(t *testing.T, url string, size int64) bool {
+	t.Helper()
+	return targetDownloadsBytesWith(t, url, size, 1, curlPodOptions{})
+}
+
+// targetDownloadsBytesWith is targetDownloadsBytes with the given number of attempts, two seconds apart, and
+// options for the probe Pod.
+func targetDownloadsBytesWith(t *testing.T, url string, size int64, attempts int, opts curlPodOptions) bool {
+	t.Helper()
+	return curlPodSucceeds(t, url, fmt.Sprintf(
+		`for i in $(seq 1 %d); do `+
+			`size=$(curl -s %%s-o /dev/null -w "%%%%{size_download}" --max-time 120 %%q); `+
+			`echo "downloaded $size bytes"; [ "$size" = "%d" ] && exit 0; sleep 2; done; exit 1`, attempts, size), opts)
+}
+
+// curlPodSucceeds runs a curl Pod with the given shell script (a format string taking the --cacert flag and the
+// URL) and reports whether it exited successfully.
+func curlPodSucceeds(t *testing.T, url, script string, opts curlPodOptions) bool {
+	t.Helper()
 
 	volumes, mounts, cacertFlag := certVolumesForURL(url)
 
@@ -37,6 +86,7 @@ func requireTargetIsReachable(t *testing.T, url string) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      generateName("curl"),
 			Namespace: ns,
+			Labels:    opts.labels,
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
@@ -46,32 +96,37 @@ func requireTargetIsReachable(t *testing.T, url string) {
 					Name:         "curl",
 					Image:        "curlimages/curl",
 					VolumeMounts: mounts,
-					Command: []string{"sh", "-c", fmt.Sprintf(
-						`for i in $(seq 1 40); do `+
-							`code=$(curl -s %s-o /dev/null -w "%%{http_code}" --max-time 5 %q); `+
-							`[ "$code" = "200" ] && exit 0; sleep 2; done; exit 1`, cacertFlag, url)},
+					Command:      []string{"sh", "-c", fmt.Sprintf(script, cacertFlag, url)},
 				},
 			},
 		},
 	}
 	createAndCleanup(t, kubeClient, pod)
 
+	succeeded := false
+	notified := false
 	if err := tstest.WaitFor(5*time.Minute, func() error {
 		p := &corev1.Pod{ObjectMeta: objectMeta(ns, pod.Name)}
 		if err := get(t.Context(), kubeClient, p); err != nil {
 			return err
 		}
-		if p.Status.Phase == corev1.PodSucceeded {
-			t.Logf("curl pod %s succeeded", pod.Name)
-			return nil
+		if !notified && opts.onPodIP != nil && p.Status.PodIP != "" {
+			notified = true
+			opts.onPodIP(p.Status.PodIP)
 		}
-		if p.Status.Phase == corev1.PodFailed {
-			t.Fatalf("%s not reachable in-cluster: curl pod %s failed", url, pod.Name)
+		switch p.Status.Phase {
+		case corev1.PodSucceeded:
+			succeeded = true
+			return nil
+		case corev1.PodFailed:
+			return nil
 		}
 		return fmt.Errorf("curl pod %s phase: %s", pod.Name, p.Status.Phase)
 	}); err != nil {
-		t.Fatalf("%s not reachable in-cluster: %v", url, err)
+		t.Fatalf("waiting for curl pod %s: %v", pod.Name, err)
 	}
+	t.Logf("curl pod %s for %s: succeeded=%v", pod.Name, url, succeeded)
+	return succeeded
 }
 
 // certVolumesForURL returns the Pod volume, VolumeMount, and curl "--cacert"

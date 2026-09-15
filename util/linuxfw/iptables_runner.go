@@ -789,3 +789,102 @@ func argsFromPostRoutingRule(r string) string {
 	args, _ := strings.CutPrefix(r, "-A POSTROUTING ")
 	return args
 }
+
+// forwardToTunMasqArgs returns the nat/POSTROUTING rule arguments that
+// masquerade traffic being forwarded out via tun.
+func forwardToTunMasqArgs(tun string) []string {
+	return []string{"-o", tun, "-j", "MASQUERADE"}
+}
+
+// forwardToTunClampArgs returns the mangle/FORWARD rule arguments that clamp
+// the MSS of forwarded TCP handshake packets to the path MTU, for packets
+// leaving via tun and for packets arriving on tun.
+func forwardToTunClampArgs(tun string) [][]string {
+	return [][]string{
+		{"-o", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"},
+		{"-i", tun, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"},
+	}
+}
+
+// AddForwardToTunRules installs the rules needed for this host to forward
+// locally received traffic (for example from containers or Pods on the same
+// host) into the tailnet via tun:
+//   - nat/POSTROUTING: masquerade traffic leaving via tun, so that the peer
+//     receiving it sees this node's Tailscale IP as the source.
+//   - mangle/FORWARD: clamp the MSS of forwarded TCP handshakes to the path
+//     MTU in both directions.
+//
+// The rules are only added if they do not already exist, so it is safe to call
+// this on every start of a process whose netfilter state outlives it (i.e. one
+// running in the host network namespace).
+func (i *iptablesRunner) AddForwardToTunRules(tun string) error {
+	for _, ipt := range i.getNATTables() {
+		if err := ensureIPTRule(ipt, "nat", "POSTROUTING", forwardToTunMasqArgs(tun), true); err != nil {
+			return fmt.Errorf("adding masquerade rule for %s: %w", tun, err)
+		}
+	}
+	for _, ipt := range i.getTables() {
+		for _, args := range forwardToTunClampArgs(tun) {
+			if err := ensureIPTRule(ipt, "mangle", "FORWARD", args, false); err != nil {
+				return fmt.Errorf("adding MSS clamp rule for %s: %w", tun, err)
+			}
+		}
+	}
+	return nil
+}
+
+// DelForwardToTunRules removes the rules added by AddForwardToTunRules. Missing
+// rules are not an error.
+func (i *iptablesRunner) DelForwardToTunRules(tun string) error {
+	for _, ipt := range i.getNATTables() {
+		if err := deleteIPTRuleIfExists(ipt, "nat", "POSTROUTING", forwardToTunMasqArgs(tun)); err != nil {
+			return fmt.Errorf("deleting masquerade rule for %s: %w", tun, err)
+		}
+	}
+	for _, ipt := range i.getTables() {
+		for _, args := range forwardToTunClampArgs(tun) {
+			if err := deleteIPTRuleIfExists(ipt, "mangle", "FORWARD", args); err != nil {
+				return fmt.Errorf("deleting MSS clamp rule for %s: %w", tun, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ensureIPTRule adds the rule with the given args to table/chain if it does not
+// already exist. If insertFirst is true, the rule is inserted at the top of
+// the chain, otherwise it is appended.
+func ensureIPTRule(ipt iptablesInterface, table, chain string, args []string, insertFirst bool) error {
+	exists, err := ipt.Exists(table, chain, args...)
+	if err != nil {
+		return fmt.Errorf("checking %v in %s/%s: %w", args, table, chain, err)
+	}
+	if exists {
+		return nil
+	}
+	if insertFirst {
+		err = ipt.Insert(table, chain, 1, args...)
+	} else {
+		err = ipt.Append(table, chain, args...)
+	}
+	if err != nil {
+		return fmt.Errorf("adding %v in %s/%s: %w", args, table, chain, err)
+	}
+	return nil
+}
+
+// deleteIPTRuleIfExists deletes the rule with the given args from table/chain if
+// it exists.
+func deleteIPTRuleIfExists(ipt iptablesInterface, table, chain string, args []string) error {
+	exists, err := ipt.Exists(table, chain, args...)
+	if err != nil {
+		return fmt.Errorf("checking %v in %s/%s: %w", args, table, chain, err)
+	}
+	if !exists {
+		return nil
+	}
+	if err := ipt.Delete(table, chain, args...); err != nil {
+		return fmt.Errorf("deleting %v in %s/%s: %w", args, table, chain, err)
+	}
+	return nil
+}

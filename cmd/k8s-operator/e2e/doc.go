@@ -22,6 +22,22 @@
 // the default base image in build_docker.sh is used. If using a real cluster
 // with --build, --registry must also be set.
 //
+// With --cluster, --cni=cilium creates the kind cluster without its default
+// CNI and kube-proxy and installs Cilium from its Helm repository with its
+// default data path (eBPF host routing) plus the egress gateway feature and
+// tailscale0 among its devices, to exercise the RouteAcceptor's Cilium
+// integration. --cilium-set key=value (repeatable) overrides Cilium Helm
+// values, e.g. --cilium-set bpf.hostLegacyRouting=true.
+//
+// --cilium-spike (with --cluster --cni=cilium --build) runs only
+// TestCiliumSpike and TestCiliumSpikeSources: they validate the RouteAcceptor's data plane under Cilium
+// without devcontrol, a tailnet or the operator, by starting this repository's
+// test control server in the test process and deploying the route acceptor
+// DaemonSet and a subnet router directly, then trying the Cilium
+// configurations of interest one after the other:
+//
+// go test -count=1 -v -timeout 60m ./cmd/k8s-operator/e2e/ --build --cluster --cni=cilium --cilium-spike --skip-cleanup
+//
 // --registry without --build expects the images to already exist in the
 // registry at the tag derived from the current commit, e.g. pushed by an
 // earlier run of tailscale.com/cmd/k8s-operator/e2e/build. That allows one
