@@ -496,30 +496,6 @@ func (c *Client) GetCachedMappingOrStartCreatingOne() (external netip.AddrPort, 
 	return netip.AddrPort{}, false
 }
 
-// DebugRenewMapping forces a synchronous renewal of the current port mapping.
-func (c *Client) DebugRenewMapping() {
-	c.mu.Lock()
-	m := c.mapping
-	if m == nil {
-		c.mu.Unlock()
-		return
-	}
-	c.vlogf("renewing %s mapping now", m.MappingType())
-
-	// hack to force createOrGetMapping to renew rather than reuse the cached mapping
-	switch tm := m.(type) {
-	case *pmpMapping:
-		tm.renewAfter = time.Time{}
-	case *pcpMapping:
-		tm.renewAfter = time.Time{}
-	case *upnpMapping:
-		tm.renewAfter = time.Time{}
-	}
-	c.mu.Unlock()
-
-	c.createOrGetMapping(context.Background())
-}
-
 // maybeStartMappingLocked starts a createMapping goroutine up, if one isn't already running.
 //
 // c.mu must be held.
