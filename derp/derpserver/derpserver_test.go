@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -936,6 +937,13 @@ func TestGetPerClientSendQueueDepth(t *testing.T) {
 		{
 			"64", 64,
 		},
+		// Zero and negative values are treated as unset.
+		{
+			"0", defaultPerClientSendQueueDepth,
+		},
+		{
+			"-5", defaultPerClientSendQueueDepth,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1734,4 +1742,264 @@ func BenchmarkSenderCardinalityOverhead(b *testing.B) {
 			_ = sender.AppendTo(nil)
 		}
 	})
+}
+
+func TestPktQueue(t *testing.T) {
+	mkpkt := func(i int) pkt { return pkt{bs: []byte{byte(i)}} }
+	src := key.NewNode().Public()
+
+	t.Run("fifo_and_pool", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+		s.perClientSendQueueDepth = 3
+
+		var q pktQueue
+		if _, ok := q.dequeue(s); ok {
+			t.Fatal("dequeue on empty queue reported ok")
+		}
+		for i := range 3 {
+			dropped, wasEmpty, ok := q.enqueue(s, mkpkt(i))
+			if !ok || dropped.bs != nil {
+				t.Fatalf("enqueue %d: ok=%v dropped=%v", i, ok, dropped.bs)
+			}
+			// Only the first enqueue finds the queue empty.
+			if want := i == 0; wasEmpty != want {
+				t.Errorf("enqueue %d: wasEmpty=%v, want %v", i, wasEmpty, want)
+			}
+		}
+		if q.ring == nil {
+			t.Fatal("ring not allocated after enqueue")
+		}
+		// Full: the head (0) is dropped to make room for 3.
+		dropped, wasEmpty, ok := q.enqueue(s, mkpkt(3))
+		if !ok || string(dropped.bs) != "\x00" {
+			t.Fatalf("enqueue on full queue: ok=%v dropped=%q, want head 0 dropped", ok, dropped.bs)
+		}
+		if wasEmpty {
+			t.Error("enqueue on full queue reported wasEmpty")
+		}
+		var got []byte
+		for {
+			p, ok := q.dequeue(s)
+			if !ok {
+				break
+			}
+			got = append(got, p.bs...)
+		}
+		if want := "\x01\x02\x03"; string(got) != want {
+			t.Errorf("dequeued %q, want %q", got, want)
+		}
+		if q.ring != nil {
+			t.Error("ring not released to the pool after draining")
+		}
+		// The ring should have gone back to the pool with no
+		// packets still referenced from it.
+		if ring, ok := s.sendQueueRingPool.Get().(*[]pkt); ok {
+			for i, p := range *ring {
+				if p.bs != nil {
+					t.Errorf("pooled ring slot %d still holds a packet", i)
+				}
+			}
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		s := New(key.NewNode(), t.Logf)
+		defer s.Close()
+		s.perClientSendQueueDepth = 4
+
+		var q pktQueue
+		q.enqueue(s, pkt{bs: []byte("a"), src: src})
+		q.enqueue(s, pkt{bs: []byte("b"), src: src})
+		var dropped []string
+		q.close(s, func(p pkt) { dropped = append(dropped, string(p.bs)) })
+		if want := []string{"a", "b"}; !slices.Equal(dropped, want) {
+			t.Errorf("close dropped %q, want %q", dropped, want)
+		}
+		if q.ring != nil {
+			t.Error("ring not released on close")
+		}
+		if _, _, ok := q.enqueue(s, mkpkt(0)); ok {
+			t.Error("enqueue after close succeeded")
+		}
+		if q.ring != nil {
+			t.Error("enqueue after close allocated a ring")
+		}
+	})
+
+	// A Server that didn't come from New (as some unit tests build)
+	// has no configured queue depth and an unprimed pool. Enqueues must
+	// fail cleanly rather than panic on a nil pool.Get result, and must
+	// not allocate.
+	t.Run("zero_server", func(t *testing.T) {
+		s := &Server{}
+		var q pktQueue
+		if _, _, ok := q.enqueue(s, mkpkt(0)); ok {
+			t.Error("enqueue on zero-depth queue succeeded")
+		}
+		if q.ring != nil {
+			t.Error("zero-depth enqueue allocated a ring")
+		}
+		if _, ok := q.dequeue(s); ok {
+			t.Error("dequeue on zero-depth queue reported ok")
+		}
+		q.close(s, func(pkt) { t.Error("close on empty queue dropped a packet") })
+	})
+}
+
+// TestSendPktHeadDropAttribution checks that when a full queue drops
+// its head packet to make room, the drop is attributed to that
+// packet's sender, not to the sender of the packet that displaced it.
+func TestSendPktHeadDropAttribution(t *testing.T) {
+	var logMu sync.Mutex
+	var logs []string
+	s := New(key.NewNode(), func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	defer s.Close()
+	s.perClientSendQueueDepth = 1
+
+	dst := &sclient{s: s, key: key.NewNode().Public(), sendWake: make(chan struct{}, 1)}
+	first := &sclient{s: s, key: key.NewNode().Public()}
+	second := &sclient{s: s, key: key.NewNode().Public()}
+
+	// Drops to dst are logged verbosely, with the source key.
+	verboseDropKeys[dst.key] = true
+	defer delete(verboseDropKeys, dst.key)
+
+	if err := first.sendPkt(dst, pkt{bs: []byte("first"), src: first.key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.sendPkt(dst, pkt{bs: []byte("second"), src: second.key}); err != nil {
+		t.Fatal(err)
+	}
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	want := fmt.Sprintf("drop (%s) %s -> %s", first.key.ShortString(), dropReasonQueueHead, dst.key.ShortString())
+	if !slices.Contains(logs, want) {
+		t.Errorf("logs = %q; want to contain %q", logs, want)
+	}
+}
+
+// gatedConn is a derp.Conn whose Writes block until the test releases
+// them, one at a time, so a test can hold sendLoop inside a Flush.
+type gatedConn struct {
+	writes chan int      // receives len(p) as each Write begins
+	gate   chan struct{} // each Write completes on receiving from it
+	closed chan struct{} // closed by Close
+	once   sync.Once
+}
+
+func newGatedConn() *gatedConn {
+	return &gatedConn{
+		writes: make(chan int, 16),
+		gate:   make(chan struct{}),
+		closed: make(chan struct{}),
+	}
+}
+
+func (c *gatedConn) Write(p []byte) (int, error) {
+	c.writes <- len(p)
+	select {
+	case <-c.gate:
+		return len(p), nil
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+
+func (c *gatedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *gatedConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *gatedConn) SetDeadline(time.Time) error      { return nil }
+func (c *gatedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *gatedConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestSendLoopBufferedWriteFrames checks that the bufferedWriteFrames
+// histogram counts exactly the frames written per flush. In
+// particular a sendWake pass that itself writes nothing must not
+// inflate the count of the batch that follows it.
+func TestSendLoopBufferedWriteFrames(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn := newGatedConn()
+	c := &sclient{
+		s:          s,
+		key:        key.NewNode().Public(),
+		nc:         conn,
+		bw:         &lazyBufioWriter{w: conn},
+		logf:       t.Logf,
+		ctx:        ctx,
+		sendWake:   make(chan struct{}, 1),
+		sendPongCh: make(chan [8]byte, 1),
+		peerGone:   make(chan peerGoneMsg),
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.sendLoop(ctx) }()
+
+	src := key.NewNode().Public()
+	send := func(n int) {
+		for range n {
+			if err := c.sendPkt(c, pkt{bs: []byte("hello"), src: src}); err != nil {
+				t.Fatalf("sendPkt: %v", err)
+			}
+		}
+	}
+	// awaitWrite waits for sendLoop to be blocked in a Write, which
+	// happens only from Flush.
+	awaitWrite := func() {
+		t.Helper()
+		select {
+		case <-conn.writes:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for sendLoop to flush")
+		}
+	}
+	release := func() { conn.gate <- struct{}{} }
+
+	// One packet: sendLoop writes it and blocks flushing it.
+	send(1)
+	awaitWrite()
+
+	// While it's blocked, queue a batch. Its sendWake lands in the
+	// wake channel and is consumed by the blocking select after the
+	// first flush's observation, without writing anything itself.
+	const batch = 5
+	send(batch)
+	release()
+
+	// The batch is drained in one pass and flushed.
+	awaitWrite()
+	release()
+
+	// A pong forces one more write and flush; once that Write has
+	// begun, the batch's observation has been recorded.
+	c.sendPongCh <- [8]byte{}
+	awaitWrite()
+
+	var h map[string]float64
+	if err := json.Unmarshal([]byte(s.bufferedWriteFrames.String()), &h); err != nil {
+		t.Fatal(err)
+	}
+	// The buckets are cumulative, so the number of observations of
+	// exactly v is bucket[v] minus bucket[v-1].
+	exactly := func(v int) float64 { return h[strconv.Itoa(v)] - h[strconv.Itoa(v-1)] }
+	if h["count"] != 2 || exactly(1) != 1 || exactly(batch) != 1 {
+		t.Errorf("histogram = %v; want exactly two observations, one of 1 and one of %d", h, batch)
+	}
+
+	release()
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("sendLoop: %v", err)
+	}
 }
