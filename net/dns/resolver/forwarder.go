@@ -1324,7 +1324,13 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		src:            query.addr,
 		closeOnCtxDone: new(closePool),
 	}
-	defer fq.closeOnCtxDone.Close()
+	defer func() {
+		// cancel must run first. The close wakes a blocked reader with
+		// net.ErrClosed, which sendUDP counts as an upstream read failure
+		// unless ctx is already done.
+		cancel()
+		fq.closeOnCtxDone.Close()
+	}()
 
 	if f.verboseFwd {
 		domainSha256 := sha256.Sum256([]byte(domain))
