@@ -832,9 +832,14 @@ func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) 
 	q, publicError := dohQuery(r)
 	if publicError != "" && r.Method == "GET" {
 		if name := r.FormValue("q"); name != "" {
-			pretty = true
-			publicError = ""
-			q = dnsQueryForName(name, r.FormValue("t"))
+			nameQuery, err := dnsQueryForName(name, r.FormValue("t"))
+			if err != nil {
+				publicError = "invalid name in ‘q’ parameter"
+			} else {
+				pretty = true
+				publicError = ""
+				q = nameQuery
+			}
 		}
 	}
 	if publicError != "" {
@@ -913,7 +918,10 @@ func dohQuery(r *http.Request) (dnsQuery []byte, publicErr string) {
 	}
 }
 
-func dnsQueryForName(name, typStr string) []byte {
+// dnsQueryForName builds a DNS query for name, which comes from the caller of
+// the peerAPI DNS debug mode and is not otherwise validated. It returns an
+// error if name does not fit in a DNS message.
+func dnsQueryForName(name, typStr string) ([]byte, error) {
 	typ := dnsmessage.TypeA
 	switch strings.ToLower(typStr) {
 	case "aaaa":
@@ -921,22 +929,27 @@ func dnsQueryForName(name, typStr string) []byte {
 	case "txt":
 		typ = dnsmessage.TypeTXT
 	}
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	qname, err := dnsmessage.NewName(name)
+	if err != nil {
+		return nil, err
+	}
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{
 		OpCode:           0, // query
 		RecursionDesired: true,
 		ID:               1, // arbitrary, but 0 is rejected by some servers
 	})
-	if !strings.HasSuffix(name, ".") {
-		name += "."
-	}
 	b.StartQuestions()
-	b.Question(dnsmessage.Question{
-		Name:  dnsmessage.MustNewName(name),
+	if err := b.Question(dnsmessage.Question{
+		Name:  qname,
 		Type:  typ,
 		Class: dnsmessage.ClassINET,
-	})
-	msg, _ := b.Finish()
-	return msg
+	}); err != nil {
+		return nil, err
+	}
+	return b.Finish()
 }
 
 func writePrettyDNSReply(w io.Writer, res []byte) (err error) {

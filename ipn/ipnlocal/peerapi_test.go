@@ -566,6 +566,51 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 	}
 }
 
+// TestPeerAPIDNSQueryLongName checks that a peer allowed to use the peerAPI
+// DNS proxy cannot take the handler down with an over-long name in the
+// interactive ‘q’ debug mode. The name is used verbatim to build the
+// query, so anything that does not fit in a DNS message has to be rejected
+// rather than asserted.
+func TestPeerAPIDNSQueryLongName(t *testing.T) {
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
+	h := peerAPIHandler{
+		remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+		selfNode:   (&tailcfg.Node{}).View(),
+		peerNode:   (&tailcfg.Node{}).View(),
+	}
+
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+	ht := health.NewTracker(sys.Bus.Get())
+	reg := new(usermetric.Registry)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
+	a := appc.NewAppConnector(appc.Config{
+		Logf:     t.Logf,
+		EventBus: sys.Bus.Get(),
+	})
+	t.Cleanup(a.Close)
+	sys.Set(pm.Store())
+	sys.Set(eng)
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.pm = pm
+	b.appConnector = a // configure as an app connector just to enable the API.
+
+	h.ps = &peerAPIServer{b: b}
+	h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {}}
+	h.ps.b.setFilter(filter.NewAllowAllForTest(logger.Discard))
+
+	if allowed, _ := h.isPeerAPIDNSAllowed(r); !allowed {
+		t.Fatal("unexpectedly denied; wanted to be a DNS server")
+	}
+
+	w := httptest.NewRecorder()
+	h.handleDNSQuery(w, httptest.NewRequest("GET", "/dns-query?q="+strings.Repeat("a", 255), nil))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %v, want %v", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
 	for _, shouldStore := range []bool{false, true} {
