@@ -59,9 +59,9 @@ require (
 	github.com/gokrazy/breakglass v0.0.0-20251229072214-9dbc0478d486
 	github.com/gokrazy/firmware v0.0.0-20260522070551-527ce0ed43cf
 	github.com/gokrazy/gokrazy v0.0.0-20260418085648-c38c3134b8a7
-	github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b
-	github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1
-	github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de
+	github.com/gokrazy/kernel.amd64 v0.0.0-20260915085640-07c83e37ba8f
+	github.com/gokrazy/kernel.arm64 v0.0.0-20260915090111-d7c6207d69fe
+	github.com/gokrazy/kernel.rpi v0.0.0-20260911133309-2cbf751e3f2a
 	github.com/gokrazy/rpi-eeprom v0.0.0-20260518070910-95f7328a8228
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
