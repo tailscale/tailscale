@@ -687,7 +687,10 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 		logID := newc.PublicID.String()
 		exe, _ := os.Executable()
 		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
-			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
+			// Alongside the log config: %ProgramData%\Tailscale\Logs for
+			// the service, or %LocalAppData%\Tailscale\Logs for a tailscaled
+			// run by a regular user. See LogsDir.
+			diskLogf := filelogger.New(filepath.Join(opts.Dir, "Logs"), "tailscale-service", logID, lw.Logf)
 			logOutput = logger.FuncWriter(diskLogf)
 		}
 	}
