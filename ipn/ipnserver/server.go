@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode"
 
 	"tailscale.com/client/tailscale/apitype"
@@ -51,8 +52,9 @@ type Server struct {
 	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
 	activeReqs    map[*http.Request]ipnauth.Actor
-	backendWaiter waiterSet // of LocalBackend waiters
-	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
+	backendWaiter waiterSet            // of LocalBackend waiters
+	zeroReqWaiter waiterSet            // of blockUntilZeroConnections waiters
+	ciidGrants    map[string]ciidGrant // CIID => write grant; see noteCIIDWriteAccess
 }
 
 func (s *Server) mustBackend() *ipnlocal.LocalBackend {
@@ -217,6 +219,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if actor, ok := ci.(*actor); ok {
 			lah.PermitRead, lah.PermitWrite = actor.Permissions(lb.OperatorUserID())
 			lah.PermitCert = actor.CanFetchCerts()
+			if ciid := r.Header.Get(apitype.RequestCIIDHeader); ciid != "" {
+				if uid, ok := actor.unixUserID(); ok {
+					if lah.PermitWrite {
+						s.noteCIIDWriteAccess(ciid, uid)
+					} else if ciidWriteGrantPaths[r.URL.Path] && s.ciidWriteAllowed(ciid, uid) {
+						lah.PermitWrite = true
+					}
+				}
+			}
 		} else if testenv.InTest() {
 			lah.PermitRead, lah.PermitWrite = true, true
 		}
@@ -238,6 +249,64 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.\n")
+}
+
+// ciidGrantDuration is how long a CIID write grant remains valid after
+// the most recent write-permitted request bearing that CIID.
+const ciidGrantDuration = 30 * time.Second
+
+// maxCIIDGrants bounds the number of tracked CIID grants. Grants can
+// only be created by callers that already have write access, so this
+// is just a memory bound, not a security bound.
+const maxCIIDGrants = 100
+
+// ciidGrant is a temporary extension of LocalAPI write access to
+// requests bearing a client invocation ID ("CIID"; see
+// [apitype.RequestCIIDHeader]). It exists so that a single client
+// invocation such as "tailscale login", authorized via the operator
+// preference, doesn't lose access partway through when it switches to
+// a new, empty profile that has no operator set.
+// See tailscale/tailscale#18294.
+type ciidGrant struct {
+	uid    string    // Unix user ID that held write access
+	expiry time.Time // when the grant lapses
+}
+
+// ciidWriteGrantPaths is the set of LocalAPI paths that accept a CIID
+// write grant in lieu of regular write permission. It is limited to
+// the operations that the login flow needs after switching to a new,
+// empty profile. Keep this list minimal.
+var ciidWriteGrantPaths = map[string]bool{
+	"/localapi/v0/check-prefs":       true,
+	"/localapi/v0/start":             true,
+	"/localapi/v0/login-interactive": true,
+}
+
+// noteCIIDWriteAccess records that a request bearing the given CIID
+// from the given Unix user ID was permitted write access, extending
+// that access to near-future requests with the same CIID and uid.
+func (s *Server) noteCIIDWriteAccess(ciid, uid string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for k, g := range s.ciidGrants {
+		if g.expiry.Before(now) {
+			delete(s.ciidGrants, k)
+		}
+	}
+	if _, ok := s.ciidGrants[ciid]; !ok && len(s.ciidGrants) >= maxCIIDGrants {
+		return
+	}
+	mak.Set(&s.ciidGrants, ciid, ciidGrant{uid: uid, expiry: now.Add(ciidGrantDuration)})
+}
+
+// ciidWriteAllowed reports whether an unexpired write grant exists for
+// the given CIID and Unix user ID.
+func (s *Server) ciidWriteAllowed(ciid, uid string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.ciidGrants[ciid]
+	return ok && g.uid == uid && !g.expiry.Before(time.Now())
 }
 
 // inUseOtherUserError is the error type for when the server is in use

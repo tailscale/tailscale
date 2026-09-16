@@ -8,6 +8,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -91,6 +92,10 @@ func CleanUpArgs(args []string) []string {
 
 var localClient = local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
+	// CIID is a random client invocation ID identifying this CLI
+	// invocation across its LocalAPI requests.
+	// See [apitype.RequestCIIDHeader] for details.
+	CIID: rand.Text(),
 }
 
 // RunWithContext runs the CLI. The args do not include the binary name.
