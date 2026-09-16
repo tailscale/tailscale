@@ -101,7 +101,11 @@ func (e *desktopSessionsExt) Init(host ipnext.Host) (err error) {
 	e.host = host
 	unregisterSessionCb, err := e.sm.RegisterStateCallback(e.updateDesktopSessionState)
 	if err != nil {
-		return fmt.Errorf("session callback registration failed: %w", err)
+		// Registering the callback enumerates the existing desktop
+		// sessions, which fails for a tailscaled run by an unprivileged
+		// user. That is not an error worth alarming about: such a
+		// tailscaled has no other users' sessions to track anyway.
+		return fmt.Errorf("%w: session callback registration failed: %w", ipnext.SkipExtension, err)
 	}
 	unregisterPolicyCb, err := e.sm.RegisterInitCallback(e.initUserPolicyStore)
 	if err != nil {
