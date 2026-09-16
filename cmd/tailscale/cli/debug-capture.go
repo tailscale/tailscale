@@ -30,6 +30,8 @@ func mkDebugCaptureCmd() *ffcli.Command {
 		FlagSet: (func() *flag.FlagSet {
 			fs := newFlagSet("capture")
 			fs.StringVar(&captureArgs.outFile, "o", "", "path to stream the pcap (or - for stdout), leave empty to start wireshark")
+			fs.IntVar(&captureArgs.snapLen, "s", 262144, "snapshot length: bytes to capture from each packet (0 uses the default)")
+			fs.IntVar(&captureArgs.snapLen, "snapshot-length", 262144, "snapshot length: bytes to capture from each packet (0 uses the default)")
 			return fs
 		})(),
 	}
@@ -37,10 +39,11 @@ func mkDebugCaptureCmd() *ffcli.Command {
 
 var captureArgs struct {
 	outFile string
+	snapLen int
 }
 
 func runCapture(ctx context.Context, args []string) error {
-	stream, err := localClient.StreamDebugCapture(ctx)
+	stream, err := localClient.StreamDebugCapture(ctx, captureArgs.snapLen)
 	if err != nil {
 		return err
 	}
