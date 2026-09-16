@@ -191,8 +191,6 @@ type LogEntry[T any] struct {
 	// (used on older Go versions) only knows `inline`. Each
 	// implementation ignores the option it doesn't know, so specify
 	// both until we require Go 1.27 and drop `inline`.
-	//
-	//lint:ignore SA5008 staticcheck doesn't know Go 1.27's `embed` option yet
 	Value T `json:",inline,embed"`
 }
 
