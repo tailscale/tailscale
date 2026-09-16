@@ -37,6 +37,11 @@ func init() {
 type extension struct {
 	logf logger.Logf
 
+	// sb is the backend, consulted for its state directory when the
+	// store is created. The directory is not known yet when the
+	// extension is constructed.
+	sb ipnext.SafeBackend
+
 	// store is the log store shared by all loggers.
 	// It is created when the first logger is started.
 	store lazy.SyncValue[LogStore]
@@ -53,8 +58,11 @@ type extension struct {
 
 // newExtension is an [ipnext.NewExtensionFn] that creates a new audit log extension.
 // It is registered with [ipnext.RegisterExtension] if the package is imported.
-func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, error) {
-	return &extension{logf: logger.WithPrefix(logf, featureName+": ")}, nil
+func newExtension(logf logger.Logf, sb ipnext.SafeBackend) (ipnext.Extension, error) {
+	return &extension{
+		logf: logger.WithPrefix(logf, featureName+": "),
+		sb:   sb,
+	}, nil
 }
 
 // Name implements [ipnext.Extension].
@@ -86,7 +94,7 @@ func (e *extension) startNewLogger(cc controlclient.Client, profileID ipn.Profil
 	// Create a new log store if this is the first logger.
 	// Otherwise, get the existing log store.
 	store, err := e.store.GetErr(func() (LogStore, error) {
-		return newDefaultLogStore(e.logf)
+		return newDefaultLogStore(e.logf, e.sb.TailscaleVarRoot())
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audit log store: %w", err)
