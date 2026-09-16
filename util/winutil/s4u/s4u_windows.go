@@ -965,12 +965,19 @@ func beRelay(args []string) error {
 	defer psp.Close()
 
 	go resizeLoop(logf, resize, psp.PTYResizer())
+	outDone := make(chan struct{})
+	go func() {
+		defer close(outDone)
+		if debugRelay {
+			debugLogPTYOutput(logf, os.Stdout, psp.rStdout)
+		} else {
+			io.Copy(os.Stdout, psp.rStdout)
+		}
+	}()
 	if debugRelay {
 		go debugLogPTYInput(logf, psp.wStdin, os.Stdin)
-		go debugLogPTYOutput(logf, os.Stdout, psp.rStdout)
 	} else {
 		go io.Copy(psp.wStdin, os.Stdin)
-		go io.Copy(os.Stdout, psp.rStdout)
 	}
 
 	exitCode, err := psp.Wait()
@@ -982,10 +989,17 @@ func beRelay(args []string) error {
 		logf("relayed process returned %v", exitCode)
 	}
 
-	if err := psp.Close(); err != nil {
-		logf("s4u.Process.Close error: %v", err)
+	// The process has exited, but its last output may still be in the
+	// pseudoconsole. Release closes the pseudoconsole, which is what makes
+	// the output pipe reach EOF; drain it before exiting, or the tail of
+	// the output of a short command ("echo hello") is lost.
+	if err := psp.Release(); err != nil {
+		logf("s4u.Process.Release error: %v", err)
 		return err
 	}
+	<-outDone
+	psp.rStdout.Close()
+	psp.wStdin.Close()
 	// The relay stands in for the process it ran, so its exit code is
 	// that process's exit code.
 	if exitCode != 0 {
