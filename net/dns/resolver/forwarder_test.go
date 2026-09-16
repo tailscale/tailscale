@@ -1362,6 +1362,53 @@ func TestForwarderRcodeNoTCPRetry(t *testing.T) {
 	}
 }
 
+// TestForwarderRaceLoserNoReadError checks that the losing resolver in a race
+// isn't counted in dns_query_fwd_udp_error_read. Ending the query closes its
+// socket out from under its blocked read, which is our teardown rather than an
+// upstream problem.
+func TestForwarderRaceLoserNoReadError(t *testing.T) {
+	const domain = "race-loser.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	answering := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+	// Bound on both transports but answering on neither, so its sendUDP is still
+	// blocked in the read when the other resolver's answer ends the query.
+	silent := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		answer, func(isTCP bool, gotRequest []byte) {})
+
+	const queries = 20
+	beforeRead := metricDNSFwdUDPErrorRead.Value()
+	beforeCtxDone := metricDNSFwdUDPReadCtxDone.Value()
+	for range queries {
+		resp, err := runTestQuery(t, request, nil, answering, silent)
+		if err != nil {
+			t.Fatalf("runTestQuery: %v", err)
+		}
+		if !bytes.Equal(resp, answer) {
+			t.Fatalf("invalid response\ngot: %+v\nwant: %+v", resp, answer)
+		}
+	}
+
+	// A loser wakes only when the query tears its socket down, so wait for all
+	// of them to account for themselves before reading the counter. Counting
+	// both outcomes matters. Waiting on the teardown counter alone would time
+	// out under a regression and report the wrong thing.
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		woke := (metricDNSFwdUDPReadCtxDone.Value() - beforeCtxDone) +
+			(metricDNSFwdUDPErrorRead.Value() - beforeRead)
+		if woke < queries {
+			return fmt.Errorf("only %d of %d losing reads have woken up", woke, queries)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the losing resolvers to finish: %v", err)
+	}
+	if got := metricDNSFwdUDPErrorRead.Value() - beforeRead; got != 0 {
+		t.Errorf("dns_query_fwd_udp_error_read advanced by %d over %d queries; want 0", got, queries)
+	}
+}
+
 // TestForwarderRcodeWithHungTCP checks the shape that made every forwarded
 // query slow. The upstream refuses over UDP and accepts TCP without ever
 // answering. The client must still get the REFUSED, promptly, whichever
