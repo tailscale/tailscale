@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/goreleaser/nfpm/v2"
 	"github.com/goreleaser/nfpm/v2/files"
@@ -244,7 +245,7 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 			Source:      filepath.Join(tailscaledDir, "tailscaled.defaults"),
 			Destination: "/etc/default/tailscaled",
 		},
-	}, 0, "deb", false)
+	}, 0, "deb", false, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +398,7 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 			Type:        files.TypeDir,
 			Destination: "/var/cache/tailscale",
 		},
-	}, 0, "rpm", false)
+	}, 0, "rpm", false, time.Time{})
 	if err != nil {
 		return nil, err
 	}

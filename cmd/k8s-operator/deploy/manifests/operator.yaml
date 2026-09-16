@@ -31,7 +31,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: connectors.tailscale.com
 spec:
     group: tailscale.com
@@ -348,7 +348,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: dnsconfigs.tailscale.com
 spec:
     group: tailscale.com
@@ -1487,7 +1487,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: peerrelays.tailscale.com
 spec:
     group: tailscale.com
@@ -1792,7 +1792,6 @@ spec:
                                 x-kubernetes-list-type: map
                         type: object
                 required:
-                    - metadata
                     - spec
                 type: object
           served: true
@@ -1804,7 +1803,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: proxyclasses.tailscale.com
 spec:
     group: tailscale.com
@@ -3041,11 +3040,8 @@ spec:
                                                             Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
                                                             whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
                                                             CSIDriver instance. Other volumes are always re-labelled recursively.
-                                                            "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
 
-                                                            If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
-                                                            If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
-                                                            and "Recursive" for all other volumes.
+                                                            If not specified, "MountOption" is used.
 
                                                             This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
 
@@ -3397,7 +3393,6 @@ spec:
                                                                     procMount denotes the type of proc mount to use for the containers.
                                                                     The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
-                                                                    This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
                                                                 type: string
                                                             readOnlyRootFilesystem:
@@ -3738,7 +3733,6 @@ spec:
                                                                     procMount denotes the type of proc mount to use for the containers.
                                                                     The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
-                                                                    This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
                                                                 type: string
                                                             readOnlyRootFilesystem:
@@ -4230,7 +4224,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: proxygrouppolicies.tailscale.com
 spec:
     group: tailscale.com
@@ -4354,7 +4348,6 @@ spec:
                                 x-kubernetes-list-type: map
                         type: object
                 required:
-                    - metadata
                     - spec
                 type: object
           served: true
@@ -4366,7 +4359,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: proxygroups.tailscale.com
 spec:
     group: tailscale.com
@@ -4646,7 +4639,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: recorders.tailscale.com
 spec:
     group: tailscale.com
@@ -5810,7 +5803,6 @@ spec:
                                                                     procMount denotes the type of proc mount to use for the containers.
                                                                     The default value is Default which uses the container runtime defaults for
                                                                     readonly paths and masked paths.
-                                                                    This requires the ProcMountType feature flag to be enabled.
                                                                     Note that this field cannot be set when spec.os.name is windows.
                                                                 type: string
                                                             readOnlyRootFilesystem:
@@ -6060,11 +6052,8 @@ spec:
                                                             Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
                                                             whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
                                                             CSIDriver instance. Other volumes are always re-labelled recursively.
-                                                            "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
 
-                                                            If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
-                                                            If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
-                                                            and "Recursive" for all other volumes.
+                                                            If not specified, "MountOption" is used.
 
                                                             This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
 
@@ -6443,7 +6432,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
     annotations:
-        controller-gen.kubebuilder.io/version: v0.17.0
+        controller-gen.kubebuilder.io/version: v0.22.0
     name: tailnets.tailscale.com
 spec:
     group: tailscale.com
@@ -6576,7 +6565,6 @@ spec:
                                 x-kubernetes-list-type: map
                         type: object
                 required:
-                    - metadata
                     - spec
                 type: object
           served: true

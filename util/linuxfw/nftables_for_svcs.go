@@ -226,6 +226,11 @@ func portMapRule(t *nftables.Table, ch *nftables.Chain, tun string, targetIP net
 				RegAddrMax:  1,
 				RegProtoMin: 2,
 				RegProtoMax: 2,
+				// The kernel sets this flag itself whenever a proto
+				// register is given, and reports it back when the rule
+				// is listed. Setting it here too keeps findRule's
+				// comparison of built vs. listed rules equal.
+				Specified: true,
 			},
 		},
 	}
