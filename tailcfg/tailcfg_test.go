@@ -350,6 +350,7 @@ func TestNodeEqual(t *testing.T) {
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
 		"SelfNodeV6MasqAddrForThisPeer", "IsWireGuardOnly", "IsJailed", "ExitNodeDNSResolvers",
+		"StableTailnetID",
 	}
 	if have := fieldsOf(reflect.TypeFor[Node]()); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -402,6 +403,21 @@ func TestNodeEqual(t *testing.T) {
 		{
 			&Node{StableID: "node-abcd"},
 			&Node{StableID: "node-abcd"},
+			true,
+		},
+		{
+			&Node{StableTailnetID: "tailnet-abcd"},
+			&Node{},
+			false,
+		},
+		{
+			&Node{StableTailnetID: "tailnet-abcd"},
+			&Node{StableTailnetID: "tailnet-efgh"},
+			false,
+		},
+		{
+			&Node{StableTailnetID: "tailnet-abcd"},
+			&Node{StableTailnetID: "tailnet-abcd"},
 			true,
 		},
 		{

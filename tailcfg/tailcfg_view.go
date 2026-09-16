@@ -376,7 +376,14 @@ func (v NodeView) IsJailed() bool { return v.ж.IsJailed }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
 }
-func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
+
+// StableTailnetID is the identifier of the tailnet this node is a
+// member of.
+//
+// Control only populates this for the self node in a MapResponse
+// (MapResponse.Node); it is empty for peers.
+func (v NodeView) StableTailnetID() StableTailnetID { return v.ж.StableTailnetID }
+func (v NodeView) Equal(v2 NodeView) bool           { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeViewNeedsRegeneration = Node(struct {
@@ -416,6 +423,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	StableTailnetID               StableTailnetID
 }{})
 
 // View returns a read-only view of Hostinfo.

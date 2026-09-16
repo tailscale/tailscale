@@ -52,6 +52,34 @@ func eps(s ...string) []netip.AddrPort {
 	return eps
 }
 
+func TestStableTailnetID(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		nm   *NetworkMap
+		want tailcfg.StableTailnetID
+	}{
+		{name: "nil_map"},
+		{name: "invalid_self_node", nm: &NetworkMap{}},
+		{
+			name: "missing_id",
+			nm:   &NetworkMap{SelfNode: (&tailcfg.Node{}).View()},
+		},
+		{
+			name: "populated",
+			nm: &NetworkMap{
+				SelfNode: (&tailcfg.Node{StableTailnetID: "tailnet-abcd"}).View(),
+			},
+			want: "tailnet-abcd",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.nm.StableTailnetID(); got != tt.want {
+				t.Errorf("StableTailnetID() = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNetworkMapConcise(t *testing.T) {
 	for _, tt := range []struct {
 		name string
