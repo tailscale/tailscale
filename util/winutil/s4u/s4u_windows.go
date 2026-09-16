@@ -135,7 +135,7 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 		return nil, err
 	}
 	if capLevel == CapCreateProcess {
-		token = maybeLinkedToken(token)
+		token = maybeLinkedToken(logfOrDiscard(logf), u, token)
 	}
 	tokenCloseOnce := sync.OnceFunc(func() { token.Close() })
 	defer func() {
@@ -193,15 +193,25 @@ func Login(logf logger.Logf, srcName string, u *user.User, capLevel CapabilityLe
 // UAC-filtered token, closing token, and otherwise returns token unchanged.
 // The caller must hold SeTcbPrivilege for the linked token to be a usable
 // primary token rather than an identification-level one.
-func maybeLinkedToken(token windows.Token) windows.Token {
+//
+// UAC filters the logon of a local Administrators member other than the
+// built-in Administrator (see LocalAccountTokenFilterPolicy); domain
+// accounts' network logons are not filtered, so for them this is a no-op.
+func maybeLinkedToken(logf logger.Logf, u *user.User, token windows.Token) windows.Token {
 	limited, err := winutil.IsTokenLimited(token)
-	if err != nil || !limited {
+	if err != nil {
+		logf("(s4u) IsTokenLimited(%q): %v", u.Username, err)
+		return token
+	}
+	if !limited {
 		return token
 	}
 	linked, err := token.GetLinkedToken()
 	if err != nil {
+		logf("(s4u) GetLinkedToken(%q): %v; using the UAC-filtered token", u.Username, err)
 		return token
 	}
+	logf("(s4u) using the linked (unfiltered) administrator token for %q", u.Username)
 	token.Close()
 	return linked
 }
