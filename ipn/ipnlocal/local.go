@@ -1499,6 +1499,7 @@ func (b *LocalBackend) updateStatusLocked(sb *ipnstate.StatusBuilder) {
 			s.CurrentTailnet.MagicDNSSuffix = nm.MagicDNSSuffix()
 			s.CurrentTailnet.MagicDNSEnabled = nm.DNS.Proxied
 			s.CurrentTailnet.Name = nm.Domain
+			s.CurrentTailnet.StableID = nm.StableTailnetID()
 			if prefs := b.pm.CurrentPrefs(); prefs.Valid() {
 				if !prefs.RouteAll() && nm.AnyPeersAdvertiseRoutes() {
 					s.Health = append(s.Health, healthmsg.WarnAcceptRoutesOff)

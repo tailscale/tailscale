@@ -122,6 +122,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	StableTailnetID               StableTailnetID
 }{})
 
 // Clone makes a deep copy of Hostinfo.

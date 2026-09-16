@@ -173,6 +173,10 @@ type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.
 	Name string
 
+	// StableID is the stable, unique identifier of the tailnet, as used to
+	// identify the tailnet in the Tailscale API.
+	StableID tailcfg.StableTailnetID
+
 	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
 	// in the network such as "userfoo.tailscale.net".
 	// There are no surrounding dots.

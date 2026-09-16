@@ -775,8 +775,8 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node, onFalse func(string))
 		case "computedHostIfDifferent", "ComputedName", "ComputedNameWithHost":
 			// Caller's responsibility to have populated these.
 			continue
-		case "DataPlaneAuditLogID":
-			//  Not sent for peers.
+		case "DataPlaneAuditLogID", "StableTailnetID":
+			// Not sent for peers.
 		case "Capabilities":
 			// Deprecated; see https://github.com/tailscale/tailscale/issues/11508
 			// And it was never sent by any known control server.

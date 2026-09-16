@@ -1936,6 +1936,48 @@ func TestStatusPeerCapabilities(t *testing.T) {
 	}
 }
 
+func TestStatusStableTailnetID(t *testing.T) {
+	b := newTestLocalBackend(t)
+	for _, tt := range []struct {
+		name     string
+		stableID tailcfg.StableTailnetID
+	}{
+		{name: "populated", stableID: "tailnet-abcd"},
+		{name: "missing"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b.setNetMapLocked(&netmap.NetworkMap{
+				Domain: "example.com",
+				SelfNode: (&tailcfg.Node{
+					MachineAuthorized: true,
+					Addresses:         ipps("100.101.101.101"),
+					StableTailnetID:   tt.stableID,
+				}).View(),
+			})
+
+			// The ID is returned with or without peers.
+			t.Run("with_peers", func(t *testing.T) {
+				st := b.Status()
+				if st.CurrentTailnet == nil {
+					t.Fatalf("CurrentTailnet is nil")
+				}
+				if got := st.CurrentTailnet.StableID; got != tt.stableID {
+					t.Errorf("CurrentTailnet.StableID = %q; want %q", got, tt.stableID)
+				}
+			})
+			t.Run("without_peers", func(t *testing.T) {
+				st := b.StatusWithoutPeers()
+				if st.CurrentTailnet == nil {
+					t.Fatalf("CurrentTailnet is nil")
+				}
+				if got := st.CurrentTailnet.StableID; got != tt.stableID {
+					t.Errorf("CurrentTailnet.StableID = %q; want %q", got, tt.stableID)
+				}
+			})
+		})
+	}
+}
+
 // TestStatusWithoutPeersSelfUserProfile verifies that the self user's
 // UserProfile is reported in Status.User even when peers are omitted, so that
 // callers like `tailscale status --peers=false` can resolve the self node's
