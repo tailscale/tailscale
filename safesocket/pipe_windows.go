@@ -7,9 +7,11 @@ package safesocket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,8 +29,12 @@ func connect(ctx context.Context, path string) (net.Conn, error) {
 
 // windowsSDDL is the Security Descriptor set on the namedpipe.
 // It provides read/write access to all users and the local system.
-// It is a var for testing, do not change this value.
-var windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
+//
+// It deliberately sets no owner or group: the creator becomes the owner.
+// Naming the Administrators group as the owner, as this once did, made
+// listening fail for a tailscaled run by a non-administrator, since only
+// administrators may assign that SID as an owner.
+const windowsSDDL = "D:P(A;;GWGR;;;BU)(A;;GWGR;;;SY)"
 
 func listen(path string) (net.Listener, error) {
 	lc, err := winio.ListenPipe(
@@ -40,6 +46,11 @@ func listen(path string) (net.Listener, error) {
 		},
 	)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) && strings.HasPrefix(strings.ToLower(path), `\\.\pipe\protectedprefix\administrators\`) {
+			// Only administrators may create pipes under that prefix,
+			// which is where tailscaled listens by default.
+			return nil, fmt.Errorf("namedpipe.Listen: %w; creating a pipe under \\\\.\\pipe\\ProtectedPrefix\\Administrators requires running as an administrator; run elevated or pass --socket with another pipe name", err)
+		}
 		return nil, fmt.Errorf("namedpipe.Listen: %w", err)
 	}
 	return &winIOPipeListener{Listener: lc}, nil
