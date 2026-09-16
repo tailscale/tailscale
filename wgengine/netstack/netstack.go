@@ -1055,7 +1055,16 @@ func (ns *Impl) injectToWireGuard() {
 		}
 		if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
 			ns.logf("netstack injectToWireGuard err: %v", err)
-			return
+			// When failing to write to the tundev, log the error, but continue
+			// serving the ReadContext for sending traffic as nothing manages a failed
+			// injectToWireGuard. This is especially important on android where the
+			// tundev changes its fd often, and a write at the wrong time can result
+			// in an IO err while a new fd is being set up.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
+			continue
 		}
 	}
 }
@@ -1097,7 +1106,16 @@ func (ns *Impl) injectToHost() {
 		}
 		if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundSlab, packets, writeBufs); err != nil {
 			ns.logf("netstack injectToHost err: %v", err)
-			return
+			// When failing to write to the tundev, log the error, but continue
+			// serving the ReadContext for sending traffic as nothing manages a failed
+			// injectToWireGuard. This is especially important on android where the
+			// tundev changes its fd often, and a write at the wrong time can result
+			// in an IO err while a new fd is being set up.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
+			continue
 		}
 	}
 }
