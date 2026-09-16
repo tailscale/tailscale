@@ -106,11 +106,13 @@ const (
 	// udpRaceTimeout is the timeout after which we will start a DNS query
 	// over TCP while waiting for the UDP query to complete.
 	udpRaceTimeout = 2 * time.Second
-
-	// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
-	// It matches the default 5sec timeout of the 'dig' utility.
-	tcpQueryTimeout = 5 * time.Second
 )
+
+// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
+// It matches the default 5sec timeout of the 'dig' utility.
+//
+// It's a var only so tests can shorten it.
+var tcpQueryTimeout = 5 * time.Second
 
 // txid identifies a DNS transaction.
 //
@@ -692,6 +694,14 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	firstUDP := func(ctx context.Context) ([]byte, error) {
 		resp, err := f.sendUDP(ctx, fq, rr)
 		if err != nil {
+			if rcodeErr, ok := errors.AsType[rcodeResponseError](err); ok {
+				// A response carrying REFUSED or SERVFAIL is a complete
+				// answer, so hand it back as the race's result. That ends
+				// the race here rather than waiting on a TCP retry that can
+				// only fetch the same rcode. send turns it back into the
+				// soft error the caller expects.
+				return rcodeErr.res, nil
+			}
 			return nil, err
 		}
 		if !truncatedFlagSet(resp) {
@@ -722,12 +732,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, truncatedResponseError{resp}
 	}
 	thenTCP := func(ctx context.Context) ([]byte, error) {
-		// If we're skipping the TCP fallback, then wait until the
-		// context is canceled and return that error (i.e. not
-		// returning anything).
+		// Report the disabled retry instead of waiting out the context.
 		if skipTCP {
-			<-ctx.Done()
-			return nil, ctx.Err()
+			return nil, errTCPRetryDisabled
 		}
 
 		return f.sendTCP(ctx, fq, rr)
@@ -744,6 +751,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	rh := race.New(timeout, firstUDP, thenTCP)
 	resp, err := rh.Start(ctx)
 	if err == nil {
+		// firstUDP returns an upstream REFUSED or SERVFAIL as a result so the
+		// race ends without waiting on the TCP arm. No other success out of
+		// the race carries those rcodes. sendUDP and sendTCP both turn them
+		// into errors, and DoH never enters the race. For a tcp-family query
+		// the TCP arm may already be running. The query's teardown closes its
+		// conn.
+		switch rcode := getRCode(resp); rcode {
+		case dns.RCodeServerFailure, dns.RCodeRefused:
+			return nil, rcodeResponseError{rcode, resp}
+		}
 		return resp, nil
 	}
 
@@ -783,6 +800,13 @@ func (r rcodeResponseError) Unwrap() error {
 var errRefused = errors.New("response code indicates refusal")
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
+
+// errTCPRetryDisabled is what the TCP arm of the race in send reports when
+// TCP retries are disabled. It is joined with the UDP arm's error, which is the
+// one forwardWithDestChan acts on. A UDP failure with retries disabled is
+// therefore reported at once instead of stalling the query to its deadline, so
+// it no longer trips the deadline path that raises dnsForwarderFailing.
+var errTCPRetryDisabled = errors.New("no TCP retry: disabled by envknob or control knob")
 
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()
@@ -1010,6 +1034,16 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		return nil, err
 	}
 	defer conn.Close()
+
+	// Canceling ctx can't interrupt reads blocked in the runtime, so the
+	// deadline has to go on the conn. ctx already carries
+	// min(caller's deadline, tcpQueryTimeout).
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Best effort. The caller's ctx still bounds the read.
+			f.logf("sendTCP: setting conn deadline: %v", err)
+		}
+	}
 
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
