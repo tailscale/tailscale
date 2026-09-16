@@ -1,0 +1,230 @@
+name: bumpdep
+
+on:
+  # Only trigger the workflow on demand.
+  workflow_dispatch:
+    inputs:
+      deps:
+        description: >-
+          Comma-separated dependencies to bump. Special names: "go" (runs
+          ./pull-toolchain.sh), "wireguard-go" (github.com/tailscale/wireguard-go@tailscale),
+          "gvisor" (gvisor.dev/gvisor@go). Anything else is a Go module path
+          bumped to @latest, or to the version given in a "path@version" suffix.
+        required: true
+      issue:
+        description: >-
+          URL of the GitHub issue motivating this bump, e.g.
+          https://github.com/tailscale/tailscale/issues/12345. It becomes the
+          "Updates #12345" line of the commit message.
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bumpdep:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate issue URL
+        env:
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          set -euo pipefail
+          issue=$(printf '%s' "$ISSUE" | tr -d '[:space:]')
+          if ! printf '%s\n' "$issue" | grep -Eq '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$'; then
+            echo "::error::issue must be a GitHub issue URL like https://github.com/tailscale/tailscale/issues/12345; got '$ISSUE'" >&2
+            exit 1
+          fi
+          # Convert to the short form used in commit messages: "#123" for
+          # this repo, "owner/repo#123" for others.
+          path="${issue#https://github.com/}"
+          repo="${path%/issues/*}"
+          num="${path##*/}"
+          if [ "$repo" = "$GITHUB_REPOSITORY" ]; then
+            ref="#$num"
+          else
+            ref="$repo#$num"
+          fi
+          echo "ISSUE_REF=$ref" >>"$GITHUB_ENV"
+
+      - name: Bump dependencies
+        id: bump
+        env:
+          DEPS: ${{ inputs.deps }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+
+          # Build gocross (if needed) using the regular GOPROXY so the
+          # GOPROXY=direct go get calls below don't have to.
+          ./tool/go version
+
+          # modver prints the current version of the given module, or nothing
+          # if it's not yet in go.mod.
+          modver() {
+            ./tool/go list -m -f '{{.Version}}' "$1" 2>/dev/null || true
+          }
+
+          # goget bumps module $1 to version $2, appending a summary line
+          # to the PR body that links $3 (a GitHub repo URL) if given.
+          # It fails if go get downgraded anything: a downgrade means
+          # something went wrong and needs a human's rollback PR, not an
+          # unattended bump.
+          goget() {
+            local mod="$1" ver="$2" repo="${3:-}"
+            local before after log="$RUNNER_TEMP/go-get.log"
+            before=$(modver "$mod")
+            GOPROXY=direct ./tool/go get "$mod@$ver" 2>&1 | tee "$log"
+            if grep -q '^go: downgraded ' "$log"; then
+              echo "::error::refusing to downgrade modules while bumping $mod@$ver:" >&2
+              grep '^go: downgraded ' "$log" >&2
+              exit 1
+            fi
+            after=$(modver "$mod")
+            if [ "$before" = "$after" ]; then
+              echo "* $mod: already at $after" >>"$BODY"
+            elif [ -n "$repo" ] && [ -n "$before" ]; then
+              # Link a compare view; for pseudo-versions, the trailing
+              # component is the commit hash.
+              echo "* $mod: $repo/compare/${before##*-}...${after##*-}" >>"$BODY"
+            else
+              echo "* $mod: ${before:-(new)} to $after" >>"$BODY"
+            fi
+          }
+
+          BODY="$RUNNER_TEMP/pr-body.md"
+          : >"$BODY"
+
+          names=()   # display names, for the title
+          slugs=()   # cleaned input names, for the branch name
+          touch_gomod=0
+          touch_toolchain=0
+
+          IFS=',' read -ra deps <<<"$DEPS"
+          for dep in "${deps[@]}"; do
+            dep="${dep#"${dep%%[![:space:]]*}"}" # strip leading whitespace
+            dep="${dep%"${dep##*[![:space:]]}"}" # strip trailing whitespace
+            [ -z "$dep" ] && continue
+            slugs+=("$dep")
+            case "$dep" in
+              go)
+                before=$(cat go.toolchain.rev)
+                ./pull-toolchain.sh
+                after=$(cat go.toolchain.rev)
+                if [ "$before" != "$after" ]; then
+                  echo "* Go toolchain: https://github.com/tailscale/go/compare/${before}...${after}" >>"$BODY"
+                else
+                  echo "* Go toolchain: already at ${after}" >>"$BODY"
+                fi
+                names+=("Go toolchain")
+                touch_toolchain=1
+                ;;
+              wireguard-go)
+                goget github.com/tailscale/wireguard-go tailscale https://github.com/tailscale/wireguard-go
+                names+=("wireguard-go")
+                touch_gomod=1
+                ;;
+              gvisor)
+                goget gvisor.dev/gvisor go https://github.com/google/gvisor
+                names+=("gvisor")
+                touch_gomod=1
+                ;;
+              *)
+                mod="${dep%%@*}"
+                ver=latest
+                case "$dep" in
+                  *@*) ver="${dep#*@}" ;;
+                esac
+                goget "$mod" "$ver"
+                names+=("$mod")
+                touch_gomod=1
+                ;;
+            esac
+          done
+
+          if [ "${#names[@]}" -eq 0 ]; then
+            echo "::error::no dependencies given" >&2
+            exit 1
+          fi
+
+          prefix=""
+          [ "$touch_gomod" = 1 ] && prefix="go.mod"
+          if [ "$touch_toolchain" = 1 ]; then
+            prefix="${prefix:+$prefix,}go.toolchain.rev"
+          fi
+          title="$prefix: bump $(printf '%s, ' "${names[@]}" | sed 's/, $//')"
+
+          # Branch name: actions/bumpdep/<deps>, restricted to characters
+          # that are safe in a git ref and bounded in length.
+          slug=$(IFS=,; printf '%s' "${slugs[*]}" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/\.+/./g; s/^[.-]+//' | cut -c1-80 | sed -E 's/[.-]+$//')
+
+          echo "" >>"$BODY"
+          echo "Triggered by @${TRIGGERING_ACTOR} via the bumpdep workflow." >>"$BODY"
+          echo "" >>"$BODY"
+          echo "Updates $ISSUE_REF" >>"$BODY"
+
+          {
+            echo "title=$title"
+            echo "branch=actions/bumpdep/$slug"
+            echo "commit-message<<BUMPDEP_EOF"
+            echo "$title"
+            echo
+            cat "$BODY"
+            echo "BUMPDEP_EOF"
+          } >>"$GITHUB_OUTPUT"
+
+          echo "body-path=$BODY" >>"$GITHUB_OUTPUT"
+
+          echo "### $title" >>"$GITHUB_STEP_SUMMARY"
+          cat "$BODY" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: make tidy
+        run: make tidy
+
+      - name: make updatedeps
+        run: make updatedeps
+
+      - name: Show changes
+        run: git --no-pager diff --stat
+
+      - name: Get access token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3.0.0
+        id: generate-token
+        with:
+          # Get token for app: https://github.com/apps/tailscale-code-updater
+          app-id: ${{ secrets.CODE_UPDATER_APP_ID }}
+          private-key: ${{ secrets.CODE_UPDATER_APP_PRIVATE_KEY }}
+          # Limit the token to only pushing a branch and opening a pull request.
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Send pull request
+        id: pull-request
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 #v8.1.0
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          author: Dep Updater <noreply+dep-updater@tailscale.com>
+          committer: Dep Updater <noreply+dep-updater@tailscale.com>
+          branch: ${{ steps.bump.outputs.branch }}
+          commit-message: ${{ steps.bump.outputs.commit-message }}
+          title: ${{ steps.bump.outputs.title }}
+          body-path: ${{ steps.bump.outputs.body-path }}
+          signoff: true
+          delete-branch: true
+          # Assign the PR to the user that triggered this action.
+          reviewers: ${{ github.triggering_actor }}
+
+      - name: Summary
+        if: ${{ steps.pull-request.outputs.pull-request-number }}
+        env:
+          PR_OPERATION: ${{ steps.pull-request.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.pull-request.outputs.pull-request-url }}
+        run: echo "$PR_OPERATION $PR_URL" >> "$GITHUB_STEP_SUMMARY"
