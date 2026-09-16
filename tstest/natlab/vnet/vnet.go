@@ -2569,6 +2569,10 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		}
 
 		if toSplitDNS {
+			if string(q.Name) == SplitDNSRefusedName {
+				response.ResponseCode = layers.DNSResponseCodeRefused
+				continue
+			}
 			// The secondary server serves only its own zone, and only A records.
 			if addr, ok := splitDNSZone[string(q.Name)]; ok && q.Type == layers.DNSTypeA {
 				response.ANCount++
