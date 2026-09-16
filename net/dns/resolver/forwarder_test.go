@@ -1400,6 +1400,100 @@ func TestForwarderTCPRetriesDisabledDoesNotStall(t *testing.T) {
 	}
 }
 
+// TestForwarderRcodeHoldWithOutstandingResolver checks that an upstream REFUSED
+// reaches the client even though another resolver in the race never reports.
+func TestForwarderRcodeHoldWithOutstandingResolver(t *testing.T) {
+	const domain = "refused-with-hung-peer.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	refusingPort := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {})
+	// Answers on neither transport, but has both ports bound, so queries to it
+	// hang rather than failing fast.
+	hungPort := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		response, func(isTCP bool, gotRequest []byte) {})
+
+	start := time.Now()
+	resp, err := runTestQuery(t, request, beVerbose, refusingPort, hungPort)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, response) {
+		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, response)
+	}
+	// Both resolvers start immediately, so the hold is just rcodeHoldGrace.
+	if elapsed < rcodeHoldGrace {
+		t.Errorf("query took %v (< rcodeHoldGrace %v): the REFUSED wasn't held for a better answer",
+			elapsed, rcodeHoldGrace)
+	}
+	if elapsed >= 2*time.Second {
+		t.Errorf("query took %v; the hold should have released the REFUSED after %v",
+			elapsed, rcodeHoldGrace)
+	}
+}
+
+func TestRcodeHoldDelay(t *testing.T) {
+	res := func(delays ...time.Duration) []resolverAndDelay {
+		rr := make([]resolverAndDelay, len(delays))
+		for i, d := range delays {
+			rr[i] = resolverAndDelay{name: &dnstype.Resolver{Addr: "8.8.8.8:53"}, startDelay: d}
+		}
+		return rr
+	}
+	tests := []struct {
+		name      string
+		resolvers []resolverAndDelay
+		elapsed   time.Duration
+		want      time.Duration
+	}{
+		{"no delays", res(0, 0), 0, rcodeHoldGrace},
+		{"no delays, late rcode", res(0, 0), 50 * time.Millisecond, rcodeHoldGrace - 50*time.Millisecond},
+		{"waits out the largest delay", res(0, dohHeadStart), 0, dohHeadStart + rcodeHoldGrace},
+		{"delay already elapsed", res(0, dohHeadStart), dohHeadStart, rcodeHoldGrace},
+		{"grace already elapsed", res(0, dohHeadStart), time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rcodeHoldDelay(tt.resolvers, tt.elapsed); got != tt.want {
+				t.Errorf("rcodeHoldDelay = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestForwarderRcodeHoldWaitsForDelayedResolver checks that a fast REFUSED
+// doesn't cut off a resolver still inside its startDelay, which is the shape
+// resolversWithDelays produces for a public resolver's dns53 entry.
+func TestForwarderRcodeHoldWaitsForDelayedResolver(t *testing.T) {
+	const domain = "refused-then-delayed.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	refused := makeTestResponse(t, domain, dns.RCodeRefused)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	refusingPort := runDNSServer(t, nil, refused, func(isTCP bool, gotRequest []byte) {})
+	answeringPort := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+
+	resolvers := []resolverAndDelay{
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", refusingPort)}},
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", answeringPort)}, startDelay: dohHeadStart},
+	}
+
+	start := time.Now()
+	resp, err := runTestQueryWithResolvers(t, request, "udp", beVerbose, resolvers...)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("runTestQueryWithResolvers: %v", err)
+	}
+	if !bytes.Equal(resp, answer) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+	}
+	if elapsed < dohHeadStart {
+		t.Errorf("query took %v, less than the delayed resolver's startDelay of %v; it can't have answered",
+			elapsed, dohHeadStart)
+	}
+}
+
 // TestSendTCPReadTimeout checks that tcpQueryTimeout bounds the response read
 // against an upstream that accepts the connection and never answers.
 func TestSendTCPReadTimeout(t *testing.T) {
