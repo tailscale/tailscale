@@ -82,6 +82,16 @@ type settings struct {
 	DebugAddrPort         string
 	EgressProxiesCfgPath  string
 	IngressProxiesCfgPath string
+	// RouteAcceptor is set to true if this node should be configured so that
+	// traffic it forwards (for example from Pods on the same Kubernetes node
+	// when running in the host network namespace) can reach the tailnet. See
+	// TS_EXPERIMENTAL_ROUTE_ACCEPTOR.
+	RouteAcceptor bool
+	// RouteAcceptorSources is set to true if only the Pods the Kubernetes
+	// operator lists in the route_sources field of the state Secret may be
+	// routed via the tailnet, each to the routes listed for it. See
+	// TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES.
+	RouteAcceptorSources bool
 	// CertShareMode is set for Kubernetes Pods running cert share mode.
 	// Possible values are empty (containerboot doesn't run any certs
 	// logic),  'ro' (for Pods that shold never attempt to issue/renew
@@ -136,6 +146,8 @@ func configFromEnv() (*settings, error) {
 		DebugAddrPort:                         os.Getenv("TS_DEBUG_ADDR_PORT"),
 		EgressProxiesCfgPath:                  os.Getenv("TS_EGRESS_PROXIES_CONFIG_PATH"),
 		IngressProxiesCfgPath:                 os.Getenv("TS_INGRESS_PROXIES_CONFIG_PATH"),
+		RouteAcceptor:                         def.Bool(os.Getenv("TS_EXPERIMENTAL_ROUTE_ACCEPTOR"), false),
+		RouteAcceptorSources:                  def.Bool(os.Getenv("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES"), false),
 		PodUID:                                os.Getenv("POD_UID"),
 		BootCtxTimeout:                        def.Duration(os.Getenv("TS_BOOT_TIMEOUT"), 60*time.Second),
 	}
@@ -352,6 +364,21 @@ func (s *settings) validate() error {
 	if s.IngressProxiesCfgPath != "" && !(s.InKubernetes && s.KubeSecret != "") {
 		return errors.New("TS_INGRESS_PROXIES_CONFIG_PATH is only supported for Tailscale running on Kubernetes")
 	}
+	if s.RouteAcceptor {
+		if s.UserspaceMode {
+			return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR is not supported with TS_USERSPACE")
+		}
+		if !(s.InKubernetes && s.KubeSecret != "") {
+			return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR is only supported for Tailscale running on Kubernetes")
+		}
+		if s.ProxyTargetIP != "" || s.ProxyTargetDNSName != "" || s.TailnetTargetIP != "" || s.TailnetTargetFQDN != "" ||
+			s.ServeConfigPath != "" || s.Routes != nil || s.EgressProxiesCfgPath != "" || s.IngressProxiesCfgPath != "" {
+			return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR cannot be set in combination with TS_DEST_IP, TS_EXPERIMENTAL_DEST_DNS_NAME, TS_TAILNET_TARGET_IP, TS_TAILNET_TARGET_FQDN, TS_SERVE_CONFIG, TS_ROUTES, TS_EGRESS_PROXIES_CONFIG_PATH or TS_INGRESS_PROXIES_CONFIG_PATH")
+		}
+	}
+	if s.RouteAcceptorSources && !s.RouteAcceptor {
+		return errors.New("TS_EXPERIMENTAL_ROUTE_ACCEPTOR_SOURCES requires TS_EXPERIMENTAL_ROUTE_ACCEPTOR")
+	}
 
 	// Error out when passed a malformed duration in `TS_BOOT_TIMEOUT` env var.
 	if v := os.Getenv("TS_BOOT_TIMEOUT"); v != "" {
@@ -448,7 +475,7 @@ func isOneStepConfig(cfg *settings) bool {
 // as an L3 proxy, proxying to an endpoint provided via one of the config env
 // vars.
 func isL3Proxy(cfg *settings) bool {
-	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressProxiesCfgPath != "" || cfg.IngressProxiesCfgPath != ""
+	return cfg.ProxyTargetIP != "" || cfg.ProxyTargetDNSName != "" || cfg.TailnetTargetIP != "" || cfg.TailnetTargetFQDN != "" || cfg.AllowProxyingClusterTrafficViaIngress || cfg.EgressProxiesCfgPath != "" || cfg.IngressProxiesCfgPath != "" || cfg.RouteAcceptor
 }
 
 // hasKubeStateStore returns true if the state must be stored in a Kubernetes

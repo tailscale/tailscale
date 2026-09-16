@@ -35,6 +35,7 @@ const (
 	MetricProxyGroupAPIServerCount       = "k8s_proxygroup_kube_apiserver_resources"
 	MetricTailnetCount                   = "k8s_tailnet_resources"
 	MetricPeerRelayCount                 = "k8s_peerrelay_resources"
+	MetricRouteAcceptorCount             = "k8s_routeacceptor_resources"
 
 	// Keys that containerboot writes to state file that can be used to determine its state.
 	// fields set in Tailscale state Secret. These are mostly used by the Tailscale Kubernetes operator to determine
@@ -45,6 +46,13 @@ const (
 	KeyPodUID         = "pod_uid"          // Pod UID
 	KeyCapVer         = "tailscale_capver" // tailcfg.CurrentCapabilityVersion of this proxy instance.
 	KeyReissueAuthkey = "reissue_authkey"  // Proxies will set this to the authkey that failed, or "no-authkey", if they can't log in.
+	// KeyAcceptedRoutes is set by containerboot instances running in route acceptor mode to a JSON array of the
+	// subnet routes (CIDRs) that the device currently accepts from its tailnet peers.
+	KeyAcceptedRoutes = "accepted_routes"
+	// KeyRouteSources is set by the Kubernetes operator on the state Secret of a route acceptor device to a
+	// routesources.Document listing which Pods on the device's node may be routed via the tailnet, and to which
+	// routes. Unlike the other keys it is written by the operator and read by containerboot.
+	KeyRouteSources = "route_sources"
 	// KeyHTTPSEndpoint is a name of a field that can be set to the value of any HTTPS endpoint currently exposed by
 	// this device to the tailnet. This is used by the Kubernetes operator Ingress proxy to communicate to the operator
 	// that cluster workloads behind the Ingress can now be accessed via the given DNS name over HTTPS.
