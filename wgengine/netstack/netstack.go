@@ -1055,7 +1055,16 @@ func (ns *Impl) injectToWireGuard() {
 		}
 		if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
 			ns.logf("netstack injectToWireGuard err: %v", err)
-			return
+			// When failing to inject an outbound packet buffer, log the error, but
+			// continue serving the ReadContext for sending subsequent packets, as
+			// nothing manages or restarts a failed injectToWireGuard. An error here
+			// only applies to the current packet and should not terminate the long-lived
+			// packet pump.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
+			continue
 		}
 	}
 }
@@ -1097,7 +1106,16 @@ func (ns *Impl) injectToHost() {
 		}
 		if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundSlab, packets, writeBufs); err != nil {
 			ns.logf("netstack injectToHost err: %v", err)
-			return
+			// When failing to inject an outbound packet buffer, log the error, but
+			// continue serving the ReadContext for sending subsequent packets, as
+			// nothing manages or restarts a failed injectToHost. An error here
+			// only applies to the current packet and should not terminate the long-lived
+			// packet pump.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
+			continue
 		}
 	}
 }
