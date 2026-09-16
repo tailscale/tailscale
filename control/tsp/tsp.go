@@ -21,6 +21,7 @@ import (
 	"tailscale.com/control/ts2021"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -160,10 +161,18 @@ func (c *Client) noiseClient(ctx context.Context) (*ts2021.Client, error) {
 	}
 
 	nc, err := ts2021.NewClient(ts2021.ClientOpts{
-		ServerURL:     c.serverURL,
-		PrivKey:       c.opts.MachineKey,
-		ServerPubKey:  c.serverPub,
-		Dialer:        tsdial.NewFromFuncForDebug(c.logf, (&net.Dialer{}).DialContext),
+		ServerURL:    c.serverURL,
+		PrivKey:      c.opts.MachineKey,
+		ServerPubKey: c.serverPub,
+		Dialer:       tsdial.NewFromFuncForDebug(c.logf, (&net.Dialer{}).DialContext),
+		// tsp is a protocol library and does not know about the system's
+		// routing table or interfaces, so it deliberately provides a plain
+		// resolver with no LookupIPFallback. Without one, ts2021 would build
+		// a resolver that falls back to bootstrap DNS over DERP when the
+		// first dial fails, which is a tailscaled concern and not ours.
+		DNSCache: &dnscache.Resolver{
+			Logf: c.logf,
+		},
 		Logf:          c.logf,
 		HealthTracker: c.opts.HealthTracker,
 	})
