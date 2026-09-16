@@ -13,7 +13,11 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"sync"
 	"time"
+
+	"tailscale.com/util/mak"
+	"tailscale.com/util/singleflight"
 )
 
 const expiresSoon = 7 * 24 * time.Hour // 7 days from now
@@ -26,7 +30,7 @@ const letsEncryptStartedStaplingCRL int64 = 1746576000 // 2025-05-07 00:00:00 UT
 //
 // The ProbeFunc connects to a hostPort (host:port string), does a TLS
 // handshake, verifies that the hostname matches the presented certificate,
-// checks certificate validity time and OCSP revocation status.
+// checks certificate validity time and CRL revocation status.
 //
 // The TLS config is optional and may be nil.
 func TLS(hostPort string, config *tls.Config) ProbeClass {
@@ -59,13 +63,13 @@ func probeTLS(ctx context.Context, config *tls.Config, dialHostPort string) erro
 	defer conn.Close()
 
 	tlsConnState := conn.(*tls.Conn).ConnectionState()
-	return validateConnState(ctx, &tlsConnState)
+	return validateConnState(ctx, defaultCRLCache, &tlsConnState)
 }
 
 // validateConnState verifies certificate validity time in all certificates
-// returned by the TLS server and checks OCSP revocation status for the
+// returned by the TLS server and checks CRL revocation status for the
 // leaf cert.
-func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr error) {
+func validateConnState(ctx context.Context, crls *crlCache, cs *tls.ConnectionState) (returnerr error) {
 	var errs []error
 	defer func() {
 		returnerr = errors.Join(errs...)
@@ -117,35 +121,43 @@ func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr 
 		return
 	}
 
-	err := checkCertCRL(ctx, leafCert.CRLDistributionPoints[0], leafCert, issuerCert)
+	err := crls.checkCertCRL(ctx, leafCert.CRLDistributionPoints[0], leafCert, issuerCert)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("CRL verification failed for %v: %w", leafCert.Subject, err))
 	}
 	return
 }
 
-func checkCertCRL(ctx context.Context, crlURL string, leafCert, issuerCert *x509.Certificate) error {
-	hreq, err := http.NewRequestWithContext(ctx, "GET", crlURL, nil)
-	if err != nil {
-		return fmt.Errorf("could not create CRL GET request: %w", err)
+var defaultCRLCache = &crlCache{now: time.Now}
+
+// crlRefreshInterval caps how long a cached CRL is reused, even when its
+// NextUpdate (the x509.RevocationList field giving the deadline for the
+// issuer's next CRL) is further out. An hour was chosen based on the
+// Cache-Control max-age Let's Encrypt serves on its root CRL.
+const crlRefreshInterval = time.Hour
+
+// crlCache caches parsed CRLs by distribution point URL, so that repeated
+// probes do not refetch one on every run.
+type crlCache struct {
+	now   func() time.Time
+	fetch singleflight.Group[string, *x509.RevocationList]
+
+	mu   sync.Mutex
+	crls map[string]crlCacheEntry
+}
+
+type crlCacheEntry struct {
+	crl       *x509.RevocationList
+	refreshAt time.Time
+}
+
+func (c *crlCache) checkCertCRL(ctx context.Context, crlURL string, leafCert, issuerCert *x509.Certificate) error {
+	if issuerCert == nil {
+		return fmt.Errorf("issuer certificate for %v not in presented chain", leafCert.Subject)
 	}
-	hresp, err := http.DefaultClient.Do(hreq)
-	if err != nil {
-		return fmt.Errorf("CRL request failed: %w", err)
-	}
-	defer hresp.Body.Close()
-	if hresp.StatusCode != http.StatusOK {
-		return fmt.Errorf("crl: non-200 status code from CRL server: %s", hresp.Status)
-	}
-	lr := io.LimitReader(hresp.Body, 10<<20) // 10MB
-	crlB, err := io.ReadAll(lr)
+	crl, err := c.get(ctx, crlURL, issuerCert)
 	if err != nil {
 		return err
-	}
-
-	crl, err := x509.ParseRevocationList(crlB)
-	if err != nil {
-		return fmt.Errorf("could not parse CRL: %w", err)
 	}
 
 	if err := crl.CheckSignatureFrom(issuerCert); err != nil {
@@ -159,4 +171,89 @@ func checkCertCRL(ctx context.Context, crlURL string, leafCert, issuerCert *x509
 	}
 
 	return nil
+}
+
+// get returns the CRL at crlURL, refetching it once the cached copy is due
+// for a refresh. A CRL is cached only once it verifies against the fetching
+// caller's issuerCert; one with no NextUpdate declares no lifetime and is
+// not cached.
+func (c *crlCache) get(ctx context.Context, crlURL string, issuerCert *x509.Certificate) (*x509.RevocationList, error) {
+	if crl, ok := c.cached(crlURL); ok {
+		return crl, nil
+	}
+
+	res := <-c.fetch.DoChanContext(ctx, crlURL, func(ctx context.Context) (*x509.RevocationList, error) {
+		// A caller that missed the cache above can reach here after another
+		// caller's fetch stored one; singleflight dedupes only overlapping calls.
+		if crl, ok := c.cached(crlURL); ok {
+			return crl, nil
+		}
+		crl, err := fetchCRL(ctx, crlURL)
+		if err != nil {
+			return nil, err
+		}
+		if err := crl.CheckSignatureFrom(issuerCert); err != nil {
+			return nil, fmt.Errorf("could not verify CRL signature: %w", err)
+		}
+		if !crl.NextUpdate.IsZero() {
+			c.store(crlURL, crl)
+		}
+		return crl, nil
+	})
+	return res.Val, res.Err
+}
+
+// cached returns the CRL cached for crlURL, if one is present and not yet due
+// for a refresh.
+func (c *crlCache) cached(crlURL string) (*x509.RevocationList, bool) {
+	c.mu.Lock()
+	e, ok := c.crls[crlURL]
+	c.mu.Unlock()
+	if !ok || !c.now().Before(e.refreshAt) {
+		return nil, false
+	}
+	return e.crl, true
+}
+
+func (c *crlCache) store(crlURL string, crl *x509.RevocationList) {
+	now := c.now()
+	refreshAt := now.Add(crlRefreshInterval)
+	if crl.NextUpdate.Before(refreshAt) {
+		refreshAt = crl.NextUpdate
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for url, e := range c.crls {
+		if !e.refreshAt.After(now) {
+			delete(c.crls, url)
+		}
+	}
+	mak.Set(&c.crls, crlURL, crlCacheEntry{crl: crl, refreshAt: refreshAt})
+}
+
+func fetchCRL(ctx context.Context, crlURL string) (*x509.RevocationList, error) {
+	hreq, err := http.NewRequestWithContext(ctx, "GET", crlURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not create CRL GET request: %w", err)
+	}
+	hresp, err := http.DefaultClient.Do(hreq)
+	if err != nil {
+		return nil, fmt.Errorf("CRL request failed: %w", err)
+	}
+	defer hresp.Body.Close()
+	if hresp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("crl: non-200 status code from CRL server: %s", hresp.Status)
+	}
+	lr := io.LimitReader(hresp.Body, 10<<20) // 10MB
+	crlB, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+
+	crl, err := x509.ParseRevocationList(crlB)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse CRL: %w", err)
+	}
+	return crl, nil
 }
