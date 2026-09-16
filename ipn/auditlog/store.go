@@ -41,9 +41,20 @@ func DefaultStoreFilePath() (string, error) {
 	}
 }
 
-// newDefaultLogStore returns a new [LogStore] for the current platform.
-func newDefaultLogStore(logf logger.Logf) (LogStore, error) {
-	path, err := storeFilePath.GetErr(DefaultStoreFilePath)
+// newDefaultLogStore returns a new [LogStore] for the current platform. Its
+// file is the path set with [SetStoreFilePath] if any, else audit-log.json in
+// varRoot (the backend's state directory) if that is known, else the platform
+// default from [DefaultStoreFilePath]. For the Windows service the state
+// directory is the platform default's directory anyway; the difference is for
+// a tailscaled run by a user with their own --statedir, which cannot write
+// under %ProgramData%.
+func newDefaultLogStore(logf logger.Logf, varRoot string) (LogStore, error) {
+	path, err := storeFilePath.GetErr(func() (string, error) {
+		if varRoot != "" {
+			return filepath.Join(varRoot, "audit-log.json"), nil
+		}
+		return DefaultStoreFilePath()
+	})
 	if err != nil {
 		// This indicates that the auditlog package was not omitted from the build
 		// on a platform without a default store path and that [SetStoreFilePath]
