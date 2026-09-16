@@ -120,11 +120,19 @@ func FuzzAUMUnserializeValidate(f *testing.F) {
 	bigVotes := k
 	bigVotes.Votes = 4097
 	f.Add([]byte((&AUM{MessageKind: AUMAddKey, Key: &bigVotes}).Serialize()))
-	// Empty disablement value; fails the length check
+	// Zero disablement value
 	f.Add([]byte((&AUM{
 		MessageKind: AUMCheckpoint,
 		State: &State{
 			DisablementValues: [][]byte{make([]byte, disablementLength-1)},
+			Keys:              []Key{k},
+		},
+	}).Serialize()))
+	// Empty disablement value; fails the length check
+	f.Add([]byte((&AUM{
+		MessageKind: AUMCheckpoint,
+		State: &State{
+			DisablementValues: [][]byte{{}},
 			Keys:              []Key{k},
 		},
 	}).Serialize()))

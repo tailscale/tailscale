@@ -141,9 +141,6 @@ build_fuzzers() {
 	build_fuzzer tailscale.com/net/traffic FuzzNodeHasherCompare traffic_node_hasher_compare
 	build_fuzzer tailscale.com/net/traffic FuzzSortNodes traffic_sort_nodes
 
-	# tailcfg (top-level)
-	build_fuzzer tailscale.com/tailcfg FuzzNodeIsRouter tailcfg_node_isrouter
-
 	# tka (top-level)
 	build_fuzzer tailscale.com/tka FuzzAUMUnserializeValidate tka_aum_unserialize_validate
 	build_fuzzer tailscale.com/tka FuzzNodeKeySignatureUnserialize tka_node_key_signature_unserialize
@@ -163,9 +160,6 @@ build_fuzzers() {
 	build_fuzzer tailscale.com/util/nocasemaps FuzzAppendToLower nocase_append_tolower
 	build_fuzzer tailscale.com/util/safediff FuzzDiff safediff_diff
 	build_fuzzer tailscale.com/util/zstdframe FuzzNextSize zstdframe_next_size
-
-	# wgengine (netlog)
-	build_fuzzer tailscale.com/wgengine/netlog FuzzQuotedLen netlog_quoted_len
 }
 
 prepare

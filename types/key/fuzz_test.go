@@ -41,7 +41,7 @@ func FuzzParseHex(f *testing.F) {
 	f.Add([]byte(strings.Repeat("a", 63)))
 	f.Add([]byte(strings.Repeat("a", 65)))
 	f.Add([]byte(strings.Repeat("a", 128)))
-	// Valid hex of wrong parity, so the length check passes but the final nibble dangles
+	// Valid length, but the per-character check fails
 	f.Add([]byte(strings.Repeat("g", 64)))
 	f.Add([]byte(strings.Repeat("G", 64)))
 	f.Add([]byte(nodePublicHexPrefix + strings.Repeat("z", 64)))
@@ -86,9 +86,9 @@ func FuzzNodePublicUnmarshalBinary(f *testing.F) {
 	f.Add(slices.Concat([]byte(nodePublicBinaryPrefix), []byte(strings.Repeat("\xff", 32))))
 	// Wrong prefix: hex text, or the machine key's prefixes
 	f.Add([]byte("nodekey:"))
-	f.Add([]byte("np"))
 	f.Add([]byte("pn" + strings.Repeat("a", 32)))
-	// Right prefix, wrong length: one short, one long
+	// Right prefix, wrong length
+	f.Add([]byte("np"))
 	f.Add(slices.Concat([]byte(nodePublicBinaryPrefix), make([]byte, 31)))
 	f.Add(slices.Concat([]byte(nodePublicBinaryPrefix), make([]byte, 33)))
 
@@ -132,15 +132,16 @@ func FuzzOpen(f *testing.F) {
 	nodeCT := nodePriv.SealTo(nodePub, []byte("hello"))
 	f.Add(corruptBit(nodeCT, 0))              // first nonce byte
 	f.Add(corruptBit(nodeCT, 23))             // last nonce byte
-	f.Add(corruptBit(nodeCT, 25))             // first ciphertext byte
-	f.Add(corruptBit(nodeCT, len(nodeCT)-1))  // last ciphertext byte
-	f.Add(corruptBit(nodeCT, len(nodeCT)-33)) // first tag byte
+	f.Add(corruptBit(nodeCT, 24))             // first ciphertext byte
+	f.Add(corruptBit(nodeCT, len(nodeCT)-17)) // last ciphertext byte
+	f.Add(corruptBit(nodeCT, len(nodeCT)-16)) // first tag byte
+	f.Add(corruptBit(nodeCT, len(nodeCT)-1))  // last tag byte
 	discoCT := discoShared.Seal([]byte("disco"))
 	f.Add(corruptBit(discoCT, len(discoCT)-1))
 	machineCT := machinePriv.SealTo(machinePub, []byte("world"))
 	f.Add(corruptBit(machineCT, len(machineCT)-1))
-	// Truncations of a valid box: keep the nonce, cut the ciphertext
-	// (invalid tag position) or cut into the nonce itself.
+	// Truncations of a valid box
+	f.Add(nodeCT[:12])
 	f.Add(nodeCT[:24])
 	f.Add(nodeCT[:25])
 	f.Add(nodeCT[:len(nodeCT)-1])
