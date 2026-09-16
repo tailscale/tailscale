@@ -671,6 +671,16 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 		c.vlogf("fallback to UPnP due to no PCP and PMP failed")
 		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
+
+	var pcpNonce pcpNonce
+	if m, ok := c.mapping.(*pcpMapping); ok {
+		// Reuse the existing mapping's nonce so renewals target the same mapping.
+		pcpNonce = m.nonce
+	} else {
+		// New mappings need a random nonce.
+		rand.Read(pcpNonce[:])
+	}
+
 	c.mu.Unlock()
 
 	uc, err := c.listenPacket(ctx, "udp4", ":0")
@@ -685,15 +695,6 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
 
 	preferPCP := !c.debug.DisablePCP() && (c.debug.DisablePMP() || (!haveRecentPMP && haveRecentPCP))
-
-	var pcpNonce pcpNonce
-	if m, ok := c.mapping.(*pcpMapping); ok {
-		// Reuse the existing mapping's nonce so renewals target the same mapping.
-		pcpNonce = m.nonce
-	} else {
-		// New mappings need a random nonce.
-		rand.Read(pcpNonce[:])
-	}
 
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
 	if preferPCP {
