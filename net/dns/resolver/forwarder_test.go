@@ -348,6 +348,12 @@ type testDNSServerOptions struct {
 	// behind a firewall that completes the handshake but swallows DNS. It's
 	// distinct from SkipTCP, where nothing listens and the connect fails fast.
 	HangTCP bool
+
+	// ResponseDelay is how long the server waits before answering, on either
+	// transport. It models a resolver that started on time but answers slowly.
+	// A resolver that hasn't started yet is resolverAndDelay's startDelay
+	// instead.
+	ResponseDelay time.Duration
 }
 
 func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, onRequest func(bool, []byte)) (port uint16) {
@@ -422,6 +428,10 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 		req = req[:n]
 		onRequest(true, req)
 
+		if opts != nil && opts.ResponseDelay > 0 {
+			time.Sleep(opts.ResponseDelay)
+		}
+
 		// Write response
 		if _, err := conn.Write(tcpResponse); err != nil {
 			logf("error writing response: %v", err)
@@ -463,6 +473,9 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 
 	handleUDP := func(addr netip.AddrPort, req []byte) {
 		onRequest(false, req)
+		if opts != nil && opts.ResponseDelay > 0 {
+			time.Sleep(opts.ResponseDelay)
+		}
 		if _, err := udpLn.WriteToUDPAddrPort(response, addr); err != nil {
 			logf("error writing response: %v", err)
 		}
@@ -1424,6 +1437,124 @@ func TestForwarderTCPRetriesDisabledDoesNotStall(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Error("send waited out the caller's context instead of reporting the disabled retry")
+	}
+}
+
+// TestForwarderRcodeHoldWithOutstandingResolver checks that an upstream REFUSED
+// reaches the client even though another resolver in the race never reports.
+func TestForwarderRcodeHoldWithOutstandingResolver(t *testing.T) {
+	const domain = "refused-with-hung-peer.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	// Shortened to keep the test fast. Nothing below depends on the value,
+	// only on the hold releasing before the query's context ends.
+	tstest.Replace(t, &rcodeHoldGrace, 300*time.Millisecond)
+
+	refusingPort := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {})
+	// Answers on neither transport, but has both ports bound, so queries to it
+	// hang rather than failing fast.
+	hungPort := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		response, func(isTCP bool, gotRequest []byte) {})
+
+	// Only bumped when a forward runs out its context, which is what waiting on
+	// the hung resolver would do.
+	beforeCtx := metricDNSFwdErrorContext.Value()
+	resp, err := runTestQuery(t, request, beVerbose, refusingPort, hungPort)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, response) {
+		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, response)
+	}
+	if got := metricDNSFwdErrorContext.Value() - beforeCtx; got != 0 {
+		t.Errorf("dns_query_fwd_error_context advanced by %d; the held REFUSED was not released before the context ended", got)
+	}
+}
+
+func TestRcodeHoldDelay(t *testing.T) {
+	res := func(delays ...time.Duration) []resolverAndDelay {
+		rr := make([]resolverAndDelay, len(delays))
+		for i, d := range delays {
+			rr[i] = resolverAndDelay{name: &dnstype.Resolver{Addr: "8.8.8.8:53"}, startDelay: d}
+		}
+		return rr
+	}
+	tests := []struct {
+		name      string
+		resolvers []resolverAndDelay
+		elapsed   time.Duration
+		want      time.Duration
+	}{
+		{"no delays", res(0, 0), 0, rcodeHoldGrace},
+		{"no delays, late rcode", res(0, 0), 50 * time.Millisecond, rcodeHoldGrace - 50*time.Millisecond},
+		{"waits out the largest delay", res(0, dohHeadStart), 0, dohHeadStart + rcodeHoldGrace},
+		{"delay already elapsed", res(0, dohHeadStart), dohHeadStart, rcodeHoldGrace},
+		{"grace already elapsed", res(0, dohHeadStart), dohHeadStart + rcodeHoldGrace + time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rcodeHoldDelay(tt.resolvers, tt.elapsed); got != tt.want {
+				t.Errorf("rcodeHoldDelay = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestForwarderRcodeHoldWaitsForDelayedResolver checks that a fast REFUSED
+// doesn't cut off a resolver still inside its startDelay, which is the shape
+// resolversWithDelays produces for a public resolver's dns53 entry.
+func TestForwarderRcodeHoldWaitsForDelayedResolver(t *testing.T) {
+	const domain = "refused-then-delayed.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	refused := makeTestResponse(t, domain, dns.RCodeRefused)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	refusingPort := runDNSServer(t, nil, refused, func(isTCP bool, gotRequest []byte) {})
+	answeringPort := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+
+	resolvers := []resolverAndDelay{
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", refusingPort)}},
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", answeringPort)}, startDelay: dohHeadStart},
+	}
+
+	resp, err := runTestQueryWithResolvers(t, request, "udp", beVerbose, resolvers...)
+	if err != nil {
+		t.Fatalf("runTestQueryWithResolvers: %v", err)
+	}
+	// The delayed resolver sleeps its startDelay before send is called, so
+	// these bytes cannot exist until the hold has outlasted dohHeadStart. A
+	// separate timing check would be weaker as well as redundant, because a
+	// slow machine satisfies one even when the REFUSED won the race.
+	if !bytes.Equal(resp, answer) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+	}
+}
+
+// TestForwarderRcodeHoldWaitsForSlowResolver checks that a fast SERVFAIL from
+// one resolver doesn't beat a slower real answer from another. Letting the real
+// answer win is the point of treating an rcode as a soft error, and it is what
+// the client got before the hold existed, when the rcode waited for every
+// resolver to report.
+func TestForwarderRcodeHoldWaitsForSlowResolver(t *testing.T) {
+	const domain = "servfail-then-slow-answer.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	servfail := makeTestResponse(t, domain, dns.RCodeServerFailure)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	failingPort := runDNSServer(t, nil, servfail, func(isTCP bool, gotRequest []byte) {})
+	// Started on time but slow to answer. The other case, a resolver that
+	// hasn't started yet, is TestForwarderRcodeHoldWaitsForDelayedResolver.
+	// 350ms is an ordinary cross-region latency and well inside rcodeHoldGrace.
+	slowPort := runDNSServer(t, &testDNSServerOptions{ResponseDelay: 350 * time.Millisecond},
+		answer, func(isTCP bool, gotRequest []byte) {})
+
+	resp, err := runTestQuery(t, request, beVerbose, failingPort, slowPort)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, answer) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
 	}
 }
 
