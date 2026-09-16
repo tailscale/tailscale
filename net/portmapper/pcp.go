@@ -25,7 +25,9 @@ const (
 	pcpVersion     = 2
 	pcpDefaultPort = 5351
 
-	pcpMapLifetimeSec = 7200 // TODO does the RFC recommend anything? This is taken from PMP.
+	// Use the same lifetime as NAT-PMP given that we don't know how long
+	// the IP assignment is valid for.
+	pcpMapLifetimeSec = 7200
 
 	pcpCodeOK            pcpResultCode = 0
 	pcpCodeNotAuthorized pcpResultCode = 2
@@ -104,8 +106,6 @@ func buildPCPRequestMappingPacket(
 	mapOp := pkt[24:]
 	copy(mapOp[:12], nonce[:])
 
-	// TODO: should this be a UDP mapping? It looks like it supports "all protocols" with 0, but
-	// also doesn't support a local port then.
 	mapOp[12] = pcpUDPMapping
 	binary.BigEndian.PutUint16(mapOp[16:18], localPort)
 	binary.BigEndian.PutUint16(mapOp[18:20], prevPort)
