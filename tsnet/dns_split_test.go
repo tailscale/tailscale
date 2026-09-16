@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,8 +101,135 @@ func TestSplitDNSToTailnetResolverUDP(t *testing.T) {
 	}
 }
 
-// serveOneAnswerDNS answers every A query on pc with addr, until pc is closed.
-func serveOneAnswerDNS(pc net.PacketConn, addr netip.Addr) {
+// TestRefusingUpstreamAnswersPromptly exercises the whole daemon DNS path,
+// from control pushing a resolver through dns.Manager to the forwarder. The
+// upstream answers REFUSED over UDP and accepts TCP without ever answering.
+// The client must get the REFUSED, not a stall that ends in no answer at all.
+//
+// See tailscale/tailscale#20826.
+func TestRefusingUpstreamAnswersPromptly(t *testing.T) {
+	ctx := t.Context()
+	controlURL, control := startControl(t)
+	s1, _, _ := startServer(t, ctx, controlURL, "s1")
+
+	// A host-loopback upstream, so this is the ordinary "system upstream" case
+	// rather than a tailnet address reached over netstack.
+	upstream := listenRefusingUpstream(t)
+
+	if !control.AddRawMapResponse(s1.lb.NodeKey(), &tailcfg.MapResponse{
+		DNSConfig: &tailcfg.DNSConfig{
+			Proxied:   true,
+			Resolvers: []*dnstype.Resolver{{Addr: upstream.String()}},
+		},
+	}) {
+		t.Fatal("AddRawMapResponse failed")
+	}
+
+	mgr := s1.Sys().DNSManager.Get()
+	query := mustDNSQuery(t, "refused.example.com.")
+	from := netip.MustParseAddrPort("127.0.0.1:12345")
+
+	// Wait for the pushed resolver to take effect. Until it lands there is no
+	// upstream at all, and the forwarder synthesizes its own SERVFAIL.
+	if err := tstest.WaitFor(60*time.Second, func() error {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		resp, err := mgr.Query(ctx, query, "udp", from)
+		if err != nil {
+			return err
+		}
+		if got := rcodeOf(t, resp); got != dns.RCodeRefused {
+			return fmt.Errorf("rcode = %v, want %v", got, dns.RCodeRefused)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the REFUSED upstream to take effect: %v", err)
+	}
+
+	for i := range 3 {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		start := time.Now()
+		resp, err := mgr.Query(ctx, query, "udp", from)
+		elapsed := time.Since(start)
+		cancel()
+		if err != nil {
+			t.Fatalf("query %d: %v", i, err)
+		}
+		if got := rcodeOf(t, resp); got != dns.RCodeRefused {
+			t.Errorf("query %d: rcode = %v, want %v", i, got, dns.RCodeRefused)
+		}
+		// Logged rather than asserted on. Before this fix the query returned
+		// nothing after the full 10s dnsQueryTimeout, and the error check above
+		// turns that into a failure on its own.
+		t.Logf("query %d: %v", i, elapsed)
+	}
+}
+
+// listenRefusingUpstream starts a DNS upstream on host loopback that answers
+// REFUSED over UDP and accepts TCP connections without ever answering them. It
+// returns the address, and stops both listeners when the test ends.
+//
+// A free UDP port is not necessarily a free TCP port, so this listens on TCP
+// first and then binds UDP to the same port, retrying on a clash the way
+// runDNSServer in net/dns/resolver does.
+func listenRefusingUpstream(t *testing.T) netip.AddrPort {
+	t.Helper()
+	const tries = 25
+	var (
+		tcpLn net.Listener
+		pc    net.PacketConn
+	)
+	for range tries {
+		var err error
+		tcpLn, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pc, err = net.ListenPacket("udp", tcpLn.Addr().String())
+		if err == nil {
+			break
+		}
+		tcpLn.Close()
+		tcpLn = nil
+	}
+	if tcpLn == nil {
+		t.Skipf("failed to listen on the same port for TCP and UDP after %d tries", tries)
+	}
+
+	// Hold accepted conns open until the test ends, so the forwarder's TCP
+	// retry, if it makes one, connects and then waits rather than failing fast.
+	var (
+		heldMu sync.Mutex
+		held   []net.Conn
+	)
+	t.Cleanup(func() {
+		tcpLn.Close()
+		pc.Close()
+		heldMu.Lock()
+		defer heldMu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	})
+	go serveRefusedDNS(pc)
+	go func() {
+		for {
+			c, err := tcpLn.Accept()
+			if err != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, c)
+			heldMu.Unlock()
+		}
+	}()
+	return netip.MustParseAddrPort(pc.LocalAddr().String())
+}
+
+// serveDNS answers every query on pc with whatever respond builds from the
+// query's header and question, until pc is closed. Queries that don't parse
+// and responses that don't build are dropped.
+func serveDNS(pc net.PacketConn, respond func(hdr dns.Header, q dns.Question) ([]byte, error)) {
 	buf := make([]byte, 1500)
 	for {
 		n, from, err := pc.ReadFrom(buf)
@@ -117,6 +245,40 @@ func serveOneAnswerDNS(pc net.PacketConn, addr netip.Addr) {
 		if err != nil {
 			continue
 		}
+		resp, err := respond(hdr, q)
+		if err != nil {
+			continue
+		}
+		pc.WriteTo(resp, from)
+	}
+}
+
+// serveRefusedDNS answers every query on pc with REFUSED, until pc is closed.
+func serveRefusedDNS(pc net.PacketConn) {
+	serveDNS(pc, func(hdr dns.Header, q dns.Question) ([]byte, error) {
+		hdr.Response = true
+		hdr.RCode = dns.RCodeRefused
+		b := dns.NewBuilder(nil, hdr)
+		b.StartQuestions()
+		b.Question(q)
+		return b.Finish()
+	})
+}
+
+// rcodeOf returns the response code in resp.
+func rcodeOf(tb testing.TB, resp []byte) dns.RCode {
+	tb.Helper()
+	var p dns.Parser
+	h, err := p.Start(resp)
+	if err != nil {
+		tb.Fatalf("parsing response: %v", err)
+	}
+	return h.RCode
+}
+
+// serveOneAnswerDNS answers every A query on pc with addr, until pc is closed.
+func serveOneAnswerDNS(pc net.PacketConn, addr netip.Addr) {
+	serveDNS(pc, func(hdr dns.Header, q dns.Question) ([]byte, error) {
 		b := dns.NewBuilder(nil, dns.Header{ID: hdr.ID, Response: true})
 		b.StartQuestions()
 		b.Question(q)
@@ -126,12 +288,8 @@ func serveOneAnswerDNS(pc net.PacketConn, addr netip.Addr) {
 			Class: dns.ClassINET,
 			TTL:   300,
 		}, dns.AResource{A: addr.As4()})
-		resp, err := b.Finish()
-		if err != nil {
-			continue
-		}
-		pc.WriteTo(resp, from)
-	}
+		return b.Finish()
+	})
 }
 
 // mustDNSQuery builds an A query for domain.
