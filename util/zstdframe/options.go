@@ -125,12 +125,8 @@ type encoderOptions struct {
 	lowMemory     bool
 }
 
-type encoder struct {
-	pool *sync.Pool
-	*zstd.Encoder
-}
-
-func getEncoder(opts ...Option) encoder {
+// parseEncoderOptions applies opts on top of the default encoder options.
+func parseEncoderOptions(opts []Option) encoderOptions {
 	eopts := encoderOptions{level: zstd.SpeedDefault, checksum: true}
 	for _, opt := range opts {
 		switch opt := opt.(type) {
@@ -144,6 +140,60 @@ func getEncoder(opts ...Option) encoder {
 			eopts.lowMemory = bool(opt)
 		}
 	}
+	return eopts
+}
+
+type encoder struct {
+	pool *sync.Pool
+	*zstd.Encoder
+}
+
+var streamingEncoderPools sync.Map // map[encoderOptions]*sync.Pool -> *zstd.Encoder
+
+// GetStreamingEncoder returns an encoder from the shared pool, configured
+// for streaming (stateful) use: it maintains compression context across
+// Write calls, and Close finishes the frame. The caller must call
+// enc.Reset with the destination writer before first use, and enc.Close
+// when done writing. Call the returned put function exactly once
+// afterwards to return the encoder to the pool; the encoder must not be
+// used after that, and must not be used concurrently.
+func GetStreamingEncoder(opts ...Option) (enc *zstd.Encoder, put func()) {
+	eopts := parseEncoderOptions(opts)
+
+	var pool *sync.Pool
+	if poolCoders() {
+		vpool, ok := streamingEncoderPools.Load(eopts)
+		if !ok {
+			vpool, _ = streamingEncoderPools.LoadOrStore(eopts, new(sync.Pool))
+		}
+		pool = vpool.(*sync.Pool)
+		enc, _ = pool.Get().(*zstd.Encoder)
+	}
+	if enc == nil {
+		// Unlike the stateless encoders above, streaming encoders must not
+		// use SingleSegment framing: the total content size is not known up
+		// front, and the window size must be communicated to decoders.
+		zopts := []zstd.EOption{
+			// Set concurrency=1 to ensure synchronous operation.
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderLevel(eopts.level),
+			zstd.WithEncoderCRC(eopts.checksum),
+			zstd.WithLowerEncoderMem(eopts.lowMemory),
+		}
+		if eopts.maxWindowLog2 > 0 {
+			zopts = append(zopts, zstd.WithWindowSize(1<<eopts.maxWindowLog2))
+		}
+		enc = must.Get(zstd.NewWriter(nil, zopts...))
+	}
+	return enc, func() {
+		if pool != nil {
+			pool.Put(enc)
+		}
+	}
+}
+
+func getEncoder(opts ...Option) encoder {
+	eopts := parseEncoderOptions(opts)
 
 	var pool *sync.Pool
 	var enc *zstd.Encoder
