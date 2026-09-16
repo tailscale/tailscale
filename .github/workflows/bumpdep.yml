@@ -28,6 +28,8 @@ concurrency:
 jobs:
   bumpdep:
     runs-on: ubuntu-latest
+    # A hung module fetch shouldn't hold the runner for the 6 hour default.
+    timeout-minutes: 45
 
     steps:
       - name: Check out code
@@ -63,8 +65,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build gocross (if needed) using the regular GOPROXY so the
-          # GOPROXY=direct go get calls below don't have to.
+          # Build gocross if needed.
           ./tool/go version
 
           # modver prints the current version of the given module, or nothing
@@ -78,11 +79,17 @@ jobs:
           # It fails if go get downgraded anything: a downgrade means
           # something went wrong and needs a human's rollback PR, not an
           # unattended bump.
+          #
+          # It uses the default GOPROXY (proxy.golang.org). Callers that
+          # need the very latest commit of a tracked branch can set
+          # GOPROXY=direct, but only for repos that are cheap to clone; a
+          # direct fetch of something like github.com/gokrazy/kernel.amd64
+          # clones gigabytes of kernel blobs and never finishes.
           goget() {
             local mod="$1" ver="$2" repo="${3:-}"
             local before after log="$RUNNER_TEMP/go-get.log"
             before=$(modver "$mod")
-            GOPROXY=direct ./tool/go get "$mod@$ver" 2>&1 | tee "$log"
+            ./tool/go get "$mod@$ver" 2>&1 | tee "$log"
             if grep -q '^go: downgraded ' "$log"; then
               echo "::error::refusing to downgrade modules while bumping $mod@$ver:" >&2
               grep '^go: downgraded ' "$log" >&2
@@ -128,7 +135,9 @@ jobs:
                 touch_toolchain=1
                 ;;
               wireguard-go)
-                goget github.com/tailscale/wireguard-go tailscale https://github.com/tailscale/wireguard-go
+                # Our own small repo: fetch directly so a just-pushed
+                # commit isn't hidden behind the proxy's cache.
+                GOPROXY=direct goget github.com/tailscale/wireguard-go tailscale https://github.com/tailscale/wireguard-go
                 names+=("wireguard-go")
                 touch_gomod=1
                 ;;
