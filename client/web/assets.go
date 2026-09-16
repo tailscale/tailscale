@@ -4,7 +4,7 @@
 package web
 
 import (
-	"io"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -14,12 +14,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	prebuilt "github.com/tailscale/web-client-prebuilt"
+	"tailscale.com/tsweb/compserve"
+	"tailscale.com/tsweb/vcstime"
 )
-
-var start = time.Now()
 
 func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	if devMode {
@@ -28,47 +27,36 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 		return devServerProxy(), cleanup
 	}
 
-	fsys := prebuilt.FS()
+	// vcstime supplies the VCS commit time as mod time for the embedded
+	// assets, enabling conditional requests.
+	fsys := vcstime.FS(prebuilt.FS())
+	opts := compserve.Options{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
-		f, err := openPrecompressedFile(w, r, path, fsys)
-		if err != nil {
-			// Rewrite request to just fetch index.html and let
-			// the frontend router handle it.
-			r = r.Clone(r.Context())
-			path = "index.html"
-			f, err = openPrecompressedFile(w, r, path, fsys)
-		}
-		if f == nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		defer f.Close()
-
-		// fs.File does not claim to implement Seeker, but in practice it does.
-		fSeeker, ok := f.(io.ReadSeeker)
-		if !ok {
-			http.Error(w, "Not seekable", http.StatusInternalServerError)
-			return
-		}
-
 		if strings.HasPrefix(path, "assets/") {
 			// Aggressively cache static assets, since we cache-bust our assets with
 			// hashed filenames.
 			w.Header().Set("Cache-Control", "public, max-age=31535996")
-			w.Header().Set("Vary", "Accept-Encoding")
 		}
-
-		http.ServeContent(w, r, path, start, fSeeker)
+		err := compserve.ServeFile(w, r, fsys, path, opts)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Rewrite request to just fetch index.html and let
+			// the frontend router handle it. The fallback must not inherit
+			// cache headers of the original path; nothing has been written
+			// yet, so they can still be adjusted.
+			w.Header().Del("Cache-Control")
+			err = compserve.ServeFile(w, r, fsys, "index.html", opts)
+		}
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				http.NotFound(w, r)
+				return
+			}
+			// Errors may embed the request path; log rather than reflect it.
+			log.Printf("web client: serving %q: %v", path, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 	}), nil
-}
-
-func openPrecompressedFile(w http.ResponseWriter, r *http.Request, path string, fs fs.FS) (fs.File, error) {
-	if f, err := fs.Open(path + ".gz"); err == nil {
-		w.Header().Set("Content-Encoding", "gzip")
-		return f, nil
-	}
-	return fs.Open(path) // fallback
 }
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
