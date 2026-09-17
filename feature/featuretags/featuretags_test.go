@@ -36,6 +36,10 @@ func TestRequires(t *testing.T) {
 		want set.Set[FeatureTag]
 	}{
 		{
+			in:   "exitnodehealth",
+			want: setOf("exitnodehealth", "health", "useexitnode", "peerapiclient", "useroutes"),
+		},
+		{
 			in:   "drive",
 			want: setOf("drive"),
 		},
