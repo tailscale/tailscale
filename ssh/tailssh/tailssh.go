@@ -1074,7 +1074,13 @@ func (ss *sshSession) run() {
 	if ss.rdStderr != nil {
 		wg.Go(func() {
 			defer ss.rdStderr.Close()
-			if _, err := io.Copy(ss.Stderr(), ss.rdStderr); err != nil {
+			// Record stderr under the "o" (output) direction: the
+			// asciinema cast format has no separate stderr channel,
+			// and pty sessions already fold stdout+stderr into the
+			// single recorded "o" stream. Wrapping it in rec.writer
+			// (rather than copying raw) is what keeps stderr in the
+			// recording for non-pty sessions.
+			if _, err := io.Copy(rec.writer("o", ss.Stderr()), ss.rdStderr); err != nil {
 				logf("stderr copy: %v", err)
 			}
 		})
