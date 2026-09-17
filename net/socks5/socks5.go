@@ -28,6 +28,7 @@ import (
 
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 )
 
 // Authentication METHODs described in RFC 1928, section 3.
@@ -239,6 +240,16 @@ func (c *Conn) handleTCP() error {
 	}
 	defer srv.Close()
 
+	// As of 2026-09-16, `srv.dial` always returns either a TCPConn-type
+	// connection, or such a connection wrapped by a [tsdial.sysConn],
+	// which passes down calls to half-close the connection to its
+	// underlying Conn.
+	srvHalfCloser, srvIsHalfCloser := srv.(nettype.HalfCloser)
+	// As of 2026-09-16, `c.clientConn` always originates from a TCP listener,
+	// sometimes split up by [proxymux.SplitSOCKSAndHTTP], which passes down
+	// calls to half-close the connection to its underlying Conn.
+	clientHalfCloser, clientIsHalfCloser := c.clientConn.(nettype.HalfCloser)
+
 	localAddr := srv.LocalAddr().String()
 	serverAddr, serverPort, err := splitHostPort(localAddr)
 	if err != nil {
@@ -266,6 +277,12 @@ func (c *Conn) handleTCP() error {
 		if err != nil {
 			err = fmt.Errorf("from backend to client: %w", err)
 		}
+		if clientIsHalfCloser {
+			err = errors.Join(err, clientHalfCloser.CloseWrite())
+		}
+		if srvIsHalfCloser {
+			err = errors.Join(srvHalfCloser.CloseRead())
+		}
 		errc <- err
 	}()
 	go func() {
@@ -273,9 +290,20 @@ func (c *Conn) handleTCP() error {
 		if err != nil {
 			err = fmt.Errorf("from client to backend: %w", err)
 		}
+		if clientIsHalfCloser {
+			err = errors.Join(err, clientHalfCloser.CloseRead())
+		}
+		if srvIsHalfCloser {
+			err = errors.Join(srvHalfCloser.CloseWrite())
+		}
 		errc <- err
 	}()
-	return <-errc
+	// Wait for both sides of the connection to close.
+	var errs []error
+	for range 2 {
+		errs = append(errs, <-errc)
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Conn) handleUDP() error {

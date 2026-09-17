@@ -484,3 +484,79 @@ func TestUDPLogNilLogf(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestTCPHalfClose(t *testing.T) {
+	const msg = "we are so winning"
+
+	// backend server which we'll use SOCKS5 to connect to
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendServerPort := listener.Addr().(*net.TCPAddr).Port
+	go func() {
+		c, err := listener.Accept()
+		if err != nil {
+			t.Errorf("backend accept conn: %v", err)
+		}
+		defer c.Close()
+		defer listener.Close()
+		tcpConn := c.(*net.TCPConn)
+		var buf [1500]byte
+		n, err := tcpConn.Read(buf[:])
+		if err != nil {
+			t.Errorf("backend read: %v", err)
+		}
+		res := string(buf[:n])
+		if res != msg {
+			t.Errorf("backend read: want %q, got %q", msg, res)
+		}
+		if err := tcpConn.CloseRead(); err != nil {
+			t.Errorf("backend closeread: %v", err)
+		}
+		_, err = tcpConn.Write([]byte(msg))
+		if err != nil {
+			t.Errorf("backend write: %v", err)
+		}
+	}()
+
+	// SOCKS5 server
+	socks5, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socks5Port := socks5.Addr().(*net.TCPAddr).Port
+	go socks5Server(socks5)
+
+	// Client
+	addr := fmt.Sprintf("localhost:%d", socks5Port)
+	socksDialer, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr = fmt.Sprintf("localhost:%d", backendServerPort)
+	conn, err := socksDialer.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	tcpConn := conn.(*net.TCPConn)
+	_, err = tcpConn.Write([]byte(msg))
+	if err != nil {
+		t.Errorf("client write: %v", err)
+	}
+	if err := tcpConn.CloseWrite(); err != nil {
+		t.Errorf("client closewrite: %v", err)
+	}
+	var buf [1500]byte
+	n, err := tcpConn.Read(buf[:])
+	if err != nil {
+		t.Errorf("client read: %v", err)
+	}
+	res := string(buf[:n])
+	if res != msg {
+		t.Errorf("client read: want %q, got %q", msg, res)
+	}
+}

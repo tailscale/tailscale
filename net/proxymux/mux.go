@@ -13,6 +13,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"tailscale.com/types/nettype"
 )
 
 // SplitSOCKSAndHTTP accepts connections on ln and passes connections
@@ -127,11 +129,15 @@ func (ln *listener) Addr() net.Addr {
 type connWithOneByte struct {
 	net.Conn
 
-	b     byte
-	bRead bool
+	b          byte
+	bRead      bool
+	readClosed bool
 }
 
 func (c *connWithOneByte) Read(bs []byte) (int, error) {
+	if c.readClosed {
+		return 0, net.ErrClosed
+	}
 	if c.bRead {
 		return c.Conn.Read(bs)
 	}
@@ -141,4 +147,23 @@ func (c *connWithOneByte) Read(bs []byte) (int, error) {
 	c.bRead = true
 	bs[0] = c.b
 	return 1, nil
+}
+
+// CloseRead implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c *connWithOneByte) CloseRead() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		c.readClosed = true
+		return hc.CloseRead()
+	}
+	return nil
+}
+
+// CloseWrite implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c *connWithOneByte) CloseWrite() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseWrite()
+	}
+	return nil
 }
