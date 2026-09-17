@@ -29,7 +29,7 @@ const testTag string = "tag:clusterTag"
 func makeAuthTestPeer(i int, tags views.Slice[string]) *ipnstate.PeerStatus {
 	return &ipnstate.PeerStatus{
 		ID:   tailcfg.StableNodeID(fmt.Sprintf("%d", i)),
-		Tags: &tags,
+		Tags: tags,
 		TailscaleIPs: []netip.Addr{
 			netip.AddrFrom4([4]byte{100, 0, 0, byte(i)}),
 			netip.MustParseAddr(fmt.Sprintf("fd7a:115c:a1e0:0::%d", i)),

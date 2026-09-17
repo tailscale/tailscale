@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,7 +12,15 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
+
+// sliceViewComparers compares the views.Slice fields on PeerStatus by their
+// contents, since cmp cannot traverse the views' unexported backing slice.
+var sliceViewComparers = []cmp.Option{
+	cmp.Comparer(func(a, b views.Slice[netip.Prefix]) bool { return views.SliceEqual(a, b) }),
+	cmp.Comparer(func(a, b views.Slice[string]) bool { return views.SliceEqual(a, b) }),
+}
 
 func TestFilterFormatAndSortExitNodes(t *testing.T) {
 	t.Run("without-filter", func(t *testing.T) {
@@ -134,7 +143,7 @@ func TestFilterFormatAndSortExitNodes(t *testing.T) {
 
 		result := filterFormatAndSortExitNodes(ps, "")
 
-		if res := cmp.Diff(result.Countries, want.Countries, cmpopts.IgnoreUnexported(key.NodePublic{})); res != "" {
+		if res := cmp.Diff(result.Countries, want.Countries, append(sliceViewComparers, cmpopts.IgnoreUnexported(key.NodePublic{}))...); res != "" {
 			t.Fatal(res)
 		}
 	})
@@ -229,7 +238,7 @@ func TestFilterFormatAndSortExitNodes(t *testing.T) {
 
 		result := filterFormatAndSortExitNodes(ps, "Pacific")
 
-		if res := cmp.Diff(result.Countries, want.Countries, cmpopts.IgnoreUnexported(key.NodePublic{})); res != "" {
+		if res := cmp.Diff(result.Countries, want.Countries, append(sliceViewComparers, cmpopts.IgnoreUnexported(key.NodePublic{}))...); res != "" {
 			t.Fatal(res)
 		}
 	})
