@@ -1,57 +1,37 @@
-name: bumpdep
+name: gokrazy-bump
+
+# Weekly bump of the gokrazy modules (kernels, firmware, gokrazy itself)
+# that the natlab VM tests boot. The PR carries the run-natlab-tests
+# label so natlab-test.yml exercises the new kernels before merge.
 
 on:
-  # Only trigger the workflow on demand.
+  schedule:
+    # Sunday night (Monday 05:17 UTC), off-the-hour to avoid GitHub's :00
+    # cron-stampede window.
+    - cron: "17 5 * * 1"
   workflow_dispatch:
-    inputs:
-      deps:
-        description: >-
-          Comma-separated dependencies to bump. Special names: "go" (runs
-          ./pull-toolchain.sh), "wireguard-go", "gvisor". Anything else is a
-          Go module path, or a case-insensitive substring of one ("kernel"
-          bumps every gokrazy kernel), bumped to @latest, or to the version
-          given in a "path@version" suffix. See misc/bumpdeps.
-        required: true
-      issue:
-        description: >-
-          URL of the GitHub issue motivating this bump, e.g.
-          https://github.com/tailscale/tailscale/issues/12345. It becomes the
-          "Updates #12345" line of the commit message.
-        required: true
-      exclude-newer-than-days:
-        description: >-
-          Cooldown: ignore releases younger than this many days and use the
-          newest older one instead. 0 means take the latest.
-        required: false
-        default: "0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
-  bumpdep:
+  gokrazy-bump:
     runs-on: ubuntu-latest
-    # A hung module fetch shouldn't hold the runner for the 6 hour default.
     timeout-minutes: 45
 
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # misc/bumpdeps does the work: it validates the inputs, resolves
-      # versions, runs go get, make tidy, and make updatedeps, and writes
-      # the PR title, branch, and commit message to $GITHUB_OUTPUT.
-      - name: Bump dependencies
+      # The substring matches every direct github.com/gokrazy/* module.
+      # See misc/bumpdeps for what the tool does and the outputs it sets.
+      - name: Bump gokrazy modules
         id: bump
-        env:
-          DEPS: ${{ inputs.deps }}
-          ISSUE: ${{ inputs.issue }}
-          COOLDOWN: ${{ inputs.exclude-newer-than-days }}
-        run: ./tool/go run ./misc/bumpdeps -github -issue "$ISSUE" -exclude-newer-than-days "${COOLDOWN:-0}" -- "$DEPS"
+        run: ./tool/go run ./misc/bumpdeps -github -issue https://github.com/tailscale/tailscale/issues/1866 -- github.com/gokrazy/
 
       - name: Show changes
         run: git --no-pager diff --stat
@@ -67,6 +47,8 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
+      # Nothing happens if go.mod didn't change: create-pull-request
+      # opens a PR only when there's a diff to commit.
       - name: Send pull request
         id: pull-request
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 #v8.1.0
@@ -78,9 +60,10 @@ jobs:
           commit-message: ${{ steps.bump.outputs.commit-message }}
           title: ${{ steps.bump.outputs.title }}
           body-path: ${{ steps.bump.outputs.body-path }}
+          labels: run-natlab-tests
           signoff: true
           delete-branch: true
-          # Assign the PR to the user that triggered this action.
+          # For scheduled runs this is whoever last edited this file.
           reviewers: ${{ github.triggering_actor }}
 
       - name: Summary
