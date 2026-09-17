@@ -41,7 +41,6 @@ import (
 	"github.com/axiomhq/hyperloglog"
 	"github.com/go4org/hashtriemap"
 	"go4.org/mem"
-	"golang.org/x/sync/errgroup"
 	xrate "golang.org/x/time/rate"
 	"tailscale.com/client/local"
 	"tailscale.com/derp"
@@ -189,7 +188,7 @@ type Server struct {
 	tcpRtt                     metrics.LabelMap // histogram
 	meshUpdateBatchSize        *metrics.Histogram
 	meshUpdateLoopCount        *metrics.Histogram
-	bufferedWriteFrames        *metrics.Histogram // how many sendLoop frames (or groups of related frames) get written per flush
+	bufferedWriteFrames        *metrics.Histogram // how many frames (or groups of related frames) the writer writes per flush
 	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
 	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
 
@@ -945,7 +944,7 @@ func (s *Server) broadcastPeerStateChangeLocked(peer key.NodePublic, ipPort neti
 			flags:   flags,
 			appName: appName,
 		})
-		go w.requestMeshUpdate()
+		w.requestMeshUpdate()
 	}
 }
 
@@ -1073,9 +1072,12 @@ func (s *Server) notePeerGoneFromRegionLocked(key key.NodePublic) {
 	// so they can drop their route entries to us (issue 150)
 	// or move them over to the active client (in case a replaced client
 	// connection is being unregistered).
+	//
+	// The watchers (sclient.onPeerGoneFromRegion) don't block, so
+	// they run inline, holding s.mu.
 	set := s.peerGoneWatchers[key]
 	for _, f := range set {
-		go f(key)
+		f(key)
 	}
 	delete(s.peerGoneWatchers, key)
 }
@@ -1089,7 +1091,7 @@ func (c *sclient) requestPeerGoneWriteLimited(peer key.NodePublic, contents []by
 	}
 
 	if c.peerGoneLim.Allow() {
-		go c.requestPeerGoneWrite(peer, reason)
+		c.requestPeerGoneWrite(peer, reason)
 	}
 }
 
@@ -1125,7 +1127,7 @@ func (s *Server) addWatcher(c *sclient) {
 	// connections & disconnections).
 	s.watchers.Add(c)
 
-	go c.requestMeshUpdate()
+	c.requestMeshUpdate()
 }
 
 func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
@@ -1163,17 +1165,12 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
-		sendWake:       make(chan struct{}, 1),
-		sendPongCh:     make(chan [8]byte, 1),
-		peerGone:       make(chan peerGoneMsg),
 		canMesh:        s.isMeshPeer(clientInfo),
 		isNotIdealConn: IdealNodeContextKey.Value(ctx) != "",
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
+	c.runWriterFunc = c.runWriter // allocate the method value once, not per wake
 
-	if c.canMesh {
-		c.meshUpdate = make(chan struct{}, 1) // must be buffered; >1 is fine but wasteful
-	}
 	if clientInfo != nil {
 		c.info = *clientInfo
 		if envknob.Bool("DERP_PROBER_DEBUG_LOGS") && clientInfo.IsProber {
@@ -1187,13 +1184,22 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		f(clientKey, c.info)
 	}
 
+	// Until run takes over, this goroutine is the client's writer (see
+	// wakeWriter): the ServerInfo frame goes out on c.bw below, and
+	// work that other goroutines publish for the client once it's
+	// registered (packets, peer gone notices) waits until then.
+	c.writerState.Store(packWriterState(writerRunning, 0))
+
 	s.registerClient(c)
 	defer s.unregisterClient(c)
 
 	err = s.sendServerInfo(c.bw, clientKey)
 	if err != nil {
+		c.writerState.Store(packWriterState(writerStopped, 0))
 		return fmt.Errorf("send server info: %v", err)
 	}
+	// Write anything published during the handshake, then park.
+	c.runWriter()
 
 	return c.run(ctx)
 }
@@ -1209,31 +1215,22 @@ func (s *Server) debugLogf(format string, v ...any) {
 
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
+//
+// run is the client's reader goroutine, and the only goroutine the
+// connection pins while idle. Writes to the client happen on a writer
+// goroutine that exists only while there is something to write; see
+// [sclient.wakeWriter].
 func (c *sclient) run(ctx context.Context) error {
-	// Launch sender, but don't return from run until sender goroutine is done.
-	var grp errgroup.Group
-	sendCtx, cancelSender := context.WithCancel(ctx)
-	grp.Go(func() error { return c.sendLoop(sendCtx) })
-	defer func() {
-		cancelSender()
-		if err := grp.Wait(); err != nil && !c.s.isClosed() {
-			if errors.Is(err, context.Canceled) {
-				c.debugLogf("sender canceled by reader exiting")
-			} else {
-				if errors.Is(err, os.ErrDeadlineExceeded) {
-					c.s.sclientWriteTimeouts.Add(1)
-				}
-				c.logf("sender failed: %v", err)
-			}
-		}
-	}()
+	defer c.stopWriter()
 
 	// Allow disabling RTT stats collection to reduce
 	// CPU and syscalls on servers with high connection
 	// counts
 	if !envknob.Bool("TS_DERP_DISABLE_RTT_STATS") {
-		c.startStatsLoop(sendCtx)
+		c.startStatsLoop(ctx)
 	}
+
+	c.keepAliveTimer = c.s.clock.AfterFunc(keepAliveInterval(), c.onKeepAliveTimer)
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
@@ -1328,12 +1325,7 @@ func (c *sclient) handleFramePing(ft derp.FrameType, fl uint32) error {
 		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
 
-	select {
-	case c.sendPongCh <- [8]byte(m):
-	default:
-		// They're pinging too fast. Ignore.
-		// TODO(bradfitz): add a rate limiter too.
-	}
+	c.queuePong([8]byte(m))
 	return err
 }
 
@@ -1629,9 +1621,9 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 	s := c.s
 	dstKey := dst.key
 
-	q := &dst.sendQueue
+	q, pend := &dst.sendQueue, pendSendQueue
 	if disco.LooksLikeDiscoWrapper(p.bs) {
-		q = &dst.discoSendQueue
+		q, pend = &dst.discoSendQueue, pendDiscoQueue
 	}
 	dropped, wasEmpty, ok := q.enqueue(s, p)
 	if !ok {
@@ -1656,53 +1648,69 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 		c.recordQueueTime(dropped.enqueuedAt)
 	}
 	if wasEmpty {
-		// Wake dst's sendLoop, which may be parked. This is only
+		// Wake dst's writer, which may have parked. This is only
 		// needed when p made the queue non-empty: otherwise the
-		// sendLoop is either mid-drain and will get to p before it
+		// writer is either mid-drain and will get to p before it
 		// parks, or the wake from the packet that made the queue
 		// non-empty is still pending.
-		select {
-		case dst.sendWake <- struct{}{}:
-		default: // a wake-up is already pending
-		}
+		dst.wakeWriter(pend)
 	}
 	dst.debugLogf("sendPkt enqueued")
 	return nil
 }
 
 // onPeerGoneFromRegion is the callback registered with the Server to be
-// notified (in a new goroutine) whenever a peer has disconnected from all DERP
-// nodes in the current region.
+// notified whenever a peer has disconnected from all DERP nodes in the
+// current region. It is called with Server.mu held and must not block.
 func (c *sclient) onPeerGoneFromRegion(peer key.NodePublic) {
 	c.requestPeerGoneWrite(peer, derp.PeerGoneReasonDisconnected)
 }
 
-// requestPeerGoneWrite sends a request to write a "peer gone" frame
-// with an explanation of why it is gone. It blocks until either the
-// write request is scheduled, or the client has closed.
+// requestPeerGoneWrite asks the writer to send a "peer gone" frame with
+// an explanation of why it is gone. It does not block.
+//
+// The pending list is not capped: it is bounded by the number of
+// distinct peers the client has heard from, each of whose watchers
+// fires at most once, plus the rate-limited "not here" replies from
+// [sclient.requestPeerGoneWriteLimited].
 func (c *sclient) requestPeerGoneWrite(peer key.NodePublic, reason derp.PeerGoneReasonType) {
-	select {
-	case c.peerGone <- peerGoneMsg{
-		peer:   peer,
-		reason: reason,
-	}:
-	case <-c.ctx.Done():
-	}
+	c.peerGoneMu.Lock()
+	c.peerGonePending = append(c.peerGonePending, peerGoneMsg{peer: peer, reason: reason})
+	c.peerGoneMu.Unlock()
+	c.wakeWriter(pendPeerGone)
+}
+
+// takePeerGonePending returns and clears the pending peer gone
+// requests. It is called by the writer ([sclient.writePending]).
+func (c *sclient) takePeerGonePending() []peerGoneMsg {
+	c.peerGoneMu.Lock()
+	defer c.peerGoneMu.Unlock()
+	msgs := c.peerGonePending
+	c.peerGonePending = nil
+	return msgs
 }
 
 // requestMeshUpdate notes that a c's peerStateChange has been appended to and
-// should now be written.
-//
-// It does not block. If a meshUpdate is already pending for this client, it
-// does nothing.
+// should now be written. It does not block.
 func (c *sclient) requestMeshUpdate() {
 	if !c.canMesh {
 		panic("unexpected requestMeshUpdate")
 	}
-	select {
-	case c.meshUpdate <- struct{}{}:
-	default:
+	c.wakeWriter(pendMeshUpdate)
+}
+
+// queuePong asks the writer to send a pong carrying data. It is called
+// only from the reader goroutine. If a pong is already pending, the
+// client is pinging faster than we write, and the new one is dropped.
+// (A pong queued in the moment between the writer taking the pending
+// bit and loading pong is instead written twice, which is harmless.)
+func (c *sclient) queuePong(data [8]byte) {
+	if c.writerState.Load().pending()&pendPong != 0 {
+		// TODO(bradfitz): add a rate limiter too.
+		return
 	}
+	c.pong.Store(binary.BigEndian.Uint64(data[:]))
+	c.wakeWriter(pendPong)
 }
 
 // isMeshPeer reports whether the client is a trusted mesh peer
@@ -1989,33 +1997,64 @@ type sclient struct {
 	key            key.NodePublic
 	info           derp.ClientInfo
 	logf           logger.Logf
-	ctx            context.Context  // closed when connection closes
-	remoteIPPort   netip.AddrPort   // zero if remoteAddr is not ip:port.
-	sendQueue      pktQueue         // packets queued to this client
-	discoSendQueue pktQueue         // important packets queued to this client
-	sendWake       chan struct{}    // wakes sendLoop after an enqueue to sendQueue or discoSendQueue; cap 1
-	sendPongCh     chan [8]byte     // pong replies to send to the client; never closed
-	peerGone       chan peerGoneMsg // write request that a peer is not at this server (not used by mesh peers)
-	meshUpdate     chan struct{}    // write request to write peerStateChange
-	canMesh        bool             // clientInfo had correct mesh token for inter-region routing
-	isNotIdealConn bool             // client indicated it is not its ideal node in the region
-	isDup          atomic.Bool      // whether more than 1 sclient for key is connected
-	isDisabled     atomic.Bool      // whether sends to this peer are disabled due to active/active dups
-	debug          bool             // turn on for verbose logging
+	ctx            context.Context // closed when connection closes
+	remoteIPPort   netip.AddrPort  // zero if remoteAddr is not ip:port.
+	sendQueue      pktQueue        // packets queued to this client
+	discoSendQueue pktQueue        // important packets queued to this client
+	canMesh        bool            // clientInfo had correct mesh token for inter-region routing
+	isNotIdealConn bool            // client indicated it is not its ideal node in the region
+	isDup          atomic.Bool     // whether more than 1 sclient for key is connected
+	isDisabled     atomic.Bool     // whether sends to this peer are disabled due to active/active dups
+	debug          bool            // turn on for verbose logging
+
+	// runWriterFunc is the method value [sclient.runWriter] bound to
+	// this client. It is allocated once here so that the go statement
+	// in [sclient.wakeWriter] doesn't allocate a new one per wake.
+	runWriterFunc func()
+
+	// keepAliveTimer fires [sclient.onKeepAliveTimer]. It is set by
+	// [sclient.run] and stopped by [sclient.stopWriter].
+	keepAliveTimer tstime.TimerController
+
+	// writerState coordinates the writer goroutine, which exists only
+	// while the client has something to write, with the goroutines
+	// that give it work. See [sclient.wakeWriter].
+	writerState atomicWriterState
+
+	// writerExited is closed by the writer goroutine as it exits after
+	// [sclient.stopWriter] moved writerState to [writerClosing].
+	// stopWriter creates it before that transition and the writer reads
+	// it only after observing the transition, so the plain field is
+	// race-free.
+	writerExited chan struct{}
+
+	// Pending work for the writer. Producers publish their work here
+	// and then call [sclient.wakeWriter] with its [writerPending] bit;
+	// the writer consumes it in [sclient.writePending]. peerGoneMu
+	// guards peerGonePending. pong is the latest pong reply to write,
+	// as a big-endian uint64 so the reader can replace it without a
+	// lock.
+	peerGoneMu      sync.Mutex
+	peerGonePending []peerGoneMsg // "peer gone" frames to write (not used by mesh peers)
+	pong            atomic.Uint64
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
 	connectedAt time.Time
 	preferred   bool
 
-	// Owned by sendLoop, not thread-safe.
-	sawSrc map[key.NodePublic]set.Handle
-	bw     *lazyBufioWriter
+	// Owned by the writer goroutine, not thread-safe. Only one writer
+	// runs at a time, and [sclient.stopWriter] touches these only after
+	// the last one has exited.
+	sawSrc   map[key.NodePublic]set.Handle
+	bw       *lazyBufioWriter
+	writeErr error // the write error that stopped the writer, if any; logged by stopWriter
 
 	// senderCardinality estimates the number of unique peers that have
-	// sent packets to this client. Owned by sendLoop, protected by
-	// senderCardinalityMu for reads from other goroutines. It is nil
-	// unless [Server.trackSenderCardinality] is set.
+	// sent packets to this client. It is nil unless
+	// [Server.trackSenderCardinality] is set, and then until the first
+	// packet. Written by the writer goroutine ([sclient.sendPacket]),
+	// guarded by senderCardinalityMu for [sclient.EstimatedUniqueSenders].
 	senderCardinalityMu sync.Mutex
 	senderCardinality   *hyperloglog.Sketch
 
@@ -2098,8 +2137,8 @@ type pkt struct {
 // idle client doesn't pin a channel buffer of perClientSendQueueDepth
 // pkts for the lifetime of its connection: the ring is taken from
 // Server.sendQueueRingPool on first enqueue and returned whenever the
-// queue drains empty. Enqueuers wake the client's sendLoop through
-// sclient.sendWake.
+// queue drains empty. Enqueuers wake the client's writer through
+// [sclient.wakeWriter].
 type pktQueue struct {
 	mu     sync.Mutex
 	ring   *[]pkt // nil iff n == 0; length Server.perClientSendQueueDepth otherwise
@@ -2115,7 +2154,7 @@ type pktQueue struct {
 // but a zero-value Server has. When a head drop made room, the dropped
 // packet is returned with a non-nil bs for the caller to record.
 // wasEmpty reports whether the queue was empty before p was added,
-// meaning the caller needs to wake the sendLoop; see sendPkt.
+// meaning the caller needs to wake the writer; see [sclient.sendPkt].
 func (q *pktQueue) enqueue(s *Server, p pkt) (dropped pkt, wasEmpty, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -2138,15 +2177,17 @@ func (q *pktQueue) enqueue(s *Server, p pkt) (dropped pkt, wasEmpty, ok bool) {
 }
 
 // dequeue removes and returns the packet at the head of the queue,
-// reporting whether one was queued. When the queue drains empty its
-// ring is returned to the pool.
-func (q *pktQueue) dequeue(s *Server) (p pkt, ok bool) {
+// reporting whether one was queued and whether more remain after it,
+// so a drain needs no extra call to learn it is done. When the queue
+// drains empty its ring is returned to the pool.
+func (q *pktQueue) dequeue(s *Server) (p pkt, more, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.n == 0 {
-		return pkt{}, false
+		return pkt{}, false, false
 	}
-	return q.popLocked(s), true
+	p = q.popLocked(s)
+	return p, q.n > 0, true
 }
 
 // popLocked removes and returns the packet at the head of the queue,
@@ -2230,14 +2271,302 @@ func (c *sclient) recordQueueTime(enqueuedAt time.Time) {
 	}
 }
 
-// onSendLoopDone is called when the send loop is done
-// to clean up.
+// writerPhase is where the client's writer goroutine is in its
+// lifecycle. It is packed with a [writerPending] into a [writerState].
+// See [sclient.wakeWriter] for how the phases fit together.
+type writerPhase uint8
+
+const (
+	// writerParked means no writer goroutine exists. The next
+	// [sclient.wakeWriter] starts one. Nothing is pending in this phase.
+	writerParked writerPhase = iota
+
+	// writerRunning means a writer goroutine is draining the client's
+	// pending work. Work published meanwhile is recorded in the
+	// [writerPending] set, which the writer must take before it may park.
+	writerRunning
+
+	// writerClosing means [sclient.stopWriter] is waiting on
+	// [sclient.writerExited] for the running writer to exit.
+	writerClosing
+
+	// writerStopped is terminal: the writer has exited for good, either
+	// because a write failed or because [sclient.stopWriter] tore the
+	// client down, and no writer goroutine will run again.
+	writerStopped
+)
+
+// writerPending is a set of kinds of work pending for the client's
+// writer goroutine, one pend* bit per kind. It is packed with a
+// [writerPhase] into a [writerState]. A producer publishes its work (a
+// [pktQueue.enqueue], a store to [sclient.pong], an append to
+// [sclient.peerGonePending]) and then passes its bit to
+// [sclient.wakeWriter]; the writer takes the whole set at once and
+// looks only at the sources whose bits are set ([sclient.writePending]).
+type writerPending uint32
+
+const (
+	pendPeerGone   writerPending = 1 << iota // peerGonePending has entries
+	pendMeshUpdate                           // peerStateChange has entries to write (mesh peers only)
+	pendPong                                 // pong holds a pong reply to write
+	pendKeepAlive                            // the keepalive timer fired
+	pendSendQueue                            // sendQueue went from empty to non-empty
+	pendDiscoQueue                           // discoSendQueue went from empty to non-empty
+)
+
+// writerState is the value of [sclient.writerState]: a [writerPhase]
+// and a [writerPending] packed into one word, so that a producer can
+// record its work and start a parked writer in a single
+// compare-and-swap, and the writer can take all pending work and decide
+// whether to park likewise. The phase is in the low [writerPhaseBits]
+// bits and the pending set above them; [packWriterState] builds one
+// and [writerState.phase] and [writerState.pending] take it apart.
+type writerState uint32
+
+const writerPhaseBits = 2
+
+// packWriterState returns the [writerState] with phase ph and pending
+// set pend.
+func packWriterState(ph writerPhase, pend writerPending) writerState {
+	return writerState(ph) | writerState(pend)<<writerPhaseBits
+}
+
+// phase returns w's [writerPhase].
+func (w writerState) phase() writerPhase { return writerPhase(w & (1<<writerPhaseBits - 1)) }
+
+// pending returns w's [writerPending] set.
+func (w writerState) pending() writerPending { return writerPending(w >> writerPhaseBits) }
+
+// withPending returns w with pend added to its pending set.
+func (w writerState) withPending(pend writerPending) writerState {
+	return w | writerState(pend)<<writerPhaseBits
+}
+
+// atomicWriterState is an atomically accessed [writerState].
+type atomicWriterState struct{ v atomic.Uint32 }
+
+func (a *atomicWriterState) Load() writerState   { return writerState(a.v.Load()) }
+func (a *atomicWriterState) Store(w writerState) { a.v.Store(uint32(w)) }
+func (a *atomicWriterState) CompareAndSwap(old, new writerState) bool {
+	return a.v.CompareAndSwap(uint32(old), uint32(new))
+}
+
+// wakeWriter makes sure the work the caller just published, of the
+// kinds in pend, gets written. It adds pend to the writer's
+// [writerPending] set and starts a writer goroutine ([sclient.runWriter])
+// if none is running. It is a no-op once the writer has stopped for
+// good.
 //
-// It must only be called from the sendLoop goroutine.
-func (c *sclient) onSendLoopDone() {
-	// If the sender shuts down unilaterally due to an error, close so
-	// that the receive loop unblocks and cleans up the rest.
+// The writer goroutine comes and goes as needed. It runs only
+// while there is something to write and exits ("parks") once the
+// pending work drains, so an idle client pins one goroutine, the
+// reader in [sclient.run], rather than two. This follows the shape of
+// the parking serve goroutine in Go's net/http HTTP/2 server, golang/go
+// commits 5c51011e82 and dcf521c570.
+//
+// Every producer publishes its work before calling wakeWriter, and
+// the writer takes the pending set ([sclient.takePending]) before
+// looking at the work, so work published while the writer is deciding
+// whether to park ([sclient.tryParkWriter]) is never lost: the producer
+// either finds the writer parked and starts a new one with the work
+// already pending, or finds it running and adds to its pending set,
+// which makes its park attempt fail.
+func (c *sclient) wakeWriter(pend writerPending) {
+	if c.claimWriter(pend) {
+		go c.runWriterFunc()
+	}
+}
+
+// claimWriter is [sclient.wakeWriter]'s state transition: it adds
+// pend, the kinds of work the caller just published, to the writer's
+// [writerPending] set and, if the writer had parked, moves it to
+// [writerRunning] on the caller's behalf. It reports whether the caller
+// must now run the writer ([sclient.runWriter]), having claimed it that
+// way. Otherwise a running writer will see pend before it parks, or the
+// writer has stopped for good and the work is moot.
+func (c *sclient) claimWriter(pend writerPending) bool {
+	for {
+		old := c.writerState.Load()
+		switch old.phase() {
+		case writerParked:
+			if c.writerState.CompareAndSwap(old, packWriterState(writerRunning, pend)) {
+				return true
+			}
+		case writerRunning:
+			if new := old.withPending(pend); new == old || c.writerState.CompareAndSwap(old, new) {
+				return false
+			}
+		default: // closing or stopped
+			return false
+		}
+	}
+}
+
+// runWriter is the body of the writer goroutine started by
+// [sclient.wakeWriter]. It writes the client's pending work until there
+// is none, flushing each time it catches up, and then parks. If a
+// write fails it stops for good and closes the connection, which makes
+// the reader tear the client down ([sclient.stopWriter]).
+func (c *sclient) runWriter() {
+	inBatch := 0 // frames (or groups of related frames) written since the last flush, for bufferedWriteFrames
+
+	// carry is the queue work a writePending pass ran out of budget
+	// for. Its pending bits were already taken, and enqueuers only wake
+	// the writer when a queue goes from empty to non-empty, so it must
+	// be fed back into the next pass rather than dropped.
+	var carry writerPending
+	for {
+		pend, exit := c.takePending()
+		if exit {
+			return
+		}
+		pend |= carry
+		if pend != 0 {
+			var n int
+			var err error
+			n, carry, err = c.writePending(pend)
+			inBatch += n
+			if err != nil {
+				c.stopWriterOnError(err)
+				return
+			}
+			continue
+		}
+		// Caught up. Flush, then try to park; if work arrived
+		// meanwhile, the park attempt fails and the loop goes around.
+		if err := c.bw.Flush(); err != nil {
+			c.stopWriterOnError(err)
+			return
+		}
+		// Nothing to observe when nothing was written, as after a
+		// wake whose work an earlier pass already drained.
+		if inBatch != 0 {
+			c.s.bufferedWriteFrames.Observe(float64(inBatch))
+			inBatch = 0
+		}
+		if c.tryParkWriter() {
+			return
+		}
+	}
+}
+
+// takePending returns and clears the writer's [writerPending] set. It
+// reports exit when the writer must instead exit because
+// [sclient.stopWriter] is closing the client, having done that handoff.
+func (c *sclient) takePending() (pend writerPending, exit bool) {
+	for {
+		old := c.writerState.Load()
+		switch old.phase() {
+		case writerRunning:
+			pend = old.pending()
+			if pend == 0 || c.writerState.CompareAndSwap(old, packWriterState(writerRunning, 0)) {
+				return pend, false
+			}
+		case writerClosing:
+			c.exitWriterForStop()
+			return 0, true
+		default:
+			panic(fmt.Sprintf("unexpected writer state %#x", old))
+		}
+	}
+}
+
+// tryParkWriter is the writer's attempt to exit after it caught up. It
+// reports whether the writer must exit, which it must both when it
+// parks and when [sclient.stopWriter] is closing the client. It reports
+// false when more work was published meanwhile, so the writer must go
+// on.
+func (c *sclient) tryParkWriter() (exit bool) {
+	for {
+		old := c.writerState.Load()
+		switch old.phase() {
+		case writerRunning:
+			if old.pending() != 0 {
+				return false
+			}
+			if c.writerState.CompareAndSwap(old, packWriterState(writerParked, 0)) {
+				return true
+			}
+		case writerClosing:
+			c.exitWriterForStop()
+			return true
+		default:
+			panic(fmt.Sprintf("unexpected writer state %#x", old))
+		}
+	}
+}
+
+// exitWriterForStop is the writer's side of the handoff to a
+// [sclient.stopWriter] waiting in [writerClosing] for it to exit.
+func (c *sclient) exitWriterForStop() {
+	c.writerState.Store(packWriterState(writerStopped, 0))
+	close(c.writerExited)
+}
+
+// stopWriterOnError ends the writer for good after a write failed with
+// err. Closing the connection makes the reader's next read fail, and
+// the reader's teardown ([sclient.stopWriter]) logs err.
+func (c *sclient) stopWriterOnError(err error) {
+	c.writeErr = err
 	c.nc.Close()
+	for {
+		old := c.writerState.Load()
+		switch old.phase() {
+		case writerRunning:
+			if c.writerState.CompareAndSwap(old, packWriterState(writerStopped, 0)) {
+				return
+			}
+		case writerClosing:
+			c.exitWriterForStop()
+			return
+		default:
+			panic(fmt.Sprintf("unexpected writer state %#x", old))
+		}
+	}
+}
+
+// stopWriter is [sclient.run]'s teardown. It closes the connection,
+// waits for a running writer goroutine to exit, and then, as the sole
+// remaining owner of the client's write-side state, releases it: the
+// keepalive timer, the peer gone watches, and the send queues.
+//
+// It must only be called from the reader goroutine, after run's read
+// loop has exited.
+func (c *sclient) stopWriter() {
+	// Fail any write in progress so the writer exits promptly.
+	c.nc.Close()
+
+	for stopped := false; !stopped; {
+		old := c.writerState.Load()
+		switch old.phase() {
+		case writerParked:
+			stopped = c.writerState.CompareAndSwap(old, packWriterState(writerStopped, 0))
+		case writerRunning:
+			if c.writerExited == nil {
+				c.writerExited = make(chan struct{})
+			}
+			if c.writerState.CompareAndSwap(old, packWriterState(writerClosing, 0)) {
+				<-c.writerExited
+				stopped = true
+			}
+		case writerStopped:
+			stopped = true
+		default:
+			// Only stopWriter moves to writerClosing, and it runs once.
+			panic(fmt.Sprintf("unexpected writer state %#x", old))
+		}
+	}
+
+	if err := c.writeErr; err != nil && !c.s.isClosed() {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			c.s.sclientWriteTimeouts.Add(1)
+		}
+		c.logf("sender failed: %v", err)
+	}
+
+	if c.keepAliveTimer != nil {
+		c.keepAliveTimer.Stop()
+	}
 
 	// Clean up watches.
 	for peer, h := range c.sawSrc {
@@ -2254,103 +2583,88 @@ func (c *sclient) onSendLoopDone() {
 	c.discoSendQueue.close(c.s, drop)
 }
 
-func (c *sclient) sendLoop(ctx context.Context) error {
-	defer c.onSendLoopDone()
+// keepAliveInterval returns how long to wait before sending the
+// client its next keepalive frame, jittered so a server's clients
+// don't all tick together.
+func keepAliveInterval() time.Duration {
+	return derp.KeepAlive + rand.N(5*time.Second)
+}
 
-	if c.s.trackSenderCardinality {
-		c.senderCardinality = hyperloglog.New()
+// onKeepAliveTimer runs on the keepalive timer's goroutine when it is
+// time to send the client a keepalive. Because it already has a
+// goroutine of its own, it runs a parked writer inline
+// ([sclient.runWriter]) rather than starting another goroutine for it.
+func (c *sclient) onKeepAliveTimer() {
+	if c.claimWriter(pendKeepAlive) {
+		c.runWriter()
 	}
+}
 
-	jitter := rand.N(5 * time.Second)
-	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(derp.KeepAlive + jitter)
-	defer keepAliveTick.Stop()
-
-	var werr error // last write error
-	inBatch := 0   // frames (or groups of related frames) written since the last flush, for bufferedWriteFrames
-	for {
-		if werr != nil {
-			return werr
-		}
-		// First, a non-blocking select (with a default) that
-		// does as many non-flushing writes as possible.
-		select {
-		case <-ctx.Done():
-			return nil
-		case msg := <-c.peerGone:
-			werr = c.sendPeerGone(msg.peer, msg.reason)
-			inBatch++
-			continue
-		case <-c.meshUpdate:
-			werr = c.sendMeshUpdates()
-			inBatch++
-			continue
-		case msg := <-c.sendPongCh:
-			werr = c.sendPong(msg)
-			inBatch++
-			continue
-		case <-keepAliveTickChannel:
-			werr = c.sendKeepAlive()
-			inBatch++
-			continue
-		default:
-			// The pktQueues aren't selectable, so poll them here.
-			// Pick which to try first at random, as select did when
-			// these were channels and both had packets ready, so
-			// neither disco nor regular packets can starve the other.
-			q1, q2 := &c.discoSendQueue, &c.sendQueue
-			if rand.IntN(2) == 0 {
-				q1, q2 = q2, q1
+// writePending writes the pending work of the kinds in pend, without
+// flushing, and returns how many frames (or groups of related frames)
+// it wrote. Control frames (peer gone, mesh updates, pong, keepalive)
+// go before packets, and between the two [pktQueue]s the order is
+// random, as select's was when they were channels, so neither disco
+// nor regular packets can starve the other.
+//
+// A pass writes at most a queue's depth worth of packets. A sender
+// that keeps a queue topped up as fast as it drains would otherwise
+// hold the writer in here forever, with the control frames published
+// meanwhile never written. The queue bits it didn't finish are
+// returned as carry for the caller to add to its next pass, after
+// picking up any newly pending work. It returns the first write error.
+func (c *sclient) writePending(pend writerPending) (frames int, carry writerPending, err error) {
+	if pend&pendPeerGone != 0 {
+		for _, m := range c.takePeerGonePending() {
+			if err := c.sendPeerGone(m.peer, m.reason); err != nil {
+				return frames, 0, err
 			}
-			if msg, ok := q1.dequeue(c.s); ok {
-				werr = c.sendPacket(msg.src, msg.bs)
-				c.s.putPacketBuf(msg.buf)
-				c.recordQueueTime(msg.enqueuedAt)
-				inBatch++
-				continue
-			}
-			if msg, ok := q2.dequeue(c.s); ok {
-				werr = c.sendPacket(msg.src, msg.bs)
-				c.s.putPacketBuf(msg.buf)
-				c.recordQueueTime(msg.enqueuedAt)
-				inBatch++
-				continue
-			}
-			// Flush any writes from the sends above, or from
-			// the blocking loop below.
-			if werr = c.bw.Flush(); werr != nil {
-				return werr
-			}
-			// Nothing to observe when nothing was written, as on the
-			// first pass or after a sendWake whose packets an earlier
-			// pass already drained.
-			if inBatch != 0 {
-				c.s.bufferedWriteFrames.Observe(float64(inBatch))
-				inBatch = 0
-			}
-		}
-
-		// Then a blocking select with same:
-		select {
-		case <-ctx.Done():
-			return nil
-		case msg := <-c.peerGone:
-			werr = c.sendPeerGone(msg.peer, msg.reason)
-			inBatch++
-		case <-c.meshUpdate:
-			werr = c.sendMeshUpdates()
-			inBatch++
-		case <-c.sendWake:
-			// Packets were enqueued; the next loop iteration
-			// dequeues them above. Nothing was written here, so
-			// inBatch is deliberately not incremented.
-		case msg := <-c.sendPongCh:
-			werr = c.sendPong(msg)
-			inBatch++
-		case <-keepAliveTickChannel:
-			werr = c.sendKeepAlive()
-			inBatch++
+			frames++
 		}
 	}
+	if pend&pendMeshUpdate != 0 {
+		if err := c.sendMeshUpdates(); err != nil {
+			return frames, 0, err
+		}
+		frames++
+	}
+	if pend&pendPong != 0 {
+		var data [8]byte
+		binary.BigEndian.PutUint64(data[:], c.pong.Load())
+		if err := c.sendPong(data); err != nil {
+			return frames, 0, err
+		}
+		frames++
+	}
+	if pend&pendKeepAlive != 0 {
+		if err := c.sendKeepAlive(); err != nil {
+			return frames, 0, err
+		}
+		c.keepAliveTimer.Reset(keepAliveInterval())
+		frames++
+	}
+	const queues = pendSendQueue | pendDiscoQueue
+	for budget := max(c.s.perClientSendQueueDepth, 1); pend&queues != 0 && budget > 0; budget-- {
+		q, bit := &c.sendQueue, pendSendQueue
+		if pend&pendDiscoQueue != 0 && (pend&pendSendQueue == 0 || rand.IntN(2) == 0) {
+			q, bit = &c.discoSendQueue, pendDiscoQueue
+		}
+		msg, more, ok := q.dequeue(c.s)
+		if !more {
+			pend &^= bit
+		}
+		if !ok {
+			continue
+		}
+		err := c.sendPacket(msg.src, msg.bs)
+		c.s.putPacketBuf(msg.buf)
+		if err != nil {
+			return frames, 0, err
+		}
+		c.recordQueueTime(msg.enqueuedAt)
+		frames++
+	}
+	return frames, pend & queues, nil
 }
 
 func (c *sclient) setWriteDeadline() {
@@ -2514,8 +2828,11 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 	if withKey {
 		pktLen += key.NodePublicRawLen
 		c.noteSendFromSrc(srcKey)
-		if c.senderCardinality != nil {
+		if c.s.trackSenderCardinality {
 			c.senderCardinalityMu.Lock()
+			if c.senderCardinality == nil {
+				c.senderCardinality = hyperloglog.New()
+			}
 			var raw [key.NodePublicRawLen]byte
 			c.senderCardinality.Insert(srcKey.AppendTo(raw[:0]))
 			c.senderCardinalityMu.Unlock()
@@ -2549,7 +2866,7 @@ func (c *sclient) EstimatedUniqueSenders() uint64 {
 // noteSendFromSrc notes that we are about to write a packet
 // from src to sclient.
 //
-// It must only be called from the sendLoop goroutine.
+// It must only be called from the writer goroutine ([sclient.runWriter]).
 func (c *sclient) noteSendFromSrc(src key.NodePublic) {
 	if _, ok := c.sawSrc[src]; ok {
 		return
