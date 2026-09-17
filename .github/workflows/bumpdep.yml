@@ -7,9 +7,10 @@ on:
       deps:
         description: >-
           Comma-separated dependencies to bump. Special names: "go" (runs
-          ./pull-toolchain.sh), "wireguard-go" (github.com/tailscale/wireguard-go@tailscale),
-          "gvisor" (gvisor.dev/gvisor@go). Anything else is a Go module path
-          bumped to @latest, or to the version given in a "path@version" suffix.
+          ./pull-toolchain.sh), "wireguard-go", "gvisor". Anything else is a
+          Go module path, or a case-insensitive substring of one ("kernel"
+          bumps every gokrazy kernel), bumped to @latest, or to the version
+          given in a "path@version" suffix. See misc/bumpdeps.
         required: true
       issue:
         description: >-
@@ -17,6 +18,12 @@ on:
           https://github.com/tailscale/tailscale/issues/12345. It becomes the
           "Updates #12345" line of the commit message.
         required: true
+      exclude-newer-than-days:
+        description: >-
+          Cooldown: ignore releases younger than this many days and use the
+          newest older one instead. 0 means take the latest.
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -35,171 +42,16 @@ jobs:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate issue URL
-        env:
-          ISSUE: ${{ inputs.issue }}
-        run: |
-          set -euo pipefail
-          issue=$(printf '%s' "$ISSUE" | tr -d '[:space:]')
-          if ! printf '%s\n' "$issue" | grep -Eq '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$'; then
-            echo "::error::issue must be a GitHub issue URL like https://github.com/tailscale/tailscale/issues/12345; got '$ISSUE'" >&2
-            exit 1
-          fi
-          # Convert to the short form used in commit messages: "#123" for
-          # this repo, "owner/repo#123" for others.
-          path="${issue#https://github.com/}"
-          repo="${path%/issues/*}"
-          num="${path##*/}"
-          if [ "$repo" = "$GITHUB_REPOSITORY" ]; then
-            ref="#$num"
-          else
-            ref="$repo#$num"
-          fi
-          echo "ISSUE_REF=$ref" >>"$GITHUB_ENV"
-
+      # misc/bumpdeps does the work: it validates the inputs, resolves
+      # versions, runs go get, make tidy, and make updatedeps, and writes
+      # the PR title, branch, and commit message to $GITHUB_OUTPUT.
       - name: Bump dependencies
         id: bump
         env:
           DEPS: ${{ inputs.deps }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-
-          # Build gocross if needed.
-          ./tool/go version
-
-          # modver prints the current version of the given module, or nothing
-          # if it's not yet in go.mod.
-          modver() {
-            ./tool/go list -m -f '{{.Version}}' "$1" 2>/dev/null || true
-          }
-
-          # goget bumps module $1 to version $2, appending a summary line
-          # to the PR body that links $3 (a GitHub repo URL) if given.
-          # It fails if go get downgraded anything: a downgrade means
-          # something went wrong and needs a human's rollback PR, not an
-          # unattended bump.
-          #
-          # It uses the default GOPROXY (proxy.golang.org). Callers that
-          # need the very latest commit of a tracked branch can set
-          # GOPROXY=direct, but only for repos that are cheap to clone; a
-          # direct fetch of something like github.com/gokrazy/kernel.amd64
-          # clones gigabytes of kernel blobs and never finishes.
-          goget() {
-            local mod="$1" ver="$2" repo="${3:-}"
-            local before after log="$RUNNER_TEMP/go-get.log"
-            before=$(modver "$mod")
-            ./tool/go get "$mod@$ver" 2>&1 | tee "$log"
-            if grep -q '^go: downgraded ' "$log"; then
-              echo "::error::refusing to downgrade modules while bumping $mod@$ver:" >&2
-              grep '^go: downgraded ' "$log" >&2
-              exit 1
-            fi
-            after=$(modver "$mod")
-            if [ "$before" = "$after" ]; then
-              echo "* $mod: already at $after" >>"$BODY"
-            elif [ -n "$repo" ] && [ -n "$before" ]; then
-              # Link a compare view; for pseudo-versions, the trailing
-              # component is the commit hash.
-              echo "* $mod: $repo/compare/${before##*-}...${after##*-}" >>"$BODY"
-            else
-              echo "* $mod: ${before:-(new)} to $after" >>"$BODY"
-            fi
-          }
-
-          BODY="$RUNNER_TEMP/pr-body.md"
-          : >"$BODY"
-
-          names=()   # display names, for the title
-          slugs=()   # cleaned input names, for the branch name
-          touch_gomod=0
-          touch_toolchain=0
-
-          IFS=',' read -ra deps <<<"$DEPS"
-          for dep in "${deps[@]}"; do
-            dep="${dep#"${dep%%[![:space:]]*}"}" # strip leading whitespace
-            dep="${dep%"${dep##*[![:space:]]}"}" # strip trailing whitespace
-            [ -z "$dep" ] && continue
-            slugs+=("$dep")
-            case "$dep" in
-              go)
-                before=$(cat go.toolchain.rev)
-                ./pull-toolchain.sh
-                after=$(cat go.toolchain.rev)
-                if [ "$before" != "$after" ]; then
-                  echo "* Go toolchain: https://github.com/tailscale/go/compare/${before}...${after}" >>"$BODY"
-                else
-                  echo "* Go toolchain: already at ${after}" >>"$BODY"
-                fi
-                names+=("Go toolchain")
-                touch_toolchain=1
-                ;;
-              wireguard-go)
-                # Our own small repo: fetch directly so a just-pushed
-                # commit isn't hidden behind the proxy's cache.
-                GOPROXY=direct goget github.com/tailscale/wireguard-go tailscale https://github.com/tailscale/wireguard-go
-                names+=("wireguard-go")
-                touch_gomod=1
-                ;;
-              gvisor)
-                goget gvisor.dev/gvisor go https://github.com/google/gvisor
-                names+=("gvisor")
-                touch_gomod=1
-                ;;
-              *)
-                mod="${dep%%@*}"
-                ver=latest
-                case "$dep" in
-                  *@*) ver="${dep#*@}" ;;
-                esac
-                goget "$mod" "$ver"
-                names+=("$mod")
-                touch_gomod=1
-                ;;
-            esac
-          done
-
-          if [ "${#names[@]}" -eq 0 ]; then
-            echo "::error::no dependencies given" >&2
-            exit 1
-          fi
-
-          prefix=""
-          [ "$touch_gomod" = 1 ] && prefix="go.mod"
-          if [ "$touch_toolchain" = 1 ]; then
-            prefix="${prefix:+$prefix,}go.toolchain.rev"
-          fi
-          title="$prefix: bump $(printf '%s, ' "${names[@]}" | sed 's/, $//')"
-
-          # Branch name: actions/bumpdep/<deps>, restricted to characters
-          # that are safe in a git ref and bounded in length.
-          slug=$(IFS=,; printf '%s' "${slugs[*]}" | tr -c 'A-Za-z0-9._-' '-' | sed -E 's/\.+/./g; s/^[.-]+//' | cut -c1-80 | sed -E 's/[.-]+$//')
-
-          echo "" >>"$BODY"
-          echo "Triggered by @${TRIGGERING_ACTOR} via the bumpdep workflow." >>"$BODY"
-          echo "" >>"$BODY"
-          echo "Updates $ISSUE_REF" >>"$BODY"
-
-          {
-            echo "title=$title"
-            echo "branch=actions/bumpdep/$slug"
-            echo "commit-message<<BUMPDEP_EOF"
-            echo "$title"
-            echo
-            cat "$BODY"
-            echo "BUMPDEP_EOF"
-          } >>"$GITHUB_OUTPUT"
-
-          echo "body-path=$BODY" >>"$GITHUB_OUTPUT"
-
-          echo "### $title" >>"$GITHUB_STEP_SUMMARY"
-          cat "$BODY" >>"$GITHUB_STEP_SUMMARY"
-
-      - name: make tidy
-        run: make tidy
-
-      - name: make updatedeps
-        run: make updatedeps
+          ISSUE: ${{ inputs.issue }}
+          COOLDOWN: ${{ inputs.exclude-newer-than-days }}
+        run: ./tool/go run ./misc/bumpdeps -github -issue "$ISSUE" -exclude-newer-than-days "${COOLDOWN:-0}" -- "$DEPS"
 
       - name: Show changes
         run: git --no-pager diff --stat
