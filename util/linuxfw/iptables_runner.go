@@ -705,6 +705,7 @@ func buildExternalCGNATRules(mode CGNATMode, tunname string) ([][]string, error)
 		// which we fall out of the Tailscale chain.
 		return [][]string{
 			{"!", "-i", tunname, "-s", tsaddr.ChromeOSVMRange().String(), "-j", "RETURN"},
+			{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
 			{"!", "-i", tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"},
 		}, nil
 	case CGNATModeReturn:
