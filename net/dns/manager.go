@@ -46,6 +46,10 @@ var (
 	// upstream resolvers to forward the default route to. See
 	// https://github.com/tailscale/tailscale/issues/20341
 	errEmptyBaseConfig = errors.New("no upstream resolvers in OS base config")
+
+	// errIncompleteBaseConfig is returned by compileConfig when a trample leaves
+	// the base config without the upstream resolvers it had before.
+	errIncompleteBaseConfig = errors.New("base DNS configuration has no upstream resolvers")
 )
 
 // Bounds for [Manager.retryEmptyBaseConfig]. The delay doubles each attempt,
@@ -90,8 +94,11 @@ type Manager struct {
 	mu                  sync.Mutex // guards following
 	config              *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 	queryResponseMapper ResponseMapper
-	waitingForBaseCfg   bool // a retry goroutine is waiting for OS upstream resolvers
-	managerCacheFlush        // platform-specific state, guarded by mu
+	waitingForBaseCfg   bool          // a retry goroutine is waiting for OS upstream resolvers
+	hasDefaultResolvers bool          // applied quad-100 config has upstreams for "."
+	trampleRetry        *time.Timer   // nil when no retry is scheduled
+	trampleRetryDelay   time.Duration // zero until the first incomplete trample read
+	managerCacheFlush                 // platform-specific state, guarded by mu
 }
 
 // NewManager created a new manager from the given config.
@@ -121,21 +128,14 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, health *health.Tracker, 
 		goos:     goos,
 	}
 
+	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.eventClient = bus.Client("dns.Manager")
 	eventbus.SubscribeFunc(m.eventClient, func(trample TrampleDNS) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if m.config == nil {
-			m.logf("resolve.conf was trampled, but there is no DNS config")
-			return
-		}
-		m.logf("resolve.conf was trampled, setting existing config again")
-		if err := m.setLocked(*m.config); err != nil {
-			m.logf("error setting DNS config: %s", err)
-		}
+		m.reapplyAfterTrampleLocked()
 	})
 
-	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
 	return m
 }
@@ -175,6 +175,10 @@ func (m *Manager) RecompileDNSConfig() error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cancelTrampleRetryLocked()
+	if m.ctx.Err() != nil {
+		return m.ctx.Err()
+	}
 	if m.config != nil {
 		return m.setLocked(*m.config)
 	}
@@ -187,6 +191,10 @@ func (m *Manager) Set(cfg Config) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cancelTrampleRetryLocked()
+	if m.ctx.Err() != nil {
+		return m.ctx.Err()
+	}
 	return m.setLocked(cfg)
 }
 
@@ -208,13 +216,21 @@ func (m *Manager) setLocked(cfg Config) error {
 		cfg.WriteToBufioWriter(w)
 	}))
 
-	rcfg, ocfg, err := m.compileConfig(cfg)
+	rcfg, ocfg, err := m.compileConfig(cfg, false)
 	if err != nil {
 		// On a compilation failure, set m.config set for later reuse by
 		// [Manager.RecompileDNSConfig] and return the error.
 		m.config = &cfg
 		return err
 	}
+
+	return m.applyConfigLocked(cfg, rcfg, ocfg)
+}
+
+// applyConfigLocked applies a compiled configuration without reading the base
+// configuration again. m.mu must be held.
+func (m *Manager) applyConfigLocked(cfg Config, rcfg resolver.Config, ocfg OSConfig) error {
+	syncs.AssertLocked(&m.mu)
 
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		rcfg.WriteToBufioWriter(w)
@@ -227,6 +243,7 @@ func (m *Manager) setLocked(cfg Config) error {
 		m.config = nil
 		return err
 	}
+	m.hasDefaultResolvers = len(rcfg.Routes["."]) != 0
 	if err := m.setDNSLocked(ocfg); err != nil {
 		return err
 	}
@@ -236,6 +253,87 @@ func (m *Manager) setLocked(cfg Config) error {
 	m.config = &cfg
 
 	return nil
+}
+
+// Trample retries back off while an external writer leaves the base config
+// incomplete. The retry rate is bounded, not the recovery window: a slow writer
+// must not leave DNS waiting for an unrelated event to recover.
+const (
+	trampleRetryInitial = 250 * time.Millisecond
+	trampleRetryMax     = 5 * time.Second
+)
+
+// reapplyAfterTrampleLocked preserves the applied configuration if the base
+// config cannot yet provide upstreams. Unlike Set, a trample notification is
+// not an instruction to accept a new (possibly empty) DNS configuration.
+// m.mu must be held.
+func (m *Manager) reapplyAfterTrampleLocked() {
+	syncs.AssertLocked(&m.mu)
+	if m.ctx.Err() != nil || m.config == nil {
+		return
+	}
+	if m.trampleRetry != nil {
+		m.trampleRetry.Stop()
+		m.trampleRetry = nil
+	}
+	cfg := *m.config
+	rcfg, ocfg, err := m.compileConfig(cfg, m.hasDefaultResolvers)
+	if errors.Is(err, errEmptyBaseConfig) {
+		// Nothing was applied to preserve; retryEmptyBaseConfig owns this case.
+		m.cancelTrampleRetryLocked()
+		return
+	}
+	if err != nil {
+		if m.trampleRetryDelay == 0 {
+			m.logf("trample: retaining DNS configuration and retrying: %v", err)
+			m.trampleRetryDelay = trampleRetryInitial
+		} else {
+			m.trampleRetryDelay = min(2*m.trampleRetryDelay, trampleRetryMax)
+		}
+		// Both the timer identity and its callback are protected by m.mu. A
+		// stopped callback may already be waiting for the lock; it must not
+		// reapply a configuration after Set, RecompileDNSConfig, or Down.
+		var timer *time.Timer
+		timer = time.AfterFunc(m.trampleRetryDelay, func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.retryTrampleLocked(timer)
+		})
+		m.trampleRetry = timer
+		return
+	}
+	recovering := m.trampleRetryDelay != 0
+	m.cancelTrampleRetryLocked()
+	if err := m.applyConfigLocked(cfg, rcfg, ocfg); err != nil {
+		m.logf("error restoring DNS configuration after trample: %v", err)
+	} else if recovering {
+		m.logf("trample: DNS configuration recovered")
+	}
+}
+
+// retryTrampleLocked runs a scheduled retry only if it has not been superseded.
+// m.mu must be held.
+func (m *Manager) retryTrampleLocked(timer *time.Timer) {
+	syncs.AssertLocked(&m.mu)
+	if m.trampleRetry != timer {
+		return
+	}
+	m.trampleRetry = nil
+	m.reapplyAfterTrampleLocked()
+}
+
+// cancelTrampleRetryLocked cancels pending recovery before an explicit
+// configuration change or shutdown. m.mu must be held.
+func (m *Manager) cancelTrampleRetryLocked() {
+	syncs.AssertLocked(&m.mu)
+	if m.trampleRetry != nil {
+		m.trampleRetry.Stop()
+		m.trampleRetry = nil
+	}
+	if m.trampleRetryDelay != 0 {
+		m.health.SetHealthy(OSConfigurationReadWarnable)
+	}
+	m.trampleRetryDelay = 0
 }
 
 func (m *Manager) setDNSLocked(ocfg OSConfig) error {
@@ -307,8 +405,10 @@ var OSConfigurationReadWarnable = health.Register(&health.Warnable{
 	Text: func(args health.Args) string {
 		return fmt.Sprintf("Tailscale failed to fetch the DNS configuration of your device: %v", args[health.ArgError])
 	},
-	Severity:  health.SeverityLow,
-	DependsOn: []*health.Warnable{health.NetworkStatusWarnable},
+	// An external writer may temporarily leave resolv.conf incomplete.
+	TimeToVisible: 5 * time.Second,
+	Severity:      health.SeverityLow,
+	DependsOn:     []*health.Warnable{health.NetworkStatusWarnable},
 })
 
 // EmptyBaseConfigWarnable warns that MagicDNS is inactive because the OS has no
@@ -333,8 +433,10 @@ var osConfigurationSetWarnable = health.Register(&health.Warnable{
 })
 
 // compileConfig converts cfg into a quad-100 resolver configuration
-// and an OS-level configuration.
-func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig, err error) {
+// and an OS-level configuration. If requireBaseResolvers is true, a base
+// config with no nameservers is treated as incomplete. Trample recovery uses
+// this to avoid replacing working upstreams with a transient empty read.
+func (m *Manager) compileConfig(cfg Config, requireBaseResolvers bool) (rcfg resolver.Config, ocfg OSConfig, err error) {
 	// The internal resolver always gets MagicDNS hosts and
 	// authoritative suffixes, even if we don't propagate MagicDNS to
 	// the OS.
@@ -464,6 +566,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// interface change. These failures should be retried if/when the OS indicates
 	// that the DNS configuration has changed via [RecompileDNSConfig].
 	base, err := m.os.GetBaseConfig()
+	if requireBaseResolvers && (errors.Is(err, ErrGetBaseConfigNoResolvers) || err == nil && len(underlyingResolvers(base)) == 0) {
+		// The applied config already has upstreams, so this is an incomplete
+		// rewrite and not an OS without resolvers. The trample path retries it.
+		err = errIncompleteBaseConfig
+	}
 	if err != nil {
 		if errors.Is(err, ErrGetBaseConfigNoResolvers) {
 			m.health.SetHealthy(OSConfigurationReadWarnable)
@@ -822,8 +929,12 @@ func (m *Manager) Down() error {
 	if !buildfeatures.HasDNS {
 		return nil
 	}
+	m.mu.Lock()
 	m.ctxCancel()
-	if err := m.os.Close(); err != nil {
+	m.cancelTrampleRetryLocked()
+	err := m.os.Close()
+	m.mu.Unlock()
+	if err != nil {
 		return err
 	}
 	m.eventClient.Close()
