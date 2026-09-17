@@ -433,6 +433,11 @@ const (
 	// UDP headers or checksums for equal-length GSO batches, without requiring
 	// a client release. See https://github.com/tailscale/tailscale/issues/19777.
 	NeverGSOEqualTail Cap = "never-gso-equal-tail"
+
+	// Conn25Connector specifies which conn25 apps a peer is a connector for.
+	// Presence of this field means that this client may try to use the peer as
+	// a connector for the domains specified in the named app's configuration.
+	Conn25Connector Cap = "conn25-connector-apps"
 )
 
 const (
