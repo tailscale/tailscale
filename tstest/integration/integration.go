@@ -172,6 +172,13 @@ func (b BinaryInfo) writeCopy(path string) error {
 // It fails tb if the build or binary copies fail.
 func GetBinaries(tb testing.TB) *Binaries {
 	dir := tb.TempDir()
+	// Working around an issue with GitHub runners where provjobd.exe can keep files
+	// open for longer than the 2s tb.TempDir's own cleanup allows. See #21099.
+	tb.Cleanup(func() {
+		if err := tstest.WaitFor(60*time.Second, func() error { return os.RemoveAll(dir) }); err != nil {
+			tb.Logf("removing %s: %v", dir, err)
+		}
+	})
 	buildOnce.Do(func() {
 		buildErr = buildTestBinaries(dir)
 	})
