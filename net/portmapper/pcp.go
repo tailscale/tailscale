@@ -79,12 +79,20 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr(), p.nonce)
+	// Per RFC 6887 section 15.1 (with Errata ID 3621), a mapping-delete
+	// request (lifetime 0) MUST set the Suggested External Port to zero and
+	// the Suggested External Address to the all-zeros address of the family
+	// being deleted: ::ffff:0.0.0.0 for IPv4, :: for IPv6.
+	zeroExtAddr := netip.IPv4Unspecified()
+	if p.external.Addr().Is6() {
+		zeroExtAddr = netip.IPv6Unspecified()
+	}
+	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), 0, 0, zeroExtAddr, p.nonce)
 	uc.WriteToUDPAddrPort(pkt, p.gw)
 }
 
 // buildPCPRequestMappingPacket generates a PCP packet with a MAP opcode.
-// To create a packet which deletes a mapping, lifetimeSec should be set to 0.
+// To create a packet which deletes a mapping, lifetimeSec, prevPort and prevExternalIP should be set to 0.
 // If prevPort is not known, it should be set to 0.
 // If prevExternalIP is not known, it should be set to 0.0.0.0.
 // Renewing or deleting a mapping must reuse the nonce from the original response.
