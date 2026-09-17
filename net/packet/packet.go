@@ -149,12 +149,15 @@ func (q *Parsed) decode4(b []byte) {
 	q.Src = withIP(q.Src, netaddr.IPv4(b[12], b[13], b[14], b[15]))
 	q.Dst = withIP(q.Dst, netaddr.IPv4(b[16], b[17], b[18], b[19]))
 
-	q.subofs = int((b[0] & 0x0F) << 2)
-	if q.subofs > q.length {
+	// subofs is only committed to q after validation, so a rejected
+	// packet can't leave it pointing past the end of the buffer.
+	subofs := int((b[0] & 0x0F) << 2)
+	if subofs > q.length {
 		// next-proto starts beyond end of packet.
 		q.IPProto = unknown
 		return
 	}
+	q.subofs = subofs
 	sub := b[q.subofs:]
 	sub = sub[:len(sub):len(sub)] // help the compiler do bounds check elimination
 
@@ -478,6 +481,10 @@ func (q *Parsed) Payload() []byte {
 // Transport returns the transport header and payload (IP subprotocol, such as TCP or UDP).
 // This is a read-only view; that is, p retains the ownership of the buffer.
 func (p *Parsed) Transport() []byte {
+	if p.subofs > len(p.b) {
+		// defensive check, should not survive decode4 or decode6 (first line)
+		return nil
+	}
 	return p.b[p.subofs:]
 }
 
