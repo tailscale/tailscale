@@ -1762,13 +1762,6 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// tcpCloser is an interface to abstract around various TCPConn types that
-// allow closing of the read and write streams independently of each other.
-type tcpCloser interface {
-	CloseRead() error
-	CloseWrite() error
-}
-
 func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort, isLocal bool) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
@@ -1841,7 +1834,7 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	// from stdDialer.DialContext (which has the requisite functions),
 	// or nil from hangDialer in tests (in which case we would have
 	// errored out by now), so this conversion should always succeed.
-	backendTCPCloser, backendIsTCPCloser := backend.(tcpCloser)
+	backendHalfCloser, backendIsHalfCloser := backend.(nettype.HalfCloser)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(backend, client)
@@ -1850,8 +1843,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		}
 		connClosed <- err
 		err = nil
-		if backendIsTCPCloser {
-			err = backendTCPCloser.CloseWrite()
+		if backendIsHalfCloser {
+			err = backendHalfCloser.CloseWrite()
 		}
 		err = errors.Join(err, client.CloseRead())
 		if err != nil {
@@ -1865,8 +1858,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 		}
 		connClosed <- err
 		err = nil
-		if backendIsTCPCloser {
-			err = backendTCPCloser.CloseRead()
+		if backendIsHalfCloser {
+			err = backendHalfCloser.CloseRead()
 		}
 		err = errors.Join(err, client.CloseWrite())
 		if err != nil {
