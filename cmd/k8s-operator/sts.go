@@ -386,6 +386,14 @@ func (r *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, l
 func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient tsclient.Client, stsC *tailscaleSTSConfig, hsvc *corev1.Service, logger *zap.SugaredLogger) ([]string, error) {
 	secretNames := make([]string, stsC.Replicas)
 
+	// TLS cert secrets share ChildResourceLabels with the proxy's state
+	// secrets, for their own cleanup-on-delete tracking. The scale-down
+	// cleanup below assumes every listed secret follows the
+	// "<name>-<ordinal>" naming convention, so state secrets get an extra
+	// label here to keep cert secrets out of that list.
+	stateSecretLabels := maps.Clone(stsC.ChildResourceLabels)
+	stateSecretLabels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
+
 	// Start by ensuring we have Secrets for the desired number of replicas. This will handle both creating and scaling
 	// up a StatefulSet.
 	for i := range stsC.Replicas {
@@ -393,7 +401,7 @@ func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient 
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("%s-%d", hsvc.Name, i),
 				Namespace: r.operatorNamespace,
-				Labels:    stsC.ChildResourceLabels,
+				Labels:    stateSecretLabels,
 			},
 		}
 
@@ -480,7 +488,7 @@ func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient 
 	// Next, we check if we have additional secrets and remove them and their associated device. This happens when we
 	// scale an StatefulSet down.
 	var secrets corev1.SecretList
-	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(stsC.ChildResourceLabels)); err != nil {
+	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(stateSecretLabels)); err != nil {
 		return nil, err
 	}
 
