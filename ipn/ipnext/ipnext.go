@@ -418,6 +418,18 @@ type Hooks struct {
 	// or when the client disconnects and the network map is cleared.
 	OnNetMapToggle feature.Hooks[func(*netmap.NetworkMap)]
 
+	// NetworkConfiguredChange is called with LocalBackend.mu held when the
+	// current node receives its initial network configuration or that
+	// configuration is cleared, including during a profile reset.
+	NetworkConfiguredChange feature.Hooks[func(configured bool)]
+
+	// OnPeerUpdate is called with LocalBackend.mu held after processing a
+	// replacement, incremental update, or clear of the current node's peers.
+	// The peer state need not differ from its previous value.
+	// Callbacks can query [Host.NodeBackend] for the current peers.
+	// It runs independently of engine reconfiguration.
+	OnPeerUpdate feature.Hooks[func()]
+
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]
@@ -520,6 +532,9 @@ type FilterHooks struct {
 //
 // It is not a snapshot in time but is locked to a particular node.
 type NodeBackend interface {
+	// PeerByStableID returns a current peer, including incremental updates.
+	PeerByStableID(tailcfg.StableNodeID) (tailcfg.NodeView, bool)
+
 	// Self returns the current node.
 	Self() tailcfg.NodeView
 
