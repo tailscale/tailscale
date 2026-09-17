@@ -1,18 +1,44 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The bumpdeps program updates every direct dependency in go.mod to its
-// latest version, or just the ones named on the command line.
+// The bumpdeps program updates dependencies in go.mod (and, on request,
+// the Go toolchain), tidies up afterwards, and writes a commit message
+// describing what changed. With no arguments it bumps every direct
+// dependency to its latest version.
 //
-// It parses go.mod, asks the Go module proxy concurrently for the newest
-// version of each required module, and then runs a single "go get" with
-// the modules that have something newer. A few modules follow a branch
-// rather than tagged releases; see specialBranches.
+// It is also the brain of the bumpdep and gokrazy-bump GitHub workflows
+// (.github/workflows/bumpdep.yml and gokrazy-bump.yml), which run it with
+// -github and turn its outputs into a pull request.
 //
-// Arguments, if any, are case-insensitive substrings of module paths:
-// "bumpdeps gvisor wireguard" only considers modules whose path contains
-// one of those. Explicitly named modules are considered even if they're
-// only indirect dependencies.
+// Each argument selects something to bump. Arguments may also be
+// comma-separated, which is how the workflow passes them through.
+//
+//   - "path@version" bumps (or adds) exactly that module at that
+//     version. The version is anything go get accepts: a tag, "latest",
+//     a branch name, or a commit hash. Only "latest" goes through the
+//     safety checks below; other versions are handed to go get as is.
+//   - "go" updates the Go toolchain by running ./pull-toolchain.sh.
+//   - "wireguard-go" and "gvisor" are aliases for the modules of the same
+//     name; see aliases.
+//   - An exact module path already in go.mod selects that module.
+//   - Anything else is a case-insensitive substring of module paths:
+//     "bumpdeps kernel" considers both gokrazy kernel modules. Indirect
+//     dependencies only match with -indirect; name them exactly to
+//     bump one on its own.
+//   - A module path that isn't in go.mod and matches nothing is added at
+//     its latest version.
+//
+// Versions come from the Go module proxy, asked concurrently. A few
+// modules follow a branch rather than tagged releases; see
+// specialBranches. Their head is found with git ls-remote so a
+// just-pushed commit is picked up even if the proxy hasn't seen it yet,
+// and the proxy then supplies the pseudo-version for that commit.
+// Everything selected is bumped with a single "go get", followed by
+// "make tidy" and "make updatedeps" unless -tidy=false.
+//
+// The program refuses to downgrade anything. A downgrade means something
+// went wrong (a retracted release, a stray tag) and wants a human's
+// rollback commit, not an unattended bump.
 //
 // The --exclude-newer-than-days flag is a cooldown, as described at
 // https://nesbitt.io/2026/03/04/package-managers-need-to-cool-down.html:
@@ -24,10 +50,11 @@
 // so they're held until their head is old enough.
 //
 // Indirect dependencies are only updated as far as the direct ones pull
-// them, unless -indirect is set. Bumping them individually to @latest
-// tends to break the build, since their importers haven't necessarily
-// caught up. (github.com/gobwas/glob v1.0.0 removed packages that
-// github.com/goreleaser/fileglob still imports, for instance.)
+// them, unless -indirect is set or they're named explicitly. Bumping them
+// individually to @latest tends to break the build, since their importers
+// haven't necessarily caught up. (github.com/gobwas/glob v1.0.0 removed
+// packages that github.com/goreleaser/fileglob still imports, for
+// instance.)
 //
 // Modules with a replace directive are left alone, as are modules the proxy
 // doesn't know about (such as private modules) and modules whose latest
@@ -35,18 +62,21 @@
 //
 // # Running
 //
-// From the repo root, run: `./tool/go run ./misc/bumpdeps` and then
-// `make tidy && make updatedeps`.
+// From the repo root:
+//
+//	./tool/go run ./misc/bumpdeps                      # all direct deps
+//	./tool/go run ./misc/bumpdeps gvisor wireguard-go  # just those two
+//	./tool/go run ./misc/bumpdeps -issue https://github.com/tailscale/tailscale/issues/123 go
+//
+// The last form prints a commit message with an "Updates #123" line.
 package main
 
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -58,33 +88,52 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
-	"golang.org/x/mod/semver"
 	"golang.org/x/sync/errgroup"
 )
 
-// specialBranches maps module paths to the branch they should track
-// instead of the proxy's notion of @latest.
-var specialBranches = map[string]string{
-	"gvisor.dev/gvisor":                    "go",        // upstream convention for the Go-module-friendly branch
-	"github.com/tailscale/wireguard-go":    "tailscale", // our fork's main branch
-	"github.com/tailscale/golang-x-crypto": "main",      // our fork has stray upstream-style tags; see tempfork/acme
+// branchInfo says which branch of which git repo a module tracks.
+type branchInfo struct {
+	repo   string // https URL of the git repo, for git ls-remote and compare links
+	branch string
 }
 
+// specialBranches maps module paths to the branch they should track
+// instead of the proxy's notion of @latest.
+var specialBranches = map[string]branchInfo{
+	// Upstream's convention for the Go-module-friendly branch.
+	"gvisor.dev/gvisor": {"https://github.com/google/gvisor", "go"},
+	// Our fork's main branch.
+	"github.com/tailscale/wireguard-go": {"https://github.com/tailscale/wireguard-go", "tailscale"},
+	// Our fork has stray upstream-style tags; see tempfork/acme.
+	"github.com/tailscale/golang-x-crypto": {"https://github.com/tailscale/golang-x-crypto", "main"},
+}
+
+// aliases maps short names accepted on the command line to module paths.
+var aliases = map[string]string{
+	"gvisor":       "gvisor.dev/gvisor",
+	"wireguard-go": "github.com/tailscale/wireguard-go",
+}
+
+// toolchainRepo is the git repo that go.toolchain.rev points into.
+const toolchainRepo = "https://github.com/tailscale/go"
+
 var (
-	dryRun               = flag.Bool("n", false, "print what would be updated without running go get")
+	dryRun               = flag.Bool("n", false, "print what would be updated without changing anything")
 	goBin                = flag.String("go", "", "path to the go binary to run; defaults to ./tool/go if present, else go from $PATH")
 	proxyURL             = flag.String("proxy", "https://proxy.golang.org", "base URL of the Go module proxy to query")
 	parallel             = flag.Int("j", 32, "maximum number of concurrent proxy requests")
 	indirect             = flag.Bool("indirect", false, "also update modules marked // indirect; risky, since their importers may not build against newer versions")
 	excludeNewerThanDays = flag.Int("exclude-newer-than-days", 0, "ignore versions younger than this many days and use the newest older one instead; 0 means no cooldown")
+	tidy                 = flag.Bool("tidy", true, "run \"make tidy\" and \"make updatedeps\" after updating")
+	issue                = flag.String("issue", "", "GitHub issue motivating the bump, as a URL or #123 or owner/repo#123; becomes the \"Updates\" line of the commit message; required with -github")
+	github               = flag.Bool("github", false, "run as the bumpdep GitHub workflow: read the actor and repo from the environment and write the title, branch, and commit message to $GITHUB_OUTPUT and $GITHUB_STEP_SUMMARY")
 )
 
 func main() {
 	log.SetFlags(0)
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "usage: bumpdeps [flags] [module-path-substring ...]\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: bumpdeps [flags] [dep ...]\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -93,136 +142,193 @@ func main() {
 	}
 }
 
-// update describes one module that has a newer version available.
+// update describes one module that has a newer version available, or
+// that was asked for at an explicit version.
 type update struct {
 	Path    string
-	Current string
-	Latest  string
+	Current string // version in go.mod before, or "" if it's being added
+	Latest  string // version to bump to; after go get, the version go.mod ended up with
 }
 
-// resolver looks up versions on the module proxy.
-type resolver struct {
-	client *http.Client
-	base   string    // proxy URL without a trailing slash
-	cutoff time.Time // versions committed after this are too new; zero means no cooldown
-}
+func run(ctx context.Context, args []string) error {
+	var env *githubEnv
+	if *github {
+		var err error
+		if env, err = githubEnvFromOS(); err != nil {
+			return err
+		}
+		if *issue == "" {
+			return errors.New("-issue is required with -github")
+		}
+	}
+	var issueRef string
+	if *issue != "" {
+		repo := "tailscale/tailscale"
+		if env != nil {
+			repo = env.repo
+		}
+		var err error
+		if issueRef, err = parseIssueRef(*issue, repo); err != nil {
+			return err
+		}
+	}
 
-func run(ctx context.Context, filters []string) error {
-	data, err := os.ReadFile("go.mod")
+	before, err := readGoMod()
 	if err != nil {
 		return err
 	}
-	mf, err := modfile.Parse("go.mod", data, nil)
+	sel, err := parseArgs(before, args, *indirect)
 	if err != nil {
 		return err
-	}
-	replaced := map[string]bool{}
-	for _, r := range mf.Replace {
-		replaced[r.Old.Path] = true
 	}
 
 	r := &resolver{
-		client: &http.Client{Timeout: 30 * time.Second},
-		base:   strings.TrimSuffix(*proxyURL, "/"),
+		client:   &http.Client{Timeout: 2 * time.Minute},
+		base:     strings.TrimSuffix(*proxyURL, "/"),
+		lsRemote: gitLsRemote,
 	}
 	if *excludeNewerThanDays > 0 {
 		r.cutoff = time.Now().Add(-time.Duration(*excludeNewerThanDays) * 24 * time.Hour)
 	}
+	res, err := resolveAll(ctx, r, sel.lookups)
+	if err != nil {
+		return err
+	}
+	updates := append(res.updates, sel.explicit...)
+	slices.SortFunc(updates, func(a, b update) int { return cmp.Compare(a.Path, b.Path) })
 
+	switch {
+	case len(updates) > 0:
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "MODULE\tCURRENT\tLATEST")
+		for _, u := range updates {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", u.Path, cmp.Or(u.Current, "(new)"), u.Latest)
+		}
+		tw.Flush()
+	case len(res.held) > 0:
+		fmt.Printf("nothing to update; %d module(s) held by the %d-day cooldown\n", len(res.held), *excludeNewerThanDays)
+	case !sel.toolchain:
+		fmt.Println("all dependencies are up to date")
+	}
+	if *dryRun {
+		if sel.toolchain {
+			fmt.Println("would also run ./pull-toolchain.sh")
+		}
+		return res.err()
+	}
+
+	if len(updates) > 0 {
+		if err := goGet(ctx, updates); err != nil {
+			return err
+		}
+		after, err := readGoMod()
+		if err != nil {
+			return err
+		}
+		if err := checkDowngrades(before, after); err != nil {
+			return err
+		}
+		for i := range updates {
+			if v, ok := after.versions[updates[i].Path]; ok {
+				updates[i].Latest = v
+			}
+		}
+	}
+
+	var tc *toolchainBump
+	if sel.toolchain {
+		if tc, err = bumpToolchain(ctx); err != nil {
+			return err
+		}
+	}
+
+	if *tidy && (len(updates) > 0 || tc.changed()) {
+		for _, target := range []string{"tidy", "updatedeps"} {
+			if err := runCommand(ctx, "make", target); err != nil {
+				return err
+			}
+		}
+	}
+
+	rep := buildReport(reportInput{
+		updated:   updates,
+		unchanged: res.upToDate,
+		held:      res.held,
+		requested: sel.names,
+		toolchain: tc,
+		issueRef:  issueRef,
+		env:       env,
+		now:       time.Now(),
+	})
+	if env != nil {
+		if err := rep.writeGitHubOutputs(env); err != nil {
+			return err
+		}
+	} else if len(updates) > 0 || tc.changed() {
+		fmt.Printf("\nSuggested commit message:\n\n%s", rep.commitMessage())
+	}
+	return res.err()
+}
+
+// resolveResult is what resolveAll learned about the modules it was asked
+// to look up.
+type resolveResult struct {
+	updates  []update
+	upToDate []string   // paths with nothing newer
+	held     []heldInfo // paths whose only newer versions are inside the cooldown
+	failures int        // lookups that errored, already logged
+}
+
+// heldInfo describes a module held back by the cooldown.
+type heldInfo struct {
+	Path string
+	Err  *heldError
+}
+
+// err returns an error if any lookups failed, so the program's exit
+// status reflects them even though the successful updates were applied.
+func (r *resolveResult) err() error {
+	if r.failures > 0 {
+		return fmt.Errorf("%d module lookups failed; see above", r.failures)
+	}
+	return nil
+}
+
+// resolveAll asks the proxy about every module in mods concurrently.
+func resolveAll(ctx context.Context, r *resolver, mods []module.Version) (*resolveResult, error) {
 	var (
-		mu       sync.Mutex
-		updates  []update
-		failures int
-		numHeld  int
-		matched  int
+		mu  sync.Mutex
+		res resolveResult
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(*parallel)
-	for _, req := range mf.Require {
-		if len(filters) > 0 {
-			if !matchesAny(req.Mod.Path, filters) {
-				continue
-			}
-			matched++
-		} else if req.Indirect && !*indirect {
-			continue
-		}
-		if replaced[req.Mod.Path] {
-			log.Printf("skipping %s: has a replace directive", req.Mod.Path)
-			continue
-		}
+	for _, mod := range mods {
 		g.Go(func() error {
-			latest, err := r.lookupNewer(gctx, req.Mod)
+			latest, err := r.lookupNewer(gctx, mod)
 			mu.Lock()
 			defer mu.Unlock()
 			var held *heldError
 			switch {
 			case errors.As(err, &held):
-				numHeld++
-				log.Printf("holding %s: %v", req.Mod.Path, err)
+				res.held = append(res.held, heldInfo{mod.Path, held})
+				log.Printf("holding %s: %v", mod.Path, err)
 			case err != nil:
-				failures++
-				log.Printf("skipping %s: %v", req.Mod.Path, err)
+				res.failures++
+				log.Printf("skipping %s: %v", mod.Path, err)
 			case latest != "":
-				updates = append(updates, update{req.Mod.Path, req.Mod.Version, latest})
+				res.updates = append(res.updates, update{mod.Path, mod.Version, latest})
+			default:
+				res.upToDate = append(res.upToDate, mod.Path)
 			}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return err
+		return nil, err
 	}
-	if len(filters) > 0 && matched == 0 {
-		return fmt.Errorf("no modules in go.mod match %q", filters)
-	}
-	slices.SortFunc(updates, func(a, b update) int { return cmp.Compare(a.Path, b.Path) })
-
-	if len(updates) == 0 {
-		if numHeld > 0 {
-			fmt.Printf("nothing to update; %d module(s) held by the %d-day cooldown\n", numHeld, *excludeNewerThanDays)
-		} else {
-			fmt.Println("all dependencies are up to date")
-		}
-	} else {
-		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "MODULE\tCURRENT\tLATEST")
-		for _, u := range updates {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", u.Path, u.Current, u.Latest)
-		}
-		tw.Flush()
-	}
-
-	if len(updates) > 0 && !*dryRun {
-		args := []string{"get"}
-		for _, u := range updates {
-			args = append(args, u.Path+"@"+u.Latest)
-		}
-		cmd := exec.CommandContext(ctx, goBinary(), args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		fmt.Fprintf(os.Stderr, "running: %s get ... (%d modules)\n", cmd.Path, len(updates))
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("go get: %w", err)
-		}
-		fmt.Fprintln(os.Stderr, "done; now run \"make tidy && make updatedeps\" (or \"go mod tidy\")")
-	}
-
-	if failures > 0 {
-		return fmt.Errorf("%d module lookups failed; see above", failures)
-	}
-	return nil
-}
-
-// matchesAny reports whether modPath contains any of the filters,
-// ignoring case.
-func matchesAny(modPath string, filters []string) bool {
-	lower := strings.ToLower(modPath)
-	for _, f := range filters {
-		if strings.Contains(lower, strings.ToLower(f)) {
-			return true
-		}
-	}
-	return false
+	slices.Sort(res.upToDate)
+	slices.SortFunc(res.held, func(a, b heldInfo) int { return cmp.Compare(a.Path, b.Path) })
+	return &res, nil
 }
 
 // goBinary returns the go binary to run, honoring the -go flag.
@@ -236,206 +342,58 @@ func goBinary() string {
 	return "go"
 }
 
-// heldError says a newer version exists but is younger than the cooldown.
-type heldError struct {
-	version string
-	t       time.Time
+// goGet runs a single go get for all of updates.
+func goGet(ctx context.Context, updates []update) error {
+	args := []string{"get"}
+	for _, u := range updates {
+		args = append(args, u.Path+"@"+u.Latest)
+	}
+	fmt.Fprintf(os.Stderr, "running: %s get ... (%d modules)\n", goBinary(), len(updates))
+	if err := runCommand(ctx, goBinary(), args...); err != nil {
+		return fmt.Errorf("go get: %w", err)
+	}
+	return nil
 }
 
-func (e *heldError) Error() string {
-	return fmt.Sprintf("%s is only %.1f days old", e.version, time.Since(e.t).Hours()/24)
+// runCommand runs name with args, passing through its output.
+func runCommand(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return nil
 }
 
-// versionInfo is the proxy's @latest and @v/<version>.info response.
-type versionInfo struct {
-	Version string
-	Time    time.Time
+// toolchainBump records a run of ./pull-toolchain.sh.
+type toolchainBump struct {
+	before, after string // contents of go.toolchain.rev
 }
 
-// tooNew reports whether a version committed at t is younger than the
-// cooldown.
-func (r *resolver) tooNew(t time.Time) bool {
-	return !r.cutoff.IsZero() && t.After(r.cutoff)
+// changed reports whether the toolchain moved. It's safe on a nil receiver
+// so callers needn't check whether a bump was requested.
+func (t *toolchainBump) changed() bool {
+	return t != nil && t.before != t.after
 }
 
-// lookupNewer asks the module proxy for the newest version of mod, or for
-// the head of its branch if it's in specialBranches. It returns "" if there
-// is nothing newer than the version already in go.mod or if the newer
-// version isn't usable under mod's path, and a *heldError if the only
-// newer versions are younger than the cooldown.
-func (r *resolver) lookupNewer(ctx context.Context, mod module.Version) (string, error) {
-	escaped, err := module.EscapePath(mod.Path)
-	if err != nil {
-		return "", err
-	}
-	base := r.base + "/" + escaped
-
-	var info versionInfo
-	if branch, ok := specialBranches[mod.Path]; ok {
-		if err := fetchJSON(ctx, r.client, base+"/@v/"+branch+".info", &info); err != nil {
-			return "", err
-		}
-	} else {
-		if err := fetchJSON(ctx, r.client, base+"/@latest", &info); err != nil {
-			return "", err
-		}
-		if semver.Compare(info.Version, mod.Version) > 0 && r.tooNew(info.Time) {
-			// Fall back to the newest release that has aged enough, if any.
-			// Only tagged versions are listed, so branch heads (above)
-			// have nothing to fall back to and get held instead.
-			aged, err := r.newestAged(ctx, base, mod.Version)
-			if err != nil {
-				return "", err
-			}
-			if aged.Version == "" {
-				return "", &heldError{info.Version, info.Time}
-			}
-			info = aged
-		}
-	}
-	if !semver.IsValid(info.Version) {
-		return "", fmt.Errorf("proxy returned invalid version %q", info.Version)
-	}
-
-	// Only ever move forward. The proxy's @latest is the newest tagged
-	// release, which can be older than a pseudo-version already in go.mod.
-	if semver.Compare(info.Version, mod.Version) <= 0 {
-		return "", nil
-	}
-	if r.tooNew(info.Time) {
-		return "", &heldError{info.Version, info.Time}
-	}
-
-	// Also never move backward in time. Forks sometimes carry stray tags
-	// that sort above their real development branch (github.com/tailscale/
-	// golang-x-crypto has a v0.91.0 from 2024, say), and the proxy happily
-	// reports those as @latest.
-	curTime, err := r.versionTime(ctx, base, mod.Version)
-	if err != nil {
-		return "", err
-	}
-	if !info.Time.After(curTime) {
-		return "", fmt.Errorf("%s (%s) is older than current %s (%s); probably a stray tag, so add it to specialBranches or bump by hand",
-			info.Version, info.Time.Format(time.DateOnly), mod.Version, curTime.Format(time.DateOnly))
-	}
-
-	// Modules sometimes move (github.com/imdario/mergo became
-	// dario.cat/mergo, say) and keep tagging releases under the new path.
-	// The proxy still reports those as @latest for the old path, but go
-	// get rejects them, so check the go.mod of the candidate version.
-	escapedVer, err := module.EscapeVersion(info.Version)
-	if err != nil {
-		return "", err
-	}
-	gomod, err := fetch(ctx, r.client, base+"/@v/"+escapedVer+".mod")
-	if err != nil {
-		return "", err
-	}
-	if got := modfile.ModulePath(gomod); got != mod.Path {
-		return "", fmt.Errorf("%s declares module path %s; update the import path by hand", info.Version, got)
-	}
-	return info.Version, nil
-}
-
-// newestAged returns the newest tagged release of the module served at base
-// that is both newer than cur and older than the cooldown, or a zero
-// versionInfo if there is none. Prereleases are skipped, matching what
-// @latest would pick.
-func (r *resolver) newestAged(ctx context.Context, base, cur string) (versionInfo, error) {
-	list, err := fetch(ctx, r.client, base+"/@v/list")
-	if err != nil {
-		return versionInfo{}, err
-	}
-	var candidates []string
-	for _, v := range strings.Fields(string(list)) {
-		if semver.IsValid(v) && semver.Prerelease(v) == "" && semver.Compare(v, cur) > 0 {
-			candidates = append(candidates, v)
-		}
-	}
-	semver.Sort(candidates)
-	slices.Reverse(candidates)
-	for _, v := range candidates {
-		escapedVer, err := module.EscapeVersion(v)
-		if err != nil {
-			return versionInfo{}, err
-		}
-		var info versionInfo
-		if err := fetchJSON(ctx, r.client, base+"/@v/"+escapedVer+".info", &info); err != nil {
-			return versionInfo{}, err
-		}
-		if !r.tooNew(info.Time) {
-			return info, nil
-		}
-	}
-	return versionInfo{}, nil
-}
-
-// versionTime returns the commit time of version ver of the module served
-// at base. Pseudo-versions carry it in their name, so only tagged versions
-// need a proxy round trip.
-func (r *resolver) versionTime(ctx context.Context, base, ver string) (time.Time, error) {
-	if module.IsPseudoVersion(ver) {
-		return module.PseudoVersionTime(ver)
-	}
-	escapedVer, err := module.EscapeVersion(ver)
-	if err != nil {
-		return time.Time{}, err
-	}
-	var info versionInfo
-	if err := fetchJSON(ctx, r.client, base+"/@v/"+escapedVer+".info", &info); err != nil {
-		return time.Time{}, err
-	}
-	return info.Time, nil
-}
-
-// statusError is a non-2xx response from the proxy.
-type statusError struct {
-	code int
-	body string
-}
-
-func (e *statusError) Error() string {
-	return fmt.Sprintf("proxy returned %d: %s", e.code, strings.TrimSpace(e.body))
-}
-
-// fetchJSON fetches url from the proxy and decodes its JSON body into dst.
-func fetchJSON(ctx context.Context, client *http.Client, url string, dst any) error {
-	body, err := fetch(ctx, client, url)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(body, dst)
-}
-
-// fetch fetches url from the proxy and returns its body. It retries once
-// on transient errors, since the proxy occasionally returns those under
-// load. Client errors are final.
-func fetch(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	for attempt := 0; ; attempt++ {
-		body, err := fetchOnce(ctx, client, url)
-		if err == nil {
-			return body, nil
-		}
-		var se *statusError
-		if attempt > 0 || (errors.As(err, &se) && se.code < 500) {
-			return nil, err
-		}
-	}
-}
-
-func fetchOnce(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+// bumpToolchain runs ./pull-toolchain.sh and reports what it did to
+// go.toolchain.rev.
+func bumpToolchain(ctx context.Context) (*toolchainBump, error) {
+	const revFile = "go.toolchain.rev"
+	before, err := os.ReadFile(revFile)
 	if err != nil {
 		return nil, err
 	}
-	res, err := client.Do(req)
+	if err := runCommand(ctx, "./pull-toolchain.sh"); err != nil {
+		return nil, err
+	}
+	after, err := os.ReadFile(revFile)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
-		return nil, &statusError{res.StatusCode, string(body)}
-	}
-	return io.ReadAll(res.Body)
+	return &toolchainBump{
+		before: strings.TrimSpace(string(before)),
+		after:  strings.TrimSpace(string(after)),
+	}, nil
 }
