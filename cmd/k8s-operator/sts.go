@@ -312,13 +312,21 @@ func (r *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		}
 	}
 
-	resourceTypes := []client.Object{
-		&corev1.Service{},
-		&corev1.Secret{},
+	if err = r.DeleteAllOf(ctx, &corev1.Service{}, client.InNamespace(r.operatorNamespace), client.MatchingLabels(labels)); err != nil {
+		return false, err
 	}
 
-	for _, resourceType := range resourceTypes {
-		if err = r.DeleteAllOf(ctx, resourceType, client.InNamespace(r.operatorNamespace), client.MatchingLabels(labels)); err != nil {
+	// Skip an HA Ingress's TLS cert Secret: it carries the same parent labels but
+	// belongs to the ProxyGroup, and deleting it discards an already-issued cert.
+	var secrets corev1.SecretList
+	if err = r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(labels)); err != nil {
+		return false, err
+	}
+	for _, secret := range secrets.Items {
+		if secret.Labels[kubetypes.LabelSecretType] == kubetypes.LabelSecretTypeCerts {
+			continue
+		}
+		if err = r.Delete(ctx, &secret); err != nil && !apierrors.IsNotFound(err) {
 			return false, err
 		}
 	}

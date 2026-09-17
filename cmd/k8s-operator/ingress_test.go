@@ -122,6 +122,55 @@ func TestTailscaleIngress(t *testing.T) {
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 }
 
+// TestTailscaleIngressToProxyGroupKeepsCertSecret verifies that moving an Ingress
+// onto a ProxyGroup cleans up the standalone proxy but not the ProxyGroup's cert Secret.
+func TestTailscaleIngressToProxyGroupKeepsCertSecret(t *testing.T) {
+	fc := fake.NewFakeClient(ingressClass())
+	ft := &fakeTSClient{
+		vipServices: make(map[string]tailscale.VIPService),
+	}
+	fakeTsnetServer := &fakeTSNetServer{certDomains: []string{"foo.com"}}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingR := &IngressReconciler{
+		Client:           fc,
+		ingressClassName: "tailscale",
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(ft),
+			tsnetServer:       fakeTsnetServer,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	mustCreate(t, fc, ingress())
+	mustCreate(t, fc, service())
+	expectReconciled(t, ingR, "default", "test")
+	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
+
+	// The TLS cert Secret the HA Ingress reconciler creates for a ProxyGroup Ingress.
+	ing := ingress()
+	ing.TypeMeta = metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"}
+	const domain = "default-test.tailnetxyz.ts.net"
+	mustCreate(t, fc, certSecret("pg", "operator-ns", domain, ing))
+
+	// Annotating for a ProxyGroup unexposes the Ingress from the standalone reconciler.
+	mustUpdate(t, fc, "default", "test", func(ing *networkingv1.Ingress) {
+		mak.Set(&ing.ObjectMeta.Annotations, AnnotationProxyGroup, "pg")
+	})
+	expectReconciled(t, ingR, "default", "test")
+	expectReconciled(t, ingR, "default", "test") // deleting Ingress STS requires two reconciles
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+	expectEqual(t, fc, certSecret("pg", "operator-ns", domain, ing))
+}
+
 func TestTailscaleIngressHostname(t *testing.T) {
 	fc := fake.NewFakeClient(ingressClass())
 	ft := &fakeTSClient{}
