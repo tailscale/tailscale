@@ -59,7 +59,7 @@ func (lc *Client) NetworkLockInit(ctx context.Context, keys []tka.Key, disableme
 
 // TailnetLockWrapPreauthKey wraps a pre-auth key with information to
 // enable unattended bringup in the locked tailnet.
-func (lc *Client) TailnetLockWrapPreauthKey(ctx context.Context, preauthKey string, tkaKey key.NLPrivate) (string, error) {
+func (lc *Client) TailnetLockWrapPreauthKey(ctx context.Context, preauthKey string, tkaKey key.TLPrivate) (string, error) {
 	encodedPrivate, err := tkaKey.MarshalText()
 	if err != nil {
 		return "", err
@@ -68,7 +68,7 @@ func (lc *Client) TailnetLockWrapPreauthKey(ctx context.Context, preauthKey stri
 	var b bytes.Buffer
 	type wrapRequest struct {
 		TSKey  string
-		TKAKey string // key.NLPrivate.MarshalText
+		TKAKey string // key.TLPrivate.MarshalText
 	}
 	if err := json.NewEncoder(&b).Encode(wrapRequest{TSKey: preauthKey, TKAKey: string(encodedPrivate)}); err != nil {
 		return "", err
@@ -82,7 +82,7 @@ func (lc *Client) TailnetLockWrapPreauthKey(ctx context.Context, preauthKey stri
 }
 
 // Deprecated: use [Client.TailnetLockWrapPreauthKey] instead.
-func (lc *Client) NetworkLockWrapPreauthKey(ctx context.Context, preauthKey string, tkaKey key.NLPrivate) (string, error) {
+func (lc *Client) NetworkLockWrapPreauthKey(ctx context.Context, preauthKey string, tkaKey key.TLPrivate) (string, error) {
 	return lc.TailnetLockWrapPreauthKey(ctx, preauthKey, tkaKey)
 }
 
