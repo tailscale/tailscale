@@ -1585,6 +1585,166 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 	}
 }
 
+func TestExpiredKeyLoggedInStatusDoesNotUnblockEngine(t *testing.T) {
+	connect := &ipn.MaskedPrefs{
+		WantRunning:    true,
+		WantRunningSet: true,
+	}
+
+	validNetmap := buildNetmapWithPeers(
+		makePeer(
+			1,
+			withName("self"),
+			withAddresses(netip.MustParsePrefix("100.64.1.1/32")),
+		),
+	)
+
+	lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, false)
+
+	mustDo(t)(lb.Start(ipn.Options{}))
+	mustDo2(t)(lb.EditPrefs(connect))
+	cc().authenticated(validNetmap)
+
+	expiredNetmap := *validNetmap
+	expiredSelf := validNetmap.SelfNode.AsStruct()
+	expiredSelf.KeyExpiry = time.Now().Add(-time.Minute)
+	expiredNetmap.SelfNode = expiredSelf.View()
+
+	cc().send(sendOpt{nm: &expiredNetmap})
+
+	if got := lb.State(); got != ipn.NeedsLogin {
+		t.Fatalf("state after expiry = %v; want NeedsLogin", got)
+	}
+	if !lb.isEngineBlocked() {
+		t.Fatal("engine is not blocked after key expiry")
+	}
+	if cfg := engine.Config(); len(cfg.Addresses) != 0 {
+		t.Fatalf("engine addresses after expiry = %v; want none", cfg.Addresses)
+	}
+
+	// A subsequent control status can still say LoggedIn even though the
+	// node key remains expired. This must not be treated as completed
+	// reauthentication.
+	cc().send(sendOpt{
+		loginFinished: true,
+		nm:            &expiredNetmap,
+	})
+
+	if got := lb.State(); got != ipn.NeedsLogin {
+		t.Errorf("state after stale LoggedIn status = %v; want NeedsLogin", got)
+	}
+	if !lb.isEngineBlocked() {
+		t.Error("stale LoggedIn status unblocked the engine for an expired key")
+	}
+	if cfg := engine.Config(); len(cfg.Addresses) != 0 {
+		t.Errorf("stale LoggedIn status restored engine addresses: %v", cfg.Addresses)
+	}
+}
+
+func TestTimeJumpRechecksSelfKeyExpiry(t *testing.T) {
+	tests := []struct {
+		name           string
+		wakeAfter      time.Duration
+		wantState      ipn.State
+		wantBlocked    bool
+		wantConfigured bool
+	}{
+		{
+			name:           "before_expiry",
+			wakeAfter:      4 * time.Minute,
+			wantState:      ipn.Running,
+			wantBlocked:    false,
+			wantConfigured: true,
+		},
+		{
+			name:           "after_expiry",
+			wakeAfter:      7 * time.Minute,
+			wantState:      ipn.NeedsLogin,
+			wantBlocked:    true,
+			wantConfigured: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(1_800_000_000, 0)
+			clock := &expiryCallbackClock{now: now}
+
+			connect := &ipn.MaskedPrefs{
+				WantRunning:    true,
+				WantRunningSet: true,
+			}
+
+			self := makePeer(
+				1,
+				withName("self"),
+				withAddresses(netip.MustParsePrefix("100.64.1.1/32")),
+				func(n *tailcfg.Node) {
+					n.MachineAuthorized = true
+					n.KeyExpiry = now.Add(5 * time.Minute)
+				},
+			)
+			nm := buildNetmapWithPeers(self)
+
+			lb, engine, cc := newLocalBackendWithMockEngineAndControl(t, false)
+			lb.ForTest().SetClock(clock)
+
+			mustDo(t)(lb.Start(ipn.Options{}))
+			mustDo2(t)(lb.EditPrefs(connect))
+			cc().authenticated(nm)
+
+			// Give the fake engine a live DERP connection so the backend
+			// reaches Running before the simulated sleep.
+			lb.setWgengineStatus(&wgengine.Status{
+				DERPs: 1,
+				AsOf:  now,
+			}, nil)
+
+			if got := lb.State(); got != ipn.Running {
+				t.Fatalf("state before sleep = %v; want Running", got)
+			}
+
+			// Advance wall time without invoking the scheduled expiry
+			// callback, modeling a timer suspended while the machine sleeps.
+			clock.now = now.Add(tt.wakeAfter)
+
+			networkState := &netmon.State{}
+			delta, err := netmon.NewChangeDelta(
+				networkState,
+				networkState,
+				tt.wakeAfter,
+				true,
+			)
+			if err != nil {
+				t.Fatalf("NewChangeDelta: %v", err)
+			}
+			if !delta.TimeJumped() {
+				t.Fatal("test delta does not report a time jump")
+			}
+			if delta.RebindLikelyRequired {
+				t.Fatal("time jump unexpectedly requires a rebind")
+			}
+
+			lb.linkChange(delta)
+
+			if got := lb.State(); got != tt.wantState {
+				t.Errorf("state after wake = %v; want %v", got, tt.wantState)
+			}
+			if got := lb.isEngineBlocked(); got != tt.wantBlocked {
+				t.Errorf("engine blocked after wake = %v; want %v",
+					got, tt.wantBlocked)
+			}
+
+			cfg := engine.Config()
+			gotConfigured := cfg != nil && len(cfg.Addresses) != 0
+			if gotConfigured != tt.wantConfigured {
+				t.Errorf("engine configured after wake = %v; want %v",
+					gotConfigured, tt.wantConfigured)
+			}
+		})
+	}
+}
+
 // TestPeerConfigUpdatedOnPeerRouteDelta tests that a netmap delta that
 // changes a peer's allowed IPs is visible through the live per-peer
 // config source that LocalBackend installs on the engine.
