@@ -122,7 +122,7 @@ require (
 	github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210
 	github.com/tailscale/setec v0.0.0-20260824224040-f8d7a936837c
 	github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e
-	github.com/tailscale/web-client-prebuilt v0.0.0-20251127225136-f19339b67368
+	github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/tailscale/wireguard-go v0.0.0-20260911194433-e3222a3340cd
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e

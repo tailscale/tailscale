@@ -1146,8 +1146,8 @@ github.com/tailscale/setec v0.0.0-20260824224040-f8d7a936837c h1:J0aTCtzXxik475w
 github.com/tailscale/setec v0.0.0-20260824224040-f8d7a936837c/go.mod h1:ILYCfHqZuCwIE4+ajWhLYaFBkoYij3P1uFv4K86BhRA=
 github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e h1:+ot1gXs22BhqoStjwo2YSoZppGl/xovy31V29trAPeE=
 github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e/go.mod h1:mu0sethAvP7xItcfBAxMJWiXZ3ZQ5qbKmjPYizOkSHE=
-github.com/tailscale/web-client-prebuilt v0.0.0-20251127225136-f19339b67368 h1:0tpDdAj9sSfSZg4gMwNTdqMP592sBrq2Sm0w6ipnh7k=
-github.com/tailscale/web-client-prebuilt v0.0.0-20251127225136-f19339b67368/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
+github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea h1:ah5jt6ZnxMvNclt6kBBoLcMpLLjMA44PTsnov2y7gpU=
+github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea/go.mod h1:agQPE6y6ldqCOui2gkIh7ZMztTkIQKH049tv8siLuNQ=
 github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 h1:l10Gi6w9jxvinoiq15g8OToDdASBni4CyJOdHY1Hr8M=
 github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6/go.mod h1:ZXRML051h7o4OcI0d3AaILDIad/Xw0IkXaHM17dic1Y=
 github.com/tailscale/wireguard-go v0.0.0-20260911194433-e3222a3340cd h1:7l7Aru/QMwjoWvfvnTEiX3gG+ixhN5WAFENxHcA9NlI=
