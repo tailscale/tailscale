@@ -145,6 +145,13 @@ type Server struct {
 	debug       bool
 	localClient local.Client
 
+	// trackSenderCardinality reports whether each client should keep a
+	// HyperLogLog estimate of how many unique peers have sent it packets.
+	// It is off by default and enabled by the TS_DERP_SENDER_CARDINALITY
+	// environment variable, since the sketch costs memory and time on
+	// the packet path for every connected client.
+	trackSenderCardinality bool
+
 	// onClientInfoForTest, if non-nil, is called with each connecting
 	// client's key and ClientInfo. It is set (before the server accepts
 	// any connections) via forTest.SetOnClientInfo and is nil outside
@@ -416,6 +423,7 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		clock:               tstime.StdClock{},
 		tcpWriteTimeout:     DefaultTCPWiteTimeout,
 	}
+	s.trackSenderCardinality = envknob.Bool("TS_DERP_SENDER_CARDINALITY")
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get(string(packetKindDisco))
 	s.packetsRecvOther = s.packetsRecvByKind.Get(string(packetKindOther))
@@ -2006,7 +2014,8 @@ type sclient struct {
 
 	// senderCardinality estimates the number of unique peers that have
 	// sent packets to this client. Owned by sendLoop, protected by
-	// senderCardinalityMu for reads from other goroutines.
+	// senderCardinalityMu for reads from other goroutines. It is nil
+	// unless [Server.trackSenderCardinality] is set.
 	senderCardinalityMu sync.Mutex
 	senderCardinality   *hyperloglog.Sketch
 
@@ -2248,7 +2257,9 @@ func (c *sclient) onSendLoopDone() {
 func (c *sclient) sendLoop(ctx context.Context) error {
 	defer c.onSendLoopDone()
 
-	c.senderCardinality = hyperloglog.New()
+	if c.s.trackSenderCardinality {
+		c.senderCardinality = hyperloglog.New()
+	}
 
 	jitter := rand.N(5 * time.Second)
 	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(derp.KeepAlive + jitter)
@@ -2523,7 +2534,9 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 }
 
 // EstimatedUniqueSenders returns an estimate of the number of unique peers
-// that have sent packets to this client.
+// that have sent packets to this client. It returns 0 if sender
+// cardinality tracking is disabled (the default; see
+// [Server.trackSenderCardinality]).
 func (c *sclient) EstimatedUniqueSenders() uint64 {
 	c.senderCardinalityMu.Lock()
 	defer c.senderCardinalityMu.Unlock()

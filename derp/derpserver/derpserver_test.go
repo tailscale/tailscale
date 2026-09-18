@@ -2004,6 +2004,71 @@ func TestSendLoopBufferedWriteFrames(t *testing.T) {
 	}
 }
 
+// TestSenderCardinalityEnv checks that sendLoop keeps a unique sender
+// estimate only when TS_DERP_SENDER_CARDINALITY is set.
+func TestSenderCardinalityEnv(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			envVal := ""
+			if enabled {
+				envVal = "1"
+			}
+			t.Setenv("TS_DERP_SENDER_CARDINALITY", envVal)
+			s := New(key.NewNode(), t.Logf)
+			defer s.Close()
+			if s.trackSenderCardinality != enabled {
+				t.Fatalf("trackSenderCardinality = %v; want %v", s.trackSenderCardinality, enabled)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn := newGatedConn()
+			c := &sclient{
+				s:          s,
+				key:        key.NewNode().Public(),
+				nc:         conn,
+				bw:         &lazyBufioWriter{w: conn},
+				logf:       t.Logf,
+				ctx:        ctx,
+				sendWake:   make(chan struct{}, 1),
+				sendPongCh: make(chan [8]byte, 1),
+				peerGone:   make(chan peerGoneMsg),
+			}
+			done := make(chan error, 1)
+			go func() { done <- c.sendLoop(ctx) }()
+
+			// Send one packet at a time from distinct sources, waiting
+			// for each to reach the conn so its insert has happened.
+			const numSenders = 10
+			for range numSenders {
+				if err := c.sendPkt(c, pkt{bs: []byte("hello"), src: key.NewNode().Public()}); err != nil {
+					t.Fatalf("sendPkt: %v", err)
+				}
+				select {
+				case <-conn.writes:
+				case <-time.After(10 * time.Second):
+					t.Fatal("timeout waiting for sendLoop to flush")
+				}
+				conn.gate <- struct{}{}
+			}
+
+			got := c.EstimatedUniqueSenders()
+			if !enabled {
+				if got != 0 {
+					t.Errorf("EstimatedUniqueSenders() = %d; want 0 when disabled", got)
+				}
+			} else if got < numSenders-2 || got > numSenders+2 {
+				t.Errorf("EstimatedUniqueSenders() = %d; want ~%d", got, numSenders)
+			}
+
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("sendLoop: %v", err)
+			}
+		})
+	}
+}
+
 func TestPacketBufPool(t *testing.T) {
 	s := &Server{}
 
