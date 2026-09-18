@@ -309,6 +309,11 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "UseRoutes",
 		Desc: "Use routes advertised by other nodes",
 	},
+	"exitnodehealth": {
+		Sym:  "ExitNodeHealth",
+		Desc: "Health warnings for unavailable exit nodes",
+		Deps: []FeatureTag{"health", "useexitnode"},
+	},
 	"useexitnode": {
 		Sym:  "UseExitNode",
 		Desc: "Use exit nodes",
