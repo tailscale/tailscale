@@ -2951,7 +2951,7 @@ func nodeHasCap(filt *filter.Filter, src, dst tailcfg.NodeView, cap peercap.Cap)
 				// same address family they either have the capability or not.
 				// We do not check against additional host addresses of the same
 				// address family.
-				return filt.CapsWithValues(srcAddr, dstAddr).HasCapability(cap)
+				return filt.HasCapability(srcAddr, dstAddr, cap)
 			}
 		}
 	}
