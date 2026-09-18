@@ -6797,6 +6797,7 @@ rules:
         - list
         - watch
         - create
+        - patch
         - update
         - deletecollection
     - apiGroups:

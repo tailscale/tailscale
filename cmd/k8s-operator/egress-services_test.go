@@ -53,6 +53,7 @@ func TestTailscaleEgressServices(t *testing.T) {
 		WithStatusSubresource(pg).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Create: clusterIPInterceptor("10.96.0.1"),
+			Patch:  ssaMergeInterceptor().Patch,
 		}).
 		Build()
 	zl, err := zap.NewDevelopment()
@@ -345,6 +346,7 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		WithStatusSubresource(pg).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Create: clusterIPInterceptor("10.96.0.1", "fd00::1"),
+			Patch:  ssaMergeInterceptor().Patch,
 		}).
 		Build()
 	zl, err := zap.NewDevelopment()
