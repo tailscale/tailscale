@@ -1119,6 +1119,9 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 	return c.run(ctx)
 }
 
+// debugLogf logs only when the server has debug logging enabled.
+// Callers on the per-packet path must check s.debug themselves first,
+// since Go evaluates and boxes the arguments before the call.
 func (s *Server) debugLogf(format string, v ...any) {
 	if s.debug {
 		s.logf(format, v...)
@@ -1155,7 +1158,9 @@ func (c *sclient) run(ctx context.Context) error {
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
-		c.debugLogf("read frame type %d len %d err %v", ft, fl, err)
+		if c.debug {
+			c.debugLogf("read frame type %d len %d err %v", ft, fl, err)
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				c.debugLogf("read EOF")
@@ -1315,7 +1320,9 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 		return nil
 	}
 
-	dst.debugLogf("received forwarded packet from %s via %s", srcKey.ShortString(), c.key.ShortString())
+	if dst.debug {
+		dst.debugLogf("received forwarded packet from %s via %s", srcKey.ShortString(), c.key.ShortString())
+	}
 
 	return c.sendPkt(dst, pkt{
 		bs:         contents,
@@ -1373,7 +1380,9 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 		if fwd != nil {
 			s.packetsForwardedOut.Add(1)
 			err := fwd.ForwardPacket(c.key, dstKey, contents)
-			c.debugLogf("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
+			if c.debug {
+				c.debugLogf("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
+			}
 			if err != nil {
 				// TODO:
 				return nil
@@ -1387,10 +1396,14 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 			c.requestPeerGoneWriteLimited(dstKey, contents, derp.PeerGoneReasonNotHere)
 		}
 		s.recordDrop(contents, c.key, dstKey, reason)
-		c.debugLogf("SendPacket for %s, dropping with reason=%s", dstKey.ShortString(), reason)
+		if c.debug {
+			c.debugLogf("SendPacket for %s, dropping with reason=%s", dstKey.ShortString(), reason)
+		}
 		return nil
 	}
-	c.debugLogf("SendPacket for %s, sending directly", dstKey.ShortString())
+	if c.debug {
+		c.debugLogf("SendPacket for %s, sending directly", dstKey.ShortString())
+	}
 
 	p := pkt{
 		bs:         contents,
@@ -1474,6 +1487,9 @@ func (c *sclient) rateLimit(n int) error {
 	return nil
 }
 
+// debugLogf logs only when the client has debug logging enabled.
+// Callers on the per-packet path must check c.debug themselves first,
+// since Go evaluates and boxes the arguments before the call.
 func (c *sclient) debugLogf(format string, v ...any) {
 	if c.debug {
 		c.logf(format, v...)
@@ -1519,7 +1535,9 @@ func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, r
 		msg := fmt.Sprintf("drop (%s) %s -> %s", srcKey.ShortString(), reason, dstKey.ShortString())
 		s.limitedLogf(msg)
 	}
-	s.debugLogf("dropping packet reason=%s dst=%s disco=%v", reason, dstKey, looksDisco)
+	if s.debug {
+		s.debugLogf("dropping packet reason=%s dst=%s disco=%v", reason, dstKey, looksDisco)
+	}
 }
 
 func (c *sclient) sendPkt(dst *sclient, p pkt) error {
@@ -1539,7 +1557,9 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 			reason = dropReasonQueueTail
 		}
 		s.recordDrop(p.bs, c.key, dstKey, reason)
-		dst.debugLogf("sendPkt dropped, reason=%s", reason)
+		if dst.debug {
+			dst.debugLogf("sendPkt dropped, reason=%s", reason)
+		}
 		return nil
 	}
 	if dropped.bs != nil {
@@ -2372,7 +2392,9 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 			c.s.packetsSent.Add(1)
 			c.s.bytesSent.Add(int64(len(contents)))
 		}
-		c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)
+		if c.debug {
+			c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)
+		}
 	}()
 
 	c.setWriteDeadline()
@@ -2384,7 +2406,8 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 		c.noteSendFromSrc(srcKey)
 		if c.senderCardinality != nil {
 			c.senderCardinalityMu.Lock()
-			c.senderCardinality.Insert(srcKey.AppendTo(nil))
+			var raw [key.NodePublicRawLen]byte
+			c.senderCardinality.Insert(srcKey.AppendTo(raw[:0]))
 			c.senderCardinalityMu.Unlock()
 		}
 	}
