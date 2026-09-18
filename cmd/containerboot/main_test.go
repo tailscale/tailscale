@@ -41,10 +41,12 @@ import (
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubeclient"
 	"tailscale.com/kube/kubetypes"
+	klc "tailscale.com/kube/localclient"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 )
 
 const configFileAuthKey = "some-auth-key"
@@ -1290,12 +1292,6 @@ func TestContainerBoot(t *testing.T) {
 						t.Fatalf("phase %d: updating mtime for %q: %v", i, path, err)
 					}
 				}
-				if p.Notify != nil && p.Notify.InitialStatus == nil {
-					// Shallow-copy before mutating to avoid a race with
-					// parallel subtests that share the same *ipn.Notify.
-					p.Notify = new(*p.Notify)
-					p.Notify.InitialStatus = statusFromNotify(p.Notify)
-				}
 				env.lapi.Notify(p.Notify)
 				if p.Signal != nil {
 					cmd.Process.Signal(*p.Signal)
@@ -1488,6 +1484,7 @@ type localAPI struct {
 	sync.Mutex
 	cond   *sync.Cond
 	notify *ipn.Notify
+	status *ipnstate.Status
 }
 
 func (lc *localAPI) Start() error {
@@ -1521,6 +1518,32 @@ func (lc *localAPI) Notify(n *ipn.Notify) {
 	lc.Lock()
 	defer lc.Unlock()
 	lc.notify = n
+	if n.InitialStatus != nil {
+		lc.status = n.InitialStatus
+	} else if lc.status == nil {
+		lc.status = statusFromNotify(n)
+	} else {
+		if n.State != nil {
+			lc.status.BackendState = n.State.String()
+		}
+		if n.SelfChange != nil {
+			lc.status.Self = peerStatusFromNode(n.SelfChange.View())
+		}
+		for _, p := range n.PeersChanged {
+			if lc.status.Peer == nil {
+				lc.status.Peer = map[key.NodePublic]*ipnstate.PeerStatus{}
+			}
+			pv := p.View()
+			lc.status.Peer[pv.Key()] = peerStatusFromNode(pv)
+		}
+		for _, id := range n.PeersRemoved {
+			for k, p := range lc.status.Peer {
+				if p.NodeID == id {
+					delete(lc.status.Peer, k)
+				}
+			}
+		}
+	}
 	lc.cond.Broadcast()
 }
 
@@ -1617,9 +1640,15 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	lc.Lock()
 	defer lc.Unlock()
+	first := true
 	for {
 		if lc.notify != nil {
-			if err := enc.Encode(lc.notify); err != nil {
+			n := *lc.notify
+			if first {
+				n.InitialStatus = lc.status
+				first = false
+			}
+			if err := enc.Encode(&n); err != nil {
 				// Usually broken pipe as the test client disconnects.
 				return
 			}
@@ -2000,5 +2029,139 @@ func TestProcessNotifyRefreshesDNSOnSelfChange(t *testing.T) {
 	}
 	if got.certDomains.Len() != 1 || got.certDomains.At(0) != "node.tailnet.ts.net" {
 		t.Errorf("certDomains = %v, want [node.tailnet.ts.net]", got.certDomains.AsSlice())
+	}
+}
+
+func TestContainerbootWatchMask(t *testing.T) {
+	const base = ipn.NotifyInitialStatus | ipn.NotifyNoNetMap
+	tests := []struct {
+		name string
+		cfg  settings
+		want ipn.NotifyWatchOpt
+	}{
+		{name: "subnet_router", cfg: settings{Routes: new("10.0.0.0/8")}, want: base},
+		{name: "tailnet_target_IP", cfg: settings{TailnetTargetIP: "100.64.0.1"}, want: base},
+		{name: "tailnet_target_FQDN", cfg: settings{TailnetTargetFQDN: "target.example.ts.net"}, want: base | ipn.NotifyPeerChanges},
+		{name: "egress_services", cfg: settings{EgressProxiesCfgPath: "/etc/egress-services"}, want: base | ipn.NotifyPeerChanges},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containerbootWatchMask(&tt.cfg); got != tt.want {
+				t.Errorf("containerbootWatchMask() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateFromStatusReplacesState(t *testing.T) {
+	oldPeer := &tailcfg.Node{ID: 1, StableID: "old", Name: "old.example.ts.net."}
+	s := netmapState{
+		self:            oldPeer.View(),
+		certDomains:     views.SliceOf([]string{"old.example.ts.net"}),
+		dnsExtraRecords: views.SliceOf([]tailcfg.DNSRecord{{Name: "old.example.ts.net."}}),
+	}.upsertPeer(oldPeer.View())
+
+	got := s.updateFromStatus(new(ipnstate.Status))
+	if got.self.Valid() {
+		t.Error("self remained valid after an empty authoritative status")
+	}
+	if got.peersByID != nil && got.peersByID.Len() != 0 {
+		t.Errorf("peer count = %d, want 0", got.peersByID.Len())
+	}
+	if got.certDomains.Len() != 0 || got.dnsExtraRecords.Len() != 0 {
+		t.Error("DNS state remained after an empty authoritative status")
+	}
+}
+
+type scriptedIPNBusWatcher struct {
+	notifies []ipn.Notify
+	err      error
+}
+
+func (w *scriptedIPNBusWatcher) Close() error { return nil }
+
+func (w *scriptedIPNBusWatcher) Next() (ipn.Notify, error) {
+	if len(w.notifies) == 0 {
+		return ipn.Notify{}, w.err
+	}
+	n := w.notifies[0]
+	w.notifies = w.notifies[1:]
+	return n, nil
+}
+
+func TestReconnectingIPNBusWatcher(t *testing.T) {
+	terminalMessage := "IPN bus consumer fell behind; closing watch"
+	watches := []*scriptedIPNBusWatcher{
+		{notifies: []ipn.Notify{{ErrMessage: &terminalMessage}}, err: io.EOF},
+		{notifies: []ipn.Notify{{InitialStatus: &ipnstate.Status{BackendState: ipn.Running.String()}}}, err: io.EOF},
+	}
+	var (
+		mu    sync.Mutex
+		masks []ipn.NotifyWatchOpt
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	watch := func(_ context.Context, mask ipn.NotifyWatchOpt) (klc.IPNBusWatcher, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		masks = append(masks, mask)
+		if len(watches) == 0 {
+			return nil, errors.New("no scripted watcher")
+		}
+		w := watches[0]
+		watches = watches[1:]
+		return w, nil
+	}
+	mask := ipn.NotifyInitialStatus | ipn.NotifyNoNetMap
+	w := newReconnectingIPNBusWatcher(ctx, "test", watch, mask, time.Millisecond)
+	defer w.Close()
+
+	n, err := w.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.ErrMessage == nil || *n.ErrMessage != terminalMessage {
+		t.Fatalf("first notification = %+v, want terminal error", n)
+	}
+
+	n, err = w.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.InitialStatus == nil || n.InitialStatus.BackendState != ipn.Running.String() {
+		t.Fatalf("notification = %+v, want replacement running status", n)
+	}
+	cancel()
+	if _, err := w.Next(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %v, want context.Canceled", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(masks) < 2 {
+		t.Fatalf("watch attempts = %d, want at least 2", len(masks))
+	}
+	for i, got := range masks[:2] {
+		if got != mask {
+			t.Errorf("watch attempt %d mask = %v, want %v", i, got, mask)
+		}
+	}
+}
+
+func TestReconnectingIPNBusWatcherGivesUpOnDialFailure(t *testing.T) {
+	dialErr := errors.New("connection refused")
+	var attempts int
+	watch := func(context.Context, ipn.NotifyWatchOpt) (klc.IPNBusWatcher, error) {
+		attempts++
+		return nil, dialErr
+	}
+	w := newReconnectingIPNBusWatcher(t.Context(), "test", watch, ipn.NotifyInitialStatus, time.Millisecond)
+	w.maxDialFailure = 20 * time.Millisecond
+
+	if _, err := w.Next(); !errors.Is(err, dialErr) {
+		t.Fatalf("Next error = %v, want %v", err, dialErr)
+	}
+	if attempts < 2 {
+		t.Errorf("watch attempts = %d, want at least 2", attempts)
 	}
 }
