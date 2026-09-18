@@ -343,7 +343,7 @@ func TestBreakWatcherConnRecv(t *testing.T) {
 
 			watcher.BreakConnection(watcher)
 			// re-establish connection by sending a packet
-			watcher.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+			watcher.ForwardPacket(key.NodePublic{}, key.NodePublic{}, derp.LoanBytes([]byte("bogus")))
 		}
 		cancel() // Cancel the context to stop the watcher loop.
 		wg.Wait()
@@ -426,7 +426,7 @@ func TestBreakWatcherConn(t *testing.T) {
 
 			watcher1.BreakConnection(watcher1)
 			// re-establish connection by sending a packet
-			watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, []byte("bogus"))
+			watcher1.ForwardPacket(key.NodePublic{}, key.NodePublic{}, derp.LoanBytes([]byte("bogus")))
 			// signal that the breaker is done
 			breakerChan <- true
 		}

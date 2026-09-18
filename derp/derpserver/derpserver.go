@@ -24,6 +24,7 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"math/bits"
 	"math/rand/v2"
 	"net/http"
 	"net/netip"
@@ -208,6 +209,11 @@ type Server struct {
 	// per-client memory low; see pktQueue.
 	sendQueueRingPool sync.Pool
 
+	// packetBufPools holds released packet payload buffers, one pool
+	// per power-of-two size class from 1<<packetBufMinClass bytes up
+	// to derp.MaxPacketSize. See getPacketBuf.
+	packetBufPools [numPacketBufClasses]sync.Pool
+
 	mu       syncs.Mutex // guards the following fields
 	closed   bool
 	netConns map[derp.Conn]chan struct{} // chan is closed when conn closes
@@ -365,7 +371,10 @@ func (s *dupClientSet) removeClient(c *sclient) bool {
 // is a multiForwarder, which this package creates as needed if a
 // public key gets more than one PacketForwarder registered for it.
 type PacketForwarder interface {
-	ForwardPacket(src, dst key.NodePublic, payload []byte) error
+	// ForwardPacket forwards payload from src to dst. The payload is
+	// only on loan for the duration of the call; the Server reuses
+	// the memory once it returns.
+	ForwardPacket(src, dst key.NodePublic, payload derp.LoanedBytes) error
 	String() string
 }
 
@@ -425,6 +434,68 @@ func (s *Server) getSendQueueRing() *[]pkt {
 	}
 	ring := make([]pkt, s.perClientSendQueueDepth)
 	return &ring
+}
+
+// Pooled packet payload buffers come in power-of-two size classes.
+// Class i holds 1<<(packetBufMinClass+i) bytes, from 1 KiB up to
+// derp.MaxPacketSize.
+const (
+	packetBufMinClass   = 10
+	packetBufMaxClass   = 16
+	numPacketBufClasses = packetBufMaxClass - packetBufMinClass + 1
+)
+
+// The largest size class must be exactly derp.MaxPacketSize or
+// getPacketBuf could index past packetBufPools. This fails to compile
+// if the two disagree in either direction.
+var _ [0]struct{} = [1<<packetBufMaxClass - derp.MaxPacketSize]struct{}{}
+
+// packetBufClass returns the index into Server.packetBufPools of the
+// smallest size class that holds n bytes. ok is false if n is
+// negative or exceeds derp.MaxPacketSize.
+func packetBufClass(n int) (class int, ok bool) {
+	if n < 0 || n > derp.MaxPacketSize {
+		return 0, false
+	}
+	if n <= 1<<packetBufMinClass {
+		return 0, true
+	}
+	return bits.Len(uint(n-1)) - packetBufMinClass, true
+}
+
+// getPacketBuf returns a packet payload buffer of length n from
+// s.packetBufPools, or a fresh one if the pool for n's size class is
+// empty. The caller must release it with putPacketBuf once the packet
+// has been written, forwarded, or dropped. It panics if n is
+// negative or exceeds derp.MaxPacketSize.
+func (s *Server) getPacketBuf(n int) *[]byte {
+	class, ok := packetBufClass(n)
+	if !ok {
+		panic(fmt.Sprintf("getPacketBuf: size %d out of range [0, %d]", n, derp.MaxPacketSize))
+	}
+	if buf, ok := s.packetBufPools[class].Get().(*[]byte); ok {
+		*buf = (*buf)[:n]
+		return buf
+	}
+	buf := make([]byte, n, 1<<(packetBufMinClass+class))
+	return &buf
+}
+
+// putPacketBuf returns a buffer from getPacketBuf to its size class
+// pool. A nil buf is a no-op, so callers can release a pkt regardless
+// of whether its bytes came from the pool. It panics if buf's
+// capacity is not one of the pool's size classes, which means it
+// didn't come from getPacketBuf.
+func (s *Server) putPacketBuf(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	c := cap(*buf)
+	class, ok := packetBufClass(c)
+	if !ok || 1<<(packetBufMinClass+class) != c {
+		panic(fmt.Sprintf("putPacketBuf: cap %d is not a pool size class", c))
+	}
+	s.packetBufPools[class].Put(buf)
 }
 
 func genDroppedCounters() {
@@ -1298,10 +1369,11 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	}
 	s := c.s
 
-	srcKey, dstKey, contents, err := s.recvForwardPacket(c.br, fl)
+	srcKey, dstKey, buf, err := s.recvForwardPacket(c.br, fl)
 	if err != nil {
 		return fmt.Errorf("client %v: recvForwardPacket: %v", c.key, err)
 	}
+	contents := *buf
 	s.packetsForwardedIn.Add(1)
 
 	// Use the same lock-free fast path as the local send path. The mesh
@@ -1317,6 +1389,7 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 			c.requestPeerGoneWriteLimited(dstKey, contents, derp.PeerGoneReasonNotHere)
 		}
 		s.recordDrop(contents, srcKey, dstKey, reason)
+		s.putPacketBuf(buf)
 		return nil
 	}
 
@@ -1326,6 +1399,7 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 
 	return c.sendPkt(dst, pkt{
 		bs:         contents,
+		buf:        buf,
 		enqueuedAt: c.s.clock.Now(),
 		src:        srcKey,
 	})
@@ -1369,17 +1443,19 @@ func (c *sclient) lookupDest(dst key.NodePublic) (_ *sclient, fwd PacketForwarde
 func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	s := c.s
 
-	dstKey, contents, err := s.recvPacket(c.br, fl)
+	dstKey, buf, err := s.recvPacket(c.br, fl)
 	if err != nil {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
+	contents := *buf
 
 	dst, fwd, dstLen := c.lookupDest(dstKey)
 
 	if dst == nil {
+		defer s.putPacketBuf(buf)
 		if fwd != nil {
 			s.packetsForwardedOut.Add(1)
-			err := fwd.ForwardPacket(c.key, dstKey, contents)
+			err := fwd.ForwardPacket(c.key, dstKey, derp.LoanBytes(contents))
 			if c.debug {
 				c.debugLogf("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
 			}
@@ -1407,6 +1483,7 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 
 	p := pkt{
 		bs:         contents,
+		buf:        buf,
 		enqueuedAt: c.s.clock.Now(),
 		src:        c.key,
 	}
@@ -1557,6 +1634,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 			reason = dropReasonQueueTail
 		}
 		s.recordDrop(p.bs, c.key, dstKey, reason)
+		s.putPacketBuf(p.buf)
 		if dst.debug {
 			dst.debugLogf("sendPkt dropped, reason=%s", reason)
 		}
@@ -1566,6 +1644,7 @@ func (c *sclient) sendPkt(dst *sclient, p pkt) error {
 		// The queue was full; the packet at its head was dropped to
 		// make room, prioritizing fresher packets.
 		s.recordDrop(dropped.bs, dropped.src, dstKey, dropReasonQueueHead)
+		s.putPacketBuf(dropped.buf)
 		c.recordQueueTime(dropped.enqueuedAt)
 	}
 	if wasEmpty {
@@ -1824,7 +1903,11 @@ func (s *Server) recvClientKey(br *bufio.Reader) (clientKey key.NodePublic, info
 	return clientKey, info, nil
 }
 
-func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodePublic, contents []byte, err error) {
+// recvPacket reads the body of a send packet frame of length frameLen
+// from br. The returned buffer holds the packet payload and must be
+// released with putPacketBuf once the packet has been written,
+// forwarded, or dropped.
+func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodePublic, buf *[]byte, err error) {
 	if frameLen < derp.KeyLen {
 		return zpub, nil, errors.New("short send packet frame")
 	}
@@ -1835,8 +1918,10 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodeP
 	if packetLen > derp.MaxPacketSize {
 		return zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, derp.MaxPacketSize)
 	}
-	contents = make([]byte, packetLen)
+	buf = s.getPacketBuf(int(packetLen))
+	contents := *buf
 	if _, err := io.ReadFull(br, contents); err != nil {
+		s.putPacketBuf(buf)
 		return zpub, nil, err
 	}
 	s.packetsRecv.Add(1)
@@ -1846,13 +1931,17 @@ func (s *Server) recvPacket(br *bufio.Reader, frameLen uint32) (dstKey key.NodeP
 	} else {
 		s.packetsRecvOther.Add(1)
 	}
-	return dstKey, contents, nil
+	return dstKey, buf, nil
 }
 
 // zpub is the key.NodePublic zero value.
 var zpub key.NodePublic
 
-func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.NodePublic, contents []byte, err error) {
+// recvForwardPacket reads the body of a forward packet frame of length
+// frameLen from br. The returned buffer holds the packet payload and
+// must be released with putPacketBuf once the packet has been written
+// or dropped.
+func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, dstKey key.NodePublic, buf *[]byte, err error) {
 	if frameLen < derp.KeyLen*2 {
 		return zpub, zpub, nil, errors.New("short send packet frame")
 	}
@@ -1866,13 +1955,14 @@ func (s *Server) recvForwardPacket(br *bufio.Reader, frameLen uint32) (srcKey, d
 	if packetLen > derp.MaxPacketSize {
 		return zpub, zpub, nil, fmt.Errorf("data packet longer (%d) than max of %v", packetLen, derp.MaxPacketSize)
 	}
-	contents = make([]byte, packetLen)
-	if _, err := io.ReadFull(br, contents); err != nil {
+	buf = s.getPacketBuf(int(packetLen))
+	if _, err := io.ReadFull(br, *buf); err != nil {
+		s.putPacketBuf(buf)
 		return zpub, zpub, nil, err
 	}
 	// TODO: was s.packetsRecv.Add(1)
 	// TODO: was s.bytesRecv.Add(int64(len(contents)))
-	return srcKey, dstKey, contents, nil
+	return srcKey, dstKey, buf, nil
 }
 
 // sclient is a client connection to the server.
@@ -1977,9 +2067,15 @@ type pkt struct {
 	// and is used for reporting metrics on the duration of packets in the queue.
 	enqueuedAt time.Time
 
-	// bs is the data packet bytes.
-	// The memory is owned by pkt.
+	// bs is the data packet bytes. When buf is non-nil, bs aliases
+	// *buf and is only valid until the packet is released with
+	// Server.putPacketBuf; otherwise the memory is owned by pkt.
 	bs []byte
+
+	// buf is the pooled buffer backing bs, or nil if bs did not come
+	// from Server.getPacketBuf. Whoever consumes bs, by writing or
+	// dropping the packet, releases it with Server.putPacketBuf.
+	buf *[]byte
 
 	// src is the who's the sender of the packet.
 	src key.NodePublic
@@ -2143,6 +2239,7 @@ func (c *sclient) onSendLoopDone() {
 	// client, and drain them to count dropped packets.
 	drop := func(p pkt) {
 		c.s.recordDrop(p.bs, p.src, c.key, dropReasonGoneDisconnected)
+		c.s.putPacketBuf(p.buf)
 	}
 	c.sendQueue.close(c.s, drop)
 	c.discoSendQueue.close(c.s, drop)
@@ -2195,12 +2292,14 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			}
 			if msg, ok := q1.dequeue(c.s); ok {
 				werr = c.sendPacket(msg.src, msg.bs)
+				c.s.putPacketBuf(msg.buf)
 				c.recordQueueTime(msg.enqueuedAt)
 				inBatch++
 				continue
 			}
 			if msg, ok := q2.dequeue(c.s); ok {
 				werr = c.sendPacket(msg.src, msg.bs)
+				c.s.putPacketBuf(msg.buf)
 				c.recordQueueTime(msg.enqueuedAt)
 				inBatch++
 				continue
@@ -2581,7 +2680,7 @@ func (f *multiForwarder) deleteLocked(fwd PacketForwarder) (_ PacketForwarder, i
 	return nil, false
 }
 
-func (f *multiForwarder) ForwardPacket(src, dst key.NodePublic, payload []byte) error {
+func (f *multiForwarder) ForwardPacket(src, dst key.NodePublic, payload derp.LoanedBytes) error {
 	return f.fwd.Load().ForwardPacket(src, dst, payload)
 }
 
