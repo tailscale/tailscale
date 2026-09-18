@@ -204,7 +204,7 @@ func TestRecvClientKeyAppName(t *testing.T) {
 
 type testFwd int
 
-func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, []byte) error {
+func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, derp.LoanedBytes) error {
 	panic("not called in tests")
 }
 func (testFwd) String() string {
@@ -342,8 +342,8 @@ type channelFwd struct {
 }
 
 func (f channelFwd) String() string { return "" }
-func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet []byte) error {
-	f.c <- packet
+func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet derp.LoanedBytes) error {
+	f.c <- packet.Clone()
 	return nil
 }
 
@@ -394,7 +394,7 @@ func TestMultiForwarder(t *testing.T) {
 		s.mu.Lock()
 		fwd = s.clientsMesh[u]
 		s.mu.Unlock()
-		fwd.ForwardPacket(u, u, []byte(strconv.Itoa(i)))
+		fwd.ForwardPacket(u, u, derp.LoanBytes([]byte(strconv.Itoa(i))))
 	}
 
 	cancel()
@@ -2001,5 +2001,74 @@ func TestSendLoopBufferedWriteFrames(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("sendLoop: %v", err)
+	}
+}
+
+func TestPacketBufPool(t *testing.T) {
+	s := &Server{}
+
+	// smallestClass is the reference implementation of packetBufClass:
+	// the index of the smallest power-of-two class that holds n bytes.
+	smallestClass := func(n int) int {
+		for i := range numPacketBufClasses {
+			if n <= 1<<(packetBufMinClass+i) {
+				return i
+			}
+		}
+		t.Fatalf("no size class holds %d bytes", n)
+		return -1
+	}
+	for n := 0; n <= derp.MaxPacketSize; n++ {
+		got, ok := packetBufClass(n)
+		if want := smallestClass(n); !ok || got != want {
+			t.Fatalf("packetBufClass(%d) = %d, %v; want %d, true", n, got, ok, want)
+		}
+	}
+	for _, n := range []int{-1, derp.MaxPacketSize + 1} {
+		if _, ok := packetBufClass(n); ok {
+			t.Errorf("packetBufClass(%d) ok = true; want false", n)
+		}
+	}
+
+	// Exercise get/put at the bounds of every size class.
+	for class := range numPacketBufClasses {
+		size := 1 << (packetBufMinClass + class)
+		lo := 0
+		if class > 0 {
+			lo = size/2 + 1
+		}
+		for _, n := range []int{lo, lo + 1, size - 1, size} {
+			buf := s.getPacketBuf(n)
+			if len(*buf) != n {
+				t.Errorf("getPacketBuf(%d): len = %d", n, len(*buf))
+			}
+			if cap(*buf) != size {
+				t.Errorf("getPacketBuf(%d): cap = %d; want class %d size %d", n, cap(*buf), class, size)
+			}
+			s.putPacketBuf(buf)
+		}
+	}
+	s.putPacketBuf(nil) // no-op for pkts whose bs didn't come from the pool
+
+	if allocs := testing.AllocsPerRun(1000, func() {
+		s.putPacketBuf(s.getPacketBuf(700))
+	}); allocs != 0 {
+		t.Errorf("get/put cycle allocates %v times per run; want 0", allocs)
+	}
+
+	mustPanic := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s: did not panic", name)
+			}
+		}()
+		f()
+	}
+	mustPanic("getPacketBuf(-1)", func() { s.getPacketBuf(-1) })
+	mustPanic("getPacketBuf(MaxPacketSize+1)", func() { s.getPacketBuf(derp.MaxPacketSize + 1) })
+	for _, c := range []int{0, 3, 1<<packetBufMinClass - 1, 1<<packetBufMinClass + 1, 1500, 2 * derp.MaxPacketSize} {
+		b := make([]byte, c)
+		mustPanic(fmt.Sprintf("putPacketBuf(cap %d)", c), func() { s.putPacketBuf(&b) })
 	}
 }

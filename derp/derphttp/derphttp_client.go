@@ -1019,7 +1019,9 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	return la, nil
 }
 
-func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
+// ForwardPacket forwards b from the node from to the node to over the
+// mesh connection. It does not retain b after it returns.
+func (c *Client) ForwardPacket(from, to key.NodePublic, b derp.LoanedBytes) error {
 	client, _, err := c.connect(c.newContext(), "derphttp.Client.ForwardPacket")
 	if err != nil {
 		return err
