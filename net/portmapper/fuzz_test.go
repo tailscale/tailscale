@@ -6,10 +6,14 @@ package portmapper
 import "testing"
 
 func FuzzParsePCPResponse(f *testing.F) {
-	// Minimal valid 24-byte PCP common header
+	// Valid PCP common header with version, opcode reply bit, a nonzero result code, lifetime and epoch
+	f.Add(append([]byte{2, 129, 0, 7, 28, 32, 155, 237, 10, 188, 17, 255, 135, 180, 175, 246},
+		make([]byte, 8)...))
+	// A 24-byte header with the opcode reply bit set, an OK result code, and nonzero lifetime and epoch
+	f.Add(append([]byte{2, 129, 0, 0, 210, 3, 241, 208, 251, 45, 157, 76, 10, 188, 17, 255},
+		make([]byte, 8)...))
+	// A 16-byte response, eight bytes short of the 24-byte minimum
 	f.Add([]byte{2, 129, 0, 7, 28, 32, 155, 237, 10, 188, 17, 255, 135, 180, 175, 246})
-	// Response with the opcode reply bit set and an OK result code
-	f.Add([]byte{2, 129, 0, 4, 210, 3, 241, 208, 251, 45, 157, 76, 10, 188, 17, 255})
 	// Version mismatch / too-short inputs to exercise the length check
 	f.Add([]byte{2})
 	// Full 24-byte headers so the parse succeeds: a MAP opcode reply with an
