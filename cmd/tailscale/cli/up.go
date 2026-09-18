@@ -104,6 +104,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.clientID, "client-id", "", "Client ID used to generate authkeys via workload identity federation")
 	upf.StringVar(&upArgs.clientSecretOrFile, "client-secret", "", `Client Secret used to generate authkeys via OAuth; if it begins with "file:", then it's a path to a file containing the secret`)
 	upf.StringVar(&upArgs.idTokenOrFile, "id-token", "", `ID token from the identity provider to exchange with the control server for workload identity federation; if it begins with "file:", then it's a path to a file containing the token`)
+	upf.BoolVar(&upArgs.retryTransientAuthErrors, "retry-transient-auth-errors", false, "retry auth key generation via OAuth or workload identity federation on transient errors; performs up to 3 attempts using exponential backoff")
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
@@ -176,38 +177,39 @@ func defaultNetfilterMode() string {
 // As of 2024-10-08, upArgsT is frozen and no new arguments should be
 // added to it. Add new arguments to setArgsT instead.
 type upArgsT struct {
-	qr                     bool
-	qrFormat               string
-	reset                  bool
-	server                 string
-	acceptRoutes           bool
-	acceptDNS              bool
-	exitNodeIP             string
-	exitNodeAllowLANAccess bool
-	shieldsUp              bool
-	runSSH                 bool
-	runWebClient           bool
-	forceReauth            bool
-	forceDaemon            bool
-	advertiseRoutes        string
-	advertiseDefaultRoute  bool
-	advertiseTags          string
-	advertiseConnector     bool
-	snat                   bool
-	statefulFiltering      bool
-	netfilterMode          string
-	authKeyOrFile          string // "secret" or "file:/path/to/secret"
-	clientID               string
-	audience               string
-	clientSecretOrFile     string // "secret" or "file:/path/to/secret"
-	idTokenOrFile          string // "secret" or "file:/path/to/secret"
-	hostname               string
-	opUser                 string
-	json                   bool
-	timeout                time.Duration
-	acceptedRisks          string
-	profileName            string
-	postureChecking        bool
+	qr                       bool
+	qrFormat                 string
+	reset                    bool
+	server                   string
+	acceptRoutes             bool
+	acceptDNS                bool
+	exitNodeIP               string
+	exitNodeAllowLANAccess   bool
+	shieldsUp                bool
+	runSSH                   bool
+	runWebClient             bool
+	forceReauth              bool
+	forceDaemon              bool
+	advertiseRoutes          string
+	advertiseDefaultRoute    bool
+	advertiseTags            string
+	advertiseConnector       bool
+	snat                     bool
+	statefulFiltering        bool
+	netfilterMode            string
+	authKeyOrFile            string // "secret" or "file:/path/to/secret"
+	clientID                 string
+	audience                 string
+	clientSecretOrFile       string // "secret" or "file:/path/to/secret"
+	idTokenOrFile            string // "secret" or "file:/path/to/secret"
+	hostname                 string
+	opUser                   string
+	json                     bool
+	timeout                  time.Duration
+	acceptedRisks            string
+	profileName              string
+	postureChecking          bool
+	retryTransientAuthErrors bool
 }
 
 // resolveValueFromFile returns the value as-is, or if it starts with "file:",
@@ -657,8 +659,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 
 			authKey, err = f(ctx, tailscale.ResolveAuthKeyArgs{
-				AuthKey: clientSecret,
-				Tags:    prefs.AdvertiseTags,
+				AuthKey:                  clientSecret,
+				Tags:                     prefs.AdvertiseTags,
+				RetryTransientAuthErrors: upArgs.retryTransientAuthErrors,
 			})
 			if err != nil {
 				return err
@@ -673,11 +676,12 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			}
 
 			authKey, err = f(ctx, tailscale.ResolveAuthKeyWIFArgs{
-				BaseURL:  prefs.ControlURL,
-				ClientID: upArgs.clientID,
-				IDToken:  idToken,
-				Audience: upArgs.audience,
-				Tags:     prefs.AdvertiseTags,
+				BaseURL:                  prefs.ControlURL,
+				ClientID:                 upArgs.clientID,
+				IDToken:                  idToken,
+				Audience:                 upArgs.audience,
+				Tags:                     prefs.AdvertiseTags,
+				RetryTransientAuthErrors: upArgs.retryTransientAuthErrors,
 			})
 			if err != nil {
 				return err
@@ -955,7 +959,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token":
+	case "auth-key", "force-reauth", "reset", "qr", "qr-format", "json", "timeout", "accept-risk", "host-routes", "client-id", "audience", "client-secret", "id-token", "retry-transient-auth-errors":
 		return true
 	}
 	return false
