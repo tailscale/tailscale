@@ -3496,6 +3496,447 @@ func TestMaybeRebindOnError(t *testing.T) {
 	})
 }
 
+// errOncePacketConn wraps a *net.UDPConn and fails its first read with err,
+// which simulates the OS breaking a bound socket underneath us (as seen on
+// macOS across VPN interface transitions; tailscale/tailscale#20616).
+type errOncePacketConn struct {
+	*net.UDPConn
+	err    error
+	failed atomic.Bool
+}
+
+func (c *errOncePacketConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	if c.failed.CompareAndSwap(false, true) {
+		return 0, netip.AddrPort{}, c.err
+	}
+	return c.UDPConn.ReadFromUDPAddrPort(b)
+}
+
+// errOnceListener is a localhostListener whose first udp4 conn fails its
+// first read with err. Conns bound afterwards (i.e. by a rebind) are normal.
+type errOnceListener struct {
+	localhostListener
+	err  error
+	used atomic.Bool
+}
+
+func (l *errOnceListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	pc, err := l.localhostListener.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if network == "udp4" && l.used.CompareAndSwap(false, true) {
+		return &errOncePacketConn{UDPConn: pc.(*net.UDPConn), err: l.err}, nil
+	}
+	return pc, nil
+}
+
+// TestReceiveFuncSurvivesReadError verifies that a UDP receive func does not
+// return a non-shutdown read error to wireguard-go (which would stop its
+// receive goroutine for good), but instead rebinds and keeps delivering
+// packets from the replacement socket.
+func TestReceiveFuncSurvivesReadError(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	readErr := &net.OpError{Op: "read", Net: "udp", Err: syscall.ENETDOWN}
+	if neterr, ok := any(readErr).(net.Error); !ok || neterr.Temporary() {
+		t.Fatal("test wants a non-temporary net.Error, the kind wireguard-go gives up on")
+	}
+	ln := &errOnceListener{err: readErr}
+
+	bus := eventbustest.NewBus(t)
+	t.Cleanup(bus.Close)
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+
+	conn, err := NewConn(Options{
+		NetMon:                 netMon,
+		EventBus:               bus,
+		HealthTracker:          health.NewTracker(bus),
+		Metrics:                new(usermetric.Registry),
+		DisablePortMapper:      true,
+		Logf:                   t.Logf,
+		Port:                   0,
+		TestOnlyPacketListener: ln,
+		EndpointsFunc:          func([]tailcfg.Endpoint) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if !ln.used.Load() {
+		t.Fatal("listener was not used to bind the udp4 socket")
+	}
+
+	sendConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sendConn.Close() })
+
+	// Obtain the receive funcs the way wireguard-go does (Device.Up ->
+	// connBind.Open); until Open the bind reports closed, which the receive
+	// func correctly treats as shutdown.
+	fns, _, err := conn.bind.Open(0)
+	if err != nil {
+		t.Fatalf("bind.Open: %v", err)
+	}
+	t.Cleanup(func() { conn.bind.Close() })
+	receiveIPv4 := fns[0]
+
+	rebindsBefore := metricRebindCalls.Value()
+	slab := make([]byte, batching.ReadSlabMultiple)
+	packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := receiveIPv4(slab, packets)
+		done <- result{n, err}
+	}()
+
+	// The first read fails; the receive func must rebind rather than return.
+	deadline := time.Now().Add(10 * time.Second)
+	for metricRebindCalls.Value() == rebindsBefore {
+		select {
+		case r := <-done:
+			t.Fatalf("receive func returned (%d, %v) after a read error; want it to rebind and keep running", r.n, r.err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for a rebind after the read error")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Now make sendConn a known peer path and prove the rebound socket
+	// still delivers packets to the same, still-running receive func.
+	addTestEndpoint(t, conn, sendConn)
+	sendBuf := bytes.Repeat([]byte{'x'}, 1<<10)
+	for {
+		if _, err := sendConn.WriteTo(sendBuf, conn.pconn4.LocalAddr()); err != nil {
+			t.Fatalf("WriteTo: %v", err)
+		}
+		select {
+		case r := <-done:
+			if r.err != nil || r.n != 1 {
+				t.Fatalf("receive func returned (%d, %v); want (1, nil)", r.n, r.err)
+			}
+			return
+		case <-time.After(200 * time.Millisecond):
+			// The receive func may still be in its post-error backoff;
+			// resend until it picks the packet up.
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for a packet on the rebound socket")
+			}
+		}
+	}
+}
+
+// errAlwaysListener is a localhostListener whose udp4 conns fail every read
+// with err, simulating a socket the OS has broken for good.
+type errAlwaysListener struct {
+	localhostListener
+	err error
+}
+
+type errAlwaysPacketConn struct {
+	*net.UDPConn
+	err error
+}
+
+func (c *errAlwaysPacketConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	return 0, netip.AddrPort{}, c.err
+}
+
+func (l *errAlwaysListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	pc, err := l.localhostListener.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if network == "udp4" {
+		return &errAlwaysPacketConn{UDPConn: pc.(*net.UDPConn), err: l.err}, nil
+	}
+	return pc, nil
+}
+
+// newReceiveErrorConn returns a Conn bound through ln with its Bind open (as
+// wireguard-go's Device.Up would leave it) and the udp4 receive func.
+func newReceiveErrorConn(t *testing.T, ln nettype.PacketListener) (*Conn, wgconn.ReceiveFunc) {
+	t.Helper()
+	bus := eventbustest.NewBus(t)
+	t.Cleanup(bus.Close)
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	t.Cleanup(func() { netMon.Close() })
+	conn, err := NewConn(Options{
+		NetMon:                 netMon,
+		EventBus:               bus,
+		HealthTracker:          health.NewTracker(bus),
+		Metrics:                new(usermetric.Registry),
+		DisablePortMapper:      true,
+		Logf:                   t.Logf,
+		Port:                   0,
+		TestOnlyPacketListener: ln,
+		EndpointsFunc:          func([]tailcfg.Endpoint) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	fns, _, err := conn.bind.Open(0)
+	if err != nil {
+		t.Fatalf("bind.Open: %v", err)
+	}
+	t.Cleanup(func() { conn.bind.Close() })
+	return conn, fns[0]
+}
+
+func runReceiveFunc(recv wgconn.ReceiveFunc) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		slab := make([]byte, batching.ReadSlabMultiple)
+		packets := make([]wgconn.ReceivedPacket, batching.MinimumReadBatchSize)
+		_, err := recv(slab, packets)
+		done <- err
+	}()
+	return done
+}
+
+// TestReceiveFuncShutdownDuringBackoff verifies that closing the Bind while a
+// receive func is waiting out a read-error backoff returns it to wireguard-go
+// promptly (Device.Close waits for the receive goroutines), instead of after
+// the full backoff.
+func TestReceiveFuncShutdownDuringBackoff(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+	tstest.Replace(t, &receiveErrorMinBackoff, time.Hour)
+	tstest.Replace(t, &receiveErrorMaxBackoff, time.Hour)
+
+	readErr := &net.OpError{Op: "read", Net: "udp", Err: syscall.ENETDOWN}
+	conn, recv := newReceiveErrorConn(t, &errAlwaysListener{err: readErr})
+
+	errorsBefore := metricReceiveError.Value()
+	done := runReceiveFunc(recv)
+	deadline := time.Now().Add(10 * time.Second)
+	for metricReceiveError.Value() == errorsBefore {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the receive func to see the read error")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The receive func has counted the error; give it a moment to reach
+	// its (one hour) backoff select. Closing the Bind must wake it.
+	time.Sleep(50 * time.Millisecond)
+	conn.bind.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("receive func returned %v after the Bind was closed; want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("receive func did not return within 5s of the Bind closing")
+	}
+}
+
+// TestReceiveFuncBoundsRebinds verifies that a socket that keeps failing
+// triggers at most receiveErrorMaxRebinds rebinds per burst, and that the
+// receive func keeps retrying (rather than returning) afterwards.
+func TestReceiveFuncBoundsRebinds(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+	tstest.Replace(t, &receiveErrorMinBackoff, time.Millisecond)
+	tstest.Replace(t, &receiveErrorMaxBackoff, 5*time.Millisecond)
+	tstest.Replace(t, &receiveErrorMaxRebinds, 2)
+	tstest.Replace(t, &errRebindThrottle, 0)
+
+	readErr := &net.OpError{Op: "read", Net: "udp", Err: syscall.ENETDOWN}
+	conn, recv := newReceiveErrorConn(t, &errAlwaysListener{err: readErr})
+
+	errorsBefore := metricReceiveError.Value()
+	rebindsBefore := metricReceiveErrorRebind.Value()
+	rebindCallsBefore := metricRebindCalls.Value()
+	done := runReceiveFunc(recv)
+	deadline := time.Now().Add(10 * time.Second)
+	for metricReceiveError.Value()-errorsBefore < 20 {
+		select {
+		case err := <-done:
+			t.Fatalf("receive func returned (%v) on a persistent read error; want it to keep retrying", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out; saw %d read errors", metricReceiveError.Value()-errorsBefore)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := metricReceiveErrorRebind.Value() - rebindsBefore; got != int64(receiveErrorMaxRebinds) {
+		t.Fatalf("rebinds performed = %d; want exactly %d", got, receiveErrorMaxRebinds)
+	}
+	if got := metricRebindCalls.Value() - rebindCallsBefore; got != int64(receiveErrorMaxRebinds) {
+		t.Fatalf("Rebind calls = %d; want exactly %d", got, receiveErrorMaxRebinds)
+	}
+	conn.bind.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("receive func returned %v after the Bind closed; want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("receive func did not return after the Bind closed")
+	}
+}
+
+// TestReceiveFuncThrottledRebindsDoNotConsumeBudget verifies that a rebind
+// attempt denied by the throttle does not count against the per-burst
+// rebind budget: with a throttle much longer than the error backoff, the
+// burst performs one rebind at once and a second only after the throttle
+// expires, and then stops at the budget however many errors follow. An
+// implementation that charged denied attempts to the budget would never
+// perform the second rebind.
+func TestReceiveFuncThrottledRebindsDoNotConsumeBudget(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+	tstest.Replace(t, &receiveErrorMinBackoff, time.Millisecond)
+	tstest.Replace(t, &receiveErrorMaxBackoff, 2*time.Millisecond)
+	tstest.Replace(t, &receiveErrorMaxRebinds, 2)
+	tstest.Replace(t, &errRebindThrottle, 100*time.Millisecond)
+
+	readErr := &net.OpError{Op: "read", Net: "udp", Err: syscall.ENETDOWN}
+	conn, recv := newReceiveErrorConn(t, &errAlwaysListener{err: readErr})
+	errorsBefore := metricReceiveError.Value()
+	rebindsBefore := metricReceiveErrorRebind.Value()
+	done := runReceiveFunc(recv)
+	deadline := time.Now().Add(10 * time.Second)
+	// Phase 1: inside the throttle window many errors happen but only the
+	// first rebind is performed.
+	for metricReceiveError.Value()-errorsBefore < 10 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out; saw %d read errors", metricReceiveError.Value()-errorsBefore)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := metricReceiveErrorRebind.Value() - rebindsBefore; got != 1 {
+		t.Fatalf("rebinds performed inside the throttle window = %d; want 1", got)
+	}
+	// Phase 2: once the throttle expires the budget still has one rebind
+	// left, and it is used; after that no more, however many errors.
+	for metricReceiveErrorRebind.Value()-rebindsBefore < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the second rebind; performed=%d errors=%d",
+				metricReceiveErrorRebind.Value()-rebindsBefore, metricReceiveError.Value()-errorsBefore)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	errorsAtBudget := metricReceiveError.Value()
+	for metricReceiveError.Value()-errorsAtBudget < 20 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for post-budget read errors")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := metricReceiveErrorRebind.Value() - rebindsBefore; got != 2 {
+		t.Fatalf("rebinds performed = %d; want exactly the budget of 2", got)
+	}
+	conn.bind.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("receive func returned %v; want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("receive func did not return after the Bind closed")
+	}
+}
+
+// blockThenErrListener hands out udp4 conns whose reads block until the conn
+// is closed and then fail with err (not net.ErrClosed), which is what an OS
+// can do when the Bind is closed under a reader in the middle of a read.
+type blockThenErrListener struct {
+	localhostListener
+	err error
+}
+
+type blockThenErrPacketConn struct {
+	*net.UDPConn
+	err     error
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *blockThenErrPacketConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	<-c.release
+	return 0, netip.AddrPort{}, c.err
+}
+
+func (c *blockThenErrPacketConn) Close() error {
+	c.once.Do(func() { close(c.release) })
+	return c.UDPConn.Close()
+}
+
+func (l *blockThenErrListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	pc, err := l.localhostListener.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if network == "udp4" {
+		return &blockThenErrPacketConn{UDPConn: pc.(*net.UDPConn), err: l.err, release: make(chan struct{})}, nil
+	}
+	return pc, nil
+}
+
+// TestReceiveFuncCloseDuringRead verifies that when the Bind is closed while
+// a read is in flight and the OS then reports something other than
+// net.ErrClosed, the receive func still returns net.ErrClosed (the conn.Bind
+// contract) rather than the OS error, and does not try to rebind.
+func TestReceiveFuncCloseDuringRead(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+
+	readErr := &net.OpError{Op: "read", Net: "udp", Err: syscall.ENETDOWN}
+	conn, recv := newReceiveErrorConn(t, &blockThenErrListener{err: readErr})
+	rebindsBefore := metricRebindCalls.Value()
+	done := runReceiveFunc(recv)
+	time.Sleep(50 * time.Millisecond) // let the reader block in the read
+	conn.bind.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("receive func returned %v; want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("receive func did not return after the Bind closed")
+	}
+	if got := metricRebindCalls.Value() - rebindsBefore; got != 0 {
+		t.Fatalf("Rebind was called %d times after the Bind closed; want 0", got)
+	}
+}
+
+// TestRebindAfterBindCloseIsNoop verifies that Rebind (which the receive
+// funcs may now trigger) installs nothing once the Bind is closed, so a
+// shutdown can never strand a freshly bound socket.
+func TestRebindAfterBindCloseIsNoop(t *testing.T) {
+	tstest.PanicOnLog()
+	tstest.ResourceCheck(t)
+	conn, _ := newReceiveErrorConn(t, localhostListener{})
+	conn.bind.Close()
+	rebindsBefore := metricRebindCalls.Value()
+	conn.Rebind()
+	if got := metricRebindCalls.Value() - rebindsBefore; got != 0 {
+		t.Fatalf("Rebind after Bind close performed %d rebinds; want 0", got)
+	}
+	if err := conn.rebind(keepCurrentPort); err == nil {
+		t.Fatal("rebind after Bind close succeeded; want an error and no new socket")
+	}
+}
+
 func newTestConnAndRegistry(t *testing.T) (*Conn, *usermetric.Registry) {
 	t.Helper()
 	bus := eventbus.New()
