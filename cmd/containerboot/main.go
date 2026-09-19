@@ -156,6 +156,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/def"
 	"tailscale.com/util/dnsname"
@@ -173,9 +174,13 @@ func getAutoAdvertiseBool() bool {
 	return def.Bool(os.Getenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT"), true)
 }
 
-const containerbootWatchMask = ipn.NotifyInitialStatus |
-	ipn.NotifyPeerChanges |
-	ipn.NotifyNoNetMap
+func containerbootWatchMask(cfg *settings) ipn.NotifyWatchOpt {
+	mask := ipn.NotifyInitialStatus | ipn.NotifyNoNetMap
+	if cfg.TailnetTargetFQDN != "" || cfg.EgressProxiesCfgPath != "" {
+		mask |= ipn.NotifyPeerChanges
+	}
+	return mask
+}
 
 func notifyState(n ipn.Notify) (_ ipn.State, ok bool) {
 	if n.State != nil {
@@ -235,19 +240,60 @@ func (s netmapState) processNotify(ctx context.Context, client *local.Client, n 
 }
 
 func (s netmapState) updateFromStatus(st *ipnstate.Status) netmapState {
-	s.certDomains = views.SliceOf(st.CertDomains)
-	s.dnsExtraRecords = views.SliceOf(st.ExtraRecords)
+	s = netmapState{
+		certDomains:     views.SliceOf(st.CertDomains),
+		dnsExtraRecords: views.SliceOf(st.ExtraRecords),
+	}
 	if st.Self != nil {
 		s.self = nodeFromPeerStatus(st.Self).View()
 	}
-	if len(st.Peer) != 0 {
-		s.peersByID = nil
-		s.peersByName = nil
-		for _, ps := range st.Peer {
-			s = s.upsertPeer(nodeFromPeerStatus(ps).View())
-		}
+	for _, ps := range st.Peer {
+		s = s.upsertPeer(nodeFromPeerStatus(ps).View())
 	}
 	return s
+}
+
+type watchIPNBusFunc func(context.Context, ipn.NotifyWatchOpt) (klc.IPNBusWatcher, error)
+
+// runIPNBusWatcher keeps a steady-state IPN bus watch running. Watch streams
+// can be closed when the consumer falls behind, in which case a new initial
+// status provides an authoritative snapshot before subsequent deltas.
+func runIPNBusWatcher(ctx context.Context, watch watchIPNBusFunc, mask ipn.NotifyWatchOpt, notify chan<- ipn.Notify) {
+	bo := backoff.NewBackoff("containerboot-ipn-watch", log.Printf, 30*time.Second)
+	for ctx.Err() == nil {
+		w, err := watch(ctx, mask)
+		if err != nil {
+			bo.BackOff(ctx, err)
+			continue
+		}
+
+		started := time.Now()
+		for {
+			n, err := w.Next()
+			if err != nil {
+				w.Close()
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("IPN bus watch ended; reconnecting: %v", err)
+				if time.Since(started) >= 30*time.Second {
+					bo.Reset()
+				}
+				bo.BackOff(ctx, err)
+				break
+			}
+			if n.ErrMessage != nil {
+				log.Printf("IPN bus watch error: %s", *n.ErrMessage)
+				continue
+			}
+			select {
+			case notify <- n:
+			case <-ctx.Done():
+				w.Close()
+				return
+			}
+		}
+	}
 }
 
 func (s netmapState) upsertPeer(n tailcfg.NodeView) netmapState {
@@ -461,7 +507,9 @@ func run() error {
 		}
 	}
 
-	w, err := client.WatchIPNBus(bootCtx, containerbootWatchMask|ipn.NotifyInitialPrefs|ipn.NotifyInitialHealthState)
+	watchMask := containerbootWatchMask(cfg)
+	authWatchMask := watchMask | ipn.NotifyInitialPrefs | ipn.NotifyInitialHealthState
+	w, err := client.WatchIPNBus(bootCtx, authWatchMask)
 	if err != nil {
 		return fmt.Errorf("failed to watch tailscaled for updates: %w", err)
 	}
@@ -501,7 +549,8 @@ func run() error {
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
-		w, err = client.WatchIPNBus(bootCtx, containerbootWatchMask)
+		authWatchMask = watchMask
+		w, err = client.WatchIPNBus(bootCtx, authWatchMask)
 		if err != nil {
 			return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
 		}
@@ -514,11 +563,27 @@ func run() error {
 		}
 	}
 
+	bo := backoff.NewBackoff("containerboot-auth-ipn-watch", log.Printf, 5*time.Second)
 authLoop:
 	for {
 		n, err := w.Next()
 		if err != nil {
-			return fmt.Errorf("failed to read from tailscaled: %w", err)
+			w.Close()
+			if bootCtx.Err() != nil {
+				return fmt.Errorf("failed to read from tailscaled: %w", bootCtx.Err())
+			}
+			for err != nil && bootCtx.Err() == nil {
+				bo.BackOff(bootCtx, err)
+				w, err = client.WatchIPNBus(bootCtx, authWatchMask)
+			}
+			if bootCtx.Err() != nil {
+				return fmt.Errorf("reconnecting to tailscaled IPN bus: %w", bootCtx.Err())
+			}
+			continue
+		}
+		if n.ErrMessage != nil {
+			log.Printf("IPN bus watch error during startup: %s", *n.ErrMessage)
+			continue
 		}
 
 		if state, ok := notifyState(n); ok {
@@ -613,11 +678,6 @@ authLoop:
 		}
 	}
 
-	w, err = client.WatchIPNBus(ctx, containerbootWatchMask)
-	if err != nil {
-		return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
-	}
-
 	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
 	cfgWatchErrChan := make(chan error)
 	cfgWatchCtx, cfgWatchCancel := context.WithCancel(ctx)
@@ -694,18 +754,9 @@ authLoop:
 
 	var egressSvcsNotify chan netmapState
 	notifyChan := make(chan ipn.Notify)
-	errChan := make(chan error)
-	go func() {
-		for {
-			n, err := w.Next()
-			if err != nil {
-				errChan <- err
-				break
-			} else {
-				notifyChan <- n
-			}
-		}
-	}()
+	go runIPNBusWatcher(ctx, func(ctx context.Context, mask ipn.NotifyWatchOpt) (klc.IPNBusWatcher, error) {
+		return client.WatchIPNBus(ctx, mask)
+	}, watchMask, notifyChan)
 	var nmState netmapState
 	var wg sync.WaitGroup
 
@@ -720,8 +771,6 @@ runLoop:
 			// processes.
 			killTailscaled()
 			break runLoop
-		case err := <-errChan:
-			return fmt.Errorf("failed to read from tailscaled: %w", err)
 		case err := <-cfgWatchErrChan:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
