@@ -21,7 +21,7 @@ require (
 	github.com/aws/smithy-go v1.28.1
 	github.com/axiomhq/hyperloglog v0.2.6
 	github.com/benbjohnson/immutable v0.4.3
-	github.com/bradfitz/go-tool-cache v0.0.0-20260909201542-a1c7321be47b
+	github.com/bradfitz/go-tool-cache v0.0.0-20260919185303-c660171c910c
 	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
 	github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03
 	github.com/bramvdbogaerde/go-scp v1.6.1
