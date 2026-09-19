@@ -22,6 +22,14 @@ const (
 	SYN_PING   ControlFrameType = 6 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.5
 )
 
+// maxHeaderCount bounds the number of Name/Value pairs parsed out of one SPDY header block.
+// A 'kubectl exec/attach' session opens a few streams whose blocks carry a handful of pairs,
+// so this is orders of magnitude above real traffic.
+const maxHeaderCount = 1000
+
+// maxHeaderBlockSize bounds the decompressed size of one Name/Value Header Block.
+const maxHeaderBlockSize = 1 << 20 // 1MiB
+
 // spdyFrame is a parsed SPDY frame as defined in
 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt
 // A SPDY frame can be either a control frame or a data frame.
@@ -179,8 +187,15 @@ func (sf *spdyFrame) parseHeaders(z *zlibReader, log *zap.SugaredLogger) (http.H
 // See also https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.10
 func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, error) {
 	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
+	defer func() {
+		if buf.Cap() <= maxHeaderBlockSize { // don't retain a buffer grown by a large block
+			bufPool.Put(buf)
+		}
+	}()
 	buf.Reset()
+
+	// Limit the impact of a potential compression bomb from the header block
+	decompressor = io.LimitReader(decompressor, maxHeaderBlockSize)
 
 	// readUint32 reads the next 4 decompressed bytes from the decompressor
 	// as a uint32.
@@ -209,6 +224,9 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	numHeaders, err := readUint32()
 	if err != nil {
 		return nil, fmt.Errorf("error determining num headers: %v", err)
+	}
+	if numHeaders > maxHeaderCount {
+		return nil, fmt.Errorf("invalid data: too many headers declared: %v, maximum is %v", numHeaders, maxHeaderCount)
 	}
 	h := make(http.Header, numHeaders)
 	for range numHeaders {
