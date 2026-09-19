@@ -383,16 +383,23 @@ func dumpLogTail(t testing.TB, name, kind, path string) {
 		t.Logf("=== %s %s log unavailable: %v ===", name, kind, err)
 		return
 	}
+	dumpTail(t, name, kind, data, 50)
+}
+
+// dumpTail prints the last maxLines lines of data to the test log, prefixed
+// with the VM name and kind. It prints only a short note if data is empty.
+func dumpTail(t testing.TB, name, kind string, data []byte, maxLines int) {
+	t.Helper()
 	if len(data) == 0 {
 		t.Logf("=== %s %s log is empty ===", name, kind)
 		return
 	}
-	lines := bytes.Split(data, []byte("\n"))
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n"))
 	start := 0
-	if len(lines) > 50 {
-		start = len(lines) - 50
+	if len(lines) > maxLines {
+		start = len(lines) - maxLines
 	}
-	t.Logf("=== last 50 lines of %s %s log ===", name, kind)
+	t.Logf("=== last %d lines of %s %s log ===", len(lines)-start, name, kind)
 	for _, line := range lines[start:] {
 		t.Logf("[%s] %s", name, line)
 	}
