@@ -398,6 +398,19 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 			}
 		}
 
+		// DERPNode.RegionID is optional on the wire and is commonly omitted in
+		// custom DERP maps. Populate it from the region the node lives in so
+		// consumers that key on node.RegionID (such as netcheck latency
+		// accounting) attribute the node to the correct region; a node's
+		// RegionID has only one valid value, the ID of its region.
+		for rid, r := range dm.Regions {
+			for _, n := range r.Nodes {
+				if n.RegionID == 0 {
+					n.RegionID = rid
+				}
+			}
+		}
+
 		// In the copy/v86 wasm environment with limited networking, if the
 		// control plane didn't pick our DERP home for us, do it ourselves and
 		// mark all but the lowest region as NoMeasureNoHome. For prod, this

@@ -1712,3 +1712,37 @@ func TestPeerIDAndKeyByTailscaleIP(t *testing.T) {
 		}
 	})
 }
+
+func TestDERPMapNodeRegionID(t *testing.T) {
+	// DERPNode.RegionID is optional on the wire and is commonly omitted in
+	// custom DERP maps. The client must populate it from the region the node
+	// lives in, otherwise consumers that key on node.RegionID (e.g. netcheck
+	// latency accounting) attribute the node to region 0 and the custom DERP
+	// server is never selected. Regression test for #9526.
+	ms := newTestMapSession(t, nil)
+	nm := ms.netmapForResponse(&tailcfg.MapResponse{
+		Node: new(tailcfg.Node),
+		DERPMap: &tailcfg.DERPMap{
+			Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+				999: {
+					RegionID:   999,
+					RegionCode: "custom",
+					Nodes: []*tailcfg.DERPNode{
+						{Name: "999a", HostName: "derp1.example.com"},                // RegionID omitted (0)
+						{Name: "999b", HostName: "derp2.example.com", RegionID: 999}, // already set
+					},
+				},
+			},
+		},
+	})
+
+	region := nm.DERPMap.Regions[999]
+	if region == nil {
+		t.Fatal("region 999 missing from netmap DERPMap")
+	}
+	for i, n := range region.Nodes {
+		if n.RegionID != 999 {
+			t.Errorf("node %d (%q): RegionID = %d, want 999", i, n.Name, n.RegionID)
+		}
+	}
+}
