@@ -642,6 +642,7 @@ func runReconcilers(opts reconcilerOpts) {
 			clock:       tstime.DefaultClock{},
 			logger:      opts.log.Named("egress-pods-readiness-reconciler"),
 			httpClient:  http.DefaultClient,
+			maxBackoff:  500 * time.Millisecond,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create egress Pods readiness reconciler: %v", err)
