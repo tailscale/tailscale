@@ -940,3 +940,123 @@ func TestExitNodeBlackhole(t *testing.T) {
 	commit(rm, func(m *Mutation) { m.SetPrefs(Prefs{}) })
 	wantOSRoutes(t, rm)
 }
+
+// TestWireGuardOnlyExitNodePeerView ensures that changes to jailed WGOnly
+// exit node peers does not add their addresses to the route table. Jailed
+// WGOnly subnet routers will still have their addresses inserted.
+func TestWireGuardOnlyExitNodePeerView(t *testing.T) {
+	exitAllowedIPs := []netip.Prefix{
+		pfx("100.100.0.1/32"), pfx("fd7a::1/128"),
+		pfx("0.0.0.0/0"), pfx("::/0"),
+	}
+	subnetAllowedIPs := []netip.Prefix{
+		pfx("100.100.0.1/32"), pfx("fd7a::1/128"), pfx("10.0.0.0/8"),
+	}
+	addrs := []netip.Prefix{
+		pfx("100.100.0.1/32"), pfx("fd7a::1/128"),
+	}
+
+	tests := []struct {
+		name         string
+		isWGOnly     bool
+		isJailed     bool
+		allowedIPs   []netip.Prefix
+		wantSelfAddr []netip.Prefix
+		wantRoutes   []netip.Prefix
+	}{
+		{
+			name:         "wgonly-jailed-exitnode",
+			isWGOnly:     true,
+			isJailed:     true,
+			allowedIPs:   exitAllowedIPs,
+			wantSelfAddr: nil,
+			wantRoutes:   []netip.Prefix{pfx("0.0.0.0/0"), pfx("::/0")},
+		},
+		{
+			name:         "wgonly-exitnode",
+			isWGOnly:     true,
+			isJailed:     false,
+			allowedIPs:   exitAllowedIPs,
+			wantSelfAddr: []netip.Prefix{pfx("100.100.0.1/32"), pfx("fd7a::1/128")},
+			wantRoutes:   []netip.Prefix{pfx("0.0.0.0/0"), pfx("::/0")},
+		},
+		{
+			name:         "wgonly-jailed-subnetrouter",
+			isWGOnly:     true,
+			isJailed:     true,
+			allowedIPs:   subnetAllowedIPs,
+			wantSelfAddr: []netip.Prefix{pfx("100.100.0.1/32"), pfx("fd7a::1/128")},
+			wantRoutes:   []netip.Prefix{pfx("10.0.0.0/8")},
+		},
+		{
+			name:         "jailed-exitnode",
+			isWGOnly:     false,
+			isJailed:     true,
+			allowedIPs:   exitAllowedIPs,
+			wantSelfAddr: []netip.Prefix{pfx("100.100.0.1/32"), pfx("fd7a::1/128")},
+			wantRoutes:   []netip.Prefix{pfx("0.0.0.0/0"), pfx("::/0")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := &tailcfg.Node{
+				ID:              99,
+				Key:             k3,
+				IsWireGuardOnly: tt.isWGOnly,
+				IsJailed:        tt.isJailed,
+				AllowedIPs:      tt.allowedIPs,
+				Addresses:       addrs,
+				HomeDERP:        1,
+			}
+			pv := peerViewOf(n.View())
+			if !slices.Equal(pv.SelfAddrs, tt.wantSelfAddr) {
+				t.Errorf("SelfAddrs = %v; want %v", pv.SelfAddrs, tt.wantSelfAddr)
+			}
+			if !slices.Equal(pv.Routes, tt.wantRoutes) {
+				t.Errorf("Routes = %v; want %v", pv.Routes, tt.wantRoutes)
+			}
+		})
+	}
+}
+
+// TestWireGuardOnlyExitNodeNoOSChurn ensures that mutations to the route table
+// does not happen for changes to WGOnlyExitNodes.
+func TestWireGuardOnlyExitNodeNoOSChurn(t *testing.T) {
+	rm := New(t.Logf)
+	// Normal peer establishes baseline OS routes.
+	commit(rm, func(m *Mutation) { m.upsertPeer(peer1()) })
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
+
+	wgOnlyPeer := &tailcfg.Node{
+		ID:              99,
+		Key:             k1,
+		IsWireGuardOnly: true,
+		IsJailed:        true,
+		AllowedIPs: []netip.Prefix{
+			pfx("100.100.0.1/32"), pfx("fd7a::1/128"),
+			pfx("0.0.0.0/0"), pfx("::/0"),
+		},
+		Addresses: []netip.Prefix{
+			pfx("100.100.0.1/32"), pfx("fd7a::1/128"),
+		},
+	}
+
+	// Add the WGOnly exit node, OS routes unchanged.
+	res := commit(rm, func(m *Mutation) { m.UpsertPeer(wgOnlyPeer.View()) })
+	if res.OSRoutesChanged {
+		t.Error("adding WireGuardOnly exit node should not change OSRoutes")
+	}
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
+
+	// Remove it, also no change.
+	res = commit(rm, func(m *Mutation) { m.RemovePeer(99) })
+	if res.OSRoutesChanged {
+		t.Error("removing WireGuardOnly exit node should not change OSRoutes")
+	}
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
+
+	// When selected as exit node, its /0 routes appear (no host routes).
+	commit(rm, func(m *Mutation) { m.UpsertPeer(wgOnlyPeer.View()) })
+	commit(rm, func(m *Mutation) { m.SetPrefs(Prefs{ExitNodeID: 99}) })
+	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48", "0.0.0.0/0", "::/0")
+}
