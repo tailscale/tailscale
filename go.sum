@@ -201,8 +201,8 @@ github.com/bombsimon/wsl/v4 v4.7.0 h1:1Ilm9JBPRczjyUs6hvOPKvd7VL1Q++PL8M0SXBDf+j
 github.com/bombsimon/wsl/v4 v4.7.0/go.mod h1:uV/+6BkffuzSAVYD+yGyld1AChO7/EuLrCF/8xTiapg=
 github.com/bombsimon/wsl/v5 v5.9.0 h1:WCrgZ7RQnZO5oEwbVTlYgBdU3wL294kR1BSWV8vTfsU=
 github.com/bombsimon/wsl/v5 v5.9.0/go.mod h1:kjo4HiAV5FDkHC8/uzJq9mBffEEd6WT/nvN7DoMovDM=
-github.com/bradfitz/go-tool-cache v0.0.0-20260909201542-a1c7321be47b h1:I25vmkOhIDJHcYUnogRsNXLIqcTOk/OnY7z2YhGqX6g=
-github.com/bradfitz/go-tool-cache v0.0.0-20260909201542-a1c7321be47b/go.mod h1:CwMr4SG9k92ZvGJ7EnopI0qYUSya3aZHAEdaSi2sR3k=
+github.com/bradfitz/go-tool-cache v0.0.0-20260919185303-c660171c910c h1:9TulZxZIanagyWV3nc5jU5k7j4l+6ynAxRfpoden2F4=
+github.com/bradfitz/go-tool-cache v0.0.0-20260919185303-c660171c910c/go.mod h1:CwMr4SG9k92ZvGJ7EnopI0qYUSya3aZHAEdaSi2sR3k=
 github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f h1:voy0korWbg2e1gsJpBZ8/OBhVL8evXeUwbCZcA1PWv8=
 github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f/go.mod h1:TG1HbU9fRVDnNgXncVkKz9GdvjIvqquXjH6QZSEVmY4=
 github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03 h1:V1gD/xbQZtimHXZ0y19oMgTVBIXQyazG/mG9JIflrIY=
