@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -130,7 +131,7 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if !svc.DeletionTimestamp.IsZero() || !r.isTailscaleService(svc) {
 		logger.Debugf("Service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
-		_, err = r.maybeCleanup(ctx, hostname, svc, logger, tsClient)
+		_, err = r.maybeCleanup(ctx, hostname, svc, pg, logger, tsClient)
 		return res, err
 	}
 
@@ -353,6 +354,19 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 			return false, fmt.Errorf("error getting DNS name for Service: %w", err)
 		}
 
+		// Provision the per-domain TLS Secret + Role + RoleBinding so that
+		// `tailscale cert <dnsName>` invoked from a ProxyGroup pod can
+		// write its certificate back into the cluster — closes #20121.
+		// The ProxyGroup's default Role only permits get/patch/update on a
+		// fixed set of Secret names (the per-replica config and state
+		// Secrets), so without this the cert path fails with
+		//   secrets "<dnsName>" is forbidden: cannot get resource "secrets"
+		// Mirrors the equivalent ensureCertResources call in
+		// HAIngressReconciler and KubeAPIServerTSServiceReconciler.
+		if err := r.ensureCertResources(ctx, pg, dnsName, svc); err != nil {
+			return false, fmt.Errorf("failed to ensure cert resources: %w", err)
+		}
+
 		lbs = []corev1.LoadBalancerIngress{
 			{
 				Hostname: dnsName,
@@ -374,7 +388,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 // Service is being deleted or is unexposed. The cleanup is safe for a multi-cluster setup- the Tailscale Service is only
 // deleted if it does not contain any other owner references. If it does the cleanup only removes the owner reference
 // corresponding to this Service.
-func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, logger *zap.SugaredLogger, tsClient tsclient.Client) (svcChanged bool, err error) {
+func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string, svc *corev1.Service, pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, tsClient tsclient.Client) (svcChanged bool, err error) {
 	logger.Debugf("Ensuring any resources for Service are cleaned up")
 	ix := slices.Index(svc.Finalizers, svcPGFinalizerName)
 	if ix < 0 {
@@ -395,6 +409,15 @@ func (r *HAServiceReconciler) maybeCleanup(ctx context.Context, hostname string,
 	svcChanged, err = cleanupTailscaleService(ctx, tsClient, serviceName.String(), r.operatorID, logger)
 	if err != nil {
 		return false, fmt.Errorf("error deleting Tailscale Service: %w", err)
+	}
+
+	// Best-effort cleanup of the per-domain TLS Secret + Role + RoleBinding
+	// that ensureCertResources may have provisioned. The DNS name lookup
+	// inside cleanupCertResources reads ProxyGroup state Secrets which may
+	// already be torn down by this point — log and continue in that case
+	// rather than blocking finalizer removal. See #20121.
+	if err := cleanupCertResources(ctx, r.Client, r.tsNamespace, serviceName, pg); err != nil {
+		logger.Warnf("best-effort cert resource cleanup failed (continuing): %v", err)
 	}
 
 	// 2. Unadvertise the Tailscale Service.
@@ -725,6 +748,44 @@ func (r *HAServiceReconciler) numberPodsAdvertising(ctx context.Context, pgName 
 	}
 
 	return count, nil
+}
+
+// ensureCertResources ensures the TLS Secret for an HA Service plus the
+// per-domain Role and RoleBinding that let the ProxyGroup pods read/write
+// it. Without these, `tailscale cert <dnsName>` invoked from inside a
+// ProxyGroup pod fails because the pod's ServiceAccount only has
+// get/patch/update on the per-replica config and state Secrets — see
+// #20121. Mirrors the equivalent on HAIngressReconciler and
+// KubeAPIServerTSServiceReconciler.
+//
+// The Tailscale Service name is constrained to match Kubernetes resource
+// name validation, so the DNS name (which embeds it) is a valid Secret /
+// Role / RoleBinding name.
+func (r *HAServiceReconciler) ensureCertResources(ctx context.Context, pg *tsapi.ProxyGroup, domain string, svc *corev1.Service) error {
+	secret := certSecret(pg.Name, r.tsNamespace, domain, svc)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, secret, func(s *corev1.Secret) {
+		// Labels might have changed if the Service has been updated to use a
+		// different ProxyGroup.
+		s.Labels = secret.Labels
+	}); err != nil {
+		return fmt.Errorf("failed to create or update Secret %s: %w", secret.Name, err)
+	}
+	role := certSecretRole(pg.Name, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, role, func(r *rbacv1.Role) {
+		r.Labels = role.Labels
+		r.Rules = role.Rules
+	}); err != nil {
+		return fmt.Errorf("failed to create or update Role %s: %w", role.Name, err)
+	}
+	rolebinding := certSecretRoleBinding(pg, r.tsNamespace, domain)
+	if _, err := createOrUpdate(ctx, r.Client, r.tsNamespace, rolebinding, func(rb *rbacv1.RoleBinding) {
+		rb.Labels = rolebinding.Labels
+		rb.Subjects = rolebinding.Subjects
+		rb.RoleRef = rolebinding.RoleRef
+	}); err != nil {
+		return fmt.Errorf("failed to create or update RoleBinding %s: %w", rolebinding.Name, err)
+	}
+	return nil
 }
 
 // dnsNameForService returns the DNS name for the given Tailscale Service name.
