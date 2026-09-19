@@ -711,6 +711,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		b.onTailnetDefaultAutoUpdate(au.Value)
 	})
 	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) { b.linkChange(&cd) })
+	b.refreshInterfaceState(netMon)
 	if buildfeatures.HasHealth {
 		eventbus.SubscribeFunc(ec, b.onHealthChange)
 	}
@@ -1168,6 +1169,27 @@ func (b *LocalBackend) DisconnectControl() {
 	if cc != nil {
 		cc.Shutdown()
 	}
+}
+
+// refreshInterfaceState applies netMon's current interface state as a link
+// change if it differs from the state b last saw. [NewLocalBackend] calls it
+// right after subscribing to [netmon.ChangeDelta] events, to pick up a change
+// published between its initial snapshot and that subscription.
+func (b *LocalBackend) refreshInterfaceState(netMon *netmon.Monitor) {
+	cur := netMon.InterfaceState()
+	b.mu.Lock()
+	old := b.interfaceState
+	b.mu.Unlock()
+	if old.Equal(cur) {
+		return
+	}
+	cd, err := netmon.NewChangeDelta(old, cur, 0, false)
+	if err != nil {
+		b.logf("[unexpected] refreshInterfaceState: %v", err)
+		return
+	}
+	b.logf("refreshInterfaceState: network changed during LocalBackend construction")
+	b.linkChange(cd)
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
