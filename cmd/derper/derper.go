@@ -32,7 +32,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	runtimemetrics "runtime/metrics"
 	"strconv"
 	"strings"
 	"sync"
@@ -548,19 +547,6 @@ func (ln *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	ln.numAccepts.Add(1)
 	return cn, nil
-}
-
-func init() {
-	expvar.Publish("go_sync_mutex_wait_seconds", expvar.Func(func() any {
-		const name = "/sync/mutex/wait/total:seconds" // Go 1.20+
-		var s [1]runtimemetrics.Sample
-		s[0].Name = name
-		runtimemetrics.Read(s[:])
-		if v := s[0].Value; v.Kind() == runtimemetrics.KindFloat64 {
-			return v.Float64()
-		}
-		return 0
-	}))
 }
 
 type templateData struct {
