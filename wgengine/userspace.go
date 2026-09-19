@@ -580,6 +580,16 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if err := e.router.Set(nil); err != nil {
 		return nil, fmt.Errorf("router.Set(nil): %w", err)
 	}
+	// Subscribe to network changes before starting the monitor, which
+	// publishes nothing before Start, so no change can be missed.
+	ec := e.eventBus.Client("userspaceEngine")
+	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) {
+		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
+			f()
+		}
+		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
+	})
+
 	e.logf("Starting network monitor...")
 	e.netMon.Start()
 
@@ -595,13 +605,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}
 
-	ec := e.eventBus.Client("userspaceEngine")
-	eventbus.SubscribeFunc(ec, func(cd netmon.ChangeDelta) {
-		if f, ok := feature.HookProxyInvalidateCache.GetOk(); ok {
-			f()
-		}
-		e.linkChangeQueue.Add(func() { e.linkChange(&cd) })
-	})
 	eventbus.SubscribeFunc(ec, func(update events.DiscoKeyAdvertisement) {
 		e.logf("[v1] wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
