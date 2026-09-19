@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"tailscale.com/derp/derphttp"
 	"tailscale.com/health"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/tailcfg"
@@ -18,6 +19,54 @@ import (
 func CheckDERPHeuristicTimes(t *testing.T) {
 	if netcheck.PreferredDERPFrameTime <= frameReceiveRecordRate {
 		t.Errorf("PreferredDERPFrameTime too low; should be at least frameReceiveRecordRate")
+	}
+}
+
+func TestCloseOrReconnectDERPIfCurrentLocked(t *testing.T) {
+	const regionID tailcfg.DERPRegionID = 1
+	tests := []struct {
+		name        string
+		pingCurrent bool
+		wantClosed  bool
+	}{
+		{name: "stale-client"},
+		{name: "current-client", pingCurrent: true, wantClosed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn(t.Logf)
+			staleClient := new(derphttp.Client)
+			currentClient := new(derphttp.Client)
+			cancelCalled := false
+			c.activeDerp = map[tailcfg.DERPRegionID]activeDerp{
+				regionID: {
+					c: currentClient,
+					cancel: func() {
+						cancelCalled = true
+					},
+				},
+			}
+			pingClient := staleClient
+			if tt.pingCurrent {
+				pingClient = currentClient
+			}
+
+			c.mu.Lock()
+			c.closeOrReconnectDERPIfCurrentLocked(regionID, pingClient, "test-ping-failure")
+			ad, ok := c.activeDerp[regionID]
+			c.mu.Unlock()
+
+			if gotClosed := !ok; gotClosed != tt.wantClosed {
+				t.Errorf("DERP connection closed = %v, want %v", gotClosed, tt.wantClosed)
+			}
+			if cancelCalled != tt.wantClosed {
+				t.Errorf("cancel called = %v, want %v", cancelCalled, tt.wantClosed)
+			}
+			if ok && ad.c != currentClient {
+				t.Errorf("active DERP client = %p, want %p", ad.c, currentClient)
+			}
+		})
 	}
 }
 
