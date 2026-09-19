@@ -628,16 +628,19 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
+		c.mu.Unlock()
+
 		rle, rateLimited := errors.AsType[*rateLimitError](err)
 
+		// PollNetMap has finished its callbacks, so accessing the backoff here
+		// cannot race with UpdateFullNetmap resetting it. Leave c.mu unlocked so
+		// SetPaused and Shutdown can cancel ctx during the wait.
 		if paused {
 			mrs.bo.Reset()
 		} else if !rateLimited {
 			mrs.bo.BackOff(ctx, err)
 		}
-		c.mu.Unlock()
 
-		// Now safe to call functions that might acquire the mutex
 		if paused {
 			c.logf("mapRoutine: paused")
 		} else {
