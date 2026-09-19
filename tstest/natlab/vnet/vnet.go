@@ -594,7 +594,7 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			node.logCatcherWrites++
 			for _, lg := range logs {
 				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
-				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
+				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, strings.TrimSuffix(lg.Text, "\n"))
 			}
 		}
 	})
@@ -2999,6 +2999,19 @@ func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 	}
 	mak.Set(&s.agentDialer, n.n, d)
 	return d
+}
+
+// NodeLogs returns the tailscaled log lines that node n has uploaded so far
+// to the fake log.tailscale.com log catcher, one line per entry, each
+// prefixed with the client's timestamp. It returns the empty string if the
+// node has not been started under this server or has uploaded nothing.
+func (s *Server) NodeLogs(n *Node) string {
+	if n == nil || n.n == nil {
+		return ""
+	}
+	n.n.logMu.Lock()
+	defer n.n.logMu.Unlock()
+	return n.n.logBuf.String()
 }
 
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {

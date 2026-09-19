@@ -344,6 +344,9 @@ func New(t testing.TB, opts ...EnvOption) *Env {
 		o.applyTo(e)
 	}
 	t.Cleanup(func() {
+		if t.Failed() {
+			e.dumpNodeLogs()
+		}
 		e.testStatus.finish(t.Failed())
 		e.eventBus.Publish(VMEvent{
 			Type:    EventTestStatus,
@@ -352,6 +355,24 @@ func New(t testing.TB, opts ...EnvOption) *Env {
 		})
 	})
 	return e
+}
+
+// dumpNodeLogs writes the tail of each node's tailscaled logs, as uploaded
+// to the fake log catcher, to the test log. It runs on test failure. The
+// VM console log dumped by [dumpLogTail] holds only kernel and init output;
+// on gokrazy the processes' own output goes to a remote syslog that the
+// virtual network discards, so this is the only view of what tailscaled
+// was doing.
+func (e *Env) dumpNodeLogs() {
+	if e.server == nil {
+		return
+	}
+	// Nodes run tailscaled and upload its logs whether or not they joined
+	// the tailnet or have an agent, so dump them all. A node that uploaded
+	// nothing gets a one-line note.
+	for _, n := range e.nodes {
+		dumpTail(e.t, n.name, "tailscaled (via logcatcher)", []byte(e.server.NodeLogs(n.vnetNode)), 100)
+	}
 }
 
 // EnvOption configures an [Env] in [New].
@@ -525,6 +546,15 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 
 	n.vnetNode = e.cfg.AddNode(vnetOpts...)
 	n.num = n.vnetNode.Num()
+	// VMTEST_VERBOSE_SYSLOG=1 logs each node's remote syslog (the stdout
+	// and stderr of tailscaled and the other guest processes) into the
+	// test output as it arrives. It is the natlab equivalent of
+	// tstest/integration/nat's --log-tailscaled flag and is the way to
+	// watch a guest live; on failure the tail of tailscaled's logs is
+	// dumped regardless, from the fake log catcher.
+	if os.Getenv("VMTEST_VERBOSE_SYSLOG") == "1" {
+		n.vnetNode.SetVerboseSyslog(true)
+	}
 	return n
 }
 
@@ -750,8 +780,17 @@ func (e *Env) Start() {
 			if n.joinTailnet {
 				tsStep := e.Step("Tailscale up: " + n.name)
 				tsStep.Begin()
-				if err := e.tailscaleUp(ctx, n); err != nil {
-					return fmt.Errorf("[%s] tailscale up: %w", n.name, err)
+				// Bound "tailscale up" more tightly than the overall
+				// test context. It normally completes in about a second
+				// against the in-process control server, so a node that
+				// is stuck here should fail promptly, with its logs
+				// dumped, rather than hang until go test's timeout panic,
+				// which dumps nothing useful about the node.
+				upCtx, upCancel := context.WithTimeout(ctx, tailscaleUpTimeout)
+				err := e.tailscaleUp(upCtx, n)
+				upCancel()
+				if err != nil {
+					return fmt.Errorf("[%s] tailscale up (limit %v): %w", n.name, tailscaleUpTimeout, err)
 				}
 				st2, err := n.agent.Status(ctx)
 				if err != nil {
@@ -807,6 +846,11 @@ func (e *Env) Start() {
 		}
 	}
 }
+
+// tailscaleUpTimeout bounds one node's "tailscale up" in [Env.Start]. It
+// is far above the roughly one second the command takes against the
+// in-process control server, and far below the test's overall context.
+const tailscaleUpTimeout = 90 * time.Second
 
 // tailscaleUp runs "tailscale up" on the node via TTA.
 func (e *Env) tailscaleUp(ctx context.Context, n *Node) error {
