@@ -32,6 +32,30 @@ import (
 	"tailscale.com/util/syspolicy/policyclient"
 )
 
+// TestServeIndexRootPath verifies that a GET of the root path ("/"), as
+// the `curl 100.100.100.100` smoke test issues, serves the SPA
+// index.html rather than "internal error".
+func TestServeIndexRootPath(t *testing.T) {
+	s, err := NewServer(ServerOpts{Mode: LoginServerMode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown()
+
+	for _, path := range []string{"/", "/index.html"} {
+		r := httptest.NewRequest(httpm.GET, "http://100.100.100.100"+path, nil)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %v: status = %d, want 200; body=%s", path, w.Code, w.Body.String())
+			continue
+		}
+		if !strings.Contains(w.Body.String(), "<!doctype html>") {
+			t.Errorf("GET %v: body is not index.html: %q", path, w.Body.String())
+		}
+	}
+}
+
 func TestQnapAuthnURL(t *testing.T) {
 	query := url.Values{
 		"qtoken": []string{"token"},

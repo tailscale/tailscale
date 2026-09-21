@@ -33,6 +33,10 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	opts := compserve.Options{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			// The root path is the SPA entrypoint.
+			path = "index.html"
+		}
 		if strings.HasPrefix(path, "assets/") {
 			// Aggressively cache static assets, since we cache-bust our assets with
 			// hashed filenames.
