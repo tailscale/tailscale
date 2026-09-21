@@ -142,12 +142,11 @@ type Knobs struct {
 	// is supported by the client and storage is available.
 	CacheNetworkMaps atomic.Bool
 
-	// ScopeQuad100OnMacOS is whether sandboxed macOS should scope quad-100 to
-	// its match domains rather than installing it as the OS's primary resolver,
-	// so a user's DoH system profile isn't shadowed. It has no effect on other
-	// platforms. Off by default; when off, sandboxed macOS keeps the older
-	// behavior of making quad-100 the default resolver, as iOS still does.
-	// See tailscale/corp#45534.
+	// ScopeQuad100OnMacOS lets sandboxed macOS scope quad-100 for simple DNS
+	// configs, so public queries can use the OS resolver (including DoH).
+	// Custom split resolvers or unrouted forward/PTR records still require
+	// quad-100 as primary. Off by default; has no effect on other platforms.
+	// See tailscale/corp#45534 and tailscale/corp#48693.
 	ScopeQuad100OnMacOS atomic.Bool
 }
 
