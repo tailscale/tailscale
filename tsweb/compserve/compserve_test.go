@@ -285,6 +285,25 @@ func TestServeFile_Missing(t *testing.T) {
 	}
 }
 
+func TestServeFile_InvalidPath(t *testing.T) {
+	// Wrap a map FS in fs.Sub with a non-root directory: the subFS
+	// rejects invalid names with fs.ErrInvalid, like embedded-asset
+	// file systems do (prebuilt.FS is fs.Sub(embed.FS, "build")).
+	sub, err := fs.Sub(mapFS(map[string][]byte{"build/index.html": []byte("html")}), "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", "../escape"} {
+		w, notExist := serveFileRequest(t, sub, path, "zstd", Options{})
+		if !notExist {
+			t.Errorf("path %q: expected fs.ErrNotExist", path)
+		}
+		if w.Body.Len() != 0 {
+			t.Errorf("path %q: body = %q, want no response written", path, w.Body.String())
+		}
+	}
+}
+
 // modTimeFS is an fs.FS whose files report a fixed modification time, like
 // vcstime-wrapped file systems do for embedded files.
 type modTimeFS struct {

@@ -85,6 +85,12 @@ func ServeFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, path string, 
 	if encodings == nil {
 		encodings = DefaultEncodings
 	}
+	if !fs.ValidPath(path) {
+		// An invalid name can never exist. Report not-found rather than
+		// the fs.ErrInvalid that validating file systems such as fs.Sub
+		// return, so callers can fall back to another path.
+		return &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+	}
 	// The served representation (an encoded variant or identity) is
 	// selected from Accept-Encoding, so caches must treat the response as
 	// varying even when the negotiated representation is identity.
