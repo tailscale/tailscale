@@ -6,13 +6,7 @@
 // network infrastructure. It supports mixed OS types (gokrazy, Ubuntu, Debian)
 // and multi-NIC configurations for scenarios like subnet routing.
 //
-// Prerequisites:
-//   - qemu-system-x86_64 (KVM is used automatically on Linux when /dev/kvm is accessible)
-//   - A built gokrazy natlabapp image (auto-built on first run via "make natlab" in gokrazy/)
-//
-// Run tests with:
-//
-//	go test ./tstest/natlab/vmtest/ --run-vm-tests -v
+// See tstest/natlab/README.md for prerequisites and how to run.
 package vmtest
 
 import (
