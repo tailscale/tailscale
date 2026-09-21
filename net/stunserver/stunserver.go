@@ -8,6 +8,7 @@ package stunserver
 import (
 	"context"
 	"errors"
+	"expvar"
 	"io"
 	"log"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"tailscale.com/metrics"
+	"tailscale.com/net/pktinfo"
 	"tailscale.com/net/stun"
 )
 
@@ -29,11 +31,31 @@ var (
 
 	stunIPv4 = stunAddrFamily.Get("ipv4")
 	stunIPv6 = stunAddrFamily.Get("ipv6")
+
+	// stunNoLocalAddr counts requests for which the kernel didn't report
+	// the local address the request was sent to, despite pktinfo being
+	// enabled, so the response was sent from a kernel-chosen source
+	// address instead.
+	stunNoLocalAddr = newCounter("counter_no_local_addr")
 )
+
+func newCounter(name string) *expvar.Int {
+	v := new(expvar.Int)
+	stats.Set(name, v)
+	return v
+}
 
 type STUNServer struct {
 	ctx context.Context // ctx signals service shutdown
 	pc  *net.UDPConn    // pc is the UDP listener
+
+	// pktInfo is whether the kernel reports the destination address of
+	// each request (see [pktinfo.Enable]). When it does, the response is
+	// sent from that same address rather than from whatever source
+	// address a route lookup on the reply's destination would pick.
+	// On a multi-homed server those differ, and replies from the wrong
+	// address break conntrack-based policy routing (tailscale/tailscale#21404).
+	pktInfo bool
 }
 
 // New creates a new STUN server. The server is shutdown when ctx is done.
@@ -51,6 +73,11 @@ func (s *STUNServer) Listen(listenAddr string) error {
 	if err != nil {
 		return err
 	}
+	if err := pktinfo.Enable(s.pc); err == nil {
+		s.pktInfo = true
+	} else if !errors.Is(err, errors.ErrUnsupported) {
+		log.Printf("STUN server: pktinfo unavailable; responses will use the kernel-chosen source address: %v", err)
+	}
 	log.Printf("STUN server listening on %v", s.LocalAddr())
 	// close the listener on shutdown in order to break out of the read loop
 	go func() {
@@ -63,13 +90,9 @@ func (s *STUNServer) Listen(listenAddr string) error {
 // Serve starts serving responses to STUN requests. Listen must be called before Serve.
 func (s *STUNServer) Serve() error {
 	var buf [64 << 10]byte
-	var (
-		n   int
-		ua  *net.UDPAddr
-		err error
-	)
+	var oob, oobOut [256]byte
 	for {
-		n, ua, err = s.pc.ReadFromUDP(buf[:])
+		n, remote, local, err := s.readFrom(buf[:], oob[:])
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -89,20 +112,50 @@ func (s *STUNServer) Serve() error {
 			stunNotSTUN.Add(1)
 			continue
 		}
-		if ua.IP.To4() != nil {
+		remote = netip.AddrPortFrom(remote.Addr().Unmap(), remote.Port())
+		if remote.Addr().Is4() {
 			stunIPv4.Add(1)
 		} else {
 			stunIPv6.Add(1)
 		}
-		addr, _ := netip.AddrFromSlice(ua.IP)
-		res := stun.Response(txid, netip.AddrPortFrom(addr, uint16(ua.Port)))
-		_, err = s.pc.WriteTo(res, ua)
-		if err != nil {
+		if s.pktInfo && !local.IsValid() {
+			stunNoLocalAddr.Add(1)
+		}
+		res := stun.Response(txid, remote)
+		if err := s.writeTo(res, remote, local, oobOut[:0]); err != nil {
 			stunWriteError.Add(1)
 		} else {
 			stunSuccess.Add(1)
 		}
 	}
+}
+
+// readFrom reads one datagram into buf, returning its length, its sender,
+// and the local address it was sent to (the zero [netip.Addr] if unknown).
+// oob is scratch space for control messages.
+func (s *STUNServer) readFrom(buf, oob []byte) (n int, remote netip.AddrPort, local netip.Addr, err error) {
+	if !s.pktInfo {
+		n, remote, err = s.pc.ReadFromUDPAddrPort(buf)
+		return n, remote, netip.Addr{}, err
+	}
+	n, oobn, _, remote, err := s.pc.ReadMsgUDPAddrPort(buf, oob)
+	if err != nil {
+		return 0, remote, netip.Addr{}, err
+	}
+	return n, remote, pktinfo.Dst(oob[:oobn]), nil
+}
+
+// writeTo sends b to remote from the local address local, if known.
+// Otherwise the kernel picks the source address. oob is scratch space for
+// control messages.
+func (s *STUNServer) writeTo(b []byte, remote netip.AddrPort, local netip.Addr, oob []byte) error {
+	oob = pktinfo.AppendSrc(oob, local)
+	if len(oob) == 0 {
+		_, err := s.pc.WriteToUDPAddrPort(b, remote)
+		return err
+	}
+	_, _, err := s.pc.WriteMsgUDPAddrPort(b, oob, remote)
+	return err
 }
 
 // ListenAndServe starts the STUN server on listenAddr.
