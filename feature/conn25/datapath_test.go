@@ -94,6 +94,21 @@ func (tn testNet) synthParsed(src, dst netip.AddrPort) *packet.Parsed {
 	return p
 }
 
+func (tn testNet) udpPacket(src, dst netip.AddrPort, payload []byte) []byte {
+	if tn.ipVersion == 6 {
+		return packet.Generate(packet.UDP6Header{
+			IP6Header: packet.IP6Header{Src: src.Addr(), Dst: dst.Addr()},
+			SrcPort:   src.Port(),
+			DstPort:   dst.Port(),
+		}, payload)
+	}
+	return packet.Generate(packet.UDP4Header{
+		IP4Header: packet.IP4Header{Src: src.Addr(), Dst: dst.Addr()},
+		SrcPort:   src.Port(),
+		DstPort:   dst.Port(),
+	}, payload)
+}
+
 func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapathHandler {
 	t.Helper()
 
@@ -481,6 +496,78 @@ func TestConnectorFlowCache(t *testing.T) {
 			if want, got := netip.AddrPortFrom(tn.transitIP, serverPort), incoming.Src; want != got {
 				t.Errorf("unexpected packet src after second call: want %v, got %v", want, got)
 			}
+		})
+	}
+}
+
+// TestNATRewritesRealPackets pushes real, fully-formed packets through both
+// directions of the client and connector datapaths, and checks the resulting
+// bytes on the wire rather than just the parsed 5-tuple. A NATed packet must be
+// byte-identical to one generated with the translated address, which confirms
+// that the address was written at the right header offset and that every
+// checksum was updated to match.
+func TestNATRewritesRealPackets(t *testing.T) {
+	const clientPort, serverPort = 1234, 80
+	payload := []byte("hello")
+
+	for _, tn := range testNets {
+		t.Run(tn.name, func(t *testing.T) {
+			// check runs pkt through handle and asserts that the datapath
+			// accepted it and rewrote it into want.
+			check := func(t *testing.T, handle func(*packet.Parsed) filter.Response, pkt, want []byte) {
+				t.Helper()
+				var p packet.Parsed
+				p.Decode(pkt)
+				if got, want := handle(&p), filter.Accept; got != want {
+					t.Fatalf("filter response: got %v, want %v", got, want)
+				}
+				if got := p.Buffer(); !bytes.Equal(got, want) {
+					t.Errorf("packet after NAT:\n got %x\nwant %x", got, want)
+				}
+			}
+
+			t.Run("client", func(t *testing.T) {
+				dph := tn.newClientDatapath(t, false)
+				tun := newFakeTUN(t)
+
+				client := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
+				magic := netip.AddrPortFrom(tn.magicIP, serverPort)
+				transit := netip.AddrPortFrom(tn.transitIP, serverPort)
+
+				// Outbound: DNAT the Magic IP to the Transit IP.
+				check(t,
+					func(p *packet.Parsed) filter.Response { return dph.HandlePacketFromTunDevice(p, tun) },
+					tn.udpPacket(client, magic, payload),
+					tn.udpPacket(client, transit, payload))
+
+				// Return: SNAT the Transit IP back to the Magic IP, so the
+				// local application sees the address it connected to.
+				check(t,
+					func(p *packet.Parsed) filter.Response { return dph.HandlePacketFromWireGuard(p, tun) },
+					tn.udpPacket(transit, client, payload),
+					tn.udpPacket(magic, client, payload))
+			})
+
+			t.Run("connector", func(t *testing.T) {
+				dph := tn.newConnectorDatapath(t, false)
+				tun := newFakeTUN(t)
+
+				client := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
+				transit := netip.AddrPortFrom(tn.transitIP, serverPort)
+				server := netip.AddrPortFrom(tn.realIP, serverPort)
+
+				// Outbound: DNAT the Transit IP to the real IP.
+				check(t,
+					func(p *packet.Parsed) filter.Response { return dph.HandlePacketFromWireGuard(p, tun) },
+					tn.udpPacket(client, transit, payload),
+					tn.udpPacket(client, server, payload))
+
+				// Return: SNAT the real IP back to the Transit IP.
+				check(t,
+					func(p *packet.Parsed) filter.Response { return dph.HandlePacketFromTunDevice(p, tun) },
+					tn.udpPacket(server, client, payload),
+					tn.udpPacket(transit, client, payload))
+			})
 		})
 	}
 }
