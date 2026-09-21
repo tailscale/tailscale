@@ -879,7 +879,8 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 	writeBuffsByDest := make(map[netip.AddrPort][][]byte, batching.MaximumWriteBatchSize)
 
 	for {
-		// TODO: extract laddr from IP_PKTINFO for use in reply
+		// TODO: extract laddr from IP_PKTINFO for use in reply, using
+		// tailscale.com/net/pktinfo.
 		// ReadBatch will split coalesced datagrams before returning, which
 		// WriteBatchTo will re-coalesce further down. We _could_ be more
 		// efficient and not split datagrams that belong to the same VNI if they
