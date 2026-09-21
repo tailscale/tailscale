@@ -938,7 +938,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		data.TailnetName = profile.NetworkProfile.MagicDNSName
 		data.DomainName = profile.NetworkProfile.DisplayNameOrDefault()
 	}
-	if st.Self.Tags != nil {
+	if !st.Self.Tags.IsZero() {
 		data.Tags = st.Self.Tags.AsSlice()
 	}
 	if st.Self.KeyExpiry != nil {
@@ -946,7 +946,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	routeApproved := func(route netip.Prefix) bool {
-		if st.Self == nil || st.Self.AllowedIPs == nil {
+		if st.Self == nil {
 			return false
 		}
 		return st.Self.AllowedIPs.ContainsFunc(func(p netip.Prefix) bool {
