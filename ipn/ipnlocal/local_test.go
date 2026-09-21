@@ -730,6 +730,75 @@ func TestUpdateNetMapCache(t *testing.T) {
 	clb.mu.Unlock()
 
 	wantCacheEmpty()
+
+	// Force caching without the node attribute and verify that incremental peer
+	// updates are also persisted. A later load from the cache must not recover
+	// the peer state from the preceding full map.
+	t.Setenv("TS_FORCE_CACHE_NETMAP", "1")
+	clb.mu.Lock()
+	clb.setNetMapLocked(testMap)
+	clb.mu.Unlock()
+
+	loadCachedMap := func() *netmap.NetworkMap {
+		t.Helper()
+		c := netmapcache.NewCache(netmapcache.FileStore(cacheDir))
+		nm, err := c.Load(t.Context())
+		if err != nil {
+			t.Fatalf("Load cached netmap: %v", err)
+		}
+		return nm
+	}
+	peerByID := func(nm *netmap.NetworkMap, id tailcfg.NodeID) (tailcfg.NodeView, bool) {
+		t.Helper()
+		for _, p := range nm.Peers {
+			if p.ID() == id {
+				return p, true
+			}
+		}
+		return tailcfg.NodeView{}, false
+	}
+
+	patches, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{{NodeID: 601, Online: new(false)}},
+	}, time.Now())
+	if !ok {
+		t.Fatal("MutationsFromMapResponse failed")
+	}
+	if !clb.UpdateNetmapDelta(patches) {
+		t.Fatal("UpdateNetmapDelta(peer patch) = false, want true")
+	}
+	if p, ok := peerByID(loadCachedMap(), 601); !ok {
+		t.Fatal("patched peer 601 is missing from cached netmap")
+	} else if online, ok := p.Online().GetOk(); !ok || online {
+		t.Fatalf("cached peer 601 Online = %v, %v; want false, true", online, ok)
+	}
+
+	newPeer := (&tailcfg.Node{
+		ID:           603,
+		StableID:     "n603FAKE",
+		ComputedName: "new-peer",
+		User:         tailcfg.UserID(1),
+		Key:          makeNodeKeyFromID(603),
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.2.3.7/32"),
+		},
+	}).View()
+	if !clb.UpdateNetmapDelta([]netmap.NodeMutation{
+		netmap.NodeMutationUpsert{Node: newPeer},
+		netmap.MakeNodeMutationRemove(601),
+	}) {
+		t.Fatal("UpdateNetmapDelta(peer upsert and removal) = false, want true")
+	}
+	got := loadCachedMap()
+	if _, ok := peerByID(got, 601); ok {
+		t.Error("removed peer 601 is still present in cached netmap")
+	}
+	if p, ok := peerByID(got, 603); !ok {
+		t.Fatal("upserted peer 603 is missing from cached netmap")
+	} else if diff := cmp.Diff(p.AsStruct(), newPeer.AsStruct(),
+		cmpopts.EquateComparable(key.NodePublic{}, key.DiscoPublic{}, netip.Addr{}, netip.Prefix{})); diff != "" {
+		t.Errorf("cached peer 603 differs (-got, +want):\n%s", diff)
+	}
 }
 
 func TestConfigureExitNode(t *testing.T) {

@@ -2579,10 +2579,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	// Reaching here, apply any peer changes to the netmap cache (if relevant).
 	// Note we do this AFTER the updates are applied in the nodeBackend, so that
 	// we can get its updated views to put back into the cache.
-	if buildfeatures.HasCacheNetMap &&
-		cn.SelfHasCap(nodecap.CacheNetworkMaps) &&
-		envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
-
+	if shouldCacheNetmap(cn) {
 		var peersToUpdate []tailcfg.NodeView
 		for id := range updateIDs {
 			if n, ok := cn.NodeByID(id); ok {
@@ -3191,10 +3188,10 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	// At this point we do not yet know whether we are meant to cache netmaps by
 	// policy (as we have not yet spoken to the control plane).
 	//
-	// However, since we do not create or update a netmap cache unless we observe the
-	// [tailcfg.NodeAttrCacheNetworkMaps] capability, we can use the presence
-	// of the cached netmap as a signal that we were expected to do so as of the
-	// last time we updated the cache.
+	// However, since we do not create or update a netmap cache unless we observe
+	// the [nodecap.CacheNetworkMaps] capability or the force-cache
+	// envknob, we can use the presence of the cached netmap as a signal that we
+	// were expected to do so as of the last time we updated the cache.
 	//
 	// If the policy has (since) changed, a subsequent network map from the control
 	// plane may remove the attribute, at which point we will drop the cache.
@@ -7468,9 +7465,10 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// now (if configured) update the cache. We do this after application to
 	// reduce the chance we will cache a QoD netmap.
 	//
-	// As of 2026-03-25 we require the envknob AND the node attribute to use
-	// a netmap cache, with the envknob defaulted to true so we can use it as
-	// a safety override during rollout.
+	// As of 2026-03-25 we require the use-cache envknob and either the node
+	// attribute or the force-cache envknob to use a netmap cache. The use-cache
+	// envknob defaults to true so we can use it as a safety override during
+	// rollout.
 	//
 	// We treat the envknob being false as identical to disabling the feature
 	// by policy, and clean up the cache on that basis. That ensures we will
@@ -7478,7 +7476,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// not being updated (because of the envknob) and could be read back when
 	// the node starts up.
 	if nm != nil {
-		if (b.currentNode().SelfHasCap(nodecap.CacheNetworkMaps) || envknob.Bool("TS_FORCE_CACHE_NETMAP")) && envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP") {
+		if shouldCacheNetmap(b.currentNode()) {
 			if err := b.writeNetmapToDiskLockedWithPeers(nm); err != nil {
 				b.logf("write netmap to cache: %v", err)
 			}
@@ -7486,6 +7484,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			b.discardDiskCacheLocked()
 		}
 	}
+}
+
+// shouldCacheNetmap reports whether cn's live netmap and peer deltas should be
+// persisted to the netmap cache.
+func shouldCacheNetmap(cn *nodeBackend) bool {
+	return buildfeatures.HasCacheNetMap &&
+		(cn.SelfHasCap(nodecap.CacheNetworkMaps) || envknob.Bool("TS_FORCE_CACHE_NETMAP")) &&
+		envknob.BoolDefaultTrue("TS_USE_CACHED_NETMAP")
 }
 
 // HookSetRuntimeMetricsEnabled is an optional hook for the "runtimemetrics" feature.
