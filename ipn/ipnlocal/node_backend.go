@@ -1240,6 +1240,25 @@ func (nb *nodeBackend) magicDNSPTR(ip netip.Addr) (_ dnsname.FQDN, ok bool) {
 	return fqdn, true
 }
 
+// magicDNSReverseAllowedFrom reports whether a reverse MagicDNS lookup
+// from the given source may be answered, admitting only this host's own
+// sources: loopback or one of its tailscale addresses.
+func (nb *nodeBackend) magicDNSReverseAllowedFrom(ip netip.Addr) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() {
+		return true
+	}
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	nm := nb.netMap
+	return nm != nil && nm.GetAddresses().ContainsFunc(func(p netip.Prefix) bool {
+		return p.Addr() == ip
+	})
+}
+
 // magicDNSSubdomainHost reports whether fqdn names a node with the
 // [tailcfg.NodeAttrDNSSubdomainResolve] attribute, backing
 // [resolver.MagicDNSHosts.SubdomainHost].
