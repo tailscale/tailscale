@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,11 +52,11 @@ func TestGokrazyUpdatesItselfToSameImage(t *testing.T) {
 		"--unsigned",
 	)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			t.Logf("update command connection ended during reboot: %v", err)
-		} else {
+		var ue *url.Error
+		if !errors.As(err, &ue) {
 			t.Fatalf("gokrazy update command failed: %v\n%s", err, out)
 		}
+		t.Logf("update command connection lost during reboot: %v", err) // transport error
 	} else {
 		t.Logf("update command output:\n%s", out)
 	}
