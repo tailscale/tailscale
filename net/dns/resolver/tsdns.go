@@ -287,6 +287,11 @@ type MagicDNSHosts interface {
 	// [tailcfg.NodeAttrDNSSubdomainResolve] attribute, whose
 	// subdomains all resolve to the node's own addresses.
 	SubdomainHost(dnsname.FQDN) bool
+
+	// ReverseLookupAllowedFrom reports whether reverse (PTR) answers for
+	// Tailscale IPs may be served to the given source address, preventing
+	// hostname reconnaissance from outside local queries.
+	ReverseLookupAllowedFrom(netip.Addr) bool
 }
 
 // SetMagicDNSHosts installs the live MagicDNS host source consulted
@@ -437,7 +442,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 	default:
 	}
 
-	out, err := r.respond(bs)
+	out, err := r.respond(bs, from)
 	if err == errNotOurName {
 		responses := make(chan *Response, 1)
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
@@ -930,7 +935,7 @@ func (r *Resolver) resolveViaDomain(dnsName dnsname.FQDN, typ dns.Type) (netip.A
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
-func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
+func (r *Resolver) resolveLocalReverse(name dnsname.FQDN, from netip.Addr) (dnsname.FQDN, dns.RCode) {
 	var ip netip.Addr
 	var ok bool
 	switch {
@@ -952,16 +957,32 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 	// If the requested IP is part of the IPv6 4-to-6 range, it might
 	// correspond to an IPv4 address (assuming IPv4 is enabled).
 	if ip4, ok := tsaddr.Tailscale6to4(ip); ok {
-		fqdn, code := r.fqdnForIPLocked(ip4, name)
+		fqdn, code := r.fqdnForIPLocked(ip4, name, from)
 		if code == dns.RCodeSuccess {
 			return fqdn, code
 		}
 	}
-	return r.fqdnForIPLocked(ip, name)
+	return r.fqdnForIPLocked(ip, name, from)
 }
 
+// rcodeReverseSuppressed is an internal sentinel RCode used only within
+// respondReverse to distinguish "refused because of the query source"
+// from a genuine dns.RCodeRefused. It is never marshaled onto the wire.
+const rcodeReverseSuppressed = dns.RCode(3841) // 3841 is start of private use range (RFC6895)
+
 // r.mu must be held.
-func (r *Resolver) fqdnForIPLocked(ip netip.Addr, name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
+func (r *Resolver) fqdnForIPLocked(ip netip.Addr, name dnsname.FQDN, from netip.Addr) (dnsname.FQDN, dns.RCode) {
+	// Refuse reverse lookups of Tailscale IPs from off-node sources, as the
+	// answers would disclose the peer set. Check before any host lookup:
+	//   - Windows preloads peer records into ipToHost, which would answer
+	//     without consulting magicHosts.
+	//   - Unassigned addresses fall through to NXDOMAIN while assigned peers
+	//     return REFUSED, leaking which addresses exist.
+	// With no magicHosts, no source is known local, so fail closed.
+	if tsaddr.IsTailscaleIP(ip) && (r.magicHosts == nil || !r.magicHosts.ReverseLookupAllowedFrom(from)) {
+		return "", rcodeReverseSuppressed
+	}
+
 	// If someone curiously does a reverse lookup on the DNS IP, we
 	// return a domain that helps indicate that Tailscale is using
 	// this IP for a special purpose and it is not a node on their
@@ -1443,13 +1464,18 @@ func (r *Resolver) authoritativeZoneFor(name dnsname.FQDN) dnsname.FQDN {
 	return ""
 }
 
-func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response, generation uint64) ([]byte, error) {
+func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response, generation uint64, from netip.AddrPort) ([]byte, error) {
 	if hasRDNSBonjourPrefix(name) {
 		metricDNSReverseMissBonjour.Add(1)
 		return nil, errNotOurName
 	}
 
-	resp.Name, resp.Header.RCode = r.resolveLocalReverse(name)
+	resp.Name, resp.Header.RCode = r.resolveLocalReverse(name, from.Addr())
+	if resp.Header.RCode == rcodeReverseSuppressed {
+		metricDNSReverseRefusedSource.Add(1)
+		resp.Header.RCode = dns.RCodeRefused
+		return marshalResponse(resp)
+	}
 	if resp.Header.RCode == dns.RCodeRefused {
 		metricDNSReverseMissOther.Add(1)
 		return nil, errNotOurName
@@ -1463,10 +1489,11 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 }
 
 // respond returns a DNS response to query if it can be resolved locally.
-// Otherwise, it returns errNotOurName.
-func (r *Resolver) respond(query []byte) ([]byte, error) {
+// Otherwise, it returns errNotOurName. from is the query source, used to gate
+// reverse answers.
+func (r *Resolver) respond(query []byte, from netip.AddrPort) ([]byte, error) {
 	for {
-		packet, err := r.respondOnce(query)
+		packet, err := r.respondOnce(query, from)
 		if err != errLocalResponseOutdated {
 			return packet, err
 		}
@@ -1475,7 +1502,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 	}
 }
 
-func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
+func (r *Resolver) respondOnce(query []byte, from netip.AddrPort) ([]byte, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -1514,7 +1541,7 @@ func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
 	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
 	if parser.Question.Type == dns.TypePTR {
-		return r.respondReverse(query, name, parser.response(), generation)
+		return r.respondReverse(query, name, parser.response(), generation, from)
 	}
 
 	ip, rcode := r.resolveLocal(name, parser.Question.Type)
@@ -1643,4 +1670,6 @@ var (
 
 	metricDNSReverseMissBonjour = clientmetric.NewCounter("dns_reverse_miss_bonjour")
 	metricDNSReverseMissOther   = clientmetric.NewCounter("dns_reverse_miss_other")
+
+	metricDNSReverseRefusedSource = clientmetric.NewCounter("dns_reverse_refused_source")
 )
