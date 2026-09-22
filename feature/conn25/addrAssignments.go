@@ -66,12 +66,12 @@ func (a *addrAssignments) insertWithExpiry(as *addrs, d time.Duration) error {
 	if _, ok := a.byDomainDst[ddst]; ok {
 		return errors.New("byDomainDst key exists")
 	}
-	if _, ok := a.byTransitIP[as.transit]; ok {
+	if _, ok := a.byTransitIP[as.connectorAddr.transit]; ok {
 		return errors.New("byTransitIP key exists")
 	}
 	as.expiresAt = now.Add(d)
 	mak.Set(&a.byMagicIP, as.magic, as)
-	mak.Set(&a.byTransitIP, as.transit, as)
+	mak.Set(&a.byTransitIP, as.connectorAddr.transit, as)
 	mak.Set(&a.byDomainDst, ddst, as)
 	heap.Push(&a.byExpiresAt, as)
 	return nil
@@ -146,7 +146,7 @@ func (a *addrAssignments) popExpired(now time.Time) *addrs {
 		heap.Push(&a.byExpiresAt, candidate)
 	}
 	delete(a.byMagicIP, v.magic)
-	delete(a.byTransitIP, v.transit)
+	delete(a.byTransitIP, v.connectorAddr.transit)
 	dd := domainDst{domain: v.domain, dst: v.dst}
 	delete(a.byDomainDst, dd)
 	return v

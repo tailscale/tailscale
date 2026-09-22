@@ -47,7 +47,7 @@ func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 	defer c.mu.Unlock()
 	v, ok := c.assignments.lookupByMagicIP(magicIP)
 	if ok {
-		return v.transit, true
+		return v.connectorAddr.transit, true
 	}
 	return netip.Addr{}, false
 }
@@ -105,13 +105,38 @@ func (c *client) reset() {
 // the app name refers to a configured app.
 // It checks that this domain should be routed and that this client is not itself a connector for the domain
 // and generally if it is valid to make the assignment.
-func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr, ttl time.Duration) (*addrs, error) {
+func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip.Addr, ttl time.Duration, connectorNode tailcfg.NodeView, token string) (*addrs, error) {
 	if !dst.IsValid() {
 		return nil, errors.New("dst is not valid")
+	}
+	if !connectorNode.Valid() {
+		return nil, errors.New("connector node is not valid")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, ok := c.assignments.lookupByDomainDst(domain, dst); ok {
+		// We have the domain/dst, but it's possible this came from another connector
+		// and the original connector is dead, in which case we currently don't
+		// call enqueueAddressAssignment and register the TransitIP with the other
+		// connector. And we don't install the new connector's node key in WireGuard.
+		//
+		// The correct action would be to allocate a new TransitIP associated
+		// with that new connector, and then register the TransitIP address, and
+		// install the node key.
+		// But as of 2026-10-01, the data model doesn't support multiple TransitIPs
+		// per domain/dst/magic.
+		//
+		// For now, try to use the old connector, even if this new DNS request came from
+		// a new connector.
+		//
+		// Token management. If it came from the old connector, token should be updated,
+		// because it is what the connector will expect. If it came from a different
+		// connector, don't modify the token for the original connector.
+		//
+		// TODO(tailscale/corp#50318): support multiple TransitIPs/connectors per domain/dst/magic.
+		if existing.connectorAddr.node.ID() == connectorNode.ID() {
+			existing.connectorAddr.token = token
+		}
 		c.assignments.updateFromTTL(existing, ttl)
 		return existing, nil
 	}
@@ -129,10 +154,10 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		}
 		if a.is4() {
 			c.v4MagicIPPool.returnAddr(a.magic)
-			c.v4TransitIPPool.returnAddr(a.transit)
+			c.v4TransitIPPool.returnAddr(a.connectorAddr.transit)
 		} else if a.is6() {
 			c.v6MagicIPPool.returnAddr(a.magic)
-			c.v6TransitIPPool.returnAddr(a.transit)
+			c.v6TransitIPPool.returnAddr(a.connectorAddr.transit)
 		} else {
 			return nil, errors.New("unexpected neither 4 nor 6")
 		}
@@ -160,11 +185,15 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 		return nil, err
 	}
 	as := &addrs{
-		dst:     dst,
-		magic:   mip,
-		transit: tip,
-		app:     appName,
-		domain:  domain,
+		dst:   dst,
+		magic: mip,
+		connectorAddr: connectorAddr{
+			transit: tip,
+			node:    connectorNode,
+			token:   token,
+		},
+		app:    appName,
+		domain: domain,
 	}
 	if err := c.assignments.insertFromTTL(as, ttl); err != nil {
 		magicPool.returnAddr(mip)
@@ -179,6 +208,9 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 }
 
 func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView) error {
+	if !conn.Valid() {
+		return fmt.Errorf("unexpectedly received invalid connector node")
+	}
 	if conn.Key().IsZero() {
 		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
 	}
@@ -249,7 +281,7 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 
 	// make an answer for each rewrite
 	for _, rw := range answers {
-		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second)
+		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second, rw.connectorNode, rw.token)
 		if err != nil {
 			return nil, err
 		}
@@ -286,7 +318,7 @@ func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, quest
 type addrs struct {
 	dst             netip.Addr
 	magic           netip.Addr
-	transit         netip.Addr
+	connectorAddr   connectorAddr
 	domain          dnsname.FQDN
 	app             string
 	expiresAt       time.Time
