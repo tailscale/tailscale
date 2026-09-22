@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -943,7 +944,7 @@ func additionalSection() []dnsmessage.Resource {
 	}
 }
 
-func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource) []byte {
+func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource) *resolver.Response {
 	t.Helper()
 	name := dnsmessage.MustNewName(domain)
 	questions := []dnsmessage.Question{
@@ -968,7 +969,7 @@ func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource)
 	return makeDNSResponseForAllSections(t, questions, answers, authoritySectionFor(name), additionalSection())
 }
 
-func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAResource) []byte {
+func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAResource) *resolver.Response {
 	t.Helper()
 	name := dnsmessage.MustNewName(domain)
 	questions := []dnsmessage.Question{
@@ -993,7 +994,7 @@ func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAReso
 	return makeDNSResponseForAllSections(t, questions, answers, authoritySectionFor(name), additionalSection())
 }
 
-func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, answers []dnsmessage.Resource, additional []dnsmessage.Resource) []byte {
+func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, answers []dnsmessage.Resource, additional []dnsmessage.Resource) *resolver.Response {
 	t.Helper()
 	return makeDNSResponseForAllSections(t, questions, answers, nil, additional)
 }
@@ -1002,7 +1003,7 @@ func makeDNSResponseForAllSections(
 	t *testing.T,
 	questions []dnsmessage.Question,
 	answers, authorities, additional []dnsmessage.Resource,
-) []byte {
+) *resolver.Response {
 	t.Helper()
 	b := dnsmessage.NewBuilder(nil,
 		dnsmessage.Header{
@@ -1048,7 +1049,7 @@ func makeDNSResponseForAllSections(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return outbs
+	return &resolver.Response{Bs: outbs}
 }
 
 // buildResource writes r into whichever section b is currently building.
@@ -1303,7 +1304,7 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			var dnsResp []byte
+			var dnsResp *resolver.Response
 			if len(tt.v4Addrs) > 0 {
 				dnsResp = makeDNSResponse(t, tt.domain, tt.v4Addrs)
 			} else {
@@ -1443,7 +1444,7 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 
 	for _, tt := range []struct {
 		name  string
-		toMap []byte
+		toMap *resolver.Response
 	}{
 		{
 			name: "typeA",
@@ -1894,12 +1895,12 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 
 	for _, tt := range []struct {
 		name     string
-		toMap    []byte
+		toMap    *resolver.Response
 		assertFx func(*testing.T, []byte)
 	}{
 		{
 			name:     "unparseable",
-			toMap:    []byte{1, 2, 3, 4},
+			toMap:    &resolver.Response{Bs: []byte{1, 2, 3, 4}},
 			assertFx: assertBytes([]byte{1, 2, 3, 4}),
 		},
 		{
@@ -1943,12 +1944,12 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		{
 			name:     "not-our-domain",
 			toMap:    ipv4ResponseUnhandledDomain,
-			assertFx: assertBytes(ipv4ResponseUnhandledDomain),
+			assertFx: assertBytes(ipv4ResponseUnhandledDomain.Bs),
 		},
 		{
 			name:     "ipv6-not-our-domain",
 			toMap:    ipv6ResponseUnhandledDomain,
-			assertFx: assertBytes(ipv6ResponseUnhandledDomain),
+			assertFx: assertBytes(ipv6ResponseUnhandledDomain.Bs),
 		},
 		{
 			name: "case-insensitive",
@@ -1991,13 +1992,15 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			// additional record, cut short mid-answer so that the parsing of
 			// it breaks after we have decided we should handle it.
 			// Frozen like this so that it doesn't depend on the implementation of dnsmessage.
-			toMap:    []byte{0, 1, 132, 0, 0, 1, 0, 1, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3},
+			toMap: &resolver.Response{
+				Bs: []byte{0, 1, 132, 0, 0, 1, 0, 1, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3},
+			},
 			assertFx: assertServFail,
 		},
 		{
 			name:     "not-inet-question",
 			toMap:    nonINETQuestionResp,
-			assertFx: assertBytes(nonINETQuestionResp),
+			assertFx: assertBytes(nonINETQuestionResp.Bs),
 		},
 		{
 			name: "not-inet-answer",
@@ -2451,7 +2454,7 @@ func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(cfg)
 			mapped := c.mapDNSResponse(toMap)
-			if diff := cmp.Diff(toMap, mapped); diff != "" {
+			if diff := cmp.Diff(toMap.Bs, mapped); diff != "" {
 				t.Errorf("response was not written through unchanged (-want +got):\n%s", diff)
 			}
 			answers, authorities, additionals := parseResponse(t, mapped)

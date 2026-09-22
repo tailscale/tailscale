@@ -71,8 +71,13 @@ func TestDoH(t *testing.T) {
 			}
 			c.Transport.(*http.Transport).CloseIdleConnections()
 
+			// Contents of DoHMeta are tested in TestDoHMeta.
+			if res.DoHMeta == nil {
+				t.Errorf("expected DoHMeta")
+			}
+
 			var p dnsmessage.Parser
-			h, err := p.Start(res)
+			h, err := p.Start(res.Bs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,8 +228,8 @@ func TestSendArbitraryDoHWithBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !bytes.Equal(res, fq.packet) {
-		t.Errorf("response = %x; want echoed query", res)
+	if !bytes.Equal(res.Bs, fq.packet) {
+		t.Errorf("response = %x; want echoed query", res.Bs)
 	}
 	if got := gotRequests.Load(); got != 1 {
 		t.Errorf("saw %d requests; want 1", got)
