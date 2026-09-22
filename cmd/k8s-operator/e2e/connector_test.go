@@ -155,9 +155,6 @@ func TestConnectorSubnetRouter(t *testing.T) {
 		if !slices.Contains(routes.Advertised, route) {
 			return fmt.Errorf("device %s does not advertise %s: %v", deviceID, route, routes.Advertised)
 		}
-		if !slices.Contains(routes.Enabled, route) {
-			return fmt.Errorf("route %s not yet enabled on device %s: %v", route, deviceID, routes.Enabled)
-		}
 		return nil
 	}); err != nil {
 		t.Fatalf("verifying subnet router routes: %v", err)

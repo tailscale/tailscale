@@ -1086,6 +1086,12 @@ func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) er
 		if !apierrors.IsAlreadyExists(err) {
 			return err
 		}
+		current := obj.DeepCopyObject().(client.Object)
+		if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
+			return err
+		}
+		obj.SetResourceVersion(current.GetResourceVersion())
+		obj.SetFinalizers(current.GetFinalizers())
 		return cl.Update(ctx, obj)
 	}
 	return nil
