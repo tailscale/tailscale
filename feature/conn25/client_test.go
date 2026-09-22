@@ -62,7 +62,7 @@ func TestReserveIPs(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			addrs, err := c.client.reserveAddresses(appName, domain, tt.dst, 10)
+			addrs, err := c.client.reserveAddresses(appName, domain, tt.dst, 10, testConnectorPeer, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,8 +72,8 @@ func TestReserveIPs(t *testing.T) {
 			if tt.wantMagic != addrs.magic {
 				t.Errorf("want %v, got %v", tt.wantMagic, addrs.magic)
 			}
-			if tt.wantTransit != addrs.transit {
-				t.Errorf("want %v, got %v", tt.wantTransit, addrs.transit)
+			if tt.wantTransit != addrs.connectorAddr.transit {
+				t.Errorf("want %v, got %v", tt.wantTransit, addrs.connectorAddr.transit)
 			}
 			if appName != addrs.app {
 				t.Errorf("want %s, got %s", appName, addrs.app)
@@ -108,12 +108,12 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 			c.v4TransitIPPool = newIPPool(mustIPSetFromPrefix("169.254.0.0/24"))
 			c.v6TransitIPPool = newIPPool(mustIPSetFromPrefix("fd7a:115c:a1e0:a99c:0200::/80"))
 
-			first, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10)
+			first, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10, testConnectorPeer, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			second, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10)
+			second, err := c.reserveAddresses(appName, "example.com.", tt.dst, 10, testConnectorPeer, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -137,11 +137,11 @@ func TestTransitIPConnMapping(t *testing.T) {
 	conn25 := newConn25(t.Logf)
 
 	as := &addrs{
-		dst:     netip.MustParseAddr("1.2.3.1"),
-		magic:   netip.MustParseAddr("100.64.0.1"),
-		transit: netip.MustParseAddr("169.254.0.1"),
-		domain:  "woo.example.com.",
-		app:     "app1",
+		dst:           netip.MustParseAddr("1.2.3.1"),
+		magic:         netip.MustParseAddr("100.64.0.1"),
+		connectorAddr: connectorAddr{transit: netip.MustParseAddr("169.254.0.1")}, // peer node set below
+		domain:        "woo.example.com.",
+		app:           "app1",
 	}
 
 	connectorPeers := []tailcfg.NodeView{
@@ -160,7 +160,8 @@ func TestTransitIPConnMapping(t *testing.T) {
 	}
 
 	// Adding a transit IP that isn't known should fail
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err == nil {
+	as.connectorAddr.node = connectorPeers[1]
+	if err := conn25.client.addTransitIPForConnector(as); err == nil {
 		t.Error("adding an unknown transit IP should fail")
 	}
 
@@ -168,16 +169,18 @@ func TestTransitIPConnMapping(t *testing.T) {
 	conn25.client.assignments.insert(as)
 
 	// Adding a transit IP for a node with an unset key should fail
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[0]); err == nil {
+	as.connectorAddr.node = connectorPeers[0]
+	if err := conn25.client.addTransitIPForConnector(as); err == nil {
 		t.Error("adding an transit IP mapping for a connector with a zero key should fail")
 	}
 	// Adding a transit IP that is known should succeed
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
+	as.connectorAddr.node = connectorPeers[1]
+	if err := conn25.client.addTransitIPForConnector(as); err != nil {
 		t.Errorf("unexpected error for first time add: %v", err)
 	}
 	// And doing it again shouldn't fail (this is done when resending mappings
 	// to a restarted connector)
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
+	if err := conn25.client.addTransitIPForConnector(as); err != nil {
 		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
 	}
 }
@@ -188,7 +191,9 @@ func TestIsKnownTransitIP(t *testing.T) {
 
 	c := newConn25(t.Logf)
 	err := c.client.assignments.insert(&addrs{
-		transit: knownTip,
+		connectorAddr: connectorAddr{
+			transit: knownTip,
+		},
 	})
 	if err != nil {
 		t.Errorf("error inserting address assignment: %v", err)
@@ -208,7 +213,9 @@ func TestLinkLocalAllow(t *testing.T) {
 
 	c := newConn25(t.Logf)
 	err := c.client.assignments.insert(&addrs{
-		transit: knownTip,
+		connectorAddr: connectorAddr{
+			transit: knownTip,
+		},
 	})
 	if err != nil {
 		t.Fatalf("error inserting address assignment: %v", err)
@@ -272,18 +279,18 @@ func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
 				conn25: c,
 			}
 
-			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
+			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10, testConnectorPeer, "")
 			if !errors.Is(err, errUninitializedIPPool) {
 				t.Fatalf("want %v, got %v", errUninitializedIPPool, err)
 			}
 
 			ext.onSelfChange(makeNodeFromMagicRange(beforeRangeV4, beforeRangeV6))
-			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
+			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10, testConnectorPeer, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			ext.onSelfChange(makeNodeFromMagicRange(afterRangeV4, afterRangeV6))
-			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo, 10)
+			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo, 10, testConnectorPeer, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -446,8 +453,15 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			cfg := mustConfig(t, sn)
 			c.reconfig(cfg)
 
+			ext := &extension{
+				conn25: c,
+				host: &testHost{
+					nb: &testNodeBackend{peers: []tailcfg.NodeView{testConnectorPeer}},
+				},
+			}
+
 			// we get a dns response for ipone
-			bs1 := c.mapDNSResponse(dnsRespIPOne)
+			bs1 := ext.mapDNSResponse(dnsRespIPOne)
 			assertParsesToAnswers(
 				[]netip.Addr{
 					netip.MustParseAddr("100.64.0.0"),
@@ -460,7 +474,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 			}
 
 			// there are client flows and time passes
-			tt.flowsAndTimeFx(c, clock, c.client.assignments.byDomainDst[ipOneDD].transit)
+			tt.flowsAndTimeFx(c, clock, c.client.assignments.byDomainDst[ipOneDD].connectorAddr.transit)
 
 			// then a second dns response
 			dnsR2 := tt.secondDNSResponse
@@ -473,7 +487,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 					},
 				)
 			}
-			bs2 := c.mapDNSResponse(dnsR2)
+			bs2 := ext.mapDNSResponse(dnsR2)
 			assertSecondResponseFx(t, bs2)
 
 			// assert which addresses have expired / remain unexpired

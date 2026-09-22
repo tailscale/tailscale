@@ -40,7 +40,7 @@ func TestGetActiveState(t *testing.T) {
 				domain:          mustFQDN(domain),
 				dst:             netip.MustParseAddr(dst),
 				magic:           netip.MustParseAddr(magic),
-				transit:         netip.MustParseAddr(transit),
+				connectorAddr:   connectorAddr{transit: netip.MustParseAddr(transit)},
 				activeFlowCount: flows,
 				expiresAt:       expires,
 			}
