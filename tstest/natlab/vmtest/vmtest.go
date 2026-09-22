@@ -752,7 +752,7 @@ func (e *Env) Start() {
 			aStep.Begin()
 			t.Logf("[%s] waiting for agent...", n.name)
 			if n.joinTailnet {
-				st, err := n.agent.Status(ctx)
+				st, err := e.waitForAgentStatus(ctx, n)
 				if err != nil {
 					return fmt.Errorf("[%s] agent status: %w", n.name, err)
 				}
@@ -2010,6 +2010,21 @@ func (e *Env) waitForAgentConn(ctx context.Context, n *Node) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// waitForAgentStatus waits for a TTA agent to connect and return a successful tailscaled Status.
+func (e *Env) waitForAgentStatus(ctx context.Context, n *Node) (*ipnstate.Status, error) {
+	for {
+		st, err := n.agent.Status(ctx)
+		if err == nil {
+			return st, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		e.t.Logf("[%s] agent status not ready, retrying: %v", n.name, err)
 		time.Sleep(500 * time.Millisecond)
 	}
 }
