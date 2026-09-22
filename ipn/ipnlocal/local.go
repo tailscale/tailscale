@@ -6469,6 +6469,19 @@ func (b *LocalBackend) initPeerAPIListenerLocked() {
 			// We don't care about the error here.  Not all platforms set this.
 			// If ps.listen needs it, it will check for zero values and error out.
 			tsIfIndex, _ := netmon.TailscaleInterfaceIndex()
+			if tsIfIndex == 0 {
+				// On Linux nothing calls netmon.SetTailscaleInterfaceProps,
+				// so the tun device is the source of truth for the
+				// interface name. peerapi uses the index to bind its
+				// listener to the tunnel interface there.
+				if tun, ok := b.sys.Tun.GetOK(); ok {
+					if name, err := tun.Name(); err == nil {
+						if iface, err := net.InterfaceByName(name); err == nil {
+							tsIfIndex = iface.Index
+						}
+					}
+				}
+			}
 
 			ln, err = ps.listen(a.Addr(), tsIfIndex)
 			if err != nil {
