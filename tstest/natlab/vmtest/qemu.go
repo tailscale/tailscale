@@ -343,7 +343,13 @@ func (e *Env) startQEMUOnce(name, logPath string, args []string) (*qemuRun, erro
 		qemuLog.Close()
 		return nil, fmt.Errorf("killWithParent: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// Child now has a copy of the pipe's read end. Parent can close its own.
+	// These were populated by killWithParent prior to Start.
+	for _, f := range cmd.ExtraFiles {
+		f.Close()
+	}
+	if err != nil {
 		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
