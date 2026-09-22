@@ -65,14 +65,18 @@ func TestDoH(t *testing.T) {
 			if !ok {
 				t.Fatal("expected DoH")
 			}
-			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t))
+			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t), false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			c.Transport.(*http.Transport).CloseIdleConnections()
 
+			if res.PeerAPIMeta != nil {
+				t.Errorf("unexpected PeerAPIMeta %+v for non-PeerAPI DoH", res.PeerAPIMeta)
+			}
+
 			var p dnsmessage.Parser
-			h, err := p.Start(res)
+			h, err := p.Start(res.Bs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,8 +227,8 @@ func TestSendArbitraryDoHWithBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if !bytes.Equal(res, fq.packet) {
-		t.Errorf("response = %x; want echoed query", res)
+	if !bytes.Equal(res.Bs, fq.packet) {
+		t.Errorf("response = %x; want echoed query", res.Bs)
 	}
 	if got := gotRequests.Load(); got != 1 {
 		t.Errorf("saw %d requests; want 1", got)

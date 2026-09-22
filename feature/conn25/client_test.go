@@ -14,6 +14,7 @@ import (
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -347,7 +348,7 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 	tests := []struct {
 		name                    string
 		flowsAndTimeFx          func(*Conn25, *tstest.Clock, netip.Addr)
-		secondDNSResponse       []byte
+		secondDNSResponse       *resolver.Response
 		assertSecondDNSResponse func(*testing.T, []byte)
 		wantUnexpiredDstIPs     set.Set[netip.Addr]
 		wantExpiredAtTime       map[netip.Addr]time.Duration // since the startTime
