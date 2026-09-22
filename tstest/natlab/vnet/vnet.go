@@ -1195,6 +1195,10 @@ func (s *Server) Close() {
 		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
+
+	for n := range s.networks {
+		n.ns.Close()
+	}
 }
 
 // AwaitFirstPacket waits until the first ethernet frame is received from the
