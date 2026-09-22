@@ -573,7 +573,10 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 
 const dohType = "application/dns-message"
 
-func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
+// sendDoH sends packet as a DoH query to urlBase using client c.
+// If isPeerAPI is true, urlBase references a PeerAPI's DoH server
+// and the returned Response has PeerAPIMeta populated.
+func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte, isPeerAPI bool) (*Response, error) {
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderDoH, f.logf)
 	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
@@ -603,13 +606,23 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
 	}
 	res, err := io.ReadAll(hres.Body)
-	if err != nil {
-		metricDNSFwdDoHErrorBody.Add(1)
-	}
+	// Check truncated flag regardless of error.
 	if truncatedFlagSet(res) {
 		metricDNSFwdTruncated.Add(1)
 	}
-	return res, err
+	if err != nil {
+		metricDNSFwdDoHErrorBody.Add(1)
+		return nil, err
+	}
+
+	ret := &Response{Bs: res}
+	if isPeerAPI {
+		ret.PeerAPIMeta = &PeerAPIMetadata{
+			RequestURL:     hres.Request.URL.Clone(),
+			ResponseHeader: hres.Header.Clone(),
+		}
+	}
+	return ret, nil
 }
 
 var (
@@ -624,25 +637,30 @@ var (
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
-func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
+func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret *Response, err error) {
 	if f.verboseFwd {
 		id := forwarderCount.Add(1)
 		domain, typ, _ := nameFromQuery(fq.packet)
 		f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id)
 		defer func() {
-			f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id, len(ret), err)
+			var n int
+			if ret != nil {
+				n = len(ret.Bs)
+			}
+			f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id, n, err)
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
+		const isPeerAPI = true
 		if !buildfeatures.HasPeerAPIClient {
 			return nil, feature.ErrUnavailable
 		}
-		res, err := f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
+		res, err := f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet, isPeerAPI)
 		if err != nil {
 			return nil, err
 		}
 		// Check response size and set TC flag if needed (only for UDP queries)
-		res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+		res.Bs = checkResponseSizeAndSetTC(res.Bs, fq.packet, fq.family, f.logf)
 		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
@@ -652,14 +670,15 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custom DoH providers
 		// aren't currently supported. There's no backup DNS resolution path for
 		// them.
+		const isPeerAPI = false
 		urlBase := rr.name.Addr
 		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
-			res, err := f.sendDoH(ctx, urlBase, hc, fq.packet)
+			res, err := f.sendDoH(ctx, urlBase, hc, fq.packet, isPeerAPI)
 			if err != nil {
 				return nil, err
 			}
 			// Check response size and set TC flag if needed (only for UDP queries)
-			res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+			res.Bs = checkResponseSizeAndSetTC(res.Bs, fq.packet, fq.family, f.logf)
 			return res, nil
 		}
 		metricDNSFwdErrorType.Add(1)
@@ -744,12 +763,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	rh := race.New(timeout, firstUDP, thenTCP)
 	resp, err := rh.Start(ctx)
 	if err == nil {
-		return resp, nil
+		return &Response{Bs: resp}, nil
 	}
 
 	// If we got a truncated UDP response, return that instead of an error.
 	if trErr, ok := errors.AsType[truncatedResponseError](err); ok {
-		return trErr.res, nil
+		return &Response{Bs: trErr.res}, nil
 	}
 	return nil, err
 }
@@ -1222,7 +1241,7 @@ type forwardQuery struct {
 //
 // If resolvers is non-empty, it's used explicitly (notably, for exit
 // node DNS proxy queries), otherwise f.resolvers is used.
-func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
+func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- *Response, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, typ, err := nameFromQuery(query.bs)
 	if err != nil {
@@ -1247,7 +1266,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting to send NXDOMAIN: %w", ctx.Err())
-		case responseChan <- res:
+		case responseChan <- &Response{Bs: res.bs}:
 			return nil
 		}
 	}
@@ -1275,7 +1294,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("waiting to send SERVFAIL: %w", ctx.Err())
-			case responseChan <- res:
+			case responseChan <- &Response{Bs: res.bs}:
 				return nil
 			}
 		} else {
@@ -1298,8 +1317,8 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
 	}
 
-	resc := make(chan []byte, 1) // it's fine buffered or not
-	errc := make(chan error, 1)  // it's fine buffered or not too
+	resc := make(chan *Response, 1) // it's fine buffered or not
+	errc := make(chan error, 1)     // it's fine buffered or not too
 	for i := range resolvers {
 		go func(rr *resolverAndDelay) {
 			if rr.startDelay > 0 {
@@ -1337,9 +1356,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			case <-ctx.Done():
 				metricDNSFwdErrorContext.Add(1)
 				return fmt.Errorf("waiting to send response: %w", ctx.Err())
-			case responseChan <- packet{v, query.family, query.addr}:
+			case responseChan <- v:
 				if f.verboseFwd {
-					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v.Bs))
 				}
 				metricDNSFwdSuccess.Add(1)
 				f.health.SetHealthy(dnsForwarderFailing)
@@ -1394,7 +1413,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 					if f.acceptDNS {
 						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
 					}
-				case responseChan <- res:
+				case responseChan <- &Response{Bs: res.bs}:
 					if f.verboseFwd {
 						f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
 					}
@@ -1539,4 +1558,34 @@ func (p *closePool) Close() error {
 		c.Close()
 	}
 	return nil
+}
+
+// PeerAPIMetadata captures data about the HTTP
+// request and response when a DNS request is
+// forwarded to a PeerAPI DoH server, e.g. for
+// exit nodes or app connectors.
+//
+// As of 2026-09-24, the only known consumer is
+// feature/conn25, which uses the data to track
+// which app connector served a DNS request for
+// a client, and to extract authorization tokens
+// from the response headers, which it then uses
+// in further communication with the connector.
+type PeerAPIMetadata struct {
+	// RequestURL is a clone of the URL of the PeerAPI request
+	// that produced the response.
+	RequestURL *url.URL
+	// ResponseHeader is a clone of the PeerAPI HTTP response headers.
+	ResponseHeader http.Header
+}
+
+// Response is a DNS response in bytes, along with metadata
+// from the PeerAPI DoH server that served it, if it was served
+// by a PeerAPI DoH server.
+type Response struct {
+	// Bs is the wire-encoded DNS response.
+	Bs []byte
+	// PeerAPIMeta is non-nil if the response came
+	// from a PeerAPI DoH server, and nil otherwise.
+	PeerAPIMeta *PeerAPIMetadata
 }

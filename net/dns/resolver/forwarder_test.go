@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"reflect"
@@ -296,16 +298,16 @@ func TestControlDPremiumDoHLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	res, err := fwd.sendDoH(ctx, urlBase, c, query)
+	res, err := fwd.sendDoH(ctx, urlBase, c, query, false)
 	if err != nil {
 		t.Fatalf("sendDoH: %v", err)
 	}
-	if rcode := getRCode(res); rcode != dns.RCodeSuccess {
+	if rcode := getRCode(res.Bs); rcode != dns.RCodeSuccess {
 		t.Fatalf("got rcode %v, want success", rcode)
 	}
 
 	var p dns.Parser
-	if _, err := p.Start(res); err != nil {
+	if _, err := p.Start(res.Bs); err != nil {
 		t.Fatalf("parsing response: %v", err)
 	}
 	if err := p.SkipAllQuestions(); err != nil {
@@ -314,7 +316,7 @@ func TestControlDPremiumDoHLive(t *testing.T) {
 	if _, err := p.AnswerHeader(); err != nil {
 		t.Fatalf("no answers returned: %v", err)
 	}
-	t.Logf("ControlD premium DoH query for example.com succeeded (%d bytes)", len(res))
+	t.Logf("ControlD premium DoH query for example.com succeeded (%d bytes)", len(res.Bs))
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {
@@ -535,13 +537,13 @@ func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify
 		addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
 	}
 
-	rchan := make(chan packet, 1)
+	rchan := make(chan *Response, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	tb.Cleanup(cancel)
 	err = fwd.forwardWithDestChan(ctx, rpkt, rchan, resolvers...)
 	select {
 	case res := <-rchan:
-		return res.bs, err
+		return res.Bs, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -1241,7 +1243,7 @@ func TestForwarderIgnoresStrayDatagrams(t *testing.T) {
 				family: "udp",
 				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
 			}
-			rchan := make(chan packet, 1)
+			rchan := make(chan *Response, 1)
 
 			// When a reply is expected it should arrive promptly;
 			// when none is, the query only has to outlast the
@@ -1265,10 +1267,10 @@ func TestForwarderIgnoresStrayDatagrams(t *testing.T) {
 			select {
 			case res := <-rchan:
 				if tt.wantNone {
-					t.Fatalf("forwarder returned a reply anyway: %+v", res.bs)
+					t.Fatalf("forwarder returned a reply anyway: %+v", res.Bs)
 				}
-				if !bytes.Equal(res.bs, realResponse) {
-					t.Errorf("invalid response\ngot:  %+v\nwant: %+v", res.bs, realResponse)
+				if !bytes.Equal(res.Bs, realResponse) {
+					t.Errorf("invalid response\ngot:  %+v\nwant: %+v", res.Bs, realResponse)
 				}
 			case <-ctx.Done():
 				if !tt.wantNone {
@@ -1369,7 +1371,7 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 				family: family,
 				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
 			}
-			rchan := make(chan packet, 1)
+			rchan := make(chan *Response, 1)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
@@ -1382,7 +1384,7 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 			var got []byte
 			select {
 			case res := <-rchan:
-				got = res.bs
+				got = res.Bs
 			case <-ctx.Done():
 				t.Fatalf("timed out waiting for response: %v", ctx.Err())
 			}
@@ -1462,7 +1464,7 @@ func TestForwarderNetstackUpstreamTruncated(t *testing.T) {
 		family: "udp",
 		addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
 	}
-	rchan := make(chan packet, 1)
+	rchan := make(chan *Response, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1473,7 +1475,7 @@ func TestForwarderNetstackUpstreamTruncated(t *testing.T) {
 	var got []byte
 	select {
 	case res := <-rchan:
-		got = res.bs
+		got = res.Bs
 	case <-ctx.Done():
 		t.Fatalf("timed out waiting for response: %v", ctx.Err())
 	}
@@ -1868,7 +1870,7 @@ func TestForwarderHealthOnContextExpiry(t *testing.T) {
 
 			// Use an unbuffered responseChan so the send blocks, forcing the
 			// ctx.Done path and the SetUnhealthy call.
-			responseChan := make(chan packet)
+			responseChan := make(chan *Response)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			// Cancel after DNS servers have had time to respond and their errors
@@ -1920,7 +1922,7 @@ func TestForwarderHealthNoUpstreamResolvers(t *testing.T) {
 				addr:   netip.MustParseAddrPort("127.0.0.1:12345"),
 			}
 			// Buffered so the SERVFAIL response can be sent without a reader.
-			responseChan := make(chan packet, 1)
+			responseChan := make(chan *Response, 1)
 
 			if err := fwd.forwardWithDestChan(context.Background(), rpkt, responseChan); err != nil {
 				t.Fatalf("forwardWithDestChan: %v", err)
@@ -2067,6 +2069,50 @@ func TestResolversCustomScheme(t *testing.T) {
 			}
 			if !slices.Equal(gotAddrs, tt.wantAddrs) {
 				t.Errorf("got %v, want %v", gotAddrs, tt.wantAddrs)
+			}
+		})
+	}
+}
+
+func TestPeerAPIDoH(t *testing.T) {
+	const domain = "example.com."
+	query := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("1.2.3.4"))
+	testHdrVal := "hello from PeerAPI"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", dohType)
+		w.Header().Set("Tailscale-Test", testHdrVal)
+		w.Write(response)
+	}))
+	defer srv.Close()
+
+	f := &forwarder{logf: t.Logf}
+	urlBase := srv.URL + "/dns-query"
+
+	for _, isPeerAPI := range []bool{true, false} {
+		t.Run(fmt.Sprintf("isPeerAPI=%v", isPeerAPI), func(t *testing.T) {
+			res, err := f.sendDoH(t.Context(), urlBase, srv.Client(), query, isPeerAPI)
+			if err != nil {
+				t.Fatalf("sendDoH: %+v", err)
+			}
+			if !bytes.Equal(res.Bs, response) {
+				t.Errorf("response = %x, want %x", res.Bs, response)
+			}
+			if !isPeerAPI {
+				if res.PeerAPIMeta != nil {
+					t.Errorf("PeerAPIMeta = %+v, want nil", res.PeerAPIMeta)
+				}
+				return
+			}
+			if res.PeerAPIMeta == nil {
+				t.Fatal("PeerAPIMeta = nil, want non-nil")
+			}
+			if want, got := testHdrVal, res.PeerAPIMeta.ResponseHeader.Get("Tailscale-Test"); want != got {
+				t.Errorf("PeerAPIMeta.Header[Tailscale-Test] = %q, want %q", got, want)
+			}
+			if want, got := urlBase, res.PeerAPIMeta.RequestURL.String(); want != got {
+				t.Errorf("PeerAPIMeta.RequestURL = %q, want %q", got, want)
 			}
 		})
 	}
