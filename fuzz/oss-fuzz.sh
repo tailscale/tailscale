@@ -119,6 +119,14 @@ build_fuzzers() {
 	# disco (top-level)
 	build_fuzzer tailscale.com/disco FuzzDiscoParse disco_parse_fuzzer
 
+	# k8s-operator (sessionrecording/spdy)
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzSpdyFrameParse spdy_frame_parse
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzSpdyFrameParseHeaders spdy_frame_parse_headers
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzParseHeaders spdy_parse_headers
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzZlibReader spdy_zlib_reader
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzConnRead spdy_conn_read
+	build_fuzzer tailscale.com/k8s-operator/sessionrecording/spdy FuzzConnWrite spdy_conn_write
+
 	# net (dnscache, dns/resolver, packet, portmapper, stun, traffic)
 	build_fuzzer tailscale.com/net/dnscache FuzzGetDNSQueryCacheKey dnscache_get_dns_query_cache_key
 	build_fuzzer tailscale.com/net/dnscache FuzzAsciiLowerName dnscache_ascii_lower_name
