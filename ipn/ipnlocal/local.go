@@ -2489,6 +2489,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 
 	deltaRes, _ := cn.UpdateNetmapDelta(muts)
 	b.notifyPeerUpdateLocked()
+	b.checkCachedDNSLocked()
 	if buildfeatures.HasDrive {
 		// Drive's lazy remotes-source caches its rebuild keyed by this
 		// generation, so any delta — peer add/remove, address change,
@@ -7395,6 +7396,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		}
 	}
 	b.notifyPeerUpdateLocked()
+	b.checkCachedDNSLocked()
 	b.setDataPlanePeerRoutes()
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
@@ -7579,6 +7581,17 @@ func (b *LocalBackend) notifyPeerUpdateLocked() {
 	}
 	for _, f := range b.extHost.Hooks().OnPeerUpdate {
 		f()
+	}
+}
+
+// checkCachedDNSLocked checks recent negative answers after updating the
+// live MagicDNS host records. b.mu must be held.
+func (b *LocalBackend) checkCachedDNSLocked() {
+	if b.shutdownCalled || !buildfeatures.HasDNS {
+		return
+	}
+	if dm, ok := b.sys.DNSManager.GetOK(); ok {
+		dm.CheckCachedDNS()
 	}
 }
 
@@ -8439,6 +8452,11 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		// ephemeral nodes, which can then call back here. But we're shutting
 		// down, so no need to do any work.
 		return nil
+	}
+	if buildfeatures.HasDNS {
+		if dm, ok := b.sys.DNSManager.GetOK(); ok {
+			dm.Resolver().ClearNegativeCache()
+		}
 	}
 	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {

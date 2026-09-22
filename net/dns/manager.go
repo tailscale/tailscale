@@ -89,6 +89,7 @@ type Manager struct {
 	config              *Config    // Tracks the last viable DNS configuration set by Set.  nil on failures other than compilation failures or if set has never been called.
 	queryResponseMapper ResponseMapper
 	waitingForBaseCfg   bool // a retry goroutine is waiting for OS upstream resolvers
+	managerCacheFlush        // platform-specific state, guarded by mu
 }
 
 // NewManager created a new manager from the given config.
@@ -825,13 +826,6 @@ func (m *Manager) Down() error {
 	m.eventClient.Close()
 	m.resolver.Close()
 	return nil
-}
-
-func (m *Manager) FlushCaches() error {
-	if !buildfeatures.HasDNS {
-		return nil
-	}
-	return flushCaches()
 }
 
 // CleanUp restores the system DNS configuration to its original state

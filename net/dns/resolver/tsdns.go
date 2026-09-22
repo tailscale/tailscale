@@ -241,6 +241,8 @@ type Resolver struct {
 	// closed signals all goroutines to stop.
 	closed chan struct{}
 
+	negativeCache negativeCache
+
 	// mu guards the following fields from being updated while used.
 	mu             syncs.Mutex
 	localDomains   []dnsname.FQDN
@@ -248,6 +250,7 @@ type Resolver struct {
 	ipToHost       map[netip.Addr]dnsname.FQDN
 	subdomainHosts set.Set[dnsname.FQDN]
 	magicHosts     MagicDNSHosts // or nil if none installed
+
 }
 
 // MagicDNSHosts is a live source of MagicDNS host records, installed
@@ -297,6 +300,14 @@ func (r *Resolver) SetMagicDNSHosts(h MagicDNSHosts) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.magicHosts = h
+}
+
+func (r *Resolver) marshalLocalResponse(name dnsname.FQDN, resp *response) ([]byte, error) {
+	packet, err := marshalResponse(resp)
+	if err == nil && resp.Header.RCode == dns.RCodeNameError && resp.SOAZone != "" {
+		r.negativeCache.record(name)
+	}
+	return packet, err
 }
 
 type ForwardLinkSelector interface {
@@ -1429,7 +1440,7 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 	}
 
 	metricDNSMagicDNSSuccessReverse.Add(1)
-	return marshalResponse(resp)
+	return r.marshalLocalResponse(name, resp)
 }
 
 // respond returns a DNS response to query if it can be resolved locally.
@@ -1495,7 +1506,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		}
 	}
 	metricDNSMagicDNSSuccessName.Add(1)
-	return marshalResponse(resp)
+	return r.marshalLocalResponse(name, resp)
 }
 
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
