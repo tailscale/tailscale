@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/envknob"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -35,6 +37,12 @@ type Logger struct {
 	// It is cleared in bulk by Invalidate when the underlying peer set
 	// may have changed.
 	cache map[string]string
+
+	// self, when non-nil, is the Tailscale-conventional short string
+	// (e.g. "[AbCdE]") of the local node's public key. It is appended
+	// to log lines that reference a known peer so multi-node logs show
+	// which local node produced them. See SetSelfKey.
+	self atomic.Pointer[string]
 }
 
 // NewLogger creates a new logger for use with wireguard-go.
@@ -100,6 +108,10 @@ func NewLogger(logf logger.Logf, lookup func(wgString string) (tsString string, 
 			logf(format, args...)
 			return
 		}
+		if self := ret.self.Load(); self != nil {
+			format += ", self: %s"
+			newargs = append(newargs, *self)
+		}
 		logf(format, newargs...)
 	}
 	if envknob.Bool("TS_DEBUG_RAW_WGLOG") {
@@ -156,4 +168,20 @@ func (x *Logger) Invalidate() {
 	x.mu.Lock()
 	clear(x.cache)
 	x.mu.Unlock()
+}
+
+// SetSelfKey sets the local node's public key, whose short string form
+// is appended to wireguard-go log lines that reference a known peer.
+// A zero key clears it. It is safe to call concurrently with logging.
+//
+// The tag reflects the key most recently set, not the key of the
+// session a given packet belongs to; after a key change, lines for
+// sessions still using the old key carry the new key's tag.
+func (x *Logger) SetSelfKey(k key.NodePublic) {
+	if k.IsZero() {
+		x.self.Store(nil)
+		return
+	}
+	s := k.ShortString()
+	x.self.Store(&s)
 }
