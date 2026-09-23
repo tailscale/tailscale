@@ -7,7 +7,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 )
 
-func getDeviceOptions() []device.Option {
+func getMemoryOptions() []device.Option {
 	// iOS has a very restrictive memory limit on network extensions.
 	// Reduce the maximum amount of memory that wireguard-go can allocate to
 	// avoid getting killed.
