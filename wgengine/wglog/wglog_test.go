@@ -89,6 +89,62 @@ func TestSuppressLogs(t *testing.T) {
 	}
 }
 
+func TestLoggerSelfKey(t *testing.T) {
+	var logs []string
+	logf := func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	k, err := key.ParseNodePublicUntyped(mem.S("20c4c1ae54e1fd37cab6e9a532ca20646aff496796cc41d4519560e5e82bee53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWG := k.WireGuardGoString()
+	lookup := func(s string) (string, bool) {
+		if s == wantWG {
+			return k.ShortString(), true
+		}
+		return "", false
+	}
+	x := wglog.NewLogger(logf, lookup)
+	self := key.NewNode().Public()
+	peer := stringer(wantWG)
+
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+	x.SetSelfKey(self)
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+	x.DeviceLogger.Verbosef("%v - Receiving keepalive packet", peer)
+	x.DeviceLogger.Verbosef("%v - Something else", peer)
+	args := make([]any, 1, 2)
+	args[0] = peer
+	x.DeviceLogger.Verbosef("%v - Received handshake response", args...)
+	x.SetSelfKey(key.NodePublic{})
+	x.DeviceLogger.Verbosef("%v - Sending handshake initiation", peer)
+
+	selfTag := ", self: " + self.ShortString()
+	want := []string{
+		"wg: [v2] [IMTBr] - Sending handshake initiation",
+		"wg: [v2] [IMTBr] - Sending handshake initiation" + selfTag,
+		"wg: [v2] [IMTBr] - Receiving keepalive packet" + selfTag,
+		"wg: [v2] [IMTBr] - Something else",
+		"wg: [v2] [IMTBr] - Received handshake response" + selfTag,
+		"wg: [v2] [IMTBr] - Sending handshake initiation",
+	}
+	if len(logs) != len(want) {
+		t.Fatalf("got %d logs %q, want %d", len(logs), logs, len(want))
+	}
+	for i := range want {
+		if logs[i] != want[i] {
+			t.Errorf("log %d = %q, want %q", i, logs[i], want[i])
+		}
+	}
+
+	// The caller's args (which had spare capacity) must not be written to.
+	if got := args[:cap(args)][1]; got != nil {
+		t.Errorf("caller's args backing array was modified: %v", got)
+	}
+}
+
 // TestWireGuardGoStringMatchesWireGuardGo guards against a wireguard-go bump
 // silently changing the wireguard-go peer-string format from under us. The
 // LocalBackend's nodeByWGString index is built using

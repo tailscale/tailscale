@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/envknob"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
@@ -35,6 +37,32 @@ type Logger struct {
 	// It is cleared in bulk by Invalidate when the underlying peer set
 	// may have changed.
 	cache map[string]string
+
+	// self, when non-nil, is the Tailscale-conventional short string
+	// (e.g. "[AbCdE]") of the local node's public key. It is appended
+	// to handshake and keepalive log lines so multi-node logs show
+	// which local node produced them. See SetSelfKey.
+	self atomic.Pointer[string]
+}
+
+// selfTaggedSuffixes are the suffixes of wireguard-go handshake and
+// keepalive log formats that get the local node's key appended.
+var selfTaggedSuffixes = []string{
+	" - Sending handshake initiation",
+	" - Sending handshake response",
+	" - Received handshake initiation",
+	" - Received handshake response",
+	" - Sending keepalive packet",
+	" - Receiving keepalive packet",
+}
+
+func isSelfTagged(format string) bool {
+	for _, s := range selfTaggedSuffixes {
+		if strings.HasSuffix(format, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // NewLogger creates a new logger for use with wireguard-go.
@@ -68,6 +96,12 @@ func NewLogger(logf logger.Logf, lookup func(wgString string) (tsString string, 
 			// the messaging related to these is not specific enough to be
 			// useful.
 			return
+		}
+		if self := ret.self.Load(); self != nil && isSelfTagged(format) {
+			format += ", self: %s"
+			// Use a full slice expression so append copies rather than
+			// writing into the caller's backing array.
+			args = append(args[:len(args):len(args)], *self)
 		}
 		if ret.lookup == nil {
 			// No lookup; log as originally planned.
@@ -156,4 +190,20 @@ func (x *Logger) Invalidate() {
 	x.mu.Lock()
 	clear(x.cache)
 	x.mu.Unlock()
+}
+
+// SetSelfKey sets the local node's public key, whose short string form
+// is appended to wireguard-go handshake and keepalive log lines.
+// A zero key clears it. It is safe to call concurrently with logging.
+//
+// The tag reflects the key most recently set, not the key of the
+// session a given packet belongs to; after a key change, lines for
+// sessions still using the old key carry the new key's tag.
+func (x *Logger) SetSelfKey(k key.NodePublic) {
+	if k.IsZero() {
+		x.self.Store(nil)
+		return
+	}
+	s := k.ShortString()
+	x.self.Store(&s)
 }
