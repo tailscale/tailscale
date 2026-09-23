@@ -28,6 +28,14 @@ import (
 // same interface and subnet.
 var forceAllIPv6Endpoints = envknob.RegisterBool("TS_DEBUG_FORCE_ALL_IPV6_ENDPOINTS")
 
+// includeULAEndpoints, when true, causes [LocalAddresses] to include IPv6
+// Unique Local Addresses (ULA, fc00::/7) as regular endpoints alongside RFC
+// 1918 IPv4 addresses. This enables direct LAN connections between peers on
+// the same network without requiring a DERP relay when no global IPv6 is
+// available. By default ULA addresses are only used as a fallback when no
+// other addresses are present (e.g. Google Cloud Run).
+var includeULAEndpoints = envknob.RegisterBool("TS_INCLUDE_ULA_ENDPOINTS")
+
 // LoginEndpointForProxyDetermination is the URL used for testing
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
@@ -54,8 +62,13 @@ func isProblematicInterface(nif *net.Interface) bool {
 
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses. If there are no regular addresses
-// it will return any IPv4 linklocal or IPv6 unique local addresses because we
+// it will return any IPv4 link-local or IPv6 unique local addresses because we
 // know of environments where these are used with NAT to provide connectivity.
+//
+// IPv6 Unique Local Addresses (ULA, fc00::/7) can be promoted to regular
+// endpoints via [includeULAEndpoints] (TS_INCLUDE_ULA_ENDPOINTS), which
+// enables direct LAN connectivity between peers on the same network without
+// requiring a DERP relay when no global IPv6 is available.
 func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 	// TODO(crawshaw): don't serve interface addresses that we are routing
 	ifaces, err := netInterfaces()
@@ -63,6 +76,7 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 		return nil, nil, err
 	}
 	var regular4, regular6, linklocal4, ula6 []netip.Addr
+	var haveUsableNonFallback bool
 	for _, iface := range ifaces {
 		stdIf := iface.Interface
 		if !isUp(stdIf) || isProblematicInterface(stdIf) {
@@ -108,12 +122,26 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 					// address. We don't want to report all of those
 					// IPv6 LL to Control.
 				} else if ip.Is6() && ip.IsPrivate() {
-					// Google Cloud Run uses NAT with IPv6 Unique
-					// Local Addresses to provide IPv6 connectivity.
-					ula6 = append(ula6, ip)
+					// IPv6 Unique Local Addresses (ULA, fc00::/7).
+					// By default these are only used as a fallback when
+					// no other addresses are available (see below), as in
+					// Google Cloud Run's NAT-based IPv6 connectivity.
+					// Set TS_INCLUDE_ULA_ENDPOINTS=true to treat them
+					// like RFC 1918 IPv4 and include them as regular
+					// endpoints, enabling direct LAN connectivity.
+					curMask, _ := netip.AddrFromSlice(v.IP.Mask(v.Mask))
+					if includeULAEndpoints() {
+						if forceAllIPv6Endpoints() || subnets[curMask] < 2 {
+							regular6 = append(regular6, ip)
+						}
+						mak.Set(&subnets, curMask, subnets[curMask]+1)
+					} else {
+						ula6 = append(ula6, ip)
+					}
 				} else {
 					if ip.Is4() {
 						regular4 = append(regular4, ip)
+						haveUsableNonFallback = true
 					} else {
 						curMask, _ := netip.AddrFromSlice(v.IP.Mask(v.Mask))
 						// Limit the number of addresses reported per subnet for
@@ -124,18 +152,19 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 							regular6 = append(regular6, ip)
 						}
 						mak.Set(&subnets, curMask, subnets[curMask]+1)
+						haveUsableNonFallback = true
 					}
 				}
 			}
 		}
 	}
-	if len(regular4) == 0 && len(regular6) == 0 {
+	if !haveUsableNonFallback {
 		// if we have no usable IP addresses then be willing to accept
 		// addresses we otherwise wouldn't, like:
 		//   + 169.254.x.x (AWS Lambda and Azure App Services use NAT with these)
 		//   + IPv6 ULA (Google Cloud Run uses these with address translation)
-		regular4 = linklocal4
-		regular6 = ula6
+		regular4 = append(regular4, linklocal4...)
+		regular6 = append(regular6, ula6...)
 	}
 	regular = append(regular4, regular6...)
 	sortIPs(regular)
