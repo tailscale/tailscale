@@ -11,7 +11,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 )
 
-func getDeviceOptions() []device.Option {
+func getMemoryOptions() []device.Option {
 	// wireguard-go is a packet pipeline:
 	//
 	// TUN read -> encrypt -> ordered network write

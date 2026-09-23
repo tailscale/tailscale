@@ -10,12 +10,31 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 )
 
 // NewDevice returns a wireguard-go Device configured for Tailscale use.
 func NewDevice(tunDev tun.Device, bind conn.Bind, logger *device.Logger) *device.Device {
-	return device.NewDevice(tunDev, bind, logger, getDeviceOptions()...)
+	return device.NewDevice(tunDev, bind, logger, append(getMemoryOptions(), getDeviceMetrics())...)
 }
+
+func getDeviceMetrics() device.Option {
+	return device.WithMetrics(device.Metrics{
+		MessageInitiationTXAttemptInitial: metricMessageInitiationTXAttemptInitial,
+		MessageInitiationTXAttemptRetry:   metricMessageInitiationTXAttemptRetry,
+		MessageResponseTXAttempt:          metricMessageResponseTXAttempt,
+		HandshakeInitiatorCompleted:       metricHandshakeInitiatorCompleted,
+		HandshakeResponderCompleted:       metricHandshakeResponderCompleted,
+	})
+}
+
+var (
+	metricMessageInitiationTXAttemptInitial = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_initial")
+	metricMessageInitiationTXAttemptRetry   = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_retry")
+	metricMessageResponseTXAttempt          = clientmetric.NewCounter("wireguard_message_response_tx_attempt")
+	metricHandshakeInitiatorCompleted       = clientmetric.NewCounter("wireguard_handshake_initiator_completed")
+	metricHandshakeResponderCompleted       = clientmetric.NewCounter("wireguard_handshake_responder_completed")
+)
 
 // NewPeerLookupFunc returns a [device.PeerLookupFunc] that lazily
 // creates peers using peerConfig as the source of each peer's allowed IPs and
