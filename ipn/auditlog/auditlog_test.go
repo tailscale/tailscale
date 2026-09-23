@@ -12,6 +12,7 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -481,4 +482,72 @@ type mockError struct {
 
 func (e mockError) Retryable() bool {
 	return e == retriableError
+}
+
+// failableStore wraps a LogStore and can be set to fail on load.
+type failableStore struct {
+	LogStore
+	mu      sync.Mutex
+	loadErr error
+}
+
+func (s *failableStore) setLoadErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadErr = err
+}
+
+func (s *failableStore) load(key ipn.ProfileID) ([]*transaction, error) {
+	s.mu.Lock()
+	err := s.loadErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.LogStore.load(key)
+}
+
+func (s *failableStore) save(key ipn.ProfileID, txns []*transaction) error {
+	return s.LogStore.save(key, txns)
+}
+
+// TestMarkTransactionsDoneLoadError verifies that a transient load failure in
+// markTransactionsDone does not erase the persisted transactions. Before the
+// fix, load returning an error left persisted nil, the filter loop produced an
+// empty unsent list, and save overwrote the store — losing every pending entry.
+func TestMarkTransactionsDoneLoadError(t *testing.T) {
+	c := qt.New(t)
+
+	inner := NewLogStore(&mem.Store{})
+	store := &failableStore{LogStore: inner}
+
+	al := loggerForTest(t, Opts{
+		RetryLimit: 100,
+		Logf:       t.Logf,
+		Store:      store,
+	})
+	c.Assert(al.SetProfileID("test"), qt.IsNil)
+
+	// Seed the store with two transactions.
+	al.mu.Lock()
+	seed := []*transaction{
+		{EventID: "ev1", Details: "one", TimeStamp: time.Now()},
+		{EventID: "ev2", Details: "two", TimeStamp: time.Now()},
+	}
+	c.Assert(al.appendToStoreLocked(seed), qt.IsNil)
+	al.mu.Unlock()
+
+	// Make load fail, then call markTransactionsDone for one event.
+	store.setLoadErr(errors.New("disk read error"))
+	al.markTransactionsDone([]*transaction{{EventID: "ev1"}})
+
+	// Restore load and verify the store still has both entries.
+	store.setLoadErr(nil)
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	remaining, err := al.store.load("test")
+	c.Assert(err, qt.IsNil)
+	if got, want := len(remaining), 2; got != want {
+		t.Fatalf("remaining transactions: got %d, want %d", got, want)
+	}
 }
