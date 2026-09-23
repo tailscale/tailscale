@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"go4.org/netipx"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -38,6 +39,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -176,9 +178,16 @@ type nodeBackend struct {
 	// Begin/Commit mutations must be serialized, which we do by only
 	// mutating it with mu held.
 	routeMgr *routemanager.RouteManager
+
+	// knobs is the controlknobs for this node, or nil.
+	knobs *controlknobs.Knobs
+	// hybridHandshakesDisabled is the value of knobs.DisableHybridHandshakes as of the
+	// last call to updatePeersLocked. It is used to compute the set of changed peer
+	// configurations when the controlknob toggles.
+	hybridHandshakesDisabled bool
 }
 
-func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *nodeBackend {
+func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus, knobs *controlknobs.Knobs) *nodeBackend {
 	ctx, ctxCancel := context.WithCancelCause(ctx)
 	nb := &nodeBackend{
 		logf:        logf,
@@ -187,6 +196,7 @@ func newNodeBackend(ctx context.Context, logf logger.Logf, bus *eventbus.Bus) *n
 		eventClient: bus.Client("ipnlocal.nodeBackend"),
 		readyCh:     make(chan struct{}),
 		routeMgr:    routemanager.New(logf),
+		knobs:       knobs,
 	}
 	// Default filter blocks everything and logs nothing.
 	noneFilter := filter.NewAllowNone(logger.Discard, &netipx.IPSet{})
@@ -271,20 +281,29 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// PeerAllowedIPs returns the prefixes from which the peer with the
-// given public key is currently allowed to originate traffic, or
-// ok=false if the key is unknown or the peer currently contributes no
-// prefixes.
-func (nb *nodeBackend) PeerAllowedIPs(k key.NodePublic) ([]netip.Prefix, bool) {
+// PeerWGConfig returns the wgcfg.PeerConfig to use for the peer with the
+// given public key, or ok=false if the key is unknown or currently should
+// not receive any traffic.
+func (nb *nodeBackend) PeerWGConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	id, ok := nb.nodeByKey[k]
 	if !ok {
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	}
-	// Holding nb.mu satisfies routeMgr's serialization requirement:
-	// all routeMgr mutations also run under nb.mu.
-	return nb.routeMgr.PeerAllowedIPs(id)
+
+	peer, ok := nb.peers[id]
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+	hybrid := capVerSupportsHybridHandshakes(peer.Cap()) && !nb.knobs.ShouldDisableHybridHandshakes()
+
+	ips, ok := nb.routeMgr.PeerAllowedIPs(id)
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+
+	return wgcfg.PeerConfig{AllowedIPs: ips, Hybrid: hybrid}, true
 }
 
 // NodeByWireGuardString returns the node ID of the peer whose
@@ -647,7 +666,7 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	return nm
 }
 
-func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges, handshakeTypeChanged []key.NodePublic) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	nb.netMap = nm
@@ -655,7 +674,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 	nb.updateNodeByKeyLocked()
 	nb.updateNodeByStableIDLocked()
 	nb.updateNodeByNameLocked()
-	discoChanged, routeChanged = nb.updatePeersLocked()
+	discoChanged, routeChanged, handshakeTypeChanged = nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
 		nb.userProfiles = maps.Clone(nm.UserProfiles)
@@ -668,7 +687,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
-	return discoChanged, routeChanged
+	return discoChanged, routeChanged, handshakeTypeChanged
 }
 
 // AwaitNodeKeyForTest returns a channel that is closed once a peer with the
@@ -850,7 +869,11 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 	return ip, ok
 }
 
-func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+func capVerSupportsHybridHandshakes(cap tailcfg.CapabilityVersion) bool {
+	return cap >= 150
+}
+
+func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges, handshakeTypeChanged []key.NodePublic) {
 	nm := nb.netMap
 	oldIDs := slices.Collect(maps.Keys(nb.peers))
 
@@ -892,7 +915,22 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 		rt.UpsertPeer(p)
 	}
 	res := rt.Commit()
-	return discoChanged, res.AllowedIPs
+
+	// If hybrid PQ handshaking support was toggled by a controlknob, collect all
+	// affected peers for reconfiguration.
+	hybridHandshakesDisabled := nb.knobs.ShouldDisableHybridHandshakes()
+	hybridSupportChanged := hybridHandshakesDisabled != nb.hybridHandshakesDisabled
+	nb.hybridHandshakesDisabled = hybridHandshakesDisabled
+
+	if hybridSupportChanged {
+		for _, p := range nb.peers {
+			if capVerSupportsHybridHandshakes(p.Cap()) {
+				handshakeTypeChanged = append(handshakeTypeChanged, p.Key())
+			}
+		}
+	}
+
+	return discoChanged, res.AllowedIPs, handshakeTypeChanged
 }
 
 // discoChanged reports whether a peer's disco key change from prev to

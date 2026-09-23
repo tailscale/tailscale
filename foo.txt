@@ -1,0 +1,13 @@
+The general logic we want is that a pair of peers should use the new hybrid handshake protocol if both the local node and remote peer support it, otherwise they should use the "classic" wireguard handshake.
+
+We can do this fairly easily by defining a new capability version, which signals that a node supports hybrid handshakes. Then, when configuring wireguard, a client just needs to check if the peer's capability version is >= the cutoff, and if so configure hybrid handshakes.
+
+But as I say, we also want to have a way to disable the new handshake from control if something goes wrong. At first we looked at doing this with a controlknob, but this is problematic because that can only tell a client "never do hybrid handshakes even if your peer's CapVer supports it". Because of node sharing, this means we can only ever disable hybrid handshakes globally all at once on all tailnets, otherwise the two peers will disagree on what handshake to execute and won't be able to talk to each other. And global disables are a big hammer, and also tricky to execute simultaneously across all shards (which would be required for shared nodes to not break).
+
+So instead, we're thinking of plumbing this in through peer capabilities, specifically a new Node.CapMap entry. Then we'd wire that up as a per-tailnet feature flag, which when enabled adds the capability to all Peer entries when generating netmaps. On the client, the check for hybrid handshakes then becomes "peer CapVer is high enough, and !peer.HasCap(disableHybrid)".
+
+This feels nicer, because it lets us toggle disablement per-tailnet if we need to (e.g. enterprise customer freaks out because the packet format changed), and because (I believe?) peer capabilities also get sent for shared nodes, so if I disable hybrid handshakes for a shared device in tailnet A, the recipient of the share in tailnet B would see the disablement capability and react correctly.
+
+And if we do end up wanting to disable hybrid handshakes globally, we can do that with a normal control rollout that forces the disable on per-shard, without running into cross-shard synchronization issues like we would with controlknobs.
+
+Does all that sound right? Have we missed a better way of plumbing this disablement into things? Also I haven't worked on control in years, is plumbing such a feature flag into netmap generation going to suck horribly in ways I'm not aware of?

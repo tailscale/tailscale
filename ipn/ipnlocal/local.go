@@ -634,7 +634,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	sys.NoiseRoundTripper.Set(noiseRoundTripper{b})
 
-	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get())
+	nb := newNodeBackend(ctx, b.logf, b.sys.Bus.Get(), b.sys.ControlKnobs())
 	b.currentNodeAtomic.Store(nb)
 	nb.ready()
 
@@ -845,7 +845,7 @@ func (b *LocalBackend) currentNode() *nodeBackend {
 	if v := b.currentNodeAtomic.Load(); v != nil || !testenv.InTest() {
 		return v
 	}
-	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get())
+	v := newNodeBackend(cmp.Or(b.ctx, context.Background()), b.logf, b.sys.Bus.Get(), b.sys.ControlKnobs())
 	if b.currentNodeAtomic.CompareAndSwap(nil, v) {
 		v.ready()
 	}
@@ -7477,7 +7477,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if nm != nil {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
-	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
+	discoChanged, routeChanged, handshakeTypeChanged := b.currentNode().SetNetMap(nm)
 	// A profile reset swaps in a fresh nodeBackend before clearing its map,
 	// so notify on every clear even if this node never received a map.
 	if !b.shutdownCalled && (oldNetMap == nil || nm == nil) {
@@ -7509,6 +7509,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	// (or that were removed) in the full-netmap resync above; peers not
 	// in routeChanged are already up to date.
 	for k := range routeChanged {
+		b.e.SyncDevicePeer(k)
+	}
+	for _, k := range handshakeTypeChanged {
 		b.e.SyncDevicePeer(k)
 	}
 	if login != b.activeLogin {
@@ -8548,7 +8551,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 			dm.Resolver().ClearNegativeCache()
 		}
 	}
-	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
+	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get(), b.sys.ControlKnobs())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
 		oldNode.shutdown(errNodeContextChanged)
 	}
