@@ -1250,6 +1250,12 @@ var (
 	metricDNSResponseRewriteUnsupportedQuestionTypeErrorServfail = clientmetric.NewCounter(
 		"conn25_map_dns_response_rewrite_unsupported_question_type_error_servfail",
 	)
+
+	// metricDNSResponseSkippedAAAA4In6 increments when an AAAA answer for an
+	// app connector domain is dropped because it holds an IPv4-in-IPv6 address.
+	metricDNSResponseSkippedAAAA4In6 = clientmetric.NewCounter(
+		"conn25_map_dns_response_skipped_aaaa_4in6",
+	)
 )
 
 // mapDNSResponse parses and inspects the DNS response. If the domain
@@ -1418,6 +1424,12 @@ func (c *Conn25) mapDNSResponse(buf []byte) []byte {
 					return makeServFail(c.logf, hdr, question)
 				}
 				dstAddr = netip.AddrFrom16(r.AAAA)
+
+				// Skip AAAA answer with IPv4-in-IPv6 address.
+				if dstAddr.Is4In6() {
+					metricDNSResponseSkippedAAAA4In6.Add(1)
+					continue
+				}
 			}
 			answers = append(answers, dnsResponseRewrite{domain: queriedDomain, dst: dstAddr, ttlSeconds: h.TTL})
 		default:
