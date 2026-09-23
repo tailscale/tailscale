@@ -62,13 +62,42 @@ type peerAPIServer struct {
 	resolver peerDNSQueryHandler
 }
 
+// skipKernelListener reports whether peerapi should not create a
+// kernel-level listener at all and instead rely on netstack intercepting
+// connections to the peerapi port. See [fakePeerAPIListener].
+func (s *peerAPIServer) skipKernelListener() bool {
+	switch runtime.GOOS {
+	case "android":
+		// Android for whatever reason often has problems creating the
+		// peerapi listener (Issues 4449, 4293). Since netstack
+		// intercepts the connections anyway, the kernel listener isn't
+		// needed.
+		return true
+	case "freebsd":
+		// FreeBSD is a weak-host stack like Linux: a kernel listener on
+		// the node's Tailscale IP would answer TCP handshakes from
+		// LAN-adjacent machines that address that IP at the node's NIC
+		// (tailscale/corp#48248). Linux fixes that with SO_BINDTODEVICE
+		// and macOS/iOS with IP_BOUND_IF, but FreeBSD has no per-socket
+		// equivalent, so skip the kernel listener entirely whenever
+		// netstack is present. Without netstack (ts_omit_netstack),
+		// the kernel listener is the only way to serve peers, and
+		// protecting it is left to pf; see the log line in
+		// [peerAPIServer.listen].
+		_, hasNetstack := s.b.sys.Netstack.GetOK()
+		return hasNetstack
+	}
+	return false
+}
+
 func (s *peerAPIServer) listen(ip netip.Addr, tunIfIndex int) (ln net.Listener, err error) {
-	// Android for whatever reason often has problems creating the peerapi listener.
-	// But since we started intercepting it with netstack, it's not even important that
-	// we have a real kernel-level listener. So just create a dummy listener on Android
-	// and let netstack intercept it.
-	if runtime.GOOS == "android" {
+	if s.skipKernelListener() {
 		return newFakePeerAPIListener(ip), nil
+	}
+	if runtime.GOOS == "freebsd" {
+		// No netstack, so a kernel listener is required; see
+		// skipKernelListener for why it is exposed.
+		s.b.logf("peerapi: no netstack in this build; the kernel listener on %v answers connections from any interface (FreeBSD's weak host model), so restrict it to the tunnel interface with pf", ip)
 	}
 
 	ipStr := ip.String()
@@ -1114,8 +1143,10 @@ func newFakePeerAPIListener(ip netip.Addr) net.Listener {
 // for a given IP on port 1 (arbitrary) and can be Closed, but otherwise Accept
 // just blocks forever until closed. The purpose of this is to let the rest
 // of the LocalBackend/PeerAPI code run and think it's talking to the kernel,
-// even if the kernel isn't cooperating (like on Android: Issue 4449, 4293, etc)
-// or we lack permission to listen on a port. It's okay to not actually listen via
+// even if the kernel isn't cooperating (like on Android: Issue 4449, 4293, etc),
+// we lack permission to listen on a port, or a kernel listener would be
+// reachable from off the tailnet (FreeBSD; see [peerAPIServer.skipKernelListener]).
+// It's okay to not actually listen via
 // the kernel because on almost all platforms (except iOS as of 2022-04-20) we
 // also intercept incoming netstack TCP requests to our peerapi port and hand them over
 // directly to peerapi, without involving the kernel. So this doesn't need to be
