@@ -1121,6 +1121,70 @@ func mustCreateURL(t *testing.T, u string) url.URL {
 	return *uParsed
 }
 
+func TestServeListenersFollowNetmapAddresses(t *testing.T) {
+	const (
+		port1 = 10001
+		port2 = 10002
+	)
+	currentAddr := netip.MustParseAddr("127.0.0.1")
+	removedAddr := netip.MustParseAddr("127.0.0.2")
+	b := &LocalBackend{
+		ctx:            context.Background(),
+		logf:           logger.Discard,
+		sys:            tsd.NewSystem(),
+		serveListeners: make(map[netip.AddrPort]*localListener),
+	}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{SelfNode: (&tailcfg.Node{
+		Addresses: []netip.Prefix{netip.PrefixFrom(currentAddr, currentAddr.BitLen())},
+	}).View()})
+
+	closed := make(map[netip.AddrPort]bool)
+	newFakeListener := func(ap netip.AddrPort) *localListener {
+		sl := b.newServeListener(context.Background(), ap, logger.Discard)
+		sl.closeListener.Store(func() error {
+			closed[ap] = true
+			return nil
+		})
+		return sl
+	}
+	current := []netip.AddrPort{
+		netip.AddrPortFrom(currentAddr, port1),
+		netip.AddrPortFrom(currentAddr, port2),
+	}
+	removed := []netip.AddrPort{
+		netip.AddrPortFrom(removedAddr, port1),
+		netip.AddrPortFrom(removedAddr, port2),
+	}
+	preserved := make(map[netip.AddrPort]*localListener)
+	for _, ap := range append(append([]netip.AddrPort{}, current...), removed...) {
+		b.serveListeners[ap] = newFakeListener(ap)
+	}
+	for _, ap := range current {
+		preserved[ap] = b.serveListeners[ap]
+	}
+
+	b.mu.Lock()
+	b.updateServeTCPPortNetMapAddrListenersLocked([]uint16{port1, port2})
+	b.mu.Unlock()
+
+	if len(b.serveListeners) != len(current) {
+		t.Fatalf("serveListeners has %d entries, want %d", len(b.serveListeners), len(current))
+	}
+	for _, ap := range current {
+		if got := b.serveListeners[ap]; got != preserved[ap] {
+			t.Errorf("listener %v was replaced: got %p, want %p", ap, got, preserved[ap])
+		}
+	}
+	for _, ap := range removed {
+		if _, ok := b.serveListeners[ap]; ok {
+			t.Errorf("obsolete listener %v remains", ap)
+		}
+		if !closed[ap] {
+			t.Errorf("obsolete listener %v was not closed", ap)
+		}
+	}
+}
+
 func newTestBackend(t *testing.T, opts ...any) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	const debug = false
