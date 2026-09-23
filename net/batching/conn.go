@@ -27,6 +27,8 @@ type ReceivedPacket struct {
 	Size int
 	// Source is the source address that sent the packet.
 	Source netip.AddrPort
+	// Local is the local address the packet was sent to, where the reader reports it, and the zero Addr otherwise.
+	Local netip.Addr
 }
 
 const (

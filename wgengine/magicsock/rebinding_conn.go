@@ -168,11 +168,12 @@ func (c *RebindingUDPConn) ReadBatch(i int, slab []byte, batchingPackets []batch
 		pconn := c.connAt(i)
 		b, ok := pconn.(batching.Conn)
 		if !ok {
-			n, ap, err := c.readFromWithInitPconn(i, pconn, slab)
+			n, ap, local, err := c.readOne(i, pconn, slab)
 			if err == nil {
 				batchingPackets[0].Offset = 0
 				batchingPackets[0].Size = n
 				batchingPackets[0].Source = netaddr.Unmap(ap)
+				batchingPackets[0].Local = local
 				return 1, nil
 			}
 			return 0, err

@@ -58,6 +58,7 @@ type linuxBatchingConn struct {
 	pc                 *net.UDPConn
 	xpc                xnetBatchReaderWriter
 	rxOffload          bool        // supports UDP GRO or similar
+	reportsLocal       bool        // the socket asked for each datagram's local address; see reportsLocalAddr
 	txOffload          atomic.Bool // supports UDP GSO or similar
 	msgsPool           sync.Pool
 	rxqOverflowsMetric *clientmetric.Metric
@@ -383,6 +384,40 @@ func getDataFromControl(control []byte, cmsgLevel, cmsgType int32, minDataLen in
 	return nil, nil
 }
 
+// reportsLocalAddr reports whether uc asked the kernel for the local address of each datagram it receives, with IP_PKTINFO or IPV6_RECVPKTINFO as x/net's FlagDst does, so that ReadBatch reports it in ReceivedPacket.Local.
+func reportsLocalAddr(uc *net.UDPConn, network string) bool {
+	rc, err := uc.SyscallConn()
+	if err != nil {
+		return false
+	}
+	level, opt := unix.IPPROTO_IP, unix.IP_PKTINFO
+	if network == "udp6" {
+		level, opt = unix.IPPROTO_IPV6, unix.IPV6_RECVPKTINFO
+	}
+	var v int
+	var gerr error
+	if err := rc.Control(func(fd uintptr) { v, gerr = unix.GetsockoptInt(int(fd), level, opt) }); err != nil || gerr != nil {
+		return false
+	}
+	return v != 0
+}
+
+// getLocalFromControl returns the local address a datagram was sent to, from the IP_PKTINFO or IPV6_PKTINFO control message the kernel adds when the socket asks for it, or the zero Addr when there is none.
+func getLocalFromControl(control []byte) netip.Addr {
+	if len(control) == 0 {
+		return netip.Addr{}
+	}
+	if data, _ := getDataFromControl(control, unix.IPPROTO_IP, unix.IP_PKTINFO, unix.SizeofInet4Pktinfo); data != nil {
+		info := (*unix.Inet4Pktinfo)(unsafe.Pointer(&data[0]))
+		return netip.AddrFrom4(info.Addr) // the header's destination; Spec_dst is the route's source
+	}
+	if data, _ := getDataFromControl(control, unix.IPPROTO_IPV6, unix.IPV6_PKTINFO, unix.SizeofInet6Pktinfo); data != nil {
+		info := (*unix.Inet6Pktinfo)(unsafe.Pointer(&data[0]))
+		return netip.AddrFrom16(info.Addr).Unmap()
+	}
+	return netip.Addr{}
+}
+
 // getRXQOverflowsFromControl returns the rxq overflows cumulative counter found
 // in control. If no rxq counter is found or the len(control) < unix.SizeofCmsghdr,
 // this function returns 0. A non-nil error will be returned if control is
@@ -476,10 +511,10 @@ func (c *linuxBatchingConn) ReadBatch(slab []byte, packets []ReceivedPacket) (n 
 		return 0, err
 	}
 	c.handleRXQOverflowCounter(batch.msgs[:n], err)
-	return fillReceivedPackets(batch.msgs[:n], recvmmsgSlotSize, packets, c.rxOffload)
+	return fillReceivedPackets(batch.msgs[:n], recvmmsgSlotSize, packets, c.rxOffload, c.reportsLocal)
 }
 
-func fillReceivedPackets(msgs []ipv6.Message, slabOffset int, packets []ReceivedPacket, rxOffload bool) (n int, err error) {
+func fillReceivedPackets(msgs []ipv6.Message, slabOffset int, packets []ReceivedPacket, rxOffload, reportsLocal bool) (n int, err error) {
 	for i, msg := range msgs {
 		var (
 			gsoSize    int
@@ -496,6 +531,10 @@ func fillReceivedPackets(msgs []ipv6.Message, slabOffset int, packets []Received
 			}
 		}
 		addrPort := msg.Addr.(*net.UDPAddr).AddrPort()
+		var local netip.Addr
+		if reportsLocal {
+			local = getLocalFromControl(msg.OOB[:msg.NN]) // shared by every datagram GRO coalesced into msg
+		}
 		regionOffset := i * slabOffset // region may contain multiple coalesced packets
 		for j := 0; j < numToSplit; j++ {
 			if n >= len(packets) {
@@ -509,6 +548,7 @@ func fillReceivedPackets(msgs []ipv6.Message, slabOffset int, packets []Received
 				Offset: regionOffset + start,
 				Size:   end - start,
 				Source: addrPort,
+				Local:  local,
 			}
 			n++
 			start = end
@@ -666,8 +706,15 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetr
 	if !ok {
 		return pconn
 	}
+	// A socket that asked for each datagram's local address gets room for it in every message; one that did not pays nothing for it.
+	reportsLocal := reportsLocalAddr(uc, network)
+	oobSize := controlMessageSize
+	if reportsLocal {
+		oobSize += unix.CmsgSpace(unix.SizeofInet6Pktinfo) // IP_PKTINFO or IPV6_PKTINFO; the IPv6 one is the larger
+	}
 	b := &linuxBatchingConn{
-		pc: uc,
+		pc:           uc,
+		reportsLocal: reportsLocal,
 		msgsPool: sync.Pool{
 			New: func() any {
 				ua := &net.UDPAddr{
@@ -677,7 +724,7 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetr
 				for i := range msgs {
 					msgs[i].Buffers = make([][]byte, 1)
 					msgs[i].Addr = ua
-					msgs[i].OOB = make([]byte, controlMessageSize)
+					msgs[i].OOB = make([]byte, oobSize)
 				}
 				return &msgsBatch{
 					writeBatchToUDPAddr: ua,
