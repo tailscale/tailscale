@@ -52,11 +52,12 @@ func TestGokrazyUpdatesItselfToSameImage(t *testing.T) {
 		"--unsigned",
 	)
 	if err != nil {
-		var ue *url.Error
-		if !errors.As(err, &ue) {
+		if urlError, ok := errors.AsType[*url.Error](err); ok {
+			// Ignore transport errors
+			t.Logf("update command connection lost during reboot: %v", urlError)
+		} else {
 			t.Fatalf("gokrazy update command failed: %v\n%s", err, out)
 		}
-		t.Logf("update command connection lost during reboot: %v", err) // transport error
 	} else {
 		t.Logf("update command output:\n%s", out)
 	}
