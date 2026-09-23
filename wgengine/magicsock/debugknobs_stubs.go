@@ -21,6 +21,7 @@ func debugOmitLocalAddresses() bool    { return false }
 func logDerpVerbose() bool             { return false }
 func debugReSTUNStopOnIdle() bool      { return false }
 func debugAlwaysDERP() bool            { return false }
+func debugConnectedSockets() bool      { return false }
 func debugUseDERPHTTP() bool           { return false }
 func debugEnableSilentDisco() bool     { return false }
 func debugSendCallMeUnknownPeer() bool { return false }

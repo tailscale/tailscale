@@ -40,3 +40,35 @@ func (c *Conn) connControl(network string, fn func(fd uintptr)) error {
 	}
 	return rc.Control(fn)
 }
+
+// copyDontFragment gives rc, a connected socket being dialled for network, the shared socket's current don't-fragment setting. UpdatePMTUD redials connected sockets when it changes that setting.
+func (c *Conn) copyDontFragment(network string, rc syscall.RawConn) error {
+	ruc := &c.pconn4
+	if network == "udp6" {
+		ruc = &c.pconn6
+	}
+	sc, ok := ruc.currentConn().(syscall.Conn)
+	if !ok {
+		return nil // nothing to copy from
+	}
+	src, err := sc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var v int
+	var gerr, serr error
+	if err := src.Control(func(fd uintptr) {
+		v, gerr = syscall.GetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network))
+	}); err != nil {
+		return err
+	}
+	if gerr != nil {
+		return gerr
+	}
+	if err := rc.Control(func(fd uintptr) {
+		serr = syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), v)
+	}); err != nil {
+		return err
+	}
+	return serr
+}
