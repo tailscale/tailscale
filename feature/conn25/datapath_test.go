@@ -100,6 +100,59 @@ func (tn testNet) udpPacket(src, dst netip.AddrPort) *packet.Parsed {
 	return p
 }
 
+func (tn testNet) checkPacket(t *testing.T, p *packet.Parsed, src, dst netip.AddrPort) {
+	t.Helper()
+
+	if got, want := p.Src, src; got != want {
+		t.Errorf("unexpected packet src: got %v, want %v", got, want)
+	}
+	if got, want := p.Dst, dst; got != want {
+		t.Errorf("unexpected packet dst: got %v, want %v", got, want)
+	}
+	if got, want := p.Buffer(), tn.udpPacket(src, dst).Buffer(); !bytes.Equal(got, want) {
+		t.Errorf("unexpected packet bytes:\n got %+x\nwant %+x", got, want)
+	}
+}
+
+func (tn testNet) checkICMPUnreachable(t *testing.T, got []byte, from, to netip.Addr, invoking *packet.Parsed) {
+	t.Helper()
+
+	var p packet.Parsed
+	p.Decode(got)
+	if !p.IsError() {
+		t.Errorf("injected packet is not an ICMP error")
+	}
+	if got, want := p.Src.Addr(), from; got != want {
+		t.Errorf("injected packet src: got %v, want %v", got, want)
+	}
+	if got, want := p.Dst.Addr(), to; got != want {
+		t.Errorf("injected packet dst: got %v, want %v", got, want)
+	}
+
+	var want []byte
+	if tn.ipVersion == 6 {
+		// RFC 4443: as much of the invoking packet as fits
+		// without exceeding the minimum IPv6 MTU. The test packets are
+		// far below that, so the whole packet is quoted.
+		want = packet.Generate(packet.ICMP6Header{
+			IP6Header: packet.IP6Header{Src: from, Dst: to},
+			Type:      packet.ICMP6Unreachable,
+			Code:      packet.ICMP6AddressUnreachable,
+		}, append(make([]byte, 4), invoking.Buffer()...))
+	} else {
+		// RFC 792: the IPv4 header, which is 20 bytes for the option-less
+		// test packets, plus the first 64 bits of the datagram.
+		want = packet.Generate(packet.ICMP4Header{
+			IP4Header: packet.IP4Header{Src: from, Dst: to},
+			Type:      packet.ICMP4Unreachable,
+			Code:      packet.ICMP4HostUnreachable,
+		}, append(make([]byte, 4), invoking.Buffer()[:20+8]...))
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("unexpected injected packet bytes:\n got %+x\nwant %+x", got, want)
+	}
+}
+
 func (tn testNet) newClientDatapath(t *testing.T, throwMappingErr bool) *datapathHandler {
 	t.Helper()
 
@@ -204,12 +257,7 @@ func TestHandlePacketFromTunDevice(t *testing.T) {
 					if want, got := tt.expectedFilterResponse, dph.HandlePacketFromTunDevice(p, tun); want != got {
 						t.Errorf("unexpected filter response: want %v, got %v", want, got)
 					}
-					if want, got := tt.expectedSrc, p.Src; want != got {
-						t.Errorf("unexpected packet src: want %v, got %v", want, got)
-					}
-					if want, got := tt.expectedDst, p.Dst; want != got {
-						t.Errorf("unexpected packet dst: want %v, got %v", want, got)
-					}
+					tn.checkPacket(t, p, tt.expectedSrc, tt.expectedDst)
 				})
 			}
 		})
@@ -225,11 +273,6 @@ func TestUnmappedMagicIPICMPUnreachable(t *testing.T) {
 
 	for _, tn := range testNets {
 		t.Run(tn.name, func(t *testing.T) {
-			wantProto := ipproto.ICMPv4
-			if tn.ipVersion == 6 {
-				wantProto = ipproto.ICMPv6
-			}
-
 			dph := tn.newClientDatapath(t, false)
 			chtun, tun := newChannelTUN(t)
 
@@ -238,36 +281,26 @@ func TestUnmappedMagicIPICMPUnreachable(t *testing.T) {
 			gotInboundPacketChan := make(chan []byte, 1)
 			go func() { gotInboundPacketChan <- <-chtun.Inbound }()
 
-			p := tn.udpPacket(
-				netip.AddrPortFrom(tn.clientSrcIP, clientPort),
-				netip.AddrPortFrom(tn.unusedMagicIP, serverPort),
-			)
+			src := netip.AddrPortFrom(tn.clientSrcIP, clientPort)
+			dst := netip.AddrPortFrom(tn.unusedMagicIP, serverPort)
+			p := tn.udpPacket(src, dst)
 			if got, want := dph.HandlePacketFromTunDevice(p, tun), filter.Drop; got != want {
 				t.Fatalf("unexpected filter response: got %v, want %v", got, want)
 			}
+			// The dropped packet itself must be left untouched, since the
+			// injected error quotes it.
+			tn.checkPacket(t, p, src, dst)
 
-			var injected packet.Parsed
+			var injected []byte
 			select {
-			case b := <-gotInboundPacketChan:
-				injected.Decode(b)
+			case injected = <-gotInboundPacketChan:
 			case <-time.After(1 * time.Second):
 				t.Fatal("timed out waiting for injected ICMP packet")
 			}
 
-			if !injected.IsError() {
-				t.Errorf("injected packet is not an ICMP error")
-			}
-			if got := injected.IPProto; got != wantProto {
-				t.Errorf("injected packet proto: got %v, want %v", got, wantProto)
-			}
 			// The error should appear to come from the unreachable Magic IP,
 			// addressed back to the original sender.
-			if got, want := injected.Src.Addr(), tn.unusedMagicIP; got != want {
-				t.Errorf("injected packet src: got %v, want %v", got, want)
-			}
-			if got, want := injected.Dst.Addr(), tn.clientSrcIP; got != want {
-				t.Errorf("injected packet dst: got %v, want %v", got, want)
-			}
+			tn.checkICMPUnreachable(t, injected, tn.unusedMagicIP, tn.clientSrcIP, p)
 		})
 	}
 }
@@ -347,12 +380,7 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 					if want, got := tt.expectedFilterResponse, dph.HandlePacketFromWireGuard(p, tun); want != got {
 						t.Errorf("unexpected filter response: want %v, got %v", want, got)
 					}
-					if want, got := tt.expectedSrc, p.Src; want != got {
-						t.Errorf("unexpected packet src: want %v, got %v", want, got)
-					}
-					if want, got := tt.expectedDst, p.Dst; want != got {
-						t.Errorf("unexpected packet dst: want %v, got %v", want, got)
-					}
+					tn.checkPacket(t, p, tt.expectedSrc, tt.expectedDst)
 					if tt.expectedInjectedPkt != nil {
 						slab := make([]byte, (2*wgtun.ReadPacketSpacing)+(2*(1<<16-1)))
 						packets := make([]wgtun.ReadPacket, 1)
@@ -402,17 +430,17 @@ func TestClientFlowCache(t *testing.T) {
 			if dph.HandlePacketFromTunDevice(o1, tun) != filter.Accept {
 				t.Errorf("first call to HandlePacketFromTunDevice was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.transitIP, serverPort), o1.Dst; want != got {
-				t.Errorf("unexpected packet dst after first call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, o1,
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				netip.AddrPortFrom(tn.transitIP, serverPort))
 			// The second call should use the cache.
 			o2 := newOutgoing()
 			if dph.HandlePacketFromTunDevice(o2, tun) != filter.Accept {
 				t.Errorf("second call to HandlePacketFromTunDevice was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.transitIP, serverPort), o2.Dst; want != got {
-				t.Errorf("unexpected packet dst after second call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, o2,
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				netip.AddrPortFrom(tn.transitIP, serverPort))
 
 			// Return traffic should have the Transit IP as the source,
 			// and be SNATed to the Magic IP.
@@ -424,9 +452,9 @@ func TestClientFlowCache(t *testing.T) {
 			if dph.HandlePacketFromWireGuard(incoming, tun) != filter.Accept {
 				t.Errorf("call to HandlePacketFromWireGuard was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.magicIP, serverPort), incoming.Src; want != got {
-				t.Errorf("unexpected packet src after second call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, incoming,
+				netip.AddrPortFrom(tn.magicIP, serverPort),
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort))
 		})
 	}
 }
@@ -460,17 +488,17 @@ func TestConnectorFlowCache(t *testing.T) {
 			if dph.HandlePacketFromWireGuard(o1, tun) != filter.Accept {
 				t.Errorf("first call to HandlePacketFromWireGuard was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.realIP, serverPort), o1.Dst; want != got {
-				t.Errorf("unexpected packet dst after first call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, o1,
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				netip.AddrPortFrom(tn.realIP, serverPort))
 			// The second call should use the cache.
 			o2 := newOutgoing()
 			if dph.HandlePacketFromWireGuard(o2, tun) != filter.Accept {
 				t.Errorf("second call to HandlePacketFromWireGuard was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.realIP, serverPort), o2.Dst; want != got {
-				t.Errorf("unexpected packet dst after second call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, o2,
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+				netip.AddrPortFrom(tn.realIP, serverPort))
 
 			// Return traffic should have the Real IP as the source,
 			// and be SNATed to the Transit IP.
@@ -482,9 +510,9 @@ func TestConnectorFlowCache(t *testing.T) {
 			if dph.HandlePacketFromTunDevice(incoming, tun) != filter.Accept {
 				t.Errorf("call to HandlePacketFromTunDevice was not accepted")
 			}
-			if want, got := netip.AddrPortFrom(tn.transitIP, serverPort), incoming.Src; want != got {
-				t.Errorf("unexpected packet src after second call: want %v, got %v", want, got)
-			}
+			tn.checkPacket(t, incoming,
+				netip.AddrPortFrom(tn.transitIP, serverPort),
+				netip.AddrPortFrom(tn.clientSrcIP, clientPort))
 		})
 	}
 }
