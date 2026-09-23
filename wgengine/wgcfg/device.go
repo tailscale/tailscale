@@ -35,6 +35,7 @@ func NewPeerLookupFunc(bind conn.Bind, logf logger.Logf, peerConfig func(device.
 		return &device.NewPeerConfig{
 			AllowedIPs:   conf.AllowedIPs,
 			PresharedKey: conf.PresharedKey,
+			Hybrid:       conf.Hybrid,
 			Endpoint:     ep,
 		}, true
 	}
