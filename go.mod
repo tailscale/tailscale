@@ -57,11 +57,11 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gokrazy/breakglass v0.0.0-20260711072910-0f882c44303e
 	github.com/gokrazy/firmware v0.0.0-20260522070551-527ce0ed43cf
-	github.com/gokrazy/gokrazy v0.0.0-20260703061218-a4a45a20149d
-	github.com/gokrazy/kernel.amd64 v0.0.0-20260705070735-de680abf072b
-	github.com/gokrazy/kernel.arm64 v0.0.0-20260705071517-37841c4d6ff1
-	github.com/gokrazy/kernel.rpi v0.0.0-20251127164438-9778ec0261de
-	github.com/gokrazy/rpi-eeprom v0.0.0-20260518070910-95f7328a8228
+	github.com/gokrazy/gokrazy v0.0.0-20260916140236-39fe3e5557b8
+	github.com/gokrazy/kernel.amd64 v0.0.0-20260922084445-21771250d660
+	github.com/gokrazy/kernel.arm64 v0.0.0-20260922084859-ac43a676b0b4
+	github.com/gokrazy/kernel.rpi v0.0.0-20260911133309-2cbf751e3f2a
+	github.com/gokrazy/rpi-eeprom v0.0.0-20260913082024-b80c62cf428d
 	github.com/gokrazy/serial-busybox v0.0.0-20250119153030-ac58ba7574e7
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8
 	github.com/golang/snappy v1.0.0
