@@ -192,6 +192,12 @@ type Conn struct {
 	pconn4 RebindingUDPConn
 	pconn6 RebindingUDPConn
 
+	// connected4 and connected6 are sockets connected to individual peer addresses, sharing pconn4's and pconn6's ports, used for direct paths when useConnectedSockets. Owned by connBind between Open and Close; nil otherwise.
+	connected4 syncs.AtomicValue[*conn.ConnectedSockets]
+	connected6 syncs.AtomicValue[*conn.ConnectedSockets]
+	// connectedStarter is the device's conn.ReceiveFuncStarter, set before connBind.Open. Guarded by connBind.mu.
+	connectedStarter func(fn conn.ReceiveFunc, slabSize, batchSize int) bool
+
 	// closeDisco4 and closeDisco6 are io.Closers to shut down the raw
 	// disco packet receivers. If nil, no raw disco receiver is
 	// running for the given family.
@@ -1525,7 +1531,10 @@ func (c *Conn) sendUDPBatch(addr epAddr, buffs [][]byte, offset int) (sent bool,
 	default:
 		panic("bogus sendUDPBatch addr type")
 	}
-	if isIPv6 {
+	handled, err := c.sendConnected(addr, buffs, offset)
+	if handled {
+		// sent on the peer's connected socket
+	} else if isIPv6 {
 		err = c.pconn6.WriteWireGuardBatchTo(buffs, addr, offset)
 	} else {
 		err = c.pconn4.WriteWireGuardBatchTo(buffs, addr, offset)
@@ -1712,10 +1721,11 @@ func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
 // The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
+func (c *Conn) mkReceiveFunc(ruc batchReader, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
+	var pairs localPairs
 
 	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
@@ -1726,9 +1736,6 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
 				}
 			}()
-		}
-		if ruc == nil {
-			panic("nil RebindingUDPConn")
 		}
 		if len(batchingPackets) != len(packets) {
 			batchingPackets = make([]batching.ReceivedPacket, len(packets))
@@ -1761,6 +1768,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 							peerRelayBytesMetric.Add(int64(len(buf)))
 						}
 					} else {
+						pairs.note(c, batchingPacket, packets[i].Endpoint)
 						if directPacketMetric != nil {
 							directPacketMetric.Add(1)
 						}
@@ -1773,6 +1781,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 					packets[i].Size = 0
 				}
 			}
+			pairs.flush(c)
 			if reportToCaller {
 				return numMsgs, nil
 			}
@@ -3449,8 +3458,8 @@ var _ conn.Bind = (*connBind)(nil)
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.BatchSize
 func (c *connBind) BatchSize() int {
 	// TODO(raggi): determine by properties rather than hardcoding platform behavior
-	switch runtime.GOOS {
-	case "linux":
+	switch {
+	case runtime.GOOS == "linux", c.useConnectedSockets():
 		return conn.IdealBatchSize
 	default:
 		return 1
@@ -3473,6 +3482,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	if runtime.GOOS == "js" {
 		fns = []conn.ReceiveFunc{c.receiveDERP}
 	}
+	c.openConnected()
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
 	return fns, c.LocalPort(), nil
@@ -3497,6 +3507,7 @@ func (c *connBind) Close() error {
 	}
 	c.closed = true
 	// Unblock all outstanding receives.
+	c.closeConnected()
 	c.pconn4.Close()
 	c.pconn6.Close()
 	if c.closeDisco4 != nil {
@@ -3676,10 +3687,21 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
 	}
 	addr := net.JoinHostPort("", fmt.Sprint(port))
+	var pc nettype.PacketConn
+	var err error
 	if c.testOnlyPacketListener != nil {
-		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
+		pc, err = nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
+	} else {
+		lc := netns.Listener(c.logf, c.netMon)
+		if debugConnectedSockets() {
+			lc.Control = reusePortControl(lc.Control)
+		}
+		pc, err = nettype.MakePacketListenerWithNetIP(lc).ListenPacket(ctx, network, addr)
 	}
-	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
+	if err == nil {
+		reportLocalAddr(pc, network)
+	}
+	return pc, err
 }
 
 // bindSocket binds a UDP socket to ruc.
@@ -3801,6 +3823,7 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 	if c.portMapper != nil {
 		c.portMapper.SetLocalPort(c.LocalPort())
 	}
+	c.rebindConnected()
 	c.UpdatePMTUD()
 	return nil
 }

@@ -114,6 +114,7 @@ func (c *Conn) UpdatePMTUD() {
 		c.logf("magicsock: peermtu: peer MTU probes are %v", tstun.WireMTUsToProbe)
 	}
 	c.peerMTUEnabled.Store(newStatus)
+	c.rebindConnected() // redial them with the shared sockets' new don't-fragment setting
 	c.resetEndpointStates()
 }
 
