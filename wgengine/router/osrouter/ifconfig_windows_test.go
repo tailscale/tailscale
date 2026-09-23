@@ -238,3 +238,49 @@ func TestDeltaRouteData(t *testing.T) {
 		t.Errorf("del:\n   got: %v\n  want: %v\n", formatRouteData(del), formatRouteData(wantDel))
 	}
 }
+
+// Windows normalizes on-link next hops to 0.0.0.0. A one-peer change in a
+// large table should remain a one-route operation.
+func TestDeltaRouteDataLargePeerChange(t *testing.T) {
+	const routeCount = 2652
+	localAddr := netip.MustParseAddr("100.100.101.1")
+	onLink := netip.MustParseAddr("0.0.0.0")
+	got := make([]*routeData, 0, routeCount)
+	want := make([]*routeData, 0, routeCount+1)
+	for i := range routeCount + 1 {
+		addr := netip.AddrFrom4([4]byte{100, 64 + byte(i/256), byte(i % 256), 1})
+		dst := netip.PrefixFrom(addr, 32)
+		want = append(want, &routeData{RouteData: W{Destination: dst, NextHop: localAddr}})
+		if i < routeCount {
+			got = append(got, &routeData{RouteData: W{Destination: dst, NextHop: onLink}})
+		}
+	}
+	normalizeOnLinkRouteNextHops(got, want)
+	add, del := deltaRouteData(got, want)
+	if len(add) != 1 || len(del) != 0 || add[0].Destination != want[routeCount].Destination {
+		t.Fatalf("one-peer change: got %d adds and %d deletes, want 1 add and 0 deletes", len(add), len(del))
+	}
+}
+
+func TestNormalizeOnLinkRouteNextHopsKeepsOtherDifferences(t *testing.T) {
+	dst := netip.MustParsePrefix("100.70.0.1/32")
+	localAddr := netip.MustParseAddr("100.100.101.1")
+	got := []*routeData{{RouteData: W{Destination: dst, NextHop: netip.MustParseAddr("0.0.0.0"), Metric: 1}}}
+	want := []*routeData{{RouteData: W{Destination: dst, NextHop: localAddr, Metric: 0}}}
+	normalizeOnLinkRouteNextHops(got, want)
+	add, del := deltaRouteData(got, want)
+	if len(add) != 1 || len(del) != 1 {
+		t.Fatalf("metric change: got %d adds and %d deletes, want 1 each", len(add), len(del))
+	}
+}
+
+func TestNormalizeOnLinkRouteNextHopsKeepsOtherRoutes(t *testing.T) {
+	localAddr := netip.MustParseAddr("100.100.101.1")
+	onLink := netip.MustParseAddr("0.0.0.0")
+	got := []*routeData{{RouteData: W{Destination: netip.MustParsePrefix("192.0.2.1/32"), NextHop: onLink}}}
+	want := []*routeData{{RouteData: W{Destination: netip.MustParsePrefix("192.0.2.1/32"), NextHop: localAddr}}}
+	normalizeOnLinkRouteNextHops(got, want)
+	if got[0].NextHop != onLink {
+		t.Fatalf("non-Tailscale route next hop changed to %v", got[0].NextHop)
+	}
+}

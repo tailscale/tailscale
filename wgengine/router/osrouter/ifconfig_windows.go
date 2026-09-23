@@ -798,6 +798,11 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*routeData, dontDelete 
 	}
 	got := filterRoutes(existingRoutes, dontDelete)
 
+	// Windows reports on-link peer routes with an unspecified next hop, even
+	// when AddRoute was called with our local Tailscale address as the next hop.
+	// Treat those representations as equal for the delta. Keep the original row
+	// so deletions still target the actual Windows route.
+	normalizeOnLinkRouteNextHops(got, want)
 	add, del := deltaRouteData(got, want)
 
 	var errs []error
@@ -831,4 +836,20 @@ func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*routeData, dontDelete 
 	}
 
 	return errors.Join(errs...)
+}
+
+func normalizeOnLinkRouteNextHops(got, want []*routeData) {
+	wantHop := make(map[netip.Prefix]netip.Addr)
+	for _, r := range want {
+		if r.Destination.IsSingleIP() && tsaddr.IsTailscaleIP(r.Destination.Addr()) && r.NextHop.IsValid() && !r.NextHop.IsUnspecified() {
+			wantHop[r.Destination] = r.NextHop
+		}
+	}
+	for _, r := range got {
+		if r.NextHop.IsUnspecified() {
+			if hop, ok := wantHop[r.Destination]; ok {
+				r.NextHop = hop
+			}
+		}
+	}
 }
