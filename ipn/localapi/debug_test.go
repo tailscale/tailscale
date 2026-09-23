@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"tailscale.com/ipn"
@@ -69,6 +70,47 @@ func TestServeDevSetStateStore(t *testing.T) {
 			defer res.Body.Close()
 			if res.StatusCode != tt.wantStatus {
 				t.Errorf("res.StatusCode = %d, want %d", res.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestServeDebugLogGate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		desc        string
+		permitRead  bool
+		permitWrite bool
+		wantStatus  int
+	}{
+		{
+			desc:       "read-only-denied",
+			permitRead: true,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			desc:        "write-allowed",
+			permitRead:  true,
+			permitWrite: true,
+			wantStatus:  http.StatusNoContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			h := handlerForTest(t, &Handler{
+				PermitRead:  tt.permitRead,
+				PermitWrite: tt.permitWrite,
+				b:           newTestLocalBackend(t),
+			})
+			req := httptest.NewRequest("POST", "http://local-tailscaled.sock/localapi/v0/debug-log",
+				strings.NewReader(`{"prefix":"test","lines":["line"]}`))
+			resp := httptest.NewRecorder()
+			h.serveDebugLog(resp, req)
+
+			if resp.Code != tt.wantStatus {
+				t.Errorf("resp.Code = %d, want %d; body: %s", resp.Code, tt.wantStatus, resp.Body.String())
 			}
 		})
 	}

@@ -522,7 +522,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
 		return
 	}
-	if !h.PermitRead {
+	if !h.PermitWrite {
 		http.Error(w, "debug-log access denied", http.StatusForbidden)
 		return
 	}
