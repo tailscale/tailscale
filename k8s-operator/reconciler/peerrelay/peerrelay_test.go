@@ -52,6 +52,11 @@ func testResolver(_ context.Context, _ string, host string) ([]netip.Addr, error
 			netip.MustParseAddr("203.0.113.30"),
 			netip.MustParseAddr("203.0.113.20"),
 		},
+		// A dualstack load balancer answers on both families.
+		"dualstack.elb.amazonaws.com": {
+			netip.MustParseAddr("2001:db8::10"),
+			netip.MustParseAddr("203.0.113.40"),
+		},
 	}
 
 	if addrs, ok := r[host]; ok {
@@ -72,6 +77,8 @@ type expectedService struct {
 	Annotations       map[string]string
 	AbsentLabels      []string
 	AbsentAnnotations []string
+	IPFamilyPolicy    *corev1.IPFamilyPolicy // asserted only when non-nil
+	IPFamilies        []corev1.IPFamily      // asserted only when non-nil
 }
 
 type statefulSetSpec struct {
@@ -267,6 +274,93 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 		},
 		{
+			// The AWS address type is a default rather than a forced value. On an IPv6 EKS cluster the pods are
+			// IPv6 and the AWS Load Balancer Controller refuses to put them behind an IPv4 load balancer, so the
+			// user must be able to ask for dualstack. A dualstack UDP load balancer also needs IPv6 source NAT
+			// or the controller rejects it, so that is defaulted on alongside.
+			Name:    "dualstack-address-type-is-honoured",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+					}},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "on",
+					},
+				},
+			},
+		},
+		{
+			// A user who sets the source NAT annotation themselves keeps their value, even when it disagrees
+			// with what the operator would have chosen.
+			Name:    "dualstack-respects-user-source-nat",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "off",
+					}},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name: "peerrelay-test-0",
+					Annotations: map[string]string{
+						ipAddressTypeAnnotation: "dualstack",
+						ipv6SourceNATAnnotation: "off",
+					},
+				},
+			},
+		},
+		{
+			// Without a user value the address type defaults to ipv4 and source NAT is left alone, since an
+			// IPv4 load balancer has no use for it and the controller rejects it on one.
+			Name:    "ipv4-address-type-by-default",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:              "peerrelay-test-0",
+					Annotations:       map[string]string{ipAddressTypeAnnotation: "ipv4"},
+					AbsentAnnotations: []string{ipv6SourceNATAnnotation},
+				},
+			},
+		},
+		{
+			// spec.service.ipFamilyPolicy and ipFamilies pass straight through to the Service so a dual-stack
+			// cluster can be asked for a load balancer that answers on both families.
+			Name:    "ip-families-pass-through",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						IPFamilyPolicy: new(corev1.IPFamilyPolicyRequireDualStack),
+						IPFamilies:     []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol},
+					},
+				},
+			},
+			ExpectedServices: []expectedService{
+				{
+					Name:           "peerrelay-test-0",
+					IPFamilyPolicy: new(corev1.IPFamilyPolicyRequireDualStack),
+					IPFamilies:     []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol},
+				},
+			},
+		},
+		{
 			// The reconciler applies via server-side apply, so a drifted Service (wrong Spec.Type, wrong Ports)
 			// is restored on reconcile. Kubernetes owns the merge with fields belonging to other managers
 			// (cloud LB controller annotations, kube-proxy's NodePort) and preserves them — that contract is
@@ -385,6 +479,40 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
 			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
 				{Replica: 0, Address: "203.0.113.10", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A dualstack load balancer's hostname resolves to addresses in both families, and every one of them
+			// is advertised so IPv6-only peers get a direct path while IPv4 peers keep theirs.
+			Name:    "dualstack-hostname-advertises-both-families",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{
+						Annotations: map[string]string{ipAddressTypeAnnotation: "dualstack"},
+					},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "dualstack.elb.amazonaws.com"),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "2001:db8::10", Port: 41641},
+				{Replica: 0, Address: "203.0.113.40", Port: 41641},
+			},
+			ExpectedConfigs: map[string]expectedConfig{
+				"peerrelay-test-0-config": {
+					RelayServerPort: 41641,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("[2001:db8::10]:41641"),
+						netip.MustParseAddrPort("203.0.113.40:41641"),
+					},
+				},
 			},
 			ExpectedReadyStatus: metav1.ConditionTrue,
 			ExpectedReadyReason: peerrelay.ReasonReady,
@@ -955,12 +1083,18 @@ func TestReconciler_Reconcile(t *testing.T) {
 				Logger:             logger.Sugar(),
 			})
 
-			_, err = r.Reconcile(t.Context(), tc.Request)
+			res, err := r.Reconcile(t.Context(), tc.Request)
 			if tc.ExpectsError && err == nil {
 				t.Fatalf("expected error, got none")
 			}
 			if !tc.ExpectsError && err != nil {
 				t.Fatalf("expected no error, got %v", err)
+			}
+
+			// A ready PeerRelay is still revisited so load balancer addresses DNS publishes late are picked up,
+			// while one that is not yet ready polls more eagerly.
+			if tc.ExpectedReadyStatus == metav1.ConditionTrue && res.RequeueAfter != peerrelay.ReadyResyncInterval {
+				t.Errorf("expected ready PeerRelay to requeue after %v, got %v", peerrelay.ReadyResyncInterval, res.RequeueAfter)
 			}
 
 			var svcs corev1.ServiceList
@@ -1164,6 +1298,15 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		t.Errorf("Service %q: expected type %q, got %q", want.Name, want.Type, got.Spec.Type)
 	}
 
+	if want.IPFamilyPolicy != nil {
+		if got.Spec.IPFamilyPolicy == nil || *got.Spec.IPFamilyPolicy != *want.IPFamilyPolicy {
+			t.Errorf("Service %q: expected ipFamilyPolicy %v, got %v", want.Name, *want.IPFamilyPolicy, got.Spec.IPFamilyPolicy)
+		}
+	}
+	if want.IPFamilies != nil && !slices.Equal(got.Spec.IPFamilies, want.IPFamilies) {
+		t.Errorf("Service %q: expected ipFamilies %v, got %v", want.Name, want.IPFamilies, got.Spec.IPFamilies)
+	}
+
 	if want.Port != 0 || want.Protocol != "" || want.NodePort != 0 {
 		if len(got.Spec.Ports) != 1 {
 			t.Fatalf("Service %q: expected exactly one port, got %d", want.Name, len(got.Spec.Ports))
@@ -1241,6 +1384,8 @@ const (
 	eipAllocationsAnnotation = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	subnetsAnnotation        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
 	lbAttributesAnnotation   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
+	ipAddressTypeAnnotation  = "service.beta.kubernetes.io/aws-load-balancer-ip-address-type"
+	ipv6SourceNATAnnotation  = "service.beta.kubernetes.io/aws-load-balancer-enable-prefix-for-ipv6-source-nat"
 )
 
 func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSet {

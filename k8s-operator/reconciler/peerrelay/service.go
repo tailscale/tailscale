@@ -16,7 +16,6 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -43,16 +42,24 @@ const (
 	annotationEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
 	annotationSubnets        = "service.beta.kubernetes.io/aws-load-balancer-subnets"
 	annotationLBAttributes   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
+	annotationIPAddressType  = "service.beta.kubernetes.io/aws-load-balancer-ip-address-type"
+	annotationIPv6SourceNAT  = "service.beta.kubernetes.io/aws-load-balancer-enable-prefix-for-ipv6-source-nat"
+
+	// ipAddressTypeDualStack is the aws-load-balancer-ip-address-type value that gives a Network Load Balancer
+	// both an IPv4 and an IPv6 address. It is the only value that can front IPv6 targets, which is what the pods
+	// are on an IPv6 EKS cluster.
+	ipAddressTypeDualStack = "dualstack"
 )
 
 // cloudAnnotations are the cloud-provider-specific annotations applied to every generated LoadBalancer Service to
-// ensure the Service is provisioned with a publicly addressable IP rather than a DNS name.
+// ensure the Service is provisioned with a publicly addressable IP rather than a DNS name. They override anything
+// the user supplies in spec.service.annotations. Annotations the user may override are defaulted separately in
+// peerRelayServiceAnnotations.
 var cloudAnnotations = map[string]string{
 	// AWS: provision an internet-facing NLB in IP target mode via the AWS Load Balancer Controller.
 	"service.beta.kubernetes.io/aws-load-balancer-type":            "external",
 	"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
 	"service.beta.kubernetes.io/aws-load-balancer-scheme":          "internet-facing",
-	"service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "ipv4",
 
 	// AWS: health check the pod over HTTP against containerboot's /healthz rather than the port the Service
 	// forwards. A peer relay listens only on UDP, so the default TCP check against the traffic port can never
@@ -102,6 +109,23 @@ func peerRelayServiceAnnotations(pr *tsapi.PeerRelay, idx int32) map[string]stri
 
 	maps.Copy(annotations, cloudAnnotations)
 
+	// Default the AWS load balancer to IPv4 only, but let the user ask for dualstack. On an IPv6 EKS cluster the
+	// Service and pod targets are IPv6, and the AWS Load Balancer Controller refuses to put IPv6 targets behind
+	// an IPv4 load balancer, so dualstack is the only address type that provisions there. A dualstack load
+	// balancer still answers on IPv4, so peers without IPv6 reach the relay as before.
+	if _, ok := annotations[annotationIPAddressType]; !ok {
+		annotations[annotationIPAddressType] = "ipv4"
+	}
+
+	// A dualstack Network Load Balancer forwarding UDP to IPv6 targets has to source NAT the client's address,
+	// since the target cannot answer an IPv4 client directly, and the AWS Load Balancer Controller rejects the
+	// Service outright when that isn't enabled. Turn it on unless the user has set it themselves.
+	if annotations[annotationIPAddressType] == ipAddressTypeDualStack {
+		if _, ok := annotations[annotationIPv6SourceNAT]; !ok {
+			annotations[annotationIPv6SourceNAT] = "on"
+		}
+	}
+
 	// Unless the user has taken control of the load balancer attributes themselves, default cross-zone on. When no
 	// subnet is pinned the AWS Load Balancer Controller spreads the load balancer over every zone it discovers,
 	// and cross-zone is what lets all of those addresses reach the replica's pod regardless of the zone the
@@ -126,17 +150,13 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 	name := replicaName(pr.Name, idx)
 	port := int32(peerRelayPort(pr))
 
-	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Service",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   r.tailscaleNamespace,
-			Labels:      peerRelayServiceLabels(pr.Name, idx),
-			Annotations: peerRelayServiceAnnotations(pr, idx),
-		},
+	svc := &corev1.Service{
+		APIVersion:  "v1",
+		Kind:        "Service",
+		Name:        name,
+		Namespace:   r.tailscaleNamespace,
+		Labels:      peerRelayServiceLabels(pr.Name, idx),
+		Annotations: peerRelayServiceAnnotations(pr, idx),
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeLoadBalancer,
 			// The Service targets the specific StatefulSet pod for this replica. The StatefulSet controller
@@ -154,6 +174,16 @@ func (r *Reconciler) peerRelayService(pr *tsapi.PeerRelay, idx int32) *corev1.Se
 			},
 		},
 	}
+
+	// The address families are only set when the user asked for them. Left unset, the API server defaults them
+	// from the cluster's configuration and, since this is a server-side apply, the operator never takes ownership
+	// of the fields, so the defaults stand.
+	if pr.Spec.Service != nil {
+		svc.Spec.IPFamilyPolicy = pr.Spec.Service.IPFamilyPolicy
+		svc.Spec.IPFamilies = pr.Spec.Service.IPFamilies
+	}
+
+	return svc
 }
 
 func replicaIndexFromLabels(labels map[string]string) (int32, bool) {
@@ -196,7 +226,10 @@ func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.Sugared
 	// No IP was assigned, so fall back to resolving the hostname. This is primarily for AWS, where NLB-backed
 	// Service resources are only ever given hostnames. The addresses behind such a hostname belong to the load
 	// balancer and are fixed for its lifetime, whether they came from spec.aws.elasticIPs or were assigned by
-	// AWS, so we resolve it here rather than making the user supply the address themselves.
+	// AWS, so we resolve it here rather than making the user supply the address themselves. Both address
+	// families are looked up so a dualstack load balancer's IPv6 addresses are advertised alongside its IPv4
+	// ones, giving IPv6-only peers a direct path; an IPv4 load balancer has no AAAA records so gets the same
+	// endpoints as before.
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.Hostname == "" {
 			continue
@@ -205,7 +238,7 @@ func (r *Reconciler) peerRelayEndpoints(ctx context.Context, logger *zap.Sugared
 		resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		addrs, err := r.resolver(resolveCtx, "ip4", ing.Hostname)
+		addrs, err := r.resolver(resolveCtx, "ip", ing.Hostname)
 		if err != nil || len(addrs) == 0 {
 			logger.Debugf("failed to resolve LoadBalancer hostname %q for Service %q: %v", ing.Hostname, svc.Name, err)
 			// Preserve the previously-known endpoints (if any) so that a failure here doesn't erase

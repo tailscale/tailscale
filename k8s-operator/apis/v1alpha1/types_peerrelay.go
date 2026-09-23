@@ -6,6 +6,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -123,8 +124,17 @@ type PeerRelaySpec struct {
 }
 
 type PeerRelayService struct {
-	// Annotations to apply to the LoadBalancer service. Any annotations that conflict with those used by known
-	// cloud providers to ensure IP addresses rather than DNS names are ignored.
+	// Annotations to apply to the LoadBalancer service. Annotations the operator relies on to have known cloud
+	// providers give the Service a publicly addressable IP rather than a DNS name, such as the AWS load balancer
+	// type, target type, scheme and health check settings, are always set by the operator and any conflicting
+	// value supplied here is ignored.
+	//
+	// The AWS load balancer address type is an exception: the operator defaults
+	// service.beta.kubernetes.io/aws-load-balancer-ip-address-type to ipv4 but a value supplied here is honoured.
+	// Set it to dualstack on an IPv6 EKS cluster, where the pods are IPv6 and an IPv4 load balancer cannot
+	// target them. When dualstack is set the operator also defaults
+	// service.beta.kubernetes.io/aws-load-balancer-enable-prefix-for-ipv6-source-nat to on, which a dualstack
+	// UDP load balancer requires, unless a value is supplied here.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 
@@ -137,6 +147,27 @@ type PeerRelayService struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port *uint16 `json:"port,omitzero"`
+
+	// IPFamilyPolicy sets spec.ipFamilyPolicy on each LoadBalancer Service. Leave unset to accept the cluster
+	// default, which is a single-stack Service in the cluster's primary address family. Set RequireDualStack on a
+	// dual-stack cluster to have the cloud provision a load balancer that answers on both IPv4 and IPv6, so peers
+	// on either family reach the relay directly; every address the Service reports is advertised. Whether a
+	// dual-stack load balancer is available depends on the cluster and cloud, for example GKE and AKS need a
+	// dual-stack cluster. On EKS the load balancer's address family is instead chosen by the
+	// aws-load-balancer-ip-address-type annotation, see Annotations.
+	// +optional
+	// +kubebuilder:validation:Enum=SingleStack;PreferDualStack;RequireDualStack
+	IPFamilyPolicy *corev1.IPFamilyPolicy `json:"ipFamilyPolicy,omitempty"`
+
+	// IPFamilies sets spec.ipFamilies on each LoadBalancer Service, choosing which address families the Service
+	// carries and in which order. Leave unset to accept the cluster default. Must be consistent with
+	// IPFamilyPolicy as Kubernetes requires, for example a single family with SingleStack or both families with
+	// RequireDualStack.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=2
+	// +kubebuilder:validation:items:Enum=IPv4;IPv6
+	IPFamilies []corev1.IPFamily `json:"ipFamilies,omitempty"`
 }
 
 // PeerRelayAWS contains AWS-specific configuration for a PeerRelay.
