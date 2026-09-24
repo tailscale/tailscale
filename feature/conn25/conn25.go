@@ -549,6 +549,7 @@ const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
 const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
 const unknownAppNameMessage = "The App name in the request does not match a configured App"
 const missingAppPermissionMessage = "You do not have permission to use this App"
+const transitIPNotInPoolMessage = "The transit address is not in a configured transit IP pool"
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
 // to a ConnectorTransitIPRequest. It updates the connectors mapping of
@@ -624,6 +625,13 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
 		return TransitIPResponse{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}
+	}
+
+	// The transit address has to come from a transit IP pool we're configured with.
+	if !c.transitIPInPool(tipr.TransitIP) {
+		c.logf("[Unexpected] peer attempt to map a transit IP outside of the configured pools: node: %s, IP: %v",
+			n.StableID(), tipr.TransitIP)
+		return TransitIPResponse{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage}
 	}
 
 	// Datapath lookups only have access to the peer IP, and that will match the family
@@ -719,6 +727,12 @@ const (
 	// MissingAppPermission indicates that the client is not permitted to access
 	// the App name that was specified in the request.
 	MissingAppPermission = 6
+
+	// TransitIPNotInPool indicates that the transit address in the request is
+	// not within a transit IP pool the connector is configured with. A client
+	// which sees this has most likely allocated from a pool configuration that
+	// the connector has not received yet, or has already replaced.
+	TransitIPNotInPool = 7
 )
 
 // TransitIPResponse is the response to a TransitIPRequest
@@ -1549,6 +1563,16 @@ func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP net
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lookupAddrBySrcIPAndTransitIP(srcIP, transitIP)
+}
+
+// transitIPInPool reports whether tip is within the transit IP pool of its
+// address family that this connector is configured with.
+func (c *connector) transitIPInPool(tip netip.Addr) bool {
+	ipSets := c.getIPSets()
+	if tip.Is4() {
+		return ipSets.v4Transit != nil && ipSets.v4Transit.Contains(tip)
+	}
+	return ipSets.v6Transit != nil && ipSets.v6Transit.Contains(tip)
 }
 
 const packetFilterAllowReason = "app connector transit IP"

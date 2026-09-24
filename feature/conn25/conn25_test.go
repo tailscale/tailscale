@@ -69,11 +69,15 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	pipV6_1 := netip.MustParseAddr("fd7a:115c:a1e0::101")
 	pipV6_3 := netip.MustParseAddr("fd7a:115c:a1e0::103")
 
-	// Transit IPs
-	tipV4_1 := netip.MustParseAddr("0.0.0.1")
-	tipV4_2 := netip.MustParseAddr("0.0.0.2")
+	// Transit IPs, from the pools configured on the connector below.
+	tipV4_1 := netip.MustParseAddr("169.254.0.1")
+	tipV4_2 := netip.MustParseAddr("169.254.0.2")
 
 	tipV6_1 := netip.MustParseAddr("FE80::1")
+
+	// Transit IPs from outside of the configured pools.
+	tipV4Outside := netip.MustParseAddr("192.0.2.1")
+	tipV6Outside := netip.MustParseAddr("2001:db8::1")
 
 	// Destination IPs
 	dipV4_1 := netip.MustParseAddr("10.0.0.1")
@@ -375,6 +379,55 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				{},
 			},
 		},
+		// Single peer, ipv4 transit IP from outside the configured pool
+		{
+			name:         "one-peer-tip-not-in-pool-ipv4",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4Outside, DestinationIP: dipV4_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4Outside, netip.Addr{}}},
+			},
+		},
+		// Single peer, ipv6 transit IP from outside the configured pool
+		{
+			name:         "one-peer-tip-not-in-pool-ipv6",
+			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6Outside, DestinationIP: dipV6_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV6_3, tipV6Outside, netip.Addr{}}},
+			},
+		},
+		// Single peer, an out of pool transit IP does not stop the other
+		// mappings in the request from being processed.
+		{
+			name:         "one-peer-multi-map-tip-not-in-pool",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tipV4Outside, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{
+					{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage},
+					{Code: OK, Message: ""},
+				}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4Outside, netip.Addr{}}, {pipV4_2, tipV4_2, dipV4_2}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -399,6 +452,10 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 					appName: {
 						Name: appName,
 					},
+				},
+				ipSets: ipSets{
+					v4Transit: mustIPSetFromPrefix("169.254.0.0/24"),
+					v6Transit: mustIPSetFromPrefix("fe80::/64"),
 				},
 			})
 
@@ -2723,6 +2780,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 	c.reconfig(&config{
 		isConfigured: true,
 		appsByName:   map[string]appctype.Conn25Attr{appName: {}},
+		ipSets:       ipSets{v4Transit: mustIPSetFromPrefix("0.0.0.0/15")},
 	})
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
 	// this would be a data race if we had started the sweeper, but we haven't.
