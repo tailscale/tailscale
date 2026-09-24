@@ -78,6 +78,9 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	tipV4Outside := netip.MustParseAddr("192.0.2.1")
 	tipV6Outside := netip.MustParseAddr("2001:db8::1")
 
+	// tipV4_1 written in its IPv4-in-IPv6 form; the same address as tipV4_1.
+	tipV4_1In6 := netip.MustParseAddr("::ffff:169.254.0.1")
+
 	// Destination IPs
 	dipV4_1 := netip.MustParseAddr("10.0.0.1")
 	dipV4_2 := netip.MustParseAddr("10.0.0.2")
@@ -427,6 +430,21 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			},
 			wantLookups: [][][]netip.Addr{
 				{{pipV4_2, tipV4Outside, netip.Addr{}}, {pipV4_2, tipV4_2, dipV4_2}},
+			},
+		},
+		// Single peer, a transit IP in its IPv4-in-IPv6 form is canonicalized
+		// and stored unmapped.
+		{
+			name:         "one-peer-tip-4in6",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1In6, DestinationIP: dipV4_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_1In6, netip.Addr{}}},
 			},
 		},
 	}
