@@ -78,6 +78,13 @@ func TestContainerBoot(t *testing.T) {
 		// Waits below to be true before proceeding to the next phase.
 		Notify *ipn.Notify
 
+		// If non-nil, set the DNS config that the fake tailscaled reports to
+		// containerboot before sending this phase's Notify. containerboot
+		// refetches the DNS config on Notify updates that carry SelfChange,
+		// so this is how Tailscale Service (VIPService) IPs, which arrive as
+		// DNS ExtraRecords, become visible to it.
+		UpdateDNSConfig *tailcfg.DNSConfig
+
 		// WantCmds is the commands that containerboot should run in this phase.
 		WantCmds []string
 
@@ -1103,6 +1110,7 @@ func TestContainerBoot(t *testing.T) {
 							},
 							PeersChanged: []*tailcfg.Node{
 								{
+									ID:        1,
 									StableID:  tailcfg.StableNodeID("fooID"),
 									Name:      "foo.tailnetxyz.ts.net.",
 									Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
@@ -1124,6 +1132,7 @@ func TestContainerBoot(t *testing.T) {
 					{
 						Notify: &ipn.Notify{
 							PeersChanged: []*tailcfg.Node{{
+								ID:        1,
 								StableID:  tailcfg.StableNodeID("fooID"),
 								Name:      "foo.tailnetxyz.ts.net.",
 								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
@@ -1131,6 +1140,88 @@ func TestContainerBoot(t *testing.T) {
 						},
 						WantKubeSecret: map[string]string{
 							"egress-services":   string(mustJSON(t, egressStatusUpdated)),
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net.",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
+						},
+					},
+					{
+						// The tailnet device backing the target is deleted and
+						// replaced by a Tailscale Service with the same FQDN:
+						// the device disappears from the netmap, the service's
+						// VIP appears in DNS ExtraRecords and a ProxyGroup node
+						// advertises the VIP.
+						UpdateDNSConfig: &tailcfg.DNSConfig{
+							ExtraRecords: []tailcfg.DNSRecord{{Name: "foo.tailnetxyz.ts.net.", Type: "A", Value: "100.100.0.5"}},
+						},
+						Notify: &ipn.Notify{
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+							PeersRemoved: []tailcfg.NodeID{1},
+							PeersChanged: []*tailcfg.Node{{
+								ID:         2,
+								StableID:   tailcfg.StableNodeID("ingressID"),
+								Name:       "ingress.tailnetxyz.ts.net.",
+								AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.100.0.5/32")},
+							}},
+						},
+						WantKubeSecret: map[string]string{
+							"egress-services":   string(mustJSON(t, egressSvcStatus("foo", "foo.tailnetxyz.ts.net", "100.100.0.5"))),
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net.",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
+						},
+					},
+					{
+						// The VIPs of the Tailscale Service that backs the
+						// target change.
+						UpdateDNSConfig: &tailcfg.DNSConfig{
+							ExtraRecords: []tailcfg.DNSRecord{{Name: "foo.tailnetxyz.ts.net.", Type: "A", Value: "100.100.0.6"}},
+						},
+						Notify: &ipn.Notify{
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+							PeersChanged: []*tailcfg.Node{{
+								ID:         2,
+								StableID:   tailcfg.StableNodeID("ingressID"),
+								Name:       "ingress.tailnetxyz.ts.net.",
+								AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.100.0.6/32")},
+							}},
+						},
+						WantKubeSecret: map[string]string{
+							"egress-services":   string(mustJSON(t, egressSvcStatus("foo", "foo.tailnetxyz.ts.net", "100.100.0.6"))),
+							"authkey":           "tskey-key",
+							"device_fqdn":       "test-node.test.ts.net.",
+							"device_id":         "myID",
+							"device_ips":        `["100.64.0.1"]`,
+							kubetypes.KeyCapVer: capver,
+						},
+					},
+					{
+						// The target is deleted: neither a device nor a
+						// Tailscale Service resolves to it anymore, so the
+						// proxy must stop forwarding to the stale VIP.
+						UpdateDNSConfig: &tailcfg.DNSConfig{},
+						Notify: &ipn.Notify{
+							SelfChange: &tailcfg.Node{
+								StableID:  tailcfg.StableNodeID("myID"),
+								Name:      "test-node.test.ts.net.",
+								Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+							},
+							PeersRemoved: []tailcfg.NodeID{2},
+						},
+						WantKubeSecret: map[string]string{
+							"egress-services":   string(mustJSON(t, egressSvcStatusNoTargetIPs("foo", "foo.tailnetxyz.ts.net"))),
 							"authkey":           "tskey-key",
 							"device_fqdn":       "test-node.test.ts.net.",
 							"device_id":         "myID",
@@ -1291,6 +1382,9 @@ func TestContainerBoot(t *testing.T) {
 					if err := os.Chtimes(fullPath, now, now); err != nil {
 						t.Fatalf("phase %d: updating mtime for %q: %v", i, path, err)
 					}
+				}
+				if p.UpdateDNSConfig != nil {
+					env.lapi.SetDNSConfig(p.UpdateDNSConfig)
 				}
 				env.lapi.Notify(p.Notify)
 				if p.Signal != nil {
@@ -1485,6 +1579,18 @@ type localAPI struct {
 	cond   *sync.Cond
 	notify *ipn.Notify
 	status *ipnstate.Status
+	// dnsConfig is the DNS config served to containerboot, which refetches
+	// it on every netmap update (any Notify that carries SelfChange) to see
+	// current Tailscale Service (VIPService) IPs in ExtraRecords.
+	dnsConfig *tailcfg.DNSConfig
+}
+
+// SetDNSConfig sets the DNS config that the fake tailscaled reports to
+// containerboot.
+func (lc *localAPI) SetDNSConfig(cfg *tailcfg.DNSConfig) {
+	lc.Lock()
+	defer lc.Unlock()
+	lc.dnsConfig = cfg
 }
 
 func (lc *localAPI) Start() error {
@@ -1606,6 +1712,18 @@ func (lc *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			panic(fmt.Sprintf("unsupported method %q", r.Method))
 		}
 		w.Write([]byte("fake metrics"))
+		return
+	case "/localapi/v0/dns-config":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+		lc.Lock()
+		cfg := lc.dnsConfig
+		lc.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(cfg); err != nil {
+			panic(fmt.Sprintf("encoding DNS config: %v", err))
+		}
 		return
 	case "/localapi/v0/prefs":
 		switch r.Method {
@@ -1863,6 +1981,21 @@ func egressSvcStatus(name, fqdn, ip string) egressservices.Status {
 					FQDN: fqdn,
 				},
 				TailnetTargetIPs: []netip.Addr{netip.MustParseAddr(ip)},
+			},
+		},
+	}
+}
+
+// egressSvcStatusNoTargetIPs is the egress services status for one named tailnet
+// target specified by FQDN that currently resolves to no addresses. As written
+// by the proxy to its state Secret.
+func egressSvcStatusNoTargetIPs(name, fqdn string) egressservices.Status {
+	return egressservices.Status{
+		Services: map[string]*egressservices.ServiceStatus{
+			name: {
+				TailnetTarget: egressservices.TailnetTarget{
+					FQDN: fqdn,
+				},
 			},
 		},
 	}

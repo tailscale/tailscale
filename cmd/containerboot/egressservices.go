@@ -31,6 +31,7 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/linuxfw"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 const tailscaleTunInterface = "tailscale0"
@@ -60,8 +61,11 @@ type egressProxy struct {
 	podIPv4 string // empty if Pod does not have IPv4 address
 	podIPv6 string // empty if Pod does not have IPv6 address
 
-	// tailnetFQDNs is the egress service FQDN to tailnet IP mappings that
-	// were last used to configure firewall rules for this proxy.
+	// targetFQDNs maps each egress service FQDN target to the tailnet
+	// addresses that it resolved to when the proxy last configured firewall
+	// rules. An FQDN target that did not resolve is recorded with no
+	// addresses, so that the target is re-checked on later netmap updates.
+	// Written by sync, read by shouldResync.
 	// TODO(irbekrm): target addresses are also stored in the state Secret.
 	// Evaluate whether we should retrieve them from there and not store in
 	// memory at all.
@@ -199,6 +203,9 @@ func (ep *egressProxy) addrsHaveChanged(nm netmapState) bool {
 // applied and updates the status after a successful sync.
 func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *egressservices.Status, nm netmapState) (*egressservices.Status, error) {
 	if !(wantsServicesConfigured(cfgs) || hasServicesConfigured(status)) {
+		// Nothing is configured or applied, so there are no target addresses
+		// for a netmap update to change.
+		ep.targetFQDNs = nil
 		return nil, nil
 	}
 
@@ -209,16 +216,28 @@ func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *eg
 	}
 	newStatus := &egressservices.Status{}
 	if !wantsServicesConfigured(cfgs) {
+		ep.targetFQDNs = nil
 		return newStatus, nil
 	}
 
 	// Add new services, update rules for any that have changed.
 	rulesPerSvcToAdd := make(map[string][]rule, 0)
 	rulesPerSvcToDelete := make(map[string][]rule, 0)
+	// The addresses that the configured FQDN targets resolve to. Targets that
+	// do not resolve are recorded with no addresses. Recorded on the proxy once
+	// the rules have been applied, so that shouldResync can detect netmap
+	// updates that change the addresses that the applied rules forward to.
+	targetFQDNs := make(map[string][]netip.Prefix, len(cfgs))
 	for svcName, cfg := range cfgs {
-		tailnetTargetIPs, err := ep.tailnetTargetIPsForSvc(cfg, nm)
+		tailnetTargetIPs, resolved, err := ep.tailnetTargetIPsForSvc(cfg, nm)
 		if err != nil {
 			return nil, fmt.Errorf("error determining tailnet target IPs: %w", err)
+		}
+		// Only targets that are resolved by FQDN are recorded: a target that
+		// has an IP is forwarded to that IP regardless of what the FQDN
+		// resolves to, so it has no resolved addresses to re-check.
+		if fqdn := cfg.TailnetTarget.FQDN; fqdn != "" && cfg.TailnetTarget.IP == "" {
+			targetFQDNs[fqdn] = resolved
 		}
 		rulesToAdd, rulesToDelete, err := updatesForCfg(svcName, cfg, status, tailnetTargetIPs)
 		if err != nil {
@@ -269,6 +288,7 @@ func (ep *egressProxy) syncEgressConfigs(cfgs egressservices.Configs, status *eg
 		return nil, fmt.Errorf("error deleting rules: %w", err)
 	}
 
+	ep.targetFQDNs = targetFQDNs
 	return newStatus, nil
 }
 
@@ -458,53 +478,51 @@ func (ep *egressProxy) setStatus(ctx context.Context, status *egressservices.Sta
 }
 
 // tailnetTargetIPsForSvc returns the tailnet IPs to which traffic for this
-// egress service should be proxied. The egress service can be configured by IP
-// or by FQDN. If it's configured by IP, just return that. If it's configured by
-// FQDN, resolve the FQDN and return the resolved IPs. It checks if the
-// netfilter runner supports IPv6 NAT and skips any IPv6 addresses if it
-// doesn't.
-func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netmapState) (addrs []netip.Addr, err error) {
+// egress service should be proxied, and the addresses that the target resolved
+// to. The egress service can be configured by IP or by FQDN. If it's configured
+// by IP, just return that. If it's configured by FQDN, resolve the FQDN and
+// return the resolved IPs. resolved is the result of resolving an FQDN target:
+// the addresses it resolved to, none if it did not resolve, and nil for a target
+// configured by IP. It checks if the netfilter runner supports IPv6 NAT and
+// skips any IPv6 addresses if it doesn't.
+func (ep *egressProxy) tailnetTargetIPsForSvc(svc egressservices.Config, nm netmapState) (addrs []netip.Addr, resolved []netip.Prefix, err error) {
 	if svc.TailnetTarget.IP != "" {
 		addr, err := netip.ParseAddr(svc.TailnetTarget.IP)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing tailnet target IP: %w", err)
+			return nil, nil, fmt.Errorf("error parsing tailnet target IP: %w", err)
 		}
 		if addr.Is6() && !ep.nfr.HasIPV6NAT() {
 			log.Printf("tailnet target is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode. This will probably not work.")
-			return addrs, nil
+			return nil, nil, nil
 		}
-		return []netip.Addr{addr}, nil
+		return []netip.Addr{addr}, nil, nil
 	}
 
 	if svc.TailnetTarget.FQDN == "" {
-		return nil, errors.New("unexpected egress service config- neither tailnet target IP nor FQDN is set")
+		return nil, nil, errors.New("unexpected egress service config- neither tailnet target IP nor FQDN is set")
 	}
 	if !nm.self.Valid() {
 		log.Printf("netmap state is not available, unable to determine backend addresses for %s", svc.TailnetTarget.FQDN)
-		return addrs, nil
+		return nil, nil, nil
 	}
-	egressAddrs, err := resolveTailnetFQDN(nm, svc.TailnetTarget.FQDN)
+	resolved, err = resolveTailnetFQDN(nm, svc.TailnetTarget.FQDN)
 	if err != nil {
 		log.Printf("error fetching backend addresses for %q: %v", svc.TailnetTarget.FQDN, err)
-		return addrs, nil
+		return nil, nil, nil
 	}
-	if len(egressAddrs) == 0 {
+	if len(resolved) == 0 {
 		log.Printf("tailnet target %q does not have any backend addresses, skipping", svc.TailnetTarget.FQDN)
-		return addrs, nil
+		return nil, resolved, nil
 	}
 
-	for _, addr := range egressAddrs {
+	for _, addr := range resolved {
 		if addr.Addr().Is6() && !ep.nfr.HasIPV6NAT() {
 			log.Printf("tailnet target %v is an IPv6 address, but this host does not support IPv6 in the chosen firewall mode, skipping.", addr.Addr().String())
 			continue
 		}
 		addrs = append(addrs, addr.Addr())
 	}
-	// Egress target endpoints configured via FQDN are stored, so
-	// that we can determine if a netmap update should trigger a
-	// resync.
-	mak.Set(&ep.targetFQDNs, svc.TailnetTarget.FQDN, egressAddrs)
-	return addrs, nil
+	return addrs, resolved, nil
 }
 
 // shouldResync parses netmap state update and returns true if the update contains
@@ -521,20 +539,35 @@ func (ep *egressProxy) shouldResync(nm netmapState) bool {
 		return true
 	}
 
-	// If the IPs for any of the egress services configured via FQDN have
-	// changed, resync.
-	for fqdn, ips := range ep.targetFQDNs {
-		for nn := range nm.peers() {
-			if equalFQDNs(nn.Name(), fqdn) {
-				if !views.SliceEqual(views.SliceOf(ips), nn.Addresses()) {
-					log.Printf("backend addresses for egress target %q have changed old IPs %v, new IPs %v trigger egress config resync", nn.Name(), ips, nn.Addresses().AsSlice())
-					return true
-				}
-				break
-			}
+	// If the addresses that any of the egress services configured via FQDN
+	// resolve to have changed, resync. Targets are resolved with the same logic
+	// that sync uses to configure the firewall, so that a target that moves
+	// between a tailnet device, a Tailscale Service and a 4via6 address, as well
+	// as a target that stops or starts being resolvable, is detected.
+	// A target that cannot be resolved has no addresses: if it had addresses at
+	// the last sync, this update changes where the proxy forwards traffic and
+	// needs a resync; if it had none, there are no rules to reconfigure.
+	for fqdn, addrs := range ep.targetFQDNs {
+		resolved, err := resolveTailnetFQDN(nm, fqdn)
+		if err != nil {
+			resolved = nil
+		}
+		if !sameTargetAddrs(resolved, addrs) {
+			log.Printf("backend addresses for egress target %q have changed from %v to %v, trigger egress config resync", fqdn, addrs, resolved)
+			return true
 		}
 	}
 	return false
+}
+
+// sameTargetAddrs reports whether two sets of resolved tailnet target addresses
+// contain the same addresses, ignoring their order and how many times each
+// address occurs. Resolution can report an address more than once (for example
+// when more than one node advertises a Tailscale Service VIP), and neither the
+// order nor the number of times an address is reported changes where the proxy
+// forwards traffic.
+func sameTargetAddrs(a, b []netip.Prefix) bool {
+	return set.Of(a...).Equal(set.Of(b...))
 }
 
 // ensureServiceDeleted ensures that any rules for an egress service are removed
@@ -593,12 +626,6 @@ func lookupCurrentConfig(svcName string, status *egressservices.Status) (*egress
 	}
 	c, ok := status.Services[svcName]
 	return c, ok
-}
-
-func equalFQDNs(s, s1 string) bool {
-	s, _ = strings.CutSuffix(s, ".")
-	s1, _ = strings.CutSuffix(s1, ".")
-	return strings.EqualFold(s, s1)
 }
 
 // rule contains configuration for an egress proxy firewall rule.
