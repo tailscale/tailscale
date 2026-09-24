@@ -23,6 +23,7 @@ func getDeviceMetrics() device.Option {
 		MessageInitiationTXAttemptInitial: metricMessageInitiationTXAttemptInitial,
 		MessageInitiationTXAttemptRetry:   metricMessageInitiationTXAttemptRetry,
 		MessageResponseTXAttempt:          metricMessageResponseTXAttempt,
+		MessageCookieReplyTXAttempt:       metricMessageCookieReplyTXAttempt,
 		HandshakeInitiatorCompleted:       metricHandshakeInitiatorCompleted,
 		HandshakeResponderCompleted:       metricHandshakeResponderCompleted,
 	})
@@ -32,6 +33,7 @@ var (
 	metricMessageInitiationTXAttemptInitial = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_initial")
 	metricMessageInitiationTXAttemptRetry   = clientmetric.NewCounter("wireguard_message_initiation_tx_attempt_retry")
 	metricMessageResponseTXAttempt          = clientmetric.NewCounter("wireguard_message_response_tx_attempt")
+	metricMessageCookieReplyTXAttempt       = clientmetric.NewCounter("wireguard_message_cookie_reply_tx_attempt")
 	metricHandshakeInitiatorCompleted       = clientmetric.NewCounter("wireguard_handshake_initiator_completed")
 	metricHandshakeResponderCompleted       = clientmetric.NewCounter("wireguard_handshake_responder_completed")
 )
