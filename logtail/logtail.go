@@ -548,6 +548,9 @@ func (lg *Logger) uploading(ctx context.Context) {
 		var numFailures int
 		var firstFailure time.Time
 		for len(body) > 0 && ctx.Err() == nil {
+			if logtailDisabled.Load() || lg.disabled.Load() {
+				break
+			}
 			retryAfter, err := lg.upload(ctx, body, origlen)
 			if err != nil {
 				numFailures++

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -664,6 +665,54 @@ func TestLoggerSetEnabled(t *testing.T) {
 	if back, _ := buf.TryReadLine(); !strings.Contains(string(back), "enabled2") {
 		t.Errorf("write after re-enable not buffered; got %q", back)
 	}
+}
+
+func TestLoggerSetEnabledStopsPendingRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+
+		httpc := &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Header: http.Header{
+						"Retry-After": []string{"1"},
+					},
+					Body: io.NopCloser(strings.NewReader("try again")),
+				}, nil
+			}),
+		}
+
+		lg := NewLogger(Config{
+			BaseURL:      "http://logtail.test.invalid",
+			HTTPC:        httpc,
+			Bus:          eventbustest.NewBus(t),
+			FlushDelayFn: func() time.Duration { return 0 },
+		}, t.Logf)
+		defer func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			lg.Shutdown(ctx)
+		}()
+
+		lg.Logf("hello")
+
+		synctest.Wait()
+
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("upload attempts before disabling = %d; want 1", got)
+		}
+
+		lg.SetEnabled(false)
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("upload retried after SetEnabled(false): got %d attempts, want 1", got)
+		}
+	})
 }
 
 func TestAppendMetadata(t *testing.T) {
