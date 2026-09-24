@@ -8,8 +8,10 @@ package paths
 import (
 	"log"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"tailscale.com/syncs"
 	"tailscale.com/version/distro"
@@ -19,11 +21,43 @@ import (
 // containing a directory we can read/write in.
 var AppSharedDir syncs.AtomicValue[string]
 
+// WindowsProtectedPipePrefix is the prefix of the Windows named pipe names
+// that only administrators may create. tailscaled's default socket is under
+// it, which is what lets clients trust that whatever answers there is the
+// Tailscale service (or an administrator's tailscaled) and not another user's.
+const WindowsProtectedPipePrefix = `\\.\pipe\ProtectedPrefix\Administrators\`
+
+// IsWindowsProtectedPipe reports whether path is a named pipe name under
+// [WindowsProtectedPipePrefix]. Pipe names are case-insensitive.
+func IsWindowsProtectedPipe(path string) bool {
+	return len(path) > len(WindowsProtectedPipePrefix) &&
+		strings.EqualFold(path[:len(WindowsProtectedPipePrefix)], WindowsProtectedPipePrefix)
+}
+
+// WindowsDevTailscaledSocket returns the named pipe that a tailscaled started
+// by the current user with --windows-mode=dev listens on by default:
+// \\.\pipe\tailscale-<username>. It returns "" on other platforms or if the
+// current user is unknown.
+func WindowsDevTailscaledSocket() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	name := u.Username
+	if _, after, ok := strings.Cut(name, `\`); ok {
+		name = after // drop the MACHINE\ or DOMAIN\ prefix
+	}
+	return `\\.\pipe\tailscale-` + strings.ToLower(name)
+}
+
 // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
 // or the empty string if there's no reasonable default.
 func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "windows" {
-		return `\\.\pipe\ProtectedPrefix\Administrators\Tailscale\tailscaled`
+		return WindowsProtectedPipePrefix + `Tailscale\tailscaled`
 	}
 	if runtime.GOOS == "darwin" {
 		return "/var/run/tailscaled.socket"

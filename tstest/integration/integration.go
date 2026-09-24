@@ -1002,6 +1002,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		// On Windows, tailscaled defaults to a fixed port (41641).
 		// Force a random port to avoid collisions when running multiple test nodes.
 		cmd.Args = append(cmd.Args, "--port=0")
+		// The test's per-node pipe isn't under the administrators-only
+		// prefix that tailscaled otherwise insists on.
+		cmd.Args = append(cmd.Args, "--windows-mode=dev")
 	}
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")

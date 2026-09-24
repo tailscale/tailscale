@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"net"
 	"net/http"
@@ -129,7 +130,28 @@ func (lc *Client) defaultDialer(ctx context.Context, network, addr string) (net.
 			return d.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.Itoa(port))
 		}
 	}
-	return safesocket.ConnectContext(ctx, lc.socket())
+	sock := lc.socket()
+	c, err := safesocket.ConnectContext(ctx, sock)
+	if runtime.GOOS == "windows" && err != nil && sock == paths.DefaultTailscaledSocket() && errors.Is(err, fs.ErrNotExist) {
+		// Nothing is listening on the default pipe. A tailscaled the
+		// current user started with --windows-mode=dev listens on a
+		// per-user pipe instead; try that before giving up. That pipe
+		// is not under the administrators-only prefix, so insist that
+		// it is owned by the current user and not some other user's
+		// process squatting on the name.
+		if dev := paths.WindowsDevTailscaledSocket(); dev != "" {
+			c, err2 := safesocket.ConnectCurrentUserContext(ctx, dev)
+			if err2 == nil {
+				return c, nil
+			}
+			if !errors.Is(err2, fs.ErrNotExist) {
+				// Something is listening there but we won't use it,
+				// which is worth more than the default pipe's absence.
+				return nil, fmt.Errorf("connecting to %s: %w", dev, err2)
+			}
+		}
+	}
+	return c, err
 }
 
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.
