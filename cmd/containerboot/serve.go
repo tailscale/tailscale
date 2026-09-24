@@ -82,7 +82,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 
 		var sc *ipn.ServeConfig
 		if cfg.ServeConfigPath != "" {
-			sc, err := readServeConfig(cfg.ServeConfigPath, certDomain)
+			sc, err = readServeConfig(cfg.ServeConfigPath, certDomain)
 			if err != nil {
 				log.Fatalf("serve proxy: failed to read serve config: %v", err)
 			}
@@ -102,11 +102,10 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 				}
 			}
 			prevServeConfig = sc
-			if cfg.CertShareMode != "rw" {
-				continue
-			}
-			if err := cm.EnsureCertLoops(ctx, sc); err != nil {
-				log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
+			if cfg.CertShareMode == "rw" {
+				if err := cm.EnsureCertLoops(ctx, sc); err != nil {
+					log.Fatalf("serve proxy: error ensuring cert loops: %v", err)
+				}
 			}
 		} else {
 			log.Printf("serve config path not provided.")
