@@ -1138,8 +1138,8 @@ func TestCachedNetmapAfterRestart(t *testing.T) {
 
 	cutControlStep.Begin()
 	// Both nodes lose connection to control
-	a.DropControlTraffic()
-	b.DropControlTraffic()
+	env.DropControlTraffic(a)
+	env.DropControlTraffic(b)
 	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
 		panic(fmt.Sprintf("got connection from %v", nk))
 	})
@@ -1234,7 +1234,7 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 			checkInitialMetrics.End(nil)
 
 			cutControlStep.Begin()
-			a.DropControlTraffic()
+			env.DropControlTraffic(a)
 			env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
 				if env.ControlServer().Node(nk).Name == a.Name() {
 					panic(fmt.Sprintf("got connection from %v", a.Name()))
@@ -1320,8 +1320,8 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	checkInitialMetrics.End(nil)
 
 	cutControlStep.Begin()
-	a.DropControlTraffic()
-	b.DropControlTraffic()
+	env.DropControlTraffic(a)
+	env.DropControlTraffic(b)
 	env.ControlServer().SetOnMapRequest(func(nk key.NodePublic) {
 		nodeName := env.ControlServer().Node(nk).Name
 		if nodeName == a.Name() || nodeName == b.Name() {
