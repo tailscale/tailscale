@@ -177,13 +177,8 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 	// Deliberately lax on longer-than-expected messages, for future
 	// compatibility.
 	if len(p) >= key.NodePublicRawLen {
-		// Skip all-zero trailing bytes: treat them as padding, not a NodeKey,
-		// to match AppendMarshal (which omits zero keys).
-		nk := key.NodePublicFromRaw32(mem.B(p[:key.NodePublicRawLen]))
-		if !nk.IsZero() {
-			m.NodeKey = nk
-			m.Padding -= key.NodePublicRawLen
-		}
+		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:key.NodePublicRawLen]))
+		m.Padding -= key.NodePublicRawLen
 	}
 	return m, nil
 }
