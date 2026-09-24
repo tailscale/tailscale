@@ -585,6 +585,12 @@ func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps ta
 
 	seen := map[netip.Addr]bool{}
 	for _, each := range ctipr.TransitIPs {
+		// Canonicalize IPv4-in-IPv6 addresses, so that duplicate detection and
+		// the keys we store in the connector's map match the unmapped form the
+		// datapath produces when it parses packets.
+		each.TransitIP = each.TransitIP.Unmap()
+		each.DestinationIP = each.DestinationIP.Unmap()
+
 		if seen[each.TransitIP] {
 			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
 				Code:    DuplicateTransitIP,
