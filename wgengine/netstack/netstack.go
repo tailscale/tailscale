@@ -1073,16 +1073,7 @@ func (ns *Impl) inject() {
 		if sendToHost {
 			if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundBuffs, inboundBuffsSizes); err != nil {
 				ns.logf("netstack inject inbound: %v", err)
-				// When failing to inject an outbound packet buffer, log the error, but
-				// continue serving the ReadContext for sending subsequent packets, as
-				// nothing manages or restarts a failed inject. An error here
-				// only applies to the current packet and should not terminate the long-lived
-				// packet pump.
-				// The exception to this is if the context has ended, indicating a shutdown.
-				if ns.ctx.Err() != nil {
-					return
-				}
-				continue
+				return
 			}
 		} else {
 			// Self-addressed packet: deliver back into gVisor directly
@@ -1097,16 +1088,7 @@ func (ns *Impl) inject() {
 
 			if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
 				ns.logf("netstack inject outbound: %v", err)
-				// When failing to inject an outbound packet buffer, log the error, but
-				// continue serving the ReadContext for sending subsequent packets, as
-				// nothing manages or restarts a failed inject. An error here
-				// only applies to the current packet and should not terminate the long-lived
-				// packet pump.
-				// The exception to this is if the context has ended, indicating a shutdown.
-				if ns.ctx.Err() != nil {
-					return
-				}
-				continue
+				return
 			}
 		}
 	}
