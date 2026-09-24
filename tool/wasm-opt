@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # This script acts like the "wasm-opt" command from the Binaryen toolchain, but
 # uses Tailscale's currently-desired version, downloading it first if necessary.
 
-set -eu
+set -euo pipefail
 
 BINARYEN_DIR="$HOME/.cache/tailscale-binaryen"
 read -r BINARYEN_REV < "$(dirname "$0")/binaryen.rev"
@@ -20,41 +20,38 @@ if [ "$ARCH" = "aarch64" ]; then
     ARCH="arm64"
 fi
 
+# Hashes are the sha256sum of the release tarballs at
+# https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_REV}/binaryen-version_${BINARYEN_REV}-${ARCH}-${OS}.tar.gz.
+# Update these when bumping binaryen.rev. Binaryen does not publish a
+# linux/arm64 (arm64-linux) build, so it is intentionally absent and
+# select_sha256 fails closed there, matching the prior behavior where that
+# download 404'd.
+BINARYEN_SHAS=(
+    x86_64-linux=7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4
+    x86_64-macos=72a98df1bfb81dd1e241d2b022e15c72edbd49e29d84abc6a1129c7d083072dd
+    arm64-macos=28bab047c4ce845c5c1da111222ffee5fafcec0bbedd046ad8b3dcae0fd57076
+)
+
 install_binaryen() {
-    BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_REV}/binaryen-version_${BINARYEN_REV}-${ARCH}-${OS}.tar.gz"
-    install_tool "wasm-opt" $BINARYEN_REV $BINARYEN_DIR $BINARYEN_URL
-}
+    # shellcheck source=lib/download.sh
+    . "$(dirname "$0")/lib/download.sh"
 
-install_tool() {
-    TOOL=$1
-    REV=$2
-    TOOLCHAIN=$3
-    URL=$4
+    local want_hash
+    want_hash=$(select_sha256 "${ARCH}-${OS}" "${BINARYEN_SHAS[@]}")
 
-    archive="$TOOLCHAIN-$REV.tar.gz"
-    mark="$TOOLCHAIN.extracted"
-    extracted=
-    [ ! -e "$mark" ] || read -r extracted junk <$mark
-
-    if [ "$extracted" = "$REV" ] && [ -e "$TOOLCHAIN/bin/$TOOL" ]; then
-        # Already extracted, continue silently
+    local mark="$BINARYEN_DIR.extracted"
+    local extracted=
+    [ ! -e "$mark" ] || read -r extracted _ <"$mark"
+    if [ "$extracted" = "$BINARYEN_REV" ] && [ -e "$BINARYEN_DIR/bin/wasm-opt" ]; then
+        # Already extracted, continue silently.
         return 0
     fi
-    echo ""
 
-    rm -f "$archive.new" "$TOOLCHAIN.extracted"
-    if [ ! -e "$archive" ]; then
-            log "Need to download $TOOL '$REV' from $URL."
-            curl -f -L -o "$archive.new" $URL
-            rm -f "$archive"
-            mv "$archive.new" "$archive"
-    fi
-
-    log "Extracting $TOOL '$REV' into '$TOOLCHAIN'." >&2
-    rm -rf "$TOOLCHAIN"
-    mkdir -p "$TOOLCHAIN"
-    (cd "$TOOLCHAIN" && tar --strip-components=1 -xf "$archive")
-    echo "$REV" >$mark
+    local url="https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_REV}/binaryen-version_${BINARYEN_REV}-${ARCH}-${OS}.tar.gz"
+    log "Downloading wasm-opt '$BINARYEN_REV' from $url."
+    rm -f "$mark"
+    download_tool --args=--strip-components=1 --verify-sha256="$want_hash" "$url" "$BINARYEN_DIR"
+    echo "$BINARYEN_REV" >"$mark"
 }
 
 log() {
@@ -62,10 +59,10 @@ log() {
 }
 
 if [ "${BINARYEN_DIR}" = "SKIP" ] ||
-   [ "${OS}" != "macos" -a "${OS}" != "linux" ] ||
-   [ "${ARCH}" != "x86_64" -a "${ARCH}" != "arm64" ]; then
+   { [ "${OS}" != "macos" ] && [ "${OS}" != "linux" ]; } ||
+   { [ "${ARCH}" != "x86_64" ] && [ "${ARCH}" != "arm64" ]; }; then
     log "Unsupported OS (${OS}) and architecture (${ARCH}) combination."
-    log "Using existing wasm-opt (`which wasm-opt`)."
+    log "Using existing wasm-opt ($(which wasm-opt))."
     exec wasm-opt "$@"
 fi
 
