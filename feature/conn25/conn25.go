@@ -544,12 +544,14 @@ func (c *Conn25) reconfig(cfg *config) {
 	c.client.reconfig()
 }
 
-const dupeTransitIPMessage = "Duplicate transit address in ConnectorTransitIPRequest"
-const noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
-const addrFamilyMismatchMessage = "Transit and Destination addresses must have matching IP family"
-const unknownAppNameMessage = "The App name in the request does not match a configured App"
-const missingAppPermissionMessage = "You do not have permission to use this App"
-const transitIPNotInPoolMessage = "The transit address is not in a configured transit IP pool"
+const (
+	dupeTransitIPMessage          = "Duplicate transit address in ConnectorTransitIPRequest"
+	noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
+	addrFamilyMismatchMessage     = "Transit and Destination addresses must have matching IP family"
+	unknownAppNameMessage         = "The App name in the request does not match a configured App"
+	missingAppPermissionMessage   = "You do not have permission to use this App"
+	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
+)
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
 // to a ConnectorTransitIPRequest. It updates the connectors mapping of
@@ -752,8 +754,10 @@ type ConnectorTransitIPResponse struct {
 	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
 }
 
-const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experimental"
-const AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
+const (
+	AppConnectorsExperimentalAttrName        = "tailscale.com/app-connectors-experimental"
+	AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
+)
 
 // ipSets wraps all the IPSets the config needs.
 type ipSets struct {
