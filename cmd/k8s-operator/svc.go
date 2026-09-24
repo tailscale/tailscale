@@ -9,8 +9,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,10 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
@@ -278,7 +282,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	a.mu.Lock()
-	if shouldExposeClusterIP(svc, a.isDefaultLoadBalancer) {
+	if proxyProtocol, ok := serviceProxyProtocolVersion(svc); ok {
+		sts.ServeConfig = serviceProxyServeConfig(svc, proxyProtocol, "")
+		a.managedIngressProxies.Add(svc.UID)
+		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	} else if shouldExposeClusterIP(svc, a.isDefaultLoadBalancer) {
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
@@ -395,6 +403,23 @@ func validateService(svc *corev1.Service) []string {
 			violations = append(violations, fmt.Sprintf("parsed IP address in annotation %s: %q is not valid", AnnotationTailnetTargetIP, ipStr))
 		}
 	}
+	if value, ok := svc.Annotations[AnnotationProxyProtocol]; ok {
+		if value != "1" && value != "2" {
+			violations = append(violations, fmt.Sprintf("annotation %s must be either %q or %q", AnnotationProxyProtocol, "1", "2"))
+		}
+		if tailnetTargetAnnotation(svc) != "" || svc.Annotations[AnnotationTailnetTargetFQDN] != "" {
+			violations = append(violations, fmt.Sprintf("annotation %s is only supported for ingress Services", AnnotationProxyProtocol))
+		}
+		if len(svc.Spec.Ports) == 0 {
+			violations = append(violations, fmt.Sprintf("annotation %s requires at least one Service port", AnnotationProxyProtocol))
+		}
+		for _, port := range svc.Spec.Ports {
+			if port.Protocol != corev1.ProtocolTCP {
+				violations = append(violations, fmt.Sprintf("annotation %s is only supported for TCP Service ports", AnnotationProxyProtocol))
+				break
+			}
+		}
+	}
 
 	svcName := nameForService(svc)
 	if err := dnsname.ValidLabel(svcName); err != nil {
@@ -406,6 +431,43 @@ func validateService(svc *corev1.Service) []string {
 	}
 	violations = append(violations, tagViolations(svc)...)
 	return violations
+}
+
+func serviceProxyProtocolVersion(svc *corev1.Service) (version int, ok bool) {
+	if svc == nil {
+		return 0, false
+	}
+	value, ok := svc.Annotations[AnnotationProxyProtocol]
+	if !ok {
+		return 0, false
+	}
+	version, err := strconv.Atoi(value)
+	if err != nil || version < 1 || version > 2 {
+		return 0, false
+	}
+	return version, true
+}
+
+// serviceProxyServeConfig returns a ServeConfig that forwards each exposed TCP
+// port to the Kubernetes Service while prepending a PROXY protocol header. If
+// serviceName is empty, the config is for a single-node ingress proxy;
+// otherwise it is for the named Tailscale Service on an ingress ProxyGroup.
+func serviceProxyServeConfig(svc *corev1.Service, proxyProtocol int, serviceName tailcfg.ServiceName) *ipn.ServeConfig {
+	targetHost := svc.Spec.ClusterIP
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		targetHost = svc.Spec.ExternalName
+	}
+
+	cfg := new(ipn.ServeConfig)
+	for _, port := range svc.Spec.Ports {
+		target := net.JoinHostPort(targetHost, strconv.Itoa(int(port.Port)))
+		if serviceName == "" {
+			cfg.SetTCPForwarding(uint16(port.Port), target, false, proxyProtocol, "")
+		} else {
+			cfg.SetTCPForwardingForService(uint16(port.Port), target, false, serviceName, proxyProtocol, "")
+		}
+	}
+	return cfg
 }
 
 func shouldExpose(svc *corev1.Service, isDefaultLoadBalancer bool) bool {
