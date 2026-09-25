@@ -13,9 +13,9 @@ import (
 )
 
 // TestSubnetRouterFreeBSDManyFlows runs the standard subnet-router topology
-// against a FreeBSD router with SNAT left at its default (true) and makes
-// several sequential HTTP requests, so that each request opens a fresh flow
-// through the router's SNAT path.
+// against a FreeBSD router on the kernel path (TS_DEBUG_NETSTACK_SUBNETS=false)
+// with SNAT left at its default (true) and makes several sequential HTTP
+// requests, so that each request opens a fresh flow through pf's SNAT rules.
 //
 // A single-flow test cannot catch a NAT rule whose translation address is
 // wrong on average but right occasionally: PF's "-> (self)" round-robins new
@@ -33,7 +33,8 @@ func TestSubnetRouterFreeBSDManyFlows(t *testing.T) {
 		vmtest.OS(vmtest.Gokrazy))
 	sr := env.AddNode("subnet-router", clientNet, internalNet,
 		vmtest.OS(vmtest.FreeBSD150),
-		vmtest.AdvertiseRoutes("10.0.0.0/24"))
+		vmtest.AdvertiseRoutes("10.0.0.0/24"),
+		vnet.TailscaledEnv{Key: "TS_DEBUG_NETSTACK_SUBNETS", Value: "false"})
 	backend := env.AddNode("backend", internalNet,
 		vmtest.OS(vmtest.Gokrazy),
 		vmtest.DontJoinTailnet(),
@@ -90,6 +91,10 @@ func TestSubnetRouterFreeBSDManyFlows(t *testing.T) {
 	}
 	if failCount > 0 {
 		t.Errorf("%d of 8 requests failed: some flows were translated to an address the backend cannot route back to", failCount)
+	}
+	// Netstack SNAT shows the backend the same source, so prove pf did it.
+	if out, err := env.SSHExec(sr, "pfctl -a tailscale -vsn"); err != nil || !strings.Contains(out, "nat on") {
+		t.Errorf("no pf NAT rules in the tailscale anchor; is the kernel path in effect? err=%v\n%s", err, out)
 	}
 	if len(srcSeen) > 1 {
 		t.Errorf("backend saw %d distinct source addresses %v, want 1: SNAT translation address is unstable across flows", len(srcSeen), srcSeen)

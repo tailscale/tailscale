@@ -148,6 +148,19 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 		httpStep.Fatalf("got %q", body)
 	}
 	httpStep.End(nil)
+
+	// FreeBSD routes subnets in netstack by default, so tailscaled must
+	// leave the host's pf alone: no kldload, no anchor refs, no rules.
+	if srOS.GOOS() == "freebsd" {
+		out, err := env.SSHExec(sr, "if kldstat -q -m pf; then pfctl -s nat; pfctl -a tailscale -s nat; else echo no-pf; fi 2>&1")
+		if err != nil {
+			t.Fatalf("checking pf on subnet router: %v\n%s", err, out)
+		}
+		if strings.Contains(out, "tailscale") || strings.Contains(out, "100.64.0.0/10") {
+			t.Fatalf("tailscaled touched pf in netstack mode:\n%s", out)
+		}
+		t.Logf("pf on subnet router: %s", strings.TrimSpace(out))
+	}
 }
 
 func TestSiteToSite(t *testing.T) {
