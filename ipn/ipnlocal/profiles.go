@@ -139,6 +139,18 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) {
 // and must check whether pm.currentProfile is Valid before using it.
 func (pm *profileManager) SwitchToProfile(profile ipn.LoginProfileView) (cp ipn.LoginProfileView, changed bool, err error) {
 	prefs := defaultPrefs
+	if pm.prefs.Valid() && pm.prefs.OperatorUser() != "" {
+		// Carry the operator over to a new profile. The operator is a
+		// machine-local administrative setting rather than an account
+		// setting, and any actor able to initiate a profile switch
+		// already has write access. Without this, an operator running
+		// "tailscale login" would lose access partway through the
+		// login flow when it switches to a new empty profile.
+		// See tailscale/tailscale#18294.
+		p := prefs.AsStruct()
+		p.OperatorUser = pm.prefs.OperatorUser()
+		prefs = p.View()
+	}
 	switch {
 	case !profile.Valid():
 		// Create a new profile that is not associated with any user.
