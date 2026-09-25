@@ -461,6 +461,7 @@ type LocalBackend struct {
 	// or when switching profiles, connecting/disconnecting Tailscale, restarting the client,
 	// or on similar events.
 	//
+	// Set through setExitNodePolicyOverrideLocked so extensions are notified.
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
 
@@ -2309,7 +2310,7 @@ func (b *LocalBackend) applyExitNodeSysPolicyLocked(prefs *ipn.Prefs) (anyChange
 		// older clients (in case a user downgrades to an earlier version)
 		// and GUIs/CLIs that have special handling for it.
 		if useAutoExitNode {
-			exitNodeID = unresolvedExitNodeID
+			exitNodeID = ipn.UnresolvedExitNodeID
 		}
 
 		// If the current exit node ID doesn't match the one enforced by the policy setting,
@@ -2392,7 +2393,7 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 		// Reset the exit node override if a policy that enforces exit node usage
 		// or allows the user to override automatic exit node selection has changed.
 		b.mu.Lock()
-		b.overrideExitNodePolicy = false
+		b.setExitNodePolicyOverrideLocked(false)
 		b.mu.Unlock()
 	}
 
@@ -2466,6 +2467,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 
 	deltaRes, _ := cn.UpdateNetmapDelta(muts)
+	b.notifyPeerUpdateLocked()
 	if buildfeatures.HasDrive {
 		// Drive's lazy remotes-source caches its rebuild keyed by this
 		// generation, so any delta — peer add/remove, address change,
@@ -2842,10 +2844,10 @@ func (b *LocalBackend) resolveAutoExitNodeLocked(prefs *ipn.Prefs) (prefsChanged
 		// specify an allowed auto exit node ID, retain it.
 		newExitNodeID = prefs.ExitNodeID
 	} else {
-		// Otherwise, use [unresolvedExitNodeID] to install a blackhole route,
+		// Otherwise, use [ipn.UnresolvedExitNodeID] to install a blackhole route,
 		// preventing traffic from leaking to the local network until an actual
 		// exit node is selected.
-		newExitNodeID = unresolvedExitNodeID
+		newExitNodeID = ipn.UnresolvedExitNodeID
 	}
 	if prefs.ExitNodeID != newExitNodeID {
 		prefs.ExitNodeID = newExitNodeID
@@ -5151,7 +5153,7 @@ func (b *LocalBackend) SetUseExitNodeEnabled(actor ipnauth.Actor, v bool) (ipn.P
 		if expr, ok := ipn.ParseAutoExitNodeString(mp.ExitNodeID); ok {
 			mp.AutoExitNodeSet = true
 			mp.AutoExitNode = expr
-			mp.ExitNodeID = unresolvedExitNodeID
+			mp.ExitNodeID = ipn.UnresolvedExitNodeID
 		}
 	} else {
 		mp.ExitNodeIDSet = true
@@ -5310,7 +5312,7 @@ func (b *LocalBackend) adjustEditPrefsLocked(prefs ipn.PrefsView, mp *ipn.Masked
 	}
 
 	// Clear ExitNodeID if AutoExitNode is disabled and ExitNodeID is still unresolved.
-	if mp.AutoExitNodeSet && mp.AutoExitNode == "" && prefs.ExitNodeID() == unresolvedExitNodeID {
+	if mp.AutoExitNodeSet && mp.AutoExitNode == "" && prefs.ExitNodeID() == ipn.UnresolvedExitNodeID {
 		mp.ExitNodeIDSet = true
 		mp.ExitNodeID = ""
 	}
@@ -5350,16 +5352,16 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 	if oldPrefs.WantRunning() != newPrefs.WantRunning() {
 		// Connecting to or disconnecting from Tailscale clears the override,
 		// unless the user is also explicitly changing the exit node (see below).
-		b.overrideExitNodePolicy = false
+		b.setExitNodePolicyOverrideLocked(false)
 	}
 	if mp.AutoExitNodeSet || mp.ExitNodeIDSet || mp.ExitNodeIPSet {
 		if allowExitNodeOverride, _ := b.polc.GetBoolean(pkey.AllowExitNodeOverride, false); allowExitNodeOverride {
 			// If applying exit node policy settings to the new prefs results in no change,
 			// the user is not overriding the policy. Otherwise, it is an override.
-			b.overrideExitNodePolicy = b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct())
+			b.setExitNodePolicyOverrideLocked(b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct()))
 		} else {
 			// Overrides are not allowed; clear the override flag.
-			b.overrideExitNodePolicy = false
+			b.setExitNodePolicyOverrideLocked(false)
 		}
 	}
 
@@ -6753,7 +6755,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// [pkey.ExitNodeID]), or an exit node is specified by ExitNodeIP
 	// instead of ExitNodeID , and we don't yet have enough info to resolve
 	// it (usually due to missing netmap or net report), then ExitNodeID in
-	// the prefs may be invalid (typically, [unresolvedExitNodeID]) until
+	// the prefs may be invalid (typically, [ipn.UnresolvedExitNodeID]) until
 	// the netmap is available.
 	//
 	// In this case, we shouldn't update the Hostinfo with the bogus
@@ -6761,7 +6763,7 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 	// the netmap and/or net report have been received to both pick the exit
 	// node and notify control of the change.
 	if buildfeatures.HasUseExitNode {
-		if sid := prefs.ExitNodeID(); sid != unresolvedExitNodeID {
+		if sid := prefs.ExitNodeID(); sid != ipn.UnresolvedExitNodeID {
 			hi.ExitNodeID = prefs.ExitNodeID()
 		}
 	}
@@ -7266,7 +7268,7 @@ func (b *LocalBackend) resolveExitNodeLocked() (changed bool) {
 	// TODO(sfllaw): Mutating b.hostinfo here is undesirable, mutating
 	// in-place doubly so.
 	sid := prefs.ExitNodeID
-	if sid != unresolvedExitNodeID && b.hostinfo.ExitNodeID != sid {
+	if sid != ipn.UnresolvedExitNodeID && b.hostinfo.ExitNodeID != sid {
 		b.hostinfo.ExitNodeID = sid
 		b.goTracker.Go(b.doSetHostinfoFilterServices)
 	}
@@ -7346,6 +7348,14 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
 	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
+	// A profile reset swaps in a fresh nodeBackend before clearing its map,
+	// so notify on every clear even if this node never received a map.
+	if !b.shutdownCalled && (oldNetMap == nil || nm == nil) {
+		for _, f := range b.extHost.Hooks().NetworkConfiguredChange {
+			f(nm != nil)
+		}
+	}
+	b.notifyPeerUpdateLocked()
 	b.setDataPlanePeerRoutes()
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
@@ -7520,6 +7530,31 @@ var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend)]
 // remotes lazily instead of being pushed a fresh list on every netmap
 // update.
 var hookInstallDriveRemoteSource feature.Hook[func(*LocalBackend)]
+
+// notifyPeerUpdateLocked notifies extensions after processing a peer update,
+// even if the peer state did not change.
+// b.mu must be held.
+func (b *LocalBackend) notifyPeerUpdateLocked() {
+	if b.shutdownCalled {
+		return
+	}
+	for _, f := range b.extHost.Hooks().OnPeerUpdate {
+		f()
+	}
+}
+
+// setExitNodePolicyOverrideLocked sets the override and notifies extensions.
+// Notify even if the value is unchanged: the policy itself may have changed.
+// b.mu must be held.
+func (b *LocalBackend) setExitNodePolicyOverrideLocked(overridden bool) {
+	b.overrideExitNodePolicy = overridden
+	if b.shutdownCalled {
+		return
+	}
+	for _, f := range b.extHost.Hooks().ExitNodePolicyOverrideChange {
+		f(overridden)
+	}
+}
 
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
 func roundTraffic(bytes int64) float64 {
@@ -8408,7 +8443,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
-	b.overrideExitNodePolicy = false
+	b.setExitNodePolicyOverrideLocked(false)
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
@@ -9150,17 +9185,6 @@ func longLatDistance(fromLat, fromLong, toLat, toLong float64) float64 {
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusMeters * c
 }
-
-const (
-	// unresolvedExitNodeID is a special [tailcfg.StableNodeID] value
-	// used as an exit node ID to install a blackhole route, preventing
-	// accidental non-exit-node usage until the [ipn.ExitNodeExpression]
-	// is evaluated and an actual exit node is selected.
-	//
-	// We use "auto:any" for compatibility with older, pre-[ipn.ExitNodeExpression]
-	// clients that have been using "auto:any" for this purpose for a long time.
-	unresolvedExitNodeID tailcfg.StableNodeID = "auto:any"
-)
 
 func isAllowedAutoExitNodeID(polc policyclient.Client, exitNodeID tailcfg.StableNodeID) bool {
 	if exitNodeID == "" {

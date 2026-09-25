@@ -378,3 +378,16 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 		},
 	}.Check(t)
 }
+
+func TestOmitExitNodeHealth(t *testing.T) {
+	for _, tag := range []string{"ts_omit_exitnodehealth", "ts_omit_health", "ts_omit_useexitnode"} {
+		t.Run(tag, func(t *testing.T) {
+			deptest.DepChecker{
+				GOOS:    "linux",
+				GOARCH:  "amd64",
+				Tags:    tag + ",ts_include_cli",
+				BadDeps: map[string]string{"tailscale.com/feature/exitnodehealth": "unexpected exit node health feature"},
+			}.Check(t)
+		})
+	}
+}
