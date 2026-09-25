@@ -3196,9 +3196,21 @@ func parseSSOutput(raw string) map[netip.AddrPort]BytesSentRecv {
 	return newState
 }
 
+// debugTrafficFlushSize is the buffered JSON size at which
+// [Server.ServeDebugTraffic] releases the server mutex and writes
+// what it has so far to the network.
+const debugTrafficFlushSize = 32 << 10
+
 func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 	prevState := map[netip.AddrPort]BytesSentRecv{}
-	enc := json.NewEncoder(w)
+
+	// Records are JSON-encoded into buf while holding s.mu, but
+	// are only written to the network with s.mu released, so a
+	// slow client can't stall the server. Rather than toggling
+	// the lock around every record, we let buf grow to
+	// debugTrafficFlushSize before flushing.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	for r.Context().Err() == nil {
 		output, err := exec.Command("ss", "-i", "-H", "-t").Output()
 		if err != nil {
@@ -3221,14 +3233,25 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 						s.mu.Unlock()
 						return
 					}
+					if buf.Len() >= debugTrafficFlushSize {
+						s.mu.Unlock()
+						_, err := w.Write(buf.Bytes())
+						buf.Reset()
+						if err != nil {
+							return
+						}
+						s.mu.Lock()
+					}
 				}
 			}
 		}
 		s.mu.Unlock()
 		prevState = newState
-		if _, err := fmt.Fprintln(w); err != nil {
+		buf.WriteByte('\n')
+		if _, err := w.Write(buf.Bytes()); err != nil {
 			return
 		}
+		buf.Reset()
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
