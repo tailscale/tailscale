@@ -88,6 +88,12 @@ const (
 	// tailscale in non-userspace, with NET_ADMIN cap for tailscale
 	// container and will also run a privileged init container that enables
 	// forwarding.
+	// Because the forwarded traffic reaches serve on the proxy's Pod IP
+	// rather than over the tunnel interface, the annotation also sets
+	// TS_SERVE_ALLOW_ALL_INTERFACES so the serve listener is not bound to the
+	// tunnel interface (which would otherwise drop it). This exposes the serve
+	// listener on the proxy's other interfaces, so only enable this on proxies
+	// whose Pod network is trusted.
 	// Eventually this behaviour might become the default.
 	AnnotationExperimentalForwardClusterTrafficViaL7IngresProxy = "tailscale.com/experimental-forward-cluster-traffic-via-ingress"
 
@@ -701,10 +707,21 @@ func (r *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	)
 
 	if sts.ForwardClusterTrafficViaL7IngressProxy {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
-			Value: "true",
-		})
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
+				Value: "true",
+			},
+			// Cluster traffic reaches this proxy on its Pod IP and is
+			// forwarded to the node's Tailscale IP, where serve answers it.
+			// On Linux the serve listener is otherwise bound to the tunnel
+			// interface and would drop that traffic, so opt the listener out
+			// of the interface bind.
+			corev1.EnvVar{
+				Name:  "TS_SERVE_ALLOW_ALL_INTERFACES",
+				Value: "true",
+			},
+		)
 	}
 
 	for i, secret := range proxySecrets {

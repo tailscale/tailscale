@@ -224,7 +224,12 @@ DNSConfig is a singleton - you must not create more than one.
 NB: if you want cluster workloads to be able to refer to Tailscale Ingress
 using its MagicDNS name, you must also annotate the Ingress resource with
 tailscale.com/experimental-forward-cluster-traffic-via-ingress annotation to
-ensure that the proxy created for the Ingress listens on its Pod IP address.
+ensure that the proxy created for the Ingress is available via its Pod IP
+address. The annotation installs rules that DNAT traffic sent to the proxy's
+Pod IP to its Tailscale IP, and allows the Serve listener on that Tailscale IP
+to accept packets arriving through the Pod interface. Traffic accepted via this
+path does not traverse the Tailscale tunnel and is not affected by tailnet
+ACLs. Restrict access using Kubernetes network policy.
 
 
 
