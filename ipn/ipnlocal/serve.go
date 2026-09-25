@@ -124,7 +124,21 @@ type localListener struct {
 
 	handler       func(net.Conn) error            // handler for inbound connections
 	closeListener syncs.AtomicValue[func() error] // Listener's Close method, if any
+
+	// allowAllInterfaces, if set, stops the listener from being bound to the
+	// Tailscale interface, so it answers traffic arriving on any interface.
+	// Only serve listeners set it, and only when serveAllowAllInterfaces is
+	// set; the web client listener always stays bound.
+	allowAllInterfaces bool
 }
+
+// serveAllowAllInterfaces, when set, stops serve's kernel listeners from
+// being bound to the Tailscale interface, so they answer traffic arriving on
+// any interface. It applies only to serve listeners, not the web client
+// listener. This re-exposes serve to the local network; it is set only by the
+// Kubernetes operator's experimental cluster-traffic ingress feature, which
+// forwards cluster traffic to the node's Tailscale IP via another interface.
+var serveAllowAllInterfaces = envknob.RegisterBool("TS_SERVE_ALLOW_ALL_INTERFACES")
 
 func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, logf logger.Logf) *localListener {
 	ctx, cancel := context.WithCancel(ctx)
@@ -134,6 +148,8 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 		ctx:    ctx,
 		cancel: cancel,
 		logf:   logf,
+
+		allowAllInterfaces: serveAllowAllInterfaces(),
 
 		handler: func(conn net.Conn) error {
 			srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
@@ -169,7 +185,7 @@ func (s *localListener) Run() {
 		ipStr := ip.String()
 
 		var lc net.ListenConfig
-		if initListenConfig != nil {
+		if initListenConfig != nil && !s.allowAllInterfaces {
 			ifIndex, err := netmon.TailscaleInterfaceIndex()
 			if err != nil {
 				s.logf("localListener failed to get Tailscale interface index %v, backing off: %v", s.ap, err)
