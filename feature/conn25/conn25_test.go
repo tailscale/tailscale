@@ -75,6 +75,9 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 
 	tipV6_1 := netip.MustParseAddr("FE80::1")
 
+	// tipV4_1 written in its IPv4-in-IPv6 form; the same address as tipV4_1.
+	tipV4_1In6 := netip.MustParseAddr("::ffff:0.0.0.1")
+
 	// Destination IPs
 	dipV4_1 := netip.MustParseAddr("10.0.0.1")
 	dipV4_2 := netip.MustParseAddr("10.0.0.2")
@@ -373,6 +376,21 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			},
 			wantLookups: [][][]netip.Addr{
 				{},
+			},
+		},
+		// Single peer, a transit IP in its IPv4-in-IPv6 form is canonicalized
+		// and stored unmapped.
+		{
+			name:         "one-peer-tip-4in6",
+			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1In6, DestinationIP: dipV4_1, App: appName}}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
+			},
+			wantLookups: [][][]netip.Addr{
+				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_1In6, netip.Addr{}}},
 			},
 		},
 	}
@@ -1090,6 +1108,24 @@ func TestMapDNSResponseAssignsAddrs(t *testing.T) {
 					dst:     netip.MustParseAddr("::2"),
 					magic:   netip.MustParseAddr("fd7a:115c:a1e0:a99c:0::1"),
 					transit: netip.MustParseAddr("fd7a:115c:a1e0:a99c:40::1"),
+					app:     "app1",
+				},
+			},
+		},
+		{
+			name:       "v6-ip-4in6-skipped",
+			appDomains: []string{"example.com"},
+			domain:     "example.com.",
+			v6Addrs: []*dnsmessage.AAAAResource{
+				{AAAA: netip.MustParseAddr("::ffff:1.0.0.1").As16()},
+				{AAAA: netip.MustParseAddr("::1").As16()},
+			},
+			wantByMagicIP: map[netip.Addr]*addrs{
+				netip.MustParseAddr("fd7a:115c:a1e0:a99c::"): {
+					domain:  "example.com.",
+					dst:     netip.MustParseAddr("::1"),
+					magic:   netip.MustParseAddr("fd7a:115c:a1e0:a99c:0::"),
+					transit: netip.MustParseAddr("fd7a:115c:a1e0:a99c:40::"),
 					app:     "app1",
 				},
 			},
@@ -1852,6 +1888,18 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			),
 		},
 		{
+			name: "ipv6-4in6-answer-dropped",
+			toMap: makeV6DNSResponse(t, domainName, []*dnsmessage.AAAAResource{
+				{AAAA: netip.MustParseAddr("::ffff:1.2.3.4").As16()},
+				{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
+			}),
+			assertFx: assertParsesToAnswers(
+				[]netip.Addr{
+					netip.MustParseAddr("2606:4700::6812:100"),
+				},
+			),
+		},
+		{
 			name:     "not-our-domain",
 			toMap:    ipv4ResponseUnhandledDomain,
 			assertFx: assertBytes(ipv4ResponseUnhandledDomain),
@@ -2006,7 +2054,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 							Type:  dnsmessage.TypeAAAA,
 							Class: dnsmessage.ClassINET,
 						},
-						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("1.2.3.4").As16()},
+						Body: &dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2606:4700::6812:1a78").As16()},
 					},
 					{
 						Header: dnsmessage.ResourceHeader{
