@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -409,6 +410,20 @@ func TestSendRecv(t *testing.T) {
 	recv(2, string(msg2))
 	recvNothing(0)
 	recvNothing(1)
+
+	// Client 1 has now received one 11-byte packet and sent one,
+	// which the debug clients page should show in its per-connection
+	// counters. The server bumps them before the packet reaches the
+	// client, so they're settled by the time recv returns.
+	{
+		rec := httptest.NewRecorder()
+		s.ServeDebugClients(rec, httptest.NewRequest("GET", "/debug/clients/?key="+clientKeys[1].String(), nil))
+		body := rec.Body.String()
+		const wantCounters = "<td class=\"n\">1</td>\n<td class=\"n\">11</td>\n<td class=\"n\">1</td>\n<td class=\"n\">11</td>"
+		if rec.Code != 200 || !strings.Contains(body, wantCounters) {
+			t.Errorf("debug clients page for client 1: status %d, missing rx/tx counters %q:\n%s", rec.Code, wantCounters, body)
+		}
+	}
 
 	// Send messages to a non-existent node
 	neKey := key.NewNode().Public()

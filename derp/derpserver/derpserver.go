@@ -1017,7 +1017,7 @@ func (s *Server) unregisterClient(c *sclient) {
 	delete(s.keyOfAddr, c.remoteIPPort)
 
 	s.curClients.Add(-1)
-	if c.preferred {
+	if c.preferred.Load() {
 		s.curHomeClients.Add(-1)
 	}
 	if c.isNotIdealConn {
@@ -1375,6 +1375,8 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	}
 	contents := *buf
 	s.packetsForwardedIn.Add(1)
+	c.packetsRecv.Add(1)
+	c.bytesRecv.Add(uint64(len(contents)))
 
 	// Use the same lock-free fast path as the local send path. The mesh
 	// forwarder return is intentionally discarded: we never re-forward an
@@ -1448,6 +1450,8 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 		return fmt.Errorf("client %v: recvPacket: %v", c.key, err)
 	}
 	contents := *buf
+	c.packetsRecv.Add(1)
+	c.bytesRecv.Add(uint64(len(contents)))
 
 	dst, fwd, dstLen := c.lookupDest(dstKey)
 
@@ -2041,7 +2045,17 @@ type sclient struct {
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
 	connectedAt time.Time
-	preferred   bool
+
+	// preferred is whether the client reported this server as its
+	// preferred (home) DERP. It's written by run and read by
+	// [Server.ServeDebugClients].
+	preferred atomic.Bool
+
+	// Per-connection traffic counters for [Server.ServeDebugClients].
+	// Like the server-wide counters, they count data packets only,
+	// not frame overhead or other frame types.
+	packetsRecv, bytesRecv atomic.Uint64 // packets this client sent us to deliver or forward
+	packetsSent, bytesSent atomic.Uint64 // packets we wrote to this client
 
 	// Owned by the writer goroutine, not thread-safe. Only one writer
 	// runs at a time, and [sclient.stopWriter] touches these only after
@@ -2228,10 +2242,10 @@ type peerGoneMsg struct {
 }
 
 func (c *sclient) setPreferred(v bool) {
-	if c.preferred == v {
+	if c.preferred.Load() == v {
 		return
 	}
-	c.preferred = v
+	c.preferred.Store(v)
 	var homeMove *expvar.Int
 	if v {
 		c.s.curHomeClients.Add(1)
@@ -2815,6 +2829,8 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 		} else {
 			c.s.packetsSent.Add(1)
 			c.s.bytesSent.Add(int64(len(contents)))
+			c.packetsSent.Add(1)
+			c.bytesSent.Add(uint64(len(contents)))
 		}
 		if c.debug {
 			c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)

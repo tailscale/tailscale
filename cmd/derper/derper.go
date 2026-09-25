@@ -304,6 +304,7 @@ func main() {
 		}
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	debug.Handle("clients/", "Connected clients", http.HandlerFunc(s.ServeDebugClients))
 	debug.Handle("set-mutex-profile-fraction", "SetMutexProfileFraction", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := r.FormValue("rate")
 		if s == "" || r.Header.Get("Sec-Debug") != "derp" {
