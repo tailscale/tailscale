@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,211 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 )
+
+func Test_limitHeaderReader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		body     []byte // underlying stream, never nil in practice
+		remain   int64  // starting budget
+		readSize int    // bytes to request per Read
+		wantData []byte // total bytes expected before the terminal error
+		wantErr  error  // terminal error; nil means clean EOF
+	}{
+		{
+			name:     "under_limit",
+			body:     []byte("hello"),
+			remain:   16,
+			readSize: 16,
+			wantData: []byte("hello"),
+		},
+		{
+			// Budget spent with the last bytes: parsing succeeded but any
+			// further read, including the ended() check, errors.
+			name:     "exactly_at_limit",
+			body:     []byte("hello"),
+			remain:   5,
+			readSize: 5,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "budget_spent_mid_stream",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 2,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "budget_spent_mid_stream_single_reads",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 1,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			// Every read after the budget is spent keeps reporting the
+			// sentinel while data remains.
+			name:     "error_persists_after_trip",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 5,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "empty_read_no_hang",
+			body:     []byte("hello"),
+			remain:   5,
+			readSize: 0, // zero length read must not spin the budget away
+			wantData: nil,
+		},
+		{
+			name:     "eof_mid_block",
+			body:     []byte("hi"),
+			remain:   5,
+			readSize: 1,
+			wantData: []byte("hi"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lr := &limitHeaderReader{r: bytes.NewReader(tt.body), remain: tt.remain}
+			var got []byte
+			var lastErr error
+			for range 10 { // bounded loop: a bug here must not hang the test
+				p := make([]byte, tt.readSize)
+				n, err := lr.Read(p)
+				got = append(got, p[:n]...)
+				if err != nil {
+					lastErr = err
+					break
+				}
+			}
+			if tt.wantErr != nil && lastErr == nil {
+				t.Errorf("limitHeaderReader.Read() got no error after %v bytes, want %v", len(got), tt.wantErr)
+			}
+			if tt.wantErr == nil {
+				// No error expected: the stream must end in a clean EOF, not
+				// the sentinel or a loop that returned (0, nil) until the cap.
+				if lastErr != nil && !errors.Is(lastErr, io.EOF) {
+					t.Errorf("limitHeaderReader.Read() error = %v, want clean EOF", lastErr)
+				}
+			} else if !errors.Is(lastErr, tt.wantErr) {
+				t.Errorf("limitHeaderReader.Read() error = %v, want %v", lastErr, tt.wantErr)
+			}
+			if !bytes.Equal(got, tt.wantData) {
+				t.Errorf("limitHeaderReader.Read() data = %q, want %q", got, tt.wantData)
+			}
+			if tt.wantErr == nil {
+				return
+			}
+		})
+	}
+}
+
+func Test_limitHeaderReader_ended(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		body    []byte
+		remain  int64
+		read    int64 // bytes to consume before calling ended
+		wantErr error
+	}{
+		{
+			name:   "clean_end",
+			body:   []byte("hello"),
+			remain: 16,
+			read:   5,
+		},
+		{
+			name:    "trailing_data",
+			body:    []byte("hello!"),
+			remain:  16,
+			read:    5,
+			wantErr: errHeaderBlockTooLarge,
+		},
+		{
+			name:    "cap_exceeded",
+			body:    []byte("hello world"),
+			remain:  5,
+			read:    5,
+			wantErr: errHeaderBlockTooLarge,
+		},
+		{
+			name:    "under_read",
+			body:    []byte("hello"),
+			remain:  16,
+			read:    2,
+			wantErr: errHeaderBlockTooLarge, // 'llo' remains unconsumed
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lr := &limitHeaderReader{r: bytes.NewReader(tt.body), remain: tt.remain}
+			if _, err := io.CopyN(io.Discard, lr, tt.read); err != nil {
+				t.Fatalf("consuming %d bytes: %v", tt.read, err)
+			}
+			err := lr.ended()
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("limitHeaderReader.ended() = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func Test_parseHeaders_oversizeBlock(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const synStreamPrefix = 10 // stream ID, priority, slot before the header block
+
+	// A block declaring one name of maxHeaderBlockSize+1 bytes, backed by
+	// zeros so it compresses far below the 1MiB wire limit.
+	block := slices.Concat(
+		binary.BigEndian.AppendUint32(nil, 1),                    // one pair
+		binary.BigEndian.AppendUint32(nil, maxHeaderBlockSize+1), // name length
+		make([]byte, maxHeaderBlockSize+1),                       // name bytes
+	)
+	sf := &spdyFrame{
+		Ctrl:    true,
+		Type:    SYN_STREAM,
+		Payload: append(make([]byte, synStreamPrefix), fuzzCompress(block)...),
+	}
+	var zr zlibReader
+	zr.Set(sf.Payload[synStreamPrefix:])
+	_, err = parseHeaders(&zr, zl.Sugar())
+	if !errors.Is(err, errHeaderBlockTooLarge) {
+		t.Errorf("parseHeaders() error = %v, want errHeaderBlockTooLarge", err)
+	}
+
+	// A block of exactly maxHeaderBlockSize parses its headers but then errors
+	nameLen := uint32(maxHeaderBlockSize - 12) // minus the pair count, name and value length fields
+	block = slices.Concat(
+		binary.BigEndian.AppendUint32(nil, 1),       // one pair
+		binary.BigEndian.AppendUint32(nil, nameLen), // name length
+		make([]byte, nameLen),                       // name bytes
+		binary.BigEndian.AppendUint32(nil, 0),       // value length
+	)
+	sf = &spdyFrame{
+		Ctrl:    true,
+		Type:    SYN_STREAM,
+		Payload: append(make([]byte, synStreamPrefix), fuzzCompress(block)...),
+	}
+	var zr2 zlibReader
+	zr2.Set(sf.Payload[synStreamPrefix:])
+	_, err = parseHeaders(&zr2, zl.Sugar())
+	if !errors.Is(err, errHeaderBlockTooLarge) {
+		t.Errorf("parseHeaders() error = %v, want errHeaderBlockTooLarge for a block of exactly maxHeaderBlockSize", err)
+	}
+}
 
 func Test_spdyFrame_Parse(t *testing.T) {
 	zl, err := zap.NewDevelopment()
