@@ -169,8 +169,7 @@ func (b *LocalBackend) newServeListener(ctx context.Context, ap netip.AddrPort, 
 // Close cancels the context and closes the listener, if any.
 func (s *localListener) Close() error {
 	s.cancel()
-	if close, ok := s.closeListener.LoadOk(); ok {
-		s.closeListener.Store(nil)
+	if close := s.closeListener.Swap(nil); close != nil {
 		close()
 	}
 	return nil
@@ -181,6 +180,9 @@ func (s *localListener) Close() error {
 // Listen is retried until the context is canceled.
 func (s *localListener) Run() {
 	for {
+		if s.ctx.Err() != nil {
+			return
+		}
 		ip := s.ap.Addr()
 		ipStr := ip.String()
 
@@ -237,6 +239,10 @@ func (s *localListener) Run() {
 			continue
 		}
 		s.closeListener.Store(ln.Close)
+		if s.ctx.Err() != nil {
+			s.Close()
+			return
+		}
 
 		s.logf("listening on %v", s.ap)
 		// handleListenersAccept always returns a non-nil error.
@@ -276,7 +282,7 @@ func (s *localListener) handleListenersAccept(ln net.Listener) error {
 
 // updateServeTCPPortNetMapAddrListenersLocked starts a net.Listen for configured
 // Serve ports on all the node's addresses.
-// Existing Listeners are closed if port no longer in incoming ports list.
+// Existing Listeners are closed if their address or port is no longer current.
 //
 // b.mu must be held.
 func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint16) {
@@ -284,39 +290,37 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		// don't listen on netmap addresses if we're in userspace mode
 		return
 	}
-	// close existing listeners where port
-	// is no longer in incoming ports list
-	for ap, sl := range b.serveListeners {
-		if !slices.Contains(ports, ap.Port()) {
-			b.logf("closing listener %v", ap)
-			sl.Close()
-			delete(b.serveListeners, ap)
-		}
-	}
-
-	nm := b.NetMapNoPeers()
-	if nm == nil {
+	desired := make(map[netip.AddrPort]struct{})
+	if nm := b.NetMapNoPeers(); nm == nil {
 		b.logf("netMap is nil")
-		return
-	}
-	if !nm.SelfNode.Valid() {
+	} else if !nm.SelfNode.Valid() {
 		b.logf("netMap SelfNode is nil")
-		return
+	} else {
+		// Reconcile listeners against the current address-port set.
+		for _, a := range nm.GetAddresses().All() {
+			for _, p := range ports {
+				desired[netip.AddrPortFrom(a.Addr(), p)] = struct{}{}
+			}
+		}
+	}
+	for ap, sl := range b.serveListeners {
+		if _, ok := desired[ap]; ok {
+			continue
+		}
+		b.logf("closing listener %v", ap)
+		sl.Close()
+		delete(b.serveListeners, ap)
 	}
 
-	addrs := nm.GetAddresses()
-	for _, a := range addrs.All() {
-		for _, p := range ports {
-			addrPort := netip.AddrPortFrom(a.Addr(), p)
-			if _, ok := b.serveListeners[addrPort]; ok {
-				continue // already listening
-			}
-
-			sl := b.newServeListener(context.Background(), addrPort, b.logf)
-			mak.Set(&b.serveListeners, addrPort, sl)
-
-			go sl.Run()
+	for addrPort := range desired {
+		if _, ok := b.serveListeners[addrPort]; ok {
+			continue // already listening
 		}
+
+		sl := b.newServeListener(context.Background(), addrPort, b.logf)
+		mak.Set(&b.serveListeners, addrPort, sl)
+
+		go sl.Run()
 	}
 }
 
