@@ -109,10 +109,16 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		ImagePullPolicy: "Always",
 	}
 	if opts.shouldEnableForwardingClusterTrafficViaIngress {
-		tsContainer.Env = append(tsContainer.Env, corev1.EnvVar{
-			Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
-			Value: "true",
-		})
+		tsContainer.Env = append(tsContainer.Env,
+			corev1.EnvVar{
+				Name:  "EXPERIMENTAL_ALLOW_PROXYING_CLUSTER_TRAFFIC_VIA_INGRESS",
+				Value: "true",
+			},
+			corev1.EnvVar{
+				Name:  "TS_SERVE_ALLOW_ALL_INTERFACES",
+				Value: "true",
+			},
+		)
 	}
 	var annots map[string]string
 	var volumes []corev1.Volume
