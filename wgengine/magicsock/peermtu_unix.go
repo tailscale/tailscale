@@ -7,6 +7,8 @@ package magicsock
 
 import (
 	"syscall"
+
+	"tailscale.com/types/nettype"
 )
 
 // getIPProto returns the value of the get/setsockopt proto argument necessary
@@ -26,10 +28,19 @@ func getIPProto(network string) int {
 // error from rc.Control() if that fails). Otherwise it returns the error
 // errUnsupportedConnType.
 func (c *Conn) connControl(network string, fn func(fd uintptr)) error {
-	pconn := c.pconn4.pconn
+	return packetConnControl(c.mainPacketConn(network), fn)
+}
+
+// mainPacketConn returns the main socket for network ("udp4" or "udp6").
+func (c *Conn) mainPacketConn(network string) nettype.PacketConn {
 	if network == "udp6" {
-		pconn = c.pconn6.pconn
+		return c.pconn6.pconn
 	}
+	return c.pconn4.pconn
+}
+
+// packetConnControl runs fn on pconn's file descriptor.
+func packetConnControl(pconn nettype.PacketConn, fn func(fd uintptr)) error {
 	sc, ok := pconn.(syscall.Conn)
 	if !ok {
 		return errUnsupportedConnType

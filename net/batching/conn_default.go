@@ -14,3 +14,8 @@ import (
 func TryUpgradeToConn(pconn nettype.PacketConn, _ string, _ string, _ *controlknobs.Knobs) nettype.PacketConn {
 	return pconn
 }
+
+// TryUpgradeConnectedToConn is no-op on all platforms except linux.
+func TryUpgradeConnectedToConn(pconn nettype.PacketConn, _ string, _ *controlknobs.Knobs) nettype.PacketConn {
+	return pconn
+}

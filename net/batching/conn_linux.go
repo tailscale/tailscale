@@ -61,6 +61,11 @@ type linuxBatchingConn struct {
 	txOffload          atomic.Bool // supports UDP GSO or similar
 	msgsPool           sync.Pool
 	rxqOverflowsMetric *clientmetric.Metric
+	// connected is whether pc is a connected UDP socket. Writes to a
+	// connected socket omit the per-message destination address so the
+	// kernel uses the socket's cached route rather than performing a route
+	// lookup per sendmmsg(2) message.
+	connected bool
 	// neverGSOEqualTail, when non-nil and true, enables a sentinel-tail
 	// workaround in the UDP GSO TX path. It points at a
 	// [controlknobs.Knobs.NeverGSOEqualTail] field so the value can be
@@ -325,6 +330,11 @@ retry:
 		n = len(buffs)
 	}
 
+	if c.connected {
+		for i := range batch.msgs[:n] {
+			batch.msgs[i].Addr = nil
+		}
+	}
 	err := c.writeBatch(batch.msgs[:n])
 	if err != nil && c.txOffload.Load() && neterror.ShouldDisableUDPGSO(err) {
 		c.txOffload.Store(false)
@@ -644,6 +654,19 @@ func getRXQOverflowsMetric(name string) *clientmetric.Metric {
 // to a clientmetric with the supplied name. If knobs is non-nil, UDP GSO
 // and/or UDP GRO may be disabled via control-plane node attributes.
 func TryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetricName string, knobs *controlknobs.Knobs) nettype.PacketConn {
+	return tryUpgradeToConn(pconn, network, rxqOverflowsMetricName, knobs, false)
+}
+
+// TryUpgradeConnectedToConn is like [TryUpgradeToConn] but for a connected
+// UDP socket (one on which connect(2) has been called). The returned [Conn]
+// writes without a per-message destination address, so the addr passed to
+// [Conn.WriteBatchTo] must be the socket's connected remote address; it is
+// only consulted for its address family.
+func TryUpgradeConnectedToConn(pconn nettype.PacketConn, network string, knobs *controlknobs.Knobs) nettype.PacketConn {
+	return tryUpgradeToConn(pconn, network, "", knobs, true)
+}
+
+func tryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetricName string, knobs *controlknobs.Knobs, connected bool) nettype.PacketConn {
 	if runtime.GOOS != "linux" {
 		// Exclude Android.
 		return pconn
@@ -666,7 +689,8 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetr
 		return pconn
 	}
 	b := &linuxBatchingConn{
-		pc: uc,
+		pc:        uc,
+		connected: connected,
 		msgsPool: sync.Pool{
 			New: func() any {
 				ua := &net.UDPAddr{
