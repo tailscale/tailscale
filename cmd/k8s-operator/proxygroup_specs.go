@@ -35,10 +35,6 @@ const (
 	authAPIServerProxySAName = "kube-apiserver-auth-proxy"
 )
 
-func pgNodePortServiceName(proxyGroupName string, replica int32) string {
-	return fmt.Sprintf("%s-%d-nodeport", proxyGroupName, replica)
-}
-
 func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
