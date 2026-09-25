@@ -28,6 +28,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tstime"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/backoff"
 	"tailscale.com/util/httpm"
 )
@@ -149,7 +150,9 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 			}
 
 			var routesSetup bool
-			bo := backoff.NewBackoff(s.Name, ll.Infof, er.maxBackoff)
+			// A freshly created Pod is initially unreachable, so the per-poll backoff message floods the logs
+			// without providing useful information (see tailscale/tailscale#21079) - these logs should be dropped.
+			bo := backoff.NewBackoff(s.Name, logger.Discard, er.maxBackoff)
 			for range numCalls(pgReplicas(pg)) {
 				if ctx.Err() != nil {
 					errChan <- nil
