@@ -197,7 +197,8 @@ type CapabilityVersion int
 //   - 146: 2026-09-02: Client understands [NodeAttrConnReject]; can handle C2N /debug/rejects.
 //   - 147: 2026-09-09: Client handles 429/503 responses with retry-after headers to /machine/ endpoints
 //   - 148: 2026-09-15: Client understands [Node.StableTailnetID]
-const CurrentCapabilityVersion CapabilityVersion = 148
+//   - 149: 2026-09-23: Client supports hybrid wireguard handshakes
+const CurrentCapabilityVersion CapabilityVersion = 149
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
