@@ -400,7 +400,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	supportedGSOKind := stack.GSONotSupported
 	supportedGROKind := groNotSupported
-	if runtime.GOOS == "linux" && buildfeatures.HasGRO {
+	if (runtime.GOOS == "linux" || tstun.DebugNetstackGSO()) && buildfeatures.HasGRO {
 		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
 		supportedGROKind = tcpGROSupported
 		supportedGSOKind = stack.HostGSOSupported
