@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
@@ -1511,7 +1512,7 @@ func (t *Wrapper) InjectOutboundPacketBuffer(pkt *netstack_PacketBuffer) error {
 }
 
 func (t *Wrapper) BatchSize() int {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" || DebugNetstackGSO() {
 		// Always setup Linux to handle vectors, even in the very rare case that
 		// the underlying t.tdev returns 1. gVisor GSO is always enabled for
 		// Linux, and we cannot make a determination on gVisor usage at
@@ -1521,6 +1522,20 @@ func (t *Wrapper) BatchSize() int {
 	}
 	return t.tdev.BatchSize()
 }
+
+// DebugNetstackGSO reports whether TS_DEBUG_NETSTACK_GSO is set, which
+// enables gVisor GSO and GRO on platforms other than Linux (where they are
+// always on). Injected outbound GSO packets are split into per-MTU segments
+// by [Wrapper.Read], so wireguard-go sees batches rather than single packets,
+// which is what makes batched UDP sends possible. This is an evaluation knob.
+//
+// TODO(bradfitz): decide whether to enable this by default on macOS and
+// remove the knob.
+func DebugNetstackGSO() bool {
+	return debugNetstackGSO()
+}
+
+var debugNetstackGSO = envknob.RegisterBool("TS_DEBUG_NETSTACK_GSO")
 
 // Unwrap returns the underlying tun.Device.
 func (t *Wrapper) Unwrap() tun.Device {

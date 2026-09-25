@@ -95,6 +95,12 @@ type endpoint struct {
 	endpointState      map[netip.AddrPort]*endpointState // netip.AddrPort type for key (instead of [epAddr]) as [endpointState] is irrelevant for Geneve-encapsulated paths
 	isCallMeMaybeEP    map[netip.AddrPort]bool
 
+	// peerConn, if non-nil, is a connected socket to bestAddr. See
+	// [peerConn] and [endpoint.peerConnForSendLocked].
+	peerConn            *peerConn
+	peerConnOpening     bool      // whether an openPeerConn goroutine is running
+	peerConnLastAttempt mono.Time // when openPeerConn was last started
+
 	// The following fields are related to the new "silent disco"
 	// implementation that's a WIP as of 2022-10-20.
 	// See #540 for background.
@@ -138,6 +144,7 @@ func (de *endpoint) udpRelayEndpointReady(maybeBest addrQuality) {
 func (de *endpoint) setBestAddrLocked(v addrQuality) {
 	if v.epAddr != de.bestAddr.epAddr {
 		de.probeUDPLifetime.resetCycleEndpointLocked()
+		de.closePeerConnLocked("best address changed")
 
 		// Reaching here, if we are upgrading from an invalid (missing) address
 		// to a valid one, record metrics:
@@ -1120,6 +1127,7 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 	}
 	de.noteTxActivityExtTriggerLocked(now)
 	de.lastSendAny = now
+	pc := de.peerConnForSendLocked(udpAddr, now)
 	de.mu.Unlock()
 
 	if !udpAddr.ap.IsValid() && !derpAddr.IsValid() {
@@ -1135,13 +1143,31 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 	}
 	var err error
 	if udpAddr.ap.IsValid() {
-		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
+		sent := false
+		if pc != nil {
+			err = pc.writeWireGuardBatch(buffs, offset)
+			if err == nil {
+				sent = true
+				metricSendPeerConn.Add(int64(len(buffs)))
+			} else {
+				// Unlike the main sockets, a connected socket surfaces
+				// ICMP errors as send errors. Don't let those feed
+				// noteBadEndpoint; just drop the peerConn and retry
+				// below on the main socket.
+				metricPeerConnSendError.Add(1)
+				pc.close(fmt.Sprintf("send error: %v", err))
+				de.detachPeerConn(pc)
+			}
+		}
+		if !sent {
+			_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
 
-		// If the error is known to indicate that the endpoint is no longer
-		// usable, clear the endpoint statistics so that the next send will
-		// re-evaluate the best endpoint.
-		if err != nil && isBadEndpointErr(err) {
-			de.noteBadEndpoint(udpAddr)
+			// If the error is known to indicate that the endpoint is no longer
+			// usable, clear the endpoint statistics so that the next send will
+			// re-evaluate the best endpoint.
+			if err != nil && isBadEndpointErr(err) {
+				de.noteBadEndpoint(udpAddr)
+			}
 		}
 
 		var txBytes int

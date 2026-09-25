@@ -5,7 +5,10 @@
 
 package magicsock
 
-import "tailscale.com/disco"
+import (
+	"tailscale.com/disco"
+	"tailscale.com/types/nettype"
+)
 
 func (c *Conn) DontFragSetting() (bool, error) {
 	return false, nil
@@ -24,4 +27,8 @@ func (c *Conn) UpdatePMTUD() {
 
 func pmtuShouldLogDiscoTxErr(m disco.Message, err error) bool {
 	return true
+}
+
+func (c *Conn) setDontFragmentOn(pconn nettype.PacketConn, network string, enable bool) error {
+	return nil
 }

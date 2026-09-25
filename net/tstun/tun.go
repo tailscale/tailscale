@@ -78,6 +78,9 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if wrapTUNBatching != nil {
+		dev = wrapTUNBatching(dev, logf)
+	}
 	if err := waitInterfaceUp(dev, 90*time.Second, logf); err != nil {
 		dev.Close()
 		return nil, "", err
@@ -130,6 +133,11 @@ func cleanUpPlan9Interfaces() {
 // tunDiagnoseFailure, if non-nil, does OS-specific diagnostics of why
 // TUN failed to work.
 var tunDiagnoseFailure func(tunName string, logf logger.Logf, err error)
+
+// wrapTUNBatching, if non-nil, wraps a freshly created tun.Device with a
+// platform-specific batching implementation. It is set by an init function
+// on platforms that have one; see tun_batch_darwin.go.
+var wrapTUNBatching func(dev tun.Device, logf logger.Logf) tun.Device
 
 // Diagnose tries to explain a tuntap device creation failure.
 // It pokes around the system and logs some diagnostic info that might
