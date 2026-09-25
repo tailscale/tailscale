@@ -1278,7 +1278,28 @@ func (c *sclient) run(ctx context.Context) error {
 	}
 }
 
+// maxUnknownFrameLen is the largest declared length of an unknown frame type
+// that the server is willing to read and discard. It is the size of the
+// largest frame a regular (non-mesh) client can send today, a
+// [derp.FrameSendPacket] with a full-size packet, which leaves room for
+// future frame types without letting a client make the server drain an
+// arbitrary amount of data.
+//
+// It must not exceed [minRateLimitTokenBucketSize]: [sclient.rateLimit] charges
+// at most that many tokens per frame on the assumption that any larger frame
+// closes the connection, and this bound is what makes that true for unknown
+// frame types.
+const maxUnknownFrameLen = derp.MaxPacketSize + derp.KeyLen
+
+// handleUnknownFrame discards the body of a frame of a type the server doesn't
+// know, so that newer clients can send new frame types to older servers. It
+// closes the connection if the frame is unreasonably large, since otherwise a
+// client could have the server read (and be charged rate-limit tokens for)
+// far less than the frame's actual length.
 func (c *sclient) handleUnknownFrame(ft derp.FrameType, fl uint32) error {
+	if fl > maxUnknownFrameLen {
+		return fmt.Errorf("unknown frame type %d too large: %d bytes", ft, fl)
+	}
 	_, err := io.CopyN(io.Discard, c.br, int64(fl))
 	return err
 }

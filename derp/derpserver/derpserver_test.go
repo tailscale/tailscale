@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"expvar"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -2466,4 +2468,66 @@ func TestWriterWakeStress(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+// TestUnknownFrameSizeLimit checks that the server discards small frames of
+// unknown types, keeping the connection open, but closes the connection on
+// an unknown frame whose declared length exceeds maxUnknownFrameLen. Without
+// that bound, a client could make the server read far more from the socket
+// than the per-client rate limiter charged it for.
+func TestUnknownFrameSizeLimit(t *testing.T) {
+	s := New(key.NewNode(), t.Logf)
+	defer s.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// unknownFrameType is a frame type the server doesn't know.
+	const unknownFrameType = derp.FrameType(0xfe)
+
+	writeUnknownFrame := func(t *testing.T, tc *writerTestClient, declaredLen uint32, body []byte) {
+		t.Helper()
+		bw := bufio.NewWriter(tc.nc)
+		if err := derp.WriteFrameHeader(bw, unknownFrameType, declaredLen); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := bw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("small_is_discarded", func(t *testing.T) {
+		tc := newWriterTestClient(t, s, ln)
+		defer tc.close()
+
+		body := bytes.Repeat([]byte{'x'}, maxUnknownFrameLen)
+		writeUnknownFrame(t, tc, uint32(len(body)), body)
+
+		// The connection must still work after the unknown frame.
+		tc.sendToSelf(t, []byte("still here"))
+	})
+
+	t.Run("huge_closes_conn", func(t *testing.T) {
+		tc := newWriterTestClient(t, s, ln)
+		defer tc.close()
+
+		// Declare a frame far larger than the server should read, but only
+		// send a little of it. If the server tried to drain the declared
+		// length, it would wait on the socket instead of closing.
+		writeUnknownFrame(t, tc, math.MaxUint32, []byte("just a bit"))
+
+		// Read the raw connection rather than using tc.c.Recv, which
+		// resets the read deadline to its own much longer timeout.
+		// The server should close the connection, giving us EOF.
+		tc.nc.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if _, err := io.Copy(io.Discard, tc.nc); err != nil {
+			t.Fatalf("server did not close the connection: %v", err)
+		}
+	})
 }
