@@ -33,6 +33,7 @@ import (
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
+	tsresolver "tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
@@ -195,11 +196,11 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 
 	// Set up the DNS manager to rewrite responses for app domains
 	// to answer with Magic IPs.
-	dnsManager.SetQueryResponseMapper(func(bs []byte) []byte {
+	dnsManager.SetQueryResponseMapper(func(res *tsresolver.Response) []byte {
 		if !e.conn25.isConfigured() {
-			return bs
+			return res.Bs
 		}
-		return e.conn25.mapDNSResponse(bs)
+		return e.conn25.mapDNSResponse(res)
 	})
 
 	// Intercept packets from the tun device and from WireGuard
@@ -1237,8 +1238,9 @@ var (
 // mapDNSResponse parses and inspects the DNS response. If the domain
 // is determined to belong to app this node is client for, it assigns addresses
 // for connecting and rewrites the response to contain Magic IPs.
-func (c *Conn25) mapDNSResponse(buf []byte) []byte {
+func (c *Conn25) mapDNSResponse(res *tsresolver.Response) []byte {
 	var p dnsmessage.Parser
+	buf := res.Bs
 	hdr, err := p.Start(buf)
 	if err != nil {
 		return buf
