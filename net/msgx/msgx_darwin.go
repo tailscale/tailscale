@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -218,20 +219,45 @@ func recv(rc syscall.RawConn, msgs []Message) (n int, err error) {
 	return n, nil
 }
 
-// Send transmits up to [MaxBatch] of payloads on rc's socket in one system
-// call and returns how many the kernel accepted, which may be fewer than
-// offered; the caller retries the remainder. The socket must be connected:
-// sendmsg_x takes no per-message destination. It blocks (parked on the
-// network poller) while the socket's send buffer is full.
+// Send transmits up to [MaxBatch] of payloads on rc's connected socket in
+// one system call and returns how many the kernel accepted, which may be
+// fewer than offered; the caller retries the remainder.
+//
+// A partial batch is never reported as an error: once at least one datagram
+// has been accepted, the kernel folds EAGAIN, ENOBUFS, EINTR, and EMSGSIZE
+// on a later one into a short count (see the done label in sendmsg_x in
+// xnu's bsd/kern/uipc_syscalls.c). So a non-nil error means nothing was
+// sent. Of those, EAGAIN is handled here by parking on the network poller
+// until the socket is writable; the rest are returned. ENOBUFS in
+// particular is how Darwin reports a full interface output queue for UDP,
+// and means the datagrams were dropped, not that the socket is broken.
+//
+// On a connected datagram socket the kernel builds all the packets in one
+// pass (sosend_list); see [SendTo] for unconnected sockets.
 func Send(rc syscall.RawConn, payloads [][]byte) (n int, err error) {
 	if !Available() {
 		return 0, ErrUnavailable
 	}
-	return send(rc, payloads)
+	return send(rc, payloads, netip.AddrPort{})
 }
 
-// send is [Send] without the availability check, for the self-test.
-func send(rc syscall.RawConn, payloads [][]byte) (n int, err error) {
+// SendTo is like [Send] but for an unconnected socket: every payload is sent
+// to addr. The kernel handles the messages one at a time internally (each
+// with its own route lookup, as sendto(2) would), but in a single system
+// call, with the same short-count semantics for errors after the first
+// message.
+func SendTo(rc syscall.RawConn, payloads [][]byte, addr netip.AddrPort) (n int, err error) {
+	if !Available() {
+		return 0, ErrUnavailable
+	}
+	if !addr.IsValid() {
+		return 0, errors.New("msgx: SendTo: invalid address")
+	}
+	return send(rc, payloads, addr)
+}
+
+// send is [Send] (addr zero) or [SendTo] without the availability check.
+func send(rc syscall.RawConn, payloads [][]byte, addr netip.AddrPort) (n int, err error) {
 	if len(payloads) == 0 {
 		return 0, nil
 	}
@@ -240,13 +266,21 @@ func send(rc syscall.RawConn, payloads [][]byte) (n int, err error) {
 	}
 	st := statePool.Get().(*callState)
 	defer statePool.Put(st)
+	var (
+		name    unsafe.Pointer
+		namelen uint32
+	)
+	if addr.IsValid() {
+		namelen = addrPortToSockaddr(addr, &st.names[0])
+		name = unsafe.Pointer(&st.names[0])
+	}
 	for i, p := range payloads {
 		if len(p) == 0 {
 			return 0, fmt.Errorf("msgx: payload %d is empty", i)
 		}
 		st.iovs[i] = syscall.Iovec{Base: &p[0], Len: uint64(len(p))}
-		// All other fields must be zero on input.
-		st.hdrs[i] = msghdrX{Iov: &st.iovs[i], Iovlen: 1}
+		// Fields other than the address and iov must be zero on input.
+		st.hdrs[i] = msghdrX{Name: name, Namelen: namelen, Iov: &st.iovs[i], Iovlen: 1}
 	}
 	var (
 		r     uintptr
@@ -269,6 +303,32 @@ func send(rc syscall.RawConn, payloads [][]byte) (n int, err error) {
 		return 0, fmt.Errorf("msgx: sendmsg_x: %w", errno)
 	}
 	return int(r), nil
+}
+
+// addrPortToSockaddr fills sa with ap as a sockaddr_in or sockaddr_in6 and
+// returns the length the kernel should be told.
+func addrPortToSockaddr(ap netip.AddrPort, sa *syscall.RawSockaddrInet6) uint32 {
+	*sa = syscall.RawSockaddrInet6{}
+	if ap.Addr().Is4() || ap.Addr().Is4In6() {
+		sa4 := (*syscall.RawSockaddrInet4)(unsafe.Pointer(sa))
+		sa4.Len = syscall.SizeofSockaddrInet4
+		sa4.Family = syscall.AF_INET
+		sa4.Port = ntohs(ap.Port())
+		sa4.Addr = ap.Addr().Unmap().As4()
+		return syscall.SizeofSockaddrInet4
+	}
+	sa.Len = syscall.SizeofSockaddrInet6
+	sa.Family = syscall.AF_INET6
+	sa.Port = ntohs(ap.Port())
+	sa.Addr = ap.Addr().As16()
+	if z := ap.Addr().Zone(); z != "" {
+		if n, err := strconv.Atoi(z); err == nil {
+			sa.Scope_id = uint32(n)
+		} else if ifi, err := net.InterfaceByName(z); err == nil {
+			sa.Scope_id = uint32(ifi.Index)
+		}
+	}
+	return syscall.SizeofSockaddrInet6
 }
 
 // sockaddrToAddrPort converts a sockaddr written by the kernel (of namelen
@@ -320,7 +380,7 @@ func selfTest() error {
 	}
 	want := [][]byte{[]byte("one"), []byte("two"), []byte("three")}
 	for rem := want; len(rem) > 0; {
-		n, err := send(sendRC, rem)
+		n, err := send(sendRC, rem, netip.AddrPort{})
 		if err != nil {
 			return stepErr(selfTestSendFailed, "sendmsg_x: %w", err)
 		}

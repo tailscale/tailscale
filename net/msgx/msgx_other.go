@@ -7,6 +7,7 @@ package msgx
 
 import (
 	"errors"
+	"net/netip"
 	"syscall"
 )
 
@@ -26,5 +27,10 @@ func Recv(rc syscall.RawConn, msgs []Message) (int, error) {
 
 // Send implements the package API; it always returns [ErrUnavailable].
 func Send(rc syscall.RawConn, payloads [][]byte) (int, error) {
+	return 0, ErrUnavailable
+}
+
+// SendTo implements the package API; it always returns [ErrUnavailable].
+func SendTo(rc syscall.RawConn, payloads [][]byte, addr netip.AddrPort) (int, error) {
 	return 0, ErrUnavailable
 }

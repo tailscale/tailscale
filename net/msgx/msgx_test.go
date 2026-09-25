@@ -84,3 +84,53 @@ func TestRoundTrip(t *testing.T) {
 	}
 	t.Logf("%d datagrams in %d Recv calls", count, batches)
 }
+
+// TestSendTo sends from an unconnected socket with per-message destinations.
+func TestSendTo(t *testing.T) {
+	if !Available() {
+		t.Skipf("msgx unavailable: %v", UnavailableReason())
+	}
+	recvConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recvConn.Close()
+	sendConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sendConn.Close()
+	sendRC, _ := sendConn.SyscallConn()
+	dst := recvConn.LocalAddr().(*net.UDPAddr).AddrPort()
+
+	const count = 50
+	payloads := make([][]byte, count)
+	for i := range payloads {
+		payloads[i] = []byte{byte(i), 'y'}
+	}
+	calls := 0
+	for rem := payloads; len(rem) > 0; {
+		n, err := SendTo(sendRC, rem, dst)
+		if err != nil {
+			t.Fatalf("SendTo: %v", err)
+		}
+		if n == 0 {
+			t.Fatal("SendTo accepted nothing")
+		}
+		calls++
+		rem = rem[n:]
+	}
+	recvConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	from := sendConn.LocalAddr().(*net.UDPAddr).AddrPort()
+	buf := make([]byte, 16)
+	for i := range payloads {
+		n, src, err := recvConn.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		if string(buf[:n]) != string(payloads[i]) || src != from {
+			t.Fatalf("datagram %d: got %q from %v, want %q from %v", i, buf[:n], src, payloads[i], from)
+		}
+	}
+	t.Logf("%d datagrams in %d SendTo calls", count, calls)
+}
