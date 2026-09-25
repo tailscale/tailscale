@@ -324,10 +324,14 @@ type dupClientSet struct {
 	// data since.
 	last *sclient
 
-	// sendHistory is a log of which members of set have sent
-	// frames to the derp server, with adjacent duplicates
-	// removed. When a member of set is removed, the same
-	// element(s) are removed from sendHistory.
+	// sendHistory records which members of set have sent frames to
+	// the DERP server, ordered from least to most recently active.
+	// Each member appears at most once: recording a member that is
+	// already present moves it to the end instead of appending a
+	// duplicate. That keeps the slice bounded by the size of set.
+	// Without the bound, two connections sharing a key and taking
+	// turns sending could grow it without limit. When a member of
+	// set is removed, it is also removed from sendHistory.
 	sendHistory []*sclient
 }
 
@@ -1879,7 +1883,14 @@ func (s *Server) noteClientActivity(c *sclient) {
 		}
 	}
 
-	// Append this client to the list of clients who spoke last.
+	// Record c as the most recent sender. If c is already in
+	// sendHistory, remove the earlier occurrence first so that each
+	// member appears at most once and the slice stays bounded by the
+	// number of connections in the set. The LastEqual check above
+	// already handled the case where c is the current tail.
+	if i := slices.Index(dup.sendHistory, c); i >= 0 {
+		dup.sendHistory = slices.Delete(dup.sendHistory, i, i+1)
+	}
 	dup.sendHistory = append(dup.sendHistory, c)
 }
 
