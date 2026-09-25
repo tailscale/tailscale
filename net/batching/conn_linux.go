@@ -734,6 +734,17 @@ func tryUpgradeToConn(pconn nettype.PacketConn, network string, rxqOverflowsMetr
 	return b
 }
 
+// MaxBatchSize returns the number of datagrams a [Conn] returned by
+// [TryUpgradeToConn] on this platform can read or write per syscall, or 1 if
+// no upgrade is possible.
+func MaxBatchSize() int {
+	if runtime.GOOS != "linux" {
+		// Exclude Android.
+		return 1
+	}
+	return MaximumWriteBatchSize
+}
+
 var controlMessageSize = -1 // bomb if used for allocation before init
 
 func init() {

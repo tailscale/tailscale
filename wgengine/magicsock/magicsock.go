@@ -3481,13 +3481,7 @@ var _ conn.Bind = (*connBind)(nil)
 //
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.BatchSize
 func (c *connBind) BatchSize() int {
-	// TODO(raggi): determine by properties rather than hardcoding platform behavior
-	switch runtime.GOOS {
-	case "linux":
-		return conn.IdealBatchSize
-	default:
-		return 1
-	}
+	return batching.MaxBatchSize()
 }
 
 // Open is called by WireGuard to create a UDP binding.
