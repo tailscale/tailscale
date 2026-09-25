@@ -437,6 +437,12 @@ func (e *Env) AddNetwork(opts ...any) *vnet.Network {
 	return e.cfg.AddNetwork(opts...)
 }
 
+// FirstNetwork returns the first existing network. If no network exists, it
+// returns nil.
+func (e *Env) FirstNetwork() *vnet.Network {
+	return e.cfg.FirstNetwork()
+}
+
 // RegisterFile registers a file with the vnet fileserver.
 // It is served at http://files.tailscale/<path>.
 func (e *Env) RegisterFile(path string, data []byte) {
@@ -564,16 +570,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 	return n.vnetNode.LanIP(net)
 }
 
-// DropControlTraffic sets up a blackhole for control traffic for just this
-// node on all the networks belonging to the node.
-func (n *Node) DropControlTraffic() {
-	for _, network := range n.nets {
-		network.BlackholeControlForAddr(n.LanIP(network))
-	}
-}
-
 // NodeOption types for configuring nodes.
-
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
 type nodeOptTailscaleSSH struct{}
@@ -2327,11 +2324,11 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
 		pingCancel()
 		if err == nil && pr.Err == "" {
-			if got := classifyPing(pr); got == wantRoute {
-				e.t.Logf("Saw ping type %q", got)
+			got := classifyPing(pr)
+			e.t.Logf("Saw ping type %q", got)
+			if got == wantRoute {
 				return nil
 			} else {
-				e.t.Logf("Saw ping type %q", got)
 				lastRoute = got
 			}
 		}
@@ -2343,7 +2340,68 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
 }
 
+// PingSettle retries disco pings every 1 second between nodes from -> to. The
+// intention is to have the route settle into the desired state at ctx timeout,
+// making the last returned type the settled state of the connection. If the
+// connection is direct before the timeout, the method returns early.
+// If no ping has been completed, nil will be returned.
+func (e *Env) PingSettle(from, to *Node, timeout time.Duration) (*ipnstate.PingResult, error) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
+	defer cancel()
+	toSt, err := to.agent.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ping: can't get %s status: %w", to.name, err)
+	}
+	if len(toSt.Self.TailscaleIPs) == 0 {
+		return nil, fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
+	}
+	targetIP := toSt.Self.TailscaleIPs[0]
+	var lastRes *ipnstate.PingResult
+	n := 0
+	for ctx.Err() == nil {
+		n++
+		e.t.Logf("ping: attempt %d to %v ...", n, targetIP)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
+		pingCancel()
+		if err != nil {
+			e.t.Logf("ping: attempt %d error: %v", n, err)
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if pr.Err != "" {
+			return nil, errors.New(pr.Err)
+		}
+		e.t.Logf("ping: attempt %d: derp=%d endpoint=%v latency=%v", n, pr.DERPRegionID, pr.Endpoint, pr.LatencySeconds)
+		// When DERP on the result is 0, we have settled onto a direct path.
+		if pr.DERPRegionID == 0 {
+			return pr, nil
+		}
+		lastRes = pr
+		select {
+		case <-ctx.Done():
+			return lastRes, nil
+		case <-time.After(time.Second):
+		}
+	}
+	if lastRes != nil {
+		return lastRes, nil
+	}
+	return nil, fmt.Errorf("ping: ping no response (ctx: %v)", ctx.Err())
+}
+
 // NumNodes returns the current number of nodes configured in the env.
-func (env *Env) NumNodes() int {
-	return len(env.nodes)
+func (e *Env) NumNodes() int {
+	return len(e.nodes)
+}
+
+// DropControlTraffic sets up a blackhole for control traffic for just this
+// node on all the networks belonging to the node.
+func (e *Env) DropControlTraffic(n *Node) {
+	for _, network := range n.nets {
+		network.BlackholeControlForAddr(n.LanIP(network))
+	}
 }
