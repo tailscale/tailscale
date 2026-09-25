@@ -6,7 +6,7 @@
 // used in place of an http.Server. A safeweb.Server adds mitigations for
 // Cross-Site Request Forgery (CSRF) attacks, and annotates requests with
 // appropriate Cross-Origin Resource Sharing (CORS), Content-Security-Policy,
-// X-Content-Type-Options, and Referer-Policy headers.
+// X-Content-Type-Options, and Referrer-Policy headers.
 //
 // To use safeweb, the application must separate its "browser" routes from "API"
 // routes, with each on its own http.ServeMux. When serving requests, the
@@ -24,7 +24,7 @@
 // In addition, browser routes will also have the following applied:
 //   - Content-Security-Policy header that disallows inline scripts, framing, and third party resources.
 //   - X-Content-Type-Options header on responses set to "nosniff" to prevent MIME type sniffing attacks.
-//   - Referer-Policy header set to "same-origin" to prevent leaking referrer information to third parties.
+//   - Referrer-Policy header set to "same-origin" to prevent leaking referrer information to third parties.
 //
 // By default the Content-Security-Policy header will disallow inline styles.
 // This can be overridden by setting the CSPAllowInlineStyles field to true in
@@ -376,7 +376,7 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveBrowser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", s.csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referer-Policy", "same-origin")
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	if s.SecureContext {
 		w.Header().Set("Strict-Transport-Security", cmp.Or(s.StrictTransportSecurityOptions, DefaultStrictTransportSecurityOptions))
