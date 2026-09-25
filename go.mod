@@ -52,7 +52,7 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
 	github.com/go-logr/zapr v1.3.0
 	github.com/go-ole/go-ole v1.3.0
-	github.com/go4org/hashtriemap v0.0.0-20260824042624-45fcf11fca0e
+	github.com/go4org/hashtriemap v0.0.0-20260925222741-44e5305f85d9
 	github.com/go4org/plan9netshell v0.0.0-20250324183649-788daa080737
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gokrazy/breakglass v0.0.0-20260711072910-0f882c44303e
