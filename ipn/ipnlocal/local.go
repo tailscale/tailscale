@@ -286,7 +286,6 @@ type LocalBackend struct {
 	lastDeadlockCheckUnix                   atomic.Int64
 	deadlockChecksInFlight                  atomic.Int64
 	deadlockTimerMu                         sync.Mutex
-	deadlockTimer                           *time.Timer
 	deadlockProbeTimer                      *time.Timer
 
 	// goTracker accounts for all goroutines started by LocalBacked, primarily
