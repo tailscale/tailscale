@@ -462,11 +462,8 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
-			// Sandboxed macOS: split traffic stays pointed at quad-100 (upstreams
-			// may only be reachable via the tunnel). With NodeAttrScopeQuad100OnMacOS
-			// set, quad-100 is scoped to the match domains so public names fall
-			// through to the OS resolver (e.g. a DoH profile) rather than being
-			// shadowed. See the -no-knob variant for the default. tailscale/corp#45534.
+			// A custom split resolver requires Mode B even with macOS scoping
+			// enabled: otherwise the split suffix becomes a global search suffix.
 			name: "routes-split-sandboxed-darwin",
 			in: Config{
 				Routes:        upstreams("corp.com", "2.2.2.2"),
@@ -480,11 +477,11 @@ func TestManager(t *testing.T) {
 			},
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
-				SearchDomains: fqdns("tailscale.com", "universe.tf"),
-				MatchDomains:  fqdns("corp.com"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
+					".", "8.8.8.8",
 					"corp.com.", "2.2.2.2"),
 			},
 			goos:           "darwin",
@@ -517,13 +514,12 @@ func TestManager(t *testing.T) {
 			sandboxedMacOS: true,
 		},
 		{
-			// An ExtraRecord paired with an authoritative (resolver-less) route
-			// is scoped like any other split domain, on every platform. The
-			// darwin and linux variants must agree.
+			// An ExtraRecord can remain scoped when both its forward and
+			// synthesized PTR records have authoritative routes.
 			name: "extra-record-routed-scopes-quad100",
 			in: Config{
 				Hosts:         hosts("extra.example.com.", "100.64.0.9"),
-				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", ""),
+				Routes:        upstreams("corp.ts.net.", "", "extra.example.com.", "", "64.100.in-addr.arpa.", ""),
 				SearchDomains: fqdns("corp.ts.net"),
 			},
 			split: true,
@@ -534,11 +530,11 @@ func TestManager(t *testing.T) {
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("corp.ts.net"),
-				MatchDomains:  fqdns("corp.ts.net", "extra.example.com"),
+				MatchDomains:  fqdns("64.100.in-addr.arpa", "corp.ts.net", "extra.example.com"),
 			},
 			rs: resolver.Config{
 				Hosts:        hosts("extra.example.com.", "100.64.0.9"),
-				LocalDomains: fqdns("corp.ts.net.", "extra.example.com."),
+				LocalDomains: fqdns("64.100.in-addr.arpa.", "corp.ts.net.", "extra.example.com."),
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,
@@ -688,10 +684,10 @@ func TestManager(t *testing.T) {
 			goos: "darwin",
 		},
 		{
-			// The `routes-multi-split-linux` test case above on iOS should NOT result in a split
-			// DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
+			// The `routes-multi-split-linux` test case above on iOS: quad-100 stays
+			// the primary resolver (the scoping optimization is skipped when split
+			// routes carry custom resolvers), so MatchDomains is empty. Split-DNS
+			// suffixes are match-only and never enter the search list.
 			name: "routes-multi-does-not-split-on-ios",
 			in: Config{
 				Routes: upstreams(
@@ -786,10 +782,9 @@ func TestManager(t *testing.T) {
 			goos: "darwin",
 		},
 		{
-			// The `magic-split` test case above on iOS should NOT result in a split DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
-			name: "magic-split-does-not-split-on-ios",
+			// The forward records are covered, but their public-IP PTR names
+			// are not. Keep quad-100 primary so it can answer those PTR queries.
+			name: "magic-split-uncovered-ptr-keeps-primary-on-ios",
 			in: Config{
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
@@ -797,7 +792,7 @@ func TestManager(t *testing.T) {
 				Routes:        upstreams("ts.com", ""),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
-			split: false,
+			split: true,
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
@@ -893,10 +888,10 @@ func TestManager(t *testing.T) {
 			goos: "darwin",
 		},
 		{
-			// The `routes-magic-split-linux` test case above on Darwin should NOT result in a
-			// split DNS configuration.
-			// Check that MatchDomains is empty. Due to Apple limitations, we cannot set MatchDomains
-			// without those domains also being SearchDomains.
+			// The `routes-magic-split-linux` test case above on iOS: quad-100 stays
+			// the primary resolver (the scoping optimization is skipped when split
+			// routes carry custom resolvers), so MatchDomains is empty. Split-DNS
+			// suffixes are match-only and never enter the search list.
 			name: "routes-magic-does-not-split-on-ios",
 			in: Config{
 				Routes: upstreams(
@@ -991,8 +986,8 @@ func TestManager(t *testing.T) {
 			split: true,
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
-				SearchDomains: fqdns("optimistic-display.ts.net"),
-				MatchDomains:  fqdns("ts.net"),
+				SearchDomains: fqdns("optimistic-display.ts.net."),
+				MatchDomains:  fqdns("optimistic-display.ts.net.", "ts.net."),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
@@ -1016,7 +1011,7 @@ func TestManager(t *testing.T) {
 			split: true,
 			os: OSConfig{
 				Nameservers:   serviceAddr46,
-				SearchDomains: fqdns("optimistic-display.ts.net"),
+				SearchDomains: fqdns("optimistic-display.ts.net."),
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
