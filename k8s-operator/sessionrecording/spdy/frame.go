@@ -22,6 +22,10 @@ const (
 	SYN_PING   ControlFrameType = 6 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.5
 )
 
+// maxHeaderBlockLength bounds the total decompressed size of a single SPDY
+// Name/Value header block that parseHeaders will read from an untrusted peer.
+const maxHeaderBlockLength = 1 << 20 // 1 MiB
+
 // spdyFrame is a parsed SPDY frame as defined in
 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt
 // A SPDY frame can be either a control frame or a data frame.
@@ -178,6 +182,14 @@ func (sf *spdyFrame) parseHeaders(z *zlibReader, log *zap.SugaredLogger) (http.H
 // also advances the provided reader past the headers block.
 // See also https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.10
 func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, error) {
+	// The Name/Value block is zlib compressed and its declared field lengths
+	// are attacker controlled. zlib can expand ~1000x, so without a ceiling a
+	// peer can turn a small control frame into gigabytes of decompressed data
+	// (the field lengths below feed io.CopyN and a uint32->int conversion). Cap
+	// the decompressed bytes we're willing to read for a single header block.
+	// Real 'kubectl exec/attach' blocks are a few hundred bytes; the websocket
+	// recorder applies an equivalent payload cap in ../ws/message.go.
+	decompressor = io.LimitReader(decompressor, maxHeaderBlockLength)
 	buf := bufPool.Get().(*bytes.Buffer)
 	defer bufPool.Put(buf)
 	buf.Reset()
@@ -210,7 +222,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	if err != nil {
 		return nil, fmt.Errorf("error determining num headers: %v", err)
 	}
-	h := make(http.Header, numHeaders)
+	h := make(http.Header)
 	for range numHeaders {
 		name, err := readLenBytes()
 		if err != nil {
