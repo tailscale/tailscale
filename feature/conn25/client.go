@@ -40,36 +40,27 @@ type client struct {
 	byConnKey       map[key.NodePublic]set.Set[netip.Prefix]
 }
 
-// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
-// See also [Conn25Datapath.ClientTransitIPForMagicIP].
-func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.assignments.lookupByMagicIP(magicIP)
-	if ok {
-		return v.transit, true
-	}
-	return netip.Addr{}, false
+type addrs struct {
+	dst             netip.Addr
+	magic           netip.Addr
+	transit         netip.Addr
+	domain          dnsname.FQDN
+	app             string
+	expiresAt       time.Time
+	activeFlowCount int
+	zeroFlowTime    time.Time
 }
 
-// linkLocalAllow returns true if the provided packet with a link-local Dst address has a
-// Dst that is one of our transit IPs, and false otherwise.
-// Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
-// but conn25 uses link-local addresses for transit IPs.
-// Let the filter know if this is one of our addresses and should be allowed.
-func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ok := c.isKnownTransitIP(p.Dst.Addr())
-	if ok {
-		return true, packetFilterAllowReason
-	}
-	return false, ""
+func (as addrs) isValid() bool {
+	return as.dst.IsValid()
 }
 
-func (c *client) isKnownTransitIP(tip netip.Addr) bool {
-	_, ok := c.assignments.lookupByTransitIP(tip)
-	return ok
+func (as addrs) is4() bool {
+	return as.dst.Is4()
+}
+
+func (as addrs) is6() bool {
+	return as.dst.Is6()
 }
 
 func (c *client) reconfig() {
@@ -97,6 +88,57 @@ func (c *client) reset() {
 	c.v6TransitIPPool = newIPPool(ipSets.v6Transit)
 	c.assignments = addrAssignments{clock: c.assignments.clock}
 	c.byConnKey = nil
+}
+
+func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
+	b := dnsmessage.NewBuilder(nil, hdr)
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return nil, err
+	}
+	for _, q := range questions {
+		if err := b.Question(q); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return nil, err
+	}
+
+	// make an answer for each rewrite
+	for _, rw := range answers {
+		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		if !as.isValid() {
+			return nil, errors.New("connector addresses empty")
+		}
+		name, err := dnsmessage.NewName(rw.domain.WithTrailingDot())
+		if err != nil {
+			return nil, err
+		}
+		if rw.dst.Is4() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
+			if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
+				return nil, err
+			}
+		} else if rw.dst.Is6() {
+			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
+			if err := b.AAAAResource(rhdr, dnsmessage.AAAAResource{AAAA: as.magic.As16()}); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, errors.New("unexpected neither 4 nor 6")
+		}
+	}
+	// We do _not_ include the additional section in our rewrite. (We don't want to include
+	// eg DNSSEC info, or other extra info like related records).
+	out, err := b.Finish()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // reserveAddresses tries to make an assignment of addrs from the address pools
@@ -178,16 +220,6 @@ func (c *client) reserveAddresses(appName string, domain dnsname.FQDN, dst netip
 	return as, nil
 }
 
-func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView) error {
-	if conn.Key().IsZero() {
-		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.insertTransitConnMapping(tip, conn.Key())
-}
-
 func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	select {
 	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
@@ -198,6 +230,103 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
 		return errors.New("queue full")
 	}
+}
+
+// resendTransitIPMapping enqueues a request to re-establish an existing
+// transit IP-real IP mapping after a connector tells the client that the
+// mapping does not exist on its end. If a mapping is not found on the client
+// either, this is a no-op.
+func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
+	mapping, ok := c.assignments.lookupByTransitIP(transitIP)
+	if !ok {
+		// We have no mappings for this transit IP, so nothing to resend.
+		return
+	}
+	err := c.enqueueAddressAssignment(mapping)
+	if err != nil {
+		c.logf("error enqueueing address assignment for resend: %v", err)
+	}
+}
+
+func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView) error {
+	if conn.Key().IsZero() {
+		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.insertTransitConnMapping(tip, conn.Key())
+}
+
+// insertTransitConnMapping adds an entry to the byConnKey map
+// for the provided transitIP (as a prefix).
+// The provided transitIP must already be present in the byTransitIP map.
+func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
+	if _, ok := c.assignments.lookupByTransitIP(tip); !ok {
+		return errors.New("transit IP is not already known")
+	}
+
+	ctips, ok := c.byConnKey[connKey]
+	tipp := netip.PrefixFrom(tip, tip.BitLen())
+	if !ok {
+		ctips.Make()
+		mak.Set(&c.byConnKey, connKey, ctips)
+	}
+	ctips.Add(tipp)
+	return nil
+}
+
+func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tips, ok := c.lookupTransitIPsByConnKey(k)
+	if !ok {
+		return views.Slice[netip.Prefix]{}
+	}
+	return views.SliceOf(tips)
+}
+
+// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
+// associated with the given connector (identified by node key), or (nil, false) if there is no entry
+// for the given key.
+func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+	s, ok := c.byConnKey[k]
+	if !ok {
+		return nil, false
+	}
+	return s.Slice(), true
+}
+
+// transitIPForMagicIP is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
+// See also [Conn25Datapath.ClientTransitIPForMagicIP].
+func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.assignments.lookupByMagicIP(magicIP)
+	if ok {
+		return v.transit, true
+	}
+	return netip.Addr{}, false
+}
+
+// linkLocalAllow returns true if the provided packet with a link-local Dst address has a
+// Dst that is one of our transit IPs, and false otherwise.
+// Tailscale's wireguard filters drop link-local unicast packets (see [wgengine/filter/filter.go])
+// but conn25 uses link-local addresses for transit IPs.
+// Let the filter know if this is one of our addresses and should be allowed.
+func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ok := c.isKnownTransitIP(p.Dst.Addr())
+	if ok {
+		return true, packetFilterAllowReason
+	}
+	return false, ""
+}
+
+func (c *client) isKnownTransitIP(tip netip.Addr) bool {
+	_, ok := c.assignments.lookupByTransitIP(tip)
+	return ok
 }
 
 func (c *client) flowCreated(transit netip.Addr) {
@@ -220,134 +349,5 @@ func (c *client) flowRemoved(transit netip.Addr) {
 	entry.activeFlowCount--
 	if entry.activeFlowCount == 0 {
 		entry.zeroFlowTime = c.assignments.clock.Now()
-	}
-}
-
-func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	tips, ok := c.lookupTransitIPsByConnKey(k)
-	if !ok {
-		return views.Slice[netip.Prefix]{}
-	}
-	return views.SliceOf(tips)
-}
-
-func (c *client) rewriteDNSResponse(appName string, hdr dnsmessage.Header, questions []dnsmessage.Question, answers []dnsResponseRewrite) ([]byte, error) {
-	b := dnsmessage.NewBuilder(nil, hdr)
-	b.EnableCompression()
-	if err := b.StartQuestions(); err != nil {
-		return nil, err
-	}
-	for _, q := range questions {
-		if err := b.Question(q); err != nil {
-			return nil, err
-		}
-	}
-	if err := b.StartAnswers(); err != nil {
-		return nil, err
-	}
-
-	// make an answer for each rewrite
-	for _, rw := range answers {
-		as, err := c.reserveAddresses(appName, rw.domain, rw.dst, time.Duration(rw.ttlSeconds)*time.Second)
-		if err != nil {
-			return nil, err
-		}
-		if !as.isValid() {
-			return nil, errors.New("connector addresses empty")
-		}
-		name, err := dnsmessage.NewName(rw.domain.WithTrailingDot())
-		if err != nil {
-			return nil, err
-		}
-		if rw.dst.Is4() {
-			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
-			if err := b.AResource(rhdr, dnsmessage.AResource{A: as.magic.As4()}); err != nil {
-				return nil, err
-			}
-		} else if rw.dst.Is6() {
-			rhdr := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET, TTL: rw.ttlSeconds}
-			if err := b.AAAAResource(rhdr, dnsmessage.AAAAResource{AAAA: as.magic.As16()}); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, errors.New("unexpected neither 4 nor 6")
-		}
-	}
-	// We do _not_ include the additional section in our rewrite. (We don't want to include
-	// eg DNSSEC info, or other extra info like related records).
-	out, err := b.Finish()
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-type addrs struct {
-	dst             netip.Addr
-	magic           netip.Addr
-	transit         netip.Addr
-	domain          dnsname.FQDN
-	app             string
-	expiresAt       time.Time
-	activeFlowCount int
-	zeroFlowTime    time.Time
-}
-
-func (as addrs) isValid() bool {
-	return as.dst.IsValid()
-}
-
-func (as addrs) is4() bool {
-	return as.dst.Is4()
-}
-
-func (as addrs) is6() bool {
-	return as.dst.Is6()
-}
-
-// insertTransitConnMapping adds an entry to the byConnKey map
-// for the provided transitIP (as a prefix).
-// The provided transitIP must already be present in the byTransitIP map.
-func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
-	if _, ok := c.assignments.lookupByTransitIP(tip); !ok {
-		return errors.New("transit IP is not already known")
-	}
-
-	ctips, ok := c.byConnKey[connKey]
-	tipp := netip.PrefixFrom(tip, tip.BitLen())
-	if !ok {
-		ctips.Make()
-		mak.Set(&c.byConnKey, connKey, ctips)
-	}
-	ctips.Add(tipp)
-	return nil
-}
-
-// lookupTransitIPsByConnKey returns a slice containing the transit IPs (as netipPrefix)
-// associated with the given connector (identified by node key), or (nil, false) if there is no entry
-// for the given key.
-func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
-	s, ok := c.byConnKey[k]
-	if !ok {
-		return nil, false
-	}
-	return s.Slice(), true
-}
-
-// resendTransitIPMapping enqueues a request to re-establish an existing
-// transit IP-real IP mapping after a connector tells the client that the
-// mapping does not exist on its end. If a mapping is not found on the client
-// either, this is a no-op.
-func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
-	mapping, ok := c.assignments.lookupByTransitIP(transitIP)
-	if !ok {
-		// We have no mappings for this transit IP, so nothing to resend.
-		return
-	}
-	err := c.enqueueAddressAssignment(mapping)
-	if err != nil {
-		c.logf("error enqueueing address assignment for resend: %v", err)
 	}
 }

@@ -19,6 +19,38 @@ import (
 	"tailscale.com/util/must"
 )
 
+func TestConnectorPacketFilterAllow(t *testing.T) {
+	src := netip.MustParseAddr("100.64.0.1")
+	knownTip := netip.MustParseAddr("192.0.2.1")
+	unknownTip := netip.MustParseAddr("100.64.0.42")
+
+	v4TransitIPsBuilder := netipx.IPSetBuilder{}
+	v4TransitIPsBuilder.AddPrefix(netip.MustParsePrefix("192.0.2.0/24"))
+	v4TransitIPs := must.Get(v4TransitIPsBuilder.IPSet())
+
+	c := newConn25(t.Logf)
+	c.reconfig(&config{
+		isConfigured: true,
+		ipSets: ipSets{
+			v4Transit: v4TransitIPs,
+		},
+	})
+
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+		Src: netip.AddrPortFrom(src, 1234),
+		Dst: netip.AddrPortFrom(knownTip, 1234),
+	}); !allow {
+		t.Fatal("knownTip: should have been allowed")
+	}
+
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
+		Src: netip.AddrPortFrom(src, 1234),
+		Dst: netip.AddrPortFrom(unknownTip, 1234),
+	}); allow {
+		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
 func TestConnectorExpireTransitIPs(t *testing.T) {
 	const appName = "app"
 
@@ -119,36 +151,4 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 		t.Fatalf("expected 3 items remaining in peerA transitIPs")
 	}
 	c.connector.mu.Unlock()
-}
-
-func TestConnectorPacketFilterAllow(t *testing.T) {
-	src := netip.MustParseAddr("100.64.0.1")
-	knownTip := netip.MustParseAddr("192.0.2.1")
-	unknownTip := netip.MustParseAddr("100.64.0.42")
-
-	v4TransitIPsBuilder := netipx.IPSetBuilder{}
-	v4TransitIPsBuilder.AddPrefix(netip.MustParsePrefix("192.0.2.0/24"))
-	v4TransitIPs := must.Get(v4TransitIPsBuilder.IPSet())
-
-	c := newConn25(t.Logf)
-	c.reconfig(&config{
-		isConfigured: true,
-		ipSets: ipSets{
-			v4Transit: v4TransitIPs,
-		},
-	})
-
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
-		Src: netip.AddrPortFrom(src, 1234),
-		Dst: netip.AddrPortFrom(knownTip, 1234),
-	}); !allow {
-		t.Fatal("knownTip: should have been allowed")
-	}
-
-	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
-		Src: netip.AddrPortFrom(src, 1234),
-		Dst: netip.AddrPortFrom(unknownTip, 1234),
-	}); allow {
-		t.Fatal("unknownTip: should not have been allowed")
-	}
 }

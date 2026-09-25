@@ -16,10 +16,41 @@ import (
 	"tailscale.com/types/logger"
 )
 
+type connector struct {
+	logf      logger.Logf
+	getIPSets func() ipSets
+	clock     tstime.Clock
+
+	// Remember to add new fields to [connector.reset] if needed.
+	mu sync.Mutex // protects the fields below
+	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
+	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
+	transitIPs map[netip.Addr]map[netip.Addr]appAddr
+	// expiryQueue is processed by the goroutine from [connector.startExpirySweeper] so
+	// that transitIPs doesn't grow indefinitely.
+	expiryQueue *list.List
+}
+
+type transitIPExpiryEntry struct {
+	peerIP    netip.Addr
+	transitIP netip.Addr
+	createdAt time.Time
+}
+
 type appAddr struct {
 	app         string
 	addr        netip.Addr
 	expiryEntry *list.Element
+}
+
+// reset clears all internal state of [connector], that are not configuration
+// passed into it.
+func (c *connector) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
+	c.expiryQueue = list.New()
 }
 
 func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr, peerV6 netip.Addr, tipr TransitIPRequest) TransitIPResponse {
@@ -76,31 +107,14 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 	return TransitIPResponse{}
 }
 
-// connectorTransitIPExpiry is the minimum length of time a peer+transitIP -> dstIP mapping will be held in the connector.
-// The longer this time is the larger the map will be in memory.
-// The shorter this time is the more often a client will try to use a mapping, find it doesn't exist anymore and have to re-register.
-// We are not (yet 2026-08-12) tracking either of those things, this is a guess at a reasonable duration.
-const connectorTransitIPExpiry = time.Hour
-
-type connector struct {
-	logf      logger.Logf
-	getIPSets func() ipSets
-	clock     tstime.Clock
-
-	// Remember to add new fields to [connector.reset] if needed.
-	mu sync.Mutex // protects the fields below
-	// transitIPs is a map of connector client peer IP -> client transitIPs that we update as connector client peers instruct us to, and then use to route traffic to its destination on behalf of connector clients.
-	// Note that each peer could potentially have two maps: one for its IPv4 address, and one for its IPv6 address. The transit IPs map for a given peer IP will contain transit IPs of the same family as the peer's IP.
-	transitIPs map[netip.Addr]map[netip.Addr]appAddr
-	// expiryQueue is processed by the goroutine from [connector.startExpirySweeper] so
-	// that transitIPs doesn't grow indefinitely.
-	expiryQueue *list.List
-}
-
-type transitIPExpiryEntry struct {
-	peerIP    netip.Addr
-	transitIP netip.Addr
-	createdAt time.Time
+// transitIPInPool reports whether tip is within the transit IP pool of its
+// address family that this connector is configured with.
+func (c *connector) transitIPInPool(tip netip.Addr) bool {
+	ipSets := c.getIPSets()
+	if tip.Is4() {
+		return ipSets.v4Transit != nil && ipSets.v4Transit.Contains(tip)
+	}
+	return ipSets.v6Transit != nil && ipSets.v6Transit.Contains(tip)
 }
 
 // realIPForTransitIPConnection is part of the implementation of the [Conn25Datapath] interface for dataflow lookups.
@@ -111,14 +125,13 @@ func (c *connector) realIPForTransitIPConnection(srcIP netip.Addr, transitIP net
 	return c.lookupAddrBySrcIPAndTransitIP(srcIP, transitIP)
 }
 
-// transitIPInPool reports whether tip is within the transit IP pool of its
-// address family that this connector is configured with.
-func (c *connector) transitIPInPool(tip netip.Addr) bool {
-	ipSets := c.getIPSets()
-	if tip.Is4() {
-		return ipSets.v4Transit != nil && ipSets.v4Transit.Contains(tip)
+func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
+	m, ok := c.transitIPs[srcIP]
+	if !ok || m == nil {
+		return netip.Addr{}, false
 	}
-	return ipSets.v6Transit != nil && ipSets.v6Transit.Contains(tip)
+	v, ok := m[transitIP]
+	return v.addr, ok
 }
 
 // packetFilterAllow returns true if the provided packet has a Src that is in
@@ -136,13 +149,25 @@ func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	return false, ""
 }
 
-func (c *connector) lookupAddrBySrcIPAndTransitIP(srcIP, transitIP netip.Addr) (netip.Addr, bool) {
-	m, ok := c.transitIPs[srcIP]
-	if !ok || m == nil {
-		return netip.Addr{}, false
-	}
-	v, ok := m[transitIP]
-	return v.addr, ok
+// connectorTransitIPExpiry is the minimum length of time a peer+transitIP -> dstIP mapping will be held in the connector.
+// The longer this time is the larger the map will be in memory.
+// The shorter this time is the more often a client will try to use a mapping, find it doesn't exist anymore and have to re-register.
+// We are not (yet 2026-08-12) tracking either of those things, this is a guess at a reasonable duration.
+const connectorTransitIPExpiry = time.Hour
+
+func (c *connector) startExpirySweeper(ctx context.Context) {
+	ticker, tickerCh := c.clock.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tickerCh:
+				c.expireTransitIPs(c.clock.Now())
+			}
+		}
+	}()
 }
 
 // expireTransitIPs expires entries in the connector's transitIPs map that are
@@ -199,29 +224,4 @@ func (c *connector) expireTransitIPs(now time.Time) int {
 		}
 	}
 	return removed
-}
-
-func (c *connector) startExpirySweeper(ctx context.Context) {
-	ticker, tickerCh := c.clock.NewTicker(5 * time.Minute)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tickerCh:
-				c.expireTransitIPs(c.clock.Now())
-			}
-		}
-	}()
-}
-
-// reset clears all internal state of [connector], that are not configuration
-// passed into it.
-func (c *connector) reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.transitIPs = make(map[netip.Addr]map[netip.Addr]appAddr)
-	c.expiryQueue = list.New()
 }

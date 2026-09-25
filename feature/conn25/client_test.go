@@ -24,6 +24,73 @@ import (
 	"tailscale.com/util/set"
 )
 
+func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
+	appName := "app1"
+	mustRange := func(from, to string) netipx.IPRange {
+		return netipx.IPRangeFrom(netip.MustParseAddr(from), netip.MustParseAddr(to))
+	}
+	beforeRangeV4 := mustRange("0.0.0.1", "0.0.0.3")
+	beforeRangeV6 := mustRange("::1", "::3")
+	afterRangeV4 := mustRange("0.0.0.4", "0.0.0.7")
+	afterRangeV6 := mustRange("::4", "::7")
+	makeNodeFromMagicRange := func(v4, v6 netipx.IPRange) tailcfg.NodeView {
+		return makeSelfNode(t, []appctype.Conn25Attr{{
+			Name:       appName,
+			Connectors: []string{"tag:woo"},
+			Domains:    []string{"example.com"},
+		}}, appctype.Conn25PoolsAttr{
+			V4MagicIPPool:   []netipx.IPRange{v4},
+			V6MagicIPPool:   []netipx.IPRange{v6},
+			V4TransitIPPool: []netipx.IPRange{mustRange("169.254.0.0", "169.254.0.10")},
+			V6TransitIPPool: []netipx.IPRange{mustRange("fd7a:115c:a1e0:a99c:0200::", "fd7a:115c:a1e0:a99c:0200::10")},
+		}, []string{})
+	}
+	domain := must.Get(dnsname.ToFQDN("example.com."))
+
+	for _, tt := range []struct {
+		name   string
+		dstOne netip.Addr
+		dstTwo netip.Addr
+	}{
+		{
+			name:   "v4",
+			dstOne: netip.MustParseAddr("0.0.0.100"),
+			dstTwo: netip.MustParseAddr("0.0.0.101"),
+		},
+		{
+			name:   "v6",
+			dstOne: netip.MustParseAddr("::100"),
+			dstTwo: netip.MustParseAddr("::101"),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newConn25(t.Logf)
+			ext := &extension{
+				conn25: c,
+			}
+
+			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
+			if !errors.Is(err, errUninitializedIPPool) {
+				t.Fatalf("want %v, got %v", errUninitializedIPPool, err)
+			}
+
+			ext.onSelfChange(makeNodeFromMagicRange(beforeRangeV4, beforeRangeV6))
+			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ext.onSelfChange(makeNodeFromMagicRange(afterRangeV4, afterRangeV6))
+			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if afterAddrs.magic == beforeAddrs.magic {
+				t.Errorf("pool reissued magic: %v that was already assigned", beforeAddrs.magic)
+			}
+		})
+	}
+}
+
 func TestReserveIPs(t *testing.T) {
 	c := newConn25(logger.Discard)
 	const appName = "a"
@@ -127,167 +194,6 @@ func TestReserveAddressesDeduplicated(t *testing.T) {
 			}
 			if got := len(c.assignments.byDomainDst); got != 1 {
 				t.Errorf("want 1 entry in byDomainDst, got %d", got)
-			}
-		})
-	}
-}
-
-func TestTransitIPConnMapping(t *testing.T) {
-	conn25 := newConn25(t.Logf)
-
-	as := &addrs{
-		dst:     netip.MustParseAddr("1.2.3.1"),
-		magic:   netip.MustParseAddr("100.64.0.1"),
-		transit: netip.MustParseAddr("169.254.0.1"),
-		domain:  "woo.example.com.",
-		app:     "app1",
-	}
-
-	connectorPeers := []tailcfg.NodeView{
-		(&tailcfg.Node{
-			ID:       tailcfg.NodeID(0),
-			Tags:     []string{"tag:woo"},
-			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
-			Key:      key.NodePublic{},
-		}).View(),
-		(&tailcfg.Node{
-			ID:       tailcfg.NodeID(2),
-			Tags:     []string{"tag:hoo"},
-			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
-			Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x02})),
-		}).View(),
-	}
-
-	// Adding a transit IP that isn't known should fail
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err == nil {
-		t.Error("adding an unknown transit IP should fail")
-	}
-
-	// Insert the address assignments
-	conn25.client.assignments.insert(as)
-
-	// Adding a transit IP for a node with an unset key should fail
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[0]); err == nil {
-		t.Error("adding an transit IP mapping for a connector with a zero key should fail")
-	}
-	// Adding a transit IP that is known should succeed
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
-		t.Errorf("unexpected error for first time add: %v", err)
-	}
-	// And doing it again shouldn't fail (this is done when resending mappings
-	// to a restarted connector)
-	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
-		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
-	}
-}
-
-func TestIsKnownTransitIP(t *testing.T) {
-	knownTip := netip.MustParseAddr("100.64.0.41")
-	unknownTip := netip.MustParseAddr("100.64.0.42")
-
-	c := newConn25(t.Logf)
-	err := c.client.assignments.insert(&addrs{
-		transit: knownTip,
-	})
-	if err != nil {
-		t.Errorf("error inserting address assignment: %v", err)
-		return
-	}
-
-	if !c.client.isKnownTransitIP(knownTip) {
-		t.Fatal("knownTip: should have been known")
-	}
-	if c.client.isKnownTransitIP(unknownTip) {
-		t.Fatal("unknownTip: should not have been known")
-	}
-}
-
-func TestLinkLocalAllow(t *testing.T) {
-	knownTip := netip.MustParseAddr("100.64.0.41")
-
-	c := newConn25(t.Logf)
-	err := c.client.assignments.insert(&addrs{
-		transit: knownTip,
-	})
-	if err != nil {
-		t.Fatalf("error inserting address assignment: %v", err)
-	}
-
-	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
-		Dst: netip.AddrPortFrom(knownTip, 1234),
-	}); !allow {
-		t.Fatal("knownTip: should have been allowed")
-	}
-
-	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
-		Dst: netip.AddrPort{},
-	}); allow {
-		t.Fatal("unknownTip: should not have been allowed")
-	}
-}
-
-func TestReconfigDoesNotReissueInUseAddresses(t *testing.T) {
-	appName := "app1"
-	mustRange := func(from, to string) netipx.IPRange {
-		return netipx.IPRangeFrom(netip.MustParseAddr(from), netip.MustParseAddr(to))
-	}
-	beforeRangeV4 := mustRange("0.0.0.1", "0.0.0.3")
-	beforeRangeV6 := mustRange("::1", "::3")
-	afterRangeV4 := mustRange("0.0.0.4", "0.0.0.7")
-	afterRangeV6 := mustRange("::4", "::7")
-	makeNodeFromMagicRange := func(v4, v6 netipx.IPRange) tailcfg.NodeView {
-		return makeSelfNode(t, []appctype.Conn25Attr{{
-			Name:       appName,
-			Connectors: []string{"tag:woo"},
-			Domains:    []string{"example.com"},
-		}}, appctype.Conn25PoolsAttr{
-			V4MagicIPPool:   []netipx.IPRange{v4},
-			V6MagicIPPool:   []netipx.IPRange{v6},
-			V4TransitIPPool: []netipx.IPRange{mustRange("169.254.0.0", "169.254.0.10")},
-			V6TransitIPPool: []netipx.IPRange{mustRange("fd7a:115c:a1e0:a99c:0200::", "fd7a:115c:a1e0:a99c:0200::10")},
-		}, []string{})
-	}
-	domain := must.Get(dnsname.ToFQDN("example.com."))
-
-	for _, tt := range []struct {
-		name   string
-		dstOne netip.Addr
-		dstTwo netip.Addr
-	}{
-		{
-			name:   "v4",
-			dstOne: netip.MustParseAddr("0.0.0.100"),
-			dstTwo: netip.MustParseAddr("0.0.0.101"),
-		},
-		{
-			name:   "v6",
-			dstOne: netip.MustParseAddr("::100"),
-			dstTwo: netip.MustParseAddr("::101"),
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c := newConn25(t.Logf)
-			ext := &extension{
-				conn25: c,
-			}
-
-			_, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
-			if !errors.Is(err, errUninitializedIPPool) {
-				t.Fatalf("want %v, got %v", errUninitializedIPPool, err)
-			}
-
-			ext.onSelfChange(makeNodeFromMagicRange(beforeRangeV4, beforeRangeV6))
-			beforeAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstOne, 10)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ext.onSelfChange(makeNodeFromMagicRange(afterRangeV4, afterRangeV6))
-			afterAddrs, err := c.client.reserveAddresses(appName, domain, tt.dstTwo, 10)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if afterAddrs.magic == beforeAddrs.magic {
-				t.Errorf("pool reissued magic: %v that was already assigned", beforeAddrs.magic)
 			}
 		})
 	}
@@ -496,5 +402,99 @@ func TestAddressExpiryDependsOnActiveFlows(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTransitIPConnMapping(t *testing.T) {
+	conn25 := newConn25(t.Logf)
+
+	as := &addrs{
+		dst:     netip.MustParseAddr("1.2.3.1"),
+		magic:   netip.MustParseAddr("100.64.0.1"),
+		transit: netip.MustParseAddr("169.254.0.1"),
+		domain:  "woo.example.com.",
+		app:     "app1",
+	}
+
+	connectorPeers := []tailcfg.NodeView{
+		(&tailcfg.Node{
+			ID:       tailcfg.NodeID(0),
+			Tags:     []string{"tag:woo"},
+			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+			Key:      key.NodePublic{},
+		}).View(),
+		(&tailcfg.Node{
+			ID:       tailcfg.NodeID(2),
+			Tags:     []string{"tag:hoo"},
+			Hostinfo: (&tailcfg.Hostinfo{AppConnector: opt.NewBool(true)}).View(),
+			Key:      key.NodePublicFromRaw32(mem.B([]byte{0: 0xff, 31: 0x02})),
+		}).View(),
+	}
+
+	// Adding a transit IP that isn't known should fail
+	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err == nil {
+		t.Error("adding an unknown transit IP should fail")
+	}
+
+	// Insert the address assignments
+	conn25.client.assignments.insert(as)
+
+	// Adding a transit IP for a node with an unset key should fail
+	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[0]); err == nil {
+		t.Error("adding an transit IP mapping for a connector with a zero key should fail")
+	}
+	// Adding a transit IP that is known should succeed
+	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
+		t.Errorf("unexpected error for first time add: %v", err)
+	}
+	// And doing it again shouldn't fail (this is done when resending mappings
+	// to a restarted connector)
+	if err := conn25.client.addTransitIPForConnector(as.transit, connectorPeers[1]); err != nil {
+		t.Errorf("error adding duplicate transitIP for a connector: %v", err)
+	}
+}
+
+func TestLinkLocalAllow(t *testing.T) {
+	knownTip := netip.MustParseAddr("100.64.0.41")
+
+	c := newConn25(t.Logf)
+	err := c.client.assignments.insert(&addrs{
+		transit: knownTip,
+	})
+	if err != nil {
+		t.Fatalf("error inserting address assignment: %v", err)
+	}
+
+	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
+		Dst: netip.AddrPortFrom(knownTip, 1234),
+	}); !allow {
+		t.Fatal("knownTip: should have been allowed")
+	}
+
+	if allow, _ := c.client.linkLocalAllow(packet.Parsed{
+		Dst: netip.AddrPort{},
+	}); allow {
+		t.Fatal("unknownTip: should not have been allowed")
+	}
+}
+
+func TestIsKnownTransitIP(t *testing.T) {
+	knownTip := netip.MustParseAddr("100.64.0.41")
+	unknownTip := netip.MustParseAddr("100.64.0.42")
+
+	c := newConn25(t.Logf)
+	err := c.client.assignments.insert(&addrs{
+		transit: knownTip,
+	})
+	if err != nil {
+		t.Errorf("error inserting address assignment: %v", err)
+		return
+	}
+
+	if !c.client.isKnownTransitIP(knownTip) {
+		t.Fatal("knownTip: should have been known")
+	}
+	if c.client.isKnownTransitIP(unknownTip) {
+		t.Fatal("unknownTip: should not have been known")
 	}
 }

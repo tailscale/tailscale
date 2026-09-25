@@ -53,28 +53,6 @@ import (
 // It is also the [extension] name and the log prefix.
 const featureName = "conn25"
 
-const maxBodyBytes = 1024 * 1024
-
-// jsonDecode decodes all of a io.ReadCloser (eg an http.Request Body) into one pointer with best practices.
-// It limits the size of bytes it will read.
-// It either decodes all of the bytes into the pointer, or errors (unlike json.Decoder.Decode).
-// It closes the ReadCloser after reading.
-func jsonDecode(target any, rc io.ReadCloser) error {
-	defer rc.Close()
-	respBs, err := io.ReadAll(io.LimitReader(rc, maxBodyBytes+1))
-	if err != nil {
-		return err
-	}
-	err = json.Unmarshal(respBs, &target)
-	return err
-}
-
-func normalizeDNSName(name string) (dnsname.FQDN, error) {
-	// note that appconnector does this same thing, tsdns has its own custom lower casing
-	// it might be good to unify in a function in dnsname package.
-	return dnsname.ToFQDN(strings.ToLower(name))
-}
-
 func init() {
 	if !feature.Register(featureName) {
 		return
@@ -286,6 +264,115 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 	return nil
 }
 
+// Shutdown implements [ipnlocal.Extension].
+func (e *extension) Shutdown() error {
+	if e.ctxCancel != nil {
+		e.ctxCancel(errors.New("extension shutdown"))
+	}
+	if e.conn25 != nil {
+		close(e.conn25.client.addrsCh)
+	}
+	return nil
+}
+
+// onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.
+func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
+	cfg, err := configFromNodeView(selfNode)
+	if err != nil {
+		e.conn25.logf("error generating config from self node view: %v", err)
+		return
+	}
+	e.conn25.reconfig(cfg)
+}
+
+// profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
+func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
+	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
+
+	if !sameNode {
+		// Load an empty configuration to disable conn25 entirely, since we
+		// don't yet know that it is configured on the new profile. We will
+		// know once [extension.onSelfChange] is called with a new
+		// configuration, if any.
+		e.conn25.reconfig(&config{})
+
+		// If a client changes profiles and becomes a different node, all of its
+		// existing flows lose meaning, and we should delete them so that the
+		// settings of our new environment can take over.
+		if e.clearAllDatapathFlows != nil {
+			e.clearAllDatapathFlows()
+		}
+
+		// Clear internal state, like address assignments for clients and
+		// transit IP mappings for connectors.
+		e.conn25.client.reset()
+		e.conn25.connector.reset()
+	}
+}
+
+func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
+	cfg, ok := e.conn25.getConfig()
+	if !ok {
+		return views.Slice[netip.Prefix]{}
+	}
+	return views.SliceOf(slices.Concat(cfg.ipSets.v4Magic.Prefixes(), cfg.ipSets.v6Magic.Prefixes()))
+}
+
+func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
+	return e.conn25.client.extraWireGuardAllowedIPs(k)
+}
+
+// Conn25 holds state for routing traffic for a domain via a connector.
+type Conn25 struct {
+	config                  atomic.Pointer[config]
+	prefsAdvertiseConnector atomic.Bool
+	logf                    logger.Logf
+	client                  *client
+	connector               *connector
+}
+
+func newConn25(logf logger.Logf) *Conn25 {
+	c := &Conn25{
+		logf: logf,
+	}
+	getIPSets := func() ipSets {
+		cfg, ok := c.getConfig()
+		if !ok {
+			return emptyIPSets()
+		}
+		return cfg.ipSets
+	}
+	c.config.Store(&config{}) // initialize with empty to avoid nil checks
+	c.client = &client{
+		logf:        logf,
+		addrsCh:     make(chan addrs, 64),
+		assignments: addrAssignments{clock: tstime.StdClock{}},
+		getIPSets:   getIPSets,
+	}
+	c.connector = &connector{
+		logf:        logf,
+		getIPSets:   getIPSets,
+		clock:       tstime.StdClock{},
+		expiryQueue: list.New(),
+	}
+	return c
+}
+
+func (c *Conn25) getConfig() (*config, bool) {
+	cfg := c.config.Load()
+	return cfg, cfg.isConfigured
+}
+
+func (c *Conn25) isConfigured() bool {
+	_, ok := c.getConfig()
+	return ok
+}
+
+func (c *Conn25) reconfig(cfg *config) {
+	c.config.Store(cfg)
+	c.client.reconfig()
+}
+
 // ClientTransitIPForMagicIP implements [Conn25Datapath].
 func (c *Conn25) ClientTransitIPForMagicIP(m netip.Addr) (netip.Addr, error) {
 	if addr, ok := c.client.transitIPForMagicIP(m); ok {
@@ -330,389 +417,12 @@ func (c *Conn25) ConnectorRealIPForTransitIPConnection(src, transit netip.Addr) 
 	return netip.Addr{}, ErrUnmappedSrcAndTransitIP
 }
 
-func (e *extension) getMagicRange() views.Slice[netip.Prefix] {
-	cfg, ok := e.conn25.getConfig()
-	if !ok {
-		return views.Slice[netip.Prefix]{}
-	}
-	return views.SliceOf(slices.Concat(cfg.ipSets.v4Magic.Prefixes(), cfg.ipSets.v6Magic.Prefixes()))
-}
-
-// Shutdown implements [ipnlocal.Extension].
-func (e *extension) Shutdown() error {
-	if e.ctxCancel != nil {
-		e.ctxCancel(errors.New("extension shutdown"))
-	}
-	if e.conn25 != nil {
-		close(e.conn25.client.addrsCh)
-	}
-	return nil
-}
-
-func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != "POST" {
-		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
-		return
-	}
-	var req ConnectorTransitIPRequest
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1)).Decode(&req)
-	if err != nil {
-		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
-		return
-	}
-	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), h.PeerCaps(), req)
-	bs, err := json.Marshal(resp)
-	if err != nil {
-		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
-		return
-	}
-	w.Write(bs)
-}
-
-func (c *Conn25) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler, r *http.Request) (sourceAllowed bool, nameAllowed ipnlocal.DNSNameFilter) {
-	if !c.prefsAdvertiseConnector.Load() {
-		// We are not a connector.
-		return false, nil
-	}
-
-	cfg, isConfigured := c.getConfig()
-	if !isConfigured {
-		// We have no connector config.
-		return false, nil
-	}
-
-	// Determine which app the query is for
-	var app appctype.Conn25Attr
-	if appName, hasApp := r.URL.Query()["app"]; !hasApp || len(appName) != 1 {
-		return false, nil
-	} else {
-		a, ok := cfg.appsByName[appName[0]]
-		if !ok {
-			// We have no config for the requested app.
-			return false, nil
-		}
-		app = a
-	}
-
-	if !cfg.selfAppNames.Contains(app.Name) {
-		// We are not a connector for the requested app.
-		return false, nil
-	}
-
-	if !h.PeerCaps().HasCapability(peercap.Conn25Prefix.ToAttribute(app.Name)) {
-		// The peer does not have access to the requested app.
-		return false, nil
-	}
-
-	return true, makeNameChecker(app)
-}
-
-func makeNameChecker(app appctype.Conn25Attr) ipnlocal.DNSNameFilter {
-	// TODO(tailscale/corp#40076): optimize the comparison; if the func is
-	// generated when the app config is created, that will avoid allocating
-	// temporary instances. Some of the work (e.g. conversion to [dnsname.FQDN])
-	// can also be precomputed.
-	return func(name string) bool {
-		fqdn, err := dnsname.ToFQDN(strings.ToLower(name))
-		if err != nil {
-			return false
-		}
-		for _, domain := range app.Domains {
-			appFQDN, err := dnsname.ToFQDN(strings.TrimPrefix(strings.ToLower(domain), "*."))
-			if err != nil {
-				continue
-			}
-			// Allow both exact matches and suffix matches, even when the app
-			// does not specify a wildcard. This is because of limitations in
-			// the Split DNS implementation: we treat all split DNS rules as
-			// wildcard even when the app specifies exact matching. The conn25
-			// client will only perform address mapping for more strictly
-			// matched names but the connector needs to allow queries for any
-			// subdomain of an exact match.
-			if appFQDN.Contains(fqdn) {
-				return true
-			}
-		}
-		return false
-	}
-}
-
-// onSelfChange implements the [ipnext.Hooks.OnSelfChange] hook.
-func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
-	cfg, err := configFromNodeView(selfNode)
-	if err != nil {
-		e.conn25.logf("error generating config from self node view: %v", err)
-		return
-	}
-	e.conn25.reconfig(cfg)
-}
-
-// profileStateChange implements the [ipnext.Hooks.ProfileStateChange] hook.
-func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs ipn.PrefsView, sameNode bool) {
-	e.conn25.prefsAdvertiseConnector.Store(prefs.AppConnector().Advertise)
-
-	if !sameNode {
-		// Load an empty configuration to disable conn25 entirely, since we
-		// don't yet know that it is configured on the new profile. We will
-		// know once [extension.onSelfChange] is called with a new
-		// configuration, if any.
-		e.conn25.reconfig(&config{})
-
-		// If a client changes profiles and becomes a different node, all of its
-		// existing flows lose meaning, and we should delete them so that the
-		// settings of our new environment can take over.
-		if e.clearAllDatapathFlows != nil {
-			e.clearAllDatapathFlows()
-		}
-
-		// Clear internal state, like address assignments for clients and
-		// transit IP mappings for connectors.
-		e.conn25.client.reset()
-		e.conn25.connector.reset()
-	}
-}
-
-func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	return e.conn25.client.extraWireGuardAllowedIPs(k)
-}
-
-// Conn25 holds state for routing traffic for a domain via a connector.
-type Conn25 struct {
-	config                  atomic.Pointer[config]
-	prefsAdvertiseConnector atomic.Bool
-	logf                    logger.Logf
-	client                  *client
-	connector               *connector
-}
-
-func (c *Conn25) getConfig() (*config, bool) {
-	cfg := c.config.Load()
-	return cfg, cfg.isConfigured
-}
-
-func (c *Conn25) isConfigured() bool {
-	_, ok := c.getConfig()
-	return ok
-}
-
-func newConn25(logf logger.Logf) *Conn25 {
-	c := &Conn25{
-		logf: logf,
-	}
-	getIPSets := func() ipSets {
-		cfg, ok := c.getConfig()
-		if !ok {
-			return emptyIPSets()
-		}
-		return cfg.ipSets
-	}
-	c.config.Store(&config{}) // initialize with empty to avoid nil checks
-	c.client = &client{
-		logf:        logf,
-		addrsCh:     make(chan addrs, 64),
-		assignments: addrAssignments{clock: tstime.StdClock{}},
-		getIPSets:   getIPSets,
-	}
-	c.connector = &connector{
-		logf:        logf,
-		getIPSets:   getIPSets,
-		clock:       tstime.StdClock{},
-		expiryQueue: list.New(),
-	}
-	return c
-}
-
-func ipSetFromIPRanges(rs []netipx.IPRange) (*netipx.IPSet, error) {
-	b := &netipx.IPSetBuilder{}
-	for _, r := range rs {
-		b.AddRange(r)
-	}
-	return b.IPSet()
-}
-
-func (c *Conn25) reconfig(cfg *config) {
-	c.config.Store(cfg)
-	c.client.reconfig()
-}
-
-const (
-	dupeTransitIPMessage          = "Duplicate transit address in ConnectorTransitIPRequest"
-	noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
-	addrFamilyMismatchMessage     = "Transit and Destination addresses must have matching IP family"
-	unknownAppNameMessage         = "The App name in the request does not match a configured App"
-	missingAppPermissionMessage   = "You do not have permission to use this App"
-	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
-)
-
-// handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
-// to a ConnectorTransitIPRequest. It updates the connectors mapping of
-// TransitIP->DestinationIP per peer (using the Peer's IP that matches the address
-// family of the transitIP). If a peer has stored this mapping in the connector,
-// Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
-func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps tailcfg.PeerCapMap, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
-	resp := ConnectorTransitIPResponse{}
-	cfg, ok := c.getConfig()
-	if !ok {
-		// TODO(mzb): If this node is no longer configured at the
-		// the time of this call, perhaps there should be a top-level
-		// error, instead of error-per-TransitIP?
-		for range ctipr.TransitIPs {
-			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    UnknownAppName,
-				Message: unknownAppNameMessage,
-			})
-		}
-		return resp
-	}
-
-	var peerIPv4, peerIPv6 netip.Addr
-	for _, ip := range n.Addresses().All() {
-		if !ip.IsSingleIP() || !tsaddr.IsTailscaleIP(ip.Addr()) {
-			continue
-		}
-		if ip.Addr().Is4() && !peerIPv4.IsValid() {
-			peerIPv4 = ip.Addr()
-		} else if ip.Addr().Is6() && !peerIPv6.IsValid() {
-			peerIPv6 = ip.Addr()
-		}
-	}
-
-	seen := map[netip.Addr]bool{}
-	for _, each := range ctipr.TransitIPs {
-		if seen[each.TransitIP] {
-			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    DuplicateTransitIP,
-				Message: dupeTransitIPMessage,
-			})
-			c.logf("[Unexpected] peer attempt to map a transit IP reused a transitIP: node: %s, IP: %v",
-				n.StableID(), each.TransitIP)
-			continue
-		}
-
-		if !peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App)) {
-			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    MissingAppPermission,
-				Message: missingAppPermissionMessage,
-			})
-			continue
-		}
-
-		if _, ok := cfg.appsByName[each.App]; !ok {
-			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
-				Code:    UnknownAppName,
-				Message: unknownAppNameMessage,
-			})
-			c.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
-				n.StableID(), each.App)
-			continue
-		}
-		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
-		seen[each.TransitIP] = true
-		resp.TransitIPs = append(resp.TransitIPs, tipresp)
-	}
-	return resp
-}
-
-// TransitIPRequest details a single TransitIP allocation request from a client to a
-// connector.
-type TransitIPRequest struct {
-	// TransitIP is the intermediate destination IP that will be received at this
-	// connector and will be replaced by DestinationIP when performing DNAT.
-	TransitIP netip.Addr `json:"transitIP,omitzero"`
-
-	// DestinationIP is the final destination IP that connections to the TransitIP
-	// should be mapped to when performing DNAT.
-	DestinationIP netip.Addr `json:"destinationIP,omitzero"`
-
-	// App is the name of the connector application from the tailnet
-	// configuration.
-	App string `json:"app,omitzero"`
-}
-
-// ConnectorTransitIPRequest is the request body for a PeerAPI request to
-// /connector/transit-ip and can include zero or more TransitIP allocation requests.
-type ConnectorTransitIPRequest struct {
-	// TransitIPs is the list of requested mappings.
-	TransitIPs []TransitIPRequest `json:"transitIPs,omitempty"`
-}
-
-// TransitIPResponseCode appears in TransitIPResponse and signifies success or failure status.
-type TransitIPResponseCode int
-
-const (
-	// OK indicates that the mapping was created as requested.
-	OK TransitIPResponseCode = 0
-
-	// OtherFailure indicates that the mapping failed for a reason that does not have
-	// another relevant [TransitIPResponseCode].
-	OtherFailure TransitIPResponseCode = 1
-
-	// DuplicateTransitIP indicates that the same transit address appeared more than
-	// once in a [ConnectorTransitIPRequest].
-	DuplicateTransitIP TransitIPResponseCode = 2
-
-	// NoMatchingPeerIPFamily indicates that the peer did not have an associated
-	// IP with the same family as transit IP being registered.
-	NoMatchingPeerIPFamily = 3
-
-	// AddrFamilyMismatch indicates that the transit IP and destination IP addresses
-	// do not belong to the same IP family.
-	AddrFamilyMismatch = 4
-
-	// UnknownAppName indicates that the connector is not configured to handle requests
-	// for the App name that was specified in the request.
-	UnknownAppName = 5
-
-	// MissingAppPermission indicates that the client is not permitted to access
-	// the App name that was specified in the request.
-	MissingAppPermission = 6
-
-	// TransitIPNotInPool indicates that the transit address in the request is
-	// not within a transit IP pool the connector is configured with. A client
-	// which sees this has most likely allocated from a pool configuration that
-	// the connector has not received yet, or has already replaced.
-	TransitIPNotInPool = 7
-)
-
-// TransitIPResponse is the response to a TransitIPRequest
-type TransitIPResponse struct {
-	// Code is an error code indicating success or failure of the [TransitIPRequest].
-	Code TransitIPResponseCode `json:"code,omitzero"`
-	// Message is an error message explaining what happened, suitable for logging but
-	// not necessarily suitable for displaying in a UI to non-technical users. It
-	// should be empty when [Code] is [OK].
-	Message string `json:"message,omitzero"`
-}
-
-// ConnectorTransitIPResponse is the response to a ConnectorTransitIPRequest
-type ConnectorTransitIPResponse struct {
-	// TransitIPs is the list of outcomes for each requested mapping. Elements
-	// correspond to the order of [ConnectorTransitIPRequest.TransitIPs].
-	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
-}
+const packetFilterAllowReason = "app connector transit IP"
 
 const (
 	AppConnectorsExperimentalAttrName        = "tailscale.com/app-connectors-experimental"
 	AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
 )
-
-// ipSets wraps all the IPSets the config needs.
-type ipSets struct {
-	v4Transit *netipx.IPSet
-	v4Magic   *netipx.IPSet
-	v6Transit *netipx.IPSet
-	v6Magic   *netipx.IPSet
-}
-
-func emptyIPSets() ipSets {
-	return ipSets{
-		v4Transit: &netipx.IPSet{},
-		v4Magic:   &netipx.IPSet{},
-		v6Transit: &netipx.IPSet{},
-		v6Magic:   &netipx.IPSet{},
-	}
-}
 
 // config holds the config derived from the self node view,
 // which includes the policy.
@@ -832,136 +542,41 @@ func (cfg *config) getAppsForConnectorDomain(domain dnsname.FQDN, prefsAdvertise
 	return appNames
 }
 
-func (e *extension) sendLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case as := <-e.conn25.client.addrsCh:
-			if err := e.handleAddressAssignment(ctx, as); err != nil {
-				e.conn25.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
-			}
-		}
+// ipSets wraps all the IPSets the config needs.
+type ipSets struct {
+	v4Transit *netipx.IPSet
+	v4Magic   *netipx.IPSet
+	v6Transit *netipx.IPSet
+	v6Magic   *netipx.IPSet
+}
+
+func emptyIPSets() ipSets {
+	return ipSets{
+		v4Transit: &netipx.IPSet{},
+		v4Magic:   &netipx.IPSet{},
+		v6Transit: &netipx.IPSet{},
+		v6Magic:   &netipx.IPSet{},
 	}
 }
 
-func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
-	conn, err := e.sendAddressAssignment(ctx, as)
-	if err != nil {
-		return err
+func ipSetFromIPRanges(rs []netipx.IPRange) (*netipx.IPSet, error) {
+	b := &netipx.IPSetBuilder{}
+	for _, r := range rs {
+		b.AddRange(r)
 	}
-	err = e.conn25.client.addTransitIPForConnector(as.transit, conn)
-	if err != nil {
-		return err
-	}
-
-	e.host.AuthReconfigAsync()
-	return nil
+	return b.IPSet()
 }
 
-func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string, as addrs) error {
-	url := urlBase + "/v0/connector/transit-ip"
-
-	reqBody := ConnectorTransitIPRequest{
-		TransitIPs: []TransitIPRequest{{
-			TransitIP:     as.transit,
-			DestinationIP: as.dst,
-			App:           as.app,
-		}},
-	}
-	bs, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("marshalling request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bs))
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("sending request: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("connector returned HTTP %d", resp.StatusCode)
-	}
-
-	var respBody ConnectorTransitIPResponse
-	err = jsonDecode(&respBody, resp.Body)
-	if err != nil {
-		return fmt.Errorf("decoding response: %w", err)
-	}
-
-	if len(respBody.TransitIPs) > 0 && respBody.TransitIPs[0].Code != OK {
-		return fmt.Errorf("connector error: %s", respBody.TransitIPs[0].Message)
-	}
-	return nil
-}
-
-func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeView, string) {
-	nb := e.host.NodeBackend()
-	peers := pickConnector(nb, app)
-	var urlBase string
-	var conn tailcfg.NodeView
-	for _, p := range peers {
-		urlBase = nb.PeerAPIBase(p)
-		if urlBase != "" {
-			conn = p
-			break
-		}
-	}
-	return conn, urlBase
-}
-
-func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
-	cfg, ok := e.conn25.getConfig()
-	if !ok {
-		return tailcfg.NodeView{}, errors.New("not configured")
-	}
-	app, ok := cfg.appsByName[as.app]
-	if !ok {
-		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
-		return tailcfg.NodeView{}, errors.New("app not found")
-	}
-	conn, urlBase := e.pickConnectorURLBase(app)
-	if urlBase == "" {
-		return tailcfg.NodeView{}, errors.New("no connector peer found to handle address assignment")
-	}
-	client := e.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
-	return conn, makePeerAPIReq(ctx, client, urlBase, as)
+func normalizeDNSName(name string) (dnsname.FQDN, error) {
+	// note that appconnector does this same thing, tsdns has its own custom lower casing
+	// it might be good to unify in a function in dnsname package.
+	return dnsname.ToFQDN(strings.ToLower(name))
 }
 
 type dnsResponseRewrite struct {
 	domain     dnsname.FQDN
 	dst        netip.Addr
 	ttlSeconds uint32
-}
-
-func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
-	h.Response = true
-	h.Authoritative = true
-	h.RCode = dnsmessage.RCodeServerFailure
-	b := dnsmessage.NewBuilder(nil, h)
-	err := b.StartQuestions()
-	if err != nil {
-		logf("error making servfail: %v", err)
-		return []byte{}
-	}
-	err = b.Question(q)
-	if err != nil {
-		logf("error making servfail: %v", err)
-		return []byte{}
-	}
-	bs, err := b.Finish()
-	if err != nil {
-		// If there's an error here there's a bug somewhere directly above.
-		// _possibly_ some kind of question that was parseable but not encodable?,
-		// otherwise we could panic.
-		logf("error making servfail: %v", err)
-	}
-	return bs
 }
 
 var (
@@ -1209,24 +824,350 @@ func rewriteHTTPSResponse(hdr dnsmessage.Header, questions []dnsmessage.Question
 	return b.Finish()
 }
 
-const packetFilterAllowReason = "app connector transit IP"
-
-func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
-	if !peer.Valid() || !peer.Hostinfo().Valid() {
-		return false
+func makeServFail(logf logger.Logf, h dnsmessage.Header, q dnsmessage.Question) []byte {
+	h.Response = true
+	h.Authoritative = true
+	h.RCode = dnsmessage.RCodeServerFailure
+	b := dnsmessage.NewBuilder(nil, h)
+	err := b.StartQuestions()
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
 	}
-	isConn, _ := peer.Hostinfo().AppConnector().Get()
-	return isConn
+	err = b.Question(q)
+	if err != nil {
+		logf("error making servfail: %v", err)
+		return []byte{}
+	}
+	bs, err := b.Finish()
+	if err != nil {
+		// If there's an error here there's a bug somewhere directly above.
+		// _possibly_ some kind of question that was parseable but not encodable?,
+		// otherwise we could panic.
+		logf("error making servfail: %v", err)
+	}
+	return bs
 }
 
-func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
-	// The ordering of the nodes is semantic (callers use the first node they can
-	// get a peer api url for).
-	if !self.Valid() {
+// TransitIPRequest details a single TransitIP allocation request from a client to a
+// connector.
+type TransitIPRequest struct {
+	// TransitIP is the intermediate destination IP that will be received at this
+	// connector and will be replaced by DestinationIP when performing DNAT.
+	TransitIP netip.Addr `json:"transitIP,omitzero"`
+
+	// DestinationIP is the final destination IP that connections to the TransitIP
+	// should be mapped to when performing DNAT.
+	DestinationIP netip.Addr `json:"destinationIP,omitzero"`
+
+	// App is the name of the connector application from the tailnet
+	// configuration.
+	App string `json:"app,omitzero"`
+}
+
+// ConnectorTransitIPRequest is the request body for a PeerAPI request to
+// /connector/transit-ip and can include zero or more TransitIP allocation requests.
+type ConnectorTransitIPRequest struct {
+	// TransitIPs is the list of requested mappings.
+	TransitIPs []TransitIPRequest `json:"transitIPs,omitempty"`
+}
+
+// TransitIPResponseCode appears in TransitIPResponse and signifies success or failure status.
+type TransitIPResponseCode int
+
+const (
+	// OK indicates that the mapping was created as requested.
+	OK TransitIPResponseCode = 0
+
+	// OtherFailure indicates that the mapping failed for a reason that does not have
+	// another relevant [TransitIPResponseCode].
+	OtherFailure TransitIPResponseCode = 1
+
+	// DuplicateTransitIP indicates that the same transit address appeared more than
+	// once in a [ConnectorTransitIPRequest].
+	DuplicateTransitIP TransitIPResponseCode = 2
+
+	// NoMatchingPeerIPFamily indicates that the peer did not have an associated
+	// IP with the same family as transit IP being registered.
+	NoMatchingPeerIPFamily = 3
+
+	// AddrFamilyMismatch indicates that the transit IP and destination IP addresses
+	// do not belong to the same IP family.
+	AddrFamilyMismatch = 4
+
+	// UnknownAppName indicates that the connector is not configured to handle requests
+	// for the App name that was specified in the request.
+	UnknownAppName = 5
+
+	// MissingAppPermission indicates that the client is not permitted to access
+	// the App name that was specified in the request.
+	MissingAppPermission = 6
+
+	// TransitIPNotInPool indicates that the transit address in the request is
+	// not within a transit IP pool the connector is configured with. A client
+	// which sees this has most likely allocated from a pool configuration that
+	// the connector has not received yet, or has already replaced.
+	TransitIPNotInPool = 7
+)
+
+const (
+	dupeTransitIPMessage          = "Duplicate transit address in ConnectorTransitIPRequest"
+	noMatchingPeerIPFamilyMessage = "No peer IP found with matching IP family"
+	addrFamilyMismatchMessage     = "Transit and Destination addresses must have matching IP family"
+	unknownAppNameMessage         = "The App name in the request does not match a configured App"
+	missingAppPermissionMessage   = "You do not have permission to use this App"
+	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
+)
+
+// TransitIPResponse is the response to a TransitIPRequest
+type TransitIPResponse struct {
+	// Code is an error code indicating success or failure of the [TransitIPRequest].
+	Code TransitIPResponseCode `json:"code,omitzero"`
+	// Message is an error message explaining what happened, suitable for logging but
+	// not necessarily suitable for displaying in a UI to non-technical users. It
+	// should be empty when [Code] is [OK].
+	Message string `json:"message,omitzero"`
+}
+
+// ConnectorTransitIPResponse is the response to a ConnectorTransitIPRequest
+type ConnectorTransitIPResponse struct {
+	// TransitIPs is the list of outcomes for each requested mapping. Elements
+	// correspond to the order of [ConnectorTransitIPRequest.TransitIPs].
+	TransitIPs []TransitIPResponse `json:"transitIPs,omitempty"`
+}
+
+const maxBodyBytes = 1024 * 1024
+
+// jsonDecode decodes all of a io.ReadCloser (eg an http.Request Body) into one pointer with best practices.
+// It limits the size of bytes it will read.
+// It either decodes all of the bytes into the pointer, or errors (unlike json.Decoder.Decode).
+// It closes the ReadCloser after reading.
+func jsonDecode(target any, rc io.ReadCloser) error {
+	defer rc.Close()
+	respBs, err := io.ReadAll(io.LimitReader(rc, maxBodyBytes+1))
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(respBs, &target)
+	return err
+}
+
+func (e *extension) handleConnectorTransitIP(h ipnlocal.PeerAPIHandler, w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != "POST" {
+		http.Error(w, "Method should be POST", http.StatusMethodNotAllowed)
 		return
 	}
-	scores := traffic.ScoresFor(self.ID(), ns)
-	scores.SortNodes(ns)
+	var req ConnectorTransitIPRequest
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes+1)).Decode(&req)
+	if err != nil {
+		http.Error(w, "Error decoding JSON", http.StatusBadRequest)
+		return
+	}
+	resp := e.conn25.handleConnectorTransitIPRequest(h.Peer(), h.PeerCaps(), req)
+	bs, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, "Error encoding JSON", http.StatusInternalServerError)
+		return
+	}
+	w.Write(bs)
+}
+
+// handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
+// to a ConnectorTransitIPRequest. It updates the connectors mapping of
+// TransitIP->DestinationIP per peer (using the Peer's IP that matches the address
+// family of the transitIP). If a peer has stored this mapping in the connector,
+// Conn25 will route traffic to TransitIPs to DestinationIPs for that peer.
+func (c *Conn25) handleConnectorTransitIPRequest(n tailcfg.NodeView, peerCaps tailcfg.PeerCapMap, ctipr ConnectorTransitIPRequest) ConnectorTransitIPResponse {
+	resp := ConnectorTransitIPResponse{}
+	cfg, ok := c.getConfig()
+	if !ok {
+		// TODO(mzb): If this node is no longer configured at the
+		// the time of this call, perhaps there should be a top-level
+		// error, instead of error-per-TransitIP?
+		for range ctipr.TransitIPs {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    UnknownAppName,
+				Message: unknownAppNameMessage,
+			})
+		}
+		return resp
+	}
+
+	var peerIPv4, peerIPv6 netip.Addr
+	for _, ip := range n.Addresses().All() {
+		if !ip.IsSingleIP() || !tsaddr.IsTailscaleIP(ip.Addr()) {
+			continue
+		}
+		if ip.Addr().Is4() && !peerIPv4.IsValid() {
+			peerIPv4 = ip.Addr()
+		} else if ip.Addr().Is6() && !peerIPv6.IsValid() {
+			peerIPv6 = ip.Addr()
+		}
+	}
+
+	seen := map[netip.Addr]bool{}
+	for _, each := range ctipr.TransitIPs {
+		if seen[each.TransitIP] {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    DuplicateTransitIP,
+				Message: dupeTransitIPMessage,
+			})
+			c.logf("[Unexpected] peer attempt to map a transit IP reused a transitIP: node: %s, IP: %v",
+				n.StableID(), each.TransitIP)
+			continue
+		}
+
+		if !peerCaps.HasCapability(peercap.Conn25Prefix.ToAttribute(each.App)) {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    MissingAppPermission,
+				Message: missingAppPermissionMessage,
+			})
+			continue
+		}
+
+		if _, ok := cfg.appsByName[each.App]; !ok {
+			resp.TransitIPs = append(resp.TransitIPs, TransitIPResponse{
+				Code:    UnknownAppName,
+				Message: unknownAppNameMessage,
+			})
+			c.logf("[Unexpected] peer attempt to map a transit IP referenced unknown app: node: %s, app: %q",
+				n.StableID(), each.App)
+			continue
+		}
+		tipresp := c.connector.handleTransitIPRequest(n, peerIPv4, peerIPv6, each)
+		seen[each.TransitIP] = true
+		resp.TransitIPs = append(resp.TransitIPs, tipresp)
+	}
+	return resp
+}
+
+func (c *Conn25) handleHookReplyToDNSQueries(h ipnlocal.PeerAPIHandler, r *http.Request) (sourceAllowed bool, nameAllowed ipnlocal.DNSNameFilter) {
+	if !c.prefsAdvertiseConnector.Load() {
+		// We are not a connector.
+		return false, nil
+	}
+
+	cfg, isConfigured := c.getConfig()
+	if !isConfigured {
+		// We have no connector config.
+		return false, nil
+	}
+
+	// Determine which app the query is for
+	var app appctype.Conn25Attr
+	if appName, hasApp := r.URL.Query()["app"]; !hasApp || len(appName) != 1 {
+		return false, nil
+	} else {
+		a, ok := cfg.appsByName[appName[0]]
+		if !ok {
+			// We have no config for the requested app.
+			return false, nil
+		}
+		app = a
+	}
+
+	if !cfg.selfAppNames.Contains(app.Name) {
+		// We are not a connector for the requested app.
+		return false, nil
+	}
+
+	if !h.PeerCaps().HasCapability(peercap.Conn25Prefix.ToAttribute(app.Name)) {
+		// The peer does not have access to the requested app.
+		return false, nil
+	}
+
+	return true, makeNameChecker(app)
+}
+
+func makeNameChecker(app appctype.Conn25Attr) ipnlocal.DNSNameFilter {
+	// TODO(tailscale/corp#40076): optimize the comparison; if the func is
+	// generated when the app config is created, that will avoid allocating
+	// temporary instances. Some of the work (e.g. conversion to [dnsname.FQDN])
+	// can also be precomputed.
+	return func(name string) bool {
+		fqdn, err := dnsname.ToFQDN(strings.ToLower(name))
+		if err != nil {
+			return false
+		}
+		for _, domain := range app.Domains {
+			appFQDN, err := dnsname.ToFQDN(strings.TrimPrefix(strings.ToLower(domain), "*."))
+			if err != nil {
+				continue
+			}
+			// Allow both exact matches and suffix matches, even when the app
+			// does not specify a wildcard. This is because of limitations in
+			// the Split DNS implementation: we treat all split DNS rules as
+			// wildcard even when the app specifies exact matching. The conn25
+			// client will only perform address mapping for more strictly
+			// matched names but the connector needs to allow queries for any
+			// subdomain of an exact match.
+			if appFQDN.Contains(fqdn) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func (e *extension) sendLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case as := <-e.conn25.client.addrsCh:
+			if err := e.handleAddressAssignment(ctx, as); err != nil {
+				e.conn25.logf("error handling transit IP assignment (app: %s, mip: %v, src: %v): %v", as.app, as.magic, as.dst, err)
+			}
+		}
+	}
+}
+
+func (e *extension) handleAddressAssignment(ctx context.Context, as addrs) error {
+	conn, err := e.sendAddressAssignment(ctx, as)
+	if err != nil {
+		return err
+	}
+	err = e.conn25.client.addTransitIPForConnector(as.transit, conn)
+	if err != nil {
+		return err
+	}
+
+	e.host.AuthReconfigAsync()
+	return nil
+}
+
+func (e *extension) sendAddressAssignment(ctx context.Context, as addrs) (tailcfg.NodeView, error) {
+	cfg, ok := e.conn25.getConfig()
+	if !ok {
+		return tailcfg.NodeView{}, errors.New("not configured")
+	}
+	app, ok := cfg.appsByName[as.app]
+	if !ok {
+		e.conn25.client.logf("App not found for app: %s (domain: %s)", as.app, as.domain)
+		return tailcfg.NodeView{}, errors.New("app not found")
+	}
+	conn, urlBase := e.pickConnectorURLBase(app)
+	if urlBase == "" {
+		return tailcfg.NodeView{}, errors.New("no connector peer found to handle address assignment")
+	}
+	client := e.backend.Sys().Dialer.Get().PeerAPIHTTPClient()
+	return conn, makePeerAPIReq(ctx, client, urlBase, as)
+}
+
+func (e *extension) pickConnectorURLBase(app appctype.Conn25Attr) (tailcfg.NodeView, string) {
+	nb := e.host.NodeBackend()
+	peers := pickConnector(nb, app)
+	var urlBase string
+	var conn tailcfg.NodeView
+	for _, p := range peers {
+		urlBase = nb.PeerAPIBase(p)
+		if urlBase != "" {
+			conn = p
+			break
+		}
+	}
+	return conn, urlBase
 }
 
 // pickConnector returns peers the backend knows about that match the app, in order of preference to use as
@@ -1249,4 +1190,63 @@ func pickConnector(nb ipnext.NodeBackend, app appctype.Conn25Attr) []tailcfg.Nod
 	})
 	sortByPreference(nb.Self(), matches)
 	return matches
+}
+
+func sortByPreference(self tailcfg.NodeView, ns []tailcfg.NodeView) {
+	// The ordering of the nodes is semantic (callers use the first node they can
+	// get a peer api url for).
+	if !self.Valid() {
+		return
+	}
+	scores := traffic.ScoresFor(self.ID(), ns)
+	scores.SortNodes(ns)
+}
+
+func isPeerEligibleConnector(peer tailcfg.NodeView) bool {
+	if !peer.Valid() || !peer.Hostinfo().Valid() {
+		return false
+	}
+	isConn, _ := peer.Hostinfo().AppConnector().Get()
+	return isConn
+}
+
+func makePeerAPIReq(ctx context.Context, httpClient *http.Client, urlBase string, as addrs) error {
+	url := urlBase + "/v0/connector/transit-ip"
+
+	reqBody := ConnectorTransitIPRequest{
+		TransitIPs: []TransitIPRequest{{
+			TransitIP:     as.transit,
+			DestinationIP: as.dst,
+			App:           as.app,
+		}},
+	}
+	bs, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshalling request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bs))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("connector returned HTTP %d", resp.StatusCode)
+	}
+
+	var respBody ConnectorTransitIPResponse
+	err = jsonDecode(&respBody, resp.Body)
+	if err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+
+	if len(respBody.TransitIPs) > 0 && respBody.TransitIPs[0].Code != OK {
+		return fmt.Errorf("connector error: %s", respBody.TransitIPs[0].Message)
+	}
+	return nil
 }
