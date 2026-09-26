@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/httpm"
 )
@@ -1535,4 +1537,345 @@ func buildTestDNSResponse(t *testing.T, domain string, ip netip.Addr) []byte {
 	}
 
 	return msg
+}
+
+// TestTrampleIncompleteConfig exercises the manager through the event bus. A
+// completed write notification is not proof that a later base-config read is
+// complete, and recovery must not depend on receiving another notification.
+func TestTrampleIncompleteConfig(t *testing.T) {
+	for _, mode := range []string{"empty", "search_only", "read_error"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				f := &fakeOSConfigurator{BaseConfig: OSConfig{Nameservers: mustIPs("192.0.2.1")}}
+				var visibleWarnings atomic.Int32
+				observer := bus.Client("test-transient-health")
+				defer observer.Close()
+				eventbus.SubscribeFunc(observer, func(c health.Change) {
+					if c.Warnable == OSConfigurationReadWarnable && c.UnhealthyState != nil {
+						visibleWarnings.Add(1)
+					}
+				})
+				m := NewManager(t.Logf, f, health.NewTracker(bus), dialer, nil, nil, "linux", bus)
+				defer m.Down()
+				var applied resolver.Config
+				var applications int
+				m.resolver.TestOnlySetHook(func(c resolver.Config) { applied = c; applications++ })
+				config := Config{Routes: upstreams("tail.test", "192.0.2.53")}
+				if err := m.Set(config); err != nil {
+					t.Fatal(err)
+				}
+				wantOS := f.OSConfig
+				f.BaseConfig = OSConfig{}
+				if mode == "search_only" {
+					f.BaseConfig.SearchDomains = fqdns("example.test")
+				}
+				if mode == "read_error" {
+					err := errors.New("partial nameserver line")
+					f.GetBaseConfigErr = &err
+				}
+				inj := eventbustest.NewInjector(t, bus)
+				eventbustest.Inject(inj, TrampleDNS{})
+				synctest.Wait()
+				func() {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					if applications != 1 {
+						t.Fatalf("incomplete config applied: %v", applied)
+					}
+					if !f.OSConfig.Equal(wantOS) {
+						t.Fatal("incomplete read changed OS configuration")
+					}
+					f.GetBaseConfigErr = nil
+					f.BaseConfig = OSConfig{Nameservers: mustIPs("192.0.2.2")}
+				}()
+				// No new event: the manager must notice the completed config on its own.
+				time.Sleep(time.Second)
+				synctest.Wait()
+				func() {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					if applications != 2 {
+						t.Fatalf("applications = %d, want 2 after retry", applications)
+					}
+					if got := applied.Routes["."]; len(got) != 1 || got[0].Addr != "192.0.2.2" {
+						t.Fatalf("default route = %v", got)
+					}
+				}()
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				if applications != 2 {
+					t.Fatal("retry continued after recovery")
+				}
+				if visibleWarnings.Load() != 0 {
+					t.Fatal("transient read failure became visible")
+				}
+			})
+		})
+	}
+}
+
+// trampleOSConfigurator records reads and rejects access after shutdown.
+// Tests use synctest.Wait before inspecting or changing its state.
+type trampleOSConfigurator struct {
+	fakeOSConfigurator
+	reads  []time.Time
+	writes int
+	closed bool
+}
+
+func (c *trampleOSConfigurator) GetBaseConfig() (OSConfig, error) {
+	if c.closed {
+		panic("base config read after Close")
+	}
+	c.reads = append(c.reads, time.Now())
+	return c.fakeOSConfigurator.GetBaseConfig()
+}
+
+func (c *trampleOSConfigurator) SetDNS(cfg OSConfig) error {
+	if c.closed {
+		panic("SetDNS after Close")
+	}
+	c.writes++
+	return c.fakeOSConfigurator.SetDNS(cfg)
+}
+
+func (c *trampleOSConfigurator) Close() error { c.closed = true; return nil }
+
+func TestTrampleRetryBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var reads int
+		bus := eventbustest.NewBus(t)
+		dialer := tsdial.NewDialer(netmon.NewStatic())
+		dialer.SetBus(bus)
+		defer dialer.Close()
+		f := &trampleOSConfigurator{fakeOSConfigurator: fakeOSConfigurator{BaseConfig: OSConfig{Nameservers: mustIPs("192.0.2.1")}}}
+		var healthyTransitions, visibleWarnings atomic.Int32
+		var failureLogs, recoveryLogs atomic.Int32
+		observer := bus.Client("test-health")
+		defer observer.Close()
+		eventbus.SubscribeFunc(observer, func(c health.Change) {
+			if c.Warnable == OSConfigurationReadWarnable && c.UnhealthyState == nil {
+				healthyTransitions.Add(1)
+			}
+			if c.Warnable == OSConfigurationReadWarnable && c.UnhealthyState != nil {
+				visibleWarnings.Add(1)
+			}
+		})
+		h := health.NewTracker(bus)
+		logf := func(format string, args ...any) {
+			t.Logf(format, args...)
+			if strings.Contains(format, "retaining DNS configuration and retrying") {
+				failureLogs.Add(1)
+			}
+			if strings.Contains(format, "DNS configuration recovered") {
+				recoveryLogs.Add(1)
+			}
+		}
+		m := NewManager(logf, f, h, dialer, nil, nil, "linux", bus)
+		defer m.Down()
+		if err := m.Set(Config{Routes: upstreams("tail.test", "192.0.2.53")}); err != nil {
+			t.Fatal(err)
+		}
+		f.BaseConfig = OSConfig{}
+		eventbustest.Inject(eventbustest.NewInjector(t, bus), TrampleDNS{})
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if visibleWarnings.Load() != 0 {
+			t.Fatal("read warning became visible during a brief rewrite")
+		}
+		time.Sleep(59 * time.Second)
+		synctest.Wait()
+		if visibleWarnings.Load() == 0 {
+			t.Fatal("persistent read warning never became visible")
+		}
+		if failureLogs.Load() != 1 || recoveryLogs.Load() != 0 {
+			t.Fatalf("logs before recovery: failures=%d recoveries=%d", failureLogs.Load(), recoveryLogs.Load())
+		}
+		if healthyTransitions.Load() != 0 {
+			t.Fatal("read warning flickered healthy during retries")
+		}
+		func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if !h.IsUnhealthy(OSConfigurationReadWarnable) {
+				t.Fatal("persistent incomplete config is not reported unhealthy")
+			}
+			if f.writes != 1 {
+				t.Fatalf("incomplete config caused %d OS writes", f.writes-1)
+			}
+			// The first read was Set; the second was the event. Subsequent reads
+			// should back off to a bounded rate, but not abandon a slow writer.
+			retries := f.reads[1:]
+			if len(retries) < 10 || len(retries) > 20 {
+				t.Fatalf("got %d reads in a minute", len(retries))
+			}
+			wantDelay := 250 * time.Millisecond
+			for i := 1; i < len(retries); i++ {
+				if got := retries[i].Sub(retries[i-1]); got != wantDelay {
+					t.Fatalf("retry %d delay = %v, want %v", i, got, wantDelay)
+				}
+				wantDelay = min(wantDelay*2, 5*time.Second)
+			}
+			f.BaseConfig = OSConfig{Nameservers: mustIPs("192.0.2.2")}
+		}()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if f.writes != 2 {
+				t.Fatalf("no recovery after slow writer: writes=%d", f.writes)
+			}
+			if h.IsUnhealthy(OSConfigurationReadWarnable) {
+				t.Fatal("health warning remained after recovery")
+			}
+			reads = len(f.reads)
+		}()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if failureLogs.Load() != 1 || recoveryLogs.Load() != 1 {
+			t.Fatalf("logs after recovery: failures=%d recoveries=%d", failureLogs.Load(), recoveryLogs.Load())
+		}
+		if len(f.reads) != reads {
+			t.Fatal("idle polling continued after recovery")
+		}
+	})
+}
+
+func TestTrampleRetryCancellation(t *testing.T) {
+	for _, action := range []string{"empty_set", "disable", "new_resolvers", "recompile", "down"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				f := &trampleOSConfigurator{fakeOSConfigurator: fakeOSConfigurator{BaseConfig: OSConfig{Nameservers: mustIPs("192.0.2.1")}}}
+				h := health.NewTracker(bus)
+				m := NewManager(t.Logf, f, h, dialer, nil, nil, "linux", bus)
+				defer func() {
+					if !f.closed {
+						m.Down()
+					}
+				}()
+				var applied resolver.Config
+				m.resolver.TestOnlySetHook(func(c resolver.Config) { applied = c })
+				cfg := Config{Routes: upstreams("tail.test", "192.0.2.53")}
+				if err := m.Set(cfg); err != nil {
+					t.Fatal(err)
+				}
+				f.BaseConfig = OSConfig{}
+				eventbustest.Inject(eventbustest.NewInjector(t, bus), TrampleDNS{})
+				synctest.Wait()
+				staleRetry := m.trampleRetry
+				if staleRetry == nil {
+					t.Fatal("expected a pending retry")
+				}
+				// Cancel while the retry is pending; advancing fake time after
+				// the change must not read or write the old configuration.
+				time.Sleep(100 * time.Millisecond)
+				var err error
+				switch action {
+				case "empty_set":
+					err = m.Set(cfg)
+				case "disable":
+					err = m.Set(Config{})
+				case "new_resolvers":
+					err = m.Set(Config{DefaultResolvers: []*dnstype.Resolver{{Addr: "192.0.2.3"}}})
+				case "recompile":
+					err = m.RecompileDNSConfig()
+				case "down":
+					err = m.Down()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				writes, reads := f.writes, len(f.reads)
+				// A stopped AfterFunc may already be queued on m.mu. Invoke
+				// the production callback with its old identity to exercise
+				// that case independently of timer scheduling luck.
+				m.mu.Lock()
+				m.retryTrampleLocked(staleRetry)
+				m.mu.Unlock()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				if f.writes != writes || len(f.reads) != reads {
+					t.Fatal("retry survived explicit change or shutdown")
+				}
+				if h.IsUnhealthy(OSConfigurationReadWarnable) {
+					t.Fatal("stale trample warning after explicit change")
+				}
+				if action == "empty_set" || action == "recompile" {
+					if defaults, ok := applied.Routes["."]; !ok || len(defaults) != 0 {
+						t.Fatalf("explicit empty base was not applied: %v", applied)
+					}
+				}
+				if action == "new_resolvers" && !f.OSConfig.Equal(OSConfig{Nameservers: mustIPs("192.0.2.3")}) {
+					t.Fatalf("new resolvers not applied: %v", f.OSConfig)
+				}
+				if action == "disable" && !f.OSConfig.IsZero() {
+					t.Fatal("DNS not disabled")
+				}
+			})
+		})
+	}
+}
+
+func TestTrampleWithoutDefaultRoute(t *testing.T) {
+	for _, mode := range []string{"no_config", "disabled", "initial_empty_base", "native_split", "explicit_default"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				defer dialer.Close()
+				f := &trampleOSConfigurator{}
+				h := health.NewTracker(bus)
+				if h.IsUnhealthy(OSConfigurationReadWarnable) {
+					t.Fatal("unexpected initial DNS warning")
+				}
+				m := NewManager(t.Logf, f, h, dialer, nil, nil, "linux", bus)
+				defer m.Down()
+				cfg := Config{Routes: upstreams("tail.test", "192.0.2.53")}
+				switch mode {
+				case "disabled":
+					cfg = Config{}
+				case "native_split":
+					f.SplitDNS = true
+				case "explicit_default":
+					cfg.DefaultResolvers = []*dnstype.Resolver{{Addr: "192.0.2.3"}}
+				}
+				if mode != "no_config" {
+					if err := m.Set(cfg); err != nil {
+						t.Fatal(err)
+					}
+				}
+				initialWrites := f.writes
+				eventbustest.Inject(eventbustest.NewInjector(t, bus), TrampleDNS{})
+				synctest.Wait()
+				wantWrites := initialWrites + 1
+				if mode == "no_config" {
+					wantWrites = 0
+				}
+				if f.writes != wantWrites {
+					t.Fatalf("writes=%d, want %d", f.writes, wantWrites)
+				}
+				reads := len(f.reads)
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				if f.writes != wantWrites || len(f.reads) != reads {
+					t.Fatal("unexpected retries for config without base upstreams")
+				}
+				if h.IsUnhealthy(OSConfigurationReadWarnable) {
+					t.Fatal("intentional config marked unhealthy")
+				}
+			})
+		})
+	}
 }
