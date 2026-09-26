@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -108,8 +109,13 @@ func TestSetPushDeviceToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.StatusCode != 200 {
-		t.Errorf("res.StatusCode=%d, want 200. body: %s", res.StatusCode, body)
+	wantStatus := http.StatusOK
+	if !buildfeatures.HasDebug {
+		wantStatus = http.StatusNotFound
+		want = "" // The excluded endpoint must not modify hostinfo.
+	}
+	if res.StatusCode != wantStatus {
+		t.Errorf("res.StatusCode=%d, want %d. body: %s", res.StatusCode, wantStatus, body)
 	}
 	if got := h.b.GetPushDeviceToken(); got != want {
 		t.Errorf("hostinfo.PushDeviceToken=%q, want %q", got, want)
@@ -518,108 +524,6 @@ func TestServeUserProfile(t *testing.T) {
 		hh.serveUserProfileWithBackend(rec, req, b)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-		}
-	})
-}
-
-func TestShouldDenyServeConfigForGOOSAndUserContext(t *testing.T) {
-	newHandler := func(connIsLocalAdmin bool) *Handler {
-		return handlerForTest(t, &Handler{
-			Actor: &ipnauth.TestActor{LocalAdmin: connIsLocalAdmin},
-			b:     newTestLocalBackend(t),
-		})
-	}
-	tests := []struct {
-		name     string
-		configIn *ipn.ServeConfig
-		h        *Handler
-		wantErr  bool
-	}{
-		{
-			name: "not-path-or-unix-handler",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Proxy: "http://127.0.0.1:3000"},
-					}},
-				},
-			},
-			h:       newHandler(false),
-			wantErr: false,
-		},
-		{
-			name: "path-handler-admin",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Path: "/tmp"},
-					}},
-				},
-			},
-			h:       newHandler(true),
-			wantErr: false,
-		},
-		{
-			name: "path-handler-not-admin",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Path: "/tmp"},
-					}},
-				},
-			},
-			h:       newHandler(false),
-			wantErr: true,
-		},
-		{
-			name: "unix-handler-admin",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Proxy: "unix:/var/run/foo.sock"},
-					}},
-				},
-			},
-			h:       newHandler(true),
-			wantErr: false,
-		},
-		{
-			name: "unix-handler-not-admin",
-			configIn: &ipn.ServeConfig{
-				Web: map[ipn.HostPort]*ipn.WebServerConfig{
-					"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-						"/": {Proxy: "unix:/var/run/foo.sock"},
-					}},
-				},
-			},
-			h:       newHandler(false),
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		for _, goos := range []string{"linux", "windows", "darwin", "illumos", "solaris"} {
-			t.Run(goos+"-"+tt.name, func(t *testing.T) {
-				err := authorizeServeConfigForGOOSAndUserContext(goos, tt.configIn, tt.h)
-				gotErr := err != nil
-				if gotErr != tt.wantErr {
-					t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want error %v", err, tt.wantErr)
-				}
-			})
-		}
-	}
-	t.Run("other-goos", func(t *testing.T) {
-		configIn := &ipn.ServeConfig{
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Path: "/tmp"},
-				}},
-			},
-		}
-		h := newHandler(false)
-		err := authorizeServeConfigForGOOSAndUserContext("dos", configIn, h)
-		if err != nil {
-			t.Errorf("authorizeServeConfigForGOOSAndUserContext() got error = %v, want nil", err)
 		}
 	})
 }

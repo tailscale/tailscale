@@ -28,6 +28,7 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/packet/checksum"
@@ -442,6 +443,9 @@ func TestFilter(t *testing.T) {
 				}
 			}
 			if wasUDP {
+				if !buildfeatures.HasNetLog {
+					want = nil
+				}
 				if diff := cmp.Diff(got, want, cmpopts.EquateEmpty()); diff != "" {
 					t.Errorf("stats.TestExtract (-got +want):\n%s", diff)
 				}

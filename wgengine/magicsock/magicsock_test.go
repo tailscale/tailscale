@@ -47,6 +47,7 @@ import (
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/batching"
@@ -1319,6 +1320,12 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	checkStats := func(t *testing.T, m *magicStack, wantConns []netlogtype.Connection) {
 		t.Helper()
 		defer m.counts.Reset()
+		if !buildfeatures.HasNetLog {
+			if counts := m.counts.Clone(); len(counts) != 0 {
+				t.Errorf("unexpected connection counts without netlog: %v", counts)
+			}
+			return
+		}
 		if err := tstest.WaitFor(5*time.Second, func() error {
 			counts := m.counts.Clone()
 			for _, conn := range wantConns {
@@ -4426,7 +4433,7 @@ func TestConn_receiveIP(t *testing.T) {
 			case *endpoint:
 				wantNonzeroRxStats = true
 			}
-			if tt.wantOk && wantNonzeroRxStats {
+			if buildfeatures.HasNetLog && tt.wantOk && wantNonzeroRxStats {
 				wantRxBytes := uint64(len(tt.b))
 				wantPhy := map[netlogtype.Connection]netlogtype.Counts{
 					{Dst: tt.ipp}: {
