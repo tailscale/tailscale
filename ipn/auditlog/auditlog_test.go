@@ -12,6 +12,7 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -481,4 +482,53 @@ type mockError struct {
 
 func (e mockError) Retryable() bool {
 	return e == retriableError
+}
+
+// failingLoadStore wraps a LogStore and fails load while failLoad is set.
+type failingLoadStore struct {
+	LogStore
+	failLoad bool
+}
+
+func (s *failingLoadStore) load(key ipn.ProfileID) ([]*transaction, error) {
+	if s.failLoad {
+		return nil, errors.New("injected load error")
+	}
+	return s.LogStore.load(key)
+}
+
+// TestMarkTransactionsDoneLoadError ensures a failed store load in
+// markTransactionsDone does not erase pending logs from the store.
+func TestMarkTransactionsDoneLoadError(t *testing.T) {
+	c := qt.New(t)
+	store := &failingLoadStore{LogStore: NewLogStore(&mem.Store{})}
+	al := loggerForTest(t, Opts{
+		RetryLimit: 100,
+		Logf:       t.Logf,
+		Store:      store,
+	})
+	c.Assert(al.SetProfileID("test"), qt.IsNil)
+
+	logs := []*transaction{
+		{EventID: "1", Details: "log 1", TimeStamp: time.Now().Add(-time.Minute * 2)},
+		{EventID: "2", Details: "log 2", TimeStamp: time.Now().Add(-time.Minute * 1)},
+	}
+	al.mu.Lock()
+	c.Assert(al.appendToStoreLocked(logs), qt.IsNil)
+	al.mu.Unlock()
+
+	store.failLoad = true
+	al.markTransactionsDone(logs[:1])
+	store.failLoad = false
+
+	fromStore, err := store.load("test")
+	c.Assert(err, qt.IsNil)
+	c.Assert(fromStore, qt.HasLen, 2)
+
+	// Once load succeeds again, only the completed log is removed.
+	al.markTransactionsDone(logs[:1])
+	fromStore, err = store.load("test")
+	c.Assert(err, qt.IsNil)
+	c.Assert(fromStore, qt.HasLen, 1)
+	c.Assert(fromStore[0].EventID, qt.Equals, "2")
 }

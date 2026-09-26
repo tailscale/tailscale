@@ -369,7 +369,10 @@ func (al *Logger) markTransactionsDone(sent []*transaction) {
 
 	persisted, err := al.store.load(al.profileID)
 	if err != nil {
+		// Leave the store untouched. Saving here would overwrite the
+		// persisted logs with an empty list and lose every pending log.
 		al.logf("[unexpected] markTransactionsDone failed to restore logs: %v", err)
+		return
 	}
 	var unsent []*transaction
 	for _, txn := range persisted {
