@@ -1,0 +1,193 @@
+# Windows smoke tests: a named subset of tstest/integration run against a
+# tailscaled Windows service, three times a night to surface flakes that a
+# single run hides. The same tests also run on every PR as part of the
+# "windows" job in test.yml, which selects by package; this workflow selects
+# by test name and does not change that job.
+name: windows-smoke
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Three times nightly, 20 minutes apart, to catch flakes. Off-the-hour to
+    # avoid GitHub's :00 cron-stampede window, and overnight for the US so the
+    # shared Windows runner is idle.
+    - cron: "13 7 * * *"
+    - cron: "33 7 * * *"
+    - cron: "53 7 * * *"
+
+  pull_request:
+    paths:
+      - ".github/workflows/windows-smoke.yml"
+      - "tstest/integration/smoke_windows_test.go"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
+  CMD_GO_USE_GIT_HASH: "true"
+
+permissions: {}
+
+jobs:
+  smoke:
+    permissions:
+      id-token: write # request the identity JWT that authenticates to cigocached
+      contents: read # for actions/checkout
+    runs-on: ci-windows-github-1
+    timeout-minutes: 30
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: ${{ github.workspace }}/src
+        persist-credentials: false
+
+    - name: Compute Go module cache key
+      id: hash
+      shell: bash
+      run: echo "key=gomod-cross3-${{ hashFiles('src/go.mod', 'src/go.sum') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Go module cache
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: gomodcache
+        key: ${{ steps.hash.outputs.key }}
+        enableCrossOsArchive: true
+
+    - name: Set up cigocacher
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: ${{ github.workspace }}/src
+        cache-dir: ${{ github.workspace }}/cigocacher
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
+        cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
+
+    - name: smoke tests
+      shell: bash
+      working-directory: src
+      # Named explicitly rather than by a prefix, so adding a test to the
+      # nightly is a deliberate edit. -run and -count go before the package so
+      # they land in "go test"'s flags: testwrapper appends its own -run after
+      # the package when retrying one test, and a later -run would override it.
+      # -count=1: a cached pass is never retried, so flakes can't be reported.
+      run: |
+        ./tool/go run ./cmd/testwrapper \
+          -run '^(TestWindowsServiceMagicDNS|TestWindowsServiceSplitDNS|TestWindowsServiceShieldsUp|TestWindowsServiceAdvertiseRoutes|TestOneNodeUpNoAuth|TestOneNodeExpiredKey|TestLogoutRemovesAllPeers|TestNoControlConnWhenDown|TestStateSavedOnStart|TestTwoNodes)$' \
+          -count=1 \
+          ./tstest/integration -- --run-windows-service-tests
+      env:
+        NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
+        TS_TESTWRAPPER_RESULTS_SUMMARY: "1"
+        TS_TESTWRAPPER_RESULTS_PKG: tailscale.com/tstest/integration
+        TS_TESTWRAPPER_RESULTS_JSON: ${{ github.workspace }}/windows-smoke-results.json
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: windows-smoke-results
+        path: ${{ github.workspace }}/windows-smoke-results.json
+        if-no-files-found: ignore
+
+  notify:
+    if: always() && github.event_name != 'pull_request'
+    needs:
+      - smoke
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Download results
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: windows-smoke-results
+        path: results
+    - name: Build Slack payload
+      id: payload
+      env:
+        SMOKE_RESULT: ${{ needs.smoke.result }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        # Read each artifact separately so one unreadable file can't discard the others.
+        rows='[]'; unreadable=0; reported=0
+        while IFS= read -r -d '' f; do
+          reported=$((reported + 1))
+          [ -s "$f" ] || continue
+          case "$(jq -r 'type' "$f" 2>/dev/null)" in
+            array) rows=$(printf '%s\n%s' "$rows" "$(jq -c . "$f")" | jq -s 'add') ;;
+            null)  ;; # ran none of the filtered package
+            *)     unreadable=$((unreadable + 1)) ;;
+          esac
+        done < <(find results -name windows-smoke-results.json -print0 2>/dev/null)
+        rows=$(printf '%s' "$rows" | jq '[ .[] | objects ] | unique_by([.Package, .Test])')
+        count() { printf '%s' "$rows" | jq "[ (. // [])[] | select(.Outcome == \"$1\") ] | length"; }
+        retried=$(count retried)
+        passed=$(( $(count pass) + retried ))
+        failed=$(count fail)
+        skipped=$(count skip)
+        executed=$((passed + failed))
+        if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
+        # Names behind the retried count, capped so one bad run can't flood the message.
+        flaky=$(printf '%s' "$rows" | jq -r '
+          [ .[] | select(.Outcome == "retried") | (.Package | sub("^tailscale\\.com/"; "")) + "." + .Test ]
+          | sort
+          | if length > 5 then (.[:5] | join(", ")) + ", and \(length - 5) more" else join(", ") end')
+
+        case "$SMOKE_RESULT" in
+          success)   emoji=":white_check_mark:"; color="good" ;;
+          failure)   emoji=":x:";                color="danger" ;;
+          cancelled) emoji=":no_entry_sign:";    color="warning" ;;
+          skipped)   emoji=":fast_forward:";     color="warning" ;;
+          *)         emoji=":question:";         color="warning" ;;
+        esac
+
+        detail="${passed} passed, ${failed} failed, ${skipped} skipped"
+        if [ "$executed" -gt 0 ]; then
+          detail="${detail} (${pct}%)"
+        fi
+        # Anything that makes the numbers incomplete or overstated is said out loud.
+        caveats=""
+        if [ "$unreadable" -gt 0 ]; then
+          caveats="${caveats} — ${unreadable} result file(s) unreadable"
+        fi
+        if [ "$reported" -eq 0 ]; then
+          caveats="${caveats} — no results reported"
+        fi
+        if [ "$executed" -eq 0 ]; then
+          caveats="${caveats} — no tests executed"
+        fi
+        if [ "$SMOKE_RESULT" = "failure" ] && [ "$failed" -eq 0 ]; then
+          caveats="${caveats} — results may be partial (build error or timeout)"
+        fi
+        detail="${detail}${caveats}"
+        if [ "$failed" -gt 0 ]; then det_emoji=":x:"
+        elif [ -n "$caveats" ]; then det_emoji=":warning:"
+        else det_emoji=":white_check_mark:"; fi
+
+        jq -n --arg emoji "$emoji" --arg status "$SMOKE_RESULT" --arg det_emoji "$det_emoji" \
+          --arg detail "$detail" --arg flaky "$flaky" --arg retried "$retried" \
+          --arg color "$color" --arg run_url "$RUN_URL" --arg ref "$REF_NAME" \
+          '{attachments: [{
+            title: ($emoji + " Windows Smoke Tests: " + $status),
+            title_link: $run_url,
+            text: (
+              "*" + $ref + "*"
+              + "\n\n" + $det_emoji + " smoke tests: " + $detail
+              + (if $flaky == "" then "" else "\n    ↳ :warning: Flaky Tests (" + $retried + " passed on retry): " + $flaky end)
+              + "\n\n<" + $run_url + "|View run details>"
+            ),
+            color: $color,
+            mrkdwn_in: ["text"]
+          }]}' > payload.json
+    - name: Send Slack notification
+      env:
+        WEBHOOK: ${{ secrets.WINDOWS_SLACK_WEBHOOK_URL }}
+      if: env.WEBHOOK != '' && needs.smoke.result != 'cancelled'
+      continue-on-error: true
+      uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+      with:
+        webhook: ${{ env.WEBHOOK }}
+        webhook-type: incoming-webhook
+        payload-file-path: payload.json
