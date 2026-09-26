@@ -12,6 +12,7 @@ import React from "react"
 import { createRoot } from "react-dom/client"
 import { swrConfig } from "src/api"
 import App from "src/components/app"
+import { I18nProvider } from "src/i18n"
 import ToastProvider from "src/ui/toaster"
 import { SWRConfig } from "swr"
 
@@ -29,9 +30,11 @@ const root = createRoot(rootEl)
 root.render(
   <React.StrictMode>
     <SWRConfig value={swrConfig}>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
+      <I18nProvider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </I18nProvider>
     </SWRConfig>
   </React.StrictMode>
 )
