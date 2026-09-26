@@ -634,10 +634,12 @@ func (opts Options) init(disableLogging bool) (*logtail.Config, *Policy) {
 	}
 
 	conf := logtail.Config{
-		Collection:    newc.Collection,
-		PrivateID:     newc.PrivateID,
-		Stderr:        logWriter{console},
-		CompressLogs:  true,
+		Collection: newc.Collection,
+		PrivateID:  newc.PrivateID,
+		Stderr:     logWriter{console},
+		// Disabled uploads use a discard transport. Compressing those batches
+		// only spends CPU and retains encoder resources for discarded output.
+		CompressLogs:  !disableLogging,
 		MaxUploadSize: opts.MaxUploadSize,
 		Bus:           opts.Bus,
 	}
