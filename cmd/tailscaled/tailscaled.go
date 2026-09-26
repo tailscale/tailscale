@@ -134,6 +134,7 @@ var args struct {
 	encryptState        boolFlag
 	statedir            string
 	socketpath          string
+	windowsMode         string // "" (service) or "dev"; Windows only
 	birdSocketPath      string
 	verbose             int
 	socksAddr           string // listen address for SOCKS5 server
@@ -219,6 +220,9 @@ func main() {
 	}
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
+	if runtime.GOOS == "windows" {
+		flag.StringVar(&args.windowsMode, "windows-mode", "", `how tailscaled is being run: "" (the default) is the Tailscale service or an administrator standing in for it, which must use the default --socket; "dev" is a developer running tailscaled by hand, which listens on \\.\pipe\tailscale-<username> by default and only accepts connections from that user`)
+	}
 	if buildfeatures.HasBird {
 		flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	}
@@ -287,6 +291,12 @@ store state on filesystem.`)
 		log.SetFlags(0)
 		log.Fatalf("--socket is required")
 	}
+	if runtime.GOOS == "windows" {
+		if err := applyWindowsMode(); err != nil {
+			log.SetFlags(0)
+			log.Fatal(err)
+		}
+	}
 
 	if buildfeatures.HasBird && args.birdSocketPath != "" && !wgengine.HookNewBird.IsSet() {
 		log.SetFlags(0)
@@ -337,6 +347,38 @@ store state on filesystem.`)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// applyWindowsMode validates --windows-mode and --socket on Windows and, in
+// dev mode, applies the per-user default socket.
+//
+// Clients trust the default socket because only administrators can create
+// pipes under its prefix. A tailscaled listening anywhere else could be any
+// user's, so it must say so with --windows-mode=dev, which also makes its
+// pipe accessible to that user alone; see [safesocket.ListenCurrentUser].
+func applyWindowsMode() error {
+	switch args.windowsMode {
+	case "":
+		if !paths.IsWindowsProtectedPipe(args.socketpath) {
+			return fmt.Errorf("--socket=%q is not under %s, the prefix only administrators can create pipes in; the Tailscale service must use the default socket, and a developer running tailscaled by hand must pass --windows-mode=dev", args.socketpath, paths.WindowsProtectedPipePrefix)
+		}
+	case "dev":
+		socketSet := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "socket" {
+				socketSet = true
+			}
+		})
+		if !socketSet {
+			args.socketpath = paths.WindowsDevTailscaledSocket()
+			if args.socketpath == "" {
+				return errors.New("--windows-mode=dev: can't determine the current user for the default --socket")
+			}
+		}
+	default:
+		return fmt.Errorf("invalid --windows-mode=%q; valid values are \"\" (the default, for the Tailscale service) and \"dev\"", args.windowsMode)
+	}
+	return nil
 }
 
 func trySynologyMigration(p string) error {
@@ -553,7 +595,14 @@ var sigPipe os.Signal // set by sigpipe.go
 
 // logID may be the zero value if logging is not in use.
 func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
-	ln, err := safesocket.Listen(args.socketpath)
+	listen := safesocket.Listen
+	if runtime.GOOS == "windows" && args.windowsMode == "dev" {
+		// The developer's pipe is owned by and open only to the developer,
+		// which lets their CLI tell it apart from another user's pipe of
+		// the same name. See safesocket.ConnectCurrentUserContext.
+		listen = safesocket.ListenCurrentUser
+	}
+	ln, err := listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}

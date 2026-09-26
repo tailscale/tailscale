@@ -7,11 +7,14 @@ package safesocket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/tailscale/go-winio"
 	"golang.org/x/sys/windows"
@@ -25,21 +28,138 @@ func connect(ctx context.Context, path string) (net.Conn, error) {
 	return winio.DialPipeAccessImpLevel(ctx, path, windows.GENERIC_READ|windows.GENERIC_WRITE, winio.PipeImpLevelIdentification)
 }
 
+// connectCurrentUser connects to the pipe at path and then verifies that the
+// pipe could only have been created, and can only be served, by the current
+// user, closing the connection and returning an error if not.
+func connectCurrentUser(ctx context.Context, path string) (net.Conn, error) {
+	c, err := ConnectContext(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPipeExclusiveToCurrentUser(c); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// checkPipeExclusiveToCurrentUser reports an error unless the named pipe c is
+// connected to is owned by the current user and its DACL grants access to no
+// one but the current user.
+//
+// A named pipe name is shared by all of its instances, and a client connecting
+// to the name is served by whichever instance is waiting. The first instance's
+// security descriptor governs the rest: creating another instance needs
+// FILE_CREATE_PIPE_INSTANCE, which the DACL grants along with write access.
+// So the server on the other end of c is the current user's if and only if the
+// pipe was created by the current user (the owner: only administrators may
+// set an owner other than themselves) and no one else may create instances
+// (the DACL). Checking the owner alone would let another user serve
+// connections on a pipe the current user created with a permissive DACL.
+func checkPipeExclusiveToCurrentUser(c net.Conn) error {
+	pc, ok := c.(interface{ Fd() uintptr })
+	if !ok {
+		return fmt.Errorf("unexpected pipe conn type %T", c)
+	}
+	me, err := currentUserSID()
+	if err != nil {
+		return err
+	}
+	// GENERIC_READ on the pipe includes READ_CONTROL, so we may read its
+	// security descriptor.
+	sd, err := windows.GetSecurityInfo(windows.Handle(pc.Fd()), windows.SE_KERNEL_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("getting the pipe's security descriptor: %w", err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("getting the pipe's owner: %w", err)
+	}
+	if !owner.Equals(me) {
+		return fmt.Errorf("named pipe is owned by %v, not by the current user %v; refusing to talk to it", owner, me)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("getting the pipe's DACL: %w", err)
+	}
+	if dacl == nil {
+		return errors.New("named pipe has no DACL, so any user may serve it; refusing to talk to it")
+	}
+	for i := range uint32(dacl.AceCount) {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return fmt.Errorf("reading the pipe's DACL: %w", err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			continue // a deny ACE can't let anyone else in
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if !sid.Equals(me) {
+			return fmt.Errorf("named pipe grants access to %v, not only to the current user %v, so another user could serve it; refusing to talk to it", sid, me)
+		}
+	}
+	return nil
+}
+
 // windowsSDDL is the Security Descriptor set on the namedpipe.
 // It provides read/write access to all users and the local system.
-// It is a var for testing, do not change this value.
-var windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
+//
+// It deliberately sets no owner or group: the creator becomes the owner.
+// Naming the Administrators group as the owner, as this once did, made
+// listening fail for a tailscaled run by a non-administrator, since only
+// administrators may assign that SID as an owner.
+const windowsSDDL = "D:P(A;;GWGR;;;BU)(A;;GWGR;;;SY)"
+
+func init() {
+	listenCurrentUserHook = listenCurrentUser
+	connectCurrentUserHook = connectCurrentUser
+}
 
 func listen(path string) (net.Listener, error) {
+	return listenSDDL(path, windowsSDDL)
+}
+
+// currentUserSID returns the SID of the user this process runs as.
+func currentUserSID() (*windows.SID, error) {
+	tu, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, fmt.Errorf("getting the current user's SID: %w", err)
+	}
+	return tu.User.Sid, nil
+}
+
+// listenCurrentUser is like listen, but the pipe is explicitly owned by the
+// current user, and only that user may open it.
+//
+// The owner is what a connecting client of the same user checks; see
+// connectCurrentUser. Only administrators may set an owner other than
+// themselves, so a pipe owned by user X was created by X or by an
+// administrator.
+func listenCurrentUser(path string) (net.Listener, error) {
+	sid, err := currentUserSID()
+	if err != nil {
+		return nil, err
+	}
+	sddl := fmt.Sprintf("O:%sD:P(A;;GWGR;;;%s)", sid, sid)
+	return listenSDDL(path, sddl)
+}
+
+func listenSDDL(path, sddl string) (net.Listener, error) {
 	lc, err := winio.ListenPipe(
 		path,
 		&winio.PipeConfig{
-			SecurityDescriptor: windowsSDDL,
+			SecurityDescriptor: sddl,
 			InputBufferSize:    256 * 1024,
 			OutputBufferSize:   256 * 1024,
 		},
 	)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) && strings.HasPrefix(strings.ToLower(path), `\\.\pipe\protectedprefix\administrators\`) {
+			// Only administrators may create pipes under that prefix,
+			// which is where tailscaled listens by default.
+			return nil, fmt.Errorf("namedpipe.Listen: %w; creating a pipe under \\\\.\\pipe\\ProtectedPrefix\\Administrators requires running as an administrator; run elevated or pass --socket with another pipe name", err)
+		}
 		return nil, fmt.Errorf("namedpipe.Listen: %w", err)
 	}
 	return &winIOPipeListener{Listener: lc}, nil
