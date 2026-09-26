@@ -1071,7 +1071,11 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, slab []byte, packets []tun.R
 		}
 	}
 
-	invertGSOChecksum(pkt, gso)
+	// Raw injected packets (including DNS and TSMP replies) already have a
+	// complete checksum and are also used in builds without netstack.
+	if res.packet != nil {
+		invertGSOChecksum(pkt, gso)
+	}
 	// Check if this is a packet for conn25-style app connectors,
 	// and perform the necessary NAT. The main case that requires
 	// NAT from netstack toward WireGuard is an SNAT on return traffic
@@ -1093,7 +1097,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, slab []byte, packets []tun.R
 		}
 	}
 	pc.snat(p)
-	invertGSOChecksum(pkt, gso)
+	if res.packet != nil {
+		invertGSOChecksum(pkt, gso)
+	}
 
 	if res.packet != nil {
 		var gsoOptions tun.GSOOptions
