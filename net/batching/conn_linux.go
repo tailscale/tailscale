@@ -294,6 +294,7 @@ func (c *linuxBatchingConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, ge
 		batch.writeBatchToUDPAddr.IP = batch.writeBatchToUDPAddr.IP[:4]
 	}
 	batch.writeBatchToUDPAddr.Port = int(addr.Port())
+	batch.writeBatchToUDPAddr.Zone = addr.Addr().Zone()
 	// Load the control knob once per write so a single call sees a consistent
 	// value even if the knob flips concurrently.
 	neverGSOEqualTail := c.neverGSOEqualTail != nil && c.neverGSOEqualTail.Load()
