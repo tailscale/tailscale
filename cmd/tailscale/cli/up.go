@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
@@ -706,6 +707,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	go func() {
 		var printed bool // whether we've yet printed anything to stdout or stderr
 		lastURLPrinted := ""
+		lastHealthWarnPrinted := ""
 
 		// If we're doing a force-reauth, we need to get two notifications:
 		//
@@ -736,6 +738,14 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 			if n.ErrMessage != nil {
 				msg := *n.ErrMessage
 				fatalf("backend error: %v\n", msg)
+			}
+			if n.Health != nil && !printed && !ipnIsRunning {
+				if w, ok := n.Health.Warnings[tsconst.HealthWarnableLoginState]; ok && w.Text != "" {
+					if w.Text != lastHealthWarnPrinted {
+						lastHealthWarnPrinted = w.Text
+						fmt.Fprintf(Stderr, "Warning: %s\n", w.Text)
+					}
+				}
 			}
 			if s := n.State; s != nil && *s == ipn.NeedsMachineAuth {
 				printed = true
