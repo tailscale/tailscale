@@ -1466,6 +1466,12 @@ func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
 			return "", false
 		}
 	}
+	if srcPortStr != "" {
+		port, err := strconv.ParseUint(srcPortStr, 10, 16)
+		if err != nil || port == 0 {
+			return "", false
+		}
+	}
 
 	var wantLength int
 	switch srcType {
@@ -1473,6 +1479,9 @@ func isLegacyInvocation(subcmd serveMode, args []string) (string, bool) {
 		wantLength = 3
 	case "tcp", "tls-terminated-tcp":
 		wantLength = 2
+		if srcPortStr == "" {
+			return "", false
+		}
 	default:
 		// return non-legacy, and let new code handle validation.
 		return "", false
