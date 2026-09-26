@@ -462,10 +462,11 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 }
 
 // fakeBatchWriter is an xnetBatchReaderWriter that records the Buffers length
-// of each message handed to WriteBatch, and optionally fails the first call
-// with an error that triggers neterror.ShouldDisableUDPGSO.
+// and destination address of each message handed to WriteBatch, and optionally
+// fails the first call with an error that triggers neterror.ShouldDisableUDPGSO.
 type fakeBatchWriter struct {
-	gotBuffersLen [][]int // Buffers len of each msg, per WriteBatch call
+	gotBuffersLen [][]int    // Buffers len of each msg, per WriteBatch call
+	gotAddrs      [][]string // Addr.String() of each msg, per WriteBatch call
 	failFirst     bool
 }
 
@@ -473,10 +474,13 @@ func (f *fakeBatchWriter) ReadBatch([]ipv6.Message, int) (int, error) { return 0
 
 func (f *fakeBatchWriter) WriteBatch(msgs []ipv6.Message, _ int) (int, error) {
 	snap := make([]int, len(msgs))
+	addrs := make([]string, len(msgs))
 	for i := range msgs {
 		snap[i] = len(msgs[i].Buffers)
+		addrs[i] = msgs[i].Addr.String()
 	}
 	f.gotBuffersLen = append(f.gotBuffersLen, snap)
+	f.gotAddrs = append(f.gotAddrs, addrs)
 	if f.failFirst && len(f.gotBuffersLen) == 1 {
 		return 0, &os.SyscallError{Syscall: "sendmmsg", Err: unix.EIO}
 	}
@@ -607,6 +611,60 @@ func Test_linuxBatchingConn_WriteBatchTo_offsetStableOnNonCoalesceRetry(t *testi
 	for call, got := range xpc.gotBuffersLen {
 		if len(got) != len(buffs) {
 			t.Errorf("call %d sent %d msgs, want %d", call, len(got), len(buffs))
+		}
+	}
+}
+
+// Test_linuxBatchingConn_WriteBatchTo_setsZone verifies that every message
+// handed to WriteBatch is addressed to the destination passed to WriteBatchTo,
+// including its IPv6 zone, with and without UDP GSO. The destination
+// *net.UDPAddr comes from a pooled msgsBatch, so a zone set by one write must
+// not carry over to a later write to a destination without one.
+func Test_linuxBatchingConn_WriteBatchTo_setsZone(t *testing.T) {
+	// Hand out the same batch on every Get, even if the pool drops it, so each
+	// write reuses the UDPAddr left behind by the previous one.
+	ua := &net.UDPAddr{IP: make([]byte, 16)}
+	msgs := make([]ipv6.Message, 2)
+	for i := range msgs {
+		msgs[i].Buffers = make([][]byte, 1)
+		msgs[i].Addr = ua
+		msgs[i].OOB = make([]byte, controlMessageSize)
+	}
+	batch := &msgsBatch{writeBatchToUDPAddr: ua, msgs: msgs}
+
+	xpc := &fakeBatchWriter{}
+	c := &linuxBatchingConn{
+		xpc:      xpc,
+		msgsPool: sync.Pool{New: func() any { return batch }},
+	}
+
+	dsts := []netip.AddrPort{
+		netip.MustParseAddrPort("[fe80::1%eth0]:41641"),
+		netip.MustParseAddrPort("[2001:db8::1]:41641"), // zone must be cleared
+		netip.MustParseAddrPort("[fe80::1%3]:41641"),   // numeric zone
+		netip.MustParseAddrPort("192.0.2.1:41641"),     // zone must be cleared
+	}
+	// Two equal-length buffs: two msgs without GSO, one coalesced msg with it.
+	buffs := [][]byte{make([]byte, 32), make([]byte, 32)}
+	for _, gso := range []bool{false, true} {
+		c.txOffload.Store(gso)
+		wantMsgs := len(buffs)
+		if gso {
+			wantMsgs = 1
+		}
+		for _, dst := range dsts {
+			if err := c.WriteBatchTo(buffs, dst, packet.GeneveHeader{}, 0); err != nil {
+				t.Fatalf("gso=%v: WriteBatchTo(%v) = %v", gso, dst, err)
+			}
+			got := xpc.gotAddrs[len(xpc.gotAddrs)-1]
+			if len(got) != wantMsgs {
+				t.Fatalf("gso=%v: WriteBatchTo(%v) sent %d msgs, want %d", gso, dst, len(got), wantMsgs)
+			}
+			for i, addr := range got {
+				if addr != dst.String() {
+					t.Errorf("gso=%v: WriteBatchTo(%v) msg[%d] addr = %v, want %v", gso, dst, i, addr, dst)
+				}
+			}
 		}
 	}
 }
