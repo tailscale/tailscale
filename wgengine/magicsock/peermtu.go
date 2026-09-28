@@ -84,6 +84,9 @@ func (c *Conn) PeerMTUEnabled() bool {
 // If the PMTUD settings changed, it resets the endpoint state so that it will
 // re-probe path MTUs to this peer.
 func (c *Conn) UpdatePMTUD() {
+	if !hasUDPTransport {
+		return
+	}
 	if debugPMTUD() {
 		df4, err4 := c.getDontFragment("udp4")
 		df6, err6 := c.getDontFragment("udp6")

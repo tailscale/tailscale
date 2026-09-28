@@ -191,6 +191,7 @@ var Features = map[FeatureTag]FeatureMeta{
 	"listenrawdisco": {
 		Sym:  "ListenRawDisco",
 		Desc: "Use raw sockets for more robust disco (NAT traversal) message receiving (Linux only)",
+		Deps: []FeatureTag{"udptransport"},
 	},
 	"logtail": {
 		Sym:  "LogTail",
@@ -222,12 +223,21 @@ var Features = map[FeatureTag]FeatureMeta{
 		Desc:                 "PeerAPI server support",
 		ImplementationDetail: true,
 	},
-	"portlist":   {Sym: "PortList", Desc: "Optionally advertise listening service ports"},
-	"portmapper": {Sym: "PortMapper", Desc: "NAT-PMP/PCP/UPnP port mapping support"},
-	"posture":    {Sym: "Posture", Desc: "Device posture checking support"},
+	"portlist": {Sym: "PortList", Desc: "Optionally advertise listening service ports"},
+	"portmapper": {
+		Sym:  "PortMapper",
+		Desc: "NAT-PMP/PCP/UPnP port mapping support",
+		Deps: []FeatureTag{"nattraversal"},
+	},
+	"posture": {Sym: "Posture", Desc: "Device posture checking support"},
 	"dns": {
 		Sym:  "DNS",
 		Desc: "MagicDNS and system DNS configuration support",
+	},
+	"nattraversal": {
+		Sym:  "NATTraversal",
+		Desc: "NAT traversal: STUN, disco hole punching, and UDP peer relay client support (if omitted, direct UDP works only to peers with directly reachable endpoints)",
+		Deps: []FeatureTag{"udptransport"},
 	},
 	"netlog": {
 		Sym:  "NetLog",
@@ -301,6 +311,10 @@ var Features = map[FeatureTag]FeatureMeta{
 	"tap":         {Sym: "Tap", Desc: "Experimental Layer 2 (ethernet) support"},
 	"tpm":         {Sym: "TPM", Desc: "TPM support"},
 	"tundevstats": {Sym: "TUNDevStats", Desc: "Poll TUN device statistics (Linux only)"},
+	"udptransport": {
+		Sym:  "UDPTransport",
+		Desc: "UDP transport to peers (if omitted, all peer traffic is relayed over DERP)",
+	},
 	"unixsocketidentity": {
 		Sym:  "UnixSocketIdentity",
 		Desc: "differentiate between users accessing the LocalAPI over unix sockets (if omitted, all users have full access)",
