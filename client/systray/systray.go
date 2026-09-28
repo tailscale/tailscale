@@ -84,6 +84,7 @@ type Menu struct {
 
 	lc          *local.Client
 	status      *ipnstate.Status
+	prefs       *ipn.Prefs
 	curProfile  ipn.LoginProfile
 	allProfiles []ipn.LoginProfile
 
@@ -107,6 +108,7 @@ type Menu struct {
 	rebuildCh  chan struct{} // triggers a menu rebuild
 	accountsCh chan ipn.ProfileID
 	exitNodeCh chan tailcfg.StableNodeID // ID of selected exit node
+	prefsCh    chan *ipn.MaskedPrefs     // preference edits from menu toggles
 
 	eventCancel context.CancelFunc // cancel eventLoop
 
@@ -122,6 +124,7 @@ func (menu *Menu) init() {
 	menu.rebuildCh = make(chan struct{}, 1)
 	menu.accountsCh = make(chan ipn.ProfileID)
 	menu.exitNodeCh = make(chan tailcfg.StableNodeID)
+	menu.prefsCh = make(chan *ipn.MaskedPrefs)
 
 	// dbus wants a file path for notification icons, so copy to a temp file.
 	menu.notificationIcon, _ = os.CreateTemp("", "tailscale-systray.png")
@@ -203,6 +206,11 @@ func (menu *Menu) updateState() {
 	var err error
 	menu.status, err = menu.lc.Status(menu.bgCtx)
 	if err != nil {
+		log.Print(err)
+	}
+	menu.prefs, err = menu.lc.GetPrefs(menu.bgCtx)
+	if err != nil {
+		menu.prefs = nil
 		log.Print(err)
 	}
 	menu.curProfile, menu.allProfiles, err = menu.lc.ProfileStatus(menu.bgCtx)
@@ -325,6 +333,7 @@ func (menu *Menu) rebuild() {
 
 	if !menu.readonly {
 		menu.rebuildExitNodeMenu(ctx)
+		menu.rebuildPrefsToggles(ctx)
 	}
 
 	menu.more = systray.AddMenuItem("More settings", "")
@@ -492,6 +501,11 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 				}
 			}
 
+		case mp := <-menu.prefsCh:
+			if _, err := menu.lc.EditPrefs(ctx, mp); err != nil {
+				log.Printf("error editing prefs %s: %v", mp.Pretty(), err)
+			}
+
 		case <-menu.quit.ClickedCh:
 			systray.Quit()
 		}
@@ -600,6 +614,40 @@ func (menu *Menu) sendNotification(title, content string) {
 	if call.Err != nil {
 		log.Printf("dbus: %v", call.Err)
 	}
+}
+
+// rebuildPrefsToggles adds the --accept-routes and --accept-dns checkboxes.
+//
+// Each item reflects the daemon's preference rather than the click: the edit is
+// sent on prefsCh, and the ipn bus notify that follows triggers a rebuild which
+// draws the new state. A rejected edit therefore leaves the checkbox as it was.
+func (menu *Menu) rebuildPrefsToggles(ctx context.Context) {
+	if menu.prefs == nil {
+		return
+	}
+
+	toggle := func(item *systray.MenuItem, mp *ipn.MaskedPrefs) {
+		onClick(ctx, item, func(ctx context.Context) {
+			select {
+			case <-ctx.Done():
+			case menu.prefsCh <- mp:
+			}
+		})
+	}
+
+	acceptRoutes := systray.AddMenuItemCheckbox("Accept routes",
+		"Use subnet routes advertised by other nodes", menu.prefs.RouteAll)
+	toggle(acceptRoutes, &ipn.MaskedPrefs{
+		Prefs:       ipn.Prefs{RouteAll: !menu.prefs.RouteAll},
+		RouteAllSet: true,
+	})
+
+	acceptDNS := systray.AddMenuItemCheckbox("Accept DNS",
+		"Use the DNS configuration from the tailnet", menu.prefs.CorpDNS)
+	toggle(acceptDNS, &ipn.MaskedPrefs{
+		Prefs:      ipn.Prefs{CorpDNS: !menu.prefs.CorpDNS},
+		CorpDNSSet: true,
+	})
 }
 
 func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
