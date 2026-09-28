@@ -4059,6 +4059,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
+		c.setDontFragmentAfterBind(pconns, network)
 		ruc.setConnLocked(pconns, c.udpSockets, network, c.controlKnobs)
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)

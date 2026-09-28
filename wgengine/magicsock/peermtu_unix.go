@@ -7,6 +7,9 @@ package magicsock
 
 import (
 	"syscall"
+
+	"tailscale.com/net/sockopts"
+	"tailscale.com/types/nettype"
 )
 
 // getIPProto returns the value of the get/setsockopt proto argument necessary
@@ -37,9 +40,22 @@ func (c *Conn) setDontFragment(network string, enable bool) error {
 	if !enable {
 		optArg = dontFragDisabled
 	}
-	return c.connControl(network, func(fd uintptr) error {
+	return c.connControl(network, dontFragmentFn(network, optArg))
+}
+
+// setDontFragmentOn sets or clears the don't fragment bit on pconns, which aren't published in a RebindingUDPConn yet.
+func setDontFragmentOn(pconns []nettype.PacketConn, network string, enable bool) error {
+	optArg := dontFragEnabled
+	if !enable {
+		optArg = dontFragDisabled
+	}
+	return sockopts.ControlEach(pconns, dontFragmentFn(network, optArg))
+}
+
+func dontFragmentFn(network string, optArg int) func(fd uintptr) error {
+	return func(fd uintptr) error {
 		return syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
-	})
+	}
 }
 
 // getDontFragment reports whether the network sockets have the don't fragment bit set.

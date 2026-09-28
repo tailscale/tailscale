@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"tailscale.com/disco"
+	"tailscale.com/types/nettype"
 )
 
 func (c *Conn) DontFragSetting() (bool, error) {
@@ -33,3 +34,5 @@ func pmtuShouldLogDiscoTxErr(m disco.Message, err error) bool {
 func (c *Conn) copyDontFragment(string, syscall.RawConn) error {
 	return nil
 }
+
+func (c *Conn) setDontFragmentAfterBind([]nettype.PacketConn, string) {}
