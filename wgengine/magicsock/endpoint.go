@@ -23,6 +23,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/stun"
@@ -576,7 +577,9 @@ func (de *endpoint) initFakeUDPAddr() {
 // Conn.noteRecvActivity no more than once every 10s, returning true if it
 // was called, otherwise false.
 func (de *endpoint) noteRecvActivity(src epAddr, now mono.Time) bool {
-	if de.isWireguardOnly {
+	if !hasUDPTransport {
+		// Nothing to track; src is always our DERP home.
+	} else if de.isWireguardOnly {
 		de.mu.Lock()
 		de.bestAddr.ap = src.ap
 		de.bestAddrAt = now
@@ -636,7 +639,7 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr epAddr, derpAddr n
 		return udpAddr, netip.AddrPort{}, false
 	}
 
-	if de.isWireguardOnly {
+	if hasUDPTransport && de.isWireguardOnly {
 		// If the endpoint is wireguard-only, we don't have a DERP
 		// address to send to, so we have to send to the UDP address.
 		udpAddr, shouldPing := de.addrForWireGuardSendLocked(now)
@@ -890,6 +893,9 @@ func (de *endpoint) heartbeat() {
 	if now.Sub(de.lastSendExt) > sessionActiveTimeout {
 		// Session's idle. Stop heartbeating.
 		de.c.dlogf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort())
+		if !buildfeatures.HasNATTraversal {
+			return
+		}
 		if afterInactivityFor, ok := de.maybeProbeUDPLifetimeLocked(); ok {
 			// This is the best place to best effort schedule a probe of UDP
 			// path lifetime in the future as it loosely translates to "UDP path
@@ -927,7 +933,7 @@ func (de *endpoint) heartbeat() {
 		de.sendDiscoPingsLocked(now, true)
 	}
 
-	if de.wantUDPRelayPathDiscoveryLocked(now) {
+	if buildfeatures.HasNATTraversal && de.wantUDPRelayPathDiscoveryLocked(now) {
 		de.discoverUDPRelayPathsLocked(now)
 	}
 
@@ -1013,7 +1019,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 
 func (de *endpoint) noteTxActivityExtTriggerLocked(now mono.Time) {
 	de.lastSendExt = now
-	if de.heartBeatTimer == nil && !de.heartbeatDisabled {
+	if hasUDPTransport && de.heartBeatTimer == nil && !de.heartbeatDisabled {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
 }
@@ -1086,7 +1092,7 @@ func (de *endpoint) discoPing(res *ipnstate.PingResult, size int, cb func(*ipnst
 		for ep := range de.endpointState {
 			de.startDiscoPingLocked(epAddr{ap: ep}, now, pingCLI, size, resCB)
 		}
-		if de.wantUDPRelayPathDiscoveryLocked(now) {
+		if buildfeatures.HasNATTraversal && de.wantUDPRelayPathDiscoveryLocked(now) {
 			de.discoverUDPRelayPathsLocked(now)
 		}
 	}
@@ -1108,13 +1114,15 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 	now := mono.Now()
 	udpAddr, derpAddr, startWGPing := de.addrForSendLocked(now)
 
-	if de.isWireguardOnly {
+	if !hasUDPTransport {
+		// There are no UDP paths to discover; everything goes over DERP.
+	} else if de.isWireguardOnly {
 		if startWGPing {
 			de.sendWireGuardOnlyPingsLocked(now)
 		}
 	} else if !udpAddr.isDirect() || now.After(de.trustBestAddrUntil) {
 		de.sendDiscoPingsLocked(now, true)
-		if de.wantUDPRelayPathDiscoveryLocked(now) {
+		if buildfeatures.HasNATTraversal && de.wantUDPRelayPathDiscoveryLocked(now) {
 			de.discoverUDPRelayPathsLocked(now)
 		}
 	}
@@ -1134,7 +1142,7 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		}
 	}
 	var err error
-	if udpAddr.ap.IsValid() {
+	if hasUDPTransport && udpAddr.ap.IsValid() {
 		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
 
 		// If the error is known to indicate that the endpoint is no longer
@@ -1274,7 +1282,7 @@ func (de *endpoint) removeSentDiscoPingLocked(txid stun.TxID, sp sentPing, resul
 	// Stop the timer for the case where sendPing failed to write to UDP.
 	// In the case of a timer already having fired, this is a no-op:
 	sp.timer.Stop()
-	if sp.purpose == pingHeartbeatForUDPLifetime {
+	if buildfeatures.HasNATTraversal && sp.purpose == pingHeartbeatForUDPLifetime {
 		de.probeUDPLifetimeCliffDoneLocked(result, txid)
 	}
 	delete(de.sentPing, txid)
@@ -1440,7 +1448,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		de.startDiscoPingLocked(epAddr{ap: ep}, now, pingDiscovery, 0, nil)
 	}
 	derpAddr := de.derpAddr
-	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
+	if buildfeatures.HasNATTraversal && sentAny && sendCallMeMaybe && derpAddr.IsValid() {
 		// Have our magicsock.Conn figure out its STUN endpoint (if
 		// it doesn't know already) and then send a CallMeMaybe
 		// message to our peer via DERP informing them that we've
@@ -1454,7 +1462,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 // a WireGuard only endpoint and initiates an ICMP ping for useable
 // addresses.
 func (de *endpoint) sendWireGuardOnlyPingsLocked(now mono.Time) {
-	if runtime.GOOS == "js" {
+	if !hasUDPTransport {
 		return
 	}
 
@@ -1699,10 +1707,12 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 	defer de.mu.Unlock()
 
 	de.heartbeatDisabled = heartbeatDisabled
-	if probeUDPLifetimeEnabled {
-		de.setProbeUDPLifetimeConfigLocked(defaultProbeUDPLifetimeConfig)
-	} else {
-		de.setProbeUDPLifetimeConfigLocked(nil)
+	if buildfeatures.HasNATTraversal {
+		if probeUDPLifetimeEnabled {
+			de.setProbeUDPLifetimeConfigLocked(defaultProbeUDPLifetimeConfig)
+		} else {
+			de.setProbeUDPLifetimeConfigLocked(nil)
+		}
 	}
 	de.expired = n.Expired()
 
@@ -1742,7 +1752,9 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool, p
 		de.derpAddr = newDerp
 	}
 
-	de.setEndpointsLocked(n.Endpoints())
+	if hasUDPTransport {
+		de.setEndpointsLocked(n.Endpoints())
+	}
 
 	de.relayCapable = capVerIsRelayCapable(n.Cap())
 }
@@ -1940,7 +1952,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
-	if !isDerp && !src.vni.IsSet() {
+	if hasUDPTransport && !isDerp && !src.vni.IsSet() {
 		// Note: we check vni.isSet() as relay [epAddr]'s are not stored in
 		// endpointState, they are either de.bestAddr or not.
 		st, ok := de.endpointState[sp.to.ap]
@@ -1977,7 +1989,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
-	if !isDerp {
+	if hasUDPTransport && !isDerp {
 		thisPong := addrQuality{
 			epAddr:  sp.to,
 			latency: latency,
@@ -2292,7 +2304,7 @@ func (de *endpoint) invalidateDiscoPathLocked() {
 		}
 	}
 	de.probeUDPLifetime.resetCycleEndpointLocked()
-	if de.c != nil {
+	if buildfeatures.HasNATTraversal && de.c != nil {
 		de.c.relayManager.stopWork(de)
 	}
 }
@@ -2309,7 +2321,7 @@ func (de *endpoint) setDERPHome(regionID uint16) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 	de.derpAddr = netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
-	if de.c.relayManager.hasPeerRelayServers.Load() {
+	if buildfeatures.HasNATTraversal && de.c.relayManager.hasPeerRelayServers.Load() {
 		de.c.relayManager.handleDERPHomeChange(de.publicKey, regionID)
 	}
 }
