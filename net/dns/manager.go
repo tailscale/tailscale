@@ -462,6 +462,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// that the DNS configuration has changed via [RecompileDNSConfig].
 	base, err := m.os.GetBaseConfig()
 	if err != nil {
+		if errors.Is(err, ErrGetBaseConfigNoResolvers) {
+			m.health.SetHealthy(OSConfigurationReadWarnable)
+			m.health.SetUnhealthy(EmptyBaseConfigWarnable, nil)
+			if !isSandboxedApple {
+				m.retryEmptyBaseConfig()
+			}
+			return resolver.Config{}, OSConfig{}, err
+		}
 		canScopeWithoutBase := !isSandboxedApple && (isNoopManager(m.os) || supportsSplitDNS) ||
 			isIOS && supportsSplitDNS && scopeApple
 		if canScopeWithoutBase && err == ErrGetBaseConfigNotSupported {
@@ -480,23 +488,29 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 	m.health.SetHealthy(OSConfigurationReadWarnable)
 
+	defaultRoutes := underlyingResolvers(base)
+	if len(defaultRoutes) == 0 && (!isSandboxedApple || !scopeApple) {
+		// Taking over here would point the OS at quad-100 with an empty "."
+		// route, failing every non-Tailscale name. Leave the OS config alone
+		// and retry until resolvers appear. Check the recovered resolvers,
+		// which may carry endpoints not representable in base.Nameservers.
+		// Apple extensions trigger recompilation on DNS changes instead of
+		// using the retry goroutine. Apple scoped mode does not need upstreams
+		// for queries left to the OS, so it tolerates a successful empty read.
+		m.logf("no upstream resolvers in OS base config; not taking over DNS")
+		m.health.SetUnhealthy(EmptyBaseConfigWarnable, nil)
+		if !isSandboxedApple {
+			m.retryEmptyBaseConfig()
+		}
+		return resolver.Config{}, OSConfig{}, errEmptyBaseConfig
+	} else if len(defaultRoutes) == 0 {
+		m.logf("dns: base config has no resolvers; quad-100 has no upstream for non-tailnet queries")
+	}
+
 	if isIOS && supportsSplitDNS && scopeApple {
 		// Include the authoritative MagicDNS roots, not just upstream routes.
 		// Do not union search-only domains: that would capture their queries.
 		ocfg.MatchDomains = cfg.matchDomains()
-	}
-	var defaultRoutes []*dnstype.Resolver
-	if len(base.Nameservers) == 0 && !isSandboxedApple {
-		// Taking over here would point the OS at quad-100 with an empty "."
-		// route, failing every non-Tailscale name. Leave the OS config alone
-		// and retry until resolvers appear.
-		m.logf("no upstream resolvers in OS base config; not taking over DNS")
-		m.health.SetUnhealthy(EmptyBaseConfigWarnable, nil)
-		m.retryEmptyBaseConfig()
-		return resolver.Config{}, OSConfig{}, errEmptyBaseConfig
-	}
-	for _, ip := range base.Nameservers {
-		defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
 	}
 	rcfg.Routes["."] = defaultRoutes
 	// Append base config search domains, but only if not already present.
@@ -509,6 +523,35 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 
 	return rcfg, ocfg, nil
+}
+
+// underlyingResolvers returns the resolvers that quad-100 should forward
+// non-tailnet queries to, derived from the OS's base configuration.
+//
+// Platforms that can recover the underlying configuration with more detail
+// than IP addresses (non-standard ports, DoH/DoT endpoints) populate
+// [OSConfig.Resolvers], which preserves that detail end to end. Otherwise we
+// fall back to plain IP:53 resolvers built from Nameservers. Note that the
+// result can be empty: callers that cannot serve queries without a catch-all
+// forwarder must check and handle that case.
+func underlyingResolvers(base OSConfig) []*dnstype.Resolver {
+	if len(base.Resolvers) > 0 {
+		out := make([]*dnstype.Resolver, 0, len(base.Resolvers))
+		for _, r := range base.Resolvers {
+			if r == nil || r.Addr == "" {
+				continue
+			}
+			out = append(out, r.Clone())
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	var out []*dnstype.Resolver
+	for _, ip := range base.Nameservers {
+		out = append(out, &dnstype.Resolver{Addr: ip.String()})
+	}
+	return out
 }
 
 func (m *Manager) disableSplitDNSOptimization() bool {

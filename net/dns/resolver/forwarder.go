@@ -532,6 +532,62 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if len(allIPs) == 0 {
 		return nil, false
 	}
+	return f.newDoHClientLocked(urlBase, urlBase, allIPs)
+}
+
+// getDoHClientForResolver returns an HTTP client for the DoH server described
+// by r. Known public providers ([publicdns.DoHIPsOfBase]) work as before. For
+// arbitrary providers — typically enterprise resolvers recovered from the
+// OS's base configuration — the resolver must either carry a
+// BootstrapResolution, or its URL host must be an IP literal (which needs no
+// bootstrap): we cannot resolve the DoH server's own name through DNS without
+// recursing through ourselves.
+func (f *forwarder) getDoHClientForResolver(r *dnstype.Resolver) (c *http.Client, ok bool) {
+	urlBase := r.Addr
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := dohClientCacheKey(urlBase, r.BootstrapResolution)
+	if c, ok := f.dohClient[key]; ok {
+		return c, true
+	}
+	allIPs := publicdns.DoHIPsOfBase(urlBase)
+	if len(allIPs) == 0 {
+		if len(r.BootstrapResolution) > 0 {
+			allIPs = r.BootstrapResolution
+		} else {
+			// A URL whose host is an IP literal dials itself; no bootstrap
+			// resolution is needed.
+			u, err := url.Parse(urlBase)
+			if err != nil {
+				return nil, false
+			}
+			ip, err := netip.ParseAddr(u.Hostname())
+			if err != nil {
+				return nil, false
+			}
+			allIPs = []netip.Addr{ip}
+		}
+	}
+	return f.newDoHClientLocked(key, urlBase, allIPs)
+}
+
+// dohClientCacheKey distinguishes cached clients: bootstrap results can change
+// with the underlying network, unlike known public provider IPs.
+func dohClientCacheKey(urlBase string, bootstrap []netip.Addr) string {
+	if len(bootstrap) == 0 || len(publicdns.DoHIPsOfBase(urlBase)) > 0 {
+		return urlBase
+	}
+	ips := make([]string, len(bootstrap))
+	for i, ip := range bootstrap {
+		ips[i] = ip.String()
+	}
+	return urlBase + "\x00" + strings.Join(ips, ",")
+}
+
+// newDoHClientLocked builds a DoH HTTP client that dials urlBase's host at
+// the given IPs, caching the client under cacheKey (which differs from
+// urlBase when bootstrap results vary). f.mu must be held.
+func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.Addr) (c *http.Client, ok bool) {
 	dohURL, err := url.Parse(urlBase)
 	if err != nil {
 		return nil, false
@@ -567,7 +623,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if f.dohClient == nil {
 		f.dohClient = map[string]*http.Client{}
 	}
-	f.dohClient[urlBase] = c
+	f.dohClient[cacheKey] = c
 	return c, true
 }
 
@@ -646,15 +702,14 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
-		// Only known DoH providers are supported currently. Specifically, we
-		// only support DoH providers where we can TCP connect to them on port
-		// 443 at the same IP address they serve normal UDP DNS from (1.1.1.1,
-		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custom DoH providers
-		// aren't currently supported. There's no backup DNS resolution path for
-		// them.
-		urlBase := rr.name.Addr
-		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
-			res, err := f.sendDoH(ctx, urlBase, hc, fq.packet)
+		// Known DoH providers (see tailscale.com/net/dns/publicdns) are dialed
+		// at their well-known IPs. Arbitrary providers — typically enterprise
+		// resolvers recovered from the OS's base DNS configuration — are only
+		// usable when the resolver carries a bootstrap resolution, or when the
+		// URL's host is an IP literal, since we cannot resolve the DoH
+		// server's own name through DNS without recursing through ourselves.
+		if hc, ok := f.getDoHClientForResolver(rr.name); ok {
+			res, err := f.sendDoH(ctx, rr.name.Addr, hc, fq.packet)
 			if err != nil {
 				return nil, err
 			}
@@ -663,7 +718,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 			return res, nil
 		}
 		metricDNSFwdErrorType.Add(1)
-		return nil, fmt.Errorf("arbitrary https:// resolvers not supported yet")
+		return nil, fmt.Errorf("cannot dial https:// resolver %q: no known IPs or bootstrap resolution", rr.name.Addr)
 	}
 	if strings.HasPrefix(rr.name.Addr, "tls://") {
 		metricDNSFwdErrorType.Add(1)

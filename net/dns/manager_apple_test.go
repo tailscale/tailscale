@@ -14,7 +14,10 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus/eventbustest"
 )
@@ -34,6 +37,10 @@ func TestManagerAppleDNSModes(t *testing.T) {
 				disableScope bool
 				macEnv       string
 				noBase       bool
+				emptyBase    bool
+				// baseResolvers populates BaseConfig.Resolvers and expects the
+				// blended catch-all route to use them verbatim.
+				baseResolvers []*dnstype.Resolver
 			}{
 				{name: "mode-a-magicdns-forward-reverse-and-search-only"},
 				{
@@ -136,7 +143,24 @@ func TestManagerAppleDNSModes(t *testing.T) {
 					primary: true,
 					noBase:  true,
 				},
-				{name: "no-base-scoping-disabled", primary: true, disableScope: true, noBase: true},
+				{
+					name: "no-base-scoping-disabled", primary: true, disableScope: true, noBase: true},
+				{name: "empty-base-mode-a", emptyBase: true},
+				{
+					name:      "empty-base-mode-b-errors",
+					primary:   true,
+					emptyBase: true,
+					edit:      func(c *Config) { c.Routes["split.example."] = mustRes("192.0.2.53") },
+				},
+				{
+					name: "base-resolvers-ports-and-doh",
+					edit: func(c *Config) { c.Routes["split.example."] = mustRes("192.0.2.53") },
+					baseResolvers: []*dnstype.Resolver{
+						{Addr: "192.168.1.1:5353"},
+						{Addr: "https://doh.corp.example/query", BootstrapResolution: mustIPs("192.168.1.53")},
+					},
+					primary: true,
+				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					envknob.SetenvForTest(t, "TS_DEBUG_SCOPE_QUAD100_MACOS", tt.macEnv)
@@ -166,6 +190,12 @@ func TestManagerAppleDNSModes(t *testing.T) {
 						err := ErrGetBaseConfigNotSupported
 						f.GetBaseConfigErr = &err
 					}
+					if tt.emptyBase {
+						f.BaseConfig = OSConfig{}
+					}
+					if tt.baseResolvers != nil {
+						f.BaseConfig.Resolvers = tt.baseResolvers
+					}
 					m := &Manager{
 						goos:   goos,
 						os:     f,
@@ -188,6 +218,23 @@ func TestManagerAppleDNSModes(t *testing.T) {
 						}
 						return
 					}
+					if tt.emptyBase && tt.primary {
+						// A base read that succeeds but yields no resolvers is just as
+						// unusable for a catch-all as an unsupported read.
+						if !errors.Is(err, errEmptyBaseConfig) {
+							t.Fatalf("compileConfig error = %v; want errEmptyBaseConfig", err)
+						}
+						if len(ocfg.Nameservers) != 0 || len(ocfg.MatchDomains) != 0 {
+							t.Fatalf("failed compile returned OS config: %+v", ocfg)
+						}
+						if !m.health.IsUnhealthy(EmptyBaseConfigWarnable) {
+							t.Error("empty base config read did not set health warning")
+						}
+						if m.health.IsUnhealthy(OSConfigurationReadWarnable) {
+							t.Error("empty base config incorrectly reported a read failure")
+						}
+						return
+					}
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -199,7 +246,10 @@ func TestManagerAppleDNSModes(t *testing.T) {
 						wantOS.MatchDomains = c.matchDomains()
 					}
 					wantDefault := c.DefaultResolvers
-					if len(wantDefault) == 0 && !tt.noBase && (goos == "ios" || tt.primary) {
+					if tt.baseResolvers != nil {
+						wantDefault = tt.baseResolvers
+						wantOS.SearchDomains = append(wantOS.SearchDomains, "lan.example.")
+					} else if len(wantDefault) == 0 && !tt.noBase && !tt.emptyBase && (goos == "ios" || tt.primary) {
 						wantDefault = mustRes("192.168.1.1")
 						wantOS.SearchDomains = append(wantOS.SearchDomains, "lan.example.")
 					}
@@ -224,6 +274,67 @@ func TestManagerAppleDNSModes(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// TestAppleBaseConfigWarningRecovery checks the same warning is used for an
+// empty read and a bridge-reported absence of resolvers, without masking actual
+// read failures or leaving stale warnings after recovery.
+func TestAppleBaseConfigWarningRecovery(t *testing.T) {
+	for _, goos := range []string{"ios", "darwin"} {
+		for _, bridgeError := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/bridgeError=%v", goos, bridgeError), func(t *testing.T) {
+				tstest.Replace(t, &isSandboxedMacOS, func() bool { return goos == "darwin" })
+				f := &fakeOSConfigurator{SplitDNS: true}
+				bus := eventbustest.NewBus(t)
+				ht := health.NewTracker(bus)
+				dialer := tsdial.NewDialer(netmon.NewStatic())
+				dialer.SetBus(bus)
+				m := NewManager(t.Logf, f, ht, dialer, nil, nil, goos, bus)
+				m.resolver.TestOnlySetHook(f.SetResolver)
+				t.Cleanup(func() { m.Down() })
+				cfg := Config{Routes: upstreams("split.example", "192.0.2.53")}
+
+				readErr := errors.New("dnsinfo read failed")
+				f.GetBaseConfigErr = &readErr
+				if err := m.Set(cfg); !errors.Is(err, readErr) {
+					t.Fatalf("Set error = %v; want read error", err)
+				}
+				if !ht.IsUnhealthy(OSConfigurationReadWarnable) || ht.IsUnhealthy(EmptyBaseConfigWarnable) {
+					t.Fatal("read failure did not produce only the read warning")
+				}
+
+				f.GetBaseConfigErr = nil
+				if bridgeError {
+					err := fmt.Errorf("bridge: %w", ErrGetBaseConfigNoResolvers)
+					f.GetBaseConfigErr = &err
+				}
+				if err := m.Set(cfg); !errors.Is(err, errEmptyBaseConfig) {
+					t.Fatalf("Set error = %v; want empty-base error", err)
+				}
+				if !ht.IsUnhealthy(EmptyBaseConfigWarnable) || ht.IsUnhealthy(OSConfigurationReadWarnable) {
+					t.Fatal("missing resolvers did not produce only the upstream empty-base warning")
+				}
+				if len(f.OSConfig.Nameservers) != 0 {
+					t.Fatal("took over DNS without upstreams")
+				}
+				m.mu.Lock()
+				waiting := m.waitingForBaseCfg
+				m.mu.Unlock()
+				if waiting {
+					t.Fatal("Apple should wait for extension-triggered recompilation, not start retries")
+				}
+
+				f.GetBaseConfigErr = nil
+				f.setBaseConfig(OSConfig{Nameservers: mustIPs("192.0.2.54")})
+				if err := m.RecompileDNSConfig(); err != nil {
+					t.Fatal(err)
+				}
+				if ht.IsUnhealthy(EmptyBaseConfigWarnable) || ht.IsUnhealthy(OSConfigurationReadWarnable) {
+					t.Fatal("successful recompile left a stale warning")
+				}
+			})
+		}
 	}
 }
 
