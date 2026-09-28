@@ -33,3 +33,5 @@ func pmtuShouldLogDiscoTxErr(m disco.Message, err error) bool {
 func (c *Conn) copyDontFragment(string, syscall.RawConn) error {
 	return nil
 }
+
+func (c *Conn) setDontFragmentAfterBind(string) {}

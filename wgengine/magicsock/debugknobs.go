@@ -60,6 +60,9 @@ var (
 	//
 	//lint:ignore U1000 used on Linux/Darwin only
 	debugEnablePMTUD = envknob.RegisterOptBool("TS_DEBUG_ENABLE_PMTUD")
+	// debugDontFragment keeps the don't-fragment bit set on the UDP sockets on darwin even with path MTU discovery off. Without DF, macOS gives each IPv4 datagram a random IP ID, which costs the sender and stops a Linux receiver's GRO from merging them.
+	//lint:ignore U1000 used on Linux/Darwin only
+	debugDontFragment = envknob.RegisterBool("TS_DEBUG_DONT_FRAGMENT")
 	// debugPMTUD prints extra debugging about peer MTU path discovery.
 	//
 	//lint:ignore U1000 used on Linux/Darwin only
