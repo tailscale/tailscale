@@ -544,10 +544,22 @@ func TestMarkTransactionsDoneLoadError(t *testing.T) {
 	// Restore load and verify the store still has both entries.
 	store.setLoadErr(nil)
 	al.mu.Lock()
-	defer al.mu.Unlock()
 	remaining, err := al.store.load("test")
 	c.Assert(err, qt.IsNil)
 	if got, want := len(remaining), 2; got != want {
-		t.Fatalf("remaining transactions: got %d, want %d", got, want)
+		t.Fatalf("remaining transactions after failed load: got %d, want %d", got, want)
 	}
+	al.mu.Unlock()
+
+	// Now that load works again, a second call should remove only ev1.
+	al.markTransactionsDone([]*transaction{{EventID: "ev1"}})
+
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	remaining, err = al.store.load("test")
+	c.Assert(err, qt.IsNil)
+	if got, want := len(remaining), 1; got != want {
+		t.Fatalf("remaining transactions after successful mark: got %d, want %d", got, want)
+	}
+	c.Assert(remaining[0].EventID, qt.Equals, "ev2")
 }
