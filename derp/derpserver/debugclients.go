@@ -6,6 +6,7 @@ package derpserver
 import (
 	"cmp"
 	"container/heap"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -25,26 +26,27 @@ const (
 )
 
 // debugClient is a snapshot of one connected client, rendered by
-// [Server.ServeDebugClients].
+// [Server.ServeDebugClients] as an HTML row or a JSON object.
 type debugClient struct {
-	ConnNum   int64
-	Key       key.NodePublic
-	Remote    netip.AddrPort
-	Connected time.Duration // how long the connection has been up
-	Active    bool          // the connection currently receiving packets for Key
-	Dup       bool          // Key has more than one connection
-	Disabled  bool          // sends to this connection are disabled due to dups
-	Home      bool          // client reported this as its preferred (home) DERP
-	MeshPeer  bool
-	NotIdeal  bool
-	Prober    bool
-	Version   int
-	AppName   string
-	RxPkts    uint64 // data packets received from the client
-	RxBytes   uint64
-	TxPkts    uint64 // data packets sent to the client
-	TxBytes   uint64
-	Senders   uint64 // estimated number of unique peers that have sent to it
+	ConnNum     int64          `json:"connNum"`
+	Key         key.NodePublic `json:"key"`
+	Remote      netip.AddrPort `json:"remote"`
+	ConnectedAt time.Time      `json:"connectedAt"`
+	Connected   time.Duration  `json:"connected"` // how long the connection has been up, in nanoseconds in JSON
+	Active      bool           `json:"active"`    // the connection currently receiving packets for Key
+	Dup         bool           `json:"dup"`       // Key has more than one connection
+	Disabled    bool           `json:"disabled"`  // sends to this connection are disabled due to dups
+	Home        bool           `json:"home"`      // client reported this as its preferred (home) DERP
+	MeshPeer    bool           `json:"meshPeer"`
+	NotIdeal    bool           `json:"notIdeal"`
+	Prober      bool           `json:"prober"`
+	Version     int            `json:"version"`
+	AppName     string         `json:"appName"`
+	RxPkts      uint64         `json:"rxPkts"` // data packets received from the client
+	RxBytes     uint64         `json:"rxBytes"`
+	TxPkts      uint64         `json:"txPkts"` // data packets sent to the client
+	TxBytes     uint64         `json:"txBytes"`
+	Senders     uint64         `json:"senders"` // estimated number of unique peers that have sent to it
 }
 
 // debugClientsSort is the order in which [Server.ServeDebugClients]
@@ -54,9 +56,10 @@ type debugClient struct {
 type debugClientsSort int
 
 const (
-	sortClientsByKey  debugClientsSort = iota // node key
-	sortClientsByIP                           // remote address and port
-	sortClientsByConn                         // connection number (accept order)
+	sortClientsByKey       debugClientsSort = iota // node key
+	sortClientsByIP                                // remote address and port
+	sortClientsByConn                              // connection number (accept order)
+	sortClientsByConnected                         // connection time; ascending is longest connected first
 
 	// The traffic counter sorts. They must stay after the sorts
 	// above; see [debugClientsSort.isCounter].
@@ -69,13 +72,14 @@ const (
 // debugClientsSortNames maps each sort to its name in the sort URL
 // parameter.
 var debugClientsSortNames = map[debugClientsSort]string{
-	sortClientsByKey:     "key",
-	sortClientsByIP:      "ip",
-	sortClientsByConn:    "conn",
-	sortClientsByRxBytes: "rx",
-	sortClientsByTxBytes: "tx",
-	sortClientsByRxPkts:  "rxpkts",
-	sortClientsByTxPkts:  "txpkts",
+	sortClientsByKey:       "key",
+	sortClientsByIP:        "ip",
+	sortClientsByConn:      "conn",
+	sortClientsByConnected: "connected",
+	sortClientsByRxBytes:   "rx",
+	sortClientsByTxBytes:   "tx",
+	sortClientsByRxPkts:    "rxpkts",
+	sortClientsByTxPkts:    "txpkts",
 }
 
 func (s debugClientsSort) String() string {
@@ -92,18 +96,25 @@ func (s debugClientsSort) String() string {
 func (s debugClientsSort) isCounter() bool { return s >= sortClientsByRxBytes }
 
 // debugClientsQuery is a parsed /debug/clients/ request: a filter,
-// a walk order, a page size, and optionally a cursor after which the
-// page starts.
+// a walk order, a page size, an output format, and optionally a
+// cursor after which the page starts.
 type debugClientsQuery struct {
-	// Filter. Exactly one of the fields is set.
+	// Primary filter. Exactly one of the fields is set.
 	all  bool
 	ip   netip.Addr
 	cidr netip.Prefix
 	key  key.NodePublic
 
+	// hasApps is whether app name filters were given, in which case a
+	// connection must also have one of the apps names (an empty
+	// string matches connections that sent no app name).
+	hasApps bool
+	apps    []string
+
 	sort  debugClientsSort
 	desc  bool // walk in descending order
 	limit int  // maximum connections per page
+	json  bool // respond with JSON rather than HTML
 
 	// hasAfter is whether a cursor was given. The page then starts
 	// strictly after the cursor in the walk order. Which of the
@@ -114,17 +125,24 @@ type debugClientsQuery struct {
 	hasAfter     bool
 	afterKey     key.NodePublic
 	afterAddr    netip.AddrPort
+	afterTime    time.Time
 	afterN       uint64 // for the counter sorts
 	afterConn    int64
 	hasAfterConn bool
 }
 
-// parseDebugClientsQuery parses r's query parameters.
+// parseDebugClientsQuery parses r's query parameters. now is used to
+// turn a duration cursor for the connected sort into a time.
 // It returns ok=false with no error when r has no filter parameters
 // at all, in which case the caller should serve the index page.
-func parseDebugClientsQuery(r *http.Request) (q *debugClientsQuery, ok bool, err error) {
+func parseDebugClientsQuery(r *http.Request, now time.Time) (q *debugClientsQuery, ok bool, err error) {
 	v := r.URL.Query()
 	q = &debugClientsQuery{limit: debugClientsDefaultLimit}
+	q.json = v.Get("format") == "json"
+	if f := v.Get("format"); f != "" && f != "json" && f != "html" {
+		return nil, false, fmt.Errorf("bad format %q; want json or html", f)
+	}
+
 	n := 0
 	if v.Has("all") {
 		n++
@@ -152,9 +170,16 @@ func parseDebugClientsQuery(r *http.Request) (q *debugClientsQuery, ok bool, err
 			return nil, false, fmt.Errorf("bad key %q: %w", s, err)
 		}
 	}
+	if v.Has("app") {
+		q.hasApps = true
+		q.apps = v["app"]
+	}
 	switch n {
 	case 0:
-		return nil, false, nil
+		if !q.hasApps {
+			return nil, false, nil
+		}
+		q.all = true // an app filter alone applies to all connections
 	case 1:
 	default:
 		return nil, false, fmt.Errorf("only one of all, ip, cidr, or key may be given")
@@ -171,7 +196,7 @@ func parseDebugClientsQuery(r *http.Request) (q *debugClientsQuery, ok bool, err
 			}
 		}
 		if !found {
-			return nil, false, fmt.Errorf("bad sort %q; want key, ip, conn, rx, tx, rxpkts, or txpkts, optionally with a leading -", s)
+			return nil, false, fmt.Errorf("bad sort %q; want key, ip, conn, connected, rx, tx, rxpkts, or txpkts, optionally with a leading -", s)
 		}
 	}
 	if s := v.Get("limit"); s != "" {
@@ -209,6 +234,17 @@ func parseDebugClientsQuery(r *http.Request) (q *debugClientsQuery, ok bool, err
 			if err != nil {
 				return nil, false, fmt.Errorf("bad after %q for sort by conn: %w", s, err)
 			}
+		case sortClientsByConnected:
+			// The next-page links use the connection time in
+			// Unix nanoseconds. By hand, a duration such as 30m
+			// means connections that have been up that long.
+			if ns, err := strconv.ParseInt(s, 10, 64); err == nil {
+				q.afterTime = time.Unix(0, ns)
+			} else if d, err := time.ParseDuration(s); err == nil {
+				q.afterTime = now.Add(-d)
+			} else {
+				return nil, false, fmt.Errorf("bad after %q for sort by connected; want Unix nanoseconds or a duration", s)
+			}
 		default:
 			q.afterN, err = strconv.ParseUint(s, 10, 64)
 			if err != nil {
@@ -226,19 +262,21 @@ func parseDebugClientsQuery(r *http.Request) (q *debugClientsQuery, ok bool, err
 	return q, true, nil
 }
 
-// matches reports whether a client connected from remote passes the
-// query's filter. The key filter always matches, as the caller looks
-// that key up directly rather than scanning.
-func (q *debugClientsQuery) matches(remote netip.AddrPort) bool {
+// matches reports whether c passes the query's filters. The key
+// filter always matches, as the caller looks that key up directly
+// rather than scanning.
+func (q *debugClientsQuery) matches(c *sclient) bool {
 	switch {
-	case q.all:
-		return true
 	case q.ip.IsValid():
-		return remote.Addr().Unmap() == q.ip
+		if c.remoteIPPort.Addr().Unmap() != q.ip {
+			return false
+		}
 	case q.cidr.IsValid():
-		return q.cidr.Contains(remote.Addr().Unmap())
+		if !q.cidr.Contains(c.remoteIPPort.Addr().Unmap()) {
+			return false
+		}
 	}
-	return true
+	return !q.hasApps || slices.Contains(q.apps, c.info.AppName)
 }
 
 // counter returns c's current value of the traffic counter the query
@@ -275,6 +313,8 @@ func (q *debugClientsQuery) compare(a, b pageEntry) int {
 	case sortClientsByIP:
 		d = a.c.remoteIPPort.Compare(b.c.remoteIPPort)
 	case sortClientsByConn:
+	case sortClientsByConnected:
+		d = a.c.connectedAt.Compare(b.c.connectedAt)
 	default:
 		d = cmp.Compare(a.n, b.n)
 	}
@@ -299,6 +339,8 @@ func (q *debugClientsQuery) pastCursor(e pageEntry) bool {
 		d = e.c.remoteIPPort.Compare(q.afterAddr)
 	case sortClientsByConn:
 		d = cmp.Compare(e.c.connNum, q.afterConn)
+	case sortClientsByConnected:
+		d = e.c.connectedAt.Compare(q.afterTime)
 	default:
 		d = cmp.Compare(e.n, q.afterN)
 	}
@@ -324,19 +366,29 @@ func (q *debugClientsQuery) sortParam() string {
 
 // String returns a short description of the filter for the results page.
 func (q *debugClientsQuery) String() string {
+	var s string
 	switch {
 	case q.all:
-		return "all clients"
+		s = "all clients"
 	case q.ip.IsValid():
-		return "clients from " + q.ip.String()
+		s = "clients from " + q.ip.String()
 	case q.cidr.IsValid():
-		return "clients from " + q.cidr.String()
+		s = "clients from " + q.cidr.String()
+	default:
+		s = "connections for " + q.key.String()
 	}
-	return "connections for " + q.key.String()
+	if q.hasApps {
+		names := make([]string, len(q.apps))
+		for i, a := range q.apps {
+			names[i] = cmp.Or(a, "(none)")
+		}
+		s += " with app " + strings.Join(names, " or ")
+	}
+	return s
 }
 
-// link returns a relative URL for the same filter and page size with
-// the given sort and cursor. Empty after means no cursor.
+// link returns a relative URL for the same filters, page size, and
+// format with the given sort and cursor. Empty after means no cursor.
 func (q *debugClientsQuery) link(sort, after, afterConn string) string {
 	v := url.Values{}
 	switch {
@@ -349,6 +401,9 @@ func (q *debugClientsQuery) link(sort, after, afterConn string) string {
 	default:
 		v.Set("key", q.key.String())
 	}
+	if q.hasApps {
+		v["app"] = q.apps
+	}
 	v.Set("sort", sort)
 	if after != "" {
 		v.Set("after", after)
@@ -358,6 +413,9 @@ func (q *debugClientsQuery) link(sort, after, afterConn string) string {
 	}
 	if q.limit != debugClientsDefaultLimit {
 		v.Set("limit", strconv.Itoa(q.limit))
+	}
+	if q.json {
+		v.Set("format", "json")
 	}
 	return "?" + v.Encode()
 }
@@ -437,7 +495,7 @@ func (w *debugClientsWalk) visit(cs *clientSet) {
 
 // consider offers c to the page and reports whether it matched the filter.
 func (w *debugClientsWalk) consider(c *sclient, active bool) bool {
-	if !w.q.matches(c.remoteIPPort) {
+	if !w.q.matches(c) {
 		return false
 	}
 	w.page.Conns++
@@ -497,24 +555,25 @@ func (s *Server) debugClientsPage(q *debugClientsQuery) debugClientsPage {
 // goroutine.
 func (c *sclient) debugSnapshot(now time.Time, active bool) debugClient {
 	return debugClient{
-		ConnNum:   c.connNum,
-		Key:       c.key,
-		Remote:    c.remoteIPPort,
-		Connected: now.Sub(c.connectedAt).Round(time.Second),
-		Active:    active,
-		Dup:       c.isDup.Load(),
-		Disabled:  c.isDisabled.Load(),
-		Home:      c.preferred.Load(),
-		MeshPeer:  c.canMesh,
-		NotIdeal:  c.isNotIdealConn,
-		Prober:    c.info.IsProber,
-		Version:   c.info.Version,
-		AppName:   c.info.AppName,
-		RxPkts:    c.packetsRecv.Load(),
-		RxBytes:   c.bytesRecv.Load(),
-		TxPkts:    c.packetsSent.Load(),
-		TxBytes:   c.bytesSent.Load(),
-		Senders:   c.EstimatedUniqueSenders(),
+		ConnNum:     c.connNum,
+		Key:         c.key,
+		Remote:      c.remoteIPPort,
+		ConnectedAt: c.connectedAt,
+		Connected:   now.Sub(c.connectedAt).Round(time.Second),
+		Active:      active,
+		Dup:         c.isDup.Load(),
+		Disabled:    c.isDisabled.Load(),
+		Home:        c.preferred.Load(),
+		MeshPeer:    c.canMesh,
+		NotIdeal:    c.isNotIdealConn,
+		Prober:      c.info.IsProber,
+		Version:     c.info.Version,
+		AppName:     c.info.AppName,
+		RxPkts:      c.packetsRecv.Load(),
+		RxBytes:     c.bytesRecv.Load(),
+		TxPkts:      c.packetsSent.Load(),
+		TxBytes:     c.bytesSent.Load(),
+		Senders:     c.EstimatedUniqueSenders(),
 	}
 }
 
@@ -526,6 +585,16 @@ type debugClientsView struct {
 	Page      debugClientsPage
 	SortLinks map[string]string // sort name to href that sorts by it, or flips its direction
 	NextURL   string            // href of the next page, or empty if this is the last
+}
+
+// debugClientsJSON is the format=json response body.
+type debugClientsJSON struct {
+	Query     string        `json:"query"`     // description of the filter
+	Conns     int           `json:"conns"`     // connections matching the filter, ignoring the cursor
+	Keys      int           `json:"keys"`      // node keys with at least one matching connection
+	Remaining int           `json:"remaining"` // matching connections after this page
+	Next      string        `json:"next,omitzero"`
+	Clients   []debugClient `json:"clients"`
 }
 
 // ServeDebugClients serves the /debug/clients/ page listing connected
@@ -540,35 +609,84 @@ type debugClientsView struct {
 //	?cidr=1.2.0.0/16 clients connected from that prefix
 //	?key=nodekey:... the connection(s) for that node key
 //
-// Results are paginated. sort=key (the default), ip, conn, rx, tx,
-// rxpkts, or txpkts picks the walk order, with a leading - for
-// descending. limit=N sets the page size. after=X, where X is a value
-// of the sort field, starts the page after that value; the next-page
-// links also add afterconn=N to resume precisely among connections
-// that share the value. Cursors are applied while walking, so skipped
-// connections are never snapshotted.
+// Any of those can be narrowed with app=NAME, repeatable to match any
+// of several app names; app alone implies all. An empty app matches
+// connections that sent no app name.
+//
+// Results are paginated. sort=key (the default), ip, conn, connected,
+// rx, tx, rxpkts, or txpkts picks the walk order, with a leading - for
+// descending; connected ascending is longest connected first. limit=N
+// sets the page size. after=X, where X is a value of the sort field,
+// starts the page after that value; the next-page links also add
+// afterconn=N to resume precisely among connections that share the
+// value. For the connected sort, X is a connection time in Unix
+// nanoseconds, or a duration such as 30m meaning connections up that
+// long. Cursors are applied while walking, so skipped connections are
+// never snapshotted.
+//
+// format=json returns the page as a [debugClientsJSON] object instead
+// of HTML, with the next page's relative URL in "next".
 //
 // The traffic counters keep changing between pages, so walking by
 // one of them can show a connection twice or skip it if its counter
 // crossed the cursor in between.
 func (s *Server) ServeDebugClients(w http.ResponseWriter, r *http.Request) {
-	q, ok, err := parseDebugClientsQuery(r)
+	q, ok, err := parseDebugClientsQuery(r, s.clock.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if !ok {
 		s.mu.Lock()
 		keys := s.numLocalClientKeys
 		s.mu.Unlock()
+		conns := s.curClients.Value()
+		if r.URL.Query().Get("format") == "json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"conns": conns, "keys": keys})
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		debugClientsIndexTmpl.Execute(w, map[string]any{
-			"Conns": s.curClients.Value(),
+			"Conns": conns,
 			"Keys":  keys,
 		})
 		return
 	}
 	page := s.debugClientsPage(q)
+
+	var nextURL string
+	if page.Remaining > 0 {
+		last := page.Clients[len(page.Clients)-1]
+		conn := strconv.FormatInt(last.ConnNum, 10)
+		switch q.sort {
+		case sortClientsByKey:
+			nextURL = q.link(q.sortParam(), last.Key.String(), conn)
+		case sortClientsByIP:
+			nextURL = q.link(q.sortParam(), last.Remote.String(), conn)
+		case sortClientsByConn:
+			nextURL = q.link(q.sortParam(), conn, "")
+		case sortClientsByConnected:
+			nextURL = q.link(q.sortParam(), strconv.FormatInt(last.ConnectedAt.UnixNano(), 10), conn)
+		default:
+			nextURL = q.link(q.sortParam(), strconv.FormatUint(page.lastN, 10), conn)
+		}
+	}
+
+	if q.json {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "\t")
+		enc.Encode(debugClientsJSON{
+			Query:     q.String(),
+			Conns:     page.Conns,
+			Keys:      page.Keys,
+			Remaining: page.Remaining,
+			Next:      nextURL,
+			Clients:   page.Clients,
+		})
+		return
+	}
 
 	v := debugClientsView{
 		Query:     q.String(),
@@ -576,6 +694,7 @@ func (s *Server) ServeDebugClients(w http.ResponseWriter, r *http.Request) {
 		Desc:      q.desc,
 		Page:      page,
 		SortLinks: map[string]string{},
+		NextURL:   nextURL,
 	}
 	for so, name := range debugClientsSortNames {
 		param := name
@@ -587,20 +706,7 @@ func (s *Server) ServeDebugClients(w http.ResponseWriter, r *http.Request) {
 		}
 		v.SortLinks[name] = q.link(param, "", "")
 	}
-	if page.Remaining > 0 {
-		last := page.Clients[len(page.Clients)-1]
-		conn := strconv.FormatInt(last.ConnNum, 10)
-		switch q.sort {
-		case sortClientsByKey:
-			v.NextURL = q.link(q.sortParam(), last.Key.String(), conn)
-		case sortClientsByIP:
-			v.NextURL = q.link(q.sortParam(), last.Remote.String(), conn)
-		case sortClientsByConn:
-			v.NextURL = q.link(q.sortParam(), conn, "")
-		default:
-			v.NextURL = q.link(q.sortParam(), strconv.FormatUint(page.lastN, 10), conn)
-		}
-	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	debugClientsListTmpl.Execute(w, v)
 }
 
@@ -614,9 +720,11 @@ var debugClientsIndexTmpl = template.Must(template.New("").Parse(`<!DOCTYPE html
 <li><form method="GET">By IP address: <input name="ip" size="40" placeholder="1.2.3.4"> <button>Go</button></form></li>
 <li><form method="GET">By CIDR: <input name="cidr" size="40" placeholder="1.2.0.0/16"> <button>Go</button></form></li>
 <li><form method="GET">By node key: <input name="key" size="80" placeholder="nodekey:8cde7aa8ef94232c9d274ba5422936c639dd6d24688576d919af59277841b430"> <button>Go</button></form></li>
+<li><form method="GET">By app name: <input name="app" size="40" placeholder="tailcat-server"> <button>Go</button></form></li>
 </ul>
 <p>Results are paginated. Click a column header to sort by it or flip its direction.
-Optional parameters: sort=key|ip|conn|rx|tx|rxpkts|txpkts (leading - for descending), limit=N, after=X (a value of the sort column to start after).</p>
+Optional parameters: app=NAME (repeatable, narrows any filter), sort=key|ip|conn|connected|rx|tx|rxpkts|txpkts (leading - for descending),
+limit=N, after=X (a value of the sort column to start after; for connected, Unix nanoseconds or a duration like 30m), format=json.</p>
 </body></html>
 `))
 
@@ -648,7 +756,8 @@ td.n { text-align: right; }
 <th><a href="{{index .SortLinks "conn"}}">conn#</a>{{arrow . "conn"}}</th>
 <th><a href="{{index .SortLinks "key"}}">node key</a>{{arrow . "key"}}</th>
 <th><a href="{{index .SortLinks "ip"}}">remote</a>{{arrow . "ip"}}</th>
-<th>connected</th><th>flags</th><th>ver</th><th>app</th>
+<th><a href="{{index .SortLinks "connected"}}">connected</a>{{arrow . "connected"}}</th>
+<th>flags</th><th>ver</th><th>app</th>
 <th><a href="{{index .SortLinks "rxpkts"}}">rx pkts</a>{{arrow . "rxpkts"}}</th>
 <th><a href="{{index .SortLinks "rx"}}">rx bytes</a>{{arrow . "rx"}}</th>
 <th><a href="{{index .SortLinks "txpkts"}}">tx pkts</a>{{arrow . "txpkts"}}</th>
@@ -661,7 +770,7 @@ td.n { text-align: right; }
 <td>{{.Connected}}</td>
 <td>{{if .Home}}home {{end}}{{if .MeshPeer}}mesh {{end}}{{if .Prober}}prober {{end}}{{if .NotIdeal}}notideal {{end}}{{if .Dup}}dup{{if .Active}}-active{{end}}{{if .Disabled}}-disabled{{end}}{{end}}</td>
 <td>{{.Version}}</td>
-<td>{{.AppName}}</td>
+<td>{{if .AppName}}<a href="?app={{.AppName}}">{{.AppName}}</a>{{end}}</td>
 <td class="n">{{.RxPkts}}</td>
 <td class="n">{{.RxBytes}}</td>
 <td class="n">{{.TxPkts}}</td>
