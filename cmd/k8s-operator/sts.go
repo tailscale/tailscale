@@ -67,6 +67,9 @@ const (
 	AnnotationTailnetTargetFQDN = "tailscale.com/tailnet-fqdn"
 
 	AnnotationProxyGroup = "tailscale.com/proxy-group"
+	// AnnotationTrafficDistribution sets the traffic distribution preference on
+	// the ClusterIP Service created for ProxyGroup egress Services.
+	AnnotationTrafficDistribution = "tailscale.com/traffic-distribution"
 
 	// AnnotationShareACMEAccount opts a single ProxyGroup into ("true")
 	// or out of ("false") using the shared per-tailnet ACME account key.
