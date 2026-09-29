@@ -207,6 +207,8 @@ github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f h1:voy0korWbg2e1g
 github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f/go.mod h1:TG1HbU9fRVDnNgXncVkKz9GdvjIvqquXjH6QZSEVmY4=
 github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03 h1:V1gD/xbQZtimHXZ0y19oMgTVBIXQyazG/mG9JIflrIY=
 github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03/go.mod h1:DFLM0H5mh/gbb8viqnMwZzZ8TU4o3bbXOa5tyknrOQY=
+github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f h1:jdXGSp5Ge5/kzikuxGOw9+6HSStUjkNBJZjGNtpItek=
+github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f/go.mod h1:oiCPXxBoDKSkb/RGEZwAZk8y/fwDlQ1vYlBbNRxPysw=
 github.com/bramvdbogaerde/go-scp v1.6.1 h1:HE63uMkmMEB62JwqdRrVqRTBi7H/L/rkTp8TPC7uffY=
 github.com/bramvdbogaerde/go-scp v1.6.1/go.mod h1:Lqx75BOgAvQoeBbPuPN/MfU3jf5tlfZVmUqpPbSZkZc=
 github.com/breml/bidichk v0.3.3 h1:WSM67ztRusf1sMoqH6/c4OBCUlRVTKq+CbSeo0R17sE=

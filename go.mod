@@ -24,6 +24,7 @@ require (
 	github.com/bradfitz/go-tool-cache v0.0.0-20260919185303-c660171c910c
 	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
 	github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03
+	github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f
 	github.com/bramvdbogaerde/go-scp v1.6.1
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
