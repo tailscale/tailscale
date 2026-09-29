@@ -363,3 +363,27 @@ func BenchmarkToFQDN(b *testing.B) {
 		})
 	}
 }
+
+// TestToFQDNValidatesLastLabel verifies that the final label of a name is
+// subject to the same checks as the labels that precede it.
+func TestToFQDNValidatesLastLabel(t *testing.T) {
+	long := strings.Repeat("a", maxLabelLength+1)
+	for _, in := range []string{
+		"com." + long,
+		"com." + long + ".",
+		long,
+		long + ".",
+		"foo..",
+		"foo.com..",
+	} {
+		if got, err := ToFQDN(in); err == nil {
+			t.Errorf("ToFQDN(%q) = %q, nil error; want error", in, got)
+		}
+	}
+	ok := strings.Repeat("a", maxLabelLength)
+	for _, in := range []string{ok, "com." + ok, "com." + ok + "."} {
+		if _, err := ToFQDN(in); err != nil {
+			t.Errorf("ToFQDN(%q) = %v; want nil error", in, err)
+		}
+	}
+}
