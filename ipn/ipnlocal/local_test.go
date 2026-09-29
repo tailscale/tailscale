@@ -10195,3 +10195,16 @@ func TestExtensionStateHooksWhileBlocked(t *testing.T) {
 		t.Errorf("network configuration events = %v, want [false]", configured)
 	}
 }
+
+// Tests that an empty, non-nil StaticEndpoints in the initial config file
+// does not panic when there is no previous config.
+func TestSetStaticEndpointsFromConfigEmpty(t *testing.T) {
+	b := newTestLocalBackend(t)
+	conf := &conffile.Config{Parsed: ipn.ConfigVAlpha{
+		Version:         "alpha0",
+		StaticEndpoints: []netip.AddrPort{},
+	}}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.setStaticEndpointsFromConfigLocked(conf)
+}
