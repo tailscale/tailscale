@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -642,7 +641,6 @@ func runReconcilers(opts reconcilerOpts) {
 			tsNamespace: opts.tailscaleNamespace,
 			clock:       tstime.DefaultClock{},
 			logger:      opts.log.Named("egress-pods-readiness-reconciler"),
-			httpClient:  http.DefaultClient,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create egress Pods readiness reconciler: %v", err)
