@@ -2006,6 +2006,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 	}
 
 	// Perform all reconfiguration based on the netmap here.
+	var oldPeers []tailcfg.NodeView // set below only if hasPeerChangeWatcherLocked
 	if st.NetMap != nil {
 		b.capTailnetLock = st.NetMap.HasCap(nodecap.TailnetLock)
 		b.setWebClientAtomicBoolLocked(st.NetMap.AllCaps)
@@ -2032,6 +2033,11 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
+		}
+		// Snapshot the live peer set (last full netmap plus deltas) so the
+		// peer-change Notify below can report the peers this netmap drops.
+		if b.hasPeerChangeWatcherLocked() {
+			oldPeers = cn.Peers()
 		}
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(prefs.View())
@@ -2104,8 +2110,17 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		if b.hasPeerChangeWatcherLocked() {
 			notify.UserProfiles = st.NetMap.UserProfiles
 			notify.PeersChanged = make([]*tailcfg.Node, 0, len(st.NetMap.Peers))
+			cur := make(set.Set[tailcfg.NodeID], len(st.NetMap.Peers))
 			for _, p := range st.NetMap.Peers {
 				notify.PeersChanged = append(notify.PeersChanged, p.AsStruct())
+				cur.Add(p.ID())
+			}
+			// Watchers upsert PeersChanged, so a peer absent from a full
+			// netmap must be listed explicitly or it lingers.
+			for _, p := range oldPeers {
+				if !cur.Contains(p.ID()) {
+					notify.PeersRemoved = append(notify.PeersRemoved, p.ID())
+				}
 			}
 		}
 		b.sendLocked(notify)
