@@ -26,6 +26,7 @@ func getDeviceMetrics() device.Option {
 		MessageCookieReplyTXAttempt:       metricMessageCookieReplyTXAttempt,
 		HandshakeInitiatorCompleted:       metricHandshakeInitiatorCompleted,
 		HandshakeResponderCompleted:       metricHandshakeResponderCompleted,
+		MessageTransportRXDroppedReplay:   metricMessageTransportRXDroppedReplay,
 	})
 }
 
@@ -36,6 +37,7 @@ var (
 	metricMessageCookieReplyTXAttempt       = clientmetric.NewCounter("wireguard_message_cookie_reply_tx_attempt")
 	metricHandshakeInitiatorCompleted       = clientmetric.NewCounter("wireguard_handshake_initiator_completed")
 	metricHandshakeResponderCompleted       = clientmetric.NewCounter("wireguard_handshake_responder_completed")
+	metricMessageTransportRXDroppedReplay   = clientmetric.NewCounter("wireguard_message_transport_rx_dropped_replay")
 )
 
 // NewPeerLookupFunc returns a [device.PeerLookupFunc] that lazily
