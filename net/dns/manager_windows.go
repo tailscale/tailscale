@@ -12,12 +12,10 @@ import (
 	"maps"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -493,40 +491,15 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	// have changed, which makes the DNS settings actually take
 	// effect.
 	//
-	// This command can take a few seconds to run, so run it async, best effort.
-	//
 	// After re-registering DNS, also flush the DNS cache to clear out
 	// any cached split-horizon queries that are no longer the correct
 	// answer.
-	go func() {
-		t0 := time.Now()
-		m.logf("running ipconfig /registerdns ...")
-		cmd := exec.Command("ipconfig", "/registerdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: windows.DETACHED_PROCESS,
-		}
-		err := cmd.Run()
-		d := time.Since(t0).Round(time.Millisecond)
-		if err != nil {
-			m.logf("error running ipconfig /registerdns after %v: %v", d, err)
-		} else {
-			m.logf("ran ipconfig /registerdns in %v", d)
-		}
-
-		t0 = time.Now()
-		m.logf("running ipconfig /flushdns ...")
-		cmd = exec.Command("ipconfig", "/flushdns")
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: windows.DETACHED_PROCESS,
-		}
-		err = cmd.Run()
-		d = time.Since(t0).Round(time.Millisecond)
-		if err != nil {
-			m.logf("error running ipconfig /flushdns after %v: %v", d, err)
-		} else {
-			m.logf("ran ipconfig /flushdns in %v", d)
-		}
-	}()
+	//
+	// Both operations are non-blocking and coalesced: at most one of
+	// each is in flight at a time, with at most one more queued.
+	m.logf("Re-registering DNS and flushing cache")
+	registerDNS()
+	Flush()
 
 	// On initial setup of WSL, the restart caused by --shutdown is slow,
 	// so we do it out-of-line.
