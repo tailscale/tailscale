@@ -38,6 +38,23 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
+func TestParseDurationFractionalDaysAndWeeks(t *testing.T) {
+	for _, in := range []string{"1.5d", "0.5d", ".5d", "1.5w", "1h0.5d", "2d1.5w"} {
+		if got, err := ParseDuration(in); err == nil {
+			t.Errorf("ParseDuration(%q) = %v; want an error", in, got)
+		}
+	}
+	// Fractions of the other units are still handled by time.ParseDuration.
+	for in, want := range map[string]time.Duration{
+		"1.5h":   90 * time.Minute,
+		"0.5h1d": 24*time.Hour + 30*time.Minute,
+	} {
+		if got, err := ParseDuration(in); err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+}
+
 func TestGoDuration(t *testing.T) {
 	wantDur := GoDuration{time.Hour + time.Minute + time.Second + time.Millisecond + time.Microsecond + time.Nanosecond}
 	gotJSON := string(must.Get(json.Marshal(wantDur)))

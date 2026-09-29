@@ -7,6 +7,7 @@ package tstime
 import (
 	"context"
 	"encoding"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -28,13 +29,18 @@ func Parse3339B(b []byte) (time.Time, error) {
 
 // ParseDuration is more expressive than [time.ParseDuration],
 // also accepting 'd' (days) and 'w' (weeks) literals.
+// The number before 'd' or 'w' must be an integer.
 func ParseDuration(s string) (time.Duration, error) {
+	orig := s
 	for {
 		end := strings.IndexAny(s, "dw")
 		if end < 0 {
 			break
 		}
 		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "0123456789")))
+		if start > 0 && s[start-1] == '.' {
+			return 0, fmt.Errorf("time: invalid duration %q: fractional %c is not supported", orig, s[end])
+		}
 		n, err := strconv.Atoi(s[start:end])
 		if err != nil {
 			return 0, err
