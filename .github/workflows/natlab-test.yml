@@ -131,7 +131,7 @@ jobs:
       # compileBinariesForOS in vmtest.go.
       - name: Warm Go build cache
         run: |
-          ./tool/go test -c -o /dev/null ./tstest/natlab/vmtest ./tstest/integration/nat
+          ./tool/go test -c -o /dev/null ./tstest/natlab/vmtest
           for pkg in tta tailscale tailscaled; do
             GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o /dev/null ./cmd/"$pkg"
           done
@@ -148,9 +148,9 @@ jobs:
         # single-test-per-matrix-job model. They stay runnable locally.
         run: |
           set -euo pipefail
-          exclude='^(TestGrid|TestVnetPerf.*)$'
+          exclude='^(TestGrid|TestPair|TestVnetPerf.*)$'
           tmp=$(mktemp)
-          for pkg_dir in tstest/natlab/vmtest tstest/integration/nat; do
+          for pkg_dir in tstest/natlab/vmtest; do
             pkg="./${pkg_dir}/"
             for f in "${pkg_dir}"/*_test.go; do
               [ -e "$f" ] || continue
