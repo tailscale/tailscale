@@ -39,6 +39,9 @@ func (h *Handler) handleLOCK(w http.ResponseWriter, r *http.Request, pathCompone
 	if shouldDelegateToChild(r, pathComponents, mpl) {
 		// Delegate to a Child.
 		status, result := h.delegateRewriting(w, r, pathComponents, mpl)
+		// Locking a file that doesn't exist creates it, so any cached
+		// stats, including a cached "not found", may now be stale.
+		h.StatCache.invalidate()
 		respondRewritten(w, status, result)
 		return
 	}

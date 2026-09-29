@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/studio-b12/gowebdav"
 	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl/compositedav"
 	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstest"
 )
@@ -354,6 +355,66 @@ func TestLOCK(t *testing.T) {
 	}
 }
 
+// TestLOCKInvalidatesStatCache verifies that locking a file that doesn't exist
+// yet, which creates it, isn't followed by a stale cached "not found" answer.
+func TestLOCKInvalidatesStatCache(t *testing.T) {
+	s := newSystemWithStatCache(t, &compositedav.StatCache{TTL: time.Minute})
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.ln.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file112))
+
+	propfind := func() int {
+		t.Helper()
+		req, err := http.NewRequest("PROPFIND", u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Depth", "0")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if got := propfind(); got != http.StatusNotFound {
+		t.Fatalf("PROPFIND of missing file = %d; want %d", got, http.StatusNotFound)
+	}
+
+	req, err := http.NewRequest("LOCK", u, strings.NewReader(lockBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Timeout", "Second-600")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("LOCK of missing file = %d; want 200 or 201", resp.StatusCode)
+	}
+
+	if got := propfind(); got != http.StatusMultiStatus {
+		t.Errorf("PROPFIND after LOCK created the file = %d; want %d", got, http.StatusMultiStatus)
+	}
+}
+
 func TestUNLOCK(t *testing.T) {
 	s := newSystem(t)
 
@@ -502,10 +563,14 @@ func (s *system) Generation() uint64 {
 }
 
 func newSystem(t *testing.T) *system {
+	return newSystemWithStatCache(t, nil)
+}
+
+func newSystemWithStatCache(t *testing.T, statCache *compositedav.StatCache) *system {
 	// Make sure we don't leak goroutines
 	tstest.ResourceCheck(t)
 
-	fs := newFileSystemForLocal(log.Printf, nil)
+	fs := newFileSystemForLocal(log.Printf, statCache)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
