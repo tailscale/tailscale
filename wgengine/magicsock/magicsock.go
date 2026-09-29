@@ -1587,14 +1587,93 @@ func (c *Conn) maybeRebindOnError(err error) {
 	if !ok {
 		return
 	}
+	c.throttledRebind(reason)
+}
 
-	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
+// errRebindThrottle is the minimum interval between error-triggered rebinds.
+// It is a variable only so tests can shorten it.
+var errRebindThrottle = 5 * time.Second
+
+// throttledRebind performs a rebind and restun for the given reason, unless
+// an error-triggered rebind was already performed within errRebindThrottle.
+// It reports whether the rebind was performed.
+func (c *Conn) throttledRebind(reason string) bool {
+	if c.lastErrRebind.Load().Before(time.Now().Add(-errRebindThrottle)) {
 		c.logf("magicsock: performing rebind due to %q", reason)
 		c.lastErrRebind.Store(time.Now())
 		c.Rebind()
 		go c.ReSTUN(reason)
+		return true
+	}
+	c.logf("magicsock: not performing %q rebind due to throttle", reason)
+	return false
+}
+
+// Tunables for a receive func whose socket returns read errors. They are
+// variables (not constants) only so tests can shorten them.
+var (
+	// receiveErrorMinBackoff is how long a receive func waits after the
+	// first read error in a burst before reading again.
+	receiveErrorMinBackoff = 100 * time.Millisecond
+	// receiveErrorMaxBackoff caps the exponential backoff between retries
+	// of a receive func whose socket keeps returning errors.
+	receiveErrorMaxBackoff = 5 * time.Second
+	// receiveErrorMaxRebinds bounds how many rebinds one burst of consecutive
+	// read errors may perform (attempts denied by the rebind throttle do
+	// not count). A socket that keeps failing after that many fresh sockets
+	// is not going to be fixed by another one; the receive func then only
+	// keeps retrying its reads (at receiveErrorMaxBackoff) and leaves further
+	// rebinds to link-change handling, so that one dead address family
+	// cannot reset every peer's endpoint state forever.
+	receiveErrorMaxRebinds = 3
+)
+
+// receiveErrorState tracks one burst of consecutive read errors in a receive
+// func. Its zero value means "no error in progress".
+type receiveErrorState struct {
+	backoff time.Duration // last backoff used; 0 before the first error
+	rebinds int           // rebinds performed in this burst
+	gaveUp  bool          // logged that no further rebinds will be tried
+}
+
+// onReceiveError handles a read error from the receive func named name that
+// is not a shutdown (see mkReceiveFunc). It logs the first error of a burst,
+// performs a throttled rebind for the first receiveErrorMaxRebinds errors of
+// the burst (replacing the broken socket, the same remedy the send path
+// applies in maybeRebindOnError), and then waits for the backoff period
+// unless the Conn or its Bind is closing. It reports whether the receive
+// func should keep going; false means the Conn or Bind was closed meanwhile
+// and the receive func must return net.ErrClosed to wireguard-go.
+func (c *Conn) onReceiveError(name string, err error, st *receiveErrorState) (keepGoing bool) {
+	metricReceiveError.Add(1)
+	if st.backoff == 0 {
+		c.logf("magicsock: %s: read error: %T, %v; rebinding and retrying", name, err, err)
+		st.backoff = receiveErrorMinBackoff
 	} else {
-		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+		st.backoff = min(st.backoff*2, receiveErrorMaxBackoff)
+	}
+	bindClosed := c.bind.closedChan()
+	if bindClosed == nil {
+		return false
+	}
+	if st.rebinds < receiveErrorMaxRebinds {
+		if c.throttledRebind(name + "-read-error") {
+			st.rebinds++
+			metricReceiveErrorRebind.Add(1)
+		}
+	} else if !st.gaveUp {
+		st.gaveUp = true
+		c.logf("magicsock: %s: still failing after %d rebinds; will keep retrying reads every %v without rebinding", name, receiveErrorMaxRebinds, receiveErrorMaxBackoff)
+	}
+	timer := time.NewTimer(st.backoff)
+	defer timer.Stop()
+	select {
+	case <-c.donec:
+		return false
+	case <-bindClosed:
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -1692,7 +1771,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 }
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
+	return c.mkReceiveFunc(&c.pconn4, health.ReceiveIPv4,
 		&c.metrics.inboundPacketsIPv4Total,
 		&c.metrics.inboundPacketsPeerRelayIPv4Total,
 		&c.metrics.inboundBytesIPv4Total,
@@ -1702,7 +1781,7 @@ func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
+	return c.mkReceiveFunc(&c.pconn6, health.ReceiveIPv6,
 		&c.metrics.inboundPacketsIPv6Total,
 		&c.metrics.inboundPacketsPeerRelayIPv6Total,
 		&c.metrics.inboundBytesIPv6Total,
@@ -1710,20 +1789,29 @@ func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 	)
 }
 
-// mkReceiveFunc creates a ReceiveFunc reading from ruc.
-// The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
+// mkReceiveFunc creates a ReceiveFunc reading from ruc. The which argument
+// identifies the receive func for health tracking and logging. The metrics
+// are updated if non-nil.
+//
+// The returned func only ever returns an error once the underlying socket
+// has been closed for good (Conn.Close / connBind.Close). Any other read
+// error is treated as a broken socket: the func rebinds (throttled), backs
+// off briefly and keeps reading, so that the wireguard-go receive goroutine
+// that calls it stays alive. See [Conn.onReceiveError].
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, which health.ReceiveFunc, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
+	name := which.String()
+	healthItem := c.health.ReceiveFuncStats(which) // nil if health is disabled
 
 	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
 			defer func() {
-				if retErr != nil && !c.closing.Load() {
-					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
+				if retErr != nil && !c.closing.Load() && !errors.Is(retErr, net.ErrClosed) {
+					c.logf("Receive func %s exiting with error: %T, %v", name, retErr, retErr)
 				}
 			}()
 		}
@@ -1734,14 +1822,34 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 			batchingPackets = make([]batching.ReceivedPacket, len(packets))
 		}
 
+		var errState receiveErrorState // zero until the first consecutive read error
 		for {
 			numMsgs, err := ruc.ReadBatch(slab, batchingPackets)
 			if err != nil {
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
-				return 0, err
+				if errors.Is(err, net.ErrClosed) || c.closing.Load() || c.bind.isClosed() {
+					// Real shutdown: Conn.Close, or wireguard-go closing
+					// the Bind (Device.Close waits for us to return), or
+					// a socket closed under us with no replacement
+					// installed. net.ErrClosed is the only error
+					// wireguard-go should ever see from us (conn.Bind
+					// contract), whatever the OS reported.
+					return 0, net.ErrClosed
+				}
+				// wireguard-go's Device.RoutineReceiveIncoming returns
+				// permanently on any error that is not a Temporary
+				// net.Error, and nothing ever calls this func again:
+				// the receive path is silently dead until the process
+				// restarts (tailscale/tailscale#20616, #19504, #10976).
+				// Do not hand it the error; heal in place instead.
+				if !c.onReceiveError(name, err, &errState) {
+					return 0, net.ErrClosed
+				}
+				continue
 			}
+			errState = receiveErrorState{}
 
 			reportToCaller := false
 			for i, batchingPacket := range batchingPackets[:numMsgs] {
@@ -3437,6 +3545,23 @@ type connBind struct {
 	*Conn
 	mu     sync.Mutex
 	closed bool
+	// closedCh is closed by Close. It is created by Open, so it is nil while
+	// the bind has never been opened.
+	closedCh chan struct{}
+	// closedAtomic mirrors closed for readers that must not take mu (the
+	// rebind path holds RebindingUDPConn.mu, which Close acquires after mu).
+	closedAtomic atomic.Bool
+}
+
+// closedChan returns a channel that is closed once the bind is closed, or
+// nil if the bind is not currently open.
+func (c *connBind) closedChan() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	return c.closedCh
 }
 
 // This is a compile-time assertion that connBind implements the wireguard-go
@@ -3469,6 +3594,8 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
+	c.closedCh = make(chan struct{})
+	c.closedAtomic.Store(false)
 	fns := []conn.ReceiveFunc{c.receiveIPv4(), c.receiveIPv6(), c.receiveDERP}
 	if runtime.GOOS == "js" {
 		fns = []conn.ReceiveFunc{c.receiveDERP}
@@ -3496,6 +3623,10 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.closedAtomic.Store(true) // stops any in-flight rebind from installing a new socket
+	if c.closedCh != nil {
+		close(c.closedCh) // wake receive funcs waiting out a read-error backoff
+	}
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	c.pconn6.Close()
@@ -3698,6 +3829,13 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
 
+	if c.closing.Load() || c.bind.closedAtomic.Load() {
+		// Conn.Close/connBind.Close have started (or finished) closing the
+		// sockets; installing a replacement now would leave a socket open
+		// that nothing closes, with a receive func possibly parked on it.
+		return errConnClosed
+	}
+
 	if runtime.GOOS == "js" {
 		ruc.setConnLocked(newBlockForeverConn(), "", c.controlKnobs)
 		return nil
@@ -3808,6 +3946,11 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 // Rebind closes and re-binds the UDP sockets and resets the DERP connection.
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
+	if c.closing.Load() || c.bind.closedAtomic.Load() {
+		// A rebind after shutdown would install fresh sockets that
+		// nothing closes and strand a receive func on them.
+		return
+	}
 	metricRebindCalls.Add(1)
 	if err := c.rebind(keepCurrentPort); err != nil {
 		c.logf("%v", err)
@@ -4159,9 +4302,17 @@ var (
 	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
 	metricNumDERPConns = clientmetric.NewGauge("magicsock_num_derp_conns")
 
-	metricRebindCalls     = clientmetric.NewCounter("magicsock_rebind_calls")
-	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")
-	metricUpdateEndpoints = clientmetric.NewCounter("magicsock_update_endpoints")
+	metricRebindCalls = clientmetric.NewCounter("magicsock_rebind_calls")
+	// metricReceiveError counts read errors seen by the UDP receive funcs
+	// that were neither truncation nor shutdown. Before the receive funcs
+	// learned to retry, any such error that was not a Temporary net.Error
+	// ended wireguard-go's receive goroutine for good.
+	// metricReceiveErrorRebind counts the rebinds actually performed in
+	// response (throttled attempts are not counted).
+	metricReceiveError       = clientmetric.NewCounter("magicsock_receive_error")
+	metricReceiveErrorRebind = clientmetric.NewCounter("magicsock_receive_error_rebind")
+	metricReSTUNCalls        = clientmetric.NewCounter("magicsock_restun_calls")
+	metricUpdateEndpoints    = clientmetric.NewCounter("magicsock_update_endpoints")
 
 	// Sends (data or disco)
 	metricSendDERPQueued      = clientmetric.NewCounter("magicsock_send_derp_queued")
