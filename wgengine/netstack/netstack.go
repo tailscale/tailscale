@@ -1854,19 +1854,22 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	// errored out by now), so this conversion should always succeed.
 	backendHalfCloser, backendIsHalfCloser := backend.(nettype.HalfCloser)
 	connClosed := make(chan error, 2)
+	// Each direction half-closes its destination once the source is done,
+	// so the destination's peer sees EOF while the other direction keeps
+	// flowing. Neither direction shuts down its source's read side: that
+	// has no effect on the wire, and once the source has returned EOF,
+	// macOS (and Linux, if the socket is fully closed by then) rejects the
+	// shutdown with ENOTCONN, which used to be logged for every connection.
 	go func() {
 		_, err := io.Copy(backend, client)
 		if err != nil {
 			err = fmt.Errorf("client -> backend: %w", err)
 		}
 		connClosed <- err
-		err = nil
 		if backendIsHalfCloser {
-			err = backendHalfCloser.CloseWrite()
-		}
-		err = errors.Join(err, client.CloseRead())
-		if err != nil {
-			ns.logf("client -> backend close connection: %v", err)
+			if err := backendHalfCloser.CloseWrite(); err != nil {
+				ns.logf("client -> backend close connection: %v", err)
+			}
 		}
 	}()
 	go func() {
@@ -1875,12 +1878,7 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 			err = fmt.Errorf("backend -> client: %w", err)
 		}
 		connClosed <- err
-		err = nil
-		if backendIsHalfCloser {
-			err = backendHalfCloser.CloseRead()
-		}
-		err = errors.Join(err, client.CloseWrite())
-		if err != nil {
+		if err := client.CloseWrite(); err != nil {
 			ns.logf("backend -> client close connection: %v", err)
 		}
 	}()
