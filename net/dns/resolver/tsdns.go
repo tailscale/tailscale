@@ -158,8 +158,11 @@ func WriteDNSResolver(w *bufio.Writer, r *dnstype.Resolver) {
 	if len(r.BootstrapResolution) > 0 {
 		w.WriteByte('(')
 		var b []byte
-		for _, ip := range r.BootstrapResolution {
-			ip.AppendTo(b[:0])
+		for i, ip := range r.BootstrapResolution {
+			if i > 0 {
+				w.WriteByte(' ')
+			}
+			b = ip.AppendTo(b[:0])
 			w.Write(b)
 		}
 		w.WriteByte(')')

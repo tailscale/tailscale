@@ -4,6 +4,7 @@
 package resolver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -1857,6 +1858,50 @@ func TestLocalResponseTCFlagIntegration(t *testing.T) {
 			// Verify response size is reasonable (local responses are typically small)
 			if len(response) > 1000 {
 				t.Logf("Warning: Local response is unusually large: %d bytes", len(response))
+			}
+		})
+	}
+}
+
+func TestWriteDNSResolver(t *testing.T) {
+	tests := []struct {
+		name string
+		r    *dnstype.Resolver
+		want string
+	}{
+		{
+			name: "plain",
+			r:    &dnstype.Resolver{Addr: "1.1.1.1"},
+			want: "1.1.1.1",
+		},
+		{
+			name: "bootstrap-one",
+			r: &dnstype.Resolver{
+				Addr:                "https://dns.example.com/dns-query",
+				BootstrapResolution: []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+			},
+			want: "https://dns.example.com/dns-query(192.0.2.1)",
+		},
+		{
+			name: "bootstrap-many",
+			r: &dnstype.Resolver{
+				Addr: "https://dns.example.com/dns-query",
+				BootstrapResolution: []netip.Addr{
+					netip.MustParseAddr("192.0.2.1"),
+					netip.MustParseAddr("2001:db8::1"),
+				},
+			},
+			want: "https://dns.example.com/dns-query(192.0.2.1 2001:db8::1)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			w := bufio.NewWriter(&buf)
+			WriteDNSResolver(w, tt.r)
+			w.Flush()
+			if got := buf.String(); got != tt.want {
+				t.Errorf("WriteDNSResolver = %q; want %q", got, tt.want)
 			}
 		})
 	}
