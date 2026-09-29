@@ -401,7 +401,7 @@ _Appears in:_
 
 #### Labels
 
-_Underlying type:_ _[map[string]LabelValue](#map[string]labelvalue)_
+_Underlying type:_ _[map[string]LabelValue](#labelvalue)_
 
 
 
@@ -739,7 +739,7 @@ _Appears in:_
 
 _Appears in:_
 - [NodePortConfig](#nodeportconfig)
-- [PortRanges](#portranges)
+- [PortRanges](#portrange)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
