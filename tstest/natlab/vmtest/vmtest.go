@@ -46,8 +46,6 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
-	"tailscale.com/util/backoff"
 	"tailscale.com/util/mak"
 )
 
@@ -754,8 +752,14 @@ func (e *Env) Start() {
 			aStep.Begin()
 			t.Logf("[%s] waiting for agent...", n.name)
 			if n.joinTailnet {
-				st, err := e.waitForAgentStatus(ctx, n)
-				if err != nil {
+				// gokrazy starts tta and tailscaled concurrently. If tta wins,
+				// it answers 502 until tailscaled.sock exists.
+				var st *ipnstate.Status
+				if err := tstest.WaitFor(tailscaleUpTimeout, func() error {
+					var e error
+					st, e = n.agent.Status(ctx)
+					return e
+				}); err != nil {
 					return fmt.Errorf("[%s] agent status: %w", n.name, err)
 				}
 				t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
@@ -2013,29 +2017,6 @@ func (e *Env) waitForAgentConn(ctx context.Context, n *Node) error {
 			return ctx.Err()
 		}
 		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-// waitForAgentStatus waits for a TTA agent to connect and return a successful tailscaled Status.
-func (e *Env) waitForAgentStatus(ctx context.Context, n *Node) (*ipnstate.Status, error) {
-	e.t.Helper()
-	firstAttempt := true
-	bo := backoff.NewBackoff("agent-status", logger.Discard, 2*time.Second)
-	for {
-		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute) // give VM enough time to boot
-		st, err := n.agent.Status(reqCtx)
-		cancel()
-		if err == nil {
-			return st, nil
-		}
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("waiting for agent status: %w (last error: %v)", ctx.Err(), err)
-		}
-		if firstAttempt {
-			firstAttempt = false
-			e.t.Logf("[%s] agent status not ready, retrying: %v", n.name, err)
-		}
-		bo.BackOff(ctx, err)
 	}
 }
 
