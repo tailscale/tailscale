@@ -419,7 +419,7 @@ func infoFromDir(dir string) (verInfo, error) {
 	if err != nil {
 		return verInfo{}, err
 	}
-	date, err := r.output("git", "log", "-n1", "--format=%%ct", "HEAD")
+	date, err := r.output("git", "log", "-n1", "--format=%ct", "HEAD")
 	if err != nil {
 		return verInfo{}, err
 	}
