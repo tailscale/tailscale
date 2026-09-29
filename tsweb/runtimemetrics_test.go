@@ -100,7 +100,14 @@ func TestRuntimeMetricsHandler(t *testing.T) {
 			})
 		}
 
-		code, body := get(mux, "/debug/runtime-metrics?format=bogus", tsIP)
+		// A trailing slash on the index URL serves the index, not a
+		// lookup of an empty metric name.
+		code, body := get(mux, "/debug/runtime-metrics/?format=text", tsIP)
+		if code != 200 || !strings.Contains(body, wantName+"\n") {
+			t.Errorf("trailing slash: got %d, want the index; body: %.200s", code, body)
+		}
+
+		code, body = get(mux, "/debug/runtime-metrics?format=bogus", tsIP)
 		if code != 400 {
 			t.Errorf("bogus format: got %d, want 400; body: %s", code, body)
 		}

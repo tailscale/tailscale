@@ -70,7 +70,7 @@ func addRuntimeMetricsHandlers(d *DebugHandler) {
 // Histograms are objects with "counts" and "buckets" arrays; infinite
 // bucket boundaries are encoded as the strings "-Inf" and "+Inf".
 func runtimeMetricsHandler(w http.ResponseWriter, r *http.Request) {
-	if rest, ok := strings.CutPrefix(r.URL.Path, runtimeMetricsPath+"/"); ok {
+	if rest, ok := strings.CutPrefix(r.URL.Path, runtimeMetricsPath+"/"); ok && rest != "" {
 		serveRuntimeMetricValue(w, "/"+rest)
 		return
 	}
