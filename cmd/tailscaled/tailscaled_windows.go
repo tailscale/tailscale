@@ -410,12 +410,7 @@ func handleSessionChange(chgRequest svc.ChangeRequest) {
 	}
 	if flushDNSOnSessionUnlock, _ := policyclient.Get().GetBoolean(pkey.FlushDNSOnSessionUnlock, false); flushDNSOnSessionUnlock {
 		log.Printf("Received WTS_SESSION_UNLOCK event, initiating DNS flush.")
-		go func() {
-			err := dns.Flush()
-			if err != nil {
-				log.Printf("Error flushing DNS on session unlock: %v", err)
-			}
-		}()
+		dns.Flush() // non-blocking; coalesced with other flush calls
 	}
 }
 
