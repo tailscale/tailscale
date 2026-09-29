@@ -1037,7 +1037,7 @@ func (lg *Logger) Write(buf []byte) (int, error) {
 
 	level, buf := parseAndRemoveLogLevel(buf)
 	if lg.stderr != nil && lg.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&lg.stderrLevel) {
-		if buf[len(buf)-1] == '\n' {
+		if len(buf) > 0 && buf[len(buf)-1] == '\n' {
 			lg.stderr.Write(buf)
 		} else {
 			// The log package always line-terminates logs,

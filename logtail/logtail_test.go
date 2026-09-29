@@ -873,3 +873,23 @@ func BenchmarkWriteJSON(b *testing.B) {
 		must.Get(lg.Write(testdataJSONLog))
 	}
 }
+
+// TestLoggerWriteOnlyLevelPrefix verifies that a message consisting solely of
+// a verbosity prefix, which is empty once the prefix is removed, does not panic
+// when it is also written to stderr.
+func TestLoggerWriteOnlyLevelPrefix(t *testing.T) {
+	for _, msg := range []string{"[v1] ", "[v2] "} {
+		var stderr bytes.Buffer
+		lg := newLogger(Config{Stderr: &stderr, StderrLevel: 2})
+		n, err := lg.Write([]byte(msg))
+		if err != nil {
+			t.Errorf("Write(%q): %v", msg, err)
+		}
+		if n != len(msg) {
+			t.Errorf("Write(%q) = %d, want %d", msg, n, len(msg))
+		}
+		if got := stderr.String(); got != "\n" {
+			t.Errorf("Write(%q): stderr = %q, want %q", msg, got, "\n")
+		}
+	}
+}
