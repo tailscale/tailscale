@@ -768,7 +768,12 @@ func flattenExtraClaims(rules []capRule) map[string]any {
 // and recursively handles nested slices. Unsupported types are ignored with a log message.
 func addClaimValue(sets map[string]map[string]struct{}, claim string, val any) {
 	switch v := val.(type) {
-	case string, float64, int, int64:
+	case float64:
+		// Avoid the exponent notation that %v uses for large values such as
+		// 1e+06, which is how a JSON number like 1000000 would be stringified.
+		addClaimValue(sets, claim, strconv.FormatFloat(v, 'f', -1, 64))
+
+	case string, int, int64:
 		// Ensure the claim set is initialized
 		if sets[claim] == nil {
 			sets[claim] = make(map[string]struct{})

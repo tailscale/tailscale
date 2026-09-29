@@ -160,6 +160,23 @@ func TestFlattenExtraClaims(t *testing.T) {
 			},
 		},
 		{
+			// JSON numbers decode to float64; large ones must not switch
+			// to exponent notation.
+			name: "large-json-numbers",
+			input: []capRule{
+				{
+					ExtraClaims: map[string]any{
+						"quota":  float64(1000000),
+						"limits": []any{float64(2500000), float64(0.5)},
+					},
+				},
+			},
+			expected: map[string]any{
+				"quota":  "1000000",
+				"limits": []any{"2500000", "0.5"},
+			},
+		},
+		{
 			name: "slice-of-strings-and-ints",
 			input: []capRule{
 				{
