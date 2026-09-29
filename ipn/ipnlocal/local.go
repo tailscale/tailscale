@@ -5005,6 +5005,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := checkAdvertiseRoutes(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := b.checkRelayServerPortLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -5112,6 +5115,23 @@ func checkAdvertiseRoutes(p *ipn.Prefs) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// checkRelayServerPortLocked rejects a relay server port that magicsock is
+// already bound to, since the relay server would only log the bind failure.
+func (b *LocalBackend) checkRelayServerPortLocked(p *ipn.Prefs) error {
+	// 0 picks a random port, and LocalPort also reports 0 without an IPv4 socket.
+	if !buildfeatures.HasRelayServer || p.RelayServerPort == nil || *p.RelayServerPort == 0 {
+		return nil
+	}
+	ms, ok := b.sys.MagicSock.GetOK()
+	if !ok {
+		return nil
+	}
+	if port := *p.RelayServerPort; port == ms.LocalPort() {
+		return fmt.Errorf("relay server port %d is already used by tailscaled for WireGuard and peer-to-peer traffic; choose a different port", port)
+	}
+	return nil
 }
 
 // SetUseExitNodeEnabled turns on or off the most recently selected exit node.
