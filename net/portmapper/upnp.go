@@ -260,15 +260,8 @@ func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, 
 		return nil, nil, err
 	}
 
-	ipp, err := netip.ParseAddrPort(u.Host)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
-	}
-	if ipp.Addr() != gw {
-		// https://github.com/tailscale/tailscale/issues/5502
-		logf("UPnP discovered root %q does not match gateway IP %v; repointing at gateway which is assumed to be floating",
-			meta.Location, gw)
-		u.Host = net.JoinHostPort(gw.String(), u.Port())
+	if err := repointUPnPLocation(logf, u, gw); err != nil {
+		return nil, nil, err
 	}
 
 	// We're fetching a smallish XML document over plain HTTP
@@ -284,6 +277,27 @@ func getUPnPRootDevice(ctx context.Context, logf logger.Logf, debug DebugKnobs, 
 		return nil, nil, err
 	}
 	return root, u, nil
+}
+
+// repointUPnPLocation rewrites the host of u, the location of a UPnP root
+// device description, to gw if it names a different address. The port is
+// optional in u and is kept if present.
+func repointUPnPLocation(logf logger.Logf, u *url.URL, gw netip.Addr) error {
+	addr, err := netip.ParseAddr(u.Hostname())
+	if err != nil {
+		return fmt.Errorf("unexpected host %q in %q", u.Host, u)
+	}
+	if addr != gw {
+		// https://github.com/tailscale/tailscale/issues/5502
+		logf("UPnP discovered root %q does not match gateway IP %v; repointing at gateway which is assumed to be floating",
+			u, gw)
+		if port := u.Port(); port != "" {
+			u.Host = net.JoinHostPort(gw.String(), port)
+		} else {
+			u.Host = gw.String()
+		}
+	}
+	return nil
 }
 
 // selectBestService picks the "best" service from the given UPnP root device

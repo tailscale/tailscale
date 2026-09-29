@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"regexp"
 	"slices"
@@ -1279,4 +1280,35 @@ func makeGetExternalIPAddressResponse(ip string) string {
   </s:Body>
 </s:Envelope>
 `, ip)
+}
+
+func TestRepointUPnPLocation(t *testing.T) {
+	gw := netip.MustParseAddr("192.168.1.1")
+	tests := []struct {
+		name     string
+		location string
+		want     string
+		wantErr  bool
+	}{
+		{name: "same_gateway_with_port", location: "http://192.168.1.1:5000/rootDesc.xml", want: "http://192.168.1.1:5000/rootDesc.xml"},
+		{name: "same_gateway_no_port", location: "http://192.168.1.1/rootDesc.xml", want: "http://192.168.1.1/rootDesc.xml"},
+		{name: "other_addr_with_port", location: "http://10.0.0.1:5000/rootDesc.xml", want: "http://192.168.1.1:5000/rootDesc.xml"},
+		{name: "other_addr_no_port", location: "http://10.0.0.1/rootDesc.xml", want: "http://192.168.1.1/rootDesc.xml"},
+		{name: "hostname", location: "http://router.lan/rootDesc.xml", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := url.Parse(tt.location)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = repointUPnPLocation(t.Logf, u, gw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v; wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && u.String() != tt.want {
+				t.Errorf("got %q; want %q", u, tt.want)
+			}
+		})
+	}
 }
