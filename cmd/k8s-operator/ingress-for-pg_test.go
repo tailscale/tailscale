@@ -84,7 +84,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectEqual(t, fc, certSecretRoleBinding(pg, "operator-ns", "my-svc.ts.net"))
 
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
-		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
+		ing.Annotations["tailscale.com/tags"] = "tag:custom, tag:test"
 	})
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
@@ -326,6 +326,26 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	}
 	if !tailscale.IsNotFound(err) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTagsAnnotation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "single", in: "tag:a", want: []string{"tag:a"}},
+		{name: "no_spaces", in: "tag:a,tag:b", want: []string{"tag:a", "tag:b"}},
+		{name: "spaces_after_comma", in: "tag:a, tag:b", want: []string{"tag:a", "tag:b"}},
+		{name: "spaces_around", in: " tag:a , tag:b ", want: []string{"tag:a", "tag:b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseTagsAnnotation(tt.in); !slices.Equal(got, tt.want) {
+				t.Errorf("parseTagsAnnotation(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
