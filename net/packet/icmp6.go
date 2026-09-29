@@ -156,15 +156,9 @@ func checksumCombine(a, b uint16) uint16 {
 func checksumBytes(buf []byte, initial uint16) uint16 {
 	v := uint32(initial)
 
-	odd := len(buf)%2 == 1
-	if odd {
-		v += uint32(buf[0])
-		buf = buf[1:]
-	}
-
 	n := len(buf)
-	odd = n&1 != 0
-	if odd {
+	if n%2 == 1 {
+		// An odd trailing byte is padded with a zero low-order byte.
 		n--
 		v += uint32(buf[n]) << 8
 	}
