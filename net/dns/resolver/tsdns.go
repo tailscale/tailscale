@@ -1500,6 +1500,9 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
 func unARPA(a string) (ipStr string, ok bool) {
+	// DNS names are case-insensitive, and some clients randomize the case
+	// of the names they query.
+	a = strings.ToLower(a)
 	const suf4 = ".in-addr.arpa."
 	if s, ok := strings.CutSuffix(a, suf4); ok {
 		// Parse and reverse octets.
@@ -1521,7 +1524,9 @@ func unARPA(a string) (ipStr string, ok bool) {
 				return "", false
 			}
 		}
-		hex.Decode(a16[:], hx[:])
+		if _, err := hex.Decode(a16[:], hx[:]); err != nil {
+			return "", false
+		}
 		return netip.AddrFrom16(a16).Unmap().String(), true
 	}
 	return "", false
