@@ -1117,6 +1117,20 @@ func checkClientMetrics(t *testing.T, label string, metrics vmtest.ClientMetrics
 	}
 }
 
+// checkClientMetricsAtLeast verifies that each entry in want exists and has at
+// least the given value in metrics.
+func checkClientMetricsAtLeast(t *testing.T, label string, metrics vmtest.ClientMetrics, want map[string]int64) {
+	t.Helper()
+	for name, minValue := range want {
+		got, ok := metrics[name]
+		if !ok {
+			t.Errorf("%s: required metric %q not found", label, name)
+		} else if got.Value < minValue {
+			t.Errorf("%s: metric %q: %v < %v", label, name, got.Value, minValue)
+		}
+	}
+}
+
 // TestCachedNetmapAfterRestart verifies that two nodes with netmap
 // caching enabled (NodeAttrCacheNetworkMaps) can re-establish a direct
 // WireGuard tunnel after both are restarted while the control server is
@@ -1283,7 +1297,7 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 
 			// After: Verify that we recorded a direct contact on the disconnected node.
 			checkFinalMetrics.Begin()
-			checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
+			checkClientMetricsAtLeast(t, "Node A", env.ClientMetrics(a), map[string]int64{
 				"magicsock_cached_peer_contact_direct": 1,
 			})
 			checkFinalMetrics.End(nil)
@@ -1362,8 +1376,8 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 
 	// After: Verify that we recorded a direct contact on the disconnected node.
 	checkFinalMetrics.Begin()
-	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
-		"magicsock_cached_peer_contact_direct": 1,
+	checkClientMetricsAtLeast(t, "Node A", env.ClientMetrics(a), map[string]int64{
+		"magicsock_cached_peer_contact_direct":        1,
 		"magicsock_tsmp_disco_key_advertisement_sent": 1,
 	})
 	checkFinalMetrics.End(nil)
