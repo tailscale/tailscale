@@ -1410,7 +1410,7 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, er
 	for k, v := range sourceMap {
 		if v != 0 {
 			if v > math.MaxUint16 {
-				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, srvType)
+				return 0, 0, fmt.Errorf("port number %d is too high for %s flag", v, k)
 			}
 			srcTypeCount++
 			srvType = k

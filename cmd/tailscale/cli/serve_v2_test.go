@@ -2737,3 +2737,27 @@ func TestRunServeSetConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestSrvTypeAndPortFromFlagsPortTooHigh(t *testing.T) {
+	tests := []struct {
+		name string
+		env  serveEnv
+		want string
+	}{
+		{"http", serveEnv{http: 65536}, "port number 65536 is too high for http flag"},
+		{"https", serveEnv{https: 65536}, "port number 65536 is too high for https flag"},
+		{"tcp", serveEnv{tcp: 65536}, "port number 65536 is too high for tcp flag"},
+		{"tls-terminated-tcp", serveEnv{tlsTerminatedTCP: 65536}, "port number 65536 is too high for tls-terminated-tcp flag"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := srvTypeAndPortFromFlags(&tt.env)
+			if err == nil {
+				t.Fatal("got nil error, want error")
+			}
+			if got := err.Error(); got != tt.want {
+				t.Errorf("error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
