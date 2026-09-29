@@ -34,13 +34,18 @@ import (
 //
 // For older (cap<68) clients, the streaming MapRequest is still a write and
 // writes do happen, so DiscoKey=zero in the request does clobber.
+// Implementations with a newer protocol floor must reject older versions
+// without mutating the node instead.
 func TestStreamingMapReqReadOnlyByVersion(t *testing.T) {
 	tests := []struct {
 		version     tailcfg.CapabilityVersion
 		wantClobber bool
 	}{
-		{67, true},  // pre-cap-68: streaming is a write, DiscoKey=zero clobbers.
-		{68, false}, // cap>=68: streaming is read-only, DiscoKey unchanged.
+		{67, true},   // pre-cap-68: streaming is a write, DiscoKey=zero clobbers.
+		{68, false},  // cap>=68: streaming is read-only, DiscoKey unchanged.
+		{108, false}, // just below the reco implementation's version floor.
+		{109, false}, // the reco implementation's oldest supported version.
+		{tailcfg.CurrentCapabilityVersion, false},
 	}
 
 	for _, tt := range tests {
@@ -115,15 +120,24 @@ func TestStreamingMapReqReadOnlyByVersion(t *testing.T) {
 				t.Fatalf("nc.Do: %v", err)
 			}
 			res.Body.Close() // tears down the streaming session server-side
+			wantStatus := http.StatusOK
+			wantClobber := tt.wantClobber
+			if tt.version < minTestControlCapabilityVersion {
+				wantStatus = http.StatusBadRequest
+				wantClobber = false
+			}
+			if res.StatusCode != wantStatus {
+				t.Fatalf("map response status = %d, want %d", res.StatusCode, wantStatus)
+			}
 
 			got := ctrl.Node(nodeKey.Public())
 			if got == nil {
 				t.Fatal("node disappeared")
 			}
 			switch {
-			case tt.wantClobber && !got.DiscoKey.IsZero():
+			case wantClobber && !got.DiscoKey.IsZero():
 				t.Errorf("v%d: expected DiscoKey clobbered to zero, got %v", tt.version, got.DiscoKey)
-			case !tt.wantClobber && got.DiscoKey != wantDisco:
+			case !wantClobber && got.DiscoKey != wantDisco:
 				t.Errorf("v%d: DiscoKey changed from %v to %v; should have been left alone",
 					tt.version, wantDisco, got.DiscoKey)
 			}
