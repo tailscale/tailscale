@@ -192,6 +192,18 @@ func TestParseARNAndOpts(t *testing.T) {
 			wantKey: "alias/Bare",
 		},
 		{
+			name:    "key-id",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=1234abcd-12ab-34cd-56ef-1234567890ab",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantKey: "1234abcd-12ab-34cd-56ef-1234567890ab",
+		},
+		{
+			name:    "multi-region-key-id",
+			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=mrk-1234abcd12ab34cd56ef1234567890ab",
+			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",
+			wantKey: "mrk-1234abcd12ab34cd56ef1234567890ab",
+		},
+		{
 			name:    "arn-arg",
 			arg:     "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam?kmsKey=arn:foo",
 			wantARN: "arn:aws:ssm:us-east-1:123456789012:parameter/myTailscaleParam",

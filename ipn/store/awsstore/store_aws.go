@@ -45,6 +45,10 @@ const (
 
 var parameterNameRx = regexp.MustCompile(parameterNameRxStr)
 
+// kmsKeyIDRx matches a KMS key ID: a UUID for a single-Region key, or "mrk-"
+// followed by 32 hex digits for a multi-Region key.
+var kmsKeyIDRx = regexp.MustCompile(`^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|mrk-[0-9a-fA-F]{32})$`)
+
 // Option defines a functional option type for configuring awsStore.
 type Option func(*storeOptions)
 
@@ -128,12 +132,13 @@ func ParseARNAndOpts(arg string) (ssmARN string, opts []Option, err error) {
 				return "", nil, fmt.Errorf("unknown arn option parameter %q", k)
 			case "kmsKey":
 				// We allow an ARN, a key ID, or an alias name for kmsKeyID.
-				// If it doesn't look like an ARN and doesn't have a '/',
-				// prepend "alias/" for KMS alias references.
+				// If it doesn't look like an ARN or a key ID and doesn't
+				// have a '/', prepend "alias/" for KMS alias references.
 				kmsKey := q.Get(k)
 				if kmsKey != "" &&
 					!strings.Contains(kmsKey, "/") &&
-					!strings.HasPrefix(kmsKey, "arn:") {
+					!strings.HasPrefix(kmsKey, "arn:") &&
+					!kmsKeyIDRx.MatchString(kmsKey) {
 					kmsKey = "alias/" + kmsKey
 				}
 				if kmsKey != "" {
