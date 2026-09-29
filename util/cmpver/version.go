@@ -18,11 +18,7 @@
 // version numbers don't need it.
 package cmpver
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
+import "strings"
 
 // Less reports whether v1 is less than v2.
 //
@@ -53,11 +49,7 @@ func notnum(r rune) bool {
 //	                == 0  if v1 == v2
 //	                 > 0  if v1  > v2
 func Compare(v1, v2 string) int {
-	var (
-		f1, f2 string
-		n1, n2 uint64
-		err    error
-	)
+	var f1, f2 string
 	for v1 != "" || v2 != "" {
 		// Compare the non-numeric character run lexicographically.
 		f1, v1 = splitPrefixFunc(v1, notnum)
@@ -71,39 +63,32 @@ func Compare(v1, v2 string) int {
 		f1, v1 = splitPrefixFunc(v1, isnum)
 		f2, v2 = splitPrefixFunc(v2, isnum)
 
-		// ParseUint refuses to parse empty strings, which would only
-		// happen if we reached end-of-string. We follow the Debian
-		// convention that empty strings mean zero, because
-		// empirically that produces reasonable-feeling comparison
-		// behavior.
-		n1 = 0
-		if f1 != "" {
-			n1, err = strconv.ParseUint(f1, 10, 64)
-			if err != nil {
-				panic(fmt.Sprintf("all-number string %q didn't parse as string: %s", f1, err))
-			}
-		}
-
-		n2 = 0
-		if f2 != "" {
-			n2, err = strconv.ParseUint(f2, 10, 64)
-			if err != nil {
-				panic(fmt.Sprintf("all-number string %q didn't parse as string: %s", f2, err))
-			}
-		}
-
-		switch {
-		case n1 == n2:
-		case n1 < n2:
-			return -1
-		case n1 > n2:
-			return 1
+		// Compare the digit runs numerically. Empty strings mean zero,
+		// which follows the Debian convention because empirically that
+		// produces reasonable-feeling comparison behavior.
+		if res := compareDigits(f1, f2); res != 0 {
+			return res
 		}
 	}
 
 	// Only way to reach here is if v1 and v2 run out of fields
 	// simultaneously - i.e. exactly equal versions.
 	return 0
+}
+
+// compareDigits compares two strings of ASCII digits by numeric value and
+// returns -1, 0 or 1. Unlike parsing the strings as integers, it has no
+// limit on the length of the numbers. An empty string is treated as zero.
+func compareDigits(a, b string) int {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a, b)
 }
 
 // splitPrefixFunc splits s at the first rune where f(rune) is false.
