@@ -4,6 +4,14 @@
 // mkversion gets version info from git and outputs a bunch of shell variables
 // that get used elsewhere in the build system to embed version numbers into
 // binaries.
+//
+// If TS_VERSION_LONG and TS_VERSION_GIT_HASH are set, the version comes from
+// the environment instead of git and no checkout is needed. That is also a
+// convenient way to see everything derived from a given version:
+//
+//	TS_VERSION_LONG=1.99.5-t8895cec85 TS_VERSION_GIT_HASH=8895cec85... go run ./cmd/mkversion
+//
+// See tailscale.com/version/mkversion.InfoFrom for the full set of variables.
 package main
 
 import (
