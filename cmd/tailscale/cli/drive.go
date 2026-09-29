@@ -21,6 +21,7 @@ const (
 	driveUnshareUsage = "tailscale drive unshare <name>"
 	driveListUsage    = "tailscale drive list"
 	driveLsUsage      = "tailscale drive ls <node>:<share>[/<path>]"
+	driveGetUsage     = "tailscale drive get <node>:<share>/<file> [destination]"
 )
 
 func init() {
@@ -37,10 +38,21 @@ func driveCmd() *ffcli.Command {
 			driveUnshareUsage,
 			driveListUsage,
 			driveLsUsage,
+			driveGetUsage,
 		}, "\n"),
 		LongHelp:  buildShareLongHelp(),
 		UsageFunc: usageFuncNoDefaultValues,
 		Subcommands: []*ffcli.Command{
+			{
+				Name:       "get",
+				ShortUsage: driveGetUsage,
+				ShortHelp:  "[ALPHA] Download a remote file",
+				Exec:       runDriveGet,
+				LongHelp: "Download a single remote file. The destination defaults to the current directory.\n" +
+					"An existing destination directory receives the remote file's basename.\n" +
+					"Existing files are never overwritten. Downloads use private permissions\n" +
+					"(0600 before umask on Unix) and require a filesystem supporting hard links.",
+			},
 			{
 				Name:       "ls",
 				ShortUsage: driveLsUsage,
