@@ -1598,6 +1598,10 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	// Start a funnel listener.
 	ln, err := s.listen(network, addr, lnOn)
 	if err != nil {
+		if cleanupOnClose != nil {
+			// Don't leave Funnel enabled with no listener to disable it.
+			cleanupOnClose()
+		}
 		return nil, err
 	}
 	ln = &cleanupListener{Listener: ln, cleanup: cleanupOnClose}

@@ -1081,6 +1081,30 @@ func TestFunnelClose(t *testing.T) {
 		}
 	})
 
+	// If ListenFunnel fails after enabling Funnel in the serve config (for
+	// example because the port is already in use), it must not leave Funnel
+	// enabled with no listener to clean it up.
+	t.Run("listen_failure", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		before := s.lb.ServeConfig()
+
+		// Occupy the port so that ListenFunnel's listen step fails.
+		occupied := must.Get(s.Listen("tcp", ":443"))
+		defer occupied.Close()
+
+		if ln, err := s.ListenFunnel("tcp", ":443"); err == nil {
+			ln.Close()
+			t.Fatal("expected ListenFunnel to fail with the port in use")
+		}
+
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected serve config to be unchanged after failed ListenFunnel (-got, +want):\n%s", diff)
+		}
+	})
+
 	// It should be possible to close a listener and free system resources even
 	// when the Server has been closed (or the listener should be automatically
 	// closed).
