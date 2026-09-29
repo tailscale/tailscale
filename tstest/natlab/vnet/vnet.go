@@ -2926,7 +2926,7 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 	}
 }
 
-func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
+func (s *Server) takeAgentConn(ctx context.Context, n *node) (*agentConn, error) {
 	const debug = false
 	// stuckThreshold is how long we wait before deciding the agent is slow
 	// enough to warrant a log line. Below this we stay quiet because, in
@@ -2941,7 +2941,7 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 			if debug {
 				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
 			}
-			return ac, true
+			return ac, nil
 		}
 		if debug && miss > 0 {
 			log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
@@ -2960,7 +2960,9 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 		}
 		select {
 		case <-ctx.Done():
-			return nil, false
+			return nil, ctx.Err()
+		case <-s.shutdownCtx.Done():
+			return nil, errors.New("takeAgentConn: server shut down while waiting for agent conn")
 		case <-ready:
 		case <-time.After(time.Second):
 			// Try again regularly anyway, in case we have multiple clients
@@ -3005,9 +3007,9 @@ func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 		return d
 	}
 	d := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ac, ok := s.takeAgentConn(ctx, n.n)
-		if !ok {
-			return nil, ctx.Err()
+		ac, err := s.takeAgentConn(ctx, n.n)
+		if err != nil {
+			return nil, err
 		}
 		return ac.tc, nil
 	}
