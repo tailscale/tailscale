@@ -83,3 +83,23 @@ func TestShutdownAndWaitTimeout(t *testing.T) {
 		close(release)
 	})
 }
+
+// Test that RunSync on a queue that was shut down before it was ever used
+// returns an error instead of blocking until its context is done.
+func TestRunSyncAfterShutdownOfUnusedQueue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := &ExecQueue{}
+		q.Shutdown()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var ran atomic.Bool
+		err := q.RunSync(ctx, func() { ran.Store(true) })
+		if err != errExecQueueShutdown {
+			t.Errorf("RunSync = %v; want %v", err, errExecQueueShutdown)
+		}
+		if ran.Load() {
+			t.Error("function ran after shutdown")
+		}
+	})
+}

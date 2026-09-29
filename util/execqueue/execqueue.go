@@ -121,6 +121,11 @@ func (q *ExecQueue) ShutdownAndWait(ctx context.Context) error {
 func (q *ExecQueue) initCtxLocked() {
 	if q.ctx == nil {
 		q.ctx, q.cancel = context.WithCancel(context.Background())
+		if q.closed {
+			// Shutdown ran before the context existed, so it had
+			// nothing to cancel.
+			q.cancel()
+		}
 	}
 }
 
