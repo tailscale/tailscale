@@ -5,6 +5,7 @@ package socks5
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -485,78 +487,271 @@ func TestUDPLogNilLogf(t *testing.T) {
 	}
 }
 
-func TestTCPHalfClose(t *testing.T) {
-	const msg = "we are so winning"
-
-	// backend server which we'll use SOCKS5 to connect to
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatal(err)
+// runOneTCPConn accepts one connection on ln and runs it through a SOCKS5
+// [Conn] of srv, returning a channel that receives the result of [Conn.Run]
+// once the proxied connection has fully closed in both directions.
+func runOneTCPConn(t *testing.T, ln net.Listener, srv *Server) <-chan error {
+	if srv.Logf == nil {
+		srv.Logf = t.Logf
 	}
-	backendServerPort := listener.Addr().(*net.TCPAddr).Port
+	errc := make(chan error, 1)
 	go func() {
-		c, err := listener.Accept()
+		c, err := ln.Accept()
 		if err != nil {
-			t.Errorf("backend accept conn: %v", err)
+			errc <- err
+			return
 		}
 		defer c.Close()
-		defer listener.Close()
-		tcpConn := c.(*net.TCPConn)
-		var buf [1500]byte
-		n, err := tcpConn.Read(buf[:])
-		if err != nil {
-			t.Errorf("backend read: %v", err)
-		}
-		res := string(buf[:n])
-		if res != msg {
-			t.Errorf("backend read: want %q, got %q", msg, res)
-		}
-		if err := tcpConn.CloseRead(); err != nil {
-			t.Errorf("backend closeread: %v", err)
-		}
-		_, err = tcpConn.Write([]byte(msg))
-		if err != nil {
-			t.Errorf("backend write: %v", err)
-		}
+		errc <- (&Conn{clientConn: c, srv: srv}).Run()
 	}()
+	return errc
+}
 
-	// SOCKS5 server
-	socks5, err := net.Listen("tcp", ":0")
+// dialViaSOCKS5 connects to addr through the SOCKS5 server at socks5Addr.
+func dialViaSOCKS5(t *testing.T, socks5Addr, addr string) *net.TCPConn {
+	socksDialer, err := proxy.SOCKS5("tcp", socks5Addr, nil, proxy.Direct)
 	if err != nil {
 		t.Fatal(err)
 	}
-	socks5Port := socks5.Addr().(*net.TCPAddr).Port
-	go socks5Server(socks5)
-
-	// Client
-	addr := fmt.Sprintf("localhost:%d", socks5Port)
-	socksDialer, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	addr = fmt.Sprintf("localhost:%d", backendServerPort)
 	conn, err := socksDialer.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
+	return conn.(*net.TCPConn)
+}
 
-	tcpConn := conn.(*net.TCPConn)
-	_, err = tcpConn.Write([]byte(msg))
+// TestTCPHalfClose checks that a half-close in either direction propagates
+// through the proxy: the backend sees EOF after the client's CloseWrite but
+// can still reply, and the client sees the reply followed by EOF once the
+// backend closes.
+func TestTCPHalfClose(t *testing.T) {
+	const msg = "we are so winning"
+
+	// Backend server which we'll use SOCKS5 to connect to. It reads the
+	// request until EOF, then replies and closes.
+	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		t.Errorf("client write: %v", err)
+		t.Fatal(err)
 	}
-	if err := tcpConn.CloseWrite(); err != nil {
-		t.Errorf("client closewrite: %v", err)
+	defer listener.Close()
+	backendDone := make(chan struct{})
+	go func() {
+		defer close(backendDone)
+		c, err := listener.Accept()
+		if err != nil {
+			t.Errorf("backend accept conn: %v", err)
+			return
+		}
+		defer c.Close()
+		got, err := io.ReadAll(c)
+		if err != nil {
+			t.Errorf("backend read: %v", err)
+		}
+		if string(got) != msg {
+			t.Errorf("backend read: want %q, got %q", msg, got)
+		}
+		if _, err := c.Write([]byte(msg)); err != nil {
+			t.Errorf("backend write: %v", err)
+		}
+	}()
+
+	socks5, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	var buf [1500]byte
-	n, err := tcpConn.Read(buf[:])
+	defer socks5.Close()
+	runErr := runOneTCPConn(t, socks5, &Server{})
+
+	conn := dialViaSOCKS5(t, socks5.Addr().String(), listener.Addr().String())
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatalf("client closewrite: %v", err)
+	}
+	got, err := io.ReadAll(conn)
 	if err != nil {
 		t.Errorf("client read: %v", err)
 	}
-	res := string(buf[:n])
-	if res != msg {
-		t.Errorf("client read: want %q, got %q", msg, res)
+	if string(got) != msg {
+		t.Errorf("client read: want %q, got %q", msg, got)
+	}
+	<-backendDone
+
+	// A cleanly half-closed connection in each direction is not an error.
+	// It used to be reported as one on macOS, where shutting down the read
+	// side of a socket that has already received a FIN fails with ENOTCONN.
+	if err := <-runErr; err != nil {
+		t.Errorf("Conn.Run: %v", err)
+	}
+}
+
+// TestTCPBackendReset checks that when the backend resets the connection,
+// the proxy tears down the client connection too rather than leaving it
+// half-open until the client happens to close it.
+func TestTCPBackendReset(t *testing.T) {
+	const msg = "hello"
+
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		c, err := listener.Accept()
+		if err != nil {
+			t.Errorf("backend accept conn: %v", err)
+			return
+		}
+		buf := make([]byte, len(msg))
+		if _, err := io.ReadFull(c, buf); err != nil {
+			t.Errorf("backend read: %v", err)
+		}
+		// Close with SO_LINGER zero so the kernel sends a RST rather
+		// than a FIN.
+		c.(*net.TCPConn).SetLinger(0)
+		c.Close()
+	}()
+
+	socks5, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socks5.Close()
+	runErr := runOneTCPConn(t, socks5, &Server{})
+
+	conn := dialViaSOCKS5(t, socks5.Addr().String(), listener.Addr().String())
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
+	// The client never closes its side. The proxy must still finish once
+	// the backend is gone, and report why.
+	select {
+	case err := <-runErr:
+		if err == nil {
+			t.Errorf("Conn.Run returned nil, want a backend error")
+		} else {
+			t.Logf("Conn.Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for the proxy to give up on the client connection")
+	}
+	var buf [1]byte
+	if n, err := conn.Read(buf[:]); err == nil {
+		t.Errorf("client read got %d bytes and no error, want EOF or reset", n)
+	}
+}
+
+// resetBackend is a fake backend connection for [TestTCPBackendResetMidResponse].
+// It behaves like a TCP connection whose peer replied and then reset the
+// connection: reads return the reply and then ECONNRESET, and writes fail
+// immediately. The first failed write closes writeFailed.
+type resetBackend struct {
+	reply       *bytes.Reader
+	writeFailed chan struct{}
+	failOnce    sync.Once
+
+	mu     sync.Mutex
+	closed bool
+}
+
+func (b *resetBackend) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if closed {
+		return 0, net.ErrClosed
+	}
+	n, err := b.reply.Read(p)
+	if err == io.EOF {
+		err = syscall.ECONNRESET
+	}
+	return n, err
+}
+
+func (b *resetBackend) Write(p []byte) (int, error) {
+	b.failOnce.Do(func() { close(b.writeFailed) })
+	return 0, syscall.EPIPE
+}
+
+func (b *resetBackend) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	return nil
+}
+
+func (b *resetBackend) CloseRead() error    { return nil }
+func (b *resetBackend) CloseWrite() error   { return syscall.ENOTCONN }
+func (b *resetBackend) LocalAddr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1} }
+func (b *resetBackend) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2}
+}
+func (b *resetBackend) SetDeadline(time.Time) error      { return nil }
+func (b *resetBackend) SetReadDeadline(time.Time) error  { return nil }
+func (b *resetBackend) SetWriteDeadline(time.Time) error { return nil }
+
+// TestTCPBackendResetMidResponse checks that when the backend replies and
+// then resets the connection while the client is still sending, the whole
+// reply still reaches the client. The proxy must let the backend-to-client
+// direction drain what the backend sent before the reset rather than closing
+// the backend connection as soon as the client-to-backend direction fails.
+//
+// The backend is faked so that the ordering is deterministic: its writes
+// fail at once, while its reads still have a reply too large to fit in the
+// socket buffers between the proxy and the client.
+func TestTCPBackendResetMidResponse(t *testing.T) {
+	reply := bytes.Repeat([]byte("r"), 16<<20)
+	backend := &resetBackend{
+		reply:       bytes.NewReader(reply),
+		writeFailed: make(chan struct{}),
+	}
+	srv := &Server{
+		Dialer: func(context.Context, string, string) (net.Conn, error) {
+			return backend, nil
+		},
+	}
+
+	socks5, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socks5.Close()
+	runErr := runOneTCPConn(t, socks5, srv)
+
+	conn := dialViaSOCKS5(t, socks5.Addr().String(), "backend.invalid:80")
+	if _, err := conn.Write([]byte("hello")); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
+	// Don't read the reply until the proxy has failed to forward the
+	// client's write, so that most of the reply is still inside the proxy
+	// at that point.
+	select {
+	case <-backend.writeFailed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for the proxy to write to the backend")
+	}
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Errorf("client read: %v", err)
+	}
+	if len(got) != len(reply) {
+		t.Errorf("client read %d bytes of the reply, want %d", len(got), len(reply))
+	} else if !bytes.Equal(got, reply) {
+		t.Errorf("client read a corrupted reply")
+	}
+
+	select {
+	case err := <-runErr:
+		if err == nil {
+			t.Errorf("Conn.Run returned nil, want a backend error")
+		} else {
+			t.Logf("Conn.Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for Conn.Run")
 	}
 }
