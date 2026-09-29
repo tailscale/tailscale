@@ -261,6 +261,9 @@ func loadConfigV0(json []byte, forService string) (*ServicesConfigFile, error) {
 		}
 	}
 	for svcName, svc := range scf.Services {
+		if svc == nil {
+			return nil, fmt.Errorf("service %q: missing service definition", svcName)
+		}
 		if forService == "" && svc.Version != "" {
 			return nil, errors.New("services cannot be versioned separately from config file")
 		}
@@ -274,6 +277,9 @@ func loadConfigV0(json []byte, forService string) (*ServicesConfigFile, error) {
 		foundTUN := false
 		foundNonTUN := false
 		for ppr, target := range svc.Endpoints {
+			if target == nil {
+				return nil, fmt.Errorf("service %q: endpoint %q has no target", svcName, ppr.String())
+			}
 			if target.Protocol == "TUN" {
 				if ppr.Proto != 0 || ppr.Ports != tailcfg.PortRangeAny {
 					return nil, fmt.Errorf("service %q: destination \"TUN\" can only be used with source \"*\"", svcName)

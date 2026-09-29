@@ -6,6 +6,8 @@
 package conffile
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -102,6 +104,40 @@ func TestTargetUnixSocketRoundtrip(t *testing.T) {
 			}
 			if string(marshaled) != tt.serialized {
 				t.Errorf("MarshalText() = %q, want %q", marshaled, tt.serialized)
+			}
+		})
+	}
+}
+
+func TestLoadServicesConfigNullValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		forService string
+		body       string
+	}{
+		{
+			name: "null_service",
+			body: `{"version":"0.0.1","services":{"svc:a":null}}`,
+		},
+		{
+			name: "null_target",
+			body: `{"version":"0.0.1","services":{"svc:a":{"endpoints":{"tcp:443":null}}}}`,
+		},
+		{
+			name:       "null_target_for_service",
+			forService: "svc:a",
+			body:       `{"version":"0.0.1","endpoints":{"tcp:443":null}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "conf.json")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Must return an error rather than panic.
+			if _, err := LoadServicesConfig(path, tt.forService); err == nil {
+				t.Error("LoadServicesConfig succeeded; want error")
 			}
 		})
 	}
