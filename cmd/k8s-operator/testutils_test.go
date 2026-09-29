@@ -667,12 +667,6 @@ func mustCreate(t *testing.T, client client.Client, obj client.Object) {
 		t.Fatalf("creating %q: %v", obj.GetName(), err)
 	}
 }
-func mustCreateAll(t *testing.T, client client.Client, objs ...client.Object) {
-	t.Helper()
-	for _, obj := range objs {
-		mustCreate(t, client, obj)
-	}
-}
 
 func mustDeleteAll(t *testing.T, client client.Client, objs ...client.Object) {
 	t.Helper()
