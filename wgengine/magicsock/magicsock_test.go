@@ -184,7 +184,9 @@ func newMagicStack(t testing.TB, logf logger.Logf, ln nettype.PacketListener, de
 	return newMagicStackWithKey(t, logf, ln, derpMap, privateKey)
 }
 
-func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate) *magicStack {
+// newMagicStackWithKey is like [newMagicStack] but with a fixed private key.
+// Any optMods are applied to the [Options] before [NewConn].
+func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListener, derpMap *tailcfg.DERPMap, privateKey key.NodePrivate, optMods ...func(*Options)) *magicStack {
 	t.Helper()
 
 	bus := eventbustest.NewBus(t)
@@ -197,7 +199,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 
 	var reg usermetric.Registry
 	epCh := make(chan []tailcfg.Endpoint, 100) // arbitrary
-	conn, err := NewConn(Options{
+	opts := Options{
 		NetMon:                 netMon,
 		EventBus:               bus,
 		Metrics:                &reg,
@@ -208,7 +210,11 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, ln nettype.PacketListe
 		EndpointsFunc: func(eps []tailcfg.Endpoint) {
 			epCh <- eps
 		},
-	})
+	}
+	for _, mod := range optMods {
+		mod(&opts)
+	}
+	conn, err := NewConn(opts)
 	if err != nil {
 		t.Fatalf("constructing magicsock: %v", err)
 	}
@@ -828,9 +834,14 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 // communication, because if you listen on the unspecified address on
 // macOS and Windows, you get an interactive firewall consent prompt
 // to allow the binding, which breaks our CIs.
-type localhostListener struct{}
+// localhostListener is a [nettype.PacketListener] that binds to loopback
+// instead of the wildcard address.
+type localhostListener struct {
+	// control, if non-nil, is applied to each socket before bind.
+	control func(network, address string, c syscall.RawConn) error
+}
 
-func (localhostListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+func (l localhostListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -853,7 +864,7 @@ func (localhostListener) ListenPacket(ctx context.Context, network, address stri
 			return nil, fmt.Errorf("localhostListener cannot be asked to listen on %q", address)
 		}
 	}
-	var conf net.ListenConfig
+	conf := net.ListenConfig{Control: l.control}
 	return conf.ListenPacket(ctx, network, net.JoinHostPort(host, port))
 }
 

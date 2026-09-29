@@ -198,6 +198,10 @@ type Conn struct {
 	closeDisco4 io.Closer
 	closeDisco6 io.Closer
 
+	// peerConns holds the state for connected per-peer UDP sockets, which
+	// share pconn4/pconn6's ports. See [peerConn].
+	peerConns peerConnState
+
 	// netChecker is the prober that discovers local network
 	// conditions, including the closest DERP relay and NAT mappings.
 	netChecker *netcheck.Client
@@ -476,6 +480,10 @@ type Options struct {
 	// Only used by tests.
 	TestOnlyPacketListener nettype.PacketListener
 
+	// testOnlyConnectedSockets enables connected per-peer sockets as if
+	// TS_DEBUG_MAGICSOCK_CONNECTED_SOCKETS were set. Only used by tests.
+	testOnlyConnectedSockets bool
+
 	// NetMon is the network monitor to use.
 	// It must be non-nil.
 	NetMon *netmon.Monitor
@@ -698,6 +706,15 @@ func NewConn(opts Options) (*Conn, error) {
 	c.extraRootCAs = opts.ExtraRootCAs
 	c.derpAppName = opts.DERPAppName
 	c.getPeerByKey = opts.PeerByKeyFunc
+
+	// This must be decided before the first bind, as the main sockets
+	// need SO_REUSEPORT for peerConns to share their ports.
+	if debugConnectedSockets() || opts.testOnlyConnectedSockets {
+		c.peerConns.enabled = peerConnSupported(c.logf)
+		if c.peerConns.enabled {
+			c.logf("magicsock: using connected per-peer sockets")
+		}
+	}
 
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err
@@ -1692,30 +1709,47 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 }
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
-		&c.metrics.inboundPacketsIPv4Total,
-		&c.metrics.inboundPacketsPeerRelayIPv4Total,
-		&c.metrics.inboundBytesIPv4Total,
-		&c.metrics.inboundBytesPeerRelayIPv4Total,
-	)
+	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4), c.inboundMetrics4())
+}
+
+// inboundMetrics groups the inbound packet and byte counters for one address
+// family, as updated by the receive functions.
+type inboundMetrics struct {
+	directPackets, peerRelayPackets, directBytes, peerRelayBytes *expvar.Int
+}
+
+func (c *Conn) inboundMetrics4() *inboundMetrics {
+	return &inboundMetrics{
+		directPackets:    &c.metrics.inboundPacketsIPv4Total,
+		peerRelayPackets: &c.metrics.inboundPacketsPeerRelayIPv4Total,
+		directBytes:      &c.metrics.inboundBytesIPv4Total,
+		peerRelayBytes:   &c.metrics.inboundBytesPeerRelayIPv4Total,
+	}
+}
+
+func (c *Conn) inboundMetrics6() *inboundMetrics {
+	return &inboundMetrics{
+		directPackets:    &c.metrics.inboundPacketsIPv6Total,
+		peerRelayPackets: &c.metrics.inboundPacketsPeerRelayIPv6Total,
+		directBytes:      &c.metrics.inboundBytesIPv6Total,
+		peerRelayBytes:   &c.metrics.inboundBytesPeerRelayIPv6Total,
+	}
 }
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
-		&c.metrics.inboundPacketsIPv6Total,
-		&c.metrics.inboundPacketsPeerRelayIPv6Total,
-		&c.metrics.inboundBytesIPv6Total,
-		&c.metrics.inboundBytesPeerRelayIPv6Total,
-	)
+	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6), c.inboundMetrics6())
 }
 
-// mkReceiveFunc creates a ReceiveFunc reading from ruc.
-// The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
+// mkReceiveFunc creates a ReceiveFunc reading from src.
+// The provided healthItem is updated if non-nil. Received packets are counted
+// in m if non-nil, else in the counters for each packet's address family
+// (for a src, such as a [peerConnSlot], that may carry either).
+func (c *Conn) mkReceiveFunc(src batchReader, healthItem *health.ReceiveFuncStats, m *inboundMetrics) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
+	m4, m6 := c.inboundMetrics4(), c.inboundMetrics6()
 
 	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
@@ -1727,15 +1761,15 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				}
 			}()
 		}
-		if ruc == nil {
-			panic("nil RebindingUDPConn")
+		if src == nil {
+			panic("nil batchReader")
 		}
 		if len(batchingPackets) != len(packets) {
 			batchingPackets = make([]batching.ReceivedPacket, len(packets))
 		}
 
 		for {
-			numMsgs, err := ruc.ReadBatch(slab, batchingPackets)
+			numMsgs, err := src.ReadBatch(slab, batchingPackets)
 			if err != nil {
 				if neterror.PacketWasTruncated(err) {
 					continue
@@ -1753,20 +1787,19 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				packets[i].Size = batchingPacket.Size
 				packets[i].Offset = batchingPacket.Offset
 				if isGeneveEncap, ok := c.receiveIP(buf, batchingPacket.Source, &epCache, &packets[i]); ok {
+					pm := m
+					if pm == nil {
+						pm = m4
+						if batchingPacket.Source.Addr().Is6() {
+							pm = m6
+						}
+					}
 					if isGeneveEncap {
-						if peerRelayPacketMetric != nil {
-							peerRelayPacketMetric.Add(1)
-						}
-						if peerRelayBytesMetric != nil {
-							peerRelayBytesMetric.Add(int64(len(buf)))
-						}
+						pm.peerRelayPackets.Add(1)
+						pm.peerRelayBytes.Add(int64(len(buf)))
 					} else {
-						if directPacketMetric != nil {
-							directPacketMetric.Add(1)
-						}
-						if directBytesMetric != nil {
-							directBytesMetric.Add(int64(len(buf)))
-						}
+						pm.directPackets.Add(1)
+						pm.directBytes.Add(int64(len(buf)))
 					}
 					reportToCaller = true
 				} else {
@@ -3448,13 +3481,7 @@ var _ conn.Bind = (*connBind)(nil)
 //
 // See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.BatchSize
 func (c *connBind) BatchSize() int {
-	// TODO(raggi): determine by properties rather than hardcoding platform behavior
-	switch runtime.GOOS {
-	case "linux":
-		return conn.IdealBatchSize
-	default:
-		return 1
-	}
+	return batching.MaxBatchSize()
 }
 
 // Open is called by WireGuard to create a UDP binding.
@@ -3473,6 +3500,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	if runtime.GOOS == "js" {
 		fns = []conn.ReceiveFunc{c.receiveDERP}
 	}
+	fns = append(fns, c.openPeerConnSlots()...)
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
 	return fns, c.LocalPort(), nil
@@ -3499,6 +3527,7 @@ func (c *connBind) Close() error {
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	c.pconn6.Close()
+	c.closePeerConnSlots("bind closed")
 	if c.closeDisco4 != nil {
 		c.closeDisco4.Close()
 	}
@@ -3555,6 +3584,7 @@ func (c *Conn) Close() error {
 	// They will frequently have been closed already by a call to connBind.Close.
 	c.pconn6.Close()
 	c.pconn4.Close()
+	c.closePeerConnSlots("conn closed")
 	if c.closeDisco4 != nil {
 		c.closeDisco4.Close()
 	}
@@ -3679,7 +3709,11 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	if c.testOnlyPacketListener != nil {
 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
 	}
-	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.netMon)).ListenPacket(ctx, network, addr)
+	lc := netns.Listener(c.logf, c.netMon)
+	if c.peerConns.enabled {
+		wrapReusePort(lc)
+	}
+	return nettype.MakePacketListenerWithNetIP(lc).ListenPacket(ctx, network, addr)
 }
 
 // bindSocket binds a UDP socket to ruc.
@@ -3792,6 +3826,9 @@ const (
 // rebind closes and re-binds the UDP sockets.
 // We consider it successful if we manage to bind the IPv4 socket.
 func (c *Conn) rebind(curPortFate currentPortFate) error {
+	// The peerConns share the old sockets' ports and interface bindings,
+	// neither of which may survive the rebind.
+	c.closeAllPeerConns("rebind")
 	if err := c.bindSocket(&c.pconn6, "udp6", curPortFate); err != nil {
 		c.logf("magicsock: Rebind ignoring IPv6 bind failure: %v", err)
 	}

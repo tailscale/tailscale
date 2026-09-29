@@ -7,6 +7,8 @@ package magicsock
 
 import (
 	"syscall"
+
+	"tailscale.com/types/nettype"
 )
 
 func getDontFragOpt(network string) int {
@@ -17,12 +19,18 @@ func getDontFragOpt(network string) int {
 }
 
 func (c *Conn) setDontFragment(network string, enable bool) error {
+	return c.setDontFragmentOn(c.mainPacketConn(network), network, enable)
+}
+
+// setDontFragmentOn sets the DF bit socket option on pconn, a socket of the
+// given network ("udp4" or "udp6").
+func (c *Conn) setDontFragmentOn(pconn nettype.PacketConn, network string, enable bool) error {
 	optArg := syscall.IP_PMTUDISC_DO
 	if enable == false {
 		optArg = syscall.IP_PMTUDISC_DONT
 	}
 	var err error
-	rcErr := c.connControl(network, func(fd uintptr) {
+	rcErr := packetConnControl(pconn, func(fd uintptr) {
 		err = syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
 	})
 
