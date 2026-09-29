@@ -873,3 +873,31 @@ func BenchmarkWriteJSON(b *testing.B) {
 		must.Get(lg.Write(testdataJSONLog))
 	}
 }
+
+// TestDrainPendingRawStderr verifies that a line in the buffer that bypassed
+// logtail (such as a panic from a previous run) is echoed to stderr as is,
+// rather than the batch of entries accumulated so far.
+func TestDrainPendingRawStderr(t *testing.T) {
+	var stderr bytes.Buffer
+	buf := NewMemoryBuffer(8)
+	lg := newLogger(Config{Stderr: &stderr, Buffer: buf})
+
+	const jsonLine = `{"text":"already encoded"}` + "\n"
+	const rawLine = "panic: something broke\n"
+	for _, line := range []string{jsonLine, rawLine} {
+		if _, err := buf.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := lg.drainPending()
+	if !bytes.Contains(body, []byte("something broke")) {
+		t.Errorf("drained body %q does not contain the raw line", body)
+	}
+	if want := "RAW-STDERR: " + rawLine; !strings.HasSuffix(stderr.String(), want) {
+		t.Errorf("stderr = %q, want suffix %q", stderr.String(), want)
+	}
+	if strings.Contains(stderr.String(), "already encoded") {
+		t.Errorf("stderr = %q, contains an already-encoded entry", stderr.String())
+	}
+}

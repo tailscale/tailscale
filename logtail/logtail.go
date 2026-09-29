@@ -512,7 +512,7 @@ func (lg *Logger) drainPending() (b []byte) {
 				fmt.Fprintf(lg.stderr, "RAW-STDERR:\n")
 				lg.explainedRaw = true
 			}
-			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", b)
+			fmt.Fprintf(lg.stderr, "RAW-STDERR: %s", line)
 			// Do not add a client time, as it could be really old.
 			// Do not include instance key or ID either,
 			// since this came from a different instance.
