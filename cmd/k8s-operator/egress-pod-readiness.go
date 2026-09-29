@@ -9,10 +9,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
-	"strings"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -142,38 +143,46 @@ func (er *egressPodsReconciler) Reconcile(ctx context.Context, req reconcile.Req
 		go func() {
 			ll := lg.With("service_name", s.Name)
 			d := retrieveClusterDomain(er.tsNamespace, ll)
-			healthCheckAddr := healthCheckForSvc(&s, d)
-			if healthCheckAddr == "" {
+			targets, err := healthCheckTargetsForSvc(&s, pod, d)
+			if err != nil {
+				errChan <- fmt.Errorf("error determining health check targets for Pod: %w", err)
+				return
+			}
+			if len(targets) == 0 {
 				ll.Debugf("ClusterIP Service does not expose a health check endpoint, unable to verify if routing is set up")
 				errChan <- nil
 				return
 			}
-
-			var routesSetup bool
-			// A freshly created Pod is initially unreachable, so the per-poll backoff message floods the logs
-			// without providing useful information (see tailscale/tailscale#21079) - these logs should be dropped.
-			bo := backoff.NewBackoff(s.Name, logger.Discard, er.maxBackoff)
-			for range numCalls(pgReplicas(pg)) {
-				if ctx.Err() != nil {
-					errChan <- nil
-					return
+			// The Pod must be reachable via every IP family the Service
+			// exposes, not just one of them.
+			for _, t := range targets {
+				var routesSetup bool
+				// A freshly created Pod is initially unreachable, so the per-poll backoff message floods the logs
+				// without providing useful information (see tailscale/tailscale#21079) - these logs should be dropped.
+				bo := backoff.NewBackoff(s.Name, logger.Discard, er.maxBackoff)
+				for range numCalls(pgReplicas(pg)) {
+					if ctx.Err() != nil {
+						errChan <- nil
+						return
+					}
+					state, err := er.lookupPodRouteViaSvc(ctx, pod, t, ll)
+					if err != nil {
+						errChan <- fmt.Errorf("error validating if routing has been set up for Pod: %w", err)
+						return
+					}
+					if state == healthy || state == cannotVerify {
+						routesSetup = true
+						break
+					}
+					if state == unreachable || state == unhealthy || state == podNotReady {
+						bo.BackOff(ctx, errors.New("backoff"))
+					}
 				}
-				state, err := er.lookupPodRouteViaSvc(ctx, pod, healthCheckAddr, ll)
-				if err != nil {
-					errChan <- fmt.Errorf("error validating if routing has been set up for Pod: %w", err)
-					return
-				}
-				if state == healthy || state == cannotVerify {
-					routesSetup = true
+				if !routesSetup {
+					ll.Debugf("Pod is not yet configured as Service endpoint for %s", t.podIP)
+					routesMissing.Store(true)
 					break
 				}
-				if state == unreachable || state == unhealthy || state == podNotReady {
-					bo.BackOff(ctx, errors.New("backoff"))
-				}
-			}
-			if !routesSetup {
-				ll.Debugf("Pod is not yet configured as Service endpoint")
-				routesMissing.Store(true)
 			}
 			errChan <- nil
 		}()
@@ -223,32 +232,85 @@ const (
 	healthy                              // 200
 )
 
+// healthCheckTarget is a health check endpoint of an egress Service and the
+// Pod IP that a healthy response from that endpoint must report.
+type healthCheckTarget struct {
+	addr  string     // health check URL
+	podIP netip.Addr // Pod IP of the family that addr is expected to route over
+}
+
+// healthCheckTargetsForSvc returns the health check endpoints that must reach
+// the Pod for it to be considered routable via the Service. It returns nil if
+// the Service does not expose a health check port.
+//
+// If the Service has ClusterIPs, there is one target per Pod IP family that
+// the Service also has a ClusterIP for, so that each family is verified
+// separately. Otherwise, there is a single target that uses the Service's DNS
+// name and the Pod's primary IP. The DNS name resolves to all of the Service's
+// ClusterIPs and we do not control which IP family the request uses, so a
+// response received that way only verifies one of the families.
+func healthCheckTargetsForSvc(svc *corev1.Service, pod *corev1.Pod, clusterDomain string) ([]healthCheckTarget, error) {
+	dnsAddr := healthCheckForSvc(svc, clusterDomain)
+	if dnsAddr == "" {
+		return nil, nil
+	}
+	var podIPs []netip.Addr
+	for _, pi := range pod.Status.PodIPs {
+		ip, err := netip.ParseAddr(pi.IP)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing Pod IP %q: %w", pi.IP, err)
+		}
+		podIPs = append(podIPs, ip)
+	}
+	if len(podIPs) == 0 {
+		// The Pod does not have an IP address yet.
+		return []healthCheckTarget{{addr: dnsAddr}}, nil
+	}
+	var port int32
+	for _, p := range svc.Spec.Ports {
+		if p.Name == tsHealthCheckPortName {
+			port = p.Port
+			break
+		}
+	}
+	var targets []healthCheckTarget
+	for _, podIP := range podIPs {
+		for _, cip := range svc.Spec.ClusterIPs {
+			ip, err := netip.ParseAddr(cip)
+			if err != nil || ip.Is4() != podIP.Is4() {
+				continue
+			}
+			targets = append(targets, healthCheckTarget{
+				addr:  fmt.Sprintf("http://%s/healthz", net.JoinHostPort(ip.String(), strconv.Itoa(int(port)))),
+				podIP: podIP,
+			})
+			break
+		}
+	}
+	if len(targets) == 0 {
+		// Use the Pod's primary IP (PodIPs[0]), whose family is determined
+		// by the cluster's IP family configuration.
+		targets = append(targets, healthCheckTarget{addr: dnsAddr, podIP: podIPs[0]})
+	}
+	return targets, nil
+}
+
 // lookupPodRouteViaSvc attempts to reach a Pod using a health check endpoint served by a Service and returns the state of the health check.
-func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, healthCheckAddr string, lg *zap.SugaredLogger) (healthCheckState, error) {
+func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *corev1.Pod, t healthCheckTarget, lg *zap.SugaredLogger) (healthCheckState, error) {
 	if !slices.ContainsFunc(pod.Spec.Containers[0].Env, func(e corev1.EnvVar) bool {
 		return e.Name == "TS_ENABLE_HEALTH_CHECK" && e.Value == "true"
 	}) {
 		lg.Debugf("Pod does not have health check enabled, unable to verify if it is currently routable via Service")
 		return cannotVerify, nil
 	}
-	// Use the Pod's primary IP (PodIPs[0]) to identify this Pod in the health check
-	// response. The primary IP family is determined by the cluster's IP family configuration.
-
-	// Note: we do not control which IP family the request uses, so on a dual-stack
-	// cluster either IPv4 or IPv6 could be used. In either case, a matching IP header
-	// comfirms the request reached this Pod.
-	if len(pod.Status.PodIPs) == 0 || pod.Status.PodIPs[0].IP == "" {
+	if !t.podIP.IsValid() {
 		return podNotReady, nil
 	}
-	wantsIP := pod.Status.PodIPs[0].IP
-	parsed, err := netip.ParseAddr(wantsIP)
-	if err != nil {
-		return -1, fmt.Errorf("error parsing Pod IP %q: %w", wantsIP, err)
-	}
 	header := kubetypes.PodIPv4Header
-	if parsed.Is6() {
+	if t.podIP.Is6() {
 		header = kubetypes.PodIPv6Header
 	}
+	healthCheckAddr := t.addr
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
@@ -270,7 +332,7 @@ func (er *egressPodsReconciler) lookupPodRouteViaSvc(ctx context.Context, pod *c
 		lg.Debugf("Health check does not return Pod's IP header, unable to verify if Pod is currently routable via Service")
 		return cannotVerify, nil
 	}
-	if !strings.EqualFold(wantsIP, gotIP) {
+	if got, err := netip.ParseAddr(gotIP); err != nil || got != t.podIP {
 		return notFound, nil
 	}
 	if resp.StatusCode != http.StatusOK {
