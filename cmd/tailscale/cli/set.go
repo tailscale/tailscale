@@ -195,8 +195,6 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
-	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)
-
 	var advertiseExitNodeSet, advertiseRoutesSet bool
 	setFlagSet.Visit(func(f *flag.Flag) {
 		updateMaskedPrefsFromUpOrSetFlag(maskedPrefs, f.Name)
@@ -221,6 +219,9 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
+
+	// This must come after AdvertiseRoutes is populated above.
+	warnOnAdvertiseRoutes(ctx, &maskedPrefs.Prefs)
 
 	if runtime.GOOS == "darwin" && maskedPrefs.AppConnector.Advertise {
 		if err := presentRiskToUser(riskMacAppConnector, riskMacAppConnectorMessage, setArgs.acceptedRisks); err != nil {

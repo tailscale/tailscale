@@ -4,9 +4,13 @@
 package cli
 
 import (
+	"context"
 	"flag"
+	"io"
+	"net/http"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 
 	"tailscale.com/ipn"
@@ -149,4 +153,49 @@ func TestSetDefaultsMatchUpDefaults(t *testing.T) {
 			t.Errorf("--%s: set defaults to %q, but up defaults to %q", up.Name, set.DefValue, up.DefValue)
 		}
 	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Tests that "tailscale set --advertise-routes" checks whether IP forwarding
+// is enabled, and prints the warning if it is not.
+func TestSetAdvertiseRoutesWarnsOnIPForwarding(t *testing.T) {
+	oldTransport, oldStdout := localClient.Transport, Stdout
+	oldArgs, oldFlagSet := setArgs, setFlagSet
+	t.Cleanup(func() {
+		localClient.Transport, Stdout = oldTransport, oldStdout
+		setArgs, setFlagSet = oldArgs, oldFlagSet
+	})
+	setArgs = setArgsT{}
+	setFlagSet = newSetFlagSet(effectiveGOOS(), &setArgs)
+
+	localClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
+		switch r.URL.Path {
+		case "/localapi/v0/status":
+			body = `{"BackendState":"Running","Self":{},"Peer":{}}`
+		case "/localapi/v0/check-ip-forwarding":
+			body = `{"Warning":"IP forwarding is disabled"}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})
+	var out strings.Builder
+	Stdout = &out
+
+	if err := setFlagSet.Parse([]string{"--advertise-routes=10.0.0.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSet(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := "IP forwarding is disabled"; !strings.Contains(out.String(), want) {
+		t.Errorf("output = %q; want it to contain %q", out.String(), want)
+	}
 }
