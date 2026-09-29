@@ -2042,3 +2042,45 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 		})
 	}
 }
+
+// TestGetServeHandlerHostCaseInsensitive tests that plaintext HTTP requests
+// are matched to serve config entries regardless of the case of the Host
+// header, as DNS names are case-insensitive.
+func TestGetServeHandlerHostCaseInsensitive(t *testing.T) {
+	const fqdn = "node.tailnet.ts.net"
+	b := newTestBackend(t)
+	b.pm.currentProfile = (&ipn.LoginProfile{
+		ID:             "id0",
+		NetworkProfile: ipn.NetworkProfile{MagicDNSName: "tailnet.ts.net"},
+	}).View()
+	b.serveConfig = (&ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort(fqdn + ":80"): {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Text: "hi"},
+				},
+			},
+		},
+	}).View()
+
+	for _, host := range []string{
+		"node.tailnet.ts.net",
+		"node.tailnet.ts.net:80",
+		"Node.Tailnet.TS.net",
+		"NODE.TAILNET.TS.NET:80",
+		"NODE",
+	} {
+		t.Run(host, func(t *testing.T) {
+			req := &http.Request{
+				Host: host,
+				URL:  &url.URL{Path: "/"},
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 80,
+			}))
+			if _, _, ok := b.getServeHandler(req); !ok {
+				t.Errorf("no handler found for Host %q", host)
+			}
+		})
+	}
+}

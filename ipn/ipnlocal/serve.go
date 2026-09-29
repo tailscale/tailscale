@@ -827,6 +827,9 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
+		// DNS names are case-insensitive, and the serve config keys are
+		// lowercase (as is r.TLS.ServerName), so normalize the Host header.
+		hostname = strings.ToLower(hostname)
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
