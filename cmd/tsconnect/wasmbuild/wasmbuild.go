@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"tailscale.com/feature/featuretags"
@@ -113,23 +112,7 @@ type BuildInfo struct {
 // the same string (and therefore the same wasm bytes, given identical
 // inputs to `go build`).
 func Tags() string {
-	keep := map[featuretags.FeatureTag]bool{}
-	for _, ft := range Keep {
-		for dep := range featuretags.Requires(ft) {
-			keep[dep] = true
-		}
-	}
-	var tags []string
-	for ft := range featuretags.Features {
-		if ft == "" || !ft.IsOmittable() {
-			continue
-		}
-		if !keep[ft] {
-			tags = append(tags, ft.OmitTag())
-		}
-	}
-	slices.Sort(tags)
-	return strings.Join(tags, ",")
+	return strings.Join(featuretags.MinTags(Keep...), ",")
 }
 
 // ProdCommand returns an *exec.Cmd that runs `go build` for

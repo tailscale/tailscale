@@ -36,27 +36,19 @@ func main() {
 		return
 	}
 
-	var keep = map[featuretags.FeatureTag]bool{}
+	var keep []featuretags.FeatureTag
 	for t := range strings.SplitSeq(*add, ",") {
 		if t != "" {
-			for ft := range featuretags.Requires(featuretags.FeatureTag(t)) {
-				keep[ft] = true
-			}
+			keep = append(keep, featuretags.FeatureTag(t))
 		}
 	}
 	var tags []string
-	if keep[featuretags.CLI] {
-		tags = append(tags, "ts_include_cli")
-	}
 	if *min {
-		for _, f := range slices.Sorted(maps.Keys(features)) {
-			if f == "" {
-				continue
-			}
-			if !keep[f] && f.IsOmittable() {
-				tags = append(tags, f.OmitTag())
-			}
-		}
+		tags = featuretags.MinTags(keep...)
+	} else if slices.ContainsFunc(keep, func(ft featuretags.FeatureTag) bool {
+		return featuretags.Requires(ft).Contains(featuretags.CLI)
+	}) {
+		tags = append(tags, "ts_include_cli")
 	}
 	removeSet := set.Set[featuretags.FeatureTag]{}
 	for v := range strings.SplitSeq(*remove, ",") {
