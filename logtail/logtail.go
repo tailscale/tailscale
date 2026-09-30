@@ -1013,7 +1013,7 @@ func (lg *Logger) Write(buf []byte) (int, error) {
 	inLen := len(buf) // length as provided to us, before modifications to downstream writers
 
 	level, buf := parseAndRemoveLogLevel(buf)
-	if lg.stderr != nil && lg.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&lg.stderrLevel) {
+	if len(buf) > 0 && lg.stderr != nil && lg.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&lg.stderrLevel) {
 		if buf[len(buf)-1] == '\n' {
 			lg.stderr.Write(buf)
 		} else {
