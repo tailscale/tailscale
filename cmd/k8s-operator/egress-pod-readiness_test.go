@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"testing"
@@ -458,6 +457,69 @@ func TestEgressPodReadiness(t *testing.T) {
 		expectEqual(t, fc, pod)
 		mustDeleteAll(t, fc, pod, svc)
 	})
+	t.Run("dual_stack_pod_and_svc_both_families_routed_to", func(t *testing.T) {
+		pod := podTemplate.DeepCopy()
+		pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
+
+		svc, _ := newSvc("svc", 9002)
+		svc.Spec.ClusterIPs = []string{"10.96.0.5", "fd00:96::5"}
+		mustCreateAll(t, fc, svc, pod)
+		httpCl := fakeHTTPClient{
+			t: t,
+			state: map[string][]fakeResponse{
+				"http://10.96.0.5:9002/healthz":    readyResps("10.0.0.2", 1),
+				"http://[fd00:96::5]:9002/healthz": readyRespsV6("fd00::2", 1),
+			},
+		}
+		rec.httpClient = &httpCl
+		expectReconciled(t, rec, "operator-ns", pod.Name)
+
+		podSetReady(pod, cl)
+		expectEqual(t, fc, pod)
+		mustDeleteAll(t, fc, pod, svc)
+	})
+	t.Run("dual_stack_pod_and_svc_ipv6_never_routed_to", func(t *testing.T) {
+		pod := podTemplate.DeepCopy()
+		pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
+
+		svc, _ := newSvc("svc", 9002)
+		svc.Spec.ClusterIPs = []string{"10.96.0.5", "fd00:96::5"}
+		mustCreateAll(t, fc, svc, pod)
+		// The IPv4 ClusterIP reaches the Pod, but for a ProxyGroup with 3
+		// replicas the IPv6 ClusterIP is tried 9 times and only reaches other
+		// Pods. The Pod must not be marked as ready.
+		httpCl := fakeHTTPClient{
+			t: t,
+			state: map[string][]fakeResponse{
+				"http://10.96.0.5:9002/healthz":    readyResps("10.0.0.2", 1),
+				"http://[fd00:96::5]:9002/healthz": readyRespsV6("fd00::3", 9),
+			},
+		}
+		rec.httpClient = &httpCl
+		expectRequeue(t, rec, "operator-ns", pod.Name)
+
+		expectEqual(t, fc, pod)
+		mustDeleteAll(t, fc, pod, svc)
+	})
+	t.Run("dual_stack_pod_single_stack_ipv4_svc", func(t *testing.T) {
+		pod := podTemplate.DeepCopy()
+		pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.2"}, {IP: "fd00::2"}}
+
+		svc, _ := newSvc("svc", 9002)
+		svc.Spec.ClusterIPs = []string{"10.96.0.5"}
+		mustCreateAll(t, fc, svc, pod)
+		// The Service only has an IPv4 ClusterIP, so only that family can be verified.
+		httpCl := fakeHTTPClient{
+			t:     t,
+			state: map[string][]fakeResponse{"http://10.96.0.5:9002/healthz": readyResps("10.0.0.2", 1)},
+		}
+		rec.httpClient = &httpCl
+		expectReconciled(t, rec, "operator-ns", pod.Name)
+
+		podSetReady(pod, cl)
+		expectEqual(t, fc, pod)
+		mustDeleteAll(t, fc, pod, svc)
+	})
 }
 
 func readyResps(ip string, num int) (resps []fakeResponse) {
@@ -536,8 +598,10 @@ func (f *fakeHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	resps := f.state[req.URL.String()]
 	if len(resps) == 0 {
 		f.mu.Unlock()
-		log.Printf("\n\n\nURL %q\n\n\n", req.URL)
-		f.t.Fatalf("fakeHTTPClient received an unexpected request for %q", req.URL)
+		// Do not use Fatalf here: this is called from the reconciler's
+		// goroutines and FailNow must only be called from the test goroutine.
+		f.t.Errorf("fakeHTTPClient received an unexpected request for %q", req.URL)
+		return nil, fmt.Errorf("unexpected request for %q", req.URL)
 	}
 	defer func() {
 		if len(resps) == 1 {
