@@ -2481,6 +2481,7 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	needsAuthReconfig := netmapDeltaNeedsAuthReconfig(cn, muts)
 
 	deltaRes, _ := cn.UpdateNetmapDelta(muts)
+	b.checkCachedDNSLocked()
 	if buildfeatures.HasDrive {
 		// Drive's lazy remotes-source caches its rebuild keyed by this
 		// generation, so any delta — peer add/remove, address change,
@@ -7361,6 +7362,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		login = cmp.Or(profileFromView(nm.UserProfiles[nm.User()]).LoginName, "<missing-profile>")
 	}
 	discoChanged, routeChanged := b.currentNode().SetNetMap(nm)
+	b.checkCachedDNSLocked()
 	b.setDataPlanePeerRoutes()
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
@@ -7535,6 +7537,17 @@ var hookSetNetMapLockedDrive feature.Hook[func(*LocalBackend)]
 // remotes lazily instead of being pushed a fresh list on every netmap
 // update.
 var hookInstallDriveRemoteSource feature.Hook[func(*LocalBackend)]
+
+// checkCachedDNSLocked checks recent negative answers after updating the
+// live MagicDNS host records. b.mu must be held.
+func (b *LocalBackend) checkCachedDNSLocked() {
+	if b.shutdownCalled || !buildfeatures.HasDNS {
+		return
+	}
+	if dm, ok := b.sys.DNSManager.GetOK(); ok {
+		dm.CheckCachedDNS()
+	}
+}
 
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
 func roundTraffic(bytes int64) float64 {
@@ -8402,6 +8415,11 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 		// ephemeral nodes, which can then call back here. But we're shutting
 		// down, so no need to do any work.
 		return nil
+	}
+	if buildfeatures.HasDNS {
+		if dm, ok := b.sys.DNSManager.GetOK(); ok {
+			dm.Resolver().ClearNegativeCache()
+		}
 	}
 	newNode := newNodeBackend(b.ctx, b.logf, b.sys.Bus.Get())
 	if oldNode := b.currentNodeAtomic.Swap(newNode); oldNode != nil {
