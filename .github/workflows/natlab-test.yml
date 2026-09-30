@@ -110,10 +110,12 @@ jobs:
         run: |
           ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep
 
-      - name: Build gokrazy VM image
+      # This also builds the minimal-feature gokrazy variants, which warms
+      # the Go build cache for their tagged tailscale and tailscaled.
+      - name: Build gokrazy VM images
         if: steps.gokrazy-cache.outputs.cache-hit != 'true'
         run: |
-          make -C gokrazy natlab
+          ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep --gokrazy
 
       # No Go source imports this module, so nothing above fetches it. Pulling
       # it here puts it in the module cache the matrix jobs restore.

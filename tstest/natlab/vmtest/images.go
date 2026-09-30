@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ulikunitz/xz"
+	"tailscale.com/feature/featuretags"
 )
 
 // LinuxFamily classifies a Linux distro by the conventions that affect how we
@@ -45,6 +46,23 @@ type OSImage struct {
 	Family    LinuxFamily // Linux distro family (affects cloud-init user-data); empty means Debian-like
 	IsGokrazy bool        // true for gokrazy images (different QEMU setup)
 	IsMacOS   bool        // true for macOS images (launched via tailmac, not QEMU)
+
+	// gokrazyKeep, if non-nil, makes a gokrazy image a minimal build: its
+	// tailscale and tailscaled are built with [featuretags.MinTags] of
+	// these features.
+	gokrazyKeep []featuretags.FeatureTag
+}
+
+// gokrazyMakeArgs returns the arguments to make in the gokrazy directory
+// that build the gokrazy image img, and the name of the qcow2 file that
+// writes there.
+func (img OSImage) gokrazyMakeArgs() (args []string, qcow2 string) {
+	if img.gokrazyKeep == nil {
+		return []string{"natlab"}, "natlabapp.qcow2"
+	}
+	name := strings.TrimPrefix(img.Name, "gokrazy-")
+	tags := strings.Join(featuretags.MinTags(img.gokrazyKeep...), ",")
+	return []string{"natlab-tagged", "NAME=" + name, "TAGS=" + tags}, "natlabapp-" + name + ".qcow2"
 }
 
 // GOOS returns the Go OS name for this image.
@@ -83,6 +101,35 @@ var (
 		Name:      "gokrazy",
 		IsGokrazy: true,
 		MemoryMB:  384,
+	}
+
+	// GokrazyExtraSmall is like [Gokrazy], but its tailscale and tailscaled
+	// are built with the same feature-omitting build tags as
+	// "build_dist.sh --extra-small". The tta test agent is built normally.
+	GokrazyExtraSmall = OSImage{
+		Name:        "gokrazy-extrasmall",
+		IsGokrazy:   true,
+		MemoryMB:    384,
+		gokrazyKeep: featuretags.ExtraSmall,
+	}
+
+	// GokrazyNoNATTraversal is like [GokrazyExtraSmall] but also without
+	// NAT traversal (STUN, hole punching), so it only gets a direct path to
+	// peers whose endpoints are directly reachable.
+	GokrazyNoNATTraversal = OSImage{
+		Name:        "gokrazy-nonat",
+		IsGokrazy:   true,
+		MemoryMB:    384,
+		gokrazyKeep: []featuretags.FeatureTag{"osrouter", "udptransport"},
+	}
+
+	// GokrazyDERPOnly is like [GokrazyExtraSmall] but also without UDP
+	// transport, so all peer traffic goes over DERP.
+	GokrazyDERPOnly = OSImage{
+		Name:        "gokrazy-derponly",
+		IsGokrazy:   true,
+		MemoryMB:    384,
+		gokrazyKeep: []featuretags.FeatureTag{"osrouter"},
 	}
 
 	// Ubuntu2404 is Ubuntu 24.04 LTS (Noble Numbat) cloud image.

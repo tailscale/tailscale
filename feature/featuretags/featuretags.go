@@ -66,6 +66,11 @@ func RequiredBy(ft FeatureTag) set.Set[FeatureTag] {
 	return s
 }
 
+// ExtraSmall is the set of features kept by build_dist.sh --extra-small
+// (via cmd/featuretags --extra-small), the smallest build that's still a
+// useful tailscaled. Pass it to [MinTags] to get its build tags.
+var ExtraSmall = []FeatureTag{"osrouter", "nattraversal"}
+
 // MinTags returns the sorted Go build tags for a minimal build that
 // includes only the features in keep and the features they require.
 // Every other omittable feature in [Features] gets its ts_omit_ tag, and

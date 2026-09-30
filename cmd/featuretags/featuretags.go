@@ -22,10 +22,28 @@ var (
 	remove = flag.String("remove", "", "a comma-separated list of features to remove from the build. (without the 'ts_omit_' prefix)")
 	add    = flag.String("add", "", "a comma-separated list of features or tags to add, if --min is used.")
 	list   = flag.Bool("list", false, "if true, list all known features and what they do")
+
+	extraSmall = flag.Bool("extra-small", false, "shorthand for build_dist.sh --extra-small's tags: --min --add="+joinFeatures(featuretags.ExtraSmall))
 )
+
+func joinFeatures(fts []featuretags.FeatureTag) string {
+	var ss []string
+	for _, ft := range fts {
+		ss = append(ss, string(ft))
+	}
+	return strings.Join(ss, ",")
+}
 
 func main() {
 	flag.Parse()
+
+	if *extraSmall {
+		if *min || *add != "" {
+			log.Fatalf("--extra-small can't be combined with --min or --add")
+		}
+		*min = true
+		*add = joinFeatures(featuretags.ExtraSmall)
+	}
 
 	features := featuretags.Features
 

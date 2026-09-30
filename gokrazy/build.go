@@ -15,9 +15,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"os"
+	"strings"
 
 	"tailscale.com/gokrazy/build"
 )
@@ -29,7 +31,21 @@ var (
 	gaf        = flag.Bool("gaf", false, "if true, build a gokrazy archive format file instead of a full disk image")
 	jsonOut    = flag.Bool("json", false, "emit one machine-readable JSON result line to stdout")
 	region     = flag.String("region", "", "AWS region for import+register; default us-east-1 (honors $AWS_REGION)")
+	output     = flag.String("output", "", "base name of the .img or .gaf file to write; default is --app")
+
+	goBuildTags = map[string][]string{}
 )
+
+func init() {
+	flag.Func("go-build-tags", "PKG=TAG1,TAG2 to build Go package PKG with the given build tags, overriding config.json; may be repeated", func(v string) error {
+		pkg, tags, ok := strings.Cut(v, "=")
+		if !ok || pkg == "" {
+			return errors.New("want PKG=TAG1,TAG2")
+		}
+		goBuildTags[pkg] = strings.Split(tags, ",")
+		return nil
+	})
+}
 
 func main() {
 	flag.Parse()
@@ -57,6 +73,9 @@ func run(ctx context.Context) (build.Result, error) {
 		App:    *app,
 		Bucket: *bucket,
 		Region: build.ResolveRegion(*region, os.Getenv("AWS_REGION")),
+
+		Output:      *output,
+		GoBuildTags: goBuildTags,
 	})
 	if err != nil {
 		return build.Result{App: *app, Error: err.Error()}, err
