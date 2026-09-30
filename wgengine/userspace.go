@@ -426,10 +426,15 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 		e.RequestStatus()
 	}
+	maxSockets := min(16, runtime.GOMAXPROCS(0))
+	if n, ok := envknob.LookupInt("TS_DEBUG_MAX_QUEUES"); ok {
+		maxSockets = n
+	}
 	magicsockOpts := magicsock.Options{
 		EventBus:       e.eventBus,
 		Logf:           logf,
 		Port:           conf.ListenPort,
+		UDPSockets:     maxSockets,
 		EndpointsFunc:  endpointsFn,
 		DERPActiveFunc: e.RequestStatus,
 		IdleFunc:       e.tundev.IdleDuration,
