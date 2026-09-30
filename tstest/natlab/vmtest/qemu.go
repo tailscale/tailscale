@@ -58,26 +58,21 @@ func hardwareAccelAvailable() bool {
 type gokrazyPlatform struct{}
 
 func (gokrazyPlatform) planSteps(e *Env, n *Node) {
-	e.Step("Build gokrazy image")
+	e.Step(fmt.Sprintf("Build %s image", n.os.Name))
 	e.Step("Launch QEMU: " + n.name)
 }
 
 func (gokrazyPlatform) boot(ctx context.Context, e *Env, n *Node) error {
-	e.gokrazyOnce.Do(func() {
-		step := e.Step("Build gokrazy image")
-		step.Begin()
-		if err := e.ensureGokrazy(ctx); err != nil {
-			step.End(err)
-			e.t.Fatalf("ensureGokrazy: %v", err)
-		}
-		step.End(nil)
-	})
+	base, err := e.ensureGokrazy(ctx, n.os)
+	if err != nil {
+		return fmt.Errorf("ensureGokrazy(%s): %w", n.os.Name, err)
+	}
 
 	e.ensureQEMUSocket()
 
 	vmStep := e.Step("Launch QEMU: " + n.name)
 	vmStep.Begin()
-	if err := e.startGokrazyQEMU(n); err != nil {
+	if err := e.startGokrazyQEMU(n, base); err != nil {
 		vmStep.End(err)
 		return err
 	}
@@ -115,11 +110,12 @@ func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
 	return nil
 }
 
-// startGokrazyQEMU launches a QEMU process for a gokrazy node.
+// startGokrazyQEMU launches a QEMU process for a gokrazy node whose disk is
+// an overlay on the base qcow2 image at basePath.
 // This follows the same pattern as tstest/integration/nat/nat_test.go.
-func (e *Env) startGokrazyQEMU(n *Node) error {
+func (e *Env) startGokrazyQEMU(n *Node, basePath string) error {
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))
-	if err := createOverlay(e.gokrazyBase, disk); err != nil {
+	if err := createOverlay(basePath, disk); err != nil {
 		return err
 	}
 
