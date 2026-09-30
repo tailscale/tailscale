@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/events"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
+	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogfunc"
 	"tailscale.com/util/clientmetric"
@@ -126,48 +127,19 @@ type Wrapper struct {
 	// peerConfig stores the current NAT configuration.
 	peerConfig atomic.Pointer[peerConfigTable]
 
-	// queues are the Wrapper's read queues, see [tun.QueuesOf].
-	queues []tun.Queue
+	// readQueues wrap the queues of the underlying device.
+	readQueues []*wrapperQueue
+	// injectionQueue is the Wrapper's read queue for injected packets.
+	injectionQueue *injectionQueue
 	// writeTo is tdev's queue-aware write.
 	writeTo func(flow int, bufs [][]byte, offset int) (int, error)
 
-	// startPollingOnce is used to start a [Wrapper.pollVector] goroutine at the
-	// first read of queue 0.
-	startPollingOnce sync.Once
-	// bufferConsumedMu protects bufferConsumed from concurrent sends, closes,
-	// and send-after-close (by way of bufferConsumedClosed).
-	bufferConsumedMu sync.Mutex
-	// bufferConsumedClosed is true when bufferConsumed has been closed. This is
-	// read by bufferConsumed writers to prevent send-after-close.
-	bufferConsumedClosed bool
-	// bufferConsumed synchronizes access to packet bufs and descriptors shared
-	// by queue 0's read and [Wrapper.pollVector].
-	//
-	// Close closes bufferConsumed and sets bufferConsumedClosed to true.
-	bufferConsumed chan struct{}
-
-	// closed signals poll (by closing) when the device is closed.
+	// closed signals the queues (by closing) when the device is closed.
 	closed chan struct{}
-	// outboundMu protects outbound and vectorOutbound from concurrent sends,
-	// closes, and send-after-close (by way of outboundClosed).
-	outboundMu sync.Mutex
-	// outboundClosed is true when outbound or vectorOutbound have been closed.
-	// This is read by outbound and vectorOutbound writers to prevent
-	// send-after-close.
-	outboundClosed bool
-	// vectorOutbound is the queue by which packets leave the TUN device.
-	//
-	// The directions are relative to the network, not the device:
-	// inbound packets arrive via UDP and are written into the TUN device;
-	// outbound packets are read from the TUN device and sent out via UDP.
-	// This queue is needed because although inbound writes are synchronous,
-	// the other direction must wait on a WireGuard goroutine to poll it.
-	//
-	// Empty reads are skipped by WireGuard, so it is always legal
-	// to discard an empty packet instead of sending it through vectorOutbound.
-	//
-	// Close closes vectorOutbound and sets outboundClosed to true.
-	vectorOutbound chan tunVectorReadResult
+
+	// forTest holds the test-only helpers of [Wrapper.ForTest], which read
+	// every queue and so must exist at most once.
+	forTest lazy.SyncValue[*forTest]
 
 	// eventsUpDown yields up and down tun.Events that arrive on a Wrapper's events channel.
 	eventsUpDown chan tun.Event
@@ -272,39 +244,27 @@ type tunInjectedRead struct {
 	data   []byte
 }
 
-// tunVectorReadResult is the result of a [tun.Device.Read], or an injected
-// packet pretending to be a [tun.Device.Read].
-type tunVectorReadResult struct {
-	// isInjected indicates if tunVectorReadResult contains a "real" [tun.Device.Read]
-	// result, or an injected packet. When true, injected will be set with meaningful
-	// data, otherwise real will be set with meaningful data.
-	isInjected bool
-	// Result consumer ([Wrapper.Read]) must call a non-nil doneHandlingFn when
-	// they are done with the result. The consumer must not access [tunVectorReadResult]
-	// fields once this func has been called, as it provides synchronization
-	// around shared memory.
-	doneHandlingFn func()
-
-	real struct {
-		err     error
-		slab    []byte
-		packets []tun.ReadPacket
-	}
-	injected tunInjectedRead
-}
-
 // wrapperQueue is one read queue of a [Wrapper], wrapping a single queue of
 // the underlying [tun.Device]. Distinct wrapperQueues may be read concurrently.
 type wrapperQueue struct {
 	w *Wrapper
 	q tun.Queue
-
-	// marks queue for injection, see [Wrapper.readMultiplexed]
-	isInjectionQueue bool
 }
 
 // File implements [tun.Queue].
 func (q *wrapperQueue) File() *os.File { return q.q.File() }
+
+// injectionQueue is a [Wrapper]'s read queue for injected packets.
+type injectionQueue struct {
+	w *Wrapper
+
+	// ch carries injected packets to the reader.
+	// ch is never closed, senders and the reader select on [Wrapper.closed].
+	ch chan tunInjectedRead
+}
+
+// File implements [tun.Queue]. An injectionQueue has no file descriptor.
+func (q *injectionQueue) File() *os.File { return nil }
 
 // Start unblocks any queue reads that have already started
 // and makes the Wrapper functional.
@@ -327,31 +287,29 @@ func Wrap(logf logger.Logf, tdev tun.Device, m *usermetric.Registry, bus *eventb
 func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry, bus *eventbus.Bus) *Wrapper {
 	logf = logger.WithPrefix(logf, "tstun: ")
 	w := &Wrapper{
-		logf:        logf,
-		limitedLogf: logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
-		isTAP:       isTAP,
-		tdev:        tdev,
-		writeTo:     tun.WriteToOf(tdev),
-		// bufferConsumed is conceptually a condition variable:
-		// a goroutine should not block when setting it, even with no listeners.
-		bufferConsumed: make(chan struct{}, 1),
-		closed:         make(chan struct{}),
-		// vectorOutbound can be unbuffered; the buffer is an optimization.
-		vectorOutbound: make(chan tunVectorReadResult, 1),
-		eventsUpDown:   make(chan tun.Event),
-		eventsOther:    make(chan tun.Event),
+		logf:         logf,
+		limitedLogf:  logger.RateLimitedFn(logf, 1*time.Minute, 2, 10),
+		isTAP:        isTAP,
+		tdev:         tdev,
+		writeTo:      tun.WriteToOf(tdev),
+		closed:       make(chan struct{}),
+		eventsUpDown: make(chan tun.Event),
+		eventsOther:  make(chan tun.Event),
 		// TODO(dmytro): (highly rate-limited) hexdumps should happen on unknown packets.
 		filterFlags: filter.LogAccepts | filter.LogDrops,
 		startCh:     make(chan struct{}),
 		metrics:     registerMetrics(m),
 	}
-	for i, q := range tun.QueuesOf(tdev) {
-		w.queues = append(w.queues, &wrapperQueue{
-			w:                w,
-			isInjectionQueue: i == 0, // injected packets are multiplexed onto queue 0
-			q:                q,
-		})
+	for _, q := range tun.QueuesOf(tdev) {
+		w.readQueues = append(w.readQueues, &wrapperQueue{w: w, q: q})
 	}
+	// Wireguard-go calls back into [Wrapper.filterPacketInboundFromWireGuard]
+	// during write. That may inject a TSMP reject via [Wrapper.InjectOutbound].
+	// With depth 0, inbound delivery (shared among the ReceiveFunc peers)
+	// blocks until the outbound routine picks the reject up.
+	// Depth 1 raises the threshold from one reject to two, and replicates the
+	// past vectorOutbound behaviour.
+	w.injectionQueue = &injectionQueue{w: w, ch: make(chan tunInjectedRead, 1)}
 
 	if buildfeatures.HasTUNDevStats {
 		if f, ok := HookPollTUNDevStats.GetOk(); ok {
@@ -367,8 +325,6 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool, m *usermetric.Registry,
 	w.discoKeyAdvertisementPub = eventbus.Publish[events.DiscoKeyAdvertisement](w.eventClient)
 
 	go w.pumpEvents()
-	// The buffer starts out consumed.
-	w.bufferConsumed <- struct{}{}
 	w.noteActivity()
 
 	return w
@@ -411,21 +367,14 @@ func (t *Wrapper) isSelfDisco(p *packet.Parsed) bool {
 	return selfDiscoPub == discoSrc
 }
 
+// Close closes the Wrapper and the underlying [tun.Device].
+//
+// It requires that tdev.Close return any read blocked in one of tdev's
+// queues: wireguard-go's device.Close waits for the goroutines parked there.
 func (t *Wrapper) Close() error {
 	var err error
 	t.closeOnce.Do(func() {
-		if t.started.CompareAndSwap(false, true) {
-			close(t.startCh)
-		}
 		close(t.closed)
-		t.bufferConsumedMu.Lock()
-		t.bufferConsumedClosed = true
-		close(t.bufferConsumed)
-		t.bufferConsumedMu.Unlock()
-		t.outboundMu.Lock()
-		t.outboundClosed = true
-		close(t.vectorOutbound)
-		t.outboundMu.Unlock()
 		err = t.tdev.Close()
 		t.eventClient.Close()
 		if t.tunDevStatsCloser != nil {
@@ -506,90 +455,33 @@ func (t *Wrapper) Name() (string, error) {
 var (
 	_ tun.MultiQueueDevice = (*Wrapper)(nil)
 	_ tun.Queue            = (*wrapperQueue)(nil)
+	_ tun.Queue            = (*injectionQueue)(nil)
 )
 
 // Queues implements [tun.MultiQueueDevice] with one queue per queue of the
-// underlying device. Injected packets are multiplexed onto queue 0.
+// underlying device, followed by the queue carrying injected packets.
 func (t *Wrapper) Queues() []tun.Queue {
-	return slices.Clone(t.queues)
-}
-
-// pollVector polls [Wrapper.tdev.Read], writing the oldest unconsumed packet
-// slab and packet descriptors into the [Wrapper.vectorOutbound] channel.
-// slabLen and packetsLen should originate from the first read of queue 0,
-// and are used for sizing the equivalent arguments pollVector passes to
-// [Wrapper.tdev.Read].
-//
-// [Wrapper.tdev.Read] can block, so we poll tdev in a goroutine independent of
-// wireguard-go's reads of queue 0, in order to support native tdev reads
-// alongside packets we inject.
-//
-// pollVector returns when [t.bufferConsumed] is closed, or when [Wrapper.isClosed]
-// returns true.
-func (t *Wrapper) pollVector(slabLen, packetsLen int) {
-	slab := make([]byte, slabLen)
-	packets := make([]tun.ReadPacket, packetsLen)
-	for range t.bufferConsumed {
-		var n int
-		var err error
-		for n == 0 && err == nil {
-			if t.isClosed() {
-				return
-			}
-			n, err = t.tdev.Read(slab, packets)
-			if t.isTAP && TAPDebug {
-				s := fmt.Sprintf("% x", slab)
-				for strings.HasSuffix(s, " 00") {
-					s = strings.TrimSuffix(s, " 00")
-				}
-				t.logf("TAP read %v, %v: %s", n, err, s)
-			}
-		}
-		t.sendVectorOutbound(tunVectorReadResult{
-			isInjected:     false,
-			doneHandlingFn: t.sendBufferConsumed,
-			real: struct {
-				err     error
-				slab    []byte
-				packets []tun.ReadPacket
-			}{err: err, slab: slab, packets: packets[:n]},
-		})
+	qs := make([]tun.Queue, 0, len(t.readQueues)+1)
+	for _, q := range t.readQueues {
+		qs = append(qs, q)
 	}
+	return append(qs, t.injectionQueue)
 }
 
-// sendBufferConsumed does t.bufferConsumed <- struct{}{}.
-func (t *Wrapper) sendBufferConsumed() {
-	t.bufferConsumedMu.Lock()
-	defer t.bufferConsumedMu.Unlock()
-	if t.bufferConsumedClosed {
-		return
-	}
-	t.bufferConsumed <- struct{}{}
+// InjectionQueue returns [tun.Queue] carrying injected packets.
+func (t *Wrapper) InjectionQueue() tun.Queue {
+	return t.injectionQueue
 }
 
-// injectOutbound does t.vectorOutbound <- r
+// injectOutbound hands r to the injection queue's reader, or releases it if
+// the Wrapper is closed.
 func (t *Wrapper) injectOutbound(r tunInjectedRead) {
-	t.outboundMu.Lock()
-	defer t.outboundMu.Unlock()
-	if t.outboundClosed {
-		return
-	}
 	select {
-	case t.vectorOutbound <- tunVectorReadResult{injected: r, isInjected: true}:
+	case t.injectionQueue.ch <- r:
 	case <-t.closed:
-	}
-}
-
-// sendVectorOutbound does t.vectorOutbound <- r.
-func (t *Wrapper) sendVectorOutbound(r tunVectorReadResult) {
-	t.outboundMu.Lock()
-	defer t.outboundMu.Unlock()
-	if t.outboundClosed {
-		return
-	}
-	select {
-	case t.vectorOutbound <- r:
-	case <-t.closed:
+		if r.packet != nil {
+			r.packet.DecRef()
+		}
 	}
 }
 
@@ -893,19 +785,12 @@ func (t *Wrapper) IdleDuration() time.Duration {
 	return mono.Since(t.lastActivityAtomic.LoadAtomic())
 }
 
-// ProbeLocks acquires and releases Wrapper's internal mutexes.
-func (t *Wrapper) ProbeLocks() {
-	t.bufferConsumedMu.Lock()
-	t.bufferConsumedMu.Unlock()
-
-	t.outboundMu.Lock()
-	t.outboundMu.Unlock()
-}
-
 func (t *Wrapper) awaitStart() {
 	for {
 		select {
 		case <-t.startCh:
+			return
+		case <-t.closed:
 			return
 		case <-time.After(1 * time.Second):
 			// Multiple times while remixing tailscaled I (Brad) have forgotten
@@ -917,54 +802,21 @@ func (t *Wrapper) awaitStart() {
 }
 
 // Read implements [tun.Device.Read].
+//
+// Deprecated: Injected packets arrive on their own queue. Read [Wrapper.Queues] instead.
 func (t *Wrapper) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
-	return t.queues[0].Read(slab, packets)
+	// TODO: panic?
+	return t.readQueues[0].Read(slab, packets)
 }
 
-// Read implements [tun.Reader]. Queue 0 carries injected packets as well as the
-// device's own, multiplexed by [Wrapper.pollVector], every other queue reads
-// the device directly into slab.
+// Read implements [tun.Reader]. It reads and filters in place: surviving
+// packets stay where the underlying queue put them in slab, and packets is
+// compacted down to their descriptors.
 func (q *wrapperQueue) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	t := q.w
 	if !t.started.Load() {
 		t.awaitStart()
 	}
-	if q.isInjectionQueue {
-		return t.readMultiplexed(slab, packets)
-	}
-	return q.readDevice(slab, packets)
-}
-
-// readMultiplexed multiplexes injected reads into the underlying TUN
-// queue's data stream.
-//
-// TODO(illotum): give injected packets a queue of their own and retire this.
-func (t *Wrapper) readMultiplexed(slab []byte, packets []tun.ReadPacket) (int, error) {
-	t.startPollingOnce.Do(func() {
-		go t.pollVector(len(slab), len(packets))
-	})
-	// packet from OS read and sent to WG
-	res, ok := <-t.vectorOutbound
-	if !ok {
-		return 0, io.EOF
-	}
-	defer func() {
-		if res.doneHandlingFn != nil {
-			res.doneHandlingFn()
-		}
-	}()
-	if res.isInjected {
-		return t.injectedRead(res.injected, slab, packets, tun.ReadPacketSpacing)
-	}
-	if res.real.err != nil && len(res.real.packets) == 0 {
-		return 0, res.real.err
-	}
-	return t.filterOutbound(res.real.slab, res.real.packets, slab, packets), res.real.err
-}
-
-// readDevice reads q's queue of the underlying device directly into slab.
-func (q *wrapperQueue) readDevice(slab []byte, packets []tun.ReadPacket) (int, error) {
-	t := q.w
 	var n int
 	var err error
 	// Empty reads are skipped by WireGuard, it is legal to discard an empty read.
@@ -984,14 +836,7 @@ func (q *wrapperQueue) readDevice(slab []byte, packets []tun.ReadPacket) (int, e
 	if err != nil && n == 0 {
 		return 0, err
 	}
-	return t.filterOutbound(slab, packets[:n], slab, packets), err
-}
-
-// filterOutbound runs the outbound filter pipeline over the packets described
-// by read, which live in src. Survivors are copied into slab and their
-// descriptors compacted into packets. It returns the number of survivors.
-func (t *Wrapper) filterOutbound(src []byte, read []tun.ReadPacket, slab []byte, packets []tun.ReadPacket) int {
-	metricPacketOut.Add(int64(len(read)))
+	metricPacketOut.Add(int64(n))
 
 	var numPackets int
 	p := parsedPacketPool.Get().(*packet.Parsed)
@@ -999,8 +844,8 @@ func (t *Wrapper) filterOutbound(src []byte, read []tun.ReadPacket, slab []byte,
 	captHook := t.captureHook.Load()
 	pc := t.peerConfig.Load()
 	var buffsGRO *gro.GRO
-	for _, meta := range read {
-		data := src[meta.Offset : meta.Offset+meta.Size]
+	for _, meta := range packets[:n] {
+		data := slab[meta.Offset : meta.Offset+meta.Size]
 		p.Decode(data)
 
 		if buildfeatures.HasCapture && captHook != nil {
@@ -1023,11 +868,6 @@ func (t *Wrapper) filterOutbound(src []byte, read []tun.ReadPacket, slab []byte,
 		// Make sure to do SNAT after filtering, so that any flow tracking in
 		// the filter sees the original source address. See #12133.
 		pc.snat(p)
-		// A no-op when src is slab: p.Buffer() is then the destination too.
-		n := copy(slab[meta.Offset:meta.Offset+meta.Size], p.Buffer())
-		if n != len(data) {
-			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)))
-		}
 		packets[numPackets] = meta
 		numPackets++
 	}
@@ -1036,7 +876,23 @@ func (t *Wrapper) filterOutbound(src []byte, read []tun.ReadPacket, slab []byte,
 	}
 
 	t.noteActivity()
-	return numPackets
+	return numPackets, err
+}
+
+// Read implements [tun.Reader]. It blocks until a packet is injected or the
+// Wrapper is closed.
+func (q *injectionQueue) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	t := q.w
+	if !t.started.Load() {
+		t.awaitStart()
+	}
+	var r tunInjectedRead
+	select {
+	case r = <-q.ch:
+	case <-t.closed:
+		return 0, io.EOF
+	}
+	return t.injectedRead(r, slab, packets, tun.ReadPacketSpacing)
 }
 
 const (
