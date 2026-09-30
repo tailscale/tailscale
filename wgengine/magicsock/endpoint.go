@@ -1109,7 +1109,7 @@ var (
 	errPingTooBig  = errors.New("ping size too big")
 )
 
-func (de *endpoint) send(buffs [][]byte, offset int) error {
+func (de *endpoint) send(flow int, buffs [][]byte, offset int) error {
 	de.mu.Lock()
 	if de.expired {
 		de.mu.Unlock()
@@ -1148,7 +1148,7 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 	}
 	var err error
 	if hasUDPTransport && udpAddr.ap.IsValid() {
-		_, err = de.c.sendUDPBatch(udpAddr, buffs, offset)
+		_, err = de.c.sendUDPBatch(flow, udpAddr, buffs, offset)
 
 		// If the error is known to indicate that the endpoint is no longer
 		// usable, clear the endpoint statistics so that the next send will
