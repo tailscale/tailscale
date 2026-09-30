@@ -4,8 +4,6 @@
 package main
 
 import (
-	"maps"
-	"slices"
 	"strings"
 	"testing"
 
@@ -304,13 +302,7 @@ func TestOmitUseProxy(t *testing.T) {
 }
 
 func minTags() string {
-	var tags []string
-	for _, f := range slices.Sorted(maps.Keys(featuretags.Features)) {
-		if f.IsOmittable() {
-			tags = append(tags, f.OmitTag())
-		}
-	}
-	return strings.Join(tags, ",")
+	return strings.Join(featuretags.MinTags(), ",")
 }
 
 func TestMinTailscaledNoCLI(t *testing.T) {

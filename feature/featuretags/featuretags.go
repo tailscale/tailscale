@@ -4,7 +4,11 @@
 // Package featuretags is a registry of all the ts_omit-able build tags.
 package featuretags
 
-import "tailscale.com/util/set"
+import (
+	"slices"
+
+	"tailscale.com/util/set"
+)
 
 // CLI is a special feature in the [Features] map that works opposite
 // from the others: it is opt-in, rather than opt-out, having a different
@@ -60,6 +64,28 @@ func RequiredBy(ft FeatureTag) set.Set[FeatureTag] {
 		}
 	}
 	return s
+}
+
+// MinTags returns the sorted Go build tags for a minimal build that
+// includes only the features in keep and the features they require.
+// Every other omittable feature in [Features] gets its ts_omit_ tag, and
+// ts_include_cli is added if [CLI] is kept.
+func MinTags(keep ...FeatureTag) []string {
+	kept := set.Set[FeatureTag]{}
+	for _, ft := range keep {
+		kept.AddSet(Requires(ft))
+	}
+	var tags []string
+	if kept.Contains(CLI) {
+		tags = append(tags, "ts_include_cli")
+	}
+	for ft := range Features {
+		if ft != "" && ft.IsOmittable() && !kept.Contains(ft) {
+			tags = append(tags, ft.OmitTag())
+		}
+	}
+	slices.Sort(tags)
+	return tags
 }
 
 // featureDependsOn reports whether feature a (directly or indirectly) depends on b.

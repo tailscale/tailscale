@@ -87,6 +87,36 @@ func TestRequiredBy(t *testing.T) {
 	}
 }
 
+func TestMinTags(t *testing.T) {
+	has := func(tags []string, tag string) bool { return slices.Contains(tags, tag) }
+
+	all := MinTags()
+	if !slices.IsSorted(all) {
+		t.Errorf("MinTags() not sorted: %v", all)
+	}
+	if has(all, "ts_include_cli") {
+		t.Errorf("MinTags() includes ts_include_cli")
+	}
+	for ft := range Features {
+		if ft.IsOmittable() && !has(all, ft.OmitTag()) {
+			t.Errorf("MinTags() missing %q", ft.OmitTag())
+		}
+	}
+
+	// Keeping webclient must also keep what it requires.
+	got := MinTags("webclient", CLI)
+	for _, tag := range []string{"ts_omit_webclient", "ts_omit_serve", "ts_omit_netstack"} {
+		if has(got, tag) {
+			t.Errorf("MinTags(webclient, cli) includes %q", tag)
+		}
+	}
+	for _, tag := range []string{"ts_include_cli", "ts_omit_drive"} {
+		if !has(got, tag) {
+			t.Errorf("MinTags(webclient, cli) missing %q", tag)
+		}
+	}
+}
+
 // Verify that all "ts_omit_foo" build tags are declared in featuretags.go
 func TestAllOmitBuildTagsDeclared(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
