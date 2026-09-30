@@ -29,8 +29,8 @@ const (
 	fuzzResizeStreamID uint32 = 3
 )
 
-// fuzzCtrlFrame returns a SPDY control frame carrying payload. version is the 15 bit protocol
-// version, so seeds can set bits that controlFrameVersion drops.
+// fuzzCtrlFrame returns a SPDY control frame carrying payload. version is the
+// 15 bit protocol version.
 func fuzzCtrlFrame(version uint16, typ ControlFrameType, payload []byte) []byte {
 	f := make([]byte, 8+len(payload))
 	v := version & 0x7fff // bit 15 is the control bit
@@ -147,22 +147,21 @@ func FuzzSpdyFrameParse(f *testing.F) {
 	// Flags byte all set, sitting between version/type and the length field
 	f.Add([]byte{0x80, 0x3, 0x0, 0x1, 0xff, 0x0, 0x0, 0x0})
 	f.Add([]byte{0x0, 0x0, 0x0, 0x1, 0xff, 0x0, 0x0, 0x0}) // data frame variant
-	// Version bits above bit 7: controlFrameVersion masks with 0x7f so this reads
-	// as version 35 instead of the 15 bit value 291
+	// Version is the 15 bits above the control bit: this reads as version 291
 	f.Add([]byte{0x81, 0x23, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0})
-	// A version whose set bits are all above bit 7: the mask hides them so the
-	// frame is rejected as non-SPDY
-	f.Add([]byte{0x81, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0})
+	f.Add([]byte{0x81, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0}) // version 257, only bits above 7 set
 	// Control frames rejected for a zero version or type
 	f.Add([]byte{0x80, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0})
 	f.Add([]byte{0x80, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0})
 	// Data frame rejected for a zero stream ID
 	f.Add([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0})
-	// Stream IDs above 7 bits: dataFrameStreamID masks with 0x7f so ID 300 and
-	// ID 44 parse to the same value, putting two streams on one recording
+	// Stream IDs use all 31 bits above the control bit: ID 300 and ID 44 stay
+	// distinct, putting their output on separate recordings
 	f.Add(fuzzDataFrame(300, []byte("stream 300")))
 	f.Add(fuzzDataFrame(44, []byte("stream 44")))
-	f.Add(fuzzDataFrame(0x7fffffff, []byte("max stream id, masked to 127")))
+	f.Add(fuzzDataFrame(0x7fffffff, []byte("max stream id")))
+	// An ID with bit 31 set is a control frame with a zero version, rejected
+	f.Add([]byte{0x80, 0x0, 0x0, 0x5, 0x0, 0x0, 0x1, 0x0})
 	// Truncated headers, one per boundary Parse checks
 	for _, n := range []int{0, 1, 4, 7} {
 		f.Add(slices.Clone(synStream[:n]))
@@ -205,9 +204,9 @@ func FuzzSpdyFrameParse(f *testing.F) {
 			t.Fatalf("data frame parsed out version %d and type %d", sf.Version, sf.Type)
 		} else if sf.Ctrl && sf.StreamID != 0 {
 			t.Fatalf("control frame parsed out stream id %d", sf.StreamID)
-		} else if !sf.Ctrl && (sf.StreamID == 0 || sf.StreamID&^0x7f != 0) {
-			// A data frame only parses with a nonzero ID, and dataFrameStreamID keeps 7 bits
-			t.Fatalf("data frame stream id %d, want nonzero within its mask", sf.StreamID)
+		} else if !sf.Ctrl && sf.StreamID == 0 {
+			// A data frame only parses with a nonzero stream ID
+			t.Fatalf("data frame parsed out zero stream id")
 		}
 	})
 }
@@ -425,15 +424,19 @@ func FuzzConnRead(f *testing.F) {
 	// Stream types that are not recorded must still be parsed
 	f.Add(fuzzCtrlFrame(3, SYN_STREAM, fuzzSynStream(7, [2]string{"streamtype", "stdin"})), true, uint8(1))
 	f.Add(fuzzCtrlFrame(3, SYN_STREAM, fuzzSynStream(8, [2]string{"streamtype", "\x00"})), true, uint8(1))
-	// storeStreamID keeps all 32 bits of the ID from a SYN_STREAM payload while
-	// dataFrameStreamID keeps 7. Output on a stdout stream opened above ID 127 is
-	// therefore never matched: the stored ID is 300 while the frame masks to 44.
+	// A stdout stream opened above ID 127: SYN_STREAM and data frames both keep
+	// 31 bits, so its output matches the stored ID and is recorded
 	f.Add(slices.Concat(
 		fuzzCtrlFrame(3, SYN_STREAM, fuzzSynStream(300, [2]string{"streamtype", "stdout"})),
 		fuzzDataFrame(300, []byte("output on the stored ID"))), true, uint8(1))
-	// A frame on stream 259: masked to 3, the resize stream, so its payload gets
-	// parsed as a resize message even though it belongs to another stream
+	// A frame on stream 259 does not match the resize stream 3: IDs must be
+	// equal on all 31 bits, so its payload is not parsed as a resize message
 	f.Add(fuzzDataFrame(259, []byte(`{"width":1,"height":1}`)), true, uint8(1))
+	// A SYN_STREAM whose ID field has the X flag bit set: storeStreamID drops
+	// the flag and keeps the 31 bit ID, so data frames on stream 3 still match
+	f.Add(slices.Concat(
+		fuzzCtrlFrame(3, SYN_STREAM, fuzzSynStream(0x80000003, [2]string{"streamtype", "resize"})),
+		fuzzDataFrame(3, []byte(`{"width":1,"height":1}`))), true, uint8(1))
 	// A session opening: SYN_REPLY plus stream setup plus output and resize frames,
 	// sharing one decompression context across reads
 	f.Add(slices.Concat(
@@ -459,9 +462,9 @@ func FuzzConnRead(f *testing.F) {
 		[]byte{0, 0, 0, 1}, fuzzCompress(binary.BigEndian.AppendUint32(nil, 0x8000_0000)))), true, uint8(1))
 	// A SYN_STREAM whose compressed header block is cut off mid stream
 	f.Add(fuzzCtrlFrame(3, SYN_STREAM, append(make([]byte, 10), 0x78, 0x9c, 0x63)), true, uint8(2))
-	// Non-SPDY bytes on a hijacked connection: a TLS record header masks to a
-	// zero stream ID so Read reports it, while plain HTTP parses as a data frame
-	// header with a huge claimed length and is buffered as incomplete
+	// Non-SPDY bytes on a hijacked connection: a TLS record header parses as a
+	// data frame matching no stored stream, while plain HTTP parses as a data
+	// frame header with a huge claimed length and is buffered as incomplete
 	f.Add([]byte{0x16, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00}, true, uint8(1))
 	f.Add([]byte("HTTP/1.1 200 OK\r\n\r\n"), true, uint8(1))
 
@@ -491,11 +494,10 @@ func FuzzConnWrite(f *testing.F) {
 	f.Add(errF, uint8(1))
 	f.Add(fuzzDataFrame(fuzzStdoutStreamID, nil), uint8(1))
 	f.Add(fuzzDataFrame(fuzzResizeStreamID, []byte(`{"width":80,"height":24}`)), uint8(1)) // not a recorded stream
-	// Data frames whose ID only matches a recorded stream after truncation.
-	// stdout is stored as ID 1 and dataFrameStreamID keeps 7 bits, so these
-	// land on the stdout recording together with the real stream 1 output.
-	f.Add(fuzzDataFrame(129, []byte("aliased onto stdout")), uint8(1))
-	f.Add(fuzzDataFrame(0x1000001, []byte("also aliased onto stdout")), uint8(1))
+	// Data frames whose IDs differ from stdout's ID 1 above bit 7: data frames
+	// keep 31 bits, so these are distinct streams and are not recorded
+	f.Add(fuzzDataFrame(129, []byte("distinct from stdout")), uint8(1))
+	f.Add(fuzzDataFrame(0x1000001, []byte("also distinct from stdout")), uint8(1))
 	// Control frames carry no output but must be forwarded whole
 	f.Add(fuzzCtrlFrame(3, SYN_STREAM, fuzzSynStream(fuzzStdoutStreamID, [2]string{"streamtype", "stdout"})), uint8(1))
 	f.Add(fuzzCtrlFrame(3, SYN_REPLY, fuzzSynReply(0, [2]string{"status", "200"})), uint8(1))

@@ -275,7 +275,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	return h, nil
 }
 
-// isSPDYFrame validates that the input bytes start with a valid SPDY frame
+// isSPDYFrameHeader validates that the input bytes start with a valid SPDY frame
 // header.
 func isSPDYFrameHeader(f []byte) bool {
 	if hasControlBitSet(f) {
@@ -286,11 +286,11 @@ func isSPDYFrameHeader(f []byte) bool {
 	return dataFrameStreamID(f) != uint32(0)
 }
 
-// spdyDataFrameStreamID returns stream ID for an SPDY data frame passed as the
+// dataFrameStreamID returns stream ID for an SPDY data frame passed as the
 // input data slice. StreaID is contained within bits [0-31) of a data frame
 // header.
 func dataFrameStreamID(frame []byte) uint32 {
-	return binary.BigEndian.Uint32(frame[0:4]) & 0x7f
+	return binary.BigEndian.Uint32(frame[0:4]) & 0x7fffffff
 }
 
 // controlFrameType returns the type of a SPDY control frame.
@@ -299,11 +299,11 @@ func controlFrameType(f []byte) ControlFrameType {
 	return ControlFrameType(binary.BigEndian.Uint16(f[2:4]))
 }
 
-// spdyControlFrameVersion returns SPDY version extracted from input bytes that
+// controlFrameVersion returns SPDY version extracted from input bytes that
 // must be a SPDY control frame.
 func controlFrameVersion(frame []byte) uint16 {
 	bs := binary.BigEndian.Uint16(frame[0:2]) // first 16 bits
-	return bs & 0x7f                          // discard control bit
+	return bs & 0x7fff                        // discard control bit
 }
 
 // hasControlBitSet returns true if the passsed bytes have SPDY control bit set.
