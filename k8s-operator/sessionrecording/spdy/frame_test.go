@@ -248,9 +248,16 @@ func Test_spdyFrame_Parse(t *testing.T) {
 			gotBytes: []byte{0x0, 0x0, 0x0, 0x5, 0x0, 0x0, 0x0, 0x2}, // header specifies payload length of 2
 		},
 		{
-			name:     "control_bit_set_not_spdy_frame",
-			gotBytes: []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}, // header specifies payload length of 2
-			wantErr:  true,
+			// Data frames keep 31 bits of stream ID: this parses with ID
+			// 0x01000000 rather than being rejected as not SPDY
+			name:     "data_frame_high_stream_id",
+			gotBytes: []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+			wantFrame: spdyFrame{
+				Payload:  []byte{},
+				StreamID: 0x01000000,
+				Raw:      []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+			},
+			wantOk: true,
 		},
 		{
 			name:     "control_bit_not_set_not_spdy_frame",
