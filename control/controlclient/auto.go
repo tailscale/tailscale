@@ -628,6 +628,8 @@ func (c *Auto) mapRoutine() {
 		c.mu.Lock()
 		c.inMapPoll = false
 		paused := c.paused
+		c.mu.Unlock()
+
 		rle, rateLimited := errors.AsType[*rateLimitError](err)
 
 		if paused {
@@ -635,9 +637,7 @@ func (c *Auto) mapRoutine() {
 		} else if !rateLimited {
 			mrs.bo.BackOff(ctx, err)
 		}
-		c.mu.Unlock()
 
-		// Now safe to call functions that might acquire the mutex
 		if paused {
 			c.logf("mapRoutine: paused")
 		} else {
