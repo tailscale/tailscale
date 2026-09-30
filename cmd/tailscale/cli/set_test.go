@@ -7,11 +7,55 @@ import (
 	"flag"
 	"net/netip"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 )
+
+func TestParseAcceptRouteFilter(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []netip.Prefix
+		err  string
+	}{
+		{name: "clear"},
+		{
+			name: "sort_and_deduplicate",
+			in:   "2001:db8::/32,192.0.2.0/24,192.0.2.0/24",
+			want: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")},
+		},
+		{
+			name: "family_wildcards",
+			in:   "0.0.0.0/0,::/0",
+			want: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
+		},
+		{name: "invalid", in: "not-a-prefix", err: "not a valid CIDR prefix"},
+		{name: "address_without_prefix", in: "192.0.2.1", err: "not a valid CIDR prefix"},
+		{name: "empty_element", in: "192.0.2.0/24,", err: "not a valid CIDR prefix"},
+		{name: "invalid_length", in: "192.0.2.0/33", err: "not a valid CIDR prefix"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseAcceptRouteFilter(tt.in)
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("parseAcceptRouteFilter(%q) error = %v, want %q", tt.in, err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("parseAcceptRouteFilter(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 	pfx := netip.MustParsePrefix
