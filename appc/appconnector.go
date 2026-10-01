@@ -365,14 +365,12 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		toRemove = routesWithout(e.controlRoutes, routes)
 	}
 
-nextRoute:
 	for _, r := range routes {
 		for _, addr := range e.domains {
 			for _, a := range addr {
 				if r.Contains(a) && netip.PrefixFrom(a, a.BitLen()) != r {
 					pfx := netip.PrefixFrom(a, a.BitLen())
 					toRemove = append(toRemove, pfx)
-					continue nextRoute
 				}
 			}
 		}
