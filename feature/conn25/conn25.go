@@ -35,10 +35,12 @@ import (
 	"tailscale.com/net/traffic"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -261,6 +263,20 @@ func (e *extension) installHooks(dph *datapathHandler) error {
 		return e.conn25.connector.packetFilterAllow(p)
 	})
 
+	// Route DNS queries for app domains to the connector that serves
+	// them, chosen at query time via the [appc.DNSAddrScheme] scheme.
+	e.host.Hooks().ExtraDNSRoutes.Set(func() map[string][]*dnstype.Resolver {
+		if !e.conn25.isConfigured() {
+			return nil
+		}
+		if e.conn25.prefsAdvertiseConnector.Load() {
+			// A node that is itself a connector resolves app domains
+			// directly rather than via another connector.
+			return nil
+		}
+		return e.conn25.appDNSRoutes.Load()
+	})
+
 	// Give the client the Magic IP range to install on the OS.
 	e.host.Hooks().ExtraRouterConfigRoutes.Set(func() views.Slice[netip.Prefix] {
 		if !e.conn25.isConfigured() {
@@ -445,6 +461,9 @@ func (e *extension) onSelfChange(selfNode tailcfg.NodeView) {
 		e.conn25.logf("error generating config from self node view: %v", err)
 		return
 	}
+	// Store the routes only once the config parsed, so a bad self node
+	// leaves the previous routes and config in place together.
+	e.conn25.appDNSRoutes.Store(appc.AppDNSRoutes(selfNode.HasCap, selfNode))
 	e.conn25.reconfig(cfg)
 }
 
@@ -458,6 +477,7 @@ func (e *extension) profileStateChange(loginProfile ipn.LoginProfileView, prefs 
 		// know once [extension.onSelfChange] is called with a new
 		// configuration, if any.
 		e.conn25.reconfig(&config{})
+		e.conn25.appDNSRoutes.Store(nil)
 
 		// If a client changes profiles and becomes a different node, all of its
 		// existing flows lose meaning, and we should delete them so that the
@@ -481,9 +501,16 @@ func (e *extension) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip
 type Conn25 struct {
 	config                  atomic.Pointer[config]
 	prefsAdvertiseConnector atomic.Bool
-	logf                    logger.Logf
-	client                  *client
-	connector               *connector
+
+	// appDNSRoutes holds the split DNS routes for the app domains in the
+	// self node's capabilities, as returned by [appc.AppDNSRoutes]. It is
+	// recomputed on each self node change and served to
+	// [ipnext.Hooks.ExtraDNSRoutes]. The map must not be mutated once stored.
+	appDNSRoutes syncs.AtomicValue[map[string][]*dnstype.Resolver]
+
+	logf      logger.Logf
+	client    *client
+	connector *connector
 }
 
 func (c *Conn25) getConfig() (*config, bool) {

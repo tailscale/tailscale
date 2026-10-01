@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
@@ -485,6 +486,24 @@ type Hooks struct {
 	//
 	// The hook is called with LocalBackend's mutex locked.
 	ExtraRouterConfigRoutes feature.Hook[func() views.Slice[netip.Prefix]]
+
+	// ExtraDNSRoutes returns split DNS routes, keyed by domain suffix, to
+	// add to the [tailscale.com/net/dns.Config] computed on each reconfig.
+	// They are added alongside the netmap's own DNS routes and go through
+	// the same handling, including the UseWithExitNode filtering that
+	// applies when an exit node proxies DNS.
+	//
+	// The extension should derive the routes from state it already tracks
+	// via other hooks, such as [Hooks.OnSelfChange] and
+	// [Hooks.ProfileStateChange], both of which fire before the reconfig
+	// that calls this hook.
+	//
+	// The returned map and slices should not be mutated by the extension
+	// after they are returned.
+	//
+	// The hook is called with LocalBackend's mutex locked. It must not
+	// call back into LocalBackend or block.
+	ExtraDNSRoutes feature.Hook[func() map[string][]*dnstype.Resolver]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet
