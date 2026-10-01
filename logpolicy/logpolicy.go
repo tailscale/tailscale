@@ -797,9 +797,18 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// logDNSCache is the DNS cache shared by all logtail dialers, so new
+// connections to the log server don't each cost a DNS lookup, even on
+// systems without a caching resolver.
+var logDNSCache = &dnscache.Resolver{
+	Forward:     dnscache.Get().Forward, // use default cache's forwarder
+	UseLastGood: true,
+}
+
 // MakeDialFunc creates a net.Dialer.DialContext function specialized for use
 // by logtail.
 // It does the following:
+//   - Resolves hostnames using a process-wide DNS cache.
 //   - If DNS lookup fails, consults the bootstrap DNS list of Tailscale hostnames.
 //   - If TLS connection fails, try again using LetsEncrypt's built-in root certificate,
 //     for the benefit of older OS platforms which might not include it.
@@ -810,18 +819,24 @@ func MakeDialFunc(netMon *netmon.Monitor, logf logger.Logf) netx.DialFunc {
 	if netMon == nil {
 		netMon = netmon.NewStatic()
 	}
-	return func(ctx context.Context, netw, addr string) (net.Conn, error) {
-		return dialContext(ctx, netw, addr, netMon, logf)
-	}
-}
-
-func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor, logf logger.Logf) (net.Conn, error) {
 	nd := netns.FromDialer(logf, netMon, &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
+	return makeDialFunc(nd.DialContext, netMon, logf)
+}
+
+// makeDialFunc is like [MakeDialFunc] but dials IP addresses using dial.
+func makeDialFunc(dial netx.DialFunc, netMon *netmon.Monitor, logf logger.Logf) netx.DialFunc {
+	cachedDial := dnscache.Dialer(dial, logDNSCache)
+	return func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		return dialContext(ctx, netw, addr, dial, cachedDial, netMon, logf)
+	}
+}
+
+func dialContext(ctx context.Context, netw, addr string, dial, cachedDial netx.DialFunc, netMon *netmon.Monitor, logf logger.Logf) (net.Conn, error) {
 	t0 := time.Now()
-	c, err := nd.DialContext(ctx, netw, addr)
+	c, err := cachedDial(ctx, netw, addr)
 	d := time.Since(t0).Round(time.Millisecond)
 	if err == nil {
 		dialLog.Printf("dialed %q in %v", addr, d)
@@ -846,14 +861,24 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 		}
 	}
 
-	// If we failed to dial, try again with bootstrap DNS.
+	// Either regular DNS (via logDNSCache) failed or the IPs it gave us
+	// didn't work, so try again with IPs from bootstrap DNS.
 	logf("logtail: dial %q failed: %v (in %v), trying bootstrap...", addr, err, d)
-	dnsCache := &dnscache.Resolver{
-		Forward:          dnscache.Get().Forward, // use default cache's forwarder
-		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.MakeLookupFunc(logf, netMon),
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
 	}
-	dialer := dnscache.Dialer(nd.DialContext, dnsCache)
+	ips, err := dnsfallback.MakeLookupFunc(logf, netMon)(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no bootstrap DNS results for %q", host)
+	}
+	dialer := dnscache.Dialer(dial, &dnscache.Resolver{
+		SingleHost:             host,
+		SingleHostStaticResult: ips,
+	})
 	c, err = dialer(ctx, netw, addr)
 	if err == nil {
 		logf("logtail: bootstrap dial succeeded")

@@ -573,3 +573,66 @@ func TestTLSDialerHostVerifiedHook(t *testing.T) {
 		}
 	})
 }
+
+func TestDialerRefreshesStaleCache(t *testing.T) {
+	ipA := netip.MustParseAddr("192.0.2.1")
+	ipB := netip.MustParseAddr("192.0.2.2")
+
+	var (
+		dnsAnswer = ipA
+		lookups   int
+		reachable = map[netip.Addr]bool{ipA: true}
+		dialed    []netip.Addr
+	)
+	r := &Resolver{
+		UseLastGood: true,
+		LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			lookups++
+			return []netip.Addr{dnsAnswer}, nil
+		},
+	}
+	fwd := func(ctx context.Context, network, address string) (net.Conn, error) {
+		ip := netip.MustParseAddrPort(address).Addr()
+		dialed = append(dialed, ip)
+		if !reachable[ip] {
+			return nil, fmt.Errorf("can't reach %v", ip)
+		}
+		c1, c2 := net.Pipe()
+		c2.Close()
+		return c1, nil
+	}
+	dial := Dialer(fwd, r)
+
+	check := func(name string, wantErr bool, wantLookups int, wantDialed ...netip.Addr) {
+		t.Helper()
+		dialed = nil
+		c, err := dial(t.Context(), "tcp", "example.com:443")
+		if c != nil {
+			c.Close()
+		}
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v; want error = %v", name, err, wantErr)
+		}
+		if lookups != wantLookups {
+			t.Errorf("%s: lookups = %d; want %d", name, lookups, wantLookups)
+		}
+		if !slices.Equal(dialed, wantDialed) {
+			t.Errorf("%s: dialed %v; want %v", name, dialed, wantDialed)
+		}
+	}
+
+	check("first", false, 1, ipA)
+	check("cached", false, 1, ipA)
+
+	// The host moves. The cached IP fails, so the dialer should look the
+	// host up again and dial the new IP.
+	dnsAnswer = ipB
+	reachable = map[netip.Addr]bool{ipB: true}
+	check("moved", false, 2, ipA, ipB)
+	check("cached-after-move", false, 2, ipB)
+
+	// The host is unreachable but its DNS hasn't changed. The dialer
+	// should look it up once more but not redial the same IP.
+	reachable = nil
+	check("unreachable", true, 3, ipB)
+}
