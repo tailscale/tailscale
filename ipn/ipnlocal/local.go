@@ -6138,7 +6138,11 @@ func (b *LocalBackend) authReconfigLocked() {
 	hasPAC := b.interfaceState.HasPAC()
 	disableSubnetsIfPAC := cn.SelfHasCap(nodecap.DisableSubnetsIfPAC)
 	dohURL, dohURLOK := cn.exitNodeCanProxyDNS(prefs.ExitNodeID())
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, cmp.Or(b.goos, runtime.GOOS))
+	var extraDNSRoutes map[string][]*dnstype.Resolver
+	if f, ok := b.extHost.hooks.ExtraDNSRoutes.GetOk(); ok {
+		extraDNSRoutes = f()
+	}
+	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, cmp.Or(b.goos, runtime.GOOS), extraDNSRoutes)
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm.SelfNode, prefs)
 
