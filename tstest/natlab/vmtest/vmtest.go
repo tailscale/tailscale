@@ -756,9 +756,9 @@ func (e *Env) Start() {
 				// it answers 502 until tailscaled.sock exists.
 				var st *ipnstate.Status
 				if err := tstest.WaitFor(tailscaleUpTimeout, func() error {
-					var e error
-					st, e = n.agent.Status(ctx)
-					return e
+					var statusErr error
+					st, statusErr = n.agent.Status(ctx)
+					return statusErr
 				}); err != nil {
 					return fmt.Errorf("[%s] agent status: %w", n.name, err)
 				}
@@ -847,8 +847,9 @@ func (e *Env) Start() {
 	}
 }
 
-// tailscaleUpTimeout bounds one node's "tailscale up" in [Env.Start]. It
-// is far above the roughly one second the command takes against the
+// tailscaleUpTimeout bounds one node's "tailscale up" in [Env.Start]
+// and the initial agent.Status.
+// It is far above the roughly one second the command takes against the
 // in-process control server, and far below the test's overall context.
 const tailscaleUpTimeout = 90 * time.Second
 
