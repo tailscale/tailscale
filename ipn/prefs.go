@@ -1161,6 +1161,15 @@ type ExitNodeExpression string
 // offering the best performance will be preferred.
 const AnyExitNode ExitNodeExpression = "any"
 
+// UnresolvedExitNodeID is a special [tailcfg.StableNodeID] value
+// used as an exit node ID to install a blackhole route, preventing
+// accidental non-exit-node usage until the [ExitNodeExpression]
+// is evaluated and an actual exit node is selected.
+//
+// We use "auto:any" for compatibility with older, pre-[ExitNodeExpression]
+// clients that have been using "auto:any" for this purpose for a long time.
+const UnresolvedExitNodeID tailcfg.StableNodeID = "auto:any"
+
 // IsSet reports whether the expression is non-empty and can be used
 // to select an exit node.
 func (e ExitNodeExpression) IsSet() bool {
@@ -1169,7 +1178,7 @@ func (e ExitNodeExpression) IsSet() bool {
 
 const (
 	// AutoExitNodePrefix is the prefix used in [syspolicy.ExitNodeID] values and CLI
-	// to indicate that the string following the prefix is an [ipn.ExitNodeExpression].
+	// to indicate that the string following the prefix is an [ExitNodeExpression].
 	AutoExitNodePrefix = "auto:"
 )
 
