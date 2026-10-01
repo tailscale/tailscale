@@ -42,6 +42,11 @@ const (
 
 var configureWSL = envknob.RegisterBool("TS_DEBUG_CONFIGURE_WSL")
 
+// disableHostsFileUpdatesLocal allows local diagnosis of expensive Windows
+// DNS Client hosts-file reloads without changing the tailnet policy.
+// On Windows, set it in %ProgramData%\Tailscale\tailscaled-env.txt and restart.
+var disableHostsFileUpdatesLocal = envknob.RegisterBool("TS_DEBUG_DISABLE_HOSTS_FILE_UPDATES")
+
 type windowsManager struct {
 	logf       logger.Logf
 	guid       string
@@ -396,7 +401,7 @@ func (m *windowsManager) disableLocalDNSOverrideViaNRPT() bool {
 }
 
 func (m *windowsManager) disableHostsFileUpdates() bool {
-	return m.knobs != nil && m.knobs.DisableHostsFileUpdates.Load()
+	return disableHostsFileUpdatesLocal() || (m.knobs != nil && m.knobs.DisableHostsFileUpdates.Load())
 }
 
 func (m *windowsManager) SetDNS(cfg OSConfig) error {
