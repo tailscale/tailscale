@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/views"
 )
 
@@ -157,6 +159,35 @@ func TestPeerStatusIsRouter(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.status.IsRouter(); got != tc.want {
+				t.Errorf("got %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsConn25Connector(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status *ipnstate.PeerStatus
+		want   bool
+	}{
+		{
+			name:   "plain",
+			status: &ipnstate.PeerStatus{},
+			want:   false,
+		},
+		{
+			name: "connector",
+			status: &ipnstate.PeerStatus{
+				CapMap: tailcfg.NodeCapMap{
+					nodecap.Conn25Connector: nil,
+				},
+			},
+			want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.status.IsConn25Connector(); got != tc.want {
 				t.Errorf("got %t, want %t", got, tc.want)
 			}
 		})
