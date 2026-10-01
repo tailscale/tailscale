@@ -626,6 +626,29 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 	}
 }
 
+// FetchIDToken requests an OIDC ID token scoped to the given audience for the
+// node running this tsnet server. The returned token is a JWT minted by the
+// control plane that can be presented to any resource provider offering OIDC
+// federation.
+//
+// This feature must be enabled by Tailscale staff for your tailnet; until it
+// is, control returns an error wrapping an HTTP 503 (Service Unavailable).
+//
+// Note: this is not related to the [Server.IDToken] field, which is an input
+// token used for workload identity federation when the node authenticates to
+// the control server.
+func (s *Server) FetchIDToken(ctx context.Context, aud string) (*tailcfg.TokenResponse, error) {
+	lc, err := s.LocalClient() // calls Start
+	if err != nil {
+		return nil, fmt.Errorf("tsnet.FetchIDToken: %w", err)
+	}
+	tr, err := lc.IDToken(ctx, aud)
+	if err != nil {
+		return nil, fmt.Errorf("tsnet.FetchIDToken: %w", err)
+	}
+	return tr, nil
+}
+
 // Close stops the server.
 //
 // It must not be called before or concurrently with Start.

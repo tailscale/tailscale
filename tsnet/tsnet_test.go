@@ -833,6 +833,44 @@ func TestTailscaleIPs(t *testing.T) {
 	}
 }
 
+func TestFetchIDToken(t *testing.T) {
+	controlURL, control := startControl(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var gotReq *tailcfg.TokenRequest
+	control.OnIDToken = func(req *tailcfg.TokenRequest) (*tailcfg.TokenResponse, error) {
+		gotReq = req
+		return &tailcfg.TokenResponse{IDToken: "test-token-for-" + req.Audience}, nil
+	}
+
+	s, _, nodeKey := startServer(t, ctx, controlURL, "s1")
+
+	const aud = "my-audience"
+	resp, err := s.FetchIDToken(ctx, aud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := resp.IDToken, "test-token-for-"+aud; got != want {
+		t.Errorf("IDToken = %q, want %q", got, want)
+	}
+	if gotReq == nil {
+		t.Fatal("control did not receive an id-token request")
+	}
+	if gotReq.Audience != aud {
+		t.Errorf("request audience = %q, want %q", gotReq.Audience, aud)
+	}
+	if gotReq.NodeKey != nodeKey {
+		t.Errorf("request node key = %v, want %v", gotReq.NodeKey, nodeKey)
+	}
+
+	// An empty audience should be rejected before reaching control.
+	if _, err := s.FetchIDToken(ctx, ""); err == nil {
+		t.Error("FetchIDToken with empty audience succeeded, want error")
+	}
+}
+
 // TestListenerCleanup is a regression test to verify that s.Close doesn't
 // deadlock if a listener is still open.
 func TestListenerCleanup(t *testing.T) {

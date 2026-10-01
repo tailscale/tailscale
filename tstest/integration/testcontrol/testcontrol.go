@@ -65,6 +65,11 @@ type Server struct {
 	C2NResponses       syncs.Map[string, func(*http.Response)] // token => onResponse func
 	OnSetDNS           func(*tailcfg.SetDNSRequest) error
 
+	// OnIDToken, if non-nil, is called to mint the ID token returned for an
+	// "id-token" request. If nil, a deterministic placeholder token encoding
+	// the audience is returned.
+	OnIDToken func(*tailcfg.TokenRequest) (*tailcfg.TokenResponse, error)
+
 	// PeerRelayGrants, if true, inserts relay capabilities into the wildcard
 	// grants rules.
 	PeerRelayGrants bool
@@ -558,6 +563,8 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		s.serveRegister(w, r, mkey)
 	case "/machine/set-dns":
 		s.serveSetDNS(w, r, mkey)
+	case "/machine/id-token":
+		s.serveIDToken(w, r, mkey)
 	case "/machine/update-health":
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusNoContent)
@@ -639,6 +646,50 @@ func (s *Server) serveSetDNS(w http.ResponseWriter, r *http.Request, mkey key.Ma
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tailcfg.SetDNSResponse{})
+}
+
+// serveIDToken handles the Noise-protected "POST /machine/id-token" request,
+// the test-control counterpart to the real control plane's OIDC ID token
+// minting. By default it returns a deterministic placeholder token encoding
+// the requested audience; set OnIDToken to customize.
+func (s *Server) serveIDToken(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
+	var req tailcfg.TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.NodeKey.IsZero() {
+		http.Error(w, "missing node key", http.StatusBadRequest)
+		return
+	}
+	if req.Audience == "" {
+		http.Error(w, "missing audience", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	node := s.nodes[req.NodeKey]
+	s.mu.Unlock()
+	if node == nil {
+		http.Error(w, "unknown node key", http.StatusForbidden)
+		return
+	}
+	if node.Machine != mkey {
+		http.Error(w, "node key does not belong to machine", http.StatusForbidden)
+		return
+	}
+
+	resp := &tailcfg.TokenResponse{IDToken: "test-id-token-for-" + req.Audience}
+	if s.OnIDToken != nil {
+		var err error
+		resp, err = s.OnIDToken(&req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) certDomainsLocked(node *tailcfg.Node) []string {
