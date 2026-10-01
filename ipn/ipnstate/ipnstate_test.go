@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/views"
 )
 
@@ -151,6 +153,18 @@ func TestPeerStatusIsRouter(t *testing.T) {
 					netip.MustParsePrefix("192.0.2.0/24"),
 					netip.MustParsePrefix("2001:db8::/32"),
 				})),
+			},
+			want: true,
+		},
+		{
+			name: "conn25-connector",
+			status: ipnstate.PeerStatus{
+				TailscaleIPs: []netip.Addr{
+					netip.MustParseAddr("100.64.0.1"),
+				},
+				CapMap: tailcfg.NodeCapMap{
+					nodecap.Conn25Connector: nil,
+				},
 			},
 			want: true,
 		},
