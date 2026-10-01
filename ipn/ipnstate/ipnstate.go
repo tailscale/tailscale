@@ -388,6 +388,11 @@ func (ps *PeerStatus) IsTagged() bool {
 	return ps.Tags != nil && ps.Tags.Len() > 0
 }
 
+// IsConn25Connector reports whether ps describes a conn25 connector.
+func (ps *PeerStatus) IsConn25Connector() bool {
+	return ps.HasCap(nodecap.Conn25Connector)
+}
+
 // StatusBuilder is a request to construct a Status. A new StatusBuilder is
 // passed to various subsystems which then call methods on it to populate state.
 // Call its Status method to return the final constructed Status.

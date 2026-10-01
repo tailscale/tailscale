@@ -634,6 +634,16 @@ func (n *Node) IsRouter() bool {
 	return false
 }
 
+// IsConn25Connector reports whether n is a conn25 connector.
+func (n *Node) IsConn25Connector() bool {
+	return n.HasCap(nodecap.Conn25Connector)
+}
+
+// IsConn25Connector reports whether v is a conn25 connector.
+func (v NodeView) IsConn25Connector() bool {
+	return v.ж.IsConn25Connector()
+}
+
 // IsTagged reports whether the node has any tags.
 func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
