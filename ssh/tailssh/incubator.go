@@ -900,8 +900,12 @@ func (ss *sshSession) launchProcess() error {
 	}
 
 	// We need to be able to close stdin and stdout separately later so make a
-	// dup.
-	ptyDup, err := syscall.Dup(int(pty.Fd()))
+	// dup. Use F_DUPFD_CLOEXEC rather than dup(2): a plain dup does not set
+	// FD_CLOEXEC, so the pty master would be inherited by every other SSH
+	// session's child process started while this session is alive. A leaked
+	// master keeps the pty open after this session ends, so its slave never
+	// hangs up and processes writing to it (e.g. a tmux server) block forever.
+	ptyDup, err := unix.FcntlInt(pty.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		pty.Close()
 		tty.Close()
