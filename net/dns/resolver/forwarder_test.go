@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -342,6 +343,14 @@ func BenchmarkNameFromQuery(b *testing.B) {
 type testDNSServerOptions struct {
 	SkipUDP bool
 	SkipTCP bool
+
+	// HangTCP accepts TCP connections and never answers them. With SkipTCP
+	// nothing listens, so the connect fails fast instead.
+	HangTCP bool
+
+	// ResponseDelay is how long the server waits before answering, on either
+	// transport.
+	ResponseDelay time.Duration
 }
 
 func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, onRequest func(bool, []byte)) (port uint16) {
@@ -416,6 +425,10 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 		req = req[:n]
 		onRequest(true, req)
 
+		if opts != nil && opts.ResponseDelay > 0 {
+			time.Sleep(opts.ResponseDelay)
+		}
+
 		// Write response
 		if _, err := conn.Write(tcpResponse); err != nil {
 			logf("error writing response: %v", err)
@@ -426,11 +439,29 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 	var wg sync.WaitGroup
 
 	if opts == nil || !opts.SkipTCP {
+		hangTCP := opts != nil && opts.HangTCP
+		var hung []net.Conn
+		var hungMu sync.Mutex
+		if hangTCP {
+			tb.Cleanup(func() {
+				hungMu.Lock()
+				defer hungMu.Unlock()
+				for _, c := range hung {
+					c.Close()
+				}
+			})
+		}
 		wg.Go(func() {
 			for {
 				conn, err := tcpLn.Accept()
 				if err != nil {
 					return
+				}
+				if hangTCP {
+					hungMu.Lock()
+					hung = append(hung, conn)
+					hungMu.Unlock()
+					continue
 				}
 				go handleConn(conn)
 			}
@@ -439,6 +470,9 @@ func runDNSServer(tb testing.TB, opts *testDNSServerOptions, response []byte, on
 
 	handleUDP := func(addr netip.AddrPort, req []byte) {
 		onRequest(false, req)
+		if opts != nil && opts.ResponseDelay > 0 {
+			time.Sleep(opts.ResponseDelay)
+		}
 		if _, err := udpLn.WriteToUDPAddrPort(response, addr); err != nil {
 			logf("error writing response: %v", err)
 		}
@@ -503,11 +537,9 @@ func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) 
 	return
 }
 
-func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports ...uint16) ([]byte, error) {
-	return runTestQueryWithFamily(tb, request, "udp", modify, ports...)
-}
-
-func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify func(*forwarder), ports ...uint16) ([]byte, error) {
+// newTestForwarder returns a forwarder wired to a fresh event bus, netmon and
+// dialer. modify, if non-nil, runs on it before it is returned.
+func newTestForwarder(tb testing.TB, modify func(*forwarder)) *forwarder {
 	logf := tstest.WhileTestRunningLogger(tb)
 	bus := eventbustest.NewBus(tb)
 	netMon, err := netmon.New(bus, logf)
@@ -523,11 +555,26 @@ func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify
 	if modify != nil {
 		modify(fwd)
 	}
+	return fwd
+}
 
+func runTestQuery(tb testing.TB, request []byte, modify func(*forwarder), ports ...uint16) ([]byte, error) {
+	return runTestQueryWithFamily(tb, request, "udp", modify, ports...)
+}
+
+func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify func(*forwarder), ports ...uint16) ([]byte, error) {
 	resolvers := make([]resolverAndDelay, len(ports))
 	for i, port := range ports {
 		resolvers[i].name = &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}
 	}
+	return runTestQueryWithResolvers(tb, request, family, modify, resolvers...)
+}
+
+// runTestQueryWithResolvers is runTestQueryWithFamily for tests that need a
+// resolver the port-based helpers can't express, such as one with a non-IP
+// address or a startDelay.
+func runTestQueryWithResolvers(tb testing.TB, request []byte, family string, modify func(*forwarder), resolvers ...resolverAndDelay) ([]byte, error) {
+	fwd := newTestForwarder(tb, modify)
 
 	rpkt := packet{
 		bs:     request,
@@ -538,7 +585,7 @@ func runTestQueryWithFamily(tb testing.TB, request []byte, family string, modify
 	rchan := make(chan packet, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	tb.Cleanup(cancel)
-	err = fwd.forwardWithDestChan(ctx, rpkt, rchan, resolvers...)
+	err := fwd.forwardWithDestChan(ctx, rpkt, rchan, resolvers...)
 	select {
 	case res := <-rchan:
 		return res.bs, err
@@ -1279,6 +1326,353 @@ func TestForwarderIgnoresStrayDatagrams(t *testing.T) {
 	}
 }
 
+// TestForwarderRcodeNoTCPRetry checks that an upstream REFUSED or SERVFAIL
+// doesn't cost a TCP retry.
+//
+// REFUSED became a soft error in the fix for tailscale/tailscale#19053.
+func TestForwarderRcodeNoTCPRetry(t *testing.T) {
+	const domain = "rcode-no-retry.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+
+	for _, rcode := range []dns.RCode{dns.RCodeRefused, dns.RCodeServerFailure} {
+		t.Run(rcode.String(), func(t *testing.T) {
+			response := makeTestResponse(t, domain, rcode)
+
+			var sawTCPRequest atomic.Bool
+			port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+				if isTCP {
+					sawTCPRequest.Store(true)
+				}
+			})
+
+			resp, err := runTestQuery(t, request, beVerbose, port)
+			if err != nil {
+				t.Fatalf("runTestQuery: %v", err)
+			}
+			if !bytes.Equal(resp, response) {
+				t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, response)
+			}
+			if sawTCPRequest.Load() {
+				t.Error("upstream saw a TCP query; the rcode answer should not be retried")
+			}
+		})
+	}
+}
+
+// TestForwarderRaceLoserNoReadError checks that the losing resolver in a race
+// isn't counted in dns_query_fwd_udp_error_read when the query's teardown
+// closes its socket.
+func TestForwarderRaceLoserNoReadError(t *testing.T) {
+	const domain = "race-loser.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	answering := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+	// Bound on both transports but answering on neither, so its read is still
+	// blocked when the other resolver's answer ends the query.
+	silent := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		answer, func(isTCP bool, gotRequest []byte) {})
+
+	const queries = 20
+	beforeRead := metricDNSFwdUDPErrorRead.Value()
+	beforeCtxDone := metricDNSFwdUDPReadCtxDone.Value()
+	for range queries {
+		resp, err := runTestQuery(t, request, nil, answering, silent)
+		if err != nil {
+			t.Fatalf("runTestQuery: %v", err)
+		}
+		if !bytes.Equal(resp, answer) {
+			t.Fatalf("invalid response\ngot: %+v\nwant: %+v", resp, answer)
+		}
+	}
+
+	// Wait for every losing read to wake up, whichever counter it lands in,
+	// before checking the counters.
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		woke := (metricDNSFwdUDPReadCtxDone.Value() - beforeCtxDone) +
+			(metricDNSFwdUDPErrorRead.Value() - beforeRead)
+		if woke < queries {
+			return fmt.Errorf("only %d of %d losing reads have woken up", woke, queries)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("waiting for the losing resolvers to finish: %v", err)
+	}
+	if got := metricDNSFwdUDPErrorRead.Value() - beforeRead; got != 0 {
+		t.Errorf("dns_query_fwd_udp_error_read advanced by %d over %d queries; want 0", got, queries)
+	}
+}
+
+// TestForwarderRcodeWithHungTCP checks that the client promptly gets the
+// REFUSED from an upstream that refuses over UDP and accepts TCP without ever
+// answering, for both udp and tcp queries.
+func TestForwarderRcodeWithHungTCP(t *testing.T) {
+	const domain = "refused-hung-tcp.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	port := runDNSServer(t, &testDNSServerOptions{HangTCP: true}, response, func(isTCP bool, gotRequest []byte) {})
+
+	// Longer than the query helper's context, so a regression that waits on
+	// the hung TCP arm fails as a context error.
+	tstest.Replace(t, &tcpQueryTimeout, 10*time.Second)
+
+	for _, family := range []string{"udp", "tcp"} {
+		t.Run(family, func(t *testing.T) {
+			// sendTCP bumps this before it dials.
+			beforeTCP := metricDNSFwdTCP.Value()
+			beforeCtx := metricDNSFwdErrorContext.Value()
+			resp, err := runTestQueryWithFamily(t, request, family, beVerbose, port)
+			if err != nil {
+				t.Fatalf("runTestQueryWithFamily: %v", err)
+			}
+			if !bytes.Equal(resp, response) {
+				t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, response)
+			}
+			if got := metricDNSFwdErrorContext.Value() - beforeCtx; got != 0 {
+				t.Errorf("dns_query_fwd_error_context advanced by %d; the REFUSED waited on the TCP arm", got)
+			}
+			// A tcp query races both transports from the start, so only the
+			// udp query must never send over TCP.
+			if got := metricDNSFwdTCP.Value() - beforeTCP; family == "udp" && got != 0 {
+				t.Errorf("dns_query_fwd_tcp advanced by %d; an rcode answer must not be retried over TCP", got)
+			}
+		})
+	}
+}
+
+// TestForwarderTCPRetriesDisabledDoesNotStall checks that the TCP arm reports
+// errTCPRetryDisabled right away rather than holding the resolver open until
+// the caller's context ends.
+func TestForwarderTCPRetriesDisabledDoesNotStall(t *testing.T) {
+	const domain = "no-tcp-retry.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+
+	fwd := newTestForwarder(t, setupForwarderWithTCPRetriesDisabled())
+
+	fq := &forwardQuery{
+		txid:           getTxID(request),
+		packet:         request,
+		family:         "udp",
+		closeOnCtxDone: new(closePool),
+	}
+	defer fq.closeOnCtxDone.Close()
+	// A non-IP resolver address makes the UDP arm fail immediately, so only
+	// the TCP arm can hold send open.
+	rr := resolverAndDelay{name: &dnstype.Resolver{Addr: "bogus-not-an-ip"}}
+
+	// Short, because a regression waits it out.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := fwd.send(ctx, fq, rr)
+	if !errors.Is(err, errTCPRetryDisabled) {
+		t.Errorf("send err = %v; want it to wrap errTCPRetryDisabled", err)
+	}
+	if ctx.Err() != nil {
+		t.Error("send waited out the caller's context instead of reporting the disabled retry")
+	}
+}
+
+// TestForwarderRcodeHoldWithOutstandingResolver checks that an upstream REFUSED
+// reaches the client even though another resolver in the race never reports.
+func TestForwarderRcodeHoldWithOutstandingResolver(t *testing.T) {
+	const domain = "refused-with-hung-peer.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	response := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	// Shortened to keep the test fast.
+	tstest.Replace(t, &rcodeHoldGrace, 300*time.Millisecond)
+
+	refusingPort := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {})
+	// Bound on both transports but answering on neither, so queries to it hang
+	// rather than failing fast.
+	hungPort := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		response, func(isTCP bool, gotRequest []byte) {})
+
+	// Bumped only when a forward runs out its context.
+	beforeCtx := metricDNSFwdErrorContext.Value()
+	resp, err := runTestQuery(t, request, beVerbose, refusingPort, hungPort)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, response) {
+		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, response)
+	}
+	if got := metricDNSFwdErrorContext.Value() - beforeCtx; got != 0 {
+		t.Errorf("dns_query_fwd_error_context advanced by %d; the held REFUSED was not released before the context ended", got)
+	}
+}
+
+func TestRcodeHoldDelay(t *testing.T) {
+	res := func(delays ...time.Duration) []resolverAndDelay {
+		rr := make([]resolverAndDelay, len(delays))
+		for i, d := range delays {
+			rr[i] = resolverAndDelay{name: &dnstype.Resolver{Addr: "8.8.8.8:53"}, startDelay: d}
+		}
+		return rr
+	}
+	tests := []struct {
+		name      string
+		resolvers []resolverAndDelay
+		elapsed   time.Duration
+		want      time.Duration
+	}{
+		{"no delays", res(0, 0), 0, rcodeHoldGrace},
+		{"no delays, late rcode", res(0, 0), 50 * time.Millisecond, rcodeHoldGrace - 50*time.Millisecond},
+		{"waits out the largest delay", res(0, dohHeadStart), 0, dohHeadStart + rcodeHoldGrace},
+		{"delay already elapsed", res(0, dohHeadStart), dohHeadStart, rcodeHoldGrace},
+		{"grace already elapsed", res(0, dohHeadStart), dohHeadStart + rcodeHoldGrace + time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rcodeHoldDelay(tt.resolvers, tt.elapsed); got != tt.want {
+				t.Errorf("rcodeHoldDelay = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestForwarderRcodeHoldWaitsForDelayedResolver checks that a fast REFUSED
+// doesn't cut off a resolver still inside its startDelay.
+func TestForwarderRcodeHoldWaitsForDelayedResolver(t *testing.T) {
+	const domain = "refused-then-delayed.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	refused := makeTestResponse(t, domain, dns.RCodeRefused)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	refusingPort := runDNSServer(t, nil, refused, func(isTCP bool, gotRequest []byte) {})
+	answeringPort := runDNSServer(t, nil, answer, func(isTCP bool, gotRequest []byte) {})
+
+	resolvers := []resolverAndDelay{
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", refusingPort)}},
+		{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", answeringPort)}, startDelay: dohHeadStart},
+	}
+
+	resp, err := runTestQueryWithResolvers(t, request, "udp", beVerbose, resolvers...)
+	if err != nil {
+		t.Fatalf("runTestQueryWithResolvers: %v", err)
+	}
+	// The answer can only exist if the hold outlasted the startDelay, so the
+	// bytes are the whole check.
+	if !bytes.Equal(resp, answer) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+	}
+}
+
+// TestForwarderRcodeHoldWaitsForSlowResolver checks that a fast SERVFAIL from
+// one resolver doesn't beat a slower answer from another.
+func TestForwarderRcodeHoldWaitsForSlowResolver(t *testing.T) {
+	const domain = "servfail-then-slow-answer.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	servfail := makeTestResponse(t, domain, dns.RCodeServerFailure)
+	answer := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("127.0.0.1"))
+
+	failingPort := runDNSServer(t, nil, servfail, func(isTCP bool, gotRequest []byte) {})
+	// 350ms is an ordinary cross-region latency, well inside rcodeHoldGrace.
+	slowPort := runDNSServer(t, &testDNSServerOptions{ResponseDelay: 350 * time.Millisecond},
+		answer, func(isTCP bool, gotRequest []byte) {})
+
+	resp, err := runTestQuery(t, request, beVerbose, failingPort, slowPort)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, answer) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, answer)
+	}
+}
+
+// TestForwarderHeldServfailPrefersUpstreamBytes checks that an upstream
+// SERVFAIL arriving after a REFUSED reaches the client as the upstream's own
+// response rather than a synthesized one.
+func TestForwarderHeldServfailPrefersUpstreamBytes(t *testing.T) {
+	const domain = "refused-then-servfail.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+	refused := makeTestResponse(t, domain, dns.RCodeRefused)
+
+	// RecursionAvailable is never set on a synthesized SERVFAIL, so the bytes
+	// tell the two apart.
+	b := dns.NewBuilder(nil, dns.Header{
+		Response:           true,
+		Authoritative:      true,
+		RecursionAvailable: true,
+		RCode:              dns.RCodeServerFailure,
+	})
+	b.StartQuestions()
+	b.Question(dns.Question{Name: dns.MustNewName(domain), Type: dns.TypeA, Class: dns.ClassINET})
+	servfail, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refusingPort := runDNSServer(t, nil, refused, func(isTCP bool, gotRequest []byte) {})
+	failingPort := runDNSServer(t, &testDNSServerOptions{ResponseDelay: 100 * time.Millisecond},
+		servfail, func(isTCP bool, gotRequest []byte) {})
+
+	resp, err := runTestQuery(t, request, beVerbose, refusingPort, failingPort)
+	if err != nil {
+		t.Fatalf("runTestQuery: %v", err)
+	}
+	if !bytes.Equal(resp, servfail) {
+		t.Errorf("invalid response\ngot:  %+v\nwant: %+v", resp, servfail)
+	}
+}
+
+// TestSendTCPReadTimeout checks that tcpQueryTimeout bounds the response read
+// against an upstream that accepts the connection and never answers.
+func TestSendTCPReadTimeout(t *testing.T) {
+	const domain = "hung-tcp.tailscale.com."
+	request := makeTestRequest(t, domain, dns.TypeA, 0)
+
+	port := runDNSServer(t, &testDNSServerOptions{SkipUDP: true, HangTCP: true},
+		makeTestResponse(t, domain, dns.RCodeSuccess), func(isTCP bool, gotRequest []byte) {})
+
+	const shortTimeout = 250 * time.Millisecond
+	tstest.Replace(t, &tcpQueryTimeout, shortTimeout)
+
+	fwd := newTestForwarder(t, nil)
+
+	fq := &forwardQuery{
+		txid:           getTxID(request),
+		packet:         request,
+		family:         "udp",
+		closeOnCtxDone: new(closePool),
+	}
+	defer fq.closeOnCtxDone.Close()
+	rr := resolverAndDelay{name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)}}
+
+	// A caller deadline well beyond tcpQueryTimeout, so the shorter one is
+	// the bound under test.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// In a goroutine because a regression hangs the read rather than
+	// returning late.
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := fwd.sendTCP(ctx, fq, rr)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Logf("sendTCP returned after %v: %v", time.Since(start), err)
+		// Either the conn deadline or the derived context's deadline may
+		// fire first, so match on the interface rather than on a sentinel.
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			t.Errorf("sendTCP err = %v; want a deadline error", err)
+		}
+		// The caller's deadline is still live, so tcpQueryTimeout bounded
+		// the read.
+		if ctx.Err() != nil {
+			t.Errorf("the caller's context expired; tcpQueryTimeout (%v) was not the binding bound", shortTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("sendTCP still running after 3s; tcpQueryTimeout (%v) is not bounding the read", shortTimeout)
+	}
+}
+
 // netstackUpstream is a resolver at a tailnet (CGNAT) address. In userspace
 // networking mode the host stack has no route to it; only netstack does.
 var netstackUpstream = netip.MustParseAddrPort("100.64.1.2:53")
@@ -1325,11 +1719,13 @@ func newNetstackDialer(tb testing.TB, netMon *netmon.Monitor, bus *eventbus.Bus,
 // case, where there is no tun device and so the host stack cannot reach the
 // tailnet.
 //
-// The two subtests send the same query to the same upstream and differ only in
-// the transport the forwarder picks; both must consult the dialer, so each
+// The two subtests send the same query and differ in the transport the
+// forwarder uses. Both transports must consult the dialer, so each subtest
 // asserts on the netstack dial hook. The UDP subtest also bounds elapsed by
 // udpRaceTimeout, since a regression that silently falls back to TCP still
-// produces the right bytes, just two seconds late.
+// produces the right bytes, just two seconds late. The TCP subtest's upstream
+// serves TCP only, so that a UDP answer can't win the race before the TCP arm
+// runs.
 //
 // See tailscale/tailscale#20314.
 func TestForwarderNetstackUpstream(t *testing.T) {
@@ -1339,8 +1735,12 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 
 	for _, family := range []string{"tcp", "udp"} {
 		t.Run(family, func(t *testing.T) {
+			var opts *testDNSServerOptions
+			if family == "tcp" {
+				opts = &testDNSServerOptions{SkipUDP: true}
+			}
 			var sawUDP, sawTCP atomic.Bool
-			port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+			port := runDNSServer(t, opts, response, func(isTCP bool, gotRequest []byte) {
 				if isTCP {
 					sawTCP.Store(true)
 				} else {
@@ -1410,8 +1810,13 @@ func TestForwarderNetstackUpstream(t *testing.T) {
 					t.Errorf("query took %v (>= udpRaceTimeout %v): UDP never answered and the response came from the TCP fallback",
 						elapsed, udpRaceTimeout)
 				}
-			} else if dials.tcp.Load() == 0 {
-				t.Errorf("forwarder never dialed TCP via netstack")
+			} else {
+				if dials.tcp.Load() == 0 {
+					t.Errorf("forwarder never dialed TCP via netstack: the TCP path bypassed the dialer")
+				}
+				if !sawTCP.Load() {
+					t.Errorf("upstream never saw a TCP query")
+				}
 			}
 		})
 	}
