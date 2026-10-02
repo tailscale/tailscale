@@ -405,7 +405,7 @@ func (r *Resolver) Close() {
 // bound on per-query resource usage.
 const dnsQueryTimeout = 10 * time.Second
 
-func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
+func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) (*Response, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -419,7 +419,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 
 	out, err := r.respond(bs)
 	if err == errNotOurName {
-		responses := make(chan packet, 1)
+		responses := make(chan *Response, 1)
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
@@ -427,15 +427,15 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 		if err != nil {
 			return nil, err
 		}
-		return (<-responses).bs, nil
+		return <-responses, nil
 	}
 
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 
 	out = checkResponseSizeAndSetTC(out, bs, family, r.logf)
-	return out, nil
+	return &Response{Bs: out}, nil
 }
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
@@ -476,7 +476,7 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		return nil, feature.ErrUnavailable
 	}
 	metricDNSExitProxyQuery.Add(1)
-	ch := make(chan packet, 1)
+	ch := make(chan *Response, 1)
 
 	resp := parseExitNodeQuery(q)
 	if resp == nil {
@@ -530,9 +530,9 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		}
 	}
 	select {
-	case p, ok := <-ch:
+	case fwdRes, ok := <-ch:
 		if ok {
-			return p.bs, nil
+			return fwdRes.Bs, nil
 		}
 		panic("unexpected close chan")
 	default:
