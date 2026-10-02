@@ -5,6 +5,7 @@ package gro
 
 import (
 	"bytes"
+	"encoding/binary"
 	"net/netip"
 	"testing"
 
@@ -79,6 +80,32 @@ func Test_RXChecksumOffload(t *testing.T) {
 	ipv4H.SetChecksum(0)
 	ipv4H.SetChecksum(^ipv4H.CalculateChecksum())
 
+	// tcp6AtomicFragment is tcp6ExtHeader with its 8-byte extension header
+	// turned into a Fragment header (offset 0, no more fragments), i.e. a
+	// complete packet whose L4 checksum is still valid.
+	tcp6AtomicFragment := make([]byte, len(tcp6ExtHeader))
+	copy(tcp6AtomicFragment, tcp6ExtHeader)
+	tcp6AtomicFragment[6] = uint8(header.IPv6FragmentExtHdrIdentifier)
+	binary.BigEndian.PutUint32(tcp6AtomicFragment[44:48], 0xdeadbeef) // identification
+
+	tcp6AtomicFragmentInvalidCsum := make([]byte, len(tcp6AtomicFragment))
+	copy(tcp6AtomicFragmentInvalidCsum, tcp6AtomicFragment)
+	tcp6AtomicFragmentInvalidCsum[40+8+16] = ^tcp6AtomicFragmentInvalidCsum[40+8+16]
+
+	// The first 80 bytes of the TCP segment go in the first fragment, which
+	// therefore doesn't carry enough for its L4 checksum to validate.
+	const firstFragLen = 80 // multiple of 8
+	tcp6FirstFragment := make([]byte, 40+8+firstFragLen)
+	copy(tcp6FirstFragment, tcp6AtomicFragment[:len(tcp6FirstFragment)])
+	header.IPv6(tcp6FirstFragment).SetPayloadLength(uint16(8 + firstFragLen))
+	tcp6FirstFragment[43] |= 1 // M flag
+
+	tcp6SecondFragment := make([]byte, 40+8+len(tcp6AtomicFragment[48+firstFragLen:]))
+	copy(tcp6SecondFragment, tcp6AtomicFragment[:48])
+	copy(tcp6SecondFragment[48:], tcp6AtomicFragment[48+firstFragLen:])
+	header.IPv6(tcp6SecondFragment).SetPayloadLength(uint16(len(tcp6SecondFragment) - 40))
+	binary.BigEndian.PutUint16(tcp6SecondFragment[42:44], firstFragLen/8<<3) // offset, M=0
+
 	tcp6ExtHeaderInvalidCsum := make([]byte, len(tcp6ExtHeader))
 	copy(tcp6ExtHeaderInvalidCsum, tcp6ExtHeader)
 	at = 40 + 8 + 16
@@ -113,6 +140,26 @@ func Test_RXChecksumOffload(t *testing.T) {
 			"tcp4 second fragment skips L4 csum",
 			tcp4SecondFragment,
 			true,
+		},
+		{
+			"tcp6 first fragment skips L4 csum",
+			tcp6FirstFragment,
+			true,
+		},
+		{
+			"tcp6 second fragment skips L4 csum",
+			tcp6SecondFragment,
+			true,
+		},
+		{
+			"tcp6 atomic fragment",
+			tcp6AtomicFragment,
+			true,
+		},
+		{
+			"tcp6 atomic fragment invalid csum",
+			tcp6AtomicFragmentInvalidCsum,
+			false,
 		},
 		{
 			"tcp6 with ext header invalid csum",
