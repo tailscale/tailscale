@@ -32,6 +32,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/appctype"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
@@ -3249,5 +3250,60 @@ func TestHandleHookReplyToDNSQueries(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExtraDNSRoutesHook tests that the extension supplies split DNS routes
+// for the app domains in the self node's capabilities, and supplies none
+// before the self node is known, when this node is itself a connector, or
+// after a switch to a different node.
+func TestExtraDNSRoutesHook(t *testing.T) {
+	ext := &extension{
+		conn25:  newConn25(logger.Discard),
+		backend: newTestSafeBackend(t),
+	}
+	h := &testHost{nb: &testNodeBackend{}, prefs: testPrefsNotConnector}
+	if err := ext.Init(h); err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Shutdown()
+
+	hook, ok := h.hooks.ExtraDNSRoutes.GetOk()
+	if !ok {
+		t.Fatal("ExtraDNSRoutes hook not set")
+	}
+	if got := hook(); got != nil {
+		t.Errorf("routes before self node known = %v, want nil", got)
+	}
+
+	selfNode := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:woo"},
+		Domains:    []string{"example.com", "*.wild.example.com"},
+	}}, appctype.Conn25PoolsAttr{}, nil)
+	ext.onSelfChange(selfNode)
+	ext.profileStateChange(ipn.LoginProfileView{}, testPrefsNotConnector, true)
+
+	want := map[string][]*dnstype.Resolver{
+		"example.com":      {{Addr: "tailscale-app:app1", UseWithExitNode: true}},
+		"wild.example.com": {{Addr: "tailscale-app:app1", UseWithExitNode: true}},
+	}
+	if diff := cmp.Diff(want, hook()); diff != "" {
+		t.Errorf("client routes mismatch (-want +got):\n%s", diff)
+	}
+
+	connectorPrefs := (&ipn.Prefs{AppConnector: ipn.AppConnectorPrefs{Advertise: true}}).View()
+	ext.profileStateChange(ipn.LoginProfileView{}, connectorPrefs, true)
+	if got := hook(); got != nil {
+		t.Errorf("connector routes = %v, want nil", got)
+	}
+	ext.profileStateChange(ipn.LoginProfileView{}, testPrefsNotConnector, true)
+	if diff := cmp.Diff(want, hook()); diff != "" {
+		t.Errorf("client routes after prefs change mismatch (-want +got):\n%s", diff)
+	}
+
+	ext.profileStateChange(ipn.LoginProfileView{}, testPrefsNotConnector, false)
+	if got := hook(); got != nil {
+		t.Errorf("routes after switching node = %v, want nil", got)
 	}
 }

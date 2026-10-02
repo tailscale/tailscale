@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"tailscale.com/appc"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
@@ -60,8 +59,11 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		os      string // version.OS value; empty means linux
 		cloud   cloudenv.Cloud
 		prefs   *ipn.Prefs
-		want    *dns.Config
-		wantLog string
+		// extraRoutes are extension-supplied split DNS routes,
+		// as returned by [ipnext.Hooks.ExtraDNSRoutes].
+		extraRoutes map[string][]*dnstype.Resolver
+		want        *dns.Config
+		wantLog     string
 	}{
 		{
 			name:  "empty",
@@ -393,18 +395,17 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			want:  &dns.Config{},
 		},
 		{
-			name: "conn25-split-dns",
+			name: "extension-split-dns",
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
-					CapMap: tailcfg.NodeCapMap{
-						nodecap.Cap(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
-							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
-						},
-					},
 				}).View(),
-				AllCaps: set.Of(nodecap.Cap(appc.AppConnectorsExperimentalAttrName)),
+			},
+			extraRoutes: map[string][]*dnstype.Resolver{
+				"example.com": {
+					{Addr: "tailscale-app:app1", UseWithExitNode: true},
+				},
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -438,18 +439,22 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 		},
 		{
-			name: "conn25-split-dns-with-exit-node",
+			name: "extension-split-dns-with-exit-node",
 			nm: &netmap.NetworkMap{
 				SelfNode: (&tailcfg.Node{
 					Name:      "a",
 					Addresses: ipps("100.101.101.101"),
-					CapMap: tailcfg.NodeCapMap{
-						tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName): []tailcfg.RawMessage{
-							tailcfg.RawMessage(`{"name":"app1","connectors":["tag:woo"],"domains":["example.com"]}`),
-						},
-					},
 				}).View(),
-				AllCaps: set.Of(tailcfg.NodeCapability(appc.AppConnectorsExperimentalAttrName)),
+			},
+			extraRoutes: map[string][]*dnstype.Resolver{
+				"example.com": {
+					{Addr: "tailscale-app:app1", UseWithExitNode: true},
+				},
+				// Routes without UseWithExitNode are dropped when an
+				// exit node proxies DNS, like the netmap's own routes.
+				"dropped.example.org": {
+					{Addr: "10.0.0.53"},
+				},
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -532,7 +537,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			goos := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos, tt.extraRoutes)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
