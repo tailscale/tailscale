@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -1373,5 +1375,77 @@ func TestStackGSOToTunGSO(t *testing.T) {
 				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+type flowRecorder struct {
+	*fakeTUN
+	mu    sync.Mutex
+	flows []int
+}
+
+func (d *flowRecorder) WriteTo(flow int, bufs [][]byte, offset int) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flows = append(d.flows, flow)
+	return len(bufs), nil
+}
+
+func (d *flowRecorder) Write(bufs [][]byte, offset int) (int, error) {
+	return d.WriteTo(0, bufs, offset)
+}
+
+func (d *flowRecorder) recordedFlows() []int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.flows)
+}
+
+func TestWrappedQueuesMatch(t *testing.T) {
+	for _, q := range []int{1, 4} {
+		t.Run(fmt.Sprintf("q=%d", q), func(t *testing.T) {
+			tdev := newFakeMQ(q)
+			bus := eventbustest.NewBus(t)
+			want := wgtun.QueuesOf(tdev)
+			if len(want) != q {
+				t.Fatalf("newFakeMQ(%d) returned %d queues", q, len(want))
+			}
+			w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+			defer w.Close()
+			got := w.Queues()
+			if have, want := len(got), len(want); have != want {
+				t.Fatalf("len(Queues()) = %d, want %d", have, want)
+			}
+			for i, q := range got {
+				if got, ok := q.(*wrapperQueue); !ok || got.q != want[i] {
+					t.Errorf("Queues()[%d] wraps the wrong underlying queue", i)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteToForwardsFlow(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	tdev := &flowRecorder{fakeTUN: newFakeMQ(4)}
+	w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+	w.disableFilter = true
+	w.Start()
+	defer w.Close()
+	pkt := udp4("100.64.1.2", "100.64.1.3", 1234, 5678)
+	want := []int{3, 1, 2}
+	for _, flow := range want {
+		if _, err := w.WriteTo(flow, [][]byte{pkt}, 0); err != nil {
+			t.Fatalf("WriteTo(%d): %v", flow, err)
+		}
+	}
+	// Write is WriteTo with a zero flow.
+	want = append(want, 0)
+	if _, err := w.Write([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got := tdev.recordedFlows(); !slices.Equal(got, want) {
+		t.Errorf("flows reaching the device = %v, want %v", got, want)
 	}
 }
