@@ -595,6 +595,56 @@ func TestMapRequestRateLimited(t *testing.T) {
 	}
 }
 
+// TestMapRequestNodeRemoved verifies that a 404 response to a map request
+// sets the node-removed health warning, other failures don't, and a later
+// successful map request clears it.
+func TestMapRequestNodeRemoved(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		wantRemoved bool
+	}{
+		{name: "404", status: http.StatusNotFound, wantRemoved: true},
+		{name: "500", status: http.StatusInternalServerError, wantRemoved: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var reject atomic.Bool
+			reject.Store(true)
+			d := newDirectForTestControl(t, &testcontrol.Server{
+				MaybeRejectRequest: testcontrol.RejectRequestForPath("/machine/map", func() (int, string, string) {
+					if reject.Load() {
+						return tt.status, "", "node not found"
+					}
+					return 0, "", ""
+				}),
+			})
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			if _, err := d.TryLogin(ctx, LoginEphemeral); err != nil {
+				t.Fatalf("TryLogin: %v", err)
+			}
+
+			if _, err := d.FetchNetMapForTest(ctx); err == nil {
+				t.Fatal("expected error on first map request, got nil")
+			}
+			if got := d.health.IsUnhealthy(nodeRemoved); got != tt.wantRemoved {
+				t.Fatalf("node-removed warning set = %v, want %v", got, tt.wantRemoved)
+			}
+
+			reject.Store(false)
+			if _, err := d.FetchNetMapForTest(ctx); err != nil {
+				t.Fatalf("FetchNetMapForTest after rejection: %v", err)
+			}
+			if d.health.IsUnhealthy(nodeRemoved) {
+				t.Error("node-removed warning still set after successful map request")
+			}
+		})
+	}
+}
+
 func connectProxyTo(t testing.TB, target, backendAddrPort string, reqs *atomic.Int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.RequestURI != target {
