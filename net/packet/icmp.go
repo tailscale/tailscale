@@ -52,7 +52,7 @@ func GenerateICMPHostUnreachable(from, to netip.Addr, invoking *Parsed) []byte {
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		// |      Internet Header + 64 bits of Original Data Datagram      |
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		ipHeaderLen := len(buf) - len(invoking.Transport())
+		ipHeaderLen := invoking.subofs
 		return Generate(ICMP4Header{
 			IP4Header: IP4Header{Src: from, Dst: to},
 			Type:      ICMP4Unreachable,
