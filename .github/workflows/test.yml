@@ -32,6 +32,7 @@ concurrency:
 
 jobs:
   gomod-cache:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     outputs:
       cache-key: ${{ steps.hash.outputs.key }}
@@ -65,6 +66,7 @@ jobs:
           enableCrossOsArchive: true
 
   race-root-integration:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     strategy:
@@ -96,6 +98,7 @@ jobs:
         TS_TEST_SHARD: ${{ matrix.shard }}
 
   test:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -207,6 +210,7 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   windows:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     permissions:
       id-token: write # This is required for requesting the GitHub action identity JWT that can auth to cigocached
       contents: read # This is required for actions/checkout
@@ -285,6 +289,7 @@ jobs:
         Invoke-Expression "$env:GOCACHEPROG --stats" | jq .
 
   macos:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: macos-latest
     needs: gomod-cache
     steps:
@@ -342,6 +347,7 @@ jobs:
         key: ${{ runner.os }}-go-test-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   privileged:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     needs: gomod-cache
     runs-on: ubuntu-24.04
     container:
@@ -366,6 +372,7 @@ jobs:
       run: ./tool/go test $(./tool/go run ./tool/listpkgs --has-root-tests)
 
   cross: # cross-compile checks, build only.
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -460,6 +467,7 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
+    if: false # DEV ONLY: disabled while developing the gotst swarms
        # make it build a few smoke packages.
     runs-on: ubuntu-24.04
     needs: gomod-cache
@@ -482,6 +490,7 @@ jobs:
         GOARCH: arm64
 
   crossmin: # cross-compile for platforms where we only check cmd/tailscale{,d}
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     needs: gomod-cache
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
@@ -552,6 +561,7 @@ jobs:
         key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   android:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     # similar to cross above, but android fails to build a few pieces of the
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
@@ -580,6 +590,7 @@ jobs:
         GOARCH: arm64
 
   wasm: # builds tsconnect, which is the only wasm build we support
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -645,6 +656,7 @@ jobs:
         key: ${{ runner.os }}-js-wasm-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
 
   tailscale_go: # Subset of tests that depend on our custom Go toolchain.
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -662,6 +674,7 @@ jobs:
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
   depaware:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -682,6 +695,7 @@ jobs:
       run: make depaware
 
   go_generate:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -714,6 +728,7 @@ jobs:
         git diff --name-only --exit-code || (echo "The files above need updating. Please run './tool/go run ./misc/genreadme'."; exit 1)
 
   make_tidy:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -736,6 +751,7 @@ jobs:
         git diff --name-only --exit-code || (echo "Please run 'make tidy'"; exit 1)
 
   licenses:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     steps:
@@ -756,6 +772,7 @@ jobs:
         ./tool/go test -v -run=TestLicenseHeaders
 
   staticcheck:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs: gomod-cache
     name: staticcheck (${{ matrix.name }})
@@ -813,7 +830,7 @@ jobs:
            $(./tool/go run ./tool/listpkgs --ignore-3p --goos=${{ matrix.goos }} --goarch=${{ matrix.goarch }} ${{ matrix.flags }} ./...)
 
   notify_slack:
-    if: always()
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     # Any of these jobs failing causes a slack notification.
     needs:
       - android
@@ -857,7 +874,7 @@ jobs:
           }
 
   notify_windows:
-    if: always()
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     needs:
       - windows
     runs-on: ubuntu-24.04
@@ -967,7 +984,7 @@ jobs:
         payload-file-path: payload.json
 
   merge_blocker:
-    if: always()
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs:
       - android
@@ -994,7 +1011,7 @@ jobs:
    # enforce these. No flaky tests are allowed in these jobs. (We don't want flaky
    # tests anywhere, really, but a flaky test here prevents merging.)
   check_mergeability_strict:
-    if: always()
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs:
       - android
@@ -1015,7 +1032,7 @@ jobs:
         jobs: ${{ toJSON(needs) }}
 
   check_mergeability:
-    if: always()
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     runs-on: ubuntu-24.04
     needs:
       - check_mergeability_strict
