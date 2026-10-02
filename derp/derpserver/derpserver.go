@@ -184,13 +184,24 @@ type Server struct {
 	multiForwarderDeleted      expvar.Int
 	removePktForwardOther      expvar.Int
 	sclientWriteTimeouts       expvar.Int
-	avgQueueDuration           *uint64          // In milliseconds; accessed atomically
-	tcpRtt                     metrics.LabelMap // histogram
+	avgQueueDuration           *uint64            // In milliseconds; accessed atomically
+	tcpRtt                     metrics.LabelMap   // histogram
+	tcpSavedSynMSS             *metrics.Histogram // MSS advertised in clients' saved SYN packets
+	tcpSavedSynStatus          metrics.LabelMap   // breakdown of TCP_SAVED_SYN retrieval outcomes
 	meshUpdateBatchSize        *metrics.Histogram
 	meshUpdateLoopCount        *metrics.Histogram
 	bufferedWriteFrames        *metrics.Histogram // how many frames (or groups of related frames) the writer writes per flush
 	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
 	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
+
+	// tcpSaveSyn, when true, enables recording of each client's advertised
+	// TCP MSS from the SYN packet the kernel saved on its socket, which
+	// requires that the listening socket had TCP_SAVE_SYN set (Linux only;
+	// see cmd/derper's --tcp-save-syn flag).
+	tcpSaveSyn atomic.Bool
+
+	// savedSynNextErrorLog is the next allowed error-log time in Unix nanoseconds.
+	savedSynNextErrorLog atomic.Int64
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -419,6 +430,8 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		peerGoneWatchers:    map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
 		avgQueueDuration:    new(uint64),
 		tcpRtt:              metrics.LabelMap{Label: "le"},
+		tcpSavedSynMSS:      metrics.NewHistogram([]float64{536, 1220, 1240, 1360, 1400, 1420, 1440, 1452, 1460, 8940}),
+		tcpSavedSynStatus:   metrics.LabelMap{Label: "status"},
 		meshUpdateBatchSize: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
 		meshUpdateLoopCount: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
 		bufferedWriteFrames: metrics.NewHistogram([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100}),
@@ -631,6 +644,13 @@ func (s *Server) SetTailscaledSocketPath(path string) {
 // Defaults to 2 seconds.
 func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
+}
+
+// SetTCPSaveSyn enables recording TCP MSS from saved SYN packets on Linux.
+// The listener must have TCP_SAVE_SYN set. It is safe to call concurrently
+// with Accept.
+func (s *Server) SetTCPSaveSyn(enabled bool) {
+	s.tcpSaveSyn.Store(enabled)
 }
 
 // minRateLimitTokenBucketSize represents the minimum size of a token bucket
@@ -1226,6 +1246,9 @@ func (s *Server) debugLogf(format string, v ...any) {
 // [sclient.wakeWriter].
 func (c *sclient) run(ctx context.Context) error {
 	defer c.stopWriter()
+
+	// Reading TCP_SAVED_SYN frees the saved packet in the kernel.
+	c.recordSavedSyn()
 
 	// Allow disabling RTT stats collection to reduce
 	// CPU and syscalls on servers with high connection
@@ -3112,6 +3135,8 @@ func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
 	m.Set("counter_tcp_rtt", &s.tcpRtt)
+	m.Set("histogram_tcp_saved_syn_mss", s.tcpSavedSynMSS)
+	m.Set("counter_tcp_saved_syn_status", &s.tcpSavedSynStatus)
 	m.Set("counter_mesh_update_batch_size", s.meshUpdateBatchSize)
 	m.Set("counter_mesh_update_loop_count", s.meshUpdateLoopCount)
 	m.Set("counter_buffered_write_frames", s.bufferedWriteFrames)
