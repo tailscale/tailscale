@@ -591,6 +591,15 @@ func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
 
 		// But a prefix is okay.
 		{"prefix-okay.some.exact.bad", true},
+
+		// The Exit Node DNS proxy passes names in the form that
+		// [dnsmessage.Name.String] returns, with a trailing dot.
+		{"google.com.", true},
+		{"foo.ts.net.", false},
+		{"ts.net.", true},
+		{"some.exact.bad.", false},
+		{"SOME.EXACT.BAD.", false},
+		{"prefix-okay.some.exact.bad.", true},
 	}
 	for _, tt := range tests {
 		got := b.allowExitNodeDNSProxyToServeName(tt.name)
