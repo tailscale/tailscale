@@ -688,6 +688,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
+	writeLowMemoryMetrics(w)
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
