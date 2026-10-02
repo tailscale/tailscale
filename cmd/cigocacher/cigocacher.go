@@ -29,8 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bradfitz/go-tool-cache/cacheproc"
-	"github.com/bradfitz/go-tool-cache/cachers"
+	"github.com/tailscale/tb/gocache/cacheproc"
+	"github.com/tailscale/tb/gocache/cachers"
 )
 
 func main() {

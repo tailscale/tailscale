@@ -21,7 +21,6 @@ require (
 	github.com/aws/smithy-go v1.28.1
 	github.com/axiomhq/hyperloglog v0.2.6
 	github.com/benbjohnson/immutable v0.4.3
-	github.com/bradfitz/go-tool-cache v0.0.0-20260919185303-c660171c910c
 	github.com/bradfitz/monogok v0.0.0-20260630033929-b1eef977b41f
 	github.com/bradfitz/qemu-guest-kragent v0.0.0-20240513123539-55a43ea02a03
 	github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f
@@ -122,6 +121,7 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210
 	github.com/tailscale/setec v0.0.0-20260824224040-f8d7a936837c
+	github.com/tailscale/tb v0.0.0-20261001153419-d666f92605bc
 	github.com/tailscale/ts-gokrazy v0.0.0-20260630224145-b83088f2e52e
 	github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
