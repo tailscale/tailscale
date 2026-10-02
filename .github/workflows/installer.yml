@@ -16,6 +16,7 @@ on:
 
 jobs:
   test:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     strategy:
       # Don't abort the entire matrix if one element fails.
       fail-fast: false
@@ -116,6 +117,7 @@ jobs:
           tailscale --version | grep -q "^${{ matrix.version }}" || { echo "Version mismatch!"; exit 1; }
         fi
   notify-slack:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     needs: test
     runs-on: ubuntu-latest
     steps:

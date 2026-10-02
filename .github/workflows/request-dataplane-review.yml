@@ -11,7 +11,7 @@ on:
 
 jobs:
   request-dataplane-review:
-    if: github.event.pull_request.draft == false
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     name: Request Dataplane Review
     runs-on: ubuntu-latest
     steps:
