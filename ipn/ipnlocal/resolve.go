@@ -107,6 +107,13 @@ func (m magicDNSHosts) SubdomainHost(fqdn dnsname.FQDN) bool {
 	return m.b.currentNode().magicDNSSubdomainHost(fqdn)
 }
 
+func (m magicDNSHosts) ReverseLookupAllowedFrom(ip netip.Addr) bool {
+	if !buildfeatures.HasDNS {
+		return false
+	}
+	return m.b.currentNode().magicDNSReverseAllowedFrom(ip)
+}
+
 var _ resolver.MagicDNSHosts = magicDNSHosts{}
 
 // nodeAddrForNetwork returns the best address from n for the given

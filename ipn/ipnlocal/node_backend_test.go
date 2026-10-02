@@ -526,9 +526,12 @@ func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	nb := newNodeBackend(t.Context(), tstest.WhileTestRunningLogger(t), eventbus.New())
 
 	self := &tailcfg.Node{
-		ID:        1,
-		Name:      "self.example.ts.net.",
-		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		ID:   1,
+		Name: "self.example.ts.net.",
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+			netip.MustParsePrefix("fd7a:115c:a1e0::1/128"),
+		},
 	}
 	p1 := &tailcfg.Node{
 		ID:   2,
@@ -577,6 +580,27 @@ func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); !ok || fqdn != "p1.example.ts.net." {
 		t.Errorf("magicDNSPTR(100.64.0.2) = %q, %v; want p1's name", fqdn, ok)
 	}
+
+	// Validate MagicDNS reverse lookup allowed
+	allowedFrom := func(ip string, want bool) {
+		t.Helper()
+
+		if got := nb.magicDNSReverseAllowedFrom(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("magicDNSReverseAllowedFrom(%q) = %v; want %v", ip, got, want)
+		}
+	}
+	// Reverse lookups are answered from localhost and this node's own addresses
+	allowedFrom("127.0.0.1", true)
+	allowedFrom("::1", true)
+	// self, v4 and v6
+	allowedFrom("100.64.0.1", true)
+	allowedFrom("fd7a:115c:a1e0::1", true)
+	// Denied peers, LAN, and unassigned tailnet addresses
+	allowedFrom("100.64.0.2", false)        // peer
+	allowedFrom("fd7a:115c:a1e0::2", false) // peer v6
+	allowedFrom("192.168.1.2", false)       // LAN
+	allowedFrom("100.64.0.99", false)       // unknown tailnet address
+
 	if got, want := nb.magicDNSSubdomainHost("p1.example.ts.net."), true; got != want {
 		t.Errorf("magicDNSSubdomainHost(p1) = %v; want %v", got, want)
 	}

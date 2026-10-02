@@ -481,6 +481,9 @@ type fakeMagicDNSHosts struct {
 	hosts     map[dnsname.FQDN][]netip.Addr
 	subdomain set.Set[dnsname.FQDN]
 	ptr       map[netip.Addr]dnsname.FQDN
+	// allowedFrom admits every source when nil; otherwise it is the
+	// set of addresses whose reverse lookups are allowed.
+	allowedFrom set.Set[netip.Addr]
 }
 
 func (f fakeMagicDNSHosts) LookupHost(fqdn dnsname.FQDN) (ips []netip.Addr, ok bool) {
@@ -495,6 +498,13 @@ func (f fakeMagicDNSHosts) LookupPTR(ip netip.Addr) (_ dnsname.FQDN, ok bool) {
 
 func (f fakeMagicDNSHosts) SubdomainHost(fqdn dnsname.FQDN) bool {
 	return f.subdomain.Contains(fqdn)
+}
+
+func (f fakeMagicDNSHosts) ReverseLookupAllowedFrom(ip netip.Addr) bool {
+	if f.allowedFrom == nil {
+		return true
+	}
+	return f.allowedFrom.Contains(ip)
 }
 
 // Tests forward, subdomain, and reverse resolution served on demand
@@ -570,7 +580,7 @@ func TestResolveLocalMagicDNSHosts(t *testing.T) {
 	}
 	for _, tt := range revTests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, code := r.resolveLocalReverse(tt.q)
+			name, code := r.resolveLocalReverse(tt.q, netip.MustParseAddr("127.0.0.1"))
 			if code != tt.code {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
@@ -604,7 +614,7 @@ func TestResolveLocalReverse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, code := r.resolveLocalReverse(tt.q)
+			name, code := r.resolveLocalReverse(tt.q, netip.MustParseAddr("127.0.0.1"))
 			if code != tt.code {
 				t.Errorf("code = %v; want %v", code, tt.code)
 			}
@@ -1125,6 +1135,108 @@ func TestFull(t *testing.T) {
 				t.Errorf("response = %x; want %x", response, tt.response)
 			}
 		})
+	}
+}
+
+func TestReverseRefusedFromDisallowedSource(t *testing.T) {
+	r := newResolver(t)
+	defer r.Close()
+
+	magicIP := netip.MustParseAddr("100.98.76.54")
+	magicArpa := dnsname.FQDN("54.76.98.100.in-addr.arpa.")
+	magicName := dnsname.FQDN("magic.ipn.dev.")
+
+	// Statics outside Tailscale ranges keep answering to any source
+	// CGNAT/ULA statics are gated like netmap nodes
+	staticIP := netip.MustParseAddr("10.20.30.40")
+	staticArpa := dnsname.FQDN("40.30.20.10.in-addr.arpa.")
+	cgnatStaticIP := netip.MustParseAddr("100.78.79.79")
+	cgnatStaticArpa := dnsname.FQDN("79.79.78.100.in-addr.arpa.")
+	r.SetConfig(Config{
+		Hosts: map[dnsname.FQDN][]netip.Addr{
+			"static.ipn.dev.":       {staticIP},
+			"cgnat-static.ipn.dev.": {cgnatStaticIP},
+		},
+	})
+
+	peerIP := netip.MustParseAddr("100.64.1.2")
+	lanIP := netip.MustParseAddr("192.168.1.2")
+	approvedSrc := netip.MustParseAddr("192.168.1.10") // any source the hook allows
+	r.SetMagicDNSHosts(fakeMagicDNSHosts{
+		hosts: map[dnsname.FQDN][]netip.Addr{
+			magicName: {magicIP},
+		},
+		ptr: map[netip.Addr]dnsname.FQDN{
+			magicIP: magicName,
+		},
+		allowedFrom: set.Of(netip.MustParseAddr("127.0.0.1"), approvedSrc),
+	})
+
+	respond := func(query []byte, from netip.Addr) dns.RCode {
+		t.Helper()
+		response, err := r.Query(context.Background(), query, "udp", netip.AddrPortFrom(from, 12345))
+		if err != nil {
+			t.Fatalf("query from %v: %v", from, err)
+		}
+		var p dns.Parser
+		hdr, err := p.Start(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hdr.RCode
+	}
+
+	magicPtrQuery := dnspacket(magicArpa, dns.TypePTR, noEdns)
+	tests := []struct {
+		name string
+		from netip.Addr
+		want dns.RCode
+	}{
+		{"allowed_loopback", netip.MustParseAddr("127.0.0.1"), dns.RCodeSuccess},
+		{"allowed_hook_approved_src", approvedSrc, dns.RCodeSuccess},
+		// Peer node addresses are not local interface addresses
+		{"refused_peer", peerIP, dns.RCodeRefused},
+		{"refused_lan", lanIP, dns.RCodeRefused},
+		// Non-member source inside the CGNAT range, trivially spoofed over L2
+		{"refused_cgnat_source_not_peer", netip.MustParseAddr("100.99.99.99"), dns.RCodeRefused},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := respond(magicPtrQuery, tt.from); got != tt.want {
+				t.Errorf("PTR from %v: RCode = %v; want %v", tt.from, got, tt.want)
+			}
+		})
+	}
+
+	// An unassigned IP must answer identically to a real peer for a disallowed source
+	unassignedArpa := dnsname.FQDN("81.99.99.100.in-addr.arpa.")
+	if got := respond(dnspacket(unassignedArpa, dns.TypePTR, noEdns), lanIP); got != dns.RCodeRefused {
+		t.Errorf("PTR of unassigned IP from %v: RCode = %v; want Refused", lanIP, got)
+	}
+
+	// A CGNAT-range static is gated too
+	if got := respond(dnspacket(cgnatStaticArpa, dns.TypePTR, noEdns), lanIP); got != dns.RCodeRefused {
+		t.Errorf("PTR of CGNAT static from %v: RCode = %v; want Refused", lanIP, got)
+	}
+	if got := respond(dnspacket(cgnatStaticArpa, dns.TypePTR, noEdns), netip.MustParseAddr("127.0.0.1")); got != dns.RCodeSuccess {
+		t.Errorf("PTR of CGNAT static from loopback: RCode = %v; want Success", got)
+	}
+
+	// Static reverse records outside Tailscale ranges keep answering to disallowed sources
+	if got := respond(dnspacket(staticArpa, dns.TypePTR, noEdns), lanIP); got != dns.RCodeSuccess {
+		t.Errorf("PTR of static ExtraRecords IP from %v: RCode = %v; want Success", lanIP, got)
+	}
+
+	// Forward lookups allowed from all source still
+	if got := respond(dnspacket(magicName, dns.TypeA, noEdns), lanIP); got != dns.RCodeSuccess {
+		t.Errorf("forward from %v: RCode = %v; want Success", lanIP, got)
+	}
+
+	// Reverse zones outside Tailscale's ranges (relayed split-DNS) are
+	// not netmap-backed and delegate upstream for any source.
+	relayQuery := dnspacket(dnsname.FQDN("50.168.192.in-addr.arpa."), dns.TypePTR, noEdns)
+	if _, err := r.respond(relayQuery, netip.AddrPortFrom(lanIP, 12345)); !errors.Is(err, errNotOurName) {
+		t.Errorf("respond PTR in relayed zone from %v: err = %v; want errNotOurName", lanIP, err)
 	}
 }
 
