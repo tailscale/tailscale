@@ -7,6 +7,7 @@ package apiproxy
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -197,4 +198,45 @@ func raw(in ...string) []tailcfg.RawMessage {
 		out = append(out, tailcfg.RawMessage(i))
 	}
 	return out
+}
+
+func TestExecAttachRecordingRouting(t *testing.T) {
+	ap := &APIServerProxy{}
+	mux := ap.newServeMux()
+
+	// The kube-apiserver accepts a trailing slash on the exec and attach
+	// subresources, so the proxy must route both forms to the recording
+	// handlers rather than letting the slashed form fall through to
+	// serveDefault, which streams the upgraded connection without recording.
+	tests := []struct {
+		method, path string
+		wantExact    string // exact pattern; empty means "not the default handler"
+	}{
+		{"POST", "/api/v1/namespaces/default/pods/p/exec", "POST /api/v1/namespaces/{namespace}/pods/{pod}/exec"},
+		{"GET", "/api/v1/namespaces/default/pods/p/exec", "GET /api/v1/namespaces/{namespace}/pods/{pod}/exec"},
+		{"POST", "/api/v1/namespaces/default/pods/p/attach", "POST /api/v1/namespaces/{namespace}/pods/{pod}/attach"},
+		{"GET", "/api/v1/namespaces/default/pods/p/attach", "GET /api/v1/namespaces/{namespace}/pods/{pod}/attach"},
+		{"POST", "/api/v1/namespaces/default/pods/p/exec/", "POST /api/v1/namespaces/{namespace}/pods/{pod}/exec/"},
+		{"GET", "/api/v1/namespaces/default/pods/p/exec/", "GET /api/v1/namespaces/{namespace}/pods/{pod}/exec/"},
+		{"POST", "/api/v1/namespaces/default/pods/p/attach/", "POST /api/v1/namespaces/{namespace}/pods/{pod}/attach/"},
+		{"GET", "/api/v1/namespaces/default/pods/p/attach/", "GET /api/v1/namespaces/{namespace}/pods/{pod}/attach/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			r := httptest.NewRequest(tt.method, tt.path, nil)
+			_, pattern := mux.Handler(r)
+			if pattern == "/" {
+				t.Fatalf("routed to serveDefault (unrecorded); want recording handler %q", tt.wantExact)
+			}
+			if pattern != tt.wantExact {
+				t.Fatalf("matched pattern %q, want %q", pattern, tt.wantExact)
+			}
+		})
+	}
+
+	// A path that is not exec or attach must still reach serveDefault.
+	r := httptest.NewRequest("GET", "/api/v1/namespaces/default/pods", nil)
+	if _, pattern := mux.Handler(r); pattern != "/" {
+		t.Errorf("non-session request matched %q, want serveDefault", pattern)
+	}
 }
