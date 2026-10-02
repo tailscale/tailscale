@@ -1565,6 +1565,12 @@ var (
 	metricDNSFwdUDPErrorRead    = clientmetric.NewCounter("dns_query_fwd_udp_error_read")
 	metricDNSFwdUDPSuccess      = clientmetric.NewCounter("dns_query_fwd_udp_success")
 
+	// metricDNSFwdUDPReadCtxDone counts reads that ended because the query
+	// ended, either by losing a race or by running out its deadline. Those
+	// reads used to be counted as upstream read failures. Counting them here
+	// instead keeps them visible without blaming the upstream.
+	metricDNSFwdUDPReadCtxDone = clientmetric.NewCounter("dns_query_fwd_udp_read_ctx_done")
+
 	metricDNSFwdTCP             = clientmetric.NewCounter("dns_query_fwd_tcp")       // on entry
 	metricDNSFwdTCPWrote        = clientmetric.NewCounter("dns_query_fwd_tcp_wrote") // sent TCP packet
 	metricDNSFwdTCPErrorWrite   = clientmetric.NewCounter("dns_query_fwd_tcp_error_write")
