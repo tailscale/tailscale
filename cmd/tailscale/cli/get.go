@@ -132,6 +132,19 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 	switch flagName {
 	case "accept-routes":
 		return prefs.RouteAll
+	case "accept-routes-allow", "accept-routes-deny":
+		routes := prefs.AcceptRoutesAllow
+		if flagName == "accept-routes-deny" {
+			routes = prefs.AcceptRoutesDeny
+		}
+		var sb strings.Builder
+		for i, route := range routes {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(route.String())
+		}
+		return sb.String()
 	case "accept-dns":
 		return prefs.CorpDNS
 	case "exit-node":

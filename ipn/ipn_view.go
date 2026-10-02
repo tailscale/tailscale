@@ -242,6 +242,23 @@ func (v PrefsView) ControlURL() string { return v.ж.ControlURL }
 // controlled by ExitNodeID/IP below.
 func (v PrefsView) RouteAll() bool { return v.ж.RouteAll }
 
+// AcceptRoutesAllow restricts accepted subnet routes to those wholly
+// contained in one of these prefixes. An empty list imposes no restriction.
+// AcceptRoutesDeny takes precedence. These filters apply only when RouteAll
+// is true and do not affect peers' Tailscale addresses or exit node routes.
+func (v PrefsView) AcceptRoutesAllow() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.AcceptRoutesAllow)
+}
+
+// AcceptRoutesDeny excludes any advertised subnet route that overlaps one
+// of these prefixes. The entire advertised route is excluded, not split.
+// An empty list excludes nothing. This is a route filter, not an access
+// control policy: excluded destinations may still be reached by other
+// routes, including a selected exit node's default routes.
+func (v PrefsView) AcceptRoutesDeny() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.AcceptRoutesDeny)
+}
+
 // ExitNodeID and ExitNodeIP specify the node that should be used
 // as an exit node for internet traffic. At most one of these
 // should be non-zero.
@@ -493,6 +510,8 @@ func (v PrefsView) Persist() persist.PersistView { return v.ж.Persist.View() }
 var _PrefsViewNeedsRegeneration = Prefs(struct {
 	ControlURL                 string
 	RouteAll                   bool
+	AcceptRoutesAllow          []netip.Prefix
+	AcceptRoutesDeny           []netip.Prefix
 	ExitNodeID                 tailcfg.StableNodeID
 	ExitNodeIP                 netip.Addr
 	AutoExitNode               ExitNodeExpression

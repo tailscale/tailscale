@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -422,8 +423,7 @@ func netfilterModeFromFlag(v string) (_ preftype.NetfilterMode, warning string, 
 // transition to running from a previously-logged-in but down state,
 // without changing any settings.
 //
-// Note this can also mutate prefs to add implicit preferences for the
-// user operator.
+// Note this can also mutate prefs to preserve implicit preferences.
 //
 // TODO(alexc): the name of this function is confusing, and perhaps a
 // sign that it's doing too much. Consider refactoring this so it's just
@@ -478,6 +478,10 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		visitFlags := env.flagSet.Visit
 		if env.upArgs.reset {
 			visitFlags = env.flagSet.VisitAll
+			// Subnet route filters have no up flags, but --reset must clear
+			// them in both the EditPrefs and Start paths.
+			justEditMP.AcceptRoutesAllowSet = true
+			justEditMP.AcceptRoutesDenySet = true
 		}
 		if prefs.AutoExitNode.IsSet() {
 			justEditMP.AutoExitNodeSet = true
@@ -949,6 +953,8 @@ func init() {
 	// The rest are 1:1:
 	addPrefFlagMapping("accept-dns", "CorpDNS")
 	addPrefFlagMapping("accept-routes", "RouteAll")
+	addPrefFlagMapping("accept-routes-allow", "AcceptRoutesAllow")
+	addPrefFlagMapping("accept-routes-deny", "AcceptRoutesDeny")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
 	addPrefFlagMapping("hostname", "Hostname")
 	addPrefFlagMapping("login-server", "ControlURL")
@@ -1142,12 +1148,14 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 	return false, errors.New(sb.String())
 }
 
-// applyImplicitPrefs mutates prefs to add implicit preferences for the user operator.
-// If the operator flag is passed no action is taken, otherwise this only needs to be set if it doesn't
-// match the current user.
-//
-// curUser is os.Getenv("USER"). It's pulled out for testability.
+// applyImplicitPrefs preserves preferences that need not be repeated in up.
+// The operator is preserved when it matches the current user and was not
+// explicitly specified. Subnet route filters are configured with set and are
+// preserved here unless the caller is resetting preferences.
 func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
+	prefs.AcceptRoutesAllow = slices.Clone(oldPrefs.AcceptRoutesAllow)
+	prefs.AcceptRoutesDeny = slices.Clone(oldPrefs.AcceptRoutesDeny)
+
 	explicitOperator := false
 	env.flagSet.Visit(func(f *flag.Flag) {
 		if f.Name == "operator" {
