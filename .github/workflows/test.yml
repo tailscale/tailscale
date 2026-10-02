@@ -105,14 +105,7 @@ jobs:
         include:
           - goarch: amd64
           - goarch: amd64
-            buildflags: "-race"
-            shard: '1/3'
-          - goarch: amd64
-            buildflags: "-race"
-            shard: '2/3'
-          - goarch: amd64
-            buildflags: "-race"
-            shard: '3/3'
+            buildflags: "-race" # benchmarks only; tests run on the gotst race swarm
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-24.04
     needs: gomod-cache
@@ -136,11 +129,11 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-
-          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ hashFiles('**/go.sum') }}-
+          ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-
           ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-
     - name: build all
       if: matrix.buildflags == '' # skip on race builder
@@ -164,14 +157,15 @@ jobs:
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
     - name: build test wrapper
+      if: matrix.buildflags == ''
       working-directory: src
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
+      if: matrix.buildflags == '' # race tests run on the gotst race swarm
       working-directory: src
       run: NOBASHDEBUG=true NOPWSHDEBUG=true PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
-        TS_TEST_SHARD: ${{ matrix.shard }}
     - name: bench all
       working-directory: src
       run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run='^$' $(for x in $(git grep -l '^func Benchmark' | xargs dirname | sort | uniq); do echo "./$x"; done)
@@ -207,7 +201,146 @@ jobs:
         path: |
           ~/.cache/go-build
           ~\AppData\Local\go-build
-        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ matrix.shard }}-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+        key: ${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-${{ hashFiles('**/go.sum') }}-${{ github.job }}-${{ github.run_id }}
+
+  # gotst-keys makes the tailcat key for the gotst swarm below, so the helpers
+  # know their leader's address before the leader starts. The key is
+  # single-use and thrown away with the run, but it does appear in job outputs
+  # and logs (GitHub drops masked values from job outputs).
+  gotst-keys:
+    runs-on: ubuntu-24.04
+    outputs:
+      addr: ${{ steps.gen.outputs.addr }}
+      key: ${{ steps.gen.outputs.key }}
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: src
+    - name: generate key
+      id: gen
+      working-directory: src
+      env:
+        # The Tailscale toolchain sets the tailscale_go build tag, which
+        # makes tailcat's older tailscale.com dependency check its toolchain
+        # rev at init.
+        TS_PERMIT_TOOLCHAIN_MISMATCH: "1"
+      # --fixed-region bakes the DERP region nearest this runner into the key
+      # and address, so the leader doesn't probe for one at startup.
+      run: |
+        set -euo pipefail
+        GOBIN="$RUNNER_TEMP" ./tool/go install github.com/tailscale/tailcat/cmd/tailcat@v0.6.0
+        addr=$("$RUNNER_TEMP/tailcat" genkey --key="$RUNNER_TEMP/leader.private.json" --fixed-region)
+        echo "leader address: $addr"
+        echo "addr=$addr" >> "$GITHUB_OUTPUT"
+        echo "key=$(base64 -w0 "$RUNNER_TEMP/leader.private.json")" >> "$GITHUB_OUTPUT"
+
+  # gotst runs the race tests on a swarm of runners using
+  # github.com/tailscale/gotst's distributed mode. The leader builds and lists
+  # every test and runs its share, while the helpers connect to it over
+  # tailcat and take work off its queue. Only the leader's exit status
+  # reflects test results; a helper that fails or arrives after the leader
+  # finishes just warns.
+  gotst:
+    needs: gotst-keys
+    name: race (${{ matrix.member }})
+    permissions:
+      actions: read # for helpers to watch their leader's job
+      contents: read # for actions/checkout
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        member: [leader, helper-2, helper-3, helper-4, helper-5]
+    env:
+      # See the gotst-keys job.
+      TS_PERMIT_TOOLCHAIN_MISMATCH: "1"
+      NOBASHDEBUG: "true"
+    defaults:
+      run:
+        shell: bash
+        working-directory: src
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: src
+    - name: install gotst
+      run: GOBIN="$RUNNER_TEMP" ./tool/go install github.com/tailscale/gotst@4ed0a43b6c5930e629e5cf1080c81802773d8731
+    - name: lead
+      if: matrix.member == 'leader'
+      env:
+        LEADER_KEY: ${{ needs.gotst-keys.outputs.key }}
+      run: |
+        set -euo pipefail
+        echo "$LEADER_KEY" | base64 -d > "$RUNNER_TEMP/leader.private.json"
+        PATH=$PWD/tool:$PATH "$RUNNER_TEMP/gotst" -dist -dist-key="$RUNNER_TEMP/leader.private.json" \
+          -listen=tailcat -progress=10s -j=$(nproc) -race
+    - name: help
+      if: matrix.member != 'leader'
+      env:
+        LEADER_ADDR: ${{ needs.gotst-keys.outputs.addr }}
+        LEADER_JOB: race (leader)
+        HELPER_NAME: race-${{ matrix.member }}
+        GH_TOKEN: ${{ github.token }}
+      # GitHub doesn't start matrix jobs in order, and runners can be scarce,
+      # so a helper can start long before its leader or even take the runner
+      # its leader is waiting for. Helpers therefore watch the leader's job:
+      # they give up their runner if the leader stays queued, and stop trying
+      # to join once it has finished.
+      #
+      # The leader only hands out work once it has built every test binary.
+      # Helpers build them too in the meantime, so that later builds of
+      # assigned packages are cache hits.
+      run: |
+        set -uo pipefail
+        export PATH=$PWD/tool:$PATH
+        leader_status() {
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq ".jobs[] | select(.name == \"$LEADER_JOB\") | .status" | head -1
+        }
+        deadline=$((SECONDS + 120))
+        while true; do
+          status=$(leader_status)
+          echo "leader job status: ${status:-unknown}"
+          case "$status" in
+            in_progress) break ;;
+            completed) echo "leader already finished"; exit 0 ;;
+          esac
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::notice title=gotst helper::$HELPER_NAME: leader still ${status:-unknown} after 2m; freeing this runner"
+            exit 0
+          fi
+          sleep 15
+        done
+        if ! "$RUNNER_TEMP/gotst" -build-only -listen= -progress=10s -j=$(nproc) -race; then
+          echo "::warning title=gotst helper::$HELPER_NAME: building test binaries failed"
+        fi
+        while [ "$(leader_status)" != completed ]; do
+          "$RUNNER_TEMP/gotst" -helper="$LEADER_ADDR" -helper-name="$HELPER_NAME" -j=$(nproc) 2>&1 | tee "$RUNNER_TEMP/helper.log"
+          if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -q 'joined leader' "$RUNNER_TEMP/helper.log"; then
+            break
+          fi
+          sleep 5
+        done
+        echo "::warning title=gotst helper::$HELPER_NAME did not finish helping its leader; see its log"
+    - name: check that no tracked files changed
+      run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
+    - name: check that no new files were added
+      run: |
+        # Note: The "error: pathspec..." you see below is normal!
+        # In the success case in which there are no new untracked files,
+        # git ls-files complains about the pathspec not matching anything.
+        # That's OK. It's not worth the effort to suppress. Please ignore it.
+        if git ls-files --others --exclude-standard --directory --no-empty-directory --error-unmatch -- ':/*'
+        then
+          echo "Build/test created untracked files in the repo (file names above)."
+          exit 1
+        fi
 
   windows:
     if: false # DEV ONLY: disabled while developing the gotst swarms
@@ -835,6 +968,7 @@ jobs:
     needs:
       - android
       - test
+      - gotst
       - windows
       - macos
       - cross
@@ -989,6 +1123,7 @@ jobs:
     needs:
       - android
       - test
+      - gotst
       - windows
       - macos
       - cross
@@ -1037,6 +1172,7 @@ jobs:
     needs:
       - check_mergeability_strict
       - test
+      - gotst
       - windows
       - macos
       - wasm
