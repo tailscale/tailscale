@@ -280,6 +280,8 @@ type LocalBackend struct {
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
 	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
+	viaAllowLocalAtomic                     syncs.AtomicValue[*netipx.IPSet]             // host-scoped 4via6 targets permitted by [viaAllowLocalCap]; nil if none
+	viaAllowLocal                           viaAllowLocalState                           // guarded by mu; tracks changes to [viaAllowLocalCap]
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
 	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
@@ -7150,7 +7152,7 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 // The packet filter only sees the outer via address of a 4via6 flow, so this
 // is the sole policy check on the embedded target.
 func (b *LocalBackend) ShouldForwardToVia(via netip.Addr) bool {
-	return viaTargetAllowed(tsaddr.UnmapVia(via))
+	return viaTargetAllowed(tsaddr.UnmapVia(via), b.viaAllowLocalAtomic.Load())
 }
 
 // Logout logs out the current profile, if any, and waits for the logout to
@@ -7398,6 +7400,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.notifyPeerUpdateLocked()
 	b.setDataPlanePeerRoutes()
+	b.setViaAllowLocalLocked(nm)
 	if ms, ok := b.sys.MagicSock.GetOK(); ok {
 		if nm != nil {
 			if nm.Cached {
@@ -9227,7 +9230,7 @@ func isAllowedAutoExitNodeID(polc policyclient.Client, exitNodeID tailcfg.Stable
 }
 
 // srcIPHasCapForFilter is called by the packet filter when evaluating firewall
-// rules that require a source IP to have a certain node capability.
+// rules that require a source IP to have a certain node attribute.
 //
 // TODO(bradfitz): optimize this later if/when it matters.
 // TODO(nickkhyl): move this into [nodeBackend] along with [LocalBackend.updateFilterLocked].
