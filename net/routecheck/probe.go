@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/traffic"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsconst"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -217,6 +218,12 @@ func (c *Client) ProbeAllHARouters(ctx context.Context, limit int, timeout time.
 			continue
 		}
 		nodes = append(nodes, rs...) // Note: this introduces duplicates.
+	}
+
+	for _, nv := range c.nb.NodeBackend().Peers() {
+		if nv.HasCap(nodecap.Conn25Connector) {
+			nodes = append(nodes, nv)
+		}
 	}
 
 	// Sort by Node.ID and deduplicate to avoid double-probing.

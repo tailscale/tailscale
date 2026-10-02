@@ -380,7 +380,8 @@ func (ps *PeerStatus) IsRouter() bool {
 			return true
 		}
 	}
-	return false
+
+	return ps.HasCap(nodecap.Conn25Connector)
 }
 
 // IsTagged reports whether ps is tagged.
