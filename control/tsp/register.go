@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"tailscale.com/control/ts2021"
 	"tailscale.com/tailcfg"
@@ -64,6 +65,33 @@ func (c *Client) Register(ctx context.Context, opts RegisterOpts) (*tailcfg.Regi
 		}
 	}
 
+	return c.register(ctx, &regReq, opts.MaxResponseSize)
+}
+
+// Logout expires the node identified by nodeKey, logging it out of the
+// coordination server. It mirrors the behavior of controlclient's
+// (*Direct).doLogin with Logout set: a register request that reuses the
+// current node key and requests an expiry far in the past.
+//
+// Logout does not close the client; use [Client.Close] to release resources.
+func (c *Client) Logout(ctx context.Context, nodeKey key.NodePrivate) error {
+	regReq := tailcfg.RegisterRequest{
+		Version:  tailcfg.CurrentCapabilityVersion,
+		NodeKey:  nodeKey.Public(),
+		Hostinfo: defaultHostinfo(),
+		// A register request whose NodeKey is the node's current key and
+		// whose Expiry is in the past expires (logs out) the node. See the
+		// Expiry doc comment on tailcfg.RegisterRequest.
+		Expiry: time.Unix(123, 0), // far in the past
+	}
+	_, err := c.register(ctx, &regReq, 0)
+	return err
+}
+
+// register sends regReq to the coordination server's /machine/register
+// endpoint over the noise channel, decoding and returning the response.
+// maxResponseSize, if zero, defaults to [DefaultMaxMessageSize].
+func (c *Client) register(ctx context.Context, regReq *tailcfg.RegisterRequest, maxResponseSize int64) (*tailcfg.RegisterResponse, error) {
 	body, err := json.Marshal(regReq)
 	if err != nil {
 		return nil, fmt.Errorf("encoding register request: %w", err)
@@ -80,7 +108,7 @@ func (c *Client) Register(ctx context.Context, opts RegisterOpts) (*tailcfg.Regi
 	if err != nil {
 		return nil, fmt.Errorf("creating register request: %w", err)
 	}
-	ts2021.AddLBHeader(req, opts.NodeKey.Public())
+	ts2021.AddLBHeader(req, regReq.NodeKey)
 
 	res, err := nc.Do(req)
 	if err != nil {
@@ -88,7 +116,7 @@ func (c *Client) Register(ctx context.Context, opts RegisterOpts) (*tailcfg.Regi
 	}
 	defer res.Body.Close()
 
-	maxResponseSize := cmp.Or(opts.MaxResponseSize, DefaultMaxMessageSize)
+	maxResponseSize = cmp.Or(maxResponseSize, DefaultMaxMessageSize)
 
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, maxResponseSize))

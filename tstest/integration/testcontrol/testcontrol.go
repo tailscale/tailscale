@@ -1092,6 +1092,14 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		}
 		s.nodes[nk] = node
 	}
+	// A register request that reuses the node's current key and requests an
+	// expiry in the past expires (logs out) the node, matching the semantics
+	// documented on tailcfg.RegisterRequest.Expiry.
+	if req.OldNodeKey.IsZero() && !req.Expiry.IsZero() && req.Expiry.Before(time.Now()) {
+		if n, ok := s.nodes[nk]; ok {
+			n.KeyExpiry = req.Expiry
+		}
+	}
 	// Consider a node key expired if allExpired is set or if the nodeKey has
 	// an expiry time in the past. This allows tests to set per-node KeyExpiry
 	// via UpdateNode to simulate an admin-triggered or time-based expiry.
