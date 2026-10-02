@@ -432,7 +432,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		ac := &agentConn{node, tc}
+		ac := &agentConn{node, tc, ep}
 		n.s.addIdleAgentConn(ac)
 		return
 	}
@@ -2904,6 +2904,7 @@ func (s *Server) WriteStartingBanner(w io.Writer) {
 type agentConn struct {
 	node *node
 	tc   *gonet.TCPConn
+	ep   tcpip.Endpoint
 }
 
 func (s *Server) addIdleAgentConn(ac *agentConn) {
@@ -2974,11 +2975,16 @@ func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ac := range s.agentConns {
-		if ac.node == n {
-			s.agentConns.Delete(ac)
-			return ac, 0
+		if ac.node != n {
+			miss++
+			continue
 		}
-		miss++
+		s.agentConns.Delete(ac)
+		if st := tcp.EndpointState(ac.ep.State()); st != tcp.StateEstablished {
+			log.Printf("takeAgentConn: discarding idle agent conn for %v that the agent already closed (state %v)", n.mac, st)
+			continue
+		}
+		return ac, 0
 	}
 	return nil, miss
 }
