@@ -819,6 +819,17 @@ func (t *Tracker) SetDERPRegionConnectedState(region tailcfg.DERPRegionID, conne
 	t.selfCheckLocked()
 }
 
+// GetDERPRegionConnectedState returns whether the DERP connection to the
+// given region is currently established.
+func (t *Tracker) GetDERPRegionConnectedState(region tailcfg.DERPRegionID) bool {
+	if t.nil() {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.derpRegionConnected[region]
+}
+
 // SetDERPRegionHealth sets or clears any problem associated with the
 // provided DERP region.
 func (t *Tracker) SetDERPRegionHealth(region tailcfg.DERPRegionID, problem string) {
