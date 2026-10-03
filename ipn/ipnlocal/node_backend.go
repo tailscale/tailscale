@@ -39,6 +39,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -272,20 +273,29 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// PeerAllowedIPs returns the prefixes from which the peer with the
-// given public key is currently allowed to originate traffic, or
-// ok=false if the key is unknown or the peer currently contributes no
-// prefixes.
-func (nb *nodeBackend) PeerAllowedIPs(k key.NodePublic) ([]netip.Prefix, bool) {
+// PeerWGConfig returns the wgcfg.PeerConfig to use for the peer with the
+// given public key, or ok=false if the key is unknown or currently should
+// not receive any traffic.
+func (nb *nodeBackend) PeerWGConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	id, ok := nb.nodeByKey[k]
 	if !ok {
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	}
-	// Holding nb.mu satisfies routeMgr's serialization requirement:
-	// all routeMgr mutations also run under nb.mu.
-	return nb.routeMgr.PeerAllowedIPs(id)
+
+	peer, ok := nb.peers[id]
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+	hybrid := peer.Cap() >= 149 // TODO: plumb in panic disable
+
+	ips, ok := nb.routeMgr.PeerAllowedIPs(id)
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+
+	return wgcfg.PeerConfig{AllowedIPs: ips, Hybrid: hybrid}, true
 }
 
 // NodeByWireGuardString returns the node ID of the peer whose
