@@ -115,7 +115,7 @@ func (b *VolatileBuffer) Read(p []byte) (int, error) {
 	defer b.mu.Unlock()
 	data := b.dataLocked()
 	if len(data) == 0 {
-		return 0, wrapError("read", bools.IfElse(b.closedWrite, io.EOF, ErrEmpty))
+		return 0, bools.IfElse(b.closedWrite, io.EOF, ErrEmpty)
 	}
 	n := copy(p, data)
 	b.readOffset += int64(n)
@@ -134,7 +134,7 @@ func (b *VolatileBuffer) Peek(p []byte) (readOffset int64, n int64, err error) {
 	readOffset = b.readOffset
 	data := b.dataLocked()
 	if len(data) == 0 {
-		return readOffset, 0, wrapError("peek", bools.IfElse(b.closedWrite, io.EOF, ErrEmpty))
+		return readOffset, 0, bools.IfElse(b.closedWrite, io.EOF, ErrEmpty)
 	}
 	return readOffset, int64(copy(p, data)), nil
 }
@@ -149,7 +149,7 @@ func (b *VolatileBuffer) DiscardUntil(readOffset int64) (n int64, err error) {
 		return 0, nil
 	}
 	if readOffset > b.writeOffset {
-		err = wrapError("discard", bools.IfElse(b.closedWrite, io.EOF, ErrEmpty))
+		err = bools.IfElse(b.closedWrite, io.EOF, ErrEmpty)
 	}
 	readOffset = min(readOffset, b.writeOffset)
 	n = readOffset - b.readOffset
