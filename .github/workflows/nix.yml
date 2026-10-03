@@ -1,0 +1,57 @@
+name: nix
+
+on:
+  pull_request:
+    paths:
+      - "flake.nix"
+      - "flakehashes.json"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "flake.nix"
+      - "flakehashes.json"
+      - "nix/**"
+      - ".github/workflows/nix.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake-check-linux:
+    name: flake check (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      # Eval-only so the heavyweight NixOS VM tests do not block the gate.
+      # The VM tests still run on demand via `nix flake check` locally.
+      - name: nix flake check (no-build)
+        run: nix flake check --no-build
+
+  darwin-e2e:
+    name: darwin E2E (Headscale + nix-darwin)
+    runs-on: macos-latest
+    needs: flake-check-linux
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+      - name: run E2E test
+        working-directory: nix/darwin/tests/ci
+        run: bash run.sh
+      - name: upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: darwin-e2e-logs
+          path: |
+            /tmp/ts-ci/headscale.log
+            /Users/runner/Library/Logs/Tailscale-*.log
