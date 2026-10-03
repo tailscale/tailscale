@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
@@ -23,12 +24,14 @@ import (
 )
 
 type userspaceBSDRouter struct {
-	logf    logger.Logf
-	netMon  *netmon.Monitor
-	health  *health.Tracker
-	tunname string
-	local   []netip.Prefix
-	routes  map[netip.Prefix]bool
+	logf            logger.Logf
+	netMon          *netmon.Monitor
+	health          *health.Tracker
+	tunname         string
+	local           []netip.Prefix
+	routes          map[netip.Prefix]bool
+	networkChanged  atomic.Bool
+	unregisterNetMon func()
 }
 
 func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (*userspaceBSDRouter, error) {
@@ -37,12 +40,18 @@ func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.M
 		return nil, err
 	}
 
-	return &userspaceBSDRouter{
+	r := &userspaceBSDRouter{
 		logf:    logf,
 		netMon:  netMon,
 		health:  health,
 		tunname: tunname,
-	}, nil
+	}
+	if netMon != nil {
+		r.unregisterNetMon = netMon.RegisterChangeCallback(func(*netmon.ChangeDelta) {
+			r.networkChanged.Store(true)
+		})
+	}
+	return r, nil
 }
 
 func (r *userspaceBSDRouter) addrsToRemove(newLocalAddrs []netip.Prefix) (remove []netip.Prefix) {
@@ -114,7 +123,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 
 	// If we're removing all addresses, we need to remove and re-add all
 	// routes.
-	resetRoutes := len(r.local) > 0 && len(addrsToRemove) == len(r.local)
+	resetRoutes := r.networkChanged.Swap(false) || (len(r.local) > 0 && len(addrsToRemove) == len(r.local))
 
 	// Update the addresses.
 	for _, addr := range addrsToRemove {
@@ -201,5 +210,9 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
 }
 
 func (r *userspaceBSDRouter) Close() error {
+	if r.unregisterNetMon != nil {
+		r.unregisterNetMon()
+		r.unregisterNetMon = nil
+	}
 	return nil
 }
