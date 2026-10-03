@@ -15,14 +15,28 @@ import (
 
 func TestLRU(t *testing.T) {
 	var c Cache[int, string]
+	if k, v := c.PeekOldest(); k != 0 || v != "" {
+		t.Errorf("PeekOldest() = (%d, %q), want (0, %q)", k, v, "")
+	}
+
 	c.Set(1, "one")
+	if k, v := c.PeekOldest(); k != 1 || v != "one" {
+		t.Errorf("PeekOldest() = (%d, %q), want (1, %q)", k, v, "one")
+	}
 	c.Set(2, "two")
 	if g, w := c.Get(1), "one"; g != w {
 		t.Errorf("got %q; want %q", g, w)
 	}
+	if k, v := c.PeekOldest(); k != 2 || v != "two" {
+		t.Errorf("PeekOldest() = (%d, %q), want (2, %q)", k, v, "two")
+	}
 	if g, w := c.Get(2), "two"; g != w {
 		t.Errorf("got %q; want %q", g, w)
 	}
+	if k, v := c.PeekOldest(); k != 1 || v != "one" {
+		t.Errorf("PeekOldest() = (%d, %q), want (1, %q)", k, v, "one")
+	}
+
 	c.DeleteOldest()
 	if g, w := c.Get(1), ""; g != w {
 		t.Errorf("got %q; want %q", g, w)
@@ -30,9 +44,16 @@ func TestLRU(t *testing.T) {
 	if g, w := c.Len(), 1; g != w {
 		t.Errorf("Len = %d; want %d", g, w)
 	}
+	if k, v := c.PeekOldest(); k != 2 || v != "two" {
+		t.Errorf("PeekOldest() = (%d, %q), want (2, %q)", k, v, "two")
+	}
+
 	c.MaxEntries = 2
 	c.Set(1, "one")
 	c.Set(2, "two")
+	if k, v := c.PeekOldest(); k != 1 || v != "one" {
+		t.Errorf("PeekOldest() = (%d, %q), want (1, %q)", k, v, "one")
+	}
 	c.Set(3, "three")
 	if c.Contains(1) {
 		t.Errorf("contains 1; should not")
