@@ -565,6 +565,7 @@ main() {
 			$SUDO apt-get update
 			if [ -n "$TAILSCALE_VERSION" ]; then
 				$SUDO apt-get install -y "tailscale=$TAILSCALE_VERSION" tailscale-archive-keyring
+				$SUDO apt-mark hold tailscale
 			else
 				$SUDO apt-get install -y tailscale tailscale-archive-keyring
 			fi
