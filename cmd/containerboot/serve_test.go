@@ -7,12 +7,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/kube/localclient"
@@ -373,4 +380,116 @@ func TestHasHTTPSEndpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWatchServeConfigChangesAdvertisesServices verifies that when the serve
+// config file is applied by the watcher, the services it defines are
+// advertised. This is the path taken on a restart with existing state, where
+// the serve config is unset at startup and so is still empty when the first
+// netmap arrives. See https://github.com/tailscale/tailscale/issues/21455.
+func TestWatchServeConfigChangesAdvertisesServices(t *testing.T) {
+	t.Setenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT", "true")
+	d := t.TempDir()
+	scPath := filepath.Join(d, "serve-config.json")
+	sc := &ipn.ServeConfig{
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:my-service": {
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {TCPForward: "127.0.0.1:8080"},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scPath, b, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotServices atomic.Pointer[[]string]
+	advertised := make(chan []string, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/localapi/v0/serve-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			json.NewEncoder(w).Encode(&ipn.ServeConfig{})
+		}
+	})
+	mux.HandleFunc("/localapi/v0/prefs", func(w http.ResponseWriter, r *http.Request) {
+		var mp ipn.MaskedPrefs
+		if r.Method == "PATCH" {
+			if err := json.NewDecoder(r.Body).Decode(&mp); err != nil {
+				t.Errorf("decoding EditPrefs body: %v", err)
+			}
+			if mp.AdvertiseServicesSet {
+				gotServices.Store(&mp.AdvertiseServices)
+				// Close the connection after this response so that the
+				// client side Close below tells us EditPrefs has
+				// received its response.
+				w.Header().Set("Connection", "close")
+			}
+		}
+		json.NewEncoder(w).Encode(&mp.Prefs)
+	})
+	sock := filepath.Join(d, "ts.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lc := &local.Client{
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			c, err := new(net.Dialer).DialContext(ctx, "unix", sock)
+			if err != nil {
+				return nil, err
+			}
+			return &closeNotifyConn{Conn: c, onClose: func() {
+				if svcs := gotServices.Load(); svcs != nil {
+					select {
+					case advertised <- *svcs:
+					default:
+					}
+				}
+			}}, nil
+		},
+	}
+	var certDomain atomic.Pointer[string]
+	certDomain.Store(new(string))
+	cdChanged := make(chan bool, 1)
+	cdChanged <- true
+	cfg := &settings{ServeConfigPath: scPath}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchServeConfigChanges(ctx, cdChanged, &certDomain, lc, nil, cfg, &ipn.ServeConfig{})
+	}()
+
+	select {
+	case got := <-advertised:
+		if diff := cmp.Diff([]string{"svc:my-service"}, got); diff != "" {
+			t.Errorf("advertised services mismatch (-want +got):\n%s", diff)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("services from serve config were never advertised")
+	}
+	cancel()
+	<-done
+}
+
+type closeNotifyConn struct {
+	net.Conn
+	once    sync.Once
+	onClose func()
+}
+
+func (c *closeNotifyConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.onClose)
+	return err
 }
