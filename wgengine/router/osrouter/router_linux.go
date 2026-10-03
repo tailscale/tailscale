@@ -1391,26 +1391,79 @@ func (r *linuxRouter) upInterface() error {
 	return netlink.LinkSetUp(link)
 }
 
+// sysctlWrite is a single sysctl to write, named by its slash-separated path
+// relative to /proc/sys.
+type sysctlWrite struct {
+	path string
+	val  string
+}
+
 func (r *linuxRouter) enableIPForwarding() {
-	sysctls := map[string]string{
-		"net.ipv4.ip_forward":          "1",
-		"net.ipv6.conf.all.forwarding": "1",
+	// accept_ra has to be raised before forwarding is turned on. With the
+	// default accept_ra=1 the kernel stops accepting (and stops soliciting)
+	// IPv6 Router Advertisements as soon as forwarding is enabled, so
+	// SLAAC-derived addresses stop being renewed and eventually disappear.
+	// accept_ra=2 keeps accepting RAs with forwarding enabled, and writing it
+	// first means we never pass through a state where RAs are dropped.
+	//
+	// accept_ra is not an "all"-aware sysctl: the kernel only consults the
+	// per-interface value, and net.ipv6.conf.default.accept_ra only seeds
+	// interfaces that appear later. So set the default for future interfaces,
+	// then every interface that already exists.
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		r.logf("warning: listing interfaces to set accept_ra: %v", err)
 	}
-	for k, v := range sysctls {
-		if err := writeSysctl(k, v); err != nil {
-			r.logf("warning: %v", k, v, err)
+	for _, s := range ipForwardingSysctls(ifaces) {
+		if err := writeSysctlPath(s.path, s.val); err != nil {
+			r.logf("warning: %v", err)
 			continue
 		}
-		r.logf("sysctl(%v=%v): ok", k, v)
+		r.logf("sysctl(%v=%v): ok", sysctlKeyForPath(s.path), s.val)
 	}
 }
 
+// ipForwardingSysctls returns the sysctls to write, in the order they must be
+// written, to enable IP forwarding on a host with the given interfaces.
+func ipForwardingSysctls(ifaces []net.Interface) []sysctlWrite {
+	sysctls := []sysctlWrite{
+		{"net/ipv6/conf/default/accept_ra", "2"},
+	}
+	for _, iface := range ifaces {
+		// Router Advertisements never arrive on loopback.
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		// Interface names can contain dots (VLANs such as eth0.100), so the
+		// /proc path is assembled directly instead of by translating dots in
+		// a sysctl key.
+		sysctls = append(sysctls, sysctlWrite{"net/ipv6/conf/" + iface.Name + "/accept_ra", "2"})
+	}
+	return append(sysctls,
+		sysctlWrite{"net/ipv4/ip_forward", "1"},
+		sysctlWrite{"net/ipv6/conf/all/forwarding", "1"},
+	)
+}
+
 func writeSysctl(key, val string) error {
-	fn := "/proc/sys/" + strings.Replace(key, ".", "/", -1)
+	return writeSysctlPath(strings.ReplaceAll(key, ".", "/"), val)
+}
+
+// writeSysctlPath writes val to /proc/sys/<path>. Unlike writeSysctl it takes
+// an already slash-separated path, for sysctls where a path element can itself
+// contain a dot, such as a VLAN interface name (eth0.100).
+func writeSysctlPath(path, val string) error {
+	fn := "/proc/sys/" + path
 	if err := os.WriteFile(fn, []byte(val), 0644); err != nil {
-		return fmt.Errorf("sysctl(%v=%v): %v", key, val, err)
+		return fmt.Errorf("sysctl(%v=%v): %v", sysctlKeyForPath(path), val, err)
 	}
 	return nil
+}
+
+// sysctlKeyForPath renders a slash-separated sysctl path in the conventional
+// dotted form, for logging.
+func sysctlKeyForPath(path string) string {
+	return strings.ReplaceAll(path, "/", ".")
 }
 
 // downInterface sets the tunnel interface administratively down.
