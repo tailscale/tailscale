@@ -892,6 +892,16 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 			e.logf("wgengine: Reconfig: SetPrivateKey: %v", err)
 		}
 
+		// Update the log tag before wgdev gets the key too, as wgdev's
+		// SetPrivateKey expires current keypairs and starts new
+		// handshakes whose log lines should carry the new key.
+		// A zero private key's Public is not zero, so check explicitly.
+		if cfg.PrivateKey.IsZero() {
+			e.wgLogger.SetSelfKey(key.NodePublic{})
+		} else {
+			e.wgLogger.SetSelfKey(cfg.PrivateKey.Public())
+		}
+
 		if err := e.wgdev.SetPrivateKey(key.NodePrivateAs[device.NoisePrivateKey](cfg.PrivateKey)); err != nil {
 			e.logf("wgengine: Reconfig: wgdev.SetPrivateKey: %v", err)
 		}
