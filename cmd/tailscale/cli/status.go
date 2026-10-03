@@ -32,6 +32,11 @@ var statusCmd = &ffcli.Command{
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
+In the Status column, online means the device is connected to the control
+plane and has no recorded traffic. Active and idle describe traffic activity;
+offline means the device is not connected to the control plane. Being online
+does not guarantee that the device is reachable from this machine.
+
 JSON FORMAT
 
 Warning: this format has changed between releases and might change more
@@ -184,7 +189,7 @@ func runStatus(ctx context.Context, args []string) error {
 			} else if !ps.Online {
 				f("offline%s", lastSeenFmt(ps.LastSeen))
 			} else {
-				f("-")
+				f("online")
 			}
 		} else {
 			f("active; ")
