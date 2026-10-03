@@ -72,6 +72,12 @@ func (q *queue) Write(pkt *stack.PacketBuffer) tcpip.Error {
 	case <-q.closedCh:
 		pkt.DecRef()
 		return &tcpip.ErrClosedForSend{}
+	default:
+		// A synchronous TCP reply may originate on the TUN reader, which
+		// outbound injection needs to make progress. Blocking here can
+		// deadlock both paths.
+		pkt.DecRef()
+		return &tcpip.ErrNoBufferSpace{}
 	}
 }
 
