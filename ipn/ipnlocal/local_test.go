@@ -9423,6 +9423,38 @@ func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
 	}
 }
 
+func TestEditPrefs_RelayServerPortCollidesWithMagicsock(t *testing.T) {
+	b := newTestLocalBackend(t)
+	msPort := b.sys.MagicSock.Get().LocalPort()
+
+	tests := []struct {
+		name    string
+		port    *uint16
+		wantErr bool
+	}{
+		{name: "magicsock_port", port: new(msPort), wantErr: true},
+		{name: "other_port", port: new(msPort - 1), wantErr: false},
+		{name: "random_port", port: new(uint16(0)), wantErr: false},
+		{name: "disabled", port: nil, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := &ipn.MaskedPrefs{
+				Prefs: ipn.Prefs{
+					RelayServerPort: tt.port,
+				},
+				RelayServerPortSet: true,
+			}
+
+			_, err := b.EditPrefs(mp)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("EditPrefs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestNoSNATWithAdvertisedExitNodeWarning(t *testing.T) {
 	exitRoutes := []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/0"),
