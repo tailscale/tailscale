@@ -56,6 +56,7 @@ func TestPrefsEqual(t *testing.T) {
 		"ForceDaemon",
 		"Egg",
 		"AdvertiseRoutes",
+		"IgnoredRoutes",
 		"AdvertiseServices",
 		"Sync",
 		"NoSNAT",
