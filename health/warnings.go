@@ -6,6 +6,7 @@ package health
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"tailscale.com/feature/buildfeatures"
@@ -110,7 +111,11 @@ var LoginStateWarnable = condRegister(func() *Warnable {
 		Severity: SeverityMedium,
 		Text: func(args Args) string {
 			if args[ArgError] != "" {
-				return fmt.Sprintf("You are logged out. The last login error was: %v", args[ArgError])
+				errStr := args[ArgError]
+				if isControlPlaneUnreachable(errStr) {
+					return fmt.Sprintf("You are logged out. The coordination server could not be reached (%v). A network firewall, captive portal, or proxy may be blocking access to Tailscale.", errStr)
+				}
+				return fmt.Sprintf("You are logged out. The last login error was: %v", errStr)
 			} else {
 				return "You are logged out."
 			}
@@ -118,6 +123,20 @@ var LoginStateWarnable = condRegister(func() *Warnable {
 		DependsOn: []*Warnable{IPNStateWarnable},
 	}
 })
+
+func isControlPlaneUnreachable(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	isControlErr := strings.Contains(lower, "fetch control key") ||
+		strings.Contains(lower, "controlplane") ||
+		strings.Contains(lower, "coordination server")
+	isNetFailure := strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "unreachable") ||
+		strings.Contains(lower, "no route to host") ||
+		strings.Contains(lower, "connection refused")
+	return isControlErr && isNetFailure
+}
 
 // notInMapPollWarnable is a Warnable that warns the user that we are using a stale network map.
 var notInMapPollWarnable = condRegister(func() *Warnable {

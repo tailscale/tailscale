@@ -1125,3 +1125,33 @@ func TestIPForwardingState(t *testing.T) {
 		}
 	})
 }
+
+func TestLoginStateWarnable(t *testing.T) {
+	tests := []struct {
+		errStr   string
+		wantText string
+	}{
+		{
+			errStr:   "",
+			wantText: "You are logged out.",
+		},
+		{
+			errStr:   "some general error",
+			wantText: "You are logged out. The last login error was: some general error",
+		},
+		{
+			errStr:   `fetch control key: Get "https://controlplane.tailscale.com/key?v=142": context deadline exceeded`,
+			wantText: `You are logged out. The coordination server could not be reached (fetch control key: Get "https://controlplane.tailscale.com/key?v=142": context deadline exceeded). A network firewall, captive portal, or proxy may be blocking access to Tailscale.`,
+		},
+		{
+			errStr:   `fetch control key: dial tcp 192.200.0.107:443: connect: connection timed out`,
+			wantText: `You are logged out. The coordination server could not be reached (fetch control key: dial tcp 192.200.0.107:443: connect: connection timed out). A network firewall, captive portal, or proxy may be blocking access to Tailscale.`,
+		},
+	}
+	for _, tt := range tests {
+		got := LoginStateWarnable.Text(Args{ArgError: tt.errStr})
+		if got != tt.wantText {
+			t.Errorf("LoginStateWarnable.Text(ArgError=%q) = %q, want %q", tt.errStr, got, tt.wantText)
+		}
+	}
+}
