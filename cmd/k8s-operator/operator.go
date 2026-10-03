@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -177,6 +178,31 @@ func main() {
 	})
 }
 
+func pollForOauthCredsChanged(ctx context.Context, paths [2]string, onChange func()) {
+	lastFileContents := make(map[string][]byte)
+	for _, p := range paths {
+		lastFileContents[p], _ = os.ReadFile(p)
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, p := range paths {
+				newFileContents, err := os.ReadFile(p)
+				if err == nil && !bytes.Equal(lastFileContents[p], newFileContents) {
+					onChange()
+					return
+				}
+			}
+		}
+	}
+}
+
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. If CLIENT_ID
 // is set, it authenticates to the Tailscale API using the federated OIDC workload
 // identity flow. Otherwise, it uses the CLIENT_ID_FILE and CLIENT_SECRET_FILE
@@ -194,6 +220,15 @@ func initTSNet(zlog *zap.SugaredLogger, loginServer string) (*tsnet.Server, *tai
 	startlog := zlog.Named("startup")
 	if clientID == "" && (clientIDPath == "" || clientSecretPath == "") {
 		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set") // TODO(tomhjp): error message can mention WIF once it's publicly available.
+	}
+
+	if clientID == "" {
+		credFiles := [2]string{clientIDPath, clientSecretPath}
+		go pollForOauthCredsChanged(context.Background(), credFiles, func() {
+			zlog := zlog.Named("cred-watch")
+			zlog.Info("OAuth2 credentials were updated, exiting")
+			os.Exit(0)
+		})
 	}
 
 	tsc, err := newTSClient(zlog.Named("ts-api-client"), clientID, clientIDPath, clientSecretPath, loginServer)
