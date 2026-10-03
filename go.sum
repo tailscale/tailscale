@@ -750,6 +750,8 @@ github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 h1:Z9n2FFNU
 github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51/go.mod h1:CzGEWj7cYgsdH8dAjBGEr58BoE7ScuLd+fwFZ44+/x8=
 github.com/kdomanski/iso9660 v0.4.0 h1:BPKKdcINz3m0MdjIMwS0wx1nofsOjxOq8TOr45WGHFg=
 github.com/kdomanski/iso9660 v0.4.0/go.mod h1:OxUSupHsO9ceI8lBLPJKWBTphLemjrCQY8LPXM7qSzU=
+github.com/keeleysam/wireguard-go v0.0.0-20260930212914-92f719645918 h1:BdFjQDv2tYzZFIQF0CGqZ/ZDz0T+fr2I7U/+HLtwEXU=
+github.com/keeleysam/wireguard-go v0.0.0-20260930212914-92f719645918/go.mod h1:rUelGmuK4UnSJYM5gl5Mknp6YbwwcL8+VAPMhNYe+jg=
 github.com/kenshaw/evdev v0.1.0 h1:wmtceEOFfilChgdNT+c/djPJ2JineVsQ0N14kGzFRUo=
 github.com/kenshaw/evdev v0.1.0/go.mod h1:B/fErKCihUyEobz0mjn2qQbHgyJKFQAxkXSvkeeA/Wo=
 github.com/kevinburke/ssh_config v1.2.0 h1:x584FjTGwHzMwvHx18PXxbBVzfnxogHaAReU4gf13a4=

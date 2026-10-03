@@ -5,7 +5,11 @@
 
 package magicsock
 
-import "tailscale.com/disco"
+import (
+	"syscall"
+
+	"tailscale.com/disco"
+)
 
 func (c *Conn) DontFragSetting() (bool, error) {
 	return false, nil
@@ -25,3 +29,9 @@ func (c *Conn) UpdatePMTUD() {
 func pmtuShouldLogDiscoTxErr(m disco.Message, err error) bool {
 	return true
 }
+
+func (c *Conn) copyDontFragment(string, syscall.RawConn) error {
+	return nil
+}
+
+func (c *Conn) setDontFragmentAfterBind(string) {}
