@@ -419,7 +419,12 @@ func peerViewOf(n tailcfg.NodeView) peerView {
 	if n.DiscoKey().IsZero() && n.HomeDERP() == 0 && !n.IsWireGuardOnly() {
 		return pv
 	}
+
+	hasExitRoute := false
 	for _, aip := range n.AllowedIPs().All() {
+		if tsaddr.IsExitRoute(aip) {
+			hasExitRoute = true
+		}
 		isSelf := aip.IsSingleIP() && tsaddr.IsTailscaleIP(aip.Addr()) ||
 			views.SliceContains(n.Addresses(), aip)
 		if isSelf {
@@ -427,6 +432,14 @@ func peerViewOf(n tailcfg.NodeView) peerView {
 		} else {
 			pv.Routes = append(pv.Routes, aip)
 		}
+	}
+
+	// WireGuardOnly peers whose sole purpose is exit routing and have
+	// unreachable Tailscale IPs (jailed), should not set SelfAddrs for insertion
+	// into the OS route table. Skip selfAddr routes for these peers so that peer
+	// changes does not change the OS routes.
+	if hasExitRoute && n.IsJailed() && n.IsWireGuardOnly() {
+		pv.SelfAddrs = []netip.Prefix{}
 	}
 	return pv
 }
