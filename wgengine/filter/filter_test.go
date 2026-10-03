@@ -1066,6 +1066,157 @@ func TestPeerCaps(t *testing.T) {
 	}
 }
 
+func TestHasCapability(t *testing.T) {
+	mm, err := MatchesFromFilterRules([]tailcfg.FilterRule{
+		{
+			SrcIPs: []string{"*"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")},
+				Caps: []peercap.Cap{"is_ipv4"},
+			}},
+		},
+		{
+			SrcIPs: []string{"*"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{netip.MustParsePrefix("::/0")},
+				Caps: []peercap.Cap{"is_ipv6"},
+			}},
+		},
+		{
+			SrcIPs: []string{"100.199.0.0/16"},
+			CapGrant: []tailcfg.CapGrant{{
+				Dsts: []netip.Prefix{netip.MustParsePrefix("100.200.0.0/16")},
+				Caps: []peercap.Cap{"some_super_admin"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filt := New(mm, nil, nil, nil, nil, t.Logf)
+	tests := []struct {
+		name     string
+		src, dst string
+		cap      peercap.Cap
+		want     bool
+	}{
+		{
+			name: "v4",
+			src:  "1.2.3.4",
+			dst:  "2.4.5.5",
+			cap:  "is_ipv4",
+			want: true,
+		},
+		{
+			name: "v6",
+			src:  "1::1",
+			dst:  "2::2",
+			cap:  "is_ipv6",
+			want: true,
+		},
+		{
+			name: "admin",
+			src:  "100.199.1.2",
+			dst:  "100.200.3.4",
+			cap:  "some_super_admin",
+			want: true,
+		},
+		{
+			name: "wrong_capability",
+			src:  "1.2.3.4",
+			dst:  "2.4.5.5",
+			cap:  "is_ipv6",
+		},
+		{
+			name: "wrong_source",
+			src:  "100.198.1.2",
+			dst:  "100.200.3.4",
+			cap:  "some_super_admin",
+		},
+		{
+			name: "wrong_destination",
+			src:  "100.199.1.2",
+			dst:  "100.201.3.4",
+			cap:  "some_super_admin",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filt.HasCapability(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst), tt.cap)
+			if got != tt.want {
+				t.Errorf("got %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func BenchmarkHasCapability(b *testing.B) {
+	const (
+		numRules    = 100
+		capsPerRule = 10
+		numCaps     = numRules * capsPerRule
+	)
+	src := netip.MustParseAddr("100.64.0.1")
+	dst := netip.MustParseAddr("100.64.0.2")
+	targetCap := peercap.RelayTarget
+
+	tests := []struct {
+		name        string
+		targetIndex int
+	}{
+		{"first", 0},
+		{"last", numCaps - 1},
+		{"missing", -1},
+	}
+	for _, tt := range tests {
+		b.Run(tt.name, func(b *testing.B) {
+			rules := make([]tailcfg.FilterRule, numRules)
+			for ruleIndex := range rules {
+				caps := make([]peercap.Cap, capsPerRule)
+				for capIndex := range caps {
+					index := ruleIndex*capsPerRule + capIndex
+					caps[capIndex] = peercap.Cap(fmt.Sprintf("https://tailscale.com/cap/benchmark-%d", index))
+					if index == tt.targetIndex {
+						caps[capIndex] = targetCap
+					}
+				}
+				rules[ruleIndex] = tailcfg.FilterRule{
+					SrcIPs: []string{"100.64.0.1"},
+					CapGrant: []tailcfg.CapGrant{{
+						Dsts: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+						Caps: caps,
+					}},
+				}
+			}
+			mm, err := MatchesFromFilterRules(rules)
+			if err != nil {
+				b.Fatal(err)
+			}
+			filt := New(mm, nil, nil, nil, nil, logger.Discard)
+			want := tt.targetIndex >= 0
+			if got := filt.CapsWithValues(src, dst).HasCapability(targetCap); got != want {
+				b.Fatalf("CapsWithValues().HasCapability() = %v; want %v", got, want)
+			}
+			if got := filt.HasCapability(src, dst, targetCap); got != want {
+				b.Fatalf("HasCapability() = %v; want %v", got, want)
+			}
+
+			b.Run("CapsWithValues", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					filt.CapsWithValues(src, dst).HasCapability(targetCap)
+				}
+			})
+			b.Run("HasCapability", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					filt.HasCapability(src, dst, targetCap)
+				}
+			})
+		})
+	}
+}
+
 var (
 	filterMatchFile = flag.String("filter-match-file", "", "JSON file of []filter.Match to benchmark")
 )
