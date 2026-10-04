@@ -109,6 +109,12 @@ const portMapServiceTimeout = 250 * time.Millisecond
 // mapping service is available.
 const trustServiceStillAvailableDuration = 10 * time.Minute
 
+// mappingReleaseTimeout is how long we wait for a port mapping to be
+// released before giving up. Releasing is best-effort, since the mapping
+// expires by lease anyway, so it's not worth blocking on a router that is
+// no longer reachable.
+const mappingReleaseTimeout = 1 * time.Second
+
 // Client is a port mapping client.
 type Client struct {
 	// The following two fields must both be non-nil.
@@ -397,7 +403,13 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	if c.mapping != nil {
 		if releaseOld {
 			c.vlogf("releasing %s mapping", c.mapping.MappingType())
-			c.mapping.Release(context.Background())
+			// Bound the release so that Close doesn't block for however
+			// long the underlying socket timeout is when the router is no
+			// longer reachable (e.g. the network went down first). Failing
+			// to delete the mapping is harmless, since it expires by lease.
+			ctx, cancel := context.WithTimeout(context.Background(), mappingReleaseTimeout)
+			defer cancel()
+			c.mapping.Release(ctx)
 		}
 		c.mapping = nil
 	}

@@ -5,12 +5,14 @@ package portmapper
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"reflect"
 	"strconv"
 	"testing"
 	"time"
 
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/util/eventbus/eventbustest"
 )
@@ -154,3 +156,66 @@ func TestUpdateEvent(t *testing.T) {
 		t.Error(err.Error())
 	}
 }
+
+// blockingMapping is a mapping whose Release blocks until the passed
+// context is done, simulating a router that is no longer reachable (as
+// happens on shutdown, when the network goes away before the mapping is
+// released).
+type blockingMapping struct {
+	releaseCalled chan struct{}
+	hadDeadline   chan bool
+}
+
+func (m *blockingMapping) Release(ctx context.Context) {
+	_, hasDeadline := ctx.Deadline()
+	m.hadDeadline <- hasDeadline
+	close(m.releaseCalled)
+	<-ctx.Done()
+}
+
+func (m *blockingMapping) GoodUntil() time.Time     { return time.Now().Add(time.Hour) }
+func (m *blockingMapping) RenewAfter() time.Time    { return time.Now().Add(time.Minute) }
+func (m *blockingMapping) External() netip.AddrPort { return netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 1234) }
+func (m *blockingMapping) MappingType() string      { return "blocking" }
+func (m *blockingMapping) MappingDebug() string      { return "blockingMapping{}" }
+
+// TestCloseDoesNotBlockOnUnreachableMapping checks that Close releases a
+// stale mapping under a bounded context, so that shutting down doesn't stall
+// waiting on a router that has already gone away. See
+// https://github.com/tailscale/tailscale/issues/21625
+func TestCloseDoesNotBlockOnUnreachableMapping(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	c := NewClient(Config{Logf: t.Logf, NetMon: netmon.NewStatic(), EventBus: bus})
+
+	m := &blockingMapping{
+		releaseCalled: make(chan struct{}),
+		hadDeadline:   make(chan bool, 1),
+	}
+	c.mapping = m
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		if err := c.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+
+	select {
+	case hasDeadline := <-m.hadDeadline:
+		if !hasDeadline {
+			t.Error("Release was called with a context that has no deadline")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close never released the mapping")
+	}
+
+	// The release only returns once its context is done, so Close returning
+	// at all proves the context was bounded.
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close blocked on releasing a mapping whose router is unreachable")
+	}
+}
+
