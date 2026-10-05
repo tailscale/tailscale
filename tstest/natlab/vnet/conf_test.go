@@ -4,6 +4,7 @@
 package vnet
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -46,6 +47,28 @@ func TestConfig(t *testing.T) {
 				c.AddNode(net1)
 				c.AddNode(net1)
 			},
+		},
+		{
+			name: "dhcp-dns-not-ipv4",
+			setup: func(c *Config) {
+				n1 := c.AddNetwork("2.1.1.1", "192.168.1.1/24")
+				n1.SetDHCPDNS(netip.MustParseAddr("2411::411"))
+				c.AddNode(n1)
+			},
+			wantErr: "SetDHCPDNS: 2411::411 is not an IPv4 address",
+		},
+		{
+			name: "dhcp-dns-too-many",
+			setup: func(c *Config) {
+				n1 := c.AddNetwork("2.1.1.1", "192.168.1.1/24")
+				servers := make([]netip.Addr, 64)
+				for i := range servers {
+					servers[i] = netip.AddrFrom4([4]byte{10, 0, 0, byte(i)})
+				}
+				n1.SetDHCPDNS(servers...)
+				c.AddNode(n1)
+			},
+			wantErr: "SetDHCPDNS: 64 servers, max 63",
 		},
 		{
 			name: "dup-wan-ip",

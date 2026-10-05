@@ -692,6 +692,9 @@ type network struct {
 	ns     *stack.Stack
 	linkEP *channel.Endpoint
 
+	// dhcpDNS holds the DNS servers the DHCP server advertises; nil means fakeDNS.
+	dhcpDNS syncs.AtomicValue[[]netip.Addr]
+
 	natStyle    syncs.AtomicValue[NAT]
 	natMu       sync.Mutex // held while using + changing natTable
 	natTable    NATTable
@@ -2353,11 +2356,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Data:   gwIP.AsSlice(),
 				Length: 4,
 			},
-			layers.DHCPOption{
-				Type:   layers.DHCPOptDNS,
-				Data:   fakeDNS.v4.AsSlice(),
-				Length: 4,
-			},
+			srcNet.dhcpDNSOption(),
 		)
 		if s.onDHCPEvent != nil {
 			s.onDHCPEvent(srcMAC, node.num, layers.DHCPMsgTypeDiscover, clientIP)
@@ -2380,11 +2379,7 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 				Data:   gwIP.AsSlice(),
 				Length: 4,
 			},
-			layers.DHCPOption{
-				Type:   layers.DHCPOptDNS,
-				Data:   fakeDNS.v4.AsSlice(),
-				Length: 4,
-			},
+			srcNet.dhcpDNSOption(),
 			layers.DHCPOption{
 				Type:   layers.DHCPOptSubnetMask,
 				Data:   net.CIDRMask(srcNet.lanIP4.Bits(), 32),
@@ -2412,6 +2407,24 @@ func (s *Server) createDHCPResponse(request gopacket.Packet) ([]byte, error) {
 		DstPort: udpLayer.SrcPort,
 	}
 	return mkPacket(eth, ip, udp, response)
+}
+
+// dhcpDNSOption returns the DNS servers option for the network's DHCP offers
+// and acks: the servers set with [Network.SetDHCPDNS], or fakeDNS by default.
+func (n *network) dhcpDNSOption() layers.DHCPOption {
+	servers := n.dhcpDNS.Load()
+	if len(servers) == 0 {
+		servers = []netip.Addr{fakeDNS.v4}
+	}
+	var data []byte
+	for _, s := range servers {
+		data = append(data, s.AsSlice()...)
+	}
+	return layers.DHCPOption{
+		Type:   layers.DHCPOptDNS,
+		Data:   data,
+		Length: uint8(len(data)),
+	}
 }
 
 // isDHCPRequest reports whether pkt is a DHCPv4 request.
