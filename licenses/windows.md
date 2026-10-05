@@ -3,7 +3,7 @@
 The following open source dependencies are used to build [Tailscale on
 Windows][].  See also the dependencies in the [Tailscale CLI][].
 
-[Tailscale on Windows]: https://tailscale.com/kb/1022/install-windows/
+[Tailscale on Windows]: https://tailscale.com/docs/install/windows
 [Tailscale CLI]: ./tailscale.md
 
 ## Go Packages
