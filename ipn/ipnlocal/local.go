@@ -35,7 +35,6 @@ import (
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/appc"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/control/controlknobs"
@@ -325,10 +324,10 @@ type LocalBackend struct {
 	conf             *conffile.Config // latest parsed config, or nil if not in declarative mode
 	pm               *profileManager  // mu guards access
 	lastFilterInputs *filterInputs
-	httpTestClient   *http.Client       // for controlclient. nil by default, used by tests.
-	ccGen            clientGen          // function for producing controlclient; lazily populated
-	sshServer        SSHServer          // or nil, initialized lazily.
-	appConnector     *appc.AppConnector // or nil, initialized when configured.
+	httpTestClient   *http.Client      // for controlclient. nil by default, used by tests.
+	ccGen            clientGen         // function for producing controlclient; lazily populated
+	sshServer        SSHServer         // or nil, initialized lazily.
+	appConnector     *appcAppConnector // or nil, initialized when configured.
 	// notifyCancel cancels notifications to the current SetNotifyCallback.
 	notifyCancel context.CancelFunc
 	cc           controlclient.Client // TODO(nickkhyl): move to nodeBackend
@@ -6012,12 +6011,7 @@ func (b *LocalBackend) reconfigAppConnectorLocked(selfNode tailcfg.NodeView, pre
 			b.logf("Unsuccessful Read RouteInfo: %v", err)
 		}
 		b.appConnector.Close() // clean up a previous connector (safe on nil)
-		b.appConnector = appc.NewAppConnector(appc.Config{
-			Logf:            b.logf,
-			EventBus:        b.sys.Bus.Get(),
-			RouteInfo:       ri,
-			HasStoredRoutes: shouldStoreRoutes,
-		})
+		b.appConnector = newAppConnector(b.logf, b.sys.Bus.Get(), ri, shouldStoreRoutes)
 	}
 	if !selfNode.Valid() {
 		return
@@ -7910,18 +7904,6 @@ func (b *LocalBackend) OfferingAppConnector() bool {
 	return b.appConnector != nil
 }
 
-// AppConnector returns the current AppConnector, or nil if not configured.
-//
-// TODO(nickkhyl): move app connectors to [nodeBackend], or perhaps a feature package?
-func (b *LocalBackend) AppConnector() *appc.AppConnector {
-	if !buildfeatures.HasAppConnectors {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.appConnector
-}
-
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
 // proxy is allowed to serve responses for the provided DNS name.
 func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
@@ -8604,7 +8586,7 @@ func (b *LocalBackend) ObserveDNSResponse(res []byte) error {
 	if !buildfeatures.HasAppConnectors {
 		return nil
 	}
-	var appConnector *appc.AppConnector
+	var appConnector *appcAppConnector
 	b.mu.Lock()
 	if b.appConnector == nil {
 		b.mu.Unlock()
