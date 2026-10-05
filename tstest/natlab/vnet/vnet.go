@@ -485,12 +485,12 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
-	if destPort == 443 && fakeLogCatcher.Match(destIP) {
+	if (destPort == 443 || destPort == 80) && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		n.s.wg.Go(func() {
-			n.serveLogCatcherConn(clientRemoteIP, tc)
+			n.serveLogCatcherConn(clientRemoteIP, tc, destPort == 443)
 		})
 		return
 	}
@@ -557,15 +557,18 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// serveLogCatchConn serves a TCP connection to "log.tailscale.com", speaking the
-// logtail/logcatcher protocol.
+// serveLogCatcherConn serves a TCP connection to "log.tailscale.com", speaking
+// the logtail/logcatcher protocol.
 //
-// We terminate TLS with an arbitrary cert; the client is configured to not
-// validate TLS certs for this hostname when running under these integration
-// tests.
-func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
-	tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's); test client configure to not check
-	tlsConn := tls.Server(c, tlsConfig)
+// With useTLS, it terminates TLS with an arbitrary cert; gokrazy guests are
+// built to not validate TLS certs for this hostname. Other guests cannot
+// trust that cert, so they are pointed at the plain-HTTP port instead via
+// TS_LOG_TARGET.
+func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn, useTLS bool) {
+	if useTLS {
+		tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's)
+		c = tls.Server(c, tlsConfig)
+	}
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		all, _ := io.ReadAll(r.Body)
 		if r.Header.Get("Content-Encoding") == "zstd" {
@@ -599,7 +602,7 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 		}
 	})
 	hs := &http.Server{Handler: handler}
-	hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+	hs.Serve(netutil.NewOneConnListener(c, nil))
 }
 
 type EthernetPacket struct {

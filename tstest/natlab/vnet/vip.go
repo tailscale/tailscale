@@ -85,6 +85,11 @@ const TestDriverPort = 8008
 // FakeDNSIPv4 returns the fake DNS IPv4 address.
 func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }
 
+// FakeLogCatcherIPv4 returns the IPv4 address of the fake log.tailscale.com,
+// which collects the tailscaled logs that [Server.NodeLogs] returns. It
+// accepts uploads over HTTPS on port 443 and over plain HTTP on port 80.
+func FakeLogCatcherIPv4() netip.Addr { return fakeLogCatcher.v4 }
+
 // FakeDNSIPv6 returns the fake DNS IPv6 address.
 func FakeDNSIPv6() netip.Addr { return fakeDNS.v6 }
 

@@ -527,6 +527,16 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			Value: "http://acme.example/directory",
 		})
 	}
+	if !n.os.IsGokrazy && !n.os.IsMacOS {
+		// Only gokrazy builds trust the fake log catcher's TLS cert, so other
+		// guests upload over plain HTTP. The address is a literal so uploads
+		// keep working while a test breaks the guest's DNS. macOS guests are
+		// left out because tailmac does not pass TailscaledEnv to tailscaled.
+		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
+			Key:   "TS_LOG_TARGET",
+			Value: "http://" + vnet.FakeLogCatcherIPv4().String(),
+		})
+	}
 
 	if n.systemdUnit && (n.os.IsGokrazy || n.os.GOOS() != "linux") {
 		e.t.Fatalf("SystemdUnit is only supported on Linux cloud VMs; node %s is %s", name, n.os.Name)
@@ -1050,6 +1060,14 @@ func (e *Env) Status(n *Node) *ipnstate.Status {
 		e.t.Fatalf("Status(%s): %v", n.name, err)
 	}
 	return st
+}
+
+// NodeLogs returns the tailscaled log lines the node has uploaded to the fake
+// log catcher so far, oldest first, each prefixed with the client's
+// timestamp. Uploads are batched, so lines tailscaled wrote recently may be
+// missing.
+func (e *Env) NodeLogs(n *Node) string {
+	return e.server.NodeLogs(n.vnetNode)
 }
 
 // ClientMetrics returns the client metrics exported by the given node.
