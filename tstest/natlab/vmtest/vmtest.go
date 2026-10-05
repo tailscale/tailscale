@@ -1729,7 +1729,11 @@ func (e *Env) Tailscale(n *Node, args ...string) (string, error) {
 	for _, arg := range args {
 		q.Add("arg", arg)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/tailscale?"+q.Encode(), nil)
+	// http.Transport transparently replays a GET whose reused conn hits EOF
+	// before the response, which would run the command twice. This is not
+	// safe to do since not all tailscale commands are idempotent.
+	// Use POST to avoid these retries.
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://unused/tailscale?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}
