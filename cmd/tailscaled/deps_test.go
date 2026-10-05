@@ -81,6 +81,21 @@ func TestOmitDNSResolveCache(t *testing.T) {
 	}.Check(t)
 }
 
+func TestOmitAppConnectors(t *testing.T) {
+	const msg = "unexpected app connector usage with ts_omit_appconnectors"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		// conn25 also uses appc, so omit it too to check that nothing
+		// else pulls appc in.
+		Tags: "ts_omit_appconnectors,ts_omit_conn25,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/appc":                  msg,
+			"tailscale.com/feature/appconnectors": msg,
+		},
+	}.Check(t)
+}
+
 func TestOmitSyspolicy(t *testing.T) {
 	const msg = "unexpected syspolicy usage with ts_omit_syspolicy"
 	deptest.DepChecker{
