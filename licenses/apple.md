@@ -3,9 +3,9 @@
 The following open source dependencies are used to build Tailscale on [macOS][], [iOS][] and [tvOS][].
 See also the dependencies in the [Tailscale CLI][].
 
-[macOS]: https://tailscale.com/kb/1016/install-mac/
-[iOS]: https://tailscale.com/kb/1020/install-ios/
-[tvOS]: https://tailscale.com/kb/1280/appletv/
+[macOS]: https://tailscale.com/docs/install/mac
+[iOS]: https://tailscale.com/docs/install/ios
+[tvOS]: https://tailscale.com/docs/install/appletv
 [Tailscale CLI]: ./tailscale.md
 
 ## Go Packages
@@ -17,7 +17,7 @@ See also the dependencies in the [Tailscale CLI][].
  - [github.com/aws/aws-sdk-go-v2/credentials](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/credentials) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/credentials/v1.20.3/credentials/LICENSE.txt))
  - [github.com/aws/aws-sdk-go-v2/feature/ec2/imds](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/feature/ec2/imds) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/feature/ec2/imds/v1.19.2/feature/ec2/imds/LICENSE.txt))
  - [github.com/aws/aws-sdk-go-v2/internal/configsources](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/internal/configsources) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/internal/configsources/v1.5.2/internal/configsources/LICENSE.txt))
- - [github.com/aws/aws-sdk-go-v2/internal/endpoints/v2](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.2/internal/endpoints/LICENSE.txt))
+ - [github.com/aws/aws-sdk-go-v2/internal/endpoints/v2](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/internal/endpoints/v2) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/internal/endpoints/v2.8.2/internal/endpoints/v2/LICENSE.txt))
  - [github.com/aws/aws-sdk-go-v2/internal/sync/singleflight](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/internal/sync/singleflight) ([BSD-3-Clause](https://github.com/aws/aws-sdk-go-v2/blob/v1.46.0/internal/sync/singleflight/LICENSE))
  - [github.com/aws/aws-sdk-go-v2/internal/v4a](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/internal/v4a) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/internal/v4a/v1.5.2/internal/v4a/LICENSE.txt))
  - [github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding](https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding) ([Apache-2.0](https://github.com/aws/aws-sdk-go-v2/blob/service/internal/accept-encoding/v1.13.19/service/internal/accept-encoding/LICENSE.txt))
@@ -61,7 +61,7 @@ See also the dependencies in the [Tailscale CLI][].
  - [github.com/tailscale/netlink](https://pkg.go.dev/github.com/tailscale/netlink) ([Apache-2.0](https://github.com/tailscale/netlink/blob/4d49adab4de7/LICENSE))
  - [github.com/tailscale/peercred](https://pkg.go.dev/github.com/tailscale/peercred) ([BSD-3-Clause](https://github.com/tailscale/peercred/blob/35a0c7bd7edc/LICENSE))
  - [github.com/tailscale/web-client-prebuilt](https://pkg.go.dev/github.com/tailscale/web-client-prebuilt) ([BSD-3-Clause](https://github.com/tailscale/web-client-prebuilt/blob/e0ed2d0d0fea/LICENSE))
- - [github.com/tailscale/wireguard-go](https://pkg.go.dev/github.com/tailscale/wireguard-go) ([MIT](https://github.com/tailscale/wireguard-go/blob/e3222a3340cd/LICENSE))
+ - [github.com/tailscale/wireguard-go](https://pkg.go.dev/github.com/tailscale/wireguard-go) ([MIT](https://github.com/tailscale/wireguard-go/blob/417aef361226/LICENSE))
  - [github.com/tailscale/xnet/webdav](https://pkg.go.dev/github.com/tailscale/xnet/webdav) ([BSD-3-Clause](https://github.com/tailscale/xnet/blob/8497ac4dab2e/LICENSE))
  - [github.com/u-root/uio](https://pkg.go.dev/github.com/u-root/uio) ([BSD-3-Clause](https://github.com/u-root/uio/blob/d2acac8f3701/LICENSE))
  - [github.com/vishvananda/netns](https://pkg.go.dev/github.com/vishvananda/netns) ([Apache-2.0](https://github.com/vishvananda/netns/blob/v0.0.5/LICENSE))
