@@ -527,10 +527,10 @@ github.com/gokrazy/gokrazy v0.0.0-20260916140236-39fe3e5557b8/go.mod h1:QGwonQ8B
 github.com/gokrazy/internal v0.0.0-20200407075822-660ad467b7c9/go.mod h1:LA5TQy7LcvYGQOy75tkrYkFUhbV2nl5qEBP47PSi2JA=
 github.com/gokrazy/internal v0.0.0-20260625065634-6994f9152c44 h1:hUOyCucKrO5bNvL7Wrn2eglA5mxMvXrhuUVepWKjHhI=
 github.com/gokrazy/internal v0.0.0-20260625065634-6994f9152c44/go.mod h1:dQY4EMkD4L5ZjYJ0SPtpgYbV7MIUMCxNIXiOfnZ6jP4=
-github.com/gokrazy/kernel.amd64 v0.0.0-20260926085050-5a347b66f180 h1:ULHF/98TNKeZIZUayW1fYfs6FYcJoyTiN4AXiUsD2ZA=
-github.com/gokrazy/kernel.amd64 v0.0.0-20260926085050-5a347b66f180/go.mod h1:bcNzFtcy9x+l7l4KUqOkVFyIqrtWn8U92Jo9ZEOckbw=
-github.com/gokrazy/kernel.arm64 v0.0.0-20260926085557-3998e71b7b1d h1:ItA8VYDapHrZPoboFIf8Oxy1ti59tlfS5Lr668vJzo0=
-github.com/gokrazy/kernel.arm64 v0.0.0-20260926085557-3998e71b7b1d/go.mod h1:WWx72LXHEesuJxbopusRfSoKJQ6ffdwkT0DZditdrLo=
+github.com/gokrazy/kernel.amd64 v0.0.0-20261004095624-56fba9a1b15f h1:wTZ5+UbENJ7oja+ebrZ0sGXdX1rWZ7VDI99V0Lz8r68=
+github.com/gokrazy/kernel.amd64 v0.0.0-20261004095624-56fba9a1b15f/go.mod h1:bcNzFtcy9x+l7l4KUqOkVFyIqrtWn8U92Jo9ZEOckbw=
+github.com/gokrazy/kernel.arm64 v0.0.0-20261004100713-96c77517a0cf h1:QJiyjn9/hHueqvmYgJvzx5LjxxMsARTMGKWFIeZC4lA=
+github.com/gokrazy/kernel.arm64 v0.0.0-20261004100713-96c77517a0cf/go.mod h1:WWx72LXHEesuJxbopusRfSoKJQ6ffdwkT0DZditdrLo=
 github.com/gokrazy/kernel.rpi v0.0.0-20260911133309-2cbf751e3f2a h1:4eK6KyU2Z+S4/05KQonylHIKP0NncP3BursP1Md+qDw=
 github.com/gokrazy/kernel.rpi v0.0.0-20260911133309-2cbf751e3f2a/go.mod h1:p5uBeUWKZVv3KJWWD6s9MpAjPjGJUe2CmKDML+5pm6U=
 github.com/gokrazy/rpi-eeprom v0.0.0-20260924082843-6a92fdda349c h1:mQmVP0qfx/GtaSqvNqHXewDejRpRD3yygGXRlApUMtA=
