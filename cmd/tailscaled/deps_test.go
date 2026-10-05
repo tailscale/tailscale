@@ -383,3 +383,31 @@ func TestOmitExitNodeHealth(t *testing.T) {
 		})
 	}
 }
+
+func TestOmitVia64(t *testing.T) {
+	const msg = "unexpected with ts_omit_via64"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_via64",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/via64":     msg,
+			"tailscale.com/net/via64/xlat":    msg,
+			"tailscale.com/net/via64/xlatbpf": msg,
+			"github.com/cilium/ebpf":          msg,
+			"github.com/cilium/ebpf/link":     msg,
+		},
+	}.Check(t)
+}
+
+// TestOmitNetstackOmitsVia64 checks that via64 is not linked without netstack, which applies the 4via6 target policy (viaTargetAllowed) and keeps the targets the kernel must not reach for it.
+func TestOmitNetstackOmitsVia64(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_netstack",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/via64": "via64 needs netstack's 4via6 target policy",
+		},
+	}.Check(t)
+}
