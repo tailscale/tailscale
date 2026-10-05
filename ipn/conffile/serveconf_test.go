@@ -6,6 +6,8 @@
 package conffile
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -102,6 +104,47 @@ func TestTargetUnixSocketRoundtrip(t *testing.T) {
 			}
 			if string(marshaled) != tt.serialized {
 				t.Errorf("MarshalText() = %q, want %q", marshaled, tt.serialized)
+			}
+		})
+	}
+}
+
+func TestLoadServicesConfigNull(t *testing.T) {
+	tests := []struct {
+		name       string
+		forService string
+		config     string
+		wantErr    string
+	}{
+		{
+			name:    "null_service",
+			config:  `{"version":"0.0.1","services":{"svc:a":null}}`,
+			wantErr: `service "svc:a": must not be null`,
+		},
+		{
+			name:    "null_endpoint",
+			config:  `{"version":"0.0.1","services":{"svc:a":{"endpoints":{"tcp:443":null}}}}`,
+			wantErr: `service "svc:a": endpoint "tcp:443": must not be null`,
+		},
+		{
+			name:       "null_endpoint_for_service",
+			forService: "svc:a",
+			config:     `{"version":"0.0.1","endpoints":{"tcp:443":null}}`,
+			wantErr:    `service "svc:a": endpoint "tcp:443": must not be null`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadServicesConfig(path, tt.forService)
+			if err == nil {
+				t.Fatalf("LoadServicesConfig succeeded; want error %q", tt.wantErr)
+			}
+			if err.Error() != tt.wantErr {
+				t.Errorf("LoadServicesConfig error = %q; want %q", err, tt.wantErr)
 			}
 		})
 	}
