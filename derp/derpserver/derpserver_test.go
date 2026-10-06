@@ -423,6 +423,11 @@ func TestMetaCert(t *testing.T) {
 	if g, w := cert.Subject.CommonName, derpconst.MetaCertCommonNamePrefix+pub.UntypedHexString(); g != w {
 		t.Errorf("CommonName = %q; want %q", g, w)
 	}
+	// Windows Schannel fails the whole TLS handshake when any certificate
+	// in the chain has an Ed25519 key, so the meta cert must not use one.
+	if cert.PublicKeyAlgorithm != x509.ECDSA {
+		t.Errorf("PublicKeyAlgorithm = %v; want %v", cert.PublicKeyAlgorithm, x509.ECDSA)
+	}
 	if n := len(cert.Extensions); n != 1 {
 		t.Fatalf("got %d extensions; want 1", n)
 	}
