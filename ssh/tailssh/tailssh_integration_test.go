@@ -6,7 +6,9 @@
 package tailssh
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -29,7 +31,8 @@ import (
 	"time"
 
 	"github.com/bramvdbogaerde/go-scp"
-	"github.com/google/go-cmp/cmp"
+	gcmp "github.com/google/go-cmp/cmp"
+	gcmpopts "github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/sftp"
 	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/crypto/ssh"
@@ -192,6 +195,78 @@ func TestIntegrationSSH(t *testing.T) {
 	}
 }
 
+// TestIntegrationSSHNoLeakedPTY checks that starting a second SSH session
+// while a PTY session is active does not leak extra file descriptors.
+func TestIntegrationSSHNoLeakedPTY(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires /proc to inspect file descriptors")
+	}
+	for _, name := range []string{"v1", "v2"} {
+		t.Run(name, func(t *testing.T) {
+			forceV1Behavior := name == "v1"
+			cl := testClient(t, forceV1Behavior, false)
+			// Bound both the readiness read and the descriptor scan if a child hangs.
+			timer := time.AfterFunc(30*time.Second, func() { cl.Close() })
+			defer timer.Stop()
+
+			first, err := cl.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			stdin, err := first.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stdin.Close()
+			if err := first.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0, ssh.OPOST: 0}); err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := first.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the first session alive until we close it. Receiving its output
+			// proves launchProcess has installed the duplicated master before we
+			// start the second session; no timing-dependent sleep is needed.
+			if err := first.Start("printf 'ready\\n'; read line"); err != nil {
+				t.Fatal(err)
+			}
+			if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+				t.Fatalf("first PTY session not ready: line=%q, err=%v", line, err)
+			}
+
+			for _, name := range []string{"pipes", "pty"} {
+				t.Run(name, func(t *testing.T) {
+					second, err := cl.NewSession()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer second.Close()
+					if name == "pty" {
+						if err := second.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					// Inspect the session shell's descriptors. Skip entries that
+					// closed after glob expansion, including the scan's directory FD.
+					out, err := second.CombinedOutput(`for fd in /proc/$$/fd/*; do
+						if [ -L "$fd" ]; then printf '%s\n' "${fd##*/}"; fi
+					done`)
+					if err != nil {
+						t.Fatalf("inspect second session descriptors: %v; output: %s", err, out)
+					}
+					got := strings.Fields(string(out))
+					want := []string{"0", "1", "2"}
+					if diff := gcmp.Diff(want, got, gcmpopts.SortSlices(cmp.Less[string])); diff != "" {
+						t.Errorf("second session descriptors (-want +got):\n%s", diff)
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestIntegrationAcceptEnvSecretNotLogged is the end-to-end regression test
 // for the acceptEnv secret leak: a forwarded secret must reach the session
 // environment, but its value must NOT appear on any process command line
@@ -292,7 +367,7 @@ func TestIntegrationSFTP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("can't read file: %s", err)
 			}
-			if diff := cmp.Diff(string(gotText), wantText); diff != "" {
+			if diff := gcmp.Diff(string(gotText), wantText); diff != "" {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
@@ -345,7 +420,7 @@ func TestIntegrationSCP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("can't read file: %s", err)
 			}
-			if diff := cmp.Diff(string(gotText), wantText); diff != "" {
+			if diff := gcmp.Diff(string(gotText), wantText); diff != "" {
 				t.Fatalf("unexpected file contents (-got +want):\n%s", diff)
 			}
 
