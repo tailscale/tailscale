@@ -788,3 +788,89 @@ func TestBareNameNotHijackedByPeer(t *testing.T) {
 		t.Fatalf("%v\nclient resolver state:\n%s", err, out)
 	}
 }
+
+// TestForwardedRefusedRcode checks that quad-100 hands the client an upstream
+// REFUSED instead of retrying it over TCP. vnet's second DNS server refuses
+// [vnet.SplitDNSRefusedName] and drops TCP to its port, so such a retry never
+// gets an answer.
+//
+// Lookups go through getent, so they reach the forwarder over UDP as a
+// client's would. The direct DNS backend keeps systemd-resolved from retrying
+// the REFUSED over TCP itself. Such a retry would bump the counter the test
+// asserts on. The test asserts on tailscaled's counters rather than on elapsed
+// time, since an emulated guest takes seconds just to start a process.
+//
+// See tailscale/tailscale#20826.
+func TestForwardedRefusedRcode(t *testing.T) {
+	fwdResolver := vnet.FakeSplitDNSIPv4()
+
+	env := vmtest.New(t,
+		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
+			// Proxied adds a nil-resolver route for the MagicDNS domain, so the
+			// route sets differ and quad-100 does the forwarding rather than
+			// handing fwdResolver to the OS.
+			Proxied: true,
+			Routes: map[string][]*dnstype.Resolver{
+				vnet.SplitDNSDomain: {{Addr: fwdResolver.String()}},
+			},
+		}))
+
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	client := env.AddNode("client", lan,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.WithDNSMode(vmtest.DNSDirect))
+
+	env.Start()
+
+	// libc must be sending to quad-100, not to fwdResolver directly, or the
+	// forwarder isn't in the path at all.
+	assertResolverState(t, env, client,
+		[]string{"100.100.100.100"},
+		[]string{fwdResolver.String()})
+
+	// A name the same server answers normally, as a positive control. Retrying
+	// it also waits for the DNS config to be applied.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := env.SSHExec(client, "getent ahostsv4 "+vnet.SplitDNSName)
+		if err != nil {
+			return fmt.Errorf("getent ahostsv4 %s: %v (%s)", vnet.SplitDNSName, err, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, vnet.SplitDNSAddr) {
+			return fmt.Errorf("getent ahostsv4 %s = %q, want it to contain %s",
+				vnet.SplitDNSName, strings.TrimSpace(out), vnet.SplitDNSAddr)
+		}
+		return nil
+	}); err != nil {
+		out, _ := env.SSHExec(client, "tailscale dns status")
+		t.Fatalf("%v\nclient DNS state:\n%s", err, out)
+	}
+
+	const (
+		tcpMetric     = "dns_query_fwd_tcp"
+		refusedMetric = "dns_query_fwd_udp_error_refused"
+	)
+	before := env.ClientMetrics(client)
+	for _, m := range []string{tcpMetric, refusedMetric} {
+		if _, ok := before[m]; !ok {
+			t.Fatalf("client has no %s metric", m)
+		}
+	}
+
+	// A REFUSED yields no address, so this lookup is expected to fail. The
+	// counters below are the check.
+	out, err := env.SSHExec(client, "getent ahostsv4 "+vnet.SplitDNSRefusedName)
+	t.Logf("getent ahostsv4 %s: err=%v out=%q", vnet.SplitDNSRefusedName, err, strings.TrimSpace(out))
+	if err == nil {
+		t.Errorf("getent ahostsv4 %s unexpectedly succeeded (%q); the upstream refuses that name",
+			vnet.SplitDNSRefusedName, strings.TrimSpace(out))
+	}
+
+	after := env.ClientMetrics(client)
+	if got, want := after[refusedMetric].Value, before[refusedMetric].Value; got <= want {
+		t.Errorf("%s did not advance (%v): the upstream's REFUSED never reached the forwarder",
+			refusedMetric, got)
+	}
+	if got, want := after[tcpMetric].Value, before[tcpMetric].Value; got != want {
+		t.Errorf("%s advanced from %v to %v: the rcode answer was retried over TCP", tcpMetric, want, got)
+	}
+}

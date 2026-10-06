@@ -107,6 +107,16 @@ func TestPacketSideEffects(t *testing.T) {
 					),
 				},
 				{
+					// An upstream rcode, for tests that need one. The answer
+					// section stays empty.
+					name: "split-dns-refuses-refused-name",
+					pkt:  mkDNSReqTo(FakeSplitDNSIPv4(), SplitDNSRefusedName),
+					check: all(
+						numPkts(1),
+						pktSubstr("ResponseCode=Query Refused"),
+					),
+				},
+				{
 					// The default DNS server must NOT answer the split zone;
 					// that's what makes the answer above meaningful.
 					name: "default-dns-does-not-answer-split-zone",
