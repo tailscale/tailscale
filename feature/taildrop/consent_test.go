@@ -4,16 +4,23 @@
 package taildrop
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -678,6 +685,494 @@ func testConsentMetadata(name string, size int64) PutRequest {
 	return PutRequest{Size: size, TxID: name, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(content)))}
 }
 
+func requestMetadata(t *testing.T, ph *peerAPIHandler, ext *fakeExtension, name string, metadata PutRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	handlePeerPutRequestWithBackend(ph, ext, rr, httptest.NewRequest("POST", "/v0/put-request/"+name, bytes.NewReader(b)))
+	return rr
+}
+
+func approveMetadata(t *testing.T, ph *peerAPIHandler, ext *fakeExtension, name string, metadata PutRequest) ConsentToken {
+	t.Helper()
+	rr := requestMetadata(t, ph, ext, name, metadata)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("request: %d %s", rr.Code, rr.Body)
+	}
+	pending := ext.manager().pendingConsentRequests()
+	if len(pending) != 1 {
+		t.Fatalf("pending: %v", pending)
+	}
+	if err := ext.manager().resolveConsent(pending[0].RequestID, true); err != nil {
+		t.Fatal(err)
+	}
+	rr = requestMetadata(t, ph, ext, name, metadata)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("approved request: %d %s", rr.Code, rr.Body)
+	}
+	var token ConsentToken
+	if err := json.Unmarshal(rr.Body.Bytes(), &token); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func deliver(t *testing.T, ph *peerAPIHandler, ext *fakeExtension, name, content string, token ConsentToken) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("PUT", "/v0/put/"+name, strings.NewReader(content))
+	r.Header = consentHeaders(&token)
+	rr := httptest.NewRecorder()
+	handlePeerPutWithBackend(ph, ext, rr, r)
+	return rr
+}
+
+// TestConsentOptIn verifies consent behavior for own and external devices when
+// external Taildrop consent is enabled or disabled.
+func TestConsentOptIn(t *testing.T) {
+	tests := []struct {
+		name                    string
+		own, enabled            bool
+		length                  int64
+		wantStatus, wantPending int
+	}{
+		{name: "other_user_opted_out", wantStatus: http.StatusForbidden},
+		{name: "other_user_opted_in", enabled: true, wantStatus: http.StatusAccepted, wantPending: 1},
+		{name: "same_user_opted_out_known_length", own: true, length: 5, wantStatus: http.StatusNoContent},
+		{name: "same_user_opted_out_unknown_length", own: true, length: -1, wantStatus: http.StatusNoContent},
+		{name: "same_user_opted_in_known_length", own: true, enabled: true, length: 5, wantStatus: http.StatusAccepted, wantPending: 1},
+		{name: "same_user_opted_in_unknown_length", own: true, enabled: true, length: -1, wantStatus: http.StatusAccepted, wantPending: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			ph.isSelf = tt.own
+			mgr.opts.AllowExternalTaildrop = func() bool { return tt.enabled }
+			// The testing override remains enabled, but cannot override the preference.
+			rr := putRequest(t, ph, ext, "foo.txt", 5)
+			if rr.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d: %s", rr.Code, tt.wantStatus, rr.Body)
+			}
+			if got := len(mgr.pendingConsentRequests()); got != tt.wantPending {
+				t.Fatalf("pending=%d, want %d", got, tt.wantPending)
+			}
+			if !tt.enabled && !tt.own && rr.Header().Get(hdrConsentError) != string(ConsentNotAllowed) {
+				t.Fatal("missing notallowed response")
+			}
+			if tt.own {
+				// An old sender knows neither the consent endpoint nor headers.
+				r := httptest.NewRequest("PUT", "/v0/put/legacy.txt", strings.NewReader("hello"))
+				r.ContentLength = tt.length
+				rr := httptest.NewRecorder()
+				handlePeerPutWithBackend(ph, ext, rr, r)
+				want := http.StatusOK
+				if tt.enabled {
+					want = http.StatusForbidden
+				}
+				if rr.Code != want {
+					t.Fatalf("legacy same-user PUT: %d %s; want %d", rr.Code, rr.Body, want)
+				}
+			}
+		})
+	}
+}
+
+// TestConsentTaggedEndpoints verifies that tagged endpoints always require
+// consent and cannot use the same-user implicit-consent exemption.
+func TestConsentTaggedEndpoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		enabled  bool
+	}{
+		{name: "sender_opted_out", endpoint: "sender", enabled: false},
+		{name: "sender_opted_in", endpoint: "sender", enabled: true},
+		{name: "receiver_opted_out", endpoint: "receiver", enabled: false},
+		{name: "receiver_opted_in", endpoint: "receiver", enabled: true},
+		{name: "both_opted_out", endpoint: "both", enabled: false},
+		{name: "both_opted_in", endpoint: "both", enabled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			// Matching user IDs must not exempt tagged endpoints from consent.
+			ph.isSelf = true
+			mgr.opts.ConsentForOwnDevices = func() bool { return false }
+			mgr.opts.AllowExternalTaildrop = func() bool { return tt.enabled }
+			if tt.endpoint != "sender" {
+				n := ph.selfNode.AsStruct()
+				n.Tags = []string{"tag:server"}
+				ph.selfNode = n.View()
+			}
+			if tt.endpoint != "receiver" {
+				n := ph.peerNode.AsStruct()
+				n.Tags = []string{"tag:server"}
+				ph.peerNode = n.View()
+			}
+			// Even with opt-in, a bare PUT must not bypass approval.
+			rr := httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader("hello")))
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("unconsented PUT: %d", rr.Code)
+			}
+			if !tt.enabled {
+				rr := putRequest(t, ph, ext, "foo.txt", 5)
+				if rr.Code != http.StatusForbidden || rr.Header().Get(hdrConsentError) != string(ConsentNotAllowed) {
+					t.Fatalf("opt-out: %d %s", rr.Code, rr.Body)
+				}
+				if len(mgr.pendingConsentRequests()) != 0 {
+					t.Fatal("opt-out generated a prompt")
+				}
+				return
+			}
+			token := approveMetadata(t, ph, ext, "foo.txt", testConsentMetadata("foo.txt", 5))
+			if rr := deliver(t, ph, ext, "foo.txt", "hello", token); rr.Code != http.StatusOK {
+				t.Fatalf("approved PUT: %d %s", rr.Code, rr.Body)
+			}
+		})
+	}
+}
+
+// TestConsentedFileHashAndTransactions verifies that delivered content must
+// match approved metadata and that each transaction requires fresh approval.
+func TestConsentedFileHashAndTransactions(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "different_content", content: "other"},
+		{name: "different_case", content: "HELLO"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			ph.isSelf = false
+			metadata := testConsentMetadata("foo.txt", 5)
+			token := approveMetadata(t, ph, ext, "foo.txt", metadata)
+			// Same length and name, different bytes: discard without publishing.
+			if rr := deliver(t, ph, ext, "foo.txt", tt.content, token); rr.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("substituted content: %d %s", rr.Code, rr.Body)
+			}
+			files, err := mgr.opts.fileOps.ListFiles()
+			if err != nil || len(files) != 0 {
+				t.Fatalf("mismatch left files: %v, %v", files, err)
+			}
+			if rr := deliver(t, ph, ext, "foo.txt", "hello", token); rr.Code != http.StatusConflict {
+				t.Fatalf("mismatched grant reused: %d", rr.Code)
+			}
+
+			// Distinct transactions for the same file each need a new approval, even
+			// when the old request and token have not expired.
+			for _, txid := range []string{"second", "third"} {
+				metadata.TxID = txid
+				token = approveMetadata(t, ph, ext, "foo.txt", metadata)
+				if rr := deliver(t, ph, ext, "foo.txt", "hello", token); rr.Code != http.StatusOK {
+					t.Fatalf("fresh transaction: %d %s", rr.Code, rr.Body)
+				}
+				rc, err := mgr.opts.fileOps.OpenReader("foo.txt")
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := io.ReadAll(rc)
+				rc.Close()
+				if err != nil || string(got) != "hello" {
+					t.Fatalf("delivered content=%q, err=%v", got, err)
+				}
+			}
+		})
+	}
+}
+
+// TestConsentTransactionMetadataImmutable verifies that polling an existing
+// transaction with changed hash or size metadata is rejected.
+func TestConsentTransactionMetadataImmutable(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*PutRequest)
+		wantErr error
+	}{
+		{name: "unchanged"},
+		{name: "hash_changed", mutate: func(r *PutRequest) { r.Hash = fmt.Sprintf("%x", sha256.Sum256([]byte("other"))) }, wantErr: ErrConsentMismatch},
+		{name: "size_changed", mutate: func(r *PutRequest) { r.Size++ }, wantErr: ErrConsentMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _, _ := consentTestManager(t)
+			req := testConsentMetadata("a", 5)
+			if _, _, err := m.requestConsent(testPeerA, "peer", "a", req); err != nil {
+				t.Fatal(err)
+			}
+			if tt.mutate != nil {
+				tt.mutate(&req)
+			}
+			if _, _, err := m.requestConsent(testPeerA, "peer", "a", req); err != tt.wantErr {
+				t.Fatalf("changed metadata: %v; want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestConsentPollingOlderRequest verifies that deciding a newer request does
+// not prevent polling an earlier approved or denied transaction.
+func TestConsentPollingOlderRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		allow     bool
+		wantState ConsentState
+	}{
+		{name: "approved", allow: true, wantState: ConsentApproved},
+		{name: "denied", wantState: ConsentDenied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, clock, _ := consentTestManager(t)
+			first := testConsentMetadata("first", 5)
+			second := testConsentMetadata("second", 5)
+			if _, _, err := m.requestConsent(testPeerA, "peer", "first", first); err != nil {
+				t.Fatal(err)
+			}
+			id := m.pendingConsentRequests()[0].RequestID
+			clock.Advance(time.Second)
+			if _, _, err := m.requestConsent(testPeerA, "peer", "second", second); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.resolveConsent(id, tt.allow); err != nil {
+				t.Fatal(err)
+			}
+			pending := m.pendingConsentRequests()
+			if len(pending) != 1 || pending[0].Files[0].Name != "second" {
+				t.Fatalf("newer pending request = %v; want second", pending)
+			}
+			if err := m.resolveConsent(pending[0].RequestID, !tt.allow); err != nil {
+				t.Fatal(err)
+			}
+			if state, _, err := m.requestConsent(testPeerA, "peer", "first", first); err != nil || state != tt.wantState {
+				t.Fatalf("older transaction lost: %s, %v", state, err)
+			}
+		})
+	}
+}
+
+type consentTestBackend struct{ ipnext.SafeBackend }
+
+func (consentTestBackend) Clock() tstime.Clock { return tstime.StdClock{} }
+
+// TestConsentLegacyFallbackOnlyOwnPeers verifies that legacy non-consent
+// fallback is permitted only for peers owned by the same user.
+func TestConsentLegacyFallbackOnlyOwnPeers(t *testing.T) {
+	tests := []struct {
+		name    string
+		own     bool
+		status  int
+		wantErr bool
+	}{
+		{name: "other_user_not_found", own: false, status: http.StatusNotFound, wantErr: true},
+		{name: "other_user_method_not_allowed", own: false, status: http.StatusMethodNotAllowed, wantErr: true},
+		{name: "other_user_no_content", own: false, status: http.StatusNoContent, wantErr: true},
+		{name: "same_user_not_found", own: true, status: http.StatusNotFound, wantErr: false},
+		{name: "same_user_method_not_allowed", own: true, status: http.StatusMethodNotAllowed, wantErr: false},
+		{name: "same_user_no_content", own: true, status: http.StatusNoContent, wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tt.status) }))
+			defer srv.Close()
+			uid := tailcfg.UserID(2)
+			if tt.own {
+				uid = 1
+			}
+			e := &Extension{selfUID: 1, sb: consentTestBackend{}, nodeBackendForTest: testNodeBackend{peers: []tailcfg.NodeView{(&tailcfg.Node{StableID: testPeerA, User: uid}).View()}}}
+			dst, _ := url.Parse(srv.URL)
+			state, err := e.requestSendConsent(context.Background(), srv.Client().Transport, dst, testPeerA, "foo.txt", testConsentMetadata("foo.txt", 5))
+			if !tt.wantErr {
+				if err != nil || state != ConsentNotRequired {
+					t.Fatalf("legacy self send: %s %v", state, err)
+				}
+			} else if err == nil {
+				t.Fatal("cross-user request fell back to unconsented PUT")
+			}
+		})
+	}
+}
+
+// TestConsentTargetCapability verifies which peers are eligible Taildrop
+// targets based on ownership, tags, and consent protocol capability.
+func TestConsentTargetCapability(t *testing.T) {
+	tests := []struct {
+		name         string
+		own          bool
+		newerVersion bool
+		tagged       bool
+		selfTagged   bool
+		wantImplicit bool
+		wantEligible bool
+	}{
+		{
+			name: "other_user/no_capability/receiver_untagged/sender_untagged",
+		},
+		{
+			name:       "other_user/no_capability/receiver_untagged/sender_tagged",
+			selfTagged: true,
+		},
+		{
+			name:   "other_user/no_capability/receiver_tagged/sender_untagged",
+			tagged: true,
+		},
+		{
+			name:       "other_user/no_capability/receiver_tagged/sender_tagged",
+			tagged:     true,
+			selfTagged: true,
+		},
+		{
+			name:         "other_user/newer_version/receiver_untagged/sender_untagged",
+			newerVersion: true,
+			wantEligible: false,
+		},
+		{
+			name:         "other_user/newer_version/receiver_untagged/sender_tagged",
+			newerVersion: true,
+			selfTagged:   true,
+			wantEligible: false,
+		},
+		{
+			name:         "other_user/newer_version/receiver_tagged/sender_untagged",
+			newerVersion: true,
+			tagged:       true,
+			wantEligible: false,
+		},
+		{
+			name:         "other_user/newer_version/receiver_tagged/sender_tagged",
+			newerVersion: true,
+			tagged:       true,
+			selfTagged:   true,
+			wantEligible: false,
+		},
+		{
+			name:         "same_user/no_capability/receiver_untagged/sender_untagged",
+			own:          true,
+			wantImplicit: true,
+			wantEligible: true,
+		},
+		{
+			name:       "same_user/no_capability/receiver_untagged/sender_tagged",
+			own:        true,
+			selfTagged: true,
+		},
+		{
+			name:   "same_user/no_capability/receiver_tagged/sender_untagged",
+			own:    true,
+			tagged: true,
+		},
+		{
+			name:       "same_user/no_capability/receiver_tagged/sender_tagged",
+			own:        true,
+			tagged:     true,
+			selfTagged: true,
+		},
+		{
+			name:         "same_user/newer_version/receiver_untagged/sender_untagged",
+			own:          true,
+			newerVersion: true,
+			wantImplicit: true,
+			wantEligible: true,
+		},
+		{
+			name:         "same_user/newer_version/receiver_untagged/sender_tagged",
+			own:          true,
+			newerVersion: true,
+			selfTagged:   true,
+			wantEligible: false,
+		},
+		{
+			name:         "same_user/newer_version/receiver_tagged/sender_untagged",
+			own:          true,
+			newerVersion: true,
+			tagged:       true,
+			wantEligible: false,
+		},
+		{
+			name:         "same_user/newer_version/receiver_tagged/sender_tagged",
+			own:          true,
+			newerVersion: true,
+			tagged:       true,
+			selfTagged:   true,
+			wantEligible: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Extension{selfUID: 1, backendState: ipn.Running, capFileSharing: true}
+			p := &tailcfg.Node{StableID: testPeerA, User: 2, Cap: tailcfg.CurrentCapabilityVersion, Hostinfo: (&tailcfg.Hostinfo{OS: "linux"}).View()}
+			if tt.own {
+				p.User = 1
+			}
+			if tt.newerVersion {
+				p.Cap = tailcfg.CurrentCapabilityVersion + 1
+			}
+			if tt.tagged {
+				p.Tags = []string{"tag:server"}
+			}
+			self := &tailcfg.Node{User: 1}
+			if tt.selfTagged {
+				self.Tags = []string{"tag:sender"}
+			}
+			nb := testNodeBackend{self: self.View(), peers: []tailcfg.NodeView{p.View()}, hasPeerAPI: true}
+			e.nodeBackendForTest = nb
+			implicit := tt.wantImplicit
+			if got := e.isOwnPeer(testPeerA); got != implicit {
+				t.Fatalf("implicit consent=%v, want %v", got, implicit)
+			}
+			got, err := e.FileTargets()
+			want := tt.wantEligible
+			if err != nil || (len(got) == 1) != want {
+				t.Fatalf("targets=%v, want eligible=%v, err=%v", got, want, err)
+			}
+		})
+	}
+}
+
+// TestAwaitSendConsentStatus verifies that send-side polling reports the
+// pending state once and returns the final approval or denial decision.
+func TestAwaitSendConsentStatus(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		t.Run(fmt.Sprint("approved=", approved), func(t *testing.T) {
+			metadata := testConsentMetadata("foo.txt", 5)
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests <= 2 {
+					w.WriteHeader(http.StatusAccepted)
+					return
+				}
+				if !approved {
+					w.Header().Set(hdrConsentError, ErrConsentDenied.Error())
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				json.NewEncoder(w).Encode(ConsentToken{Token: "token", Nonce: "nonce", TxID: metadata.TxID, Hash: metadata.Hash, ExpiresAt: time.Now().Add(time.Minute)})
+			}))
+			defer srv.Close()
+			e := &Extension{sb: consentTestBackend{}}
+			t.Cleanup(e.sentConsent.Clear)
+			dst, _ := url.Parse(srv.URL)
+			pending := 0
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			state, err := e.awaitSendConsent(ctx, srv.Client().Transport, dst, testPeerA, "foo.txt", metadata, func() { pending++ })
+			want := ConsentDenied
+			if approved {
+				want = ConsentApproved
+			}
+			if err != nil || state != want || pending != 1 {
+				t.Fatalf("awaitSendConsent = %s, %v; pending notifications = %d; want %s, nil, 1", state, err, pending, want)
+			}
+		})
+	}
+}
+
 // TestConsentIndependentDecisions verifies that consent decisions are scoped to
 // individual files: approving or denying one request does not affect another.
 func TestConsentIndependentDecisions(t *testing.T) {
@@ -832,6 +1327,47 @@ func TestConsentExpiryAfterSleep(t *testing.T) {
 	}
 }
 
+// TestInitialConsentSnapshot verifies that initial notifications include
+// currently pending Taildrop consent requests for both relevant watch masks.
+func TestInitialConsentSnapshot(t *testing.T) {
+	m, _, _ := consentTestManager(t)
+	m.requestConsent(testPeerA, "peer", "a", testConsentMetadata("a", 1))
+	e := &Extension{}
+	e.mgr.Store(m)
+	for _, mask := range []ipn.NotifyWatchOpt{ipn.NotifyInitialState, ipn.NotifyInitialTaildropConsentRequests} {
+		var n ipn.Notify
+		e.initialNotify(mask, &n)
+		if len(n.TaildropConsentRequests) != 1 {
+			t.Fatalf("mask %v: missing snapshot", mask)
+		}
+	}
+}
+
+// TestConsentAdmissionHTTP verifies that the peer API returns 429 and a
+// Retry-After header when the per-peer consent-request limit is exceeded.
+func TestConsentAdmissionHTTP(t *testing.T) {
+	h, ext, _ := consentPeerAPIEnv(t)
+	for i := range maxConsentPeerFiles + 1 {
+		name := fmt.Sprintf("file-%d", i)
+		body, err := json.Marshal(testConsentMetadata(name, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		handlePeerPutRequestWithBackend(h, ext, w, httptest.NewRequest("POST", "/v0/put-request/"+name, bytes.NewReader(body)))
+		want := http.StatusAccepted
+		if i == maxConsentPeerFiles {
+			want = http.StatusTooManyRequests
+		}
+		if w.Code != want {
+			t.Fatalf("request %d: %d, want %d: %s", i, w.Code, want, w.Body)
+		}
+		if want == http.StatusTooManyRequests && w.Header().Get("Retry-After") == "" {
+			t.Fatal("missing retry interval")
+		}
+	}
+}
+
 // Expiry must free abandoned approvals without another lookup of their IDs.
 func TestOutboundConsentCache(t *testing.T) {
 	clock := tstest.NewClock(tstest.ClockOpts{Start: time.Now()})
@@ -885,5 +1421,65 @@ func TestOutboundConsentCache(t *testing.T) {
 	cache.Clear()
 	if cache.load(clock.Now(), key) != nil {
 		t.Fatal("Clear retained a token")
+	}
+}
+
+type consentSnapshotHost struct {
+	ipnext.Host
+	notifies []ipn.Notify
+}
+
+func (h *consentSnapshotHost) SendNotifyAsync(n ipn.Notify) {
+	h.notifies = append(h.notifies, n)
+}
+
+// TestConsentProfileChangeClearsState verifies that switching profiles or
+// logging out dismisses pending prompts and discards cached outbound approvals
+// and legacy-peer exemptions.
+func TestConsentProfileChangeClearsState(t *testing.T) {
+	for _, logout := range []bool{false, true} {
+		t.Run(fmt.Sprintf("logout=%v", logout), func(t *testing.T) {
+			m, _, _ := consentTestManager(t)
+			m.requestConsent(testPeerA, "peer", "a", testConsentMetadata("a", 1))
+			host := &consentSnapshotHost{}
+			e := &Extension{host: host, logf: t.Logf, sb: consentTestBackend{}, fileOps: m.opts.fileOps}
+			e.mgr.Store(m)
+			t.Cleanup(func() { e.Shutdown() })
+			e.sendConsentNotify()
+			if len(host.notifies[0].TaildropConsentRequests) != 1 {
+				t.Fatal("initial prompt missing")
+			}
+			key := outboundConsentKey{TxID: "old-profile"}
+			e.sentConsent.store(e.Clock().Now(), key, &ConsentToken{ExpiresAt: time.Now().Add(time.Hour)})
+			e.noConsentPeers.Store(testPeerA, time.Now().Add(time.Hour))
+			profile := &ipn.LoginProfile{}
+			if !logout {
+				profile.UserProfile = tailcfg.UserProfile{ID: 2, LoginName: "new@example.com"}
+			}
+			e.onChangeProfile(profile.View(), (&ipn.Prefs{}).View(), false)
+			last := host.notifies[len(host.notifies)-1].TaildropConsentRequests
+			if last == nil || len(last) != 0 {
+				t.Fatalf("profile change did not dismiss prompts: %v", last)
+			}
+			if e.consentToken(key) != nil || e.noConsentPeers.Len() != 0 {
+				t.Fatal("profile change retained outbound state")
+			}
+		})
+	}
+}
+
+// TestConsentForbiddenIsNotDeclined verifies that an authorization failure
+// without a consent error must not be reported as the recipient declining a
+// transfer.
+func TestConsentForbiddenIsNotDeclined(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not authorized", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	e := &Extension{sb: consentTestBackend{}}
+	dst, _ := url.Parse(srv.URL)
+	state, err := e.requestSendConsent(context.Background(), srv.Client().Transport, dst, testPeerA, "a.txt", testConsentMetadata("a.txt", 1))
+	if err == nil || state == ConsentDenied {
+		t.Fatalf("ordinary authorization failure reported as a decline: state=%q, err=%v", state, err)
 	}
 }

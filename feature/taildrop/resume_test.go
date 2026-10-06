@@ -39,7 +39,7 @@ func TestResume(t *testing.T) {
 		must.Do(err)
 		must.Do(close()) // Windows wants the file handle to be closed to rename it.
 
-		must.Get(m.PutFile("", "foo", r, offset, -1))
+		must.Get(m.PutFile("", "foo", r, offset, -1, ""))
 		got := must.Get(os.ReadFile(filepath.Join(dir, "foo")))
 		if !bytes.Equal(got, want) {
 			t.Errorf("content mismatches")
@@ -62,7 +62,7 @@ func TestResume(t *testing.T) {
 			if offset < int64(len(want)) {
 				r = io.MultiReader(io.LimitReader(r, numWant), iotest.ErrReader(io.ErrClosedPipe))
 			}
-			if _, err := m.PutFile("", "bar", r, offset, -1); err == nil {
+			if _, err := m.PutFile("", "bar", r, offset, -1, ""); err == nil {
 				break
 			}
 			if i > 1000 {

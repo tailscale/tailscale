@@ -4,14 +4,20 @@
 package taildrop
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -509,6 +515,9 @@ func (m *manager) resolveConsent(id string, allow bool) error {
 	if m == nil {
 		return ErrNoTaildrop
 	}
+	if allow && !m.allowExternalTaildrop() {
+		return ErrConsentNotAllowed
+	}
 	now := m.opts.Clock.Now()
 	s := &m.consent
 	s.mu.Lock()
@@ -792,6 +801,166 @@ func (m *manager) endConsentedPut(nonce [32]byte, fileLength int64, transferErr 
 					f.used = true
 				}
 			}
+		}
+	}
+}
+
+// Sending side.
+
+const (
+	// senderConsentWait bounds how long a file-put will block waiting for the
+	// receiving user to decide.
+	//
+	// It is deliberately under a minute: GUI clients drive this through
+	// LocalAPI over an HTTP client with a per-request idle timeout, and a
+	// file-put that outlives that timeout looks to them like a hung upload
+	// rather than a pending prompt. Clients that want to wait longer should
+	// poll the file-put-request endpoint instead, which returns immediately.
+	senderConsentWait = 45 * time.Second
+
+	// senderConsentPoll is how often to re-ask a peer whose user hasn't
+	// decided yet.
+	senderConsentPoll = time.Second
+
+	// senderNoConsentTTL is how long to remember that a peer doesn't require
+	// consent, so that sending N files costs one probe rather than N.
+	//
+	// A peer that turns consent on inside this window rejects the next bare
+	// PUT, which invalidates the entry; the user retries and it works. That's
+	// preferable to charging every existing user an extra round trip per file
+	// for a feature neither side has enabled.
+	senderNoConsentTTL = 5 * time.Minute
+)
+
+// peerRequiresConsent reports whether we should ask peer for consent before
+// sending, based on what it last told us.
+func (e *Extension) peerRequiresConsent(peer tailcfg.StableNodeID) bool {
+	if e.shouldRequestConsent(peer) {
+		return true
+	}
+	until, ok := e.noConsentPeers.Load(peer)
+	if !ok {
+		return true
+	}
+	if !e.Clock().Now().Before(until) {
+		e.noConsentPeers.Delete(peer)
+		return true
+	}
+	return false
+}
+
+// consentToken returns a cached, still-valid consent token for one of this
+// node's outbound transfers, or nil.
+func (e *Extension) consentToken(key outboundConsentKey) *ConsentToken {
+	return e.sentConsent.load(e.Clock().Now(), key)
+}
+
+// forgetConsentToken drops what we think we know about a peer's consent, so
+// the next send negotiates from scratch. It's called when a peer rejects a PUT
+// on consent grounds, which means our cached state is wrong either way.
+func (e *Extension) forgetConsentToken(key outboundConsentKey) {
+	e.sentConsent.Delete(key)
+	e.noConsentPeers.Delete(key.Peer)
+}
+
+// requestSendConsent asks a peer once for permission to send it a file.
+//
+// escapedName must be the same path element the subsequent PUT will use: the
+// peer binds its token to the name as it unescapes it, so the two calls have to
+// agree byte for byte.
+//
+// On approval the token is cached for the eventual PUT.
+func (e *Extension) requestSendConsent(ctx context.Context, tr http.RoundTripper, dstURL *url.URL, peer tailcfg.StableNodeID, escapedName string, metadata PutRequest) (ConsentState, error) {
+	if err := e.checkSendPolicy(peer); err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(metadata)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", dstURL.String()+"/v0/put-request/"+escapedName, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		if !e.isOwnPeer(peer) {
+			return "", errors.New("taildrop: cross-user transfer requires consent")
+		}
+		e.noConsentPeers.Store(peer, e.Clock().Now().Add(senderNoConsentTTL))
+		return ConsentNotRequired, nil
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		if !e.isOwnPeer(peer) {
+			return "", errors.New("taildrop: peer does not support consent")
+		}
+		// The peer predates the consent protocol, so a plain PUT is all it
+		// understands and all it requires.
+		e.noConsentPeers.Store(peer, e.Clock().Now().Add(senderNoConsentTTL))
+		return ConsentNotRequired, nil
+	case http.StatusAccepted:
+		return ConsentPending, nil
+	case http.StatusForbidden:
+		if resp.Header.Get(hdrConsentError) == string(ConsentNotAllowed) {
+			return ConsentNotAllowed, nil
+		}
+		if resp.Header.Get(hdrConsentError) == ErrConsentDenied.Error() {
+			return ConsentDenied, nil
+		}
+		return "", fmt.Errorf("put-request: %s", resp.Status)
+	case http.StatusOK:
+		var tok ConsentToken
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&tok); err != nil {
+			return "", fmt.Errorf("decoding consent token: %w", err)
+		}
+		if tok.Token == "" || tok.Nonce == "" || tok.TxID != metadata.TxID || tok.Hash != metadata.Hash {
+			return "", errors.New("peer returned an empty consent token")
+		}
+		e.sentConsent.store(e.Clock().Now(), outboundConsentKey{Peer: peer, Filename: escapedName, Size: metadata.Size, TxID: metadata.TxID, Hash: metadata.Hash}, &tok)
+		return ConsentApproved, nil
+	default:
+		return "", fmt.Errorf("put-request: unexpected status %s", resp.Status)
+	}
+}
+
+// awaitSendConsent asks a peer for permission to send it a file, polling until
+// its user decides, [senderConsentWait] elapses, or ctx ends. onPending, if
+// non-nil, is called once when the peer first reports waiting for approval.
+//
+// A [ConsentPending] return means the wait ran out, not that the request was
+// lost: the peer's user may still approve it, and a later attempt will pick up
+// the decision.
+func (e *Extension) awaitSendConsent(ctx context.Context, tr http.RoundTripper, dstURL *url.URL, peer tailcfg.StableNodeID, escapedName string, metadata PutRequest, onPending func()) (ConsentState, error) {
+	ctx, cancel := context.WithTimeout(ctx, senderConsentWait)
+	defer cancel()
+
+	for {
+		state, err := e.requestSendConsent(ctx, tr, dstURL, peer, escapedName, metadata)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ConsentPending, nil
+			}
+			return "", err
+		}
+		if state != ConsentPending {
+			return state, nil
+		}
+		if onPending != nil {
+			onPending()
+			onPending = nil
+		}
+		select {
+		case <-ctx.Done():
+			return ConsentPending, nil
+		case <-time.After(senderConsentPoll):
 		}
 	}
 }

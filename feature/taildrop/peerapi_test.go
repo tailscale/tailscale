@@ -5,6 +5,7 @@ package taildrop
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -31,10 +33,11 @@ import (
 // peerAPIHandler serves the PeerAPI for a source specific client.
 type peerAPIHandler struct {
 	remoteAddr netip.AddrPort
-	isSelf     bool             // whether peerNode is owned by same user as this node
-	selfNode   tailcfg.NodeView // this node; always non-nil
-	peerNode   tailcfg.NodeView // peerNode is who's making the request
-	canDebug   bool             // whether peerNode can debug this node (goroutines, metrics, magicsock internal state, etc)
+	isSelf     bool               // whether peerNode is owned by same user as this node
+	selfNode   tailcfg.NodeView   // this node; always non-nil
+	peerNode   tailcfg.NodeView   // peerNode is who's making the request
+	canDebug   bool               // whether peerNode can debug this node (goroutines, metrics, magicsock internal state, etc)
+	peerCaps   tailcfg.PeerCapMap // ACL capabilities peerNode has toward this node
 }
 
 func (h *peerAPIHandler) IsSelfUntagged() bool {
@@ -50,7 +53,7 @@ func (h *peerAPIHandler) Logf(format string, a ...any) {
 }
 
 func (h *peerAPIHandler) PeerCaps() tailcfg.PeerCapMap {
-	return nil
+	return h.peerCaps
 }
 
 type fakeExtension struct {
@@ -158,13 +161,16 @@ func TestHandlePeerAPI(t *testing.T) {
 		checks     []check
 	}{
 		{
+			// Another user's node may send, but only with consent, so a PUT
+			// carrying no token is refused for that reason rather than for
+			// being unauthorized outright.
 			name:       "reject_non_owner_put",
 			isSelf:     false,
 			capSharing: true,
 			reqs:       []*http.Request{httptest.NewRequest("PUT", "/v0/put/foo", nil)},
 			checks: checks(
 				httpStatus(http.StatusForbidden),
-				bodyContains("Taildrop disabled"),
+				bodyContains("has not enabled Taildrop"),
 			),
 		},
 		{
@@ -586,5 +592,517 @@ func TestFileDeleteRace(t *testing.T) {
 		if len(wfs) != 0 {
 			t.Fatalf("waiting files = %d; want 0", len(wfs))
 		}
+	}
+}
+
+// consentPeerAPIEnv returns a PeerAPI handler and extension wired to a manager
+// with consent enabled.
+func consentPeerAPIEnv(t *testing.T) (*peerAPIHandler, *fakeExtension, *manager) {
+	t.Helper()
+	fo, err := newFileOps(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	consent := true
+	mgr := managerOptions{
+		Logf:                  t.Logf,
+		fileOps:               fo,
+		AllowExternalTaildrop: func() bool { return true },
+		ConsentForOwnDevices:  func() bool { return consent },
+	}.New()
+	t.Cleanup(mgr.Shutdown)
+
+	ext := &fakeExtension{
+		logf:           t.Logf,
+		capFileSharing: true,
+		clock:          &tstest.Clock{},
+		taildrop:       mgr,
+	}
+	ph := &peerAPIHandler{
+		isSelf:   false,
+		selfNode: (&tailcfg.Node{Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")}}).View(),
+		peerNode: (&tailcfg.Node{StableID: "nPEERCNTRL", ComputedName: "some-peer-name"}).View(),
+	}
+	return ph, ext, mgr
+}
+
+func putRequest(t *testing.T, ph *peerAPIHandler, ext *fakeExtension, name string, size int64) *httptest.ResponseRecorder {
+	t.Helper()
+	body := must.Get(json.Marshal(testConsentMetadata(name, size)))
+	req := httptest.NewRequest("POST", "/v0/put-request/"+name, bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handlePeerPutRequestWithBackend(ph, ext, rr, req)
+	return rr
+}
+
+// TestHandlePeerPutRequestConsentDisabled verifies that same-user transfers
+// bypass consent with either preference setting unless the development override
+// is enabled.
+func TestHandlePeerPutRequestConsentDisabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "opted_out"},
+		{name: "opted_in", enabled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fo, err := newFileOps(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			mgr := managerOptions{Logf: t.Logf, fileOps: fo, AllowExternalTaildrop: func() bool { return tt.enabled }}.New()
+			t.Cleanup(mgr.Shutdown)
+			ext := &fakeExtension{logf: t.Logf, capFileSharing: true, clock: &tstest.Clock{}, taildrop: mgr}
+			ph := &peerAPIHandler{
+				isSelf:   true,
+				selfNode: (&tailcfg.Node{}).View(),
+				peerNode: (&tailcfg.Node{StableID: "nPEERCNTRL"}).View(),
+			}
+
+			// 204 tells a consent-aware sender to go straight to a plain PUT.
+			if got := putRequest(t, ph, ext, "foo.txt", 10).Code; got != http.StatusNoContent {
+				t.Errorf("status = %d; want %d", got, http.StatusNoContent)
+			}
+
+			// And a plain PUT still works, so enabling the protocol costs nothing
+			// regardless of the preference.
+			rr := httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader("hello")))
+			if rr.Code != http.StatusOK {
+				t.Errorf("bare PUT status = %d; want 200 (body %q)", rr.Code, rr.Body)
+			}
+
+		})
+	}
+}
+
+// TestHandlePeerPutRequestUnauthorized verifies that unsigned peers cannot
+// request approval or generate a recipient prompt, even when their user matches
+// the receiver’s.
+func TestHandlePeerPutRequestUnauthorized(t *testing.T) {
+	tests := []struct {
+		name string
+		own  bool
+	}{
+		{name: "other_user"},
+		{name: "same_user", own: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// An unsigned peer has no verified identity to show the owner, so it is
+			// refused outright rather than being allowed to ask. Consent doesn't
+			// change that; it's the one case consent can't rescue.
+			//
+			// A peer belonging to another user is a different matter, and is covered
+			// by TestHandlePeerPutCrossUser.
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			ph.isSelf = tt.own
+			ph.peerNode = (&tailcfg.Node{StableID: "nUNSIGNEDCNTRL", UnsignedPeerAPIOnly: true}).View()
+
+			if got := putRequest(t, ph, ext, "foo.txt", 10).Code; got != http.StatusForbidden {
+				t.Errorf("status = %d; want %d", got, http.StatusForbidden)
+			}
+			// Above all, it must not be able to make the device owner's phone buzz.
+			if got := mgr.pendingConsentRequests(); len(got) != 0 {
+				t.Errorf("pending requests = %d; want 0", len(got))
+			}
+
+		})
+	}
+}
+
+// TestHandlePeerPutConsentFlow verifies that the peer API requires approval
+// before delivery and rejects replay of the resulting token, including for
+// empty files and direct-file mode.
+func TestHandlePeerPutConsentFlow(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		own      bool
+		direct   bool
+	}{
+		{name: "same_user_forced", contents: "hello", own: true},
+		{name: "same_user_forced_apple_direct", contents: "hello", own: true, direct: true},
+		{name: "empty"},
+		{name: "small_file", contents: "hello"},
+		{name: "larger_file", contents: "hello world"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			contents := tt.contents
+			ph.isSelf = tt.own
+			mgr.opts.DirectFileMode = tt.direct
+
+			// A bare PUT is refused while consent is required.
+			rr := httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader(contents)))
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("bare PUT status = %d; want %d", rr.Code, http.StatusForbidden)
+			}
+			if !strings.Contains(rr.Body.String(), "consent required") {
+				t.Errorf("bare PUT body = %q; want it to mention consent", rr.Body)
+			}
+
+			// Phase 1: request consent. Pending, with a retry hint.
+			rr = putRequest(t, ph, ext, "foo.txt", int64(len(contents)))
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("put-request status = %d; want %d", rr.Code, http.StatusAccepted)
+			}
+			if got := rr.Result().Header.Get("Retry-After"); got == "" {
+				t.Error("pending put-request has no Retry-After hint")
+			}
+
+			// Phase 2: the owner approves.
+			pending := mgr.pendingConsentRequests()
+			if len(pending) != 1 {
+				t.Fatalf("pending = %d; want 1", len(pending))
+			}
+			if got := pending[0].PeerName; got != "some-peer-name" {
+				t.Errorf("PeerName = %q; want %q", got, "some-peer-name")
+			}
+			if err := mgr.resolveConsent(pending[0].RequestID, true); err != nil {
+				t.Fatal(err)
+			}
+
+			rr = putRequest(t, ph, ext, "foo.txt", int64(len(contents)))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("approved put-request status = %d; want 200 (body %q)", rr.Code, rr.Body)
+			}
+			var tok ConsentToken
+			if err := json.Unmarshal(rr.Body.Bytes(), &tok); err != nil {
+				t.Fatalf("decoding token: %v", err)
+			}
+
+			// Phase 3: the authorized PUT.
+			req := httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader(contents))
+			for k, v := range consentHeaders(&tok) {
+				req.Header[k] = v
+			}
+			rr = httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("consented PUT status = %d; want 200 (body %q)", rr.Code, rr.Body)
+			}
+
+			// Replaying the same token delivers nothing further.
+			req = httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader(contents))
+			for k, v := range consentHeaders(&tok) {
+				req.Header[k] = v
+			}
+			rr = httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, req)
+			if rr.Code != http.StatusConflict {
+				t.Errorf("replayed PUT status = %d; want %d", rr.Code, http.StatusConflict)
+			}
+
+		})
+	}
+}
+
+// TestHandlePeerPutRequestDenied verifies that a recipient’s denial is returned
+// to the sender as an explicit decline.
+func TestHandlePeerPutRequestDenied(t *testing.T) {
+	tests := []struct {
+		name string
+		size int64
+	}{
+		{name: "empty_file"},
+		{name: "nonempty_file", size: 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+
+			if got := putRequest(t, ph, ext, "foo.txt", tt.size).Code; got != http.StatusAccepted {
+				t.Fatalf("status = %d; want %d", got, http.StatusAccepted)
+			}
+			pending := mgr.pendingConsentRequests()
+			if len(pending) != 1 {
+				t.Fatalf("pending = %d; want 1", len(pending))
+			}
+			if err := mgr.resolveConsent(pending[0].RequestID, false); err != nil {
+				t.Fatal(err)
+			}
+
+			rr := putRequest(t, ph, ext, "foo.txt", tt.size)
+			if rr.Code != http.StatusForbidden {
+				t.Errorf("denied status = %d; want %d", rr.Code, http.StatusForbidden)
+			}
+			if !strings.Contains(rr.Body.String(), "declined") {
+				t.Errorf("denied body = %q; want it to say the peer declined", rr.Body)
+			}
+
+		})
+	}
+}
+
+// TestHandlePeerPutRequestBadInput verifies that malformed consent requests
+// fail before creating a prompt; each case isolates the invalid method,
+// metadata, or filename it is intended to reject.
+func TestHandlePeerPutRequestBadInput(t *testing.T) {
+	metadataBody := func(size int64) io.Reader {
+		return bytes.NewReader(must.Get(json.Marshal(testConsentMetadata("input", size))))
+	}
+	tests := []struct {
+		name string
+		req  *http.Request
+		want int
+	}{
+		{
+			"wrong_method",
+			httptest.NewRequest("GET", "/v0/put-request/foo.txt", nil),
+			http.StatusMethodNotAllowed,
+		},
+		{
+			"bad_json",
+			httptest.NewRequest("POST", "/v0/put-request/foo.txt", strings.NewReader("{")),
+			http.StatusBadRequest,
+		},
+		{
+			"negative_size",
+			httptest.NewRequest("POST", "/v0/put-request/foo.txt", metadataBody(-1)),
+			http.StatusBadRequest,
+		},
+		{
+			"partial_suffix_filename",
+			httptest.NewRequest("POST", "/v0/put-request/foo.txt.partial", metadataBody(1)),
+			http.StatusBadRequest,
+		},
+		{
+			"traversal_filename",
+			httptest.NewRequest("POST", "/v0/put-request/"+hexAll("../foo"), metadataBody(1)),
+			http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			rr := httptest.NewRecorder()
+			handlePeerPutRequestWithBackend(ph, ext, rr, tt.req)
+			if rr.Code != tt.want {
+				t.Errorf("status = %d; want %d (body %q)", rr.Code, tt.want, rr.Body)
+			}
+			if pending := mgr.pendingConsentRequests(); len(pending) != 0 {
+				t.Errorf("invalid request created prompts: %v", pending)
+			}
+		})
+	}
+}
+
+// TestHandlePeerPutConsentMultiFile verifies that multiple files receive
+// separate prompts and independently usable approvals.
+func TestHandlePeerPutConsentMultiFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+	}{
+		{name: "one_file", files: []string{"a.txt"}},
+		{name: "multiple_files", files: []string{"a.txt", "b.txt", "c.txt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			names := tt.files
+
+			for _, n := range names {
+				if got := putRequest(t, ph, ext, n, 4).Code; got != http.StatusAccepted {
+					t.Fatalf("%s status = %d; want %d", n, got, http.StatusAccepted)
+				}
+			}
+
+			// Each file has its own prompt and approval.
+			pending := mgr.pendingConsentRequests()
+			if len(pending) != len(names) {
+				t.Fatalf("pending prompts = %d; want %d", len(pending), len(names))
+			}
+			for _, p := range pending {
+				if len(p.Files) != 1 {
+					t.Fatalf("files in prompt = %d; want 1", len(p.Files))
+				}
+				if err := mgr.resolveConsent(p.RequestID, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			for _, n := range names {
+				rr := putRequest(t, ph, ext, n, 4)
+				if rr.Code != http.StatusOK {
+					t.Fatalf("%s approved status = %d; want 200", n, rr.Code)
+				}
+				var tok ConsentToken
+				if err := json.Unmarshal(rr.Body.Bytes(), &tok); err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "/v0/put/"+n, strings.NewReader("abcd"))
+				for k, v := range consentHeaders(&tok) {
+					req.Header[k] = v
+				}
+				put := httptest.NewRecorder()
+				handlePeerPutWithBackend(ph, ext, put, req)
+				if put.Code != http.StatusOK {
+					t.Fatalf("%s PUT status = %d; want 200 (body %q)", n, put.Code, put.Body)
+				}
+			}
+
+		})
+	}
+}
+
+// TestHandlePeerPutConsentErrorHeader verifies that only consent failures carry
+// the protocol’s consent error header, so senders can distinguish them from
+// ordinary authorization failures.
+func TestHandlePeerPutConsentErrorHeader(t *testing.T) {
+	tests := []struct {
+		name               string
+		approved, unsigned bool
+		wantStatus         int
+		wantConsentError   bool
+	}{
+		{name: "consent_required", wantStatus: http.StatusForbidden, wantConsentError: true},
+		{name: "approved", approved: true, wantStatus: http.StatusOK},
+		{name: "unauthorized", approved: true, unsigned: true, wantStatus: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ph, ext, _ := consentPeerAPIEnv(t)
+			req := httptest.NewRequest("PUT", "/v0/put/ok.txt", strings.NewReader("hi"))
+			if tt.approved {
+				tok := approveMetadata(t, ph, ext, "ok.txt", testConsentMetadata("ok.txt", 2))
+				req.Header = consentHeaders(&tok)
+			}
+			if tt.unsigned {
+				ph.peerNode = (&tailcfg.Node{StableID: "nUNSIGNEDCNTRL", UnsignedPeerAPIOnly: true}).View()
+			}
+			rr := httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, req)
+			if rr.Code != tt.wantStatus {
+				t.Fatalf("PUT status = %d; want %d: %s", rr.Code, tt.wantStatus, rr.Body)
+			}
+			if got := rr.Header().Get(hdrConsentError) != ""; got != tt.wantConsentError {
+				t.Errorf("consent error header present = %v; want %v", got, tt.wantConsentError)
+			}
+		})
+	}
+}
+
+// TestHandlePeerPutCrossUser verifies that cross-user peers can request consent
+// without an ACL capability, but only approval authorizes delivery, regardless
+// of the same-user testing override.
+func TestHandlePeerPutCrossUser(t *testing.T) {
+	tests := []struct {
+		name              string
+		override, approve bool
+		wantPutStatus     int
+	}{
+		{name: "pending", wantPutStatus: http.StatusForbidden},
+		{name: "pending_with_override", override: true, wantPutStatus: http.StatusForbidden},
+		{name: "approved", approve: true, wantPutStatus: http.StatusOK},
+		{name: "approved_with_override", override: true, approve: true, wantPutStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The peer has no ACL capability granting file sharing.
+			ph, ext, mgr := consentPeerAPIEnv(t)
+			mgr.opts.ConsentForOwnDevices = func() bool { return tt.override }
+			rr := putRequest(t, ph, ext, "foo.txt", 5)
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("request status = %d; want 202", rr.Code)
+			}
+			if got := len(mgr.pendingConsentRequests()); got != 1 {
+				t.Fatalf("pending = %d; want 1", got)
+			}
+			req := httptest.NewRequest("PUT", "/v0/put/foo.txt", strings.NewReader("hello"))
+			if tt.approve {
+				tok := approveMetadata(t, ph, ext, "foo.txt", testConsentMetadata("foo.txt", 5))
+				req.Header = consentHeaders(&tok)
+			}
+			rr = httptest.NewRecorder()
+			handlePeerPutWithBackend(ph, ext, rr, req)
+			if rr.Code != tt.wantPutStatus {
+				t.Fatalf("PUT status = %d; want %d: %s", rr.Code, tt.wantPutStatus, rr.Body)
+			}
+		})
+	}
+}
+
+// TestPutAuthMatrix documents, for every shape of peer, whether it may send us
+// a file and whether the device owner is asked first.
+//
+// The intended design is that consent depends only on who the peer is, not on
+// an ACL capability. Same-user untagged transfers only prompt under the
+// explicit testing override; everything else always does.
+func TestPutAuthMatrix(t *testing.T) {
+	handler := func(isSelf, selfTagged, peerTagged, unsigned, sendCap bool) *peerAPIHandler {
+		self := &tailcfg.Node{}
+		if selfTagged {
+			self.Tags = []string{"tag:self"}
+		}
+		peer := &tailcfg.Node{StableID: "nPEERCNTRL", UnsignedPeerAPIOnly: unsigned}
+		if peerTagged {
+			peer.Tags = []string{"tag:peer"}
+		}
+		h := &peerAPIHandler{isSelf: isSelf, selfNode: self.View(), peerNode: peer.View()}
+		if sendCap {
+			h.peerCaps = tailcfg.PeerCapMap{peercap.FileSharingSend: nil}
+		}
+		return h
+	}
+
+	// What the design calls for, independent of any preference.
+	const (
+		wantAllowedNoPrompt = "allowed, no prompt"
+		wantPrompt          = "prompt"
+		wantDenied          = "denied"
+	)
+
+	tests := []struct {
+		name string
+		ph   *peerAPIHandler
+		want string
+	}{
+		{"same_user_untagged", handler(true, false, false, false, false), wantAllowedNoPrompt},
+		{"same_user_peer_tagged", handler(true, false, true, false, false), wantPrompt},
+		{"same_user_self_tagged", handler(true, true, false, false, false), wantPrompt},
+		{"other_user", handler(false, false, false, false, false), wantPrompt},
+		{"other_user_tagged", handler(false, false, true, false, false), wantPrompt},
+		{"unsigned", handler(true, false, false, true, false), wantDenied},
+		{"unsigned_other_user", handler(false, false, false, true, false), wantDenied},
+
+		// An ACL capability is the admin saying this peer may send. The
+		// question is whether that also waives the owner's say.
+		{"other_user_with_send_cap", handler(false, false, false, false, true), wantPrompt},
+		{"same_user_tagged_with_send_cap", handler(true, false, true, false, true), wantPrompt},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			describe := func(consentForOwnDevices bool) string {
+				switch putAuthFor(tt.ph, consentForOwnDevices) {
+				case putDenied:
+					return wantDenied
+				case putNeedsConsent:
+					return wantPrompt
+				default:
+					return wantAllowedNoPrompt
+				}
+			}
+			if got := describe(false); got != tt.want {
+				t.Errorf("got %q; want %q", got, tt.want)
+			}
+			// The testing override must prompt even for same-user transfers.
+			wantOverride := tt.want
+			if wantOverride == wantAllowedNoPrompt {
+				wantOverride = wantPrompt
+			}
+			if got := describe(true); got != wantOverride {
+				t.Errorf("override authorization: %q; want %q", got, wantOverride)
+			}
+			if !canPutFile(tt.ph, false) != (tt.want == wantDenied) {
+				t.Errorf("canPutFile disagrees with %q", tt.want)
+			}
+		})
 	}
 }
