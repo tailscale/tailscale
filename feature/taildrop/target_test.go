@@ -93,7 +93,7 @@ func TestTaildropTargetStatus(t *testing.T) {
 	const otherUID tailcfg.UserID = 2
 
 	peerNode := func(uid tailcfg.UserID, tagged bool) tailcfg.NodeView {
-		n := &tailcfg.Node{ID: 1, User: uid, Cap: tailcfg.CurrentCapabilityVersion + 1, Hostinfo: (&tailcfg.Hostinfo{OS: "linux"}).View()}
+		n := &tailcfg.Node{ID: 1, User: uid, Cap: 149, Hostinfo: (&tailcfg.Hostinfo{OS: "linux"}).View()}
 		n.Online = new(true)
 		if tagged {
 			n.Tags = []string{"tag:peer"}
@@ -109,14 +109,14 @@ func TestTaildropTargetStatus(t *testing.T) {
 		want       ipnstate.TaildropTargetStatus
 	}{
 		{"own_untagged", peerNode(selfUID, false), false, false, ipnstate.TaildropTargetAvailable},
-		{"own_tagged", peerNode(selfUID, true), false, false, ipnstate.TaildropTargetMissingCap},
-		{"own_untagged_self_tagged", peerNode(selfUID, false), true, false, ipnstate.TaildropTargetMissingCap},
-		{"other_user", peerNode(otherUID, false), false, false, ipnstate.TaildropTargetMissingCap},
+		{"own_tagged", peerNode(selfUID, true), false, false, ipnstate.TaildropTargetConsentRequired},
+		{"own_untagged_self_tagged", peerNode(selfUID, false), true, false, ipnstate.TaildropTargetConsentRequired},
+		{"other_user", peerNode(otherUID, false), false, false, ipnstate.TaildropTargetConsentRequired},
 
 		// The point of this test: an ACL capability must not turn a prompt
 		// into a promise that there won't be one.
-		{"other_user_with_cap", peerNode(otherUID, false), false, true, ipnstate.TaildropTargetMissingCap},
-		{"own_tagged_with_cap", peerNode(selfUID, true), false, true, ipnstate.TaildropTargetMissingCap},
+		{"other_user_with_cap", peerNode(otherUID, false), false, true, ipnstate.TaildropTargetConsentRequired},
+		{"own_tagged_with_cap", peerNode(selfUID, true), false, true, ipnstate.TaildropTargetConsentRequired},
 	}
 
 	for _, tt := range tests {
@@ -155,30 +155,33 @@ func TestConsentTargetPlatformSupport(t *testing.T) {
 		wantTarget bool
 		wantStatus ipnstate.TaildropTargetStatus
 	}{
-		{name: "linux", os: "linux", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "freebsd", os: "freebsd", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "openbsd", os: "openbsd", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "macos_no_ui", os: "macOS", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "ios_no_ui", os: "iOS", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "linux_old_backend", os: "linux", capVersion: tailcfg.CurrentCapabilityVersion, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "linux_newer_backend", os: "linux", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "windows_old_backend", os: "windows", capVersion: tailcfg.CurrentCapabilityVersion, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "android_old_backend", os: "android", capVersion: tailcfg.CurrentCapabilityVersion, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "linux", os: "linux", capVersion: 149, wantTarget: true, wantStatus: ipnstate.TaildropTargetConsentRequired},
+		{name: "freebsd", os: "freebsd", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "openbsd", os: "openbsd", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "macos_no_ui", os: "macOS", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "ios_no_ui", os: "iOS", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "linux_old_backend", os: "linux", capVersion: 148, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "linux_newer_backend", os: "linux", capVersion: 150, wantTarget: true, wantStatus: ipnstate.TaildropTargetConsentRequired},
+		{name: "windows_old_backend", os: "windows", capVersion: 148, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "android_old_backend", os: "android", capVersion: 148, wantStatus: ipnstate.TaildropTargetMissingCap},
 		{name: "linux_no_backend", os: "linux", wantStatus: ipnstate.TaildropTargetMissingCap},
 		{name: "macos_no_backend", os: "macOS", wantStatus: ipnstate.TaildropTargetMissingCap},
 		{name: "ios_no_backend", os: "iOS", wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "tvos", os: "tvOS", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "missing_os", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "tvos", os: "tvOS", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "watchos", os: "watchOS", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "visionos", os: "visionOS", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "unknown_os", os: "unknown", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "missing_os", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
 
-		{name: "macos_future_version_no_ui", os: "macOS", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "ios_future_version_no_ui", os: "iOS", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "darwin_future_version_no_ui", os: "darwin", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "darwin_no_ui", os: "darwin", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "windows_future_version_no_ui", os: "windows", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "android_future_version_no_ui", os: "android", capVersion: tailcfg.CurrentCapabilityVersion + 2, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "windows_no_ui", os: "windows", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "macos_future_version_no_ui", os: "macOS", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "ios_future_version_no_ui", os: "iOS", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "darwin_future_version_no_ui", os: "darwin", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "darwin_no_ui", os: "darwin", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "windows_future_version_no_ui", os: "windows", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "android_future_version_no_ui", os: "android", capVersion: 150, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "windows_no_ui", os: "windows", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
 		{name: "windows_no_backend", os: "windows", wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "android_no_ui", os: "android", capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "android_no_ui", os: "android", capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
 		{name: "android_no_backend", os: "android", wantStatus: ipnstate.TaildropTargetMissingCap},
 
 		{name: "own_linux", os: "linux", own: true, wantTarget: true, wantStatus: ipnstate.TaildropTargetAvailable},
@@ -190,16 +193,16 @@ func TestConsentTargetPlatformSupport(t *testing.T) {
 		{name: "own_tvos", os: "tvOS", own: true, wantStatus: ipnstate.TaildropTargetUnsupportedOS},
 		{name: "own_missing_os", own: true, wantTarget: true, wantStatus: ipnstate.TaildropTargetAvailable},
 
-		{name: "macos_peer_tagged_no_ui", os: "macOS", own: true, peerTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "macos_self_tagged_no_ui", os: "macOS", own: true, selfTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "ios_peer_tagged_no_ui", os: "iOS", own: true, peerTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "ios_self_tagged_no_ui", os: "iOS", own: true, selfTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "darwin_peer_tagged_no_ui", os: "darwin", own: true, peerTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "darwin_self_tagged_no_ui", os: "darwin", own: true, selfTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "windows_peer_tagged_no_ui", os: "windows", own: true, peerTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "windows_self_tagged_no_ui", os: "windows", own: true, selfTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "android_peer_tagged_no_ui", os: "android", own: true, peerTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
-		{name: "android_self_tagged_no_ui", os: "android", own: true, selfTagged: true, capVersion: tailcfg.CurrentCapabilityVersion + 1, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "macos_peer_tagged_no_ui", os: "macOS", own: true, peerTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "macos_self_tagged_no_ui", os: "macOS", own: true, selfTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "ios_peer_tagged_no_ui", os: "iOS", own: true, peerTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "ios_self_tagged_no_ui", os: "iOS", own: true, selfTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "darwin_peer_tagged_no_ui", os: "darwin", own: true, peerTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "darwin_self_tagged_no_ui", os: "darwin", own: true, selfTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "windows_peer_tagged_no_ui", os: "windows", own: true, peerTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "windows_self_tagged_no_ui", os: "windows", own: true, selfTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "android_peer_tagged_no_ui", os: "android", own: true, peerTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
+		{name: "android_self_tagged_no_ui", os: "android", own: true, selfTagged: true, capVersion: 149, wantStatus: ipnstate.TaildropTargetMissingCap},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,7 +243,7 @@ func TestForcedOwnConsent(t *testing.T) {
 	const uid tailcfg.UserID = 1
 	self := (&tailcfg.Node{User: uid}).View()
 	peer := (&tailcfg.Node{
-		StableID: "own", User: uid, Cap: tailcfg.CurrentCapabilityVersion + 1, Online: new(true),
+		StableID: "own", User: uid, Cap: 149, Online: new(true),
 		Hostinfo: (&tailcfg.Hostinfo{OS: "iOS"}).View(),
 	}).View()
 	nb := testNodeBackend{self: self, peers: []tailcfg.NodeView{peer}, hasPeerAPI: true}

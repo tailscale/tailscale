@@ -203,6 +203,8 @@ func prefValue(flagName string, prefs *ipn.Prefs, st *ipnstate.Status) any {
 			parts[i] = ep.String()
 		}
 		return strings.Join(parts, ",")
+	case "allow-external-taildrop":
+		return prefs.AllowExternalTaildrop
 	default:
 		return nil
 	}

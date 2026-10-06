@@ -16,6 +16,7 @@ import (
 	"mime"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -32,12 +33,14 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/cmd/tailscale/cli/ffcomplete"
 	"tailscale.com/envknob"
+	"tailscale.com/feature/taildrop/taildroptype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	tsrate "tailscale.com/tstime/rate"
 	"tailscale.com/util/quarantine"
+	"tailscale.com/util/rands"
 	"tailscale.com/util/truncate"
 	"tailscale.com/version"
 )
@@ -49,11 +52,12 @@ func init() {
 func getFileCmd() *ffcli.Command {
 	return &ffcli.Command{
 		Name:       "file",
-		ShortUsage: "tailscale file <cp|get> ...",
+		ShortUsage: "tailscale file <cp|get|consent> ...",
 		ShortHelp:  "Send or receive files",
 		Subcommands: []*ffcli.Command{
 			fileCpCmd,
 			fileGetCmd,
+			fileConsentCmd,
 		},
 	}
 }
@@ -130,6 +134,7 @@ func runCp(ctx context.Context, args []string) error {
 		if slices.Contains(files, "-") {
 			return errors.New("can't use '-' as STDIN file when providing filename arguments")
 		}
+		return runCpBatch(ctx, files, stableID, target)
 	}
 
 	// outFiles tracks per-name push state, populated by a goroutine subscribed
@@ -141,7 +146,8 @@ func runCp(ctx context.Context, args []string) error {
 	// unix-socket conn to tailscaled, well before the peer has heard a thing.
 	type pushState struct {
 		sent      atomic.Int64
-		warnTimer *time.Timer // disarmed on first byte sent to peerAPI; nil after
+		waiting   atomic.Bool
+		warnTimer *time.Timer // disarmed on consent pending or first byte sent to peerAPI
 	}
 	var (
 		outMu    sync.Mutex
@@ -149,32 +155,49 @@ func runCp(ctx context.Context, args []string) error {
 	)
 
 	busCtx, cancelBus := context.WithCancel(ctx)
-	defer cancelBus()
-	go watchOutgoingFiles(busCtx, stableID, func(name string, sent int64) {
-		outMu.Lock()
-		ps := outFiles[name]
-		outMu.Unlock()
-		if ps == nil {
-			return
-		}
-		// Only ever advance ps.sent forward. Bus updates can arrive late
-		// (after the success path below has already written contentLength
-		// to ps.sent for an instant final-100% paint), so we'd otherwise
-		// regress the count and the progress printer would compute a
-		// negative delta on its next tick.
-		for {
-			old := ps.sent.Load()
-			if sent <= old {
+	watchDone := make(chan struct{})
+	watchReady := make(chan struct{})
+	showProgress := cpArgs.updateInterval > 0 && isatty.IsTerminal(os.Stderr.Fd())
+	defer func() {
+		cancelBus()
+		<-watchDone
+	}()
+	go func() {
+		defer close(watchDone)
+		watchOutgoingFiles(busCtx, stableID, watchReady, func(of *ipn.OutgoingFile) {
+			if of.Finished {
 				return
 			}
-			if ps.sent.CompareAndSwap(old, sent) {
-				if old == 0 && ps.warnTimer != nil {
+			name, err := url.PathUnescape(of.Name)
+			if err != nil {
+				return
+			}
+			sent := of.Sent
+			outMu.Lock()
+			defer outMu.Unlock()
+			ps := outFiles[name]
+			if ps == nil {
+				return
+			}
+			wasWaiting := ps.waiting.Swap(of.WaitingForConsent)
+			if of.WaitingForConsent {
+				if ps.warnTimer != nil {
 					ps.warnTimer.Stop()
 				}
-				return
+				if !wasWaiting && !showProgress {
+					fmt.Fprintf(Stderr, "%s: waiting for approval from %s\n", name, target)
+				}
 			}
-		}
-	})
+			// Bus updates may arrive out of order; never regress the count.
+			if sent > ps.sent.Load() {
+				ps.sent.Store(sent)
+				if ps.warnTimer != nil {
+					ps.warnTimer.Stop()
+				}
+			}
+		})
+	}()
+	<-watchReady
 
 	for i, fileArg := range files {
 		var fileContents *countingReader
@@ -228,6 +251,9 @@ func runCp(ctx context.Context, args []string) error {
 		ps := &pushState{}
 		if i == 0 {
 			ps.warnTimer = time.AfterFunc(3*time.Second, func() {
+				if ps.waiting.Load() || ps.sent.Load() > 0 {
+					return
+				}
 				// vtRestartLine clears whatever (possibly progress) was on
 				// the current line, then we print the warning + \n so the
 				// next progress redraw lands on a fresh line below.
@@ -246,14 +272,18 @@ func runCp(ctx context.Context, args []string) error {
 		var group sync.WaitGroup
 		ctxProgress, cancelProgress := context.WithCancel(ctx)
 		defer cancelProgress()
-		if cpArgs.updateInterval > 0 && isatty.IsTerminal(os.Stderr.Fd()) {
+		if showProgress {
 			group.Go(func() {
-				progressPrinter(ctxProgress, name, ps.sent.Load, contentLength, cpArgs.updateInterval)
+				progressPrinter(ctxProgress, name, ps.sent.Load, ps.waiting.Load, contentLength, cpArgs.updateInterval)
 			})
 		}
 
 		err := localClient.PushFile(ctx, stableID, contentLength, name, fileContents)
+		outMu.Lock()
+		delete(outFiles, name)
+		outMu.Unlock()
 		if err == nil {
+			ps.waiting.Store(false)
 			// PushFile can finish faster than the IPN bus delivers a final
 			// OutgoingFile update, leaving the progress display stuck at 0%.
 			// Synthesize a "fully done" count before stopping the printer so
@@ -271,7 +301,7 @@ func runCp(ctx context.Context, args []string) error {
 			ps.warnTimer.Stop()
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("sending %q to %s: %w", name, target, err)
 		}
 		if cpArgs.verbose {
 			log.Printf("sent %q", name)
@@ -280,17 +310,175 @@ func runCp(ctx context.Context, args []string) error {
 	return nil
 }
 
+// runCpBatch sends files using individual LocalAPI PUTs, while tracking
+// progress and consent decisions for the whole selection.
+func runCpBatch(ctx context.Context, paths []string, peer tailcfg.StableNodeID, target string) (retErr error) {
+	manifest := make([]ipn.OutgoingFile, 0, len(paths))
+	var total int64
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%q is not a regular file", p)
+		}
+		name := url.PathEscape(filepath.Base(p))
+		if cpArgs.verbose {
+			log.Printf("sending %q to %s ...", filepath.Base(p), target)
+		}
+		total += fi.Size()
+		// IDs are unique across invocations as well as within this manifest.
+		manifest = append(manifest, ipn.OutgoingFile{ID: rands.HexString(32), PeerID: peer, Name: name, DeclaredSize: fi.Size()})
+	}
+	batchProgress := newConsentBatchProgress(manifest)
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	var sent atomic.Int64
+	var waiting atomic.Bool
+	showProgress := cpArgs.updateInterval > 0 && isatty.IsTerminal(os.Stderr.Fd())
+	ready, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		counts := make(map[string]int64)
+		waits := make(map[string]bool)
+		ids := make(map[string]bool)
+		for _, f := range manifest {
+			ids[f.ID] = true
+		}
+		watchOutgoingFiles(watchCtx, peer, ready, func(f *ipn.OutgoingFile) {
+			if !ids[f.ID] {
+				return
+			}
+			batchProgress.update(f)
+			if !showProgress {
+				batchProgress.printChanges(target)
+			}
+			waits[f.ID] = f.WaitingForConsent && !f.Finished
+			anyWaiting := false
+			for _, v := range waits {
+				anyWaiting = anyWaiting || v
+			}
+			waiting.Store(anyWaiting)
+
+			n := f.Sent
+			if f.Finished && f.Succeeded {
+				n = f.DeclaredSize
+			}
+			if n > counts[f.ID] {
+				sent.Add(n - counts[f.ID])
+				counts[f.ID] = n
+			}
+		})
+	}()
+	defer func() { cancelWatch(); <-done }()
+	<-ready
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	var progress sync.WaitGroup
+	if showProgress {
+		progress.Go(func() {
+			batchProgress.print(progressCtx, cpArgs.updateInterval, func(ctx context.Context) {
+				progressPrinter(ctx, fmt.Sprintf("%d files", len(paths)), sent.Load, waiting.Load, total, cpArgs.updateInterval)
+			})
+		})
+	}
+	var declineResponse bool
+	defer func() {
+		// Final bus updates can arrive just after the HTTP response. Give
+		// consent batches a brief chance to report each file's outcome.
+		select {
+		case <-batchProgress.activated:
+			if retErr != nil {
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-batchProgress.completed:
+				case <-ctx.Done():
+				case <-timer.C:
+				}
+				timer.Stop()
+			}
+		default:
+		}
+		cancelWatch()
+		<-done
+		batchProgress.finish(retErr == nil)
+		if !showProgress {
+			batchProgress.printChanges(target)
+		}
+		stopProgress()
+		progress.Wait()
+		if retErr != nil && declineResponse && batchProgress.onlyDeclines() {
+			retErr = ErrAlreadyReported
+		}
+	}()
+
+	var declines []error
+	for i, p := range paths {
+		declined, err := putBatchFile(ctx, p, manifest[i])
+		if err != nil {
+			if !declined {
+				return errors.Join(append(declines, fmt.Errorf("sending %q to %s: %w", p, target, err))...)
+			}
+			declineResponse = true
+			declines = append(declines, fmt.Errorf("sending %q to %s: %w", p, target, err))
+		}
+	}
+	if len(declines) > 0 {
+		return errors.Join(declines...)
+	}
+	cancelWatch()
+	<-done
+	waiting.Store(false)
+	sent.Store(total)
+	if cpArgs.verbose {
+		log.Printf("sent %d files to %s", len(paths), target)
+	}
+	return nil
+}
+
+// putBatchFile uses the transfer ID to associate bus updates with this file,
+// even when multiple source paths have the same basename.
+func putBatchFile(ctx context.Context, path string, file ipn.OutgoingFile) (declined bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	req, err := http.NewRequestWithContext(ctx, "PUT", "http://"+apitype.LocalAPIHost+"/localapi/v0/file-put/"+string(file.PeerID)+"/"+file.Name, io.LimitReader(f, file.DeclaredSize))
+	if err != nil {
+		return false, err
+	}
+	req.ContentLength = file.DeclaredSize
+	if file.DeclaredSize == 0 {
+		req.Body = http.NoBody
+	}
+	req.Header.Set("X-Taildrop-Txid", file.ID)
+	resp, err := localClient.DoLocalRequest(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		declined = resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-Taildrop-Consent-Error") == "taildrop: transfer declined"
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return declined, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
+	return false, err
+}
+
 // watchOutgoingFiles subscribes to the IPN bus and invokes onUpdate once
 // per OutgoingFile event for files going to peer. It runs until ctx is
 // done (which runCp does on return) and is best-effort: if the bus
 // subscription fails for any reason, onUpdate simply isn't called and the
-// caller's progress display stays at 0 — exactly the right degradation,
-// since the warning timer will then fire on its normal 3-second deadline.
-func watchOutgoingFiles(ctx context.Context, peer tailcfg.StableNodeID, onUpdate func(name string, sent int64)) {
+// caller's progress display stays at 0 until PushFile succeeds. ready is
+// closed once the subscription has been attempted so sends cannot race it.
+func watchOutgoingFiles(ctx context.Context, peer tailcfg.StableNodeID, ready chan<- struct{}, onUpdate func(*ipn.OutgoingFile)) {
 	// NotifyPeerChanges opts in to per-peer add/remove notifications so the
 	// bus stays responsive without us also subscribing to the full NetMap,
 	// which we don't read here.
 	w, err := localClient.WatchIPNBus(ctx, ipn.NotifyInitialOutgoingFiles|ipn.NotifyPeerChanges)
+	close(ready)
 	if err != nil {
 		return
 	}
@@ -304,17 +492,9 @@ func watchOutgoingFiles(ctx context.Context, peer tailcfg.StableNodeID, onUpdate
 			if of.PeerID != peer {
 				continue
 			}
-			// tailscaled keeps Finished entries in its OutgoingFiles map
-			// across PushFile calls (see feature/taildrop/ext.go), so a
-			// re-send of the same filename will see both the old completed
-			// (Sent == DeclaredSize) entry and the new in-progress one.
-			// Without this filter the watcher's monotonic CAS would latch
-			// onto the old entry's max value and the new transfer would
-			// appear stuck at 100% from the first bus tick.
-			if of.Finished {
-				continue
-			}
-			onUpdate(of.Name, of.Sent)
+			// Callers filter retained completed entries by transfer ID (batches)
+			// or Finished (single-file sends matched by filename).
+			onUpdate(of)
 		}
 	}
 }
@@ -328,7 +508,7 @@ func watchOutgoingFiles(ctx context.Context, peer tailcfg.StableNodeID, onUpdate
 // rate for >2 seconds. The stuck case prints a final newline so subsequent
 // output (e.g. an error from PushFile) lands on a fresh line below the
 // frozen progress line, instead of being painted over by it.
-func progressPrinter(ctx context.Context, name string, contentCount func() int64, contentLength int64, interval time.Duration) {
+func progressPrinter(ctx context.Context, name string, contentCount func() int64, waitingForConsent func() bool, contentLength int64, interval time.Duration) {
 	var rateValueFast, rateValueSlow tsrate.Value
 	// tailscaled emits OutgoingFile.Sent updates at ~1 Hz, so most printer
 	// ticks see no delta. With too short a half-life the displayed rate
@@ -339,6 +519,10 @@ func progressPrinter(ctx context.Context, name string, contentCount func() int64
 	rateValueSlow.HalfLife = 10 * time.Second // even slower, for ETA measurement
 	var prevContentCount int64
 	print := func() {
+		if waitingForConsent() {
+			fmt.Fprintf(Stderr, "\r\x1b[K%s    waiting for approval", rightPad(name, 36))
+			return
+		}
 		currContentCount := contentCount()
 		// Clamp so a regression (which shouldn't happen, but tsrate.Value.Add
 		// panics on a negative count) can't take down the CLI.
@@ -348,14 +532,17 @@ func progressPrinter(ctx context.Context, name string, contentCount func() int64
 		prevContentCount = currContentCount
 
 		const vtRestartLine = "\r\x1b[K"
-		fmt.Fprintf(os.Stderr, "%s%s    %s    %s",
+		fmt.Fprintf(Stderr, "%s%s    %s    %s",
 			vtRestartLine,
 			rightPad(name, 36),
 			leftPad(formatIEC(float64(currContentCount), "B"), len("1023.00MiB")),
 			leftPad(formatIEC(rateValueFast.Rate(), "B/s"), len("1023.00MiB/s")))
 		if contentLength >= 0 {
 			currContentCount = min(currContentCount, contentLength) // cap at 100%
-			ratioRemain := float64(currContentCount) / float64(contentLength)
+			ratioRemain := 1.0
+			if contentLength > 0 {
+				ratioRemain = float64(currContentCount) / float64(contentLength)
+			}
 			etaStr := "ETA -"
 			if rate := rateValueSlow.Rate(); rate > 0 {
 				bytesRemain := float64(contentLength - currContentCount)
@@ -363,7 +550,7 @@ func progressPrinter(ctx context.Context, name string, contentCount func() int64
 				secs := int(min(max(0, secsRemain), 99*60*60+59+60+59))
 				etaStr = fmt.Sprintf("ETA %02d:%02d:%02d", secs/60/60, (secs/60)%60, secs%60)
 			}
-			fmt.Fprintf(os.Stderr, "    %s    %s",
+			fmt.Fprintf(Stderr, "    %s    %s",
 				leftPad(fmt.Sprintf("%0.2f%%", 100.0*ratioRemain), len("100.00%")),
 				etaStr)
 		}
@@ -379,11 +566,12 @@ func progressPrinter(ctx context.Context, name string, contentCount func() int64
 		select {
 		case <-ctx.Done():
 			print()
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(Stderr)
 			return
 		case <-tc.C:
 			print()
-			if contentLength < 0 {
+			if waitingForConsent() || contentLength < 0 {
+				fullStartedAt = time.Time{}
 				continue
 			}
 			currCount := contentCount()
@@ -395,7 +583,7 @@ func progressPrinter(ctx context.Context, name string, contentCount func() int64
 					// Transfer is stuck at 100% with no movement. Stop
 					// repainting so we don't keep clobbering anything the
 					// rest of runCp prints (warnings, errors).
-					fmt.Fprintln(os.Stderr)
+					fmt.Fprintln(Stderr)
 					return
 				}
 			} else {
@@ -510,6 +698,15 @@ peerLoop:
 
 	case ipnstate.TaildropTargetOwnedByOtherUser:
 		return "", isOffline, errors.New("cannot send files: peer is owned by a different user")
+
+	case ipnstate.TaildropTargetPolicyDenied:
+		return "", isOffline, errors.New("cannot send files: cross-user Taildrop is disabled by IT policy")
+
+	case ipnstate.TaildropTargetConsentRequired:
+		// It will only accept if its owner approves the prompt. Whether it even
+		// offers them one isn't visible from here, so make the attempt and let
+		// the peer say no.
+		return foundPeer.ID, isOffline, nil
 
 	case ipnstate.TaildropTargetUnknown:
 		fallthrough
@@ -841,4 +1038,166 @@ func waitForFile(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// fileConsentCmd answers the approval prompts raised by inbound transfers on
+// nodes that require consent.
+//
+// GUI clients present these as notifications; on a headless node this is the
+// only way to answer one.
+var fileConsentCmd = &ffcli.Command{
+	Name:       "consent",
+	ShortUsage: "tailscale file consent <list|accept|deny> ...",
+	ShortHelp:  "Approve or decline inbound file transfers awaiting your approval",
+	LongHelp: strings.TrimSpace(`
+Inbound Taildrop transfers wait for your approval whenever the two ends
+belong to different parties: another user's node, a node shared into this
+tailnet, or a tagged node at either end. Transfers between your own
+untagged devices don't wait.
+
+Requests expire, so a transfer left unanswered long enough is declined and
+the sender must ask again.
+`),
+	Exec: func(context.Context, []string) error {
+		return errors.New("subcommand required; run 'tailscale file consent --help'")
+	},
+	Subcommands: []*ffcli.Command{
+		fileConsentListCmd,
+		fileConsentAcceptCmd,
+		fileConsentDenyCmd,
+	},
+}
+
+var fileConsentListCmd = &ffcli.Command{
+	Name:       "list",
+	ShortUsage: "tailscale file consent list",
+	ShortHelp:  "List inbound file transfers awaiting your approval",
+	Exec:       runFileConsentList,
+}
+
+func runFileConsentList(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("usage: tailscale file consent list")
+	}
+	reqs, err := localClient.TaildropConsentRequests(ctx)
+	if err != nil {
+		return err
+	}
+	if len(reqs) == 0 {
+		outln("No transfers are awaiting approval.")
+		return nil
+	}
+	for _, req := range reqs {
+		peer := req.PeerName
+		if peer == "" {
+			peer = string(req.PeerID)
+		}
+		printf("%s\t%s\t%s\t%s\n",
+			req.RequestID, peer, consentFileSummary(req), req.Expires.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// consentFileSummary describes what a peer is asking to send, briefly enough
+// for one line of a table.
+func consentFileSummary(req taildroptype.ConsentRequest) string {
+	switch len(req.Files) {
+	case 0:
+		return "(no files)"
+	case 1:
+		return fmt.Sprintf("%s (%s)", req.Files[0].Name, formatIEC(float64(req.TotalSize), "B"))
+	default:
+		return fmt.Sprintf("%s and %d more (%s)",
+			req.Files[0].Name, len(req.Files)-1, formatIEC(float64(req.TotalSize), "B"))
+	}
+}
+
+var fileConsentAcceptCmd = newFileConsentRespondCmd(true)
+var fileConsentDenyCmd = newFileConsentRespondCmd(false)
+
+func newFileConsentRespondCmd(allow bool) *ffcli.Command {
+	verb, help := "deny", "Decline inbound file transfers"
+	if allow {
+		verb, help = "accept", "Approve inbound file transfers"
+	}
+	fs := newFlagSet(verb)
+	all := fs.Bool("all", false, "respond to all currently pending inbound file transfers")
+	cmd := &ffcli.Command{
+		Name:       verb,
+		ShortUsage: "tailscale file consent " + verb + " <request-id>|--all",
+		ShortHelp:  help,
+		FlagSet:    fs,
+		Exec: func(ctx context.Context, args []string) error {
+			return runFileConsentRespond(ctx, args, allow, *all)
+		},
+	}
+	ffcomplete.Args(cmd, func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
+		return completeFileConsentRequests(args, *all)
+	})
+	return cmd
+}
+
+// completeFileConsentRequests suggests pending request IDs, with descriptions
+// that identify the sender and files without requiring a separate list command.
+func completeFileConsentRequests(args []string, all bool) ([]string, ffcomplete.ShellCompDirective, error) {
+	const directive = ffcomplete.ShellCompDirectiveNoFileComp
+	prefix := ffcomplete.LastArg(args)
+	if all || len(args) > 1 || strings.HasPrefix(prefix, "-") {
+		return nil, directive, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reqs, err := localClient.TaildropConsentRequests(ctx)
+	if err != nil {
+		return nil, directive, err
+	}
+	var words []string
+	for _, req := range reqs {
+		if !strings.HasPrefix(req.RequestID, prefix) {
+			continue
+		}
+		peer := req.PeerName
+		if peer == "" {
+			peer = string(req.PeerID)
+		}
+		words = append(words, fmt.Sprintf("%s\t%q from %q", req.RequestID, consentFileSummary(req), peer))
+	}
+	return words, directive, nil
+}
+
+func runFileConsentRespond(ctx context.Context, args []string, allow, all bool) error {
+	verb := "deny"
+	if allow {
+		verb = "accept"
+	}
+	if (!all && len(args) != 1) || (all && len(args) != 0) {
+		return fmt.Errorf("usage: tailscale file consent %s <request-id>|--all", verb)
+	}
+	ids := args
+	if all {
+		reqs, err := localClient.TaildropConsentRequests(ctx)
+		if err != nil {
+			return err
+		}
+		if len(reqs) == 0 {
+			outln("No transfers are awaiting approval.")
+			return nil
+		}
+		for _, req := range reqs {
+			ids = append(ids, req.RequestID)
+		}
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := localClient.RespondToTaildropConsent(ctx, id, allow); err != nil {
+			errs = append(errs, fmt.Errorf("%s %s: %w", verb, id, err))
+			continue
+		}
+		if allow {
+			printf("Approved %s.\n", id)
+		} else {
+			printf("Declined %s.\n", id)
+		}
+	}
+	return errors.Join(errs...)
 }

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,7 +17,9 @@ func init() {
 	beCLI = func() {
 		args := os.Args[1:]
 		if err := cli.Run(args); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			if !errors.Is(err, cli.ErrAlreadyReported) {
+				fmt.Fprintln(os.Stderr, err)
+			}
 			os.Exit(1)
 		}
 	}

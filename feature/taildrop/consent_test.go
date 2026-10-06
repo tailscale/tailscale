@@ -1003,7 +1003,7 @@ func TestConsentTargetCapability(t *testing.T) {
 	tests := []struct {
 		name         string
 		own          bool
-		newerVersion bool
+		capable      bool
 		tagged       bool
 		selfTagged   bool
 		wantImplicit bool
@@ -1026,28 +1026,28 @@ func TestConsentTargetCapability(t *testing.T) {
 			selfTagged: true,
 		},
 		{
-			name:         "other_user/newer_version/receiver_untagged/sender_untagged",
-			newerVersion: true,
-			wantEligible: false,
+			name:         "other_user/capable/receiver_untagged/sender_untagged",
+			capable:      true,
+			wantEligible: true,
 		},
 		{
-			name:         "other_user/newer_version/receiver_untagged/sender_tagged",
-			newerVersion: true,
+			name:         "other_user/capable/receiver_untagged/sender_tagged",
+			capable:      true,
 			selfTagged:   true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 		{
-			name:         "other_user/newer_version/receiver_tagged/sender_untagged",
-			newerVersion: true,
+			name:         "other_user/capable/receiver_tagged/sender_untagged",
+			capable:      true,
 			tagged:       true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 		{
-			name:         "other_user/newer_version/receiver_tagged/sender_tagged",
-			newerVersion: true,
+			name:         "other_user/capable/receiver_tagged/sender_tagged",
+			capable:      true,
 			tagged:       true,
 			selfTagged:   true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 		{
 			name:         "same_user/no_capability/receiver_untagged/sender_untagged",
@@ -1072,45 +1072,45 @@ func TestConsentTargetCapability(t *testing.T) {
 			selfTagged: true,
 		},
 		{
-			name:         "same_user/newer_version/receiver_untagged/sender_untagged",
+			name:         "same_user/capable/receiver_untagged/sender_untagged",
 			own:          true,
-			newerVersion: true,
+			capable:      true,
 			wantImplicit: true,
 			wantEligible: true,
 		},
 		{
-			name:         "same_user/newer_version/receiver_untagged/sender_tagged",
+			name:         "same_user/capable/receiver_untagged/sender_tagged",
 			own:          true,
-			newerVersion: true,
+			capable:      true,
 			selfTagged:   true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 		{
-			name:         "same_user/newer_version/receiver_tagged/sender_untagged",
+			name:         "same_user/capable/receiver_tagged/sender_untagged",
 			own:          true,
-			newerVersion: true,
+			capable:      true,
 			tagged:       true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 		{
-			name:         "same_user/newer_version/receiver_tagged/sender_tagged",
+			name:         "same_user/capable/receiver_tagged/sender_tagged",
 			own:          true,
-			newerVersion: true,
+			capable:      true,
 			tagged:       true,
 			selfTagged:   true,
-			wantEligible: false,
+			wantEligible: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := &Extension{selfUID: 1, backendState: ipn.Running, capFileSharing: true}
-			p := &tailcfg.Node{StableID: testPeerA, User: 2, Cap: tailcfg.CurrentCapabilityVersion, Hostinfo: (&tailcfg.Hostinfo{OS: "linux"}).View()}
+			p := &tailcfg.Node{StableID: testPeerA, User: 2, Cap: 148, Hostinfo: (&tailcfg.Hostinfo{OS: "linux"}).View()}
 			if tt.own {
 				p.User = 1
 			}
-			if tt.newerVersion {
-				p.Cap = tailcfg.CurrentCapabilityVersion + 1
+			if tt.capable {
+				p.Cap = 149
 			}
 			if tt.tagged {
 				p.Tags = []string{"tag:server"}

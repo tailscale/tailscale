@@ -93,6 +93,10 @@ var localClient = local.Client{
 	Socket: paths.DefaultTailscaledSocket(),
 }
 
+// ErrAlreadyReported indicates an unsuccessful command whose error has already
+// been displayed. Entrypoints should exit nonzero without printing it again.
+var ErrAlreadyReported = errors.New("command failed; details already reported")
+
 // RunWithContext runs the CLI. The args do not include the binary name.
 func RunWithContext(ctx context.Context, args []string) (err error) {
 	if runtime.GOOS == "linux" && os.Getenv("GOKRAZY_FIRST_START") == "1" && distro.Get() == distro.Gokrazy && os.Getppid() == 1 && len(args) == 0 {

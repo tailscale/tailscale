@@ -51,6 +51,11 @@ func init() {
 	localapi.Register("files/", serveFiles)
 	localapi.Register("file-targets", serveFileTargets)
 
+	ipnlocal.RegisterPeerAPIHandler("/v0/put-request/", handlePeerPutRequest)
+	localapi.Register("file-put-request/", serveFilePutRequest)
+	localapi.Register("taildrop-consent/pending", serveConsentPending)
+	localapi.Register("taildrop-consent/respond", serveConsentRespond)
+
 	if runtime.GOOS == "windows" {
 		tailscaledhooks.UninstallSystemDaemonWindows.Add(func() {
 			// Remove file sharing from Windows shell.
@@ -573,18 +578,17 @@ func (e *Extension) eligibleTarget(p tailcfg.NodeView, nb ipnext.NodeBackend) bo
 		return capVerSupportsWindowsConsentUI(p.Cap())
 	case "android":
 		return capVerSupportsAndroidConsentUI(p.Cap())
-	case "tvOS", "":
-		return false
-	default:
+	case "linux":
 		return capVerSupportsCLIConsentUI(p.Cap())
+	default:
+		return false
 	}
 }
 
 // capVerSupportsConsentProtocol reports whether the backend implements the
-// Taildrop consent protocol.
+// Taildrop consent protocol, introduced in capability version 149.
 func capVerSupportsConsentProtocol(v tailcfg.CapabilityVersion) bool {
-	// Assign the capability version when the consent flow is enabled.
-	return false
+	return v >= 149
 }
 
 // capVerSupportsAppleConsentUI reports whether macOS and iOS clients include
@@ -609,10 +613,9 @@ func capVerSupportsAndroidConsentUI(v tailcfg.CapabilityVersion) bool {
 }
 
 // capVerSupportsCLIConsentUI reports whether CLI clients include the accept
-// flow.
+// flow, which ships with the initial consent protocol.
 func capVerSupportsCLIConsentUI(v tailcfg.CapabilityVersion) bool {
-	// Assign the capability version when the consent flow is enabled.
-	return false
+	return v >= 149
 }
 
 func (e *Extension) isOwnPeer(peer tailcfg.StableNodeID) bool {
