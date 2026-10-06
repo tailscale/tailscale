@@ -49,22 +49,24 @@ const (
 	orQuad100 = "100.100.100.100"
 )
 
+// orControlDNS is the control DNS config the openresolv tests share.
+var orControlDNS = vmtest.ControlDNS(orMagicDNSDomain, &tailcfg.DNSConfig{
+	Proxied: true, // MagicDNS, so there's a route and quad-100 is in play
+	Domains: []string{orLocalDomain},
+	Routes: map[string][]*dnstype.Resolver{
+		orLocalDomain: nil, // answer locally, from ExtraRecords
+	},
+	ExtraRecords: []tailcfg.DNSRecord{
+		{Name: orLocalName, Type: "A", Value: orLocalIP},
+	},
+})
+
 // newOpenresolvEnv brings up a single Ubuntu node running upstream openresolv
 // with an existing but empty snippet directory, so openresolv has no snippets
 // registered until something adds one.
 func newOpenresolvEnv(t *testing.T) (*vmtest.Env, *vmtest.Node) {
 	t.Helper()
-	env := vmtest.New(t,
-		vmtest.ControlDNS(orMagicDNSDomain, &tailcfg.DNSConfig{
-			Proxied: true, // MagicDNS, so there's a route and quad-100 is in play
-			Domains: []string{orLocalDomain},
-			Routes: map[string][]*dnstype.Resolver{
-				orLocalDomain: nil, // answer locally, from ExtraRecords
-			},
-			ExtraRecords: []tailcfg.DNSRecord{
-				{Name: orLocalName, Type: "A", Value: orLocalIP},
-			},
-		}))
+	env := vmtest.New(t, orControlDNS)
 	node := env.AddNode("node",
 		env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT),
 		vmtest.OS(vmtest.Ubuntu2404),
