@@ -32,6 +32,7 @@ func newNetstack(logf logger.Logf, sys *tsd.System, onlyNetstack bool) (tsd.Nets
 	if err != nil {
 		return nil, err
 	}
+	ns.SetMetricsRegistry(sys.UserMetricsRegistry())
 	// Only register debug info if we have a debug mux
 	if debugMux != nil {
 		expvar.Publish("netstack", ns.ExpVar())

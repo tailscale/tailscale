@@ -46,6 +46,10 @@ const (
 
 	// ReasonError means that the packet was dropped because of an error.
 	ReasonError DropReason = "error"
+
+	// ReasonQueueFull means that the packet was dropped because an internal
+	// packet queue was full.
+	ReasonQueueFull DropReason = "queue_full"
 )
 
 // DropLabels contains common label(s) for dropped packet counters.
