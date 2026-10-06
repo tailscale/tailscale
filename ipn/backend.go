@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tailscale.com/drive"
+	"tailscale.com/feature/taildrop/taildroptype"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -210,6 +211,10 @@ const (
 	// non-zero peer states, and subsequent Notifies include per-peer
 	// state changes.
 	NotifyPeerWireGuardState NotifyWatchOpt = 1 << 18
+
+	// NotifyInitialTaildropConsentRequests includes the current pending Taildrop
+	// approvals in the first notification. Subsequent changes are always sent.
+	NotifyInitialTaildropConsentRequests NotifyWatchOpt = 1 << 19
 )
 
 // String implements the [fmt.Stringer] interface.
@@ -253,6 +258,7 @@ func (o NotifyWatchOpt) String() string {
 	try(NotifyInProcessNoDisconnect, "NotifyInProcessNoDisconnect")
 	try(NotifySysPolicyChanges, "NotifySysPolicyChanges")
 	try(NotifyPeerWireGuardState, "NotifyPeerWireGuardState")
+	try(NotifyInitialTaildropConsentRequests, "NotifyInitialTaildropConsentRequests")
 
 	if mask != o {
 		bits = append(bits, fmt.Sprintf("%T(%#x)", o, uint64(o^mask))) // unknown
@@ -442,6 +448,15 @@ type Notify struct {
 	// successful or failed. This slice is sorted by Started time, then Name.
 	OutgoingFiles []*OutgoingFile `json:",omitzero"`
 
+	// TaildropConsentRequests, if non-nil, is the full set of inbound Taildrop
+	// transfers currently awaiting the device owner's approval, sorted by
+	// Requested time.
+	//
+	// A non-nil but empty slice means there are no outstanding requests, which
+	// is how a GUI learns to dismiss a prompt it is showing. A nil slice means
+	// this Notify carries no information about consent requests.
+	TaildropConsentRequests []taildroptype.ConsentRequest `json:",omitzero"`
+
 	// LocalTCPPort, if non-nil, informs the UI frontend which
 	// (non-zero) localhost TCP port it's listening on.
 	// This is currently only used by Tailscale when run in the
@@ -580,6 +595,9 @@ func (n Notify) String() string {
 	if len(n.IncomingFiles) != 0 {
 		sb.WriteString("IncomingFiles ")
 	}
+	if len(n.TaildropConsentRequests) != 0 {
+		fmt.Fprintf(&sb, "TaildropConsentRequests=%d ", len(n.TaildropConsentRequests))
+	}
 	if n.LocalTCPPort != nil {
 		fmt.Fprintf(&sb, "tcpport=%v ", n.LocalTCPPort)
 	}
@@ -627,6 +645,17 @@ type OutgoingFile struct {
 	Sent         int64                // bytes copied thus far
 	Finished     bool                 // indicates whether or not the transfer finished
 	Succeeded    bool                 // for a finished transfer, indicates whether or not it was successful
+
+	// WaitingForConsent means the peer has requested approval from its user.
+	WaitingForConsent bool `json:",omitzero"`
+
+	// Declined means the receiver declined consent, rather than the transfer
+	// failing for another reason. It is meaningful when Finished is true.
+	Declined bool `json:",omitzero"`
+
+	// CompletedAt is when the transfer finished, successfully or otherwise.
+	// Together with Started it includes staging and waiting for approval.
+	CompletedAt time.Time `json:",omitzero"`
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state

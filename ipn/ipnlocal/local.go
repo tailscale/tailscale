@@ -2187,6 +2187,11 @@ type preferencePolicyInfo struct {
 
 var preferencePolicies = []preferencePolicyInfo{
 	{
+		key: pkey.AllowExternalTaildrop,
+		get: func(p ipn.PrefsView) bool { return p.AllowExternalTaildrop() },
+		set: func(p *ipn.Prefs, v bool) { p.AllowExternalTaildrop = v },
+	},
+	{
 		key: pkey.EnableIncomingConnections,
 		// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
 		// backend), so this has to convert between the two conventions.
@@ -3824,7 +3829,8 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
-		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState
+		ipn.NotifyInitialClientVersion | ipn.NotifySysPolicyChanges | ipn.NotifyPeerWireGuardState |
+		ipn.NotifyInitialTaildropConsentRequests
 	if mask&initialBits != 0 {
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
@@ -3882,6 +3888,11 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 		policyUID: policyUID,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
+	if ini != nil {
+		for _, f := range b.extHost.Hooks().InitialNotifyLocked {
+			f(mask, ini)
+		}
+	}
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
 		ini.PeerState = maps.Clone(b.peerWGState)
 	}

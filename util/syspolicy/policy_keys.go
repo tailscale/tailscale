@@ -26,6 +26,7 @@ var implicitDefinitions = []*setting.Definition{
 	setting.NewDefinition(pkey.ControlURL, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.DeviceSerialNumber, setting.DeviceSetting, setting.StringValue),
 	setting.NewDefinition(pkey.EnableDNSRegistration, setting.DeviceSetting, setting.PreferenceOptionValue),
+	setting.NewDefinition(pkey.AllowExternalTaildrop, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableIncomingConnections, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableRunExitNode, setting.DeviceSetting, setting.PreferenceOptionValue),
 	setting.NewDefinition(pkey.EnableServerMode, setting.DeviceSetting, setting.PreferenceOptionValue),

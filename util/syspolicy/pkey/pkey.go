@@ -73,6 +73,8 @@ const (
 	// The default is "user-decides" unless otherwise stated. Enforcement of
 	// these policies is typically performed in ipnlocal.applySysPolicy(). GUIs
 	// typically hide menu items related to policies that are enforced.
+	// AllowExternalTaildrop controls both the preference and visibility of its UI.
+	AllowExternalTaildrop     Key = "AllowExternalTaildrop"
 	EnableIncomingConnections Key = "AllowIncomingConnections"
 	EnableServerMode          Key = "UnattendedMode"
 	ExitNodeAllowLANAccess    Key = "ExitNodeAllowLANAccess"

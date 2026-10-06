@@ -439,6 +439,10 @@ type Hooks struct {
 	// before sending it to the IPN bus. It is called with LocalBackend.mu held.
 	MutateNotifyLocked feature.Hooks[func(*ipn.Notify)]
 
+	// InitialNotifyLocked populates extension state in a watcher's initial
+	// notification, with LocalBackend.mu held during watcher registration.
+	InitialNotifyLocked feature.Hooks[func(ipn.NotifyWatchOpt, *ipn.Notify)]
+
 	// SetPeerStatus is called to mutate PeerStatus.
 	// Callers must only use NodeBackend to read data.
 	SetPeerStatus feature.Hooks[func(*ipnstate.PeerStatus, tailcfg.NodeView, NodeBackend)]

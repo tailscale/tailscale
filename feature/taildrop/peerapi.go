@@ -21,6 +21,11 @@ import (
 
 var (
 	metricPutCalls = clientmetric.NewCounter("peerapi_put")
+
+	// Counted where the owner's decision is recorded, not where it's reported,
+	// so a polling sender doesn't inflate them.
+	metricConsentApproved = clientmetric.NewCounter("taildrop_consent_approved")
+	metricConsentDenied   = clientmetric.NewCounter("taildrop_consent_denied")
 )
 
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
