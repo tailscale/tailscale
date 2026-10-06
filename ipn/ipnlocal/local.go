@@ -386,6 +386,13 @@ type LocalBackend struct {
 	serveConfig       ipn.ServeConfigView      // or !Valid if none
 	ipVIPServiceMap   netmap.IPServiceMappings // map of VIPService IPs to their corresponding service names; TODO(nickkhyl): move to nodeBackend
 
+	// Diagnostic for the tailscale/corp#44108 VIP services startup race: log the
+	// first time the serve config is loaded from the store and the first time a
+	// c2n GET /vip-services is answered, to confirm their relative ordering. A c2n
+	// response before the first store load reports port-less services to control.
+	logFirstServeConfigLoadOnce sync.Once
+	logFirstC2NVIPServicesOnce  sync.Once
+
 	webClient          webClient
 	webClientListeners map[netip.AddrPort]*localListener // listeners for local web client traffic
 
@@ -7475,6 +7482,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if buildfeatures.HasServe {
 		m := nm.GetIPVIPServiceMap()
+		logVIPServiceIPChanges(b.logf, b.pm.CurrentPrefs().AdvertiseServices(), oldNetMap.GetVIPServiceIPMap(), nm.GetVIPServiceIPMap())
 		b.ipVIPServiceMap = m
 		if ns, ok := b.sys.Netstack.GetOK(); ok {
 			ns.UpdateIPServiceMappings(m)
@@ -7549,6 +7557,50 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			b.discardDiskCacheLocked()
 		}
 	}
+}
+
+// logVIPServiceIPChanges logs when control changes the VIP addresses assigned to
+// a service between netmaps, to test the hypothesis that control sometimes
+// reassigns a service a different VIP than the one it was already bound to
+// (tailscale/corp#44108). advertised is the node's currently advertised services;
+// a service that loses its VIP but is no longer advertised was deliberately
+// unadvertised, not revoked, so it is not logged. Diagnostic only.
+func logVIPServiceIPChanges(logf logger.Logf, advertised views.Slice[string], oldMap, newMap tailcfg.ServiceIPMappings) {
+	for svc, newAddrs := range newMap {
+		oldAddrs := oldMap[svc]
+		if addrsEqualUnordered(oldAddrs, newAddrs) {
+			continue
+		}
+		if len(oldAddrs) == 0 {
+			continue // first assignment, not a change
+		}
+		logf("serve: VIP service %q IP assignment changed: %v -> %v", svc, oldAddrs, newAddrs)
+	}
+	for svc, oldAddrs := range oldMap {
+		if len(oldAddrs) == 0 {
+			continue
+		}
+		if _, ok := newMap[svc]; ok {
+			continue
+		}
+		if !advertised.ContainsFunc(func(s string) bool { return tailcfg.ServiceName(s) == svc }) {
+			continue // no longer advertised: a deliberate unadvertise, not a revocation
+		}
+		logf("serve: VIP service %q lost its IP assignment while still advertised (was %v)", svc, oldAddrs)
+	}
+}
+
+// addrsEqualUnordered reports whether a and b contain the same addresses,
+// ignoring order.
+func addrsEqualUnordered(a, b []netip.Addr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := slices.Clone(a)
+	bs := slices.Clone(b)
+	slices.SortFunc(as, func(x, y netip.Addr) int { return x.Compare(y) })
+	slices.SortFunc(bs, func(x, y netip.Addr) int { return x.Compare(y) })
+	return slices.Equal(as, bs)
 }
 
 // HookSetRuntimeMetricsEnabled is an optional hook for the "runtimemetrics" feature.

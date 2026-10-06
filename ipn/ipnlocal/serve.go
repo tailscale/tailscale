@@ -542,6 +542,9 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 		services[sn].Active = true
 	}
 
+	// Diagnostic for the tailscale/corp#44108 startup race.
+	b.logVIPServicesStartupRaceLocked(prefs, services)
+
 	servicesList := slicesx.MapValues(services)
 	// [slicesx.MapValues] provides the values in an indeterminate order, but since we'll
 	// be hashing a representation of this list later we want it to be in a consistent
@@ -550,6 +553,45 @@ func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcf
 		return strings.Compare(a.Name.String(), b.Name.String())
 	})
 	return servicesList
+}
+
+// logVIPServicesStartupRaceLocked logs when a VIP services report would omit an
+// advertised service's ports only because the serve config isn't loaded from the
+// store yet, while the store does define ports for it — the tailscale/corp#44108
+// startup race. Diagnostic only; it does not change the report. In steady state
+// serveConfig is valid and this never reads the store. b.mu must be held.
+func (b *LocalBackend) logVIPServicesStartupRaceLocked(prefs ipn.PrefsView, reported map[tailcfg.ServiceName]*tailcfg.VIPService) {
+	if b.serveConfig.Valid() || prefs.AdvertiseServices().Len() == 0 {
+		return
+	}
+	pid := b.pm.CurrentProfile().ID()
+	if pid == "" {
+		return
+	}
+	confj, err := b.store.ReadState(ipn.ServeConfigKey(pid))
+	if err != nil {
+		return // no persisted config: a port-less report is expected, not the race
+	}
+	var stored ipn.ServeConfig
+	if err := json.Unmarshal(confj, &stored); err != nil {
+		return
+	}
+
+	for _, s := range prefs.AdvertiseServices().All() {
+		sn := tailcfg.ServiceName(s)
+		if rep := reported[sn]; rep != nil && len(rep.Ports) > 0 {
+			continue // about to report with ports: not the race
+		}
+		storedCfg, ok := stored.Services[sn]
+		if !ok || storedCfg == nil {
+			continue
+		}
+		storedPorts := storedCfg.View().ServicePortRange()
+		if len(storedPorts) == 0 {
+			continue
+		}
+		b.logf("[unexpected] serve: VIP service %q reported port-less during startup; store has ports %v", sn, storedPorts)
+	}
 }
 
 type serviceMeteredConn struct {
@@ -1487,6 +1529,10 @@ func handleC2NVIPServicesGet(b *LocalBackend, w http.ResponseWriter, r *http.Req
 	res.VIPServices = b.VIPServices()
 	res.ServicesHash = vipServiceHash(b.logf, res.VIPServices)
 
+	b.logFirstC2NVIPServicesOnce.Do(func() {
+		b.logf("serve: first c2n GET /vip-services answered at %v with hash %q", b.clock.Now().Format(time.RFC3339Nano), res.ServicesHash)
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
 }
@@ -1670,6 +1716,9 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	})
 
 	b.serveConfig = conf.View()
+	b.logFirstServeConfigLoadOnce.Do(func() {
+		b.logf("serve: first serve config loaded from store at %v", b.clock.Now().Format(time.RFC3339Nano))
+	})
 	b.updateCertRefreshLoopLocked()
 }
 
@@ -1699,6 +1748,16 @@ func (b *LocalBackend) setVIPServicesTCPPortsInterceptedLocked(svcPorts map[tail
 		interceptFn := generateInterceptTCPPortFunc(ports)
 		for _, addr := range addrs {
 			svcAddrPorts[addr] = interceptFn
+		}
+	}
+
+	// Inverse of the loop above: a service that control HAS assigned a VIP but for
+	// which we have no local ports. Netstack will accept the connection on the VIP
+	// and then find no TCP handler, so the service appears up but refuses traffic —
+	// the portless state at the data plane.
+	for svcName := range vipServiceIPMap {
+		if len(svcPorts[svcName]) == 0 {
+			b.logf("[unexpected] serve: VIP service %q has a VIP assigned but no local ports to serve; connections will be refused", svcName)
 		}
 	}
 
