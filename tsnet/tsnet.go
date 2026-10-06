@@ -908,6 +908,7 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	ns.SetMetricsRegistry(sys.UserMetricsRegistry())
 	sys.Tun.Get().Start()
 	sys.Set(ns)
 	if s.Tun == nil {

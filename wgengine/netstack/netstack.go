@@ -55,6 +55,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -442,11 +443,20 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	return ns, nil
 }
 
+// SetMetricsRegistry registers netstack's user-facing metrics with r, which
+// should be the registry used by ns's [tstun.Wrapper].
+func (ns *Impl) SetMetricsRegistry(r *usermetric.Registry) {
+	// Only WireGuard-bound packets are sent to other peers. Host and loopback
+	// drops are node-local, so they are reported only in debug and client metrics.
+	ns.linkEP.outboundDropped.Store(r.DroppedPacketsOutbound())
+}
+
 func (ns *Impl) Close() error {
 	stacksForMetrics.Delete(ns)
-	// Cancel the injection goroutines before ipstack.Wait closes linkEP's
-	// outbound queues. A nil queue read is expected only after cancellation.
+	// Cancel before closing the queues so consumers expect nil reads.
+	// Close linkEP before aborting endpoints that can generate replies.
 	ns.ctxCancel()
+	ns.linkEP.Close()
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
 	ns.injectWG.Wait()
@@ -469,6 +479,17 @@ func init() {
 	// Please take care to avoid exporting clientmetrics with the same metric
 	// names as the ones used by Impl.ExpVar. Both get exposed via the same HTTP
 	// endpoint, and name collisions will result in Prometheus scraping errors.
+	clientmetric.NewCounterFunc("netstack_outbound_queue_full_dropped_packets", func() int64 {
+		var total int64
+		for ns := range stacksForMetrics.Keys() {
+			v := ns.linkEP.queueFullDroppedTotal()
+			if v > math.MaxInt64-total {
+				return math.MaxInt64
+			}
+			total += v
+		}
+		return total
+	})
 	clientmetric.NewCounterFunc("netstack_tcp_forward_dropped_attempts", func() int64 {
 		var total uint64
 		for ns := range stacksForMetrics.Keys() {
@@ -1053,17 +1074,13 @@ func (ns *Impl) injectToWireGuard() {
 			ns.logf("[v2] injectToWireGuard: % x",
 				stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
 		}
-		if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
-			ns.logf("netstack injectToWireGuard err: %v", err)
-			// When failing to inject an outbound packet buffer, log the error, but
-			// continue serving the ReadContext for sending subsequent packets, as
-			// nothing manages or restarts a failed injectToWireGuard. An error here
-			// only applies to the current packet and should not terminate the long-lived
-			// packet pump.
-			// The exception to this is if the context has ended, indicating a shutdown.
-			if ns.ctx.Err() != nil {
+		if err := ns.tundev.InjectOutboundPacketBufferContext(ns.ctx, pkt); err != nil {
+			if ns.ctx.Err() != nil || errors.Is(err, tstun.ErrClosed) {
 				return
 			}
+			ns.logf("netstack injectToWireGuard err: %v", err)
+			// A per-packet error must not terminate this long-lived pump:
+			// nothing manages or restarts a failed injectToWireGuard.
 			continue
 		}
 	}
@@ -1427,7 +1444,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte, direction userPing
 		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
 	}
 	if direction == userPingDirectionOutbound {
-		if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
+		if err := ns.tundev.InjectOutboundContext(ns.ctx, pingResPkt); err != nil && ns.ctx.Err() == nil && !errors.Is(err, tstun.ErrClosed) {
 			ns.logf("InjectOutbound ping response: %v", err)
 		}
 	} else if direction == userPingDirectionInbound {
@@ -2252,6 +2269,14 @@ func readStatCounter(sc *tcpip.StatCounter) int64 {
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (ns *Impl) ExpVar() expvar.Var {
 	m := new(metrics.Set)
+
+	for q, name := range map[outboundQueue]string{
+		outboundToWireGuard: "wireguard",
+		outboundToHost:      "host",
+		outboundLoopback:    "loopback",
+	} {
+		m.Set("counter_outbound_queue_full_dropped_packets_"+name, &ns.linkEP.queueFullDropped[q])
+	}
 
 	// Global metrics
 	stats := ns.ipstack.Stats()

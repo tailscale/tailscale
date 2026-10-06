@@ -4,6 +4,7 @@
 package tstun
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,10 @@ var (
 	ErrClosed = errors.New("device closed")
 	// ErrFiltered is returned when the acted-on packet is rejected by a filter.
 	ErrFiltered = errors.New("packet dropped by filter")
+
+	// errInjectionQueueFull is returned by TryInjectOutbound when the packet
+	// cannot be queued immediately.
+	errInjectionQueueFull = errors.New("injection queue full")
 )
 
 var (
@@ -260,6 +265,7 @@ type injectionQueue struct {
 
 	// ch carries injected packets to the reader.
 	// ch is never closed, senders and the reader select on [Wrapper.closed].
+	// Packets left in ch after Close are released by [Wrapper.drainInjected].
 	ch chan tunInjectedRead
 }
 
@@ -381,7 +387,24 @@ func (t *Wrapper) Close() error {
 			t.tunDevStatsCloser.Close()
 		}
 	})
+	// Drain outside closeOnce: packet release callbacks may reenter Close.
+	t.drainInjected()
 	return err
+}
+
+// drainInjected releases packets queued for the injection queue's reader
+// without waiting for more.
+func (t *Wrapper) drainInjected() {
+	for {
+		select {
+		case r := <-t.injectionQueue.ch:
+			if r.packet != nil {
+				r.packet.DecRef()
+			}
+		default:
+			return
+		}
+	}
 }
 
 // isClosed reports whether t is closed.
@@ -473,16 +496,59 @@ func (t *Wrapper) InjectionQueue() tun.Queue {
 	return t.injectionQueue
 }
 
-// injectOutbound hands r to the injection queue's reader, or releases it if
-// the Wrapper is closed.
-func (t *Wrapper) injectOutbound(r tunInjectedRead) {
-	select {
-	case t.injectionQueue.ch <- r:
-	case <-t.closed:
-		if r.packet != nil {
+// injectOutbound transfers r to the injection queue or releases it on error.
+func (t *Wrapper) injectOutbound(ctx context.Context, r tunInjectedRead) (err error) {
+	defer func() {
+		if err != nil && r.packet != nil {
 			r.packet.DecRef()
 		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if t.isClosed() {
+		return ErrClosed
+	}
+	// Avoid a cancellation select when the queue has space.
+	select {
+	case t.injectionQueue.ch <- r:
+		t.drainIfClosed()
+		return nil
+	default:
+	}
+	select {
+	case t.injectionQueue.ch <- r:
+		t.drainIfClosed()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.closed:
+		return ErrClosed
+	}
+}
+
+// drainIfClosed is called after a send to the injection queue. A send can race
+// with Close; if Close's drain may have missed it, release it here.
+func (t *Wrapper) drainIfClosed() {
+	if t.isClosed() {
+		t.drainInjected()
+	}
+}
+
+// tryInjectOutbound queues data for the injection queue's reader without
+// waiting. It drops data if the queue is full.
+func (t *Wrapper) tryInjectOutbound(data []byte) error {
+	if t.isClosed() {
+		return ErrClosed
+	}
+	select {
+	case t.injectionQueue.ch <- tunInjectedRead{data: data}:
+		t.drainIfClosed()
+		return nil
+	default:
+	}
+	t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}, 1)
+	return errInjectionQueueFull
 }
 
 // snat does SNAT on p if the destination address requires a different source address.
@@ -978,7 +1044,19 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, slab []byte, packets []tun.R
 		}
 		bufN := copy(pkt, res.packet.NetworkHeader().Slice())
 		bufN += copy(pkt[bufN:], res.packet.TransportHeader().Slice())
-		bufN += copy(pkt[bufN:], res.packet.Data().AsRange().ToSlice())
+		// Copy payload views directly to avoid allocating a flattened copy.
+		views, offset := res.packet.AsViewList()
+		// AsViewList's offset points at the first header; skip all headers
+		// (including link/virtio headers) to reach the start of Data.
+		offset += res.packet.HeaderSize()
+		for v := views.Front(); v != nil; v = v.Next() {
+			if offset >= v.Size() {
+				offset -= v.Size()
+				continue
+			}
+			bufN += copy(pkt[bufN:], v.AsSlice()[offset:])
+			offset = 0
+		}
 		gso = res.packet.GSOOptions
 		pkt = pkt[:bufN]
 		defer res.packet.DecRef() // defer DecRef so we may continue to reference it
@@ -1173,8 +1251,7 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook pa
 			if filt.ShieldsUp() {
 				rj.Reason = packet.RejectedDueToShieldsUp
 			}
-			pkt := packet.Generate(rj, nil)
-			t.InjectOutbound(pkt)
+			t.TryInjectOutbound(packet.Generate(rj, nil))
 
 			// TODO(bradfitz): also send a TCP RST, after the TSMP message.
 
@@ -1435,30 +1512,57 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 		return
 	}
 
-	t.InjectOutbound(packet.Generate(pong, nil))
+	t.TryInjectOutbound(packet.Generate(pong, nil))
 }
 
 // InjectOutbound makes the Wrapper device behave as if a packet
 // with the given contents was sent to the network.
-// It does not block, but takes ownership of the packet.
+// It blocks until the packet can be queued or the Wrapper closes, and takes
+// ownership of the packet. Only reads from InjectionQueue can make space.
 // The injected packet will not pass through outbound filter rules,
 // but UDP/SCTP flow state is recorded so inbound replies are admitted.
 // Injecting an empty packet is a no-op.
 func (t *Wrapper) InjectOutbound(pkt []byte) error {
+	return t.InjectOutboundContext(context.Background(), pkt)
+}
+
+// TryInjectOutbound is InjectOutbound, but drops pkt rather than waiting for
+// queue space. Use it for best-effort replies generated while processing
+// packets, which must not stall behind the injection queue's reader.
+// Dropped packets are counted as queue_full outbound drops.
+func (t *Wrapper) TryInjectOutbound(pkt []byte) error {
 	if len(pkt) > MaxPacketSize {
 		return errPacketTooBig
 	}
 	if len(pkt) == 0 {
 		return nil
 	}
-	t.injectOutbound(tunInjectedRead{data: pkt})
-	return nil
+	return t.tryInjectOutbound(pkt)
 }
 
-// InjectOutboundPacketBuffer logically behaves as InjectOutbound. It takes ownership of one
-// reference count on the packet, and the packet may be mutated. The packet refcount will be
-// decremented after the injected buffer has been read.
+// InjectOutboundContext is InjectOutbound with a cancellable wait for queue
+// space. Cancellation does not retract a packet that has already been queued.
+func (t *Wrapper) InjectOutboundContext(ctx context.Context, pkt []byte) error {
+	if len(pkt) > MaxPacketSize {
+		return errPacketTooBig
+	}
+	if len(pkt) == 0 {
+		return nil
+	}
+	return t.injectOutbound(ctx, tunInjectedRead{data: pkt})
+}
+
+// InjectOutboundPacketBuffer is InjectOutbound for a PacketBuffer. It takes
+// ownership of one reference even on error. The packet may be mutated, and its
+// reference is released after InjectionQueue consumes it or the Wrapper discards it.
 func (t *Wrapper) InjectOutboundPacketBuffer(pkt *netstack_PacketBuffer) error {
+	return t.InjectOutboundPacketBufferContext(context.Background(), pkt)
+}
+
+// InjectOutboundPacketBufferContext is InjectOutboundPacketBuffer with a
+// cancellable wait for queue space. Cancellation does not retract a packet that
+// has already been queued. It takes ownership of one reference even on error.
+func (t *Wrapper) InjectOutboundPacketBufferContext(ctx context.Context, pkt *netstack_PacketBuffer) error {
 	if !buildfeatures.HasNetstack {
 		panic("unreachable")
 	}
@@ -1474,10 +1578,10 @@ func (t *Wrapper) InjectOutboundPacketBuffer(pkt *netstack_PacketBuffer) error {
 	if capt := t.captureHook.Load(); capt != nil {
 		b := pkt.ToBuffer()
 		capt(packet.SynthesizedToPeer, t.now(), b.Flatten(), packet.CaptureMeta{})
+		b.Release()
 	}
 
-	t.injectOutbound(tunInjectedRead{packet: pkt})
-	return nil
+	return t.injectOutbound(ctx, tunInjectedRead{packet: pkt})
 }
 
 func (t *Wrapper) BatchSize() int {
