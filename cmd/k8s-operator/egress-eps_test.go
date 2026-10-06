@@ -114,6 +114,37 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		})
 		expectEqual(t, fc, eps)
 	})
+	t.Run("prefer_same_zone", func(t *testing.T) {
+		mustCreate(t, fc, &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+			Name:   "node-a",
+			Labels: map[string]string{corev1.LabelTopologyZone: "zone-a"},
+		}})
+		mustUpdate(t, fc, "operator-ns", "foo-0", func(p *corev1.Pod) {
+			p.Spec.NodeName = "node-a"
+		})
+		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+			s.Annotations[AnnotationTrafficDistribution] = "PreferSameZone"
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints[0].Zone = new("zone-a")
+		eps.Endpoints[0].Hints = &discoveryv1.EndpointHints{
+			ForZones: []discoveryv1.ForZone{{Name: "zone-a"}},
+		}
+		expectEqual(t, fc, eps)
+
+		// An endpoint without a known zone disables hints for the whole slice.
+		mustUpdate(t, fc, "", "node-a", func(n *corev1.Node) {
+			delete(n.Labels, corev1.LabelTopologyZone)
+		})
+		expectReconciled(t, er, "operator-ns", "foo")
+		eps.Endpoints[0].Zone = nil
+		eps.Endpoints[0].Hints = nil
+		expectEqual(t, fc, eps)
+
+		mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+			delete(s.Annotations, AnnotationTrafficDistribution)
+		})
+	})
 	t.Run("status_does_not_match_pod_ip", func(t *testing.T) {
 		_, stateS := podAndSecretForProxyGroup("foo")                // replica Pod has IP 10.0.0.1
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.2", "", port) // status is for a Pod with IP 10.0.0.2
