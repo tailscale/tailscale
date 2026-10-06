@@ -235,7 +235,11 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	return r.Query(context.Background(), query, "udp", netip.AddrPort{})
+	res, err := r.Query(context.Background(), query, "udp", netip.AddrPort{})
+	if err != nil {
+		return nil, err
+	}
+	return res.Bs, nil
 }
 
 func mustIP(str string) netip.Addr {
@@ -1818,10 +1822,11 @@ func TestLocalResponseTCFlagIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response, err := r.Query(context.Background(), tt.query, tt.family, netip.AddrPort{})
+			res, err := r.Query(context.Background(), tt.query, tt.family, netip.AddrPort{})
 			if err != nil {
 				t.Fatalf("Query failed: %v", err)
 			}
+			response := res.Bs
 
 			if len(response) < headerBytes {
 				t.Fatalf("Response too small: %d bytes", len(response))
