@@ -1427,8 +1427,10 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Ignore the previous preferred DERP if it's since been removed from
+	// the DERP map, so the stickiness checks below can't pick it again.
 	var prevDERP tailcfg.DERPRegionID
-	if c.last != nil {
+	if c.last != nil && dm.Regions().Contains(c.last.PreferredDERP) {
 		prevDERP = c.last.PreferredDERP
 	}
 
@@ -1510,7 +1512,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 		// which undoes any region change we made above.
 		r.PreferredDERP = prevDERP
 	}
-	if c.ForcePreferredDERP != 0 {
+	if c.ForcePreferredDERP != 0 && dm.Regions().Contains(c.ForcePreferredDERP) {
 		// If the forced DERP region probed successfully, or has recent traffic,
 		// use it.
 		_, haveLatencySample := r.RegionLatency[c.ForcePreferredDERP]
