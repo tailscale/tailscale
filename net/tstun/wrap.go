@@ -68,10 +68,6 @@ var (
 	ErrClosed = errors.New("device closed")
 	// ErrFiltered is returned when the acted-on packet is rejected by a filter.
 	ErrFiltered = errors.New("packet dropped by filter")
-
-	// errInjectionQueueFull is returned by TryInjectOutbound when the packet
-	// cannot be queued immediately.
-	errInjectionQueueFull = errors.New("injection queue full")
 )
 
 var (
@@ -548,7 +544,7 @@ func (t *Wrapper) tryInjectOutbound(data []byte) error {
 	default:
 	}
 	t.metrics.outboundDroppedPacketsTotal.Add(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}, 1)
-	return errInjectionQueueFull
+	return ErrInjectionQueueFull
 }
 
 // snat does SNAT on p if the destination address requires a different source address.
@@ -1529,7 +1525,9 @@ func (t *Wrapper) InjectOutbound(pkt []byte) error {
 // TryInjectOutbound is InjectOutbound, but drops pkt rather than waiting for
 // queue space. Use it for best-effort replies generated while processing
 // packets, which must not stall behind the injection queue's reader.
-// Dropped packets are counted as queue_full outbound drops.
+// Dropped packets are counted as queue_full outbound drops, and the returned
+// error matches syscall.ENOBUFS via errors.Is on platforms that define it,
+// so callers can test for buffer exhaustion generically.
 func (t *Wrapper) TryInjectOutbound(pkt []byte) error {
 	if len(pkt) > MaxPacketSize {
 		return errPacketTooBig

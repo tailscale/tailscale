@@ -166,7 +166,13 @@ func (dh *datapathHandler) HandlePacketFromWireGuard(p *packet.Parsed, tun *tstu
 				Proto:  p.IPProto,
 				Reason: packet.RejectedDueToUnknownAppConnectorTransitIP,
 			}
-			if err := tun.TryInjectOutbound(packet.Generate(rj, nil)); err != nil && !errors.Is(err, tstun.ErrClosed) {
+			// Queue-full drops are expected under saturation and are already
+			// counted in the outbound usermetric; only log the rest.
+			// (On platforms that define it, the error also matches
+			// syscall.ENOBUFS; tstun.ErrInjectionQueueFull is the portable
+			// form for code that builds where that errno is absent.)
+			if err := tun.TryInjectOutbound(packet.Generate(rj, nil)); err != nil &&
+				!errors.Is(err, tstun.ErrClosed) && !errors.Is(err, tstun.ErrInjectionQueueFull) {
 				dh.debugLogf("error sending TSMP flow rejection packet: %v", err)
 			}
 			return filter.Drop

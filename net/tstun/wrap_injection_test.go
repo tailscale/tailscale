@@ -256,8 +256,8 @@ func TestTryInjectOutbound(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The queue is full and nothing reads it; this must drop, not block.
-	if err := w.TryInjectOutbound(data); err != errInjectionQueueFull {
-		t.Fatalf("TryInjectOutbound on full queue = %v, want errInjectionQueueFull", err)
+	if err := w.TryInjectOutbound(data); !errors.Is(err, ErrInjectionQueueFull) {
+		t.Fatalf("TryInjectOutbound on full queue = %v, want ErrInjectionQueueFull", err)
 	}
 	m, _ := w.metrics.outboundDroppedPacketsTotal.Get(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}).(*expvar.Int)
 	if m == nil || m.Value() != 1 {
