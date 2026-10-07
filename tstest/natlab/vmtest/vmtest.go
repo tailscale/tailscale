@@ -469,8 +469,9 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
-	sshPort          int     // host port for SSH debug access (cloud VMs only)
-	dnsMode          DNSMode // desired Linux DNS backend to provision; "" means the image default
+	sshPort          int        // host port for SSH debug access (cloud VMs only)
+	dnsMode          DNSMode    // desired Linux DNS backend to provision; "" means the image default
+	dhcpClient       DHCPClient // DHCP client for the vnet NIC; "" means the image default
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the
@@ -516,9 +517,26 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 				e.t.Fatalf("AddNode(%q): unsupported DNSMode %q", name, DNSMode(o))
 			}
 			n.dnsMode = DNSMode(o)
+		case nodeOptDHCPClient:
+			switch c := DHCPClient(o); c {
+			case DHCPClientDefault, DHCPClientDhcpcd:
+				n.dhcpClient = c
+			default:
+				e.t.Fatalf("AddNode(%q): unsupported DHCPClient %q", name, c)
+			}
 		default:
 			// Pass through to vnet (TailscaledEnv, NodeOption, MAC, etc.)
 			vnetOpts = append(vnetOpts, o)
+		}
+	}
+	if n.dhcpClient == DHCPClientDhcpcd {
+		// Only this image is known to ship dhcpcd-base, and the dhcpcd.conf
+		// written by dhcpcdFiles names the single vnet NIC.
+		if n.os.Name != Ubuntu2404.Name {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires the %s image, got %s", name, Ubuntu2404.Name, n.os.Name)
+		}
+		if len(n.nets) != 1 {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires exactly one network, got %d", name, len(n.nets))
 		}
 	}
 	if e.fakeACME {
@@ -591,6 +609,29 @@ type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
 type nodeOptDNSMode DNSMode
+type nodeOptDHCPClient DHCPClient
+
+// DHCPClient says which DHCP client configures the guest's vnet NIC.
+type DHCPClient string
+
+const (
+	// DHCPClientDefault leaves the image's networking alone, so the NIC is
+	// configured by whatever the image runs by default (systemd-networkd on
+	// the cloud images).
+	DHCPClientDefault DHCPClient = ""
+
+	// DHCPClientDhcpcd makes systemd-networkd leave the vnet NIC unmanaged and
+	// runs the dhcpcd that the Ubuntu 24.04 image ships (dhcpcd-base) on it
+	// instead. dhcpcd configures the lease's address and routes itself, then
+	// runs its hook scripts. The resolv.conf hook calls resolvconf when one
+	// is installed, registering a snippet named "<interface>.dhcp", and
+	// writes /etc/resolv.conf directly otherwise. Combine with
+	// [DNSOpenresolv] so the hook registers the snippet instead of writing
+	// resolv.conf.
+	//
+	// Only supported on [Ubuntu2404] nodes with a single network.
+	DHCPClientDhcpcd DHCPClient = "dhcpcd"
+)
 
 // DNSMode is a provisioning directive, not a DNS-backend name: it says what, if
 // anything, to do to the guest's DNS before tailscaled starts, letting one
@@ -614,10 +655,12 @@ const (
 
 	// DNSOpenresolv masks systemd-resolved and installs upstream openresolv
 	// (which no cloud image ships), so tailscaled selects the "openresolv"
-	// manager. Its key directory is created empty, so the only snippet ever
-	// registered is Tailscale's own. Before the fix for tailscale/tailscale#20825,
-	// tailscaled handled that state wrong. openresolv reports "no snippets" by
-	// exiting 2, and net/dns treated that non-zero exit as a hard failure.
+	// manager. Its key directory is created empty, so unless [WithDHCPClient]
+	// selects a client whose resolv.conf hook registers a snippet, the only
+	// one ever registered is Tailscale's own. Before the fix for
+	// tailscale/tailscale#20825, tailscaled handled an empty key directory
+	// wrong: openresolv reports "no snippets" by exiting 2, and net/dns
+	// treated that non-zero exit as a hard failure.
 	//
 	// openresolv's sources are vendored into the tree; see openresolv.go.
 	DNSOpenresolv DNSMode = "openresolv"
@@ -669,6 +712,10 @@ func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 // tailscaled selects the given DNS backend. Only meaningful for Linux cloud
 // images; ignored for gokrazy/macOS. See [DNSMode].
 func WithDNSMode(m DNSMode) nodeOptDNSMode { return nodeOptDNSMode(m) }
+
+// WithDHCPClient returns a NodeOption that provisions the node so the given
+// DHCP client configures its vnet NIC. See [DHCPClient].
+func WithDHCPClient(c DHCPClient) nodeOptDHCPClient { return nodeOptDHCPClient(c) }
 
 // Start initializes the virtual network, boots all VMs in parallel, and waits
 // for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
