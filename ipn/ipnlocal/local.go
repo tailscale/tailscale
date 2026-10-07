@@ -2439,7 +2439,7 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	snapshot, err := b.polc.GetPolicySnapshot("")
+	snapshot, err := b.polc.GetPolicySnapshot(sess.policyUID)
 	if err != nil || snapshot == nil {
 		return
 	}
