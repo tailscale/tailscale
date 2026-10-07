@@ -87,7 +87,10 @@ const (
 	opcodeANNOUNCE = 0 // external address lookup in NAT-PMP
 	opcodeMAP      = 1 // MAP UDP in NAT-PMP
 
+	protocolUDP = 17
+
 	versionNATPMP = 0
+	versionPCP    = 2
 )
 
 func (s *Server) PopulateDERPMapIPs() error {
@@ -2060,6 +2063,15 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
+	if isPCP(udp) {
+		n.handlePCPRequest(UDPPacket{
+			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
+			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
+			Payload: udp.Payload,
+		})
+		return
+	}
+
 	if toForward {
 		if dstIP.Is4() && n.breakWAN4 {
 			// Blackhole the packet.
@@ -2111,10 +2123,10 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if udp.DstPort == pxpPort || udp.DstPort == ssdpPort {
-		// We handle NAT-PMP, but not these yet.
+	if udp.DstPort == ssdpPort {
+		// We handle NAT-PMP and PCP, but not UPnP yet.
 		// TODO(bradfitz): handle? marginal utility so far.
-		// Don't log about them being unknown.
+		// Don't log about it being unknown.
 		return
 	}
 
@@ -2521,6 +2533,10 @@ func isNATPMP(udp *layers.UDP) bool {
 	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionNATPMP
 }
 
+func isPCP(udp *layers.UDP) bool {
+	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionPCP
+}
+
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
 	txid, err := stun.ParseBindingRequest(req.Payload)
 	if err != nil {
@@ -2892,6 +2908,96 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 	}
 
 	n.logf("TODO: handle NAT-PMP packet % 02x", req.Payload)
+}
+
+func (n *network) handlePCPRequest(req UDPPacket) {
+	if !n.svcs.Contains(PCP) {
+		return
+	}
+
+	if len(req.Payload) < 24 || req.Payload[0] != versionPCP {
+		n.logf("vnet: ignoring invalid PCP packet % 02x", req.Payload)
+		return
+	}
+	// TODO(fmarier): check that client address in the packet matches req.Src
+
+	if len(req.Payload) == 24 && req.Payload[1] == opcodeANNOUNCE {
+		// https://www.rfc-editor.org/rfc/rfc6887#section-14
+
+		res := make([]byte, 0, 24)
+		res = append(res,
+			versionPCP,
+			128+opcodeANNOUNCE,
+			0,          // reserved
+			0,          // result code success
+			0, 0, 0, 0, // lifetime (0 for ANNOUNCE)
+		)
+		epoch := uint32(time.Now().Unix())
+		res = binary.BigEndian.AppendUint32(res, epoch)
+		res = append(res, make([]byte, 12)...) // reserved (96 bits)
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
+
+	if len(req.Payload) == 60 && req.Payload[1] == opcodeMAP && req.Payload[36] == protocolUDP {
+		// https://www.rfc-editor.org/rfc/rfc6887#section-11
+		// "02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00" =>
+		//   02 ver
+		//   01 op=map
+		//   00 00 reserved
+		//   00 00 1c 20 requested lifetime in seconds (7200 sec = 2 hours)
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 client IP (10.7.1.102)
+		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f mapping nonce
+		//   11 protocol (17 = UDP)
+		//   00 00 00 reserved
+		//   9f 40 internal port 40768
+		//   00 00 suggested external port
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00 suggested external IP
+		lifetimeSec := binary.BigEndian.Uint32(req.Payload[4:8])
+		internalPort := binary.BigEndian.Uint16(req.Payload[40:42])
+		// TODO(fmarier): reject wildcard mappings (internalPort = 0)
+		wantExtPort := binary.BigEndian.Uint16(req.Payload[42:44])
+		// TODO(fmarier): reject wantedExtAddr that doesn't match IP version
+		nonce := req.Payload[24:36]
+		// TODO(fmarier): pass the nonce into doPortmap so that it can be checked on renewals/deletions
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP)
+		if !ok {
+			n.logf("PCP map request for %v:%d failed", req.Src.Addr(), internalPort)
+			return
+		}
+		res := make([]byte, 0, 60)
+		res = append(res,
+			versionPCP,
+			128+opcodeMAP,
+			0, // reserved
+			0, // result code success
+		)
+		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+		epoch := uint32(time.Now().Unix())
+		res = binary.BigEndian.AppendUint32(res, epoch)
+		res = append(res, make([]byte, 12)...) // reserved (96 bits)
+		res = append(res, nonce...)
+		res = append(res,
+			protocolUDP,
+			0, 0, 0, // reserved
+		)
+		res = binary.BigEndian.AppendUint16(res, internalPort)
+		res = binary.BigEndian.AppendUint16(res, gotPort)
+		wan4 := n.wanIP4.As16()
+		res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
+
+	n.logf("TODO: handle PCP packet % 02x", req.Payload)
 }
 
 // UDPPacket is a UDP packet.
