@@ -58,8 +58,6 @@ func (c *client) transitIPForMagicIP(magicIP netip.Addr) (netip.Addr, bool) {
 // but conn25 uses link-local addresses for transit IPs.
 // Let the filter know if this is one of our addresses and should be allowed.
 func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	ok := c.isKnownTransitIP(p.Dst.Addr())
 	if ok {
 		return true, packetFilterAllowReason
@@ -68,6 +66,8 @@ func (c *client) linkLocalAllow(p packet.Parsed) (bool, string) {
 }
 
 func (c *client) isKnownTransitIP(tip netip.Addr) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	_, ok := c.assignments.lookupByTransitIP(tip)
 	return ok
 }
@@ -182,9 +182,6 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 	if conn.Key().IsZero() {
 		return fmt.Errorf("node with stable ID %q does not have a key", conn.StableID())
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	return c.insertTransitConnMapping(tip, conn.Key())
 }
 
@@ -315,6 +312,8 @@ func (as addrs) is6() bool {
 // for the provided transitIP (as a prefix).
 // The provided transitIP must already be present in the byTransitIP map.
 func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if _, ok := c.assignments.lookupByTransitIP(tip); !ok {
 		return errors.New("transit IP is not already known")
 	}
