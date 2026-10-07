@@ -34,7 +34,12 @@ func (h *Handler) servePolicy(w http.ResponseWriter, r *http.Request) {
 
 	var scope setting.PolicyScope
 	if suffix == "" {
-		scope = setting.DefaultScope()
+		policyUID := string(h.Actor.UserID())
+		if policyUID == "" {
+			scope = setting.DefaultScope()
+		} else {
+			scope = setting.UserScopeOf(policyUID)
+		}
 	} else if err := scope.UnmarshalText([]byte(suffix)); err != nil {
 		http.Error(w, fmt.Sprintf("%q is not a valid scope", suffix), http.StatusBadRequest)
 		return
