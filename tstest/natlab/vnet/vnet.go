@@ -78,8 +78,16 @@ const nicID = 1
 
 const (
 	stunPort = 3478
-	pcpPort  = 5351
+	pxpPort  = 5351
 	ssdpPort = 1900
+)
+
+// PxP packets
+const (
+	opcodeANNOUNCE = 0 // external address lookup in NAT-PMP
+	opcodeMAP      = 1 // MAP UDP in NAT-PMP
+
+	versionNATPMP = 0
 )
 
 func (s *Server) PopulateDERPMapIPs() error {
@@ -671,9 +679,9 @@ func (nw networkWriter) write(b []byte) {
 
 type network struct {
 	s                *Server
-	num              int // 1-based
-	mac              MAC // of router
-	portmap          bool
+	num              int                     // 1-based
+	mac              MAC                     // of router
+	svcs             set.Set[NetworkService] // services the router offers (NAT-PMP, PCP, ...)
 	lanInterfaceID   int
 	wanInterfaceID   int
 	v4               bool                 // network supports IPv4
@@ -2103,7 +2111,7 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if udp.DstPort == pcpPort || udp.DstPort == ssdpPort {
+	if udp.DstPort == pxpPort || udp.DstPort == ssdpPort {
 		// We handle NAT-PMP, but not these yet.
 		// TODO(bradfitz): handle? marginal utility so far.
 		// Don't log about them being unknown.
@@ -2510,7 +2518,7 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 }
 
 func isNATPMP(udp *layers.UDP) bool {
-	return udp.DstPort == 5351 && len(udp.Payload) > 0 && udp.Payload[0] == 0 // version 0, not 2 for PCP
+	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionNATPMP
 }
 
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
@@ -2721,11 +2729,11 @@ func (n *network) IsPublicPortUsed(ap netip.AddrPort) bool {
 	return ok
 }
 
-func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int) (gotPort uint16, ok bool) {
+func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec int, service NetworkService) (gotPort uint16, ok bool) {
 	n.natMu.Lock()
 	defer n.natMu.Unlock()
 
-	if !n.portmap {
+	if !n.svcs.Contains(service) {
 		return 0, false
 	}
 
@@ -2735,6 +2743,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 	if sec == 0 {
 		lanAP, ok := n.portMap[wanAP]
 		if ok && lanAP.dst.Addr() == src {
+			n.logf("vnet: released %v mapping from %v to %v", service, wanAP, dst)
 			delete(n.portMap, wanAP)
 		}
 		return 0, false
@@ -2747,6 +2756,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 				dst:    dst,
 				expiry: time.Now().Add(time.Duration(sec) * time.Second),
 			}
+			n.logf("vnet: renewed %v mapping from %v to %v", service, wanAP, dst)
 			return k.Port(), true
 		}
 	}
@@ -2757,7 +2767,7 @@ func (n *network) doPortMap(src netip.Addr, dstLANPort, wantExtPort uint16, sec 
 				dst:    dst,
 				expiry: time.Now().Add(time.Duration(sec) * time.Second),
 			})
-			n.logf("vnet: allocated NAT mapping from %v to %v", wanAP, dst)
+			n.logf("vnet: allocated %v mapping from %v to %v", service, wanAP, dst)
 			return wanAP.Port(), true
 		}
 		wantExtPort = rand.N(uint16(32<<10)) + 32<<10
@@ -2816,19 +2826,25 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 }
 
 func (n *network) handleNATPMPRequest(req UDPPacket) {
-	if !n.portmap {
+	if !n.svcs.Contains(NATPMP) {
 		return
 	}
-	if string(req.Payload) == "\x00\x00" {
+	if len(req.Payload) < 2 || req.Payload[0] != versionNATPMP {
+		n.logf("vnet: ignoring invalid NAT-PMP packet % 02x", req.Payload)
+	}
+
+	epoch := uint32(time.Now().Unix())
+
+	if len(req.Payload) == 2 && req.Payload[0] == opcodeANNOUNCE {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
 		res := make([]byte, 0, 12)
 		res = append(res,
-			0,    // version 0 (NAT-PMP)
-			128,  // response to op 0 (128+0)
+			versionNATPMP,
+			128+opcodeANNOUNCE,
 			0, 0, // result code success
 		)
-		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
+		res = binary.BigEndian.AppendUint32(res, epoch)
 		wan4 := n.wanIP4.As4()
 		res = append(res, wan4[:]...)
 		n.WriteUDPPacketNoNAT(UDPPacket{
@@ -2839,8 +2855,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		return
 	}
 
-	// Map UDP request
-	if len(req.Payload) == 12 && req.Payload[0] == 0 && req.Payload[1] == 1 {
+	if len(req.Payload) == 12 && req.Payload[1] == opcodeMAP {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.3
 		// "00 01 00 00 ed 40 00 00 00 00 1c 20" =>
 		//   00 ver
@@ -2852,18 +2867,18 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		internalPort := binary.BigEndian.Uint16(req.Payload[4:6])
 		wantExtPort := binary.BigEndian.Uint16(req.Payload[6:8])
 		lifetimeSec := binary.BigEndian.Uint32(req.Payload[8:12])
-		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec))
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), NATPMP)
 		if !ok {
 			n.logf("NAT-PMP map request for %v:%d failed", req.Src.Addr(), internalPort)
 			return
 		}
 		res := make([]byte, 0, 16)
 		res = append(res,
-			0,     // version 0 (NAT-PMP)
-			1+128, // response to op 1
-			0, 0,  // result code success
+			versionNATPMP,
+			128+opcodeMAP,
+			0, 0, // result code success
 		)
-		res = binary.BigEndian.AppendUint32(res, uint32(time.Now().Unix()))
+		res = binary.BigEndian.AppendUint32(res, epoch)
 		res = binary.BigEndian.AppendUint16(res, internalPort)
 		res = binary.BigEndian.AppendUint16(res, gotPort)
 		res = binary.BigEndian.AppendUint32(res, lifetimeSec)

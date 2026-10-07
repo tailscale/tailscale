@@ -207,7 +207,7 @@ func TestSameLAN(t *testing.T) {
 
 // TestBPFDisco tests https://github.com/tailscale/tailscale/issues/3824 ...
 // * server behind a Hard NAT
-// * client behind a NAT with UPnP support
+// * client behind a NAT with NAT-PMP support
 // * client machine has a stateful host firewall (e.g. ufw)
 func TestBPFDisco(t *testing.T) {
 	env := vmtest.New(t)
