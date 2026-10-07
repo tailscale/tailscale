@@ -567,6 +567,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		// "tailscale up" should not be able to change the
 		// profile name.
 		prefs.ProfileName = curPrefs.ProfileName
+		// This set-only preference must survive a full Start, including reauthentication.
+		prefs.AllowExternalTaildrop = curPrefs.AllowExternalTaildrop
 	}
 
 	env := upCheckEnv{
@@ -970,6 +972,7 @@ func init() {
 	addPrefFlagMapping("relay-server-port", "RelayServerPort")
 	addPrefFlagMapping("sync", "Sync")
 	addPrefFlagMapping("relay-server-static-endpoints", "RelayServerStaticEndpoints")
+	addPrefFlagMapping("allow-external-taildrop", "AllowExternalTaildrop")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

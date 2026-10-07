@@ -412,6 +412,10 @@ func UseWIPCode() bool { return Bool("TAILSCALE_USE_WIP_CODE") }
 // re-enable it will result in an error.
 func CanSSHD() bool { return !Bool("TS_DISABLE_SSH_SERVER") }
 
+// ForceTaildropConsentForEverything enables the consent flow for
+// same-user Taildrop transfers, gated by the AllowExternalTaildrop preference.
+var ForceTaildropConsentForEverything = RegisterBool("TS_DEBUG_TAILDROP_CONSENT")
+
 // CanTaildrop reports whether the Taildrop feature is allowed to function.
 //
 // If disabled, Taildrop won't receive files regardless of user & server config.

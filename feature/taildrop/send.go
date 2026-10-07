@@ -4,7 +4,10 @@
 package taildrop
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 	"time"
@@ -63,6 +66,9 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 // The length is the expected length of content to read from r,
 // it may be negative to indicate that it is unknown.
 // It returns the length of the entire file.
+// If expectedHash is non-empty, it is the expected SHA-256 hash of the entire file
+// content, and PutFile will verify that the hash matches after writing the file.
+// If the hash does not match, PutFile will delete the partial file and return ErrConsentHashMismatch.
 //
 // If there is a failure reading from r, then the partial file is not deleted
 // for some period of time. The [manager.PartialFiles] and [manager.HashPartialFile]
@@ -70,8 +76,7 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 // specific partial file. This allows the client to determine whether to resume
 // a partial file. While resuming, PutFile may be called again with a non-zero
 // offset to specify where to resume receiving data at.
-func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, length int64) (fileLength int64, err error) {
-
+func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, length int64, expectedHash string) (fileLength int64, err error) {
 	switch {
 	case m == nil || m.opts.fileOps == nil:
 		return 0, ErrNoTaildrop
@@ -88,6 +93,23 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 	// and make sure we don't delete it while uploading:
 	m.deleter.Remove(baseName)
 
+	// Check whether there is an in-progress transfer for the file.
+	inFileKey := incomingFileKey{id, baseName}
+	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
+		inFile := &incomingFile{
+			clock:          m.opts.Clock,
+			started:        m.opts.Clock.Now(),
+			size:           length,
+			sendFileNotify: m.opts.SendFileNotify,
+		}
+		return inFile
+	})
+
+	if loaded {
+		return 0, ErrFileExists
+	}
+	defer m.incomingFiles.Delete(inFileKey)
+
 	// Create (if not already) the partial file with read-write permissions.
 	partialName := baseName + id.partialSuffix()
 	wc, partialPath, err := m.opts.fileOps.OpenWriter(partialName, offset, 0o666)
@@ -101,27 +123,12 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 		}
 	}()
 
-	// Check whether there is an in-progress transfer for the file.
-	inFileKey := incomingFileKey{id, baseName}
-	inFile, loaded := m.incomingFiles.LoadOrInit(inFileKey, func() *incomingFile {
-		inFile := &incomingFile{
-			clock:          m.opts.Clock,
-			started:        m.opts.Clock.Now(),
-			size:           length,
-			sendFileNotify: m.opts.SendFileNotify,
-		}
-		if m.opts.DirectFileMode {
-			inFile.partialPath = partialPath
-		}
-		return inFile
-	})
-
 	inFile.w = wc
-
-	if loaded {
-		return 0, ErrFileExists
+	if m.opts.DirectFileMode {
+		inFile.mu.Lock()
+		inFile.partialPath = partialPath
+		inFile.mu.Unlock()
 	}
-	defer m.incomingFiles.Delete(inFileKey)
 
 	// Record that we have started to receive at least one file.
 	// This is used by the deleter upon a cold-start to scan the directory
@@ -134,34 +141,69 @@ func (m *manager) PutFile(id clientID, baseName string, r io.Reader, offset, len
 		}
 	}
 
+	var h hash.Hash
+	var dst io.Writer = wc
+	if expectedHash != "" {
+		h = sha256.New()
+		if err := m.seedHashForPartialFile(partialName, offset, h); err != nil {
+			return 0, err
+		}
+		dst = io.MultiWriter(wc, h)
+	}
+
 	// Copy the contents of the file to the writer.
-	copyLength, err := io.Copy(wc, r)
+	copyLength, err := io.Copy(dst, r)
 	if err != nil {
-		return 0, m.redactAndLogError("Copy", err)
+		return offset + copyLength, m.redactAndLogError("Copy", err)
 	}
 	if length >= 0 && copyLength != length {
-		return 0, m.redactAndLogError("Copy", fmt.Errorf("copied %d bytes; expected %d", copyLength, length))
+		return offset + copyLength, m.redactAndLogError("Copy", fmt.Errorf("copied %d bytes; expected %d", copyLength, length))
 	}
 	if err := wc.Close(); err != nil {
 		return 0, m.redactAndLogError("Close", err)
 	}
 
+	if h != nil {
+		if hex.EncodeToString(h.Sum(nil)) != expectedHash {
+			if err := m.opts.fileOps.Remove(partialName); err != nil {
+				m.opts.Logf("discarding mismatched file: %v", err)
+			}
+			return 0, ErrConsentHashMismatch
+		}
+	}
 	fileLength = offset + copyLength
 
-	inFile.mu.Lock()
-	inFile.done = true
-	inFile.mu.Unlock()
-
-	// 6) Finalize (rename/move) the partial into place via FileOps.Rename
 	finalPath, err := m.opts.fileOps.Rename(partialPath, baseName)
 	if err != nil {
 		return 0, m.redactAndLogError("Rename", err)
 	}
+	inFile.mu.Lock()
+	inFile.done = true
 	inFile.finalPath = finalPath
+	inFile.mu.Unlock()
 
 	m.totalReceived.Add(1)
 	m.opts.SendFileNotify()
 	return fileLength, nil
+}
+
+// seedHashForPartialFile Seeds the hash for a partial file up to the given offset into the provided hash writer.
+// no-op for offset <= 0. Returns an error if the partial file cannot be opened or read.
+func (m *manager) seedHashForPartialFile(partialName string, offset int64, h io.Writer) error {
+	if offset <= 0 {
+		return nil
+	}
+
+	rc, err := m.opts.fileOps.OpenReader(partialName)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.CopyN(h, rc, offset)
+	closeErr := rc.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func (m *manager) redactAndLogError(stage string, err error) error {

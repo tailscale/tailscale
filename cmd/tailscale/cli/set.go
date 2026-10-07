@@ -69,6 +69,7 @@ type setArgsT struct {
 	netfilterMode              string
 	relayServerPort            string
 	relayServerStaticEndpoints string
+	allowExternalTaildrop      bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -93,6 +94,7 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.sync, "sync", false, hidden+"actively sync configuration from the control plane (set to false only for network failure testing)")
 	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
 	setf.StringVar(&setArgs.relayServerStaticEndpoints, "relay-server-static-endpoints", "", "static IP:port endpoints to advertise as candidates for relay connections (comma-separated, e.g. \"[2001:db8::1]:40000,192.0.2.1:40000\") or empty string to not advertise any static endpoints")
+	setf.BoolVar(&setArgs.allowExternalTaildrop, "allow-external-taildrop", false, "allow other users to request permission to send files to this device")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -151,6 +153,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			RouteAll:               setArgs.acceptRoutes,
 			CorpDNS:                setArgs.acceptDNS,
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
+			AllowExternalTaildrop:  setArgs.allowExternalTaildrop,
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,
 			RunWebClient:           setArgs.runWebClient,

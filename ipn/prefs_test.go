@@ -50,6 +50,7 @@ func TestPrefsEqual(t *testing.T) {
 		"WantRunning",
 		"LoggedOut",
 		"ShieldsUp",
+		"AllowExternalTaildrop",
 		"AdvertiseTags",
 		"Hostname",
 		"NotepadURLs",

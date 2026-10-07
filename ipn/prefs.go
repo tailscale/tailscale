@@ -163,6 +163,10 @@ type Prefs struct {
 	// connections. This overrides tailcfg.Hostinfo's ShieldsUp.
 	ShieldsUp bool
 
+	// AllowExternalTaildrop permits other users to request per-file consent.
+	// It defaults to false and may be enforced by system policy.
+	AllowExternalTaildrop bool
+
 	// AdvertiseTags specifies tags that should be applied to this node, for
 	// purposes of ACL enforcement. These can be referenced from the ACL policy
 	// document. Note that advertising a tag on the client doesn't guarantee
@@ -369,6 +373,7 @@ type MaskedPrefs struct {
 	WantRunningSet                bool                `json:",omitempty"`
 	LoggedOutSet                  bool                `json:",omitempty"`
 	ShieldsUpSet                  bool                `json:",omitempty"`
+	AllowExternalTaildropSet      bool                `json:",omitzero"`
 	AdvertiseTagsSet              bool                `json:",omitempty"`
 	HostnameSet                   bool                `json:",omitempty"`
 	NotepadURLsSet                bool                `json:",omitempty"`
@@ -682,6 +687,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.LoggedOut == p2.LoggedOut &&
 		p.NotepadURLs == p2.NotepadURLs &&
 		p.ShieldsUp == p2.ShieldsUp &&
+		p.AllowExternalTaildrop == p2.AllowExternalTaildrop &&
 		p.NoSNAT == p2.NoSNAT &&
 		p.NoStatefulFiltering == p2.NoStatefulFiltering &&
 		p.NetfilterMode == p2.NetfilterMode &&

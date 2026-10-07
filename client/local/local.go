@@ -39,6 +39,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/feature/taildrop/taildroptype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
@@ -897,6 +898,39 @@ func (lc *Client) PushFile(ctx context.Context, target tailcfg.StableNodeID, siz
 	}
 	all, _ := io.ReadAll(res.Body)
 	return bestError(fmt.Errorf("%s: %s", res.Status, all), all)
+}
+
+// TaildropConsentRequests returns the inbound Taildrop transfers awaiting this
+// device owner's approval, oldest first.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
+func (lc *Client) TaildropConsentRequests(ctx context.Context) ([]taildroptype.ConsentRequest, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/taildrop-consent/pending")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[[]taildroptype.ConsentRequest](body)
+}
+
+// RespondToTaildropConsent records this device owner's decision on a pending
+// inbound Taildrop transfer.
+//
+// It reports an error if the request has expired or was already decided, so a
+// caller acting on a stale prompt can tell.
+//
+// API maturity: this method is not considered a stable API and is
+// subject to change between releases.
+func (lc *Client) RespondToTaildropConsent(ctx context.Context, requestID string, allow bool) error {
+	body, err := json.Marshal(struct {
+		ID    string `json:"id"`
+		Allow bool   `json:"allow"`
+	}{ID: requestID, Allow: allow})
+	if err != nil {
+		return err
+	}
+	_, err = lc.send(ctx, "POST", "/localapi/v0/taildrop-consent/respond", http.StatusNoContent, bytes.NewReader(body))
+	return err
 }
 
 // CheckIPForwarding asks the local Tailscale daemon whether it looks like the

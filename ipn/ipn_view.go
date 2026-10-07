@@ -325,6 +325,10 @@ func (v PrefsView) LoggedOut() bool { return v.ж.LoggedOut }
 // connections. This overrides tailcfg.Hostinfo's ShieldsUp.
 func (v PrefsView) ShieldsUp() bool { return v.ж.ShieldsUp }
 
+// AllowExternalTaildrop permits other users to request per-file consent.
+// It defaults to false and may be enforced by system policy.
+func (v PrefsView) AllowExternalTaildrop() bool { return v.ж.AllowExternalTaildrop }
+
 // AdvertiseTags specifies tags that should be applied to this node, for
 // purposes of ACL enforcement. These can be referenced from the ACL policy
 // document. Note that advertising a tag on the client doesn't guarantee
@@ -504,6 +508,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	WantRunning                bool
 	LoggedOut                  bool
 	ShieldsUp                  bool
+	AllowExternalTaildrop      bool
 	AdvertiseTags              []string
 	Hostname                   string
 	NotepadURLs                bool

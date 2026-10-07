@@ -49,6 +49,12 @@ func (f fsFileOps) OpenWriter(name string, offset int64, perm os.FileMode) (io.W
 	if err != nil {
 		return nil, "", err
 	}
+	if offset == 0 {
+		if err := fi.Truncate(0); err != nil {
+			fi.Close()
+			return nil, "", err
+		}
+	}
 	if offset != 0 {
 		curr, err := fi.Seek(0, io.SeekEnd)
 		if err != nil {
@@ -83,12 +89,10 @@ func (f fsFileOps) Remove(name string) error {
 // newName must be a base name (not absolute or containing path separators).
 // It will retry up to 10 times, de-dup same-checksum files, etc.
 func (f fsFileOps) Rename(oldPath, newName string) (newPath string, err error) {
-	var dst string
-	if filepath.IsAbs(newName) || strings.ContainsRune(newName, os.PathSeparator) {
-		return "", fmt.Errorf("invalid newName %q: must not be an absolute path or contain path separators", newName)
+	dst, err := joinDir(f.rootDir, newName)
+	if err != nil {
+		return "", err
 	}
-
-	dst = filepath.Join(f.rootDir, newName)
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return "", err
@@ -145,7 +149,10 @@ func (f fsFileOps) Rename(oldPath, newName string) (newPath string, err error) {
 		}
 
 		// Choose a new destination filename and try again.
-		dst = filepath.Join(filepath.Dir(dst), nextFilename(filepath.Base(dst)))
+		dst, err = joinDir(f.rootDir, nextFilename(filepath.Base(dst)))
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return "", fmt.Errorf("too many retries trying to rename %q to %q", oldPath, newName)

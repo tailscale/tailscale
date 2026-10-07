@@ -6,6 +6,7 @@
 package main // import "tailscale.com/cmd/tailscale"
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +21,9 @@ func main() {
 		args = []string{"web", "-cgi"}
 	}
 	if err := cli.Run(args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if !errors.Is(err, cli.ErrAlreadyReported) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
