@@ -157,6 +157,10 @@ func (e *Env) startGokrazyQEMU(n *Node, basePath string) error {
 	}
 
 	args = append(args, qemuAccelArgs()...)
+	if !hardwareAccelAvailable() {
+		// Make boot timer calibration deterministic to avoid boot hangs.
+		args = append(args, "-icount", "shift=auto")
+	}
 	return e.launchQEMU(n.name, logPath, args)
 }
 
