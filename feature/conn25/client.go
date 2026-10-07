@@ -188,6 +188,10 @@ func (c *client) addTransitIPForConnector(tip netip.Addr, conn tailcfg.NodeView)
 	return c.insertTransitConnMapping(tip, conn.Key())
 }
 
+// errQueueFull is returned when the address assignment send queue is full and
+// the assignment was dropped. It's backpressure, not a hard failure.
+var errQueueFull = errors.New("queue full")
+
 func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 	select {
 	// TODO(fran) investigate the value of waiting for multiple addresses and sending them
@@ -196,7 +200,7 @@ func (c *client) enqueueAddressAssignment(addrs *addrs) error {
 		return nil
 	default:
 		c.logf("address assignment queue full, dropping transit assignment for %v", addrs.domain)
-		return errors.New("queue full")
+		return errQueueFull
 	}
 }
 
@@ -341,6 +345,8 @@ func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bo
 // mapping does not exist on its end. If a mapping is not found on the client
 // either, this is a no-op.
 func (c *client) resendTransitIPMapping(transitIP netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	mapping, ok := c.assignments.lookupByTransitIP(transitIP)
 	if !ok {
 		// We have no mappings for this transit IP, so nothing to resend.
