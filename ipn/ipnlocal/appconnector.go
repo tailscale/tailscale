@@ -7,6 +7,7 @@ package ipnlocal
 
 import (
 	"tailscale.com/appc"
+	"tailscale.com/envknob"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus"
@@ -18,6 +19,10 @@ import (
 // at all, which keeps appc and its dependencies out of those binaries.
 type appcAppConnector = appc.AppConnector
 
+// Keep expiration opt-in until its effect on long-lived connections has been
+// evaluated. This is a minimum retention interval, never a cap on DNS TTLs.
+var appConnectorRouteRetention = envknob.RegisterDuration("TS_DEBUG_APPC_ROUTE_RETENTION")
+
 // newAppConnector returns a new [appc.AppConnector] publishing to bus,
 // seeded with the previously stored routes in ri (which may be nil).
 func newAppConnector(logf logger.Logf, bus *eventbus.Bus, ri *appctype.RouteInfo, storeRoutes bool) *appcAppConnector {
@@ -26,6 +31,7 @@ func newAppConnector(logf logger.Logf, bus *eventbus.Bus, ri *appctype.RouteInfo
 		EventBus:        bus,
 		RouteInfo:       ri,
 		HasStoredRoutes: storeRoutes,
+		RouteRetention:  appConnectorRouteRetention(),
 	})
 }
 

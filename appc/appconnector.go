@@ -12,13 +12,13 @@ package appc
 import (
 	"context"
 	"fmt"
-	"maps"
 	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
@@ -134,6 +134,8 @@ type AppConnector struct {
 	pubClient       *eventbus.Client
 	updatePub       *eventbus.Publisher[appctype.RouteUpdate]
 	storePub        *eventbus.Publisher[appctype.RouteInfo]
+	clock           tstime.DefaultClock
+	routeRetention  time.Duration
 
 	// hasStoredRoutes records whether the connector was initialized with
 	// persisted route information.
@@ -151,6 +153,11 @@ type AppConnector struct {
 
 	// wildcards is the list of domain strings that match subdomains.
 	wildcards []string
+
+	// domainExpiry tracks the lifetime of each domain/address association.
+	domainExpiry map[string]map[netip.Addr]time.Time
+	expiryTimer  tstime.TimerController
+	closed       bool
 
 	// queue provides ordering for update operations
 	queue execqueue.ExecQueue
@@ -178,6 +185,16 @@ type Config struct {
 
 	// HasStoredRoutes indicates that the connector should assume stored routes.
 	HasStoredRoutes bool
+
+	// RouteRetention enables expiration of DNS-discovered routes when positive.
+	// Each DNS observation retains the address for at least this duration and
+	// for at least the DNS TTL. Zero disables expiration. Route persistence must
+	// also be enabled. Connections that outlive this period without another DNS
+	// lookup can be interrupted when their route expires.
+	RouteRetention time.Duration
+
+	// Clock is used for route expiration. If nil, the system clock is used.
+	Clock tstime.Clock
 }
 
 // NewAppConnector creates a new AppConnector.
@@ -198,11 +215,18 @@ func NewAppConnector(c Config) *AppConnector {
 		storePub:        eventbus.Publish[appctype.RouteInfo](ec),
 		routeAdvertiser: c.RouteAdvertiser,
 		hasStoredRoutes: c.HasStoredRoutes,
+		clock:           tstime.DefaultClock{Clock: c.Clock},
+	}
+	if c.HasStoredRoutes && c.RouteRetention > 0 {
+		ac.routeRetention = c.RouteRetention
 	}
 	if c.RouteInfo != nil {
-		ac.domains = c.RouteInfo.Domains
+		ac.domains = cloneDomainRoutes(c.RouteInfo.Domains)
 		ac.wildcards = c.RouteInfo.Wildcards
 		ac.controlRoutes = c.RouteInfo.Control
+		if ac.routeRetention > 0 {
+			ac.domainExpiry = cloneDomainExpiry(c.RouteInfo.DomainExpiry)
+		}
 	}
 	ac.writeRateMinute = newRateLogger(time.Now, time.Minute, func(c int64, s time.Time, ln int64) {
 		ac.logf("routeInfo write rate: %d in minute starting at %v (%d routes)", c, s, ln)
@@ -211,6 +235,23 @@ func NewAppConnector(c Config) *AppConnector {
 	ac.writeRateDay = newRateLogger(time.Now, 24*time.Hour, func(c int64, s time.Time, ln int64) {
 		ac.logf("routeInfo write rate: %d in 24 hours starting at %v (%d routes)", c, s, ln)
 	})
+	if ac.routeRetention > 0 {
+		// Legacy state has no observation times. Give it a full retention
+		// period instead of immediately withdrawing routes on upgrade.
+		for domain, addrs := range ac.domains {
+			for _, addr := range addrs {
+				if ac.domainExpiry[domain][addr].IsZero() {
+					ac.refreshRouteExpiryLocked(domain, addr, 0)
+				}
+			}
+		}
+		ac.storeRoutesLocked()
+		ac.scheduleExpiryLocked()
+	} else if c.RouteInfo != nil && len(c.RouteInfo.DomainExpiry) > 0 {
+		// Observations while expiration is disabled do not refresh deadlines.
+		// Discard them so a later opt-in starts with a full retention period.
+		ac.storeRoutesLocked()
+	}
 	return ac
 }
 
@@ -231,9 +272,10 @@ func (e *AppConnector) storeRoutesLocked() {
 
 		e.storePub.Publish(appctype.RouteInfo{
 			// Clone here, as the subscriber will handle these outside our lock.
-			Control:   slices.Clone(e.controlRoutes),
-			Domains:   maps.Clone(e.domains),
-			Wildcards: slices.Clone(e.wildcards),
+			Control:      slices.Clone(e.controlRoutes),
+			Domains:      cloneDomainRoutes(e.domains),
+			Wildcards:    slices.Clone(e.wildcards),
+			DomainExpiry: cloneDomainExpiry(e.domainExpiry),
 		})
 	}
 }
@@ -245,6 +287,7 @@ func (e *AppConnector) ClearRoutes() error {
 	e.controlRoutes = nil
 	e.domains = nil
 	e.wildcards = nil
+	e.domainExpiry = nil
 	e.storeRoutesLocked()
 	return nil
 }
@@ -283,6 +326,10 @@ func (e *AppConnector) Close() {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.closed = true
+	if e.expiryTimer != nil {
+		e.expiryTimer.Stop()
+	}
 	e.queue.Shutdown() // TODO(creachadair): Should we wait for it too?
 	e.pubClient.Close()
 }
@@ -320,13 +367,17 @@ func (e *AppConnector) updateDomains(domains []string) {
 
 	// Everything left in oldDomains is a domain we're no longer tracking and we
 	// can unadvertise the routes.
+	for domain := range oldDomains {
+		delete(e.domainExpiry, domain)
+	}
 	if e.hasStoredRoutes {
-		toRemove := []netip.Prefix{}
+		candidates := set.Set[netip.Addr]{}
 		for _, addrs := range oldDomains {
 			for _, a := range addrs {
-				toRemove = append(toRemove, netip.PrefixFrom(a, a.BitLen()))
+				candidates.Add(a)
 			}
 		}
+		toRemove := e.unusedRoutesLocked(candidates)
 
 		if len(toRemove) != 0 {
 			if ra := e.routeAdvertiser; ra != nil {
@@ -339,7 +390,6 @@ func (e *AppConnector) updateDomains(domains []string) {
 			e.updatePub.Publish(appctype.RouteUpdate{Unadvertise: toRemove})
 		}
 	}
-
 	e.logf("handling domains: %v and wildcards: %v", slicesx.MapKeys(e.domains), e.wildcards)
 }
 
@@ -481,6 +531,23 @@ func (e *AppConnector) isAddrKnownLocked(domain string, addr netip.Addr) bool {
 // associated with the given domain.
 func (e *AppConnector) scheduleAdvertisement(domain string, routes ...netip.Prefix) {
 	e.queue.Add(func() {
+		e.mu.Lock()
+		if e.closed {
+			e.mu.Unlock()
+			return
+		}
+		if e.routeRetention > 0 {
+			// A queued configuration update or expiry sweep may have removed
+			// this observation before its advertisement reaches the queue.
+			now := e.clock.Now()
+			routes = slices.DeleteFunc(routes, func(route netip.Prefix) bool {
+				return !e.domainExpiry[domain][route.Addr()].After(now)
+			})
+		}
+		e.mu.Unlock()
+		if len(routes) == 0 {
+			return
+		}
 		if e.routeAdvertiser != nil {
 			if err := e.routeAdvertiser.AdvertiseRoute(routes...); err != nil {
 				e.logf("failed to advertise routes for %s: %v: %v", domain, routes, err)

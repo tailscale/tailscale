@@ -8,6 +8,7 @@ package appc
 import (
 	"net/netip"
 	"strings"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/util/mak"
@@ -34,7 +35,12 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 	var cnameChain map[string]string
 
 	// addressRecords is a list of address records found in the response.
-	var addressRecords map[string][]netip.Addr
+	type addressRecord struct {
+		addr netip.Addr
+		ttl  time.Duration
+	}
+	var addressRecords map[string][]addressRecord
+	var cnameTTL time.Duration
 
 	for {
 		h, err := p.AnswerHeader()
@@ -77,6 +83,7 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 				continue
 			}
 			mak.Set(&cnameChain, cname, domain)
+			cnameTTL = max(cnameTTL, time.Duration(h.TTL)*time.Second)
 			continue
 		}
 
@@ -87,14 +94,14 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 				return err
 			}
 			addr := netip.AddrFrom4(r.A)
-			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
+			mak.Set(&addressRecords, domain, append(addressRecords[domain], addressRecord{addr, time.Duration(h.TTL) * time.Second}))
 		case dnsmessage.TypeAAAA:
 			r, err := p.AAAAResource()
 			if err != nil {
 				return err
 			}
 			addr := netip.AddrFrom16(r.AAAA)
-			mak.Set(&addressRecords, domain, append(addressRecords[domain], addr))
+			mak.Set(&addressRecords, domain, append(addressRecords[domain], addressRecord{addr, time.Duration(h.TTL) * time.Second}))
 		default:
 			if err := p.SkipAnswer(); err != nil {
 				return err
@@ -105,6 +112,10 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return nil
+	}
+	expiryChanged := false
 
 	for domain, addrs := range addressRecords {
 		domain, isRouted := e.findRoutedDomainLocked(domain, cnameChain)
@@ -117,16 +128,20 @@ func (e *AppConnector) ObserveDNSResponse(res []byte) error {
 		// advertise each address we have learned for the routed domain, that
 		// was not already known.
 		var toAdvertise []netip.Prefix
-		for _, addr := range addrs {
-			if !e.isAddrKnownLocked(domain, addr) {
-				toAdvertise = append(toAdvertise, netip.PrefixFrom(addr, addr.BitLen()))
+		for _, record := range addrs {
+			if !e.isAddrKnownLocked(domain, record.addr) {
+				toAdvertise = append(toAdvertise, netip.PrefixFrom(record.addr, record.addr.BitLen()))
 			}
+			expiryChanged = e.refreshRouteExpiryLocked(domain, record.addr, max(record.ttl, cnameTTL)) || expiryChanged
 		}
 
 		if len(toAdvertise) > 0 {
 			e.logf("[v2] observed new routes for %s: %s", domain, toAdvertise)
 			e.scheduleAdvertisement(domain, toAdvertise...)
 		}
+	}
+	if expiryChanged {
+		e.storeRoutesLocked()
 	}
 	return nil
 }

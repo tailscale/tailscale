@@ -85,6 +85,10 @@ type RouteInfo struct {
 	Control []netip.Prefix `json:",omitempty"`
 	// Domains are the routes discovered by observing DNS lookups for configured domains.
 	Domains map[string][]netip.Addr `json:",omitempty"`
+	// DomainExpiry records when each DNS-discovered address may be forgotten.
+	// Missing entries predate route retention and receive a full retention period
+	// when a connector first enables expiration.
+	DomainExpiry map[string]map[netip.Addr]time.Time `json:",omitempty"`
 	// Wildcards are the configured DNS lookup domains to observe. When a DNS query matches Wildcards,
 	// its result is added to Domains.
 	Wildcards []string `json:",omitempty"`
