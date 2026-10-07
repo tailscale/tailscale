@@ -1134,8 +1134,8 @@ github.com/tailscale/golang-x-crypto v0.0.0-20260720160339-c86ca1284b96 h1:m9EAs
 github.com/tailscale/golang-x-crypto v0.0.0-20260720160339-c86ca1284b96/go.mod h1:NC3xRCu4UR+m4n6ix8b6oLLbHa820Y0StbOQEdWTDo0=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f h1:9hiVElpCmKzsBKQHkBqZ8LGzt82iLfM8egxr4sew+Ys=
 github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f/go.mod h1:8/zr1Tv0+cKpVtGCEB/7YfRXr2TszsMxMXLaT8YuBgU=
-github.com/tailscale/mkctr v0.0.0-20260902181255-cbad597122da h1:xE1TaygKZy8774JrEv1il4jOwGFcFjbnAsTmkxi73rc=
-github.com/tailscale/mkctr v0.0.0-20260902181255-cbad597122da/go.mod h1:4st7fy3NTWcWsQdOC69JcHK4UXnncgcxSOvSR8aD8a0=
+github.com/tailscale/mkctr v0.0.0-20261007195620-6c992949fa64 h1:fINF8B1T0K7137rE60MitDMcZSSRFb+vY6y4EcNBaZI=
+github.com/tailscale/mkctr v0.0.0-20261007195620-6c992949fa64/go.mod h1:4st7fy3NTWcWsQdOC69JcHK4UXnncgcxSOvSR8aD8a0=
 github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7 h1:uFsXVBE9Qr4ZoF094vE6iYTLDl0qCiKzYXlL6UeWObU=
 github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7/go.mod h1:NzVQi3Mleb+qzq8VmcWpSkcSYxXIg0DkI6XDzpVkhJ0=
 github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc h1:24heQPtnFR+yfntqhI3oAu9i27nEojcQ4NuBQOo5ZFA=
