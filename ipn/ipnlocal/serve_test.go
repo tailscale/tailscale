@@ -1731,6 +1731,81 @@ func TestServeHTTPRedirect(t *testing.T) {
 	}
 }
 
+// TestServeHTTPRedirectShortHost tests that a ${HOST} redirect served over
+// plain HTTP expands a short MagicDNS name in the Host header to the FQDN,
+// so that an http->https redirect lands on a name the TLS cert covers.
+func TestServeHTTPRedirectShortHost(t *testing.T) {
+	const tailnet = "tail1234.ts.net"
+	b := newTestBackend(t)
+	b.pm.currentProfile = (&ipn.LoginProfile{
+		ID:             "id0",
+		NetworkProfile: ipn.NetworkProfile{MagicDNSName: tailnet},
+	}).View()
+
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			ipn.HostPort("bots." + tailnet + ":80"): {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Redirect: "301:https://${HOST}${REQUEST_URI}"},
+				},
+			},
+		},
+	}
+	if err := b.SetServeConfig(conf, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		host    string
+		wantLoc string
+	}{
+		{
+			name:    "short-name",
+			host:    "bots",
+			wantLoc: "https://bots." + tailnet + "/path?foo=bar",
+		},
+		{
+			name:    "short-name-with-port",
+			host:    "bots:80",
+			wantLoc: "https://bots." + tailnet + ":80/path?foo=bar",
+		},
+		{
+			name:    "fqdn",
+			host:    "bots." + tailnet,
+			wantLoc: "https://bots." + tailnet + "/path?foo=bar",
+		},
+		{
+			name:    "fqdn-with-port",
+			host:    "bots." + tailnet + ":80",
+			wantLoc: "https://bots." + tailnet + ":80/path?foo=bar",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &http.Request{
+				Host:       tt.host,
+				URL:        &url.URL{Path: "/path"},
+				RequestURI: "/path?foo=bar",
+			}
+			req = req.WithContext(serveHTTPContextKey.WithValue(req.Context(), &serveHTTPContext{
+				DestPort: 80,
+				SrcAddr:  netip.MustParseAddrPort("1.2.3.4:1234"),
+			}))
+
+			w := httptest.NewRecorder()
+			b.serveWebHandler(w, req)
+
+			if w.Code != http.StatusMovedPermanently {
+				t.Errorf("got status %d, want %d", w.Code, http.StatusMovedPermanently)
+			}
+			if got := w.Header().Get("Location"); got != tt.wantLoc {
+				t.Errorf("got Location %q, want %q", got, tt.wantLoc)
+			}
+		})
+	}
+}
+
 func TestValidateServeConfigUpdate(t *testing.T) {
 	tests := []struct {
 		name, description  string

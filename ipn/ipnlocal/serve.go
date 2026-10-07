@@ -818,17 +818,34 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 	return <-errc
 }
 
+// plainHTTPHost returns host, the Host header of a plain HTTP serve request,
+// with the tailnet's MagicDNS suffix appended to its hostname if not already
+// present. This expands a short MagicDNS name such as "myhost" (or
+// "myhost:80") to "myhost.tailnet-name.ts.net" (or
+// "myhost.tailnet-name.ts.net:80"). Any port in host is preserved.
+func (b *LocalBackend) plainHTTPHost(host string) string {
+	tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
+	hostname, port, err := net.SplitHostPort(host)
+	if err != nil {
+		hostname, port = host, ""
+	}
+	if !strings.HasSuffix(hostname, tcd) {
+		hostname += tcd
+	}
+	if port == "" {
+		return hostname
+	}
+	return net.JoinHostPort(hostname, port)
+}
+
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
 	var z ipn.HTTPHandlerView // zero value
 
-	hostname := r.Host
+	var hostname string
 	if r.TLS == nil {
-		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
+		hostname = b.plainHTTPHost(r.Host)
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
-		}
-		if !strings.HasSuffix(hostname, tcd) {
-			hostname += tcd
 		}
 	} else {
 		hostname = r.TLS.ServerName
@@ -1203,7 +1220,14 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := h.Redirect(); v != "" {
 		code, v := parseRedirectWithCode(v)
-		v = strings.ReplaceAll(v, "${HOST}", r.Host)
+		host := r.Host
+		if r.TLS == nil {
+			// Expand a short MagicDNS name to the FQDN, as getServeHandler
+			// does, so that a redirect to https://${HOST} lands on a name
+			// covered by the node's TLS certificate.
+			host = b.plainHTTPHost(host)
+		}
+		v = strings.ReplaceAll(v, "${HOST}", host)
 		v = strings.ReplaceAll(v, "${REQUEST_URI}", r.RequestURI)
 		http.Redirect(w, r, v, code)
 		return
