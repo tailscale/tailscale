@@ -109,6 +109,10 @@ func (c DepChecker) Check(t *testing.T) {
 // ImportAliasCheck checks that all packages are imported according to Tailscale
 // conventions.
 func ImportAliasCheck(t testing.TB, relDir string) {
+	// The git grep below reads files that Go's test cache can't see,
+	// so read GITHUB_SHA to make CI's cached result per-commit.
+	os.Getenv("GITHUB_SHA")
+
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
