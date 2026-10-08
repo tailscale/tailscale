@@ -4,13 +4,12 @@
 package dns
 
 import (
-	"context"
 	"net/netip"
 	"runtime"
 	"testing"
 
-	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/health"
+	"tailscale.com/internal/dnstest"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
@@ -45,25 +44,7 @@ func TestNegativeCacheFlushHook(t *testing.T) {
 					if err := m.Resolver().SetConfig(cfg); err != nil {
 						t.Fatal(err)
 					}
-					query, err := (&dns.Message{Header: dns.Header{ID: 1}, Questions: []dns.Question{{Name: dns.MustNewName("server.test.net."), Type: dns.TypeA, Class: dns.ClassINET}}}).Pack()
-					if err != nil {
-						t.Fatal(err)
-					}
-					issueNegative := func() {
-						t.Helper()
-						resp, err := m.Query(context.Background(), query, "udp", netip.MustParseAddrPort("100.64.0.1:12345"))
-						if err != nil {
-							t.Fatal(err)
-						}
-						var msg dns.Message
-						if err := msg.Unpack(resp); err != nil {
-							t.Fatal(err)
-						}
-						if msg.RCode != dns.RCodeNameError {
-							t.Fatalf("rcode = %v", msg.RCode)
-						}
-					}
-					issueNegative()
+					dnstest.RequireNXDOMAIN(t, m.Query, "server.test.net.")
 					if tt.globalFlush {
 						if err := m.FlushCaches(); err != nil {
 							t.Fatal(err)
@@ -74,7 +55,7 @@ func TestNegativeCacheFlushHook(t *testing.T) {
 					}
 					if tt.removeHook {
 						m.SetCacheFlushHook(nil)
-						issueNegative()
+						dnstest.RequireNXDOMAIN(t, m.Query, "server.test.net.")
 					}
 					if tt.resolve {
 						cfg.Hosts = map[dnsname.FQDN][]netip.Addr{"server.test.net.": {netip.MustParseAddr("100.64.0.2")}}
