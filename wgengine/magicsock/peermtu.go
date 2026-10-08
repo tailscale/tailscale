@@ -7,6 +7,7 @@ package magicsock
 
 import (
 	"errors"
+	"runtime"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/disco"
@@ -100,8 +101,9 @@ func (c *Conn) UpdatePMTUD() {
 	}
 
 	newStatus := enable
-	err4 := c.setDontFragment("udp4", enable)
-	err6 := c.setDontFragment("udp6", enable)
+	df := enable || dontFragmentAlways()
+	err4 := c.setDontFragment("udp4", df)
+	err6 := c.setDontFragment("udp6", df)
 	anySuccess := err4 == nil || err6 == nil
 	noFailures := (err4 == nil || err4 == errUnsupportedConnType) && (err6 == nil || err6 == errUnsupportedConnType)
 
@@ -109,15 +111,31 @@ func (c *Conn) UpdatePMTUD() {
 		c.logf("magicsock: peermtu: peer MTU status updated to %v", newStatus)
 	} else {
 		c.logf("[unexpected] magicsock: peermtu: updating peer MTU status to %v failed (v4: %v, v6: %v), disabling", enable, err4, err6)
-		_ = c.setDontFragment("udp4", false)
-		_ = c.setDontFragment("udp6", false)
+		_ = c.setDontFragment("udp4", dontFragmentAlways())
+		_ = c.setDontFragment("udp6", dontFragmentAlways())
 		newStatus = false
 	}
 	if debugPMTUD() {
 		c.logf("magicsock: peermtu: peer MTU probes are %v", tstun.WireMTUsToProbe)
 	}
 	c.peerMTUEnabled.Store(newStatus)
+	c.rebindConnected() // redial them with the shared sockets' new don't-fragment setting
 	c.resetEndpointStates()
+}
+
+// dontFragmentAlways reports whether the sockets carry the don't-fragment bit even with peer path MTU discovery off; see debugDontFragment.
+func dontFragmentAlways() bool {
+	return runtime.GOOS == "darwin" && debugDontFragment()
+}
+
+// setDontFragmentAfterBind sets the don't-fragment bit on the socket just bound for network if dontFragmentAlways asks for it. bindSocket calls it, since UpdatePMTUD only touches the sockets when discovery is turned on or off.
+func (c *Conn) setDontFragmentAfterBind(network string) {
+	if !dontFragmentAlways() {
+		return
+	}
+	if err := c.setDontFragment(network, true); err != nil && err != errUnsupportedConnType {
+		c.logf("magicsock: setting don't-fragment on %v: %v", network, err)
+	}
 }
 
 var errEMSGSIZE error = unix.EMSGSIZE

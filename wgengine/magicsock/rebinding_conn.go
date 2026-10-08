@@ -34,6 +34,8 @@ type RebindingUDPConn struct {
 	mu    syncs.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
 	port  uint16
+
+	oob []byte // control message buffer for the one reader; see readOne
 }
 
 // setConnLocked sets the provided nettype.PacketConn. It should be called only
@@ -125,11 +127,12 @@ func (c *RebindingUDPConn) ReadBatch(slab []byte, batchingPackets []batching.Rec
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(batching.Conn)
 		if !ok {
-			n, ap, err := c.readFromWithInitPconn(pconn, slab)
+			n, ap, local, err := c.readOne(pconn, slab)
 			if err == nil {
 				batchingPackets[0].Offset = 0
 				batchingPackets[0].Size = n
 				batchingPackets[0].Source = netaddr.Unmap(ap)
+				batchingPackets[0].Local = local
 				return 1, nil
 			}
 			return 0, err
