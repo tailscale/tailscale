@@ -25,9 +25,10 @@ type negativeCache struct {
 	// mu guards generation and entries.
 	mu sync.Mutex
 
-	// generation advances whenever history is cleared. A check snapshots it
-	// before resolving names without mu held, then uses it to avoid requesting
-	// a flush if another check or reset has already cleared that history.
+	// generation advances whenever history is checked or cleared. Queries
+	// snapshot it before resolving and retry a negative answer if an update
+	// checked the history before they could record it. Checks also use it to
+	// avoid requesting a flush after another check or reset supersedes them.
 	generation uint64
 
 	// entries maps each name to the time of its latest authoritative NXDOMAIN.
@@ -45,15 +46,27 @@ func (c *negativeCache) timeNow() time.Time {
 	return time.Now()
 }
 
-func (c *negativeCache) record(name dnsname.FQDN) {
+func (c *negativeCache) queryGeneration() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.generation
+}
+
+// record registers a negative answer only if no check or reset has happened
+// since resolution began. Otherwise the caller must retry local resolution.
+func (c *negativeCache) record(name dnsname.FQDN, generation uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != generation {
+		return false
+	}
 	// Initialize lazily so the zero-value cache is ready to use. Clear preserves
 	// MaxEntries, so this is only needed on the first record.
 	if c.entries.MaxEntries == 0 {
 		c.entries.MaxEntries = maxRecentNXDomains
 	}
 	c.entries.Set(name, c.timeNow())
+	return true
 }
 
 func (c *negativeCache) clear() {
@@ -68,6 +81,9 @@ func (c *negativeCache) clear() {
 func (c *negativeCache) snapshot() (names []dnsname.FQDN, generation uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Advance even when the history is empty: an in-flight query may have
+	// observed a missing name but not yet recorded its negative answer.
+	c.generation++
 	generation = c.generation
 	if c.entries.Len() == 0 {
 		return nil, generation
@@ -88,7 +104,7 @@ func (c *negativeCache) snapshot() (names []dnsname.FQDN, generation uint64) {
 	return names, generation
 }
 
-// clearIfGeneration clears the history only if it has not been cleared since
+// clearIfGeneration clears the history only if no check or reset has superseded
 // the snapshot. It reports whether the caller should request a cache flush.
 func (c *negativeCache) clearIfGeneration(generation uint64) bool {
 	c.mu.Lock()
