@@ -1259,20 +1259,19 @@ func (nb *nodeBackend) magicDNSSubdomainHost(fqdn dnsname.FQDN) bool {
 }
 
 // nodeByFQDNLocked returns the node (peer or self) with the given
-// MagicDNS FQDN. If fqdn is a short name (has no suffix),
-// it is resolved only if MagicDNS is enabled.
-// nb.mu must be held.
+// MagicDNS FQDN. nb.mu must be held.
+//
+// Single-label names (e.g. "foo.") never match, even though
+// nb.nodeByName also holds short-name keys for [nodeBackend.NodeByName].
+// The OS resolver applies the MagicDNS search domain to short names
+// before they reach quad-100, so a single-label query is a name in
+// the root zone, not a tailnet name.
 func (nb *nodeBackend) nodeByFQDNLocked(fqdn dnsname.FQDN) (_ tailcfg.NodeView, ok bool) {
-	nm := nb.netMap
-	if nm == nil {
-		return tailcfg.NodeView{}, false
-	}
 	// The resolver already lowercases query names, but lowercase
 	// again (nearly free when already lowercase) so that no other
 	// caller of the [resolver.MagicDNSHosts] hook can miss on case.
 	canon := strings.ToLower(strings.TrimSuffix(string(fqdn), "."))
-	// Don't resolve bare hostnames (e.g. "foo") if MagicDNS is disabled.
-	if !nm.DNS.Proxied && !strings.Contains(canon, ".") {
+	if !strings.Contains(canon, ".") {
 		return tailcfg.NodeView{}, false
 	}
 	nid, ok := nb.nodeByName[canon]

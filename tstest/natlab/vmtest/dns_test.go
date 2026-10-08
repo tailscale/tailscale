@@ -28,11 +28,10 @@ import (
 //     domains let bare names resolve, which requires tailscaled to
 //     have plumbed MagicDNS routes and search domains into
 //     systemd-resolved.
-//   - A peer added by control resolves by FQDN and by short name,
-//     and its IP reverse-resolves (PTR) to its name. The short name
-//     resolves both via a search domain and asked of quad-100
-//     verbatim, which is the half [TestBareNameNotHijackedByPeer]
-//     requires to stay off when MagicDNS is disabled.
+//   - A peer added by control resolves by FQDN and by short name
+//     (via a search domain), and its IP reverse-resolves (PTR) to its
+//     name. Quad-100 must not answer the short name asked verbatim;
+//     see [TestBareNameNotHijackedByPeer].
 //   - A peer renamed by control resolves under its new name only:
 //     the old name must stop resolving, and PTR must track the new
 //     name. When a node is renamed in the admin console, the control
@@ -94,11 +93,6 @@ func TestMagicDNS(t *testing.T) {
 	dt.wantResolves("renamee.tailnet.test", "100.64.7.7")
 	dt.wantResolves("renamee", "100.64.7.7") // via search domain
 	dt.wantResolves("100.64.7.7", "renamee.tailnet.test")
-	// Also as a single label, which the search domain above hides:
-	// getent passes "renamee.tailnet.test" to quad-100, not "renamee".
-	// This is the enabled-MagicDNS counterpart of
-	// [TestBareNameNotHijackedByPeer].
-	dt.wantQueryResolves("renamee", "100.64.7.7")
 
 	// Rename the peer, sending the same delta shape production
 	// control sends: the full node again with only the Name changed.
@@ -148,27 +142,6 @@ func (dt *dnsTester) wantResolves(name, want string) {
 		}
 		if !strings.Contains(out, want) {
 			return fmt.Errorf("getent hosts %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
-		}
-		return nil
-	}); err != nil {
-		out, _ := dt.env.SSHExec(dt.node, "resolvectl status; cat /etc/resolv.conf")
-		dt.t.Fatalf("%v\nresolver state:\n%s", err, out)
-	}
-}
-
-// wantQueryResolves is [dnsTester.wantResolves] via "tailscale dns
-// query", which asks quad-100 for exactly the name given. Use it when
-// the name must stay unqualified: getent would let a search domain
-// complete it and resolve a different name.
-func (dt *dnsTester) wantQueryResolves(name, want string) {
-	dt.t.Helper()
-	if err := tstest.WaitFor(30*time.Second, func() error {
-		out, err := dt.env.SSHExec(dt.node, "tailscale dns query "+name)
-		if err != nil {
-			return fmt.Errorf("tailscale dns query %s: %v (%s)", name, err, strings.TrimSpace(out))
-		}
-		if !strings.Contains(out, want) {
-			return fmt.Errorf("tailscale dns query %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
 		}
 		return nil
 	}); err != nil {
@@ -717,12 +690,21 @@ func assertResolverState(t *testing.T, env *vmtest.Env, n *vmtest.Node, want, no
 
 // TestBareNameNotHijackedByPeer checks that a bare, unqualified name owned by
 // the tailnet's global nameserver still reaches that nameserver when a tailnet
-// device shares the name. With MagicDNS off only suffixed names should be
-// answered locally, but quad-100 answered the bare name itself. Issue 20789.
+// device shares the name. Only suffixed names should be answered locally, but
+// quad-100 answered the bare name itself. Issue 20789.
+//
+// This holds with MagicDNS on, too: the OS applies the MagicDNS search domain
+// to short names before they reach quad-100, so a single-label query that
+// reaches quad-100 verbatim is a name in the root zone, not a tailnet name.
 //
 // The lookup uses "tailscale dns query", which asks for exactly the name given:
 // getent would let a search domain complete it and pass on a different name.
 func TestBareNameNotHijackedByPeer(t *testing.T) {
+	t.Run("MagicDNS-off", func(t *testing.T) { testBareNameNotHijackedByPeer(t, false) })
+	t.Run("MagicDNS-on", func(t *testing.T) { testBareNameNotHijackedByPeer(t, true) })
+}
+
+func testBareNameNotHijackedByPeer(t *testing.T, magicDNS bool) {
 	// Only vnet's second DNS server answers this name, so an answer proves the
 	// query was forwarded. Its address is outside the 100.64.x.y block
 	// testcontrol assigns nodes, so it can't be mistaken for a Tailscale IP.
@@ -734,9 +716,10 @@ func TestBareNameNotHijackedByPeer(t *testing.T) {
 	env := vmtest.New(t,
 		vmtest.SameTailnetUser(), // so the colliding peer is visible in the netmap
 		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
-			// No Proxied: MagicDNS off. No Domains: nothing can complete a bare
-			// name into something else. Resolvers is the tailnet's global
-			// nameserver, which owns upstreamName.
+			Proxied: magicDNS,
+			// No Domains: nothing can complete a bare name into something
+			// else. Resolvers is the tailnet's global nameserver, which owns
+			// upstreamName.
 			Resolvers: []*dnstype.Resolver{{Addr: vnet.FakeSplitDNSIPv4().String()}},
 		}))
 
