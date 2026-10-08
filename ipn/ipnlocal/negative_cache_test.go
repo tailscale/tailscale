@@ -30,11 +30,11 @@ func TestNegativeCachePeerUpdates(t *testing.T) {
 		subdomains bool // grant subdomain resolution on the later update to verify that only a matching update flushes
 		want       int  // expected number of flushes on this platform
 	}{
-		{name: "peer arrival", query: "server.test.net.", want: 1},
-		{name: "unqueried peer arrival"},
-		{name: "unrelated then matching peer", query: "server.test.net.", unrelated: true, want: 1},
-		{name: "subdomain without capability", query: "foo.server.test.net.", existing: true},
-		{name: "subdomain capability added", query: "foo.server.test.net.", existing: true, subdomains: true, want: 1},
+		{name: "peer_arrival", query: "server.test.net.", want: 1},
+		{name: "unqueried_peer_arrival"},
+		{name: "unrelated_then_matching_peer", query: "server.test.net.", unrelated: true, want: 1},
+		{name: "subdomain_without_capability", query: "foo.server.test.net.", existing: true},
+		{name: "subdomain_capability_added", query: "foo.server.test.net.", existing: true, subdomains: true, want: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newTestLocalBackend(t)
