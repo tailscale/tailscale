@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode"
 	"unsafe"
@@ -227,46 +228,45 @@ func TestReadAndInject(t *testing.T) {
 		}
 	}()
 
-	for _, packet := range injected {
-		go func(packet string) {
+	go func() {
+		for _, packet := range injected {
 			payload := []byte(packet)
 			err := tun.InjectOutbound(payload)
 			if err != nil {
 				t.Errorf("%s: error: %v", packet, err)
 			}
-		}(packet)
+		}
+	}()
+
+	// The device's own packets and the injected ones arrive on separate queues.
+	readAll := func(what string, q wgtun.Queue, want int) []string {
+		t.Helper()
+		got := make([]string, 0, want)
+		slab, packets := getSinglePacketReadArgs()
+		for i := range want {
+			numPackets, err := q.Read(slab, packets)
+			if err != nil {
+				t.Errorf("%s read %d: error: %v", what, i, err)
+				return got
+			}
+			if numPackets != 1 {
+				t.Fatalf("%s read %d packets, expected %d", what, numPackets, 1)
+			}
+			packet := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
+			if packetLen := len(packet); packetLen != size {
+				t.Errorf("%s read %d: got size %d; want %d", what, i, packetLen, size)
+			}
+			t.Logf("%s read %d: got %s", what, i, packet)
+			got = append(got, string(packet))
+		}
+		return got
 	}
 
-	seen := make(map[string]bool)
-	slab, packets := getSinglePacketReadArgs()
-	// We expect the same packets back, in no particular order.
-	for i := range len(written) + len(injected) {
-		numPackets, err := tun.Read(slab, packets)
-		if err != nil {
-			t.Errorf("read %d: error: %v", i, err)
-		}
-		if numPackets != 1 {
-			t.Fatalf("read %d packets, expected %d", numPackets, 1)
-		}
-		packet := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
-		packetLen := len(packet)
-		if packetLen != size {
-			t.Errorf("read %d: got size %d; want %d", i, packetLen, size)
-		}
-		got := string(packet)
-		t.Logf("read %d: got %s", i, got)
-		seen[got] = true
+	if got := readAll("device queue", tun.Queues()[0], len(written)); !slices.Equal(got, written) {
+		t.Errorf("device queue: got %q; want %q", got, written)
 	}
-
-	for _, packet := range written {
-		if !seen[packet] {
-			t.Errorf("%s not received", packet)
-		}
-	}
-	for _, packet := range injected {
-		if !seen[packet] {
-			t.Errorf("%s not received", packet)
-		}
+	if got := readAll("injection queue", tun.injectionQueue, len(injected)); !slices.Equal(got, injected) {
+		t.Errorf("injection queue: got %q; want %q", got, injected)
 	}
 }
 
@@ -386,7 +386,6 @@ func TestFilter(t *testing.T) {
 	tun.SetConnectionCounter(stats.Add)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var n int
 			var err error
 			var filtered bool
 
@@ -409,9 +408,14 @@ func TestFilter(t *testing.T) {
 				// chtun.Outbound is unbuffered, and won't be drained until the
 				// first Read call.
 				go func() { chtun.Outbound <- tt.data }()
-				n, err = tun.Read(getSinglePacketReadArgs())
+				// Read every queue.
+				var pkts [][]byte
+				pkts, err = tun.ForTest().ReadN(t.Context(), 1)
 				// In the read direction, errors are fatal, so we return n = 0 instead.
-				filtered = (n == 0)
+				filtered = len(pkts) == 0
+				if !filtered && !bytes.Equal(pkts[0], tt.data) {
+					t.Errorf("read a packet other than the one sent:\nsent:\t% x\nread:\t% x", tt.data, pkts[0])
+				}
 			}
 
 			if err != nil {
@@ -486,7 +490,7 @@ func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
 	const localIP, peerIP = "1.2.3.4", "5.6.7.8"
 
 	// Inject a UDP packet outbound. Run in a goroutine since
-	// InjectOutbound blocks on the unbuffered vectorOutbound channel
+	// InjectOutbound blocks on the injection queue
 	// until Read drains it.
 	go func() {
 		if err := tun.InjectOutbound(udp4(localIP, peerIP, localPort, peerPort)); err != nil {
@@ -496,7 +500,7 @@ func TestInjectOutboundRecordsUDPFlowState(t *testing.T) {
 
 	// Drain the injected packet via Read. This drives injectedRead, which
 	// is what records the reverse-flow tuple in filter state.
-	if n, err := tun.Read(getSinglePacketReadArgs()); err != nil {
+	if n, err := tun.injectionQueue.Read(getSinglePacketReadArgs()); err != nil {
 		t.Fatalf("Read: %v", err)
 	} else if n != 1 {
 		t.Fatalf("Read returned %d packets, want 1", n)
@@ -977,11 +981,11 @@ func TestCaptureHook(t *testing.T) {
 	defer w.Close()
 
 	// Loop reading and discarding packets; this ensures that we don't have
-	// packets stuck in vectorOutbound
+	// packets stuck in the injection queue
 	go func() {
 		slab, packets := getSinglePacketReadArgs()
 		for {
-			_, err := w.Read(slab, packets)
+			_, err := w.injectionQueue.Read(slab, packets)
 			if err != nil {
 				return
 			}
@@ -1122,7 +1126,7 @@ func TestInterceptOrdering(t *testing.T) {
 	go func() {
 		chtun.Outbound <- udp4("1.2.3.4", "5.6.7.8", 98, 98) // Simulate tun device sending.
 	}()
-	tun.Read(getSinglePacketReadArgs())
+	tun.ForTest().ReadN(t.Context(), 1)
 
 	if seq != numOutboundIntercepts {
 		t.Errorf("got number of intercepts run in Read(): %d; want: %d", seq, numOutboundIntercepts)
@@ -1148,7 +1152,7 @@ func TestInjectedReadCallsAppConnectorHook(t *testing.T) {
 	}
 
 	slab, packets := getSinglePacketReadArgs()
-	tun.Read(slab, packets)
+	tun.injectionQueue.Read(slab, packets)
 
 	if !called {
 		t.Error("app connector hook was not called in InjectOutbound")
@@ -1413,13 +1417,21 @@ func TestWrappedQueuesMatch(t *testing.T) {
 			w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
 			defer w.Close()
 			got := w.Queues()
-			if have, want := len(got), len(want); have != want {
-				t.Fatalf("len(Queues()) = %d, want %d", have, want)
+			// One wrapper queue per device queue plus the injection queue.
+			if gotLen, wantLen := len(got), len(want)+1; gotLen != wantLen {
+				t.Fatalf("len(Queues()) = %d, want %d", gotLen, wantLen)
 			}
-			for i, q := range got {
+			for i, q := range got[:len(want)] {
 				if got, ok := q.(*wrapperQueue); !ok || got.q != want[i] {
 					t.Errorf("Queues()[%d] wraps the wrong underlying queue", i)
 				}
+			}
+			last := got[len(got)-1]
+			if last != w.injectionQueue {
+				t.Errorf("Queues() does not end with the injection queue")
+			}
+			if f := last.File(); f != nil {
+				t.Errorf("injection queue File() = %v, want nil", f)
 			}
 		})
 	}
@@ -1448,4 +1460,134 @@ func TestWriteToForwardsFlow(t *testing.T) {
 	if got := tdev.recordedFlows(); !slices.Equal(got, want) {
 		t.Errorf("flows reaching the device = %v, want %v", got, want)
 	}
+}
+
+func startedWrapper(t *testing.T, queues int) *Wrapper {
+	t.Helper()
+	bus := eventbustest.NewBus(t)
+	w := Wrap(t.Logf, newFakeMQ(queues), new(usermetric.Registry), bus)
+	w.disableFilter = true
+	w.Start()
+	return w
+}
+
+func TestCloseDuringInject(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w := startedWrapper(t, 1)
+
+		const injectors, readers = 8, 4
+		var wg sync.WaitGroup
+		for range injectors {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range 50 {
+					if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+		for range readers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slab, packets := getSinglePacketReadArgs()
+				for {
+					if _, err := w.injectionQueue.Read(slab, packets); err != nil {
+						return
+					}
+				}
+			}()
+		}
+
+		synctest.Wait()
+		if err := w.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		wg.Wait()
+	})
+}
+
+func TestCloseReturnsAllQueueReads(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		newDev func() wgtun.Device
+	}{
+		{"fake", func() wgtun.Device { return NewFake() }},
+		{"fakeMQ4", func() wgtun.Device { return newFakeMQ(4) }},
+		{"channelTUN", func() wgtun.Device { return tuntest.NewChannelTUN().TUN() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bus := eventbustest.NewBus(t)
+				w := Wrap(t.Logf, tt.newDev(), new(usermetric.Registry), bus)
+				w.disableFilter = true
+				w.Start()
+
+				var wg sync.WaitGroup
+				for i, q := range w.Queues() {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						slab, packets := getSinglePacketReadArgs()
+						if _, err := q.Read(slab, packets); err == nil {
+							t.Errorf("queue %d: Read returned a nil error at close", i)
+						}
+					}()
+				}
+				synctest.Wait()
+				w.Close()
+				wg.Wait()
+			})
+		})
+	}
+}
+
+func TestCloseBeforeStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bus := eventbustest.NewBus(t)
+		w := Wrap(t.Logf, NewFake(), new(usermetric.Registry), bus)
+		w.disableFilter = true
+		// Deliberately no Start.
+
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			slab, packets := getSinglePacketReadArgs()
+			w.injectionQueue.Read(slab, packets)
+		}()
+
+		synctest.Wait()
+		w.Close()
+		<-returned
+	})
+}
+
+func TestInjectAfterClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		w := startedWrapper(t, 1)
+		w.Close()
+
+		if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != nil {
+			t.Errorf("InjectOutbound after Close: %v", err)
+		}
+		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+			Payload: buffer.MakeWithData(udp4("1.2.3.4", "5.6.7.8", 1, 2)),
+		})
+		if err := w.InjectOutboundPacketBuffer(pkt); err != nil {
+			t.Errorf("InjectOutboundPacketBuffer after Close: %v", err)
+		}
+	})
+}
+
+func TestCloseIdempotent(t *testing.T) {
+	w := startedWrapper(t, 1)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.Close() }()
+	}
+	wg.Wait()
+	w.Close() // and once more, serially
 }

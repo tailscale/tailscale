@@ -384,7 +384,7 @@ func TestHandlePacketFromWireGuard(t *testing.T) {
 					if tt.expectedInjectedPkt != nil {
 						slab := make([]byte, (2*wgtun.ReadPacketSpacing)+(2*(1<<16-1)))
 						packets := make([]wgtun.ReadPacket, 1)
-						n, err := tun.Read(slab, packets)
+						n, err := tun.InjectionQueue().Read(slab, packets)
 						if err != nil {
 							t.Errorf("error reading injected packet: %v", err)
 						}

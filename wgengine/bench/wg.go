@@ -60,8 +60,9 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		Addresses:  []netip.Prefix{a2},
 	}
 	t2 := &sinkTun{
-		logf: logger.WithPrefix(logf, "tun2: "),
-		traf: traf,
+		logf:   logger.WithPrefix(logf, "tun2: "),
+		traf:   traf,
+		closed: make(chan struct{}),
 	}
 	s2 := tsd.NewSystem()
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
@@ -177,11 +178,18 @@ func (t *sourceTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 }
 
 type sinkTun struct {
-	logf logger.Logf
-	traf *TrafficGen
+	logf      logger.Logf
+	traf      *TrafficGen
+	closeOnce sync.Once
+	closed    chan struct{}
 }
 
-func (t *sinkTun) Close() error             { return nil }
+func (t *sinkTun) Close() error {
+	t.closeOnce.Do(func() {
+		close(t.closed)
+	})
+	return nil
+}
 func (t *sinkTun) Events() <-chan tun.Event { return nil }
 func (t *sinkTun) File() *os.File           { return nil }
 func (t *sinkTun) Flush() error             { return nil }
@@ -189,8 +197,8 @@ func (t *sinkTun) MTU() (int, error)        { return 1500, nil }
 func (t *sinkTun) Name() (string, error)    { return "sink", nil }
 
 func (t *sinkTun) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
-	// Never returns
-	select {}
+	<-t.closed
+	return 0, io.EOF
 }
 
 func (t *sinkTun) Write(b [][]byte, ofs int) (int, error) {
