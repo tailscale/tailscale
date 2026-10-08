@@ -225,8 +225,6 @@ func (c *client) flowRemoved(transit netip.Addr) {
 }
 
 func (c *client) extraWireGuardAllowedIPs(k key.NodePublic) views.Slice[netip.Prefix] {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	tips, ok := c.lookupTransitIPsByConnKey(k)
 	if !ok {
 		return views.Slice[netip.Prefix]{}
@@ -332,6 +330,8 @@ func (c *client) insertTransitConnMapping(tip netip.Addr, connKey key.NodePublic
 // associated with the given connector (identified by node key), or (nil, false) if there is no entry
 // for the given key.
 func (c *client) lookupTransitIPsByConnKey(k key.NodePublic) ([]netip.Prefix, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	s, ok := c.byConnKey[k]
 	if !ok {
 		return nil, false
