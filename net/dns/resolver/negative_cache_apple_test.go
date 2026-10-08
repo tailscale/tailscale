@@ -55,6 +55,120 @@ func TestTrackNegativeAnswers(t *testing.T) {
 	}
 }
 
+// negativeCacheUpdatingHosts runs an update after a lookup has observed a miss,
+// but before the resolver can record the resulting NXDOMAIN.
+type negativeCacheUpdatingHosts struct {
+	fakeMagicDNSHosts
+	afterMiss func()
+}
+
+func (h *negativeCacheUpdatingHosts) missed() {
+	if f := h.afterMiss; f != nil {
+		h.afterMiss = nil
+		f()
+	}
+}
+
+func (h *negativeCacheUpdatingHosts) LookupHost(name dnsname.FQDN) ([]netip.Addr, bool) {
+	ips, ok := h.fakeMagicDNSHosts.LookupHost(name)
+	if !ok {
+		h.missed()
+	}
+	return ips, ok
+}
+
+func (h *negativeCacheUpdatingHosts) LookupPTR(ip netip.Addr) (dnsname.FQDN, bool) {
+	name, ok := h.fakeMagicDNSHosts.LookupPTR(ip)
+	if !ok {
+		h.missed()
+	}
+	return name, ok
+}
+
+// TestNegativeCacheUpdateDuringQuery covers a query that observes a missing peer
+// just before a peer update checks the still-empty negative-answer history.
+// Returning NXDOMAIN for the newly available peer would leave the OS's stale
+// negative cached until expiry or another update. The afterMiss callback forces
+// this ordering without timing or goroutines.
+//
+// A, AAAA, and PTR queries must retry and answer from the new peer; a cache reset
+// during resolution must likewise invalidate the pending negative. An unrelated
+// update must leave a retried NXDOMAIN tracked for a later matching update, while
+// a discarded negative must not cause a subsequent cache flush.
+func TestNegativeCacheUpdateDuringQuery(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		typ          dns.Type
+		stillMissing bool
+		reset        bool
+	}{
+		{name: "A", typ: dns.TypeA},
+		{name: "AAAA", typ: dns.TypeAAAA},
+		{name: "PTR", typ: dns.TypePTR},
+		{name: "unrelated update", typ: dns.TypeA, stillMissing: true},
+		{name: "reset", typ: dns.TypeA, reset: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newResolver(t)
+			defer r.Close()
+			if err := r.SetConfig(Config{LocalDomains: []dnsname.FQDN{"test.net.", "64.100.in-addr.arpa."}}); err != nil {
+				t.Fatal(err)
+			}
+			hosts := &negativeCacheUpdatingHosts{}
+			r.SetMagicDNSHosts(hosts)
+			const name dnsname.FQDN = "server.test.net."
+			ip4 := netip.MustParseAddr("100.64.0.2")
+			ip6 := netip.MustParseAddr("fd7a:115c:a1e0::2")
+			addPeer := func() {
+				hosts.hosts = map[dnsname.FQDN][]netip.Addr{name: {ip4, ip6}}
+				hosts.ptr = map[netip.Addr]dnsname.FQDN{ip4: name}
+			}
+			hosts.afterMiss = func() {
+				if !tt.stillMissing {
+					addPeer()
+				}
+				if tt.reset {
+					r.ClearNegativeCache()
+				} else if r.CheckCachedDNS() {
+					t.Fatal("empty history requested a flush")
+				}
+			}
+			queryName := name
+			if tt.typ == dns.TypePTR {
+				queryName = "2.0.64.100.in-addr.arpa."
+			}
+			packet, err := r.respond(dnspacket(queryName, tt.typ, noEdns))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var msg dns.Message
+			if err := msg.Unpack(packet); err != nil {
+				t.Fatal(err)
+			}
+			want := dns.RCodeSuccess
+			if tt.stillMissing {
+				want = dns.RCodeNameError
+			}
+			if msg.RCode != want {
+				t.Fatalf("rcode = %v, want %v", msg.RCode, want)
+			}
+			if tt.stillMissing {
+				// A retried query that is still negative must remain tracked
+				// so a subsequent matching peer update can flush it.
+				addPeer()
+				if !r.CheckCachedDNS() {
+					t.Fatal("retried NXDOMAIN was not tracked")
+				}
+			} else if len(msg.Answers) != 1 {
+				t.Fatalf("answers = %v, want one answer from the new peer", msg.Answers)
+			}
+			if r.CheckCachedDNS() {
+				t.Fatal("unsent NXDOMAIN requested a flush")
+			}
+		})
+	}
+}
+
 // TestCheckCachedDNS checks name matching, expiry, subdomain capabilities,
 // and history clearing when deciding whether a cached NXDOMAIN needs a flush.
 func TestCheckCachedDNS(t *testing.T) {
@@ -131,7 +245,7 @@ func TestNegativeCacheBoundedAndConcurrent(t *testing.T) {
 			for i := range tt.workers {
 				wg.Go(func() {
 					for j := range tt.perWorker {
-						r.negativeCache.record(dnsname.FQDN(fmt.Sprintf("peer%d-%d.test.net.", i, j)))
+						r.negativeCache.record(dnsname.FQDN(fmt.Sprintf("peer%d-%d.test.net.", i, j)), r.negativeCache.queryGeneration())
 					}
 				})
 			}
@@ -143,7 +257,7 @@ func TestNegativeCacheBoundedAndConcurrent(t *testing.T) {
 			if r.negativeCache.entries.Len() != 0 {
 				t.Fatal("global flush did not clear the LRU")
 			}
-			r.negativeCache.record("fresh.test.net.")
+			r.negativeCache.record("fresh.test.net.", r.negativeCache.queryGeneration())
 			if r.negativeCache.entries.Len() != 1 {
 				t.Fatal("negative after flush was lost")
 			}
@@ -169,10 +283,10 @@ func TestNegativeCacheRepeatedAnswerRefreshesAge(t *testing.T) {
 			defer r.Close()
 			now := time.Unix(1000, 0)
 			r.negativeCache.now = func() time.Time { return now }
-			r.negativeCache.record("server.test.net.")
+			r.negativeCache.record("server.test.net.", r.negativeCache.queryGeneration())
 			now = now.Add(negativeCacheLifetime - time.Second)
 			if tt.repeat {
-				r.negativeCache.record("server.test.net.")
+				r.negativeCache.record("server.test.net.", r.negativeCache.queryGeneration())
 			}
 			now = now.Add(tt.elapsed)
 			if err := r.SetConfig(Config{Hosts: map[dnsname.FQDN][]netip.Addr{"server.test.net.": {netip.MustParseAddr("100.64.0.1")}}}); err != nil {

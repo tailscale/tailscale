@@ -71,8 +71,9 @@ const negativeTTL = 10 * time.Second
 var timeNow = time.Now
 
 var (
-	errNotQuery   = errors.New("not a DNS query")
-	errNotOurName = errors.New("not a Tailscale DNS name")
+	errNotQuery              = errors.New("not a DNS query")
+	errNotOurName            = errors.New("not a Tailscale DNS name")
+	errLocalResponseOutdated = errors.New("local DNS response predates a negative cache check")
 )
 
 type packet struct {
@@ -306,10 +307,14 @@ func (r *Resolver) SetMagicDNSHosts(h MagicDNSHosts) {
 // negative caches. The SOA zone distinguishes authoritative negatives from
 // other NXDOMAINs. This tracks names only, not positive A or AAAA answers;
 // live MagicDNS host records remain the source of truth for those answers.
-func (r *Resolver) marshalLocalResponse(name dnsname.FQDN, resp *response) ([]byte, error) {
+// If a cache check or reset occurred since generation was read, a negative
+// answer returns errLocalResponseOutdated so the caller can resolve it again.
+func (r *Resolver) marshalLocalResponse(name dnsname.FQDN, resp *response, generation uint64) ([]byte, error) {
 	packet, err := marshalResponse(resp)
 	if err == nil && resp.Header.RCode == dns.RCodeNameError && resp.SOAZone != "" {
-		r.negativeCache.record(name)
+		if !r.negativeCache.record(name, generation) {
+			return nil, errLocalResponseOutdated
+		}
 	}
 	return packet, err
 }
@@ -1428,7 +1433,7 @@ func (r *Resolver) authoritativeZoneFor(name dnsname.FQDN) dnsname.FQDN {
 	return ""
 }
 
-func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response) ([]byte, error) {
+func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response, generation uint64) ([]byte, error) {
 	if hasRDNSBonjourPrefix(name) {
 		metricDNSReverseMissBonjour.Add(1)
 		return nil, errNotOurName
@@ -1444,12 +1449,23 @@ func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *respons
 	}
 
 	metricDNSMagicDNSSuccessReverse.Add(1)
-	return r.marshalLocalResponse(name, resp)
+	return r.marshalLocalResponse(name, resp, generation)
 }
 
 // respond returns a DNS response to query if it can be resolved locally.
 // Otherwise, it returns errNotOurName.
 func (r *Resolver) respond(query []byte) ([]byte, error) {
+	for {
+		packet, err := r.respondOnce(query)
+		if err != errLocalResponseOutdated {
+			return packet, err
+		}
+		// A peer update checked the negative history while this query was
+		// resolving. Retry so we don't return an NXDOMAIN it could not see.
+	}
+}
+
+func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
 	if !buildfeatures.HasDNS {
 		return nil, feature.ErrUnavailable
 	}
@@ -1483,11 +1499,12 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		return marshalResponse(resp)
 	}
 
+	generation := r.negativeCache.queryGeneration()
 	// Always try to handle reverse lookups; delegate inside when not found.
 	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
 	if parser.Question.Type == dns.TypePTR {
-		return r.respondReverse(query, name, parser.response())
+		return r.respondReverse(query, name, parser.response(), generation)
 	}
 
 	ip, rcode := r.resolveLocal(name, parser.Question.Type)
@@ -1510,7 +1527,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 		}
 	}
 	metricDNSMagicDNSSuccessName.Add(1)
-	return r.marshalLocalResponse(name, resp)
+	return r.marshalLocalResponse(name, resp, generation)
 }
 
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.

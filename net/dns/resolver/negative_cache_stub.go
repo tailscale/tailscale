@@ -10,7 +10,9 @@ import "tailscale.com/util/dnsname"
 // negativeCache is a no-op on platforms without NXDOMAIN tracking.
 type negativeCache struct{}
 
-func (*negativeCache) record(dnsname.FQDN) {}
+func (*negativeCache) queryGeneration() uint64 { return 0 }
+
+func (*negativeCache) record(dnsname.FQDN, uint64) bool { return true }
 
 // ClearNegativeCache is a no-op on this platform.
 func (*Resolver) ClearNegativeCache() {}
