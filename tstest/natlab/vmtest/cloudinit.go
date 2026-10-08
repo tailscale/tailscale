@@ -235,6 +235,11 @@ func writeLinuxDNSModeSetup(ud *strings.Builder, mode DNSMode) {
 // slot 3; see qemu.go. The debug NIC is enp0s4.
 const VnetNICName = "enp0s3"
 
+// DhcpcdEnterHook is the script dhcpcd-run-hooks sources before dhcpcd's own
+// hooks, on every hook run. Tests install it over SSH, for example with
+// "sleep 3" to delay the resolv.conf hook.
+const DhcpcdEnterHook = "/etc/dhcpcd.enter-hook"
+
 // dhcpcdFiles returns the files that hand the vnet NIC from systemd-networkd
 // to dhcpcd. See [DHCPClientDhcpcd].
 func dhcpcdFiles(n *Node) []cloudInitFile {
