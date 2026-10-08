@@ -7,14 +7,14 @@ package dns
 
 import "tailscale.com/feature/buildfeatures"
 
-// managerCacheFlush has no state on platforms without NXDOMAIN tracking.
+// managerCacheFlush provides no-op cache-flush hooks on platforms without NXDOMAIN tracking.
 type managerCacheFlush struct{}
 
 // SetCacheFlushHook is a no-op on this platform.
-func (*Manager) SetCacheFlushHook(func()) {}
+func (*managerCacheFlush) SetCacheFlushHook(func()) {}
 
 // CheckCachedDNS is a no-op on this platform.
-func (*Manager) CheckCachedDNS() {}
+func (*managerCacheFlush) CheckCachedDNS() {}
 
 // FlushCaches flushes the platform DNS cache using the native implementation.
 func (*Manager) FlushCaches() error {
