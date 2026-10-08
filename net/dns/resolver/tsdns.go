@@ -250,7 +250,6 @@ type Resolver struct {
 	ipToHost       map[netip.Addr]dnsname.FQDN
 	subdomainHosts set.Set[dnsname.FQDN]
 	magicHosts     MagicDNSHosts // or nil if none installed
-
 }
 
 // MagicDNSHosts is a live source of MagicDNS host records, installed
@@ -302,6 +301,11 @@ func (r *Resolver) SetMagicDNSHosts(h MagicDNSHosts) {
 	r.magicHosts = h
 }
 
+// marshalLocalResponse serializes a local answer and records successfully
+// marshaled authoritative NXDOMAINs so peer updates can invalidate stale OS
+// negative caches. The SOA zone distinguishes authoritative negatives from
+// other NXDOMAINs. This tracks names only, not positive A or AAAA answers;
+// live MagicDNS host records remain the source of truth for those answers.
 func (r *Resolver) marshalLocalResponse(name dnsname.FQDN, resp *response) ([]byte, error) {
 	packet, err := marshalResponse(resp)
 	if err == nil && resp.Header.RCode == dns.RCodeNameError && resp.SOAZone != "" {
