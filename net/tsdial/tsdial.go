@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
@@ -122,6 +123,24 @@ type sysConn struct {
 
 func (c sysConn) Close() error {
 	c.d.closeSysConn(c.id)
+	return nil
+}
+
+// CloseRead implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseRead() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseRead()
+	}
+	return nil
+}
+
+// CloseWrite implements [nettype.HalfCloser], allowing the underlying Conn
+// to be half-closed if possible. Otherwise, this is a no-op.
+func (c sysConn) CloseWrite() error {
+	if hc, ok := c.Conn.(nettype.HalfCloser); ok {
+		return hc.CloseWrite()
+	}
 	return nil
 }
 

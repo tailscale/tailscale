@@ -879,7 +879,8 @@ func (s *Server) packetReadLoop(readFromSocket, otherSocket batching.Conn, readF
 	writeBuffsByDest := make(map[netip.AddrPort][][]byte, batching.MaximumWriteBatchSize)
 
 	for {
-		// TODO: extract laddr from IP_PKTINFO for use in reply
+		// TODO: extract laddr from IP_PKTINFO for use in reply, using
+		// tailscale.com/net/pktinfo.
 		// ReadBatch will split coalesced datagrams before returning, which
 		// WriteBatchTo will re-coalesce further down. We _could_ be more
 		// efficient and not split datagrams that belong to the same VNI if they
@@ -1006,6 +1007,14 @@ func (s *Server) AllocateEndpoint(discoA, discoB key.DiscoPublic) (endpoint.Serv
 	defer s.mu.Unlock()
 	if s.closed {
 		return endpoint.ServerEndpoint{}, ErrServerClosed
+	}
+
+	if discoA.IsZero() || discoB.IsZero() {
+		// DiscoPrivate.Shared, called below for each client key, rejects
+		// zero keys. A zero key indicates a malformed or malicious
+		// [disco.AllocateUDPRelayEndpointRequest], whose ClientDisco values
+		// are attacker-chosen.
+		return endpoint.ServerEndpoint{}, errors.New("zero client disco key")
 	}
 
 	if s.staticAddrPorts.Len() == 0 && len(s.dynamicAddrPorts) == 0 {

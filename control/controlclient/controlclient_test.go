@@ -406,10 +406,10 @@ func testHTTPS(t *testing.T, withProxy bool) {
 	}
 }
 
-// TestRegisterRateLimited verifies that the client correctly handles 429
-// responses to registration requests by parsing the Retry-After header
-// and returning a rateLimitError.
-func TestRegisterRateLimited(t *testing.T) {
+// newDirectForTestControl serves control and returns a direct client wired to
+// reach it.
+func newDirectForTestControl(t testing.TB, tc *testcontrol.Server) *Direct {
+	t.Helper()
 	bakedroots.ResetForTest(t, tlstest.TestRootCA())
 
 	bus := eventbustest.NewBus(t)
@@ -418,17 +418,10 @@ func TestRegisterRateLimited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer controlLn.Close()
+	t.Cleanup(func() { controlLn.Close() })
 
-	var registerAttempts atomic.Int64
-	tc := &testcontrol.Server{
-		Logf: tstest.WhileTestRunningLogger(t),
-		MaybeRateLimitRegister: func() (bool, string, string) {
-			if registerAttempts.Add(1) == 1 {
-				return true, "30", "try again later"
-			}
-			return false, "", ""
-		},
+	if tc.Logf == nil {
+		tc.Logf = tstest.WhileTestRunningLogger(t)
 	}
 	controlSrv := &http.Server{
 		Handler:  tc,
@@ -476,6 +469,7 @@ func TestRegisterRateLimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDirect: %v", err)
 	}
+	t.Cleanup(func() { d.Close() })
 
 	d.dnsCache.LookupIPForTest = func(ctx context.Context, host string) ([]netip.Addr, error) {
 		if host == "controlplane.tstest" {
@@ -484,12 +478,28 @@ func TestRegisterRateLimited(t *testing.T) {
 		t.Errorf("unexpected DNS query for %q", host)
 		return nil, fmt.Errorf("unexpected DNS lookup for %q", host)
 	}
+	return d
+}
+
+// TestRegisterRateLimited verifies that the client correctly handles 429
+// responses to registration requests by parsing the Retry-After header
+// and returning a [rateLimitError].
+func TestRegisterRateLimited(t *testing.T) {
+	var registerAttempts atomic.Int64
+	d := newDirectForTestControl(t, &testcontrol.Server{
+		MaybeRejectRequest: testcontrol.RejectRequestForPath("/machine/register", func() (int, string, string) {
+			if registerAttempts.Add(1) == 1 {
+				return http.StatusTooManyRequests, "30", "try again later"
+			}
+			return 0, "", ""
+		}),
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// First attempt should get a 429 and return a rateLimitError.
-	_, err = d.TryLogin(ctx, LoginEphemeral)
+	_, err := d.TryLogin(ctx, LoginEphemeral)
 	if err == nil {
 		t.Fatal("expected rate limit error on first attempt, got nil")
 	}
@@ -498,10 +508,10 @@ func TestRegisterRateLimited(t *testing.T) {
 		t.Fatalf("expected *rateLimitError, got %T: %v", err, err)
 	}
 	if rle.retryAfter != 30*time.Second {
-		t.Errorf("retryAfter = %v, want 30s", rle.retryAfter)
+		t.Errorf("retryAfter; got = %v, want 30s", rle.retryAfter)
 	}
 	if rle.msg != "try again later" {
-		t.Errorf("msg = %q, want %q", rle.msg, "try again later")
+		t.Errorf("msg; got = %q, want %q", rle.msg, "try again later")
 	}
 
 	// Second attempt should succeed (server no longer rate-limiting).
@@ -514,7 +524,74 @@ func TestRegisterRateLimited(t *testing.T) {
 	}
 
 	if got := registerAttempts.Load(); got != 2 {
-		t.Errorf("register attempts = %d, want 2", got)
+		t.Errorf("register attempts; got = %d, want 2", got)
+	}
+}
+
+// TestMapRequestRateLimited verifies that the client turns 429 and 503
+// responses to map requests into a [rateLimitError] carrying the server's
+// Retry-After value, and that other failures don't.
+func TestMapRequestRateLimited(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		retryAfter     string
+		wantRateLimit  bool
+		wantRetryAfter time.Duration
+	}{
+		{name: "429-with-header", status: 429, retryAfter: "30", wantRateLimit: true, wantRetryAfter: 30 * time.Second},
+		{name: "503-with-header", status: 503, retryAfter: "45", wantRateLimit: true, wantRetryAfter: 45 * time.Second},
+		{name: "503-no-header", status: 503, wantRateLimit: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mapAttempts atomic.Int64
+			d := newDirectForTestControl(t, &testcontrol.Server{
+				MaybeRejectRequest: testcontrol.RejectRequestForPath("/machine/map", func() (int, string, string) {
+					if mapAttempts.Add(1) == 1 {
+						return tt.status, tt.retryAfter, "slow down"
+					}
+					return 0, "", ""
+				}),
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if _, err := d.TryLogin(ctx, LoginEphemeral); err != nil {
+				t.Fatalf("TryLogin: %v", err)
+			}
+
+			// First attempt is rejected.
+			_, err := d.FetchNetMapForTest(ctx)
+			if err == nil {
+				t.Fatal("expected error on first map request, got nil")
+			}
+			rle, ok := errors.AsType[*rateLimitError](err)
+			if ok != tt.wantRateLimit {
+				t.Fatalf("got *rateLimitError = %v, want %v; err = %v", ok, tt.wantRateLimit, err)
+			}
+			if ok {
+				if rle.retryAfter != tt.wantRetryAfter {
+					t.Errorf("retryAfter = %v, want %v", rle.retryAfter, tt.wantRetryAfter)
+				}
+				if rle.msg != "slow down" {
+					t.Errorf("msg = %q, want %q", rle.msg, "slow down")
+				}
+			}
+
+			// Second attempt should succeed (server no longer rejecting).
+			nm, err := d.FetchNetMapForTest(ctx)
+			if err != nil {
+				t.Fatalf("FetchNetMapForTest after rejection: %v", err)
+			}
+			if nm == nil {
+				t.Fatal("got nil netmap")
+			}
+			if got := mapAttempts.Load(); got != 2 {
+				t.Errorf("map attempts = %d, want 2", got)
+			}
+		})
 	}
 }
 

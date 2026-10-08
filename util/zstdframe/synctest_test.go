@@ -5,6 +5,7 @@ package zstdframe
 
 import (
 	"bytes"
+	"io"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -55,6 +56,58 @@ func TestSynctestBubbleIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if !bytes.Equal(out, src) {
+			t.Fatalf("roundtrip outside bubble = %q, want %q", out, src)
+		}
+	}
+}
+
+// TestSynctestBubbleIsolationStreaming verifies the same isolation property
+// as TestSynctestBubbleIsolation for the streaming GetDecoder and
+// GetStreamingEncoder APIs, whose pools are separate from the stateless
+// coders'.
+func TestSynctestBubbleIsolationStreaming(t *testing.T) {
+	src := []byte("hello, hello, hello, world, world, world")
+
+	synctest.Test(t, func(t *testing.T) {
+		for range 10 {
+			enc, putEnc := GetStreamingEncoder(FastestCompression)
+			enc.Reset(&bytes.Buffer{})
+			enc.Close()
+			putEnc()
+
+			dec, putDec := GetDecoder()
+			if err := dec.Reset(bytes.NewReader(src)); err != nil {
+				t.Fatal(err)
+			}
+			putDec()
+		}
+	})
+
+	// A bubble-created streaming coder must never be reused outside the
+	// bubble; prior to the nil-pool guard in GetStreamingEncoder's put
+	// function, put panicked inside the bubble instead.
+	for range 10 {
+		var buf bytes.Buffer
+		enc, putEnc := GetStreamingEncoder(FastestCompression)
+		enc.Reset(&buf)
+		if _, err := enc.Write(src); err != nil {
+			t.Fatal(err)
+		}
+		if err := enc.Close(); err != nil {
+			t.Fatal(err)
+		}
+		putEnc()
+
+		dec, putDec := GetDecoder()
+		if err := dec.Reset(bytes.NewReader(buf.Bytes())); err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(dec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		putDec()
 		if !bytes.Equal(out, src) {
 			t.Fatalf("roundtrip outside bubble = %q, want %q", out, src)
 		}

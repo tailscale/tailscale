@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/user"
 
+	"tailscale.com/feature"
 	"tailscale.com/util/syspolicy/internal"
 	"tailscale.com/util/syspolicy/rsop"
 	"tailscale.com/util/syspolicy/setting"
@@ -31,7 +32,14 @@ func init() {
 	// External code, such as the ipnlocal package, may choose to register
 	// additional policy stores, such as config files and policies received from
 	// the control plane.
+	//
+	// The syspolicy feature is registered by tailscale.com/feature/syspolicy;
+	// its default store registration here respects TS_DISABLE_FEATURE in case
+	// this package is linked by something other than the feature system.
 	internal.Init.MustDefer(func() error {
+		if feature.Disabled("syspolicy") {
+			return nil
+		}
 		// Do not register or use default policy stores during tests.
 		// Each test should set up its own necessary configurations.
 		if testenv.InTest() {

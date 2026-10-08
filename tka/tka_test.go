@@ -346,6 +346,21 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	}
 }
 
+// Trying to create a genesis AUM signed by a key that isn't in the list
+// of initial signing keys is an error.
+func TestCreateFailsIfWrongSigningKey(t *testing.T) {
+	pub1, _ := testingKey25519(t, 1)
+	key1 := Key{Kind: Key25519, Public: pub1, Votes: 2}
+
+	_, priv2 := testingKey25519(t, 2)
+
+	_, _, err := Create(ChonkMem(), CreateStateForTest(key1), signer25519(priv2))
+	wantErr := "invalid bootstrap: bad keyID on signature 0: key not found"
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("wrong error: want %q, got %v", wantErr, err)
+	}
+}
+
 // Trying to bootstrap an already-bootstrapped Chonk is an error.
 func TestBootstrapChonkMustBeEmpty(t *testing.T) {
 	chonk := ChonkMem()
@@ -492,10 +507,10 @@ func TestAuthorityInformLinear(t *testing.T) {
 }
 
 func TestInteropWithNLKey(t *testing.T) {
-	priv1 := key.NewNLPrivate()
+	priv1 := key.NewTLPrivate()
 	pub1 := priv1.Public()
-	pub2 := key.NewNLPrivate().Public()
-	pub3 := key.NewNLPrivate().Public()
+	pub2 := key.NewTLPrivate().Public()
+	pub3 := key.NewTLPrivate().Public()
 
 	state := CreateStateForTest(
 		Key{Kind: Key25519, Votes: 1, Public: pub1.KeyID()},

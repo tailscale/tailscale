@@ -23,6 +23,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"tailscale.com/feature"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -41,6 +42,9 @@ var ourMAC = net.HardwareAddr{0x30, 0x2D, 0x66, 0xEC, 0x7A, 0x93}
 const tapDebug = tstun.TAPDebug
 
 func init() {
+	if !feature.Register("tap") {
+		return
+	}
 	tstun.CreateTAP.Set(createTAPLinux)
 }
 

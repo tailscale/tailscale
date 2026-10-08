@@ -736,6 +736,13 @@ func (lg loggingResponseWriter) Flush() {
 	f.Flush()
 }
 
+// FlushError is the error-returning form of Flush that
+// [http.ResponseController.Flush] prefers, so handlers can see write
+// errors (such as an expired write deadline) that Flush would swallow.
+func (lg *loggingResponseWriter) FlushError() error {
+	return http.NewResponseController(lg.ResponseWriter).Flush()
+}
+
 func (lg *loggingResponseWriter) Unwrap() http.ResponseWriter {
 	return lg.ResponseWriter
 }

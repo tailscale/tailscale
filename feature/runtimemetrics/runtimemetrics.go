@@ -15,7 +15,9 @@ import (
 )
 
 func init() {
-	feature.Register("runtimemetrics")
+	if !feature.Register("runtimemetrics") {
+		return
+	}
 	ipnlocal.HookSetRuntimeMetricsEnabled.Set(setEnabled)
 }
 

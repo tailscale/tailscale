@@ -96,6 +96,80 @@ func TestLockUnlockPolicyStore(t *testing.T) {
 	}
 }
 
+// fakePolicyLock is a [lockableCloser] whose Lock fails with lockErr, if set.
+type fakePolicyLock struct {
+	lockErr error
+	locked  int // number of outstanding successful Lock calls
+	closed  bool
+}
+
+func (lk *fakePolicyLock) Lock() error {
+	if lk.lockErr != nil {
+		return lk.lockErr
+	}
+	lk.locked++
+	return nil
+}
+
+func (lk *fakePolicyLock) Unlock() { lk.locked-- }
+
+func (lk *fakePolicyLock) Close() error {
+	lk.closed = true
+	return nil
+}
+
+// TestPolicyStoreLockUnavailable verifies that the store still locks and reads
+// when the underlying Group Policy lock cannot be acquired for a reason that
+// doesn't prevent reading the Registry, such as ERROR_ACCESS_DENIED for a user
+// policy lock in a non-interactive logon session, while other errors are
+// still reported.
+func TestPolicyStoreLockUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		lockErr error
+		wantErr error // nil means Lock must succeed
+	}{
+		{name: "AccessDenied", lockErr: windows.ERROR_ACCESS_DENIED},
+		{name: "AccessDenied-Wrapped", lockErr: fmt.Errorf("wrapped: %w", windows.ERROR_ACCESS_DENIED)},
+		{name: "Restricted", lockErr: gp.ErrLockRestricted},
+		{name: "OtherError", lockErr: windows.ERROR_INVALID_PARAMETER, wantErr: windows.ERROR_INVALID_PARAMETER},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			softwareKey, err := registry.OpenKey(registry.CURRENT_USER, softwareKeyName, windows.KEY_READ)
+			if err != nil {
+				t.Fatalf("OpenKey: %v", err)
+			}
+			lock := &fakePolicyLock{lockErr: tt.lockErr}
+			store := newPlatformPolicyStore(gp.UserPolicy, softwareKey, lock)
+			defer func() {
+				if err := store.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+				if !lock.closed {
+					t.Error("underlying lock was not closed")
+				}
+			}()
+
+			err = store.Lock()
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Lock: got %v; want %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			// Reads must work without the underlying GP lock.
+			if _, err := store.ReadString("NonExistingPolicySetting"); !errors.Is(err, setting.ErrNotConfigured) {
+				t.Errorf("ReadString: got %v; want %v", err, setting.ErrNotConfigured)
+			}
+			store.Unlock()
+			if lock.locked != 0 {
+				t.Errorf("underlying lock has %d outstanding locks; want 0", lock.locked)
+			}
+		})
+	}
+}
+
 func TestReadPolicyStore(t *testing.T) {
 	if !winutil.IsCurrentProcessElevated() {
 		t.Skipf("test requires running as elevated user")

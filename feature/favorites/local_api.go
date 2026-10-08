@@ -13,10 +13,6 @@ import (
 	"tailscale.com/util/httpm"
 )
 
-func init() {
-	localapi.Register("pins", servePins)
-}
-
 // servePins handles GET and POST /localapi/v0/pins for the current profile: GET returns the pinned
 // favorites, POST applies a [pintype.SetRequest] and returns the updated set.
 func servePins(h *localapi.Handler, w http.ResponseWriter, r *http.Request) {

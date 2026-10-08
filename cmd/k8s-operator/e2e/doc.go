@@ -8,7 +8,7 @@
 // * Kubernetes cluster with local kubeconfig for it (direct connection, no API server proxy)
 // * Tailscale operator installed with --set apiServerProxyConfig.mode="true"
 // * ACLs from acl.hujson
-// * OAuth client secret in TS_API_CLIENT_SECRET env, with at least auth_keys write scope and tag:k8s tag
+// * OAuth client secret in TS_API_CLIENT_SECRET env, with at least auth_keys write and services read scopes, and tag:k8s tag
 // * Default ProxyClass and operator env vars as appropriate to set the desired default proxy images.
 //
 // It also supports running against devcontrol, using the --devcontrol flag,
@@ -21,6 +21,11 @@
 // --base-image=registry.access.redhat.com/ubi9/ubi-minimal:latest. Without it,
 // the default base image in build_docker.sh is used. If using a real cluster
 // with --build, --registry must also be set.
+//
+// --registry without --build expects the images to already exist in the
+// registry at the tag derived from the current commit, e.g. pushed by an
+// earlier run of tailscale.com/cmd/k8s-operator/e2e/build. That allows one
+// build to be shared by test runs against multiple clusters.
 //
 // To run with minimal dependencies, use:
 //

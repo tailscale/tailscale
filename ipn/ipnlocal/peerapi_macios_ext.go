@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 
@@ -20,5 +21,10 @@ func init() {
 // through the iOS/macOS Network/System Extension (Packet Tunnel
 // Provider) sandbox.
 func initListenConfigNetworkExtension(nc *net.ListenConfig, ip netip.Addr, ifaceIndex int) error {
+	// A zero ifaceIndex is invalid for peerapi. A zero value will not get us
+	// out of the network sandbox. Caller should log and retry.
+	if ifaceIndex == 0 {
+		return fmt.Errorf("peerapi: cannot listen on %s with ifaceIndex 0", ip)
+	}
 	return netns.SetListenConfigInterfaceIndex(nc, ifaceIndex)
 }

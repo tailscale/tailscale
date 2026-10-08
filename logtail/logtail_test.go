@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -666,6 +667,54 @@ func TestLoggerSetEnabled(t *testing.T) {
 	}
 }
 
+func TestLoggerSetEnabledStopsPendingRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+
+		httpc := &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Header: http.Header{
+						"Retry-After": []string{"1"},
+					},
+					Body: io.NopCloser(strings.NewReader("try again")),
+				}, nil
+			}),
+		}
+
+		lg := NewLogger(Config{
+			BaseURL:      "http://logtail.test.invalid",
+			HTTPC:        httpc,
+			Bus:          eventbustest.NewBus(t),
+			FlushDelayFn: func() time.Duration { return 0 },
+		}, t.Logf)
+		defer func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			lg.Shutdown(ctx)
+		}()
+
+		lg.Logf("hello")
+
+		synctest.Wait()
+
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("upload attempts before disabling = %d; want 1", got)
+		}
+
+		lg.SetEnabled(false)
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("upload retried after SetEnabled(false): got %d attempts, want 1", got)
+		}
+	})
+}
+
 func TestAppendMetadata(t *testing.T) {
 	var lg Logger
 	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
@@ -710,7 +759,6 @@ func TestAppendText(t *testing.T) {
 	var lg Logger
 	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
 	lg.metricsDelta = func() string { return "metrics" }
-	lg.lowMem = true
 
 	for _, tt := range []struct {
 		text           string
@@ -725,7 +773,7 @@ func TestAppendText(t *testing.T) {
 		{skipClientTime: true, procID: 1, procSeq: 2, want: `{"logtail":{"proc_id":1,"proc_seq":2},"metrics":"metrics"}`},
 		{text: "fizz buzz", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"fizz buzz"}`},
 		{text: "\b\f\n\r\t\"\\", want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"\b\f\n\r\t\"\\"}`},
-		{text: "x" + strings.Repeat("😐", maxSize), want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"x` + strings.Repeat("😐", 1023) + `…+1044484"}`},
+		{text: "x" + strings.Repeat("😐", maxSize), want: `{"logtail":{"client_time":"2000-01-01T00:00:00Z"},"metrics":"metrics","text":"x` + strings.Repeat("😐", 4095) + `…+1032196"}`},
 	} {
 		got := string(lg.appendText(nil, []byte(tt.text), tt.skipClientTime, tt.procID, tt.procSeq, tt.level))
 		if !strings.HasSuffix(got, "\n") {
@@ -745,7 +793,6 @@ func TestAppendTextOrJSON(t *testing.T) {
 	var lg Logger
 	lg.clock = tstest.NewClock(tstest.ClockOpts{Start: time.Date(2000, 01, 01, 0, 0, 0, 0, time.UTC)})
 	lg.metricsDelta = func() string { return "metrics" }
-	lg.lowMem = true
 
 	for _, tt := range []struct {
 		in    string

@@ -24,7 +24,9 @@ import (
 )
 
 func init() {
-	feature.Register("tundevstats")
+	if !feature.Register("tundevstats") {
+		return
+	}
 	if runtime.GOOS != "linux" {
 		// Exclude Android for now. There's no reason this shouldn't work on
 		// Android, but it needs to be tested, and justified from a battery

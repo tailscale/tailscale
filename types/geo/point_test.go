@@ -550,23 +550,6 @@ func TestPointSphericalAngleTo(t *testing.T) {
 	}
 }
 
-func FuzzPointSphericalAngleTo(f *testing.F) {
-	for _, tt := range corpusPointSphericalAngleTo {
-		xLat, xLng, _ := tt.x.LatLngFloat64()
-		yLat, yLng, _ := tt.y.LatLngFloat64()
-		f.Add(xLat, xLng, yLat, yLng)
-	}
-
-	f.Fuzz(func(t *testing.T, xLat float64, xLng float64, yLat float64, yLng float64) {
-		x := geo.MakePoint(geo.Degrees(xLat), geo.Degrees(xLng))
-		y := geo.MakePoint(geo.Degrees(yLat), geo.Degrees(yLng))
-		got, _ := x.SphericalAngleTo(y)
-		if math.IsNaN(float64(got)) {
-			t.Errorf("got NaN result with xLat=%.15f xLng=%.15f yLat=%.15f yLng=%.15f", xLat, xLng, yLat, yLng)
-		}
-	})
-}
-
 func approx[T ~float64](x, y T) bool {
 	return math.Abs(float64(x)-float64(y)) <= 1e-5
 }

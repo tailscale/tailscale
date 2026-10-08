@@ -139,7 +139,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 
 	if err := a.validate(cn); err != nil {
 		message := fmt.Sprintf(messageConnectorInvalid, err)
-		a.recorder.Eventf(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
+		a.recorder.Event(cn, corev1.EventTypeWarning, reasonConnectorInvalid, message)
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reasonConnectorInvalid, message)
 	}
 
@@ -152,7 +152,7 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 			err = nil
 			logger.Info(message)
 		} else {
-			a.recorder.Eventf(cn, corev1.EventTypeWarning, reason, message)
+			a.recorder.Event(cn, corev1.EventTypeWarning, reason, message)
 		}
 
 		return setStatus(cn, tsapi.ConnectorReady, metav1.ConditionFalse, reason, message)
@@ -268,6 +268,13 @@ func (a *ConnectorReconciler) maybeProvisionConnector(ctx context.Context, logge
 		cn.Status.Devices[i] = tsapi.ConnectorDevice{
 			Hostname:   dev.hostname,
 			TailnetIPs: dev.ips,
+		}
+		if eps := sts.staticEndpointsPerReplica[dev.ordinal]; len(eps) > 0 {
+			staticEndpoints := make([]string, len(eps))
+			for j, ep := range eps {
+				staticEndpoints[j] = ep.String()
+			}
+			cn.Status.Devices[i].StaticEndpoints = staticEndpoints
 		}
 	}
 

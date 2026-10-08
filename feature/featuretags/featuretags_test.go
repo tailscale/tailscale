@@ -36,6 +36,10 @@ func TestRequires(t *testing.T) {
 		want set.Set[FeatureTag]
 	}{
 		{
+			in:   "exitnodehealth",
+			want: setOf("exitnodehealth", "health", "useexitnode", "peerapiclient", "useroutes"),
+		},
+		{
 			in:   "drive",
 			want: setOf("drive"),
 		},
@@ -83,6 +87,36 @@ func TestRequiredBy(t *testing.T) {
 		got := RequiredBy(tt.in)
 		if !maps.Equal(got, tt.want) {
 			t.Errorf("FeaturesWhichDependOn(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestMinTags(t *testing.T) {
+	has := func(tags []string, tag string) bool { return slices.Contains(tags, tag) }
+
+	all := MinTags()
+	if !slices.IsSorted(all) {
+		t.Errorf("MinTags() not sorted: %v", all)
+	}
+	if has(all, "ts_include_cli") {
+		t.Errorf("MinTags() includes ts_include_cli")
+	}
+	for ft := range Features {
+		if ft.IsOmittable() && !has(all, ft.OmitTag()) {
+			t.Errorf("MinTags() missing %q", ft.OmitTag())
+		}
+	}
+
+	// Keeping webclient must also keep what it requires.
+	got := MinTags("webclient", CLI)
+	for _, tag := range []string{"ts_omit_webclient", "ts_omit_serve", "ts_omit_netstack"} {
+		if has(got, tag) {
+			t.Errorf("MinTags(webclient, cli) includes %q", tag)
+		}
+	}
+	for _, tag := range []string{"ts_include_cli", "ts_omit_drive"} {
+		if !has(got, tag) {
+			t.Errorf("MinTags(webclient, cli) missing %q", tag)
 		}
 	}
 }

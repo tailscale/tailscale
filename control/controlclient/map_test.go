@@ -931,7 +931,7 @@ func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
 		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
 	}
-	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+	if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
 		Peers: []*tailcfg.Node{peer},
 	}); err != nil {
@@ -943,7 +943,7 @@ func TestExistingPeerReplacementHandledIncrementally(t *testing.T) {
 
 	replacement := peer.Clone()
 	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
-	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+	if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 		PeersChanged: []*tailcfg.Node{replacement},
 	}); err != nil {
 		t.Fatal(err)
@@ -995,7 +995,7 @@ func TestUpsertReplaysUserProfiles(t *testing.T) {
 		AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 		Hostinfo:   (&tailcfg.Hostinfo{}).View(),
 	}
-	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+	if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 		Node:  &tailcfg.Node{Name: "self.example.ts.net."},
 		Peers: []*tailcfg.Node{peer},
 		UserProfiles: []tailcfg.UserProfile{
@@ -1014,7 +1014,7 @@ func TestUpsertReplaysUserProfiles(t *testing.T) {
 	// both profiles, before the delta lands.
 	replacement := peer.Clone()
 	replacement.AllowedIPs = append(replacement.AllowedIPs, netip.MustParsePrefix("100.64.0.2/32"))
-	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+	if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 		PeersChanged: []*tailcfg.Node{replacement},
 	}); err != nil {
 		t.Fatal(err)
@@ -1045,7 +1045,7 @@ func TestUpsertReplaysUserProfiles(t *testing.T) {
 	// A patch-only change (no upsert) must not replay any profiles.
 	patched := replacement.Clone()
 	patched.Endpoints = eps("10.0.0.1:1111")
-	if err := ms.handleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
+	if err := ms.HandleNonKeepAliveMapResponse(ctx, &tailcfg.MapResponse{
 		PeersChanged: []*tailcfg.Node{patched},
 	}); err != nil {
 		t.Fatal(err)

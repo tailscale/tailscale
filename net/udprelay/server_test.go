@@ -545,3 +545,29 @@ func TestServer_endpointGC(t *testing.T) {
 		})
 	}
 }
+
+// TestAllocateEndpointZeroClientDisco verifies that AllocateEndpoint rejects
+// zero client disco keys with an error rather than panicking in
+// DiscoPrivate.Shared, which rejects zero keys. A zero key can arrive from a
+// malicious AllocateUDPRelayEndpointRequest, whose ClientDisco is
+// attacker-chosen.
+func TestAllocateEndpointZeroClientDisco(t *testing.T) {
+	reg := new(usermetric.Registry)
+	deregisterMetrics()
+	server, err := NewServer(t.Logf, 0, true, reg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	server.SetStaticAddrPorts(views.SliceOf([]netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")}))
+
+	disco := key.NewDisco().Public()
+	for _, pair := range [][2]key.DiscoPublic{
+		{key.DiscoPublic{}, disco},
+		{disco, key.DiscoPublic{}},
+	} {
+		if _, err := server.AllocateEndpoint(pair[0], pair[1]); err == nil {
+			t.Fatal("AllocateEndpoint succeeded with zero client disco key")
+		}
+	}
+}

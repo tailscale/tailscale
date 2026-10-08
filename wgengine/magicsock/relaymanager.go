@@ -745,6 +745,17 @@ func (r *relayManager) handleHandshakeWorkDoneRunLoop(done relayEndpointHandshak
 }
 
 func (r *relayManager) handleNewServerEndpointRunLoop(newServerEndpoint newRelayServerEndpointEvent) {
+	if newServerEndpoint.se.ServerDisco.IsZero() {
+		// A relay server always has a nonzero disco key, so this endpoint is
+		// malformed or malicious. It may come from a [disco.CallMeMaybeVia]
+		// with a zeroed ServerDisco, including one carrying an unknown
+		// message version, which parses to a zero-valued message. Dropping it
+		// here prevents a panic in [relayManager.ensureDiscoInfoFor], whose
+		// DiscoPrivate.Shared call rejects zero keys.
+		newServerEndpoint.wlb.ep.c.logf("magicsock: relayManager: ignoring relay server endpoint with zero ServerDisco")
+		return
+	}
+
 	// Check for duplicate work by server disco + VNI.
 	sdv := serverDiscoVNI{newServerEndpoint.se.ServerDisco, newServerEndpoint.se.VNI}
 	existingWork, ok := r.handshakeWorkByServerDiscoVNI[sdv]

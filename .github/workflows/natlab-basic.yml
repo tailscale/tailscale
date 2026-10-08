@@ -55,11 +55,20 @@ jobs:
           sudo apt-get -y remove man-db
           sudo apt-get install -y qemu-system-x86 qemu-utils
       - name: Build VM image
-        # The test will build this if missing, but we do it explicitly
-        # to avoid cutting into the go test -timeout budget, and to
-        # fail earlier with a clearer error if the image build breaks.
+        # The test always rebuilds this image itself (so the baked-in
+        # binaries match the source under test), but we build it here
+        # first so that rebuild is a build cache hit instead of a cold
+        # build that eats the go test -timeout budget, and so a broken
+        # image build fails earlier with a clearer error. The Makefile
+        # uses ./tool/go, the same toolchain the test's rebuild uses;
+        # a build with a different toolchain here would warm nothing.
         run: |
           make -C gokrazy natlab
       - name: Run natlab integration tests
+        # With a warm build cache the test takes well under a minute.
+        # The timeout matches natlab-test.yml and exceeds vmtest's own
+        # 10 minute test context, so that a hung node fails through the
+        # test's bounded waits, which dump the node's logs, rather than
+        # through go test's timeout panic, which dumps nothing useful.
         run: |
-          ./tool/go test -v -run=^TestEasyEasy$ -timeout=3m -count=1 ./tstest/natlab/vmtest --run-vm-tests
+          ./tool/go test -v -run=^TestEasyEasy$ -timeout=15m -count=1 ./tstest/natlab/vmtest --run-vm-tests

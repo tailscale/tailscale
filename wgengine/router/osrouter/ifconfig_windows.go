@@ -398,7 +398,11 @@ func configureInterface(cfg *router.Config, tun *tun.NativeTun, ht *health.Track
 		case route.IsSingleIP() && (destAddr == gateway || tsaddr.IsTailscaleIP(destAddr)):
 			// add an on-link route if the destination
 			// is the nexthop itself or a single Tailscale IP.
-			gateway = localAddr
+			if route.Addr().Is4() {
+				gateway = netip.IPv4Unspecified()
+			} else {
+				gateway = netip.IPv6Unspecified()
+			}
 		}
 
 		r := &routeData{

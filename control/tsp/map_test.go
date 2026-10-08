@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -259,12 +260,17 @@ func TestSendMapUpdateAgainstTestControl(t *testing.T) {
 	// B should now observe A's new DiscoKey in a subsequent MapResponse.
 	for {
 		resp := nextNonKeepalive()
-		for _, p := range resp.Peers {
+		for _, p := range slices.Concat(resp.Peers, resp.PeersChanged) {
 			if p.Key != nodeKeyA.Public() {
 				continue
 			}
 			if p.DiscoKey == wantDisco {
 				return // success
+			}
+		}
+		for _, p := range resp.PeersChangedPatch {
+			if p.NodeID == initialA.ID && p.DiscoKey != nil && *p.DiscoKey == wantDisco {
+				return // success via a field-level update
 			}
 		}
 	}

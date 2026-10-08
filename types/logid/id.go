@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/bits"
-	"slices"
 	"unicode/utf8"
 )
 
@@ -66,7 +65,7 @@ func (id1 PrivateID) Less(id2 PrivateID) bool {
 }
 
 func (id1 PrivateID) Compare(id2 PrivateID) int {
-	return slices.Compare(id1[:], id2[:])
+	return bytes.Compare(id1[:], id2[:])
 }
 
 func (id PrivateID) IsZero() bool {
@@ -116,7 +115,7 @@ func (id1 PublicID) Less(id2 PublicID) bool {
 }
 
 func (id1 PublicID) Compare(id2 PublicID) int {
-	return slices.Compare(id1[:], id2[:])
+	return bytes.Compare(id1[:], id2[:])
 }
 
 func (id PublicID) IsZero() bool {

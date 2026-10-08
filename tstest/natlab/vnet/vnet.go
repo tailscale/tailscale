@@ -150,10 +150,11 @@ func (n *network) initStack() error {
 			icmp.NewProtocol4,
 		},
 	})
-	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
-	tcpipErr := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
-	if tcpipErr != nil {
-		return fmt.Errorf("SetTransportProtocolOption SACK: %v", tcpipErr)
+	// Cubic is the default congestion control on Linux and matches
+	// wgengine/netstack's configuration; gVisor defaults to reno.
+	cubicOpt := tcpip.CongestionControlOption("cubic")
+	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt); err != nil {
+		return fmt.Errorf("SetTransportProtocolOption cubic: %v", err)
 	}
 	// Raise the TCP buffer limits (defaults: 1 MB send, 1 MB receive)
 	// so that netstack-terminated connections (the fake control plane,
@@ -179,12 +180,6 @@ func (n *network) initStack() error {
 	rcvBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: 4 << 20, Max: 16 << 20}
 	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBufOpt); err != nil {
 		return fmt.Errorf("SetTransportProtocolOption recv buf: %v", err)
-	}
-	// Enable receive buffer moderation (auto-tuning) so idle
-	// connections don't hold the full 4 MB.
-	modRcvBufOpt := tcpip.TCPModerateReceiveBufferOption(true)
-	if err := n.ns.SetTransportProtocolOption(tcp.ProtocolNumber, &modRcvBufOpt); err != nil {
-		return fmt.Errorf("SetTransportProtocolOption moderate recv buf: %v", err)
 	}
 	// The queue is sized to hold a full TCP send buffer's worth of
 	// 1500-byte frames (see the send buffer sizing above) so that a
@@ -437,7 +432,7 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
-		ac := &agentConn{node, tc}
+		ac := &agentConn{node, tc, ep}
 		n.s.addIdleAgentConn(ac)
 		return
 	}
@@ -490,12 +485,12 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
-	if destPort == 443 && fakeLogCatcher.Match(destIP) {
+	if (destPort == 443 || destPort == 80) && fakeLogCatcher.Match(destIP) {
 		r.Complete(false)
 		tc := gonet.NewTCPConn(&wq, ep)
 		context.AfterFunc(n.s.shutdownCtx, func() { tc.SetDeadline(time.Now()) })
 		n.s.wg.Go(func() {
-			n.serveLogCatcherConn(clientRemoteIP, tc)
+			n.serveLogCatcherConn(clientRemoteIP, tc, destPort == 443)
 		})
 		return
 	}
@@ -562,15 +557,18 @@ func (n *network) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// serveLogCatchConn serves a TCP connection to "log.tailscale.com", speaking the
-// logtail/logcatcher protocol.
+// serveLogCatcherConn serves a TCP connection to "log.tailscale.com", speaking
+// the logtail/logcatcher protocol.
 //
-// We terminate TLS with an arbitrary cert; the client is configured to not
-// validate TLS certs for this hostname when running under these integration
-// tests.
-func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
-	tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's); test client configure to not check
-	tlsConn := tls.Server(c, tlsConfig)
+// With useTLS, it terminates TLS with an arbitrary cert; gokrazy guests are
+// built to not validate TLS certs for this hostname. Other guests cannot
+// trust that cert, so they are pointed at the plain-HTTP port instead via
+// TS_LOG_TARGET.
+func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn, useTLS bool) {
+	if useTLS {
+		tlsConfig := n.s.derps[0].tlsConfig // self-signed (stealing DERP's)
+		c = tls.Server(c, tlsConfig)
+	}
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		all, _ := io.ReadAll(r.Body)
 		if r.Header.Get("Content-Encoding") == "zstd" {
@@ -599,12 +597,12 @@ func (n *network) serveLogCatcherConn(clientRemoteIP netip.Addr, c net.Conn) {
 			node.logCatcherWrites++
 			for _, lg := range logs {
 				tStr := lg.Logtail.Client_Time.Round(time.Millisecond).Format(time.RFC3339Nano)
-				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, lg.Text)
+				fmt.Fprintf(&node.logBuf, "[%v] %s\n", tStr, strings.TrimSuffix(lg.Text, "\n"))
 			}
 		}
 	})
 	hs := &http.Server{Handler: handler}
-	hs.Serve(netutil.NewOneConnListener(tlsConn, nil))
+	hs.Serve(netutil.NewOneConnListener(c, nil))
 }
 
 type EthernetPacket struct {
@@ -643,6 +641,7 @@ func (m MAC) HWAddr() net.HardwareAddr {
 	return net.HardwareAddr(m[:])
 }
 
+// String returns the mac address as "xx:xx:xx:xx:xx:xx".
 func (m MAC) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
 }
@@ -1200,6 +1199,10 @@ func (s *Server) Close() {
 		s.pcapWriter.Close()
 	}
 	s.wg.Wait()
+
+	for n := range s.networks {
+		n.ns.Close()
+	}
 }
 
 // AwaitFirstPacket waits until the first ethernet frame is received from the
@@ -2569,6 +2572,10 @@ func (s *Server) createDNSResponse(pkt gopacket.Packet) ([]byte, error) {
 		}
 
 		if toSplitDNS {
+			if string(q.Name) == SplitDNSRefusedName {
+				response.ResponseCode = layers.DNSResponseCodeRefused
+				continue
+			}
 			// The secondary server serves only its own zone, and only A records.
 			if addr, ok := splitDNSZone[string(q.Name)]; ok && q.Type == layers.DNSTypeA {
 				response.ANCount++
@@ -2904,6 +2911,7 @@ func (s *Server) WriteStartingBanner(w io.Writer) {
 type agentConn struct {
 	node *node
 	tc   *gonet.TCPConn
+	ep   tcpip.Endpoint
 }
 
 func (s *Server) addIdleAgentConn(ac *agentConn) {
@@ -2922,7 +2930,7 @@ func (s *Server) addIdleAgentConn(ac *agentConn) {
 	}
 }
 
-func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok bool) {
+func (s *Server) takeAgentConn(ctx context.Context, n *node) (*agentConn, error) {
 	const debug = false
 	// stuckThreshold is how long we wait before deciding the agent is slow
 	// enough to warrant a log line. Below this we stay quiet because, in
@@ -2937,7 +2945,7 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 			if debug {
 				log.Printf("takeAgentConn: got agent conn for %v", n.mac)
 			}
-			return ac, true
+			return ac, nil
 		}
 		if debug && miss > 0 {
 			log.Printf("takeAgentConnOne: missed %d times for %v", miss, n.mac)
@@ -2956,7 +2964,9 @@ func (s *Server) takeAgentConn(ctx context.Context, n *node) (_ *agentConn, ok b
 		}
 		select {
 		case <-ctx.Done():
-			return nil, false
+			return nil, ctx.Err()
+		case <-s.shutdownCtx.Done():
+			return nil, errors.New("takeAgentConn: server shut down while waiting for agent conn")
 		case <-ready:
 		case <-time.After(time.Second):
 			// Try again regularly anyway, in case we have multiple clients
@@ -2974,11 +2984,16 @@ func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ac := range s.agentConns {
-		if ac.node == n {
-			s.agentConns.Delete(ac)
-			return ac, 0
+		if ac.node != n {
+			miss++
+			continue
 		}
-		miss++
+		s.agentConns.Delete(ac)
+		if st := tcp.EndpointState(ac.ep.State()); st != tcp.StateEstablished {
+			log.Printf("takeAgentConn: discarding idle agent conn for %v that the agent already closed (state %v)", n.mac, st)
+			continue
+		}
+		return ac, 0
 	}
 	return nil, miss
 }
@@ -2996,14 +3011,27 @@ func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
 		return d
 	}
 	d := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ac, ok := s.takeAgentConn(ctx, n.n)
-		if !ok {
-			return nil, ctx.Err()
+		ac, err := s.takeAgentConn(ctx, n.n)
+		if err != nil {
+			return nil, err
 		}
 		return ac.tc, nil
 	}
 	mak.Set(&s.agentDialer, n.n, d)
 	return d
+}
+
+// NodeLogs returns the tailscaled log lines that node n has uploaded so far
+// to the fake log.tailscale.com log catcher, one line per entry, each
+// prefixed with the client's timestamp. It returns the empty string if the
+// node has not been started under this server or has uploaded nothing.
+func (s *Server) NodeLogs(n *Node) string {
+	if n == nil || n.n == nil {
+		return ""
+	}
+	n.n.logMu.Lock()
+	defer n.n.logMu.Unlock()
+	return n.n.logBuf.String()
 }
 
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {

@@ -608,21 +608,36 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 	}()
 
-	if !buildfeatures.HasIPNBus {
-		fmt.Fprintln(Stderr, "binary built with ts_omit_ipnbus; not waiting for completion")
-		return nil
-	}
-
 	// Start watching the IPN bus before we call Start() or StartLoginInteractive(),
 	// or we could miss IPN notifications.
 	//
 	// In particular, if we're doing a force-reauth, we could miss the
 	// notification with the auth URL we should print for the user.
-	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
-	if err != nil {
-		return err
+	//
+	// Binaries built without the IPN bus instead poll tailscaled's status
+	// once the loop below starts reading.
+	var nextNotify func() (ipn.Notify, error)
+	if buildfeatures.HasIPNBus {
+		watcher, err := localClient.WatchIPNBus(watchCtx, 0)
+		if err != nil {
+			return err
+		}
+		defer watcher.Close()
+		nextNotify = watcher.Next
+	} else {
+		var polled bool
+		nextNotify = func() (ipn.Notify, error) {
+			if polled {
+				select {
+				case <-watchCtx.Done():
+					return ipn.Notify{}, watchCtx.Err()
+				case <-time.After(250 * time.Millisecond):
+				}
+			}
+			polled = true
+			return statusNotify(watchCtx)
+		}
 	}
-	defer watcher.Close()
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -728,7 +743,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		}
 
 		for {
-			n, err := watcher.Next()
+			n, err := nextNotify()
 			if err != nil {
 				watchErr <- err
 				return
@@ -831,6 +846,28 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	case <-timeoutCh:
 		return errors.New(`timeout waiting for Tailscale service to enter a Running state; check health with "tailscale status"`)
 	}
+}
+
+// statusNotify returns an IPN notification synthesized from tailscaled's
+// current status, with the fields that runUp's wait loop reads: the
+// backend state, the auth URL, and the node key. It's how "tailscale up"
+// waits in binaries built without the IPN bus.
+func statusNotify(ctx context.Context) (ipn.Notify, error) {
+	st, err := localClient.StatusWithoutPeers(ctx)
+	if err != nil {
+		return ipn.Notify{}, err
+	}
+	var n ipn.Notify
+	if state, ok := ipn.StateFromString(st.BackendState); ok {
+		n.State = &state
+	}
+	if st.AuthURL != "" {
+		n.BrowseToURL = &st.AuthURL
+	}
+	if st.Self != nil {
+		n.SelfChange = &tailcfg.Node{Key: st.Self.PublicKey}
+	}
+	return n, nil
 }
 
 func printDeviceApprovalInfo(printJson bool, prefs *ipn.Prefs, lastURLPrinted *string) {

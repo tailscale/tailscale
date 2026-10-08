@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"tailscale.com/feature"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
@@ -23,6 +24,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("posture") {
+		return
+	}
 	ipnext.RegisterExtension("posture", newExtension)
 	ipnlocal.RegisterC2N("GET /posture/identity", handleC2NPostureIdentityGet)
 }

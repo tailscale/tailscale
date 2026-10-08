@@ -19,7 +19,9 @@ import (
 )
 
 func init() {
-	feature.Register("bird")
+	if !feature.Register("bird") {
+		return
+	}
 	wgengine.HookNewBird.Set(newBird)
 }
 

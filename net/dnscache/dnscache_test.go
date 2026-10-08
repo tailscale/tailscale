@@ -5,9 +5,16 @@ package dnscache
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"flag"
 	"fmt"
+	"math/big"
 	"net"
 	"net/netip"
 	"reflect"
@@ -297,4 +304,335 @@ func TestSingleHostStaticResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+type persistCall struct {
+	host, resolver string
+	ips            []netip.Addr
+}
+
+func TestDiskCacheHooks(t *testing.T) {
+	mustIPs := func(ss ...string) (ips []netip.Addr) {
+		for _, s := range ss {
+			ips = append(ips, netip.MustParseAddr(s))
+		}
+		return ips
+	}
+	errFailed := errors.New("some resolution failure")
+
+	t.Run("persist-on-success", func(t *testing.T) {
+		var calls []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			calls = append(calls, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return mustIPs("1.1.1.1", "2600::1"), nil
+			},
+		}
+		if _, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com"); err != nil {
+			t.Fatal(err)
+		}
+		want := []persistCall{{"ctrl.example.com", "forward", mustIPs("1.1.1.1", "2600::1")}}
+		if !reflect.DeepEqual(calls, want) {
+			t.Errorf("persist calls = %+v; want %+v", calls, want)
+		}
+	})
+
+	t.Run("disk-hit-before-derp", func(t *testing.T) {
+		defer HookLookupDiskCache.SetForTest(func(host string) ([]netip.Addr, bool) {
+			if host != "ctrl.example.com" {
+				t.Errorf("disk lookup host = %q; want ctrl.example.com", host)
+			}
+			return mustIPs("2.2.2.2"), true
+		})()
+		var persisted []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			persisted = append(persisted, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, errFailed
+			},
+			LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				t.Error("DERP fallback used despite disk cache hit")
+				return nil, errFailed
+			},
+		}
+		hits0 := metricDiskFallbackHit.Value()
+		ip, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := netip.MustParseAddr("2.2.2.2"); ip != want {
+			t.Errorf("ip = %v; want %v", ip, want)
+		}
+		if d := metricDiskFallbackHit.Value() - hits0; d != 1 {
+			t.Errorf("disk fallback hit metric delta = %d; want 1", d)
+		}
+		if len(persisted) != 0 {
+			t.Errorf("disk-sourced result was re-persisted: %+v", persisted)
+		}
+	})
+
+	t.Run("disk-miss-uses-derp", func(t *testing.T) {
+		defer HookLookupDiskCache.SetForTest(func(host string) ([]netip.Addr, bool) {
+			return nil, false
+		})()
+		var persisted []persistCall
+		defer HookPersistResolution.SetForTest(func(host, resolver string, ips []netip.Addr) {
+			persisted = append(persisted, persistCall{host, resolver, ips})
+		})()
+		r := &Resolver{
+			Logf: t.Logf,
+			LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return nil, errFailed
+			},
+			LookupIPFallback: func(ctx context.Context, host string) ([]netip.Addr, error) {
+				return mustIPs("3.3.3.3"), nil
+			},
+		}
+		miss0 := metricDiskFallbackMiss.Value()
+		derp0 := metricDERPFallbackOK.Value()
+		ip, _, _, err := r.LookupIP(t.Context(), "ctrl.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := netip.MustParseAddr("3.3.3.3"); ip != want {
+			t.Errorf("ip = %v; want %v", ip, want)
+		}
+		if d := metricDiskFallbackMiss.Value() - miss0; d != 1 {
+			t.Errorf("disk fallback miss metric delta = %d; want 1", d)
+		}
+		if d := metricDERPFallbackOK.Value() - derp0; d != 1 {
+			t.Errorf("DERP fallback ok metric delta = %d; want 1", d)
+		}
+		want := []persistCall{{"ctrl.example.com", "fallback", mustIPs("3.3.3.3")}}
+		if !reflect.DeepEqual(persisted, want) {
+			t.Errorf("persist calls = %+v; want %+v", persisted, want)
+		}
+	})
+}
+
+func newTestCert(t *testing.T, dnsName string) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: dnsName},
+		DNSNames:              []string{dnsName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, parsed
+}
+
+// startTLSServer starts a TLS server on 127.0.0.1 serving cert and
+// returns its port.
+func startTLSServer(t *testing.T, cert tls.Certificate) (port string) {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				c.(*tls.Conn).Handshake()
+				c.Close()
+			}()
+		}
+	}()
+	_, port, err = net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func TestTLSDialerHostVerifiedHook(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	resolver := &Resolver{
+		Logf: t.Logf,
+		LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return []netip.Addr{lo}, nil
+		},
+	}
+	var std net.Dialer
+
+	type verifiedCall struct {
+		host string
+		ip   netip.Addr
+	}
+	var got []verifiedCall
+	defer HookHostVerified.SetForTest(func(host string, ip netip.Addr) {
+		got = append(got, verifiedCall{host, ip})
+	})()
+
+	t.Run("verified", func(t *testing.T) {
+		got = nil
+		cert, parsed := newTestCert(t, "ctrl.example.com")
+		port := startTLSServer(t, cert)
+		pool := x509.NewCertPool()
+		pool.AddCert(parsed)
+
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{RootCAs: pool})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		want := []verifiedCall{{"ctrl.example.com", lo}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("verified calls = %+v; want %+v", got, want)
+		}
+	})
+
+	t.Run("insecure-no-hook", func(t *testing.T) {
+		got = nil
+		cert, _ := newTestCert(t, "other.example.com")
+		port := startTLSServer(t, cert)
+
+		// Handshake succeeds due to InsecureSkipVerify, but without
+		// certificate verification the hook must not fire.
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{InsecureSkipVerify: true})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if len(got) != 0 {
+			t.Errorf("hook fired despite InsecureSkipVerify: %+v", got)
+		}
+	})
+
+	t.Run("intercepted-no-hook", func(t *testing.T) {
+		got = nil
+		cert, _ := newTestCert(t, "ctrl.example.com")
+		port := startTLSServer(t, cert)
+
+		// An interception-tolerant config in the style of controlhttp:
+		// a VerifyConnection hook that swallows all verification
+		// errors, because Noise doesn't need TLS to be honest. The
+		// handshake succeeds even though the cert chain is untrusted,
+		// and the hook must not fire. (Regression test for the review
+		// concern that VerifyConnection != nil was treated as proof of
+		// verification.)
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyConnection:   func(tls.ConnectionState) error { return nil },
+		})
+		c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if len(got) != 0 {
+			t.Errorf("hook fired on intercepted connection: %+v", got)
+		}
+	})
+
+	t.Run("bad-cert-no-hook", func(t *testing.T) {
+		got = nil
+		cert, parsed := newTestCert(t, "other.example.com")
+		port := startTLSServer(t, cert)
+		pool := x509.NewCertPool()
+		pool.AddCert(parsed)
+
+		// Cert is trusted but for the wrong name: handshake fails and
+		// the hook must not fire.
+		td := TLSDialer(std.DialContext, resolver, &tls.Config{RootCAs: pool})
+		if c, err := td(t.Context(), "tcp", "ctrl.example.com:"+port); err == nil {
+			c.Close()
+			t.Fatal("dial unexpectedly succeeded with wrong-name cert")
+		}
+		if len(got) != 0 {
+			t.Errorf("hook fired despite failed verification: %+v", got)
+		}
+	})
+}
+
+func TestDialerRefreshesStaleCache(t *testing.T) {
+	ipA := netip.MustParseAddr("192.0.2.1")
+	ipB := netip.MustParseAddr("192.0.2.2")
+
+	var (
+		dnsAnswer = ipA
+		lookups   int
+		reachable = map[netip.Addr]bool{ipA: true}
+		dialed    []netip.Addr
+	)
+	r := &Resolver{
+		UseLastGood: true,
+		LookupIPForTest: func(ctx context.Context, host string) ([]netip.Addr, error) {
+			lookups++
+			return []netip.Addr{dnsAnswer}, nil
+		},
+	}
+	fwd := func(ctx context.Context, network, address string) (net.Conn, error) {
+		ip := netip.MustParseAddrPort(address).Addr()
+		dialed = append(dialed, ip)
+		if !reachable[ip] {
+			return nil, fmt.Errorf("can't reach %v", ip)
+		}
+		c1, c2 := net.Pipe()
+		c2.Close()
+		return c1, nil
+	}
+	dial := Dialer(fwd, r)
+
+	check := func(name string, wantErr bool, wantLookups int, wantDialed ...netip.Addr) {
+		t.Helper()
+		dialed = nil
+		c, err := dial(t.Context(), "tcp", "example.com:443")
+		if c != nil {
+			c.Close()
+		}
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v; want error = %v", name, err, wantErr)
+		}
+		if lookups != wantLookups {
+			t.Errorf("%s: lookups = %d; want %d", name, lookups, wantLookups)
+		}
+		if !slices.Equal(dialed, wantDialed) {
+			t.Errorf("%s: dialed %v; want %v", name, dialed, wantDialed)
+		}
+	}
+
+	check("first", false, 1, ipA)
+	check("cached", false, 1, ipA)
+
+	// The host moves. The cached IP fails, so the dialer should look the
+	// host up again and dial the new IP.
+	dnsAnswer = ipB
+	reachable = map[netip.Addr]bool{ipB: true}
+	check("moved", false, 2, ipA, ipB)
+	check("cached-after-move", false, 2, ipB)
+
+	// The host is unreachable but its DNS hasn't changed. The dialer
+	// should look it up once more but not redial the same IP.
+	reachable = nil
+	check("unreachable", true, 3, ipB)
 }

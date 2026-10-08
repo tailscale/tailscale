@@ -1365,3 +1365,20 @@ func ExampleMiddlewareStack() {
 	// B mw3
 	// C mw2.4
 }
+
+// flushErrWriter is a ResponseWriter whose flush fails with err.
+type flushErrWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (w flushErrWriter) FlushError() error { return w.err }
+
+func TestLoggingResponseWriter_FlushError(t *testing.T) {
+	want := errors.New("flush failed")
+	inner := flushErrWriter{ResponseWriter: httptest.NewRecorder(), err: want}
+	lw := newLogResponseWriter(t.Logf, inner, httptest.NewRequest("GET", "/", nil))
+	if err := http.NewResponseController(lw).Flush(); !errors.Is(err, want) {
+		t.Errorf("Flush error = %v, want %v", err, want)
+	}
+}

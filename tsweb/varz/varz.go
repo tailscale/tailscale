@@ -5,7 +5,6 @@
 package varz
 
 import (
-	"bufio"
 	"cmp"
 	"expvar"
 	"fmt"
@@ -23,10 +22,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/exp/constraints"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
-	"tailscale.com/types/logger"
 	"tailscale.com/version"
 )
 
@@ -215,11 +212,14 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	if typ == "" {
 		var funcRet string
 		if f, ok := kv.Value.(expvar.Func); ok {
-			v := f()
-			if ms, ok := v.(runtime.MemStats); ok && name == "memstats" {
-				writeMemstats(w, &ms)
+			if key == "memstats" {
+				// The expvar package's own memstats var calls
+				// runtime.ReadMemStats, which stops the world and
+				// allocates. [Handler] exports the memstats_* metrics
+				// from runtime/metrics instead, so don't even call it.
 				return
 			}
+			v := f()
 			if vs, ok := v.(string); ok && strings.HasSuffix(name, "version") {
 				if name == "version" {
 					fmt.Fprintf(w, "%s{version=%q,binary=%q} 1\n", name, vs, binaryName())
@@ -328,13 +328,19 @@ type sortedKVs struct {
 //     is not exported.
 //
 // This will evolve over time, or perhaps be replaced.
+//
+// It also exports the Go runtime/metrics in [runtimeMetricSpecs] and
+// the legacy memstats_* metrics, both read from runtime/metrics.
 func Handler(w http.ResponseWriter, r *http.Request) {
 	ExpvarDoHandler(expvarDo)(w, r)
+	runtimeMetrics.writeTo(w)
 }
 
 // ExpvarDoHandler handler returns a Handler like above, but takes an optional
 // expvar.Do func allow the usage of alternative containers of metrics, other
 // than the global expvar.Map.
+//
+// Unlike [Handler], it does not export the Go runtime/metrics.
 func ExpvarDoHandler(expvarDoFunc func(f func(expvar.KeyValue))) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain;version=0.0.4;charset=utf-8")
@@ -377,54 +383,6 @@ type PrometheusMetricsReflectRooter interface {
 }
 
 var expvarDo = expvar.Do // pulled out for tests
-
-func writeMemstat[V constraints.Integer | constraints.Float](bw *bufio.Writer, typ, name string, v V, help string) {
-	if help != "" {
-		bw.WriteString("# HELP memstats_")
-		bw.WriteString(name)
-		bw.WriteString(" ")
-		bw.WriteString(help)
-		bw.WriteByte('\n')
-	}
-	bw.WriteString("# TYPE memstats_")
-	bw.WriteString(name)
-	bw.WriteString(" ")
-	bw.WriteString(typ)
-	bw.WriteByte('\n')
-	bw.WriteString("memstats_")
-	bw.WriteString(name)
-	bw.WriteByte(' ')
-	rt := reflect.TypeOf(v)
-	switch {
-	case rt == reflect.TypeFor[int]() ||
-		rt == reflect.TypeFor[uint]() ||
-		rt == reflect.TypeFor[int8]() ||
-		rt == reflect.TypeFor[uint8]() ||
-		rt == reflect.TypeFor[int16]() ||
-		rt == reflect.TypeFor[uint16]() ||
-		rt == reflect.TypeFor[int32]() ||
-		rt == reflect.TypeFor[uint32]() ||
-		rt == reflect.TypeFor[int64]() ||
-		rt == reflect.TypeFor[uint64]() ||
-		rt == reflect.TypeFor[uintptr]():
-		bw.Write(strconv.AppendInt(bw.AvailableBuffer(), int64(v), 10))
-	case rt == reflect.TypeFor[float32]() || rt == reflect.TypeFor[float64]():
-		bw.Write(strconv.AppendFloat(bw.AvailableBuffer(), float64(v), 'f', -1, 64))
-	}
-	bw.WriteByte('\n')
-}
-
-func writeMemstats(w io.Writer, ms *runtime.MemStats) {
-	fmt.Fprintf(w, "%v", logger.ArgWriter(func(bw *bufio.Writer) {
-		writeMemstat(bw, "gauge", "heap_alloc", ms.HeapAlloc, "current bytes of allocated heap objects (up/down smoothly)")
-		writeMemstat(bw, "counter", "total_alloc", ms.TotalAlloc, "cumulative bytes allocated for heap objects")
-		writeMemstat(bw, "gauge", "sys", ms.Sys, "total bytes of memory obtained from the OS")
-		writeMemstat(bw, "counter", "mallocs", ms.Mallocs, "cumulative count of heap objects allocated")
-		writeMemstat(bw, "counter", "frees", ms.Frees, "cumulative count of heap objects freed")
-		writeMemstat(bw, "counter", "num_gc", ms.NumGC, "number of completed GC cycles")
-		writeMemstat(bw, "gauge", "gc_cpu_fraction", ms.GCCPUFraction, "fraction of CPU time used by GC")
-	}))
-}
 
 // sortedStructField is metadata about a struct field used both for sorting once
 // (by structTypeSortedFields) and at serving time (by

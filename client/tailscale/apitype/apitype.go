@@ -103,6 +103,12 @@ type OptionalFeatures struct {
 	// Disabled features may be absent from the map. (That is, false values
 	// are not guaranteed to be present.)
 	Features map[string]bool
+
+	// Disabled is the list of features disabled at runtime via the
+	// TS_DISABLE_FEATURE environment variable, whether or not this build
+	// contains them. A name listed here that is absent from Features
+	// either named an unknown feature or one not linked into this build.
+	Disabled []string `json:",omitempty"`
 }
 
 // ServiceClientPrefRequest is the body POSTed to the LocalAPI endpoint /localapi/v0/prefs/service-clients.

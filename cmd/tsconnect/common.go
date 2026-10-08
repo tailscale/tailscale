@@ -151,14 +151,16 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 		log.Fatalf("Cannot create esbuild context: %v", err)
 	}
 	result, err := buildContext.Serve(esbuild.ServeOptions{
-		Port:     uint16(port),
+		Port:     int(port),
 		Host:     host,
 		Servedir: "./",
 	})
 	if err != nil {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
-	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	for _, h := range result.Hosts {
+		log.Printf("Listening on http://%s\n", net.JoinHostPort(h, strconv.Itoa(int(result.Port))))
+	}
 	select {}
 }
 

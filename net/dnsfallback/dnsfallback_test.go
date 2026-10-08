@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -204,4 +205,18 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("addrs: %+v", addrs)
+}
+
+// TestBootstrapDNSMapNilNetMon verifies that bootstrapDNSMap tolerates a nil
+// netmon.Monitor. It used to panic in netns.NewDialer, which callers such as
+// control/tsp hit under fault injection when their first dial failed.
+func TestBootstrapDNSMapNilNetMon(t *testing.T) {
+	// The context is already canceled so that no network I/O happens. The
+	// panic, when it existed, fired before any I/O.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := bootstrapDNSMap(ctx, "derp1.tailscale.com", netip.MustParseAddr("192.0.2.1"), "controlplane.tailscale.com", t.Logf, nil, nil)
+	if err == nil {
+		t.Fatal("expected error from canceled context")
+	}
 }

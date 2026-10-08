@@ -719,7 +719,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 		}
 		defer session.Close()
 		t.Logf("client established session")
-		_, err = session.CombinedOutput("echo Ran echo!")
+		_, err = session.CombinedOutput("sh -c 'echo Ran echo!; echo to-stderr >&2'")
 		if err != nil {
 			t.Errorf("client: %v", err)
 		}
@@ -734,16 +734,54 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for recording")
 	}
-	var ch sessionrecording.CastHeader
-	if err := json.NewDecoder(bytes.NewReader(recording)).Decode(&ch); err != nil {
-		t.Fatal(err)
-	}
+	ch, recordedOutput := parseRecording(t, recording)
 	if ch.SSHUser != sshUser {
 		t.Errorf("SSHUser = %q; want %q", ch.SSHUser, sshUser)
 	}
-	if ch.Command != "echo Ran echo!" {
-		t.Errorf("Command = %q; want %q", ch.Command, "echo Ran echo!")
+	const wantCommand = "sh -c echo Ran echo!; echo to-stderr >&2"
+	if ch.Command != wantCommand {
+		t.Errorf("Command = %q; want %q", ch.Command, wantCommand)
 	}
+	// Both stdout and stderr must be captured in the recording. On non-PTY
+	// sessions stderr is a separate stream; it must still flow through the
+	// recording writer (recorded under the "o" output direction).
+	if !strings.Contains(recordedOutput, "Ran echo!") {
+		t.Errorf("recording missing stdout output %q; got %q", "Ran echo!", recordedOutput)
+	}
+	if !strings.Contains(recordedOutput, "to-stderr") {
+		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", recordedOutput)
+	}
+}
+
+// parseRecording parses a session recording, returning its CastHeader and the
+// concatenation of all recorded output.
+//
+// The recording is a stream of newline-separated JSON: the CastHeader,
+// followed by asciinema cast lines of the form [time, "o", data].
+func parseRecording(t *testing.T, recording []byte) (sessionrecording.CastHeader, string) {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(recording))
+	var ch sessionrecording.CastHeader
+	if err := dec.Decode(&ch); err != nil {
+		t.Fatalf("decoding cast header: %v", err)
+	}
+	var output strings.Builder
+	for dec.More() {
+		var line []any
+		if err := dec.Decode(&line); err != nil {
+			t.Fatalf("decoding cast line: %v", err)
+		}
+		if len(line) != 3 {
+			continue
+		}
+		if dir, _ := line[1].(string); dir != "o" {
+			continue
+		}
+		if data, ok := line[2].(string); ok {
+			output.WriteString(data)
+		}
+	}
+	return ch, output.String()
 }
 
 func TestSSHAuthFlow(t *testing.T) {

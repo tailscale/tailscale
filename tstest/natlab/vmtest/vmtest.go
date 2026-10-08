@@ -6,13 +6,7 @@
 // network infrastructure. It supports mixed OS types (gokrazy, Ubuntu, Debian)
 // and multi-NIC configurations for scenarios like subnet routing.
 //
-// Prerequisites:
-//   - qemu-system-x86_64 (KVM is used automatically on Linux when /dev/kvm is accessible)
-//   - A built gokrazy natlabapp image (auto-built on first run via "make natlab" in gokrazy/)
-//
-// Run tests with:
-//
-//	go test ./tstest/natlab/vmtest/ --run-vm-tests -v
+// See tstest/natlab/README.md for prerequisites and how to run.
 package vmtest
 
 import (
@@ -24,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -53,6 +48,7 @@ import (
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 )
 
 var (
@@ -80,9 +76,9 @@ type Env struct {
 	// are downloaded from pkgs.tailscale.com instead of compiled from the tree.
 	testVersion string
 
-	// gokrazy-specific paths
-	gokrazyBase   string // path to gokrazy base qcow2 image
-	gokrazyKernel string // path to gokrazy kernel
+	// gokrazyKernel is the path to the gokrazy kernel. It's set by
+	// ensureGokrazy with gokrazyBuildMu held.
+	gokrazyKernel string
 
 	// tailmac-specific paths (macOS VMs)
 	tailmacDir        string // path to tailmac bin/ directory containing Host.app
@@ -102,12 +98,11 @@ type Env struct {
 
 	// Shared resource initialization (sync.Once for things multiple nodes share).
 	vnetOnce      sync.Once
-	gokrazyOnce   sync.Once
 	qemuSockOnce  sync.Once
 	dgramSockOnce sync.Once
 	compileMu     sync.Mutex
-	compileOnce   map[string]*sync.Once // keyed by goos_goarch
-	imageOnce     map[string]*sync.Once // keyed by OSImage.Name
+	compileOnce   map[string]*sync.Once   // keyed by goos_goarch
+	imageOnce     map[string]func() error // keyed by OSImage.Name (cloud and gokrazy images); see prepareImageOnce
 
 	// Web UI support.
 	ctx        context.Context // cancelled when test ends
@@ -344,6 +339,9 @@ func New(t testing.TB, opts ...EnvOption) *Env {
 		o.applyTo(e)
 	}
 	t.Cleanup(func() {
+		if t.Failed() {
+			e.dumpNodeLogs()
+		}
 		e.testStatus.finish(t.Failed())
 		e.eventBus.Publish(VMEvent{
 			Type:    EventTestStatus,
@@ -352,6 +350,24 @@ func New(t testing.TB, opts ...EnvOption) *Env {
 		})
 	})
 	return e
+}
+
+// dumpNodeLogs writes the tail of each node's tailscaled logs, as uploaded
+// to the fake log catcher, to the test log. It runs on test failure. The
+// VM console log dumped by [dumpLogTail] holds only kernel and init output;
+// on gokrazy the processes' own output goes to a remote syslog that the
+// virtual network discards, so this is the only view of what tailscaled
+// was doing.
+func (e *Env) dumpNodeLogs() {
+	if e.server == nil {
+		return
+	}
+	// Nodes run tailscaled and upload its logs whether or not they joined
+	// the tailnet or have an agent, so dump them all. A node that uploaded
+	// nothing gets a one-line note.
+	for _, n := range e.nodes {
+		dumpTail(e.t, n.name, "tailscaled (via logcatcher)", []byte(e.server.NodeLogs(n.vnetNode)), 100)
+	}
 }
 
 // EnvOption configures an [Env] in [New].
@@ -422,6 +438,12 @@ func (e *Env) AddNetwork(opts ...any) *vnet.Network {
 	return e.cfg.AddNetwork(opts...)
 }
 
+// FirstNetwork returns the first existing network. If no network exists, it
+// returns nil.
+func (e *Env) FirstNetwork() *vnet.Network {
+	return e.cfg.FirstNetwork()
+}
+
 // RegisterFile registers a file with the vnet fileserver.
 // It is served at http://files.tailscale/<path>.
 func (e *Env) RegisterFile(path string, data []byte) {
@@ -447,8 +469,9 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
-	sshPort          int     // host port for SSH debug access (cloud VMs only)
-	dnsMode          DNSMode // desired Linux DNS backend to provision; "" means the image default
+	sshPort          int        // host port for SSH debug access (cloud VMs only)
+	dnsMode          DNSMode    // desired Linux DNS backend to provision; "" means the image default
+	dhcpClient       DHCPClient // DHCP client for the vnet NIC; "" means the image default
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the
@@ -489,20 +512,47 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 			n.webServerPort = int(o)
 		case nodeOptDNSMode:
 			switch DNSMode(o) {
-			case DNSDefault, DNSDirect:
+			case DNSDefault, DNSDirect, DNSOpenresolv:
 			default:
 				e.t.Fatalf("AddNode(%q): unsupported DNSMode %q", name, DNSMode(o))
 			}
 			n.dnsMode = DNSMode(o)
+		case nodeOptDHCPClient:
+			switch c := DHCPClient(o); c {
+			case DHCPClientDefault, DHCPClientDhcpcd:
+				n.dhcpClient = c
+			default:
+				e.t.Fatalf("AddNode(%q): unsupported DHCPClient %q", name, c)
+			}
 		default:
 			// Pass through to vnet (TailscaledEnv, NodeOption, MAC, etc.)
 			vnetOpts = append(vnetOpts, o)
+		}
+	}
+	if n.dhcpClient == DHCPClientDhcpcd {
+		// Only this image is known to ship dhcpcd-base, and the dhcpcd.conf
+		// written by dhcpcdFiles names the single vnet NIC.
+		if n.os.Name != Ubuntu2404.Name {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires the %s image, got %s", name, Ubuntu2404.Name, n.os.Name)
+		}
+		if len(n.nets) != 1 {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires exactly one network, got %d", name, len(n.nets))
 		}
 	}
 	if e.fakeACME {
 		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
 			Key:   "TS_DEBUG_ACME_DIRECTORY_URL",
 			Value: "http://acme.example/directory",
+		})
+	}
+	if !n.os.IsGokrazy && !n.os.IsMacOS {
+		// Only gokrazy builds trust the fake log catcher's TLS cert, so other
+		// guests upload over plain HTTP. The address is a literal so uploads
+		// keep working while a test breaks the guest's DNS. macOS guests are
+		// left out because tailmac does not pass TailscaledEnv to tailscaled.
+		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
+			Key:   "TS_LOG_TARGET",
+			Value: "http://" + vnet.FakeLogCatcherIPv4().String(),
 		})
 	}
 
@@ -525,6 +575,15 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 
 	n.vnetNode = e.cfg.AddNode(vnetOpts...)
 	n.num = n.vnetNode.Num()
+	// VMTEST_VERBOSE_SYSLOG=1 logs each node's remote syslog (the stdout
+	// and stderr of tailscaled and the other guest processes) into the
+	// test output as it arrives. It is the natlab equivalent of
+	// tstest/integration/nat's --log-tailscaled flag and is the way to
+	// watch a guest live; on failure the tail of tailscaled's logs is
+	// dumped regardless, from the fake log catcher.
+	if os.Getenv("VMTEST_VERBOSE_SYSLOG") == "1" {
+		n.vnetNode.SetVerboseSyslog(true)
+	}
 	return n
 }
 
@@ -540,16 +599,7 @@ func (n *Node) LanIP(net *vnet.Network) netip.Addr {
 	return n.vnetNode.LanIP(net)
 }
 
-// DropControlTraffic sets up a blackhole for control traffic for just this
-// node on all the networks belonging to the node.
-func (n *Node) DropControlTraffic() {
-	for _, network := range n.nets {
-		network.BlackholeControlForAddr(n.LanIP(network))
-	}
-}
-
 // NodeOption types for configuring nodes.
-
 type nodeOptOS OSImage
 type nodeOptNoTailscale struct{}
 type nodeOptTailscaleSSH struct{}
@@ -559,6 +609,29 @@ type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
 type nodeOptDNSMode DNSMode
+type nodeOptDHCPClient DHCPClient
+
+// DHCPClient says which DHCP client configures the guest's vnet NIC.
+type DHCPClient string
+
+const (
+	// DHCPClientDefault leaves the image's networking alone, so the NIC is
+	// configured by whatever the image runs by default (systemd-networkd on
+	// the cloud images).
+	DHCPClientDefault DHCPClient = ""
+
+	// DHCPClientDhcpcd makes systemd-networkd leave the vnet NIC unmanaged and
+	// runs the dhcpcd that the Ubuntu 24.04 image ships (dhcpcd-base) on it
+	// instead. dhcpcd configures the lease's address and routes itself, then
+	// runs its hook scripts. The resolv.conf hook calls resolvconf when one
+	// is installed, registering a snippet named "<interface>.dhcp", and
+	// writes /etc/resolv.conf directly otherwise. Combine with
+	// [DNSOpenresolv] so the hook registers the snippet instead of writing
+	// resolv.conf.
+	//
+	// Only supported on [Ubuntu2404] nodes with a single network.
+	DHCPClientDhcpcd DHCPClient = "dhcpcd"
+)
 
 // DNSMode is a provisioning directive, not a DNS-backend name: it says what, if
 // anything, to do to the guest's DNS before tailscaled starts, letting one
@@ -579,6 +652,18 @@ const (
 	// DNSDirect masks systemd-resolved and installs a plain /etc/resolv.conf
 	// so tailscaled selects the "direct" manager (rewrites resolv.conf itself).
 	DNSDirect DNSMode = "direct"
+
+	// DNSOpenresolv masks systemd-resolved and installs upstream openresolv
+	// (which no cloud image ships), so tailscaled selects the "openresolv"
+	// manager. Its key directory is created empty, so unless [WithDHCPClient]
+	// selects a client whose resolv.conf hook registers a snippet, the only
+	// one ever registered is Tailscale's own. Before the fix for
+	// tailscale/tailscale#20825, tailscaled handled an empty key directory
+	// wrong: openresolv reports "no snippets" by exiting 2, and net/dns
+	// treated that non-zero exit as a hard failure.
+	//
+	// openresolv's sources are vendored into the tree; see openresolv.go.
+	DNSOpenresolv DNSMode = "openresolv"
 )
 
 // OS returns a NodeOption that sets the node's operating system image.
@@ -627,6 +712,10 @@ func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 // tailscaled selects the given DNS backend. Only meaningful for Linux cloud
 // images; ignored for gokrazy/macOS. See [DNSMode].
 func WithDNSMode(m DNSMode) nodeOptDNSMode { return nodeOptDNSMode(m) }
+
+// WithDHCPClient returns a NodeOption that provisions the node so the given
+// DHCP client configures its vnet NIC. See [DHCPClient].
+func WithDHCPClient(c DHCPClient) nodeOptDHCPClient { return nodeOptDHCPClient(c) }
 
 // Start initializes the virtual network, boots all VMs in parallel, and waits
 // for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
@@ -718,8 +807,14 @@ func (e *Env) Start() {
 			aStep.Begin()
 			t.Logf("[%s] waiting for agent...", n.name)
 			if n.joinTailnet {
-				st, err := n.agent.Status(ctx)
-				if err != nil {
+				// gokrazy starts tta and tailscaled concurrently. If tta wins,
+				// it answers 502 until tailscaled.sock exists.
+				var st *ipnstate.Status
+				if err := tstest.WaitFor(tailscaleUpTimeout, func() error {
+					var statusErr error
+					st, statusErr = n.agent.Status(ctx)
+					return statusErr
+				}); err != nil {
 					return fmt.Errorf("[%s] agent status: %w", n.name, err)
 				}
 				t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
@@ -740,8 +835,17 @@ func (e *Env) Start() {
 			if n.joinTailnet {
 				tsStep := e.Step("Tailscale up: " + n.name)
 				tsStep.Begin()
-				if err := e.tailscaleUp(ctx, n); err != nil {
-					return fmt.Errorf("[%s] tailscale up: %w", n.name, err)
+				// Bound "tailscale up" more tightly than the overall
+				// test context. It normally completes in about a second
+				// against the in-process control server, so a node that
+				// is stuck here should fail promptly, with its logs
+				// dumped, rather than hang until go test's timeout panic,
+				// which dumps nothing useful about the node.
+				upCtx, upCancel := context.WithTimeout(ctx, tailscaleUpTimeout)
+				err := e.tailscaleUp(upCtx, n)
+				upCancel()
+				if err != nil {
+					return fmt.Errorf("[%s] tailscale up (limit %v): %w", n.name, tailscaleUpTimeout, err)
 				}
 				st2, err := n.agent.Status(ctx)
 				if err != nil {
@@ -797,6 +901,12 @@ func (e *Env) Start() {
 		}
 	}
 }
+
+// tailscaleUpTimeout bounds one node's "tailscale up" in [Env.Start]
+// and the initial agent.Status.
+// It is far above the roughly one second the command takes against the
+// in-process control server, and far below the test's overall context.
+const tailscaleUpTimeout = 90 * time.Second
 
 // tailscaleUp runs "tailscale up" on the node via TTA.
 func (e *Env) tailscaleUp(ctx context.Context, n *Node) error {
@@ -999,6 +1109,14 @@ func (e *Env) Status(n *Node) *ipnstate.Status {
 	return st
 }
 
+// NodeLogs returns the tailscaled log lines the node has uploaded to the fake
+// log catcher so far, oldest first, each prefixed with the client's
+// timestamp. Uploads are batched, so lines tailscaled wrote recently may be
+// missing.
+func (e *Env) NodeLogs(n *Node) string {
+	return e.server.NodeLogs(n.vnetNode)
+}
+
 // ClientMetrics returns the client metrics exported by the given node.
 func (e *Env) ClientMetrics(n *Node) ClientMetrics {
 	e.t.Helper()
@@ -1115,6 +1233,27 @@ func (e *Env) SetAcceptRoutes(n *Node, on bool) {
 		e.t.Fatalf("SetAcceptRoutes(%s, %v): %v", n.name, on, err)
 	}
 	e.t.Logf("[%s] accept-routes=%v", n.name, on)
+}
+
+// SetAcceptDNS toggles the node's CorpDNS preference (the --accept-dns flag),
+// controlling whether it applies the DNS configuration control sends it.
+//
+// Toggling it off and back on makes tailscaled tear down and reapply its whole
+// DNS configuration, including re-reading the OS's own config, without
+// rebooting the guest. A test can therefore change the OS resolver state
+// mid-run and be sure tailscaled re-reads it.
+func (e *Env) SetAcceptDNS(n *Node, on bool) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
+		Prefs:      ipn.Prefs{CorpDNS: on},
+		CorpDNSSet: true,
+	}); err != nil {
+		e.t.Fatalf("SetAcceptDNS(%s, %v): %v", n.name, on, err)
+	}
+	e.t.Logf("[%s] accept-dns=%v", n.name, on)
 }
 
 // ApproveRoutes tells the test control server to approve subnet routes
@@ -1655,7 +1794,11 @@ func (e *Env) Tailscale(n *Node, args ...string) (string, error) {
 	for _, arg := range args {
 		q.Add("arg", arg)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/tailscale?"+q.Encode(), nil)
+	// http.Transport transparently replays a GET whose reused conn hits EOF
+	// before the response, which would run the command twice. This is not
+	// safe to do since not all tailscale commands are idempotent.
+	// Use POST to avoid these retries.
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://unused/tailscale?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -1890,22 +2033,30 @@ func (e *Env) ensureCompiled(ctx context.Context, goos, goarch string) {
 // ensureImage prepares the cloud image for os and returns any error from the
 // preparation. Safe for concurrent use; only prepares once per OS name.
 func (e *Env) ensureImage(ctx context.Context, os OSImage) error {
+	return e.prepareImageOnce(os.Name, fmt.Sprintf("Prepare %s image", os.Name), func() error {
+		return ensureImage(ctx, os)
+	})
+}
+
+// prepareImageOnce runs prepare as the web UI step stepName the first time
+// it's called for the image named imgName. Every call for that image,
+// concurrent or later, returns the error from that one run, so no node
+// boots from an image whose preparation failed.
+func (e *Env) prepareImageOnce(imgName, stepName string, prepare func() error) error {
 	e.compileMu.Lock()
-	once, ok := e.imageOnce[os.Name]
+	f, ok := e.imageOnce[imgName]
 	if !ok {
-		once = new(sync.Once)
-		mak.Set(&e.imageOnce, os.Name, once)
+		f = sync.OnceValue(func() error {
+			step := e.Step(stepName)
+			step.Begin()
+			err := prepare()
+			step.End(err)
+			return err
+		})
+		mak.Set(&e.imageOnce, imgName, f)
 	}
 	e.compileMu.Unlock()
-
-	var err error
-	once.Do(func() {
-		step := e.Step(fmt.Sprintf("Prepare %s image", os.Name))
-		step.Begin()
-		err = ensureImage(ctx, os)
-		step.End(err)
-	})
-	return err
+	return f()
 }
 
 // registerBinaries registers compiled binaries with the vnet file server.
@@ -2053,43 +2204,98 @@ func (e *Env) RecvTaildropFile(ctx context.Context, n *Node) (name string, conte
 	return name, body
 }
 
-var buildGokrazy sync.Once
+var (
+	// gokrazyBuildMu serializes gokrazy image builds, which share the
+	// gokrazy directory, and guards gokrazyBuilt.
+	gokrazyBuildMu sync.Mutex
 
-// ensureGokrazy builds the gokrazy base image (once per test process) and
-// locates the kernel. The build is fast (~4s) so we always rebuild to ensure
-// the baked-in binaries (tta, tailscale, tailscaled) match the current source.
-func (e *Env) ensureGokrazy(ctx context.Context) error {
-	if e.gokrazyBase != "" {
-		return nil // already found
+	// gokrazyBuilt is the set of gokrazy image names that this process
+	// has already built successfully.
+	gokrazyBuilt set.Set[string]
+)
+
+// GokrazyImages returns the gokrazy OS images that natlab builds from
+// source: [Gokrazy] and its minimal-feature variants. It is intended for
+// tooling such as a CI prep step that wants to prebuild them.
+func GokrazyImages() []OSImage {
+	return []OSImage{Gokrazy, GokrazyExtraSmall, GokrazyNoNATTraversal, GokrazyDERPOnly}
+}
+
+// BuildGokrazyImage builds the gokrazy image img from the current source
+// tree, writing its qcow2 file into the gokrazy directory, unless this
+// process has already built it. Build output goes to os.Stdout and
+// os.Stderr. It is safe for concurrent use.
+func BuildGokrazyImage(ctx context.Context, img OSImage) error {
+	gokrazyBuildMu.Lock()
+	defer gokrazyBuildMu.Unlock()
+	return buildGokrazyImageLocked(ctx, img)
+}
+
+func buildGokrazyImageLocked(ctx context.Context, img OSImage) error {
+	if !img.IsGokrazy {
+		return fmt.Errorf("%s is not a gokrazy image", img.Name)
 	}
-
+	if gokrazyBuilt.Contains(img.Name) {
+		return nil
+	}
 	modRoot, err := findModRoot()
 	if err != nil {
 		return err
 	}
-
-	var buildErr error
-	buildGokrazy.Do(func() {
-		e.t.Logf("building gokrazy natlab image...")
-		cmd := exec.CommandContext(ctx, "make", "natlab")
-		cmd.Dir = filepath.Join(modRoot, "gokrazy")
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			buildErr = fmt.Errorf("make natlab: %w", err)
-		}
-	})
-	if buildErr != nil {
-		return buildErr
+	args, _ := img.gokrazyMakeArgs()
+	if img.gokrazyKeep != nil {
+		log.Printf("building %s image (keeping only features %v)...", img.Name, img.gokrazyKeep)
+	} else {
+		log.Printf("building %s image...", img.Name)
 	}
+	cmd := exec.CommandContext(ctx, "make", args...)
+	cmd.Dir = filepath.Join(modRoot, "gokrazy")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("make %s: %w", args[0], err)
+	}
+	gokrazyBuilt.Make()
+	gokrazyBuilt.Add(img.Name)
+	return nil
+}
 
-	e.gokrazyBase = filepath.Join(modRoot, "gokrazy/natlabapp.qcow2")
-
-	kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+// ensureGokrazy builds the gokrazy image img (once per test process) and
+// locates the kernel. It returns the path to img's base qcow2 image.
+// The build is fast (~4s) so we always rebuild to ensure the baked-in
+// binaries (tta, tailscale, tailscaled) match the current source.
+// It is safe for concurrent use.
+func (e *Env) ensureGokrazy(ctx context.Context, img OSImage) (basePath string, err error) {
+	modRoot, err := findModRoot()
 	if err != nil {
-		return fmt.Errorf("finding kernel: %w", err)
+		return "", err
 	}
-	e.gokrazyKernel = kernel
+	if err := e.prepareImageOnce(img.Name, fmt.Sprintf("Build %s image", img.Name), func() error {
+		return e.buildGokrazy(ctx, modRoot, img)
+	}); err != nil {
+		return "", err
+	}
+	_, qcow2 := img.gokrazyMakeArgs()
+	return filepath.Join(modRoot, "gokrazy", qcow2), nil
+}
+
+// buildGokrazy builds the gokrazy image img, unless this process already
+// has, and sets e.gokrazyKernel.
+func (e *Env) buildGokrazy(ctx context.Context, modRoot string, img OSImage) error {
+	gokrazyBuildMu.Lock()
+	defer gokrazyBuildMu.Unlock()
+
+	if err := buildGokrazyImageLocked(ctx, img); err != nil {
+		return err
+	}
+
+	if e.gokrazyKernel == "" {
+		kernel, err := findKernelPath(filepath.Join(modRoot, "go.mod"))
+		if err != nil {
+			return fmt.Errorf("finding kernel: %w", err)
+		}
+		e.gokrazyKernel = kernel
+	}
 	return nil
 }
 
@@ -2258,11 +2464,11 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
 		pingCancel()
 		if err == nil && pr.Err == "" {
-			if got := classifyPing(pr); got == wantRoute {
-				e.t.Logf("Saw ping type %q", got)
+			got := classifyPing(pr)
+			e.t.Logf("Saw ping type %q", got)
+			if got == wantRoute {
 				return nil
 			} else {
-				e.t.Logf("Saw ping type %q", got)
 				lastRoute = got
 			}
 		}
@@ -2274,7 +2480,68 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
 }
 
+// PingSettle retries disco pings every 1 second between nodes from -> to. The
+// intention is to have the route settle into the desired state at ctx timeout,
+// making the last returned type the settled state of the connection. If the
+// connection is direct before the timeout, the method returns early.
+// If no ping has been completed, nil will be returned.
+func (e *Env) PingSettle(from, to *Node, timeout time.Duration) (*ipnstate.PingResult, error) {
+	e.t.Helper()
+	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
+	defer cancel()
+	toSt, err := to.agent.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ping: can't get %s status: %w", to.name, err)
+	}
+	if len(toSt.Self.TailscaleIPs) == 0 {
+		return nil, fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
+	}
+	targetIP := toSt.Self.TailscaleIPs[0]
+	var lastRes *ipnstate.PingResult
+	n := 0
+	for ctx.Err() == nil {
+		n++
+		e.t.Logf("ping: attempt %d to %v ...", n, targetIP)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+		pr, err := from.agent.PingWithOpts(pingCtx, targetIP, tailcfg.PingDisco, local.PingOpts{})
+		pingCancel()
+		if err != nil {
+			e.t.Logf("ping: attempt %d error: %v", n, err)
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if pr.Err != "" {
+			return nil, errors.New(pr.Err)
+		}
+		e.t.Logf("ping: attempt %d: derp=%d endpoint=%v latency=%v", n, pr.DERPRegionID, pr.Endpoint, pr.LatencySeconds)
+		// When DERP on the result is 0, we have settled onto a direct path.
+		if pr.DERPRegionID == 0 {
+			return pr, nil
+		}
+		lastRes = pr
+		select {
+		case <-ctx.Done():
+			return lastRes, nil
+		case <-time.After(time.Second):
+		}
+	}
+	if lastRes != nil {
+		return lastRes, nil
+	}
+	return nil, fmt.Errorf("ping: ping no response (ctx: %v)", ctx.Err())
+}
+
 // NumNodes returns the current number of nodes configured in the env.
-func (env *Env) NumNodes() int {
-	return len(env.nodes)
+func (e *Env) NumNodes() int {
+	return len(e.nodes)
+}
+
+// DropControlTraffic sets up a blackhole for control traffic for just this
+// node on all the networks belonging to the node.
+func (e *Env) DropControlTraffic(n *Node) {
+	for _, network := range n.nets {
+		network.BlackholeControlForAddr(n.LanIP(network))
+	}
 }

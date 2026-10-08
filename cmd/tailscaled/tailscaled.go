@@ -45,6 +45,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -53,6 +54,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
+	"tailscale.com/tsconst"
 	"tailscale.com/tsd"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/key"
@@ -133,6 +135,7 @@ var args struct {
 	encryptState        boolFlag
 	statedir            string
 	socketpath          string
+	windowsMode         tsconst.WindowsMode // Windows only
 	birdSocketPath      string
 	verbose             int
 	socksAddr           string // listen address for SOCKS5 server
@@ -218,6 +221,12 @@ func main() {
 	}
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
+	if runtime.GOOS == "windows" {
+		flag.Func("windows-mode", `how tailscaled is being run: "" (the default) is the Tailscale service or an administrator standing in for it, which must use the default --socket; "dev" is a developer running tailscaled by hand, which listens on \\.\pipe\tailscale-<user SID> by default and only accepts connections from that user`, func(s string) error {
+			args.windowsMode = tsconst.WindowsMode(s)
+			return nil
+		})
+	}
 	if buildfeatures.HasBird {
 		flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	}
@@ -286,6 +295,12 @@ store state on filesystem.`)
 		log.SetFlags(0)
 		log.Fatalf("--socket is required")
 	}
+	if runtime.GOOS == "windows" {
+		if err := applyWindowsMode(); err != nil {
+			log.SetFlags(0)
+			log.Fatal(err)
+		}
+	}
 
 	if buildfeatures.HasBird && args.birdSocketPath != "" && !wgengine.HookNewBird.IsSet() {
 		log.SetFlags(0)
@@ -336,6 +351,38 @@ store state on filesystem.`)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// applyWindowsMode validates --windows-mode and --socket on Windows and, in
+// dev mode, applies the per-user default socket.
+//
+// Clients trust the default socket because only administrators can create
+// pipes under its prefix. A tailscaled listening anywhere else could be any
+// user's, so it must say so with --windows-mode=dev, which also makes its
+// pipe accessible to that user alone; see [safesocket.ListenCurrentUser].
+func applyWindowsMode() error {
+	switch args.windowsMode {
+	case tsconst.WindowsModeDefault:
+		if !paths.IsWindowsProtectedPipe(args.socketpath) {
+			return fmt.Errorf("--socket=%q is not under %s, the prefix only administrators can create pipes in; the Tailscale service must use the default socket, and a developer running tailscaled by hand must pass --windows-mode=dev", args.socketpath, paths.WindowsProtectedPipePrefix)
+		}
+	case tsconst.WindowsModeDev:
+		socketSet := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "socket" {
+				socketSet = true
+			}
+		})
+		if !socketSet {
+			args.socketpath = paths.WindowsDevTailscaledSocket()
+			if args.socketpath == "" {
+				return errors.New("--windows-mode=dev: can't determine the current user for the default --socket")
+			}
+		}
+	default:
+		return fmt.Errorf("invalid --windows-mode=%q; valid values are %q (the default, for the Tailscale service) and %q", args.windowsMode, tsconst.WindowsModeDefault, tsconst.WindowsModeDev)
+	}
+	return nil
 }
 
 func trySynologyMigration(p string) error {
@@ -552,7 +599,14 @@ var sigPipe os.Signal // set by sigpipe.go
 
 // logID may be the zero value if logging is not in use.
 func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
-	ln, err := safesocket.Listen(args.socketpath)
+	listen := safesocket.Listen
+	if runtime.GOOS == "windows" && args.windowsMode == tsconst.WindowsModeDev {
+		// The developer's pipe is owned by and open only to the developer,
+		// which lets their CLI tell it apart from another user's pipe of
+		// the same name. See safesocket.ConnectCurrentUserContext.
+		listen = safesocket.ListenCurrentUser
+	}
+	ln, err := listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
@@ -726,6 +780,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	}
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
+		if f, ok := dnscache.HookSetCacheDir.GetOk(); ok {
+			f(filepath.Join(root, "dns-cache"), logf)
+		}
 	}
 	if f, ok := hookConfigureWebClient.GetOk(); ok {
 		f(lb)
@@ -784,16 +841,16 @@ func handleSubnetsInNetstack() bool {
 		return true
 	case "freebsd":
 		// FreeBSD can route subnets in the kernel and SNAT them with pf,
-		// but that is not yet the safe default: the pf NAT rule we install
-		// never matches (evaluated but never translating), and inserting the
-		// pf anchor at runtime cannot preserve the contents of tables an
-		// existing ruleset references.
+		// but that requires anchor references in the host's pf ruleset,
+		// which cannot be inserted at runtime without losing the contents
+		// of tables the ruleset references.
 		//
 		// Keep handling subnets in netstack, which does its own SNAT in
 		// userspace and touches no system state, and let the kernel path be
 		// opted into with TS_DEBUG_NETSTACK_SUBNETS=false. Only that path can
 		// serve --snat-subnet-routes=false, which netstack cannot do because
-		// it must rewrite the source address.
+		// it must rewrite the source address. The FreeBSD router reads the
+		// same knob to decide whether to touch pf and forwarding sysctls.
 		return true
 	}
 	return false
@@ -856,10 +913,12 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			return false, err
 		}
 
-		if runtime.GOOS == "plan9" {
+		if runtime.GOOS == "plan9" || runtime.GOOS == "linux" {
 			// TODO(bradfitz): why don't we do this on all platforms?
 			// TODO(barnstar): we do it on sandboxed darwin now
-			// We should. Doing it just on plan9 for now conservatively.
+			// We should. Doing it just on plan9 and Linux for now conservatively.
+			// Linux needs it for the serve and web client listeners, which
+			// require the Tailscale interface index to bind to.
 			netmon.SetTailscaleInterfaceProps(devName, 0)
 		}
 

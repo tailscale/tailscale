@@ -11,6 +11,7 @@
 package main // import "tailscale.com/cmd/derper"
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -31,9 +32,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	runtimemetrics "runtime/metrics"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -97,6 +98,12 @@ var (
 	tcpUserTimeout = flag.Duration("tcp-user-timeout", 15*time.Second, "TCP user timeout")
 	// tcpWriteTimeout is the timeout for writing to client TCP connections. It does not apply to mesh connections.
 	tcpWriteTimeout = flag.Duration("tcp-write-timeout", derpserver.DefaultTCPWiteTimeout, "TCP write timeout; 0 results in no timeout being set on writes")
+	// tcpSaveSyn enables TCP_SAVE_SYN on the listen socket (Linux only), so
+	// that the kernel retains a copy of each client's SYN packet on the
+	// accepted connections. The DERP server then reads each SYN with
+	// TCP_SAVED_SYN to recover the client's advertised MSS and publish it
+	// as a metric (see derpserver.SetTCPSaveSyn).
+	tcpSaveSyn = flag.Bool("tcp-save-syn", false, "whether to enable TCP_SAVE_SYN on the listen socket (Linux only), recovering each client's advertised TCP MSS from its saved SYN packet for metrics")
 
 	// ACE
 	flagACEEnabled = flag.Bool("ace", false, "whether to enable embedded ACE server [experimental + in-development as of 2025-09-12; not yet documented]")
@@ -199,6 +206,14 @@ func main() {
 		s.SetDisallowedAppNames(strings.Split(*disallowAppNames, ","))
 	}
 	s.SetTCPWriteTimeout(*tcpWriteTimeout)
+	if *tcpSaveSyn {
+		if runtime.GOOS == "linux" {
+			s.SetTCPSaveSyn(true)
+			log.Printf("derper: TCP_SAVE_SYN enabled; recovering client MSS from saved SYN packets")
+		} else {
+			log.Printf("derper: --tcp-save-syn is only supported on Linux; ignoring")
+		}
+	}
 	if *rateConfigPath != "" {
 		if err := s.LoadAndApplyRateConfig(*rateConfigPath); err != nil {
 			log.Fatalf("derper: loading rate config: %v", err)
@@ -303,6 +318,7 @@ func main() {
 		}
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	debug.Handle("clients/", "Connected clients", http.HandlerFunc(s.ServeDebugClients))
 	debug.Handle("set-mutex-profile-fraction", "SetMutexProfileFraction", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := r.FormValue("rate")
 		if s == "" || r.Header.Get("Sec-Debug") != "derp" {
@@ -323,7 +339,7 @@ func main() {
 	// keepalive counter, so the probe if unanswered will take effect promptly,
 	// this is less tolerant of high loss, but high loss is unexpected.
 	lc := net.ListenConfig{
-		Control:   ktimeout.UserTimeout(*tcpUserTimeout),
+		Control:   listenControlFunc(),
 		KeepAlive: *tcpKeepAlive,
 	}
 	// As of 2025-02-19, MPTCP does not support TCP_USER_TIMEOUT socket option
@@ -377,7 +393,21 @@ func main() {
 				}
 				tlsRequestVersion.Add(label, 1)
 				tlsActiveVersion.Add(label, 1)
-				defer tlsActiveVersion.Add(label, -1)
+				// Handlers that hijack the connection (DERP, its
+				// WebSocket flavor, CONNECT) return before the
+				// connection is done, so the active gauge must be
+				// held until the hijacked connection closes rather
+				// than until the handler returns.
+				htw := &hijackTrackingResponseWriter{
+					ResponseWriter: w,
+					onConnClose:    func() { tlsActiveVersion.Add(label, -1) },
+				}
+				w = htw
+				defer func() {
+					if !htw.hijacked {
+						tlsActiveVersion.Add(label, -1)
+					}
+				}()
 
 				if r.Method == "CONNECT" {
 					serveConnect(s, w, r)
@@ -403,7 +433,9 @@ func main() {
 					// duration exceeds server's WriteTimeout".
 					WriteTimeout: 5 * time.Minute,
 				}
-				ln, err := lc.Listen(context.Background(), "tcp", port80srv.Addr)
+				httpLC := lc
+				httpLC.Control = ktimeout.UserTimeout(*tcpUserTimeout)
+				ln, err := httpLC.Listen(context.Background(), "tcp", port80srv.Addr)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -416,7 +448,7 @@ func main() {
 				}
 			}()
 		}
-		err = rateLimitedListenAndServeTLS(httpsrv, &lc)
+		err = rateLimitedListenAndServeTLS(httpsrv, &lc, s)
 	} else {
 		log.Printf("derper: serving on %s", *addr)
 		var ln net.Listener
@@ -424,10 +456,25 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		ln = newTCPSaveSynListener(ln, s)
+		defer ln.Close()
 		err = httpsrv.Serve(ln)
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
+	}
+}
+
+// listenControlFunc returns the net.ListenConfig.Control function used by
+// derper's listeners: it composes ktimeout's TCP_USER_TIMEOUT with the
+// TCP_SAVE_SYN option from --tcp-save-syn (a no-op on non-Linux platforms).
+func listenControlFunc() func(network, address string, c syscall.RawConn) error {
+	userTimeoutControl := ktimeout.UserTimeout(*tcpUserTimeout)
+	return func(network, address string, c syscall.RawConn) error {
+		if err := userTimeoutControl(network, address, c); err != nil {
+			return err
+		}
+		return controlTCPSaveSyn(network, c)
 	}
 }
 
@@ -478,11 +525,12 @@ func defaultMeshPSKFile() string {
 	return ""
 }
 
-func rateLimitedListenAndServeTLS(srv *http.Server, lc *net.ListenConfig) error {
+func rateLimitedListenAndServeTLS(srv *http.Server, lc *net.ListenConfig, s *derpserver.Server) error {
 	ln, err := lc.Listen(context.Background(), "tcp", cmp.Or(srv.Addr, ":https"))
 	if err != nil {
 		return err
 	}
+	ln = newTCPSaveSynListener(ln, s)
 	rln := newRateLimitedListener(ln, rate.Limit(*acceptConnLimit), *acceptConnBurst)
 	expvar.Publish("tls_listener", rln.ExpVar())
 	defer rln.Close()
@@ -532,19 +580,6 @@ func (ln *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	ln.numAccepts.Add(1)
 	return cn, nil
-}
-
-func init() {
-	expvar.Publish("go_sync_mutex_wait_seconds", expvar.Func(func() any {
-		const name = "/sync/mutex/wait/total:seconds" // Go 1.20+
-		var s [1]runtimemetrics.Sample
-		s[0].Name = name
-		runtimemetrics.Read(s[:])
-		if v := s[0].Value; v.Kind() == runtimemetrics.KindFloat64 {
-			return v.Float64()
-		}
-		return 0
-	}))
 }
 
 type templateData struct {
@@ -627,3 +662,58 @@ func getHomeHandler(val string) (_ http.Handler, ok bool) {
 	}
 	return nil, false
 }
+
+// hijackTrackingResponseWriter wraps an http.ResponseWriter and watches
+// for the handler hijacking the connection, in which case it arranges
+// for onConnClose to run once when the hijacked connection is closed.
+// It exists so the TLS active-connection gauge tracks the lifetime of
+// hijacked connections (DERP and CONNECT), whose handlers return well
+// before the connection is done.
+type hijackTrackingResponseWriter struct {
+	http.ResponseWriter
+	onConnClose func()
+
+	// hijacked reports whether Hijack was called successfully. It is
+	// only used from the handler's goroutine, so it needs no locking.
+	hijacked bool
+}
+
+// Unwrap supports http.ResponseController.
+func (w *hijackTrackingResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *hijackTrackingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *hijackTrackingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
+	}
+	c, brw, err := hj.Hijack()
+	if err != nil {
+		return c, brw, err
+	}
+	w.hijacked = true
+	return &closeHookConn{Conn: c, onClose: w.onConnClose}, brw, nil
+}
+
+// closeHookConn is a net.Conn wrapper that runs onClose once when the
+// connection is closed.
+type closeHookConn struct {
+	net.Conn
+	onClose   func()
+	closeOnce sync.Once
+}
+
+func (c *closeHookConn) Close() error {
+	c.closeOnce.Do(c.onClose)
+	return c.Conn.Close()
+}
+
+// NetConn returns the underlying connection, letting code that walks
+// connection wrappers (such as derpserver's TCP RTT stats) reach the
+// *net.TCPConn below.
+func (c *closeHookConn) NetConn() net.Conn { return c.Conn }

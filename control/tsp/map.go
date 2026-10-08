@@ -21,6 +21,7 @@ import (
 	"tailscale.com/control/ts2021"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/httpbody"
 )
 
 // errSessionClosed is returned by [MapSession.Next] and
@@ -362,6 +363,11 @@ func (c *Client) Map(ctx context.Context, opts MapOpts) (*MapSession, error) {
 
 	url := c.serverURL + "/machine/map"
 	url = strings.Replace(url, "http:", "https:", 1)
+	// The response body is a stream of framed messages, each capped by
+	// maxMessageSize below, but a streaming session can carry an unbounded
+	// number of them over one body, so it must not be subject to
+	// ts2021.Client.Do's default response size cap.
+	ctx = httpbody.WithMaxSize(ctx, 0)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("creating map request: %w", err)
@@ -374,6 +380,9 @@ func (c *Client) Map(ctx context.Context, opts MapOpts) (*MapSession, error) {
 	}
 
 	if res.StatusCode != 200 {
+		// The body is an error message rather than a message stream, so
+		// cap it: the map body itself is uncapped per the comment above.
+		httpbody.LimitSizeTo(res, httpbody.DefaultMaxSize)
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return nil, fmt.Errorf("map request: http %d: %.200s",

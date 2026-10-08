@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -113,29 +114,16 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 		// full copy of the binary. We can't use os.Link(b.Path, ret.Path)
 		// because b.Path is in the first test's TempDir, which may be
 		// cleaned up before later tests call CopyTo. The open FD keeps the
-		// inode alive after the path is deleted.
+		// inode alive after the path is deleted, but only for reading:
+		// once the inode's link count drops to zero the kernel refuses
+		// to hardlink it again, so this fails and we fall through to
+		// copying the bytes instead.
 		if err := tryLinkat(b.FD, ret.Path); err == nil {
 			return ret, nil
 		}
 		fallthrough
 	case "darwin", "freebsd", "openbsd", "netbsd":
-		f, err := os.OpenFile(ret.Path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
-		if err != nil {
-			return BinaryInfo{}, err
-		}
-		b.FDMu.Lock()
-		b.FD.Seek(0, 0)
-		size, err := io.Copy(f, b.FD)
-		b.FDMu.Unlock()
-		if err != nil {
-			f.Close()
-			return BinaryInfo{}, fmt.Errorf("copying %q: %w", b.Path, err)
-		}
-		if size != b.Size {
-			f.Close()
-			return BinaryInfo{}, fmt.Errorf("copy %q: size mismatch: %d != %d", b.Path, size, b.Size)
-		}
-		if err := f.Close(); err != nil {
+		if err := b.writeCopy(ret.Path); err != nil {
 			return BinaryInfo{}, err
 		}
 		return ret, nil
@@ -146,12 +134,51 @@ func (b BinaryInfo) CopyTo(dir string) (BinaryInfo, error) {
 	}
 }
 
+// writeCopy writes the binary's contents from b.FD to path.
+//
+// It holds syscall.ForkLock for reading for the duration of the write
+// so that no concurrently forked child inherits the transient write
+// FD. A forked child holds inherited FDs (even O_CLOEXEC ones) until
+// it execs, and an exec of the new copy fails with ETXTBSY as long as
+// any process holds a write FD on it (golang.org/issue/22315). This
+// was the cause of the once-mysterious ETXTBSY errors
+// (https://github.com/tailscale/tailscale/issues/15868) that
+// [TestNode.awaitTailscaledRunnable] retries around.
+func (b BinaryInfo) writeCopy(path string) error {
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o755)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b.FDMu.Lock()
+	b.FD.Seek(0, 0)
+	size, err := io.Copy(f, b.FD)
+	b.FDMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("copying %q: %w", b.Path, err)
+	}
+	if size != b.Size {
+		return fmt.Errorf("copy %q: size mismatch: %d != %d", b.Path, size, b.Size)
+	}
+	return f.Close()
+}
+
 // GetBinaries create a temp directory using tb and builds (or copies previously
 // built) cmd/tailscale and cmd/tailscaled binaries into that directory.
 //
 // It fails tb if the build or binary copies fail.
 func GetBinaries(tb testing.TB) *Binaries {
 	dir := tb.TempDir()
+	// Working around an issue with GitHub runners where provjobd.exe can keep files
+	// open for longer than the 2s tb.TempDir's own cleanup allows. See #21099.
+	tb.Cleanup(func() {
+		if err := tstest.WaitFor(60*time.Second, func() error { return os.RemoveAll(dir) }); err != nil {
+			tb.Logf("removing %s: %v", dir, err)
+		}
+	})
 	buildOnce.Do(func() {
 		buildErr = buildTestBinaries(dir)
 	})
@@ -890,10 +917,11 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 }
 
 // awaitTailscaledRunnable tries to run `tailscaled --version` until it
-// works. This is an unsatisfying workaround for ETXTBSY we were seeing
-// on GitHub Actions that aren't understood. It's not clear what's holding
-// a writable fd to tailscaled after `go install` completes.
-// See https://github.com/tailscale/tailscale/issues/15868.
+// works. It began as a workaround for mysterious ETXTBSY errors on
+// GitHub Actions (https://github.com/tailscale/tailscale/issues/15868),
+// whose cause is now understood and fixed (see [BinaryInfo.writeCopy]).
+// It remains as cheap insurance against any other transient exec
+// failure.
 func (n *TestNode) awaitTailscaledRunnable() error {
 	t := n.env.t
 	t.Helper()
@@ -974,6 +1002,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		// On Windows, tailscaled defaults to a fixed port (41641).
 		// Force a random port to avoid collisions when running multiple test nodes.
 		cmd.Args = append(cmd.Args, "--port=0")
+		// The test's per-node pipe isn't under the administrators-only
+		// prefix that tailscaled otherwise insists on.
+		cmd.Args = append(cmd.Args, "--windows-mode=dev")
 	}
 	if *verboseTailscaled {
 		cmd.Args = append(cmd.Args, "-verbose=2")
@@ -1019,7 +1050,12 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill() })
+	// Wait too: Kill only requests termination, and Windows holds the executable
+	// until the process is gone. See #21099.
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Process.Wait()
+	})
 	return &Daemon{
 		Process: cmd.Process,
 		node:    n,
@@ -1271,9 +1307,9 @@ func (n *TestNode) PublicKey() string {
 	return st.Self.PublicKey
 }
 
-// NLPublicKey returns the hex-encoded tailnet lock public key of
+// TLPublicKey returns the hex-encoded tailnet lock public key of
 // this node, e.g. `tlpub:123456abc`
-func (n *TestNode) NLPublicKey() string {
+func (n *TestNode) TLPublicKey() string {
 	tb := n.env.t
 	tb.Helper()
 	cmd := n.Tailscale("lock", "status", "--json")
@@ -1288,6 +1324,11 @@ func (n *TestNode) NLPublicKey() string {
 		tb.Fatalf("decoding `tailscale lock status` JSON: %v\njson:\n%s", err, out)
 	}
 	return st.PublicKey
+}
+
+// Deprecated: use [TestNode.TLPublicKey] instead.
+func (n *TestNode) NLPublicKey() string {
+	return n.TLPublicKey()
 }
 
 // trafficTrap is an HTTP proxy handler to note whether any

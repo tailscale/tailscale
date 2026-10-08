@@ -39,7 +39,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		cgoCflags   = []string{"-O3", "-std=gnu11", "-g"}
 		cgoLdflags  []string
 		ldflags     []string
-		tags        = []string{"tailscale_go"}
+		tags        []string // the tailscale_go tag is set by the toolchain itself
 		cgo         = false
 		failReflect = false
 	)
@@ -125,7 +125,6 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		fallthrough
 	case "darwin":
 		cgo = nativeGOOS == "darwin"
-		tags = append(tags, "omitidna", "omitpemdecrypt")
 		if env.IsSet("XCODE_VERSION_ACTUAL") {
 			// If we're building via Xcode, we must be making the extension
 			// version (as opposed to tailscaled on Mac).

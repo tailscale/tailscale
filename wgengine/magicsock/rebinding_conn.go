@@ -43,9 +43,11 @@ type RebindingUDPConn struct {
 // disrupting surrounding code that assumes nettype.PacketConn is a
 // *net.UDPConn. knobs may be nil.
 func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn, network string, knobs *controlknobs.Knobs) {
-	upc := batching.TryUpgradeToConn(p, network, "magicsock_udp_rxq_overflows", knobs)
-	c.pconn = upc
-	c.pconnAtomic.Store(&upc)
+	if hasUDPTransport {
+		p = batching.TryUpgradeToConn(p, network, "magicsock_udp_rxq_overflows", knobs)
+	}
+	c.pconn = p
+	c.pconnAtomic.Store(&p)
 	c.port = uint16(c.localAddrLocked().Port)
 }
 

@@ -1,0 +1,1504 @@
+#!/bin/sh
+# Copyright (c) 2007-2025 Roy Marples
+# All rights reserved
+
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above
+#       copyright notice, this list of conditions and the following
+#       disclaimer in the documentation and/or other materials provided
+#       with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+RESOLVCONF="$0"
+OPENRESOLV_VERSION="3.17.4"
+SYSCONFDIR=@SYSCONFDIR@
+LIBEXECDIR=@LIBEXECDIR@
+VARDIR=@VARDIR@
+RCDIR=@RCDIR@
+RESTARTCMD=@RESTARTCMD@
+
+if [ "$1" = "--version" ]; then
+	echo "openresolv $OPENRESOLV_VERSION"
+	echo "Copyright (c) 2007-2025 Roy Marples"
+	exit 0
+fi
+
+# Disregard dhcpcd setting
+unset interface_order state_dir
+
+# If you change this, change the test in VFLAG and libc.in as well
+local_nameservers="127.* 0.0.0.0 255.255.255.255 ::1"
+
+dynamic_order="tap[0-9]* tun[0-9]* vpn vpn[0-9]* wg[0-9]* ppp[0-9]* ippp[0-9]*"
+interface_order="lo lo[0-9]*"
+name_server_blacklist="0.0.0.0"
+
+# Poor mans cat
+# /usr might not be available
+cat()
+{
+	OIFS="$IFS"
+	IFS=''
+	if [ -n "$1" ]; then
+		while read -r line; do
+			printf "%s\n" "$line"
+		done < "$1"
+	else
+		while read -r line; do
+			printf "%s\n" "$line"
+		done
+	fi
+	retval=$?
+	IFS="$OIFS"
+	return $retval
+}
+
+
+# Support original resolvconf configuration layout
+# as well as the openresolv config file
+if [ -f "$SYSCONFDIR"/resolvconf.conf ]; then
+	. "$SYSCONFDIR"/resolvconf.conf
+	[ -n "$state_dir" ] && VARDIR="$state_dir"
+elif [ -d "$SYSCONFDIR/resolvconf" ]; then
+	SYSCONFDIR="$SYSCONFDIR/resolvconf"
+	if [ -f "$SYSCONFDIR"/interface-order ]; then
+		interface_order="$(cat "$SYSCONFDIR"/interface-order)"
+	fi
+fi
+
+KEYDIR="$VARDIR/keys"
+METRICDIR="$VARDIR/metrics"
+PRIVATEDIR="$VARDIR/private"
+NOSEARCHDIR="$VARDIR/nosearch"
+EXCLUSIVEDIR="$VARDIR/exclusive"
+DEPRECATEDDIR="$VARDIR/deprecated"
+LOCKDIR="$VARDIR/lock"
+_PWD="$PWD"
+
+# Compat
+if [ ! -d "$KEYDIR" ] && [ -d "$VARDIR/interfaces" ]; then
+	KEYDIR="$VARDIR/interfaces"
+fi
+: ${allow_keys:="$allow_interfaces"}
+: ${deny_keys:="$deny_interfaces"}
+: ${key_order:="$interface_order"}
+: ${inclusive_keys:="$inclusive_interfaces"}
+: ${exclusive_keys:="$exclusive_interfaces"}
+: ${private_keys:="$private_interfaces"}
+: ${public_keys:="$public_interfaces"}
+
+warn()
+{
+	echo "${RESOLVCONF##*/}: $*" >&2
+}
+
+error_exit()
+{
+	warn "$*"
+	exit 1
+}
+
+usage()
+{
+	cat <<-EOF
+	Usage: ${RESOLVCONF##*/} [options] command [argument]
+
+	Inform the system about any DNS updates.
+
+	Commands:
+	  -a \$KEY          Add DNS information to the specified key
+	                   (DNS supplied via stdin in resolv.conf format)
+	  -C \$PATTERN      Deprecate DNS information for matched key
+	  -c \$PATTERN      Configure DNS information for matched key
+	  -d \$PATTERN      Delete DNS information from the matched key
+	  -h               Show this help cruft
+	  -i [\$PATTERN]    Show keys that have supplied DNS information
+                   optionally from keys that match the specified
+                   pattern
+	  -l [\$PATTERN]    Show DNS information, optionally from keys
+	                   that match the specified pattern
+	  -L [\$PATTERN]    Same as -l, but adjusted by our config
+
+	  -u               Run updates from our current DNS information
+	  --version        Echo the ${RESOLVCONF##*/} version
+
+	Options:
+	  -f               Ignore non existent keys
+	  -m metric        Give the added DNS information a metric
+	  -p               Mark the resolv.conf as private
+	  -x               Mark the resolv.conf as exclusive
+
+	Subscriber and System Init Commands:
+	  -I               Init the state dir
+	  -r \$SERVICE      Restart the system service
+	                   (restarting a non-existent or non-running service
+	                    should have no output and return 0)
+	  -R               Show the system service restart command
+	  -v [\$PATTERN]    echo NEWDOMAIN, NEWSEARCH and NEWNS variables to
+	  		   the console
+	  -V [\$PATTERN]    Same as -v, but only uses configuration in
+	                   $SYSCONFDIR/resolvconf.conf
+	EOF
+	[ -z "$1" ] && exit 0
+	echo
+	error_exit "$@"
+}
+
+public_key() {
+	key="$1"
+
+	# Allow expansion
+	cd "$KEYDIR"
+
+	# Public keys override private ones.
+	for p in $public_keys; do
+		case "$key" in
+		"$p"|"$p":*) return 0;;
+		esac
+	done
+
+	return 1
+}
+
+private_key()
+{
+	key="$1"
+
+	if public_key "$key"; then
+	       	return 1
+	fi
+
+	if [ -e "$PRIVATEDIR/$key" ]; then
+		return 0
+	fi
+
+	for p in $private_keys; do
+		case "$key" in
+		"$p"|"$p":*) return 0;;
+		esac
+	done
+
+	# Not a private key
+	return 1
+}
+
+nosearch_key()
+{
+	key="$1"
+
+	if public_key "$key"; then
+	       	return 1
+	fi
+
+	if [ -e "$NOSEARCHDIR/$key" ]; then
+		return 0
+	fi
+
+	for p in $nosearch_keys; do
+		case "$key" in
+		"$p"|"$p":*) return 0;;
+		esac
+	done
+
+	# Not a non searchable key
+	return 1
+}
+
+exclusive_key()
+{
+	key="$1"
+
+	for x in "$EXCLUSIVEDIR/"*" $key"; do
+		if [ -f "$x" ]; then
+			return 0
+		fi
+	done
+
+	# Not an exclusive key
+	return 1
+}
+
+# Quote input so it can be safely used for variable assignment via eval
+quote()
+{
+	if [ -z "$1" ]; then
+		R="''"
+	else
+		R=
+		for W; do
+			while [ -n "$W" ]; do
+				case "$W" in
+				\'*)  R="$R\\'"; W=${W#?};;
+				?\'*) R="$R\\${W%%\'*}"; W="${W#?}";;
+				*\'*) R="$R'${W%%\'*}'"; W="'${W#*\'}";;
+				?)    R="$R\\$W"; W=;;
+				*)    R="$R'$W'"; W=;;
+				esac
+			done
+		done
+	fi
+
+	printf '%s\n' "$R"
+	return 0
+}
+
+# Parse resolv.conf's and make variables
+# for domain name servers, search name servers and global nameservers
+# Important! Each printf here should use the above quote function
+# to ensure that user input is quoted for eval.
+parse_resolv()
+{
+	domain=
+	new=true
+	newns=
+	ns=
+	private=false
+	nosearch=false
+	search=
+
+	while read -r line; do
+		value="${line#* }"
+		case "$line" in
+		"# resolv.conf from "*)
+			if ${new}; then
+				key="${line#\# resolv.conf from *}"
+				new=false
+				if nosearch_key "$key"; then
+					private=true
+					nosearch=true
+				elif private_key "$key"; then
+					private=true
+					nosearch=false
+				else
+					private=false
+					nosearch=false
+				fi
+			fi
+			;;
+		"nameserver "*)
+			islocal=false
+			for l in $local_nameservers; do
+				case "$value" in
+				$l)
+					islocal=true
+					break
+					;;
+				esac
+			done
+			if $islocal; then
+				printf 'LOCALNAMESERVERS="$LOCALNAMESERVERS "%s\n' "$(quote "$value")"
+			else
+				ns="$ns${ns:+ }$value"
+			fi
+			;;
+		"domain "*)
+			search="$value"
+			if [ -z "$domain" ]; then
+				domain="$search"
+				if ! $nosearch; then
+					printf 'DOMAIN=%s\n' "$(quote "$domain")"
+				fi
+			fi
+			;;
+		"search "*)
+			search="$value"
+			;;
+		*)
+			[ -n "$line" ] && continue
+			if [ -n "$ns" ] && [ -n "$search" ]; then
+				newns=
+				for n in $ns; do
+					newns="$newns${newns:+,}$n"
+				done
+				ds=
+				for d in $search; do
+					ds="$ds${ds:+ }$d:$newns"
+				done
+				printf 'DOMAINS="$DOMAINS "%s\n' "$(quote "$ds")"
+			fi
+			if ! $nosearch; then
+				printf 'SEARCH="$SEARCH "%s\n' "$(quote "$search")"
+			fi
+			if ! $private; then
+				printf 'NAMESERVERS="$NAMESERVERS "%s\n' "$(quote "$ns")"
+			fi
+			ns=
+			search=
+			new=true
+			;;
+		esac
+	done
+}
+
+uniqify()
+{
+	result=
+	while [ -n "$1" ]; do
+		case " $result " in
+		*" $1 "*);;
+		*) result="$result $1";;
+		esac
+		shift
+	done
+	echo "${result# *}"
+}
+
+dirname()
+{
+	OIFS="$IFS"
+	IFS=/
+	set -- $@
+	IFS="$OIFS"
+	if [ -n "$1" ]; then
+		printf %s .
+	else
+		shift
+	fi
+	while [ -n "$2" ]; do
+		printf "/%s" "$1"
+		shift
+	done
+	printf "\n"
+}
+
+config_mkdirs()
+{
+	for f; do
+		[ -n "$f" ] || continue
+		d="$(dirname "$f")"
+		if [ ! -d "$d" ]; then
+			mkdir -p "$d" || return $?
+		fi
+	done
+	return 0
+}
+
+# With the advent of alternative init systems, it's possible to have
+# more than one installed. So we need to try and guess what one we're
+# using unless overridden by configure.
+# Note that restarting a service is a last resort - the subscribers
+# should make a reasonable attempt to reconfigure the service via some
+# method, normally SIGHUP.
+detect_init()
+{
+	[ -n "$RESTARTCMD" ] && return 0
+
+	# Detect the running init system.
+	# As systemd and OpenRC can be installed on top of legacy init
+	# systems we try to detect them first.
+	status="@STATUSARG@"
+	: ${status:=status}
+	if [ -x /bin/systemctl ] && [ -S /run/systemd/private ]; then
+		RESTARTCMD='
+			if /bin/systemctl --quiet is-active $1.service
+			then
+				/bin/systemctl restart $1.service
+			fi'
+	elif [ -x /usr/bin/systemctl ] && [ -S /run/systemd/private ]; then
+		RESTARTCMD='
+			if /usr/bin/systemctl --quiet is-active $1.service
+			then
+				/usr/bin/systemctl restart $1.service
+			fi'
+	elif [ -x /sbin/rc-service ] &&
+	     { [ -s /libexec/rc/init.d/softlevel ] ||
+	     [ -s /run/openrc/softlevel ]; }
+	then
+		RESTARTCMD='/sbin/rc-service -i $1 -- -Ds restart'
+	elif [ -x /usr/sbin/invoke-rc.d ]; then
+		RCDIR=/etc/init.d
+		RESTARTCMD='
+		   if /usr/sbin/invoke-rc.d --quiet $1 status >/dev/null 2>&1
+		   then
+			/usr/sbin/invoke-rc.d $1 restart
+		   fi'
+	elif [ -x /usr/bin/s6-rc ] && [ -x /usr/bin/s6-svc ]; then
+		RESTARTCMD='
+		   if s6-rc -a list 2>/dev/null | grep -qFx $1-srv
+		   then
+			s6-svc -r /run/service/$1-srv
+		   fi'
+	elif [ -x /sbin/service ]; then
+		# Old RedHat
+		RCDIR=/etc/init.d
+		RESTARTCMD='
+			if /sbin/service $1; then
+				/sbin/service $1 restart
+			fi'
+	elif [ -x /usr/sbin/service ]; then
+		# Could be FreeBSD
+		RESTARTCMD="
+			if /usr/sbin/service \$1 $status >/dev/null 2>&1
+			then
+				/usr/sbin/service \$1 restart
+			fi"
+	elif [ -x /bin/sv ]; then
+		RESTARTCMD='/bin/sv status $1 >/dev/null 2>&1 &&
+			    /bin/sv try-restart $1'
+	elif [ -x /usr/bin/sv ]; then
+		RESTARTCMD='/usr/bin/sv status $1 >/dev/null 2>&1 &&
+			    /usr/bin/sv try-restart $1'
+	elif [ -e /etc/arch-release ] && [ -d /etc/rc.d ]; then
+		RCDIR=/etc/rc.d
+		RESTARTCMD='
+			if [ -e /var/run/daemons/$1 ]
+			then
+				/etc/rc.d/$1 restart
+			fi'
+	elif [ -e /etc/slackware-version ] && [ -d /etc/rc.d ]; then
+		RESTARTCMD='
+			if /etc/rc.d/rc.$1 status >/dev/null 2>&1
+			then
+				/etc/rc.d/rc.$1 restart
+			fi'
+	elif [ -e /etc/rc.d/rc.subr ] && [ -d /etc/rc.d ]; then
+		# OpenBSD
+		RESTARTCMD='
+			if /etc/rc.d/$1 check >/dev/null 2>&1
+			then
+				/etc/rc.d/$1 restart
+			fi'
+	elif [ -d /etc/dinit.d ] && command -v dinitctl >/dev/null 2>&1; then
+		RESTARTCMD='dinitctl --quiet restart --ignore-unstarted $1'
+	else
+		for x in /etc/init.d/rc.d /etc/rc.d /etc/init.d; do
+			[ -d $x ] || continue
+			RESTARTCMD="
+				if $x/\$1 $status >/dev/null 2>&1
+				then
+					$x/\$1 restart
+				fi"
+			break
+		done
+	fi
+
+	if [ -z "$RESTARTCMD" ]; then
+		if [ "$_NOINIT_WARNED" != true ]; then
+			warn "could not detect a useable init system"
+			_NOINIT_WARNED=true
+		fi
+		return 1
+	fi
+	_NOINIT_WARNED=
+	return 0
+}
+
+echo_resolv()
+{
+	OIFS="$IFS"
+
+	[ -n "$1" ] && [ -f "$KEYDIR/$1" ] || return 1
+	echo "# resolv.conf from $1"
+	# Our variable maker works of the fact each resolv.conf per key
+	# is separated by blank lines.
+	# So we remove them when echoing them.
+	while read -r line; do
+		IFS="$OIFS"
+		if [ -n "$line" ]; then
+			# We need to set IFS here to preserve any whitespace
+			IFS=''
+			printf "%s\n" "$line"
+		fi
+	done < "$KEYDIR/$1"
+	IFS="$OIFS"
+}
+
+deprecated_key()
+{
+	[ -d "$DEPRECATEDDIR" ] || return 1
+
+	cd "$DEPRECATEDDIR"
+	for da; do
+		for daf in *; do
+			[ -f "$daf" ] || continue
+			case "$da" in
+			$daf) return 0;;
+			esac
+		done
+	done
+	return 1
+}
+
+match()
+{
+	match="$1"
+	file="$2"
+	retval=1
+	count=0
+
+	while read -r keyword value; do
+		new_match=
+		for om in $match; do
+			m="$om"
+			keep=
+			while [ -n "$m" ]; do
+				k="${m%%/*}"
+				r="${m#*/}"
+				f="${r%%/*}"
+				r="${r#*/}"
+				# If the length of m is the same as k/f then
+				# we know that we are done
+				if [ ${#m} = $((${#k} + 1 + ${#f})) ]; then
+					r=
+				fi
+				m="$r"
+				matched=false
+				case "$keyword" in
+				$k)
+					case "$value" in
+					$f)
+						matched=true
+						;;
+					esac
+					;;
+				esac
+				if ! $matched; then
+					keep="$keep${keep:+/}$k/$f"
+				fi
+			done
+			if [ -n "$om" ] && [ -z "$keep" ]; then
+				retval=0
+				break 2
+			fi
+			new_match="${new_match}${new_match:+ }${keep}"
+		done
+		match="${new_match}"
+	done < "$file"
+	return $retval
+}
+
+list_keys() {
+	list_cmd="$1"
+	shift
+
+	[ -d "$KEYDIR" ] || return 0
+	cd "$KEYDIR"
+
+	[ -n "$1" ] || set -- "*"
+	list=
+	retval=0
+	if [ "$list_cmd" = -i ] || [ "$list_cmd" = -l ]; then
+		for i in $@; do
+			if [ ! -f "$i" ]; then
+				if ! $force && [ "$i" != "*" ]; then
+					echo "No resolv.conf for key $i" >&2
+				fi
+				retval=2
+			       	continue
+			fi
+			list="$list $i"
+		done
+		[ -z "$list" ] || uniqify $list
+		return $retval
+	fi
+
+	if [ "$list_cmd" != -I ] && [ "$list_cmd" != -L ]; then
+		echo "list_keys: unknown command $list_cmd" >&2
+		return 1
+	fi
+
+	if [ -d "$EXCLUSIVEDIR" ]; then
+		cd "$EXCLUSIVEDIR"
+		for i in $EXCLUSIVEDIR/*; do
+			if [ -f "$i" ]; then
+				cd "$KEYDIR"
+				for ii in $inclusive_keys; do
+					if [ -f "$ii" ] && [ "${i#* }" = "$ii" ]; then
+						continue 2
+					fi
+				done
+				list="${i#* }"
+				break
+			fi
+		done
+		cd "$KEYDIR"
+		if [ -n "$list" ]; then
+			for i in $@; do
+				# list will be one item due to the above
+				if [ -f "$i" ] && [ "$i" = "$list" ]; then
+					echo "$i"
+					return 0
+				fi
+			done
+			return 0
+		fi
+	fi
+
+	for i in $key_order; do
+		for ii in "$i" "$i":* "$i".*; do
+			[ -f "$ii" ] && list="$list $ii"
+		done
+	done
+
+	for i in $dynamic_order; do
+		for ii in "$i" "$i":* "$i".*; do
+			if [ -f "$ii" ] && ! [ -e "$METRICDIR/"*" $ii" ]
+			then
+				list="$list $ii"
+			fi
+		done
+	done
+
+	# Interfaces have an implicit metric of 0 if not specified.
+	for i in *; do
+		if [ -f "$i" ] && ! [ -e "$METRICDIR/"*" $i" ]; then
+			list="$list $i"
+		fi
+	done
+
+	if [ -d "$METRICDIR" ]; then
+		cd "$METRICDIR"
+		for i in *; do
+			[ -f "$i" ] && list="$list ${i#* }"
+		done
+		cd "$KEYDIR"
+	fi
+
+	# Move deprecated keys to the back
+	active=
+	deprecated=
+	for i in $list; do
+		if deprecated_key "$i"; then
+			deprecated="$deprecated $i"
+		else
+			active="$active $i"
+		fi
+	done
+	list="$active $deprecated"
+
+	retval=0
+	if [ "$1" != "*" ]; then
+		cd "$KEYDIR"
+		matched=
+		for i in $@; do
+			if ! [ -f "$i" ]; then
+				if ! $force; then
+					echo "No resolv.conf for key $i" >&2
+				fi
+				retval=2
+				continue
+			fi
+			for ii in $list; do
+				if [ "$i" = "$ii" ]; then
+					matched="$matched${matched:+ }$i"
+					break
+				fi
+			done
+		done
+		if [ -z "$matched" ]; then
+			return $retval
+		fi
+		list="$matched"
+	fi
+
+	allowed=
+	for i in $(uniqify $list); do
+		if [ -n "$allow_keys" ]; then
+			x=false
+			for ii in $allow_keys; do
+				if [ "$i" = "$ii" ]; then
+					x=true
+					break
+				fi
+			done
+			$x || continue
+		fi
+		for ii in $deny_keys; do
+			if [ "$i" = "$ii" ]; then
+				continue 2
+			fi
+		done
+
+		if [ -n "$exclude" ] && match "$exclude" "$i"; then
+			continue
+		fi
+		allowed="$allowed${allowed:+ }$i"
+	done
+
+	cd "$KEYDIR"
+	for i in $exclusive_keys; do
+		for ii in $allowed; do
+			if [ "$i" = "$ii" ]; then
+				echo "$i"
+				return
+			fi
+		done
+	done
+	[ -z "$allowed" ] || echo "$allowed"
+}
+
+list_resolv()
+{
+	keys="$(list_keys "$@")"
+	retval=$?
+	if [ "$retval" != 0 ]; then
+		return $retval
+	fi
+	for i in $keys; do
+		echo_resolv "$i" && echo
+	done
+}
+
+list_private()
+{
+	KEYS=
+	cd "$KEYDIR"
+	if [ -z "$1" ]; then
+		set -- "*"
+	fi
+	for i in $@; do
+		if private_key "$i"; then
+		KEYS="${KEYS}${KEYS:+ }$i"
+		fi
+	done
+	if [ -n "$KEYS" ]; then
+		echo "$KEYS"
+	fi
+}
+
+list_nosearch()
+{
+
+	KEYS=
+	cd "$KEYDIR"
+	if [ -z "$1" ]; then
+		set -- "*"
+	fi
+	for i in $@; do
+		if nosearch_key "$i"; then
+			KEYS="${KEYS}${KEYS:+ }$i"
+		fi
+	done
+	if [ -n "$KEYS" ]; then
+		echo "$KEYS"
+	fi
+}
+
+list_exclusive()
+{
+	KEYS=
+	cd "$KEYDIR"
+	if [ -z "$1" ]; then
+		set -- "*"
+	fi
+	for i in $@; do
+		if exclusive_key "$i"; then
+			KEYS="${KEYS}${KEYS:+ }$i"
+		fi
+	done
+	if [ -n "$KEYS" ]; then
+		echo "$KEYS"
+	fi
+}
+
+list_remove()
+{
+	[ -z "$2" ] && return 0
+	eval list=\"\$$1\"
+	shift
+	result=
+	retval=0
+
+	set -f
+	for e; do
+		found=false
+		for l in $list; do
+			case "$e" in
+			$l) found=true;;
+			esac
+			$found && break
+		done
+		if $found; then
+			retval=$(($retval + 1))
+		else
+			result="$result $e"
+		fi
+	done
+	set +f
+	echo "${result# *}"
+	return $retval
+}
+
+echo_prepend()
+{
+	echo "# Generated by resolvconf"
+	if [ -n "$search_domains" ]; then
+		echo "search $search_domains"
+	fi
+	for n in $name_servers; do
+		echo "nameserver $n"
+	done
+	echo
+}
+
+echo_append()
+{
+	echo "# Generated by resolvconf"
+	if [ -n "$search_domains_append" ]; then
+		echo "search $search_domains_append"
+	fi
+	for n in $name_servers_append; do
+		echo "nameserver $n"
+	done
+	echo
+}
+
+tolower() {
+	# There is no good way of doing this portably in shell :(
+	# Luckily we are only doing this for domain names which we
+	# know have to be ASCII.
+	# Non ASCII domains *should* be translated to ASCII *before*
+	# we get to this stage.
+	# We could use echo "$@" | tr '[:upper:]' '[:lower:]' but
+	# tr is in /usr/bin and may not be available when data is fed
+	# to resolvconf.
+	# So it's the cost of a pipe + fork vs this slow loop
+	#
+	for word; do
+		# Check if we have any upper to avoid looping per char
+		case "$word" in
+			*[A-Z]*) ;;
+			*) printf "%s " "$word"; continue;;
+		esac
+
+		while [ -n "$word" ]; do
+			# Remove everything except the first character
+			afterchar="${word#?}"
+			# Remove the afterchar to get the first character
+			char="${word%%$afterchar}"
+			# Assign afterchar back to word for looping
+			word="$afterchar"
+
+			# Now enforce lowercase a-z
+			case "$char" in
+			A) char=a;;
+			B) char=b;;
+			C) char=c;;
+			D) char=d;;
+			E) char=e;;
+			F) char=f;;
+			G) char=g;;
+			H) char=h;;
+			I) char=i;;
+			J) char=j;;
+			K) char=k;;
+			L) char=l;;
+			M) char=m;;
+			N) char=n;;
+			O) char=o;;
+			P) char=p;;
+			Q) char=q;;
+			R) char=r;;
+			S) char=s;;
+			T) char=t;;
+			U) char=u;;
+			V) char=v;;
+			W) char=w;;
+			X) char=x;;
+			Y) char=y;;
+			Z) char=z;;
+			esac
+			printf %s "$char"
+		done
+		printf " "
+	done
+	printf "\n"
+}
+
+# Strip any trailing dot from each name as a FQDN does not belong
+# in resolv.conf(5).
+# While DNS is not case sensitive, our labels for building the zones
+# are, so ensure it's lower case.
+process_domain()
+{
+	for word in $(tolower "$@"); do
+		printf "%s " "${word%.}"
+	done
+	printf "\n"
+}
+
+process_resolv()
+{
+	while read -r keyword value; do
+		for r in $replace; do
+			k="${r%%/*}"
+			r="${r#*/}"
+			f="${r%%/*}"
+			r="${r#*/}"
+			v="${r%%/*}"
+			case "$keyword" in
+			$k)
+				case "$value" in
+				$f) value="$v";;
+				esac
+				;;
+			esac
+		done
+		val=
+		for sub in $value; do
+			for r in $replace_sub; do
+				k="${r%%/*}"
+				r="${r#*/}"
+				f="${r%%/*}"
+				r="${r#*/}"
+				v="${r%%/*}"
+				case "$keyword" in
+				$k)
+					case "$sub" in
+					$f) sub="$v";;
+					esac
+					;;
+				esac
+			done
+			val="$val${val:+ }$sub"
+		done
+		case "$keyword" in
+		\#)
+			case "$val" in
+			"resolv.conf from "*) ;;
+			*) continue;;
+			esac
+			;;
+		\#*) continue;;
+		esac
+		case "$keyword" in
+		domain|search) val="$(process_domain $val)";;
+		esac
+		printf "%s %s\n" "$keyword" "$val"
+	done
+}
+
+make_vars()
+{
+	# Clear variables
+	DOMAIN=
+	DOMAINS=
+	SEARCH=
+	NAMESERVERS=
+	LOCALNAMESERVERS=
+
+	if [ -n "${name_servers}${search_domains}" ]; then
+		eval "$(echo_prepend | parse_resolv)"
+	fi
+	if [ -z "$VFLAG" ]; then
+		eval "$(list_resolv -L "$@" | process_resolv | parse_resolv)"
+	fi
+	if [ -n "${name_servers_append}${search_domains_append}" ]; then
+		eval "$(echo_append | parse_resolv)"
+	fi
+
+	# Ensure that we only list each domain once
+	newdomains=
+	for d in $DOMAINS; do
+		dn="${d%%:*}"
+		list_remove domain_blacklist "$dn" >/dev/null || continue
+		case " $newdomains" in
+		*" ${dn}:"*) continue;;
+		esac
+		newns=
+		for nd in $DOMAINS; do
+			if [ "$dn" = "${nd%%:*}" ]; then
+				ns="${nd#*:}"
+				while [ -n "$ns" ]; do
+					case ",$newns," in
+					*,${ns%%,*},*) ;;
+					*) list_remove name_server_blacklist \
+						"${ns%%,*}" >/dev/null \
+					&& newns="$newns${newns:+,}${ns%%,*}";;
+					esac
+					[ "$ns" = "${ns#*,}" ] && break
+					ns="${ns#*,}"
+				done
+			fi
+		done
+		if [ -n "$newns" ]; then
+			newdomains="$newdomains${newdomains:+ }$dn:$newns"
+		fi
+	done
+
+	DOMAIN="$(list_remove domain_blacklist $DOMAIN)"
+	SEARCH="$(uniqify $SEARCH)"
+	SEARCH="$(list_remove domain_blacklist $SEARCH)"
+	NAMESERVERS="$(uniqify $NAMESERVERS)"
+	NAMESERVERS="$(list_remove name_server_blacklist $NAMESERVERS)"
+	LOCALNAMESERVERS="$(uniqify $LOCALNAMESERVERS)"
+	LOCALNAMESERVERS="$(list_remove name_server_blacklist $LOCALNAMESERVERS)"
+
+	# Ensure output is quoted for eval
+	printf 'DOMAIN=%s\n' "$(quote "$DOMAIN")"
+	printf 'SEARCH=%s\n' "$(quote "$SEARCH")"
+	printf 'NAMESERVERS=%s\n' "$(quote "$NAMESERVERS")"
+	printf 'LOCALNAMESERVERS=%s\n' "$(quote "$LOCALNAMESERVERS")"
+	printf 'DOMAINS=%s\n' "$(quote "$newdomains")"
+}
+
+force=false
+LFLAG=
+VFLAG=
+while getopts a:C:c:Dd:fhIiLlm:pRruvVx OPT; do
+	case "$OPT" in
+	f) force=true;;
+	h) usage;;
+	m) IF_METRIC="$OPTARG";;
+	p)
+		if [ "$IF_PRIVATE" = 1 ]; then
+			IF_NOSEARCH=1
+		else
+			IF_PRIVATE=1
+		fi
+		;;
+	V)
+		VFLAG=1
+		if [ "$local_nameservers" = \
+		    "127.* 0.0.0.0 255.255.255.255 ::1" ]
+		then
+			local_nameservers=
+		fi
+		;;
+	x) IF_EXCLUSIVE=1;;
+	'?') exit 1;;
+	*)
+		[ "$OPT" != L ] || LFLAG=1
+		cmd="$OPT"; key="$OPTARG";;
+	esac
+done
+shift $(($OPTIND - 1))
+if [ -n "$key" ]; then
+	set -- "$key" "$@"
+fi
+
+if [ -z "$cmd" ]; then
+	if [ "$IF_PRIVATE" = 1 ]; then
+		cmd=p
+	elif [ "$IF_EXCLUSIVE" = 1 ]; then
+		cmd=x
+	fi
+fi
+
+# -D ensures that the listed config file base dirs exist
+if [ "$cmd" = D ]; then
+	config_mkdirs "$@"
+	exit $?
+fi
+
+# -i lists which keys have a resolv file
+if [ "$cmd" = i ]; then
+	# If the -L modifier is given, the list is post-processed
+	if [ "$LFLAG" = 1 ]; then
+		cmd="L"
+	fi
+	list_keys "-$cmd" "$@"
+	exit $?
+fi
+
+# -l lists our resolv files, optionally for a specific key
+if [ "$cmd" = l ]; then
+	list_resolv "-$cmd" "$@"
+	exit $?
+fi
+# -L is the same as -l, but post-processed from our config
+if [ "$cmd" = L ]; then
+	list_resolv "-$cmd" "$@" | process_resolv
+	exit $?
+fi
+
+if [ "$cmd" = p ]; then
+	if [ "$IF_NOSEARCH" = 1 ]; then
+		list_nosearch "$@"
+	else
+		list_private "$@"
+	fi
+	exit $?
+fi
+
+if [ "$cmd" = x ]; then
+	list_exclusive "$@"
+	exit $?
+fi
+
+# Restart a service or echo the command to restart a service
+if [ "$cmd" = r ] || [ "$cmd" = R ]; then
+	detect_init || exit 1
+	if [ "$cmd" = r ]; then
+		eval "$RESTARTCMD"
+	else
+		echo "$RESTARTCMD" |
+			sed -e '/^$/d' -e 's/^			//g'
+	fi
+	exit $?
+fi
+
+# Not normally needed, but subscribers should be able to run independently
+if [ "$cmd" = v ] || [ -n "$VFLAG" ]; then
+	make_vars "$@"
+	exit $?
+fi
+
+# Test that we have valid options
+case "$cmd" in
+a|d|C|c)
+	if [ -z "$key" ]; then
+		error_exit "Key not specified"
+	fi
+	;;
+I|u)	;;
+*)
+	if [ -n "$cmd" ] && [ "$cmd" != h ]; then
+		error_exit "Unknown option $cmd"
+	fi
+	usage
+	;;
+esac
+
+if [ "$cmd" = a ]; then
+	for x in '/' '\' ' ' '*'; do
+		case "$key" in
+		"$x"|"$x"*|*"$x"|*"$x"*) error_exit "$x not allowed in key name";;
+		esac
+	done
+	for x in '.' '-' '~'; do
+		case "$key" in
+		"$x"*) error_exit \
+			"$x not allowed at start of key name";;
+		esac
+	done
+	[ "$cmd" = a ] && [ -t 0 ] && error_exit "No file given via stdin"
+fi
+
+if [ ! -d "$VARDIR" ]; then
+	if [ -L "$VARDIR" ]; then
+		dir="$(readlink "$VARDIR")"
+		# link maybe relative
+		cd "${VARDIR%/*}"
+		if ! mkdir -m 0755 -p "$dir"; then
+			error_exit "Failed to create needed" \
+				"directory $dir"
+		fi
+	else
+		if ! mkdir -m 0755 -p "$VARDIR"; then
+			error_exit "Failed to create needed" \
+				"directory $VARDIR"
+		fi
+	fi
+fi
+
+if [ ! -d "$KEYDIR" ]; then
+	mkdir -m 0755 -p "$KEYDIR" || \
+		error_exit "Failed to create needed directory $KEYDIR"
+	if [ "$cmd" = d ]; then
+		# Provide the same error messages as below
+		if ! ${force}; then
+			cd "$KEYDIR"
+			for i in $@; do
+				warn "No resolv.conf for key $i"
+			done
+		fi
+		${force}
+		exit $?
+	fi
+fi
+
+# A key was added, changed, deleted or a general update was called.
+# Due to exclusivity we need to ensure that this is an atomic operation.
+# Our subscribers *may* need this as well if the init system is sub par.
+# As such we spinlock at this point as best we can.
+# We don't use flock(1) because it's not widely available and normally resides
+# in /usr which we do our very best to operate without.
+[ -w "$VARDIR" ] || error_exit "Cannot write to $LOCKDIR"
+: ${lock_timeout:=10}
+: ${clear_nopids:=5}
+have_pid=false
+had_pid=false
+while true; do
+	if mkdir "$LOCKDIR" 2>/dev/null; then
+		trap 'rm -rf "$LOCKDIR";' EXIT
+		trap 'rm -rf "$LOCKDIR"; exit 1' INT QUIT ABRT SEGV ALRM TERM
+		echo $$ >"$LOCKDIR/pid"
+		break
+	fi
+	pid=$(cat "$LOCKDIR/pid" 2>/dev/null)
+	if [ "$pid" -gt 0 ] 2>/dev/null; then
+		have_pid=true
+		had_pid=true
+	else
+		have_pid=false
+		clear_nopids=$(($clear_nopids - 1))
+		if [ "$clear_nopids" -le 0 ]; then
+			warn "not seen a pid, clearing lock directory"
+			rm -rf "$LOCKDIR"
+		else
+			lock_timeout=$(($lock_timeout - 1))
+			sleep 1
+		fi
+		continue
+	fi
+	if $have_pid && ! kill -0 "$pid"; then
+		warn "clearing stale lock pid $pid"
+		rm -rf "$LOCKDIR"
+		continue
+	fi
+	lock_timeout=$(($lock_timeout - 1))
+	if [ "$lock_timeout" -le 0 ]; then
+		if $have_pid; then
+			error_exit "timed out waiting for lock from pid $pid"
+		else
+			if $had_pid; then
+				error_exit "timed out waiting for lock" \
+					"from some pids"
+			else
+				error_exit "timed out waiting for lock"
+			fi
+		fi
+	fi
+	sleep 1
+done
+unset have_pid had_pid clear_nopids
+
+case "$cmd" in
+a)
+	# Read resolv.conf from stdin
+	resolv="$(cat)"
+	changed=false
+	changedfile=false
+	# If what we are given matches what we have, then do nothing
+	if [ -e "$KEYDIR/$key" ]; then
+		if [ "$(echo "$resolv")" != \
+			"$(cat "$KEYDIR/$key")" ]
+		then
+			changed=true
+			changedfile=true
+		fi
+	else
+		changed=true
+		changedfile=true
+	fi
+
+	# Set metric and private before creating the resolv.conf file
+	# to ensure that it will have the correct flags
+	[ ! -d "$METRICDIR" ] && mkdir "$METRICDIR"
+	oldmetric="$METRICDIR/"*" $key"
+	newmetric=
+	if [ -n "$IF_METRIC" ]; then
+		# Pad metric to 6 characters, so 5 is less than 10
+		while [ ${#IF_METRIC} -le 6 ]; do
+			IF_METRIC="0$IF_METRIC"
+		done
+		newmetric="$METRICDIR/$IF_METRIC $key"
+	fi
+	rm -f "$METRICDIR/"*" $key"
+	[ "$oldmetric" != "$newmetric" ] &&
+	    [ "$oldmetric" != "$METRICDIR/* $key" ] &&
+		changed=true
+	[ -n "$newmetric" ] && echo " " >"$newmetric"
+
+	case "$IF_PRIVATE" in
+	[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1)
+		if [ ! -d "$PRIVATEDIR" ]; then
+			[ -e "$PRIVATEDIR" ] && rm "$PRIVATEDIR"
+			mkdir "$PRIVATEDIR"
+		fi
+		[ -e "$PRIVATEDIR/$key" ] || changed=true
+		[ -d "$PRIVATEDIR" ] && echo " " >"$PRIVATEDIR/$key"
+		;;
+	*)
+		if [ -e "$PRIVATEDIR/$key" ]; then
+			rm -f "$PRIVATEDIR/$key"
+			changed=true
+		fi
+		;;
+	esac
+
+	case "$IF_NOSEARCH" in
+	[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1)
+		if [ ! -d "$NOSEARCHDIR" ]; then
+			[ -e "$NOSEARCHDIR" ] && rm "$NOSEARCHDIR"
+			mkdir "$NOSEARCHDIR"
+		fi
+		[ -e "$NOSEARCHDIR/$key" ] || changed=true
+		[ -d "$NOSEARCHDIR" ] && echo " " >"$NOSEARCHDIR/$key"
+		;;
+	*)
+		if [ -e "$NOSEARCHDIR/$key" ]; then
+			rm -f "$NOSEARCHDIR/$key"
+			changed=true
+		fi
+		;;
+	esac
+	set +x
+
+	oldexcl=
+	for x in "$EXCLUSIVEDIR/"*" $key"; do
+		if [ -f "$x" ]; then
+			oldexcl="$x"
+			break
+		fi
+	done
+	case "$IF_EXCLUSIVE" in
+	[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1)
+		if [ ! -d "$EXCLUSIVEDIR" ]; then
+			[ -e "$EXCLUSIVEDIR" ] && rm "$EXCLUSIVEDIR"
+			mkdir "$EXCLUSIVEDIR"
+		fi
+		cd "$EXCLUSIVEDIR"
+		for x in *; do
+			[ -f "$x" ] && break
+		done
+		if [ "${x#* }" != "$key" ]; then
+			if [ "$x" = "${x% *}" ]; then
+				x=10000000
+			else
+				x="${x% *}"
+			fi
+			if [ "$x" = "0000000" ]; then
+				warn "exclusive underflow"
+			else
+				x=$(($x - 1))
+			fi
+			if [ -d "$EXCLUSIVEDIR" ]; then
+				echo " " >"$EXCLUSIVEDIR/$x $key"
+			fi
+			changed=true
+		fi
+		;;
+	*)
+		if [ -f "$oldexcl" ]; then
+			rm -f "$oldexcl"
+			changed=true
+		fi
+		;;
+	esac
+
+	if $changedfile; then
+		printf "%s\n" "$resolv" >"$KEYDIR/$key" || exit $?
+	elif ! $changed && [ ! -e "$VARDIR"/error ]; then
+		exit 0
+	fi
+	unset changed changedfile oldmetric newmetric x oldexcl
+	;;
+
+d)
+	# Delete any existing information about the key
+	cd "$KEYDIR"
+	changed=false
+	for i in $@; do
+		if [ -e "$i" ]; then
+			changed=true
+		elif ! ${force}; then
+			warn "No resolv.conf for key $i"
+		fi
+		rm -f "$i" "$METRICDIR/"*" $i" \
+			"$PRIVATEDIR/$i" \
+			"$EXCLUSIVEDIR/"*" $i" || exit $?
+	done
+
+	if ! $changed && [ ! -e "$VARDIR"/error ]; then
+		# Set the return code based on the forced flag
+		$force
+		exit $?
+	fi
+	unset changed i
+	;;
+
+C)
+	# Mark key as deprecated
+	[ ! -d "$DEPRECATEDDIR" ] && mkdir "$DEPRECATEDDIR"
+	cd "$DEPRECATEDDIR"
+	changed=false
+	for i in $@; do
+		if [ ! -e "$i" ]; then
+			changed=true
+			echo " " >"$i" || exit $?
+		fi
+	done
+	if ! $changed && [ ! -e "$VARDIR"/error ]; then
+		exit 0
+	fi
+	unset changed i
+	;;
+
+c)
+	# Mark key as active
+	if [ -d "$DEPRECATEDDIR" ]; then
+		cd "$DEPRECATEDDIR"
+		changed=false
+		for i in $@; do
+			if [ -e "$i" ]; then
+				changed=true
+				rm "$i" || exit $?
+			fi
+		done
+		if ! $changed && [ ! -e "$VARDIR"/error ]; then
+			exit 0
+		fi
+		unset changed i
+	fi
+	;;
+I)
+	# Init the state dir, keeping our lock and key directories only
+	for i in "$VARDIR"/*; do
+		case "$i" in
+			"$LOCKDIR") ;;
+			"$KEYDIR") rm -rf "$KEYDIR"/*;;
+			*) rm -rf "$i";;
+		esac
+	done
+	;;
+esac
+
+case "${resolvconf:-YES}" in
+[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1) ;;
+*) exit 0;;
+esac
+
+# Try and detect a suitable init system for our scripts
+detect_init
+export RESTARTCMD RCDIR _NOINIT_WARNED
+
+eval "$(make_vars)"
+export RESOLVCONF DOMAINS SEARCH NAMESERVERS LOCALNAMESERVERS
+: ${list_resolv:=list_resolv -L}
+retval=0
+
+# Run scripts in the same directory resolvconf is run from
+# in case any scripts accidentally dump files in the wrong place.
+cd "$_PWD"
+for script in "$LIBEXECDIR"/*; do
+	if [ -f "$script" ]; then
+		script_var="${script##*/}"
+		while [ "${script_var%%-*}" != "$script_var" ]; do
+			script_var="${script_var%%-*}_${script_var#*-}"
+		done
+		eval script_enabled="\$$script_var"
+		case "${script_enabled:-YES}" in
+		[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Oo][Nn]|1) ;;
+		*) continue;;
+		esac
+		if [ -x "$script" ]; then
+			"$script" "$cmd" "$key"
+		else
+			(set -- "$cmd" "$key"; . "$script")
+		fi
+		retval=$(($retval + $?))
+	fi
+done
+if [ "$retval" = 0 ]; then
+	rm -f "$VARDIR"/error
+else
+	echo "$retval" >"$VARDIR"/error
+fi
+exit $retval

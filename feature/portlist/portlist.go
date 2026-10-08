@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnext"
 	"tailscale.com/ipn/ipnlocal"
@@ -22,6 +23,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("portlist") {
+		return
+	}
 	ipnext.RegisterExtension("portlist", newExtension)
 }
 
@@ -111,6 +115,7 @@ func (e *Extension) runPollLoop() {
 	defer close(e.pollerDone)
 
 	var poller portlist.Poller
+	defer poller.Close()
 
 	ticker, tickerChannel := e.sb.Clock().NewTicker(portlist.PollInterval())
 	defer ticker.Stop()

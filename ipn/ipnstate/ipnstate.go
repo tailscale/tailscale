@@ -93,7 +93,7 @@ type Status struct {
 // TKAKey describes a key trusted by tailnet lock.
 type TKAKey struct {
 	Kind     string
-	Key      key.NLPublic
+	Key      key.TLPublic
 	Metadata map[string]string
 	Votes    uint
 }
@@ -121,7 +121,7 @@ type TailnetLockStatus struct {
 
 	// PublicKey describes the node's tailnet-lock public key.
 	// It may be zero if the node has not logged in.
-	PublicKey key.NLPublic
+	PublicKey key.TLPublic
 
 	// NodeKey describes the node's current node-key. This field is not
 	// populated if the node is not operating (i.e. waiting for a login).
@@ -172,6 +172,10 @@ type NetworkLockUpdate = TailnetLockUpdate
 type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.
 	Name string
+
+	// StableID is the stable, unique identifier of the tailnet, as used to
+	// identify the tailnet in the Tailscale API.
+	StableID tailcfg.StableTailnetID
 
 	// MagicDNSSuffix is the network's MagicDNS suffix for nodes
 	// in the network such as "userfoo.tailscale.net".

@@ -10,11 +10,15 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
@@ -23,6 +27,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/rands"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -274,5 +279,206 @@ func TestNetmapDeltaFastPath(t *testing.T) {
 		if _, ok := lb.PeerByID(addedPeerID); ok {
 			t.Errorf("PeerByID(%d) still present after PeersRemoved", addedPeerID)
 		}
+	})
+}
+
+// TestPeerRemovalBundledWithMapResponseField shows that a peer removal is lost
+// on the IPN bus when control sends it together with a field that makes the
+// client rebuild the full netmap. Each subtest has control add a peer and then
+// remove it, over a real map session. tailscaled always drops the peer; an IPN
+// bus watcher subscribed like the Android app must drop it too.
+func TestPeerRemovalBundledWithMapResponseField(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	t.Cleanup(cancel)
+
+	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	streamer := largetailnet.New(1, derpMap) // self plus peer 2
+	ctrl := &testcontrol.Server{
+		DERPMap:      derpMap,
+		DNSConfig:    &tailcfg.DNSConfig{},
+		AltMapStream: streamer.AltMapStream(),
+		Logf:         logger.Discard,
+	}
+	ctrl.HTTPTestServer = httptest.NewUnstartedServer(ctrl)
+	ctrl.HTTPTestServer.Start()
+	t.Cleanup(ctrl.HTTPTestServer.Close)
+
+	s := &tsnet.Server{
+		Dir:        t.TempDir(),
+		ControlURL: ctrl.HTTPTestServer.URL,
+		Hostname:   "removal-test",
+		UserLogf:   logger.Discard,
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+		Logf:       logger.Discard,
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.Up(ctx); err != nil {
+		t.Fatalf("tsnet.Server.Up: %v", err)
+	}
+	lb := tsnet.TestHooks.LocalBackend(s)
+
+	// Track the peers a bus watcher lists, as the Android app does.
+	var mu sync.Mutex
+	listed := map[tailcfg.NodeID]bool{}
+	go lb.WatchNotifications(ctx, ipn.NotifyInitialStatus|ipn.NotifyPeerChanges, nil, func(n *ipn.Notify) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if n.InitialStatus != nil {
+			for _, ps := range n.InitialStatus.Peer {
+				listed[ps.NodeID] = true
+			}
+		}
+		for _, p := range n.PeersChanged {
+			listed[p.ID] = true
+		}
+		for _, id := range n.PeersRemoved {
+			delete(listed, id)
+		}
+		return true
+	})
+	watcherLists := func(id tailcfg.NodeID, want bool) error {
+		return tstest.WaitFor(2*time.Second, func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			if listed[id] != want {
+				return fmt.Errorf("watcher lists peer %d = %v", id, listed[id])
+			}
+			return nil
+		})
+	}
+	send := func(t *testing.T, mr *tailcfg.MapResponse) {
+		t.Helper()
+		if err := streamer.SendDelta(ctx, mr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fullRebuilds := metricByName(t, "controlclient_map_response_handled_full_rebuild")
+
+	// removePeer has control add a fresh peer, then send removal(peer), and
+	// checks that tailscaled and the bus watcher both stop listing it.
+	removePeer := func(t *testing.T, removal func(p *tailcfg.Node) *tailcfg.MapResponse) {
+		t.Helper()
+		p := streamer.AllocPeer()
+		send(t, &tailcfg.MapResponse{PeersChanged: []*tailcfg.Node{p}})
+		if err := watcherLists(p.ID, true); err != nil {
+			t.Fatalf("adding peer: %v", err)
+		}
+
+		rebuildsBefore := fullRebuilds.Value()
+		send(t, removal(p))
+		err := tstest.WaitFor(2*time.Second, func() error {
+			if _, ok := lb.PeerByID(p.ID); ok {
+				return fmt.Errorf("tailscaled still has peer %d", p.ID)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		how := "as a delta"
+		if fullRebuilds.Value() > rebuildsBefore {
+			how = "by a full netmap rebuild"
+		}
+		if err := watcherLists(p.ID, false); err != nil {
+			t.Errorf("tailscaled removed peer %d %s, but the IPN bus watcher still lists it", p.ID, how)
+		}
+	}
+
+	peer2, _ := lb.PeerByID(2)
+	allowAll := []tailcfg.FilterRule{{
+		SrcIPs:   []string{"*"},
+		DstPorts: []tailcfg.NetPortRange{{IP: "*", Ports: tailcfg.PortRangeAny}},
+	}}
+	// A valid value for every MapResponse field, to bundle with a removal.
+	fieldValues := map[string]func(mr *tailcfg.MapResponse){
+		"MapSessionHandle": func(mr *tailcfg.MapResponse) { mr.MapSessionHandle = "session" },
+		"Seq":              func(mr *tailcfg.MapResponse) { mr.Seq = 2 },
+		"PingRequest": func(mr *tailcfg.MapResponse) {
+			mr.PingRequest = &tailcfg.PingRequest{URL: "https://ping.invalid/" + rands.HexString(8)}
+		},
+		"PopBrowserURL": func(mr *tailcfg.MapResponse) { mr.PopBrowserURL = "https://login.invalid/a/1" },
+		"Node":          func(mr *tailcfg.MapResponse) { mr.Node = lb.NetMap().SelfNode.AsStruct() },
+		"DERPMap":       func(mr *tailcfg.MapResponse) { mr.DERPMap = derpMap },
+		"Peers":         func(mr *tailcfg.MapResponse) { mr.Peers = []*tailcfg.Node{peer2.AsStruct()} },
+		"PeersChanged":  func(mr *tailcfg.MapResponse) { mr.PeersChanged = []*tailcfg.Node{peer2.AsStruct()} },
+		"PeersChangedPatch": func(mr *tailcfg.MapResponse) {
+			mr.PeersChangedPatch = []*tailcfg.PeerChange{{NodeID: 2, DERPRegion: 1}}
+		},
+		"PeerSeenChange":  func(mr *tailcfg.MapResponse) { mr.PeerSeenChange = map[tailcfg.NodeID]bool{2: true} },
+		"OnlineChange":    func(mr *tailcfg.MapResponse) { mr.OnlineChange = map[tailcfg.NodeID]bool{2: true} },
+		"DNSConfig":       func(mr *tailcfg.MapResponse) { mr.DNSConfig = &tailcfg.DNSConfig{} },
+		"Domain":          func(mr *tailcfg.MapResponse) { mr.Domain = "largetailnet.ts.net" },
+		"CollectServices": func(mr *tailcfg.MapResponse) { mr.CollectServices = "true" },
+		"PacketFilter":    func(mr *tailcfg.MapResponse) { mr.PacketFilter = allowAll },
+		"PacketFilters":   func(mr *tailcfg.MapResponse) { mr.PacketFilters = map[string][]tailcfg.FilterRule{"base": allowAll} },
+		"UserProfiles": func(mr *tailcfg.MapResponse) {
+			mr.UserProfiles = []tailcfg.UserProfile{{ID: largetailnet.SelfUserID, LoginName: "largetailnet@example.com"}}
+		},
+		"Health": func(mr *tailcfg.MapResponse) { mr.Health = []string{"test health message"} },
+		"DisplayMessages": func(mr *tailcfg.MapResponse) {
+			mr.DisplayMessages = map[tailcfg.DisplayMessageID]*tailcfg.DisplayMessage{
+				"test": {Title: "Test", Text: "Test message", Severity: tailcfg.SeverityLow},
+			}
+		},
+		"SSHPolicy":                   func(mr *tailcfg.MapResponse) { mr.SSHPolicy = &tailcfg.SSHPolicy{} },
+		"ControlTime":                 func(mr *tailcfg.MapResponse) { mr.ControlTime = new(time.Now().UTC()) },
+		"TKAInfo":                     func(mr *tailcfg.MapResponse) { mr.TKAInfo = &tailcfg.TKAInfo{Disabled: true} },
+		"DomainDataPlaneAuditLogID":   func(mr *tailcfg.MapResponse) { mr.DomainDataPlaneAuditLogID = "audit-log-id" },
+		"Debug":                       func(mr *tailcfg.MapResponse) { mr.Debug = &tailcfg.Debug{} },
+		"ControlDialPlan":             func(mr *tailcfg.MapResponse) { mr.ControlDialPlan = &tailcfg.ControlDialPlan{} },
+		"ClientVersion":               func(mr *tailcfg.MapResponse) { mr.ClientVersion = &tailcfg.ClientVersion{RunningLatest: true} },
+		"DeprecatedDefaultAutoUpdate": func(mr *tailcfg.MapResponse) { mr.DeprecatedDefaultAutoUpdate = "true" },
+	}
+
+	t.Run("PeersRemoved-alone", func(t *testing.T) {
+		removePeer(t, func(p *tailcfg.Node) *tailcfg.MapResponse {
+			return &tailcfg.MapResponse{PeersRemoved: []tailcfg.NodeID{p.ID}}
+		})
+	})
+
+	for f := range reflect.TypeFor[tailcfg.MapResponse]().Fields() {
+		switch f.Name {
+		case "PeersRemoved":
+			continue // the removal itself, covered above
+		case "KeepAlive":
+			continue // the client ignores everything else in a keep-alive
+		}
+		setField, ok := fieldValues[f.Name]
+		if !ok {
+			t.Errorf("no value for MapResponse.%s; add one to fieldValues", f.Name)
+			continue
+		}
+		t.Run(f.Name, func(t *testing.T) {
+			removePeer(t, func(p *tailcfg.Node) *tailcfg.MapResponse {
+				mr := &tailcfg.MapResponse{PeersRemoved: []tailcfg.NodeID{p.ID}}
+				setField(mr)
+				return mr
+			})
+		})
+	}
+
+	// Every new map session, such as after a reconnect, starts with a full
+	// map. A peer deleted while the client was away is simply absent.
+	t.Run("full-map-omits-peer", func(t *testing.T) {
+		removePeer(t, func(p *tailcfg.Node) *tailcfg.MapResponse {
+			return &tailcfg.MapResponse{
+				Node:      lb.NetMap().SelfNode.AsStruct(),
+				DERPMap:   derpMap,
+				Peers:     []*tailcfg.Node{peer2.AsStruct()},
+				DNSConfig: &tailcfg.DNSConfig{},
+			}
+		})
+	})
+
+	// Control can turn off delta updates for a node, so that every
+	// MapResponse rebuilds the full netmap. This must run last.
+	t.Run("delta-updates-disabled", func(t *testing.T) {
+		self := lb.NetMap().SelfNode.AsStruct()
+		self.CapMap = tailcfg.NodeCapMap{nodecap.DisableDeltaUpdates: nil}
+		send(t, &tailcfg.MapResponse{Node: self})
+		removePeer(t, func(p *tailcfg.Node) *tailcfg.MapResponse {
+			return &tailcfg.MapResponse{PeersRemoved: []tailcfg.NodeID{p.ID}}
+		})
 	})
 }

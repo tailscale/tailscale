@@ -6,7 +6,9 @@
 package portmapper
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -394,6 +396,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (nettyp
 func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 	if c.mapping != nil {
 		if releaseOld {
+			c.vlogf("releasing %s mapping", c.mapping.MappingType())
 			c.mapping.Release(context.Background())
 		}
 		c.mapping = nil
@@ -668,6 +671,16 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 		c.vlogf("fallback to UPnP due to no PCP and PMP failed")
 		return nil, netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
+
+	var pcpNonce pcpNonce
+	if m, ok := c.mapping.(*pcpMapping); ok {
+		// Reuse the existing mapping's nonce so renewals target the same mapping.
+		pcpNonce = m.nonce
+	} else {
+		// New mappings need a random nonce.
+		rand.Read(pcpNonce[:])
+	}
+
 	c.mu.Unlock()
 
 	uc, err := c.listenPacket(ctx, "udp4", ":0")
@@ -687,7 +700,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 	if preferPCP {
 		// TODO replace wildcardIP here with previous external if known.
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
-		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP)
+		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP, pcpNonce)
 		if _, err := uc.WriteToUDPAddrPort(pkt, pxpAddr); err != nil {
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
@@ -755,6 +768,14 @@ func (c *Client) createOrGetMapping(ctx context.Context) (mapping mapping, exter
 					m.epoch = pres.SecondsSinceEpoch
 				}
 			case pcpVersion:
+				// Ignore responses related to another client.
+				// A response packet is a 24-byte header followed by an operation
+				// specific payload. For a MAP operation, the first 12 bytes of
+				// the payload are the client-generated nonce.
+				if n < 36 || !bytes.Equal(res[24:36], pcpNonce[:]) {
+					c.logf("ignoring PCP response with missing or mismatched nonce")
+					continue
+				}
 				pcpMapping, err := parsePCPMapResponse(res[:n])
 				if err != nil {
 					c.logf("failed to get PCP mapping: %v", err)

@@ -10,6 +10,9 @@ import (
 )
 
 func init() {
+	if !feature.Register("useproxy") {
+		return
+	}
 	feature.HookProxyFromEnvironment.Set(tshttpproxy.ProxyFromEnvironment)
 	feature.HookProxyInvalidateCache.Set(tshttpproxy.InvalidateCache)
 	feature.HookProxyGetAuthHeader.Set(tshttpproxy.GetAuthHeader)

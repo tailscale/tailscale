@@ -58,26 +58,21 @@ func hardwareAccelAvailable() bool {
 type gokrazyPlatform struct{}
 
 func (gokrazyPlatform) planSteps(e *Env, n *Node) {
-	e.Step("Build gokrazy image")
+	e.Step(fmt.Sprintf("Build %s image", n.os.Name))
 	e.Step("Launch QEMU: " + n.name)
 }
 
 func (gokrazyPlatform) boot(ctx context.Context, e *Env, n *Node) error {
-	e.gokrazyOnce.Do(func() {
-		step := e.Step("Build gokrazy image")
-		step.Begin()
-		if err := e.ensureGokrazy(ctx); err != nil {
-			step.End(err)
-			e.t.Fatalf("ensureGokrazy: %v", err)
-		}
-		step.End(nil)
-	})
+	base, err := e.ensureGokrazy(ctx, n.os)
+	if err != nil {
+		return fmt.Errorf("ensureGokrazy(%s): %w", n.os.Name, err)
+	}
 
 	e.ensureQEMUSocket()
 
 	vmStep := e.Step("Launch QEMU: " + n.name)
 	vmStep.Begin()
-	if err := e.startGokrazyQEMU(n); err != nil {
+	if err := e.startGokrazyQEMU(n, base); err != nil {
 		vmStep.End(err)
 		return err
 	}
@@ -115,11 +110,12 @@ func (qemuCloudPlatform) boot(ctx context.Context, e *Env, n *Node) error {
 	return nil
 }
 
-// startGokrazyQEMU launches a QEMU process for a gokrazy node.
+// startGokrazyQEMU launches a QEMU process for a gokrazy node whose disk is
+// an overlay on the base qcow2 image at basePath.
 // This follows the same pattern as tstest/integration/nat/nat_test.go.
-func (e *Env) startGokrazyQEMU(n *Node) error {
+func (e *Env) startGokrazyQEMU(n *Node, basePath string) error {
 	disk := filepath.Join(e.tempDir, fmt.Sprintf("%s.qcow2", n.name))
-	if err := createOverlay(e.gokrazyBase, disk); err != nil {
+	if err := createOverlay(basePath, disk); err != nil {
 		return err
 	}
 
@@ -161,6 +157,10 @@ func (e *Env) startGokrazyQEMU(n *Node) error {
 	}
 
 	args = append(args, qemuAccelArgs()...)
+	if !hardwareAccelAvailable() {
+		// Make boot timer calibration deterministic to avoid boot hangs.
+		args = append(args, "-icount", "shift=auto")
+	}
 	return e.launchQEMU(n.name, logPath, args)
 }
 
@@ -343,7 +343,13 @@ func (e *Env) startQEMUOnce(name, logPath string, args []string) (*qemuRun, erro
 		qemuLog.Close()
 		return nil, fmt.Errorf("killWithParent: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// Child now has a copy of the pipe's read end. Parent can close its own.
+	// These were populated by killWithParent prior to Start.
+	for _, f := range cmd.ExtraFiles {
+		f.Close()
+	}
+	if err != nil {
 		parentPipe.Close()
 		devNull.Close()
 		qemuLog.Close()
@@ -383,16 +389,23 @@ func dumpLogTail(t testing.TB, name, kind, path string) {
 		t.Logf("=== %s %s log unavailable: %v ===", name, kind, err)
 		return
 	}
+	dumpTail(t, name, kind, data, 50)
+}
+
+// dumpTail prints the last maxLines lines of data to the test log, prefixed
+// with the VM name and kind. It prints only a short note if data is empty.
+func dumpTail(t testing.TB, name, kind string, data []byte, maxLines int) {
+	t.Helper()
 	if len(data) == 0 {
 		t.Logf("=== %s %s log is empty ===", name, kind)
 		return
 	}
-	lines := bytes.Split(data, []byte("\n"))
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte("\n"))
 	start := 0
-	if len(lines) > 50 {
-		start = len(lines) - 50
+	if len(lines) > maxLines {
+		start = len(lines) - maxLines
 	}
-	t.Logf("=== last 50 lines of %s %s log ===", name, kind)
+	t.Logf("=== last %d lines of %s %s log ===", len(lines)-start, name, kind)
 	for _, line := range lines[start:] {
 		t.Logf("[%s] %s", name, line)
 	}

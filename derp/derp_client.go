@@ -287,15 +287,18 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	return c.bw.Flush()
 }
 
-func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err error) {
+// ForwardPacket sends a forward packet frame carrying pkt from srcKey
+// to dstKey. It writes and flushes pkt before returning and does not
+// retain it.
+func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt LoanedBytes) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.ForwardPacket: %w", err)
 		}
 	}()
 
-	if len(pkt) > MaxPacketSize {
-		return fmt.Errorf("packet too big: %d", len(pkt))
+	if pkt.Len() > MaxPacketSize {
+		return fmt.Errorf("packet too big: %d", pkt.Len())
 	}
 
 	c.wmu.Lock()
@@ -304,7 +307,7 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
 	defer timer.Stop()
 
-	if err := WriteFrameHeader(c.bw, FrameForwardPacket, uint32(KeyLen*2+len(pkt))); err != nil {
+	if err := WriteFrameHeader(c.bw, FrameForwardPacket, uint32(KeyLen*2+pkt.Len())); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(srcKey.AppendTo(nil)); err != nil {
@@ -313,7 +316,7 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 	if _, err := c.bw.Write(dstKey.AppendTo(nil)); err != nil {
 		return err
 	}
-	if _, err := c.bw.Write(pkt); err != nil {
+	if _, err := pkt.WriteTo(c.bw); err != nil {
 		return err
 	}
 	return c.bw.Flush()

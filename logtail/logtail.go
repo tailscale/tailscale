@@ -51,9 +51,6 @@ const maxSize = 256 << 10
 // Note that JSON log messages can be as large as maxSize.
 const maxTextSize = 16 << 10
 
-// lowMemRatio reduces maxSize and maxTextSize by this ratio in lowMem mode.
-const lowMemRatio = 4
-
 // bufferSize is the typical buffer size to retain.
 // It is large enough to handle most log messages,
 // but not too large to be a notable waste of memory if retained forever.
@@ -76,11 +73,7 @@ func newLogger(cfg Config) *Logger {
 		cfg.Stderr = os.Stderr
 	}
 	if cfg.Buffer == nil {
-		pendingSize := 256
-		if cfg.LowMemory {
-			pendingSize = 64
-		}
-		cfg.Buffer = NewMemoryBuffer(pendingSize)
+		cfg.Buffer = NewMemoryBuffer(256)
 	}
 	var procID uint32
 	if cfg.IncludeProcID {
@@ -113,7 +106,6 @@ func newLogger(cfg Config) *Logger {
 		stderrLevel:    int64(cfg.StderrLevel),
 		httpc:          cfg.HTTPC,
 		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String() + urlSuffix,
-		lowMem:         cfg.LowMemory,
 		buffer:         cfg.Buffer,
 		maxUploadSize:  cfg.MaxUploadSize,
 		skipClientTime: cfg.SkipClientTime,
@@ -191,8 +183,6 @@ type LogEntry[T any] struct {
 	// (used on older Go versions) only knows `inline`. Each
 	// implementation ignores the option it doesn't know, so specify
 	// both until we require Go 1.27 and drop `inline`.
-	//
-	//lint:ignore SA5008 staticcheck doesn't know Go 1.27's `embed` option yet
 	Value T `json:",inline,embed"`
 }
 
@@ -219,9 +209,6 @@ func UploadLogs[T any](ctx context.Context, conf Config, entries iter.Seq[LogEnt
 	lg := newLogger(conf)
 
 	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
-	if lg.lowMem {
-		maxLen /= lowMemRatio
-	}
 
 	// body accumulates a JSON array of encoded entries: "[e1,e2,...]".
 	// The framing mirrors Logger.drainPending.
@@ -304,7 +291,6 @@ type Logger struct {
 	stderrLevel    int64 // accessed atomically
 	httpc          *http.Client
 	url            string
-	lowMem         bool
 	skipClientTime bool
 	netMonitor     *netmon.Monitor
 	buffer         Buffer
@@ -459,13 +445,6 @@ func (lg *Logger) drainPending() (b []byte) {
 	}()
 
 	maxLen := cmp.Or(lg.maxUploadSize, maxSize)
-	if lg.lowMem {
-		// When operating in a low memory environment, it is better to upload
-		// in multiple operations than it is to allocate a large body and OOM.
-		// Even if maxLen is less than maxSize, we can still upload an entry
-		// that is up to maxSize if we happen to encounter one.
-		maxLen /= lowMemRatio
-	}
 	for len(b) < maxLen {
 		line, err := lg.buffer.TryReadLine()
 		switch {
@@ -550,6 +529,9 @@ func (lg *Logger) uploading(ctx context.Context) {
 		var numFailures int
 		var firstFailure time.Time
 		for len(body) > 0 && ctx.Err() == nil {
+			if logtailDisabled.Load() || lg.disabled.Load() {
+				break
+			}
 			retryAfter, err := lg.upload(ctx, body, origlen)
 			if err != nil {
 				numFailures++
@@ -881,12 +863,8 @@ func (lg *Logger) appendText(dst, src []byte, skipClientTime bool, procID uint32
 
 	// Append the text string, which may be truncated.
 	// Invalid UTF-8 will be mangled with the Unicode replacement character.
-	max := maxTextSize
-	if lg.lowMem {
-		max /= lowMemRatio
-	}
 	dst = append(dst, `"text":`...)
-	dst = appendTruncatedString(dst, src, max)
+	dst = appendTruncatedString(dst, src, maxTextSize)
 	return append(dst, "}\n"...)
 }
 

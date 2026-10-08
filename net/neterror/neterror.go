@@ -50,8 +50,8 @@ var packetWasTruncated func(error) bool // non-nil on Windows at least
 // size and an error are returned (as per the partial fix for golang/go#14074).
 // If the WSAEMSGSIZE error is returned, then we ignore the error to get
 // semantics similar to the POSIX operating systems. One caveat is that it
-// appears that the source address is not returned when WSAEMSGSIZE occurs, but
-// we do not currently look at the source address.
+// appears that the source address is not returned when WSAEMSGSIZE occurs, so
+// a caller can't check where a truncated datagram came from.
 func PacketWasTruncated(err error) bool {
 	if packetWasTruncated == nil {
 		return false

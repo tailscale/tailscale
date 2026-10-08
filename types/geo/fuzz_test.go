@@ -19,6 +19,10 @@ func FuzzPointSphericalAngleTo(f *testing.F) {
 		{40.7128, -74.006, 48.8575, 2.3514},
 		{47.6061, -122.3328, 35.6764, 139.65},
 		{-6.0, 0.0, -6.0, 0.0},
+		{math.NaN(), 0.0, 0.0, 0.0},
+		{0.0, math.NaN(), 0.0, 0.0},
+		{0.0, 0.0, math.NaN(), 0.0},
+		{0.0, 0.0, 0.0, math.NaN()},
 	} {
 		f.Add(tt.xLat, tt.xLng, tt.yLat, tt.yLng)
 	}
@@ -27,7 +31,8 @@ func FuzzPointSphericalAngleTo(f *testing.F) {
 		x := MakePoint(Degrees(xLat), Degrees(xLng))
 		y := MakePoint(Degrees(yLat), Degrees(yLng))
 		got, _ := x.SphericalAngleTo(y)
-		if math.IsNaN(float64(got)) {
+		if math.IsNaN(float64(got)) &&
+			!(math.IsNaN(xLat) || math.IsNaN(xLng) || math.IsNaN(yLat) || math.IsNaN(yLng)) {
 			t.Errorf("got NaN result with xLat=%f xLng=%f yLat=%f yLng=%f", xLat, xLng, yLat, yLng)
 		}
 	})

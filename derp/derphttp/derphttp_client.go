@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"golang.org/x/net/http/httpguts"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derpconst"
 	"tailscale.com/envknob"
@@ -845,6 +846,16 @@ func firstStr(a, b string) string {
 
 // dialNodeUsingProxy connects to n using a CONNECT to the HTTP(s) proxy in proxyURL.
 func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, proxyURL *url.URL) (_ net.Conn, err error) {
+	// n.HostName comes from the control-supplied DERP map and is written
+	// verbatim into the CONNECT request line and Host header below. Reject
+	// anything that isn't a valid host value so a hostname carrying CR/LF (or
+	// other control bytes) can't inject extra headers or a second request into
+	// the proxy connection. ValidHostHeader accepts the empty string, so check
+	// for that separately.
+	if n.HostName == "" || !httpguts.ValidHostHeader(n.HostName) {
+		return nil, fmt.Errorf("derphttp: invalid DERP node hostname %q", n.HostName)
+	}
+
 	pu := proxyURL
 	var proxyConn net.Conn
 	if pu.Scheme == "https" {
@@ -1019,7 +1030,9 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	return la, nil
 }
 
-func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
+// ForwardPacket forwards b from the node from to the node to over the
+// mesh connection. It does not retain b after it returns.
+func (c *Client) ForwardPacket(from, to key.NodePublic, b derp.LoanedBytes) error {
 	client, _, err := c.connect(c.newContext(), "derphttp.Client.ForwardPacket")
 	if err != nil {
 		return err

@@ -26,6 +26,7 @@ import (
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/execqueue"
+	"tailscale.com/util/set"
 	"tailscale.com/util/slicesx"
 )
 
@@ -364,17 +365,19 @@ func (e *AppConnector) updateRoutes(routes []netip.Prefix) {
 		toRemove = routesWithout(e.controlRoutes, routes)
 	}
 
-nextRoute:
+	obsoleted := set.Set[netip.Addr]{}
 	for _, r := range routes {
 		for _, addr := range e.domains {
 			for _, a := range addr {
 				if r.Contains(a) && netip.PrefixFrom(a, a.BitLen()) != r {
-					pfx := netip.PrefixFrom(a, a.BitLen())
-					toRemove = append(toRemove, pfx)
-					continue nextRoute
+					obsoleted.Add(a)
 				}
 			}
 		}
+	}
+	for a := range obsoleted.All() {
+		pfx := netip.PrefixFrom(a, a.BitLen())
+		toRemove = append(toRemove, pfx)
 	}
 
 	if e.routeAdvertiser != nil {
@@ -425,6 +428,7 @@ func (e *AppConnector) DomainRoutes() map[string][]netip.Addr {
 // e.mu must be held.
 func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[string]string) (string, bool) {
 	var isRouted bool
+	var seen set.Set[string]
 	for {
 		_, isRouted = e.domains[domain]
 		if isRouted {
@@ -444,7 +448,12 @@ func (e *AppConnector) findRoutedDomainLocked(domain string, cnameChain map[stri
 		if !ok {
 			break
 		}
+		if seen.Contains(next) {
+			break
+		}
 		domain = next
+		seen.Make()
+		seen.Add(domain)
 	}
 	return domain, isRouted
 }

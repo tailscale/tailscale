@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -541,12 +540,14 @@ func runReconcilers(opts reconcilerOpts) {
 	// If a ProxyClassChanges, enqueue all Connectors that have
 	// .spec.proxyClass set to the name of this ProxyClass.
 	proxyClassFilterForConnector := handler.EnqueueRequestsFromMapFunc(proxyClassHandlerForConnector(mgr.GetClient(), startlog))
+	nodeFilterForConnector := handler.EnqueueRequestsFromMapFunc(nodeHandlerForConnector(mgr.GetClient(), startlog))
 	err = builder.ControllerManagedBy(mgr).
 		For(&tsapi.Connector{}).
 		Named("connector-reconciler").
 		Watches(&appsv1.StatefulSet{}, connectorFilter).
 		Watches(&corev1.Secret{}, connectorFilter).
 		Watches(&tsapi.ProxyClass{}, proxyClassFilterForConnector).
+		Watches(&corev1.Node{}, nodeFilterForConnector).
 		Complete(&ConnectorReconciler{
 			ssr:      ssr,
 			recorder: eventRecorder,
@@ -572,12 +573,14 @@ func runReconcilers(opts reconcilerOpts) {
 	}
 
 	egressSvcFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsHandler)
+	egressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
 	egressProxyGroupFilter := handler.EnqueueRequestsFromMapFunc(egressSvcsFromEgressProxyGroup(mgr.GetClient(), opts.log))
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-reconciler").
 		Watches(&corev1.Service{}, egressSvcFilter).
 		Watches(&tsapi.ProxyGroup{}, egressProxyGroupFilter).
+		Watches(&discoveryv1.EndpointSlice{}, egressSvcFromEpsFilter).
 		Complete(&egressSvcsReconciler{
 			Client:      mgr.GetClient(),
 			tsNamespace: opts.tailscaleNamespace,
@@ -592,7 +595,6 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("failed setting up indexer for egress Services: %v", err)
 	}
 
-	egressSvcFromEpsFilter := handler.EnqueueRequestsFromMapFunc(egressSvcFromEps)
 	err = builder.
 		ControllerManagedBy(mgr).
 		Named("egress-svcs-readiness-reconciler").
@@ -641,7 +643,6 @@ func runReconcilers(opts reconcilerOpts) {
 			tsNamespace: opts.tailscaleNamespace,
 			clock:       tstime.DefaultClock{},
 			logger:      opts.log.Named("egress-pods-readiness-reconciler"),
-			httpClient:  http.DefaultClient,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create egress Pods readiness reconciler: %v", err)
@@ -1066,6 +1067,60 @@ func nodeHandlerForProxyGroup(cl client.Client, defaultProxyClass string, logger
 
 			if selector.Matches(klabels.Set(o.GetLabels())) {
 				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&pg)})
+			}
+		}
+		return reqs
+	}
+}
+
+// nodeHandlerForConnector returns a handler that, for a given Node, returns a
+// list of reconcile requests for Connectors that should be reconciled for the
+// Node event. Connectors need to be reconciled for Node events if they are
+// configured to expose tailscaled static endpoints to tailnet using NodePort
+// Services.
+func nodeHandlerForConnector(cl client.Client, logger *zap.SugaredLogger) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		cnList := new(tsapi.ConnectorList)
+		if err := cl.List(ctx, cnList); err != nil {
+			logger.Debugf("error listing Connectors for Node: %v", err)
+			return nil
+		}
+
+		reqs := make([]reconcile.Request, 0)
+		for _, cn := range cnList.Items {
+			if cn.Spec.ProxyClass == "" {
+				continue
+			}
+
+			proxyClass := &tsapi.ProxyClass{}
+			if err := cl.Get(ctx, types.NamespacedName{Name: cn.Spec.ProxyClass}, proxyClass); err != nil {
+				if !apierrors.IsNotFound(err) {
+					logger.Debugf("error getting ProxyClass %q: %v", cn.Spec.ProxyClass, err)
+				}
+				continue
+			}
+
+			stat := proxyClass.Spec.StaticEndpoints
+			if stat == nil {
+				continue
+			}
+
+			// If the selector is empty, all nodes match.
+			if len(stat.NodePort.Selector) == 0 {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&cn)})
+				continue
+			}
+
+			selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+				MatchLabels: stat.NodePort.Selector,
+			})
+			if err != nil {
+				logger.Debugf("error converting `spec.staticEndpoints.nodePort.selector` to Selector: %v", err)
+				continue
+			}
+
+			if selector.Matches(klabels.Set(o.GetLabels())) {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&cn)})
 			}
 		}
 		return reqs

@@ -79,6 +79,12 @@ type statefulSetSpec struct {
 	Image    string
 }
 
+// expectedConfig holds the relay-specific fields asserted against a replica's generated tailscaled config.
+type expectedConfig struct {
+	RelayServerPort            uint16
+	RelayServerStaticEndpoints []netip.AddrPort
+}
+
 func TestReconciler_Reconcile(t *testing.T) {
 	t.Parallel()
 
@@ -95,10 +101,11 @@ func TestReconciler_Reconcile(t *testing.T) {
 		ExpectsError          bool
 		ExpectedServices      []expectedService
 		ExpectedEndpoints     []tsapi.PeerRelayEndpoint
-		ExpectedReadyStatus   metav1.ConditionStatus // asserted only when non-empty
-		ExpectedReadyReason   string                 // asserted only when non-empty
-		ExpectStatefulSetGone bool                   // assert the StatefulSet does not exist
-		ExpectStatefulSetSpec *statefulSetSpec       // asserted only when non-nil
+		ExpectedReadyStatus   metav1.ConditionStatus    // asserted only when non-empty
+		ExpectedReadyReason   string                    // asserted only when non-empty
+		ExpectedConfigs       map[string]expectedConfig // keyed by config Secret name, asserted only when non-nil
+		ExpectStatefulSetGone bool                      // assert the StatefulSet does not exist
+		ExpectStatefulSetSpec *statefulSetSpec          // asserted only when non-nil
 		ExpectFinalizer       bool
 		ExpectPRDeleted       bool
 	}{
@@ -577,6 +584,206 @@ func TestReconciler_Reconcile(t *testing.T) {
 			ExpectedReadyReason: peerrelay.ReasonEndpointsPending,
 		},
 		{
+			// spec.service.port drives the Service port and targetPort as well as the advertised endpoint port.
+			// The external port and the container's listen port are always equal: the relay advertises
+			// address:port to peers, so the load balancer must forward without rewriting the port.
+			Name:    "custom-service-port",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Service: &tsapi.PeerRelayService{Port: new(uint16(3478))},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{
+				{Name: "peerrelay-test-0", Port: 3478, Protocol: corev1.ProtocolUDP},
+			},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 3478},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// spec.staticEndpoints supplements the LB-derived endpoints: every replica advertises the static
+			// entries in addition to its own load balancer addresses.
+			Name:    "static-endpoints-supplement-lb-endpoints",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas:        new(int32(2)),
+					StaticEndpoints: []string{"203.0.113.99:41641"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedServiceWithLB("test", 1, "5.6.7.8", ""),
+				managedStatefulSet("test", 2, 2),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}, {Name: "peerrelay-test-1"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 41641},
+				{Replica: 0, Address: "203.0.113.99", Port: 41641},
+				{Replica: 1, Address: "203.0.113.99", Port: 41641},
+				{Replica: 1, Address: "5.6.7.8", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A replica whose only endpoint comes from spec.staticEndpoints counts as addressed: the relay is
+			// reachable there even though the cloud never handed its load balancer an address, e.g. an internal
+			// LB behind a NAT gateway the user forwards themselves.
+			Name:    "static-endpoints-count-as-addressed",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"203.0.113.99:6969"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedService("test", 0),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.99", Port: 6969},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// status.endpoints is keyed on replica and address, so an address may appear only once per replica.
+			// When a static entry names an address the load balancer already provides, the static entry's port
+			// wins: it is a deliberate user statement, e.g. an external DNAT rewrites the port.
+			Name:    "static-endpoint-overrides-lb-port-on-same-address",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"1.2.3.4:5000"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "1.2.3.4", ""),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "1.2.3.4", Port: 5000},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// IPv6 static endpoints are advertised with the address in canonical (unbracketed) form.
+			Name:    "ipv6-static-endpoint",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"[2001:db8::1]:41641"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedService("test", 0),
+				managedStatefulSet("test", 1, 1),
+			},
+			ExpectedServices: []expectedService{{Name: "peerrelay-test-0"}},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "2001:db8::1", Port: 41641},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// The whole chain for a non-default spec.service.port combined with spec.staticEndpoints: the listen
+			// port lands in RelayServerPort, LB-derived endpoints carry the custom port while the static entry
+			// keeps the port the user supplied (an external forward may rewrite it), and static entries reach
+			// every replica's config, including one whose LB has no address yet.
+			Name:    "custom-port-and-static-endpoints-reach-tailscaled-config",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					Replicas:        new(int32(2)),
+					Service:         &tsapi.PeerRelayService{Port: new(uint16(3478))},
+					StaticEndpoints: []string{"203.0.113.99:6969"},
+				},
+			},
+			ExistingResources: []client.Object{
+				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
+				managedService("test", 1),
+				managedStatefulSet("test", 2, 2),
+			},
+			ExpectedServices: []expectedService{
+				{Name: "peerrelay-test-0", Port: 3478, Protocol: corev1.ProtocolUDP},
+				{Name: "peerrelay-test-1", Port: 3478, Protocol: corev1.ProtocolUDP},
+			},
+			ExpectedEndpoints: []tsapi.PeerRelayEndpoint{
+				{Replica: 0, Address: "203.0.113.20", Port: 3478},
+				{Replica: 0, Address: "203.0.113.30", Port: 3478},
+				{Replica: 0, Address: "203.0.113.99", Port: 6969},
+				{Replica: 1, Address: "203.0.113.99", Port: 6969},
+			},
+			ExpectedConfigs: map[string]expectedConfig{
+				"peerrelay-test-0-config": {
+					RelayServerPort: 3478,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("203.0.113.20:3478"),
+						netip.MustParseAddrPort("203.0.113.30:3478"),
+						netip.MustParseAddrPort("203.0.113.99:6969"),
+					},
+				},
+				"peerrelay-test-1-config": {
+					RelayServerPort: 3478,
+					RelayServerStaticEndpoints: []netip.AddrPort{
+						netip.MustParseAddrPort("203.0.113.99:6969"),
+					},
+				},
+			},
+			ExpectedReadyStatus: metav1.ConditionTrue,
+			ExpectedReadyReason: peerrelay.ReasonReady,
+		},
+		{
+			// A malformed static endpoint trips the belt-and-braces check: the CRD Pattern only rejects obvious
+			// junk at admission, and Go's netip.ParseAddrPort is the authoritative parser. The reconciler refuses
+			// to create Services and surfaces StaticEndpointsInvalid so the user can fix the spec.
+			Name:    "invalid-static-endpoint-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"nonsense"},
+				},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonStaticEndpointsInvalid,
+		},
+		{
+			// Two static endpoints with the same address but different ports would silently overwrite each
+			// other in status.endpoints (keyed on replica+address), so the reconciler rejects the spec instead
+			// and surfaces StaticEndpointsInvalid.
+			Name:    "duplicate-static-endpoint-address-blocks-reconcile",
+			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
+			PeerRelay: &tsapi.PeerRelay{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: tsapi.PeerRelaySpec{
+					StaticEndpoints: []string{"203.0.113.99:41641", "203.0.113.99:41642"},
+				},
+			},
+			ExpectStatefulSetGone: true,
+			ExpectedReadyStatus:   metav1.ConditionFalse,
+			ExpectedReadyReason:   peerrelay.ReasonStaticEndpointsInvalid,
+		},
+		{
 			// spec.aws.elasticIPs fans out per-replica: each Service gets its OWN eip-allocations + subnets
 			// annotations from the array. This is the HA path on AWS where every replica needs a distinct EIP.
 			Name:    "aws-elasticips-fan-out-per-replica",
@@ -820,6 +1027,16 @@ func TestReconciler_Reconcile(t *testing.T) {
 			configSecrets, stateSecrets := childSecretsFromServices(tc.Request.Name, tc.ExpectedServices)
 			assertConfigSecrets(t, fc, tc.Request.Name, configSecrets)
 			assertStateSecrets(t, fc, tc.Request.Name, stateSecrets)
+
+			for name, want := range tc.ExpectedConfigs {
+				got := readTailscaledConfig(t, fc, name)
+				if got.RelayServerPort == nil || *got.RelayServerPort != want.RelayServerPort {
+					t.Errorf("config %q: expected RelayServerPort=%d, got %v", name, want.RelayServerPort, got.RelayServerPort)
+				}
+				if !slices.Equal(got.RelayServerStaticEndpoints, want.RelayServerStaticEndpoints) {
+					t.Errorf("config %q: expected RelayServerStaticEndpoints=%v, got %v", name, want.RelayServerStaticEndpoints, got.RelayServerStaticEndpoints)
+				}
+			}
 		})
 	}
 }
@@ -956,6 +1173,11 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 		}
 		if want.Port != 0 && got.Spec.Ports[0].Port != want.Port {
 			t.Errorf("Service %q: expected port %d, got %d", want.Name, want.Port, got.Spec.Ports[0].Port)
+		}
+		// The externally exposed port and the port the container listens on must always be equal: the relay
+		// advertises address:port to peers, so the load balancer must forward without rewriting the port.
+		if want.Port != 0 && got.Spec.Ports[0].TargetPort.IntValue() != int(want.Port) {
+			t.Errorf("Service %q: expected targetPort %d, got %v", want.Name, want.Port, got.Spec.Ports[0].TargetPort)
 		}
 		if want.NodePort != 0 && got.Spec.Ports[0].NodePort != want.NodePort {
 			t.Errorf("Service %q: expected nodePort %d, got %d", want.Name, want.NodePort, got.Spec.Ports[0].NodePort)

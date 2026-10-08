@@ -2170,3 +2170,76 @@ func proxyCreatedCondition(clock tstime.Clock) []metav1.Condition {
 func conditionTime(clock tstime.Clock) metav1.Time {
 	return metav1.NewTime(clock.Now().Truncate(time.Second))
 }
+
+func TestNodeHandlerForConnector(t *testing.T) {
+	pc := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Spec: tsapi.ProxyClassSpec{
+			StaticEndpoints: &tsapi.StaticEndpointsConfig{
+				NodePort: &tsapi.NodePortConfig{
+					Ports:    []tsapi.PortRange{{Port: 30001, EndPort: 30003}},
+					Selector: map[string]string{"zone": "eu"},
+				},
+			},
+		},
+	}
+	noStaticPC := &tsapi.ProxyClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
+	}
+	connectors := []*tsapi.Connector{
+		// Matches the node via the ProxyClass selector.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "matching"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+		},
+		// References a ProxyClass that does not exist. This must not
+		// prevent other Connectors from being reconciled.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "missing-proxyclass"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: "does-not-exist"},
+		},
+		// References a ProxyClass without static endpoints.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: noStaticPC.Name},
+		},
+		// No ProxyClass at all.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-proxyclass"},
+		},
+		// Also matches the node, listed after the Connector with the
+		// missing ProxyClass.
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "matching-after-missing"},
+			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pc, noStaticPC).
+		Build()
+	for _, cn := range connectors {
+		mustCreate(t, fc, cn)
+	}
+	handler := nodeHandlerForConnector(fc, zap.Must(zap.NewDevelopment()).Sugar())
+
+	t.Run("matching_node", func(t *testing.T) {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}}}
+		got := handler(t.Context(), node)
+		want := []reconcile.Request{
+			{NamespacedName: types.NamespacedName{Name: "matching"}},
+			{NamespacedName: types.NamespacedName{Name: "matching-after-missing"}},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("unexpected reconcile requests (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("non_matching_node", func(t *testing.T) {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"zone": "us"}}}
+		got := handler(t.Context(), node)
+		if len(got) != 0 {
+			t.Fatalf("expected no reconcile requests, got %v", got)
+		}
+	})
+}

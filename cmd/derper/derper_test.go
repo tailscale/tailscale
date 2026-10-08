@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,4 +139,52 @@ func TestTemplate(t *testing.T) {
 	if !strings.Contains(str, "Debug info") {
 		t.Error("Output is missing debug info")
 	}
+}
+
+type hijackableResponseWriter struct {
+	httptest.ResponseRecorder
+	conn net.Conn
+}
+
+func (w *hijackableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func TestHijackTrackingResponseWriter(t *testing.T) {
+	t.Run("hijacked", func(t *testing.T) {
+		c1, c2 := net.Pipe()
+		defer c2.Close()
+		closes := 0
+		htw := &hijackTrackingResponseWriter{
+			ResponseWriter: &hijackableResponseWriter{conn: c1},
+			onConnClose:    func() { closes++ },
+		}
+		conn, _, err := htw.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !htw.hijacked {
+			t.Error("hijacked = false; want true")
+		}
+		if closes != 0 {
+			t.Errorf("closes = %d before Close; want 0", closes)
+		}
+		conn.Close()
+		conn.Close() // once only
+		if closes != 1 {
+			t.Errorf("closes = %d after double Close; want 1", closes)
+		}
+		if _, ok := conn.(interface{ NetConn() net.Conn }); !ok {
+			t.Error("hijacked conn does not expose NetConn for wrapper unwrapping")
+		}
+	})
+	t.Run("not-hijackable", func(t *testing.T) {
+		htw := &hijackTrackingResponseWriter{ResponseWriter: httptest.NewRecorder()}
+		if _, _, err := htw.Hijack(); err == nil {
+			t.Error("Hijack succeeded on non-Hijacker; want error")
+		}
+		if htw.hijacked {
+			t.Error("hijacked = true; want false")
+		}
+	})
 }

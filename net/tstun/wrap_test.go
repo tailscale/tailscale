@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !ts_omit_netstack
+
 package tstun
 
 import (
@@ -11,8 +13,10 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -1267,5 +1271,181 @@ func TestFilterDropTSMP(t *testing.T) {
 	if metricPacketOutDropTSMP.Value() != wantMetric {
 		t.Errorf("expected metric\n got: %d\nwant: %d\n",
 			metricPacketOutDropTSMP.Value(), wantMetric)
+	}
+}
+
+func TestStackGSOToTunGSO(t *testing.T) {
+	tcpPacket := func(l3HdrLen, payloadLen int) []byte {
+		const tcpHdrLen = 20
+		pkt := make([]byte, l3HdrLen+tcpHdrLen+payloadLen)
+		pkt[l3HdrLen+12] = tcpHdrLen / 4 << 4
+		return pkt
+	}
+
+	tests := []struct {
+		name    string
+		pkt     []byte
+		gso     stack.GSO
+		want    wgtun.GSOOptions
+		wantErr bool
+	}{
+		{
+			name: "gso_none_does_not_parse_tcp_header",
+			pkt:  udp4("100.64.0.1", "100.64.0.2", 1234, 5678),
+		},
+		{
+			name: "tcpv4_zero_mss_without_payload",
+			pkt:  tcpPacket(20, 0),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				L3HdrLen:   20,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSONone,
+				HdrLen:     40,
+				CsumStart:  20,
+				CsumOffset: 16,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "tcpv6_zero_mss_without_payload",
+			pkt:  tcpPacket(40, 0),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv6,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				L3HdrLen:   40,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSONone,
+				HdrLen:     60,
+				CsumStart:  40,
+				CsumOffset: 16,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "tcpv4_zero_mss_with_payload",
+			pkt:  tcpPacket(20, 1),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				CsumOffset: 16,
+				L3HdrLen:   20,
+			},
+			wantErr: true,
+		},
+		{
+			name: "tcpv4_nonzero_mss",
+			pkt:  tcpPacket(20, 1),
+			gso: stack.GSO{
+				Type:       stack.GSOTCPv4,
+				NeedsCsum:  true,
+				CsumOffset: 16,
+				MSS:        1200,
+				L3HdrLen:   20,
+			},
+			want: wgtun.GSOOptions{
+				GSOType:    wgtun.GSOTCPv4,
+				HdrLen:     40,
+				CsumStart:  20,
+				CsumOffset: 16,
+				GSOSize:    1200,
+				NeedsCsum:  true,
+			},
+		},
+		{
+			name: "unsupported_gso_type",
+			gso: stack.GSO{
+				Type: stack.GSOGvisor,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stackGSOToTunGSO(tt.pkt, tt.gso)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("error = %v != wantErr: %v", err, tt.wantErr)
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+type flowRecorder struct {
+	*fakeTUN
+	mu    sync.Mutex
+	flows []int
+}
+
+func (d *flowRecorder) WriteTo(flow int, bufs [][]byte, offset int) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.flows = append(d.flows, flow)
+	return len(bufs), nil
+}
+
+func (d *flowRecorder) Write(bufs [][]byte, offset int) (int, error) {
+	return d.WriteTo(0, bufs, offset)
+}
+
+func (d *flowRecorder) recordedFlows() []int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.flows)
+}
+
+func TestWrappedQueuesMatch(t *testing.T) {
+	for _, q := range []int{1, 4} {
+		t.Run(fmt.Sprintf("q=%d", q), func(t *testing.T) {
+			tdev := newFakeMQ(q)
+			bus := eventbustest.NewBus(t)
+			want := wgtun.QueuesOf(tdev)
+			if len(want) != q {
+				t.Fatalf("newFakeMQ(%d) returned %d queues", q, len(want))
+			}
+			w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+			defer w.Close()
+			got := w.Queues()
+			if have, want := len(got), len(want); have != want {
+				t.Fatalf("len(Queues()) = %d, want %d", have, want)
+			}
+			for i, q := range got {
+				if got, ok := q.(*wrapperQueue); !ok || got.q != want[i] {
+					t.Errorf("Queues()[%d] wraps the wrong underlying queue", i)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteToForwardsFlow(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	tdev := &flowRecorder{fakeTUN: newFakeMQ(4)}
+	w := Wrap(t.Logf, tdev, new(usermetric.Registry), bus)
+	w.disableFilter = true
+	w.Start()
+	defer w.Close()
+	pkt := udp4("100.64.1.2", "100.64.1.3", 1234, 5678)
+	want := []int{3, 1, 2}
+	for _, flow := range want {
+		if _, err := w.WriteTo(flow, [][]byte{pkt}, 0); err != nil {
+			t.Fatalf("WriteTo(%d): %v", flow, err)
+		}
+	}
+	// Write is WriteTo with a zero flow.
+	want = append(want, 0)
+	if _, err := w.Write([][]byte{pkt}, 0); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got := tdev.recordedFlows(); !slices.Equal(got, want) {
+		t.Errorf("flows reaching the device = %v, want %v", got, want)
 	}
 }

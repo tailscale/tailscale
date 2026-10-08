@@ -122,6 +122,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	IsWireGuardOnly               bool
 	IsJailed                      bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
+	StableTailnetID               StableTailnetID
 }{})
 
 // Clone makes a deep copy of Hostinfo.
@@ -380,7 +381,7 @@ var _RegisterRequestCloneNeedsRegeneration = RegisterRequest(struct {
 	Version          CapabilityVersion
 	NodeKey          key.NodePublic
 	OldNodeKey       key.NodePublic
-	NLKey            key.NLPublic
+	NLKey            key.TLPublic
 	Auth             *RegisterResponseAuth
 	Expiry           time.Time
 	Followup         string

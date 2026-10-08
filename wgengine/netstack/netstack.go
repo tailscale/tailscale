@@ -217,7 +217,7 @@ type Impl struct {
 	dialer    *tsdial.Dialer
 	ctx       context.Context        // alive until Close
 	ctxCancel context.CancelFunc     // called on Close
-	injectWG  sync.WaitGroup         // wait for the inject goroutine
+	injectWG  sync.WaitGroup         // wait for the inject goroutines
 	lb        *ipnlocal.LocalBackend // or nil
 	dns       *dns.Manager
 
@@ -350,80 +350,10 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if dialer == nil {
 		return nil, errors.New("nil Dialer")
 	}
-	ipstack := stack.New(stack.Options{
-		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
-		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
-	})
-	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
-	tcpipErr := ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &sackEnabledOpt)
-	if tcpipErr != nil {
-		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
-	}
-	// See https://github.com/tailscale/tailscale/issues/9707
-	// gVisor's RACK performs poorly. ACKs do not appear to be handled in a
-	// timely manner, leading to spurious retransmissions and a reduced
-	// congestion window.
-	tcpRecoveryOpt := tcpip.TCPRecovery(0)
-	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRecoveryOpt)
-	if tcpipErr != nil {
-		return nil, fmt.Errorf("could not disable TCP RACK: %v", tcpipErr)
-	}
-	// gVisor defaults to reno at the time of writing. We explicitly set reno
-	// congestion control in order to prevent unexpected changes. Netstack
-	// has an int overflow in sender congestion window arithmetic that is more
-	// prone to trigger with cubic congestion control.
-	// See https://github.com/google/gvisor/issues/11632
-	renoOpt := tcpip.CongestionControlOption("reno")
-	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &renoOpt)
-	if tcpipErr != nil {
-		return nil, fmt.Errorf("could not set reno congestion control: %v", tcpipErr)
-	}
-	err := setTCPBufSizes(ipstack)
-	if err != nil {
-		return nil, err
-	}
-	supportedGSOKind := stack.GSONotSupported
-	supportedGROKind := groNotSupported
-	if runtime.GOOS == "linux" && buildfeatures.HasGRO {
-		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
-		supportedGROKind = tcpGROSupported
-		supportedGSOKind = stack.HostGSOSupported
-	}
-	linkEP := newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", supportedGROKind)
-	linkEP.SupportedGSOKind = supportedGSOKind
-	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
-		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
-	}
-	// By default the netstack NIC will only accept packets for the IPs
-	// registered to it. Since in some cases we dynamically register IPs
-	// based on the packets that arrive, the NIC needs to accept all
-	// incoming packets. The NIC won't receive anything it isn't meant to
-	// since WireGuard will only send us packets that are meant for us.
-	ipstack.SetPromiscuousMode(nicID, true)
-	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
-	// are handled by the one fake NIC we use.
-	ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
-	if err != nil {
-		return nil, fmt.Errorf("could not create IPv4 subnet: %v", err)
-	}
-	ipv6Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 16)), tcpip.MaskFromBytes(make([]byte, 16)))
-	if err != nil {
-		return nil, fmt.Errorf("could not create IPv6 subnet: %v", err)
-	}
-	ipstack.SetRouteTable([]tcpip.Route{
-		{
-			Destination: ipv4Subnet,
-			NIC:         nicID,
-		},
-		{
-			Destination: ipv6Subnet,
-			NIC:         nicID,
-		},
-	})
+	// construct [Impl] before [linkEndpoint], as [linkEndpoint] construction
+	// requires [Impl.outboundQueueForPacket] and non-nil ip lookup funcs.
 	ns := &Impl{
 		logf:                  logf,
-		ipstack:               ipstack,
-		linkEP:                linkEP,
 		tundev:                tundev,
 		e:                     e,
 		pm:                    pm,
@@ -441,6 +371,71 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(ipset.FalseContainsIPFunc())
 	ns.atomicIsVIPServiceIPFunc.Store(ipset.FalseContainsIPFunc())
+	opts := stack.Options{
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol4, icmp.NewProtocol6},
+	}
+	if runtime.GOOS == "windows" {
+		// Windows monotonic clocks commonly update in 500us steps. RACK's loss
+		// detection compensates for this quantization when configured with an
+		// upper bound on the clock resolution, otherwise timestamp quantization
+		// alone can cause spurious loss declarations and retransmissions.
+		opts.ClockResolution = 500 * time.Microsecond
+	}
+	ns.ipstack = stack.New(opts)
+	// CUBIC is the default congestion control on Linux, and is more
+	// appropriate for Tailscale's high-BDP paths than reno. Netstack
+	// previously suffered from an int overflow in CUBIC sender cwnd
+	// arithmetic (https://github.com/google/gvisor/issues/11632), which is
+	// why reno was pinned here; the CUBIC implementation has since been
+	// reworked to use float arithmetic with RFC 9438 target clamping.
+	cubicOpt := tcpip.CongestionControlOption("cubic")
+	tcpipErr := ns.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt)
+	if tcpipErr != nil {
+		return nil, fmt.Errorf("could not set cubic congestion control: %v", tcpipErr)
+	}
+	err := setTCPBufSizes(ns.ipstack)
+	if err != nil {
+		return nil, err
+	}
+	supportedGSOKind := stack.GSONotSupported
+	supportedGROKind := groNotSupported
+	if runtime.GOOS == "linux" && buildfeatures.HasGRO {
+		// TODO(jwhited): add Windows support https://github.com/tailscale/corp/issues/21874
+		supportedGROKind = tcpGROSupported
+		supportedGSOKind = stack.HostGSOSupported
+	}
+	ns.linkEP = newLinkEndpoint(512, uint32(tstun.DefaultTUNMTU()), "", supportedGROKind, ns.outboundQueueForPacket)
+	ns.linkEP.SupportedGSOKind = supportedGSOKind
+	if tcpipProblem := ns.ipstack.CreateNIC(nicID, ns.linkEP); tcpipProblem != nil {
+		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
+	}
+	// By default the netstack NIC will only accept packets for the IPs
+	// registered to it. Since in some cases we dynamically register IPs
+	// based on the packets that arrive, the NIC needs to accept all
+	// incoming packets. The NIC won't receive anything it isn't meant to
+	// since WireGuard will only send us packets that are meant for us.
+	ns.ipstack.SetPromiscuousMode(nicID, true)
+	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
+	// are handled by the one fake NIC we use.
+	ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
+	if err != nil {
+		return nil, fmt.Errorf("could not create IPv4 subnet: %v", err)
+	}
+	ipv6Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 16)), tcpip.MaskFromBytes(make([]byte, 16)))
+	if err != nil {
+		return nil, fmt.Errorf("could not create IPv6 subnet: %v", err)
+	}
+	ns.ipstack.SetRouteTable([]tcpip.Route{
+		{
+			Destination: ipv4Subnet,
+			NIC:         nicID,
+		},
+		{
+			Destination: ipv6Subnet,
+			NIC:         nicID,
+		},
+	})
 	ns.tundev.PostFilterPacketInboundFromWireGuard = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	stacksForMetrics.Store(ns, struct{}{})
@@ -449,6 +444,8 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 
 func (ns *Impl) Close() error {
 	stacksForMetrics.Delete(ns)
+	// Cancel the injection goroutines before ipstack.Wait closes linkEP's
+	// outbound queues. A nil queue read is expected only after cancellation.
 	ns.ctxCancel()
 	ns.ipstack.Close()
 	ns.ipstack.Wait()
@@ -647,9 +644,9 @@ func (ns *Impl) Start(b LocalBackend) error {
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapTCPProtocolHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapUDPProtocolHandler(udpFwd.HandlePacket))
-	ns.injectWG.Go(func() {
-		ns.inject()
-	})
+	ns.injectWG.Go(ns.injectToHost)
+	ns.injectWG.Go(ns.injectToWireGuard)
+	ns.injectWG.Go(ns.injectLoopback)
 	if ns.ready.Swap(true) {
 		panic("already started")
 	}
@@ -1021,6 +1018,57 @@ func (ns *Impl) DialContextUDPWithBind(ctx context.Context, localAddr netip.Addr
 	return gonet.DialUDP(ns.ipstack, localAddress, remoteAddress, ipType)
 }
 
+// outboundQueueForPacket is the [outboundQueueRouter] used by [linkEndpoint].
+func (ns *Impl) outboundQueueForPacket(pkt *stack.PacketBuffer) outboundQueue {
+	switch {
+	case ns.shouldSendToHost(pkt):
+		return outboundToHost
+	case ns.isSelfDst(pkt):
+		// Self-addressed packet: deliver back into gVisor directly
+		// via the link endpoint's dispatcher, but only if the packet is not
+		// earmarked for the host. Neither the inbound path (fakeTUN Write is a
+		// no-op) nor the outbound path (WireGuard has no peer for our own IP)
+		// can handle these.
+		return outboundLoopback
+	default:
+		return outboundToWireGuard
+	}
+}
+
+// injectToWireGuard reads packets from the [outboundToWireGuard] [linkEndpoint]
+// queue and injects them into tstun for eventual delivery to wireguard-go via
+// [tun.Device.Read].
+func (ns *Impl) injectToWireGuard() {
+	for {
+		// TODO(jwhited): read-ahead and deliver a vector of packets to tstun
+		// for improved performance.
+		pkt := ns.linkEP.ReadContext(ns.ctx, outboundToWireGuard)
+		if pkt == nil {
+			if ns.ctx.Err() != nil {
+				return
+			}
+			panic("linkEndpoint.ReadContext returned nil with active context")
+		}
+		if debugPackets {
+			ns.logf("[v2] injectToWireGuard: % x",
+				stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
+		}
+		if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
+			ns.logf("netstack injectToWireGuard err: %v", err)
+			// When failing to inject an outbound packet buffer, log the error, but
+			// continue serving the ReadContext for sending subsequent packets, as
+			// nothing manages or restarts a failed injectToWireGuard. An error here
+			// only applies to the current packet and should not terminate the long-lived
+			// packet pump.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+	}
+}
+
 // getInjectInboundPacketSlab returns packet memory and related descriptors to
 // be used when calling [tstun.Wrapper.InjectInboundPacketBuffer]. The returned
 // elements are sized with consideration for MTU and GSO support on [Impl.linkEP],
@@ -1038,55 +1086,57 @@ func (ns *Impl) getInjectInboundPacketSlab() (slab []byte, packets []tun.ReadPac
 		make([][]byte, packetCount)
 }
 
-// The inject goroutine reads in packets that netstack generated, and delivers
-// them to the correct path.
-func (ns *Impl) inject() {
+// injectToHost reads packets from the [outboundToHost] [linkEndpoint] queue and
+// injects them into tstun for eventual delivery to the host networking stack
+// via [tun.Device.Write]. MagicDNS flows are one example of packets that are
+// routed over this path.
+func (ns *Impl) injectToHost() {
 	inboundSlab, packets, writeBufs := ns.getInjectInboundPacketSlab()
 	for {
-		pkt := ns.linkEP.ReadContext(ns.ctx)
+		pkt := ns.linkEP.ReadContext(ns.ctx, outboundToHost)
 		if pkt == nil {
 			if ns.ctx.Err() != nil {
-				// Return without logging.
 				return
 			}
-			ns.logf("[v2] ReadContext-for-write = ok=false")
+			panic("linkEndpoint.ReadContext returned nil with active context")
+		}
+		if debugPackets {
+			ns.logf("[v2] injectToHost: % x",
+				stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
+		}
+		if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundSlab, packets, writeBufs); err != nil {
+			ns.logf("netstack injectToHost err: %v", err)
+			// When failing to inject an outbound packet buffer, log the error, but
+			// continue serving the ReadContext for sending subsequent packets, as
+			// nothing manages or restarts a failed injectToHost. An error here
+			// only applies to the current packet and should not terminate the long-lived
+			// packet pump.
+			// The exception to this is if the context has ended, indicating a shutdown.
+			if ns.ctx.Err() != nil {
+				return
+			}
 			continue
 		}
+	}
+}
 
+// injectLoopback reads packets from the [outboundLoopback] [linkEndpoint]
+// queue and writes them back towards gVisor. [tsnet.Server] flows towards self
+// Tailscale addresses are one example of packets that flow on this path.
+func (ns *Impl) injectLoopback() {
+	for {
+		pkt := ns.linkEP.ReadContext(ns.ctx, outboundLoopback)
+		if pkt == nil {
+			if ns.ctx.Err() != nil {
+				return
+			}
+			panic("linkEndpoint.ReadContext returned nil with active context")
+		}
 		if debugPackets {
-			ns.logf("[v2] packet Write out: % x", stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
+			ns.logf("[v2] injectLoopback: % x",
+				stack.PayloadSince(pkt.NetworkHeader()).AsSlice())
 		}
-
-		// In the normal case, netstack synthesizes the bytes for
-		// traffic which should transit back into WG and go to peers.
-		// However, some uses of netstack (presently, magic DNS)
-		// send traffic destined for the local device, hence must
-		// be injected 'inbound'.
-		sendToHost := ns.shouldSendToHost(pkt)
-
-		// pkt has a non-zero refcount, so injection methods takes
-		// ownership of one count and will decrement on completion.
-		if sendToHost {
-			if err := ns.tundev.InjectInboundPacketBuffer(pkt, inboundSlab, packets, writeBufs); err != nil {
-				ns.logf("netstack inject inbound: %v", err)
-				return
-			}
-		} else {
-			// Self-addressed packet: deliver back into gVisor directly
-			// via the link endpoint's dispatcher, but only if the packet is not
-			// earmarked for the host. Neither the inbound path (fakeTUN Write is a
-			// no-op) nor the outbound path (WireGuard has no peer for our own IP)
-			// can handle these.
-			if ns.isSelfDst(pkt) {
-				ns.linkEP.DeliverLoopback(pkt)
-				continue
-			}
-
-			if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
-				ns.logf("netstack inject outbound: %v", err)
-				return
-			}
-		}
+		ns.linkEP.DeliverLoopback(pkt)
 	}
 }
 
@@ -1162,8 +1212,8 @@ func (ns *Impl) shouldSendToHost(pkt *stack.PacketBuffer) bool {
 }
 
 // isSelfDst reports whether pkt's destination IP is a local Tailscale IP
-// assigned to this node. This is used by inject() to detect self-addressed
-// packets that need loopback delivery.
+// assigned to this node. This is used by outboundQueueForPacket() to detect
+// self-addressed packets that need loopback delivery.
 func (ns *Impl) isSelfDst(pkt *stack.PacketBuffer) bool {
 	hdr := pkt.Network()
 	switch v := hdr.(type) {
@@ -1730,13 +1780,6 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-// tcpCloser is an interface to abstract around various TCPConn types that
-// allow closing of the read and write streams independently of each other.
-type tcpCloser interface {
-	CloseRead() error
-	CloseWrite() error
-}
-
 func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort, isLocal bool) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
@@ -1809,21 +1852,24 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	// from stdDialer.DialContext (which has the requisite functions),
 	// or nil from hangDialer in tests (in which case we would have
 	// errored out by now), so this conversion should always succeed.
-	backendTCPCloser, backendIsTCPCloser := backend.(tcpCloser)
+	backendHalfCloser, backendIsHalfCloser := backend.(nettype.HalfCloser)
 	connClosed := make(chan error, 2)
+	// Each direction half-closes its destination once the source is done,
+	// so the destination's peer sees EOF while the other direction keeps
+	// flowing. Neither direction shuts down its source's read side: that
+	// has no effect on the wire, and once the source has returned EOF,
+	// macOS (and Linux, if the socket is fully closed by then) rejects the
+	// shutdown with ENOTCONN, which used to be logged for every connection.
 	go func() {
 		_, err := io.Copy(backend, client)
 		if err != nil {
 			err = fmt.Errorf("client -> backend: %w", err)
 		}
 		connClosed <- err
-		err = nil
-		if backendIsTCPCloser {
-			err = backendTCPCloser.CloseWrite()
-		}
-		err = errors.Join(err, client.CloseRead())
-		if err != nil {
-			ns.logf("client -> backend close connection: %v", err)
+		if backendIsHalfCloser {
+			if err := backendHalfCloser.CloseWrite(); err != nil {
+				ns.logf("client -> backend close connection: %v", err)
+			}
 		}
 	}()
 	go func() {
@@ -1832,12 +1878,7 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 			err = fmt.Errorf("backend -> client: %w", err)
 		}
 		connClosed <- err
-		err = nil
-		if backendIsTCPCloser {
-			err = backendTCPCloser.CloseRead()
-		}
-		err = errors.Join(err, client.CloseWrite())
-		if err != nil {
+		if err := client.CloseWrite(); err != nil {
 			ns.logf("backend -> client close connection: %v", err)
 		}
 	}()

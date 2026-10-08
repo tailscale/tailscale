@@ -156,6 +156,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/views"
+	"tailscale.com/util/backoff"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/def"
 	"tailscale.com/util/dnsname"
@@ -173,9 +174,13 @@ func getAutoAdvertiseBool() bool {
 	return def.Bool(os.Getenv("TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT"), true)
 }
 
-const containerbootWatchMask = ipn.NotifyInitialStatus |
-	ipn.NotifyPeerChanges |
-	ipn.NotifyNoNetMap
+func containerbootWatchMask(cfg *settings) ipn.NotifyWatchOpt {
+	mask := ipn.NotifyInitialStatus | ipn.NotifyNoNetMap
+	if cfg.TailnetTargetFQDN != "" || cfg.EgressProxiesCfgPath != "" {
+		mask |= ipn.NotifyPeerChanges
+	}
+	return mask
+}
 
 func notifyState(n ipn.Notify) (_ ipn.State, ok bool) {
 	if n.State != nil {
@@ -235,19 +240,103 @@ func (s netmapState) processNotify(ctx context.Context, client *local.Client, n 
 }
 
 func (s netmapState) updateFromStatus(st *ipnstate.Status) netmapState {
-	s.certDomains = views.SliceOf(st.CertDomains)
-	s.dnsExtraRecords = views.SliceOf(st.ExtraRecords)
+	s = netmapState{
+		certDomains:     views.SliceOf(st.CertDomains),
+		dnsExtraRecords: views.SliceOf(st.ExtraRecords),
+	}
 	if st.Self != nil {
 		s.self = nodeFromPeerStatus(st.Self).View()
 	}
-	if len(st.Peer) != 0 {
-		s.peersByID = nil
-		s.peersByName = nil
-		for _, ps := range st.Peer {
-			s = s.upsertPeer(nodeFromPeerStatus(ps).View())
-		}
+	for _, ps := range st.Peer {
+		s = s.upsertPeer(nodeFromPeerStatus(ps).View())
 	}
 	return s
+}
+
+type watchIPNBusFunc func(context.Context, ipn.NotifyWatchOpt) (klc.IPNBusWatcher, error)
+
+// maxIPNBusDialFailure is how long reconnectingIPNBusWatcher keeps failing to
+// open a new watch before giving up. A closed stream is always retried, but a
+// watch that cannot be opened at all usually means tailscaled is gone.
+const maxIPNBusDialFailure = time.Minute
+
+type reconnectingIPNBusWatcher struct {
+	ctx            context.Context
+	watch          watchIPNBusFunc
+	mask           ipn.NotifyWatchOpt
+	bo             *backoff.Backoff
+	watcher        klc.IPNBusWatcher
+	startedAt      time.Time
+	maxDialFailure time.Duration
+	dialFailSince  time.Time
+}
+
+func newReconnectingIPNBusWatcher(ctx context.Context, name string, watch watchIPNBusFunc, mask ipn.NotifyWatchOpt, maxBackoff time.Duration) *reconnectingIPNBusWatcher {
+	return &reconnectingIPNBusWatcher{
+		ctx:            ctx,
+		watch:          watch,
+		mask:           mask,
+		bo:             backoff.NewBackoff(name, log.Printf, maxBackoff),
+		maxDialFailure: maxIPNBusDialFailure,
+	}
+}
+
+// Next returns the next notification, reconnecting after the watch stream
+// closes. Each new watch starts with an authoritative InitialStatus snapshot.
+func (w *reconnectingIPNBusWatcher) Next() (ipn.Notify, error) {
+	for {
+		if err := w.ctx.Err(); err != nil {
+			return ipn.Notify{}, err
+		}
+		if w.watcher == nil {
+			watcher, err := w.watch(w.ctx, w.mask)
+			if err != nil {
+				if w.dialFailSince.IsZero() {
+					w.dialFailSince = time.Now()
+				} else if time.Since(w.dialFailSince) >= w.maxDialFailure {
+					return ipn.Notify{}, err
+				}
+				w.bo.BackOff(w.ctx, err)
+				continue
+			}
+			w.watcher = watcher
+			w.startedAt = time.Now()
+			w.dialFailSince = time.Time{}
+		}
+
+		n, err := w.watcher.Next()
+		if err == nil {
+			if n.ErrMessage != nil {
+				log.Printf("tailscaled IPN bus error: %s", *n.ErrMessage)
+			}
+			return n, nil
+		}
+		w.watcher.Close()
+		w.watcher = nil
+		if ctxErr := w.ctx.Err(); ctxErr != nil {
+			return ipn.Notify{}, ctxErr
+		}
+		log.Printf("IPN bus watch ended; reconnecting: %v", err)
+		if time.Since(w.startedAt) >= 30*time.Second {
+			w.bo.Reset()
+		}
+		w.bo.BackOff(w.ctx, err)
+	}
+}
+
+func (w *reconnectingIPNBusWatcher) SetMask(mask ipn.NotifyWatchOpt) {
+	w.Close()
+	w.mask = mask
+	w.bo.Reset()
+}
+
+func (w *reconnectingIPNBusWatcher) Close() error {
+	if w.watcher == nil {
+		return nil
+	}
+	err := w.watcher.Close()
+	w.watcher = nil
+	return err
 }
 
 func (s netmapState) upsertPeer(n tailcfg.NodeView) netmapState {
@@ -461,10 +550,10 @@ func run() error {
 		}
 	}
 
-	w, err := client.WatchIPNBus(bootCtx, containerbootWatchMask|ipn.NotifyInitialPrefs|ipn.NotifyInitialHealthState)
-	if err != nil {
-		return fmt.Errorf("failed to watch tailscaled for updates: %w", err)
-	}
+	watchMask := containerbootWatchMask(cfg)
+	authWatchMask := watchMask | ipn.NotifyInitialPrefs | ipn.NotifyInitialHealthState
+	localClient := klc.New(client)
+	w := newReconnectingIPNBusWatcher(bootCtx, "containerboot-auth-ipn-watch", localClient.WatchIPNBus, authWatchMask, 5*time.Second)
 
 	// Now that we've started tailscaled, we can symlink the socket to the
 	// default location if needed.
@@ -501,10 +590,8 @@ func run() error {
 		if err := tailscaleUp(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %w", err)
 		}
-		w, err = client.WatchIPNBus(bootCtx, containerbootWatchMask)
-		if err != nil {
-			return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
-		}
+		authWatchMask = watchMask
+		w.SetMask(authWatchMask)
 		return nil
 	}
 
@@ -518,7 +605,7 @@ authLoop:
 	for {
 		n, err := w.Next()
 		if err != nil {
-			return fmt.Errorf("failed to read from tailscaled: %w", err)
+			return fmt.Errorf("reading tailscaled IPN bus: %w", err)
 		}
 
 		if state, ok := notifyState(n); ok {
@@ -613,11 +700,6 @@ authLoop:
 		}
 	}
 
-	w, err = client.WatchIPNBus(ctx, containerbootWatchMask)
-	if err != nil {
-		return fmt.Errorf("rewatching tailscaled for updates after auth: %w", err)
-	}
-
 	// If tailscaled config was read from a mounted file, watch the file for updates and reload.
 	cfgWatchErrChan := make(chan error)
 	cfgWatchCtx, cfgWatchCancel := context.WithCancel(ctx)
@@ -694,15 +776,21 @@ authLoop:
 
 	var egressSvcsNotify chan netmapState
 	notifyChan := make(chan ipn.Notify)
-	errChan := make(chan error)
+	errChan := make(chan error, 1)
+	steadyWatch := newReconnectingIPNBusWatcher(ctx, "containerboot-ipn-watch", localClient.WatchIPNBus, watchMask, 30*time.Second)
 	go func() {
 		for {
-			n, err := w.Next()
+			n, err := steadyWatch.Next()
 			if err != nil {
-				errChan <- err
-				break
-			} else {
-				notifyChan <- n
+				if ctx.Err() == nil {
+					errChan <- err
+				}
+				return
+			}
+			select {
+			case notifyChan <- n:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -721,7 +809,7 @@ runLoop:
 			killTailscaled()
 			break runLoop
 		case err := <-errChan:
-			return fmt.Errorf("failed to read from tailscaled: %w", err)
+			return fmt.Errorf("reading tailscaled IPN bus: %w", err)
 		case err := <-cfgWatchErrChan:
 			return fmt.Errorf("failed to watch tailscaled config: %w", err)
 		case n := <-notifyChan:
@@ -908,7 +996,7 @@ runLoop:
 					return fmt.Errorf("autoadvertisement: failed to get serve config: %w", err)
 				}
 
-				err = refreshAdvertiseServices(ctx, prevServeConfig, klc.New(client))
+				err = refreshAdvertiseServices(ctx, prevServeConfig, localClient)
 				if err != nil {
 					return fmt.Errorf("autoadvertisement: failed to refresh advertise services: %w", err)
 				}

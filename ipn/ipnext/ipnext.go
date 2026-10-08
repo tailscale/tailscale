@@ -21,6 +21,7 @@ import (
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/mapx"
@@ -115,7 +116,14 @@ var extensions mapx.OrderedMap[string, *Definition]
 //
 // It panics if newExt is nil or if an extension with the same name
 // has already been registered.
+//
+// As a backstop for feature packages that forget to consult
+// feature.Register, it does nothing if the named feature was disabled
+// via the TS_DISABLE_FEATURE environment variable.
 func RegisterExtension(name string, newExt NewExtensionFn) {
+	if feature.Disabled(name) {
+		return
+	}
 	if newExt == nil {
 		panic(fmt.Sprintf("ipnext: newExt is nil: %q", name))
 	}
@@ -411,6 +419,18 @@ type Hooks struct {
 	// or when the client disconnects and the network map is cleared.
 	OnNetMapToggle feature.Hooks[func(*netmap.NetworkMap)]
 
+	// NetworkConfiguredChange is called with LocalBackend.mu held when the
+	// current node receives its initial network configuration or that
+	// configuration is cleared, including during a profile reset.
+	NetworkConfiguredChange feature.Hooks[func(configured bool)]
+
+	// OnPeerUpdate is called with LocalBackend.mu held after processing a
+	// replacement, incremental update, or clear of the current node's peers.
+	// The peer state need not differ from its previous value.
+	// Callbacks can query [Host.NodeBackend] for the current peers.
+	// It runs independently of engine reconfiguration.
+	OnPeerUpdate feature.Hooks[func()]
+
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]
@@ -478,6 +498,24 @@ type Hooks struct {
 	//
 	// The hook is called with LocalBackend's mutex locked.
 	ExtraRouterConfigRoutes feature.Hook[func() views.Slice[netip.Prefix]]
+
+	// ExtraDNSRoutes returns split DNS routes, keyed by domain suffix, to
+	// add to the [tailscale.com/net/dns.Config] computed on each reconfig.
+	// They are added alongside the netmap's own DNS routes and go through
+	// the same handling, including the UseWithExitNode filtering that
+	// applies when an exit node proxies DNS.
+	//
+	// The extension should derive the routes from state it already tracks
+	// via other hooks, such as [Hooks.OnSelfChange] and
+	// [Hooks.ProfileStateChange], both of which fire before the reconfig
+	// that calls this hook.
+	//
+	// The returned map and slices should not be mutated by the extension
+	// after they are returned.
+	//
+	// The hook is called with LocalBackend's mutex locked. It must not
+	// call back into LocalBackend or block.
+	ExtraDNSRoutes feature.Hook[func() map[string][]*dnstype.Resolver]
 }
 
 // FilterHooks contains hooks that extensions can use to customize the packet
@@ -513,6 +551,9 @@ type FilterHooks struct {
 //
 // It is not a snapshot in time but is locked to a particular node.
 type NodeBackend interface {
+	// PeerByStableID returns a current peer, including incremental updates.
+	PeerByStableID(tailcfg.StableNodeID) (tailcfg.NodeView, bool)
+
 	// Self returns the current node.
 	Self() tailcfg.NodeView
 

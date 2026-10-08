@@ -194,7 +194,11 @@ type CapabilityVersion int
 //   - 143: 2026-07-22: Client correctly ignores conn25 node attributes when not enabled by environment variable
 //   - 144: 2026-07-31: Client sends [packet.TSMPDiscoKeyAdvertisement] around WireGuard handshakes
 //   - 145: 2026-08-04: Client understands [NodeAttrScopeQuad100OnMacOS]
-const CurrentCapabilityVersion CapabilityVersion = 145
+//   - 146: 2026-09-02: Client understands [NodeAttrConnReject]; can handle C2N /debug/rejects.
+//   - 147: 2026-09-09: Client handles 429/503 responses with retry-after headers to /machine/ endpoints
+//   - 148: 2026-09-15: Client understands [Node.StableTailnetID]
+//   - 149: 2026-10-07: Sentinel version to request the server send back [NodeAttrCacheNetworkMaps] set to enabled
+const CurrentCapabilityVersion CapabilityVersion = 149
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -257,6 +261,16 @@ type StableNodeID string
 
 func (u StableNodeID) IsZero() bool {
 	return u == ""
+}
+
+// StableTailnetID is the stable and opaque identifier of the tailnet this node
+// is a member of, as used to identify the tailnet in the Tailscale API. These
+// IDs are guaranteed to be unique across all tailnets for a single control
+// server instance, but may or may not be unique across different servers.
+type StableTailnetID string
+
+func (id StableTailnetID) IsZero() bool {
+	return id == ""
 }
 
 // User is a Tailscale user.
@@ -541,6 +555,13 @@ type Node struct {
 	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
 	// node is marked IsWireGuardOnly and being used as an exit node.
 	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
+
+	// StableTailnetID is the identifier of the tailnet this node is a
+	// member of.
+	//
+	// Control only populates this for the self node in a MapResponse
+	// (MapResponse.Node); it is empty for peers.
+	StableTailnetID StableTailnetID `json:",omitzero"`
 }
 
 // HasCap reports whether the node has the given capability.
@@ -1307,7 +1328,7 @@ type RegisterRequest struct {
 
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
-	NLKey      key.NLPublic
+	NLKey      key.TLPublic
 	Auth       *RegisterResponseAuth `json:",omitempty"`
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.
@@ -2413,7 +2434,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
 		n.IsWireGuardOnly == n2.IsWireGuardOnly &&
-		n.IsJailed == n2.IsJailed
+		n.IsJailed == n2.IsJailed &&
+		n.StableTailnetID == n2.StableTailnetID
 }
 
 func eqPtr[T comparable](a, b *T) bool {
@@ -2555,6 +2577,7 @@ const (
 	NodeAttrDisableTUNUDPGRO                     = nodecap.DisableTUNUDPGRO
 	NodeAttrDisableTUNTCPGRO                     = nodecap.DisableTUNTCPGRO
 	NodeAttrNeverGSOEqualTail                    = nodecap.NeverGSOEqualTail
+	NodeAttrConnReject                           = nodecap.ConnReject
 	// Deprecated: Do not add any further values here, use [nodecap] instead.
 
 	NodeAttrPrefixServices = nodecap.ServicesPrefix

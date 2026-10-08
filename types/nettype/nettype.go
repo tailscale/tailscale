@@ -63,3 +63,14 @@ type ConnPacketConn interface {
 	net.Conn
 	net.PacketConn
 }
+
+// HalfCloser is an interface to abstract around various Conn types that
+// allow closing of the read and write streams independently of each other.
+// It is normally used as a typecast for a `net.Conn` to get access to these
+// functions. If you use it for this purpose, you should either be absolutely
+// certain that the `net.Conn` you have represents a half-closable connection
+// (eg. TCP or unix socket), or check for and handle a failure to cast.
+type HalfCloser interface {
+	CloseRead() error
+	CloseWrite() error
+}

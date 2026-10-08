@@ -8,6 +8,7 @@ package dnscache
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -20,12 +21,62 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/feature"
+	"tailscale.com/feature/buildfeatures"
+	"tailscale.com/net/bakedroots"
 	"tailscale.com/net/netx"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/testenv"
+)
+
+// HookSetCacheDir optionally points to the dnsresolvecache feature's
+// function to configure the directory in which resolved IPs are
+// persisted to disk. It is called by tailscaled at startup, if the
+// feature is linked in.
+var HookSetCacheDir feature.Hook[func(dir string, logf logger.Logf)]
+
+// HookPersistResolution optionally points to the dnsresolvecache
+// feature's function to record a successful DNS resolution of host
+// to disk. The resolver argument is one of the "forward", "cloud",
+// or "fallback" resolver source names. The feature defers the actual
+// disk write until [HookHostVerified] confirms one of the
+// resolution's IPs.
+var HookPersistResolution feature.Hook[func(host, resolver string, ips []netip.Addr)]
+
+// HookLookupDiskCache optionally points to the dnsresolvecache
+// feature's function to load previously persisted IPs for host from
+// disk. It is consulted only after regular DNS resolution has
+// failed, before falling back to the DERP-based bootstrap DNS.
+var HookLookupDiskCache feature.Hook[func(host string) ([]netip.Addr, bool)]
+
+// HookHostVerified optionally points to the dnsresolvecache
+// feature's function to record that a TLS connection to host, at the
+// given remote IP, presented a certificate chain that is valid for
+// host. That is checked independently of the connection's own TLS
+// config, which may deliberately tolerate interception (as the
+// control plane Noise connection does). The feature uses this to
+// flush a pending resolution of host to disk only once one of its
+// IPs has been cryptographically verified to be host.
+var HookHostVerified feature.Hook[func(host string, ip netip.Addr)]
+
+// Resolver source names, as passed to [HookPersistResolution] and
+// used for deciding fallback behavior in Resolver.lookupIP.
+const (
+	srcForward  = "forward"  // Resolver.Forward (or the test hook)
+	srcCloud    = "cloud"    // cloud host resolver (e.g. GCP metadata resolver)
+	srcDisk     = "disk"     // dnsresolvecache disk cache of an earlier resolution
+	srcFallback = "fallback" // Resolver.LookupIPFallback (DERP-based bootstrap DNS)
+)
+
+var (
+	metricDiskFallbackHit    = clientmetric.NewCounter("dnscache_disk_fallback_hit")
+	metricDiskFallbackMiss   = clientmetric.NewCounter("dnscache_disk_fallback_miss")
+	metricDERPFallbackOK     = clientmetric.NewCounter("dnscache_derp_fallback_ok")
+	metricDERPFallbackDialOK = clientmetric.NewCounter("dnscache_derp_fallback_dial_ok")
 )
 
 var zaddr netip.Addr
@@ -112,7 +163,7 @@ type ipCacheEntry struct {
 	ip      netip.Addr   // either v4 or v6
 	ip6     netip.Addr   // nil if no v4 or no v6
 	allIPs  []netip.Addr // 1+ v4 and/or v6
-	expires time.Time
+	expires time.Time    // fresh until then; zero means expired (see expireIPCache)
 }
 
 func (r *Resolver) fwd() *net.Resolver {
@@ -259,6 +310,18 @@ func (r *Resolver) lookupIPCache(host string) (ip, ip6 netip.Addr, allIPs []neti
 	return zaddr, zaddr, nil, false
 }
 
+// expireIPCache marks host's cache entry, if any, as expired by zeroing
+// its expires time, so the next lookup goes to the network. The entry
+// remains available to [Resolver.UseLastGood].
+func (r *Resolver) expireIPCache(host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ent, ok := r.ipCache[host]; ok {
+		ent.expires = time.Time{}
+		r.ipCache[host] = ent
+	}
+}
+
 func (r *Resolver) lookupIPCacheExpired(host string) (ip, ip6 netip.Addr, allIPs []netip.Addr, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -295,15 +358,28 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 	defer lookupCancel()
 
 	var ips []netip.Addr
+	src := srcForward
 	if r.LookupIPForTest != nil && testenv.InTest() {
 		ips, err = r.LookupIPForTest(ctx, host)
 	} else {
 		ips, err = r.fwd().LookupNetIP(lookupCtx, "ip", host)
+		if err != nil || len(ips) == 0 {
+			if resolver, ok := r.cloudHostResolver(); ok {
+				r.dlogf("resolving %q via cloud resolver", host)
+				src = srcCloud
+				ips, err = resolver.LookupNetIP(lookupCtx, "ip", host)
+			}
+		}
 	}
-	if err != nil || len(ips) == 0 {
-		if resolver, ok := r.cloudHostResolver(); ok {
-			r.dlogf("resolving %q via cloud resolver", host)
-			ips, err = resolver.LookupNetIP(lookupCtx, "ip", host)
+	if buildfeatures.HasDNSResolveCache && (err != nil || len(ips) == 0) {
+		if f, ok := HookLookupDiskCache.GetOk(); ok {
+			if cached, ok := f(host); ok {
+				r.dlogf("resolving %q from disk cache after error", host)
+				metricDiskFallbackHit.Add(1)
+				ips, err, src = cached, nil, srcDisk
+			} else {
+				metricDiskFallbackMiss.Add(1)
+			}
 		}
 	}
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
@@ -314,7 +390,11 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 		} else {
 			r.dlogf("resolving %q using fallback resolver due to no returned IPs", host)
 		}
+		src = srcFallback
 		ips, err = r.LookupIPFallback(lookupCtx, host)
+		if err == nil && len(ips) > 0 {
+			metricDERPFallbackOK.Add(1)
+		}
 	}
 	if err != nil {
 		return netip.Addr{}, netip.Addr{}, nil, err
@@ -344,16 +424,24 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 			}
 		}
 	}
-	r.addIPCache(host, ip, ip6, ips, r.ttl())
+	r.addIPCache(host, src, ip, ip6, ips, r.ttl())
 	return ip, ip6, ips, nil
 }
 
-func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Addr, d time.Duration) {
+func (r *Resolver) addIPCache(host, src string, ip, ip6 netip.Addr, allIPs []netip.Addr, d time.Duration) {
 	if ip.IsPrivate() {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
 		r.dlogf("%q resolved to private IP %v; using but not caching", host, ip)
 		return
+	}
+
+	// Skip persisting disk-sourced results to avoid rewriting the
+	// disk cache files with their own contents.
+	if buildfeatures.HasDNSResolveCache && src != srcDisk {
+		if f, ok := HookPersistResolution.GetOk(); ok {
+			f(host, src, allIPs)
+		}
 	}
 
 	r.dlogf("%q resolved to IP %v; caching", host, ip)
@@ -416,21 +504,46 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 			return
 		}
 		if c, err := dc.raceDial(ctx, ips); err == nil {
+			metricDERPFallbackDialOK.Add(1)
 			retConn = c
 			ret = nil
 			return
 		}
 	}()
 
-	ip, _, allIPs, err := d.dnsCache.LookupIP(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
+	ip, _, allIPs, fromCache := d.dnsCache.lookupIPCache(host)
+	if fromCache {
+		d.dnsCache.dlogf("%q = %v (cached)", host, ip)
+	} else {
+		ip, _, allIPs, err = d.dnsCache.LookupIP(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
+		}
 	}
 
+	c, err := dc.dialIPs(ctx, ip, allIPs)
+	if err == nil || !fromCache || ctx.Err() != nil {
+		return c, err
+	}
+
+	// The cached IPs might be stale. Expire the cache entry (keeping it
+	// around for UseLastGood) and look up host again, dialing any new IPs.
+	d.dnsCache.expireIPCache(host)
+	if _, _, allIPs, err2 := d.dnsCache.LookupIP(ctx, host); err2 == nil {
+		if c, err2 := dc.raceDial(ctx, allIPs); err2 == nil {
+			return c, nil
+		}
+	}
+	return nil, err
+}
+
+// dialIPs dials ip if it's the only candidate in allIPs, or else races
+// dials to all of allIPs.
+func (dc *dialCall) dialIPs(ctx context.Context, ip netip.Addr, allIPs []netip.Addr) (net.Conn, error) {
 	// If we only have one candidate, just dial that, no matter what the
 	// address family is.
 	if len(allIPs) == 1 {
-		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
+		dc.d.dnsCache.dlogf("dialing %s, %s for %s", dc.network, ip, dc.address)
 		return dc.dialOne(ctx, ip.Unmap())
 	}
 
@@ -606,8 +719,52 @@ func TLSDialer(fwd netx.DialFunc, dnsCache *Resolver, tlsConfigBase *tls.Config)
 			// DNS mechanism.
 			return nil, err
 		}
+		// Tell the dnsresolvecache feature (if linked in) that the
+		// remote IP presented a valid certificate for host. The chain
+		// is checked here, independently of whatever verification the
+		// tls.Config did during the handshake, because some callers
+		// (notably controlhttp, which runs Noise atop whatever
+		// transport it gets) deliberately tolerate invalid TLS
+		// certificates; an intercepted connection must not mark the
+		// DNS resolution as verified.
+		if buildfeatures.HasDNSResolveCache {
+			if f, ok := HookHostVerified.GetOk(); ok && certValidForHost(tlsConn.ConnectionState(), host, cfg.RootCAs) {
+				if ap, err := netip.ParseAddrPort(tcpConn.RemoteAddr().String()); err == nil {
+					f(host, ap.Addr().Unmap())
+				}
+			}
+		}
 		return tlsConn, nil
 	}
+}
+
+// certValidForHost reports whether cs's peer certificate chain is
+// valid for host, verifying against roots if non-nil (a caller's
+// explicitly configured trust anchors), else against the system
+// roots. In either case the baked-in Let's Encrypt roots are also
+// tried, as net/tlsdial's Config does.
+func certValidForHost(cs tls.ConnectionState, host string, roots *x509.CertPool) bool {
+	if len(cs.PeerCertificates) == 0 {
+		return false
+	}
+	opts := x509.VerifyOptions{
+		DNSName:       host,
+		Roots:         roots, // nil means system roots
+		Intermediates: x509.NewCertPool(),
+	}
+	for _, cert := range cs.PeerCertificates[1:] {
+		opts.Intermediates.AddCert(cert)
+	}
+	if _, err := cs.PeerCertificates[0].Verify(opts); err == nil {
+		return true
+	}
+	if buildfeatures.HasBakedRoots {
+		opts.Roots = bakedroots.Get()
+		if _, err := cs.PeerCertificates[0].Verify(opts); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneTLSConfig(cfg *tls.Config) *tls.Config {

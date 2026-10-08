@@ -174,6 +174,35 @@ func (c Config) hasSplitDNSRouteForHost(host dnsname.FQDN) bool {
 	return false
 }
 
+// hasHostsWithoutReverseRoutes reports whether any PTR record synthesized by
+// quad-100 from Hosts is outside the configured routes. Apple scoping must
+// preserve these answers as well as forward records.
+func (c Config) hasHostsWithoutReverseRoutes() bool {
+	for _, ips := range c.Hosts {
+		for _, ip := range ips {
+			if !ip.IsValid() || !c.hasSplitDNSRouteForHost(reverseDNSName(ip)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reverseDNSName returns the PTR query name for a valid IP address.
+func reverseDNSName(ip netip.Addr) dnsname.FQDN {
+	if ip.Is4() {
+		b := ip.As4()
+		return dnsname.FQDN(fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", b[3], b[2], b[1], b[0]))
+	}
+	b := ip.As16()
+	const hex = "0123456789abcdef"
+	name := make([]byte, 0, 64+len("ip6.arpa."))
+	for i := len(b) - 1; i >= 0; i-- {
+		name = append(name, hex[b[i]&0xf], '.', hex[b[i]>>4], '.')
+	}
+	return dnsname.FQDN(append(name, "ip6.arpa."...))
+}
+
 func (c Config) hasDefaultResolvers() bool {
 	return len(c.DefaultResolvers) > 0
 }

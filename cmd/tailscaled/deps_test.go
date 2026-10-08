@@ -4,8 +4,6 @@
 package main
 
 import (
-	"maps"
-	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +66,32 @@ func TestOmitSyslog(t *testing.T) {
 		BadDeps: map[string]string{
 			"log/syslog":                   msg,
 			"tailscale.com/feature/syslog": msg,
+		},
+	}.Check(t)
+}
+
+func TestOmitDNSResolveCache(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		Tags:   "ts_omit_dnsresolvecache,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/feature/dnsresolvecache": "unexpected dnsresolvecache usage with ts_omit_dnsresolvecache",
+		},
+	}.Check(t)
+}
+
+func TestOmitAppConnectors(t *testing.T) {
+	const msg = "unexpected app connector usage with ts_omit_appconnectors"
+	deptest.DepChecker{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		// conn25 also uses appc, so omit it too to check that nothing
+		// else pulls appc in.
+		Tags: "ts_omit_appconnectors,ts_omit_conn25,ts_include_cli",
+		BadDeps: map[string]string{
+			"tailscale.com/appc":                  msg,
+			"tailscale.com/feature/appconnectors": msg,
 		},
 	}.Check(t)
 }
@@ -293,13 +317,7 @@ func TestOmitUseProxy(t *testing.T) {
 }
 
 func minTags() string {
-	var tags []string
-	for _, f := range slices.Sorted(maps.Keys(featuretags.Features)) {
-		if f.IsOmittable() {
-			tags = append(tags, f.OmitTag())
-		}
-	}
-	return strings.Join(tags, ",")
+	return strings.Join(featuretags.MinTags(), ",")
 }
 
 func TestMinTailscaledNoCLI(t *testing.T) {
@@ -366,4 +384,17 @@ func TestMinTailscaledWithCLI(t *testing.T) {
 			"github.com/mattn/go-colorable":          "unexpected go-colorable dep with ts_omit_colorable",
 		},
 	}.Check(t)
+}
+
+func TestOmitExitNodeHealth(t *testing.T) {
+	for _, tag := range []string{"ts_omit_exitnodehealth", "ts_omit_health", "ts_omit_useexitnode"} {
+		t.Run(tag, func(t *testing.T) {
+			deptest.DepChecker{
+				GOOS:    "linux",
+				GOARCH:  "amd64",
+				Tags:    tag + ",ts_include_cli",
+				BadDeps: map[string]string{"tailscale.com/feature/exitnodehealth": "unexpected exit node health feature"},
+			}.Check(t)
+		})
+	}
 }

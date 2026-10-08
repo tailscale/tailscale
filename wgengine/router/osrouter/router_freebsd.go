@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
@@ -32,7 +33,8 @@ func init() {
 // IP forwarding and PF-based NAT for native subnet routing.
 type freebsdRouter struct {
 	*userspaceBSDRouter
-	snatSubnetRoutes bool
+	kernelSubnets    bool // kernel, not netstack, forwards subnet traffic
+	snatSubnetRoutes bool // PF NAT rules are installed
 }
 
 func newFreeBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (router.Router, error) {
@@ -40,7 +42,10 @@ func newFreeBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monito
 	if err != nil {
 		return nil, err
 	}
-	return &freebsdRouter{userspaceBSDRouter: bsd}, nil
+	// Must match handleSubnetsInNetstack in cmd/tailscaled, which keeps
+	// FreeBSD subnets in netstack unless this is explicitly false.
+	v, ok := envknob.LookupBool("TS_DEBUG_NETSTACK_SUBNETS")
+	return &freebsdRouter{userspaceBSDRouter: bsd, kernelSubnets: ok && !v}, nil
 }
 
 func (r *freebsdRouter) Set(cfg *router.Config) (reterr error) {
@@ -59,16 +64,20 @@ func (r *freebsdRouter) Set(cfg *router.Config) (reterr error) {
 		setErr(err)
 	}
 
-	// Enable IP forwarding when advertising subnet routes.
-	if len(cfg.SubnetRoutes) > 0 {
+	// Forwarding and PF NAT are only needed when the kernel routes subnets.
+	// In netstack mode they would be dead weight on the host: netstack
+	// dials subnet destinations itself from the host's own addresses.
+	kernelRouting := r.kernelSubnets && len(cfg.SubnetRoutes) > 0
+	if kernelRouting {
 		r.enableIPForwarding()
 	}
 
 	// Manage PF NAT rules for subnet routing.
+	wantSNAT := kernelRouting && cfg.SNATSubnetRoutes
 	switch {
-	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
+	case wantSNAT == r.snatSubnetRoutes:
 		// No change needed.
-	case cfg.SNATSubnetRoutes:
+	case wantSNAT:
 		if err := r.addPFNATRules(); err != nil {
 			r.logf("adding PF NAT rules: %v", err)
 			setErr(err)
@@ -79,7 +88,7 @@ func (r *freebsdRouter) Set(cfg *router.Config) (reterr error) {
 			setErr(err)
 		}
 	}
-	r.snatSubnetRoutes = cfg.SNATSubnetRoutes
+	r.snatSubnetRoutes = wantSNAT
 
 	return reterr
 }

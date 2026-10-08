@@ -207,10 +207,11 @@ func (cm *CertManager) runCertLoop(ctx context.Context, domain string) {
 }
 
 // domains before issuing the cert for the first time. It uses the IPN bus
-// only as a wake-up trigger (Notify.SelfChange) and queries the current
-// cert domains explicitly via [LocalClient.CertDomains].
+// only as a wake-up trigger (the initial status and subsequent
+// Notify.SelfChange messages) and queries the current cert domains
+// explicitly via [LocalClient.CertDomains].
 func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) error {
-	w, err := cm.lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	w, err := cm.lc.WatchIPNBus(ctx, ipn.NotifyInitialStatus)
 	if err != nil {
 		return fmt.Errorf("error watching IPN bus: %w", err)
 	}
@@ -221,7 +222,7 @@ func (cm *CertManager) waitForCertDomain(ctx context.Context, domain string) err
 		if err != nil {
 			return err
 		}
-		if n.SelfChange == nil {
+		if n.SelfChange == nil && n.InitialStatus == nil {
 			continue
 		}
 		domains, err := cm.lc.CertDomains(ctx)

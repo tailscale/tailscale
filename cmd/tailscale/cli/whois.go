@@ -99,8 +99,10 @@ func printWhoIs(who *apitype.WhoIsResponse, tailnet *ipnstate.TailnetStatus, asJ
 			}
 		}
 		fmt.Fprintln(w, "Tailnet:")
-		// TODO(will@): plumb through StableTailnetID so we can show that here as well
 		fmt.Fprintf(w, "  Name:\t%s\n", cmp.Or(displayName, tailnet.Name))
+		if !tailnet.StableID.IsZero() {
+			fmt.Fprintf(w, "  ID:\t%s\n", tailnet.StableID)
+		}
 		fmt.Fprintf(w, "  MagicDNS Suffix:\t%s\n", tailnet.MagicDNSSuffix)
 	}
 	w.Flush()

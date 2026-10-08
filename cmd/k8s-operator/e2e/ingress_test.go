@@ -5,9 +5,11 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
-	"strings"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -74,8 +76,8 @@ func TestL3Ingress(t *testing.T) {
 		t.Fatalf("error waiting for the Service to become Ready: %v", err)
 	}
 
-	// Get the DNS name for the Service from the associated Secret.
-	var fqdn string
+	// Get a matching-family Tailscale IP for the Service from the associated Secret.
+	var proxyIP string
 	if err := tstest.WaitFor(time.Minute, func() error {
 		var secrets corev1.SecretList
 		if err := kubeClient.List(t.Context(), &secrets,
@@ -90,17 +92,24 @@ func TestL3Ingress(t *testing.T) {
 		if len(secrets.Items) == 0 {
 			return fmt.Errorf("Service not ready yet")
 		}
-		fqdn = strings.TrimSuffix(string(secrets.Items[0].Data[kubetypes.KeyDeviceFQDN]), ".")
-		if fqdn != "" {
-			t.Log("Got DNS name for Service")
-			return nil
+		var deviceIPs []string
+		if err := json.Unmarshal(secrets.Items[0].Data[kubetypes.KeyDeviceIPs], &deviceIPs); err != nil {
+			return fmt.Errorf("decoding device IPs: %w", err)
 		}
-		return fmt.Errorf("device FQDN not set yet")
+		currentSvc := &corev1.Service{ObjectMeta: objectMeta(ns, svc.Name)}
+		if err := get(t.Context(), kubeClient, currentSvc); err != nil {
+			return err
+		}
+		proxyIP = ipMatchingFamily(deviceIPs, currentSvc.Spec.ClusterIP)
+		if proxyIP == "" {
+			return fmt.Errorf("device has no IP matching Service ClusterIP family")
+		}
+		return nil
 	}); err != nil {
-		t.Fatalf("error waiting for DNS Name for Service: %v", err)
+		t.Fatalf("error waiting for matching-family IP for Service: %v", err)
 	}
 
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("http://%s:80", fqdn)); err != nil {
+	if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(proxyIP, "80")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,7 +161,7 @@ func TestL3HAIngress(t *testing.T) {
 	}
 	createAndCleanup(t, kubeClient, svc)
 
-	var svcIPv4 string
+	var svcIP string
 	forceReconcile := triggerReconcile(t,
 		client.ObjectKey{Namespace: ns, Name: svc.Name},
 		&corev1.Service{}, 30*time.Second)
@@ -169,7 +178,14 @@ func TestL3HAIngress(t *testing.T) {
 				if len(maybeReadySvc.Status.LoadBalancer.Ingress) == 0 {
 					return fmt.Errorf("Service does not have an IP assigned yet")
 				}
-				svcIPv4 = maybeReadySvc.Status.LoadBalancer.Ingress[0].IP
+				tsSvc, err := tsClient.VIPServices().Get(t.Context(), "svc:default-"+svc.Name)
+				if err != nil {
+					return fmt.Errorf("getting Tailscale Service: %w", err)
+				}
+				svcIP = ipMatchingFamily(tsSvc.Addrs, maybeReadySvc.Spec.ClusterIP)
+				if svcIP == "" {
+					return fmt.Errorf("Tailscale Service has no IP matching Kubernetes Service ClusterIP family")
+				}
 				t.Log("Service is ready")
 				return nil
 			}
@@ -179,7 +195,7 @@ func TestL3HAIngress(t *testing.T) {
 		t.Fatalf("error waiting for the Service to become ready: %v", err)
 	}
 
-	if err := testIngressIsReachable(t, newHTTPClient(tnClient), fmt.Sprintf("http://%s:80", svcIPv4)); err != nil {
+	if err := testIngressIsReachable(t, newHTTPClient(tnClient), "http://"+net.JoinHostPort(svcIP, "80")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -506,6 +522,20 @@ func triggerReconcile(t testing.TB, key client.ObjectKey, obj client.Object, aft
 		}
 		triggered = true
 	}
+}
+
+func ipMatchingFamily(ips []string, target string) string {
+	targetIP, err := netip.ParseAddr(target)
+	if err != nil {
+		return ""
+	}
+	for _, ip := range ips {
+		addr, err := netip.ParseAddr(ip)
+		if err == nil && addr.Is4() == targetIP.Is4() {
+			return ip
+		}
+	}
+	return ""
 }
 
 func testIngressIsReachable(t *testing.T, httpClient *http.Client, url string) error {

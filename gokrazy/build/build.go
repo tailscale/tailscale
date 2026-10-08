@@ -17,6 +17,7 @@
 package build
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -79,6 +80,15 @@ type Config struct {
 	// Region is the AWS region BuildAndImportAMI imports and registers
 	// in. Empty means ResolveRegion("", $AWS_REGION).
 	Region string
+
+	// Output is the base name (without extension) of the .img or .gaf
+	// file written into Dir. Empty means App.
+	Output string
+
+	// GoBuildTags, if non-empty, maps Go package import paths to the Go
+	// build tags to build them with, replacing any GoBuildTags that the
+	// app's config.json sets for those packages.
+	GoBuildTags map[string][]string
 
 	// Logf receives human-readable progress. If nil, log.Printf is used.
 	Logf logger.Logf
@@ -306,15 +316,23 @@ func (b *Builder) buildImage(ctx context.Context, gaf bool) error {
 	}
 
 	args := []string{"run", "github.com/bradfitz/monogok/cmd/monogok"}
+	if len(b.GoBuildTags) > 0 {
+		confPath, err := b.writeTaggedConfig(appDir)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(confPath)
+		args = append(args, "--config", confPath)
+	}
 	if gaf {
 		args = append(args,
 			"overwrite",
-			"--gaf", filepath.Join(b.Dir, b.App+".gaf"),
+			"--gaf", b.outPath(".gaf"),
 		)
 	} else {
 		args = append(args,
 			"overwrite",
-			"--full", filepath.Join(b.Dir, b.App+".img"),
+			"--full", b.outPath(".img"),
 			fmt.Sprintf("--target_storage_bytes=%d", imageSizeBytesFor(b.App)),
 		)
 	}
@@ -327,11 +345,11 @@ func (b *Builder) buildImage(ctx context.Context, gaf bool) error {
 		return err
 	}
 	if gaf {
-		b.res.GAF = filepath.Join(b.Dir, b.App+".gaf")
+		b.res.GAF = b.outPath(".gaf")
 		return nil
 	}
 
-	imgPath := filepath.Join(b.Dir, b.App+".img")
+	imgPath := b.outPath(".img")
 	f, err := os.OpenFile(imgPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", imgPath, err)
@@ -345,6 +363,60 @@ func (b *Builder) buildImage(ctx context.Context, gaf bool) error {
 	return nil
 }
 
+// outPath returns the path in Dir of the build output with the given
+// extension (".img" or ".gaf").
+func (b *Builder) outPath(ext string) string {
+	return filepath.Join(b.Dir, cmp.Or(b.Output, b.App)+ext)
+}
+
+// writeTaggedConfig writes a copy of appDir's config.json with b.GoBuildTags
+// applied and returns its path, which the caller must remove. The copy is
+// written into appDir because monogok finds the module root by walking up
+// from the config file's directory.
+func (b *Builder) writeTaggedConfig(appDir string) (string, error) {
+	confJSON, err := os.ReadFile(filepath.Join(appDir, "config.json"))
+	if err != nil {
+		return "", err
+	}
+	// Decode into generic maps so fields this package doesn't know about
+	// are preserved.
+	var conf map[string]any
+	if err := json.Unmarshal(confJSON, &conf); err != nil {
+		return "", fmt.Errorf("unmarshaling config.json: %w", err)
+	}
+	pkgConfs, _ := conf["PackageConfig"].(map[string]any)
+	if pkgConfs == nil {
+		pkgConfs = map[string]any{}
+		conf["PackageConfig"] = pkgConfs
+	}
+	for pkg, tags := range b.GoBuildTags {
+		pc, _ := pkgConfs[pkg].(map[string]any)
+		if pc == nil {
+			pc = map[string]any{}
+			pkgConfs[pkg] = pc
+		}
+		pc["GoBuildTags"] = tags
+	}
+	out, err := json.MarshalIndent(conf, "", "    ")
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(appDir, ".config-*.json")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
 // UploadToS3 uploads the built image to s3://<Bucket>/<App>.img (a
 // concurrent multipart upload, progress on b.Stderr) and returns the URI
 // (also in Result.S3). Requires BuildImage first.
@@ -356,7 +428,7 @@ func (b *Builder) UploadToS3(ctx context.Context) (s3URI string, err error) {
 	if err != nil {
 		return "", err
 	}
-	imgPath := filepath.Join(b.Dir, b.App+".img")
+	imgPath := b.res.Image
 	f, err := os.Open(imgPath)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", imgPath, err)

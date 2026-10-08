@@ -19,6 +19,10 @@ import (
 	"tailscale.com/util/lineiter"
 )
 
+// hookLocalUsernames, if non-nil, lists the local user accounts on
+// platforms without /etc/passwd. It is set by platform-specific code.
+var hookLocalUsernames func() ([]string, error)
+
 func handleC2NSSHUsernames(b *ipnlocal.LocalBackend, w http.ResponseWriter, r *http.Request) {
 	var req tailcfg.C2NSSHUsernamesRequest
 	if r.Method == "POST" {
@@ -86,6 +90,16 @@ func getSSHUsernames(b *ipnlocal.LocalBackend, req *tailcfg.C2NSSHUsernamesReque
 			add(string(line))
 		}
 	default:
+		if hookLocalUsernames != nil {
+			names, err := hookLocalUsernames()
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range names {
+				add(name)
+			}
+			break
+		}
 		for lr := range lineiter.File("/etc/passwd") {
 			line, err := lr.Value()
 			if err != nil {

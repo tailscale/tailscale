@@ -237,30 +237,46 @@ func TestRun(t *testing.T) {
 	}
 	defer conn.Close()
 	itemName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
-	obj := conn.Object(itemName, "/StatusNotifierMenu")
 
+	// Find the menu the way a StatusNotifierHost does, via the item's
+	// Menu property, rather than assuming the object path the systray
+	// library happens to use (it has changed between releases).
+	item := conn.Object(itemName, "/StatusNotifierItem")
+	menuPathVar, err := item.GetProperty("org.kde.StatusNotifierItem.Menu")
+	if err != nil {
+		t.Fatalf("getting Menu property: %v", err)
+	}
+	menuPath, ok := menuPathVar.Value().(dbus.ObjectPath)
+	if !ok {
+		t.Fatalf("Menu property is %T, want dbus.ObjectPath", menuPathVar.Value())
+	}
+	obj := conn.Object(itemName, menuPath)
+
+	// Poll until every expected label shows up. The systray library
+	// answers the very first GetLayout with a depth of 1 regardless of
+	// what was asked for (and schedules a refresh), so submenu entries
+	// like the exit node list only appear on later calls.
+	wants := []string{"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Quit"}
 	var layout string
+	var missing []string
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		call := obj.Call("com.canonical.dbusmenu.GetLayout", 0, int32(0), int32(-1), []string{"label"})
 		if call.Err == nil {
 			layout = fmt.Sprint(call.Body...)
-			if strings.Contains(layout, "Quit") {
+			missing = missing[:0]
+			for _, want := range wants {
+				if !strings.Contains(layout, want) {
+					missing = append(missing, want)
+				}
+			}
+			if len(missing) == 0 {
 				break
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for menu layout; err=%v layout=%v", call.Err, layout)
+			t.Fatalf("timed out waiting for menu layout; err=%v missing=%q layout=%v", call.Err, missing, layout)
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-
-	for _, want := range []string{"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Quit"} {
-		if !strings.Contains(layout, want) {
-			t.Errorf("menu layout missing %q", want)
-		}
-	}
-	if t.Failed() {
-		t.Logf("layout: %v", layout)
 	}
 }

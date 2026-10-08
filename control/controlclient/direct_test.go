@@ -4,8 +4,11 @@
 package controlclient
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netmon"
@@ -220,6 +224,35 @@ func TestParseRateLimitError(t *testing.T) {
 	}
 }
 
+func TestIsRateLimitedResponse(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		retryAfter string
+		want       bool
+	}{
+		{name: "429-no-header", statusCode: 429, want: true},
+		{name: "429-with-header", statusCode: 429, retryAfter: "30", want: true},
+		{name: "503-with-header", statusCode: 503, retryAfter: "30", want: true},
+		{name: "503-no-header", statusCode: 503, want: false},
+		{name: "500-with-header", statusCode: 500, retryAfter: "30", want: false},
+		{name: "200", statusCode: 200, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if tt.retryAfter != "" {
+				rec.Header().Set("Retry-After", tt.retryAfter)
+			}
+			rec.WriteHeader(tt.statusCode)
+
+			if got := isRateLimitedResponse(rec.Result()); got != tt.want {
+				t.Errorf("shouldHonorRetryAfter; got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRateLimitErrorIsError(t *testing.T) {
 	err := &rateLimitError{msg: "test", retryAfter: 5 * time.Second}
 	var target *rateLimitError
@@ -284,5 +317,53 @@ func TestTsmpPing(t *testing.T) {
 	err = postPingResult(now, t.Logf, c.httpc, pr, pingRes)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadMapResponseMessage(t *testing.T) {
+	// Normal messages round-trip.
+	var buf bytes.Buffer
+	var siz [4]byte
+	binary.LittleEndian.PutUint32(siz[:], 4)
+	buf.Write(siz[:])
+	buf.WriteString("body")
+	msg, err := readMapResponseMessage(&buf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg) != "body" {
+		t.Fatalf("got message %q, want %q", msg, "body")
+	}
+
+	// The size prefix is a uint32 chosen by the control server. A
+	// malicious server must not be able to make us allocate up to 4 GiB
+	// before any body bytes are read.
+	buf.Reset()
+	binary.LittleEndian.PutUint32(siz[:], math.MaxUint32)
+	buf.Write(siz[:])
+	if _, err := readMapResponseMessage(&buf, msg); err == nil || !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("readMapResponseMessage = %v, want size cap error", err)
+	}
+}
+
+func TestDecodeMsgMaxDecodedSize(t *testing.T) {
+	// A zstd frame whose header declares more decoded content than
+	// maxDecodedMapResponseSize. The decoder rejects such a frame before
+	// decoding any block, so a malicious control server can't make us
+	// expand a small frame into an unbounded amount of JSON, and the test
+	// doesn't need to allocate the decoded bytes either.
+	oversized := []byte{
+		0x28, 0xb5, 0x2f, 0xfd, // zstd frame magic
+		0xc0,                                           // 8-byte frame content size, no single segment, no checksum, no dict ID
+		0x00,                                           // window descriptor: 1 KiB window
+		0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, // declared content size: 16 GiB + 1
+		0x21, 0x00, 0x00, // block header: last block, raw block, 4 bytes
+		'b', 'o', 'm', 'b',
+	}
+	ms := newMapSession(key.NewNode(), nil, nil)
+	var resp tailcfg.MapResponse
+	err := ms.decodeMsg(oversized, &resp)
+	if !errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		t.Fatalf("decodeMsg(oversized frame) = %v, want zstd.ErrDecoderSizeExceeded", err)
 	}
 }

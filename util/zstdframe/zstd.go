@@ -72,6 +72,17 @@ func AppendDecode(dst, src []byte, opts ...Option) ([]byte, error) {
 	return dec.DecodeAll(src, dst)
 }
 
+// GetDecoder returns a decoder from the shared decoder pool for streaming
+// (io.Reader-style) use, configured with opts. The caller must call
+// dec.Reset on it before first use and whenever its underlying reader
+// changes. When done with the decoder, the caller must call the returned
+// put function exactly once to return it to the pool. The decoder must not
+// be used after put is called, and must not be used concurrently.
+func GetDecoder(opts ...Option) (dec *zstd.Decoder, put func()) {
+	d := getDecoder(opts...)
+	return d.Decoder, func() { putDecoder(d) }
+}
+
 // NextSize parses the next frame (regardless of whether it is a
 // data frame or a metadata frame) and returns the total size of the frame.
 // The frame can be skipped by slicing n bytes from b (e.g., b[n:]).

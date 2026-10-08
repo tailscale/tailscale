@@ -6,7 +6,9 @@
 package netns
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -128,6 +130,38 @@ func bindToDevice(fd uintptr) error {
 	}
 	if err := unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifc); err != nil {
 		return fmt.Errorf("setting SO_BINDTODEVICE: %w", err)
+	}
+	return nil
+}
+
+// SetListenConfigInterfaceName sets lc.Control so that sockets created
+// with it are bound to the named interface using SO_BINDTODEVICE, and
+// thus only receive packets that arrived on that interface. It is the
+// Linux counterpart of darwin's SetListenConfigInterfaceIndex.
+//
+// Failures to set the socket option are logged and otherwise ignored:
+// the socket then simply listens as it would have without this call.
+// Setting SO_BINDTODEVICE requires CAP_NET_RAW, and hardening must not
+// take out the caller's listener on systems where that is unavailable.
+func SetListenConfigInterfaceName(lc *net.ListenConfig, ifName string) error {
+	if lc == nil {
+		return errors.New("nil ListenConfig")
+	}
+	if lc.Control != nil {
+		return errors.New("ListenConfig.Control already set")
+	}
+	lc.Control = func(network, address string, c syscall.RawConn) error {
+		var sockErr error
+		err := c.Control(func(fd uintptr) {
+			sockErr = unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, ifName)
+		})
+		if sockErr != nil {
+			log.Printf("[unexpected] netns: SO_BINDTODEVICE(%q) on %v %v: %v", ifName, network, address, sockErr)
+		}
+		if err != nil {
+			return fmt.Errorf("RawConn.Control on %T: %w", c, err)
+		}
+		return nil
 	}
 	return nil
 }

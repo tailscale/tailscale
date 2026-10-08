@@ -110,10 +110,12 @@ jobs:
         run: |
           ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep
 
-      - name: Build gokrazy VM image
+      # This also builds the minimal-feature gokrazy variants, which warms
+      # the Go build cache for their tagged tailscale and tailscaled.
+      - name: Build gokrazy VM images
         if: steps.gokrazy-cache.outputs.cache-hit != 'true'
         run: |
-          make -C gokrazy natlab
+          ./tool/go run ./tstest/natlab/vmtest/cmd/natlabprep --gokrazy
 
       # No Go source imports this module, so nothing above fetches it. Pulling
       # it here puts it in the module cache the matrix jobs restore.
@@ -121,16 +123,19 @@ jobs:
         run: |
           ./tool/go mod download github.com/gokrazy/kernel.amd64
 
-      # Warm the build cache for the matrix jobs. Two toolchains are involved:
-      # ./tool/go (tsgo) compiles the test binaries, and both vmtest.go and
-      # gokrazy/build shell out to the runner's stock `go`. GOCACHE entries
-      # embed the compiler's build ID, so one toolchain's entries are useless
-      # to the other. The env below mirrors compileBinariesForOS in vmtest.go.
+      # Warm the build cache for the matrix jobs. Everything must be built
+      # with ./tool/go (tsgo): it compiles the test binaries, and the go
+      # command puts its own $GOROOT/bin first on the test binary's $PATH,
+      # so the "go" that vmtest.go and gokrazy/build shell out to from
+      # inside the test is tsgo as well. GOCACHE entries embed the
+      # compiler's build ID, so anything built here with the runner's
+      # stock Go would be useless to the tests. The env below mirrors
+      # compileBinariesForOS in vmtest.go.
       - name: Warm Go build cache
         run: |
-          ./tool/go test -c -o /dev/null ./tstest/natlab/vmtest ./tstest/integration/nat
+          ./tool/go test -c -o /dev/null ./tstest/natlab/vmtest
           for pkg in tta tailscale tailscaled; do
-            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/"$pkg"
+            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o /dev/null ./cmd/"$pkg"
           done
 
       - name: Discover tests
@@ -145,9 +150,9 @@ jobs:
         # single-test-per-matrix-job model. They stay runnable locally.
         run: |
           set -euo pipefail
-          exclude='^(TestGrid|TestVnetPerf.*)$'
+          exclude='^(TestGrid|TestPair|TestVnetPerf.*)$'
           tmp=$(mktemp)
-          for pkg_dir in tstest/natlab/vmtest tstest/integration/nat; do
+          for pkg_dir in tstest/natlab/vmtest; do
             pkg="./${pkg_dir}/"
             for f in "${pkg_dir}"/*_test.go; do
               [ -e "$f" ] || continue

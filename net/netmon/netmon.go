@@ -380,12 +380,10 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 		lastWall: wallTime(),
 	}
 	m.changed = eventbus.Publish[ChangeDelta](m.b)
-	st, err := m.interfaceStateUncached()
-	if err != nil {
-		return nil, err
-	}
-	m.ifState = st
 
+	// Subscribe to OS change notifications before taking the initial
+	// snapshot, so a change between the two is queued rather than lost.
+	var err error
 	m.om, err = newOSMon(bus, logf, m)
 	if err != nil {
 		return nil, err
@@ -393,6 +391,13 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 	if m.om == nil {
 		return nil, errors.New("newOSMon returned nil, nil")
 	}
+
+	st, err := m.interfaceStateUncached()
+	if err != nil {
+		m.om.Close()
+		return nil, err
+	}
+	m.ifState = st
 
 	return m, nil
 }

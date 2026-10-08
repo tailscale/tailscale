@@ -283,6 +283,13 @@ func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "debug access denied", http.StatusForbidden)
 		return
 	}
+	// state keys are otherwise gated by their own handlers, e.g. serve-config
+	// requires a local admin for Unix-socket targets; writing a _serve/<profile>
+	// key here would bypass that, so require a local admin too
+	if !h.Actor.IsLocalAdmin(h.b.OperatorUserID()) {
+		http.Error(w, "dev-set-state-store access denied; must be a local admin", http.StatusUnauthorized)
+		return
+	}
 	if r.Method != httpm.POST {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -515,7 +522,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, feature.ErrUnavailable.Error(), http.StatusNotImplemented)
 		return
 	}
-	if !h.PermitRead {
+	if !h.PermitWrite {
 		http.Error(w, "debug-log access denied", http.StatusForbidden)
 		return
 	}
@@ -558,6 +565,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveDebugOptionalFeatures(w http.ResponseWriter, r *http.Request) {
 	of := &apitype.OptionalFeatures{
 		Features: feature.Registered(),
+		Disabled: feature.EnvDisabled(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(of)

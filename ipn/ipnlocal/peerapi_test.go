@@ -29,6 +29,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/must"
+	"tailscale.com/util/set"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -187,69 +188,316 @@ func TestHandlePeerAPI(t *testing.T) {
 	}
 }
 
-func TestPeerAPIReplyToDNSQueries(t *testing.T) {
-	var h peerAPIHandler
-
-	h.isSelf = true
-	if !h.replyToDNSQueries() {
-		t.Errorf("for isSelf = false; want true")
+func TestPeerAPIIsAddressValid(t *testing.T) {
+	selfNode := &tailcfg.Node{
+		Addresses: []netip.Prefix{
+			netip.MustParsePrefix("100.64.0.1/32"),
+			netip.MustParsePrefix("fd7a:115c:a1e0::1/128"),
+		},
 	}
-	h.isSelf = false
-	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+	tests := []struct {
+		name   string
+		masqV4 string // SelfNodeV4MasqAddrForThisPeer, if non-empty
+		masqV6 string // SelfNodeV6MasqAddrForThisPeer, if non-empty
+		addr   string
+		want   bool
+	}{
+		{"no_masq_native_v4", "", "", "100.64.0.1", true},
+		{"no_masq_native_v6", "", "", "fd7a:115c:a1e0::1", true},
+		{"no_masq_other_addr", "", "", "100.64.0.9", false},
+		{"masq_v4_masq_addr", "100.99.1.1", "", "100.99.1.1", true},
+		{"masq_v4_native_v4", "100.99.1.1", "", "100.64.0.1", false},
+		{"masq_v4_native_v6", "100.99.1.1", "", "fd7a:115c:a1e0::1", true},
+		{"masq_v6_masq_addr", "", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::99", true},
+		{"masq_v6_native_v6", "", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::1", false},
+		{"masq_v6_native_v4", "", "fd7a:115c:a1e0::99", "100.64.0.1", true},
+		{"masq_both_native_v4", "100.99.1.1", "fd7a:115c:a1e0::99", "100.64.0.1", false},
+		{"masq_both_masq_v4", "100.99.1.1", "fd7a:115c:a1e0::99", "100.99.1.1", true},
+		{"masq_both_masq_v6", "100.99.1.1", "fd7a:115c:a1e0::99", "fd7a:115c:a1e0::99", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			peerNode := &tailcfg.Node{}
+			if tt.masqV4 != "" {
+				peerNode.SelfNodeV4MasqAddrForThisPeer = new(netip.MustParseAddr(tt.masqV4))
+			}
+			if tt.masqV6 != "" {
+				peerNode.SelfNodeV6MasqAddrForThisPeer = new(netip.MustParseAddr(tt.masqV6))
+			}
+			h := &peerAPIHandler{
+				selfNode: selfNode.View(),
+				peerNode: peerNode.View(),
+			}
+			if got := h.isAddressValid(netip.MustParseAddr(tt.addr)); got != tt.want {
+				t.Errorf("isAddressValid(%v) = %v; want %v", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsPeerAPIDNSAllowed(t *testing.T) {
+	// This test can not be run in parallel because it modifies
+	// HookReplyToDNSQueries and exitNodeDNSFilterForTest.
+
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
+
+	originalHooks := HookReplyToDNSQueries
+	defer func() { HookReplyToDNSQueries = originalHooks }()
 
 	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
-
 	ht := health.NewTracker(sys.Bus.Get())
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
 	reg := new(usermetric.Registry)
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
 	sys.Set(pm.Store())
 	sys.Set(eng)
-
 	b := newTestLocalBackendWithSys(t, sys)
 	b.pm = pm
-
-	h.ps = &peerAPIServer{b: b}
-	if h.ps.b.OfferingExitNode() {
-		t.Fatal("unexpectedly offering exit node")
+	if b.OfferingExitNode() {
+		t.Error("unexpectedly offering exit node")
+		return
 	}
-	h.ps.b.pm.SetPrefs((&ipn.Prefs{
-		AdvertiseRoutes: []netip.Prefix{
-			netip.MustParsePrefix("0.0.0.0/0"),
-			netip.MustParsePrefix("::/0"),
+
+	addrSubtests := []struct {
+		name string
+		addr netip.AddrPort
+	}{
+		{
+			name: "v4",
+			addr: netip.MustParseAddrPort("100.150.151.152:12345"),
 		},
-	}).View(), ipn.NetworkProfile{})
-	if !h.ps.b.OfferingExitNode() {
-		t.Fatal("unexpectedly not offering exit node")
+		{
+			name: "v6",
+			addr: netip.MustParseAddrPort("[fe70::1]:12345"),
+		},
 	}
 
-	if h.replyToDNSQueries() {
-		t.Errorf("unexpectedly doing DNS without filter")
+	tests := []struct {
+		name string
+
+		registerExtension bool // add an extra handler in HookReplyToDNSQueries
+		// Only used when registerExtension is true
+		extensionUseNameChecker bool
+		extensionAllowSource    bool
+		extensionApprovedNames  set.Set[string]
+
+		isSelf           bool
+		noOfferExitNode  bool
+		noPacketFilter   bool
+		denyPacketFilter bool
+
+		wantSourceAllowed bool
+		wantNamesAllowed  map[string]bool
+	}{
+		{
+			name:            "self",
+			isSelf:          true,
+			noOfferExitNode: true,
+
+			wantSourceAllowed: true,
+			wantNamesAllowed: map[string]bool{
+				"is-self.example.com": true,
+				"ts.net":              false,
+			},
+		},
+		{
+			name:              "no-exit-node",
+			noOfferExitNode:   true,
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "exit-node-no-packet-filter",
+			noPacketFilter:    true,
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "exit-node-deny-packet-filter",
+			denyPacketFilter:  true,
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "exit-node-allow-packet-filter",
+			wantSourceAllowed: true,
+			wantNamesAllowed: map[string]bool{
+				"exit-node.example.com": true,
+				"ts.net":                false,
+			},
+		},
+		{
+			name:              "extension-deny",
+			registerExtension: true,
+			noOfferExitNode:   true,
+
+			wantSourceAllowed: false,
+		},
+		{
+			name:              "extension-with-exit-node",
+			registerExtension: true,
+
+			wantSourceAllowed: true,
+			wantNamesAllowed: map[string]bool{
+				"exit-node.example.com": true,
+				"ts.net":                false,
+			},
+		},
+		{
+			name:                 "extension-without-name-filter",
+			registerExtension:    true,
+			extensionAllowSource: true,
+			noOfferExitNode:      true,
+
+			wantSourceAllowed: true,
+			wantNamesAllowed: map[string]bool{
+				"exit-node.example.com": true,
+				"ts.net":                false,
+			},
+		},
+		{
+			name: "extension-with-name-filter",
+
+			registerExtension:       true,
+			extensionAllowSource:    true,
+			extensionUseNameChecker: true,
+			extensionApprovedNames:  set.Of("extension.example.com", "blocked.extension.example.com"),
+			noOfferExitNode:         true,
+
+			wantSourceAllowed: true,
+			wantNamesAllowed: map[string]bool{
+				"extension.example.com":         true,
+				"blocked.extension.example.com": false,
+				"exit-node.example.com":         false,
+				"ts.net":                        false,
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.extensionApprovedNames) > 0 && !tt.extensionUseNameChecker {
+				t.Error("malformed test: extension has approved names but is not using name checker")
+			}
 
-	h.ps.b.setFilter(filter.NewAllowNone(logger.Discard, new(netipx.IPSet)))
-	if h.replyToDNSQueries() {
-		t.Errorf("unexpectedly doing DNS without filter")
-	}
+			h := peerAPIHandler{
+				ps: &peerAPIServer{
+					b: b,
+				},
+				selfNode: (&tailcfg.Node{}).View(),
+				peerNode: (&tailcfg.Node{}).View(),
+				isSelf:   tt.isSelf,
+			}
 
-	f := filter.NewAllowAllForTest(logger.Discard)
+			var advertiseRoutes []netip.Prefix
+			if !tt.noOfferExitNode {
+				advertiseRoutes = []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
+				}
+			}
+			if err := h.ps.b.pm.SetPrefs((&ipn.Prefs{
+				AdvertiseRoutes: advertiseRoutes,
+			}).View(), ipn.NetworkProfile{}); err != nil {
+				t.Errorf("SetPrefs: %v", err)
+				return
+			}
+			if h.ps.b.OfferingExitNode() != !tt.noOfferExitNode {
+				t.Errorf("unexpected: offering exit node = %v, want %v", h.ps.b.OfferingExitNode(), !tt.noOfferExitNode)
+				return
+			}
+			var f *filter.Filter
+			if !tt.noPacketFilter {
+				if tt.denyPacketFilter {
+					f = filter.NewAllowNone(logger.Discard, new(netipx.IPSet))
+				} else {
+					f = filter.NewAllowAllForTest(logger.Discard)
+				}
+			}
+			h.ps.b.setFilter(f)
 
-	h.ps.b.setFilter(f)
-	if !h.replyToDNSQueries() {
-		t.Errorf("unexpectedly deny; wanted to be a DNS server")
-	}
+			var lastExtensionNameCheck string
+			if tt.registerExtension {
+				HookReplyToDNSQueries = slices.Clone(originalHooks)
+				defer func() { HookReplyToDNSQueries = originalHooks }()
 
-	// Also test IPv6.
-	h.remoteAddr = netip.MustParseAddrPort("[fe70::1]:12345")
-	if !h.replyToDNSQueries() {
-		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
+				extensionNameChecker := func(name string) bool {
+					lastExtensionNameCheck = name
+					return tt.extensionApprovedNames.Contains(name)
+				}
+
+				HookReplyToDNSQueries.Add(func(handler PeerAPIHandler, request *http.Request) (sourceAllowed bool, nameAllowed DNSNameFilter) {
+					if handler != &h {
+						t.Error("unexpected handler")
+					}
+					if request != r {
+						t.Error("unexpected request")
+					}
+					if tt.extensionUseNameChecker {
+						return tt.extensionAllowSource, extensionNameChecker
+					}
+					return tt.extensionAllowSource, nil
+				})
+			}
+
+			var lastNameCheck string
+			exitNodeDNSFilterForTest = func(name string) bool {
+				lastNameCheck = name
+
+				allow, found := tt.wantNamesAllowed[name]
+				if !found {
+					t.Errorf("unexpected name %q caught by filter", name)
+				}
+				return allow
+			}
+			defer func() { exitNodeDNSFilterForTest = nil }()
+
+			for _, tt2 := range addrSubtests {
+				t.Run(tt2.name, func(t *testing.T) {
+					h.remoteAddr = tt2.addr
+
+					sourceAllowed, nameChecker := h.isPeerAPIDNSAllowed(r)
+					if sourceAllowed != tt.wantSourceAllowed {
+						t.Errorf("sourceAllowed = %v, want %v", sourceAllowed, tt.wantSourceAllowed)
+					}
+					if !sourceAllowed {
+						if nameChecker != nil {
+							t.Errorf("nameChecker != nil when source not allowed, want nil")
+						}
+						return
+					}
+					if nameChecker == nil {
+						t.Errorf("nameChecker = nil when source allowed, want not-nil")
+						return
+					}
+
+					for name, want := range tt.wantNamesAllowed {
+						got := nameChecker(name)
+						if got != want {
+							t.Errorf("nameChecker(%q) = %v, want %v", name, got, want)
+						}
+						if lastNameCheck != name {
+							t.Error("lastNameCheck did not update as expected")
+						}
+						if tt.extensionUseNameChecker && lastExtensionNameCheck != name {
+							// Only require the extension to be consulted if the
+							// exitNodeDNSFilterForTest filter would have
+							// allowed it.
+							if want {
+								t.Error("extensionUseNameChecker did not update as expected")
+							}
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
 func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
 	for _, shouldStore := range []bool{false, true} {
-		var h peerAPIHandler
-		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+		h := peerAPIHandler{
+			remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+			selfNode:   (&tailcfg.Node{}).View(),
+			peerNode:   (&tailcfg.Node{}).View(),
+		}
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 
@@ -298,7 +546,7 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 		f := filter.NewAllowAllForTest(logger.Discard)
 		h.ps.b.setFilter(f)
 
-		if !h.replyToDNSQueries() {
+		if allowed, _ := h.isPeerAPIDNSAllowed(r); !allowed {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 
@@ -318,10 +566,59 @@ func TestPeerAPIPrettyReplyCNAME(t *testing.T) {
 	}
 }
 
+// TestPeerAPIDNSQueryLongName checks that a peer allowed to use the peerAPI
+// DNS proxy cannot take the handler down with an over-long name in the
+// interactive ‘q’ debug mode. The name is used verbatim to build the
+// query, so anything that does not fit in a DNS message has to be rejected
+// rather than asserted.
+func TestPeerAPIDNSQueryLongName(t *testing.T) {
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
+	h := peerAPIHandler{
+		remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+		selfNode:   (&tailcfg.Node{}).View(),
+		peerNode:   (&tailcfg.Node{}).View(),
+	}
+
+	sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
+	ht := health.NewTracker(sys.Bus.Get())
+	reg := new(usermetric.Registry)
+	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0, ht, reg, sys.Bus.Get(), sys.Set)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ht))
+	a := appc.NewAppConnector(appc.Config{
+		Logf:     t.Logf,
+		EventBus: sys.Bus.Get(),
+	})
+	t.Cleanup(a.Close)
+	sys.Set(pm.Store())
+	sys.Set(eng)
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.pm = pm
+	b.appConnector = a // configure as an app connector just to enable the API.
+
+	h.ps = &peerAPIServer{b: b}
+	h.ps.resolver = &fakeResolver{build: func(b *dnsmessage.Builder) {}}
+	h.ps.b.setFilter(filter.NewAllowAllForTest(logger.Discard))
+
+	if allowed, _ := h.isPeerAPIDNSAllowed(r); !allowed {
+		t.Fatal("unexpectedly denied; wanted to be a DNS server")
+	}
+
+	w := httptest.NewRecorder()
+	h.handleDNSQuery(w, httptest.NewRequest("GET", "/dns-query?q="+strings.Repeat("a", 255), nil))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %v, want %v", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
 	for _, shouldStore := range []bool{false, true} {
-		var h peerAPIHandler
-		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+		h := peerAPIHandler{
+			remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+			selfNode:   (&tailcfg.Node{}).View(),
+			peerNode:   (&tailcfg.Node{}).View(),
+		}
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 		bw := eventbustest.NewWatcher(t, sys.Bus.Get())
@@ -369,7 +666,7 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 		if !h.ps.b.OfferingAppConnector() {
 			t.Fatal("expecting to be offering app connector")
 		}
-		if !h.replyToDNSQueries() {
+		if allowed, _ := h.isPeerAPIDNSAllowed(r); !allowed {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 
@@ -394,10 +691,14 @@ func TestPeerAPIReplyToDNSQueriesAreObserved(t *testing.T) {
 }
 
 func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
+	r := must.Get(http.NewRequest("POST", "http://peerapi:1234/dns-query", nil))
 	for _, shouldStore := range []bool{false, true} {
 		ctx := context.Background()
-		var h peerAPIHandler
-		h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
+		h := peerAPIHandler{
+			remoteAddr: netip.MustParseAddrPort("100.150.151.152:12345"),
+			selfNode:   (&tailcfg.Node{}).View(),
+			peerNode:   (&tailcfg.Node{}).View(),
+		}
 
 		sys := tsd.NewSystemWithBus(eventbustest.NewBus(t))
 		bw := eventbustest.NewWatcher(t, sys.Bus.Get())
@@ -455,7 +756,7 @@ func TestPeerAPIReplyToDNSQueriesAreObservedWithCNAMEFlattening(t *testing.T) {
 		if !h.ps.b.OfferingAppConnector() {
 			t.Fatal("expecting to be offering app connector")
 		}
-		if !h.replyToDNSQueries() {
+		if allowed, _ := h.isPeerAPIDNSAllowed(r); !allowed {
 			t.Errorf("unexpectedly deny; wanted to be a DNS server")
 		}
 

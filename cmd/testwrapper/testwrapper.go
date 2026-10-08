@@ -263,28 +263,29 @@ func testFuncNames(path string) ([]string, error) {
 	return names, sc.Err()
 }
 
-// runTests runs the tests in pt and sends the results on ch. It sends a
-// testAttempt for each test and a final testAttempt per pkg with pkgFinished
-// set to true. Package build errors will not emit a testAttempt (as no valid
-// JSON is produced) but the [os/exec.ExitError] will be returned.
+// runTests runs the tests in the packages matching patterns in a single
+// "go test" invocation and sends the results on ch. It sends a testAttempt
+// for each test and a final testAttempt per pkg with pkgFinished set to
+// true. Package build errors will not emit a testAttempt (as no valid JSON
+// is produced) but the [os/exec.ExitError] will be returned.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
+func runTests(ctx context.Context, attempt int, patterns []string, goTestArgs, testArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
 	args := []string{"test"}
 	args = append(args, goTestArgs...)
-	args = append(args, pt.Pattern)
-	if len(pt.Tests) > 0 {
-		// Specific tests requested (e.g. flaky test retry).
-		runArg := strings.Join(pt.Tests, "|")
-		args = append(args, "--run", runArg)
-	} else if shardSpec := os.Getenv("TS_TEST_SHARD"); shardSpec != "" {
+	args = append(args, patterns...)
+	if shardSpec := os.Getenv("TS_TEST_SHARD"); shardSpec != "" {
 		// Automatic test-name sharding: list tests and filter by hash.
-		shardTests, err := testsForShard(ctx, pt.Pattern, shardSpec)
+		if len(patterns) != 1 {
+			return fmt.Errorf("TS_TEST_SHARD requires a single package pattern per go test invocation; got %q", patterns)
+		}
+		pattern := patterns[0]
+		shardTests, err := testsForShard(ctx, pattern, shardSpec)
 		if err != nil {
 			return err
 		}
 		if len(shardTests) == 0 {
-			ch <- &testAttempt{pkg: pt.Pattern, outcome: outcomeSkip, pkgFinished: true}
+			ch <- &testAttempt{pkg: pattern, outcome: outcomeSkip, pkgFinished: true}
 			return nil
 		}
 		quoted := make([]string, len(shardTests))
@@ -811,6 +812,12 @@ func buildPackageTests(fts []*failedTest, fakeRepo string) []packageTests {
 	return out
 }
 
+// isGoFile reports whether arg names a Go source file rather than a
+// package pattern.
+func isGoFile(arg string) bool {
+	return strings.HasSuffix(arg, ".go")
+}
+
 func main() {
 	goTestArgs, packages, testArgs, err := splitArgs(os.Args[1:])
 	if err != nil {
@@ -860,21 +867,34 @@ func main() {
 	}
 
 	// First pass: run every package once, collect failed tests for retry.
+	//
+	// All package patterns go to one "go test" invocation so the go
+	// command can build, link, and run them in parallel, exactly as it
+	// does for a single "./..." pattern. Test-name sharding lists tests
+	// per package, and .go file arguments each form their own
+	// "command-line-arguments" package, so those keep one invocation
+	// per argument.
+	batches := [][]string{packages}
+	if os.Getenv("TS_TEST_SHARD") != "" || slices.ContainsFunc(packages, isGoFile) {
+		batches = nil
+		for _, p := range packages {
+			batches = append(batches, []string{p})
+		}
+	}
 	var failed []*failedTest
 	var pkgFatal bool // a package produced a non-test fatal (build error, etc.)
 
 	resultsSummary := os.Getenv("TS_TESTWRAPPER_RESULTS_SUMMARY") != ""
 	allResults := map[string]testOutcome{}
-	for _, pkgPattern := range packages {
-		pt := &packageTests{Pattern: pkgPattern}
+	for _, patterns := range batches {
 		ch := make(chan *testAttempt)
 		runErrCh := make(chan error, 1)
 		go func() {
 			defer close(runErrCh)
-			runErrCh <- runTests(ctx, 1, pt, goTestArgs, testArgs, ch)
+			runErrCh <- runTests(ctx, 1, patterns, goTestArgs, testArgs, ch)
 		}()
 
-		// Collect failed tests in this package on the side; we use the count
+		// Collect failed tests in this batch on the side; we use the count
 		// when a package reports a fail to decide if the failure is explained
 		// by retryable test failures or is a separate package-level fatal.
 		var pkgFailedTests []*failedTest
@@ -882,9 +902,11 @@ func main() {
 			// Go assigns the package name "command-line-arguments" when you
 			// `go test FILE` rather than `go test PKG`. It's more
 			// convenient for us to specify files in tests, so fix tr.pkg
-			// so that subsequent testwrapper attempts run correctly.
+			// so that subsequent testwrapper attempts run correctly. File
+			// arguments always run one per batch, so the batch's only
+			// pattern is the file.
 			if tr.pkg == "command-line-arguments" {
-				tr.pkg = packages[0]
+				tr.pkg = patterns[0]
 			}
 			if tr.pkgFinished {
 				if tr.raceDetected {

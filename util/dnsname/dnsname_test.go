@@ -59,6 +59,29 @@ func TestFQDN(t *testing.T) {
 	}
 }
 
+// TestToFQDNRejectsLineUnsafeCharacters is a regression test for names from
+// a malicious control server. Search domains and hosts entries are written
+// verbatim into line-oriented OS configuration files like resolv.conf and
+// hosts, so a name containing a newline or carriage return could inject new
+// directives into those files. ToFQDN must reject such names.
+func TestToFQDNRejectsLineUnsafeCharacters(t *testing.T) {
+	for _, s := range []string{
+		"foo\nbar.com",
+		"foo\rbar.com",
+		"foo bar.com",
+		"foo\tbar.com",
+		"foo\x00bar.com",
+		"foo\x1fbar.com",
+		"foo\x7fbar.com",
+		"evil.com\nnameserver 6.6.6.6",
+		"evil.com\r\nnameserver 6.6.6.6",
+	} {
+		if _, err := ToFQDN(s); err == nil {
+			t.Errorf("ToFQDN(%q) = nil error, want error", s)
+		}
+	}
+}
+
 func TestFQDNTooLong(t *testing.T) {
 	// RFC 1035 says a dns name has a max size of 255 octets, and is represented as labels of len+ASCII chars so
 	//   example.com
@@ -302,7 +325,7 @@ func TestValidHostname(t *testing.T) {
 	}{
 		{"example", ""},
 		{"example.com", ""},
-		{" example", `must start with a letter or number`},
+		{" example", `contains invalid character`},
 		{"example-.com", `must end with a letter or number`},
 		{strings.Repeat("a", 63), ""},
 		{strings.Repeat("a", 64), `is too long, max length is 63 bytes`},

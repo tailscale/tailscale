@@ -108,6 +108,27 @@ func TestCompare(t *testing.T) {
 			want: -1,
 		},
 
+		{
+			// Numbers too large for a uint64 must compare by value
+			// instead of panicking.
+			name: "number-exceeds-uint64",
+			v1:   "1.18446744073709551616",
+			v2:   "1.18446744073709551615",
+			want: 1,
+		},
+		{
+			name: "very-long-numbers",
+			v1:   "99999999999999999999999999999999",
+			v2:   "100000000000000000000000000000000",
+			want: -1,
+		},
+		{
+			name: "leading-zeros",
+			v1:   "1.0007.00",
+			v2:   "1.7.0",
+			want: 0,
+		},
+
 		// A few specific OS version tests below.
 		{
 			name: "windows-version",

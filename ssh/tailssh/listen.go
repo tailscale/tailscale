@@ -16,8 +16,13 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func init() {
+// Register installs tailssh's hooks and child process handlers. It is
+// called from the init of tailscale.com/feature/ssh, which skips it if
+// the ssh feature was disabled via TS_DISABLE_FEATURE or omitted from
+// the build.
+func Register() {
 	ipnlocal.HookListenSSH.Set(listenSSH)
+	registerIncubator()
 }
 
 // listenSSH wraps rawLn with an SSH server that resolves Tailscale peer

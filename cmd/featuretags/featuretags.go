@@ -22,10 +22,28 @@ var (
 	remove = flag.String("remove", "", "a comma-separated list of features to remove from the build. (without the 'ts_omit_' prefix)")
 	add    = flag.String("add", "", "a comma-separated list of features or tags to add, if --min is used.")
 	list   = flag.Bool("list", false, "if true, list all known features and what they do")
+
+	extraSmall = flag.Bool("extra-small", false, "shorthand for build_dist.sh --extra-small's tags: --min --add="+joinFeatures(featuretags.ExtraSmall))
 )
+
+func joinFeatures(fts []featuretags.FeatureTag) string {
+	var ss []string
+	for _, ft := range fts {
+		ss = append(ss, string(ft))
+	}
+	return strings.Join(ss, ",")
+}
 
 func main() {
 	flag.Parse()
+
+	if *extraSmall {
+		if *min || *add != "" {
+			log.Fatalf("--extra-small can't be combined with --min or --add")
+		}
+		*min = true
+		*add = joinFeatures(featuretags.ExtraSmall)
+	}
 
 	features := featuretags.Features
 
@@ -36,27 +54,19 @@ func main() {
 		return
 	}
 
-	var keep = map[featuretags.FeatureTag]bool{}
+	var keep []featuretags.FeatureTag
 	for t := range strings.SplitSeq(*add, ",") {
 		if t != "" {
-			for ft := range featuretags.Requires(featuretags.FeatureTag(t)) {
-				keep[ft] = true
-			}
+			keep = append(keep, featuretags.FeatureTag(t))
 		}
 	}
 	var tags []string
-	if keep[featuretags.CLI] {
-		tags = append(tags, "ts_include_cli")
-	}
 	if *min {
-		for _, f := range slices.Sorted(maps.Keys(features)) {
-			if f == "" {
-				continue
-			}
-			if !keep[f] && f.IsOmittable() {
-				tags = append(tags, f.OmitTag())
-			}
-		}
+		tags = featuretags.MinTags(keep...)
+	} else if slices.ContainsFunc(keep, func(ft featuretags.FeatureTag) bool {
+		return featuretags.Requires(ft).Contains(featuretags.CLI)
+	}) {
+		tags = append(tags, "ts_include_cli")
 	}
 	removeSet := set.Set[featuretags.FeatureTag]{}
 	for v := range strings.SplitSeq(*remove, ",") {
