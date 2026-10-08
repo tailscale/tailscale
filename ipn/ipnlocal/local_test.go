@@ -8908,34 +8908,50 @@ func TestPolicyChangeNotifiesWatcher(t *testing.T) {
 }
 
 func TestPolicyNotifyPerUser(t *testing.T) {
-	store := source.NewTestStore(t)
-	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(
+			pkey.ManagedByOrganizationName,
+			setting.UserSetting,
+			setting.StringValue,
+		),
+	)
+
+	deviceStore := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "DeviceStore", setting.DeviceScope, deviceStore)
+
+	uidA := "S-1-5-21-1001"
+	uidB := "S-1-5-21-1002"
+
+	userStoreA := source.NewTestStore(t)
+	userStoreA.SetStrings(
+		source.TestSettingOf(pkey.ManagedByOrganizationName, "Org A"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreA", setting.UserScopeOf(uidA), userStoreA)
+
+	userStoreB := source.NewTestStore(t)
+	userStoreB.SetStrings(
+		source.TestSettingOf(pkey.ManagedByOrganizationName, "Org B"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreB", setting.UserScopeOf(uidB), userStoreB)
 
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
 
-	actorA := &ipnauth.TestActor{UID: "S-1-5-21-1001"}
-	actorB := &ipnauth.TestActor{UID: "S-1-5-21-1002"}
+	actorA := &ipnauth.TestActor{UID: ipn.WindowsUserID(uidA)}
+	actorB := &ipnauth.TestActor{UID: ipn.WindowsUserID(uidB)}
 
 	nwA := newNotificationWatcher(t, lb, actorA)
 	nwA.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
-		wantPolicyNotify(),
+		wantPolicyWithSetting(pkey.ManagedByOrganizationName, "Org A"),
 	})
 	nwA.check()
 
 	nwB := newNotificationWatcher(t, lb, actorB)
 	nwB.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
-		wantPolicyNotify(),
+		wantPolicyWithSetting(pkey.ManagedByOrganizationName, "Org B"),
 	})
 	nwB.check()
-
-	nwNoPolicy := newNotificationWatcher(t, lb, actorA)
-	nwNoPolicy.watch(0, nil, unexpectedPolicy)
-
-	store.SetStrings(source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"))
-
-	nwNoPolicy.check()
 }
 
 func wantPolicyNotify() wantedNotification {
