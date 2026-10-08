@@ -27,10 +27,10 @@ func TestNegativeCacheFlushHook(t *testing.T) {
 				resolve, globalFlush, removeHook bool
 				want                             int
 			}{
-				{name: "still missing"},
-				{name: "became resolvable", resolve: true, want: 1},
-				{name: "global flush clears history", resolve: true, globalFlush: true},
-				{name: "removed hook", resolve: true, removeHook: true},
+				{name: "still_missing"},
+				{name: "became_resolvable", resolve: true, want: 1},
+				{name: "global_flush_clears_history", resolve: true, globalFlush: true},
+				{name: "removed_hook", resolve: true, removeHook: true},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					bus := eventbustest.NewBus(t)
