@@ -116,7 +116,7 @@ require (
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20260720160339-c86ca1284b96
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
-	github.com/tailscale/mkctr v0.0.0-20260902181255-cbad597122da
+	github.com/tailscale/mkctr v0.0.0-20261007195620-6c992949fa64
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc
 	github.com/tailscale/policybottest v0.0.0-20260626205140-6863b672b210
