@@ -1333,6 +1333,31 @@ func TestProxyGroupTypes(t *testing.T) {
 		}) {
 			t.Errorf("expected egress readiness gate %q to be set, got %v", tsEgressReadinessGate, sts.Spec.Template.Spec.ReadinessGates)
 		}
+
+		// Unlike legacy egress proxies, egress ProxyGroups only DNAT their mapped ports, so they get probes.
+		mustUpdate(t, fc, "", pc.Name, func(p *tsapi.ProxyClass) {
+			p.Spec.StatefulSet = &tsapi.StatefulSet{
+				Pod: &tsapi.Pod{
+					TailscaleContainer: &tsapi.Container{
+						LivenessProbe:  &tsapi.Probe{},
+						ReadinessProbe: &tsapi.Probe{},
+					},
+				},
+			}
+		})
+		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
+			p.Spec.ProxyClass = pc.Name
+		})
+		expectReconciled(t, reconciler, "", pg.Name)
+		if err := fc.Get(t.Context(), client.ObjectKey{Namespace: tsNamespace, Name: pg.Name}, sts); err != nil {
+			t.Fatalf("failed to get StatefulSet: %v", err)
+		}
+		if diff := cmp.Diff(httpProbe("/livez", defaultLocalAddrPort, &tsapi.Probe{}, 5), sts.Spec.Template.Spec.Containers[0].LivenessProbe); diff != "" {
+			t.Errorf("unexpected liveness probe (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(httpProbe("/readyz", defaultLocalAddrPort, &tsapi.Probe{}, 1), sts.Spec.Template.Spec.Containers[0].ReadinessProbe); diff != "" {
+			t.Errorf("unexpected readiness probe (-want +got):\n%s", diff)
+		}
 	})
 	t.Run("egress_type_no_lifecycle_hook_when_local_addr_port_set", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
@@ -1805,6 +1830,8 @@ func TestValidateProxyGroup(t *testing.T) {
 		image          string
 		noauth         bool
 		initContainer  bool
+		probes         bool
+		env            []tsapi.Env
 		staticSAExists bool
 		expectedErrs   int
 	}
@@ -1883,6 +1910,35 @@ func TestValidateProxyGroup(t *testing.T) {
 			typ:           tsapi.ProxyGroupTypeEgress,
 			initContainer: true,
 		},
+		"probes_for_ingress_pg": {
+			typ:    tsapi.ProxyGroupTypeIngress,
+			probes: true,
+			env:    []tsapi.Env{{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9010"}},
+		},
+		"probes_with_loopback_local_addr_port": {
+			typ:          tsapi.ProxyGroupTypeIngress,
+			probes:       true,
+			env:          []tsapi.Env{{Name: "TS_LOCAL_ADDR_PORT", Value: "127.0.0.1:9002"}},
+			expectedErrs: 1,
+		},
+		"probes_with_health_check_disabled": {
+			typ:          tsapi.ProxyGroupTypeIngress,
+			probes:       true,
+			env:          []tsapi.Env{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "false"}},
+			expectedErrs: 1,
+		},
+		"probes_with_deprecated_healthcheck": {
+			typ:          tsapi.ProxyGroupTypeEgress,
+			probes:       true,
+			env:          []tsapi.Env{{Name: "TS_HEALTHCHECK_ADDR_PORT", Value: "[::]:8080"}},
+			expectedErrs: 1,
+		},
+		"probes_ignored_for_kube_pg": {
+			typ:            tsapi.ProxyGroupTypeKubernetesAPIServer,
+			staticSAExists: true,
+			probes:         true,
+			env:            []tsapi.Env{{Name: "TS_LOCAL_ADDR_PORT", Value: "127.0.0.1:9002"}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pc := &tsapi.ProxyClass{
@@ -1898,6 +1954,12 @@ func TestValidateProxyGroup(t *testing.T) {
 			if tc.image != "" {
 				pc.Spec.StatefulSet.Pod.TailscaleContainer = &tsapi.Container{
 					Image: tc.image,
+				}
+			}
+			if tc.probes {
+				pc.Spec.StatefulSet.Pod.TailscaleContainer = &tsapi.Container{
+					Env:            tc.env,
+					ReadinessProbe: &tsapi.Probe{},
 				}
 			}
 			if tc.initContainer {
@@ -2232,6 +2294,9 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 		t.Fatal(err)
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
+	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
+		applyHealthzProbes(proxyClass, statefulSet)
+	}
 
 	if shouldExist {
 		expectEqual(t, fc, role)

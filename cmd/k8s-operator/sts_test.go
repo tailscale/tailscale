@@ -316,6 +316,86 @@ func Test_applyProxyClassToStatefulSet(t *testing.T) {
 	verifyEnvVar(t, gotSS, "TS_DEBUG_ACME_DIRECTORY_URL", letsEncryptStagingEndpoint)
 }
 
+func Test_applyHealthzProbes(t *testing.T) {
+	withProbes := func(liveness, readiness *tsapi.Probe) *tsapi.ProxyClass {
+		return &tsapi.ProxyClass{
+			Spec: tsapi.ProxyClassSpec{
+				StatefulSet: &tsapi.StatefulSet{
+					Pod: &tsapi.Pod{TailscaleContainer: &tsapi.Container{LivenessProbe: liveness, ReadinessProbe: readiness}},
+				},
+			},
+		}
+	}
+	both := withProbes(&tsapi.Probe{}, &tsapi.Probe{})
+	for name, tt := range map[string]struct {
+		pc            *tsapi.ProxyClass
+		env           []corev1.EnvVar
+		wantLiveness  bool
+		wantReadiness bool
+		wantPeriod    int32
+		wantPort      int
+	}{
+		"nil_proxyclass_defaults_off": {},
+		"unset_probes_default_off":    {pc: withProbes(nil, nil)},
+		"liveness_set":                {pc: withProbes(&tsapi.Probe{}, nil), wantLiveness: true, wantPort: defaultLocalAddrPort},
+		"readiness_set":               {pc: withProbes(nil, &tsapi.Probe{}), wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
+		"both_set":                    {pc: both, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
+		"custom_readiness_period":     {pc: withProbes(nil, &tsapi.Probe{PeriodSeconds: 30}), wantReadiness: true, wantPeriod: 30, wantPort: defaultLocalAddrPort},
+		"custom_local_addr_port":      {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "$(POD_IP):9010"}}, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: 9010},
+		"loopback_local_addr_port":    {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "127.0.0.1:9002"}}},
+		"localhost_local_addr_port":   {pc: both, env: []corev1.EnvVar{{Name: "TS_LOCAL_ADDR_PORT", Value: "localhost:9002"}}},
+		"health_check_disabled":       {pc: both, env: []corev1.EnvVar{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "false"}}},
+		"health_check_enabled":        {pc: both, env: []corev1.EnvVar{{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"}}, wantLiveness: true, wantReadiness: true, wantPeriod: 10, wantPort: defaultLocalAddrPort},
+		"deprecated_healthcheck":      {pc: both, env: []corev1.EnvVar{{Name: "TS_HEALTHCHECK_ADDR_PORT", Value: "[::]:8080"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var ss appsv1.StatefulSet
+			if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
+				t.Fatalf("unmarshaling proxy template: %v", err)
+			}
+			ss.Spec.Template.Spec.Containers[0].Env = append(ss.Spec.Template.Spec.Containers[0].Env, tt.env...)
+			applyHealthzProbes(tt.pc, &ss)
+			c := ss.Spec.Template.Spec.Containers[0]
+
+			if got := c.LivenessProbe != nil; got != tt.wantLiveness {
+				t.Errorf("liveness probe present = %v, want %v", got, tt.wantLiveness)
+			}
+			if got := c.ReadinessProbe != nil; got != tt.wantReadiness {
+				t.Errorf("readiness probe present = %v, want %v", got, tt.wantReadiness)
+			}
+			if c.LivenessProbe != nil {
+				if c.LivenessProbe.HTTPGet.Path != "/livez" {
+					t.Errorf("liveness path = %q, want /livez", c.LivenessProbe.HTTPGet.Path)
+				}
+				if got := c.LivenessProbe.HTTPGet.Port.IntValue(); got != tt.wantPort {
+					t.Errorf("liveness port = %d, want %d", got, tt.wantPort)
+				}
+				if c.LivenessProbe.TimeoutSeconds != 5 {
+					t.Errorf("liveness timeout = %d, want 5", c.LivenessProbe.TimeoutSeconds)
+				}
+			}
+			if c.ReadinessProbe != nil {
+				if c.ReadinessProbe.HTTPGet.Path != "/readyz" {
+					t.Errorf("readiness path = %q, want /readyz", c.ReadinessProbe.HTTPGet.Path)
+				}
+				if got := c.ReadinessProbe.HTTPGet.Port.IntValue(); got != tt.wantPort {
+					t.Errorf("readiness port = %d, want %d", got, tt.wantPort)
+				}
+				if c.ReadinessProbe.PeriodSeconds != tt.wantPeriod {
+					t.Errorf("readiness period = %d, want %d", c.ReadinessProbe.PeriodSeconds, tt.wantPeriod)
+				}
+				if c.ReadinessProbe.TimeoutSeconds != 1 {
+					t.Errorf("readiness timeout = %d, want 1", c.ReadinessProbe.TimeoutSeconds)
+				}
+			}
+			v, _ := lookupEnv(c.Env, "TS_ENABLE_HEALTH_CHECK")
+			if got, want := v == "true", tt.wantLiveness || tt.wantReadiness; got != want {
+				t.Errorf("TS_ENABLE_HEALTH_CHECK = %q, want enabled %v", v, want)
+			}
+		})
+	}
+}
+
 func Test_mergeStatefulSetLabelsOrAnnots(t *testing.T) {
 	tests := []struct {
 		name    string

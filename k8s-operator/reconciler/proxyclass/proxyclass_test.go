@@ -274,6 +274,26 @@ func TestProxyClassValidation(t *testing.T) {
 			},
 			valid: false,
 		},
+		"probes_for_main_container": {
+			spec: tsapi.ProxyClassSpec{
+				StatefulSet: &tsapi.StatefulSet{
+					Pod: &tsapi.Pod{
+						TailscaleContainer: &tsapi.Container{ReadinessProbe: &tsapi.Probe{}},
+					},
+				},
+			},
+			valid: true,
+		},
+		"probes_for_init_container": {
+			spec: tsapi.ProxyClassSpec{
+				StatefulSet: &tsapi.StatefulSet{
+					Pod: &tsapi.Pod{
+						TailscaleInitContainer: &tsapi.Container{ReadinessProbe: &tsapi.Probe{}},
+					},
+				},
+			},
+			valid: false,
+		},
 		"static_endpoints_valid_specific_ports": {
 			spec:  tsapi.ProxyClassSpec{StaticEndpoints: nodePortWith([]tsapi.PortRange{{Port: 3001}, {Port: 3005}})},
 			valid: true,
