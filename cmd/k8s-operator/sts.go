@@ -6,12 +6,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"path"
@@ -27,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apiserver/pkg/storage/names"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -1258,6 +1261,106 @@ func enableEndpoints(ss *appsv1.StatefulSet, metrics, debug bool) {
 
 func isMainContainer(c *corev1.Container) bool {
 	return c.Name == mainContainerName
+}
+
+// applyHealthzProbes attaches liveness and readiness probes against the proxy's
+// /livez and /readyz endpoints to the main container, and enables those
+// endpoints via TS_ENABLE_HEALTH_CHECK. Each probe is off unless the ProxyClass
+// sets it. pc may be nil. It is a no-op if neither probe is set, or if the
+// container's env leaves the endpoints unreachable, see [healthzPort].
+func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) {
+	var liveness, readiness *tsapi.Probe
+	if pc != nil && pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
+		liveness = pc.Spec.StatefulSet.Pod.TailscaleContainer.LivenessProbe
+		readiness = pc.Spec.StatefulSet.Pod.TailscaleContainer.ReadinessProbe
+	}
+	if liveness == nil && readiness == nil {
+		return
+	}
+
+	for i, c := range ss.Spec.Template.Spec.Containers {
+		if !isMainContainer(&c) {
+			continue
+		}
+		port, ok := healthzPort(c.Env)
+		if !ok {
+			return
+		}
+		if _, ok := lookupEnv(c.Env, "TS_ENABLE_HEALTH_CHECK"); !ok {
+			ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
+				corev1.EnvVar{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"})
+		}
+		if liveness != nil {
+			// Longer than for readiness, as a restart drops the traffic a slow tailscaled still carries.
+			ss.Spec.Template.Spec.Containers[i].LivenessProbe = httpProbe("/livez", port, liveness, 5)
+		}
+		if readiness != nil {
+			ss.Spec.Template.Spec.Containers[i].ReadinessProbe = httpProbe("/readyz", port, readiness, 1)
+		}
+		break
+	}
+}
+
+// healthzPort returns the port the main container serves /livez and /readyz
+// on given its env. It returns false if the env turns the endpoints off, or
+// binds them where the kubelet can't reach them, as probes would then restart
+// a healthy proxy.
+func healthzPort(env []corev1.EnvVar) (int, bool) {
+	if _, ok := lookupEnv(env, "TS_HEALTHCHECK_ADDR_PORT"); ok {
+		// containerboot refuses to start with both this and TS_ENABLE_HEALTH_CHECK.
+		return 0, false
+	}
+	if v, ok := lookupEnv(env, "TS_ENABLE_HEALTH_CHECK"); ok {
+		if on, err := strconv.ParseBool(v); err != nil || !on {
+			return 0, false
+		}
+	}
+	v, ok := lookupEnv(env, envVarTSLocalAddrPort)
+	if !ok {
+		return defaultLocalAddrPort, true
+	}
+	// The host may be an env var reference such as $(POD_IP).
+	host, port, err := net.SplitHostPort(v)
+	if err != nil {
+		return 0, false
+	}
+	if ip, err := netip.ParseAddr(host); host == "localhost" || err == nil && ip.IsLoopback() {
+		return 0, false
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || p == 0 {
+		return 0, false
+	}
+	return int(p), true
+}
+
+// lookupEnv returns the value of the last env var in env called name, as
+// Kubernetes uses the last of any duplicates.
+func lookupEnv(env []corev1.EnvVar, name string) (string, bool) {
+	for _, e := range slices.Backward(env) {
+		if e.Name == name {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// httpProbe builds an httpGet probe against path on port, using timeout and the
+// Kubernetes defaults for unset timing fields.
+func httpProbe(path string, port int, p *tsapi.Probe, timeout int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: path,
+				Port: intstr.FromInt(port),
+			},
+		},
+		InitialDelaySeconds: p.InitialDelaySeconds,
+		PeriodSeconds:       cmp.Or(p.PeriodSeconds, 10),
+		TimeoutSeconds:      cmp.Or(p.TimeoutSeconds, timeout),
+		FailureThreshold:    cmp.Or(p.FailureThreshold, 3),
+		SuccessThreshold:    1,
+	}
 }
 
 // tailscaledConfig takes a proxy config, a newly generated auth key if generated and a Secret with the previous proxy

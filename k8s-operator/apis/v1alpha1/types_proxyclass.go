@@ -426,6 +426,47 @@ type Container struct {
 	// Not recommended for production use.
 	// +optional
 	Debug *Debug `json:"debug,omitempty"`
+	// Liveness probe against the proxy's /livez endpoint, which fails only when
+	// tailscaled stops responding, not when the tailnet is unreachable. Off
+	// unless set; {} runs it with the default timing. Older proxy images don't
+	// serve /livez and fail the probe. Only used by ProxyGroups.
+	// +optional
+	LivenessProbe *Probe `json:"livenessProbe,omitempty"`
+	// Readiness probe against the proxy's /readyz endpoint, which passes once
+	// the proxy has a tailnet IP address and, for proxies that serve Tailscale
+	// Services, has applied its serve config and has a TLS cert for each
+	// HTTPS-only Tailscale Service. Off unless set; {} runs it with the default
+	// timing. Older proxy images don't serve /readyz and fail the probe.
+	// Only used by ProxyGroups.
+	// +optional
+	ReadinessProbe *Probe `json:"readinessProbe,omitempty"`
+}
+
+// Probe tunes a Kubernetes probe against the proxy. The operator sets the
+// probe's target; the fields here match the same fields on a Kubernetes probe
+// and each falls back to a default when unset.
+type Probe struct {
+	// Number of seconds after the container has started before the probe is
+	// initiated.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	InitialDelaySeconds int32 `json:"initialDelaySeconds,omitempty"`
+	// How often, in seconds, to perform the probe.
+	// +optional
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
+	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
+	// Number of seconds after which the probe times out. Defaults to 5 for
+	// livenessProbe and 1 for readinessProbe.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+	// Minimum consecutive failures for the probe to be considered failed after
+	// having succeeded.
+	// +optional
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=1
+	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 
 type Debug struct {
