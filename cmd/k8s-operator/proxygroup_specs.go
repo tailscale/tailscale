@@ -89,6 +89,9 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		OwnerReferences: pgOwnerReference(pg),
 	}
 	ss.Spec.Replicas = new(pgReplicas(pg))
+	// Start Pods in parallel so one that isn't ready yet, e.g. while its
+	// device awaits approval, doesn't hold back the others.
+	ss.Spec.PodManagementPolicy = appsv1.ParallelPodManagement
 	ss.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: pgLabels(pg.Name, nil),
 	}
@@ -326,7 +329,8 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 			OwnerReferences: pgOwnerReference(pg),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas: new(pgReplicas(pg)),
+			Replicas:            new(pgReplicas(pg)),
+			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: pgLabels(pg.Name, nil),
 			},
