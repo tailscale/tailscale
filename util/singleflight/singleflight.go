@@ -201,14 +201,14 @@ func (g *Group[K, V]) DoChanContext(ctx context.Context, key K, fn func(context.
 	// Do so by creating an final channel that gets the
 	// result and hooking that up to the wait function.
 	final := make(chan Result[V], 1)
-	go g.waitCtx(ctx, c, ch, final)
+	go g.waitCtx(ctx, key, c, ch, final)
 	return final
 }
 
 // waitCtx will wait on the provided call to finish, or the context to be done.
 // If the context is done, and this is the last waiter, then the context
 // provided to the underlying function will be canceled.
-func (g *Group[K, V]) waitCtx(ctx context.Context, c *call[V], result <-chan Result[V], output chan<- Result[V]) {
+func (g *Group[K, V]) waitCtx(ctx context.Context, key K, c *call[V], result <-chan Result[V], output chan<- Result[V]) {
 	var res Result[V]
 	select {
 	case <-ctx.Done():
@@ -223,6 +223,15 @@ func (g *Group[K, V]) waitCtx(ctx context.Context, c *call[V], result <-chan Res
 	// finished executing after the last caller has returned.
 	if c.ctxWaiters.Add(-1) == 0 {
 		c.cancel()
+
+		// Remove the call from the map immediately when all waiters are
+		// canceled. This prevents subsequent callers joining an already-canceled call.
+		g.mu.Lock()
+		if g.m[key] == c {
+			delete(g.m, key)
+		}
+		g.mu.Unlock()
+
 		c.wg.Wait()
 	}
 
