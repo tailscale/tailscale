@@ -2116,7 +2116,7 @@ func (e *Env) LANPing(from *Node, targetIP netip.Addr) {
 	e.t.Logf("LANPing: %s -> %s", from.name, targetIP)
 	deadline := time.Now().Add(2 * time.Minute)
 	for attempt := 0; time.Now().Before(deadline); attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		reqURL := fmt.Sprintf("http://unused/ping?host=%s", targetIP)
 		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 		if err != nil {
