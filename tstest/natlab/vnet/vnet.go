@@ -2834,8 +2834,6 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		return
 	}
 
-	epoch := uint32(time.Now().Unix())
-
 	if len(req.Payload) == 2 && req.Payload[0] == opcodeANNOUNCE {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
@@ -2845,6 +2843,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 			128+opcodeANNOUNCE,
 			0, 0, // result code success
 		)
+		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
 		wan4 := n.wanIP4.As4()
 		res = append(res, wan4[:]...)
@@ -2879,6 +2878,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 			128+opcodeMAP,
 			0, 0, // result code success
 		)
+		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
 		res = binary.BigEndian.AppendUint16(res, internalPort)
 		res = binary.BigEndian.AppendUint16(res, gotPort)
