@@ -450,7 +450,14 @@ func (s *Server) serveC2N(w http.ResponseWriter, r *http.Request) {
 		}
 		s.C2NResponses.Delete(token)
 
-		res, err := http.ReadResponse(bufio.NewReader(r.Body), nil)
+		// Read the whole body before handing off the response, as
+		// onRes's receiver may read res.Body after this handler
+		// returns, at which point the HTTP/2 server has closed r.Body.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return fmt.Errorf("error reading c2n response: %w", err)
+		}
+		res, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(body)), nil)
 		if err != nil {
 			return fmt.Errorf("error reading c2n response: %w", err)
 		}
