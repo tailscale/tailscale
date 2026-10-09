@@ -917,6 +917,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.health.SetRouterHealth(routerErr)
 		if routerErr != nil {
 			e.logf("wgengine: Reconfig: router config failed (%v); continuing to DNS config so name resolution still works", routerErr)
+			// Forget the config we failed to apply so that the next
+			// Reconfig retries router.Set instead of treating the
+			// (unapplied) config as current and returning ErrNoChanges,
+			// which would otherwise leave the OS routes (e.g. Linux
+			// table 52) stale indefinitely. See tailscale/tailscale#18271.
+			e.lastRouter = nil
 		}
 	}
 
