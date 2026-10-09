@@ -45,6 +45,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/net/via64"
 	"tailscale.com/proxymap"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -1321,7 +1322,14 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		return false
 	}
 	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
-		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
+		if ns.lb == nil || !ns.lb.ShouldHandleViaIP(dstIP) {
+			return false
+		}
+		// Leave the packet to the kernel if it translates this prefix (net/via64). Targets 4via6 may not reach stay here and are refused.
+		if via64.KernelHandles(dstIP, p.IPProto) && ns.lb.ShouldForwardToVia(dstIP) {
+			return false
+		}
+		return true
 	}
 	if ns.ProcessLocalIPs && isLocal {
 		return true

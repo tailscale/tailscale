@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/net/via64"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
@@ -351,6 +352,68 @@ func TestShouldProcessInbound(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "ipv6-via-kernel-handled",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				// $ tailscale debug via 7 10.1.1.9/24
+				Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
+				TCPFlags: packet.TCPSyn,
+			},
+			afterStart: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
+				}
+				i.lb.Start(ipn.Options{UpdatePrefs: prefs})
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+				via64.SetKernelHandled(prefs.AdvertiseRoutes, true)
+			},
+			want: false,
+		},
+		{
+			// With TS_DEBUG_4VIA6_KERNEL_UDP=false, UDP to a kernel-handled prefix stays on netstack, exactly as without via64.
+			name: "ipv6-via-kernel-handled-udp-on-netstack",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.UDP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
+			},
+			afterStart: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
+				}
+				i.lb.Start(ipn.Options{UpdatePrefs: prefs})
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+				via64.SetKernelHandled(prefs.AdvertiseRoutes, false)
+			},
+			want: true,
+		},
+		{
+			// Loopback inside a kernel-handled prefix stays on netstack, which refuses it.
+			name: "ipv6-via-kernel-handled-disallowed-target",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:7f00:1]:5678"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			afterStart: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7::/96"),
+				}
+				i.lb.Start(ipn.Options{UpdatePrefs: prefs})
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
+				via64.SetKernelHandled(prefs.AdvertiseRoutes, true)
+			},
+			want: true,
+		},
+		{
 			name: "tailscale-ssh-enabled",
 			pkt: &packet.Parsed{
 				IPVersion: 4,
@@ -654,6 +717,7 @@ func TestShouldProcessInbound(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() { via64.SetKernelHandled(nil, true) })
 			if tc.runOnGOOS != "" && runtime.GOOS != tc.runOnGOOS {
 				t.Skipf("skipping on GOOS=%v", runtime.GOOS)
 			}
@@ -1126,6 +1190,25 @@ func TestHandleLocalPackets(t *testing.T) {
 		// don't process the packet outside of netstack.
 		if resp != filter.DropSilently {
 			t.Errorf("got filter outcome %v, want filter.DropSilently", resp)
+		}
+	})
+	t.Run("ShouldHandle4via6KernelHandled", func(t *testing.T) {
+		// The router's own connections to its 4via6 routes (#11304) stay on netstack, which alone dials them from the host.
+		via64.SetKernelHandled(prefs.AdvertiseRoutes, true)
+		defer via64.SetKernelHandled(nil, true)
+		for _, proto := range []ipproto.Proto{ipproto.TCP, ipproto.UDP} {
+			pkt := &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   proto,
+				Src:       netip.MustParseAddrPort("[fd7a:115c:a1e0::123]:1234"),
+				Dst:       netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
+			}
+			if proto == ipproto.TCP {
+				pkt.TCPFlags = packet.TCPSyn
+			}
+			if resp, _ := impl.handleLocalPackets(pkt, impl.tundev, nil); resp != filter.DropSilently {
+				t.Errorf("%v: got filter outcome %v, want filter.DropSilently", proto, resp)
+			}
 		}
 	})
 	t.Run("ShouldHandleLocalTailscaleServices", func(t *testing.T) {
