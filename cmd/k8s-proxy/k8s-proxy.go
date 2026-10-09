@@ -212,6 +212,18 @@ func run(logger *zap.SugaredLogger) error {
 		AuthKey:  authKey,
 	}
 
+	// The operator sets PORT on kube-apiserver ProxyGroup pods to the NodePort
+	// Services' targetPort when staticEndpoints are configured; the WireGuard
+	// socket must bind it or the advertised <nodeIP>:<nodePort> endpoints DNAT
+	// to a dead port. Mirrors TS_PORT handling in cmd/k8s-operator.
+	if p := os.Getenv("PORT"); p != "" {
+		port, err := strconv.ParseUint(p, 10, 16)
+		if err != nil {
+			return fmt.Errorf("PORT %q cannot be parsed as uint16: %w", p, err)
+		}
+		ts.Port = uint16(port)
+	}
+
 	if cfg.Parsed.ServerURL != nil {
 		ts.ControlURL = *cfg.Parsed.ServerURL
 	}
