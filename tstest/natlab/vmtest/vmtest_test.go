@@ -1286,11 +1286,11 @@ func TestDirectConnectionWithCachedNetmapOnOneNode(t *testing.T) {
 			tsmpPingStep.End(nil)
 
 			discoPingStep.Begin()
-			if err := env.PingExpect(pFrom, pTo, vmtest.PingRouteDirect, 90*time.Second); err != nil {
+			if _, err := env.PingExpect(pFrom, pTo, vmtest.PingRouteDirect, 90*time.Second); err != nil {
 				discoPingStep.Fatal(err)
 			}
 			// Ping back, mostly to give time for the metrics to be set.
-			if err := env.PingExpect(pTo, pFrom, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+			if _, err := env.PingExpect(pTo, pFrom, vmtest.PingRouteDirect, 30*time.Second); err != nil {
 				discoPingStep.Fatal(err)
 			}
 			discoPingStep.End(nil)
@@ -1340,8 +1340,8 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	// Before: Verify that we have not recorded any cached contacts.
 	checkInitialMetrics.Begin()
 	checkClientMetrics(t, "Node A", env.ClientMetrics(a), map[string]int64{
-		"magicsock_cached_peer_contact_derp":   0,
-		"magicsock_cached_peer_contact_direct": 0,
+		"magicsock_cached_peer_contact_derp":          0,
+		"magicsock_cached_peer_contact_direct":        0,
 		"magicsock_tsmp_disco_key_advertisement_sent": 0,
 	})
 	checkInitialMetrics.End(nil)
@@ -1369,7 +1369,7 @@ func TestDirectConnectionWithCachedNetmapOnTwoNodes(t *testing.T) {
 	tsmpPingStep.End(nil)
 
 	discoPingStep.Begin()
-	if err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
+	if _, err := env.PingExpect(a, b, vmtest.PingRouteDirect, 30*time.Second); err != nil {
 		discoPingStep.Fatal(err)
 	}
 	discoPingStep.End(nil)
@@ -1505,4 +1505,80 @@ func TestPeerRelay(t *testing.T) {
 	t.Logf("relay session VNI=%d %s <-> %s on UDP port %d",
 		session.VNI, session.Client1.ShortDisco, session.Client2.ShortDisco, *srv.UDPPort)
 	sessionsStep.End(nil)
+}
+
+// TestLinuxRoaming tests that a node can establish a direct connection, then
+// have one of its network interfaces disconnect, and then roam over to the
+// other interface and have a direct connection again. The roaming node has two
+// interfaces, one eth and one mobile, simulated by adding a 50ms latency to the
+// mobile link (not too far off of what to expect with LTE).
+func TestLinuxRoaming(t *testing.T) {
+	env := vmtest.New(t)
+
+	// Add two networks for the roaming node, one of them with a 50ms latency to
+	// push magicsock to select the faster path.
+	ethAddr := "1.0.0.1"
+	mobileAddr := "2.0.0.1"
+	roamingEth := env.AddNetwork(ethAddr, "192.168.1.0/24", vnet.EasyNAT)
+	roamingMobile := env.AddNetwork(mobileAddr, "10.0.0.0/24", vnet.EasyNAT)
+	roamingMobile.SetLatency(50 * time.Millisecond)
+
+	staticNet := env.AddNetwork("3.0.0.1", "192.168.2.0/24", vnet.EasyNAT)
+
+	roaming := env.AddNode("roaming", roamingEth, roamingMobile, vmtest.OS(vmtest.Ubuntu2404))
+	static := env.AddNode("static", staticNet, vmtest.OS(vmtest.Gokrazy))
+
+	stepPingEth := env.AddStep("Ping on eth")
+	stepDisconnect := env.AddStep("Disconnect eth")
+	stepPingMobile := env.AddStep("Ping on mobile")
+
+	env.Start()
+
+	// Run the test until the network converges onto the fast eth path.
+	// Run this in WaitFor to ensure that the endpoint we get back is the expected
+	// link, giving magicsock time to converge at the right interface.
+	stepPingEth.Begin()
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		endpoint, err := env.PingExpect(static, roaming, vmtest.PingRouteDirect, 30*time.Second)
+		if err != nil {
+			return fmt.Errorf("did not get direct connection: %s", err)
+		}
+		ap, err := netip.ParseAddrPort(endpoint)
+		if err != nil {
+			return fmt.Errorf("unable to parse endpoint: %s", err)
+		}
+		if ap.Addr().String() != ethAddr {
+			return fmt.Errorf("wanted endpoint -%s got +%s", ethAddr, ap.Addr().String())
+		}
+		return nil
+	}); err != nil {
+		stepPingEth.Fatal(err)
+	}
+	stepPingEth.End(nil)
+
+	// "Disconnect" the ethernet from the node
+	stepDisconnect.Begin()
+	env.SetLinkUp(roaming, roamingEth, false)
+	stepDisconnect.End(nil)
+
+	roamingCtx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	if err := env.WaitForAgentConn(roamingCtx, roaming); err != nil {
+		cancel()
+		t.Fatalf("node did not come back up: %s", err.Error())
+	}
+	cancel()
+
+	stepPingMobile.Begin()
+	endpoint, err := env.PingExpect(static, roaming, vmtest.PingRouteDirect, 30*time.Second)
+	if err != nil {
+		stepPingMobile.Fatalf("did not get direct connection: %s", err)
+	}
+	ap, err := netip.ParseAddrPort(endpoint)
+	if err != nil {
+		stepPingMobile.Fatalf("unable to parse endpoint: %s", err)
+	}
+	if ap.Addr().String() != mobileAddr {
+		stepPingMobile.Fatalf("wanted endpoint -%s got +%s", mobileAddr, ap.Addr().String())
+	}
+	stepPingMobile.End(nil)
 }

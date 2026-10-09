@@ -130,9 +130,9 @@ func (e *Env) generateLinuxUserData(n *Node) string {
 
 	ud.WriteString("runcmd:\n")
 
-	// Remove the default route from the debug NIC (enp0s4) so traffic goes through vnet.
+	// Remove the default route (added by the debug NIC) so traffic goes through vnet.
 	// The debug NIC is only for SSH access from the host.
-	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"ip route del default via 10.0.2.2 dev enp0s4 2>/dev/null || true\"]\n")
+	ud.WriteString("  - [\"/bin/sh\", \"-c\", \"ip route del default via 10.0.2.2 2>/dev/null || true\"]\n")
 
 	// Provision the requested DNS backend before anything registers DNS
 	// state: dhcpcd's resolv.conf hook runs as soon as it has a lease.

@@ -486,6 +486,12 @@ func resetDialCancels() {
 func connect() (net.Conn, error) {
 	d := net.Dialer{
 		Control: bypassControlFunc,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     5 * time.Second,
+			Interval: 5 * time.Second,
+			Count:    3,
+		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	h := registerDialCancel(cancel)

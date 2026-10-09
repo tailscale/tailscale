@@ -288,9 +288,12 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		n.logf("no node for netstack dest IP %v", flow.dst)
 		return
 	}
+	// Use the MAC address for this specific network (important for multi-NIC nodes
+	// where the primary MAC may be on a different network).
+	mac := node.macForNet(n)
 	eth := &layers.Ethernet{
 		SrcMAC: n.mac.HWAddr(),
-		DstMAC: node.mac.HWAddr(),
+		DstMAC: mac.HWAddr(),
 	}
 	sls := []gopacket.SerializableLayer{
 		eth,
@@ -308,9 +311,6 @@ func (n *network) handleIPPacketFromGvisor(ipRaw []byte) {
 		n.logf("gvisor: serialize error: %v", err)
 		return
 	}
-	// Use the MAC address for this specific network (important for multi-NIC nodes
-	// where the primary MAC may be on a different network).
-	mac := node.macForNet(n)
 	if nw, ok := n.writers.Load(mac); ok {
 		// conditionedWrite (rather than nw.write) so that the network's
 		// simulated latency and packet loss also apply to traffic
@@ -3000,7 +3000,8 @@ func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 
 type NodeAgentClient struct {
 	*local.Client
-	HTTPClient *http.Client
+	HTTPClient     *http.Client
+	localTransport *http.Transport // transport backing local.Client
 }
 
 func (s *Server) NodeAgentDialer(n *Node) netx.DialFunc {
@@ -3036,17 +3037,29 @@ func (s *Server) NodeLogs(n *Node) string {
 
 func (s *Server) NodeAgentClient(n *Node) *NodeAgentClient {
 	d := s.NodeAgentDialer(n)
+	localTransport := &http.Transport{DialContext: d}
 	return &NodeAgentClient{
 		Client: &local.Client{
 			UseSocketOnly: true,
 			OmitAuth:      true,
 			Dial:          d,
+			Transport:     localTransport,
 		},
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: d,
 			},
 		},
+		localTransport: localTransport,
+	}
+}
+
+// CloseIdleConnections closes idle connections in both the local.Client and
+// HTTPClient transports. This helps facilitate cases where a link has changed
+// in a test.
+func (c *NodeAgentClient) CloseIdleConnections() {
+	if c.localTransport != nil {
+		c.localTransport.CloseIdleConnections()
 	}
 }
 
