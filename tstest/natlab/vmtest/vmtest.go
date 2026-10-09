@@ -48,6 +48,7 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
@@ -2565,4 +2566,24 @@ func (e *Env) SetLinkUp(n *Node, nw *vnet.Network, up bool) {
 	if err := e.setLink(n, ifIndex, up); err != nil {
 		e.t.Fatalf("unable to set link status: %s", err.Error())
 	}
+}
+
+func (e *Env) HasEndpointsForOther(probe, other *Node) error {
+	e.t.Helper()
+
+	nm, err := local.GetDebugResultJSON[netmap.NetworkMap](e.t.Context(), probe.Agent().Client, "current-netmap")
+	if err != nil {
+		return fmt.Errorf("[%s] unable to get netmap: %q", probe.name, err)
+	}
+	otherKey := e.Status(other).Self.PublicKey
+
+	i := slices.IndexFunc(nm.Peers, func(p tailcfg.NodeView) bool {
+		return p.Key() == otherKey
+	})
+	if i < 0 {
+		return fmt.Errorf("[%s] peer %s not found", probe.name, other.name)
+	} else if nm.Peers[i].Endpoints().Len() == 0 {
+		return fmt.Errorf("[%s] no endpoints for peer %s", probe.name, other.name)
+	}
+	return nil
 }
