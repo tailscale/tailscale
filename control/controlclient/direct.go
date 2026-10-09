@@ -51,6 +51,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tka"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -587,6 +588,22 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	},
 	ImpactsConnectivity: true,
 })
+
+// nodeRemoved is set when control responds to a map request with a 404, which
+// it only does once the node, or the user or login that owns it, has been
+// deleted.
+var nodeRemoved = health.Register(&health.Warnable{
+	Code:                tsconst.HealthWarnableNodeRemoved,
+	Title:               "Device removed",
+	Severity:            health.SeverityHigh,
+	Text:                health.StaticMessage("This device has been removed from the tailnet. Log in again to reconnect."),
+	DependsOn:           []*health.Warnable{health.IPNStateWarnable},
+	ImpactsConnectivity: true,
+})
+
+// ErrNodeRemoved is wrapped by the error returned from a map request that
+// control responded to with a 404. See nodeRemoved.
+var ErrNodeRemoved = errors.New("node removed from tailnet")
 
 type rateLimitError struct {
 	msg        string
@@ -1212,11 +1229,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return fmt.Errorf("initial fetch failed %d: %.200s",
+		err := fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
+		if res.StatusCode == http.StatusNotFound {
+			c.health.SetUnhealthy(nodeRemoved, nil)
+			err = fmt.Errorf("%w: %w", ErrNodeRemoved, err)
+		}
+		return err
 	}
 	defer res.Body.Close()
 
+	c.health.SetHealthy(nodeRemoved)
 	c.health.NoteMapRequestHeard(request)
 	watchdogTimer.Reset(watchdogTimeout)
 

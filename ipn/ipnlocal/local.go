@@ -349,6 +349,7 @@ type LocalBackend struct {
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
 	keyExpired        bool          // TODO(nickkhyl): move to nodeBackend
+	nodeRemoved       bool          // control said this node was deleted; cleared by the next netmap
 	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeBackend
 	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
 	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
@@ -1871,6 +1872,10 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			s := vizerr.Error()
 			b.sendLocked(ipn.Notify{ErrMessage: &s})
 		}
+		if errors.Is(st.Err, controlclient.ErrNodeRemoved) && !b.nodeRemoved {
+			b.nodeRemoved = true
+			b.stateMachineLocked()
+		}
 		return
 	}
 
@@ -1915,6 +1920,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			keyExpiryExtended = true
 		}
 		b.keyExpired = isExpired
+		b.nodeRemoved = false
 	}
 
 	if keyExpiryExtended && wasBlocked {
@@ -6928,13 +6934,14 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 	}
 
 	var (
-		cc         = b.cc
-		cn         = b.currentNode()
-		netMap     = cn.NetMap()
-		state      = b.state
-		blocked    = b.blocked
-		st         = b.engineStatus
-		keyExpired = b.keyExpired
+		cc          = b.cc
+		cn          = b.currentNode()
+		netMap      = cn.NetMap()
+		state       = b.state
+		blocked     = b.blocked
+		st          = b.engineStatus
+		keyExpired  = b.keyExpired
+		nodeRemoved = b.nodeRemoved
 
 		wantRunning = false
 		loggedOut   = false
@@ -6947,6 +6954,11 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 	switch {
 	case !wantRunning && !loggedOut && !blocked && b.hasNodeKeyLocked():
 		return ipn.Stopped
+	case wantRunning && nodeRemoved:
+		// Control said this node was deleted, need to relogin. Checked
+		// before netMap so a node that was already running, and so still
+		// has its old netmap, also needs to log in.
+		return ipn.NeedsLogin
 	case netMap == nil:
 		if (cc != nil && cc.AuthCantContinue()) || loggedOut {
 			// Auth was interrupted or waiting for URL visit,
@@ -8460,6 +8472,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
+	b.nodeRemoved = false
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())

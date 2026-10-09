@@ -1545,6 +1545,47 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 			wantRouterCfg: &router.Config{},
 			wantDNSCfg:    &dns.Config{},
 		},
+		{
+			name: "Start/Connect/Login/NodeRemoved",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(sendOpt{err: fmt.Errorf("%w: initial fetch failed 404", controlclient.ErrNodeRemoved)})
+			},
+			// If control deletes the node, we want to disconnect:
+			wantState:     ipn.NeedsLogin,
+			wantCfg:       &wgcfg.Config{},
+			wantRouterCfg: &router.Config{},
+			wantDNSCfg:    &dns.Config{},
+		},
+		{
+			name: "Start/Connect/Login/NodeRemoved/Login",
+			steps: func(t *testing.T, lb *LocalBackend, cc func() *mockControl) {
+				mustDo(t)(lb.Start(ipn.Options{}))
+				mustDo2(t)(lb.EditPrefs(connect))
+				cc().authenticated(node1)
+				cc().send(sendOpt{err: fmt.Errorf("%w: initial fetch failed 404", controlclient.ErrNodeRemoved)})
+				cc().authenticated(node1)
+			},
+			// A new netmap means the node is known to control again:
+			wantState: ipn.Starting,
+			wantCfg: &wgcfg.Config{
+				Addresses: node1.SelfNode.Addresses().AsSlice(),
+			},
+			wantRouterCfg: &router.Config{
+				SNATSubnetRoutes: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				LocalAddrs:       node1.SelfNode.Addresses().AsSlice(),
+				Routes:           routesWithQuad100(),
+			},
+			wantDNSCfg: &dns.Config{
+				AcceptDNS:             true,
+				Routes:                map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:                 map[dnsname.FQDN][]netip.Addr{},
+				MagicDNSHostsUnrouted: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
