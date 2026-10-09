@@ -341,3 +341,49 @@ func TestNextRetryInterval(t *testing.T) {
 		})
 	}
 }
+
+// TestAllCertsPresent checks that AllCertsPresent only reports true when every
+// HTTPS endpoint in the serve config has a cached cert, expired or not.
+func TestAllCertsPresent(t *testing.T) {
+	webConfig := func(domains ...string) *ipn.ServeConfig {
+		web := make(map[ipn.HostPort]*ipn.WebServerConfig)
+		for _, d := range domains {
+			web[ipn.HostPort(d+":443")] = &ipn.WebServerConfig{}
+		}
+		return &ipn.ServeConfig{
+			Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+				"svc:my-app": {Web: web},
+			},
+		}
+	}
+	valid := &tailcfg.C2NTLSCertInfo{Valid: true}
+	expired := &tailcfg.C2NTLSCertInfo{Expired: true, Error: "cert expired"}
+	unreadable := &tailcfg.C2NTLSCertInfo{Error: "failed to read Secret"}
+	for name, tt := range map[string]struct {
+		sc      *ipn.ServeConfig
+		present map[string]*tailcfg.C2NTLSCertInfo
+		want    bool
+	}{
+		"nil_config":         {nil, nil, true},
+		"no_https_endpoints": {&ipn.ServeConfig{}, nil, true},
+		"single_present":     {webConfig("a.ts.net"), map[string]*tailcfg.C2NTLSCertInfo{"a.ts.net": valid}, true},
+		"single_missing":     {webConfig("a.ts.net"), nil, false},
+		"one_of_two_missing": {webConfig("a.ts.net", "b.ts.net"), map[string]*tailcfg.C2NTLSCertInfo{"a.ts.net": valid}, false},
+		"all_present":        {webConfig("a.ts.net", "b.ts.net"), map[string]*tailcfg.C2NTLSCertInfo{"a.ts.net": valid, "b.ts.net": valid}, true},
+		"expired":            {webConfig("a.ts.net"), map[string]*tailcfg.C2NTLSCertInfo{"a.ts.net": expired}, true},
+		"unreadable":         {webConfig("a.ts.net"), map[string]*tailcfg.C2NTLSCertInfo{"a.ts.net": unreadable}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cm := &CertManager{
+				lc: &localclient.FakeLocalClient{CertStatusResults: tt.present},
+			}
+			got, err := cm.AllCertsPresent(context.Background(), tt.sc)
+			if err != nil {
+				t.Fatalf("AllCertsPresent() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("AllCertsPresent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

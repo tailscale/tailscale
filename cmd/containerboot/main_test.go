@@ -66,6 +66,9 @@ func TestContainerBoot(t *testing.T) {
 	healthURL := func(port int) string {
 		return fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
 	}
+	readyzURL := func(port int) string {
+		return fmt.Sprintf("http://127.0.0.1:%d/readyz", port)
+	}
 	egressSvcTerminateURL := func(port int) string {
 		return fmt.Sprintf("http://127.0.0.1:%d%s", port, kubetypes.EgessServicesPreshutdownEP)
 	}
@@ -999,6 +1002,31 @@ func TestContainerBoot(t *testing.T) {
 						EndpointStatuses: map[string]int{
 							metricsURL(env.localAddrPort): -1,
 							healthURL(env.localAddrPort):  200,
+						},
+					},
+				},
+			}
+		},
+		"readyz_without_serve_config_file": func(env *testEnv) testCase {
+			return testCase{
+				Env: map[string]string{
+					"TS_LOCAL_ADDR_PORT":     fmt.Sprintf("[::]:%d", env.localAddrPort),
+					"TS_ENABLE_HEALTH_CHECK": "true",
+					"TS_SERVE_CONFIG":        filepath.Join(env.d, "etc/tailscaled/no-serve-config.json"),
+				},
+				Phases: []phase{
+					{
+						WantCmds: []string{
+							"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+							"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
+						},
+						EndpointStatuses: map[string]int{
+							readyzURL(env.localAddrPort): 503, // Doesn't start passing until the next phase.
+						},
+					}, {
+						Notify: runningNotify,
+						EndpointStatuses: map[string]int{
+							readyzURL(env.localAddrPort): 200,
 						},
 					},
 				},
