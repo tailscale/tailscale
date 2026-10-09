@@ -51,6 +51,34 @@ func wantChange(c Change) func(c Change) (bool, error) {
 	}
 }
 
+func TestReceiveFuncStats(t *testing.T) {
+	tr := NewTracker(eventbustest.NewBus(t))
+	const v4, v6, derp = "ReceiveIPv4", "ReceiveIPv6", "ReceiveDERP"
+	names := []string{v4, v6, derp}
+	byName := map[string]*ReceiveFuncStats{}
+	for _, name := range names {
+		f := tr.ReceiveFuncStats(name)
+		if f == nil {
+			t.Fatalf("ReceiveFuncStats(%q) = nil", name)
+		}
+		if f.Name() != name {
+			t.Errorf("ReceiveFuncStats(%q).Name() = %q", name, f.Name())
+		}
+		for prev, prevStats := range byName {
+			if f == prevStats {
+				t.Errorf("ReceiveFuncStats(%q) and (%q) are the same tracker", prev, name)
+			}
+		}
+		byName[name] = f
+	}
+	// A second lookup returns the same tracker.
+	for _, name := range names {
+		if got := tr.ReceiveFuncStats(name); got != byName[name] {
+			t.Errorf("ReceiveFuncStats(%q) returned a different tracker on the second call", name)
+		}
+	}
+}
+
 func TestAppendWarnableDebugFlags(t *testing.T) {
 	tr := NewTracker(eventbustest.NewBus(t))
 
@@ -780,6 +808,7 @@ func TestControlHealthNotifies(t *testing.T) {
 				tw := eventbustest.NewWatcher(t, bus)
 
 				ht := NewTracker(bus)
+				ht.ReceiveFuncStats("TestReceiveFunc")
 				ht.SetIPNState("NeedsLogin", true)
 				ht.GotStreamedMapResponse()
 

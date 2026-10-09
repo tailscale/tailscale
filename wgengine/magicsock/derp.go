@@ -19,7 +19,7 @@ import (
 	"github.com/tailscale/wireguard-go/conn"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/health"
+	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/tsaddr"
@@ -708,12 +708,19 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 	}
 }
 
-func (c *connBind) receiveDERP(slab []byte, packets []conn.ReceivedPacket) (int, error) {
-	if s := c.Conn.health.ReceiveFuncStats(health.ReceiveDERP); s != nil {
-		s.Enter()
-		defer s.Exit()
+func (c *connBind) mkReceiveDERPFunc() conn.ReceiveFunc {
+	healthItem := c.health.ReceiveFuncStats(receiveDERPName)
+	if !buildfeatures.HasHealth || healthItem == nil {
+		return c.receiveDERP
 	}
+	return func(slab []byte, packets []conn.ReceivedPacket) (int, error) {
+		healthItem.Enter()
+		defer healthItem.Exit()
+		return c.receiveDERP(slab, packets)
+	}
+}
 
+func (c *connBind) receiveDERP(slab []byte, packets []conn.ReceivedPacket) (int, error) {
 	for dm := range c.derpRecvCh {
 		if c.isClosed() {
 			break
