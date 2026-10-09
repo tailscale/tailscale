@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"tailscale.com/envknob"
 	"tailscale.com/tstest"
 )
 
@@ -200,6 +201,195 @@ func TestLikelyHomeRouterIP_NoMocks(t *testing.T) {
 	// without any mocks.
 	gw, my, ok := LikelyHomeRouterIP()
 	t.Logf("LikelyHomeRouterIP: gw=%v my=%v ok=%v", gw, my, ok)
+}
+
+// TestLocalAddresses_ULA verifies the handling of IPv6 Unique Local Addresses
+// (ULA, fc00::/7) in LocalAddresses.
+//
+// By default ULA addresses are only used as a fallback when no other addresses
+// are present. Setting TS_INCLUDE_ULA_ENDPOINTS=true promotes them to
+// regular endpoints, enabling direct LAN connectivity without DERP.
+func TestLocalAddresses_ULA(t *testing.T) {
+	ipnet := func(s string) net.Addr {
+		ip, ipnet, err := net.ParseCIDR(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ipnet.IP = ip
+		return ipnet
+	}
+
+	// Interface with both RFC 1918 IPv4 and ULA IPv6, as seen on a
+	// typical LAN with a ULA-only IPv6 setup (no global IPv6 from ISP).
+	mixedIfaces := []Interface{
+		{
+			Interface: &net.Interface{
+				Index: 1,
+				MTU:   1500,
+				Name:  "en0",
+				Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("10.0.1.5/16"),
+				ipnet("fd66:6401:8e8a::1/64"),
+			},
+		},
+	}
+
+	t.Run("ULAExcludedByDefaultWhenRFC1918Present", func(t *testing.T) {
+		tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+			return mixedIfaces, nil
+		})
+		regular, _, err := LocalAddresses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []netip.Addr{netip.MustParseAddr("10.0.1.5")}
+		if !addrsEqual(regular, want) {
+			t.Errorf("LocalAddresses() regular = %v; want %v (ULA should be excluded by default)", regular, want)
+		}
+	})
+
+	t.Run("ULAIncludedAsFallbackWhenNoOtherAddresses", func(t *testing.T) {
+		// Simulate an environment with only ULA (e.g. Google Cloud Run).
+		ulaOnlyIfaces := []Interface{
+			{
+				Interface: &net.Interface{
+					Index: 1,
+					MTU:   1500,
+					Name:  "eth0",
+					Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+				},
+				AltAddrs: []net.Addr{
+					ipnet("fddf:3978:feb1:d745::1/64"),
+				},
+			},
+		}
+		tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+			return ulaOnlyIfaces, nil
+		})
+		regular, _, err := LocalAddresses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []netip.Addr{netip.MustParseAddr("fddf:3978:feb1:d745::1")}
+		if !addrsEqual(regular, want) {
+			t.Errorf("LocalAddresses() regular = %v; want %v (ULA should be used as fallback)", regular, want)
+		}
+	})
+
+	t.Run("TailscaleULAAlwaysExcluded", func(t *testing.T) {
+		// Tailscale's own ULA range (fd7a:115c:a1e0::/48) must never be
+		// reported as a local endpoint — neither by default nor with the
+		// knob enabled.
+		tsIfaces := []Interface{
+			{
+				Interface: &net.Interface{
+					Index: 1,
+					MTU:   1500,
+					Name:  "en0",
+					Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+				},
+				AltAddrs: []net.Addr{
+					ipnet("10.0.1.5/16"),
+					ipnet("fd7a:115c:a1e0::1/128"), // Tailscale ULA — must be excluded
+				},
+			},
+		}
+		want := []netip.Addr{netip.MustParseAddr("10.0.1.5")}
+
+		for _, enabled := range []bool{false, true} {
+			val := ""
+			if enabled {
+				val = "true"
+			}
+			envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", val)
+			t.Cleanup(func() { envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", "") })
+
+			tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+				return tsIfaces, nil
+			})
+			regular, _, err := LocalAddresses()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !addrsEqual(regular, want) {
+				t.Errorf("TS_INCLUDE_ULA_ENDPOINTS=%v: LocalAddresses() = %v; want %v (Tailscale ULA should always be excluded)", enabled, regular, want)
+			}
+		}
+	})
+
+	t.Run("TS_INCLUDE_ULA_ENDPOINTSPromotesULAToRegular", func(t *testing.T) {
+		envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", "true")
+		t.Cleanup(func() { envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", "") })
+
+		tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+			return mixedIfaces, nil
+		})
+		regular, _, err := LocalAddresses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []netip.Addr{
+			netip.MustParseAddr("10.0.1.5"),
+			netip.MustParseAddr("fd66:6401:8e8a::1"),
+		}
+		if !addrsEqual(regular, want) {
+			t.Errorf("LocalAddresses() with TS_INCLUDE_ULA_ENDPOINTS regular = %v; want %v", regular, want)
+		}
+	})
+
+	t.Run("TS_INCLUDE_ULA_ENDPOINTSPreservesIPv4LinkLocalFallback", func(t *testing.T) {
+		envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", "true")
+		t.Cleanup(func() { envknob.Setenv("TS_INCLUDE_ULA_ENDPOINTS", "") })
+
+		ulaAndLinkLocalIfaces := []Interface{
+			{
+				Interface: &net.Interface{
+					Index: 1,
+					MTU:   1500,
+					Name:  "eth0",
+					Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+				},
+				AltAddrs: []net.Addr{
+					ipnet("169.254.10.20/16"),
+					ipnet("fddf:3978:feb1:d745::1/64"),
+				},
+			},
+		}
+		tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+			return ulaAndLinkLocalIfaces, nil
+		})
+		regular, _, err := LocalAddresses()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []netip.Addr{
+			netip.MustParseAddr("169.254.10.20"),
+			netip.MustParseAddr("fddf:3978:feb1:d745::1"),
+		}
+		if !addrsEqual(regular, want) {
+			t.Errorf("LocalAddresses() with TS_INCLUDE_ULA_ENDPOINTS regular = %v; want %v (link-local fallback should be preserved)", regular, want)
+		}
+	})
+}
+
+// addrsEqual reports whether a and b contain the same set of addresses,
+// regardless of order.
+func addrsEqual(a, b []netip.Addr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[netip.Addr]bool, len(a))
+	for _, ip := range a {
+		set[ip] = true
+	}
+	for _, ip := range b {
+		if !set[ip] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestIsUsableV6(t *testing.T) {
