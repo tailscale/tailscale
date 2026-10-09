@@ -195,6 +195,8 @@ _Appears in:_
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#resourcerequirements-v1-core)_ | Container resource requirements.<br />By default Tailscale Kubernetes operator does not apply any resource<br />requirements. The amount of resources required wil depend on the<br />amount of resources the operator needs to parse, usage patterns and<br />cluster size.<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources |  | Optional: \{\} <br /> |
 | `securityContext` _[SecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.3/#securitycontext-v1-core)_ | Container security context.<br />Security context specified here will override the security context set by the operator.<br />By default the operator sets the Tailscale container and the Tailscale init container to privileged<br />for proxies created for Tailscale ingress and egress Service, Connector and ProxyGroup.<br />You can reduce the permissions of the Tailscale container to cap NET_ADMIN by<br />installing device plugin in your cluster and configuring the proxies tun device to be created<br />by the device plugin, see  https://github.com/tailscale/tailscale/issues/10814#issuecomment-2479977752<br />https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context |  | Optional: \{\} <br /> |
 | `debug` _[Debug](#debug)_ | Configuration for enabling extra debug information in the container.<br />Not recommended for production use. |  | Optional: \{\} <br /> |
+| `livenessProbe` _[Probe](#probe)_ | Liveness probe against the proxy's /livez endpoint, which fails only when<br />tailscaled stops responding, not when the tailnet is unreachable. Off<br />unless set; \{\} runs it with the default timing. Older proxy images don't<br />serve /livez and fail the probe. Only used by ProxyGroups. |  | Optional: \{\} <br /> |
+| `readinessProbe` _[Probe](#probe)_ | Readiness probe against the proxy's /readyz endpoint, which passes once<br />the proxy has a tailnet IP address and, for proxies that serve Tailscale<br />Services, has applied its serve config and has a TLS cert for each<br />HTTPS-only Tailscale Service. Off unless set; \{\} runs it with the default<br />timing. Older proxy images don't serve /readyz and fail the probe.<br />Only used by ProxyGroups. |  | Optional: \{\} <br /> |
 
 
 #### DNSConfig
@@ -750,6 +752,27 @@ _Appears in:_
 | `endPort` _integer_ | endPort indicates that the range of ports from port to endPort if set, inclusive,<br />should be used. This field cannot be defined if the port field is not defined.<br />The endPort must be either unset, or equal or greater than port. |  | Optional: \{\} <br /> |
 
 
+
+
+#### Probe
+
+
+
+Probe tunes a Kubernetes probe against the proxy. The operator sets the
+probe's target; the fields here match the same fields on a Kubernetes probe
+and each falls back to a default when unset.
+
+
+
+_Appears in:_
+- [Container](#container)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `initialDelaySeconds` _integer_ | Number of seconds after the container has started before the probe is<br />initiated. |  | Minimum: 0 <br />Optional: \{\} <br /> |
+| `periodSeconds` _integer_ | How often, in seconds, to perform the probe. | 10 | Minimum: 1 <br />Optional: \{\} <br /> |
+| `timeoutSeconds` _integer_ | Number of seconds after which the probe times out. Defaults to 5 for<br />livenessProbe and 1 for readinessProbe. |  | Minimum: 1 <br />Optional: \{\} <br /> |
+| `failureThreshold` _integer_ | Minimum consecutive failures for the probe to be considered failed after<br />having succeeded. | 3 | Minimum: 1 <br />Optional: \{\} <br /> |
 
 
 #### ProxyClass
