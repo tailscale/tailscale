@@ -864,8 +864,15 @@ func netInterfaces() ([]Interface, error) {
 	for i := range ifs {
 		ret[i].Interface = &ifs[i]
 	}
+	if prefetchAddrs != nil {
+		prefetchAddrs(ret)
+	}
 	return ret, nil
 }
+
+// prefetchAddrs, if present, is a platform-specific function that sets
+// AltAddrs on all interfaces in one pass.
+var prefetchAddrs func([]Interface)
 
 // DefaultRouteDetails are the details about a default route returned
 // by DefaultRoute.
