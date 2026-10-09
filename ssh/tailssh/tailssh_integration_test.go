@@ -6,6 +6,7 @@
 package tailssh
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -189,6 +190,84 @@ func TestIntegrationSSH(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestIntegrationSSHNoLeakedPTY checks that an SSH session's PTY master is not
+// inherited by another session's child process.
+func TestIntegrationSSHNoLeakedPTY(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires /proc to inspect file descriptors")
+	}
+	for _, forceV1Behavior := range []bool{false, true} {
+		name := "v2"
+		if forceV1Behavior {
+			name = "v1"
+		}
+		t.Run(name, func(t *testing.T) {
+			cl := testClient(t, forceV1Behavior, false)
+			// Bound both the readiness read and the descriptor scan if a child hangs.
+			timer := time.AfterFunc(30*time.Second, func() { cl.Close() })
+			defer timer.Stop()
+
+			first, err := cl.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			stdin, err := first.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stdin.Close()
+			if err := first.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+				t.Fatal(err)
+			}
+			stdout, err := first.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Keep the first session alive until we close it. Receiving its output
+			// proves launchProcess has installed the duplicated master before we
+			// start the second session; no timing-dependent sleep is needed.
+			if err := first.Start("printf 'ready\\n'; read line"); err != nil {
+				t.Fatal(err)
+			}
+			if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || strings.TrimSpace(line) != "ready" {
+				t.Fatalf("first PTY session not ready: line=%q, err=%v", line, err)
+			}
+
+			for _, withPTY := range []bool{false, true} {
+				name := "pipes"
+				if withPTY {
+					name = "pty"
+				}
+				t.Run(name, func(t *testing.T) {
+					second, err := cl.NewSession()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer second.Close()
+					if withPTY {
+						if err := second.RequestPty("xterm", 24, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					// Use the shell's PID so readlink inspects the session process's
+					// descriptors rather than its own. Skip the temporary directory
+					// descriptor used to expand the glob, which is already closed.
+					out, err := second.CombinedOutput(`for fd in /proc/$$/fd/*; do
+						if [ -L "$fd" ]; then readlink "$fd" || exit 1; fi
+					done`)
+					if err != nil {
+						t.Fatalf("inspect second session descriptors: %v; output: %s", err, out)
+					}
+					if strings.Contains(string(out), "/dev/ptmx") || strings.Contains(string(out), "/dev/pts/ptmx") {
+						t.Errorf("second session inherited a PTY master: %s", out)
+					}
+				})
+			}
+		})
 	}
 }
 
