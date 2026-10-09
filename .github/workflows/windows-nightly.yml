@@ -1,0 +1,131 @@
+# Runs the whole tstest/integration suite against the Windows service three times a night.
+name: windows-nightly
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Three runs, 20 minutes apart and off the hour, to catch flaky tests.
+    - cron: "13,33,53 7 * * *"
+
+  pull_request:
+    paths:
+      - ".github/workflows/windows-nightly.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GOMODCACHE: ${{ github.workspace }}/gomodcache
+  CMD_GO_USE_GIT_HASH: "true"
+
+permissions: {}
+
+jobs:
+  nightly:
+    permissions:
+      id-token: write # request the identity JWT that authenticates to cigocached
+      contents: read # for actions/checkout
+    runs-on: ci-windows-github-1
+    name: Windows nightly (${{ matrix.suite }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One row per suite, so smoke and regression suites can be added as rows later.
+          - suite: integration
+            packages: ./tstest/integration
+            results_pkg: tailscale.com/tstest/integration
+            flags: --run-windows-service-tests
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: ${{ github.workspace }}/src
+        persist-credentials: false
+
+    - name: Compute Go module cache key
+      id: hash
+      shell: bash
+      run: echo "key=gomod-cross3-${{ hashFiles('src/go.mod', 'src/go.sum') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Go module cache
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: gomodcache
+        key: ${{ steps.hash.outputs.key }}
+        enableCrossOsArchive: true
+
+    - name: Set up cigocacher
+      uses: ./src/.github/actions/go-cache
+      with:
+        checkout-path: ${{ github.workspace }}/src
+        cache-dir: ${{ github.workspace }}/cigocacher
+        cigocached-url: ${{ vars.CIGOCACHED_AZURE_URL }}
+        cigocached-host: ${{ vars.CIGOCACHED_AZURE_HOST }}
+
+    - name: test
+      shell: bash
+      working-directory: src
+      # -count=1: a cached pass is never retried, so flakes can't be reported.
+      run: ./tool/go run ./cmd/testwrapper $PACKAGES -count=1 $FLAGS
+      env:
+        PACKAGES: ${{ matrix.packages }}
+        FLAGS: ${{ matrix.flags }}
+        NOPWSHDEBUG: "true" # to quiet tool/gocross/gocross-wrapper.ps1 in CI
+        TS_TESTWRAPPER_RESULTS_SUMMARY: "1"
+        TS_TESTWRAPPER_RESULTS_PKG: ${{ matrix.results_pkg }}
+        TS_TESTWRAPPER_RESULTS_JSON: ${{ github.workspace }}/windows-integration-results.json
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: windows-nightly-${{ matrix.suite }}-results
+        path: ${{ github.workspace }}/windows-integration-results.json
+        if-no-files-found: ignore
+        retention-days: 90
+
+  notify:
+    if: always()
+    needs:
+      - nightly
+    permissions:
+      contents: read # for actions/checkout
+    runs-on: ubuntu-24.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: ${{ github.workspace }}/src
+        persist-credentials: false
+    - name: Download results
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        # A pattern, not a name, so a run that never uploaded still gets reported.
+        pattern: windows-nightly-*-results
+        path: results
+    - name: Build Slack payload
+      id: payload
+      if: always()
+      uses: ./src/.github/actions/windows-slack-payload
+      with:
+        result: ${{ needs.nightly.result }}
+        title: Windows Nightly Tests
+        header: "*${{ github.ref_name }}*"
+        tests-label: smoke and integration tests
+        # One result file per suite row.
+        expected-files: "1"
+    - name: Send Slack notification
+      env:
+        WEBHOOK: ${{ secrets.WINDOWS_SLACK_WEBHOOK_URL }}
+      # Posts on cancel too, so a missing message always means something went wrong.
+      if: always() && env.WEBHOOK != '' && github.event_name != 'pull_request'
+      continue-on-error: true
+      uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+      with:
+        webhook: ${{ env.WEBHOOK }}
+        webhook-type: incoming-webhook
+        payload-file-path: payload.json

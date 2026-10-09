@@ -1,0 +1,114 @@
+name: windows-slack-payload
+description: Build a Slack message from the windows-integration-results.json files under results/
+
+inputs:
+  result:
+    description: Result of the job that ran the tests
+    required: true
+  title:
+    description: Message title, shown before the result
+    required: true
+  header:
+    description: First line of the message, in Slack mrkdwn
+    required: true
+  status-label:
+    description: Label for an extra line with the result, left out when empty
+    required: false
+    default: ""
+  tests-label:
+    description: Label for the line with the test counts
+    required: true
+  expected-files:
+    description: Number of result files the run should have uploaded
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build Slack payload
+      shell: bash
+      env:
+        RESULT: ${{ inputs.result }}
+        # Title and header can come from a fork PR, so they only reach the script through env.
+        TITLE: ${{ inputs.title }}
+        HEADER: ${{ inputs.header }}
+        STATUS_LABEL: ${{ inputs.status-label }}
+        TESTS_LABEL: ${{ inputs.tests-label }}
+        EXPECTED_FILES: ${{ inputs.expected-files }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        # Read each artifact separately so one unreadable file can't discard the others.
+        rows='[]'; unreadable=0; reported=0
+        while IFS= read -r -d '' f; do
+          reported=$((reported + 1))
+          [ -s "$f" ] || continue
+          case "$(jq -r 'type' "$f" 2>/dev/null)" in
+            array) rows=$(printf '%s\n%s' "$rows" "$(jq -c . "$f")" | jq -s 'add') ;;
+            null)  ;; # ran none of the filtered package
+            *)     unreadable=$((unreadable + 1)) ;;
+          esac
+        done < <(find results -name windows-integration-results.json -print0 2>/dev/null)
+        # Dedupe so a re-shard reporting a test twice can't double every count.
+        rows=$(printf '%s' "$rows" | jq '[ .[] | objects ] | unique_by([.Package, .Test])')
+        count() { printf '%s' "$rows" | jq "[ (. // [])[] | select(.Outcome == \"$1\") ] | length"; }
+        retried=$(count retried)
+        passed=$(( $(count pass) + retried ))
+        failed=$(count fail)
+        skipped=$(count skip)
+        executed=$((passed + failed))
+        if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
+        # Names behind the retried count, capped so one bad run can't flood the message.
+        flaky=$(printf '%s' "$rows" | jq -r '
+          [ .[] | select(.Outcome == "retried") | (.Package | sub("^tailscale\\.com/"; "")) + "." + .Test ]
+          | sort
+          | if length > 5 then (.[:5] | join(", ")) + ", and \(length - 5) more" else join(", ") end')
+
+        case "$RESULT" in
+          success)   emoji=":white_check_mark:"; color="good" ;;
+          failure)   emoji=":x:";                color="danger" ;;
+          cancelled) emoji=":no_entry_sign:";    color="warning" ;;
+          skipped)   emoji=":fast_forward:";     color="warning" ;;
+          *)         emoji=":question:";         color="warning" ;;
+        esac
+
+        tests="${passed} passed, ${failed} failed, ${skipped} skipped"
+        if [ "$executed" -gt 0 ]; then
+          tests="${tests} (${pct}%)"
+        fi
+        # Anything that makes the numbers incomplete or overstated is said out loud.
+        caveats=""
+        if [ "$unreadable" -gt 0 ]; then
+          caveats="${caveats} — ${unreadable} result file(s) unreadable"
+        fi
+        if [ "$reported" -lt "$EXPECTED_FILES" ]; then
+          caveats="${caveats} — only ${reported} of ${EXPECTED_FILES} result files reported"
+        fi
+        # Retries get their own line below, so they don't warn the count line.
+        if [ "$executed" -eq 0 ]; then
+          caveats="${caveats} — no tests executed"
+        fi
+        if [ "$RESULT" = "failure" ] && [ "$failed" -eq 0 ]; then
+          caveats="${caveats} — results may be partial (build error or timeout)"
+        fi
+        tests="${tests}${caveats}"
+        if [ "$failed" -gt 0 ]; then tests_emoji=":x:"
+        elif [ -n "$caveats" ]; then tests_emoji=":warning:"
+        else tests_emoji=":white_check_mark:"; fi
+
+        jq -n --arg emoji "$emoji" --arg status "$RESULT" --arg tests_emoji "$tests_emoji" \
+          --arg tests "$tests" --arg flaky "$flaky" --arg retried "$retried" \
+          --arg title "$TITLE" --arg header "$HEADER" --arg status_label "$STATUS_LABEL" \
+          --arg tests_label "$TESTS_LABEL" --arg color "$color" --arg run_url "$RUN_URL" \
+          '{attachments: [{
+            title: ($emoji + " " + $title + ": " + $status),
+            title_link: $run_url,
+            text: (
+              $header
+              + "\n\n" + (if $status_label == "" then "" else $emoji + " " + $status_label + ": " + $status + "\n" end)
+              + $tests_emoji + " " + $tests_label + ": " + $tests
+              + (if $flaky == "" then "" else "\n    ↳ :warning: Flaky Tests (" + $retried + " passed on retry): " + $flaky end)
+              + "\n\n<" + $run_url + "|View run details>"
+            ),
+            color: $color,
+            mrkdwn_in: ["text"]
+          }]}' > payload.json
