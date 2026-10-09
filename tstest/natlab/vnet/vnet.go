@@ -2923,7 +2923,12 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 
 	if len(req.Payload) == 24 && req.Payload[1] == opcodeANNOUNCE {
 		// https://www.rfc-editor.org/rfc/rfc6887#section-14
-
+		// "02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66" =>
+		//   02 ver
+		//   00 op=announce
+		//   00 00 reserved
+		//   00 00 00 00 requested lifetime in seconds
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 client IP (10.7.1.102)
 		res := make([]byte, 0, 24)
 		res = append(res,
 			versionPCP,
@@ -2935,6 +2940,15 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
 		res = append(res, make([]byte, 12)...) // reserved (96 bits)
+
+		// "02 80 00 00 00 00 00 00 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00" =>
+		//   02 ver
+		//   80 op=announce+128
+		//   00 reserved
+		//   00 result=success
+		//   00 00 00 00 lifetime in seconds
+		//   6a c9 62 fb epoch (2026-10-09T21:56:11 UTC)
+		//   00 00 00 00 00 00 00 00 00 00 00 00 reserved
 		n.WriteUDPPacketNoNAT(UDPPacket{
 			Src:     req.Dst,
 			Dst:     req.Src,
@@ -2951,7 +2965,7 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		//   00 00 reserved
 		//   00 00 1c 20 requested lifetime in seconds (7200 sec = 2 hours)
 		//   00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 client IP (10.7.1.102)
-		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f mapping nonce
+		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f nonce
 		//   11 protocol (17 = UDP)
 		//   00 00 00 reserved
 		//   9f 40 internal port 40768
@@ -2989,6 +3003,21 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		res = binary.BigEndian.AppendUint16(res, gotPort)
 		wan4 := n.wanIP4.As16()
 		res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+
+		// "02 81 00 00 00 00 1c 20 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 e6 59 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01" =>
+		//   02 vers
+		//   81 op=map+128
+		//   00 reserved
+		//   00 result=success
+		//   00 00 1c 20 lifetime in seconds (7200 sec = 2 hours)
+		//   6a c9 62 fb epoch (2026-10-09T21:56:11 UTC)
+		//   00 00 00 00 00 00 00 00 00 00 00 00 reserved
+		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f nonce
+		//   11 protocol (17 = UDP)
+		//   00 00 00 reserved
+		//   9f 40 internal port 40768
+		//   e6 59 external port 58969
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01 external address (2.1.1.1)
 		n.WriteUDPPacketNoNAT(UDPPacket{
 			Src:     req.Dst,
 			Dst:     req.Src,
