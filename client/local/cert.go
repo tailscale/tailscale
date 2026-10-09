@@ -8,6 +8,7 @@ package local
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/tailcfg"
 )
 
 // rateLimitedError is returned from cert-fetching methods when the
@@ -137,6 +139,24 @@ func (lc *Client) CertPairWithValidity(ctx context.Context, domain string, minVa
 		return nil, nil, fmt.Errorf("unexpected output: key in cert")
 	}
 	return certPEM, keyPEM, nil
+}
+
+// CertStatus reports the state of the cached TLS certificate for domain
+// without fetching or issuing one. Unlike [Client.CertPair], a cache miss is
+// reported (Missing: true) rather than triggering issuance, so it is safe to
+// call repeatedly, e.g., from a health check or a Kubernetes readiness probe.
+//
+// API maturity: this method is not considered a stable API and is subject to change between releases.
+func (lc *Client) CertStatus(ctx context.Context, domain string) (*tailcfg.C2NTLSCertInfo, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/cert-status/"+domain)
+	if err != nil {
+		return nil, err
+	}
+	var info tailcfg.C2NTLSCertInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
 
 // GetCertificate fetches a TLS certificate for the TLS ClientHello in hi.
