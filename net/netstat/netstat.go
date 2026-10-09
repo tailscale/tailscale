@@ -33,3 +33,8 @@ type Table struct {
 func Get() (*Table, error) {
 	return get()
 }
+
+// GetListeners is like Get but only returns entries in the LISTEN state.
+func GetListeners() (*Table, error) {
+	return getListeners()
+}

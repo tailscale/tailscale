@@ -12,3 +12,7 @@ type OSMetadata struct{}
 func get() (*Table, error) {
 	return nil, ErrNotImplemented
 }
+
+func getListeners() (*Table, error) {
+	return nil, ErrNotImplemented
+}
