@@ -4,22 +4,31 @@
 package conffile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"tailscale.com/feature"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/omit"
 )
 
+// metadataTimeout is the maximum time to wait for each request to the VM
+// metadata service. The service is link-local, so if it does not answer
+// quickly (e.g. on a host that is not a cloud VM) it is not going to.
+var metadataTimeout = 5 * time.Second
+
 func getEC2MetadataToken() (string, error) {
 	if omit.AWS {
 		return "", omit.Err
 	}
-	req, _ := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), metadataTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "PUT", "http://169.254.169.254/latest/api/token", nil)
 	req.Header.Add("X-aws-ec2-metadata-token-ttl-seconds", "300")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -47,7 +56,9 @@ func readVMUserData() ([]byte, error) {
 		return nil, omit.Err
 	}
 	token, tokErr := getEC2MetadataToken()
-	req, _ := http.NewRequest("GET", "http://169.254.169.254/latest/user-data", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), metadataTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://169.254.169.254/latest/user-data", nil)
 	req.Header.Add("X-aws-ec2-metadata-token", token)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
