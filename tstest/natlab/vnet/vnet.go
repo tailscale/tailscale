@@ -2831,6 +2831,7 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 	}
 	if len(req.Payload) < 2 || req.Payload[0] != versionNATPMP {
 		n.logf("vnet: ignoring invalid NAT-PMP packet % 02x", req.Payload)
+		return
 	}
 
 	epoch := uint32(time.Now().Unix())
