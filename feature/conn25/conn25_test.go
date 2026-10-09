@@ -1033,7 +1033,11 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 			body, _ := ans.Body.(*dnsmessage.SVCBResource)
 			b.SVCBResource(ans.Header, *body)
 		default:
-			t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
+			body, ok := ans.Body.(*dnsmessage.UnknownResource)
+			if !ok {
+				t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
+			}
+			b.UnknownResource(ans.Header, *body)
 		}
 	}
 
@@ -1041,11 +1045,14 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 		t.Fatal(err)
 	}
 	for _, add := range additional {
-		body, ok := add.Body.(*dnsmessage.AResource)
-		if !ok {
-			t.Fatalf("unexpected additional type, update test")
+		switch body := add.Body.(type) {
+		case *dnsmessage.AResource:
+			b.AResource(add.Header, *body)
+		case *dnsmessage.AAAAResource:
+			b.AAAAResource(add.Header, *body)
+		default:
+			t.Fatalf("unexpected additional type, update test: %v", add.Header.Type)
 		}
-		b.AResource(add.Header, *body)
 	}
 
 	outbs, err := b.Finish()
@@ -2281,20 +2288,25 @@ func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 		{dnsmessage.TypeCNAME, &dnsmessage.CNAMEResource{CNAME: dnsMessageName}},
 		{dnsmessage.TypeSOA, &dnsmessage.SOAResource{NS: dnsMessageName, MBox: dnsMessageName, Serial: 1}},
 		{dnsmessage.TypePTR, &dnsmessage.PTRResource{PTR: dnsMessageName}},
-		{dnsmessage.TypeMX, &dnsmessage.MXResource{Pref: 10, MX: dnsMessageName}},
-		{dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"hello"}}},
-		{dnsmessage.TypeSRV, &dnsmessage.SRVResource{Priority: 1, Weight: 1, Port: 443, Target: dnsMessageName}},
 		{dnsmessage.TypeOPT, &dnsmessage.OPTResource{}},
 		{dnsmessage.TypeSVCB, &dnsmessage.SVCBResource{Priority: 1, Target: dnsMessageName}},
+		// An ANY question can be answered with address records, so it is not written through either
+		{dnsmessage.TypeALL, &dnsmessage.AResource{A: [4]byte{1, 2, 3, 4}}},
+		// An RR type we've never looked at fails closed rather than being written through.
+		{dnsmessage.Type(1234), &dnsmessage.UnknownResource{Type: dnsmessage.Type(1234), Data: []byte{1, 2, 3}}},
 	}
 	for _, tt := range unhandled {
 		t.Run(tt.typ.String(), func(t *testing.T) {
+			answerType := tt.typ
+			if tt.typ == dnsmessage.TypeALL {
+				answerType = dnsmessage.TypeA
+			}
 			toMap := makeDNSResponseForSections(
 				t,
 				[]dnsmessage.Question{{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET}},
 				[]dnsmessage.Resource{
 					{
-						Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET, TTL: 300},
+						Header: dnsmessage.ResourceHeader{Name: dnsMessageName, Type: answerType, Class: dnsmessage.ClassINET, TTL: 300},
 						Body:   tt.body,
 					},
 				},
@@ -2306,6 +2318,61 @@ func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 			answers, _ := parseResponse(t, bs)
 			if len(answers) != 0 {
 				t.Fatalf("expected response to be dropped (0 answers), got %d: %v", len(answers), answers)
+			}
+		})
+	}
+}
+
+// TestMapDNSResponseWritesThroughNonAddressTypes checks that a question type
+// whose RDATA can't hold an address is answered with the upstream records
+// rather than an empty answer section.
+func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
+	configuredDomain := "example.com"
+	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
+	targetName := dnsmessage.MustNewName("target.example.net.")
+	sn := makeSelfNode(t, []appctype.Conn25Attr{{
+		Name:       "app1",
+		Connectors: []string{"tag:connector"},
+		Domains:    []string{configuredDomain},
+	}}, arbitraryPools, []string{})
+	cfg := mustConfig(t, sn)
+
+	writtenThrough := []struct {
+		name string
+		typ  dnsmessage.Type
+		body dnsmessage.ResourceBody
+	}{
+		{"MX", dnsmessage.TypeMX, &dnsmessage.MXResource{Pref: 10, MX: targetName}},
+		{"TXT", dnsmessage.TypeTXT, &dnsmessage.TXTResource{TXT: []string{"hello"}}},
+		{"SRV", dnsmessage.TypeSRV, &dnsmessage.SRVResource{Priority: 1, Weight: 1, Port: 443, Target: targetName}},
+		{"NAPTR", dnsmessage.Type(35), &dnsmessage.UnknownResource{Type: dnsmessage.Type(35), Data: []byte{1, 2, 3}}},
+	}
+	for _, tt := range writtenThrough {
+		t.Run(tt.name, func(t *testing.T) {
+			hdr := dnsmessage.ResourceHeader{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET, TTL: 300}
+			toMap := makeDNSResponseForSections(
+				t,
+				[]dnsmessage.Question{{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET}},
+				[]dnsmessage.Resource{{Header: hdr, Body: tt.body}},
+				nil,
+			)
+			c := newConn25(logger.Discard)
+			c.reconfig(cfg)
+			answers, _ := parseResponse(t, c.mapDNSResponse(toMap))
+			if len(answers) != 1 {
+				t.Fatalf("got %d answers, want 1: %v", len(answers), answers)
+			}
+			if got := answers[0].Header.Type; got != tt.typ {
+				t.Errorf("answer type got %v, want %v", got, tt.typ)
+			}
+			if got := answers[0].Header.Name.String(); got != dnsMessageName.String() {
+				t.Errorf("answer name got %q, want %q", got, dnsMessageName.String())
+			}
+			if got := answers[0].Header.TTL; got != 300 {
+				t.Errorf("answer TTL got %d, want 300", got)
+			}
+			if diff := cmp.Diff(tt.body, answers[0].Body); diff != "" {
+				t.Errorf("answer body mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
