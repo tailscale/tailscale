@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/feature"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
 
 // TLSCertKeyPair is a TLS public and private key, and whether they were
@@ -59,7 +60,22 @@ var (
 	// HookHandleC2NTLSCertStatus handles the GET /tls-cert-status
 	// control-to-node request.
 	HookHandleC2NTLSCertStatus feature.Hook[func(b *LocalBackend, w http.ResponseWriter, r *http.Request)]
+
+	// HookCertStatus reports the state of the cached TLS certificate for
+	// domain without fetching or refreshing it. It implements
+	// [LocalBackend.CertStatus].
+	HookCertStatus feature.Hook[func(b *LocalBackend, domain string) (*tailcfg.C2NTLSCertInfo, error)]
 )
+
+// CertStatus reports the state of the cached TLS certificate for domain. It
+// never contacts the CA or triggers issuance; it only reports what is already
+// on disk. It returns errNoCerts in builds without ACME support.
+func (b *LocalBackend) CertStatus(domain string) (*tailcfg.C2NTLSCertInfo, error) {
+	if f, ok := HookCertStatus.GetOk(); ok {
+		return f(b, domain)
+	}
+	return nil, errNoCerts
+}
 
 func init() {
 	RegisterC2N("GET /tls-cert-status", func(b *LocalBackend, w http.ResponseWriter, r *http.Request) {
