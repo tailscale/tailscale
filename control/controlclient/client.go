@@ -93,4 +93,8 @@ type Client interface {
 	// ClientID returns the ClientID of a client. This ID is meant to
 	// distinguish one client from another.
 	ClientID() int64
+	// ResetConnections discards cached DNS, HTTP, and Noise connection
+	// state. Called on major link changes to avoid using stale state
+	// from the previous network.
+	ResetConnections()
 }
