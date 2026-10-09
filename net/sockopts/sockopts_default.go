@@ -6,8 +6,19 @@
 package sockopts
 
 import (
+	"errors"
+	"syscall"
+
 	"tailscale.com/types/nettype"
 )
+
+// CanReusePort reports whether [SetReusePort] is supported on this platform.
+const CanReusePort = false
+
+// SetReusePort returns [errors.ErrUnsupported].
+func SetReusePort(c syscall.RawConn) error {
+	return errors.ErrUnsupported
+}
 
 // SetBufferSize sets pconn's buffer to size for direction. size may be silently
 // capped depending on platform.
