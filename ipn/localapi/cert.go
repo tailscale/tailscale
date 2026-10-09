@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !ios && !android && !js && !ts_omit_acme
+//go:build !ios && !js && !ts_omit_acme
 
 package localapi
 
