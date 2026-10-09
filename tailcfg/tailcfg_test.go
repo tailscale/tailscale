@@ -823,7 +823,7 @@ func peerStatusFromNode(n NodeView) *ipnstate.PeerStatus {
 			ps.TailscaleIPs = append(ps.TailscaleIPs, p.Addr())
 		}
 	}
-	ps.AllowedIPs = new(n.AllowedIPs())
+	ps.AllowedIPs = n.AllowedIPs()
 	return ps
 }
 

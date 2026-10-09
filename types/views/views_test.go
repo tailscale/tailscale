@@ -654,6 +654,153 @@ func TestSliceViewRange(t *testing.T) {
 	}
 }
 
+// TestZeroViewsAreSafe verifies that a zero-value (unset) view behaves like an
+// empty native container: iterating yields nothing, Len is 0, IsNil/IsZero
+// report true, and conversions return nil. This is the structural guarantee
+// that lets callers hold views by value rather than by pointer: a nil *view
+// panics when a value-receiver method is called on it, but a zero view does
+// not. See the PeerStatus.AllowedIPs SIGSEGV that motivated this.
+func TestZeroViewsAreSafe(t *testing.T) {
+	t.Run("Slice", func(t *testing.T) {
+		var v Slice[netip.Prefix]
+		if v.Len() != 0 || !v.IsNil() || !v.IsZero() || v.AsSlice() != nil {
+			t.Errorf("zero Slice not empty: len=%d isNil=%v isZero=%v asSlice=%v", v.Len(), v.IsNil(), v.IsZero(), v.AsSlice())
+		}
+		n := 0
+		for range v.All() {
+			n++
+		}
+		if n != 0 {
+			t.Errorf("All yielded %d elements, want 0", n)
+		}
+		if v.ContainsFunc(func(netip.Prefix) bool { return true }) {
+			t.Error("ContainsFunc = true, want false")
+		}
+		if got := v.IndexFunc(func(netip.Prefix) bool { return true }); got != -1 {
+			t.Errorf("IndexFunc = %d, want -1", got)
+		}
+		if SliceContains(Slice[string]{}, "x") {
+			t.Error("SliceContains = true, want false")
+		}
+	})
+
+	t.Run("SliceView", func(t *testing.T) {
+		var v SliceView[*testStruct, testStructView]
+		if v.Len() != 0 || !v.IsNil() || !v.IsZero() || v.AsSlice() != nil {
+			t.Errorf("zero SliceView not empty: len=%d isNil=%v isZero=%v", v.Len(), v.IsNil(), v.IsZero())
+		}
+		n := 0
+		for range v.All() {
+			n++
+		}
+		if n != 0 {
+			t.Errorf("All yielded %d elements, want 0", n)
+		}
+	})
+
+	t.Run("ByteSlice", func(t *testing.T) {
+		var v ByteSlice[[]byte]
+		if v.Len() != 0 || !v.IsNil() || !v.IsZero() || v.AsSlice() != nil {
+			t.Errorf("zero ByteSlice not empty: len=%d isNil=%v isZero=%v", v.Len(), v.IsNil(), v.IsZero())
+		}
+	})
+
+	t.Run("Map", func(t *testing.T) {
+		var m Map[string, int]
+		if m.Len() != 0 || !m.IsNil() || !m.IsZero() || m.Contains("x") || m.AsMap() != nil {
+			t.Errorf("zero Map not empty: len=%d isNil=%v isZero=%v", m.Len(), m.IsNil(), m.IsZero())
+		}
+		n := 0
+		for range m.All() {
+			n++
+		}
+		if n != 0 {
+			t.Errorf("All yielded %d elements, want 0", n)
+		}
+	})
+
+	t.Run("MapSlice", func(t *testing.T) {
+		var m MapSlice[string, int]
+		if m.Len() != 0 || !m.IsNil() || !m.IsZero() || m.Contains("x") || m.AsMap() != nil {
+			t.Errorf("zero MapSlice not empty: len=%d isNil=%v isZero=%v", m.Len(), m.IsNil(), m.IsZero())
+		}
+		n := 0
+		for range m.All() {
+			n++
+		}
+		if n != 0 {
+			t.Errorf("All yielded %d elements, want 0", n)
+		}
+		if g := m.Get("x"); g.Len() != 0 {
+			t.Errorf("Get on zero MapSlice: len=%d, want 0", g.Len())
+		}
+	})
+
+	t.Run("MapFn", func(t *testing.T) {
+		var m MapFn[string, *testStruct, testStructView]
+		if m.Len() != 0 || !m.IsNil() || !m.IsZero() || m.Contains("x") {
+			t.Errorf("zero MapFn not empty: len=%d isNil=%v isZero=%v", m.Len(), m.IsNil(), m.IsZero())
+		}
+		n := 0
+		for range m.All() {
+			n++
+		}
+		if n != 0 {
+			t.Errorf("All yielded %d elements, want 0", n)
+		}
+	})
+}
+
+// TestSliceOmitZeroJSON locks in the wire format that value-typed view fields
+// rely on: a zero view tagged json:",omitzero" must be omitted (matching the
+// old *views.Slice pointer with omitempty, which omitted a nil pointer), and a
+// populated view must serialize and round-trip its elements. It checks both
+// encoding/json (jsonv1) and go-json-experiment/json (jsonv2).
+func TestSliceOmitZeroJSON(t *testing.T) {
+	type omitZeroStruct struct {
+		Int  int
+		IPs  Slice[netip.Prefix] `json:",omitzero"`
+		Tags Slice[string]       `json:",omitzero"`
+	}
+
+	empty := omitZeroStruct{Int: 5}
+	for _, enc := range []struct {
+		name string
+		fn   func(any) ([]byte, error)
+	}{
+		{"jsonv1", jsonv1.Marshal},
+		{"jsonv2", func(v any) ([]byte, error) { return jsonv2.Marshal(v) }},
+	} {
+		got, err := enc.fn(empty)
+		if err != nil {
+			t.Fatalf("%s: %v", enc.name, err)
+		}
+		if want := `{"Int":5}`; string(got) != want {
+			t.Errorf("%s zero: got %s want %s", enc.name, got, want)
+		}
+	}
+
+	full := omitZeroStruct{
+		Int:  5,
+		IPs:  SliceOf([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}),
+		Tags: SliceOf([]string{"tag:foo"}),
+	}
+	b, err := jsonv1.Marshal(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"Int":5,"IPs":["10.0.0.0/8"],"Tags":["tag:foo"]}`; string(b) != want {
+		t.Errorf("full: got %s want %s", b, want)
+	}
+	var back omitZeroStruct
+	if err := jsonv1.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.IPs.Len() != 1 || back.Tags.Len() != 1 {
+		t.Errorf("round-trip lost elements: %+v", back)
+	}
+}
+
 func TestMapIter(t *testing.T) {
 	m := MapOf(map[string]int{"foo": 1, "bar": 2})
 	var got []string
