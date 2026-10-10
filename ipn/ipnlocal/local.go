@@ -7906,6 +7906,8 @@ func (b *LocalBackend) OfferingAppConnector() bool {
 
 // allowExitNodeDNSProxyToServeName reports whether the Exit Node DNS
 // proxy is allowed to serve responses for the provided DNS name.
+//
+// name may be in FQDN form, with a trailing dot.
 func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -7913,7 +7915,11 @@ func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 	if nm == nil {
 		return false
 	}
-	name = strings.ToLower(name)
+	// ExitNodeFilteredSet entries never carry a trailing dot, but the Exit
+	// Node DNS proxy passes the question name in FQDN form. dnsname.HasSuffix
+	// trims one off for the suffix entries below, so trim here too to let the
+	// exact-match entries line up.
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
 	for _, bad := range nm.DNS.ExitNodeFilteredSet {
 		if bad == "" {
 			// Invalid, ignore.
