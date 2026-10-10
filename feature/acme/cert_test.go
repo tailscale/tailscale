@@ -1057,13 +1057,109 @@ func TestServeConfigUsesACMECerts(t *testing.T) {
 		{"nil", nil, false},
 		{"empty", &ipn.ServeConfig{}, false},
 		{
-			name: "background_web",
+			name: "background_web_https",
 			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 				Web: map[ipn.HostPort]*ipn.WebServerConfig{
 					"node.ts.net:443": {},
 				},
 			},
 			want: true,
+		},
+		{
+			// `tailscale serve --http=80`: a Web entry whose TCP
+			// handler is plain HTTP never needs a cert.
+			name: "background_web_http_only",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"node.ts.net:80": {},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "background_web_no_tcp_handler",
+			sc: &ipn.ServeConfig{
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"node.ts.net:443": {},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "foreground_web_https",
+			sc: &ipn.ServeConfig{
+				Foreground: map[string]*ipn.ServeConfig{
+					"session1": {
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"node.ts.net:443": {},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "foreground_web_http_only",
+			sc: &ipn.ServeConfig{
+				Foreground: map[string]*ipn.ServeConfig{
+					"session1": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"node.ts.net:80": {},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "service_web_https",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:web": {
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"web.svc.ts.net:443": {},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			// `tailscale serve --service=svc:web --http=80`.
+			name: "service_web_http_only",
+			sc: &ipn.ServeConfig{
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:web": {
+						TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"web.svc.ts.net:80": {},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			// A Service's HTTPS handler does not make the node's own
+			// plain-HTTP Web entry on the same port HTTPS.
+			name: "service_https_does_not_leak_to_node_http",
+			sc: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTP: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"node.ts.net:443": {},
+				},
+				Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+					"svc:web": {
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+					},
+				},
+			},
+			want: false,
 		},
 		{
 			name: "tcp_forward_no_tls",
@@ -1112,6 +1208,13 @@ func TestRefreshApplicableCerts(t *testing.T) {
 	const (
 		certDomain = "node1.example.com"
 		byoDomain  = "byo.example.org"
+		// httpOnlyDomain is a valid cert domain served only over
+		// plain HTTP. It must not be fetched (tailscale/tailscale#21693).
+		httpOnlyDomain = "node2.example.com"
+		// svcHTTPSDomain and svcHTTPOnlyDomain are Service names,
+		// served over HTTPS and plain HTTP respectively.
+		svcHTTPSDomain    = "secure.example.com"
+		svcHTTPOnlyDomain = "plain.example.com"
 	)
 	b := ipnlocaltest.NewBackend(t)
 	b.SetVarRoot(t.TempDir())
@@ -1120,22 +1223,42 @@ func TestRefreshApplicableCerts(t *testing.T) {
 	b.ForTest().SetNetMap(&netmap.NetworkMap{
 		SelfNode: (&tailcfg.Node{}).View(),
 		DNS: tailcfg.DNSConfig{
-			CertDomains: []string{certDomain},
+			CertDomains: []string{certDomain, httpOnlyDomain, svcHTTPSDomain, svcHTTPOnlyDomain},
 		},
 	})
 	b.ForTest().SetServeConfig((&ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			443: {HTTPS: true},
+			80:  {HTTP: true},
+		},
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			ipn.HostPort(certDomain + ":443"): {},
 			ipn.HostPort(byoDomain + ":443"):  {},
 			// Not in CertDomains and no Funnel entry; must be filtered out.
 			ipn.HostPort("not-ours.other.tld:443"): {},
+			// Plain HTTP; must be filtered out.
+			ipn.HostPort(httpOnlyDomain + ":80"): {},
 		},
 		AllowFunnel: map[ipn.HostPort]bool{
 			ipn.HostPort(byoDomain + ":443"): true,
 		},
+		Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+			"svc:secure": {
+				TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort(svcHTTPSDomain + ":443"): {},
+				},
+			},
+			"svc:plain": {
+				TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					ipn.HostPort(svcHTTPOnlyDomain + ":80"): {},
+				},
+			},
+		},
 	}).View())
 
-	gotCh := make(chan string, 4)
+	gotCh := make(chan string, 8)
 	b.ForTest().ConfigureCerts(func(host string) (*ipnlocal.TLSCertKeyPair, error) {
 		gotCh <- host
 		return &ipnlocal.TLSCertKeyPair{}, nil
@@ -1143,7 +1266,7 @@ func TestRefreshApplicableCerts(t *testing.T) {
 
 	e.refreshApplicableCerts(context.Background(), b)
 
-	want := set.Of(certDomain, byoDomain)
+	want := set.Of(certDomain, byoDomain, svcHTTPSDomain)
 	got := set.Set[string]{}
 	for got.Len() < want.Len() {
 		select {
