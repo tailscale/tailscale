@@ -5,7 +5,7 @@
 // chosen hostname. By default it proxies raw TCP; pass --http to reverse
 // proxy as HTTP, or --https to reverse proxy as HTTPS with an auto-issued
 // Tailscale cert. Both HTTP modes inject Tailscale-User-* identity headers
-// from WhoIs.
+// from WhoIs, or Tailscale-Node-* identity headers for tagged nodes.
 //
 // Arguments are <name> <local> [tailnet]: local is the port on localhost
 // to proxy to and tailnet is the port to expose on the tailnet. If tailnet
@@ -23,20 +23,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"strconv"
-	"unicode/utf8"
 
-	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/net/identityheaders"
 	"tailscale.com/tsnet"
 )
 
@@ -147,27 +147,19 @@ func proxyTCP(c net.Conn, target string) {
 	io.Copy(c, d)
 }
 
-func addTailscaleIdentityHeaders(lc *local.Client, r *httputil.ProxyRequest) {
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
-
-	who, err := lc.WhoIs(r.In.Context(), r.In.RemoteAddr)
-	if err != nil || who == nil || who.Node.IsTagged() {
-		return
-	}
-	r.Out.Header.Set("Tailscale-User-Login", encHeader(who.UserProfile.LoginName))
-	r.Out.Header.Set("Tailscale-User-Name", encHeader(who.UserProfile.DisplayName))
-	r.Out.Header.Set("Tailscale-User-Profile-Pic", who.UserProfile.ProfilePicURL)
+// whoIser is the subset of [local.Client] used to identify the caller.
+type whoIser interface {
+	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 }
 
-// encHeader mirrors the encoding tailscaled's serve path applies to
-// user-provided strings destined for HTTP headers.
-func encHeader(v string) string {
-	if !utf8.ValidString(v) {
-		return ""
+// addTailscaleIdentityHeaders sets identity headers on the outgoing request
+// based on the WhoIs result for the caller.
+func addTailscaleIdentityHeaders(lc whoIser, r *httputil.ProxyRequest) {
+	identityheaders.Strip(r.Out.Header)
+
+	who, err := lc.WhoIs(r.In.Context(), r.In.RemoteAddr)
+	if err != nil || who == nil {
+		return
 	}
-	return mime.QEncoding.Encode("utf-8", v)
+	identityheaders.Set(r.Out.Header, who.Node.View(), who.UserProfile.View())
 }
