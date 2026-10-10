@@ -5,8 +5,10 @@ package netstack
 
 import (
 	"context"
+	"expvar"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -15,6 +17,7 @@ import (
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine/netstack/gro"
 )
 
@@ -73,6 +76,12 @@ func (q *queue) Write(pkt *stack.PacketBuffer) tcpip.Error {
 	case <-q.closedCh:
 		pkt.DecRef()
 		return &tcpip.ErrClosedForSend{}
+	default:
+		// Packet processing can synchronously generate a reply on the TUN
+		// reader or loopback consumer. Neither may wait for queue space:
+		// draining the queue can depend on that same goroutine.
+		pkt.DecRef() // balance the IncRef evaluated before selecting a case
+		return &tcpip.ErrNoBufferSpace{}
 	}
 }
 
@@ -139,6 +148,24 @@ type linkEndpoint struct {
 	mtu        uint32
 
 	outboundQueues [outboundQueueLimit]*queue // outbound
+
+	// queueFullDropped counts, per [outboundQueue], packets dropped by
+	// WritePackets because that queue was full. A GSO packet counts as one.
+	queueFullDropped [outboundQueueLimit]expvar.Int
+
+	// outboundDropped, if set, is the user metric for packets dropped while
+	// being sent to peers. It is shared with tstun, so it is added to rather
+	// than replaced with queueFullDropped.
+	outboundDropped atomic.Pointer[usermetric.MultiLabelMap[usermetric.DropLabels]]
+}
+
+// queueFullDroppedTotal returns the sum of queueFullDropped.
+func (ep *linkEndpoint) queueFullDroppedTotal() int64 {
+	var total int64
+	for i := range ep.queueFullDropped {
+		total += ep.queueFullDropped[i].Value()
+	}
+	return total
 }
 
 // newLinkEndpoint constructs a [*linkEndpoint]. size is applied independently
@@ -356,9 +383,12 @@ func (ep *linkEndpoint) SetLinkAddress(addr tcpip.LinkAddress) {
 }
 
 // WritePackets routes outbound packets into the appropriate outbound [queue].
-// Multiple concurrent calls are permitted.
+// Multiple concurrent calls are permitted. Packets whose queue is full are
+// dropped and excluded from the returned count; if any were dropped, the error
+// is [tcpip.ErrNoBufferSpace].
 func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
 	n := 0
+	var full bool
 	// TODO(jwhited): evaluate writing a stack.PacketBufferList instead of a
 	//  single packet. We can split 2 x 64K GSO across
 	//  wireguard-go/conn.IdealBatchSize (128 slots) @ 1280 MTU, and non-GSO we
@@ -376,14 +406,28 @@ func (ep *linkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Er
 			panic(fmt.Sprintf("linkEndpoint.outboundQueueRouter returned %v which is outside outboundQueueLimit(%v)", q, outboundQueueLimit))
 		}
 		if err := ep.outboundQueues[q].Write(pkt); err != nil {
-			if _, ok := err.(*tcpip.ErrNoBufferSpace); !ok && n == 0 {
+			if _, ok := err.(*tcpip.ErrNoBufferSpace); ok {
+				// Drop only this packet. Later packets may be routed to
+				// queues that have space.
+				ep.queueFullDropped[q].Add(1)
+				if q == outboundToWireGuard {
+					if m := ep.outboundDropped.Load(); m != nil {
+						m.Add(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}, 1)
+					}
+				}
+				full = true
+				continue
+			}
+			if n == 0 {
 				return 0, err
 			}
 			break
 		}
 		n++
 	}
-
+	if full {
+		return n, &tcpip.ErrNoBufferSpace{}
+	}
 	return n, nil
 }
 
