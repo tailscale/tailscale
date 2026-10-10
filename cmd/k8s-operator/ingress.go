@@ -229,7 +229,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	crl := childResourceLabels(ing.Name, ing.Namespace, "ingress")
 	var tags []string
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
+		tags = parseTagsAnnotation(tstr)
 	}
 	hostname := hostnameForIngress(ing)
 

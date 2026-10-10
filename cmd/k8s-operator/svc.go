@@ -259,7 +259,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
 	var tags []string
 	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
+		tags = parseTagsAnnotation(tstr)
 	}
 
 	sts := &tailscaleSTSConfig{
