@@ -283,7 +283,7 @@ func (r *HAServiceReconciler) maybeProvision(ctx context.Context, hostname strin
 
 	tags := r.defaultTags
 	if tstr, ok := svc.Annotations[AnnotationTags]; ok && tstr != "" {
-		tags = strings.Split(tstr, ",")
+		tags = parseTagsAnnotation(tstr)
 	}
 
 	tsSvc := tailscale.VIPService{

@@ -333,7 +333,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// 4. Ensure that the Tailscale Service exists and is up to date.
 	tags := r.defaultTags
 	if tstr, ok := ing.Annotations[AnnotationTags]; ok {
-		tags = strings.Split(tstr, ",")
+		tags = parseTagsAnnotation(tstr)
 	}
 
 	tsSvcPorts := []string{"tcp:443"} // always 443 for Ingress
@@ -1145,11 +1145,20 @@ func tagViolations(obj client.Object) []string {
 		return nil
 	}
 
-	for tag := range strings.SplitSeq(tags, ",") {
-		tag = strings.TrimSpace(tag)
+	for _, tag := range parseTagsAnnotation(tags) {
 		if err := tailcfg.CheckTag(tag); err != nil {
 			violations = append(violations, fmt.Sprintf("invalid tag %q: %v", tag, err))
 		}
 	}
 	return violations
+}
+
+// parseTagsAnnotation parses the value of the tailscale.com/tags annotation,
+// a comma-separated list of tags, ignoring whitespace around each tag.
+func parseTagsAnnotation(s string) []string {
+	tags := strings.Split(s, ",")
+	for i, tag := range tags {
+		tags[i] = strings.TrimSpace(tag)
+	}
+	return tags
 }

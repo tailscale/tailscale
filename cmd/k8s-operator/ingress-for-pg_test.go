@@ -84,7 +84,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectEqual(t, fc, certSecretRoleBinding(pg, "operator-ns", "my-svc.ts.net"))
 
 	mustUpdate(t, fc, "default", "test-ingress", func(ing *networkingv1.Ingress) {
-		ing.Annotations["tailscale.com/tags"] = "tag:custom,tag:test"
+		ing.Annotations["tailscale.com/tags"] = "tag:custom, tag:test" // whitespace around tags is ignored
 	})
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 
@@ -502,6 +502,23 @@ func TestValidateIngress(t *testing.T) {
 				t.Errorf("validateIngress() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseTagsAnnotation(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string
+	}{
+		{"tag:a", []string{"tag:a"}},
+		{"tag:a,tag:b", []string{"tag:a", "tag:b"}},
+		{"tag:a, tag:b", []string{"tag:a", "tag:b"}},
+		{" tag:a ,\ttag:b ", []string{"tag:a", "tag:b"}},
+	}
+	for _, tt := range tests {
+		if got := parseTagsAnnotation(tt.in); !slices.Equal(got, tt.want) {
+			t.Errorf("parseTagsAnnotation(%q) = %q; want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
