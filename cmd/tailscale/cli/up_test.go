@@ -7,6 +7,9 @@ import (
 	"flag"
 	"testing"
 
+	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/persist"
 	"tailscale.com/util/set"
 )
 
@@ -57,4 +60,30 @@ func TestUpFlagSetIsFrozen(t *testing.T) {
 			t.Errorf("--%s flag added to tailscale up, new prefs go in tailscale set: see tailscale/tailscale#15460", name)
 		}
 	})
+}
+
+func TestUpWithAcceptRiskOnlyIsSimpleUp(t *testing.T) {
+	var upArgs upArgsT
+	flagSet := newUpFlagSet("linux", &upArgs, "up")
+	if err := flagSet.Parse([]string{"--accept-risk=lose-ssh"}); err != nil {
+		t.Fatal(err)
+	}
+
+	curPrefs := ipn.NewPrefs()
+	curPrefs.ControlURL = ipn.DefaultControlURL
+	curPrefs.Hostname = "non-default-hostname"
+	curPrefs.Persist = &persist.Persist{
+		UserProfile: tailcfg.UserProfile{LoginName: "user@example.com"},
+	}
+	simpleUp, err := checkForAccidentalSettingReverts(ipn.NewPrefs(), curPrefs, upCheckEnv{
+		goos:         "linux",
+		flagSet:      flagSet,
+		backendState: ipn.Running.String(),
+	})
+	if err != nil {
+		t.Fatalf("checkForAccidentalSettingReverts: %v", err)
+	}
+	if !simpleUp {
+		t.Fatal("tailscale up with only --accept-risk was not treated as a simple up")
+	}
 }
