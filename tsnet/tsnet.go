@@ -1573,11 +1573,21 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	}
 	domain := st.CertDomains[0]
 	hp := ipn.HostPort(domain + ":" + portStr)
+
+	// Start a funnel listener. Do this before enabling Funnel in the serve
+	// config so that a failure to listen (for example, because the port is
+	// already in use) doesn't leave Funnel enabled with nothing behind it.
+	ln, err := s.listen(network, addr, lnOn)
+	if err != nil {
+		return nil, err
+	}
+
 	var cleanupOnClose func() error
 	if !srvConfig.AllowFunnel[hp] {
 		mak.Set(&srvConfig.AllowFunnel, hp, true)
 		srvConfig.AllowFunnel[hp] = true
 		if err := lc.SetServeConfig(ctx, srvConfig); err != nil {
+			ln.Close()
 			return nil, err
 		}
 		cleanupOnClose = func() error {
@@ -1595,11 +1605,6 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 		}
 	}
 
-	// Start a funnel listener.
-	ln, err := s.listen(network, addr, lnOn)
-	if err != nil {
-		return nil, err
-	}
 	ln = &cleanupListener{Listener: ln, cleanup: cleanupOnClose}
 	return tls.NewListener(ln, tlsConfig), nil
 }
