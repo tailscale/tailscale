@@ -111,6 +111,33 @@ func synctestDrainPendingMessages(t *testing.T) {
 	}
 }
 
+// TestDrainPendingRawStderr verifies that drainPending echoes a line that
+// bypassed logtail, such as a panic from a previous run, to stderr.
+func TestDrainPendingRawStderr(t *testing.T) {
+	var stderr bytes.Buffer
+	lg := &Logger{
+		buffer: NewMemoryBuffer(10),
+		stderr: &stderr,
+	}
+	lg.buffer.Write([]byte(`{"text":"already encoded"}` + "\n"))
+	lg.buffer.Write([]byte("panic: something broke\n"))
+
+	got := lg.drainPending()
+	if !jsontext.Value(got).IsValid() {
+		t.Errorf("drainPending returned invalid JSON: %s", got)
+	}
+	if want := `"text":"panic: something broke\n"`; !strings.Contains(string(got), want) {
+		t.Errorf("drainPending = %s; want it to contain %s", got, want)
+	}
+
+	if want := "RAW-STDERR: panic: something broke\n"; !strings.HasSuffix(stderr.String(), want) {
+		t.Errorf("stderr = %q; want it to end with %q", stderr.String(), want)
+	}
+	if strings.Contains(stderr.String(), "already encoded") {
+		t.Errorf("stderr = %q; want only the raw line echoed", stderr.String())
+	}
+}
+
 func TestEncodeAndUploadMessages(t *testing.T) { synctest.Test(t, synctestEncodeAndUploadMessages) }
 
 func synctestEncodeAndUploadMessages(t *testing.T) {
