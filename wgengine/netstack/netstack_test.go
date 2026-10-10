@@ -2208,3 +2208,69 @@ func TestInjectLoopback(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "loopback test")
 	}
 }
+
+// TestCloseWithFullOutboundQueue tests that Close returns when gVisor's
+// teardown has to write into an outbound queue that nobody reads anymore.
+//
+// Close cancels ns.ctx, which stops the goroutines draining linkEP's outbound
+// queues. Stack.Close then aborts every endpoint, and aborting an established
+// TCP connection writes a RST. With the queue full, that write blocked in
+// queue.Write until the queue was closed, which only happened later in
+// Stack.Wait, so Close never returned.
+func TestCloseWithFullOutboundQueue(t *testing.T) {
+	selfIP4 := netip.MustParseAddr("100.64.1.2")
+	ns := makeNetstack(t, func(impl *Impl) {
+		impl.ProcessLocalIPs = true
+		impl.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool { return addr == selfIP4 })
+	})
+	if err := ns.ipstack.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+		Protocol:          header.IPv4ProtocolNumber,
+		AddressWithPrefix: tcpip.AddrFrom4(selfIP4.As4()).WithPrefix(),
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatalf("AddProtocolAddress: %v", err)
+	}
+
+	// Establish a self-addressed TCP connection. Its packets, and the RST its
+	// abort sends, go through the outboundLoopback queue.
+	laddr := tcpip.FullAddress{NIC: nicID, Addr: tcpip.AddrFrom4(selfIP4.As4()), Port: 8080}
+	ln, err := gonet.ListenTCP(ns.ipstack, laddr, header.IPv4ProtocolNumber)
+	if err != nil {
+		t.Fatalf("ListenTCP: %v", err)
+	}
+	defer ln.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := gonet.DialContextTCP(ctx, ns.ipstack, laddr, header.IPv4ProtocolNumber)
+	if err != nil {
+		t.Fatalf("DialContextTCP: %v", err)
+	}
+	defer c.Close()
+	sc, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	defer sc.Close()
+
+	// Stop the readers, as Close does first, and fill the loopback queue as a
+	// backlog of outbound packets would.
+	ns.ctxCancel()
+	ns.injectWG.Wait()
+	q := ns.linkEP.outboundQueues[outboundLoopback]
+	for len(q.c) < cap(q.c) {
+		q.c <- stack.NewPacketBuffer(stack.PacketBufferOptions{})
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		ns.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		// Unblock the stuck writers so the test fails instead of hanging in
+		// the cleanup's own Close.
+		ns.linkEP.Close()
+		t.Fatal("Close did not return with a full outbound queue")
+	}
+}
