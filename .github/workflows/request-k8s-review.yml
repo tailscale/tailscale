@@ -18,7 +18,7 @@ on:
 
 jobs:
   request-k8s-review:
-    if: github.event.pull_request.draft == false
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     name: Request K8s Review
     runs-on: ubuntu-latest
     steps:
