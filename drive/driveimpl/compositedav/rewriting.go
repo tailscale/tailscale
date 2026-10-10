@@ -39,6 +39,13 @@ func (h *Handler) handleLOCK(w http.ResponseWriter, r *http.Request, pathCompone
 	if shouldDelegateToChild(r, pathComponents, mpl) {
 		// Delegate to a Child.
 		status, result := h.delegateRewriting(w, r, pathComponents, mpl)
+		if status == http.StatusCreated {
+			// Locking an unmapped URL created an empty file there (see
+			// RFC 4918, section 7.3). Invalidate the StatCache so that we
+			// don't keep reporting that file as not found, whether from a
+			// cached PROPFIND of the file itself or of its parent.
+			h.StatCache.invalidate()
+		}
 		respondRewritten(w, status, result)
 		return
 	}

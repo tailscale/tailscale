@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/studio-b12/gowebdav"
 	"tailscale.com/drive"
+	"tailscale.com/drive/driveimpl/compositedav"
 	"tailscale.com/drive/driveimpl/shared"
 	"tailscale.com/tstest"
 )
@@ -428,6 +429,67 @@ func TestUNLOCK(t *testing.T) {
 	}
 }
 
+// TestLOCKCreatesFileWithStatCache verifies that a file created by a LOCK on
+// an unmapped URL is visible to subsequent PROPFINDs, even when the StatCache
+// already recorded that the file doesn't exist.
+func TestLOCKCreatesFileWithStatCache(t *testing.T) {
+	s := newSystemWithStatCache(t, &compositedav.StatCache{TTL: 24 * time.Hour}) // don't expire
+
+	s.addRemote(remote1)
+	s.addShare(remote1, share11, drive.PermissionReadWrite)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+
+	u := fmt.Sprintf("http://%s/%s/%s/%s/%s",
+		s.local.ln.Addr(),
+		url.PathEscape(domain),
+		url.PathEscape(remote1),
+		url.PathEscape(share11),
+		url.PathEscape(file111))
+
+	propfind := func() int {
+		t.Helper()
+		req, err := http.NewRequest("PROPFIND", u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Depth", "0")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// PROPFIND the missing file, which caches that it isn't found.
+	if status := propfind(); status != http.StatusNotFound {
+		t.Fatalf("PROPFIND of missing file got status %d, want %d", status, http.StatusNotFound)
+	}
+
+	// Lock the missing file, which creates it.
+	req, err := http.NewRequest("LOCK", u, strings.NewReader(lockBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Timeout", "Second-600")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected LOCK of missing file to create it with a %d, but got status %d", http.StatusCreated, resp.StatusCode)
+	}
+
+	if status := propfind(); status != http.StatusMultiStatus {
+		t.Fatalf("PROPFIND of file created by LOCK got status %d, want %d", status, http.StatusMultiStatus)
+	}
+}
+
 type local struct {
 	ln net.Listener
 	fs *FileSystemForLocal
@@ -502,10 +564,16 @@ func (s *system) Generation() uint64 {
 }
 
 func newSystem(t *testing.T) *system {
+	return newSystemWithStatCache(t, nil)
+}
+
+// newSystemWithStatCache is like newSystem, but the FileSystemForLocal caches
+// PROPFIND results in statCache, like the one in production does.
+func newSystemWithStatCache(t *testing.T, statCache *compositedav.StatCache) *system {
 	// Make sure we don't leak goroutines
 	tstest.ResourceCheck(t)
 
-	fs := newFileSystemForLocal(log.Printf, nil)
+	fs := newFileSystemForLocal(log.Printf, statCache)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to Listen: %s", err)
