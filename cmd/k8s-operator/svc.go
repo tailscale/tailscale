@@ -29,13 +29,24 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/tstime"
+	"tailscale.com/types/lazy"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 )
 
+var (
+	// resolvConfPath is the resolver config that the cluster domain is
+	// derived from. It is a variable so that tests can override it.
+	resolvConfPath = "/etc/resolv.conf"
+
+	// cachedClusterDomain holds the cluster domain of the Pod this process
+	// runs in. It cannot change during the process lifetime, so it is
+	// derived from resolvConfPath at most once and shared by all reconcilers.
+	cachedClusterDomain lazy.SyncValue[string]
+)
+
 const (
-	resolvConfPath       = "/etc/resolv.conf"
 	defaultClusterDomain = "cluster.local"
 
 	reasonProxyCreated = "ProxyCreated"
@@ -462,16 +473,21 @@ func proxyClassIsReady(ctx context.Context, name string, cl client.Client) (bool
 // (cluster.local) in which this Pod is running by parsing search domains in
 // /etc/resolv.conf. If an error is encountered at any point during the process,
 // defaults cluster domain to 'cluster.local'.
+//
+// The resolver config is parsed at most once per process and the result is
+// cached; namespace is the operator's own namespace, which every caller passes.
 func retrieveClusterDomain(namespace string, logger *zap.SugaredLogger) string {
-	logger.Infof("attempting to retrieve cluster domain..")
-	conf, err := resolvconffile.ParseFile(resolvConfPath)
-	if err != nil {
-		// Vast majority of clusters use the cluster.local domain, so it
-		// is probably better to fall back to that than error out.
-		logger.Warn("error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
-		return defaultClusterDomain
-	}
-	return clusterDomainFromResolverConf(conf, namespace, logger)
+	return cachedClusterDomain.Get(func() string {
+		logger.Debugf("attempting to retrieve cluster domain..")
+		conf, err := resolvconffile.ParseFile(resolvConfPath)
+		if err != nil {
+			// Vast majority of clusters use the cluster.local domain, so it
+			// is probably better to fall back to that than error out.
+			logger.Warn("error parsing /etc/resolv.conf to determine cluster domain, defaulting to 'cluster.local'.")
+			return defaultClusterDomain
+		}
+		return clusterDomainFromResolverConf(conf, namespace, logger)
+	})
 }
 
 // clusterDomainFromResolverConf attempts to retrieve cluster domain from the provided resolver config.
@@ -502,6 +518,6 @@ func clusterDomainFromResolverConf(conf *resolvconffile.Config, namespace string
 		logger.Warnf("expected resolver config to contain serch domains <namespace>.svc.<cluster-domain>, svc.<cluster-domain>, <cluster-domain>; got %s %s %s\n. Defaulting cluster domain to 'cluster.local'.", first, second, third)
 		return defaultClusterDomain
 	}
-	logger.Infof("Cluster domain %q extracted from resolver config", probablyClusterDomain)
+	logger.Debugf("Cluster domain %q extracted from resolver config", probablyClusterDomain)
 	return probablyClusterDomain
 }
