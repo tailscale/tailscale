@@ -1960,6 +1960,50 @@ func TestRebindStress(t *testing.T) {
 	}
 }
 
+func TestLocalEndpointAddrPorts(t *testing.T) {
+	v4 := netip.MustParseAddr("192.168.1.5")
+	v6 := netip.MustParseAddr("2001:db8::5")
+	ap := netip.MustParseAddrPort
+	tests := []struct {
+		name         string
+		ips          []netip.Addr
+		port4, port6 uint16
+		want         []netip.AddrPort
+	}{
+		{
+			name:  "same_port",
+			ips:   []netip.Addr{v4, v6},
+			port4: 41641,
+			port6: 41641,
+			want:  []netip.AddrPort{ap("192.168.1.5:41641"), ap("[2001:db8::5]:41641")},
+		},
+		{
+			// With no configured port, pconn4 and pconn6 get unrelated
+			// ephemeral ports; each address must carry its own family's.
+			name:  "different_ports",
+			ips:   []netip.Addr{v4, v6},
+			port4: 58766,
+			port6: 63859,
+			want:  []netip.AddrPort{ap("192.168.1.5:58766"), ap("[2001:db8::5]:63859")},
+		},
+		{
+			name:  "no_ipv6_socket",
+			ips:   []netip.Addr{v4, v6},
+			port4: 58766,
+			port6: 0,
+			want:  []netip.AddrPort{ap("192.168.1.5:58766")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := localEndpointAddrPorts(tt.ips, tt.port4, tt.port6)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEndpointSetsEqual(t *testing.T) {
 	s := func(ports ...uint16) (ret []tailcfg.Endpoint) {
 		for _, port := range ports {

@@ -1416,8 +1416,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			// offline, for example.
 			ips = loopback
 		}
-		for _, ip := range ips {
-			addAddr(netip.AddrPortFrom(ip, uint16(localAddr.Port)), tailcfg.EndpointLocal)
+		for _, ap := range localEndpointAddrPorts(ips, uint16(localAddr.Port), c.pconn6.Port()) {
+			addAddr(ap, tailcfg.EndpointLocal)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -1439,6 +1439,32 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// Despite this sorting, though, clients since 0.100 haven't relied
 	// on the sorting order for any decisions.
 	return eps, nil
+}
+
+// localEndpointAddrPorts pairs each local interface address with the port
+// of the socket that would receive traffic sent to it: port4 for IPv4
+// addresses and port6 for IPv6 addresses.
+//
+// pconn4 and pconn6 are bound independently, so unless a port was
+// configured they listen on different ephemeral ports. Advertising IPv6
+// addresses with the IPv4 port sends peers to a port nothing listens on,
+// and when both ends sit behind stateful IPv6 firewalls, each side's disco
+// pings arrive from a port the other side's firewall has no state for, so
+// a direct IPv6 path is never found even though one exists.
+//
+// IPv6 addresses are omitted when port6 is zero, meaning there is no
+// working IPv6 socket.
+func localEndpointAddrPorts(ips []netip.Addr, port4, port6 uint16) []netip.AddrPort {
+	aps := make([]netip.AddrPort, 0, len(ips))
+	for _, ip := range ips {
+		switch {
+		case ip.Is4():
+			aps = append(aps, netip.AddrPortFrom(ip, port4))
+		case ip.Is6() && port6 != 0:
+			aps = append(aps, netip.AddrPortFrom(ip, port6))
+		}
+	}
+	return aps
 }
 
 // endpointSetsEqual reports whether x and y represent the same set of
