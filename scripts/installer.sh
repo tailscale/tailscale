@@ -693,8 +693,12 @@ main() {
 			else
 				$SUDO apk add tailscale
 			fi
-			$SUDO rc-update add tailscale
-			$SUDO rc-service tailscale start
+			if type rc-update >/dev/null; then
+				$SUDO rc-update add tailscale
+				$SUDO rc-service tailscale start
+			else
+				echo "OpenRC not found, skipping service setup; start tailscaled with your init system"
+			fi
 			set +x
 			;;
 		xbps)
