@@ -150,7 +150,7 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 			}
 			// Regardless whether the netmap is cached, record how long it has
 			// been since the endpoint was initialized.
-			de.c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
+			de.c.logf("[v1] magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
 				de.publicKey.ShortString(), int64(mono.Since(de.c.initializedAt)/time.Microsecond), isCached)
 		}
 	}
