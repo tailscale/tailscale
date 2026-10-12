@@ -70,6 +70,7 @@ type linuxRouter struct {
 	eventClient   *eventbus.Client
 	rulesAddedPub *eventbus.Publisher[AddIPRules]
 	unregNetMon   func()
+	stopWSLWatch  chan struct{} // non-nil while watchWSLMTU runs; closed by Close
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
@@ -189,7 +190,11 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
 
-	r.fixupWSLMTU()
+	r.fixupWSLMTU(true)
+	if distro.IsWSL() && !r.useIPCommand() {
+		r.stopWSLWatch = make(chan struct{})
+		go r.watchWSLMTU(r.stopWSLWatch)
+	}
 
 	return r, nil
 }
@@ -389,6 +394,10 @@ func (r *linuxRouter) Close() error {
 	r.closed.Store(true)
 	if r.unregNetMon != nil {
 		r.unregNetMon()
+	}
+	if r.stopWSLWatch != nil {
+		close(r.stopWSLWatch)
+		r.stopWSLWatch = nil
 	}
 	r.eventClient.Close()
 
@@ -1425,21 +1434,54 @@ func (r *linuxRouter) downInterface() error {
 	return netlink.LinkSetDown(link)
 }
 
+// watchWSLMTU re-applies fixupWSLMTU when WSL puts eth0 back to its 1280-byte
+// default after tailscaled has started, which otherwise leaves full-size
+// tailscale0 packets too big for the underlay until tailscaled restarts. netmon
+// doesn't subscribe to link messages, so an MTU-only change never reaches it;
+// watch eth0 directly instead. It returns when stop is closed.
+func (r *linuxRouter) watchWSLMTU(stop <-chan struct{}) {
+	updates := make(chan netlink.LinkUpdate)
+	err := netlink.LinkSubscribeWithOptions(updates, stop, netlink.LinkSubscribeOptions{
+		ErrorCallback: func(err error) { r.logf("fixupWSLMTU: eth0 watch: %v", err) },
+	})
+	if err != nil {
+		r.logf("fixupWSLMTU: can't watch eth0 for MTU resets: %v", err)
+		return
+	}
+	// Catch a reset that happened between the startup fixup and the
+	// subscription.
+	r.fixupWSLMTU(false)
+	for u := range updates {
+		if a := u.Attrs(); a != nil && a.Name == "eth0" && a.MTU == 1280 {
+			r.fixupWSLMTU(false)
+		}
+	}
+}
+
 // fixupWSLMTU sets the MTU on the eth0 interface to 1360 bytes if running under
 // WSL, eth0 is the default route, and has the MTU 1280 bytes.
-func (r *linuxRouter) fixupWSLMTU() {
+//
+// It runs at startup and again from watchWSLMTU whenever eth0 goes back to 1280.
+// logSkips reports why it did nothing; it is false on those re-runs so that a
+// WSL instance whose default route is not eth0 (such as mirrored networking
+// mode) doesn't log each time.
+func (r *linuxRouter) fixupWSLMTU(logSkips bool) {
 	if !distro.IsWSL() {
 		return
 	}
 
 	if r.useIPCommand() {
-		r.logf("fixupWSLMTU: not implemented by ip command")
+		if logSkips {
+			r.logf("fixupWSLMTU: not implemented by ip command")
+		}
 		return
 	}
 
 	link, err := netlink.LinkByName("eth0")
 	if err != nil {
-		r.logf("warning: fixupWSLMTU: could not open eth0: %v", err)
+		if logSkips {
+			r.logf("warning: fixupWSLMTU: could not open eth0: %v", err)
+		}
 		return
 	}
 
@@ -1448,19 +1490,25 @@ func (r *linuxRouter) fixupWSLMTU() {
 		if err == nil {
 			err = fmt.Errorf("none found")
 		}
-		r.logf("fixupWSLMTU: could not get default route: %v", err)
+		if logSkips {
+			r.logf("fixupWSLMTU: could not get default route: %v", err)
+		}
 		return
 	}
 
 	if routes[0].LinkIndex != link.Attrs().Index {
-		r.logf("fixupWSLMTU: default route is not via eth0")
+		if logSkips {
+			r.logf("fixupWSLMTU: default route is not via eth0")
+		}
 		return
 	}
 
 	if link.Attrs().MTU == 1280 {
 		if err := netlink.LinkSetMTU(link, 1360); err != nil {
 			r.logf("warning: fixupWSLMTU: could not raise eth0 MTU: %v", err)
+			return
 		}
+		r.logf("fixupWSLMTU: raised eth0 MTU from 1280 to 1360")
 	}
 }
 
