@@ -84,6 +84,14 @@ func (r *Reconciler) peerRelayStatefulSet(pr *tsapi.PeerRelay, replicas int32, p
 		},
 	})
 
+	// The relay server force-sets its UDP socket buffer sizes, which requires NET_ADMIN. Without it, tailscaled falls
+	// back to the kernel defaults and relay throughput suffers. A ProxyClass security context replaces this entirely.
+	ss.Spec.Template.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Add: []corev1.Capability{"NET_ADMIN"},
+		},
+	}
+
 	return tailscaled.ApplyProxyClass(ss, pc, managedLabelKeys, nil)
 }
 
