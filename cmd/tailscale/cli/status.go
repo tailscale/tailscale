@@ -28,7 +28,7 @@ import (
 
 var statusCmd = &ffcli.Command{
 	Name:       "status",
-	ShortUsage: "tailscale status [--active] [--web] [--json]",
+	ShortUsage: "tailscale status [--active] [--web] [--json] [--routes]",
 	ShortHelp:  "Show state of tailscaled and its connections",
 	LongHelp: strings.TrimSpace(`
 
@@ -56,6 +56,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 		fs.StringVar(&statusArgs.listen, "listen", "127.0.0.1:8384", "listen address for web mode; use port 0 for automatic")
 		fs.BoolVar(&statusArgs.browser, "browser", true, "open a browser in web mode")
 		fs.BoolVar(&statusArgs.header, "header", false, "show column headers in table format")
+		fs.BoolVar(&statusArgs.routes, "routes", false, "show subnet routes advertised by each node, and only list nodes advertising routes")
 		return fs
 	})(),
 }
@@ -69,6 +70,7 @@ var statusArgs struct {
 	self    bool   // in CLI mode, show status of local machine
 	peers   bool   // in CLI mode, show status of peer machines
 	header  bool   // in CLI mode, show column headers in table format
+	routes  bool   // in CLI mode, show advertised subnet routes, listing only nodes that advertise some
 }
 
 const mullvadTCD = "mullvad.ts.net."
@@ -157,8 +159,13 @@ func runStatus(ctx context.Context, args []string) error {
 	w := tabwriter.NewWriter(Stdout, 0, 0, 2, ' ', 0)
 	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
 	if statusArgs.header {
-		fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
-		fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		if statusArgs.routes {
+			fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tRoutes")
+			fmt.Fprintln(w, "--\t--------\t-----\t--\t------")
+		} else {
+			fmt.Fprintln(w, "IP\tHostname\tOwner\tOS\tStatus\t")
+			fmt.Fprintln(w, "--\t--------\t-----\t--\t------\t")
+		}
 	}
 
 	printPS := func(ps *ipnstate.PeerStatus) {
@@ -168,6 +175,12 @@ func runStatus(ctx context.Context, args []string) error {
 			ownerLogin(st, ps),
 			ps.OS,
 		)
+		if statusArgs.routes {
+			// No trailing tab: tabwriter pads all but the last cell, and the
+			// routes column is wide enough that padding it looks bad.
+			f("%s\n", strings.Join(advertisedRoutes(ps), " "))
+			return
+		}
 		relay := ps.Relay
 		anyTraffic := ps.TxBytes != 0 || ps.RxBytes != 0
 		var offline string
@@ -211,7 +224,9 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 
 	if statusArgs.self && st.Self != nil {
-		printPS(st.Self)
+		if !statusArgs.routes || len(advertisedRoutes(st.Self)) > 0 {
+			printPS(st.Self)
+		}
 	}
 
 	locBasedExitNode := false
@@ -232,6 +247,9 @@ func runStatus(ctx context.Context, args []string) error {
 		ipnstate.SortPeers(peers)
 		for _, ps := range peers {
 			if statusArgs.active && !ps.Active {
+				continue
+			}
+			if statusArgs.routes && len(advertisedRoutes(ps)) == 0 {
 				continue
 			}
 			printPS(ps)
@@ -311,6 +329,26 @@ func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 		return u.LoginName[:i+1]
 	}
 	return u.LoginName
+}
+
+// advertisedRoutes returns the subnet routes ps advertises: its AllowedIPs
+// minus the single-address prefixes covering its own Tailscale IPs.
+func advertisedRoutes(ps *ipnstate.PeerStatus) []string {
+	if ps.AllowedIPs == nil {
+		return nil
+	}
+	self := make(map[netip.Addr]bool, len(ps.TailscaleIPs))
+	for _, ip := range ps.TailscaleIPs {
+		self[ip] = true
+	}
+	var routes []string
+	for _, p := range ps.AllowedIPs.All() {
+		if p.IsSingleIP() && self[p.Addr()] {
+			continue
+		}
+		routes = append(routes, p.String())
+	}
+	return routes
 }
 
 func firstIPString(v []netip.Addr) string {
