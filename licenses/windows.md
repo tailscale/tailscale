@@ -3,7 +3,7 @@
 The following open source dependencies are used to build [Tailscale on
 Windows][].  See also the dependencies in the [Tailscale CLI][].
 
-[Tailscale on Windows]: https://tailscale.com/kb/1022/install-windows/
+[Tailscale on Windows]: https://tailscale.com/docs/install/windows
 [Tailscale CLI]: ./tailscale.md
 
 ## Go Packages
@@ -55,7 +55,7 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
  - [golang.org/x/exp](https://pkg.go.dev/golang.org/x/exp) ([BSD-3-Clause](https://cs.opensource.google/go/x/exp/+/85c1c220:LICENSE))
  - [golang.org/x/image](https://pkg.go.dev/golang.org/x/image) ([BSD-3-Clause](https://cs.opensource.google/go/x/image/+/v0.46.0:LICENSE))
  - [golang.org/x/mod](https://pkg.go.dev/golang.org/x/mod) ([BSD-3-Clause](https://cs.opensource.google/go/x/mod/+/v0.41.0:LICENSE))
- - [golang.org/x/net](https://pkg.go.dev/golang.org/x/net) ([BSD-3-Clause](https://cs.opensource.google/go/x/net/+/v0.59.0:LICENSE))
+ - [golang.org/x/net](https://pkg.go.dev/golang.org/x/net) ([BSD-3-Clause](https://cs.opensource.google/go/x/net/+/v0.60.0:LICENSE))
  - [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) ([BSD-3-Clause](https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE))
  - [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) ([BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE))
  - [golang.org/x/term](https://pkg.go.dev/golang.org/x/term) ([BSD-3-Clause](https://cs.opensource.google/go/x/term/+/v0.46.0:LICENSE))
