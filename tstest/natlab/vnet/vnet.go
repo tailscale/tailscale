@@ -92,6 +92,11 @@ const (
 
 	versionNATPMP = 0
 	versionPCP    = 2
+
+	resultSuccess       = 0
+	resultUnsuppVersion = 1
+
+	opcodeResponseBit = 128
 )
 
 func (s *Server) PopulateDERPMapIPs() error {
@@ -2058,17 +2063,8 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if dstIP == n.lanIP4.Addr() && isNATPMP(udp) {
-		n.handleNATPMPRequest(UDPPacket{
-			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
-			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
-			Payload: udp.Payload,
-		})
-		return
-	}
-
-	if isPCP(udp) {
-		n.handlePCPRequest(UDPPacket{
+	if dstIP == n.lanIP4.Addr() && udp.DstPort == pxpPort && len(udp.Payload) >= 2 { // TODO(fmarier): support IPv6 PCP
+		n.handlePxPRequest(UDPPacket{
 			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
 			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
 			Payload: udp.Payload,
@@ -2533,14 +2529,6 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
-func isNATPMP(udp *layers.UDP) bool {
-	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionNATPMP
-}
-
-func isPCP(udp *layers.UDP) bool {
-	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionPCP
-}
-
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
 	txid, err := stun.ParseBindingRequest(req.Payload)
 	if err != nil {
@@ -2845,6 +2833,68 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+func (n *network) handlePxPRequest(req UDPPacket) {
+	if req.Payload[1]&opcodeResponseBit != 0 {
+		n.logf("vnet: ignoring NAT-PMP/PCP packet with response bit set % 02x", req.Payload)
+		return
+	}
+	switch req.Payload[0] {
+	case versionNATPMP:
+		switch {
+		case n.svcs.Contains(NATPMP):
+			n.handleNATPMPRequest(req)
+		case n.svcs.Contains(PCP):
+			n.writePCPUnsuppVersion(req)
+		}
+	case versionPCP:
+		switch {
+		case n.svcs.Contains(PCP):
+			n.handlePCPRequest(req)
+		case n.svcs.Contains(NATPMP):
+			n.writeNATPMPUnsuppVersion(req)
+		}
+	default:
+		n.logf("vnet: ignoring NAT-PMP/PCP packet with unknown version % 02x", req.Payload)
+	}
+}
+
+func (n *network) writeNATPMPUnsuppVersion(req UDPPacket) {
+	res := make([]byte, 0, 8)
+	res = append(res,
+		versionNATPMP,
+		0, // opcode is 0 as per https://www.rfc-editor.org/rfc/rfc6886#section-3.5
+		0, resultUnsuppVersion,
+	)
+	epoch := uint32(time.Now().Unix())
+	res = binary.BigEndian.AppendUint32(res, epoch)
+	n.WriteUDPPacketNoNAT(UDPPacket{
+		Src:     req.Dst,
+		Dst:     req.Src,
+		Payload: res,
+	})
+}
+
+func (n *network) writePCPUnsuppVersion(req UDPPacket) {
+	opcode := req.Payload[1]
+	res := make([]byte, 0, 24)
+	res = append(res,
+		versionPCP,
+		opcodeResponseBit|opcode,
+		0, // reserved
+		resultUnsuppVersion,
+	)
+	lifetimeSec := uint32(1800) // 30 min
+	res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+	epoch := uint32(time.Now().Unix())
+	res = binary.BigEndian.AppendUint32(res, epoch)
+	res = append(res, make([]byte, 12)...) // reserved (96 bits)
+	n.WriteUDPPacketNoNAT(UDPPacket{
+		Src:     req.Dst,
+		Dst:     req.Src,
+		Payload: res,
+	})
+}
+
 func (n *network) handleNATPMPRequest(req UDPPacket) {
 	if !n.svcs.Contains(NATPMP) {
 		return
@@ -2854,14 +2904,14 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		return
 	}
 
-	if len(req.Payload) == 2 && req.Payload[0] == opcodeANNOUNCE {
+	if len(req.Payload) == 2 && req.Payload[1] == opcodeANNOUNCE {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
 		res := make([]byte, 0, 12)
 		res = append(res,
 			versionNATPMP,
-			128+opcodeANNOUNCE,
-			0, 0, // result code success
+			opcodeResponseBit|opcodeANNOUNCE,
+			0, resultSuccess,
 		)
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
@@ -2895,8 +2945,8 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		res := make([]byte, 0, 16)
 		res = append(res,
 			versionNATPMP,
-			128+opcodeMAP,
-			0, 0, // result code success
+			opcodeResponseBit|opcodeMAP,
+			0, resultSuccess,
 		)
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
@@ -2936,9 +2986,9 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		res := make([]byte, 0, 24)
 		res = append(res,
 			versionPCP,
-			128+opcodeANNOUNCE,
-			0,          // reserved
-			0,          // result code success
+			opcodeResponseBit|opcodeANNOUNCE,
+			0, // reserved
+			resultSuccess,
 			0, 0, 0, 0, // lifetime (0 for ANNOUNCE)
 		)
 		epoch := uint32(time.Now().Unix())
@@ -2990,9 +3040,9 @@ func (n *network) handlePCPRequest(req UDPPacket) {
 		res := make([]byte, 0, 60)
 		res = append(res,
 			versionPCP,
-			128+opcodeMAP,
+			opcodeResponseBit|opcodeMAP,
 			0, // reserved
-			0, // result code success
+			resultSuccess,
 		)
 		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
 		epoch := uint32(time.Now().Unix())
