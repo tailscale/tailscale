@@ -7238,6 +7238,19 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 		refresh = b.refreshAutoExitNode
 		b.refreshAutoExitNode = false
 	}
+	// On a fresh install, the first netmap arrives before the first netcheck
+	// report. Auto exit node resolution runs without a preferred DERP region
+	// and installs the blackhole [ipn.UnresolvedExitNodeID]. Nothing else
+	// re-resolves it once the report arrives, so do it here.
+	//
+	// This is not gated on an active DERP connection. No exit node has been
+	// chosen yet, so a provisional choice is better than a blackhole. Later
+	// reports are deduplicated by magicsock and may never reach this callback.
+	//
+	// See tailscale/tailscale#18199.
+	if prefs := b.pm.CurrentPrefs(); prefs.AutoExitNode().IsSet() && prefs.ExitNodeID() == ipn.UnresolvedExitNodeID {
+		refresh = true
+	}
 	b.mu.Unlock()
 
 	if cc == nil {
