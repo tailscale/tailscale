@@ -69,7 +69,7 @@ func TestNegativeCacheFlushHook(t *testing.T) {
 						want = 0
 					}
 					for check := range 2 {
-						m.CheckCachedDNS()
+						m.MaybeCheckCachedDNS()
 						if flushed != want {
 							t.Fatalf("check %d: flushes = %d, want %d", check, flushed, want)
 						}

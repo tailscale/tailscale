@@ -14,8 +14,11 @@ type managerCacheFlush struct {
 
 // SetCacheFlushHook installs a callback that flushes the DNS cache by reapplying
 // VPN settings. Passing nil removes the callback. The callback must be
-// concurrency-safe, return promptly, and must not call LocalBackend.
-// It is called without the manager lock held.
+// concurrency-safe, return promptly, must not call LocalBackend.  Typically, it should
+// be set as early as possible during backend initialization and never thereafter.  The hook
+// is not called immediately when set.
+//
+// Must be called without the manager lock held.
 func (m *Manager) SetCacheFlushHook(hook func()) {
 	if !buildfeatures.HasDNS {
 		return
@@ -23,12 +26,11 @@ func (m *Manager) SetCacheFlushHook(hook func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cacheFlushHook = hook
-	m.resolver.ClearNegativeCache()
 }
 
-// CheckCachedDNS checks previously issued negative answers against the current
+// MaybeCheckCachedDNS checks previously issued negative answers against the current
 // in-memory host records after a peer update. It does not issue DNS queries.
-func (m *Manager) CheckCachedDNS() {
+func (m *Manager) MaybeCheckCachedDNS() {
 	if !buildfeatures.HasDNS || !m.resolver.CheckCachedDNS() {
 		return
 	}
@@ -36,8 +38,10 @@ func (m *Manager) CheckCachedDNS() {
 	hook := m.cacheFlushHook
 	m.mu.Unlock()
 	if hook != nil {
-		m.logf("MagicDNS name became resolvable after a recent NXDOMAIN; requesting DNS cache flush")
+		m.logf("MagicDNS record became resolvable after issuing NXDOMAIN; requesting DNS cache flush")
 		hook()
+	} else {
+		m.logf("MagicDNS record became resolvable after issuing NXDOMAIN; no cache flush hook is set")
 	}
 }
 

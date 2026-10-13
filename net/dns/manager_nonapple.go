@@ -13,8 +13,8 @@ type managerCacheFlush struct{}
 // SetCacheFlushHook is a no-op on this platform.
 func (*managerCacheFlush) SetCacheFlushHook(func()) {}
 
-// CheckCachedDNS is a no-op on this platform.
-func (*managerCacheFlush) CheckCachedDNS() {}
+// MaybeCheckCachedDNS is a no-op on this platform.
+func (*managerCacheFlush) MaybeCheckCachedDNS() {}
 
 // FlushCaches flushes the platform DNS cache using the native implementation.
 func (*Manager) FlushCaches() error {

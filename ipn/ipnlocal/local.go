@@ -7591,7 +7591,7 @@ func (b *LocalBackend) checkCachedDNSLocked() {
 		return
 	}
 	if dm, ok := b.sys.DNSManager.GetOK(); ok {
-		dm.CheckCachedDNS()
+		dm.MaybeCheckCachedDNS()
 	}
 }
 
