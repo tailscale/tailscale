@@ -179,6 +179,9 @@ func genKnownHosts(st *ipnstate.Status) []byte {
 	var buf bytes.Buffer
 	for _, k := range st.Peers() {
 		ps := st.Peer[k]
+		if strings.ContainsAny(ps.DNSName, "\n\r") { // invalid; avoid known_hosts injection
+			continue
+		}
 		for _, hk := range ps.SSH_HostKeys {
 			hostKey := strings.TrimSpace(hk)
 			if strings.ContainsAny(hostKey, "\n\r") { // invalid
