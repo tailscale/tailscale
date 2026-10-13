@@ -2405,7 +2405,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// If we did not already have an endpoint for this peer, even a stale
 		// one, record how long it has been since the endpoint was initialized.
 		if !lastBest.ap.IsValid() {
-			c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
+			c.logf("[v1] magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
 				nodeKey.ShortString(), int64(mono.Since(c.initializedAt)/time.Microsecond), isCached)
 		}
 		if isVia {
@@ -3089,7 +3089,7 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	if self.Valid() && !selfWasValid {
 		// Reaching here, we have our first "real" netmap (self is valid, and
 		// the previous netmap was unset or reset), so record the latency from reset.
-		c.logf("magicsock: new contact: control-netmap usec=%d cached=%v",
+		c.logf("[v1] magicsock: new contact: control-netmap usec=%d cached=%v",
 			int64(mono.Since(initializedAt)/time.Microsecond), isCached)
 	}
 
