@@ -10,17 +10,22 @@ import (
 	"context"
 	"errors"
 	"expvar"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"go4.org/netipx"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/net/packet"
+	"tailscale.com/types/ipproto"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/eventbus/eventbustest"
 	"tailscale.com/util/usermetric"
+	"tailscale.com/wgengine/filter"
 )
 
 func newInjectionTestPacket(data []byte, released *atomic.Int32) *stack.PacketBuffer {
@@ -267,4 +272,110 @@ func TestTryInjectOutbound(t *testing.T) {
 	if err := w.TryInjectOutbound(data); err != ErrClosed {
 		t.Errorf("TryInjectOutbound after Close = %v, want ErrClosed", err)
 	}
+}
+
+// Replies generated while processing an inbound packet (TSMP pongs and
+// TSMP connection rejects) must not block when the injection queue is full
+// and its reader is not draining it. The injection queue's reader may be
+// blocked behind wireguard-go's device.peers lock, held by RemovePeer,
+// while the routine that processes inbound packets must complete before
+// that same peer's teardown can finish. A blocking injection on these paths
+// deadlocks peer removal against inbound packet processing, as in
+// tailscale/corp#45544.
+//
+// The full queue is the only blocking operation on these paths, so after
+// synctest.Wait the reply either completed or is provably stuck on the
+// queue; no timeout is needed. A regressed, blocking sender is unblocked
+// by closing the Wrapper before failing, so the bubble can settle.
+func TestInboundReplyWithFullInjectionQueue(t *testing.T) {
+	// fillInjectionQueue queues one packet, filling the injection queue
+	// (depth 1), and leaves it unread.
+	fillInjectionQueue := func(t *testing.T, w *Wrapper) {
+		t.Helper()
+		if err := w.TryInjectOutbound(udp4("1.2.3.4", "5.6.7.8", 98, 98)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queueFullDrops := func(w *Wrapper) int64 {
+		m, _ := w.metrics.outboundDroppedPacketsTotal.Get(usermetric.DropLabels{Reason: usermetric.ReasonQueueFull}).(*expvar.Int)
+		if m == nil {
+			return -1
+		}
+		return m.Value()
+	}
+	// waitReply returns the reply's filter response, or fails the test if the
+	// sender is durably blocked instead. Closing w unblocks a blocking sender.
+	waitReply := func(t *testing.T, w *Wrapper, reply func() filter.Response) filter.Response {
+		t.Helper()
+		done := make(chan filter.Response, 1)
+		go func() { done <- reply() }()
+		synctest.Wait()
+		select {
+		case res := <-done:
+			return res
+		default:
+			w.Close()
+			synctest.Wait()
+			t.Fatal("reply generation blocked on a full injection queue")
+			panic("unreachable")
+		}
+	}
+
+	t.Run("TSMP_pong", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			_, w := newFakeTUN(t.Logf, bus, false)
+			t.Cleanup(func() { w.Close() })
+			fillInjectionQueue(t, w)
+
+			ipHdr := packet.IP4Header{
+				IPProto: ipproto.TSMP,
+				Src:     netip.MustParseAddr("1.2.3.4"),
+				Dst:     netip.MustParseAddr("100.64.1.2"),
+			}
+			payload := make([]byte, 9)
+			payload[0] = byte(packet.TSMPTypePing)
+			pkt := make([]byte, ipHdr.Len()+len(payload))
+			ipHdr.Marshal(pkt)
+			copy(pkt[ipHdr.Len():], payload)
+			pp := new(packet.Parsed)
+			pp.Decode(pkt)
+
+			res := waitReply(t, w, func() filter.Response {
+				res, _ := w.filterPacketInboundFromWireGuard(pp, nil, nil, nil)
+				return res
+			})
+			if res != filter.DropSilently {
+				t.Fatalf("TSMP ping response = %v, want DropSilently", res)
+			}
+			if got := queueFullDrops(w); got != 1 {
+				t.Errorf("queue_full drops = %d, want 1 (the pong)", got)
+			}
+		})
+	})
+
+	t.Run("TSMP_connection_reject", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			bus := eventbustest.NewBus(t)
+			_, w := newFakeTUN(t.Logf, bus, false)
+			t.Cleanup(func() { w.Close() })
+			w.disableFilter = false
+			w.SetFilter(filter.NewAllowNone(logger.Discard, new(netipx.IPSet)))
+			fillInjectionQueue(t, w)
+
+			pp := new(packet.Parsed)
+			pp.Decode(tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000))
+
+			res := waitReply(t, w, func() filter.Response {
+				res, _ := w.filterPacketInboundFromWireGuard(pp, nil, nil, nil)
+				return res
+			})
+			if !res.IsDrop() {
+				t.Fatalf("SYN rejected by filter = %v, want a drop", res)
+			}
+			if got := queueFullDrops(w); got != 1 {
+				t.Errorf("queue_full drops = %d, want 1 (the reject)", got)
+			}
+		})
+	})
 }
