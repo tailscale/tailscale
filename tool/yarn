@@ -16,12 +16,21 @@ fi
     repo_root="${BASH_SOURCE%/*}/../"
     cd "$repo_root"
 
+    # shellcheck source=lib/download.sh
+    . tool/lib/download.sh
+
     ./tool/node --version >/dev/null # Ensure node is unpacked and ready
 
     cachedir="$HOME/.cache/tailscale-yarn"
-    tarball="${cachedir}.tar.gz"
 
     read -r want_rev < "./tool/yarn.rev"
+
+    # Hash is the sha256sum of the release tarball at
+    # https://github.com/yarnpkg/yarn/releases/download/v${want_rev}/yarn-v${want_rev}.tar.gz.
+    # The tarball is architecture-independent. Update when bumping yarn.rev.
+    want_shas=(
+        all=732620bac8b1690d507274f025f3c6cfdc3627a84d9642e38a07452cc00e0f2e
+    )
 
     got_rev=""
     if [[ -x "${cachedir}/bin/yarn" ]]; then
@@ -29,11 +38,8 @@ fi
     fi
 
     if [[ "$want_rev" != "$got_rev" ]]; then
-        rm -rf "$cachedir" "$tarball"
-        mkdir -p "$cachedir"
-        curl -f -L -o "$tarball" "https://github.com/yarnpkg/yarn/releases/download/v${want_rev}/yarn-v${want_rev}.tar.gz"
-        (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
-        rm -f "$tarball"
+        want_hash=$(select_sha256 "all" "${want_shas[@]}")
+        download_tool --args=--strip-components=1 --verify-sha256="$want_hash" "https://github.com/yarnpkg/yarn/releases/download/v${want_rev}/yarn-v${want_rev}.tar.gz" "$cachedir"
     fi
 )
 
