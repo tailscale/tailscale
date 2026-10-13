@@ -35,8 +35,8 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
@@ -980,7 +980,7 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create an OIDC token using this issuer's signer.
-	token, err := jwt.Signed(signer).Claims(tsClaimsWithExtra).CompactSerialize()
+	token, err := jwt.Signed(signer).Claims(tsClaimsWithExtra).Serialize()
 	if err != nil {
 		log.Printf("Error getting token: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
