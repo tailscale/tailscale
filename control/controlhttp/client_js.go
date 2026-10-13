@@ -41,7 +41,7 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 	wsURL := &url.URL{
 		Scheme: wsScheme,
 		Host:   host,
-		Path:   serverUpgradePath,
+		Path:   appendServerBasePath(d.BasePath, serverUpgradePath),
 		// Can't set HTTP headers on the websocket request, so we have to to send
 		// the handshake via an HTTP header.
 		RawQuery: url.Values{

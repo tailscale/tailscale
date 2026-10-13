@@ -251,12 +251,12 @@ func (a *Dialer) dialHostOpt(ctx context.Context, optAddr netip.Addr, optACEHost
 	u80 := &url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPPort, "80")),
-		Path:   serverUpgradePath,
+		Path:   appendServerBasePath(a.BasePath, serverUpgradePath),
 	}
 	u443 := &url.URL{
 		Scheme: "https",
 		Host:   net.JoinHostPort(a.Hostname, strDef(a.HTTPSPort, "443")),
-		Path:   serverUpgradePath,
+		Path:   appendServerBasePath(a.BasePath, serverUpgradePath),
 	}
 	if a.HTTPSPort == NoPort || optACEHost != "" {
 		u443 = nil
