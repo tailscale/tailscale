@@ -6,7 +6,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -21,12 +23,15 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"tailscale.com/client/tailscale/v2"
 
 	"tailscale.com/ipn"
@@ -2448,5 +2453,57 @@ func testCasesForLEStagingTests() []leStagingTestCase {
 			defaultProxyClass:     "le-staging-false",
 			useLEStagingEndpoint:  false,
 		},
+	}
+}
+
+func TestProxyGroupOptimisticLockErrorRequeues(t *testing.T) {
+	pg := &tsapi.ProxyGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Finalizers: []string{"tailscale.com/finalizer"},
+			Generation: 1,
+		},
+		Spec: tsapi.ProxyGroupSpec{
+			Type: tsapi.ProxyGroupTypeEgress,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(pg).
+		WithStatusSubresource(pg).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*appsv1.StatefulSet); ok {
+					return apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "statefulsets"}, obj.GetName(), errors.New(optimisticLockErrorMsg))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	fr := record.NewFakeRecorder(1)
+	r := &ProxyGroupReconciler{
+		tsNamespace:    tsNamespace,
+		tsProxyImage:   testProxyImage,
+		defaultTags:    []string{"tag:test-tag"},
+		tsFirewallMode: "auto",
+		Client:         fc,
+		clients:        tsclient.NewProvider(&fakeTSClient{}),
+		recorder:       fr,
+		log:            zap.NewNop().Sugar(),
+		clock:          tstest.NewClock(tstest.ClockOpts{}),
+		reissuer:       tailscaled.NewReissuer(),
+	}
+
+	expectRequeue(t, r, "", pg.Name)
+
+	if err := fc.Get(t.Context(), client.ObjectKeyFromObject(pg), pg); err != nil {
+		t.Fatalf("getting ProxyGroup: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(pg.Status.Conditions, string(tsapi.ProxyGroupReady))
+	if cond == nil || cond.Reason != reasonProxyGroupCreating || cond.Message != "ProxyGroup resources are being updated, retrying" {
+		t.Errorf("ProxyGroupReady condition = %+v, want reason %q and the retrying message", cond, reasonProxyGroupCreating)
+	}
+	if len(fr.Events) != 0 {
+		t.Errorf("got %d events, want none", len(fr.Events))
 	}
 }

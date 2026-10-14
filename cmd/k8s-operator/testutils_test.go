@@ -48,6 +48,8 @@ const (
 
 	// tsNamespace is the namespace the operator is installed in for tests that don't override it.
 	tsNamespace = "tailscale"
+
+	optimisticLockErrorMsg = "the object has been modified; please apply your changes to the latest version and try again"
 )
 
 // confgOpts contains configuration options for creating cluster resources for
