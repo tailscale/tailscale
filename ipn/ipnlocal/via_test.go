@@ -9,6 +9,11 @@ import (
 	"testing"
 
 	"go4.org/netipx"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 )
 
 func TestViaTargetAllowed(t *testing.T) {
@@ -64,7 +69,7 @@ func TestViaTargetAllowed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		ip := netip.MustParseAddr(tc.ip)
-		if got := viaTargetAllowed(ip); got != tc.want {
+		if got := viaTargetAllowed(ip, nil); got != tc.want {
 			t.Errorf("viaTargetAllowed(%v) = %v, want %v", ip, got, tc.want)
 		}
 	}
@@ -213,5 +218,210 @@ func TestGenerateViaTargetAdditions(t *testing.T) {
 				t.Errorf("nil ipset, want ranges to be %v", tt.want)
 			}
 		})
+	}
+}
+
+func TestViaTargetAllowedPolicy(t *testing.T) {
+	t.Parallel()
+
+	var b netipx.IPSetBuilder
+	b.AddPrefix(netip.MustParsePrefix("127.53.0.0/16"))
+	b.Add(netip.MustParseAddr("169.254.169.253"))
+	policy, err := b.IPSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"127.53.46.20", true},     // in the policy's loopback slice
+		{"169.254.169.253", true},  // exact link-local address in the policy
+		{"127.0.0.1", false},       // loopback outside the policy
+		{"169.254.169.254", false}, // link-local outside the policy
+		{"10.0.0.1", true},         // ordinary site address, unaffected
+	}
+	for _, tc := range cases {
+		ip := netip.MustParseAddr(tc.ip)
+		if got := viaTargetAllowed(ip, policy); got != tc.want {
+			t.Errorf("viaTargetAllowed(%v, policy) = %v, want %v", ip, got, tc.want)
+		}
+	}
+}
+
+func TestViaTargetAdditionsFromCapMap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		capMap   tailcfg.NodeCapMap
+		want     []netipx.IPRange
+		wantErrs int
+	}{
+		{
+			name: "cap-absent",
+		},
+		{
+			name: "single-value",
+			capMap: tailcfg.NodeCapMap{
+				viaAllowLocalCap: {`{"ranges":["127.53.0.0/16","169.254.169.253"]}`},
+			},
+			want: []netipx.IPRange{
+				netipx.MustParseIPRange("127.53.0.0-127.53.255.255"),
+				netipx.MustParseIPRange("169.254.169.253-169.254.169.253"),
+			},
+		},
+		{
+			name: "multiple-values-union",
+			capMap: tailcfg.NodeCapMap{
+				viaAllowLocalCap: {
+					`{"ranges":["127.53.0.0/16"]}`,
+					`{"ranges":["169.254.169.250-169.254.169.253"]}`,
+				},
+			},
+			want: []netipx.IPRange{
+				netipx.MustParseIPRange("127.53.0.0-127.53.255.255"),
+				netipx.MustParseIPRange("169.254.169.250-169.254.169.253"),
+			},
+		},
+		{
+			name: "invalid-entry-skipped",
+			capMap: tailcfg.NodeCapMap{
+				viaAllowLocalCap: {`{"ranges":["127.53.0.0/16","asdf","fe80::/64"]}`},
+			},
+			want:     []netipx.IPRange{netipx.MustParseIPRange("127.53.0.0-127.53.255.255")},
+			wantErrs: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := viaTargetAdditionsFromCapMap(views.MapSliceOf(tt.capMap))
+			var gotErrs int
+			if err != nil {
+				if u, ok := err.(interface{ Unwrap() []error }); ok {
+					gotErrs = len(u.Unwrap())
+				} else {
+					gotErrs = 1
+				}
+			}
+			if gotErrs != tt.wantErrs {
+				t.Errorf("got %d errors (%v), want %d", gotErrs, err, tt.wantErrs)
+			}
+			var gotRanges []netipx.IPRange
+			if got != nil {
+				gotRanges = got.Ranges()
+			}
+			if !slices.Equal(gotRanges, tt.want) {
+				t.Errorf("ranges = %v, want %v", gotRanges, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldForwardToViaFollowsNetMap(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	via, err := tsaddr.MapVia(0x12, netip.MustParsePrefix("127.53.46.20/32"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := via.Addr()
+
+	setSelfCaps := func(caps tailcfg.NodeCapMap) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.setNetMapLocked(&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				ID:        1,
+				Key:       makeNodeKeyFromID(1),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+				CapMap:    caps,
+			}).View(),
+		})
+	}
+
+	setSelfCaps(nil)
+	if b.ShouldForwardToVia(dst) {
+		t.Fatalf("ShouldForwardToVia(%v) = true without %s, want false", dst, viaAllowLocalCap)
+	}
+
+	setSelfCaps(tailcfg.NodeCapMap{
+		viaAllowLocalCap: {`{"ranges":["127.53.0.0/16"]}`},
+	})
+	if !b.ShouldForwardToVia(dst) {
+		t.Fatalf("ShouldForwardToVia(%v) = false with %s covering it, want true", dst, viaAllowLocalCap)
+	}
+
+	setSelfCaps(nil)
+	if b.ShouldForwardToVia(dst) {
+		t.Fatalf("ShouldForwardToVia(%v) = true after %s removed, want false", dst, viaAllowLocalCap)
+	}
+}
+
+func TestViaAllowLocalStateUpdate(t *testing.T) {
+	t.Parallel()
+
+	withAttr := func(vals ...tailcfg.RawMessage) views.MapSlice[nodecap.Cap, tailcfg.RawMessage] {
+		return views.MapSliceOf(tailcfg.NodeCapMap{viaAllowLocalCap: vals})
+	}
+	none := views.MapSliceOf(tailcfg.NodeCapMap(nil))
+
+	var s viaAllowLocalState
+
+	ips, changed, err := s.update(withAttr(`{"ranges":["127.53.0.0/16"]}`))
+	if err != nil || !changed || ips == nil || !ips.Contains(netip.MustParseAddr("127.53.1.1")) {
+		t.Fatalf("first update = (%v, changed=%v, %v), want set containing 127.53.1.1, changed", ips, changed, err)
+	}
+
+	ips2, changed, err := s.update(withAttr(`{"ranges":["127.53.0.0/16"]}`))
+	if err != nil || changed || ips2 != ips {
+		t.Fatalf("identical update = (%v, changed=%v, %v), want same set, unchanged", ips2, changed, err)
+	}
+
+	ips, changed, _ = s.update(withAttr(`{"ranges":["169.254.169.253"]}`))
+	if !changed || ips == nil || !ips.Contains(netip.MustParseAddr("169.254.169.253")) || ips.Contains(netip.MustParseAddr("127.53.1.1")) {
+		t.Fatalf("changed update = (%v, changed=%v), want only 169.254.169.253, changed", ips, changed)
+	}
+
+	_, changed, err = s.update(withAttr(`{"ranges":["asdf"]}`))
+	if !changed || err == nil {
+		t.Fatalf("invalid update: changed=%v err=%v, want changed with error", changed, err)
+	}
+	_, changed, err = s.update(withAttr(`{"ranges":["asdf"]}`))
+	if changed || err != nil {
+		t.Fatalf("repeated invalid update: changed=%v err=%v, want unchanged with no error, so it is logged once", changed, err)
+	}
+
+	ips, changed, err = s.update(none)
+	if err != nil || !changed || ips != nil {
+		t.Fatalf("removed update = (%v, changed=%v, %v), want nil set, changed", ips, changed, err)
+	}
+}
+
+func TestViaAllowLocalMetric(t *testing.T) {
+	b := newTestLocalBackend(t)
+
+	setSelfCaps := func(caps tailcfg.NodeCapMap) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.setNetMapLocked(&netmap.NetworkMap{
+			SelfNode: (&tailcfg.Node{
+				ID:        1,
+				Key:       makeNodeKeyFromID(1),
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+				CapMap:    caps,
+			}).View(),
+		})
+	}
+
+	setSelfCaps(tailcfg.NodeCapMap{viaAllowLocalCap: {`{"ranges":["127.53.0.0/16"]}`}})
+	if got := metricViaAllowLocalNodeAttr.Value(); got != 1 {
+		t.Errorf("metric with node attribute = %d, want 1", got)
+	}
+
+	setSelfCaps(nil)
+	if got := metricViaAllowLocalNodeAttr.Value(); got != 0 {
+		t.Errorf("metric without node attribute = %d, want 0", got)
 	}
 }
