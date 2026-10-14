@@ -148,9 +148,10 @@ func (a *ConnectorReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 		message := fmt.Sprintf(messageConnectorCreationFailed, err)
 		if reconciler.IsOptimisticLockError(err) {
 			reason = reasonConnectorCreating
-			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			message = "Connector resources are being updated, retrying"
+			logger.Debugf("update conflict, retrying: %v", err)
 			err = nil
-			logger.Info(message)
+			res = reconcile.Result{RequeueAfter: shortRequeue}
 		} else {
 			a.recorder.Event(cn, corev1.EventTypeWarning, reason, message)
 		}

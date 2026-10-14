@@ -149,8 +149,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 		if done, err := r.maybeCleanup(ctx, tsClient, pg); err != nil {
 			if reconciler.IsOptimisticLockError(err) {
-				logger.Infof("optimistic lock error, retrying: %s", err)
-				return reconcile.Result{}, nil
+				logger.Debugf("update conflict, retrying: %v", err)
+				return reconcile.Result{RequeueAfter: shortRequeue}, nil
 			}
 			return reconcile.Result{}, err
 		} else if !done {
@@ -167,7 +167,13 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 
 	oldPGStatus := pg.Status.DeepCopy()
 	staticEndpoints, nrr, err := r.reconcilePG(ctx, tsClient, pg, logger)
-	return reconcile.Result{}, errors.Join(err, r.maybeUpdateStatus(ctx, logger, pg, oldPGStatus, nrr, staticEndpoints))
+	if err = errors.Join(err, r.maybeUpdateStatus(ctx, logger, pg, oldPGStatus, nrr, staticEndpoints)); err != nil {
+		return reconcile.Result{}, err
+	}
+	if nrr != nil && nrr.requeue {
+		return reconcile.Result{RequeueAfter: shortRequeue}, nil
+	}
+	return reconcile.Result{}, nil
 }
 
 // reconcilePG handles all reconciliation of a ProxyGroup that is not marked
@@ -474,7 +480,7 @@ func (r *ProxyGroupReconciler) maybeUpdateStatus(ctx context.Context, logger *za
 		if !apiequality.Semantic.DeepEqual(*oldPGStatus, pg.Status) {
 			if updateErr := r.Client.Status().Update(ctx, pg); updateErr != nil {
 				if reconciler.IsOptimisticLockError(updateErr) {
-					logger.Infof("optimistic lock error updating status, retrying: %s", updateErr)
+					logger.Debugf("status update conflict, will reconcile on the next event: %v", updateErr)
 					updateErr = nil
 				}
 				err = errors.Join(err, updateErr)
@@ -1100,9 +1106,12 @@ func sharedACMEAccountEnabled(pg *tsapi.ProxyGroup, operatorDefault bool) bool {
 func (r *ProxyGroupReconciler) notReadyErrf(pg *tsapi.ProxyGroup, logger *zap.SugaredLogger, format string, a ...any) (map[string][]netip.AddrPort, *notReadyReason, error) {
 	err := fmt.Errorf(format, a...)
 	if reconciler.IsOptimisticLockError(err) {
-		msg := fmt.Sprintf("optimistic lock error, retrying: %s", err.Error())
-		logger.Info(msg)
-		return notReady(reasonProxyGroupCreating, msg)
+		logger.Debugf("update conflict, retrying: %v", err)
+		return nil, &notReadyReason{
+			reason:  reasonProxyGroupCreating,
+			message: "ProxyGroup resources are being updated, retrying",
+			requeue: true,
+		}, nil
 	}
 
 	r.recorder.Event(pg, corev1.EventTypeWarning, reasonProxyGroupCreationFailed, err.Error())
@@ -1115,4 +1124,5 @@ func (r *ProxyGroupReconciler) notReadyErrf(pg *tsapi.ProxyGroup, logger *zap.Su
 type notReadyReason struct {
 	reason  string
 	message string
+	requeue bool // set for optimistic lock errors, which are retried after shortRequeue
 }

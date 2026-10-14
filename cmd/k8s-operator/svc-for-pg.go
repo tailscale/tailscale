@@ -191,10 +191,10 @@ func (r *HAServiceReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	needsRequeue, err = r.maybeProvision(ctx, hostname, svc, pg, logger, tsClient)
 	if err != nil {
 		if reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		return reconcile.Result{}, err
 	}
 	if needsRequeue {
 		res = reconcile.Result{RequeueAfter: requeueInterval()}

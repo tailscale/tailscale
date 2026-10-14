@@ -84,10 +84,10 @@ func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request
 
 	if err := a.maybeProvision(ctx, logger, ing); err != nil {
 		if reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-		} else {
-			return reconcile.Result{}, err
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil

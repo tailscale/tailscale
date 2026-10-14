@@ -214,12 +214,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		message := fmt.Sprintf("failed creating Recorder: %s", err)
 		if reconciler.IsOptimisticLockError(err) {
 			reason = reasonRecorderCreating
-			message = fmt.Sprintf("optimistic lock error, retrying: %s", err)
+			message = "Recorder resources are being updated, retrying"
+			logger.Debugf("update conflict, retrying: %v", err)
 			err = nil
-			logger.Info(message)
-		} else {
-			r.recorder.Event(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
+			if _, err = setStatusReady(tsr, metav1.ConditionFalse, reason, message); err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
+		r.recorder.Event(tsr, corev1.EventTypeWarning, reasonRecorderCreationFailed, message)
 		return setStatusReady(tsr, metav1.ConditionFalse, reason, message)
 	}
 
