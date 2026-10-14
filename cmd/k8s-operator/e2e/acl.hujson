@@ -11,6 +11,9 @@
 		// wide subnet maximises compatibility for most clusters.
 		"routes": {
 			"10.0.0.0/8": ["tag:k8s"],
+			// Tailscale 4via6 range, so dynamically-computed 4via6 subnet routes
+			// advertised by Connectors in the e2e tests are auto-approved.
+			"fd7a:115c:a1e0:b1a::/64": ["tag:k8s"],
 		},
 		"services": {
 			"tag:k8s": ["tag:k8s"],
@@ -28,6 +31,12 @@
 					},
 				}],
 			},
+		},
+		{
+			// Allow egress proxies to reach 4via6 targets.
+			"src": ["tag:k8s"],
+			"dst": ["fd7a:115c:a1e0:b1a::/64"],
+			"ip":  ["tcp:80", "tcp:443"],
 		},
 	],
 }
