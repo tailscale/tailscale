@@ -28,6 +28,16 @@ func (lc *Client) GetEffectivePolicy(ctx context.Context, scope setting.PolicySc
 	return decodeJSON[*setting.Snapshot](body)
 }
 
+// GetEffectivePolicyForCurrentUser returns the effective policy for the
+// user associated with the LocalAPI request.
+func (lc *Client) GetEffectivePolicyForCurrentUser(ctx context.Context) (*setting.Snapshot, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/policy/")
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
+}
+
 // ReloadEffectivePolicy reloads the effective policy for the specified scope
 // by reading and merging policy settings from all applicable policy sources.
 func (lc *Client) ReloadEffectivePolicy(ctx context.Context, scope setting.PolicyScope) (*setting.Snapshot, error) {
@@ -36,6 +46,16 @@ func (lc *Client) ReloadEffectivePolicy(ctx context.Context, scope setting.Polic
 		return nil, err
 	}
 	body, err := lc.send(ctx, "POST", "/localapi/v0/policy/"+string(scopeID), 200, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	return decodeJSON[*setting.Snapshot](body)
+}
+
+// ReloadEffectivePolicyForCurrentUser reloads the effective policy for the
+// user associated with the LocalAPI request.
+func (lc *Client) ReloadEffectivePolicyForCurrentUser(ctx context.Context) (*setting.Snapshot, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/policy/", 200, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
