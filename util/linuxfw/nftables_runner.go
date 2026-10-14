@@ -366,6 +366,57 @@ func (n *nftablesRunner) ClampMSSToPMTU(tun string, addr netip.Addr) error {
 	return n.conn.Flush()
 }
 
+// AddTCPResetRule creates a base chain of its own, ts-reset, on the forward
+// hook of each IP family's filter table and adds to it rules that reject with
+// a TCP RST every TCP segment leaving via tun or arriving on tun. Like the
+// ts-clamp chain of ClampMSSToPMTU, a dedicated base chain keeps this
+// independent of whether tailscaled's ts-forward chain exists in this network
+// namespace, and the reject verdict ends the packet regardless of what another
+// chain on the hook would have accepted. Both directions are matched so the
+// remote peer's side of each forwarded connection is reset too.
+func (n *nftablesRunner) AddTCPResetRule(tun string) error {
+	polAccept := nftables.ChainPolicyAccept
+	for _, table := range n.getTables() {
+		filterTable, err := createTableIfNotExist(n.conn, table.Proto, "filter")
+		if err != nil {
+			return fmt.Errorf("error ensuring filter table: %w", err)
+		}
+		chain, err := getOrCreateChain(n.conn, chainInfo{
+			table:         filterTable,
+			name:          "ts-reset",
+			chainType:     nftables.ChainTypeFilter,
+			chainHook:     nftables.ChainHookForward,
+			chainPriority: nftables.ChainPriorityFilter,
+			chainPolicy:   &polAccept,
+		})
+		if err != nil {
+			return fmt.Errorf("error ensuring ts-reset chain: %w", err)
+		}
+		for _, ifaceKey := range []expr.MetaKey{expr.MetaKeyOIFNAME, expr.MetaKeyIIFNAME} {
+			n.conn.AddRule(&nftables.Rule{
+				Table: filterTable,
+				Chain: chain,
+				Exprs: []expr.Any{
+					&expr.Meta{Key: ifaceKey, Register: 1},
+					&expr.Cmp{
+						Op:       expr.CmpOpEq,
+						Register: 1,
+						Data:     []byte(tun),
+					},
+					&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+					&expr.Cmp{
+						Op:       expr.CmpOpEq,
+						Register: 1,
+						Data:     []byte{unix.IPPROTO_TCP},
+					},
+					&expr.Reject{Type: unix.NFT_REJECT_TCP_RST},
+				},
+			})
+		}
+	}
+	return n.conn.Flush()
+}
+
 // deleteTableIfExists deletes a nftables table via connection c if it exists
 // within the given family.
 func deleteTableIfExists(c *nftables.Conn, family nftables.TableFamily, name string) error {
@@ -607,6 +658,16 @@ type NetfilterRunner interface {
 	// packets in both directions (entering and leaving the provided tun
 	// interface), so both endpoints negotiate an MSS that fits the tun MTU.
 	ClampMSSToPMTU(tun string, addr netip.Addr) error
+
+	// AddTCPResetRule adds rules that answer every TCP segment forwarded to
+	// or from the given tun interface with a TCP RST, for each IP family.
+	// The Kubernetes operator's egress proxies call it once, at shutdown:
+	// they forward in-kernel and own no socket for the connections that
+	// cluster workloads hold through them, so nothing else closes those
+	// connections when the Pod goes away and they stay black-holed until
+	// the client's retransmission timer expires. The rules are only ever
+	// added to a Pod that is about to exit, so there is no matching Del.
+	AddTCPResetRule(tun string) error
 
 	// AddMagicsockPortRule adds a rule to the ts-input chain to accept
 	// incoming traffic on the specified port, to allow magicsock to
