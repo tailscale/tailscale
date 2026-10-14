@@ -136,17 +136,12 @@ func (e *extension) getCertPEMWithValidity(ctx context.Context, b *ipnlocal.Loca
 			return pair, nil
 		}
 		if minValidity == 0 {
-			// Start renewal in the background if there isn't one already in progress,
-			// return current valid cert.
-			if e.beginAsyncRenewal(certDomain) {
+			// Renew in the background and return the current valid
+			// cert. If a renewal is already running, this joins it.
+			if _, started, err := e.startIssuance(b, cs, logf, traceACME, certDomain, now, minValidity); err != nil {
+				logf("async renewal not started: %v", err)
+			} else if started {
 				logf("starting async renewal")
-
-				e.Go(func() {
-					defer e.endAsyncRenewal(certDomain)
-					if _, err := getCertPEM(context.Background(), e, b, cs, logf, traceACME, certDomain, now, minValidity); err != nil {
-						logf("async renewal failed: getCertPem: %v", err)
-					}
-				})
 			}
 			return pair, nil
 		}
@@ -159,12 +154,37 @@ func (e *extension) getCertPEMWithValidity(ctx context.Context, b *ipnlocal.Loca
 		return nil, fmt.Errorf("retrieving cached TLS certificate failed and cert store is configured in read-only mode, not attempting to issue a new certificate: %w", cacheErr)
 	}
 
-	pair, err = getCertPEM(ctx, e, b, cs, logf, traceACME, certDomain, now, minValidity)
+	pair, err = e.awaitIssuance(ctx, b, cs, logf, traceACME, certDomain, now, minValidity)
 	if err != nil {
-		logf("getCertPEM: %v", err)
 		return nil, err
 	}
+	if pair != nil && pair.Cached && minValidity != 0 {
+		// The issuance this caller waited on found a cached cert that
+		// satisfied its own requirement, which may have been none if
+		// the caller joined a background renewal. Check the cert against
+		// this caller's requirement and run one more issuance if it
+		// falls short.
+		if renew, err := e.shouldStartDomainRenewal(b, cs, certDomain, now, pair, minValidity); err == nil && renew {
+			return e.awaitIssuance(ctx, b, cs, logf, traceACME, certDomain, now, minValidity)
+		}
+	}
 	return pair, nil
+}
+
+// awaitIssuance starts an issuance for domain, or joins the one in
+// flight, and waits for it until ctx is done. The issuance itself keeps
+// running if ctx is done first.
+func (e *extension) awaitIssuance(ctx context.Context, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+	iss, _, err := e.startIssuance(b, cs, logf, traceACME, domain, now, minValidity)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-iss.done:
+		return iss.pair, iss.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for in-flight ACME issuance for %q: %w", domain, ctx.Err())
+	}
 }
 
 // shouldStartDomainRenewal reports whether the domain's cert should be
@@ -204,30 +224,58 @@ func (e *extension) domainRenewed(domain string) {
 	delete(e.renewCertAt, domain)
 }
 
-// beginAsyncRenewal marks a domain as having an async renewal in flight,
-// and reports whether this caller started it.
-//
-// The caller must arrange for endAsyncRenewal(domain) when the renewal
-// finishes, regardless of result.
-func (e *extension) beginAsyncRenewal(domain string) bool {
-	e.renewMu.Lock()
-	defer e.renewMu.Unlock()
-	if e.renewingCertDomains.Contains(domain) {
-		return false
-	}
-	e.renewingCertDomains.Make()
-	e.renewingCertDomains.Add(domain)
-	return true
+// issuance is one run of getCertPEM for a domain. Every caller that
+// needs the domain's cert while it runs waits on the same issuance.
+type issuance struct {
+	done chan struct{} // closed once pair and err are set
+	pair *ipnlocal.TLSCertKeyPair
+	err  error
 }
 
-// endAsyncRenewal clears the in-flight marker for domain, allowing
-// a subsequent renewal to begin.
+// issuanceTimeout bounds one issuance. It has to cover control's wait
+// for DNS propagation, the CA's validation, and finalization.
+const issuanceTimeout = 5 * time.Minute
+
+// startIssuance returns the issuance in flight for domain, starting one
+// if there is none. started reports whether this call started it.
 //
-// It should only be called by the caller that began the renewal.
-func (e *extension) endAsyncRenewal(domain string) {
+// The issuance runs in its own goroutine with a context derived from
+// the extension's, not from any caller's. A caller that gives up
+// therefore does not abandon an ACME order partway, which is what left
+// stale _acme-challenge records behind before. See
+// tailscale/tailscale#21759.
+func (e *extension) startIssuance(b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (iss *issuance, started bool, err error) {
 	e.renewMu.Lock()
 	defer e.renewMu.Unlock()
-	e.renewingCertDomains.Delete(domain)
+	if iss, ok := e.inflight[domain]; ok {
+		return iss, false, nil
+	}
+	if err := e.baseCtx.Err(); err != nil {
+		return nil, false, fmt.Errorf("acme: not starting issuance for %q: %w", domain, err)
+	}
+	iss = &issuance{done: make(chan struct{})}
+	mak.Set(&e.inflight, domain, iss)
+	e.Go(func() {
+		ctx, cancel := context.WithTimeout(e.baseCtx, issuanceTimeout)
+		defer cancel()
+		pair, err := getCertPEM(ctx, e, b, cs, logf, traceACME, domain, now, minValidity)
+		if err != nil {
+			logf("getCertPEM: %v", err)
+		}
+		e.finishIssuance(domain, iss, pair, err)
+	})
+	return iss, true, nil
+}
+
+// finishIssuance records the result of iss and removes it from inflight,
+// so the next caller starts a new issuance rather than joining a
+// finished one.
+func (e *extension) finishIssuance(domain string, iss *issuance, pair *ipnlocal.TLSCertKeyPair, err error) {
+	iss.pair, iss.err = pair, err
+	e.renewMu.Lock()
+	delete(e.inflight, domain)
+	e.renewMu.Unlock()
+	close(iss.done)
 }
 
 func domainRenewalTimeByExpiry(pair *ipnlocal.TLSCertKeyPair) (time.Time, error) {
@@ -347,9 +395,10 @@ var getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBacken
 	dm.Lock()
 	defer dm.Unlock()
 
-	// In case this method was triggered multiple times in parallel (when
-	// serving incoming requests), check whether one of the other goroutines
-	// already renewed the cert before us.
+	// Check the cache again under the lock. Another tailscaled sharing
+	// this cert store (TS_CERT_SHARE_MODE=rw) may have renewed the cert
+	// since the caller looked, and the cached cert is also what the ARI
+	// "replaces" hint and the challenge choice below are based on.
 	previous, err := getCertPEMCached(cs, domain, now)
 	if err == nil {
 		// shouldStartDomainRenewal caches its result so it's OK to call this

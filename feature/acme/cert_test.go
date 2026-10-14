@@ -17,12 +17,14 @@ import (
 	"crypto/x509/pkix"
 	"embed"
 	"encoding/pem"
+	"errors"
 	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -764,39 +766,34 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 
 			b.ForTest().SetClock(tstest.NewClock(tstest.ClockOpts{Start: tt.now}))
 
-			// Set to true if getCertPEM is called. GetCertPEM can be called in
-			// a goroutine for async renewal or in the main goroutine if
-			// issuance is required to obtain valid TLS credentials.
-			getCertPemWasCalled := false
+			// Every issuance runs in its own goroutine. What tells a
+			// synchronous issuance from an async renewal is the result:
+			// a synchronous caller gets what getCertPEM returned, an
+			// async renewal returns the cached cert right away.
+			issued := &ipnlocal.TLSCertKeyPair{CertPEM: []byte("issued")}
+			var getCertPemWasCalled atomic.Bool
 			orig := getCertPEM
 			getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
-				getCertPemWasCalled = true
-				return nil, nil
+				getCertPemWasCalled.Store(true)
+				return issued, nil
 			}
 			t.Cleanup(func() { getCertPEM = orig })
-			prevGo := e.goroutinesStarted.Load()
-			_, err = b.GetCertPEMWithValidity(context.Background(), testDomain, 0)
+			pair, err := b.GetCertPEMWithValidity(context.Background(), testDomain, 0)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("b.GetCertPemWithValidity got err %v, wants error: '%v'", err, tt.wantErr)
 			}
-			// GetCertPEMWithValidity spawns one tracked goroutine (via
-			// extension.Go) iff it kicked off async renewal.
-			gotAsyncRenewal := e.goroutinesStarted.Load()-prevGo != 0
-			if gotAsyncRenewal {
-				done := make(chan struct{})
-				go func() { e.wg.Wait(); close(done) }()
-				select {
-				case <-time.After(5 * time.Second):
-					t.Fatal("timed out waiting for async renewal goroutine to finish")
-				case <-done:
-				}
+			done := make(chan struct{})
+			go func() { e.wg.Wait(); close(done) }()
+			select {
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for issuance goroutines to finish")
+			case <-done:
 			}
-			// Verify that async renewal was triggered if expected.
+			gotIssuance := getCertPemWasCalled.Load() && pair == issued
+			gotAsyncRenewal := getCertPemWasCalled.Load() && pair != nil && pair.Cached
 			if tt.wantAsyncRenewal != gotAsyncRenewal {
 				t.Fatalf("wants getCertPem to be called async: %v, got called %v", tt.wantAsyncRenewal, gotAsyncRenewal)
 			}
-			// Verify that (non-async) issuance was started if expected.
-			gotIssuance := getCertPemWasCalled && !gotAsyncRenewal
 			if tt.wantIssuance != gotIssuance {
 				t.Errorf("wants getCertPem to be called: %v, got called %v", tt.wantIssuance, gotIssuance)
 			}
@@ -942,7 +939,10 @@ func TestAsyncRenewalDedup(t *testing.T) {
 	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
 		t.Logf("calling getCertPEM")
 		renewalStarted <- struct{}{}
-		<-renewalComplete
+		select {
+		case <-renewalComplete:
+		case <-ctx.Done():
+		}
 		return nil, nil
 	}
 	t.Cleanup(func() { getCertPEM = orig })
@@ -989,8 +989,161 @@ func TestAsyncRenewalDedup(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for in-flight async renewal goroutine to finish")
 	}
-	if e.renewingCertDomains.Contains(domain) {
-		t.Fatal("renewingCertDomains still contains domain after renewal finished")
+	if e.issuanceInFlight(domain) {
+		t.Fatal("issuance still recorded as in flight after renewal finished")
+	}
+}
+
+// issuanceInFlight reports whether an issuance for domain is running.
+func (e *extension) issuanceInFlight(domain string) bool {
+	e.renewMu.Lock()
+	defer e.renewMu.Unlock()
+	_, ok := e.inflight[domain]
+	return ok
+}
+
+// TestIssuanceDetachedFromCaller checks that an issuance keeps running
+// when the caller that started it gives up, that a second caller joins
+// it instead of starting another, and that the second caller gets its
+// result. See tailscale/tailscale#21759.
+func TestIssuanceDetachedFromCaller(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const domain = "example.com"
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS:      tailcfg.DNSConfig{CertDomains: []string{domain}},
+	})
+
+	issued := &ipnlocal.TLSCertKeyPair{CertPEM: []byte("issued")}
+	entered := make(chan context.Context, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	orig := getCertPEM
+	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+		calls.Add(1)
+		entered <- ctx
+		select {
+		case <-release:
+			return issued, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	t.Cleanup(func() { getCertPEM = orig })
+
+	// The first caller gives up while the issuance is running.
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := b.GetCertPEMWithValidity(callerCtx, domain, 0)
+		firstDone <- err
+	}()
+	var issuanceCtx context.Context
+	select {
+	case issuanceCtx = <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the issuance to start")
+	}
+	cancelCaller()
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("first caller got %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first caller did not return after its context was canceled")
+	}
+	if issuanceCtx.Err() != nil {
+		t.Fatal("the issuance's context was canceled along with the caller's")
+	}
+	if !e.issuanceInFlight(domain) {
+		t.Fatal("issuance is not in flight after the caller gave up")
+	}
+
+	// A second caller joins the running issuance and gets its result.
+	secondDone := make(chan *ipnlocal.TLSCertKeyPair, 1)
+	go func() {
+		pair, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
+		if err != nil {
+			t.Errorf("second caller: %v", err)
+		}
+		secondDone <- pair
+	}()
+	// Give the second caller a moment to reach startIssuance; a join
+	// starts no goroutine, so there is nothing else to wait on.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	select {
+	case pair := <-secondDone:
+		if pair == nil || string(pair.CertPEM) != "issued" {
+			t.Fatalf("second caller got %+v, want the issued pair", pair)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second caller did not get the issuance's result")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("getCertPEM ran %d times, want 1", got)
+	}
+	if e.issuanceInFlight(domain) {
+		t.Fatal("issuance still recorded as in flight after it finished")
+	}
+}
+
+// TestShutdownCancelsIssuance checks that Shutdown cancels a running
+// issuance and that no new one can start afterwards.
+func TestShutdownCancelsIssuance(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const domain = "example.com"
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+	b.ForTest().SetNetMap(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{}).View(),
+		DNS:      tailcfg.DNSConfig{CertDomains: []string{domain}},
+	})
+
+	entered := make(chan struct{}, 1)
+	orig := getCertPEM
+	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+		entered <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { getCertPEM = orig })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the issuance to start")
+	}
+
+	shutdownDone := make(chan struct{})
+	go func() { e.Shutdown(); close(shutdownDone) }()
+	select {
+	case <-shutdownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return; the issuance was not canceled")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller got %v, want context.Canceled from the shut-down issuance", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return after Shutdown")
+	}
+	if _, _, err := e.startIssuance(b, nil, t.Logf, nil, domain, time.Now(), 0); err == nil {
+		t.Fatal("startIssuance succeeded after Shutdown; want an error")
 	}
 }
 
