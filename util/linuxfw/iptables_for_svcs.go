@@ -100,7 +100,7 @@ func argsForPortMapRule(svc, excludeI string, targetIP netip.Addr, pm PortMap) [
 		"--dport", fmt.Sprintf("%d", pm.MatchPort),
 		"-m", "comment", "--comment", c,
 		"-j", "DNAT",
-		"--to-destination", fmt.Sprintf("%v:%v", targetIP, pm.TargetPort),
+		"--to-destination", netip.AddrPortFrom(targetIP, pm.TargetPort).String(),
 	}
 }
 
