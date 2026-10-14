@@ -86,8 +86,8 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	if markedForDeletion(pg) {
 		logger.Debugf("ProxyGroup is being deleted, ensuring any created resources are cleaned up")
 		if err = r.maybeCleanup(ctx, serviceName, pg, logger, tsClient); reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return res, nil
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
 
 		return res, err
@@ -96,8 +96,8 @@ func (r *KubeAPIServerTSServiceReconciler) Reconcile(ctx context.Context, req re
 	err = r.maybeProvision(ctx, serviceName, pg, logger, tsClient)
 	if err != nil {
 		if reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return reconcile.Result{}, nil
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		}
 		return reconcile.Result{}, err
 	}

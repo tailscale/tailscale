@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
@@ -49,6 +50,8 @@ const (
 
 	defaultNameserverImageRepo = "tailscale/k8s-nameserver"
 	defaultNameserverImageTag  = "stable"
+
+	shortRequeue = 5 * time.Second
 )
 
 var gaugeNameserverResources = clientmetric.NewGauge(kubetypes.MetricNameserverCount)
@@ -159,8 +162,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	}
 	if err = r.maybeProvision(ctx, &dnsCfg); err != nil {
 		if reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
-			return reconcile.Result{}, nil
+			logger.Debugf("update conflict, retrying: %v", err)
+			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		} else {
 			return reconcile.Result{}, fmt.Errorf("error provisioning nameserver resources: %w", err)
 		}

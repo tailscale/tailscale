@@ -157,7 +157,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 
 	if err := r.maybeProvision(ctx, proxySvc, logger); err != nil {
 		if reconciler.IsOptimisticLockError(err) {
-			logger.Infof("optimistic lock error, retrying: %s", err)
+			logger.Debugf("update conflict, retrying: %v", err)
 			return reconcile.Result{RequeueAfter: shortRequeue}, nil
 		} else {
 			return reconcile.Result{}, err
