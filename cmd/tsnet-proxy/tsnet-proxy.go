@@ -143,8 +143,12 @@ func proxyTCP(c net.Conn, target string) {
 		return
 	}
 	defer d.Close()
-	go io.Copy(d, c)
-	io.Copy(c, d)
+	// Return once either direction ends so the deferred closes tear down the
+	// other one; otherwise a client disconnect leaks the upstream connection.
+	done := make(chan struct{}, 2)
+	go func() { io.Copy(d, c); done <- struct{}{} }()
+	go func() { io.Copy(c, d); done <- struct{}{} }()
+	<-done
 }
 
 func addTailscaleIdentityHeaders(lc *local.Client, r *httputil.ProxyRequest) {
