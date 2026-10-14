@@ -28,6 +28,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
 )
 
 func generateName(prefix string) string {
@@ -113,20 +114,36 @@ func newHTTPClient(cl *tsnet.Server) *http.Client {
 	}
 }
 
-func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server) error {
+// tailnetDomain returns the tailnet's MagicDNS domain (the DNSName suffix after
+// the node name) for the given tailnet client, e.g. "example.ts.net".
+func tailnetDomain(t *testing.T, cl *tsnet.Server) string {
 	t.Helper()
 	lc, err := cl.LocalClient()
 	if err != nil {
-		return err
+		t.Fatalf("getting local client: %v", err)
 	}
 	status, err := lc.Status(t.Context())
 	if err != nil {
-		return err
+		t.Fatalf("getting tailnet status: %v", err)
 	}
-	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
+	_, domain, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
 	if !ok {
-		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
+		t.Fatalf("unexpected DNSName format %q", status.Self.DNSName)
 	}
+	return domain
+}
+
+// via6FQDN returns the hyphenated 4via6 MagicDNS name for an IPv4 address and
+// site ID on the given tailnet, e.g. "10-1-0-5-via-7.example.ts.net".
+func via6FQDN(t *testing.T, ip netip.Addr, siteID int, cl *tsnet.Server) string {
+	t.Helper()
+	hyphenatedIP := strings.ReplaceAll(ip.String(), ".", "-")
+	return fmt.Sprintf("%s-via-%d.%s", hyphenatedIP, siteID, tailnetDomain(t, cl))
+}
+
+func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server) error {
+	t.Helper()
+	expectedTailnet := tailnetDomain(t, cl)
 	if err := tstest.WaitFor(3*time.Minute, func() error {
 		var secrets corev1.SecretList
 		if err := kubeClient.List(t.Context(), &secrets,
@@ -162,18 +179,7 @@ func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server)
 func verifyProxyGroupTailnet(t *testing.T, pg *tsapi.ProxyGroup, cl *tsnet.Server) error {
 	t.Helper()
 	// Determine the expected tailnet Magic DNS Name.
-	lc, err := cl.LocalClient()
-	if err != nil {
-		return err
-	}
-	status, err := lc.Status(t.Context())
-	if err != nil {
-		return err
-	}
-	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
-	if !ok {
-		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
-	}
+	expectedTailnet := tailnetDomain(t, cl)
 	// Read the device FQDN from the first state secret for the ProxyGroup,
 	// and verify that this matches the expected tailnet.
 	if err := tstest.WaitFor(3*time.Minute, func() error {
@@ -206,7 +212,10 @@ func verifyProxyGroupTailnet(t *testing.T, pg *tsapi.ProxyGroup, cl *tsnet.Serve
 	return nil
 }
 
-func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string) *tsnet.Server {
+// newTailnetNode brings up an ephemeral, tag:k8s tsnet node. Pass a logf (e.g.
+// t.Logf) to surface the node's backend logs, including netstack subnet-router /
+// 4via6 forwarding decisions; omit it to keep the node quiet.
+func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string, logf ...logger.Logf) *tsnet.Server {
 	t.Helper()
 	caps := tailscale.KeyCapabilities{}
 	caps.Devices.Create.Preauthorized = true
@@ -224,6 +233,9 @@ func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string) *tsnet.
 		Ephemeral:  true,
 		Store:      &mem.Store{},
 		AuthKey:    authKey.Key,
+	}
+	if len(logf) > 0 {
+		srv.Logf = logf[0]
 	}
 	if _, err := srv.Up(t.Context()); err != nil {
 		t.Fatalf("bringing up node: %v", err)
