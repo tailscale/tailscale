@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -21,10 +22,14 @@ import (
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"tailscale.com/ipn"
 	tsoperator "tailscale.com/k8s-operator"
@@ -820,5 +825,54 @@ func TestConnectorWithStaticEndpoints(t *testing.T) {
 	}
 	if env := findPortEnv(sts); env != nil {
 		t.Errorf("expected StatefulSet %q to no longer have a PORT env, got %v", shortName, env)
+	}
+}
+
+func TestConnectorOptimisticLockErrorRequeues(t *testing.T) {
+	cn := &tsapi.Connector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+			UID:  types.UID("1234-UID"),
+		},
+		Spec: tsapi.ConnectorSpec{
+			Replicas: new(int32(1)),
+			ExitNode: true,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(tsapi.GlobalScheme).
+		WithObjects(cn).
+		WithStatusSubresource(cn).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*appsv1.StatefulSet); ok {
+					return apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "statefulsets"}, obj.GetName(), errors.New(optimisticLockErrorMsg))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	cr := &ConnectorReconciler{
+		Client:   fc,
+		recorder: record.NewFakeRecorder(10),
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			clients:           tsclient.NewProvider(&fakeTSClient{}),
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		clock:  tstest.NewClock(tstest.ClockOpts{}),
+		logger: zap.Must(zap.NewDevelopment()).Sugar(),
+	}
+
+	expectRequeue(t, cr, "", "test")
+
+	got := new(tsapi.Connector)
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Reason != reasonConnectorCreating {
+		t.Errorf("want condition reason %q, got %+v", reasonConnectorCreating, got.Status.Conditions)
 	}
 }

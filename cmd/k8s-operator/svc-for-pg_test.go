@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
@@ -18,11 +19,14 @@ import (
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"tailscale.com/client/tailscale/v2"
 
 	tsoperator "tailscale.com/k8s-operator"
@@ -648,4 +652,22 @@ func TestProxyGroupFromServiceFinalizers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServicePGReconciler_OptimisticLockErrorRequeues fails the update to the
+// ProxyGroup's ingress config ConfigMap, which the reconciler doesn't watch,
+// so a dropped request is only retried by the requeue.
+func TestServicePGReconciler_OptimisticLockErrorRequeues(t *testing.T) {
+	svcPGR, stateSecret, fc, _, _ := setupServiceTest(t)
+	svc, _ := setupTestService(t, "test-svc", "", "1.2.3.4", fc, stateSecret)
+
+	svcPGR.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if cm, ok := obj.(*corev1.ConfigMap); ok {
+				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, cm.Name, errors.New(optimisticLockErrorMsg))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	})
+	expectRequeue(t, svcPGR, "default", svc.Name)
 }
