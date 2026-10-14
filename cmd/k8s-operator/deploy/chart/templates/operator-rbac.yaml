@@ -41,6 +41,15 @@ rules:
 - apiGroups: ["tailscale.com"]
   resources: ["dnsconfigs", "dnsconfigs/status"]
   verbs: ["get", "list", "watch", "update"]
+# The nameserver's ServiceAccount, Deployment, Service and ConfigMap are created with an
+# ownerReference to the cluster-scoped DNSConfig and blockOwnerDeletion: true. Clusters
+# that enable the OwnerReferencesPermissionEnforcement admission plugin (OpenShift does by
+# default) then require update on the owner's finalizers subresource, otherwise every
+# create is rejected and nameserver provisioning never succeeds. Inert where the plugin
+# is not enabled.
+- apiGroups: ["tailscale.com"]
+  resources: ["dnsconfigs/finalizers"]
+  verbs: ["update"]
 - apiGroups: ["tailscale.com"]
   resources: ["tailnets", "tailnets/status"]
   verbs: ["get", "list", "watch", "update"]
