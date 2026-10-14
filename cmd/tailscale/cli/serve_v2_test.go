@@ -2736,4 +2736,45 @@ func TestRunServeSetConfig(t *testing.T) {
 			t.Errorf("get-config output missing https-over-unix target:\n%s", gotStdout.String())
 		}
 	})
+
+	t.Run("tls_terminated_tcp_roundtrip", func(t *testing.T) {
+		// A tls-terminated-tcp endpoint was rejected with "must be a URL
+		// starting with one of the supported schemes: [tcp unix]". The target
+		// was built as "tls-terminated-tcp://host:port", while applyTCPServe
+		// takes TLS termination from the serve type and expands the target
+		// allowing only {tcp, unix} -- the same shape that
+		// `--tls-terminated-tcp=443 tcp://localhost:9481` already produced.
+		lc := &fakeLocalServeClient{config: &ipn.ServeConfig{}}
+		var stdout, stderr bytes.Buffer
+		e := &serveEnv{lc: lc, service: fooSvc, testStdout: &stdout, testStderr: &stderr}
+		path := writeTmpServeConfig(t, `{"version":"0.0.1","endpoints":{"tcp:443":"tls-terminated-tcp://localhost:9481"}}`)
+
+		if err := e.runServeSetConfig(context.Background(), []string{path}); err != nil {
+			t.Fatalf("set-config: %v", err)
+		}
+		svc := lc.config.Services[fooSvc]
+		if svc == nil || svc.TCP[443] == nil {
+			t.Fatalf("svc:foo TCP/443 not applied; got %+v", lc.config.Services)
+		}
+		if got := svc.TCP[443].TCPForward; got != "localhost:9481" {
+			t.Errorf("TCPForward = %q, want %q", got, "localhost:9481")
+		}
+		if got := svc.TCP[443].TerminateTLS; got != "foo.test.ts.net" {
+			t.Errorf("TerminateTLS = %q, want %q", got, "foo.test.ts.net")
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr must be empty; got:\n%s", stderr.String())
+		}
+
+		// Round-trip through get-config.
+		var gotStdout, gotStderr bytes.Buffer
+		g := &serveEnv{lc: lc, service: fooSvc, testStdout: &gotStdout, testStderr: &gotStderr}
+		if err := g.runServeGetConfig(context.Background(), nil); err != nil {
+			t.Fatalf("get-config: %v", err)
+		}
+		if !strings.Contains(gotStdout.String(), `"tcp:443": "tls-terminated-tcp://localhost:9481"`) {
+			t.Errorf("get-config output missing tls-terminated-tcp target:\n%s", gotStdout.String())
+		}
+	})
+
 }

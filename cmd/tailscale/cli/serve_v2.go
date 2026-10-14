@@ -947,7 +947,21 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					// map source port range 1-1 to destination port range
 					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
 					portStr := fmt.Sprint(destPort)
-					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
+					scheme := ep.Protocol
+					if scheme == conffile.ProtoTLSTerminatedTCP {
+						// TLS termination is carried by the serve type, not by
+						// the proxy target: applyTCPServe reads it from
+						// serveTypeTLSTerminatedTCP and then expands the target
+						// allowing only {tcp, unix}, so the protocol name as a
+						// scheme is rejected. This is the same pair the flag
+						// form already produces:
+						// --tls-terminated-tcp=<port> tcp://host:port.
+						//
+						// ProtoHTTPSInsecure needs no such mapping, because the
+						// web path accepts "https+insecure" as a target scheme.
+						scheme = conffile.ProtoTCP
+					}
+					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
 				}
 				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {
