@@ -155,6 +155,9 @@ EXAMPLES
   - Expose a service listening on a Unix socket (Linux/macOS/BSD only):
     $ tailscale %[1]s unix:/var/run/myservice.sock
 
+  - Serve HTTPS on 443 and answer plain HTTP on port 80 with a redirect to it:
+    $ tailscale %[1]s --bg --https=443 --http-redirect=80 3000
+
 For more examples and use cases visit our docs site https://tailscale.com/kb/1247/funnel-serve-use-cases
 `)
 
@@ -250,6 +253,7 @@ func newServeV2Command(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.UintVar(&e.tcp, "tcp", 0, "Expose a TCP forwarder to forward raw TCP packets at the specified port")
 			fs.UintVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", 0, "Expose a TCP forwarder to forward TLS-terminated TCP packets at the specified port")
 			fs.UintVar(&e.proxyProtocol, "proxy-protocol", 0, "PROXY protocol version (1 or 2) for TCP forwarding")
+			fs.UintVar(&e.httpRedirect, "http-redirect", 0, "Answer plaintext HTTP on the specified port with a redirect to the HTTPS port being served (use with --https)")
 			fs.BoolVar(&e.yes, "yes", false, "Update without interactive prompts (default false)")
 		}),
 		UsageFunc: usageFuncNoDefaultValues,
@@ -346,13 +350,13 @@ func (e *serveEnv) validateArgs(subcmd serveMode, args []string) error {
 		fmt.Fprint(e.stderr(), "\nPlease see https://tailscale.com/kb/1242/tailscale-serve for more information.\n")
 		return errHelpFunc(subcmd)
 	}
-	if len(args) == 0 && e.tun {
+	if len(args) == 0 && (e.tun || e.httpRedirect != 0) {
 		return nil
 	}
 	if len(args) == 0 {
 		return flag.ErrHelp
 	}
-	if e.tun && len(args) > 1 {
+	if (e.tun || e.httpRedirect != 0 && e.https == 0) && len(args) > 1 {
 		fmt.Fprintln(e.stderr(), "Error: invalid argument format")
 		return errHelpFunc(subcmd)
 	}
@@ -428,6 +432,18 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
 			return errHelpFunc(subcmd)
 		}
+
+		redirectPort, err := e.httpRedirectPortFromFlags(srvType, srvPort)
+		if err != nil {
+			fmt.Fprintf(e.stderr(), "error: %v\n\n", err)
+			return errHelpFunc(subcmd)
+		}
+		// With a redirect port and no HTTPS port named, the command is about
+		// the redirect alone: it points at the HTTPS this node (or service)
+		// already serves, and "off" takes only the redirect away. With both
+		// named, the redirect rides along with the HTTPS serve, and "off"
+		// removes the serve, which takes its redirects with it.
+		redirectOnly := redirectPort != 0 && e.https == 0
 
 		if (srvType == serveTypeHTTP || srvType == serveTypeHTTPS) && e.proxyProtocol != 0 {
 			return fmt.Errorf("PROXY protocol is only supported for TCP forwarding, not HTTP/HTTPS")
@@ -512,10 +528,22 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		var msg string
-		if turnOff {
+		switch {
+		case turnOff && redirectOnly:
+			err = e.removeRedirectToHTTPS(sc, svcName, redirectPort)
+		case turnOff:
 			// only unset serve when trying to unset with type and port flags.
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount, magicDNSSuffix)
-		} else {
+		case redirectOnly:
+			var httpsPort uint16
+			httpsPort, err = soleHTTPSPort(parentSC, svcName)
+			if err == nil {
+				err = e.applyRedirectToHTTPS(parentSC, sc, svcName, redirectPort, httpsPort)
+			}
+			if err == nil {
+				msg = e.messageForRedirect(dnsName, svcName, magicDNSSuffix, redirectPort, httpsPort)
+			}
+		default:
 			if forService {
 				e.addServiceToPrefs(ctx, svcName)
 			}
@@ -527,6 +555,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 				return err
 			}
 			err = e.setServe(sc, dnsName, srvType, srvPort, mount, target, funnel, magicDNSSuffix, e.acceptAppCaps, int(e.proxyProtocol))
+			if err == nil && redirectPort != 0 {
+				err = e.applyRedirectToHTTPS(parentSC, sc, svcName, redirectPort, srvPort)
+			}
 			msg = e.messageForPort(sc, st, dnsName, srvType, srvPort)
 		}
 		if err != nil {
@@ -1130,6 +1161,12 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 			output.WriteString(fmt.Sprintf("%s://%s%s%s\n", scheme, host, portPart, m))
 			output.WriteString(fmt.Sprintf("%s %-5s %s\n\n", "|--", t, d))
 		}
+		if scheme == "https" {
+			for _, from := range redirectsToHTTPSPort(sc, svcName, srvPort) {
+				output.WriteString(fmt.Sprintf("http://%s%s\n", host, portSuffix(from, 80)))
+				output.WriteString(fmt.Sprintf("|-- redirect to https://%s%s\n\n", host, portPart))
+			}
+		}
 	} else if tcpHandler != nil {
 		var annotations []string
 		if tcpHandler.TerminateTLS != "" {
@@ -1290,6 +1327,9 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	if sc.IsTCPForwardingOnPort(srvPort, svcName) {
 		return errors.New("cannot serve web; already serving TCP")
 	}
+	if sc.IsRedirectToHTTPSOnPort(srvPort, svcName) {
+		return fmt.Errorf("cannot serve web; port %d redirects to https (tailscale serve --http-redirect=%d off)", srvPort, srvPort)
+	}
 
 	sc.SetWebHandler(h, dnsName, srvPort, mount, useTLS, mds)
 
@@ -1335,6 +1375,9 @@ func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType se
 
 	if sc.IsServingWeb(srcPort, svcName) {
 		return fmt.Errorf("cannot serve TCP; already serving web on %d for %s", srcPort, dnsName)
+	}
+	if sc.IsRedirectToHTTPSOnPort(srcPort, svcName) {
+		return fmt.Errorf("cannot serve TCP; port %d redirects to https (tailscale serve --http-redirect=%d off)", srcPort, srcPort)
 	}
 
 	// TODO: needs to account for multiple configs from foreground mode
@@ -1604,8 +1647,174 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, dnsName string, src uint1
 	if sc.IsServingWeb(src, svcName) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
+	if sc.IsRedirectToHTTPSOnPort(src, svcName) {
+		return fmt.Errorf("unable to remove; redirecting to https, not TCP forwarding on serve port %d (tailscale serve --http-redirect=%d off)", src, src)
+	}
 	sc.RemoveTCPForwarding(svcName, src)
 	return nil
+}
+
+// httpRedirectPortFromFlags validates --http-redirect against the serve the
+// other flags describe and returns the port to redirect from, or 0 if the
+// flag was not given.
+func (e *serveEnv) httpRedirectPortFromFlags(srvType serveType, srvPort uint16) (uint16, error) {
+	if e.httpRedirect == 0 {
+		return 0, nil
+	}
+	if e.httpRedirect > math.MaxUint16 {
+		return 0, fmt.Errorf("port number %d is too high for --http-redirect", e.httpRedirect)
+	}
+	// srvType is https when --https was given and when nothing was, so the
+	// flags to refuse are the ones that name another kind of serve.
+	if srvType != serveTypeHTTPS {
+		return 0, fmt.Errorf("--http-redirect redirects to an HTTPS serve; it cannot be combined with --%s", srvType)
+	}
+	port := uint16(e.httpRedirect)
+	if e.https != 0 && port == srvPort {
+		return 0, fmt.Errorf("--http-redirect=%d cannot redirect to itself", port)
+	}
+	return port, nil
+}
+
+// applyRedirectToHTTPS makes port answer plaintext HTTP with a redirect to
+// httpsPort, in sc (the config this command edits). The HTTPS serve it points
+// at may be anywhere in parentSC: the background config or any foreground
+// session, so a redirect set in the background can point at a serve another
+// session holds.
+func (e *serveEnv) applyRedirectToHTTPS(parentSC, sc *ipn.ServeConfig, svcName tailcfg.ServiceName, port, httpsPort uint16) error {
+	if !servesHTTPS(parentSC, svcName, httpsPort) {
+		return fmt.Errorf("cannot redirect port %d to https on port %d; nothing is served there", port, httpsPort)
+	}
+	if h := sc.GetTCPPortHandler(port, svcName); h != nil && h.RedirectToHTTPSPort == 0 {
+		return fmt.Errorf("cannot redirect on port %d; already serving %s there", port, describeHandler(h))
+	}
+	if h := parentSC.GetTCPPortHandler(port, svcName); h != nil && h.RedirectToHTTPSPort == 0 && h != sc.GetTCPPortHandler(port, svcName) {
+		return fmt.Errorf("cannot redirect on port %d; already serving %s there", port, describeHandler(h))
+	}
+	sc.SetRedirectToHTTPS(port, httpsPort, svcName)
+	return nil
+}
+
+// removeRedirectToHTTPS takes the redirect on port away, and nothing else.
+func (e *serveEnv) removeRedirectToHTTPS(sc *ipn.ServeConfig, svcName tailcfg.ServiceName, port uint16) error {
+	if !sc.IsRedirectToHTTPSOnPort(port, svcName) {
+		return fmt.Errorf("port %d does not redirect to https", port)
+	}
+	sc.RemoveTCPForwarding(svcName, port)
+	return nil
+}
+
+// servesHTTPS reports whether the node (or svcName) serves HTTPS on port in
+// sc's background config or any of its foreground sessions.
+func servesHTTPS(sc *ipn.ServeConfig, svcName tailcfg.ServiceName, port uint16) bool {
+	if sc.IsServingHTTPS(port, svcName) {
+		return true
+	}
+	if svcName != noService {
+		return false
+	}
+	for _, fg := range sc.Foreground {
+		if fg.IsServingHTTPS(port, noService) {
+			return true
+		}
+	}
+	return false
+}
+
+// soleHTTPSPort returns the one port on which the node (or svcName) serves
+// HTTPS, for a redirect that did not say which. None or several is an error
+// that says what to type instead.
+func soleHTTPSPort(sc *ipn.ServeConfig, svcName tailcfg.ServiceName) (uint16, error) {
+	var ports []uint16
+	add := func(tcp map[uint16]*ipn.TCPPortHandler) {
+		for p, h := range tcp {
+			if h != nil && h.HTTPS && !slices.Contains(ports, p) {
+				ports = append(ports, p)
+			}
+		}
+	}
+	if svcName != noService {
+		if svc := sc.Services[svcName]; svc != nil {
+			add(svc.TCP)
+		}
+	} else {
+		add(sc.TCP)
+		for _, fg := range sc.Foreground {
+			add(fg.TCP)
+		}
+	}
+	slices.Sort(ports)
+	switch len(ports) {
+	case 0:
+		return 0, errors.New("nothing is served over https yet; add --https=<port> to say where the redirect should go")
+	case 1:
+		return ports[0], nil
+	default:
+		return 0, fmt.Errorf("https is served on ports %v; add --https=<port> to say which the redirect should go to", ports)
+	}
+}
+
+// redirectsToHTTPSPort lists the ports in sc that redirect to https on httpsPort,
+// sorted, for the node or for svcName.
+func redirectsToHTTPSPort(sc *ipn.ServeConfig, svcName tailcfg.ServiceName, httpsPort uint16) []uint16 {
+	tcp := sc.TCP
+	if svcName != noService {
+		if svc := sc.Services[svcName]; svc != nil {
+			tcp = svc.TCP
+		} else {
+			tcp = nil
+		}
+	}
+	var ports []uint16
+	for p, h := range tcp {
+		if h != nil && h.RedirectToHTTPSPort == httpsPort {
+			ports = append(ports, p)
+		}
+	}
+	slices.Sort(ports)
+	return ports
+}
+
+// portSuffix is ":port", or nothing when port is the scheme's default.
+func portSuffix(port, defaultPort uint16) string {
+	if port == defaultPort {
+		return ""
+	}
+	return ":" + strconv.Itoa(int(port))
+}
+
+// describeHandler names what a TCP port handler does, for an error message.
+func describeHandler(h *ipn.TCPPortHandler) string {
+	switch {
+	case h.HTTPS:
+		return "https"
+	case h.HTTP:
+		return "http"
+	case h.TCPForward != "":
+		return "tcp"
+	case h.RedirectToHTTPSPort != 0:
+		return "an https redirect"
+	}
+	return "something else"
+}
+
+// messageForRedirect is what a command that set only a redirect prints.
+func (e *serveEnv) messageForRedirect(dnsName string, svcName tailcfg.ServiceName, mds string, port, httpsPort uint16) string {
+	host := dnsName
+	if svcName != noService {
+		host = svcName.WithoutPrefix() + "." + mds
+	}
+	var output strings.Builder
+	output.WriteString(msgServeAvailable)
+	output.WriteString("\n\n")
+	output.WriteString(fmt.Sprintf("http://%s%s\n", host, portSuffix(port, 80)))
+	output.WriteString(fmt.Sprintf("|-- redirect to https://%s%s\n\n", host, portSuffix(httpsPort, 443)))
+	if svcName != noService {
+		output.WriteString(fmt.Sprintf("To remove the redirect, run: tailscale serve --service=%s --http-redirect=%d off", svcName, port))
+	} else {
+		output.WriteString(fmt.Sprintf("To remove the redirect, run: tailscale serve --http-redirect=%d off", port))
+	}
+	return output.String()
 }
 
 func (e *serveEnv) removeTunServe(sc *ipn.ServeConfig, dnsName string) error {
