@@ -707,6 +707,30 @@ func (ns *Impl) removeSubnetAddress(ip netip.Addr) {
 	}
 }
 
+// subnetAddressRemover returns a func that drops the reference
+// wrapTCPProtocolHandler took on subnet address ip for an incoming TCP
+// connection. Call it before the endpoint is created on wq, and call the
+// returned func once acceptTCP is done, saying whether an endpoint exists.
+// With an endpoint, the reference is dropped only after netstack reports it
+// closed (EventHUp): Close just queues the FIN behind any unsent data, and
+// removing the address before that makes every later send fail in netstack.
+func (ns *Impl) subnetAddressRemover(wq *waiter.Queue, ip netip.Addr) func(epCreated bool) {
+	entry, closed := waiter.NewChannelEntry(waiter.EventHUp)
+	wq.EventRegister(&entry)
+	return func(epCreated bool) {
+		if !epCreated {
+			wq.EventUnregister(&entry)
+			ns.removeSubnetAddress(ip)
+			return
+		}
+		go func() {
+			<-closed
+			wq.EventUnregister(&entry)
+			ns.removeSubnetAddress(ip)
+		}()
+	}
+}
+
 func ipPrefixToAddressWithPrefix(ipp netip.Prefix) tcpip.AddressWithPrefix {
 	return tcpip.AddressWithPrefix{
 		Address:   tcpip.AddrFromSlice(ipp.Addr().AsSlice()),
@@ -1631,13 +1655,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		dialIP = tsaddr.UnmapVia(dialIP)
 	}
 
-	defer func() {
-		if !isTailscaleIP {
-			// if this is a subnet IP, we added this in before the TCP handshake
-			// so netstack is happy TCP-handshaking as a subnet IP
-			ns.removeSubnetAddress(dialIP)
-		}
-	}()
+	var wq waiter.Queue
+	epCreated := false
+	if !isTailscaleIP {
+		// if this is a subnet IP, we added this in before the TCP handshake
+		// so netstack is happy TCP-handshaking as a subnet IP
+		removeSubnetAddr := ns.subnetAddressRemover(&wq, dialIP)
+		defer func() { removeSubnetAddr(epCreated) }()
+	}
 
 	if isVia && !ns.shouldForwardToVia(viaIP) {
 		// Refuse host-scoped 4via6 targets with a RST
@@ -1647,8 +1672,6 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true) // sends a RST
 		return
 	}
-
-	var wq waiter.Queue
 
 	// We can't actually create the endpoint or complete the inbound
 	// request until we're sure that the connection can be handled by this
@@ -1661,6 +1684,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			r.Complete(true) // sends a RST
 			return nil
 		}
+		epCreated = true
 		r.Complete(false)
 		for _, opt := range opts {
 			ep.SetSockOpt(opt)

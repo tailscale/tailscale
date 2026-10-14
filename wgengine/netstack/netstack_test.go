@@ -6,6 +6,7 @@ package netstack
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/netip"
@@ -17,9 +18,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/loopback"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/envknob"
@@ -2206,5 +2209,116 @@ func TestInjectLoopback(t *testing.T) {
 	}
 	if got := string(buf[:n]); got != "loopback test" {
 		t.Errorf("got %q, want %q", got, "loopback test")
+	}
+}
+
+// TestSubnetAddressRemoverWaitsForEndpointClose verifies that the subnet
+// address reference for a forwarded TCP connection outlives the endpoint,
+// not just the forwarder.
+func TestSubnetAddressRemoverWaitsForEndpointClose(t *testing.T) {
+	ns := makeNetstack(t, nil)
+	ip := netip.MustParseAddr("192.0.2.1")
+	refs := func() (int, bool) {
+		ns.mu.Lock()
+		defer ns.mu.Unlock()
+		n, ok := ns.connsOpenBySubnetIP[ip]
+		return n, ok
+	}
+
+	// No endpoint: dropped immediately.
+	ns.addSubnetAddress(ip)
+	var noEndpoint waiter.Queue
+	ns.subnetAddressRemover(&noEndpoint, ip)(false)
+	if n, ok := refs(); ok {
+		t.Fatalf("connsOpenBySubnetIP[%v] = %d after remover without endpoint; want no entry", ip, n)
+	}
+
+	// With an endpoint: a real TCP connection on a loopback stack.
+	s := stack.New(stack.Options{
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+	})
+	t.Cleanup(s.Destroy)
+	const nic = 1
+	lo := tcpip.AddrFrom4([4]byte{127, 0, 0, 1})
+	if err := s.CreateNIC(nic, loopback.New()); err != nil {
+		t.Fatalf("CreateNIC: %v", err)
+	}
+	if err := s.AddProtocolAddress(nic, tcpip.ProtocolAddress{
+		Protocol:          ipv4.ProtocolNumber,
+		AddressWithPrefix: lo.WithPrefix(),
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatalf("AddProtocolAddress: %v", err)
+	}
+	s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: nic}})
+	ln, err := gonet.ListenTCP(s, tcpip.FullAddress{NIC: nic, Addr: lo}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("ListenTCP: %v", err)
+	}
+	defer ln.Close()
+
+	ns.addSubnetAddress(ip)
+	// Registered before the endpoint exists, as in acceptTCP.
+	var wq waiter.Queue
+	remove := ns.subnetAddressRemover(&wq, ip)
+	ep, tcpipErr := s.NewEndpoint(tcp.ProtocolNumber, ipv4.ProtocolNumber, &wq)
+	if tcpipErr != nil {
+		t.Fatalf("NewEndpoint: %v", tcpipErr)
+	}
+	connEntry, connCh := waiter.NewChannelEntry(waiter.WritableEvents)
+	wq.EventRegister(&connEntry)
+	tcpipErr = ep.Connect(tcpip.FullAddress{NIC: nic, Addr: lo, Port: uint16(ln.Addr().(*net.TCPAddr).Port)})
+	if _, ok := tcpipErr.(*tcpip.ErrConnectStarted); ok {
+		<-connCh
+		tcpipErr = ep.LastError()
+	}
+	wq.EventUnregister(&connEntry)
+	if tcpipErr != nil {
+		t.Fatalf("Connect: %v", tcpipErr)
+	}
+	client := gonet.NewTCPConn(&wq, ep)
+	defer client.Close()
+	peerConn, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	peer := peerConn.(*gonet.TCPConn)
+	defer peer.Close()
+
+	// Forwarder done, endpoint still open: the reference must survive.
+	remove(true)
+	if n, ok := refs(); !ok || n != 1 {
+		t.Fatalf("connsOpenBySubnetIP[%v] = %d (present=%v) with the endpoint open; want 1", ip, n, ok)
+	}
+
+	// Peer half-closes first, then the endpoint writes and closes with the
+	// data still queued, as a forwarded request/response does.
+	if err := peer.CloseWrite(); err != nil {
+		t.Fatalf("peer CloseWrite: %v", err)
+	}
+	if n, err := client.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("client Read after peer CloseWrite = %d, %v; want 0, io.EOF", n, err)
+	}
+	payload := make([]byte, 64<<10)
+	if _, err := client.Write(payload); err != nil {
+		t.Fatalf("client Write: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("client Close: %v", err)
+	}
+	got, err := io.ReadAll(peer)
+	if err != nil {
+		t.Fatalf("peer ReadAll: %v", err)
+	}
+	if len(got) != len(payload) {
+		t.Fatalf("peer read %d bytes; want %d", len(got), len(payload))
+	}
+	if err := tstest.WaitFor(10*time.Second, func() error {
+		if n, ok := refs(); ok {
+			return fmt.Errorf("connsOpenBySubnetIP[%v] = %d after the endpoint closed; want no entry", ip, n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
