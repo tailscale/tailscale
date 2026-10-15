@@ -537,7 +537,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			goos := cmp.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos, tt.extraRoutes)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), tt.expired, log.Logf, goos, tt.extraRoutes, "")
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
@@ -559,6 +559,111 @@ func peersMap(s []tailcfg.NodeView) map[tailcfg.NodeID]tailcfg.NodeView {
 		m[n.ID()] = n
 	}
 	return m
+}
+
+func TestDNSConfigPrimaryDNSSuffix(t *testing.T) {
+	nm := &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name:      "mynode.tail1234.ts.net.",
+			Addresses: ipps("100.101.101.101"),
+		}).View(),
+		DNS: tailcfg.DNSConfig{
+			Proxied:   true,
+			Domains:   []string{"tail1234.ts.net"},
+			Resolvers: []*dnstype.Resolver{{Addr: "8.8.8.8"}},
+		},
+	}
+	peers := nodeViews([]*tailcfg.Node{
+		{
+			ID:        1,
+			Name:      "peer1.tail1234.ts.net.",
+			Addresses: ipps("100.102.102.102"),
+		},
+		{
+			ID:        2,
+			Name:      "peer2.tail1234.ts.net.",
+			Addresses: ipps("100.103.103.103"),
+		},
+	})
+	prefs := &ipn.Prefs{CorpDNS: true}
+
+	tests := []struct {
+		name          string
+		primarySuffix string
+		splitDNS      map[string][]*dnstype.Resolver
+		wantHosts     map[dnsname.FQDN][]netip.Addr
+		wantRoute     bool
+	}{
+		{
+			name:          "empty suffix is no-op",
+			primarySuffix: "",
+			wantHosts: map[dnsname.FQDN][]netip.Addr{
+				"mynode.tail1234.ts.net.": {netip.MustParseAddr("100.101.101.101")},
+				"peer1.tail1234.ts.net.":  {netip.MustParseAddr("100.102.102.102")},
+				"peer2.tail1234.ts.net.":  {netip.MustParseAddr("100.103.103.103")},
+			},
+		},
+		{
+			name:          "adds aliases under primary suffix",
+			primarySuffix: "corp.example.com",
+			wantHosts: map[dnsname.FQDN][]netip.Addr{
+				"mynode.tail1234.ts.net.":  {netip.MustParseAddr("100.101.101.101")},
+				"peer1.tail1234.ts.net.":   {netip.MustParseAddr("100.102.102.102")},
+				"peer2.tail1234.ts.net.":   {netip.MustParseAddr("100.103.103.103")},
+				"mynode.corp.example.com.": {netip.MustParseAddr("100.101.101.101")},
+				"peer1.corp.example.com.":  {netip.MustParseAddr("100.102.102.102")},
+				"peer2.corp.example.com.":  {netip.MustParseAddr("100.103.103.103")},
+			},
+			wantRoute: true,
+		},
+		{
+			name:          "existing splitDNS route not overwritten",
+			primarySuffix: "corp.example.com",
+			splitDNS: map[string][]*dnstype.Resolver{
+				"corp.example.com": {{Addr: "10.0.0.1"}},
+			},
+			wantHosts: map[dnsname.FQDN][]netip.Addr{
+				"mynode.tail1234.ts.net.":  {netip.MustParseAddr("100.101.101.101")},
+				"peer1.tail1234.ts.net.":   {netip.MustParseAddr("100.102.102.102")},
+				"peer2.tail1234.ts.net.":   {netip.MustParseAddr("100.103.103.103")},
+				"mynode.corp.example.com.": {netip.MustParseAddr("100.101.101.101")},
+				"peer1.corp.example.com.":  {netip.MustParseAddr("100.102.102.102")},
+				"peer2.corp.example.com.":  {netip.MustParseAddr("100.103.103.103")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nmCopy := *nm
+			if tt.splitDNS != nil {
+				nmCopy.DNS.Routes = tt.splitDNS
+			}
+			var log tstest.MemLogger
+			got := dnsConfigForNetmap(&nmCopy, peersMap(peers), prefs.View(), false, log.Logf, "windows", nil, tt.primarySuffix)
+
+			if !reflect.DeepEqual(got.Hosts, tt.wantHosts) {
+				gotj, _ := json.MarshalIndent(got.Hosts, "", "\t")
+				wantj, _ := json.MarshalIndent(tt.wantHosts, "", "\t")
+				t.Errorf("Hosts wrong\n got: %s\n\nwant: %s\n", gotj, wantj)
+			}
+
+			psFQDN := dnsname.FQDN("corp.example.com.")
+			route, hasRoute := got.Routes[psFQDN]
+			if tt.wantRoute {
+				if !hasRoute {
+					t.Error("expected route for primary DNS suffix, got none")
+				} else if route == nil {
+					t.Error("route for primary suffix should have resolvers (not nil/authoritative)")
+				}
+			}
+			if tt.splitDNS != nil && hasRoute {
+				// Verify existing splitDNS route was preserved.
+				if len(route) != 1 || route[0].Addr != "10.0.0.1" {
+					t.Errorf("splitDNS route was overwritten: got %v", route)
+				}
+			}
+		})
+	}
 }
 
 func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {

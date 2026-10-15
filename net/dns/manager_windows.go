@@ -404,6 +404,10 @@ func (m *windowsManager) disableHostsFileUpdates() bool {
 	return disableHostsFileUpdatesLocal() || (m.knobs != nil && m.knobs.DisableHostsFileUpdates.Load())
 }
 
+func (m *windowsManager) useQuad100ForPrimaryDNSSuffix() bool {
+	return m.knobs != nil && m.knobs.UseQuad100ForPrimaryDNSSuffix.Load()
+}
+
 func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	// We can configure Windows DNS in one of two ways:
 	//
@@ -450,11 +454,13 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 			return err
 		}
 		var hosts []*HostEntry
-		if !m.disableHostsFileUpdates() && winenv.IsDomainJoined() {
+		if !m.disableHostsFileUpdates() && !m.useQuad100ForPrimaryDNSSuffix() && winenv.IsDomainJoined() {
 			// On domain-joined Windows devices the primary search domain (the one the device is joined to)
 			// always takes precedence over other search domains. This breaks MagicDNS when we are the primary
 			// resolver on the device (see #18712). To work around this Windows behavior, we should write MagicDNS
 			// host names the hosts file just as we do when we're not the primary resolver.
+			// When UseQuad100ForPrimaryDNSSuffix is enabled, MagicDNS resolves peers
+			// under the primary suffix directly, so hosts file writes are unnecessary.
 			hosts = cfg.Hosts
 		}
 		if err := m.setHosts(hosts); err != nil {

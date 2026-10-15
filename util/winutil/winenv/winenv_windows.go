@@ -76,6 +76,22 @@ func IsDomainJoined() bool {
 	return status == windows.NetSetupDomainName
 }
 
+// DomainName returns the AD domain name if the device is domain-joined,
+// or an empty string otherwise. This corresponds to the "primary DNS suffix"
+// shown by ipconfig /all on Windows.
+func DomainName() string {
+	var domain *uint16
+	var status uint32
+	if err := windows.NetGetJoinInformation(nil, &domain, &status); err != nil {
+		return ""
+	}
+	defer windows.NetApiBufferFree((*byte)(unsafe.Pointer(domain)))
+	if status != windows.NetSetupDomainName {
+		return ""
+	}
+	return windows.UTF16PtrToString(domain)
+}
+
 // IsMDMRegistered reports whether the device is MDM-registered.
 func IsMDMRegistered() bool {
 	const S_OK int32 = 0

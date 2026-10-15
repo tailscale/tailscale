@@ -198,7 +198,8 @@ type CapabilityVersion int
 //   - 147: 2026-09-09: Client handles 429/503 responses with retry-after headers to /machine/ endpoints
 //   - 148: 2026-09-15: Client understands [Node.StableTailnetID]
 //   - 149: 2026-10-07: Sentinel version to request the server send back [NodeAttrCacheNetworkMaps] set to enabled
-const CurrentCapabilityVersion CapabilityVersion = 149
+//   - 150: 2026-10-15: Client understands [NodeAttrUseQuad100ForPrimaryDNSSuffix]
+const CurrentCapabilityVersion CapabilityVersion = 150
 
 // ID is an integer ID for a user, node, or login allocated by the
 // control plane.
@@ -2581,6 +2582,14 @@ const (
 	// Deprecated: Do not add any further values here, use [nodecap] instead.
 
 	NodeAttrPrefixServices = nodecap.ServicesPrefix
+
+	// NodeAttrUseQuad100ForPrimaryDNSSuffix makes the client add MagicDNS
+	// host entries for peers under the device's primary DNS suffix (the AD
+	// domain on Windows), so that MagicDNS (quad-100) can resolve peer names
+	// directly without hosts file entries. This avoids the DNS performance
+	// problems caused by large hosts files on domain-joined Windows devices.
+	NodeAttrUseQuad100ForPrimaryDNSSuffix NodeCapability = "use-quad100-for-primary-dns-suffix"
+
 	// Deprecated: Do not add any further values here, use [nodecap] instead.
 )
 

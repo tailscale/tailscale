@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 
 	"go4.org/netipx"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -1183,10 +1184,14 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
 }
 
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, goos string, extraRoutes map[string][]*dnstype.Resolver) *dns.Config {
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, goos string, extraRoutes map[string][]*dnstype.Resolver, knobs *controlknobs.Knobs) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, goos, extraRoutes)
+	var suffix string
+	if knobs != nil && knobs.UseQuad100ForPrimaryDNSSuffix.Load() {
+		suffix = primaryDNSSuffix()
+	}
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, goos, extraRoutes, suffix)
 }
 
 // magicDNSHostAddrs returns the MagicDNS A/AAAA answer for fqdn from
@@ -1435,7 +1440,10 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 // [ipnext.Hooks.ExtraDNSRoutes]. They are added alongside nm's own DNS
 // routes and get the same treatment, including the UseWithExitNode
 // filtering when an exit node proxies DNS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, goos string, extraRoutes map[string][]*dnstype.Resolver) *dns.Config {
+//
+// primarySuffix, if non-empty, causes peer host entries to be added
+// under that DNS suffix so MagicDNS can resolve them directly.
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, goos string, extraRoutes map[string][]*dnstype.Resolver, primarySuffix string) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -1643,6 +1651,50 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	addSplitDNSRoutes(nm.DNS.Routes)
 	addSplitDNSRoutes(extraRoutes)
 	coverExtraRecords()
+
+	// If a primary DNS suffix is specified (e.g., AD domain on Windows),
+	// add peer host entries under that suffix so MagicDNS can resolve
+	// queries like "host123.corp.example.com" directly from the peer list.
+	// This avoids writing to the OS hosts file on domain-joined Windows
+	// devices, which causes DNS performance problems.
+	if primarySuffix != "" && nm.DNS.Proxied {
+		psFQDN, err := dnsname.ToFQDN(primarySuffix)
+		if err == nil {
+			toAdd := map[dnsname.FQDN][]netip.Addr{}
+			for fqdn, ips := range dcfg.Hosts {
+				label := dnsname.FirstLabel(string(fqdn))
+				if label == "" {
+					continue
+				}
+				aliasFQDN, err := dnsname.ToFQDN(label + "." + primarySuffix)
+				if err != nil || aliasFQDN == fqdn {
+					continue
+				}
+				if _, exists := dcfg.Hosts[aliasFQDN]; !exists {
+					toAdd[aliasFQDN] = ips
+				}
+			}
+			for fqdn, ips := range toAdd {
+				dcfg.Hosts[fqdn] = ips
+			}
+
+			// Ensure the primary DNS suffix is routed through MagicDNS
+			// so it becomes a MatchDomain on Windows (NRPT rule). Use
+			// resolvers from the route if already configured (splitDNS),
+			// otherwise fall back to default or fallback resolvers.
+			// Do NOT use nil (that would make it a localDomain, returning
+			// NXDOMAIN for non-peer names and breaking corporate DNS).
+			if _, hasRoute := dcfg.Routes[psFQDN]; !hasRoute {
+				resolvers := dcfg.DefaultResolvers
+				if len(resolvers) == 0 {
+					resolvers = nm.DNS.FallbackResolvers
+				}
+				if len(resolvers) > 0 {
+					dcfg.Routes[psFQDN] = slices.Clone(resolvers)
+				}
+			}
+		}
+	}
 
 	// Set FallbackResolvers as the default resolvers in the
 	// scenarios that can't handle a purely split-DNS config. See

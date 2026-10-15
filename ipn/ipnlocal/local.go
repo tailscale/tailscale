@@ -6138,7 +6138,7 @@ func (b *LocalBackend) authReconfigLocked() {
 	if f, ok := b.extHost.hooks.ExtraDNSRoutes.GetOk(); ok {
 		extraDNSRoutes = f()
 	}
-	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, cmp.Or(b.goos, runtime.GOOS), extraDNSRoutes)
+	dcfg := cn.dnsConfigForNetmap(prefs, b.keyExpired, cmp.Or(b.goos, runtime.GOOS), extraDNSRoutes, b.ControlKnobs())
 	// If the current node is an app connector, ensure the app connector machine is started
 	b.reconfigAppConnectorLocked(nm.SelfNode, prefs)
 

@@ -148,6 +148,12 @@ type Knobs struct {
 	// quad-100 as primary. Off by default; has no effect on other platforms.
 	// See tailscale/corp#45534 and tailscale/corp#48693.
 	ScopeQuad100OnMacOS atomic.Bool
+
+	// UseQuad100ForPrimaryDNSSuffix indicates that the node should add peer
+	// DNS entries under the device's primary DNS suffix so MagicDNS (quad-100)
+	// can resolve them directly, avoiding hosts file writes on domain-joined
+	// Windows devices.
+	UseQuad100ForPrimaryDNSSuffix atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -185,6 +191,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 		neverGSOEqualTail                    = has(nodecap.NeverGSOEqualTail)
 		cacheNetworkMaps                     = has(nodecap.CacheNetworkMaps)
 		scopeQuad100OnMacOS                  = has(nodecap.ScopeQuad100OnMacOS)
+		useQuad100ForPrimaryDNSSuffix        = has(tailcfg.NodeAttrUseQuad100ForPrimaryDNSSuffix)
 	)
 
 	if has(nodecap.OneCGNATEnable) {
@@ -220,6 +227,7 @@ func (k *Knobs) UpdateFromNodeAttributes(capMap tailcfg.NodeCapMap) {
 	k.NeverGSOEqualTail.Store(neverGSOEqualTail)
 	k.CacheNetworkMaps.Store(cacheNetworkMaps)
 	k.ScopeQuad100OnMacOS.Store(scopeQuad100OnMacOS)
+	k.UseQuad100ForPrimaryDNSSuffix.Store(useQuad100ForPrimaryDNSSuffix)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
