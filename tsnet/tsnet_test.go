@@ -1007,8 +1007,8 @@ func TestFunnel(t *testing.T) {
 }
 
 // TestFunnelClose ensures that the listener returned by ListenFunnel cleans up
-// after itself when closed. Specifically, changes made to the serve config
-// should be cleared.
+// after itself when closed, and that a failed ListenFunnel leaves nothing
+// behind. Specifically, changes made to the serve config should be cleared.
 func TestFunnelClose(t *testing.T) {
 
 	marshalServeConfig := func(t *testing.T, sc ipn.ServeConfigView) string {
@@ -1078,6 +1078,30 @@ func TestFunnelClose(t *testing.T) {
 		after := s.lb.ServeConfig()
 		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
 			t.Fatalf("expected existing config to remain intact (-got, +want):\n%s", diff)
+		}
+	})
+
+	// A ListenFunnel call that fails to listen shouldn't leave Funnel enabled
+	// in the serve config, as there's no listener for the caller to close.
+	t.Run("listen_error", func(t *testing.T) {
+		controlURL, _ := startControl(t)
+		s, _, _ := startServer(t, t.Context(), controlURL, "s")
+
+		// Occupy the port with a tailnet listener so that ListenFunnel
+		// fails to listen on it.
+		ln := must.Get(s.Listen("tcp", ":443"))
+		defer ln.Close()
+
+		before := s.lb.ServeConfig()
+
+		if fln, err := s.ListenFunnel("tcp", ":443"); err == nil {
+			fln.Close()
+			t.Fatal("ListenFunnel on a port that is already in use succeeded; want error")
+		}
+
+		after := s.lb.ServeConfig()
+		if diff := cmp.Diff(marshalServeConfig(t, after), marshalServeConfig(t, before)); diff != "" {
+			t.Fatalf("expected serve config to be unchanged after failed ListenFunnel (-got, +want):\n%s", diff)
 		}
 	})
 
