@@ -58,9 +58,6 @@ func TestHostSubnetRouter4via6Egress(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestHostSubnetRouter4via6Egress requires a working tailnet client")
 	}
-	if *fCluster {
-		t.Skip("4via6 does not work in a kind cluster; run against a real cluster (omit --cluster)")
-	}
 	if !clusterIPv6Support {
 		t.Skip("4via6 egress requires an IPv6-capable cluster")
 	}
@@ -94,9 +91,6 @@ func TestHostSubnetRouter4via6Egress(t *testing.T) {
 func TestHostSubnetRouter4via6HAEgress(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestHostSubnetRouter4via6HAEgress requires a working tailnet client")
-	}
-	if *fCluster {
-		t.Skip("4via6 does not work in a kind cluster; run against a real cluster (omit --cluster)")
 	}
 	if !clusterIPv6Support {
 		t.Skip("4via6 egress requires an IPv6-capable cluster")
@@ -207,9 +201,6 @@ func TestConnector4via6Egress(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestConnector4via6Egress requires a working tailnet client")
 	}
-	if *fCluster {
-		t.Skip("4via6 does not work in a kind cluster; run against a real dual-stack cluster")
-	}
 	if !clusterIPv4Support || !clusterIPv6Support {
 		t.Skip("TestConnector4via6Egress requires a dual-stack cluster; for a single-stack IPv6 cluster see TestHostSubnetRouter4via6Egress")
 	}
@@ -243,9 +234,6 @@ func TestConnector4via6Egress(t *testing.T) {
 func TestConnector4via6HAEgress(t *testing.T) {
 	if tnClient == nil {
 		t.Skip("TestConnector4via6HAEgress requires a working tailnet client")
-	}
-	if *fCluster {
-		t.Skip("4via6 does not work in a kind cluster; run against a real dual-stack cluster (omit --cluster)")
 	}
 	if !clusterIPv4Support || !clusterIPv6Support {
 		t.Skip("TestConnector4via6HAEgress requires a dual-stack cluster; for a single-stack IPv6 cluster see TestHostSubnetRouter4via6HAEgress")
