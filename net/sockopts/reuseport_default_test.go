@@ -6,7 +6,6 @@
 package sockopts
 
 import (
-	"context"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -15,7 +14,7 @@ import (
 func TestBindUDPGroupUnsupported(t *testing.T) {
 	var tc testControl
 	var log tstest.MemLogger
-	pconns, boundPort, err := BindUDPGroup(context.Background(), log.Logf, 4, tc.control, "udp4", 0)
+	pconns, boundPort, err := BindUDPGroup(t.Context(), log.Logf, 4, tc.control, "udp4", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

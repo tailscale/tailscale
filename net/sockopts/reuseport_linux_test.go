@@ -6,7 +6,6 @@
 package sockopts
 
 import (
-	"context"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -33,7 +32,7 @@ func TestBindUDPGroup(t *testing.T) {
 			tc := testControl{failAt: tt.failAt}
 			var log tstest.MemLogger
 
-			pconns, boundPort, err := BindUDPGroup(context.Background(), log.Logf, tt.sockets, tc.control, "udp4", 0)
+			pconns, boundPort, err := BindUDPGroup(t.Context(), log.Logf, tt.sockets, tc.control, "udp4", 0)
 			defer closeConns(pconns)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Fatalf("BindUDPGroup err = %v, want an error: %v", err, tt.wantErr)

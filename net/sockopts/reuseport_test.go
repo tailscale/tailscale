@@ -4,7 +4,6 @@
 package sockopts
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -68,7 +67,7 @@ func TestBindUDPGroupLone(t *testing.T) {
 			var tc testControl
 			var log tstest.MemLogger
 
-			pconns, boundPort, err := BindUDPGroup(context.Background(), log.Logf, sockets, tc.control, "udp4", 0)
+			pconns, boundPort, err := BindUDPGroup(t.Context(), log.Logf, sockets, tc.control, "udp4", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +97,7 @@ func TestBindUDPGroupError(t *testing.T) {
 			tc := testControl{failAt: tt.failAt}
 			var log tstest.MemLogger
 
-			pconns, boundPort, err := BindUDPGroup(context.Background(), log.Logf, 4, tc.control, tt.network, 0)
+			pconns, boundPort, err := BindUDPGroup(t.Context(), log.Logf, 4, tc.control, tt.network, 0)
 			defer closeConns(pconns)
 			if err == nil {
 				t.Fatal("BindUDPGroup succeeded, want an error")
