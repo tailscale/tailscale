@@ -91,6 +91,15 @@ const (
 	// server, DERP servers, etc.)
 	DebugTSDNSResolution Cap = "https://tailscale.com/cap/debug-ts-dns-resolution"
 
+	// DisableHybridHandshakes indicates that the node should not use hybrid
+	// PQ wireguard handshakes to communicate with peers that support hybrid
+	// handshakes.
+	// 2026-11-03: This is a temporary panic disable attribute intended to reduce
+	// the risk of the initial rollout of hybrid handshakes. It will eventually
+	// be deleted to remove the control server's ability to downgrade hybrid
+	// handshakes.
+	DisableHybridHandshakes Cap = "https://tailscale.com/cap/disable-hybrid-handshakes"
+
 	// FunnelPorts specifies the ports that the Funnel is available on.
 	// The ports are specified as a comma-separated list of port numbers or port
 	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
