@@ -772,6 +772,51 @@ func TestGetUPnPPortMapping_MikroTikDoesNotQueryExternalIPAfterMapping(t *testin
 	}
 }
 
+// TestUPnPRequestsUseClientHTTPClient tests that every UPnP request, including
+// the SOAP actions and the release on Close, goes through the Client's HTTP
+// client rather than http.DefaultTransport.
+func TestUPnPRequestsUseClientHTTPClient(t *testing.T) {
+	igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+	igd.SetUPnPHandler(&upnpServer{
+		t:    t,
+		Desc: testRootDesc,
+		Control: map[string]map[string]any{"/ctl/IPConn": {
+			"AddPortMapping":       testAddPortMappingResponse,
+			"DeletePortMapping":    "",
+			"GetExternalIPAddress": testGetExternalIPAddressResponse,
+			"GetStatusInfo":        testGetStatusInfoResponse,
+		}},
+	})
+
+	ctx := context.Background()
+	c := newTestClient(t, igd, nil)
+	var paths []string
+	c.uPnPHTTPClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	mustProbeUPnP(t, ctx, c)
+	gw, myIP, ok := c.gatewayAndSelfIP()
+	if !ok {
+		t.Fatal("could not get gateway and self IP")
+	}
+	if _, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0); !ok {
+		t.Fatal("could not get UPnP port mapping")
+	}
+	c.Close()
+
+	// The root description, then GetExternalIPAddress, AddPortMapping, and
+	// DeletePortMapping.
+	want := []string{"/rootDesc.xml", "/ctl/IPConn", "/ctl/IPConn", "/ctl/IPConn"}
+	if !slices.Equal(paths, want) {
+		t.Errorf("requests through the Client's HTTP client = %q, want %q", paths, want)
+	}
+}
+
 // TestGetUPnPPortMapping_NoValidServices tests that getUPnPPortMapping doesn't
 // crash when a valid UPnP response with no supported services is discovered
 // and parsed.

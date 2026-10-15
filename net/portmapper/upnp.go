@@ -66,6 +66,14 @@ func init() {
 	}
 }
 
+// useContextHTTPClient makes sc send requests through the HTTP client stored
+// in each request's context, like goupnp.HTTPClientDefault. goupnp gives each
+// SOAPClient a zero http.Client, which would otherwise use
+// http.DefaultTransport and bypass the Client's netns dialer.
+func useContextHTTPClient(sc *soap.SOAPClient) {
+	sc.HTTPClient = *goupnp.HTTPClientDefault
+}
+
 // References:
 //
 // WANIP Connection v2: http://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
@@ -88,6 +96,8 @@ type upnpMapping struct {
 	// to release an existing mapping; new mappings should be selected from
 	// the rootDev on each attempt.
 	client upnpClient
+	// httpClient is the Client's HTTP client, used by client's requests.
+	httpClient *http.Client
 }
 
 // upnpProtocolUDP represents the protocol name for UDP, to be used in the UPnP
@@ -111,6 +121,7 @@ func (u *upnpMapping) MappingDebug() string {
 		u.loc)
 }
 func (u *upnpMapping) Release(ctx context.Context) {
+	ctx = upnpHTTPClientKey.WithValue(ctx, u.httpClient)
 	u.client.DeletePortMappingCtx(ctx, "", u.external.Port(), upnpProtocolUDP)
 }
 
@@ -315,12 +326,15 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 
 	var clients []upnpClient
 	for _, v := range wanIP2 {
+		useContextHTTPClient(v.SOAPClient)
 		clients = append(clients, v)
 	}
 	for _, v := range wanIP1 {
+		useContextHTTPClient(v.SOAPClient)
 		clients = append(clients, v)
 	}
 	for _, v := range wanPPP {
+		useContextHTTPClient(v.SOAPClient)
 		clients = append(clients, v)
 	}
 
@@ -329,11 +343,13 @@ func selectBestService(ctx context.Context, logf logger.Logf, root *goupnp.RootD
 	legacyClients, _ := goupnp.NewServiceClientsFromRootDevice(root, loc, urn_LegacyWANPPPConnection_1)
 	metricUPnPSelectLegacy.Add(int64(len(legacyClients)))
 	for _, client := range legacyClients {
+		useContextHTTPClient(client.SOAPClient)
 		clients = append(clients, &legacyWANPPPConnection1{client})
 	}
 	legacyClients, _ = goupnp.NewServiceClientsFromRootDevice(root, loc, urn_LegacyWANIPConnection_1)
 	metricUPnPSelectLegacy.Add(int64(len(legacyClients)))
 	for _, client := range legacyClients {
+		useContextHTTPClient(client.SOAPClient)
 		clients = append(clients, &legacyWANIPConnection1{client})
 	}
 
@@ -489,7 +505,8 @@ func (c *Client) getUPnPPortMapping(
 	c.mu.Lock()
 	oldMapping, ok := c.mapping.(*upnpMapping)
 	metas := c.uPnPMetas
-	ctx = upnpHTTPClientKey.WithValue(ctx, c.upnpHTTPClientLocked())
+	httpClient := c.upnpHTTPClientLocked()
+	ctx = upnpHTTPClientKey.WithValue(ctx, httpClient)
 	c.mu.Unlock()
 
 	// Wrapper for a uPnPDiscoResponse with an optional existing root
@@ -571,6 +588,7 @@ func (c *Client) getUPnPPortMapping(
 		upnp.rootDev = rootDev
 		upnp.loc = loc
 		upnp.client = client
+		upnp.httpClient = httpClient
 
 		c.mu.Lock()
 		defer c.mu.Unlock()
