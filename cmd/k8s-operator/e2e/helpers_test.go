@@ -28,7 +28,6 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tsnet"
 	"tailscale.com/tstest"
-	"tailscale.com/types/logger"
 )
 
 func generateName(prefix string) string {
@@ -212,10 +211,7 @@ func verifyProxyGroupTailnet(t *testing.T, pg *tsapi.ProxyGroup, cl *tsnet.Serve
 	return nil
 }
 
-// newTailnetNode brings up an ephemeral, tag:k8s tsnet node. Pass a logf (e.g.
-// t.Logf) to surface the node's backend logs, including netstack subnet-router /
-// 4via6 forwarding decisions; omit it to keep the node quiet.
-func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string, logf ...logger.Logf) *tsnet.Server {
+func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string) *tsnet.Server {
 	t.Helper()
 	caps := tailscale.KeyCapabilities{}
 	caps.Devices.Create.Preauthorized = true
@@ -233,9 +229,6 @@ func newTailnetNode(t *testing.T, cl *tailscale.Client, hostname string, logf ..
 		Ephemeral:  true,
 		Store:      &mem.Store{},
 		AuthKey:    authKey.Key,
-	}
-	if len(logf) > 0 {
-		srv.Logf = logf[0]
 	}
 	if _, err := srv.Up(t.Context()); err != nil {
 		t.Fatalf("bringing up node: %v", err)
