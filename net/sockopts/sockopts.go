@@ -29,11 +29,10 @@ func RawConn(pconn nettype.PacketConn) (syscall.RawConn, error) {
 // distinct from the kernel refusing the option on one.
 var ErrNoSocket = errors.New("no socket to configure")
 
-// ControlEach runs the system call fn on the socket of every conn in pconns,
-// every one of them or none.
-//
-// It returns an error wrapping [ErrNoSocket] if pconns is empty or a conn has
-// no socket, and otherwise the joined errors of every call.
+// ControlEach runs the system call fn on the socket of every conn in pconns.
+// It reports [ErrNoSocket] without calling fn if pconns is empty or if any
+// conn has no socket; otherwise it calls fn for each socket before returning,
+// and returns the join of any errors it reports.
 func ControlEach(pconns []nettype.PacketConn, fn func(fd uintptr) error) error {
 	if len(pconns) == 0 {
 		return ErrNoSocket
