@@ -463,7 +463,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		}
 	}
 
-	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
+	tagsChanged := !simpleUp && !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
