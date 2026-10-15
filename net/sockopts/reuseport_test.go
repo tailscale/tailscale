@@ -5,7 +5,6 @@ package sockopts
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"strings"
 	"syscall"
@@ -58,27 +57,6 @@ func wantSharedPort(t *testing.T, pconns []nettype.PacketConn, boundPort uint16,
 		if got := uint16(pconn.LocalAddr().(*net.UDPAddr).Port); got != boundPort {
 			t.Errorf("socket %d bound to port %d, want %d", i, got, boundPort)
 		}
-	}
-}
-
-func TestBindUDPGroupLone(t *testing.T) {
-	for _, sockets := range []int{1, 0, -3} {
-		t.Run(fmt.Sprint(sockets), func(t *testing.T) {
-			var tc testControl
-			var log tstest.MemLogger
-
-			pconns, boundPort, err := BindUDPGroup(t.Context(), log.Logf, sockets, tc.control, "udp4", 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer closeConns(pconns)
-
-			wantSharedPort(t, pconns, boundPort, 1)
-			if tc.calls != 1 {
-				t.Errorf("bound %d sockets, want 1", tc.calls)
-			}
-			wantLines(t, &log, 0)
-		})
 	}
 }
 

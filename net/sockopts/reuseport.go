@@ -25,7 +25,9 @@ import (
 // An error is reported only when it could not bind even one socket.
 // The caller owns every returned socket.
 func BindUDPGroup(ctx context.Context, logf logger.Logf, n int, control ControlFunc, network string, port uint16) (pconns []nettype.PacketConn, boundPort uint16, err error) {
-	n = max(n, 1)
+	if n < 1 {
+		panic(fmt.Sprintf("must bind at least one socket, %d was requested", n))
+	}
 	first, err := listenUDP(ctx, control, network, port)
 	if err != nil {
 		return nil, 0, err
