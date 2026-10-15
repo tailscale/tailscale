@@ -16,32 +16,32 @@ import (
 
 // RawConn returns the socket underlying pconn.
 //
-// The error wraps [errors.ErrUnsupported] if pconn has no socket.
+// The error wraps [ErrNoSocket] if pconn has no socket.
 func RawConn(pconn nettype.PacketConn) (syscall.RawConn, error) {
 	sc, ok := pconn.(syscall.Conn)
 	if !ok {
-		return nil, fmt.Errorf("%T has no socket: %w", pconn, errors.ErrUnsupported)
+		return nil, fmt.Errorf("%T: %w", pconn, ErrNoSocket)
 	}
 	return sc.SyscallConn()
 }
 
-// ErrNoSocket reports that there is no socket to apply an option to, as
+// ErrNoSocket reports that there is no socket to apply an option to,
 // distinct from the kernel refusing the option on one.
 var ErrNoSocket = errors.New("no socket to configure")
 
 // ControlEach runs the system call fn on the socket of every conn in pconns.
 // It reports [ErrNoSocket] without calling fn if pconns is empty or if any
 // conn has no socket; otherwise it calls fn for each socket before returning,
-// and returns the join of any errors it reports.
+// and returns the join of fn's errors.
 func ControlEach(pconns []nettype.PacketConn, fn func(fd uintptr) error) error {
 	if len(pconns) == 0 {
-		return ErrNoSocket
+		return fmt.Errorf("empty group: %w", ErrNoSocket)
 	}
 	rcs := make([]syscall.RawConn, len(pconns))
 	for i, pconn := range pconns {
 		rc, err := RawConn(pconn)
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrNoSocket, err)
+			return fmt.Errorf("socket %d of %d: %w", i, len(pconns), err)
 		}
 		rcs[i] = rc
 	}
