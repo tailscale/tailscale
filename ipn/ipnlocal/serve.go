@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -31,12 +30,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/pires/go-proxyproto"
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/net/identityheaders"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
@@ -1097,53 +1096,25 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
+	identityheaders.Strip(r.Out.Header)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok {
 		return
 	}
 	if c.Funnel != nil {
-		r.Out.Header.Set("Tailscale-Funnel-Request", "?1")
+		r.Out.Header.Set(identityheaders.FunnelRequest, "?1")
 		return
 	}
 	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
 	if !ok {
 		return // traffic from outside of Tailnet (funneled or local machine)
 	}
-	if node.IsTagged() {
-		// 2023-06-14: Not setting identity headers for tagged nodes.
-		// Only currently set for nodes with user identities.
-		return
-	}
-	r.Out.Header.Set("Tailscale-User-Login", encTailscaleHeaderValue(user.LoginName))
-	r.Out.Header.Set("Tailscale-User-Name", encTailscaleHeaderValue(user.DisplayName))
-	r.Out.Header.Set("Tailscale-User-Profile-Pic", user.ProfilePicURL)
-	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
-}
-
-// encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
-// an HTTP header value. See
-// https://github.com/tailscale/tailscale/issues/11603.
-//
-// If v is not a valid UTF-8 string, it returns an empty string.
-// If v is a valid ASCII string, it returns v unmodified.
-// If v is a valid UTF-8 string with non-ASCII characters, it returns a
-// RFC 2047 Q-encoded string.
-func encTailscaleHeaderValue(v string) string {
-	if !utf8.ValidString(v) {
-		return ""
-	}
-	return mime.QEncoding.Encode("utf-8", v)
+	identityheaders.Set(r.Out.Header, node, user.View())
 }
 
 func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
-	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
-	r.Out.Header.Del(appCapabilitiesHeaderName)
+	r.Out.Header.Del(identityheaders.AppCapabilities)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok || c.Funnel != nil {
@@ -1171,7 +1142,7 @@ func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error 
 		return fmt.Errorf("unable to process app capabilities")
 	}
 
-	r.Out.Header.Set(appCapabilitiesHeaderName, encTailscaleHeaderValue(string(peerCapsSerialized)))
+	r.Out.Header.Set(identityheaders.AppCapabilities, identityheaders.Encode(string(peerCapsSerialized)))
 	return nil
 }
 
