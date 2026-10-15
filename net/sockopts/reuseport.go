@@ -75,7 +75,7 @@ func listenUDP(ctx context.Context, control ControlFunc, network string, port ui
 	uc, ok := pconn.(*net.UDPConn)
 	if !ok {
 		pconn.Close()
-		return nil, fmt.Errorf("%q is not a UDP network", network)
+		return nil, fmt.Errorf("%q (%T) is not a UDP network", network, pconn)
 	}
 	return uc, nil
 }
