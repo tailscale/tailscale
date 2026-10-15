@@ -299,7 +299,7 @@ func TestControlDPremiumDoHLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	res, err := fwd.sendDoH(ctx, urlBase, c, query, false)
+	res, err := fwd.sendDoH(ctx, urlBase, c, query)
 	if err != nil {
 		t.Fatalf("sendDoH: %v", err)
 	}
@@ -2479,11 +2479,11 @@ func TestResolversCustomScheme(t *testing.T) {
 	}
 }
 
-func TestPeerAPIDoH(t *testing.T) {
+func TestDoHMeta(t *testing.T) {
 	const domain = "example.com."
 	query := makeTestRequest(t, domain, dns.TypeA, 0)
 	response := makeTestResponse(t, domain, dns.RCodeSuccess, netip.MustParseAddr("1.2.3.4"))
-	testHdrVal := "hello from PeerAPI"
+	testHdrVal := "hello from DoH"
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", dohType)
@@ -2495,30 +2495,20 @@ func TestPeerAPIDoH(t *testing.T) {
 	f := &forwarder{logf: t.Logf}
 	urlBase := srv.URL + "/dns-query"
 
-	for _, isPeerAPI := range []bool{true, false} {
-		t.Run(fmt.Sprintf("isPeerAPI=%v", isPeerAPI), func(t *testing.T) {
-			res, err := f.sendDoH(t.Context(), urlBase, srv.Client(), query, isPeerAPI)
-			if err != nil {
-				t.Fatalf("sendDoH: %+v", err)
-			}
-			if !bytes.Equal(res.Bs, response) {
-				t.Errorf("response = %x, want %x", res.Bs, response)
-			}
-			if !isPeerAPI {
-				if res.PeerAPIMeta != nil {
-					t.Errorf("PeerAPIMeta = %+v, want nil", res.PeerAPIMeta)
-				}
-				return
-			}
-			if res.PeerAPIMeta == nil {
-				t.Fatal("PeerAPIMeta = nil, want non-nil")
-			}
-			if want, got := testHdrVal, res.PeerAPIMeta.ResponseHeader.Get("Tailscale-Test"); want != got {
-				t.Errorf("PeerAPIMeta.Header[Tailscale-Test] = %q, want %q", got, want)
-			}
-			if want, got := urlBase, res.PeerAPIMeta.RequestURL.String(); want != got {
-				t.Errorf("PeerAPIMeta.RequestURL = %q, want %q", got, want)
-			}
-		})
+	res, err := f.sendDoH(t.Context(), urlBase, srv.Client(), query)
+	if err != nil {
+		t.Fatalf("sendDoH: %+v", err)
+	}
+	if !bytes.Equal(res.Bs, response) {
+		t.Errorf("response = %x, want %x", res.Bs, response)
+	}
+	if res.DoHMeta == nil {
+		t.Fatal("DoHMeta = nil, want non-nil")
+	}
+	if want, got := testHdrVal, res.DoHMeta.ResponseHeader.Get("Tailscale-Test"); want != got {
+		t.Errorf("DoHMeta.Header[Tailscale-Test] = %q, want %q", got, want)
+	}
+	if want, got := urlBase, res.DoHMeta.RequestURL.String(); want != got {
+		t.Errorf("DoHMeta.RequestURL = %q, want %q", got, want)
 	}
 }

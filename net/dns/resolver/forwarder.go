@@ -640,9 +640,7 @@ func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.
 const dohType = "application/dns-message"
 
 // sendDoH sends packet as a DoH query to urlBase using client c.
-// If isPeerAPI is true, urlBase references a PeerAPI's DoH server
-// and the returned Response has PeerAPIMeta populated.
-func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte, isPeerAPI bool) (*Response, error) {
+func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) (*Response, error) {
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderDoH, f.logf)
 	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
@@ -680,15 +678,13 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		metricDNSFwdDoHErrorBody.Add(1)
 		return nil, err
 	}
-
-	ret := &Response{Bs: res}
-	if isPeerAPI {
-		ret.PeerAPIMeta = &PeerAPIMetadata{
-			RequestURL:     hres.Request.URL.Clone(),
-			ResponseHeader: hres.Header.Clone(),
-		}
-	}
-	return ret, nil
+	return &Response{
+		Bs: res,
+		DoHMeta: &DoHMetadata{
+			RequestURL:     hres.Request.URL,
+			ResponseHeader: hres.Header,
+		},
+	}, nil
 }
 
 var (
@@ -717,11 +713,10 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
-		const isPeerAPI = true
 		if !buildfeatures.HasPeerAPIClient {
 			return nil, feature.ErrUnavailable
 		}
-		res, err := f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet, isPeerAPI)
+		res, err := f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
 		if err != nil {
 			return nil, err
 		}
@@ -736,9 +731,8 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// usable when the resolver carries a bootstrap resolution, or when the
 		// URL's host is an IP literal, since we cannot resolve the DoH
 		// server's own name through DNS without recursing through ourselves.
-		const isPeerAPI = false
 		if hc, ok := f.getDoHClientForResolver(rr.name); ok {
-			res, err := f.sendDoH(ctx, rr.name.Addr, hc, fq.packet, isPeerAPI)
+			res, err := f.sendDoH(ctx, rr.name.Addr, hc, fq.packet)
 			if err != nil {
 				return nil, err
 			}
@@ -1697,9 +1691,9 @@ func (p *closePool) Close() error {
 	return nil
 }
 
-// PeerAPIMetadata captures data about the HTTP
+// DoHMetadata captures data about the HTTP
 // request and response when a DNS request is
-// forwarded to a PeerAPI DoH server, e.g. for
+// forwarded to a DoH server, e.g. PeerAPI DoH for
 // exit nodes or app connectors.
 //
 // As of 2026-09-24, the only known consumer is
@@ -1708,21 +1702,26 @@ func (p *closePool) Close() error {
 // a client, and to extract authorization tokens
 // from the response headers, which it then uses
 // in further communication with the connector.
-type PeerAPIMetadata struct {
-	// RequestURL is a clone of the URL of the PeerAPI request
+type DoHMetadata struct {
+	// RequestURL is the URL of the DoH request
 	// that produced the response.
+	// It is passed as a pointer to avoid allocations.
+	// It should not be modified.
 	RequestURL *url.URL
-	// ResponseHeader is a clone of the PeerAPI HTTP response headers.
+	// ResponseHeader is the DoH HTTP response headers.
+	// It references the actual headers which may or may
+	// not have been sent to the HTTP client.
+	// It should not be modified.
 	ResponseHeader http.Header
 }
 
 // Response is a DNS response in bytes, along with metadata
-// from the PeerAPI DoH server that served it, if it was served
-// by a PeerAPI DoH server.
+// from the DoH server that served it, if it was served
+// by a DoH server.
 type Response struct {
 	// Bs is the wire-encoded DNS response.
 	Bs []byte
-	// PeerAPIMeta is non-nil if the response came
-	// from a PeerAPI DoH server, and nil otherwise.
-	PeerAPIMeta *PeerAPIMetadata
+	// DoHMeta is non-nil if the response came
+	// from a DoH server, and nil otherwise.
+	DoHMeta *DoHMetadata
 }

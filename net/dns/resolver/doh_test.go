@@ -65,14 +65,14 @@ func TestDoH(t *testing.T) {
 			if !ok {
 				t.Fatal("expected DoH")
 			}
-			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t), false)
+			res, err := f.sendDoH(context.Background(), urlBase, c, someDNSQuestion(t))
 			if err != nil {
 				t.Fatal(err)
 			}
 			c.Transport.(*http.Transport).CloseIdleConnections()
 
-			if res.PeerAPIMeta != nil {
-				t.Errorf("unexpected PeerAPIMeta %+v for non-PeerAPI DoH", res.PeerAPIMeta)
+			if res.DoHMeta == nil {
+				t.Errorf("expected DoHMeta")
 			}
 
 			var p dnsmessage.Parser

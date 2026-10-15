@@ -550,9 +550,9 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		}
 	}
 	select {
-	case fwdRes, ok := <-ch:
+	case p, ok := <-ch:
 		if ok {
-			return fwdRes.Bs, nil
+			return p.Bs, nil
 		}
 		panic("unexpected close chan")
 	default:
