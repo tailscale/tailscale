@@ -595,6 +595,43 @@ func TestMapRequestRateLimited(t *testing.T) {
 	}
 }
 
+// TestMapRequestNodeRemoved verifies that only a 404 response to a map request
+// returns an error wrapping ErrNodeRemoved.
+func TestMapRequestNodeRemoved(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		wantRemoved bool
+	}{
+		{name: "404", status: http.StatusNotFound, wantRemoved: true},
+		{name: "500", status: http.StatusInternalServerError, wantRemoved: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newDirectForTestControl(t, &testcontrol.Server{
+				MaybeRejectRequest: testcontrol.RejectRequestForPath("/machine/map", func() (int, string, string) {
+					return tt.status, "", "node not found"
+				}),
+			})
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+
+			if _, err := d.TryLogin(ctx, LoginEphemeral); err != nil {
+				t.Fatalf("TryLogin: %v", err)
+			}
+
+			_, err := d.FetchNetMapForTest(ctx)
+			if err == nil {
+				t.Fatal("expected error on map request, got nil")
+			}
+			if got := errors.Is(err, ErrNodeRemoved); got != tt.wantRemoved {
+				t.Fatalf("errors.Is(%v, ErrNodeRemoved) = %v, want %v", err, got, tt.wantRemoved)
+			}
+		})
+	}
+}
+
 func connectProxyTo(t testing.TB, target, backendAddrPort string, reqs *atomic.Int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.RequestURI != target {
