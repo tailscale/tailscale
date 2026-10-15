@@ -21,7 +21,7 @@ import (
 // It may be nil.
 //
 // BindUDPGroup returns at least one socket and logs the shortfall.
-// It returns one socket and logs nothing where [CanReusePort] is false.
+// It returns one socket and logs nothing where [CanShareUDPPort] is false.
 // An error is reported only when it could not bind even one socket.
 // The caller owns every returned socket.
 func BindUDPGroup(ctx context.Context, logf logger.Logf, n int, control ControlFunc, network string, port uint16) (pconns []nettype.PacketConn, boundPort uint16, err error) {
@@ -34,7 +34,7 @@ func BindUDPGroup(ctx context.Context, logf logger.Logf, n int, control ControlF
 	}
 	boundPort = uint16(first.LocalAddr().(*net.UDPAddr).Port)
 	pconns = append(make([]nettype.PacketConn, 0, n), first)
-	if n == 1 || !CanReusePort {
+	if n == 1 || !CanShareUDPPort {
 		return pconns, boundPort, nil
 	}
 

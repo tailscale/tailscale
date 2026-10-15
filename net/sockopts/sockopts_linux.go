@@ -13,8 +13,9 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-// CanReusePort reports whether [SetReusePort] is supported on this platform.
-const CanReusePort = true
+// CanShareUDPPort reports whether this platform spreads inbound datagrams
+// across several UDP sockets sharing one local port.
+const CanShareUDPPort = true
 
 // SetReusePort sets SO_REUSEPORT on the socket underlying c.
 func SetReusePort(c syscall.RawConn) error {
