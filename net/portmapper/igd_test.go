@@ -29,6 +29,7 @@ type TestIGD struct {
 	upnpConn net.PacketConn // for UPnP discovery
 	pxpConn  net.PacketConn // for NAT-PMP and/or PCP
 	ts       *httptest.Server
+	openHTTP atomic.Int32 // UPnP HTTP connections currently open
 	upnpHTTP syncs.AtomicValue[http.Handler]
 	logf     logger.Logf
 	closed   atomic.Bool
@@ -88,7 +89,16 @@ func NewTestIGD(tb testenv.TB, t TestIGDOptions) (*TestIGD, error) {
 		d.upnpConn.Close()
 		return nil, err
 	}
-	d.ts = httptest.NewServer(http.HandlerFunc(d.serveUPnPHTTP))
+	d.ts = httptest.NewUnstartedServer(http.HandlerFunc(d.serveUPnPHTTP))
+	d.ts.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		switch s {
+		case http.StateNew:
+			d.openHTTP.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			d.openHTTP.Add(-1)
+		}
+	}
+	d.ts.Start()
 	go d.serveUPnPDiscovery()
 	go d.servePxP()
 	return d, nil

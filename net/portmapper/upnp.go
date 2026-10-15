@@ -509,6 +509,16 @@ func (c *Client) getUPnPPortMapping(
 	ctx = upnpHTTPClientKey.WithValue(ctx, httpClient)
 	c.mu.Unlock()
 
+	// Requests still in flight when Close runs return their connections to
+	// the pool afterwards, so close them once this attempt is done.
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed {
+			httpClient.CloseIdleConnections()
+		}
+	}()
+
 	// Wrapper for a uPnPDiscoResponse with an optional existing root
 	// device + URL (if we've got a previous cached mapping).
 	type step struct {
@@ -592,7 +602,9 @@ func (c *Client) getUPnPPortMapping(
 
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		c.mapping = upnp
+		if !c.setMappingLocked(upnp) {
+			return netip.AddrPort{}, false
+		}
 		c.localPort = internal.Port()
 		return upnp.external, true
 	}

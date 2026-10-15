@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"tailscale.com/net/portmapper/portmappertype"
 	"tailscale.com/tstest"
@@ -814,6 +815,82 @@ func TestUPnPRequestsUseClientHTTPClient(t *testing.T) {
 	want := []string{"/rootDesc.xml", "/ctl/IPConn", "/ctl/IPConn", "/ctl/IPConn"}
 	if !slices.Equal(paths, want) {
 		t.Errorf("requests through the Client's HTTP client = %q, want %q", paths, want)
+	}
+}
+
+// TestUPnPCleanupOnClose tests that Close leaves no UPnP mapping on the gateway
+// and no open UPnP HTTP connections, including when a mapping completes after
+// Close.
+func TestUPnPCleanupOnClose(t *testing.T) {
+	for _, closeDuringAdd := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closeDuringAdd=%v", closeDuringAdd), func(t *testing.T) {
+			igd, err := NewTestIGD(t, TestIGDOptions{UPnP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer igd.Close()
+			addEntered, addRelease := make(chan struct{}), make(chan struct{})
+			var deletes atomic.Int32
+			igd.SetUPnPHandler(&upnpServer{
+				t:    t,
+				Desc: testRootDesc,
+				Control: map[string]map[string]any{"/ctl/IPConn": {
+					"AddPortMapping": func(string) string {
+						if closeDuringAdd {
+							close(addEntered)
+							<-addRelease
+						}
+						return testAddPortMappingResponse
+					},
+					"DeletePortMapping": func(string) string {
+						deletes.Add(1)
+						return ""
+					},
+					"GetExternalIPAddress": testGetExternalIPAddressResponse,
+					"GetStatusInfo":        testGetStatusInfoResponse,
+				}},
+			})
+
+			ctx := context.Background()
+			c := newTestClient(t, igd, nil)
+			// Without an idle timeout, connections only close if Close
+			// closes them.
+			c.uPnPHTTPClient = &http.Client{Transport: &http.Transport{}}
+			mustProbeUPnP(t, ctx, c)
+			gw, myIP, _ := c.gatewayAndSelfIP()
+			mapped := make(chan bool)
+			go func() {
+				_, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+				mapped <- ok
+			}()
+			if closeDuringAdd {
+				<-addEntered
+				c.Close()
+				close(addRelease)
+			}
+			if got, want := <-mapped, !closeDuringAdd; got != want {
+				t.Fatalf("getUPnPPortMapping ok = %v, want %v", got, want)
+			}
+			c.Close()
+
+			if got := deletes.Load(); got != 1 {
+				t.Errorf("DeletePortMapping requests = %d, want 1", got)
+			}
+			if err := tstest.WaitFor(5*time.Second, func() error {
+				if n := igd.openHTTP.Load(); n > 0 {
+					return fmt.Errorf("%d UPnP HTTP connections open after Close", n)
+				}
+				return nil
+			}); err != nil {
+				t.Error(err)
+			}
+			c.GetCachedMappingOrStartCreatingOne()
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.runningCreate {
+				t.Error("mapping attempt started after Close")
+			}
+		})
 	}
 }
 
