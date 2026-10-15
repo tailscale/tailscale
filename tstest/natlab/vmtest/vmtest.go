@@ -9,6 +9,8 @@
 // See tstest/natlab/README.md for prerequisites and how to run.
 package vmtest
 
+//go:generate go run tailscale.com/tstest/natlab/vmtest/cmd/natlab-test-matrix .
+
 import (
 	"bytes"
 	"context"

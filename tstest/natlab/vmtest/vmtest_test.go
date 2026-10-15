@@ -107,7 +107,7 @@ func TestFedoraDNSDirect(t *testing.T) {
 	env.AssertDNSBackend(node, "direct")
 }
 
-func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
+func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImageLinux) {
 	t.Helper()
 	env := vmtest.New(t)
 
@@ -164,7 +164,7 @@ func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
 }
 
 func TestSiteToSite(t *testing.T) {
-	testSiteToSite(t, vmtest.Ubuntu2404)
+	testSiteToSite(t, vmtest.Ubuntu2404, vmtest.Ubuntu2404)
 }
 
 // testSiteToSite runs a site-to-site subnet routing test with
@@ -179,7 +179,7 @@ func TestSiteToSite(t *testing.T) {
 // Both subnet routers are on Tailscale with --snat-subnet-routes=false.
 // The test sends HTTP from backend-a to backend-b through the subnet routers
 // and verifies that backend-b sees backend-a's LAN IP (not the subnet router's).
-func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
+func testSiteToSite(t *testing.T, srOS, backendOS vmtest.OSImageLinux) {
 	env := vmtest.New(t)
 
 	// WAN networks for each site (each behind NAT).
@@ -204,11 +204,11 @@ func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
 	// Backend servers on each site's LAN (not on Tailscale).
 	// Use Ubuntu so we can SSH in to add static routes.
 	backendA := env.AddNode("backend-a", lanA,
-		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.OS(backendOS),
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 	backendB := env.AddNode("backend-b", lanB,
-		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.OS(backendOS),
 		vmtest.DontJoinTailnet(),
 		vmtest.WebServer(8080))
 
