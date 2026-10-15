@@ -65,6 +65,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/acmetest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -943,7 +944,7 @@ type Server struct {
 	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
 	controlTLS *tls.Config
 	derps      []*derpServer
-	fakeACME   *fakeACMEServer
+	fakeACME   *acmetest.Server
 	pcapWriter *pcapWriter
 
 	// vmWriteState holds per-VM-connection write state, serializing
@@ -1043,7 +1044,7 @@ func New(c *Config) (*Server, error) {
 			DERPMap:         derpMap,
 			ExplicitBaseURL: "http://" + controlHostname,
 		},
-		fakeACME: newFakeACMEServer("http://acme.example"),
+		fakeACME: acmetest.New("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
@@ -1057,7 +1058,10 @@ func New(c *Config) (*Server, error) {
 		s.setDNSRecord(req.Name, req.Value)
 		return nil
 	}
-	s.fakeACME.lookupTXT = s.lookupTXT
+	s.fakeACME.LookupTXT = s.lookupTXT
+	// Keep issuance pending long enough for `tailscale cert` to print the
+	// cert-pending health warning the ACME vmtest watches for.
+	s.fakeACME.ValidationDelay = 3 * time.Second
 	s.controlTLS, _ = selfSignedCert(controlHostname)
 	for _, host := range derpHostnames {
 		s.derps = append(s.derps, newDERPServer(host))
@@ -1099,12 +1103,12 @@ func (s *Server) DERPCertSHA256Hex(idx int) string {
 
 // FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
 func (s *Server) FakeACMEDirectoryURL() string {
-	return s.fakeACME.directoryURL()
+	return s.fakeACME.DirectoryURL()
 }
 
 // FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
 func (s *Server) FakeACMERootPEM() []byte {
-	return s.fakeACME.rootPEM()
+	return s.fakeACME.RootPEM()
 }
 
 func (s *Server) setDNSRecord(name, value string) {
