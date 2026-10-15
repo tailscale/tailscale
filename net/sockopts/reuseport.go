@@ -22,7 +22,7 @@ import (
 //
 // BindUDPGroup returns at least one socket and logs the shortfall.
 // It returns one socket and logs nothing where [CanReusePort] is false.
-// err is set only when it could not bind even one socket.
+// An error is reported only when it could not bind even one socket.
 // The caller owns every returned socket.
 func BindUDPGroup(ctx context.Context, logf logger.Logf, n int, control ControlFunc, network string, port uint16) (pconns []nettype.PacketConn, boundPort uint16, err error) {
 	n = max(n, 1)
