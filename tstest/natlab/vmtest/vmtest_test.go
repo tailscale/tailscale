@@ -107,7 +107,7 @@ func TestFedoraDNSDirect(t *testing.T) {
 	env.AssertDNSBackend(node, "direct")
 }
 
-func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImage) {
+func testSubnetRouterForOS(t testing.TB, srOS vmtest.OSImageLinux) {
 	t.Helper()
 	env := vmtest.New(t)
 
@@ -179,7 +179,7 @@ func TestSiteToSite(t *testing.T) {
 // Both subnet routers are on Tailscale with --snat-subnet-routes=false.
 // The test sends HTTP from backend-a to backend-b through the subnet routers
 // and verifies that backend-b sees backend-a's LAN IP (not the subnet router's).
-func testSiteToSite(t *testing.T, srOS vmtest.OSImage) {
+func testSiteToSite(t *testing.T, srOS vmtest.OSImageLinux) {
 	env := vmtest.New(t)
 
 	// WAN networks for each site (each behind NAT).
