@@ -234,6 +234,15 @@ const (
 	// tailscale/corp#48693.
 	ScopeQuad100OnMacOS Cap = "scope-quad100-macos"
 
+	// DisableHybridHandshakes indicates that the node should not use hybrid
+	// PQ wireguard handshakes to communicate with peers that support hybrid
+	// handshakes.
+	// 2026-10-15: This is a temporary panic disable attribute intended to reduce
+	// the risk of the initial rollout of hybrid handshakes. It will eventually
+	// be deleted to remove the control server's ability to downgrade hybrid
+	// handshakes.
+	DisableHybridHandshakes Cap = "disable-hybrid-handshakes"
+
 	// DisableLocalDNSOverrideViaNRPT indicates that the node's DNS manager should not
 	// create a default (catch-all) Windows NRPT rule when "Override local DNS" is enabled.
 	// Without this rule, Windows 8.1 and newer devices issue parallel DNS requests to DNS servers
