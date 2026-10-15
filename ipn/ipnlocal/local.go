@@ -7939,7 +7939,7 @@ func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 	if nm == nil {
 		return false
 	}
-	name = strings.ToLower(name)
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
 	for _, bad := range nm.DNS.ExitNodeFilteredSet {
 		if bad == "" {
 			// Invalid, ignore.
