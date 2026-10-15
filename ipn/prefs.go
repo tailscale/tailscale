@@ -80,6 +80,19 @@ type Prefs struct {
 	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
+	// AcceptRoutesAllow restricts accepted subnet routes to those wholly
+	// contained in one of these prefixes. An empty list imposes no restriction.
+	// AcceptRoutesDeny takes precedence. These filters apply only when RouteAll
+	// is true and do not affect peers' Tailscale addresses or exit node routes.
+	AcceptRoutesAllow []netip.Prefix `json:",omitempty"`
+
+	// AcceptRoutesDeny excludes any advertised subnet route that overlaps one
+	// of these prefixes. The entire advertised route is excluded, not split.
+	// An empty list excludes nothing. This is a route filter, not an access
+	// control policy: excluded destinations may still be reached by other
+	// routes, including a selected exit node's default routes.
+	AcceptRoutesDeny []netip.Prefix `json:",omitempty"`
+
 	// ExitNodeID and ExitNodeIP specify the node that should be used
 	// as an exit node for internet traffic. At most one of these
 	// should be non-zero.
@@ -358,6 +371,8 @@ type MaskedPrefs struct {
 
 	ControlURLSet                 bool                `json:",omitempty"`
 	RouteAllSet                   bool                `json:",omitempty"`
+	AcceptRoutesAllowSet          bool                `json:",omitzero"`
+	AcceptRoutesDenySet           bool                `json:",omitzero"`
 	ExitNodeIDSet                 bool                `json:",omitempty"`
 	ExitNodeIPSet                 bool                `json:",omitempty"`
 	AutoExitNodeSet               bool                `json:",omitempty"`
@@ -548,6 +563,12 @@ func (p *Prefs) pretty(goos string) string {
 	sb.WriteString("Prefs{")
 	if buildfeatures.HasUseRoutes {
 		fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
+		if len(p.AcceptRoutesAllow) > 0 {
+			fmt.Fprintf(&sb, "ra-allow=%v ", p.AcceptRoutesAllow)
+		}
+		if len(p.AcceptRoutesDeny) > 0 {
+			fmt.Fprintf(&sb, "ra-deny=%v ", p.AcceptRoutesDeny)
+		}
 	}
 	if buildfeatures.HasDNS {
 		fmt.Fprintf(&sb, "dns=%v want=%v ", p.CorpDNS, p.WantRunning)
@@ -669,6 +690,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 
 	return p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
+		slices.Equal(p.AcceptRoutesAllow, p2.AcceptRoutesAllow) &&
+		slices.Equal(p.AcceptRoutesDeny, p2.AcceptRoutesDeny) &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.AutoExitNode == p2.AutoExitNode &&

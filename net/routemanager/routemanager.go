@@ -123,8 +123,53 @@ type Prefs struct {
 	ExitNodeSelected bool
 
 	// RouteAll is whether advertised subnet routes (non-exit
-	// routes) from peers are accepted.
+	// routes) from peers are accepted, subject to AcceptRoutesAllow
+	// and AcceptRoutesDeny.
 	RouteAll bool
+
+	// AcceptRoutesAllow restricts accepted subnet routes to those
+	// wholly contained by at least one listed prefix. An empty list
+	// imposes no restriction. Routes are accepted or rejected whole;
+	// they are never split to fit the list.
+	AcceptRoutesAllow views.Slice[netip.Prefix]
+
+	// AcceptRoutesDeny rejects subnet routes that overlap any listed
+	// prefix, even if AcceptRoutesAllow would otherwise accept them.
+	// These filters do not affect self addresses, extra allowed IPs,
+	// or exit routes.
+	AcceptRoutesDeny views.Slice[netip.Prefix]
+}
+
+// Equals reports whether p and other contain the same preferences.
+func (p Prefs) Equals(other Prefs) bool {
+	return p.ExitNodeID == other.ExitNodeID &&
+		p.ExitNodeSelected == other.ExitNodeSelected &&
+		p.RouteAll == other.RouteAll &&
+		views.SliceEqual(p.AcceptRoutesAllow, other.AcceptRoutesAllow) &&
+		views.SliceEqual(p.AcceptRoutesDeny, other.AcceptRoutesDeny)
+}
+
+// acceptsSubnetRoute reports whether p accepts the advertised subnet
+// route. It is not used for self addresses, extra allowed IPs, or
+// exit routes.
+func (p Prefs) acceptsSubnetRoute(route netip.Prefix) bool {
+	if !p.RouteAll {
+		return false
+	}
+	for _, denied := range p.AcceptRoutesDeny.All() {
+		if denied.Overlaps(route) {
+			return false
+		}
+	}
+	if p.AcceptRoutesAllow.Len() == 0 {
+		return true
+	}
+	for _, allowed := range p.AcceptRoutesAllow.All() {
+		if allowed.Bits() <= route.Bits() && allowed.Contains(route.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 // TailnetConfig is tailnet-global and environment-derived
@@ -259,7 +304,7 @@ func (rm *RouteManager) HasDataPlaneAttrs() bool {
 
 // PeerAllowedIPs returns the prefixes from which the given peer is
 // currently allowed to originate traffic: its self addresses, its
-// advertised subnet routes when Prefs.RouteAll is set, the exit
+// advertised subnet routes accepted by Prefs, the exit
 // routes when it is the selected exit node, and its extra allowed
 // IPs (see [Mutation.SetExtraAllowedIPs]). It returns ok=false if
 // the peer is unknown or currently contributes no prefixes; such a
@@ -577,7 +622,7 @@ func (m *Mutation) Commit() Result {
 				res.PeersRemoved++
 			}
 		case opPrefs:
-			if rm.prefs != op.prefs {
+			if !rm.prefs.Equals(op.prefs) {
 				snapshotAll()
 				rm.prefs = op.prefs
 				res.PrefsChanged = true
@@ -822,8 +867,9 @@ func (rm *RouteManager) dropContrib(id tailcfg.NodeID, pfx netip.Prefix) {
 // eligible reports whether id's contribution of pfx (of the given
 // kind) should be reflected in the outbound table and in the peer's
 // allowed source prefixes, per current prefs and tailnet config.
-// Extra allowed IPs are always eligible here, but are excluded from
-// the OS route set by [RouteManager.desiredFor].
+// Extra allowed IPs bypass subnet route filters, but retain the
+// RouteAll/exit-node gating when also advertised as routes. They are
+// excluded from the OS route set by [RouteManager.desiredFor].
 func (rm *RouteManager) eligible(id tailcfg.NodeID, pfx netip.Prefix, kind contribKind) bool {
 	if kind&kindSelf != 0 {
 		if !(pfx.Addr().Is4() && rm.cfg.DisableIPv4) {
@@ -834,7 +880,7 @@ func (rm *RouteManager) eligible(id tailcfg.NodeID, pfx netip.Prefix, kind contr
 		if tsaddr.IsExitRoute(pfx) {
 			return rm.prefs.ExitNodeID != 0 && id == rm.prefs.ExitNodeID
 		}
-		return rm.prefs.RouteAll
+		return rm.prefs.RouteAll && (kind&kindExtra != 0 || rm.prefs.acceptsSubnetRoute(pfx))
 	}
 	return kind&kindExtra != 0
 }
