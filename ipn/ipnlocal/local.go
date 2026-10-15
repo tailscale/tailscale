@@ -71,6 +71,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tsconst"
 	"tailscale.com/tsd"
 	"tailscale.com/tstime"
 	"tailscale.com/types/appctype"
@@ -349,6 +350,7 @@ type LocalBackend struct {
 	endpoints         []tailcfg.Endpoint
 	blocked           bool
 	keyExpired        bool          // TODO(nickkhyl): move to nodeBackend
+	nodeRemoved       bool          // control said this node was deleted; cleared on the next netmap or profile switch
 	authURL           string        // non-empty if not Running; TODO(nickkhyl): move to nodeBackend
 	authURLTime       time.Time     // when the authURL was received from the control server; TODO(nickkhyl): move to nodeBackend
 	authActor         ipnauth.Actor // an actor who called [LocalBackend.StartLoginInteractive] last, or nil; TODO(nickkhyl): move to nodeBackend
@@ -1853,6 +1855,30 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	b.setControlClientStatusLocked(c, st)
 }
 
+// nodeRemovedWarnable is set while control says this node has been deleted.
+var nodeRemovedWarnable = health.Register(&health.Warnable{
+	Code:                tsconst.HealthWarnableNodeRemoved,
+	Title:               "Device removed",
+	Severity:            health.SeverityHigh,
+	Text:                health.StaticMessage("This device has been removed from the tailnet. Log in again to reconnect."),
+	DependsOn:           []*health.Warnable{health.IPNStateWarnable},
+	ImpactsConnectivity: true,
+})
+
+// setNodeRemovedLocked sets b.nodeRemoved and the matching health warning.
+// b.mu must be held.
+func (b *LocalBackend) setNodeRemovedLocked(removed bool) {
+	if removed == b.nodeRemoved {
+		return
+	}
+	b.nodeRemoved = removed
+	if removed {
+		b.health.SetUnhealthy(nodeRemovedWarnable, nil)
+	} else {
+		b.health.SetHealthy(nodeRemovedWarnable)
+	}
+}
+
 // setControlClientStatusLocked is the locked version of SetControlClientStatus.
 //
 // b.mu must be held.
@@ -1870,6 +1896,10 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 		if vizerr, ok := vizerror.As(st.Err); ok {
 			s := vizerr.Error()
 			b.sendLocked(ipn.Notify{ErrMessage: &s})
+		}
+		if errors.Is(st.Err, controlclient.ErrNodeRemoved) && !b.nodeRemoved {
+			b.setNodeRemovedLocked(true)
+			b.stateMachineLocked()
 		}
 		return
 	}
@@ -1915,6 +1945,7 @@ func (b *LocalBackend) setControlClientStatusLocked(c controlclient.Client, st c
 			keyExpiryExtended = true
 		}
 		b.keyExpired = isExpired
+		b.setNodeRemovedLocked(false)
 	}
 
 	if keyExpiryExtended && wasBlocked {
@@ -6929,13 +6960,14 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 	}
 
 	var (
-		cc         = b.cc
-		cn         = b.currentNode()
-		netMap     = cn.NetMap()
-		state      = b.state
-		blocked    = b.blocked
-		st         = b.engineStatus
-		keyExpired = b.keyExpired
+		cc          = b.cc
+		cn          = b.currentNode()
+		netMap      = cn.NetMap()
+		state       = b.state
+		blocked     = b.blocked
+		st          = b.engineStatus
+		keyExpired  = b.keyExpired
+		nodeRemoved = b.nodeRemoved
 
 		wantRunning = false
 		loggedOut   = false
@@ -6948,6 +6980,13 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 	switch {
 	case !wantRunning && !loggedOut && !blocked && b.hasNodeKeyLocked():
 		return ipn.Stopped
+	case wantRunning && nodeRemoved:
+		// Control said this node was deleted, need to relogin. Checked
+		// before netMap so a node deleted after registering but before
+		// its first netmap, which then never gets one, goes to NeedsLogin
+		// rather than staying in NoState.
+		// See https://github.com/tailscale/tailscale/issues/18922#issuecomment-6198375286
+		return ipn.NeedsLogin
 	case netMap == nil:
 		if (cc != nil && cc.AuthCantContinue()) || loggedOut {
 			// Auth was interrupted or waiting for URL visit,
@@ -8491,6 +8530,7 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
+	b.setNodeRemovedLocked(false)
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
