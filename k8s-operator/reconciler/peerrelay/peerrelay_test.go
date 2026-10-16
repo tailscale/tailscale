@@ -35,6 +35,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
 	"tailscale.com/k8s-operator/tsclient"
+	"tailscale.com/types/key"
 )
 
 const (
@@ -1415,6 +1416,7 @@ type fakeTSClient struct {
 	mu            sync.Mutex
 	keyCalls      []tailscaleclient.CreateKeyRequest
 	deviceDeletes []string
+	devices       []tailscaleclient.Device
 	nextKey       []string
 }
 
@@ -1464,7 +1466,10 @@ func (d *fakeDevices) Delete(_ context.Context, id string) error {
 }
 
 func (d *fakeDevices) List(_ context.Context, _ ...tailscaleclient.ListDevicesOptions) ([]tailscaleclient.Device, error) {
-	return nil, nil
+	c := (*fakeTSClient)(d)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.devices), nil
 }
 
 func (d *fakeDevices) Get(_ context.Context, _ string) (*tailscaleclient.Device, error) {
@@ -1627,8 +1632,17 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 				Finalizers:        []string{"tailscale.com/finalizer"},
 				DeletionTimestamp: new(metav1.Now()),
 			},
-			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 		}
+
+		// Replica 2 registered with control but never reported its device ID.
+		mk := key.NewMachine()
+		mkText, err := mk.MarshalText()
+		if err != nil {
+			t.Fatal(err)
+		}
+		unreported := stateSecret("test", "peerrelay-test-2", 2, "")
+		unreported.Data = map[string][]byte{string(ipn.MachineKeyStateKey): mkText}
 
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
@@ -1637,11 +1651,15 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 				pr,
 				stateSecret("test", "peerrelay-test-0", 0, "device-aaa"),
 				stateSecret("test", "peerrelay-test-1", 1, ""), // pod never registered , no device_id
+				unreported,
 				stateSecret("other", "peerrelay-other-0", 0, "device-should-not-touch"),
 			).
 			Build()
 
-		tsc := &fakeTSClient{}
+		tsc := &fakeTSClient{devices: []tailscaleclient.Device{
+			{NodeID: "device-bbb", MachineKey: mk.Public().String()},
+			{NodeID: "device-other", MachineKey: key.NewMachine().Public().String()},
+		}}
 		r := peerrelay.NewReconciler(peerrelay.ReconcilerOptions{
 			Client:             fc,
 			TailscaleNamespace: tailscaleNamespace,
@@ -1656,12 +1674,14 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if got, want := tsc.DeviceDeletes(), []string{"device-aaa"}; !slices.Equal(got, want) {
+		got := tsc.DeviceDeletes()
+		slices.Sort(got)
+		if want := []string{"device-aaa", "device-bbb"}; !slices.Equal(got, want) {
 			t.Errorf("expected Devices().Delete calls %v, got %v", want, got)
 		}
 
 		// Our state Secrets should be gone; the unrelated PeerRelay's state Secret should still be present.
-		for _, name := range []string{"peerrelay-test-0", "peerrelay-test-1"} {
+		for _, name := range []string{"peerrelay-test-0", "peerrelay-test-1", "peerrelay-test-2"} {
 			var s corev1.Secret
 			if err = fc.Get(t.Context(), types.NamespacedName{Namespace: tailscaleNamespace, Name: name}, &s); !apierrors.IsNotFound(err) {
 				t.Errorf("expected state Secret %q gone, got err=%v", name, err)
