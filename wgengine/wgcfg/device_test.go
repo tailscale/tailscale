@@ -31,7 +31,7 @@ func TestNewPeerLookupFunc(t *testing.T) {
 	// LocalBackend provides via wgengine.Engine.SetPeerConfigFunc.
 	psk2 := device.NoisePresharedKey{1, 2, 3}
 	peers := map[device.NoisePublicKey]PeerConfig{
-		k2.Raw32(): {AllowedIPs: []netip.Prefix{ip2}, PresharedKey: psk2},
+		k2.Raw32(): {AllowedIPs: []netip.Prefix{ip2}, PresharedKey: psk2, Hybrid: true},
 	}
 	dev.SetPeerLookupFunc(NewPeerLookupFunc(dev.Bind(), t.Logf, func(pubk device.NoisePublicKey) (PeerConfig, bool) {
 		conf, ok := peers[pubk]
@@ -49,6 +49,9 @@ func TestNewPeerLookupFunc(t *testing.T) {
 			t.Fatal(err)
 		}
 		if want := "preshared_key=0102030000000000000000000000000000000000000000000000000000000000"; !strings.Contains(got, want) {
+			t.Fatalf("device config does not contain %q:\n%s", want, got)
+		}
+		if want := "hybrid=true"; !strings.Contains(got, want) {
 			t.Fatalf("device config does not contain %q:\n%s", want, got)
 		}
 		// An unknown peer should not be found.

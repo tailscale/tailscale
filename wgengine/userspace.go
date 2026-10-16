@@ -712,6 +712,7 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	}
 	if peer, ok := e.wgdev.LookupActivePeer(k.Raw32()); ok {
 		peer.SetPresharedKey(conf.PresharedKey)
+		peer.SetHybridHandshake(conf.Hybrid)
 		peer.SetAllowedIPs(conf.AllowedIPs)
 	}
 }
