@@ -113,16 +113,22 @@ func availableEndpoints(derpMap *tailcfg.DERPMap, preferredDERPRegionID tailcfg.
 
 	// Let's also try the default Tailscale coordination server and admin console.
 	// These are likely to be blocked on some networks.
-	appendTailscaleEndpoint := func(urlString string) {
-		u, err := url.Parse(urlString)
-		if err != nil {
-			logf("captivedetection: failed to parse Tailscale URL %q: %v", urlString, err)
-			return
+	//
+	// Skip these if the DERPMap has OmitDefaultRegions set, since that means the
+	// user has explicitly opted out of using Tailscale's default infrastructure,
+	// and we shouldn't be making requests to it either.
+	if !derpMap.OmitDefaultRegions {
+		appendTailscaleEndpoint := func(urlString string) {
+			u, err := url.Parse(urlString)
+			if err != nil {
+				logf("captivedetection: failed to parse Tailscale URL %q: %v", urlString, err)
+				return
+			}
+			endpoints = append(endpoints, Endpoint{u, http.StatusNoContent, "", false, Tailscale})
 		}
-		endpoints = append(endpoints, Endpoint{u, http.StatusNoContent, "", false, Tailscale})
+		appendTailscaleEndpoint("http://controlplane.tailscale.com/generate_204")
+		appendTailscaleEndpoint("http://login.tailscale.com/generate_204")
 	}
-	appendTailscaleEndpoint("http://controlplane.tailscale.com/generate_204")
-	appendTailscaleEndpoint("http://login.tailscale.com/generate_204")
 
 	// Sort the endpoints by provider so that we can prioritize DERP nodes in the preferred region, followed by
 	// any other DERP server elsewhere, then followed by Tailscale endpoints.
