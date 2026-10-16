@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   tailcat:
+    if: false # DEV ONLY: disabled while developing the gotst swarms
     name: heads-up-hypothetical-tailcat-build-using-this-commit
     runs-on: ubuntu-latest
     steps:
