@@ -766,10 +766,10 @@ func TestGetCertPEMWithValidity(t *testing.T) {
 
 			b.ForTest().SetClock(tstest.NewClock(tstest.ClockOpts{Start: tt.now}))
 
-			// Every issuance runs in its own goroutine. What tells a
-			// synchronous issuance from an async renewal is the result:
-			// a synchronous caller gets what getCertPEM returned, an
-			// async renewal returns the cached cert right away.
+			// Every issuance runs in its own goroutine. The result tells
+			// the two cases apart. A synchronous caller gets what
+			// getCertPEM returned. An async renewal returns the cached
+			// cert right away.
 			issued := &ipnlocal.TLSCertKeyPair{CertPEM: []byte("issued")}
 			var getCertPemWasCalled atomic.Bool
 			orig := getCertPEM
@@ -1065,31 +1065,95 @@ func TestIssuanceDetachedFromCaller(t *testing.T) {
 	}
 
 	// A second caller joins the running issuance and gets its result.
-	secondDone := make(chan *ipnlocal.TLSCertKeyPair, 1)
-	go func() {
-		pair, err := b.GetCertPEMWithValidity(context.Background(), domain, 0)
-		if err != nil {
-			t.Errorf("second caller: %v", err)
-		}
-		secondDone <- pair
-	}()
-	// Give the second caller a moment to reach startIssuance; a join
-	// starts no goroutine, so there is nothing else to wait on.
-	time.Sleep(50 * time.Millisecond)
+	cs, err := e.getCertStore(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss, started, err := e.startIssuance(b, cs, logger.Logf(t.Logf), nil, domain, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started {
+		t.Fatal("second caller started a new issuance instead of joining the running one")
+	}
 	close(release)
 	select {
-	case pair := <-secondDone:
-		if pair == nil || string(pair.CertPEM) != "issued" {
-			t.Fatalf("second caller got %+v, want the issued pair", pair)
+	case <-iss.done:
+		if iss.err != nil || iss.pair == nil || string(iss.pair.CertPEM) != "issued" {
+			t.Fatalf("joined issuance finished with pair=%+v err=%v, want the issued pair", iss.pair, iss.err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("second caller did not get the issuance's result")
+		t.Fatal("joined issuance did not finish")
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("getCertPEM ran %d times, want 1", got)
 	}
 	if e.issuanceInFlight(domain) {
 		t.Fatal("issuance still recorded as in flight after it finished")
+	}
+}
+
+// TestAwaitIssuanceHonorsMinValidity checks that a caller with a
+// validity requirement that joins an issuance started without one does
+// not accept that issuance's cached cert, but runs its own issuance
+// once the first finishes.
+func TestAwaitIssuanceHonorsMinValidity(t *testing.T) {
+	tstest.AssertNotParallel(t)
+
+	const domain = "example.com"
+	b := ipnlocaltest.NewBackend(t)
+	b.SetVarRoot(t.TempDir())
+	e := extOf(t, b)
+	cs, err := e.getCertStore(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cached := &ipnlocal.TLSCertKeyPair{CertPEM: []byte("cached"), Cached: true}
+	issued := &ipnlocal.TLSCertKeyPair{CertPEM: []byte("issued")}
+	release := make(chan struct{})
+	var calls atomic.Int32
+	orig := getCertPEM
+	getCertPEM = func(ctx context.Context, e *extension, b *ipnlocal.LocalBackend, cs certStore, logf logger.Logf, traceACME func(any), domain string, now time.Time, minValidity time.Duration) (*ipnlocal.TLSCertKeyPair, error) {
+		calls.Add(1)
+		if minValidity == 0 {
+			// A background renewal that found the cached cert good enough.
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return cached, nil
+		}
+		return issued, nil
+	}
+	t.Cleanup(func() { getCertPEM = orig })
+
+	// A background renewal is in flight with no validity requirement.
+	if _, started, err := e.startIssuance(b, cs, logger.Logf(t.Logf), nil, domain, time.Now(), 0); err != nil || !started {
+		t.Fatalf("startIssuance = started %v, err %v; want a new issuance", started, err)
+	}
+
+	// A caller that needs an hour of validity must not settle for the
+	// cached cert that issuance returns.
+	got := make(chan *ipnlocal.TLSCertKeyPair, 1)
+	go func() {
+		pair, err := e.awaitIssuance(context.Background(), b, cs, logger.Logf(t.Logf), nil, domain, time.Now(), time.Hour)
+		if err != nil {
+			t.Errorf("awaitIssuance: %v", err)
+		}
+		got <- pair
+	}()
+	close(release)
+	select {
+	case pair := <-got:
+		if pair != issued {
+			t.Fatalf("awaitIssuance returned %+v, want the pair issued with the caller's validity requirement", pair)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("awaitIssuance did not return")
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("getCertPEM ran %d times, want 2 (the joined renewal, then the caller's own)", n)
 	}
 }
 
@@ -1437,52 +1501,6 @@ func TestRefreshApplicableCerts(t *testing.T) {
 		t.Errorf("unexpected extra fetch for %q", h)
 	default:
 	}
-}
-
-// TestLockDomain_SameDomainReturnsSameMutex verifies the repeat
-// calls for the same domain return the same mutex, and different
-// domains get distinct mutexes.
-func TestLockDomain_SameDomainReturnsSameMutex(t *testing.T) {
-	const domA, domB = "a.example.com", "b.example.com"
-	e := &extension{}
-	a1 := e.lockDomain(domA)
-	a2 := e.lockDomain(domA)
-	b := e.lockDomain(domB)
-	if a1 != a2 {
-		t.Errorf("lockDomain(%q) second call = %p, want %p", domA, a2, a1)
-	}
-	if a1 == b {
-		t.Errorf("lockDomain(%q) = lockDomain(%q) = %p, want different", domA, domB, a1)
-	}
-}
-
-// TestLockDomain_PerDomainConcurrency verifies a lock on one
-// domain doesn't block another, and the same domain blocks while held
-// and is acquireable again after release.
-func TestLockDomain_PerDomainConcurrency(t *testing.T) {
-	const domA, domB = "a.example.com", "b.example.com"
-	e := &extension{}
-
-	aLock := e.lockDomain(domA)
-	aLock.Lock()
-
-	bLock := e.lockDomain(domB)
-	if !bLock.TryLock() {
-		t.Errorf("lockDomain(%q).TryLock() = false while %q held, want true", domB, domA)
-	} else {
-		bLock.Unlock()
-	}
-
-	if aLock.TryLock() {
-		t.Errorf("lockDomain(%q).TryLock() = true while held, want false", domA)
-	}
-
-	aLock.Unlock()
-
-	if !aLock.TryLock() {
-		t.Errorf("lockDomain(%q).TryLock() = false after release, want true", domA)
-	}
-	aLock.Unlock()
 }
 
 // TestAcmeKey_ConcurrentFirstCall verifies that N goroutines racing on

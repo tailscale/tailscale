@@ -3,8 +3,8 @@
 
 // Package acme registers the ACME/TLS-cert feature and implements its
 // associated [ipnext.Extension]. The extension owns the per-LocalBackend
-// ACME serialization mutex, in-flight cert tracking, the refresh loop's
-// cancel func, and the test-only cert override; together with the cert
+// in-flight certificate issuances, the refresh loop's cancel func, and
+// the test-only cert override; together with the cert
 // acquisition logic in this package, it is everything tailscaled needs
 // to obtain and renew TLS certificates via ACME.
 //
@@ -32,7 +32,6 @@ import (
 	"tailscale.com/tsconst"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 )
 
@@ -71,36 +70,30 @@ var errNoExt = errors.New("acme extension not registered on this LocalBackend")
 type extension struct {
 	logf logger.Logf
 
-	// domainsMu guards domainLocks.
-	domainsMu syncs.Mutex
-	// domainLocks holds a per-domain mutex serialising ACME operations
-	// for that domain. Within one process, inflight already ensures a
-	// domain has at most one issuance running; the lock additionally
-	// covers direct callers of getCertPEM. Entries are never removed; a
-	// node only ever has a handful of domains so the map stays small.
-	domainLocks map[string]*syncs.Mutex
-
 	// accountMu serialises ACME account setup (key generation, LE
 	// registration) so two first-time issuances don't create separate
 	// accounts.
 	accountMu syncs.Mutex
 
 	// renewMu guards renewCertAt and inflight.
-	// Lock order: per-domain lock before renewMu.
 	renewMu     syncs.Mutex
 	renewCertAt map[string]time.Time // lazily initialized under renewMu
 
-	// inflight holds the issuance currently running for each domain.
-	// Every caller that needs a domain's cert while one is running
-	// waits on that issuance rather than starting another.
+	// inflight holds the issuance running for each domain, so a domain
+	// has at most one getCertPEM running at a time. Entries are removed
+	// when the issuance finishes.
 	inflight map[string]*issuance
 
-	// baseCtx is the parent context of every issuance. It is not
-	// derived from any caller's context, so a caller giving up does
-	// not abandon an ACME order partway. [extension.Shutdown] cancels
-	// it via baseCancel.
+	// baseCtx is the parent context of every issuance and of the cert
+	// refresh loop, independent of any caller's context.
+	// [extension.Shutdown] cancels it via baseCancel. Both are set by
+	// newExtension and never nil in production.
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
+
+	// goMu serialises [extension.Go] against [extension.Shutdown]. It
+	// is never held while taking another mutex.
+	goMu sync.Mutex
 
 	// pendingACMETLSALPNCerts maps SNI names to short-lived ACME
 	// tls-alpn-01 challenge certificates while an ACME order is
@@ -132,43 +125,38 @@ type extension struct {
 	// See [LocalBackend.ConfigureCertsForTest].
 	getCertForTest func(hostname string) (*ipnlocal.TLSCertKeyPair, error)
 
-	// certRefreshCancel cancels the background TLS cert refresh loop
-	// that periodically pokes [LocalBackend.GetCertPEM] so renewals
-	// happen on idle nodes. Non-nil while the loop is running.
+	// certRefreshCancel stops the background TLS cert refresh loop.
+	// Non-nil from when updateCertRefreshLoop starts the loop until it
+	// stops it. Shutdown stops the loop through baseCtx instead.
 	certRefreshCancel context.CancelFunc
 }
 
-// lockDomain returns the mutex for domain, creating it on first use.
-func (e *extension) lockDomain(domain string) *syncs.Mutex {
-	e.domainsMu.Lock()
-	defer e.domainsMu.Unlock()
-	if m, ok := e.domainLocks[domain]; ok {
-		return m
+// Go runs f in a new goroutine tracked by e.wg and reports whether it
+// did. It does nothing once [extension.Shutdown] has begun.
+func (e *extension) Go(f func()) bool {
+	e.goMu.Lock()
+	defer e.goMu.Unlock()
+	if e.baseCtx.Err() != nil {
+		return false
 	}
-	m := new(syncs.Mutex)
-	mak.Set(&e.domainLocks, domain, m)
-	return m
-}
-
-// Go runs f in a new goroutine tracked by e.wg. [extension.Shutdown]
-// waits for all such goroutines to finish.
-func (e *extension) Go(f func()) {
 	e.wg.Add(1)
 	e.goroutinesStarted.Add(1)
 	go func() {
 		defer e.wg.Done()
 		f()
 	}()
+	return true
 }
 
 // newExtension is the [ipnext.NewExtensionFn] registered for this
 // feature. It is called once per [*ipnlocal.LocalBackend].
 func newExtension(logf logger.Logf, _ ipnext.SafeBackend) (ipnext.Extension, error) {
-	e := &extension{
-		logf: logger.WithPrefix(logf, featureName+": "),
-	}
-	e.baseCtx, e.baseCancel = context.WithCancel(context.Background())
-	return e, nil
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	return &extension{
+		logf:       logger.WithPrefix(logf, featureName+": "),
+		baseCtx:    baseCtx,
+		baseCancel: baseCancel,
+	}, nil
 }
 
 // Name implements [ipnext.Extension].
@@ -177,19 +165,12 @@ func (e *extension) Name() string { return featureName }
 // Init implements [ipnext.Extension].
 func (e *extension) Init(ipnext.Host) error { return nil }
 
-// Shutdown implements [ipnext.Extension]. It cancels the cert refresh
-// loop if it's running and every in-flight issuance, then waits for
-// all goroutines (issuances, refresh loop workers) to finish.
+// Shutdown implements [ipnext.Extension]. It cancels baseCtx and waits
+// for all goroutines to finish.
 func (e *extension) Shutdown() error {
-	e.mu.Lock()
-	if e.certRefreshCancel != nil {
-		e.certRefreshCancel()
-		e.certRefreshCancel = nil
-	}
-	e.mu.Unlock()
-	if e.baseCancel != nil {
-		e.baseCancel()
-	}
+	e.goMu.Lock()
+	e.baseCancel()
+	e.goMu.Unlock()
 	e.wg.Wait()
 	return nil
 }
