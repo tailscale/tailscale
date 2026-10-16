@@ -871,3 +871,22 @@ func BenchmarkWriteJSON(b *testing.B) {
 		must.Get(lg.Write(testdataJSONLog))
 	}
 }
+
+func TestLoggerWriteOnlyVerbosityPrefix(t *testing.T) {
+	var stderr bytes.Buffer
+	lg := &Logger{
+		clock:       tstime.StdClock{},
+		buffer:      NewMemoryBuffer(1024),
+		stderr:      &stderr,
+		stderrLevel: 2,
+	}
+	for _, inBuf := range [][]byte{[]byte("[v1] "), []byte("[v2] ")} {
+		n, err := lg.Write(inBuf)
+		if err != nil {
+			t.Error(err)
+		}
+		if n != len(inBuf) {
+			t.Errorf("logger.Write(%q) wrote %d bytes, expected %d", inBuf, n, len(inBuf))
+		}
+	}
+}
