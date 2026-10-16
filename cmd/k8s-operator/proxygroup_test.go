@@ -1051,6 +1051,7 @@ func TestProxyGroup(t *testing.T) {
 	})
 
 	t.Run("scale_down_to_1", func(t *testing.T) {
+		setUnreportedDevice(t, fc, tsClient, pgStateSecretName(pg.Name, 2), "unreported-2")
 		pg.Spec.Replicas = new(int32(1))
 		mustUpdate(t, fc, "", pg.Name, func(p *tsapi.ProxyGroup) {
 			p.Spec = pg.Spec
@@ -1086,6 +1087,7 @@ func TestProxyGroup(t *testing.T) {
 	})
 
 	t.Run("delete_and_cleanup", func(t *testing.T) {
+		setUnreportedDevice(t, fc, tsClient, pgStateSecretName(pg.Name, 0), "unreported-0")
 		if err := fc.Delete(t.Context(), pg); err != nil {
 			t.Fatal(err)
 		}
@@ -1098,7 +1100,7 @@ func TestProxyGroup(t *testing.T) {
 		}
 		// 2 nodes should get deleted as part of the scale down, and then finally
 		// the first node gets deleted with the ProxyGroup cleanup.
-		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "nodeid-2", "nodeid-0"}); diff != "" {
+		if diff := cmp.Diff(tsClient.deleted, []string{"nodeid-1", "unreported-2", "unreported-0"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
 		expectMissing[corev1.Service](t, reconciler, "tailscale", metricsResourceName(pg.Name))

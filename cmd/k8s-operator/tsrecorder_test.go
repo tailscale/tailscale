@@ -261,6 +261,8 @@ func TestRecorder(t *testing.T) {
 	})
 
 	t.Run("delete_the_Recorder_and_observe_cleanup", func(t *testing.T) {
+		// Replica 0 comes first, so an unreported device there must not end cleanup early.
+		setUnreportedDevice(t, fc, tsClient, "test-0", "unreported-0")
 		if err := fc.Delete(context.Background(), tsr); err != nil {
 			t.Fatal(err)
 		}
@@ -271,7 +273,7 @@ func TestRecorder(t *testing.T) {
 		if expected := 0; reconciler.recorders.Len() != expected {
 			t.Fatalf("expected %d recorders, got %d", expected, reconciler.recorders.Len())
 		}
-		if diff := cmp.Diff(tsClient.deleted, []string{"node-0", "node-1", "node-2"}); diff != "" {
+		if diff := cmp.Diff(tsClient.deleted, []string{"unreported-0", "node-1", "node-2"}); diff != "" {
 			t.Fatalf("unexpected deleted devices (-got +want):\n%s", diff)
 		}
 		// The fake client does not clean up objects whose owner has been
