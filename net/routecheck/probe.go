@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/traffic"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsconst"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
@@ -208,15 +209,37 @@ func (c *Client) ProbeAllHARouters(ctx context.Context, limit int, timeout time.
 		return nil, err
 	}
 
+	peers := c.nb.NodeBackend().Peers()
 	// When a prefix is routed by multiple nodes, we probe those nodes.
 	// There is no point to probing a router when it is the only choice.
 	// These nodes are referred to a High Availability (HA) routers.
 	var nodes []tailcfg.NodeView
-	for _, rs := range c.RoutersByPrefix() {
+	for _, rs := range GroupRoutersByPrefix(peers) {
 		if len(rs) <= 1 {
 			continue
 		}
 		nodes = append(nodes, rs...) // Note: this introduces duplicates.
+	}
+
+	// Group conn25 connectors by the app they serve, then probe only
+	// connectors for apps served by more than one node, since there is
+	// no point probing a connector when it is the only choice for its app.
+	connectorsByApp := make(map[string][]tailcfg.NodeView)
+	for _, nv := range peers {
+		apps, err := tailcfg.UnmarshalNodeCapViewJSON[string](nv.CapMap(), nodecap.Conn25Connector)
+		if err != nil {
+			c.logf("routecheck: bad %s cap on node %v: %v", nodecap.Conn25Connector, nv.ID(), err)
+			continue
+		}
+		for _, app := range apps {
+			connectorsByApp[app] = append(connectorsByApp[app], nv)
+		}
+	}
+	for _, cs := range connectorsByApp {
+		if len(cs) <= 1 {
+			continue
+		}
+		nodes = append(nodes, cs...)
 	}
 
 	// Sort by Node.ID and deduplicate to avoid double-probing.
