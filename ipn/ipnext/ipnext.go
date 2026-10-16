@@ -557,6 +557,14 @@ type NodeBackend interface {
 	// Self returns the current node.
 	Self() tailcfg.NodeView
 
+	// NodeByAddr returns the ID of the node that owns
+	// the given IP address, or ok=false if there is none.
+	NodeByAddr(netip.Addr) (_ tailcfg.NodeID, ok bool)
+
+	// NodeByID returns the node with the given ID,
+	// or ok=false if there is none.
+	NodeByID(tailcfg.NodeID) (_ tailcfg.NodeView, ok bool)
+
 	// AppendMatchingPeers appends all peers that match the predicate
 	// to the base slice and returns it.
 	AppendMatchingPeers(base []tailcfg.NodeView, pred func(tailcfg.NodeView) bool) []tailcfg.NodeView
