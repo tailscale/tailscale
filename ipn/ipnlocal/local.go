@@ -1064,7 +1064,13 @@ func (b *LocalBackend) setStaticEndpointsFromConfigLocked(conf *conffile.Config)
 	// Ensure that magicsock conn has the up to date static wireguard
 	// endpoints. Setting the endpoints here triggers an asynchronous update
 	// of the node's advertised endpoints.
-	if b.conf == nil && len(conf.Parsed.StaticEndpoints) != 0 || !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints) {
+	var changed bool
+	if b.conf == nil {
+		changed = len(conf.Parsed.StaticEndpoints) != 0
+	} else {
+		changed = !reflect.DeepEqual(conf.Parsed.StaticEndpoints, b.conf.Parsed.StaticEndpoints)
+	}
+	if changed {
 		ms, ok := b.sys.MagicSock.GetOK()
 		if !ok {
 			b.logf("[unexpected] ReloadConfig: MagicSock not set")
