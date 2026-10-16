@@ -28,11 +28,10 @@ import (
 //     domains let bare names resolve, which requires tailscaled to
 //     have plumbed MagicDNS routes and search domains into
 //     systemd-resolved.
-//   - A peer added by control resolves by FQDN and by short name,
-//     and its IP reverse-resolves (PTR) to its name. The short name
-//     resolves both via a search domain and asked of quad-100
-//     verbatim, which is the half [TestBareNameNotHijackedByPeer]
-//     requires to stay off when MagicDNS is disabled.
+//   - A peer added by control resolves by FQDN and by short name
+//     (via a search domain), and its IP reverse-resolves (PTR) to its
+//     name. Quad-100 must not answer the short name asked verbatim;
+//     see [TestBareNameNotHijackedByPeer].
 //   - A peer renamed by control resolves under its new name only:
 //     the old name must stop resolving, and PTR must track the new
 //     name. When a node is renamed in the admin console, the control
@@ -94,11 +93,6 @@ func TestMagicDNS(t *testing.T) {
 	dt.wantResolves("renamee.tailnet.test", "100.64.7.7")
 	dt.wantResolves("renamee", "100.64.7.7") // via search domain
 	dt.wantResolves("100.64.7.7", "renamee.tailnet.test")
-	// Also as a single label, which the search domain above hides:
-	// getent passes "renamee.tailnet.test" to quad-100, not "renamee".
-	// This is the enabled-MagicDNS counterpart of
-	// [TestBareNameNotHijackedByPeer].
-	dt.wantQueryResolves("renamee", "100.64.7.7")
 
 	// Rename the peer, sending the same delta shape production
 	// control sends: the full node again with only the Name changed.
@@ -148,27 +142,6 @@ func (dt *dnsTester) wantResolves(name, want string) {
 		}
 		if !strings.Contains(out, want) {
 			return fmt.Errorf("getent hosts %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
-		}
-		return nil
-	}); err != nil {
-		out, _ := dt.env.SSHExec(dt.node, "resolvectl status; cat /etc/resolv.conf")
-		dt.t.Fatalf("%v\nresolver state:\n%s", err, out)
-	}
-}
-
-// wantQueryResolves is [dnsTester.wantResolves] via "tailscale dns
-// query", which asks quad-100 for exactly the name given. Use it when
-// the name must stay unqualified: getent would let a search domain
-// complete it and resolve a different name.
-func (dt *dnsTester) wantQueryResolves(name, want string) {
-	dt.t.Helper()
-	if err := tstest.WaitFor(30*time.Second, func() error {
-		out, err := dt.env.SSHExec(dt.node, "tailscale dns query "+name)
-		if err != nil {
-			return fmt.Errorf("tailscale dns query %s: %v (%s)", name, err, strings.TrimSpace(out))
-		}
-		if !strings.Contains(out, want) {
-			return fmt.Errorf("tailscale dns query %s = %q, want it to contain %q", name, strings.TrimSpace(out), want)
 		}
 		return nil
 	}); err != nil {
@@ -717,12 +690,21 @@ func assertResolverState(t *testing.T, env *vmtest.Env, n *vmtest.Node, want, no
 
 // TestBareNameNotHijackedByPeer checks that a bare, unqualified name owned by
 // the tailnet's global nameserver still reaches that nameserver when a tailnet
-// device shares the name. With MagicDNS off only suffixed names should be
-// answered locally, but quad-100 answered the bare name itself. Issue 20789.
+// device shares the name. Only suffixed names should be answered locally, but
+// quad-100 answered the bare name itself. Issue 20789.
+//
+// This holds with MagicDNS on, too: the OS applies the MagicDNS search domain
+// to short names before they reach quad-100, so a single-label query that
+// reaches quad-100 verbatim is a name in the root zone, not a tailnet name.
 //
 // The lookup uses "tailscale dns query", which asks for exactly the name given:
 // getent would let a search domain complete it and pass on a different name.
 func TestBareNameNotHijackedByPeer(t *testing.T) {
+	t.Run("MagicDNS-off", func(t *testing.T) { testBareNameNotHijackedByPeer(t, false) })
+	t.Run("MagicDNS-on", func(t *testing.T) { testBareNameNotHijackedByPeer(t, true) })
+}
+
+func testBareNameNotHijackedByPeer(t *testing.T, magicDNS bool) {
 	// Only vnet's second DNS server answers this name, so an answer proves the
 	// query was forwarded. Its address is outside the 100.64.x.y block
 	// testcontrol assigns nodes, so it can't be mistaken for a Tailscale IP.
@@ -734,9 +716,10 @@ func TestBareNameNotHijackedByPeer(t *testing.T) {
 	env := vmtest.New(t,
 		vmtest.SameTailnetUser(), // so the colliding peer is visible in the netmap
 		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
-			// No Proxied: MagicDNS off. No Domains: nothing can complete a bare
-			// name into something else. Resolvers is the tailnet's global
-			// nameserver, which owns upstreamName.
+			Proxied: magicDNS,
+			// No Domains: nothing can complete a bare name into something
+			// else. Resolvers is the tailnet's global nameserver, which owns
+			// upstreamName.
 			Resolvers: []*dnstype.Resolver{{Addr: vnet.FakeSplitDNSIPv4().String()}},
 		}))
 
@@ -786,5 +769,91 @@ func TestBareNameNotHijackedByPeer(t *testing.T) {
 	}); err != nil {
 		out, _ := env.SSHExec(client, "resolvectl status; cat /etc/resolv.conf")
 		t.Fatalf("%v\nclient resolver state:\n%s", err, out)
+	}
+}
+
+// TestForwardedRefusedRcode checks that quad-100 hands the client an upstream
+// REFUSED instead of retrying it over TCP. vnet's second DNS server refuses
+// [vnet.SplitDNSRefusedName] and drops TCP to its port, so such a retry never
+// gets an answer.
+//
+// Lookups go through getent, so they reach the forwarder over UDP as a
+// client's would. The direct DNS backend keeps systemd-resolved from retrying
+// the REFUSED over TCP itself. Such a retry would bump the counter the test
+// asserts on. The test asserts on tailscaled's counters rather than on elapsed
+// time, since an emulated guest takes seconds just to start a process.
+//
+// See tailscale/tailscale#20826.
+func TestForwardedRefusedRcode(t *testing.T) {
+	fwdResolver := vnet.FakeSplitDNSIPv4()
+
+	env := vmtest.New(t,
+		vmtest.ControlDNS("tailnet.test", &tailcfg.DNSConfig{
+			// Proxied adds a nil-resolver route for the MagicDNS domain, so the
+			// route sets differ and quad-100 does the forwarding rather than
+			// handing fwdResolver to the OS.
+			Proxied: true,
+			Routes: map[string][]*dnstype.Resolver{
+				vnet.SplitDNSDomain: {{Addr: fwdResolver.String()}},
+			},
+		}))
+
+	lan := env.AddNetwork("2.1.1.1", "192.168.1.1/24", vnet.EasyNAT)
+	client := env.AddNode("client", lan,
+		vmtest.OS(vmtest.Ubuntu2404),
+		vmtest.WithDNSMode(vmtest.DNSDirect))
+
+	env.Start()
+
+	// libc must be sending to quad-100, not to fwdResolver directly, or the
+	// forwarder isn't in the path at all.
+	assertResolverState(t, env, client,
+		[]string{"100.100.100.100"},
+		[]string{fwdResolver.String()})
+
+	// A name the same server answers normally, as a positive control. Retrying
+	// it also waits for the DNS config to be applied.
+	if err := tstest.WaitFor(30*time.Second, func() error {
+		out, err := env.SSHExec(client, "getent ahostsv4 "+vnet.SplitDNSName)
+		if err != nil {
+			return fmt.Errorf("getent ahostsv4 %s: %v (%s)", vnet.SplitDNSName, err, strings.TrimSpace(out))
+		}
+		if !strings.Contains(out, vnet.SplitDNSAddr) {
+			return fmt.Errorf("getent ahostsv4 %s = %q, want it to contain %s",
+				vnet.SplitDNSName, strings.TrimSpace(out), vnet.SplitDNSAddr)
+		}
+		return nil
+	}); err != nil {
+		out, _ := env.SSHExec(client, "tailscale dns status")
+		t.Fatalf("%v\nclient DNS state:\n%s", err, out)
+	}
+
+	const (
+		tcpMetric     = "dns_query_fwd_tcp"
+		refusedMetric = "dns_query_fwd_udp_error_refused"
+	)
+	before := env.ClientMetrics(client)
+	for _, m := range []string{tcpMetric, refusedMetric} {
+		if _, ok := before[m]; !ok {
+			t.Fatalf("client has no %s metric", m)
+		}
+	}
+
+	// A REFUSED yields no address, so this lookup is expected to fail. The
+	// counters below are the check.
+	out, err := env.SSHExec(client, "getent ahostsv4 "+vnet.SplitDNSRefusedName)
+	t.Logf("getent ahostsv4 %s: err=%v out=%q", vnet.SplitDNSRefusedName, err, strings.TrimSpace(out))
+	if err == nil {
+		t.Errorf("getent ahostsv4 %s unexpectedly succeeded (%q); the upstream refuses that name",
+			vnet.SplitDNSRefusedName, strings.TrimSpace(out))
+	}
+
+	after := env.ClientMetrics(client)
+	if got, want := after[refusedMetric].Value, before[refusedMetric].Value; got <= want {
+		t.Errorf("%s did not advance (%v): the upstream's REFUSED never reached the forwarder",
+			refusedMetric, got)
+	}
+	if got, want := after[tcpMetric].Value, before[tcpMetric].Value; got != want {
+		t.Errorf("%s advanced from %v to %v: the rcode answer was retried over TCP", tcpMetric, want, got)
 	}
 }

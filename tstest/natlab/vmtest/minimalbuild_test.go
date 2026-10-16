@@ -85,7 +85,7 @@ func testMinimalBuild(t *testing.T, img vmtest.OSImage, sameLAN bool, wantRoute 
 	}
 
 	if wantRoute != vmtest.PingRouteDERP {
-		if err := env.PingExpect(a, b, wantRoute, 60*time.Second); err != nil {
+		if _, err := env.PingExpect(a, b, wantRoute, 60*time.Second); err != nil {
 			t.Error(err)
 		}
 		return

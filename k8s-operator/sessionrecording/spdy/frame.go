@@ -8,6 +8,7 @@ package spdy
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,18 @@ const (
 	SYN_REPLY  ControlFrameType = 2 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.2
 	SYN_PING   ControlFrameType = 6 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.5
 )
+
+// maxHeaderCount bounds the number of Name/Value pairs parsed out of one SPDY header block.
+// A 'kubectl exec/attach' session opens a few streams whose blocks carry a handful of pairs,
+// so this is orders of magnitude above real traffic.
+const maxHeaderCount = 1000
+
+// errHeaderBlockTooLarge is returned when a decompressed SPDY header block
+// exceeds maxHeaderBlockSize.
+var errHeaderBlockTooLarge = errors.New("SPDY header block too large or malformed")
+
+// maxHeaderBlockSize bounds the decompressed size of one Name/Value Header Block.
+const maxHeaderBlockSize = 1 << 20 // 1MiB
 
 // spdyFrame is a parsed SPDY frame as defined in
 // https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt
@@ -159,8 +172,29 @@ func (sf *spdyFrame) parseHeaders(z *zlibReader, log *zap.SugaredLogger) (http.H
 	return nil, nil
 }
 
-// parseHeaders expects to be passed a reader that contains a compressed SPDY control
-// frame Name/Value Header Block with 0 or more headers:
+// limitHeaderReader caps reads at maxHeaderBlockSize bytes. Reads past the
+// cap report errHeaderBlockTooLarge instead of a clean EOF.
+type limitHeaderReader struct {
+	r      io.Reader // decompressed header block
+	remain int64     // remaining byte budget
+}
+
+func (lr *limitHeaderReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	} else if lr.remain == 0 {
+		return 0, errHeaderBlockTooLarge
+	}
+	if int64(len(p)) > lr.remain {
+		p = p[:lr.remain]
+	}
+	n, err := lr.r.Read(p)
+	lr.remain -= int64(n)
+	return n, err
+}
+
+// parseHeaders expects to be passed a reader that contains a compressed SPDY
+// control frame Name/Value Header Block with 0 or more headers:
 //
 // | Number of Name/Value pairs (int32) |   <+
 // +------------------------------------+    |
@@ -179,14 +213,21 @@ func (sf *spdyFrame) parseHeaders(z *zlibReader, log *zap.SugaredLogger) (http.H
 // See also https://www.ietf.org/archive/id/draft-mbelshe-httpbis-spdy-00.txt section 2.6.10
 func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, error) {
 	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
+	defer func() {
+		if buf.Cap() <= maxHeaderBlockSize { // don't retain a buffer grown by a large block
+			bufPool.Put(buf)
+		}
+	}()
 	buf.Reset()
+
+	// Limit the impact of a potential compression bomb from the header block
+	lr := &limitHeaderReader{r: decompressor, remain: maxHeaderBlockSize}
 
 	// readUint32 reads the next 4 decompressed bytes from the decompressor
 	// as a uint32.
 	readUint32 := func() (uint32, error) {
 		const uint32Length = 4
-		if _, err := io.CopyN(buf, decompressor, uint32Length); err != nil { // decompress
+		if _, err := io.CopyN(buf, lr, uint32Length); err != nil { // decompress
 			return 0, fmt.Errorf("error decompressing bytes: %w", err)
 		}
 		return binary.BigEndian.Uint32(buf.Next(uint32Length)), nil // return as uint32
@@ -200,7 +241,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 		if err != nil {
 			return nil, err
 		}
-		if _, err := io.CopyN(buf, decompressor, int64(xLen)); err != nil { // decompress
+		if _, err := io.CopyN(buf, lr, int64(xLen)); err != nil { // decompress
 			return nil, err
 		}
 		return buf.Next(int(xLen)), nil
@@ -209,6 +250,9 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	numHeaders, err := readUint32()
 	if err != nil {
 		return nil, fmt.Errorf("error determining num headers: %v", err)
+	}
+	if numHeaders > maxHeaderCount {
+		return nil, fmt.Errorf("invalid data: too many headers declared: %v, maximum is %v", numHeaders, maxHeaderCount)
 	}
 	h := make(http.Header, numHeaders)
 	for range numHeaders {
@@ -231,7 +275,7 @@ func parseHeaders(decompressor io.Reader, log *zap.SugaredLogger) (http.Header, 
 	return h, nil
 }
 
-// isSPDYFrame validates that the input bytes start with a valid SPDY frame
+// isSPDYFrameHeader validates that the input bytes start with a valid SPDY frame
 // header.
 func isSPDYFrameHeader(f []byte) bool {
 	if hasControlBitSet(f) {
@@ -242,11 +286,11 @@ func isSPDYFrameHeader(f []byte) bool {
 	return dataFrameStreamID(f) != uint32(0)
 }
 
-// spdyDataFrameStreamID returns stream ID for an SPDY data frame passed as the
+// dataFrameStreamID returns stream ID for an SPDY data frame passed as the
 // input data slice. StreaID is contained within bits [0-31) of a data frame
 // header.
 func dataFrameStreamID(frame []byte) uint32 {
-	return binary.BigEndian.Uint32(frame[0:4]) & 0x7f
+	return binary.BigEndian.Uint32(frame[0:4]) & 0x7fffffff
 }
 
 // controlFrameType returns the type of a SPDY control frame.
@@ -255,11 +299,11 @@ func controlFrameType(f []byte) ControlFrameType {
 	return ControlFrameType(binary.BigEndian.Uint16(f[2:4]))
 }
 
-// spdyControlFrameVersion returns SPDY version extracted from input bytes that
+// controlFrameVersion returns SPDY version extracted from input bytes that
 // must be a SPDY control frame.
 func controlFrameVersion(frame []byte) uint16 {
 	bs := binary.BigEndian.Uint16(frame[0:2]) // first 16 bits
-	return bs & 0x7f                          // discard control bit
+	return bs & 0x7fff                        // discard control bit
 }
 
 // hasControlBitSet returns true if the passsed bytes have SPDY control bit set.

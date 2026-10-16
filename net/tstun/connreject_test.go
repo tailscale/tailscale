@@ -36,7 +36,7 @@ func TestOutboundTSMPRecordsRejection(t *testing.T) {
 	go func() {
 		slab, packets := getSinglePacketReadArgs()
 		for {
-			n, err := w.Read(slab, packets)
+			n, err := w.injectionQueue.Read(slab, packets)
 			_ = n
 			if err != nil {
 				return
@@ -99,7 +99,7 @@ func TestSetConnRejectCallbackUninstall(t *testing.T) {
 	go func() {
 		slab, packets := getSinglePacketReadArgs()
 		for {
-			if _, err := w.Read(slab, packets); err != nil {
+			if _, err := w.injectionQueue.Read(slab, packets); err != nil {
 				return
 			}
 		}

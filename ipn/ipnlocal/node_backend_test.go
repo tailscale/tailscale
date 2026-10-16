@@ -566,13 +566,20 @@ func testNodeBackendMagicDNSHosts(t *testing.T, magicDNSEnabled bool) {
 	wantHost("self.example.ts.net.", netip.MustParseAddr("100.64.0.1"))
 	wantHost("unknown.example.ts.net.")
 
-	// Short names are only resolved if MagicDNS is enabled.
-	// Otherwise, the resolver should not serve any short names.
-	var shortNameAddr []netip.Addr
-	if magicDNSEnabled {
-		shortNameAddr = []netip.Addr{netip.MustParseAddr("100.64.0.2")}
+	// Single-label FQDNs are not tailnet names, whether or not
+	// MagicDNS is enabled.
+	wantHost("p1.")
+	if nb.magicDNSSubdomainHost("p1.") {
+		t.Errorf("magicDNSSubdomainHost(%q) = true; want false", "p1.")
 	}
-	wantHost("p1.", shortNameAddr...)
+	wantHost("self.")
+	if nb.magicDNSSubdomainHost("self.") {
+		t.Errorf("magicDNSSubdomainHost(%q) = true; want false", "self.")
+	}
+	// But in-process dials (tsdial's UserDial) still resolve short names.
+	if nid, ok := nb.NodeByName("p1"); !ok || nid != p1.ID {
+		t.Errorf("NodeByName(%q) = %v, %v; want %v", "p1", nid, ok, p1.ID)
+	}
 
 	if fqdn, ok := nb.magicDNSPTR(netip.MustParseAddr("100.64.0.2")); !ok || fqdn != "p1.example.ts.net." {
 		t.Errorf("magicDNSPTR(100.64.0.2) = %q, %v; want p1's name", fqdn, ok)

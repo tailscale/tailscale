@@ -304,8 +304,15 @@ func (r *Reconciler) createOrUpdate(ctx context.Context, logger *zap.SugaredLogg
 		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	return reconcile.Result{}, nil
+	// Keep re-resolving once ready. A cloud publishes DNS records for a new load balancer over several minutes,
+	// one address family or zone at a time, and nothing in the cluster changes when a record lands, so without
+	// a periodic pass whatever subset the first lookup returned would be advertised for good.
+	return reconcile.Result{RequeueAfter: ReadyResyncInterval}, nil
 }
+
+// ReadyResyncInterval is how often a ready PeerRelay is reconciled to pick up load balancer addresses that DNS
+// started returning after the endpoints were last published.
+const ReadyResyncInterval = 5 * time.Minute
 
 func peerRelayReady(pr *tsapi.PeerRelay) bool {
 	for _, c := range pr.Status.Conditions {

@@ -27,7 +27,7 @@ type Persist struct {
 
 	// NetworkLockKey is the node's Tailnet Lock private key.
 	// "Network Lock" was the pre-release name for Tailnet Lock.
-	NetworkLockKey key.NLPrivate
+	NetworkLockKey key.TLPrivate
 
 	NodeID         tailcfg.StableNodeID
 	AttestationKey key.HardwareAttestationKey `json:",omitzero"`

@@ -13,18 +13,42 @@ import (
 type fakeTUN struct {
 	evchan    chan tun.Event
 	closechan chan struct{}
+	queues    []tun.Queue
 }
 
 // NewFake returns a tun.Device that does nothing.
-func NewFake() tun.Device {
-	return &fakeTUN{
+func NewFake() tun.Device { return newFakeMQ(1) }
+
+// newFakeMQ returns a fake device with n read queues.
+func newFakeMQ(n int) *fakeTUN {
+	if n < 1 {
+		panic("newFakeMQ() with less than one queue requested")
+	}
+	t := &fakeTUN{
 		evchan:    make(chan tun.Event),
 		closechan: make(chan struct{}),
 	}
+	for range n {
+		t.queues = append(t.queues, &fakeQueue{closechan: t.closechan})
+	}
+	return t
+}
+
+type fakeQueue struct {
+	closechan chan struct{}
+}
+
+func (q *fakeQueue) File() *os.File {
+	panic("fakeTUN.File() called, which makes no sense")
+}
+
+func (q *fakeQueue) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	<-q.closechan
+	return 0, io.EOF
 }
 
 func (t *fakeTUN) File() *os.File {
-	panic("fakeTUN.File() called, which makes no sense")
+	return t.queues[0].File()
 }
 
 func (t *fakeTUN) Close() error {
@@ -34,8 +58,13 @@ func (t *fakeTUN) Close() error {
 }
 
 func (t *fakeTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
-	<-t.closechan
-	return 0, io.EOF
+	return t.queues[0].Read(slab, packets)
+}
+
+func (t *fakeTUN) Queues() []tun.Queue { return t.queues }
+
+func (t *fakeTUN) WriteTo(_ int, b [][]byte, n int) (int, error) {
+	return t.Write(b, n)
 }
 
 func (t *fakeTUN) Write(b [][]byte, n int) (int, error) {

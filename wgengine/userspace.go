@@ -633,7 +633,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.
 		header := p.ICMP4Header()
 		header.ToResponse()
 		outp := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(outp)
+		t.TryInjectOutbound(outp)
 		// We already responded to it, but it's not an error.
 		// Proceed with regular delivery. (Since this code is only
 		// used in fake mode, regular delivery just means throwing

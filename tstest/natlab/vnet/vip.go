@@ -49,6 +49,13 @@ const (
 	// [FakeSplitDNSIPv4], not by a route for that domain.
 	SplitDNSBareName = "bare-upstream-only"
 	SplitDNSBareAddr = "10.99.1.2"
+
+	// SplitDNSRefusedName is answered REFUSED by fakeSplitDNS instead of with an
+	// address, for tests that need an upstream rcode rather than a resolution
+	// failure. Nothing in vnet serves DNS over TCP, and TCP to a DNS VIP is
+	// dropped rather than refused, so a forwarder that retries this rcode over
+	// TCP waits on an answer that never comes.
+	SplitDNSRefusedName = "refused." + SplitDNSDomain
 )
 
 // splitDNSZone holds the names served only by fakeSplitDNS.
@@ -84,6 +91,11 @@ const TestDriverPort = 8008
 
 // FakeDNSIPv4 returns the fake DNS IPv4 address.
 func FakeDNSIPv4() netip.Addr { return fakeDNS.v4 }
+
+// FakeLogCatcherIPv4 returns the IPv4 address of the fake log.tailscale.com,
+// which collects the tailscaled logs that [Server.NodeLogs] returns. It
+// accepts uploads over HTTPS on port 443 and over plain HTTP on port 80.
+func FakeLogCatcherIPv4() netip.Addr { return fakeLogCatcher.v4 }
 
 // FakeDNSIPv6 returns the fake DNS IPv6 address.
 func FakeDNSIPv6() netip.Addr { return fakeDNS.v6 }

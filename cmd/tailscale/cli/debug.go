@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -317,6 +318,7 @@ func debugCmd() *ffcli.Command {
 					fs.StringVar(&ts2021Args.dialPlanJSONFile, "dial-plan", "", "if non-empty, use this JSON file to configure the dial plan")
 					fs.StringVar(&ts2021Args.connectIP, "connect-ip", "", "if non-empty, dial this IP for the noise connection instead of resolving the host, keeping the host for the key fetch, SNI, and Host header")
 					fs.StringVar(&ts2021Args.forcePort, "force-port", "", "if non-empty (\"80\" or \"443\"), only dial the noise connection on this port; by default port 80 is tried first with a port 443 fallback")
+					fs.BoolVar(&ts2021Args.skipTLSCheck, "skip-tls-check", false, "if true, skip the TLS ClientHello diagnostics check")
 					return fs
 				})(),
 			},
@@ -1038,6 +1040,7 @@ var ts2021Args struct {
 	dialPlanJSONFile string // if non-empty, path to JSON file [tailcfg.ControlDialPlan] JSON
 	connectIP        string // if non-empty, IP to dial for the noise connection instead of resolving host
 	forcePort        string // if non-empty ("80" or "443"), only dial the noise connection on this port
+	skipTLSCheck     bool   // if true, skip the TLS ClientHello diagnostics check
 }
 
 func runTS2021(ctx context.Context, args []string) error {
@@ -1056,6 +1059,10 @@ func runTS2021(ctx context.Context, args []string) error {
 		// dialFunc guard below enforces this one.
 	default:
 		return fmt.Errorf("invalid --force-port value %q; must be \"80\" or \"443\"", ts2021Args.forcePort)
+	}
+
+	if !ts2021Args.skipTLSCheck {
+		checkLargeClientHello(ctx, ts2021Args.host, ts2021Args.connectIP)
 	}
 
 	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
@@ -1186,6 +1193,122 @@ func runTS2021(ctx context.Context, args []string) error {
 		break
 	}
 	return nil
+}
+
+// tlsProbe describes one TLS handshake probe made by checkLargeClientHello.
+type tlsProbe struct {
+	name string
+	cfg  *tls.Config
+}
+
+// tlsProbeResult is the result of a single tlsProbe.
+type tlsProbeResult struct {
+	ok      bool
+	err     error
+	elapsed time.Duration
+	group   string // the negotiated TLS key exchange group, if ok
+}
+
+// checkLargeClientHello checks whether something on the network path drops
+// TLS ClientHello records that span multiple TCP segments. Since Go 1.24,
+// crypto/tls offers the X25519MLKEM768 hybrid post-quantum key exchange by
+// default, which grows the TLS 1.3 ClientHello past the typical 1500-byte
+// MTU, and some middleboxes mishandle such large ClientHellos.
+//
+// It does so by comparing TLS 1.3 handshakes to host over TCP port 443 using
+// Go's default key exchange groups (which include ML-KEM hybrid groups and
+// produce a large ClientHello) with handshakes restricted to classic groups
+// (which produce a small ClientHello). If the large ClientHello fails while
+// the small one succeeds, the network path does not support large
+// (post-quantum) ClientHellos. Results are advisory: they are logged and never
+// abort the surrounding command.
+func checkLargeClientHello(ctx context.Context, host, connectIP string) {
+	const probeTimeout = 10 * time.Second
+
+	serverName := host
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		host = net.JoinHostPort(host, "443")
+	} else {
+		serverName, _, _ = net.SplitHostPort(host)
+	}
+	if connectIP != "" {
+		// Dial the same IP as the noise connection would, keeping the
+		// host for SNI.
+		_, port, err := net.SplitHostPort(host)
+		if err != nil {
+			port = "443"
+		}
+		host = net.JoinHostPort(connectIP, port)
+	}
+
+	probes := []tlsProbe{
+		{
+			name: "TLS 1.3 with default key exchange groups (large ClientHello, includes ML-KEM hybrid post-quantum groups)",
+			cfg: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				MaxVersion: tls.VersionTLS13,
+			},
+		},
+		{
+			name: "TLS 1.3 with classic key exchange groups only (small ClientHello)",
+			cfg: &tls.Config{
+				MinVersion:       tls.VersionTLS13,
+				MaxVersion:       tls.VersionTLS13,
+				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+			},
+		},
+	}
+
+	var results [2]tlsProbeResult
+	for i := range probes {
+		p := probes[i]
+		r := &results[i]
+		log.Printf("TLS check: %s ...", p.name)
+		cfg := p.cfg.Clone()
+		cfg.ServerName = serverName
+		// We only care whether the handshake bytes make it through the
+		// network; a certificate verification failure would be noise here.
+		cfg.InsecureSkipVerify = true
+		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		dialer := &tls.Dialer{Config: cfg}
+		start := time.Now()
+		conn, err := dialer.DialContext(pctx, "tcp", host)
+		cancel()
+		r.elapsed = time.Since(start)
+		if err != nil {
+			r.err = err
+			log.Printf("TLS check: FAILED in %.3fs: %v", r.elapsed.Seconds(), err)
+			continue
+		}
+		r.ok = true
+		r.group = conn.(*tls.Conn).ConnectionState().CurveID.String()
+		conn.Close()
+		log.Printf("TLS check: ok in %.3fs (key exchange group: %s)", r.elapsed.Seconds(), r.group)
+	}
+
+	large, small := results[0], results[1]
+	switch {
+	case large.ok && small.ok:
+		if large.elapsed > 5*time.Second {
+			log.Printf("TLS check: warning: the handshake with a large (post-quantum) ClientHello succeeded, but only after %.1fs. "+
+				"Something on the network path to %s may be dropping large ClientHellos, with the handshake only "+
+				"completing on a retry with a smaller one.",
+				large.elapsed.Seconds(), serverName)
+		} else {
+			log.Printf("TLS check: ok; TLS 1.3 handshakes with both large (post-quantum) and small ClientHellos completed promptly.")
+		}
+	case !large.ok && small.ok:
+		log.Printf("TLS check: large TLS ClientHello (post-quantum) unsupported. "+
+			"The TLS 1.3 handshake using Go's default key exchange groups, which include ML-KEM hybrid post-quantum groups "+
+			"and produce a large ClientHello, failed, while a handshake with a small ClientHello (classic key exchange groups "+
+			"only) succeeded. Something on the network path to %s is likely dropping ClientHellos that span multiple TCP segments.",
+			serverName)
+	case !large.ok && !small.ok:
+		log.Printf("TLS check: inconclusive; no TLS 1.3 handshake to %s succeeded, so the problem is not "+
+			"specific to large ClientHellos. Check basic connectivity to the control plane.", host)
+	default: // large.ok && !small.ok
+		log.Printf("TLS check: warning: unexpected result; the handshake with a large ClientHello succeeded but the handshake with a small ClientHello failed.")
+	}
 }
 
 func tryConnect(ctx context.Context, controlPublic key.MachinePublic, opts ts2021.ClientOpts) error {

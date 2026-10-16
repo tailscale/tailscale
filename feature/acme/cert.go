@@ -560,6 +560,24 @@ func (e *extension) issueACMECert(ctx context.Context, b *ipnlocal.LocalBackend,
 		}
 	}
 
+	// Wait for each authorization to settle before waiting on the order.
+	// When validation fails, the order reports only "invalid". The CA's
+	// reason is on the authorization's challenge. For dns-01 that is
+	// usually that it found no TXT record, or found the wrong one.
+	// WaitAuthorization returns it as an [*xacme.AuthorizationError].
+	// See tailscale/tailscale#21759.
+	for _, aurl := range order.AuthzURLs {
+		az, err := ac.WaitAuthorization(ctx, aurl)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			args.logf("acme: WaitAuthorization: %v", err)
+			return nil, err
+		}
+		args.traceACME(az)
+	}
+
 	orderURI := order.URI
 	order, err = ac.WaitOrder(ctx, orderURI)
 	if err != nil {

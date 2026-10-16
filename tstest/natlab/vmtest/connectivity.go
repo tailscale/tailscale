@@ -22,7 +22,7 @@ func (e *Env) RunConnectivityTestExpect(name string, pingRoute PingRoute, n1, n2
 	e.Start()
 
 	discoPingStep.Begin()
-	if err := e.PingExpect(node1, node2, pingRoute, 30*time.Second); err != nil {
+	if _, err := e.PingExpect(node1, node2, pingRoute, 30*time.Second); err != nil {
 		discoPingStep.End(err)
 		e.t.Error(err)
 		return

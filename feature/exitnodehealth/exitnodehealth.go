@@ -4,7 +4,7 @@
 // Package exitnodehealth reports unusable exit node configurations via
 // health warnables.
 //
-// It does not infer or probe data-plane reachability.
+// Health state is refined using traffic and heartbeat signals from magicsock.
 package exitnodehealth
 
 import (
@@ -24,6 +24,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
+	"tailscale.com/wgengine/magicsock"
 )
 
 const featureName = "exitnodehealth"
@@ -32,6 +33,8 @@ func init() {
 	if !feature.Register(featureName) {
 		return
 	}
+	magicsock.HookExitNodeHeartbeatStateLocked.Set(reportExitNodeHeartbeatStateLocked)
+	magicsock.HookExitNodeCheckResponsiveness.Set(checkExitNodeResponsiveness)
 	ipnext.RegisterExtension(featureName, newExtension)
 }
 
@@ -39,16 +42,18 @@ func newExtension(logf logger.Logf, b ipnext.SafeBackend) (ipnext.Extension, err
 	if !buildfeatures.HasHealth || !buildfeatures.HasUseExitNode {
 		return nil, ipnext.SkipExtension
 	}
-	return &extension{logf: logf, health: b.Sys().HealthTracker.Get(), polc: b.Sys().PolicyClientOrDefault()}, nil
+	ms, _ := b.Sys().MagicSock.GetOK()
+	return &extension{logf: logf, health: b.Sys().HealthTracker.Get(), polc: b.Sys().PolicyClientOrDefault(), magicsock: ms}, nil
 }
 
 // extension owns the health state for one backend.
 type extension struct {
 	host ipnext.Host
 
-	logf   logger.Logf
-	health *health.Tracker
-	polc   policyclient.Client
+	logf      logger.Logf
+	health    *health.Tracker
+	polc      policyclient.Client
+	magicsock *magicsock.Conn
 
 	// mu protects the fields below.
 	//
@@ -60,6 +65,7 @@ type extension struct {
 	closed            bool
 	reason            ExitNodeHealthVerdict // last reported reason, for transition logs
 	lastID            tailcfg.StableNodeID  // last evaluated selection, independent of name caching
+	responsiveness    responsiveness
 
 	// Remember a peer's name and/or ID so warnings can still identify it after removal.
 	// It may prove useful to persist this across sessions, but for now we only remember it while the backend is running.
@@ -84,6 +90,10 @@ func (e *extension) Shutdown() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.closed = true
+	if e.magicsock != nil {
+		activityObservers.Delete(e.magicsock)
+	}
+	e.health.SetHealthy(exitNodeUnresponsiveWarnable)
 	return nil
 }
 
@@ -133,12 +143,14 @@ func (e *extension) updateLocked() {
 	prefs := e.host.Profiles().CurrentPrefs()
 	node := e.host.NodeBackend()
 	peer, _ := node.PeerByStableID(prefs.ExitNodeID())
-	e.updateWarnableLocked(healthContext{
+	c := healthContext{
 		State:             e.state,
 		NetworkConfigured: e.networkConfigured,
 		Prefs:             prefs,
 		Peer:              peer,
-	})
+	}
+	e.updateWarnableLocked(c)
+	e.updateResponsivenessSelectionLocked(c)
 }
 
 // ExitNodeHealthVerdict describes why the selected exit node cannot carry

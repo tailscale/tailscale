@@ -217,9 +217,9 @@ func TestTailnetLockStatusOutput(t *testing.T) {
 	nodeKey2 := key.NodePublicFromRaw32(mem.B(bytes.Repeat([]byte{2}, 32)))
 	nodeKey3 := key.NodePublicFromRaw32(mem.B(bytes.Repeat([]byte{3}, 32)))
 
-	nlPub := key.NLPublicFromEd25519Unsafe(bytes.Repeat([]byte{4}, 32))
+	nlPub := key.TLPublicFromEd25519Unsafe(bytes.Repeat([]byte{4}, 32))
 
-	trustedNlPub := key.NLPublicFromEd25519Unsafe(bytes.Repeat([]byte{5}, 32))
+	trustedNlPub := key.TLPublicFromEd25519Unsafe(bytes.Repeat([]byte{5}, 32))
 
 	tailnetIPv4_A, tailnetIPv6_A := netip.MustParseAddr("100.99.99.99"), netip.MustParseAddr("fd7a:115c:a1e0::701:b62a")
 	tailnetIPv4_B, tailnetIPv6_B := netip.MustParseAddr("100.88.88.88"), netip.MustParseAddr("fd7a:115c:a1e0::4101:512f")

@@ -17,12 +17,19 @@ import (
 // the test on error.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	// Use an empty file rather than os.DevNull, as Git for Windows 2.56.0
+	// rejects "NUL" for GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM.
+	// See https://github.com/git-for-windows/git/issues/6449.
+	emptyConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyConfig, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
-		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_CONFIG_GLOBAL="+emptyConfig, "GIT_CONFIG_SYSTEM="+emptyConfig,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

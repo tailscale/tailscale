@@ -5,12 +5,15 @@ package acme
 
 import (
 	"context"
+	"iter"
 	"net"
+	"strconv"
 	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/types/views"
 	"tailscale.com/util/set"
 )
 
@@ -97,11 +100,7 @@ func (e *extension) refreshApplicableCerts(ctx context.Context, b *ipnlocal.Loca
 		}
 		want.Add(host)
 	}
-	for hp := range sc.Webs() {
-		host, _, err := net.SplitHostPort(string(hp))
-		if err != nil {
-			continue
-		}
+	for host := range httpsWebHosts(sc) {
 		consider(host)
 	}
 	for _, tcp := range sc.TCPs() {
@@ -135,7 +134,7 @@ func serveConfigUsesACMECerts(sc ipn.ServeConfigView) bool {
 	if !sc.Valid() {
 		return false
 	}
-	for range sc.Webs() {
+	for range httpsWebHosts(sc) {
 		return true
 	}
 	for _, tcp := range sc.TCPs() {
@@ -151,4 +150,57 @@ func serveConfigUsesACMECerts(sc ipn.ServeConfigView) bool {
 		}
 	}
 	return false
+}
+
+// httpsWebHosts returns an iterator over the hostnames of the Web
+// entries in sc that are served over HTTPS. It covers background,
+// foreground, and Service Web entries.
+//
+// A Web entry does not record whether it is HTTP or HTTPS. That lives
+// on the TCP handler for the entry's port in the same config: the
+// node's handlers for background and foreground entries, and the
+// Service's handlers for Service entries. Entries whose handler does
+// not have HTTPS set, such as those from `tailscale serve --http=80`,
+// are skipped because they never need a cert.
+func httpsWebHosts(sc ipn.ServeConfigView) iter.Seq[string] {
+	type webMap = views.MapFn[ipn.HostPort, *ipn.WebServerConfig, ipn.WebServerConfigView]
+	type tcpMap = views.MapFn[uint16, *ipn.TCPPortHandler, ipn.TCPPortHandlerView]
+	return func(yield func(string) bool) {
+		// walk yields the HTTPS hosts of one Web map, resolving each
+		// entry's port against the TCP handlers in tcp. It reports
+		// whether iteration should continue.
+		walk := func(web webMap, tcp tcpMap) bool {
+			for hp := range web.All() {
+				host, portStr, err := net.SplitHostPort(string(hp))
+				if err != nil {
+					continue
+				}
+				port, err := strconv.ParseUint(portStr, 10, 16)
+				if err != nil {
+					continue
+				}
+				th, ok := tcp.GetOk(uint16(port))
+				if !ok || !th.HTTPS() {
+					continue
+				}
+				if !yield(host) {
+					return false
+				}
+			}
+			return true
+		}
+		if !walk(sc.Web(), sc.TCP()) {
+			return
+		}
+		for _, conf := range sc.Foreground().All() {
+			if !walk(conf.Web(), conf.TCP()) {
+				return
+			}
+		}
+		for _, svc := range sc.Services().All() {
+			if !walk(svc.Web(), svc.TCP()) {
+				return
+			}
+		}
+	}
 }

@@ -35,30 +35,6 @@ var (
 	debugHandler map[string]http.Handler
 )
 
-// ReceiveFunc is one of the three magicsock Receive funcs (IPv4, IPv6, or
-// DERP).
-type ReceiveFunc int
-
-// ReceiveFunc indices for Tracker.MagicSockReceiveFuncs.
-const (
-	ReceiveIPv4 ReceiveFunc = 0
-	ReceiveIPv6 ReceiveFunc = 1
-	ReceiveDERP ReceiveFunc = 2
-)
-
-func (f ReceiveFunc) String() string {
-	if f < 0 || int(f) >= len(receiveNames) {
-		return fmt.Sprintf("ReceiveFunc(%d)", f)
-	}
-	return receiveNames[f]
-}
-
-var receiveNames = []string{
-	ReceiveIPv4: "ReceiveIPv4",
-	ReceiveIPv6: "ReceiveIPv6",
-	ReceiveDERP: "ReceiveDERP",
-}
-
 // Tracker tracks the health of various Tailscale subsystems,
 // comparing each subsystems' state with each other to make sure
 // they're consistent based on the user's intended state.
@@ -78,15 +54,6 @@ var receiveNames = []string{
 // emitted with ControlHealthChanged set to true. Recipients can fetch the set of
 // control-plane health messages by calling [Tracker.CurrentState]:
 type Tracker struct {
-	// MagicSockReceiveFuncs tracks the state of the three
-	// magicsock receive functions: IPv4, IPv6, and DERP.
-	MagicSockReceiveFuncs [3]ReceiveFuncStats // indexed by ReceiveFunc values
-
-	// initOnce guards the initialization of the Tracker.
-	// Notably, it initializes the MagicSockReceiveFuncs names.
-	// mu should not be held during init.
-	initOnce sync.Once
-
 	testClock tstime.Clock // nil means use time.Now / tstime.StdClock{}
 
 	eventClient *eventbus.Client
@@ -94,6 +61,8 @@ type Tracker struct {
 
 	// mu guards everything that follows.
 	mu sync.Mutex
+
+	magicSockReceiveFuncs []*ReceiveFuncStats // append-only and lazy, new Conn reuses existing entries
 
 	warnables   []*Warnable // keys ever set
 	warnableVal map[*Warnable]*warningState
@@ -992,7 +961,6 @@ func (t *Tracker) timerSelfCheck() {
 	if t.nil() {
 		return
 	}
-	t.initOnce.Do(t.doOnceInit)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.checkReceiveFuncsLocked()
@@ -1230,8 +1198,7 @@ func (t *Tracker) updateBuiltinWarnablesLocked() {
 	_ = t.lastMapRequestHeard
 
 	shouldClearMagicsockWarnings := true
-	for i := range t.MagicSockReceiveFuncs {
-		f := &t.MagicSockReceiveFuncs[i]
+	for _, f := range t.magicSockReceiveFuncs {
 		if f.missing {
 			t.setUnhealthyLocked(magicsockReceiveFuncWarnable, Args{
 				ArgMagicsockFunctionName: f.name,
@@ -1323,7 +1290,7 @@ func (t *Tracker) showUpdateWarnable() (*Warnable, bool) {
 // ReceiveFuncStats tracks the calls made to a wireguard-go receive func.
 type ReceiveFuncStats struct {
 	// name is the name of the receive func.
-	// It's lazily populated.
+	// Immutable after initialization.
 	name string
 	// numCalls is the number of times the receive func has ever been called.
 	// It is required because it is possible for a receive func's wireguard-go goroutine
@@ -1360,34 +1327,28 @@ func (s *ReceiveFuncStats) Exit() {
 }
 
 // ReceiveFuncStats returns the ReceiveFuncStats tracker for the given func
-// type.
+// name, creating it on first use. Repeated calls with the same name return
+// the same tracker.
 //
 // If t is nil, it returns nil.
-func (t *Tracker) ReceiveFuncStats(which ReceiveFunc) *ReceiveFuncStats {
+func (t *Tracker) ReceiveFuncStats(name string) *ReceiveFuncStats {
 	if !buildfeatures.HasHealth || t == nil {
 		return nil
 	}
-	t.initOnce.Do(t.doOnceInit)
-	return &t.MagicSockReceiveFuncs[which]
-}
-
-func (t *Tracker) doOnceInit() {
-	if !buildfeatures.HasHealth {
-		return
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, f := range t.magicSockReceiveFuncs {
+		if f.name == name {
+			return f
+		}
 	}
-	for i := range t.MagicSockReceiveFuncs {
-		f := &t.MagicSockReceiveFuncs[i]
-		f.name = (ReceiveFunc(i)).String()
-	}
+	f := &ReceiveFuncStats{name: name}
+	t.magicSockReceiveFuncs = append(t.magicSockReceiveFuncs, f)
+	return f
 }
 
 func (t *Tracker) checkReceiveFuncsLocked() {
-	for i := range t.MagicSockReceiveFuncs {
-		f := &t.MagicSockReceiveFuncs[i]
-		if runtime.GOOS == "js" && i < 2 {
-			// Skip IPv4 and IPv6 on js.
-			continue
-		}
+	for _, f := range t.magicSockReceiveFuncs {
 		f.missing = false
 		prev := f.prevNumCalls
 		numCalls := f.numCalls.Load()

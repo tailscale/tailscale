@@ -150,7 +150,7 @@ func (de *endpoint) setBestAddrLocked(v addrQuality) {
 			}
 			// Regardless whether the netmap is cached, record how long it has
 			// been since the endpoint was initialized.
-			de.c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
+			de.c.logf("[v1] magicsock: new contact: peer=%s usec=%d cached=%v via=direct",
 				de.publicKey.ShortString(), int64(mono.Since(de.c.initializedAt)/time.Microsecond), isCached)
 		}
 	}
@@ -820,7 +820,9 @@ func (de *endpoint) scheduleHeartbeatForLifetimeLocked(after time.Duration, via 
 // sources are de.heartbeat() and de.probeUDPLifetimeCliffDoneLocked().
 func (de *endpoint) heartbeatForLifetime() {
 	de.mu.Lock()
+	defer de.checkExitNodeResponsiveness()
 	defer de.mu.Unlock()
+	defer de.reportExitNodeHeartbeatStateLocked()
 	p := de.probeUDPLifetime
 	if p == nil || p.timer == nil {
 		// We raced with a code path trying to p.timer.Stop() us. Give up early
@@ -871,7 +873,10 @@ func (de *endpoint) heartbeatForLifetime() {
 // lifetime on the tail end of an active session.
 func (de *endpoint) heartbeat() {
 	de.mu.Lock()
+	// Record endpoint state, unlock, then inspect WireGuard counters.
+	defer de.checkExitNodeResponsiveness()
 	defer de.mu.Unlock()
+	defer de.reportExitNodeHeartbeatStateLocked()
 
 	if de.probeUDPLifetime != nil && de.probeUDPLifetime.timer != nil {
 		de.probeUDPLifetime.timer.Stop()
@@ -1950,6 +1955,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src epAdd
 	}
 
 	now := mono.Now()
+	de.c.reportExitNodePong(de.publicKey, now)
 	latency := now.Sub(sp.at)
 
 	if hasUDPTransport && !isDerp && !src.vni.IsSet() {

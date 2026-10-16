@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -469,8 +470,10 @@ type Node struct {
 	advertiseRoutes  string
 	snatSubnetRoutes *bool // nil means default (true)
 	webServerPort    int
-	sshPort          int     // host port for SSH debug access (cloud VMs only)
-	dnsMode          DNSMode // desired Linux DNS backend to provision; "" means the image default
+	sshPort          int        // host port for SSH debug access (cloud VMs only)
+	dnsMode          DNSMode    // desired Linux DNS backend to provision; "" means the image default
+	qmpPath          string     // socket path for talking to the QEMU process for the node
+	dhcpClient       DHCPClient // DHCP client for the vnet NIC; "" means the image default
 }
 
 // AddNode creates a new VM node. The name is used for identification and as the
@@ -516,15 +519,42 @@ func (e *Env) AddNode(name string, opts ...any) *Node {
 				e.t.Fatalf("AddNode(%q): unsupported DNSMode %q", name, DNSMode(o))
 			}
 			n.dnsMode = DNSMode(o)
+		case nodeOptDHCPClient:
+			switch c := DHCPClient(o); c {
+			case DHCPClientDefault, DHCPClientDhcpcd:
+				n.dhcpClient = c
+			default:
+				e.t.Fatalf("AddNode(%q): unsupported DHCPClient %q", name, c)
+			}
 		default:
 			// Pass through to vnet (TailscaledEnv, NodeOption, MAC, etc.)
 			vnetOpts = append(vnetOpts, o)
+		}
+	}
+	if n.dhcpClient == DHCPClientDhcpcd {
+		// Only this image is known to ship dhcpcd-base, and the dhcpcd.conf
+		// written by dhcpcdFiles names the single vnet NIC.
+		if n.os.Name != Ubuntu2404.Name {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires the %s image, got %s", name, Ubuntu2404.Name, n.os.Name)
+		}
+		if len(n.nets) != 1 {
+			e.t.Fatalf("AddNode(%q): DHCPClientDhcpcd requires exactly one network, got %d", name, len(n.nets))
 		}
 	}
 	if e.fakeACME {
 		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
 			Key:   "TS_DEBUG_ACME_DIRECTORY_URL",
 			Value: "http://acme.example/directory",
+		})
+	}
+	if !n.os.IsGokrazy && !n.os.IsMacOS {
+		// Only gokrazy builds trust the fake log catcher's TLS cert, so other
+		// guests upload over plain HTTP. The address is a literal so uploads
+		// keep working while a test breaks the guest's DNS. macOS guests are
+		// left out because tailmac does not pass TailscaledEnv to tailscaled.
+		vnetOpts = append(vnetOpts, vnet.TailscaledEnv{
+			Key:   "TS_LOG_TARGET",
+			Value: "http://" + vnet.FakeLogCatcherIPv4().String(),
 		})
 	}
 
@@ -581,6 +611,29 @@ type nodeOptAdvertiseRoutes string
 type nodeOptSNATSubnetRoutes bool
 type nodeOptWebServer int
 type nodeOptDNSMode DNSMode
+type nodeOptDHCPClient DHCPClient
+
+// DHCPClient says which DHCP client configures the guest's vnet NIC.
+type DHCPClient string
+
+const (
+	// DHCPClientDefault leaves the image's networking alone, so the NIC is
+	// configured by whatever the image runs by default (systemd-networkd on
+	// the cloud images).
+	DHCPClientDefault DHCPClient = ""
+
+	// DHCPClientDhcpcd makes systemd-networkd leave the vnet NIC unmanaged and
+	// runs the dhcpcd that the Ubuntu 24.04 image ships (dhcpcd-base) on it
+	// instead. dhcpcd configures the lease's address and routes itself, then
+	// runs its hook scripts. The resolv.conf hook calls resolvconf when one
+	// is installed, registering a snippet named "<interface>.dhcp", and
+	// writes /etc/resolv.conf directly otherwise. Combine with
+	// [DNSOpenresolv] so the hook registers the snippet instead of writing
+	// resolv.conf.
+	//
+	// Only supported on [Ubuntu2404] nodes with a single network.
+	DHCPClientDhcpcd DHCPClient = "dhcpcd"
+)
 
 // DNSMode is a provisioning directive, not a DNS-backend name: it says what, if
 // anything, to do to the guest's DNS before tailscaled starts, letting one
@@ -604,10 +657,12 @@ const (
 
 	// DNSOpenresolv masks systemd-resolved and installs upstream openresolv
 	// (which no cloud image ships), so tailscaled selects the "openresolv"
-	// manager. Its key directory is created empty, so the only snippet ever
-	// registered is Tailscale's own. Before the fix for tailscale/tailscale#20825,
-	// tailscaled handled that state wrong. openresolv reports "no snippets" by
-	// exiting 2, and net/dns treated that non-zero exit as a hard failure.
+	// manager. Its key directory is created empty, so unless [WithDHCPClient]
+	// selects a client whose resolv.conf hook registers a snippet, the only
+	// one ever registered is Tailscale's own. Before the fix for
+	// tailscale/tailscale#20825, tailscaled handled an empty key directory
+	// wrong: openresolv reports "no snippets" by exiting 2, and net/dns
+	// treated that non-zero exit as a hard failure.
 	//
 	// openresolv's sources are vendored into the tree; see openresolv.go.
 	DNSOpenresolv DNSMode = "openresolv"
@@ -659,6 +714,10 @@ func WebServer(port int) nodeOptWebServer { return nodeOptWebServer(port) }
 // tailscaled selects the given DNS backend. Only meaningful for Linux cloud
 // images; ignored for gokrazy/macOS. See [DNSMode].
 func WithDNSMode(m DNSMode) nodeOptDNSMode { return nodeOptDNSMode(m) }
+
+// WithDHCPClient returns a NodeOption that provisions the node so the given
+// DHCP client configures its vnet NIC. See [DHCPClient].
+func WithDHCPClient(c DHCPClient) nodeOptDHCPClient { return nodeOptDHCPClient(c) }
 
 // Start initializes the virtual network, boots all VMs in parallel, and waits
 // for all TTA agents to connect. It should be called after all AddNetwork/AddNode calls.
@@ -762,7 +821,7 @@ func (e *Env) Start() {
 				}
 				t.Logf("[%s] agent connected, backend state: %s", n.name, st.BackendState)
 			} else {
-				if err := e.waitForAgentConn(ctx, n); err != nil {
+				if err := e.WaitForAgentConn(ctx, n); err != nil {
 					return fmt.Errorf("[%s] agent connect: %w", n.name, err)
 				}
 				t.Logf("[%s] agent connected (no tailscale)", n.name)
@@ -1050,6 +1109,14 @@ func (e *Env) Status(n *Node) *ipnstate.Status {
 		e.t.Fatalf("Status(%s): %v", n.name, err)
 	}
 	return st
+}
+
+// NodeLogs returns the tailscaled log lines the node has uploaded to the fake
+// log catcher so far, oldest first, each prefixed with the client's
+// timestamp. Uploads are batched, so lines tailscaled wrote recently may be
+// missing.
+func (e *Env) NodeLogs(n *Node) string {
+	return e.server.NodeLogs(n.vnetNode)
 }
 
 // ClientMetrics returns the client metrics exported by the given node.
@@ -1729,7 +1796,11 @@ func (e *Env) Tailscale(n *Node, args ...string) (string, error) {
 	for _, arg := range args {
 		q.Add("arg", arg)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://unused/tailscale?"+q.Encode(), nil)
+	// http.Transport transparently replays a GET whose reused conn hits EOF
+	// before the response, which would run the command twice. This is not
+	// safe to do since not all tailscale commands are idempotent.
+	// Use POST to avoid these retries.
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://unused/tailscale?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -2004,9 +2075,9 @@ func (e *Env) registerBinaries(goos, goarch string) {
 	}
 }
 
-// waitForAgentConn waits for a TTA agent to connect by issuing a simple
+// WaitForAgentConn waits for a TTA agent to connect by issuing a simple
 // HTTP GET to the root endpoint, without requiring tailscaled.
-func (e *Env) waitForAgentConn(ctx context.Context, n *Node) error {
+func (e *Env) WaitForAgentConn(ctx context.Context, n *Node) error {
 	for {
 		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		req, err := http.NewRequestWithContext(reqCtx, "GET", "http://unused/", nil)
@@ -2018,6 +2089,9 @@ func (e *Env) waitForAgentConn(ctx context.Context, n *Node) error {
 		cancel()
 		if err == nil {
 			res.Body.Close()
+			// Close any idle connections left over. New requests will create new
+			// connections lazily rather than reusing existing connections.
+			n.agent.CloseIdleConnections()
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -2042,7 +2116,7 @@ func (e *Env) LANPing(from *Node, targetIP netip.Addr) {
 	e.t.Logf("LANPing: %s -> %s", from.name, targetIP)
 	deadline := time.Now().Add(2 * time.Minute)
 	for attempt := 0; time.Now().Before(deadline); attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		reqURL := fmt.Sprintf("http://unused/ping?host=%s", targetIP)
 		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 		if err != nil {
@@ -2377,17 +2451,17 @@ func classifyPing(pr *ipnstate.PingResult) PingRoute {
 // PingExpect retries disco pings until the result matches wantRoute or the
 // timeout is reached. It is using DiscoPings as this is the only ping type
 // that can classify the connection type.
-func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Duration) error {
+func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Duration) (string, error) {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(e.t.Context(), timeout)
 	defer cancel()
 	var lastRoute PingRoute
 	toSt, err := to.agent.Status(ctx)
 	if err != nil {
-		return fmt.Errorf("ping: can't get %s status: %w", to.name, err)
+		return "", fmt.Errorf("ping: can't get %s status: %w", to.name, err)
 	}
 	if len(toSt.Self.TailscaleIPs) == 0 {
-		return fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
+		return "", fmt.Errorf("ping: %s has no Tailscale IPs", to.name)
 	}
 	targetIP := toSt.Self.TailscaleIPs[0]
 	for ctx.Err() == nil {
@@ -2398,7 +2472,7 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 			got := classifyPing(pr)
 			e.t.Logf("Saw ping type %q", got)
 			if got == wantRoute {
-				return nil
+				return pr.Endpoint, nil
 			} else {
 				lastRoute = got
 			}
@@ -2408,7 +2482,7 @@ func (e *Env) PingExpect(from, to *Node, wantRoute PingRoute, timeout time.Durat
 		case <-ctx.Done():
 		}
 	}
-	return fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
+	return "", fmt.Errorf("ping route = %q, want %q (after %v)", lastRoute, wantRoute, timeout)
 }
 
 // PingSettle retries disco pings every 1 second between nodes from -> to. The
@@ -2474,5 +2548,21 @@ func (e *Env) NumNodes() int {
 func (e *Env) DropControlTraffic(n *Node) {
 	for _, network := range n.nets {
 		network.BlackholeControlForAddr(n.LanIP(network))
+	}
+}
+
+// SetLinkUp sets the link status of a network for a node. Setting the link down
+// is equivalent to unplugging the network cable from the node, the interface
+// is still present on the node, the "media" is just lost.
+func (e *Env) SetLinkUp(n *Node, nw *vnet.Network, up bool) {
+	if n.os.IsGokrazy {
+		e.t.Fatal("SetLinkUp is not supported on gokrazy nodes")
+	}
+	ifIndex := slices.Index(n.vnetNode.Networks(), nw)
+	if ifIndex == -1 {
+		e.t.Fatal("network not found for node")
+	}
+	if err := e.setLink(n, ifIndex, up); err != nil {
+		e.t.Fatalf("unable to set link status: %s", err.Error())
 	}
 }

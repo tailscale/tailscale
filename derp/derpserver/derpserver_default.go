@@ -11,3 +11,7 @@ func (c *sclient) startStatsLoop(ctx context.Context) {
 	// Nothing to do
 	return
 }
+
+// recordSavedSyn is a no-op on non-Linux platforms; TCP_SAVE_SYN is
+// Linux-only.
+func (c *sclient) recordSavedSyn() {}

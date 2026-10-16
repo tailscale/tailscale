@@ -159,14 +159,14 @@ func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request)
 
 	type wrapRequest struct {
 		TSKey  string
-		TKAKey string // key.NLPrivate.MarshalText
+		TKAKey string // key.TLPrivate.MarshalText
 	}
 	var req wrapRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 12*1024)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	var priv key.NLPrivate
+	var priv key.TLPrivate
 	if err := priv.UnmarshalText([]byte(req.TKAKey)); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return

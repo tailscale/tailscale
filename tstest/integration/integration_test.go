@@ -46,6 +46,7 @@ import (
 	"tailscale.com/net/udprelay/status"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tsconst"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -1316,6 +1317,56 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// TestNodeRemovedHealth tests that once control starts answering map requests
+// with a 404, as it does after the node has been deleted, the node-removed
+// health warning shows up on the IPN bus.
+func TestNodeRemovedHealth(t *testing.T) {
+	tstest.Parallel(t)
+	var removed atomic.Bool
+	env := NewTestEnv(t, ConfigureControl(func(control *testcontrol.Server) {
+		control.MaybeRejectRequest = testcontrol.RejectRequestForPath("/machine/map", func() (int, string, string) {
+			if removed.Load() {
+				return http.StatusNotFound, "", "node not found"
+			}
+			return 0, "", ""
+		})
+	}))
+	n1 := NewTestNode(t, env)
+
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	// Restart so that the node starts a new map poll after the removal.
+	removed.Store(true)
+	d1.MustCleanShutdown(t)
+	d2 := n1.StartDaemon()
+	n1.AwaitResponding()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	w, err := n1.LocalClient().WatchIPNBus(ctx, ipn.NotifyInitialHealthState)
+	if err != nil {
+		t.Fatalf("WatchIPNBus: %v", err)
+	}
+	defer w.Close()
+	for {
+		n, err := w.Next()
+		if err != nil {
+			t.Fatalf("waiting for %q health warning: %v", tsconst.HealthWarnableNodeRemoved, err)
+		}
+		if n.Health != nil {
+			if _, ok := n.Health.Warnings[tsconst.HealthWarnableNodeRemoved]; ok {
+				break
+			}
+		}
+	}
+	n1.AwaitNeedsLogin()
+
+	d2.MustCleanShutdown(t)
+}
+
 // Issue 2137: make sure Windows tailscaled works with the CLI alone,
 // without the GUI to kick off a Start.
 func TestOneNodeUpWindowsStyle(t *testing.T) {
@@ -2539,7 +2590,7 @@ func TestTailnetLock(t *testing.T) {
 		initCmd := signing1.Tailscale("lock", "init",
 			"--gen-disablements", "10",
 			"--confirm",
-			signing1.NLPublicKey(), signing2.NLPublicKey(),
+			signing1.TLPublicKey(), signing2.TLPublicKey(),
 		)
 		out, err := initCmd.CombinedOutput()
 		if err != nil {

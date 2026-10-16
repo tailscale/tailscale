@@ -1132,6 +1132,18 @@ func TestUpdatePrefs(t *testing.T) {
 			wantErrSubtr: "tailscale up --accept-dns=false",
 		},
 		{
+			name:  "just_up_running_with_tags",
+			flags: []string{},
+			curPrefs: &ipn.Prefs{
+				ControlURL:    ipn.DefaultControlURL,
+				Persist:       &persist.Persist{UserProfile: tailcfg.UserProfile{LoginName: "crawshaw.github"}},
+				AdvertiseTags: []string{"tag:dummy-test"},
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantSimpleUp:   true,
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+		},
+		{
 			name:  "just_edit",
 			flags: []string{},
 			curPrefs: &ipn.Prefs{

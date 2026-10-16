@@ -20,6 +20,11 @@ const AppConnectorsExperimentalAttrName = "tailscale.com/app-connectors-experime
 // time.
 const DNSAddrScheme = "tailscale-app"
 
+// AppDNSRoutes returns split DNS routes, keyed by domain suffix, for the app
+// domains configured in self's capability map. Each route resolves via the
+// [DNSAddrScheme] scheme naming the app, so the connector that serves it is
+// chosen at query time. It returns nil if hasCap reports that the node lacks
+// [AppConnectorsExperimentalAttrName].
 func AppDNSRoutes(hasCap func(c nodecap.Cap) bool, self tailcfg.NodeView) map[string][]*dnstype.Resolver {
 	if !hasCap(AppConnectorsExperimentalAttrName) {
 		return nil

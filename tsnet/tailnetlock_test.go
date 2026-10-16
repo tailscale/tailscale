@@ -123,7 +123,7 @@ func setupTailnetLockedServer(t *testing.T, ctx context.Context, extraTrustedKey
 // (unexported) signNodeKey in ipn/ipnlocal/tailnet-lock.go, replicated
 // here so tsnet tests can mint valid signatures without cyclically
 // depending on ipnlocal internals.
-func signNodeKeyForTest(t *testing.T, nodeKey key.NodePublic, nlPriv key.NLPrivate) tkatype.MarshaledSignature {
+func signNodeKeyForTest(t *testing.T, nodeKey key.NodePublic, nlPriv key.TLPrivate) tkatype.MarshaledSignature {
 	t.Helper()
 	pub, err := nodeKey.MarshalBinary()
 	if err != nil {
@@ -151,7 +151,7 @@ func signNodeKeyForTest(t *testing.T, nodeKey key.NodePublic, nlPriv key.NLPriva
 // [LocalBackend.UpdateNetmapDelta]. That makes the absence-of-fixture
 // assertion race-free without having to wait a fixed timeout for
 // "nothing to happen".
-func signedMarkerPeer(t *testing.T, nlPriv key.NLPrivate) *tailcfg.Node {
+func signedMarkerPeer(t *testing.T, nlPriv key.TLPrivate) *tailcfg.Node {
 	t.Helper()
 	markerKey := key.NewNode().Public()
 	markerAddr := netip.MustParsePrefix("100.64.99.250/32")
@@ -178,7 +178,7 @@ func signedMarkerPeer(t *testing.T, nlPriv key.NLPrivate) *tailcfg.Node {
 // [LocalBackend.NetMapWithPeers]. markerNL must be a private NL key
 // whose public verifier is trusted by the tailnet-lock state on s
 // (e.g. an extra key passed to [setupTailnetLockedServer]).
-func injectPeersChangedAndAssertFiltered(t *testing.T, ctx context.Context, s *Server, control *testcontrol.Server, dst key.NodePublic, badPeer *tailcfg.Node, markerNL key.NLPrivate) {
+func injectPeersChangedAndAssertFiltered(t *testing.T, ctx context.Context, s *Server, control *testcontrol.Server, dst key.NodePublic, badPeer *tailcfg.Node, markerNL key.TLPrivate) {
 	t.Helper()
 	marker := signedMarkerPeer(t, markerNL)
 	if !control.AddRawMapResponse(dst, &tailcfg.MapResponse{
@@ -243,7 +243,7 @@ func TestTailnetLockFiltersUnsignedDeltaPeer(t *testing.T) {
 
 	// Trust an extra NL key the test holds so it can mint signed marker
 	// peers for delta-sync below.
-	markerNL := key.NewNLPrivate()
+	markerNL := key.NewTLPrivate()
 	s1, control, s1Key := setupTailnetLockedServer(t, ctx, tka.Key{
 		Kind:   tka.Key25519,
 		Public: markerNL.Public().Verifier(),
@@ -297,7 +297,7 @@ func TestTailnetLockFiltersUnsignedDeltaPeerReplacement(t *testing.T) {
 	// Trust an extra NL key the test holds, so the test can mint valid
 	// signatures for the fake peer without colluding with the node's
 	// own NL private key (which lives only in s1's prefs).
-	testNL := key.NewNLPrivate()
+	testNL := key.NewTLPrivate()
 	s1, control, s1Key := setupTailnetLockedServer(t, ctx, tka.Key{
 		Kind:   tka.Key25519,
 		Public: testNL.Public().Verifier(),
@@ -372,7 +372,7 @@ func TestTailnetLockFiltersDeltaPeerWithInvalidSignature(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 
-	testNL := key.NewNLPrivate()
+	testNL := key.NewTLPrivate()
 	s1, control, s1Key := setupTailnetLockedServer(t, ctx, tka.Key{
 		Kind:   tka.Key25519,
 		Public: testNL.Public().Verifier(),

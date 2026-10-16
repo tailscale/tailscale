@@ -255,7 +255,7 @@ func (c *conn) storeStreamID(sf spdyFrame, header http.Header) {
 	const (
 		streamTypeHeaderKey = "Streamtype"
 	)
-	id := binary.BigEndian.Uint32(sf.Payload[0:4])
+	id := binary.BigEndian.Uint32(sf.Payload[0:4]) & 0x7fffffff // drop the reserved flag bit: data frames never carry it
 	switch header.Get(streamTypeHeaderKey) {
 	case corev1.StreamTypeStdout:
 		c.stdoutStreamID.Store(id)

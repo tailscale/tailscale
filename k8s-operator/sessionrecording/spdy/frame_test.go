@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,162 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 )
+
+func Test_limitHeaderReader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		body     []byte // underlying stream, never nil in practice
+		remain   int64  // starting budget
+		readSize int    // bytes to request per Read
+		wantData []byte // total bytes expected before the terminal error
+		wantErr  error  // terminal error; nil means clean EOF
+	}{
+		{
+			name:     "under_limit",
+			body:     []byte("hello"),
+			remain:   16,
+			readSize: 16,
+			wantData: []byte("hello"),
+		},
+		{
+			// Budget spent with the last bytes: parsing succeeded but any
+			// further read, including the ended() check, errors.
+			name:     "exactly_at_limit",
+			body:     []byte("hello"),
+			remain:   5,
+			readSize: 5,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "budget_spent_mid_stream",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 2,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "budget_spent_mid_stream_single_reads",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 1,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			// Every read after the budget is spent keeps reporting the
+			// sentinel while data remains.
+			name:     "error_persists_after_trip",
+			body:     []byte("hello world"),
+			remain:   5,
+			readSize: 5,
+			wantData: []byte("hello"),
+			wantErr:  errHeaderBlockTooLarge,
+		},
+		{
+			name:     "empty_read_no_hang",
+			body:     []byte("hello"),
+			remain:   5,
+			readSize: 0, // zero length read must not spin the budget away
+			wantData: nil,
+		},
+		{
+			name:     "eof_mid_block",
+			body:     []byte("hi"),
+			remain:   5,
+			readSize: 1,
+			wantData: []byte("hi"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lr := &limitHeaderReader{r: bytes.NewReader(tt.body), remain: tt.remain}
+			var got []byte
+			var lastErr error
+			for range 10 { // bounded loop: a bug here must not hang the test
+				p := make([]byte, tt.readSize)
+				n, err := lr.Read(p)
+				got = append(got, p[:n]...)
+				if err != nil {
+					lastErr = err
+					break
+				}
+			}
+			if tt.wantErr != nil && lastErr == nil {
+				t.Errorf("limitHeaderReader.Read() got no error after %v bytes, want %v", len(got), tt.wantErr)
+			}
+			if tt.wantErr == nil {
+				// No error expected: the stream must end in a clean EOF, not
+				// the sentinel or a loop that returned (0, nil) until the cap.
+				if lastErr != nil && !errors.Is(lastErr, io.EOF) {
+					t.Errorf("limitHeaderReader.Read() error = %v, want clean EOF", lastErr)
+				}
+			} else if !errors.Is(lastErr, tt.wantErr) {
+				t.Errorf("limitHeaderReader.Read() error = %v, want %v", lastErr, tt.wantErr)
+			}
+			if !bytes.Equal(got, tt.wantData) {
+				t.Errorf("limitHeaderReader.Read() data = %q, want %q", got, tt.wantData)
+			}
+			if tt.wantErr == nil {
+				return
+			}
+		})
+	}
+}
+
+func Test_parseHeaders_oversizeBlock(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const synStreamPrefix = 10 // stream ID, priority, slot before the header block
+
+	// A block declaring one name of maxHeaderBlockSize+1 bytes, backed by
+	// zeros so it compresses far below the 1MiB wire limit.
+	block := slices.Concat(
+		binary.BigEndian.AppendUint32(nil, 1),                    // one pair
+		binary.BigEndian.AppendUint32(nil, maxHeaderBlockSize+1), // name length
+		make([]byte, maxHeaderBlockSize+1),                       // name bytes
+	)
+	sf := &spdyFrame{
+		Ctrl:    true,
+		Type:    SYN_STREAM,
+		Payload: append(make([]byte, synStreamPrefix), fuzzCompress(block)...),
+	}
+	var zr zlibReader
+	zr.Set(sf.Payload[synStreamPrefix:])
+	_, err = parseHeaders(&zr, zl.Sugar())
+	if !errors.Is(err, errHeaderBlockTooLarge) {
+		t.Errorf("parseHeaders() error = %v, want errHeaderBlockTooLarge", err)
+	}
+
+	// A block of exactly maxHeaderBlockSize has every declared byte within
+	// budget, so it parses cleanly rather than being cut off.
+	nameLen := uint32(maxHeaderBlockSize - 12) // minus the pair count, name and value length fields
+	block = slices.Concat(
+		binary.BigEndian.AppendUint32(nil, 1),       // one pair
+		binary.BigEndian.AppendUint32(nil, nameLen), // name length
+		make([]byte, nameLen),                       // name bytes
+		binary.BigEndian.AppendUint32(nil, 0),       // value length
+	)
+	sf = &spdyFrame{
+		Ctrl:    true,
+		Type:    SYN_STREAM,
+		Payload: append(make([]byte, synStreamPrefix), fuzzCompress(block)...),
+	}
+	var zr2 zlibReader
+	zr2.Set(sf.Payload[synStreamPrefix:])
+	hdr, err := parseHeaders(&zr2, zl.Sugar())
+	if err != nil {
+		t.Errorf("parseHeaders() error = %v for a block of exactly maxHeaderBlockSize", err)
+	} else if len(hdr) != 1 {
+		t.Errorf("parseHeaders() parsed %d headers, want 1", len(hdr))
+	}
+}
 
 func Test_spdyFrame_Parse(t *testing.T) {
 	zl, err := zap.NewDevelopment()
@@ -90,9 +248,16 @@ func Test_spdyFrame_Parse(t *testing.T) {
 			gotBytes: []byte{0x0, 0x0, 0x0, 0x5, 0x0, 0x0, 0x0, 0x2}, // header specifies payload length of 2
 		},
 		{
-			name:     "control_bit_set_not_spdy_frame",
-			gotBytes: []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}, // header specifies payload length of 2
-			wantErr:  true,
+			// Data frames keep 31 bits of stream ID: this parses with ID
+			// 0x01000000 rather than being rejected as not SPDY
+			name:     "data_frame_high_stream_id",
+			gotBytes: []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+			wantFrame: spdyFrame{
+				Payload:  []byte{},
+				StreamID: 0x01000000,
+				Raw:      []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+			},
+			wantOk: true,
 		},
 		{
 			name:     "control_bit_not_set_not_spdy_frame",
@@ -201,6 +366,47 @@ func Test_spdyFrame_parseHeaders(t *testing.T) {
 				t.Errorf("spdyFrame.parseHeaders() = %v, want %v", gotHeader, tt.wantHeader)
 			}
 		})
+	}
+}
+
+// Test_parseHeaders_sharedContext verifies that consecutive header blocks
+// decode from a single zlibReader. kubectl compresses every stream's header
+// block against one zlib stream for the life of the connection, so the proxy
+// reuses one zlibReader (conn.zlibReqReader) across all of them. Each block
+// must decode without disturbing the bytes of the next.
+func Test_parseHeaders_sharedContext(t *testing.T) {
+	zl := zap.NewNop().Sugar()
+
+	// Compress two header blocks onto one writer, as kubectl does across frames.
+	var buf bytes.Buffer
+	w, err := zlib.NewWriterLevelDict(&buf, zlib.BestCompression, spdyTxtDictionary)
+	if err != nil {
+		t.Fatalf("creating zlib writer: %v", err)
+	}
+	block := func(headers map[string]string) []byte {
+		start := buf.Len()
+		writeHeaderValueBlock(t, w, headers)
+		if err := w.Flush(); err != nil {
+			t.Fatalf("flushing zlib writer: %v", err)
+		}
+		return buf.Bytes()[start:]
+	}
+	first := block(map[string]string{"Streamtype": "stdout"})
+	second := block(map[string]string{"Streamtype": "stderr"})
+
+	// Decode both from one reader, the way the proxy does.
+	var z zlibReader
+	z.Set(first)
+	if _, err := parseHeaders(&z, zl); err != nil {
+		t.Fatalf("parseHeaders(first): %v", err)
+	}
+	z.Set(second)
+	got, err := parseHeaders(&z, zl)
+	if err != nil {
+		t.Fatalf("parseHeaders(second): %v", err)
+	}
+	if want := header(map[string]string{"Streamtype": "stderr"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("parseHeaders(second) = %v, want %v", got, want)
 	}
 }
 

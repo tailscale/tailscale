@@ -1719,7 +1719,7 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 }
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(health.ReceiveIPv4),
+	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(receiveIPv4Name),
 		&c.metrics.inboundPacketsIPv4Total,
 		&c.metrics.inboundPacketsPeerRelayIPv4Total,
 		&c.metrics.inboundBytesIPv4Total,
@@ -1729,7 +1729,7 @@ func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(health.ReceiveIPv6),
+	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(receiveIPv6Name),
 		&c.metrics.inboundPacketsIPv6Total,
 		&c.metrics.inboundPacketsPeerRelayIPv6Total,
 		&c.metrics.inboundBytesIPv6Total,
@@ -2405,7 +2405,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 		// If we did not already have an endpoint for this peer, even a stale
 		// one, record how long it has been since the endpoint was initialized.
 		if !lastBest.ap.IsValid() {
-			c.logf("magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
+			c.logf("[v1] magicsock: new contact: peer=%s usec=%d cached=%v via=derp",
 				nodeKey.ShortString(), int64(mono.Since(c.initializedAt)/time.Microsecond), isCached)
 		}
 		if isVia {
@@ -3089,7 +3089,7 @@ func (c *Conn) setNetworkMapInternal(self tailcfg.NodeView, peers []tailcfg.Node
 	if self.Valid() && !selfWasValid {
 		// Reaching here, we have our first "real" netmap (self is valid, and
 		// the previous netmap was unset or reset), so record the latency from reset.
-		c.logf("magicsock: new contact: control-netmap usec=%d cached=%v",
+		c.logf("[v1] magicsock: new contact: control-netmap usec=%d cached=%v",
 			int64(mono.Since(initializedAt)/time.Microsecond), isCached)
 	}
 
@@ -3527,15 +3527,21 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 	}
 	c.closed = false
 	var fns []conn.ReceiveFunc
-	if !hasUDPTransport {
-		fns = []conn.ReceiveFunc{c.receiveDERP}
-	} else {
-		fns = []conn.ReceiveFunc{c.receiveIPv4(), c.receiveIPv6(), c.receiveDERP}
+	if hasUDPTransport {
+		fns = append(fns, c.receiveIPv4(), c.receiveIPv6())
 	}
+	fns = append(fns, c.mkReceiveDERPFunc())
 	// TODO: Combine receiveIPv4 and receiveIPv6 and receiveIP into a single
 	// closure that closes over a *RebindingUDPConn?
 	return fns, c.LocalPort(), nil
 }
+
+// The names of the ReceiveFuncs, and health.ReceiveFuncStats keys.
+const (
+	receiveIPv4Name = "ReceiveIPv4"
+	receiveIPv6Name = "ReceiveIPv6"
+	receiveDERPName = "ReceiveDERP"
+)
 
 // SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
 // We handle that ourselves elsewhere.

@@ -348,11 +348,11 @@ type Network struct {
 
 	wanIP6 netip.Prefix // global unicast router in host bits; CIDR is /64 delegated to LAN
 
-	wanIP4                      netip.Addr // IPv4 WAN IP, if any
-	lanIP4                      netip.Prefix
-	nodes                       []*Node
-	breakWAN4                   bool // whether to break WAN IPv4 connectivity
-	network                     *network
+	wanIP4    netip.Addr // IPv4 WAN IP, if any
+	lanIP4    netip.Prefix
+	nodes     []*Node
+	breakWAN4 bool // whether to break WAN IPv4 connectivity
+	network   *network
 
 	svcs set.Set[NetworkService]
 
@@ -455,7 +455,7 @@ func (s *Server) initFromConfig(c *Config) error {
 			num:        conf.num,
 			s:          s,
 			mac:        conf.mac,
-			portmap:    conf.svcs.Contains(NATPMP), // TODO: expand network.portmap
+			svcs:       conf.svcs.Clone(),
 			wanIP6:     conf.wanIP6,
 			v4:         conf.lanIP4.IsValid(),
 			v6:         conf.wanIP6.IsValid(),

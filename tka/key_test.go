@@ -65,11 +65,11 @@ func TestVerify25519(t *testing.T) {
 	}
 }
 
-func TestNLPrivate(t *testing.T) {
-	p := key.NewNLPrivate()
+func TestTLPrivate(t *testing.T) {
+	p := key.NewTLPrivate()
 	pub := p.Public()
 
-	// Test that key.NLPrivate implements Signer by making a new
+	// Test that key.TLPrivate implements Signer by making a new
 	// authority.
 	k := Key{Kind: Key25519, Public: pub.Verifier(), Votes: 1}
 	state := CreateStateForTest(k)

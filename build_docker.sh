@@ -40,6 +40,7 @@ BASE="${BASE:-${DEFAULT_BASE}}"
 PLATFORM="${PLATFORM:-}" # default to all platforms
 GOARCH="${GOARCH:-arm,arm64,amd64,386,riscv64}"
 FILES="${FILES:-}" # default to no extra files
+OUTPUT="${OUTPUT:-}" # optional OCI image archive path
 # OCI annotations that will be added to the image.
 # https://github.com/opencontainers/image-spec/blob/main/annotations.md
 ANNOTATIONS="${ANNOTATIONS:-${DEFAULT_ANNOTATIONS}}"
@@ -49,6 +50,7 @@ case "$TARGET" in
     DEFAULT_REPOS="tailscale/tailscale"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
+      --output="${OUTPUT}" \
       --gopaths="\
         tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
         tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled, \
@@ -72,6 +74,7 @@ case "$TARGET" in
     DEFAULT_REPOS="tailscale/k8s-operator"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
+      --output="${OUTPUT}" \
       --gopaths="tailscale.com/cmd/k8s-operator:/usr/local/bin/operator" \
       --ldflags="\
         -X tailscale.com/version.longStamp=${VERSION_LONG} \
@@ -92,6 +95,7 @@ case "$TARGET" in
     DEFAULT_REPOS="tailscale/k8s-nameserver"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
+      --output="${OUTPUT}" \
       --gopaths="tailscale.com/cmd/k8s-nameserver:/usr/local/bin/k8s-nameserver" \
       --ldflags=" \
         -X tailscale.com/version.longStamp=${VERSION_LONG} \
@@ -112,6 +116,7 @@ case "$TARGET" in
     DEFAULT_REPOS="tailscale/tsidp"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
+      --output="${OUTPUT}" \
       --gopaths="tailscale.com/cmd/tsidp:/usr/local/bin/tsidp" \
       --ldflags=" \
         -X tailscale.com/version.longStamp=${VERSION_LONG} \
@@ -132,6 +137,7 @@ case "$TARGET" in
     DEFAULT_REPOS="tailscale/k8s-proxy"
     REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
+      --output="${OUTPUT}" \
       --gopaths="tailscale.com/cmd/k8s-proxy:/usr/local/bin/k8s-proxy" \
       --ldflags=" \
         -X tailscale.com/version.longStamp=${VERSION_LONG} \

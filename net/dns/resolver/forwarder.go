@@ -106,11 +106,21 @@ const (
 	// udpRaceTimeout is the timeout after which we will start a DNS query
 	// over TCP while waiting for the UDP query to complete.
 	udpRaceTimeout = 2 * time.Second
-
-	// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
-	// It matches the default 5sec timeout of the 'dig' utility.
-	tcpQueryTimeout = 5 * time.Second
 )
+
+// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
+// It matches the default 5sec timeout of the 'dig' utility.
+//
+// It's a var only so tests can shorten it.
+var tcpQueryTimeout = 5 * time.Second
+
+// rcodeHoldGrace is how long forwardWithDestChan holds an upstream REFUSED or
+// SERVFAIL after every resolver has started, in case a healthier one answers.
+// It matches udpRaceTimeout, since a resolver can't be treated as hung before
+// its UDP query has had a chance to escalate to TCP.
+//
+// It's a var only so tests can shorten it.
+var rcodeHoldGrace = udpRaceTimeout
 
 // txid identifies a DNS transaction.
 //
@@ -747,6 +757,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	firstUDP := func(ctx context.Context) ([]byte, error) {
 		resp, err := f.sendUDP(ctx, fq, rr)
 		if err != nil {
+			if rcodeErr, ok := errors.AsType[rcodeResponseError](err); ok {
+				// An upstream REFUSED or SERVFAIL is a complete answer.
+				// Return it as the race's result so the race doesn't wait
+				// on a TCP retry. send converts it back to an error.
+				return rcodeErr.res, nil
+			}
 			return nil, err
 		}
 		if !truncatedFlagSet(resp) {
@@ -777,12 +793,9 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, truncatedResponseError{resp}
 	}
 	thenTCP := func(ctx context.Context) ([]byte, error) {
-		// If we're skipping the TCP fallback, then wait until the
-		// context is canceled and return that error (i.e. not
-		// returning anything).
+		// Report the disabled retry instead of waiting out the context.
 		if skipTCP {
-			<-ctx.Done()
-			return nil, ctx.Err()
+			return nil, errTCPRetryDisabled
 		}
 
 		return f.sendTCP(ctx, fq, rr)
@@ -799,6 +812,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	rh := race.New(timeout, firstUDP, thenTCP)
 	resp, err := rh.Start(ctx)
 	if err == nil {
+		// firstUDP returns an upstream REFUSED or SERVFAIL as a result.
+		// Convert it back to the soft error callers expect.
+		switch rcode := getRCode(resp); rcode {
+		case dns.RCodeServerFailure, dns.RCodeRefused:
+			return nil, rcodeResponseError{rcode, resp}
+		}
 		return resp, nil
 	}
 
@@ -838,6 +857,11 @@ func (r rcodeResponseError) Unwrap() error {
 var errRefused = errors.New("response code indicates refusal")
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
+
+// errTCPRetryDisabled is what the TCP arm of the race in send reports when TCP
+// retries are disabled, so that a failed UDP query returns at once instead of
+// waiting out its deadline.
+var errTCPRetryDisabled = errors.New("no TCP retry: disabled by envknob or control knob")
 
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()
@@ -883,6 +907,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		n, src, err = conn.ReadFromUDPAddrPort(out)
 		if err != nil {
 			if err := ctx.Err(); err != nil {
+				metricDNSFwdUDPReadCtxDone.Add(1)
 				return nil, err
 			}
 			if !neterror.PacketWasTruncated(err) {
@@ -1065,6 +1090,16 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		return nil, err
 	}
 	defer conn.Close()
+
+	// Canceling ctx can't interrupt reads blocked in the runtime, so the
+	// deadline has to go on the conn. ctx already carries
+	// min(caller's deadline, tcpQueryTimeout).
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			// Best effort. The caller's ctx still bounds the read.
+			f.logf("sendTCP: setting conn deadline: %v", err)
+		}
+	}
 
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
@@ -1345,7 +1380,13 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		src:            query.addr,
 		closeOnCtxDone: new(closePool),
 	}
-	defer fq.closeOnCtxDone.Close()
+	defer func() {
+		// cancel must run first. The close wakes a blocked reader with
+		// net.ErrClosed, which sendUDP counts as an upstream read failure
+		// unless ctx is already done.
+		cancel()
+		fq.closeOnCtxDone.Close()
+	}()
 
 	if f.verboseFwd {
 		domainSha256 := sha256.Sum256([]byte(domain))
@@ -1355,6 +1396,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	resc := make(chan []byte, 1) // it's fine buffered or not
 	errc := make(chan error, 1)  // it's fine buffered or not too
+	raceStart := time.Now()      // when the startDelay of each resolver below starts running
 	for i := range resolvers {
 		go func(rr *resolverAndDelay) {
 			if rr.startDelay > 0 {
@@ -1382,86 +1424,114 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}(&resolvers[i])
 	}
 
-	var firstErr error
+	// heldErr is the error deliverHeldResponse answers from, and the error
+	// returned when no response can be sent. A REFUSED never displaces another
+	// error and any other error displaces a REFUSED, so heldErr is a REFUSED
+	// only when every resolver refused.
+	var heldErr error
 	var numErr int
-	var sawNonRefused bool
+
+	noteErr := func(err error) {
+		numErr++
+		if heldErr == nil || (errors.Is(heldErr, errRefused) && !errors.Is(err, errRefused)) {
+			heldErr = err
+		}
+	}
+
+	// deliverSuccess gives the client an upstream's successful response.
+	deliverSuccess := func(v []byte) error {
+		select {
+		case <-ctx.Done():
+			metricDNSFwdErrorContext.Add(1)
+			return fmt.Errorf("waiting to send response: %w", ctx.Err())
+		case responseChan <- packet{v, query.family, query.addr}:
+			if f.verboseFwd {
+				f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+			}
+			metricDNSFwdSuccess.Add(1)
+			f.health.SetHealthy(dnsForwarderFailing)
+			return nil
+		}
+	}
+
+	// deliverHeldResponse gives the client the upstream response heldErr
+	// carries, or a synthesized SERVFAIL when it carries none. Like
+	// forwardWithDestChan, it either sends to responseChan and returns nil, or
+	// returns heldErr without sending.
+	deliverHeldResponse := func() error {
+		var res packet
+		if rcodeErr, ok := errors.AsType[rcodeResponseError](heldErr); ok {
+			res = packet{rcodeErr.res, query.family, query.addr}
+		} else {
+			r, err := servfailResponse(query)
+			if err != nil {
+				f.logf("building servfail response: %v", err)
+				return heldErr
+			}
+			res = r
+		}
+		select {
+		case <-ctx.Done():
+			metricDNSFwdErrorContext.Add(1)
+			metricDNSFwdErrorContextGotError.Add(1)
+			var resolverAddrs []string
+			for _, rr := range resolvers {
+				resolverAddrs = append(resolverAddrs, rr.name.Addr)
+			}
+			if f.acceptDNS {
+				f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+			}
+		case responseChan <- res:
+			if f.verboseFwd {
+				f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), heldErr)
+			}
+			return nil
+		}
+		return heldErr
+	}
+
+	// holdC stays nil, and a nil channel never fires, until an rcode error
+	// arrives with an upstream response to hold.
+	var holdC <-chan time.Time
+
 	for {
 		select {
 		case v := <-resc:
-			select {
-			case <-ctx.Done():
-				metricDNSFwdErrorContext.Add(1)
-				return fmt.Errorf("waiting to send response: %w", ctx.Err())
-			case responseChan <- packet{v, query.family, query.addr}:
-				if f.verboseFwd {
-					f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
-				}
-				metricDNSFwdSuccess.Add(1)
-				f.health.SetHealthy(dnsForwarderFailing)
-				return nil
-			}
+			return deliverSuccess(v)
 		case err := <-errc:
-			if firstErr == nil {
-				firstErr = err
-			}
-			if !errors.Is(err, errRefused) {
-				sawNonRefused = true
-			}
-			numErr++
+			noteErr(err)
 			if numErr == len(resolvers) {
-				var res packet
-				if sawNonRefused {
-					// At least one server failed with SERVFAIL or a transport error
-					// (e.g. network failure, TxID mismatch, unsupported resolver type).
-					// All such errors map to SERVFAIL at the client level.
-					// Prefer returning the upstream SERVFAIL bytes from firstErr if
-					// available; otherwise synthesize a SERVFAIL response. Note the
-					// rcode guard: firstErr may be a REFUSED rcodeResponseError if it
-					// arrived before the SERVFAIL that set sawNonRefused.
-					if rcodeErr, ok := errors.AsType[rcodeResponseError](firstErr); ok && rcodeErr.rcode == dns.RCodeServerFailure {
-						res = packet{rcodeErr.res, query.family, query.addr}
-					} else {
-						r, err := servfailResponse(query)
-						if err != nil {
-							f.logf("building servfail response: %v", err)
-							return firstErr
-						}
-						res = r
-					}
-				} else {
-					// !sawNonRefused means every error was an rcodeResponseError with rcode REFUSED,
-					// so firstErr is guaranteed to wrap one.
-					rcodeErr, ok := errors.AsType[rcodeResponseError](firstErr)
-					if !ok {
-						f.logf("unexpected: all errors were REFUSED but firstErr is not rcodeResponseError: %v", firstErr)
-						return firstErr
-					}
-					res = packet{rcodeErr.res, query.family, query.addr}
-				}
-				select {
-				case <-ctx.Done():
-					metricDNSFwdErrorContext.Add(1)
-					metricDNSFwdErrorContextGotError.Add(1)
-					var resolverAddrs []string
-					for _, rr := range resolvers {
-						resolverAddrs = append(resolverAddrs, rr.name.Addr)
-					}
-					if f.acceptDNS {
-						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
-					}
-				case responseChan <- res:
-					if f.verboseFwd {
-						f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
-					}
-					return nil
-				}
-				return firstErr
+				return deliverHeldResponse()
 			}
+			// Hold this upstream's response in case nothing better arrives.
+			if _, ok := errors.AsType[rcodeResponseError](err); ok && holdC == nil {
+				timer := time.NewTimer(rcodeHoldDelay(resolvers, time.Since(raceStart)))
+				defer timer.Stop()
+				holdC = timer.C
+			}
+		case <-holdC:
+			// The select above may have picked the timer over an answer or an
+			// error that was ready at the same time. Take those first.
+			select {
+			case v := <-resc:
+				return deliverSuccess(v)
+			default:
+			}
+		drain:
+			for {
+				select {
+				case err := <-errc:
+					noteErr(err)
+				default:
+					break drain
+				}
+			}
+			return deliverHeldResponse()
 		case <-ctx.Done():
 			metricDNSFwdErrorContext.Add(1)
-			if firstErr != nil {
+			if heldErr != nil {
 				metricDNSFwdErrorContextGotError.Add(1)
-				return firstErr
+				return heldErr
 			}
 
 			// If we haven't got an error or a successful response,
@@ -1480,6 +1550,18 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 }
 
 var initListenConfig func(_ *net.ListenConfig, _ *netmon.Monitor, tunName string) error
+
+// rcodeHoldDelay returns how much longer to hold an upstream REFUSED or
+// SERVFAIL before giving it to the client. The hold ends rcodeHoldGrace after
+// the last resolver's startDelay. elapsed is how long ago the resolvers were
+// started.
+func rcodeHoldDelay(resolvers []resolverAndDelay, elapsed time.Duration) time.Duration {
+	var lastStart time.Duration
+	for _, rr := range resolvers {
+		lastStart = max(lastStart, rr.startDelay)
+	}
+	return max(lastStart+rcodeHoldGrace-elapsed, 0)
+}
 
 // nameFromQuery extracts the normalized query name from bs.
 func nameFromQuery(bs []byte) (dnsname.FQDN, dns.Type, error) {

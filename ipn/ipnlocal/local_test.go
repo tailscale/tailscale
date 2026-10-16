@@ -3498,7 +3498,7 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 
 			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
-			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), false, t.Logf, "")
+			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), false, t.Logf, "", nil)
 			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
 				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
 			}
@@ -4446,6 +4446,100 @@ func TestAutoExitNodeSetNetInfoCallback(t *testing.T) {
 	b.setNetInfo(&ni)
 	if eid := b.Prefs().ExitNodeID(); eid != peer2.StableID() {
 		t.Errorf("got final exit node %v, want %v", eid, peer2.StableID())
+	}
+}
+
+// newAutoExitNodeNetInfoTestBackend returns a LocalBackend with a control
+// client and a netmap containing two exit node candidates: peer1 in DERP
+// region 3 and peer2 in DERP region 2. No netcheck report is installed.
+func newAutoExitNodeNetInfoTestBackend(t *testing.T) (b *LocalBackend, ni *tailcfg.NetInfo, derpMap *tailcfg.DERPMap, peer1, peer2 tailcfg.NodeView) {
+	t.Helper()
+	sys := tsd.NewSystem()
+	b = newTestLocalBackendWithSys(t, sys)
+	hi := hostinfo.New()
+	ni = &tailcfg.NetInfo{LinkType: "wired"}
+	hi.NetInfo = ni
+	b.hostinfo = hi
+	k := key.NewMachine()
+	dialer := tsdial.NewDialer(netmon.NewStatic())
+	dialer.SetBus(sys.Bus.Get())
+	b.cc = newClient(t, controlclient.Options{
+		ServerURL:            "https://example.com",
+		GetMachinePrivateKey: func() (key.MachinePrivate, error) { return k, nil },
+		Dialer:               dialer,
+		Logf:                 b.logf,
+	})
+	peer1 = makePeer(1, withCap(26), withDERP(3), withSuggest(), withExitRoutes())
+	peer2 = makePeer(2, withCap(26), withDERP(2), withSuggest(), withExitRoutes())
+	selfNode := tailcfg.Node{
+		Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.1.1/32")},
+		HomeDERP:  2,
+	}
+	derpMap = &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+		2: {Nodes: []*tailcfg.DERPNode{{Name: "t2", RegionID: 2}}},
+		3: {Nodes: []*tailcfg.DERPNode{{Name: "t3", RegionID: 3}}},
+	}}
+	b.currentNode().SetNetMap(&netmap.NetworkMap{
+		SelfNode: selfNode.View(),
+		Peers:    []tailcfg.NodeView{peer1, peer2},
+		DERPMap:  derpMap,
+	})
+	return b, ni, derpMap, peer1, peer2
+}
+
+// TestAutoExitNodeResolvesOnFirstNetcheckReport checks that an auto exit node
+// left unresolved because no netcheck report existed yet is resolved when the
+// first report arrives, without a link change.
+//
+// See tailscale/tailscale#18199.
+func TestAutoExitNodeResolvesOnFirstNetcheckReport(t *testing.T) {
+	b, ni, derpMap, _, peer2 := newAutoExitNodeNetInfoTestBackend(t)
+
+	prefs := b.pm.CurrentPrefs().AsStruct()
+	prefs.AutoExitNode = ipn.AnyExitNode
+	b.ForTest().SetPrefs(prefs)
+	if eid := b.Prefs().ExitNodeID(); eid != ipn.UnresolvedExitNodeID {
+		t.Fatalf("before netcheck report: got exit node %q, want %q", eid, ipn.UnresolvedExitNodeID)
+	}
+
+	b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
+			2: 5 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+		PreferredDERP: 2,
+	}, time.Now())
+	b.setNetInfo(ni)
+	if eid := b.Prefs().ExitNodeID(); eid != peer2.StableID() {
+		t.Errorf("after netcheck report: got exit node %q, want %q", eid, peer2.StableID())
+	}
+}
+
+// TestAutoExitNodeSetNetInfoKeepsResolvedNode checks that a new netcheck
+// report alone does not move an already resolved auto exit node. Only a link
+// change (b.refreshAutoExitNode) may do that.
+func TestAutoExitNodeSetNetInfoKeepsResolvedNode(t *testing.T) {
+	b, ni, derpMap, peer1, _ := newAutoExitNodeNetInfoTestBackend(t)
+
+	b.lastSuggestedExitNode = peer1.StableID()
+	prefs := b.pm.CurrentPrefs().AsStruct()
+	prefs.AutoExitNode = ipn.AnyExitNode
+	b.ForTest().SetPrefs(prefs)
+	if eid := b.Prefs().ExitNodeID(); eid != peer1.StableID() {
+		t.Fatalf("got initial exit node %q, want %q", eid, peer1.StableID())
+	}
+
+	// The report prefers region 2, where peer2 lives, but peer1 must stay.
+	b.sys.MagicSock.Get().AddNetcheckReportForTest(derpMap, &netcheck.Report{
+		RegionLatency: map[tailcfg.DERPRegionID]time.Duration{
+			2: 5 * time.Millisecond,
+			3: 30 * time.Millisecond,
+		},
+		PreferredDERP: 2,
+	}, time.Now())
+	b.setNetInfo(ni)
+	if eid := b.Prefs().ExitNodeID(); eid != peer1.StableID() {
+		t.Errorf("after netcheck report: got exit node %q, want %q", eid, peer1.StableID())
 	}
 }
 
@@ -8908,34 +9002,50 @@ func TestPolicyChangeNotifiesWatcher(t *testing.T) {
 }
 
 func TestPolicyNotifyPerUser(t *testing.T) {
-	store := source.NewTestStore(t)
-	rsop.RegisterStoreForTest(t, "TestStore", setting.DeviceScope, store)
+	setting.SetDefinitionsForTest(t,
+		setting.NewDefinition(
+			pkey.ManagedByOrganizationName,
+			setting.UserSetting,
+			setting.StringValue,
+		),
+	)
+
+	deviceStore := source.NewTestStore(t)
+	rsop.RegisterStoreForTest(t, "DeviceStore", setting.DeviceScope, deviceStore)
+
+	uidA := "S-1-5-21-1001"
+	uidB := "S-1-5-21-1002"
+
+	userStoreA := source.NewTestStore(t)
+	userStoreA.SetStrings(
+		source.TestSettingOf(pkey.ManagedByOrganizationName, "Org A"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreA", setting.UserScopeOf(uidA), userStoreA)
+
+	userStoreB := source.NewTestStore(t)
+	userStoreB.SetStrings(
+		source.TestSettingOf(pkey.ManagedByOrganizationName, "Org B"),
+	)
+	rsop.RegisterStoreForTest(t, "UserStoreB", setting.UserScopeOf(uidB), userStoreB)
 
 	sys := tsd.NewSystem()
 	sys.PolicyClient.Set(testPolicyClient{})
 	lb := newTestLocalBackendWithSys(t, sys)
 
-	actorA := &ipnauth.TestActor{UID: "S-1-5-21-1001"}
-	actorB := &ipnauth.TestActor{UID: "S-1-5-21-1002"}
+	actorA := &ipnauth.TestActor{UID: ipn.WindowsUserID(uidA)}
+	actorB := &ipnauth.TestActor{UID: ipn.WindowsUserID(uidB)}
 
 	nwA := newNotificationWatcher(t, lb, actorA)
 	nwA.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
-		wantPolicyNotify(),
+		wantPolicyWithSetting(pkey.ManagedByOrganizationName, "Org A"),
 	})
 	nwA.check()
 
 	nwB := newNotificationWatcher(t, lb, actorB)
 	nwB.watch(ipn.NotifySysPolicyChanges, []wantedNotification{
-		wantPolicyNotify(),
+		wantPolicyWithSetting(pkey.ManagedByOrganizationName, "Org B"),
 	})
 	nwB.check()
-
-	nwNoPolicy := newNotificationWatcher(t, lb, actorA)
-	nwNoPolicy.watch(0, nil, unexpectedPolicy)
-
-	store.SetStrings(source.TestSettingOf(pkey.AdminConsoleVisibility, "hide"))
-
-	nwNoPolicy.check()
 }
 
 func wantPolicyNotify() wantedNotification {
@@ -9140,7 +9250,7 @@ func TestStripKeysFromPrefs(t *testing.T) {
 		"Notify.Prefs.ж.Persist.NetworkLockKey": func() ipn.Notify {
 			return ipn.Notify{
 				Prefs: new((&ipn.Prefs{
-					Persist: &persist.Persist{NetworkLockKey: key.NewNLPrivate()},
+					Persist: &persist.Persist{NetworkLockKey: key.NewTLPrivate()},
 				}).View()),
 			}
 		},
