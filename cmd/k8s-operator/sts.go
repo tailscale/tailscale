@@ -37,6 +37,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler"
 	"tailscale.com/k8s-operator/reconciler/staticendpoints"
+	"tailscale.com/k8s-operator/reconciler/tailscaled"
 	"tailscale.com/k8s-operator/tsclient"
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
@@ -413,24 +414,29 @@ func (r *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		return false, nil
 	}
 
-	devices, err := r.DeviceInfo(ctx, labels, logger)
+	devices, err := r.allDeviceInfo(ctx, labels, logger)
 	if err != nil {
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
 
 	for _, dev := range devices {
-		if dev.id != "" {
-			logger.Debugf("deleting device %s from control", string(dev.id))
-			err = tsClient.Devices().Delete(ctx, string(dev.id))
-			switch {
-			case tailscale.IsNotFound(err):
-				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
-			case err != nil:
-				return false, fmt.Errorf("deleting device: %w", err)
+		if dev.id == "" {
+			if err = tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, logger, dev.stateSecret); err != nil {
+				return false, err
 			}
-
-			logger.Debugf("device %s deleted from control", string(dev.id))
+			continue
 		}
+
+		logger.Debugf("deleting device %s from control", string(dev.id))
+		err = tsClient.Devices().Delete(ctx, string(dev.id))
+		switch {
+		case tailscale.IsNotFound(err):
+			logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
+		case err != nil:
+			return false, fmt.Errorf("deleting device: %w", err)
+		}
+
+		logger.Debugf("device %s deleted from control", string(dev.id))
 	}
 
 	resourceTypes := []client.Object{
@@ -649,6 +655,8 @@ func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient 
 			if err = tsClient.Devices().Delete(ctx, string(dev.id)); err != nil && !tailscale.IsNotFound(err) {
 				return nil, err
 			}
+		} else if err = tailscaled.EnsureUnreportedDeviceDeleted(ctx, tsClient, logger, &secret); err != nil {
+			return nil, err
 		}
 
 		if err = r.Delete(ctx, &secret); err != nil {
@@ -676,6 +684,17 @@ func sanitizeConfig(c ipn.ConfigVAlpha) ipn.ConfigVAlpha {
 // Pod to ensure that it is the currently running Pod that set the capver. If the Pod or the Secret does not exist, the
 // returned capver is -1. Either of device ID, hostname and IPs can be empty string if not found in the Secret.
 func (r *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
+	devices, err := r.allDeviceInfo(ctx, childLabels, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return slices.DeleteFunc(devices, func(d *device) bool { return d.id == "" }), nil
+}
+
+// allDeviceInfo is like [tailscaleSTSReconciler.DeviceInfo], but also returns devices that have not reported their
+// device ID yet, with only their state Secret and ordinal set.
+func (r *tailscaleSTSReconciler) allDeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
 	var secrets corev1.SecretList
 	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(childLabels)); err != nil {
 		return nil, err
@@ -721,12 +740,15 @@ type device struct {
 	// ordinal is the replica ordinal parsed from the state Secret's name,
 	// or -1 if it could not be parsed.
 	ordinal int32
+	// stateSecret is set when id is not: the proxy has not reported its
+	// device ID yet, but may already have registered with control.
+	stateSecret *corev1.Secret
 }
 
 func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev *device, err error) {
 	id := tailcfg.StableNodeID(sec.Data[kubetypes.KeyDeviceID])
 	if id == "" {
-		return dev, nil
+		return &device{stateSecret: sec, ordinal: ordinalFromName(sec.Name)}, nil
 	}
 	dev = &device{id: id, ordinal: ordinalFromName(sec.Name)}
 	// Kubernetes chokes on well-formed FQDNs with the trailing dot, so we have
