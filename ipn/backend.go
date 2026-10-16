@@ -300,6 +300,11 @@ func ValidateNotifyWatchOpt(mask NotifyWatchOpt) error {
 	return nil
 }
 
+// NodeGUIVisibility contains GUI presentation metadata for a node.
+type NodeGUIVisibility struct {
+	HideInGUI bool
+}
+
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
 // (cmd/tailscale, iOS, macOS, Win Tasktray).
 // In any given notification, any or all of these may be nil, meaning
@@ -349,6 +354,15 @@ type Notify struct {
 	// and [Notify.PeerChanges] messages, it lets a watcher stitch together
 	// a continuous view of node state without fetching the netmap.
 	InitialStatus *ipnstate.Status `json:",omitzero"`
+
+	// NodeGUIVisibility, when non-nil, is a complete snapshot of GUI
+	// visibility state for the current node and peers, keyed by stable node ID.
+	// It is sent to watchers that requested [NotifySysPolicyChanges]. Clients
+	// should replace their previous visibility state with this map.
+	//
+	// This is presentation metadata only. Nodes remain present in status,
+	// peer notifications, åand the underlying netmap.
+	NodeGUIVisibility map[tailcfg.StableNodeID]NodeGUIVisibility `json:",omitzero"`
 
 	// PeerChangedPatch, if non-empty, lists narrow per-field peer patches
 	// since the last Notify (currently Online, LastSeen, DERPHome,

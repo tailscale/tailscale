@@ -187,4 +187,7 @@ const (
 
 	// AllowedSuggestedExitNodes's string array value is a list of exit node IDs that restricts which exit nodes are considered when generating suggestions for exit nodes.
 	AllowedSuggestedExitNodes Key = "AllowedSuggestedExitNodes"
+	// HiddenNetworkDevices specifies categories of network devices that GUI
+	// clients should omit from device lists.
+	HiddenNetworkDevices Key = "HiddenNetworkDevices"
 )
