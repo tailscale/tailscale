@@ -641,8 +641,7 @@ func trySetSOMark(logf logger.Logf, netMon *netmon.Monitor, network, address str
 //
 // desiredPort may be zero, in which case port selection is left up to the host
 // networking stack.
-// udp6 then reuses the port udp4 was given, if more than one udp4 socket was
-// bound.
+// If more than one udp4 socket was bound udp6 reuses the same port number.
 //
 // TODO: make these "re-bindable" in similar fashion to magicsock as a means to
 // deal with EDR software closing them. http://go/corp/30118. We could re-use
