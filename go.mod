@@ -82,7 +82,7 @@ require (
 	github.com/illarion/gonotify/v3 v3.0.2
 	github.com/inetaf/tcpproxy v0.0.0-20260515195445-c159a6051109
 	github.com/insomniacslk/dhcp v0.0.0-20260901064844-234b97448fae
-	github.com/jellydator/ttlcache/v3 v3.4.1
+	github.com/jellydator/ttlcache/v3 v3.4.2-0.20261010074537-7c10a4928427
 	github.com/jsimonetti/rtnetlink v1.4.2
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/kdomanski/iso9660 v0.4.0
@@ -143,7 +143,7 @@ require (
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.37.0
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.org/x/text v0.42.0

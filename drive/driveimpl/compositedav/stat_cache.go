@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"sync"
 	"time"
 
@@ -240,8 +241,12 @@ func (c *StatCache) stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, cache := range c.cachesByDepthAndPath {
+	for depth, cache := range c.cachesByDepthAndPath {
+		for !cache.IsStarted() {
+			runtime.Gosched()
+		}
 		cache.Stop()
+		delete(c.cachesByDepthAndPath, depth)
 	}
 }
 
