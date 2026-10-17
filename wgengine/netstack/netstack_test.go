@@ -5,6 +5,7 @@ package netstack
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"maps"
 	"net"
@@ -2129,6 +2130,139 @@ func TestLinkEndpointInjectInboundIPv4Fragments(t *testing.T) {
 	}
 	if got := udpAddr.AddrPort(); got != netip.MustParseAddrPort("100.64.1.3:12345") {
 		t.Fatalf("remote addr = %v, want 100.64.1.3:12345", got)
+	}
+}
+
+// udp6raw constructs a valid raw IPv6+UDP packet with proper checksums.
+func udp6raw(t testing.TB, src, dst netip.Addr, sport, dport uint16, payload []byte) []byte {
+	t.Helper()
+	udpLen := header.UDPMinimumSize + len(payload)
+	buf := make([]byte, header.IPv6MinimumSize+udpLen)
+
+	srcAddr, dstAddr := tcpip.AddrFrom16(src.As16()), tcpip.AddrFrom16(dst.As16())
+	header.IPv6(buf).Encode(&header.IPv6Fields{
+		PayloadLength:     uint16(udpLen),
+		TransportProtocol: header.UDPProtocolNumber,
+		HopLimit:          64,
+		SrcAddr:           srcAddr,
+		DstAddr:           dstAddr,
+	})
+
+	u := header.UDP(buf[header.IPv6MinimumSize:])
+	u.Encode(&header.UDPFields{
+		SrcPort: sport,
+		DstPort: dport,
+		Length:  uint16(udpLen),
+	})
+	copy(buf[header.IPv6MinimumSize+header.UDPMinimumSize:], payload)
+
+	xsum := header.PseudoHeaderChecksum(header.UDPProtocolNumber, srcAddr, dstAddr, uint16(udpLen))
+	u.SetChecksum(^u.CalculateChecksum(xsum))
+	return buf
+}
+
+// fragmentIPv6ForTest splits pkt, an IPv6 packet without extension headers,
+// into two fragments sharing the given identification, as a source node would
+// when sending something larger than the path MTU. The first fragment carries
+// the first firstPayloadLen bytes of pkt's payload.
+func fragmentIPv6ForTest(t testing.TB, pkt []byte, firstPayloadLen uint16, id uint32) (first, second []byte) {
+	t.Helper()
+	if firstPayloadLen%8 != 0 {
+		t.Fatalf("firstPayloadLen %d is not 8-byte aligned", firstPayloadLen)
+	}
+	payload := pkt[header.IPv6MinimumSize:]
+	if int(firstPayloadLen) >= len(payload) {
+		t.Fatalf("firstPayloadLen %d must be smaller than IP payload length %d", firstPayloadLen, len(payload))
+	}
+	proto := pkt[6]
+
+	fragment := func(offset int, chunk []byte, more bool) []byte {
+		b := make([]byte, header.IPv6MinimumSize+header.IPv6FragmentExtHdrLength+len(chunk))
+		copy(b, pkt[:header.IPv6MinimumSize])
+		header.IPv6(b).SetPayloadLength(uint16(header.IPv6FragmentExtHdrLength + len(chunk)))
+		b[6] = uint8(header.IPv6FragmentExtHdrIdentifier)
+		b[header.IPv6MinimumSize] = proto // Fragment header's Next Header
+		offsetAndFlags := uint16(offset/8) << 3
+		if more {
+			offsetAndFlags |= 1
+		}
+		binary.BigEndian.PutUint16(b[header.IPv6MinimumSize+2:], offsetAndFlags)
+		binary.BigEndian.PutUint32(b[header.IPv6MinimumSize+4:], id)
+		copy(b[header.IPv6MinimumSize+header.IPv6FragmentExtHdrLength:], chunk)
+		return b
+	}
+	return fragment(0, payload[:firstPayloadLen], true),
+		fragment(int(firstPayloadLen), payload[firstPayloadLen:], false)
+}
+
+// TestLinkEndpointInjectInboundIPv6Fragments verifies that Tailscale's inbound
+// link endpoint path lets IPv6 fragments reach gVisor for reassembly, the IPv6
+// counterpart of TestLinkEndpointInjectInboundIPv4Fragments. Previously,
+// gro.RXChecksumOffload checked the first fragment's L4 checksum against the
+// wrong bytes (and before reassembly), so the first fragment was dropped and
+// the UDP datagram never reached the socket.
+func TestLinkEndpointInjectInboundIPv6Fragments(t *testing.T) {
+	const nicID tcpip.NICID = 1
+	localIP := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	remoteIP := netip.MustParseAddr("fd7a:115c:a1e0::2")
+	payload := []byte("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz")
+	raw := udp6raw(t, remoteIP, localIP, 12345, 8081, payload)
+	first, second := fragmentIPv6ForTest(t, raw, 80, 0xdeadbeef)
+
+	s := stack.New(stack.Options{
+		NetworkProtocols: []stack.NetworkProtocolFactory{
+			ipv6.NewProtocol,
+		},
+		TransportProtocols: []stack.TransportProtocolFactory{
+			udp.NewProtocol,
+		},
+	})
+	defer s.Close()
+
+	ep := newLinkEndpoint(64, 1280, "", groNotSupported, alwaysOutboundToWireGuard)
+	if err := s.CreateNIC(nicID, ep); err != nil {
+		t.Fatalf("CreateNIC: %v", err)
+	}
+	if err := s.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
+		Protocol:          header.IPv6ProtocolNumber,
+		AddressWithPrefix: tcpip.AddrFrom16(localIP.As16()).WithPrefix(),
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatalf("AddProtocolAddress: %v", err)
+	}
+
+	pc, err := gonet.DialUDP(s, &tcpip.FullAddress{
+		NIC:  nicID,
+		Addr: tcpip.AddrFrom16(localIP.As16()),
+		Port: 8081,
+	}, nil, header.IPv6ProtocolNumber)
+	if err != nil {
+		t.Fatalf("DialUDP: %v", err)
+	}
+	defer pc.Close()
+
+	var parsed packet.Parsed
+	parsed.Decode(first)
+	ep.injectInbound(&parsed)
+	parsed.Decode(second)
+	ep.injectInbound(&parsed)
+
+	if err := pc.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 512)
+	n, addr, err := pc.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("ReadFrom: %v (fragmented packet was not reassembled and delivered)", err)
+	}
+	if got := string(buf[:n]); got != string(payload) {
+		t.Fatalf("payload = %q, want %q", got, payload)
+	}
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("remote addr = %T(%v), want *net.UDPAddr", addr, addr)
+	}
+	if got := udpAddr.AddrPort(); got != netip.MustParseAddrPort("[fd7a:115c:a1e0::2]:12345") {
+		t.Fatalf("remote addr = %v, want [fd7a:115c:a1e0::2]:12345", got)
 	}
 }
 
