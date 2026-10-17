@@ -21,6 +21,7 @@ func TestAppDNSRoutes(t *testing.T) {
 			Name:       name,
 			Domains:    domains,
 			Connectors: tags,
+			Mode:       "magicip",
 		}
 		bs, err := json.Marshal(attr)
 		if err != nil {
@@ -138,7 +139,7 @@ func TestAppDNSRoutes(t *testing.T) {
 			selfNode := &tailcfg.Node{}
 			if tt.config != nil {
 				selfNode.CapMap = tailcfg.NodeCapMap{
-					nodecap.Cap(AppConnectorsExperimentalAttrName): tt.config,
+					nodecap.Cap(AppConnectorAttrName): tt.config,
 				}
 			}
 			selfView := selfNode.View()

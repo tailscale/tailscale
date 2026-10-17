@@ -726,6 +726,7 @@ type ConnectorTransitIPResponse struct {
 }
 
 const (
+	AppConnectorAttrName                     = "tailscale.com/app-connectors"
 	AppConnectorsExperimentalAttrName        = "tailscale.com/app-connectors-experimental"
 	AppConnectorsExperimentalIPPoolsAttrName = "tailscale.com/app-connectors-experimental-ippools"
 )
@@ -764,6 +765,22 @@ func configFromNodeView(n tailcfg.NodeView) (*config, error) {
 	apps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.Conn25Attr](n.CapMap(), AppConnectorsExperimentalAttrName)
 	if err != nil {
 		return &config{}, err
+	}
+	// In addition to the apps under the [AppConnectorsExperimentalAttrName],
+	// apps can also be provided  under [AppConnectorAttrName] with the Mode
+	// field set to "magicip".
+	unfilteredApps, err := tailcfg.UnmarshalNodeCapViewJSON[appctype.AppConnectorAttr](n.CapMap(), AppConnectorAttrName)
+	if err != nil {
+		return &config{}, err
+	}
+	for _, app := range unfilteredApps {
+		if app.Mode == "magicip" {
+			apps = append(apps, appctype.Conn25Attr{
+				Name:       app.Name,
+				Domains:    app.Domains,
+				Connectors: app.Connectors,
+			})
+		}
 	}
 	if len(apps) == 0 {
 		return &config{}, nil
