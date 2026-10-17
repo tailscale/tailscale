@@ -107,6 +107,10 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return res, fmt.Errorf("error listing Pods for ProxyGroup %s: %w", proxyGroupName, err)
 	}
 	newEndpoints := make([]discoveryv1.Endpoint, 0)
+	preferSameZone := svc.Annotations[AnnotationTrafficDistribution] == "PreferSameZone"
+	zones := make([]string, 0)
+	nodeZones := make(map[string]string)
+	allZonesKnown := true
 	for _, pod := range podList.Items {
 		ready, err := er.podIsReadyToRouteTraffic(ctx, pod, &cfg, tailnetSvc, eps.AddressType, lg)
 		if err != nil {
@@ -122,6 +126,24 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		if podIP == "" {
 			continue // Pod doesn't have an IP for this address family
 		}
+		if preferSameZone {
+			zone, ok := nodeZones[pod.Spec.NodeName]
+			if !ok && pod.Spec.NodeName != "" {
+				node := &corev1.Node{}
+				if err := er.Get(ctx, client.ObjectKey{Name: pod.Spec.NodeName}, node); err != nil {
+					if !apierrors.IsNotFound(err) {
+						return res, fmt.Errorf("getting Node %s for egress endpoint: %w", pod.Spec.NodeName, err)
+					}
+				} else {
+					zone = node.Labels[corev1.LabelTopologyZone]
+					nodeZones[pod.Spec.NodeName] = zone
+				}
+			}
+			if zone == "" {
+				allZonesKnown = false
+			}
+			zones = append(zones, zone)
+		}
 		newEndpoints = append(newEndpoints, discoveryv1.Endpoint{
 			Hostname:  (*string)(&pod.UID),
 			Addresses: []string{podIP},
@@ -131,6 +153,16 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 				Terminating: new(false),
 			},
 		})
+	}
+	// Only publish hints when every ready endpoint has a known zone. A partial
+	// set of hints would cause service proxies to ignore topology preferences.
+	if preferSameZone && allZonesKnown {
+		for i, zone := range zones {
+			newEndpoints[i].Zone = new(zone)
+			newEndpoints[i].Hints = &discoveryv1.EndpointHints{
+				ForZones: []discoveryv1.ForZone{{Name: zone}},
+			}
+		}
 	}
 	// Endpoints must be in a deterministic order to avoid triggering unnecessary extra reconciles
 	// (see tailscale/tailscale#20916). Sort by Pod UID (Hostname), which is stable per Pod.
