@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/kube/egressservices"
 	"tailscale.com/kube/kubetypes"
+	"tailscale.com/util/linuxfw"
 )
 
 func Test_updatesForSvc(t *testing.T) {
@@ -323,4 +324,13 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		resp.Header.Set(kubetypes.PodIPv4Header, m.anotherIP) // Pod is no longer routable
 	}
 	return resp, nil
+}
+
+func TestResetForwardedConnections(t *testing.T) {
+	nfr := linuxfw.NewFakeNetfilterRunner()
+	ep := &egressProxy{nfr: nfr}
+	ep.resetForwardedConnections()
+	if got, want := nfr.GetTCPResetTuns(), []string{tailscaleTunInterface}; !reflect.DeepEqual(got, want) {
+		t.Errorf("AddTCPResetRule called with %v, want %v", got, want)
+	}
 }
