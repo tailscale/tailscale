@@ -757,16 +757,6 @@ type sshSession struct {
 	// For pty sessions, this is the tty fd.
 	// For non-pty sessions, this is the stdin, stdout, stderr fds.
 	childPipes []io.Closer
-
-	// We use this sync.Once to ensure that we only terminate the process once,
-	// either it exits itself or is terminated
-	exitOnce sync.Once
-
-	// exitHandled is closed when killProcessOnContextDone finishes writing any
-	// termination message to the client. run() waits on this before calling
-	// ss.Exit to ensure the message is flushed before the SSH channel is torn
-	// down. It is initialized by run() before starting killProcessOnContextDone.
-	exitHandled chan struct{}
 }
 
 func (ss *sshSession) vlogf(format string, args ...any) {
@@ -859,14 +849,17 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 	}
 }
 
-// killProcessOnContextDone waits for ss.ctx to be done and kills the process,
-// unless the process has already exited.
-func (ss *sshSession) killProcessOnContextDone() {
-	defer close(ss.exitHandled)
-	<-ss.ctx.Done()
-	// Either the process has already exited, in which case this does nothing.
-	// Or, the process is still running in which case this will kill it.
-	ss.exitOnce.Do(func() {
+// hangupGracePeriod is used by [command] to determine how long to wait
+// for a session's process to cleanly exit after session is terminated,
+// before it is killed with SIGKILL.
+const hangupGracePeriod = 5 * time.Second
+
+// command returns an [exec.Cmd] for the session’s process
+// that will be cancelled gracefully when ss.ctx is done.
+// If the process doesn’t exit after [hangupGracePeriod], it’s killed with SIGKILL.
+func (ss *sshSession) command(name string, arg ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ss.ctx, name, arg...)
+	cmd.Cancel = func() error {
 		err := context.Cause(ss.ctx)
 		if serr, ok := err.(SSHTerminationError); ok {
 			msg := serr.SSHTerminationMessage()
@@ -875,10 +868,10 @@ func (ss *sshSession) killProcessOnContextDone() {
 			}
 		}
 		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
-		// We don't need to wait for the process here, sshSession.run()
-		// does the waiting regardless of termination reason.
-		ss.hangupProcess()
-	})
+		return ss.hangupProcess()
+	}
+	cmd.WaitDelay = hangupGracePeriod
+	return cmd
 }
 
 // isNotFoundOrExecutable reports whether err is a launchProcess
@@ -1042,8 +1035,6 @@ func (ss *sshSession) run() {
 		ss.Exit(exitCode)
 		return
 	}
-	ss.exitHandled = make(chan struct{})
-	go ss.killProcessOnContextDone()
 
 	// wg covers stdout and stderr only: their close ordering is
 	// load-bearing for the wire-level frame sequence below.
@@ -1087,18 +1078,6 @@ func (ss *sshSession) run() {
 	}
 
 	exitCode, err := ss.waitProcess()
-
-	if ss.ctx.Err() != nil {
-		// Cancellation (e.g. recording upload failure) wrote a
-		// termination message via killProcessOnContextDone; wait
-		// for it before Exit closes the channel for writes.
-		<-ss.exitHandled
-	}
-
-	// This will either make the SSH Termination goroutine be a no-op,
-	// or itself will be a no-op because the process was killed by the
-	// aforementioned goroutine.
-	ss.exitOnce.Do(func() {})
 
 	switch {
 	case err != nil:

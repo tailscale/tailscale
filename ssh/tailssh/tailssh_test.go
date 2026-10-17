@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"os"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -33,6 +34,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/kballard/go-shellquote"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -1396,4 +1398,53 @@ func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// TestDisconnectSendsSIGHUP verifies that disconnecting the client
+// sends a SIGHUP to the session's process so it can exit cleanly,
+// instead of a SIGKILL which orphans the user’s shell.
+// See tailscale/tailscale#21150.
+func TestDisconnectSendsSIGHUP(t *testing.T) {
+	h := newTestSSHHarnessWithShell(t, "/bin/sh")
+	marker := filepath.Join(t.TempDir(), "got-hup")
+
+	cl, err := testssh.Dial("tcp", h.addr, &testssh.ClientConfig{
+		HostKeyCallback: testssh.InsecureIgnoreHostKey(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := s.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := fmt.Sprintf(`
+		m=%s
+		trap 'touch "$m"; kill $!' HUP
+		sleep 10 >/dev/null 2>&1 &
+		echo ready
+		wait $!
+	`, shellquote.Join(marker))
+
+	if err := s.Start(cmd); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+		t.Fatalf("session not ready: line=%q err=%v", line, err)
+	}
+
+	// Drop the connection without closing the session, like a network loss.
+	cl.Close()
+
+	if err := tstest.WaitFor(5*time.Second, func() error {
+		_, err := os.Stat(marker)
+		return err
+	}); err != nil {
+		t.Fatal("session not sent SIGHUP")
+	}
 }

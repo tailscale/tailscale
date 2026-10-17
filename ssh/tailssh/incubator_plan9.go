@@ -77,7 +77,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 
 		loginShell := ss.conn.localUser.LoginShell()
 		logf("directly running /bin/rc -c %q", ss.RawCommand())
-		return exec.CommandContext(ss.ctx, loginShell, "-c", ss.RawCommand()), nil, nil
+		return ss.command(loginShell, "-c", ss.RawCommand()), nil, nil
 	}
 
 	lu := ss.conn.localUser
@@ -140,7 +140,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 		}
 	}
 
-	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...), forwardedEnv, nil
+	return ss.command(ss.conn.srv.tailscaledPath, incubatorArgs...), forwardedEnv, nil
 }
 
 var debugTest atomic.Bool
