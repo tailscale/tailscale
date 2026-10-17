@@ -240,8 +240,16 @@ func (c *StatCache) stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, cache := range c.cachesByDepthAndPath {
+	for depth, cache := range c.cachesByDepthAndPath {
+		for !cache.IsStarted() {
+			// A stopped cache in cachesByDepthAndPath is still starting.
+			// Since the cache is started immediately before
+			// cachesByDepthAndPath[cache] is assigned,
+			// we only need to wait an instant for it to finish.
+			time.Sleep(time.Nanosecond)
+		}
 		cache.Stop()
+		delete(c.cachesByDepthAndPath, depth)
 	}
 }
 
