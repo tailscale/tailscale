@@ -787,6 +787,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if f, ok := hookConfigureWebClient.GetOk(); ok {
 		f(lb)
 	}
+	if f, ok := hookStartClientProxy.GetOk(); ok {
+		f(ctx, logf, lb)
+	}
 
 	if ns != nil {
 		if err := ns.Start(lb); err != nil {
@@ -800,6 +803,10 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 }
 
 var hookConfigureWebClient feature.Hook[func(*ipnlocal.LocalBackend)]
+
+// hookStartClientProxy, if set, starts the loopback browser client proxy
+// (feature/clientproxy). Registered by cmd/tailscaled/clientproxy.go.
+var hookStartClientProxy feature.Hook[func(context.Context, logger.Logf, *ipnlocal.LocalBackend)]
 
 // createEngine tries to the wgengine.Engine based on the order of tunnels
 // specified in the command line flags.
