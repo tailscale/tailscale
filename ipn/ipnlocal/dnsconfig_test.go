@@ -594,6 +594,11 @@ func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {
 		{"some.exact.bad", false},
 		{"SOME.EXACT.BAD", false},
 
+		// FQDN form (trailing dot), as passed by the production caller:
+		{"some.exact.bad.", false},
+		{"foo.ts.net.", false},
+		{"google.com.", true},
+
 		// But a prefix is okay.
 		{"prefix-okay.some.exact.bad", true},
 	}
