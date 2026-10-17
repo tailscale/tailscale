@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/bits"
 	"net/netip"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/cpu"
@@ -34,6 +35,10 @@ type OSMetadata interface {
 // we get back from Windows depends on AF_INET vs AF_INET6:
 // MIB_TCPTABLE_OWNER_MODULE for v4 or MIB_TCP6TABLE_OWNER_MODULE for v6.
 const tcpTableOwnerModuleAll = 8
+
+// TCP_TABLE_OWNER_MODULE_LISTENER is like TCP_TABLE_OWNER_MODULE_ALL but only
+// includes sockets in the LISTEN state. The row types are the same.
+const tcpTableOwnerModuleListener = 6
 
 // TCPIP_OWNER_MODULE_BASIC_INFO means to request "basic information" about the
 // owner module.
@@ -118,17 +123,25 @@ type _TCPIP_OWNER_MODULE_BASIC_INFO struct {
 }
 
 func get() (*Table, error) {
+	return getTable(tcpTableOwnerModuleAll)
+}
+
+func getListeners() (*Table, error) {
+	return getTable(tcpTableOwnerModuleListener)
+}
+
+func getTable(class uintptr) (*Table, error) {
 	t := new(Table)
-	if err := t.addEntries(windows.AF_INET); err != nil {
+	if err := t.addEntries(windows.AF_INET, class); err != nil {
 		return nil, fmt.Errorf("failed to get IPv4 entries: %w", err)
 	}
-	if err := t.addEntries(windows.AF_INET6); err != nil {
+	if err := t.addEntries(windows.AF_INET6, class); err != nil {
 		return nil, fmt.Errorf("failed to get IPv6 entries: %w", err)
 	}
 	return t, nil
 }
 
-func (t *Table) addEntries(fam int) error {
+func (t *Table) addEntries(fam int, class uintptr) error {
 	var size uint32
 	var addr unsafe.Pointer
 	var buf []byte
@@ -138,7 +151,7 @@ func (t *Table) addEntries(fam int) error {
 			uintptr(unsafe.Pointer(&size)),
 			1, // sorted
 			uintptr(fam),
-			tcpTableOwnerModuleAll,
+			class,
 			0, // reserved; "must be zero"
 		)
 		if err == 0 {
@@ -160,18 +173,22 @@ func (t *Table) addEntries(fam int) error {
 	}
 	buf = buf[:size]
 
+	// Index into rows rather than ranging over copies, so each entry's
+	// OSMetadata points into buf instead of a separate heap copy of its row.
 	switch fam {
 	case windows.AF_INET:
 		info := (*_MIB_TCPTABLE_OWNER_MODULE)(unsafe.Pointer(&buf[0]))
 		rows := info.getRows()
-		for _, row := range rows {
-			t.Entries = append(t.Entries, row.asEntry())
+		t.Entries = slices.Grow(t.Entries, len(rows))
+		for i := range rows {
+			t.Entries = append(t.Entries, rows[i].asEntry())
 		}
 	case windows.AF_INET6:
 		info := (*_MIB_TCP6TABLE_OWNER_MODULE)(unsafe.Pointer(&buf[0]))
 		rows := info.getRows()
-		for _, row := range rows {
-			t.Entries = append(t.Entries, row.asEntry())
+		t.Entries = slices.Grow(t.Entries, len(rows))
+		for i := range rows {
+			t.Entries = append(t.Entries, rows[i].asEntry())
 		}
 	}
 
