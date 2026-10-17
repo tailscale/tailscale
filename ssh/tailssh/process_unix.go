@@ -80,11 +80,11 @@ func (ss *sshSession) waitProcess() (exitCode int, err error) {
 
 // hangupProcess asks the session's process to terminate because the session
 // is over.
-func (ss *sshSession) hangupProcess() {
+func (ss *sshSession) hangupProcess() error {
 	// SIGHUP = POSIX terminal-disconnect semantics; OpenSSH gets it
 	// implicitly via PTY-master close (session.c:2246), we send it
 	// explicitly because non-PTY sessions use pipes.
-	ss.cmd.Process.Signal(syscall.SIGHUP)
+	return ss.cmd.Process.Signal(syscall.SIGHUP)
 }
 
 // systemHostKeyFile returns the path of the system's OpenSSH host key of the
