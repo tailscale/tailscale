@@ -124,6 +124,11 @@ type Server struct {
 	// for service updates. If empty, the default is "true".
 	CollectServices opt.Bool
 
+	// AllowUPnP, if true, stops the server from sending the
+	// [nodecap.DisableUPnP] capability to every node. Only set it when
+	// clients can't reach a real UPnP router.
+	AllowUPnP bool
+
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
@@ -1657,7 +1662,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	s.mu.Unlock()
 
 	node.CapMap = nodeCapMap
-	node.Capabilities = append(node.Capabilities, nodecap.DisableUPnP)
+	if !s.AllowUPnP {
+		node.Capabilities = append(node.Capabilities, nodecap.DisableUPnP)
+	}
 	if sshPolicy != nil {
 		mak.Set(&node.CapMap, nodecap.SSH, nil)
 	}

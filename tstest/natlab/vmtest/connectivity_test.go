@@ -123,6 +123,22 @@ func easyPxP(e *vmtest.Env) *vmtest.Node {
 			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.PCP, vnet.NATPMP))
 }
 
+func easyUPnP(e *vmtest.Env) *vmtest.Node {
+	n := e.NumNodes()
+	return e.AddNode(fmt.Sprintf("node-%d", n),
+		e.AddNetwork(
+			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+			fmt.Sprintf("192.168.%d.1/24", n), vnet.EasyNAT, vnet.UPnP))
+}
+
+func hardUPnP(e *vmtest.Env) *vmtest.Node {
+	n := e.NumNodes()
+	return e.AddNode(fmt.Sprintf("node-%d", n),
+		e.AddNetwork(
+			fmt.Sprintf("2.%d.%d.%d", n, n, n), // public IP
+			fmt.Sprintf("10.7.%d.1/24", n), vnet.HardNAT, vnet.UPnP))
+}
+
 func hardPCP(e *vmtest.Env) *vmtest.Node {
 	n := e.NumNodes()
 	return e.AddNode(fmt.Sprintf("node-%d", n),
@@ -326,15 +342,17 @@ var types = []nodeType{
 	{"easyPCP", easyPCP},
 	{"easyPMP", easyPMP},
 	{"easyPxP", easyPxP},
+	{"easyUPnP", easyUPnP},
 	{"hardPCP", hardPCP},
 	{"hardPMP", hardPMP},
 	{"hardPxP", hardPxP},
+	{"hardUPnP", hardUPnP},
 	{"one2one", one2one},
 	{"sameLAN", sameLAN},
 	{"cgnat", cgnat},
 }
 
-var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPCP, easyPMP, easyPxP, hardPCP, hardPMP, hardPxP, one2one, sameLAN)")
+var pair = flag.String("pair", "", "comma-separated pair of types to test (easy, easyAF, hard, easyPCP, easyPMP, easyPxP, easyUPnP, hardPCP, hardPMP, hardPxP, hardUPnP, one2one, sameLAN)")
 
 func TestPair(t *testing.T) {
 	t1, t2, ok := strings.Cut(*pair, ",")
