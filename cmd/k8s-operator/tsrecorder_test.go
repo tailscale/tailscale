@@ -37,10 +37,8 @@ const (
 
 func TestRecorder(t *testing.T) {
 	tsr := &tsapi.Recorder{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Finalizers: []string{"tailscale.com/finalizer"},
-		},
+		Name:       "test",
+		Finalizers: []string{"tailscale.com/finalizer"},
 		Spec: tsapi.RecorderSpec{
 			Replicas: new(int32(3)),
 		},
@@ -120,10 +118,8 @@ func TestRecorder(t *testing.T) {
 
 	t.Run("conflicting_service_account_config_marked_as_invalid", func(t *testing.T) {
 		mustCreate(t, fc, &corev1.ServiceAccount{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pre-existing-sa",
-				Namespace: tsNamespace,
-			},
+			Name:      "pre-existing-sa",
+			Namespace: tsNamespace,
 		})
 
 		tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations = nil

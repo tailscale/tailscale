@@ -1386,9 +1386,7 @@ func TestAddServiceToPrefs(t *testing.T) {
 			ctx := t.Context()
 			lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 				AdvertiseServicesSet: true,
-				Prefs: ipn.Prefs{
-					AdvertiseServices: tt.startServices,
-				},
+				AdvertiseServices:    tt.startServices,
 			})
 			e := &serveEnv{lc: lc, bg: bgBoolFlag{true, false}}
 			err := e.addServiceToPrefs(ctx, tt.svcName)
@@ -1435,9 +1433,7 @@ func TestRemoveServiceFromPrefs(t *testing.T) {
 			ctx := t.Context()
 			lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 				AdvertiseServicesSet: true,
-				Prefs: ipn.Prefs{
-					AdvertiseServices: tt.startServices,
-				},
+				AdvertiseServices:    tt.startServices,
 			})
 			e := &serveEnv{lc: lc, bg: bgBoolFlag{true, false}}
 			err := e.removeServiceFromPrefs(ctx, tt.svcName)

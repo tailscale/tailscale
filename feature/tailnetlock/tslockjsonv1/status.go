@@ -6,7 +6,6 @@
 package tslockjsonv1
 
 import (
-	"tailscale.com/cmd/tailscale/jsonoutput"
 	"tailscale.com/cmd/tailscale/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
@@ -16,10 +15,8 @@ import (
 // in a stable "v1" format.
 func StatusResponse(status *ipnstate.TailnetLockStatus) tslockjsonv1.StatusResponse {
 	out := tslockjsonv1.StatusResponse{
-		ResponseEnvelope: jsonoutput.ResponseEnvelope{
-			SchemaVersion: "1",
-		},
-		Enabled: status.Enabled,
+		SchemaVersion: "1",
+		Enabled:       status.Enabled,
 	}
 	if !status.PublicKey.IsZero() {
 		out.PublicKey = status.PublicKey.CLIString()

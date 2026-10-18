@@ -33,9 +33,7 @@ func TestHAServiceCleanupOnAnnotationRemoved(t *testing.T) {
 	createAndCleanup(t, kubeClient, nginx)
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("ingress"),
-		},
+		Name: generateName("ingress"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -43,12 +41,10 @@ func TestHAServiceCleanupOnAnnotationRemoved(t *testing.T) {
 	createAndCleanup(t, kubeClient, pg)
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("test-svc"),
-			Namespace: ns,
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": pg.Name,
-			},
+		Name:      generateName("test-svc"),
+		Namespace: ns,
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": pg.Name,
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,

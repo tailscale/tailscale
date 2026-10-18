@@ -96,7 +96,7 @@ func TestRemoteConfigIntegration(t *testing.T) {
 	c := n.LocalClient()
 	if _, err := c.EditPrefs(ctx, &ipn.MaskedPrefs{
 		RemoteConfigSet: true,
-		Prefs:           ipn.Prefs{RemoteConfig: true},
+		RemoteConfig:    true,
 	}); err != nil {
 		t.Fatalf("EditPrefs(RemoteConfig=true): %v", err)
 	}
@@ -120,7 +120,7 @@ func TestRemoteConfigIntegration(t *testing.T) {
 	const wantHostname = "remoteconfig-integration-test"
 	patch, err := json.Marshal(&ipn.MaskedPrefs{
 		HostnameSet: true,
-		Prefs:       ipn.Prefs{Hostname: wantHostname},
+		Hostname:    wantHostname,
 	})
 	if err != nil {
 		t.Fatalf("marshal patch: %v", err)
@@ -148,7 +148,7 @@ func TestRemoteConfigIntegration(t *testing.T) {
 	// calls must be rejected as soon as the pref flips.
 	patch, err = json.Marshal(&ipn.MaskedPrefs{
 		RemoteConfigSet: true,
-		Prefs:           ipn.Prefs{RemoteConfig: false},
+		RemoteConfig:    false,
 	})
 	if err != nil {
 		t.Fatalf("marshal patch off: %v", err)

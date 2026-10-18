@@ -801,10 +801,8 @@ func TestPrefsApplyEdits(t *testing.T) {
 			name:  "set_several",
 			prefs: &Prefs{},
 			edit: &MaskedPrefs{
-				Prefs: Prefs{
-					Hostname:     "bar",
-					OperatorUser: "galaxybrain",
-				},
+				Hostname:        "bar",
+				OperatorUser:    "galaxybrain",
 				HostnameSet:     true,
 				OperatorUserSet: true,
 			},
@@ -838,14 +836,12 @@ func TestMaskedPrefsPretty(t *testing.T) {
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					Hostname:      "bar",
-					OperatorUser:  "galaxybrain",
-					RouteAll:      false,
-					ExitNodeID:    "foo",
-					AdvertiseTags: []string{"tag:foo", "tag:bar"},
-					NetfilterMode: preftype.NetfilterNoDivert,
-				},
+				Hostname:         "bar",
+				OperatorUser:     "galaxybrain",
+				RouteAll:         false,
+				ExitNodeID:       "foo",
+				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
+				NetfilterMode:    preftype.NetfilterNoDivert,
 				RouteAllSet:      true,
 				HostnameSet:      true,
 				OperatorUserSet:  true,
@@ -857,45 +853,35 @@ func TestMaskedPrefsPretty(t *testing.T) {
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					ExitNodeIP: netaddr.IPv4(100, 102, 104, 105),
-				},
+				ExitNodeIP:    netaddr.IPv4(100, 102, 104, 105),
 				ExitNodeIPSet: true,
 			},
 			want: `MaskedPrefs{ExitNodeIP=100.102.104.105}`,
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(false)},
-				},
+				AutoUpdate:    AutoUpdatePrefs{Check: true, Apply: opt.NewBool(false)},
 				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: false},
 			},
 			want: `MaskedPrefs{AutoUpdate={Check=true}}`,
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true)},
-				},
+				AutoUpdate:    AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true)},
 				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: true, ApplySet: true},
 			},
 			want: `MaskedPrefs{AutoUpdate={Check=true Apply=true}}`,
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(false)},
-				},
+				AutoUpdate:    AutoUpdatePrefs{Check: true, Apply: opt.NewBool(false)},
 				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: true},
 			},
 			want: `MaskedPrefs{AutoUpdate={Apply=false}}`,
 		},
 		{
 			m: &MaskedPrefs{
-				Prefs: Prefs{
-					AutoUpdate: AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true)},
-				},
+				AutoUpdate:    AutoUpdatePrefs{Check: true, Apply: opt.NewBool(true)},
 				AutoUpdateSet: AutoUpdatePrefsMask{CheckSet: false, ApplySet: false},
 			},
 			want: `MaskedPrefs{}`,
@@ -1182,18 +1168,14 @@ func TestMaskedPrefsIsEmpty(t *testing.T) {
 			name:      "no-masks",
 			wantEmpty: true,
 			mp: &MaskedPrefs{
-				Prefs: Prefs{
-					WantRunning: true,
-				},
+				WantRunning: true,
 			},
 		},
 		{
 			name:      "with-mask",
 			wantEmpty: false,
 			mp: &MaskedPrefs{
-				Prefs: Prefs{
-					WantRunning: true,
-				},
+				WantRunning:    true,
 				WantRunningSet: true,
 			},
 		},

@@ -47,7 +47,7 @@ func TestClientServer(t *testing.T) {
 	}
 
 	// Now send an EditPrefs request from the first client to set WantRunning to true.
-	change := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	change := &ipn.MaskedPrefs{WantRunning: true, WantRunningSet: true}
 	gotPrefs, err := c1.EditPrefs(ctx, change)
 	if err != nil {
 		t.Fatalf("EditPrefs failed: %v", err)

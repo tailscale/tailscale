@@ -71,7 +71,7 @@ func TestAPIServerProxyGroupAuth(t *testing.T) {
 	// createAndCleanup, whose cleanup reports an error when the object is already gone. The cleanup
 	// here only covers failures before the shutdown phase runs.
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("api-proxy-auth")},
+		Name: generateName("api-proxy-auth"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type:       tsapi.ProxyGroupTypeKubernetesAPIServer,
 			ProxyClass: pcName,
@@ -172,7 +172,7 @@ func TestAPIServerProxyGroupNoAuth(t *testing.T) {
 	}
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("api-proxy-noauth")},
+		Name: generateName("api-proxy-noauth"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type:       tsapi.ProxyGroupTypeKubernetesAPIServer,
 			ProxyClass: pcName,
@@ -225,7 +225,7 @@ func applyProxyGroupProxyClass(t *testing.T) string {
 	}
 
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("api-proxy")},
+		Name: generateName("api-proxy"),
 		Spec: tsapi.ProxyClassSpec{
 			UseLetsEncryptStagingEnvironment: !*fDevcontrol,
 			StatefulSet: &tsapi.StatefulSet{
@@ -263,7 +263,7 @@ func applyProxyGroupProxyClass(t *testing.T) string {
 func waitForKubeAPIServerProxyReady(t *testing.T, pgName string) string {
 	t.Helper()
 
-	pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}
+	pg := &tsapi.ProxyGroup{Name: pgName}
 	trigger := triggerReconcile(t, client.ObjectKey{Name: pgName}, &tsapi.ProxyGroup{}, 30*time.Second)
 
 	if err := tstest.WaitFor(5*time.Minute, func() error {
@@ -299,7 +299,7 @@ func waitForKubeAPIServerProxyShutdown(t *testing.T, pgName string) {
 	t.Helper()
 
 	if err := tstest.WaitFor(2*time.Minute, func() error {
-		pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: pgName}}
+		pg := &tsapi.ProxyGroup{Name: pgName}
 		if err := get(t.Context(), kubeClient, pg); !apierrors.IsNotFound(err) {
 			return fmt.Errorf("ProxyGroup %s still exists (err=%v)", pgName, err)
 		}

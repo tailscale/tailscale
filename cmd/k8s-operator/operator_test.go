@@ -58,16 +58,14 @@ func TestLoadBalancerClass(t *testing.T) {
 	// Create a service that we should manage, but start with a miconfiguration
 	// in the annotations.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "invalid.example.com",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -84,13 +82,11 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	// Should have an error about invalid config.
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "invalid.example.com",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "invalid.example.com",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -202,11 +198,9 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	// Note that the Tailscale-specific condition status should be gone now.
 	want = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		UID:       "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeClusterIP,
@@ -237,16 +231,14 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
@@ -274,14 +266,12 @@ func TestTailnetTargetFQDNAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
-			},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: fmt.Sprintf("%s.operator-ns.svc.cluster.local", shortName),
@@ -347,16 +337,14 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
@@ -384,14 +372,12 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: fmt.Sprintf("%s.operator-ns.svc.cluster.local", shortName),
@@ -455,14 +441,12 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 	}
 	tailnetTargetIP := "invalid-ip"
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
+		Name:      "test",
+		Namespace: "default",
 
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -476,13 +460,11 @@ func TestTailnetTargetIPAnnotation_IPCouldNotBeParsed(t *testing.T) {
 	t0 := conditionTime(clock)
 
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -523,14 +505,12 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 	}
 	tailnetTargetIP := "999.999.999.999"
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
+		Name:      "test",
+		Namespace: "default",
 
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -544,13 +524,11 @@ func TestTailnetTargetIPAnnotation_InvalidIP(t *testing.T) {
 	t0 := conditionTime(clock)
 
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetIP: tailnetTargetIP,
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
@@ -592,16 +570,14 @@ func TestAnnotations(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -627,14 +603,12 @@ func TestAnnotations(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -662,11 +636,9 @@ func TestAnnotations(t *testing.T) {
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 	want = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		UID:       "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeClusterIP,
@@ -696,16 +668,14 @@ func TestAnnotationIntoLB(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -744,14 +714,12 @@ func TestAnnotationIntoLB(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -777,12 +745,10 @@ func TestAnnotationIntoLB(t *testing.T) {
 	// ... but the service should have a LoadBalancer status.
 
 	want = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        "1234-UID",
-		},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -826,14 +792,12 @@ func TestLBIntoAnnotation(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -872,12 +836,10 @@ func TestLBIntoAnnotation(t *testing.T) {
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-		},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -920,15 +882,13 @@ func TestLBIntoAnnotation(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 
 	want = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
-			UID: "1234-UID",
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
+		UID: "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeClusterIP,
@@ -961,17 +921,15 @@ func TestCustomHostname(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/expose":   "true",
-				"tailscale.com/hostname": "reindeer-flotilla",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/expose":   "true",
+			"tailscale.com/hostname": "reindeer-flotilla",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -997,15 +955,13 @@ func TestCustomHostname(t *testing.T) {
 	expectEqual(t, fc, expectedHeadlessService(shortName, "svc"))
 	expectEqual(t, fc, expectedSTS(t, fc, o), removeResourceReqs)
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Namespace:  "default",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			UID:        types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/expose":   "true",
-				"tailscale.com/hostname": "reindeer-flotilla",
-			},
+		Name:       "test",
+		Namespace:  "default",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		UID:        types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/expose":   "true",
+			"tailscale.com/hostname": "reindeer-flotilla",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -1033,13 +989,11 @@ func TestCustomHostname(t *testing.T) {
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
 	want = &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/hostname": "reindeer-flotilla",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/hostname": "reindeer-flotilla",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -1071,17 +1025,15 @@ func TestCustomPriorityClassName(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/expose":   "true",
-				"tailscale.com/hostname": "tailscale-critical",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/expose":   "true",
+			"tailscale.com/hostname": "tailscale-critical",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -1112,9 +1064,7 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 	zl := zap.Must(zap.NewDevelopment())
 
 	pcIfNotPresent := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "if-not-present",
-		},
+		Name: "if-not-present",
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
 				Pod: &tsapi.Pod{
@@ -1127,9 +1077,7 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 	}
 
 	pcAlways := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "always",
-		},
+		Name: "always",
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
 				Pod: &tsapi.Pod{
@@ -1148,14 +1096,12 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 	fc := builder.Build()
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: types.UID("1234-UID"),
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeLoadBalancer,
@@ -1286,7 +1232,7 @@ func TestServiceProxyClassAnnotation(t *testing.T) {
 func TestProxyClassForService(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Name: "custom-metadata",
 		Spec: tsapi.ProxyClassSpec{
 			TailscaleConfig: &tsapi.TailscaleConfig{
 				AcceptRoutes: true,
@@ -1322,14 +1268,12 @@ func TestProxyClassForService(t *testing.T) {
 	// 1. A new tailscale LoadBalancer Service is created without any
 	// ProxyClass. Resources get created for it as usual.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -1412,14 +1356,12 @@ func TestDefaultLoadBalancer(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeLoadBalancer,
@@ -1467,14 +1409,12 @@ func TestProxyFirewallMode(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
 			Type:      corev1.ServiceTypeLoadBalancer,
@@ -1543,14 +1483,12 @@ func Test_HeadlessService(t *testing.T) {
 		recorder: record.NewFakeRecorder(100),
 	}
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
+		Name:      "test",
+		Namespace: "default",
 
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationExpose: "true",
-			},
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationExpose: "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -1563,13 +1501,11 @@ func Test_HeadlessService(t *testing.T) {
 	t0 := conditionTime(clock)
 
 	want := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationExpose: "true",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationExpose: "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -1597,26 +1533,22 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	// 1. An event on a headless Service for a tailscale Ingress results in
 	// the Ingress being reconciled.
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ing-1",
-			Namespace: "ns-1",
-		},
-		Spec: networkingv1.IngressSpec{IngressClassName: new(tailscaleIngressClassName)},
+		Name:      "ing-1",
+		Namespace: "ns-1",
+		Spec:      networkingv1.IngressSpec{IngressClassName: new(tailscaleIngressClassName)},
 	})
 	svc1 := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "headless-1",
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-				LabelParentName:        "ing-1",
-				LabelParentNamespace:   "ns-1",
-				LabelParentType:        "ingress",
-			},
+		Name:      "headless-1",
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			kubetypes.LabelManaged: "true",
+			LabelParentName:        "ing-1",
+			LabelParentNamespace:   "ns-1",
+			LabelParentType:        "ingress",
 		},
 	}
 	mustCreate(t, fc, svc1)
-	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "ing-1"}}}
+	wantReqs := []reconcile.Request{{Namespace: "ns-1", Name: "ing-1"}}
 	gotReqs := serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), svc1)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
@@ -1625,10 +1557,8 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	// 2. An event on a Service that is the default backend for a tailscale
 	// Ingress results in the Ingress being reconciled.
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ing-2",
-			Namespace: "ns-2",
-		},
+		Name:      "ing-2",
+		Namespace: "ns-2",
 		Spec: networkingv1.IngressSpec{
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{Name: "def-backend"},
@@ -1637,13 +1567,11 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 		},
 	})
 	backendSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "def-backend",
-			Namespace: "ns-2",
-		},
+		Name:      "def-backend",
+		Namespace: "ns-2",
 	}
 	mustCreate(t, fc, backendSvc)
-	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-2", Name: "ing-2"}}}
+	wantReqs = []reconcile.Request{{Namespace: "ns-2", Name: "ing-2"}}
 	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), backendSvc)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
@@ -1652,27 +1580,23 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	// 3. An event on a Service that is one of the non-default backends for
 	// a tailscale Ingress results in the Ingress being reconciled.
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ing-3",
-			Namespace: "ns-3",
-		},
+		Name:      "ing-3",
+		Namespace: "ns-3",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new(tailscaleIngressClassName),
-			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+			Rules: []networkingv1.IngressRule{{HTTP: &networkingv1.HTTPIngressRuleValue{
 				Paths: []networkingv1.HTTPIngressPath{
 					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}}},
 				},
-			}}}},
+			}}},
 		},
 	})
 	backendSvc2 := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backend",
-			Namespace: "ns-3",
-		},
+		Name:      "backend",
+		Namespace: "ns-3",
 	}
 	mustCreate(t, fc, backendSvc2)
-	wantReqs = []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-3", Name: "ing-3"}}}
+	wantReqs = []reconcile.Request{{Namespace: "ns-3", Name: "ing-3"}}
 	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), backendSvc2)
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
@@ -1681,23 +1605,19 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	// 4. An event on a Service that is a backend for an Ingress that is not
 	// tailscale Ingress does not result in an Ingress reconcile.
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ing-4",
-			Namespace: "ns-4",
-		},
+		Name:      "ing-4",
+		Namespace: "ns-4",
 		Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
+			Rules: []networkingv1.IngressRule{{HTTP: &networkingv1.HTTPIngressRuleValue{
 				Paths: []networkingv1.HTTPIngressPath{
 					{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "non-ts-backend"}}},
 				},
-			}}}},
+			}}},
 		},
 	})
 	nonTSBackend := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "non-ts-backend",
-			Namespace: "ns-4",
-		},
+		Name:      "non-ts-backend",
+		Namespace: "ns-4",
 	}
 	mustCreate(t, fc, nonTSBackend)
 	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), nonTSBackend)
@@ -1708,10 +1628,8 @@ func Test_serviceHandlerForIngress(t *testing.T) {
 	// 5. An event on a Service not related to any Ingress does not result
 	// in an Ingress reconcile.
 	someSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "some-svc",
-			Namespace: "ns-4",
-		},
+		Name:      "some-svc",
+		Namespace: "ns-4",
 	}
 	mustCreate(t, fc, someSvc)
 	gotReqs = serviceHandlerForIngress(fc, zl.Sugar(), tailscaleIngressClassName)(context.Background(), someSvc)
@@ -1725,12 +1643,12 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	zl := zap.Must(zap.NewDevelopment())
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "default"},
+		Name: "backend", Namespace: "default",
 	}
 	mustCreate(t, fc, svc)
 
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-ing", Namespace: "default"},
+		Name: "nginx-ing", Namespace: "default",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("nginx"),
 			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
@@ -1738,7 +1656,7 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	})
 
 	mustCreate(t, fc, &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "ts-ing", Namespace: "default"},
+		Name: "ts-ing", Namespace: "default",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 			DefaultBackend:   &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "backend"}},
@@ -1746,7 +1664,7 @@ func Test_serviceHandlerForIngress_multipleIngressClasses(t *testing.T) {
 	})
 
 	got := serviceHandlerForIngress(fc, zl.Sugar(), "tailscale")(context.Background(), svc)
-	want := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ts-ing"}}}
+	want := []reconcile.Request{{Namespace: "default", Name: "ts-ing"}}
 
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected reconcile requests (-got +want):\n%s", diff)
@@ -1841,11 +1759,9 @@ func Test_authKeyRemoval(t *testing.T) {
 	}
 
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       "1234-UID",
-		},
+		Name:      "test",
+		Namespace: "default",
+		UID:       "1234-UID",
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -1908,16 +1824,14 @@ func Test_externalNameService(t *testing.T) {
 	// 1. Create an ExternalName Service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				AnnotationExpose: "true",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			AnnotationExpose: "true",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:         corev1.ServiceTypeExternalName,
@@ -1954,7 +1868,8 @@ func Test_externalNameService(t *testing.T) {
 
 func Test_metricsResourceCreation(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "metrics", Generation: 1},
+		Name:       "metrics",
+		Generation: 1,
 		Spec:       tsapi.ProxyClassSpec{},
 		Status: tsapi.ProxyClassStatus{
 			Conditions: []metav1.Condition{{
@@ -1965,19 +1880,17 @@ func Test_metricsResourceCreation(t *testing.T) {
 		},
 	}
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Labels:    map[string]string{LabelAnnotationProxyClass: "metrics"},
-		},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Labels:    map[string]string{LabelAnnotationProxyClass: "metrics"},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
 			LoadBalancerClass: new("tailscale"),
 		},
 	}
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{Name: serviceMonitorCRD}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(pc, svc).
@@ -2073,16 +1986,14 @@ func TestIgnorePGService(t *testing.T) {
 	// Create a service that we should manage, and check that the initial round
 	// of objects looks right.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: "1234-UID",
-			Annotations: map[string]string{
-				"tailscale.com/proxygroup": "test-pg",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: "1234-UID",
+		Annotations: map[string]string{
+			"tailscale.com/proxygroup": "test-pg",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -2103,26 +2014,22 @@ func TestIgnorePGService(t *testing.T) {
 // re-list).
 func Test_servicesFromIngressProxyGroup(t *testing.T) {
 	ingressPG := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: "ingress-pg"},
-		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeIngress},
+		Name: "ingress-pg",
+		Spec: tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeIngress},
 	}
 	egressPG := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: "egress-pg"},
-		Spec:       tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress},
+		Name: "egress-pg",
+		Spec: tsapi.ProxyGroupSpec{Type: tsapi.ProxyGroupTypeEgress},
 	}
 	svcForIngressPG := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "svc-1",
-			Namespace:   "ns-1",
-			Annotations: map[string]string{AnnotationProxyGroup: "ingress-pg"},
-		},
+		Name:        "svc-1",
+		Namespace:   "ns-1",
+		Annotations: map[string]string{AnnotationProxyGroup: "ingress-pg"},
 	}
 	svcForOtherPG := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "svc-2",
-			Namespace:   "ns-2",
-			Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
-		},
+		Name:        "svc-2",
+		Namespace:   "ns-2",
+		Annotations: map[string]string{AnnotationProxyGroup: "other-pg"},
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -2135,7 +2042,7 @@ func Test_servicesFromIngressProxyGroup(t *testing.T) {
 	// An event on an ingress ProxyGroup enqueues only the Services that are
 	// annotated for it.
 	gotReqs := h(t.Context(), ingressPG)
-	wantReqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "ns-1", Name: "svc-1"}}}
+	wantReqs := []reconcile.Request{{Namespace: "ns-1", Name: "svc-1"}}
 	if diff := cmp.Diff(gotReqs, wantReqs); diff != "" {
 		t.Errorf("servicesFromIngressProxyGroup(ingress-pg) mismatch (-got +want):\n%s", diff)
 	}
@@ -2173,7 +2080,7 @@ func conditionTime(clock tstime.Clock) metav1.Time {
 
 func TestNodeHandlerForConnector(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Name: "static-endpoints",
 		Spec: tsapi.ProxyClassSpec{
 			StaticEndpoints: &tsapi.StaticEndpointsConfig{
 				NodePort: &tsapi.NodePortConfig{
@@ -2184,34 +2091,34 @@ func TestNodeHandlerForConnector(t *testing.T) {
 		},
 	}
 	noStaticPC := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
+		Name: "no-static-endpoints",
 	}
 	connectors := []*tsapi.Connector{
 		// Matches the node via the ProxyClass selector.
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "matching"},
-			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+			Name: "matching",
+			Spec: tsapi.ConnectorSpec{ProxyClass: pc.Name},
 		},
 		// References a ProxyClass that does not exist. This must not
 		// prevent other Connectors from being reconciled.
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "missing-proxyclass"},
-			Spec:       tsapi.ConnectorSpec{ProxyClass: "does-not-exist"},
+			Name: "missing-proxyclass",
+			Spec: tsapi.ConnectorSpec{ProxyClass: "does-not-exist"},
 		},
 		// References a ProxyClass without static endpoints.
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "no-static-endpoints"},
-			Spec:       tsapi.ConnectorSpec{ProxyClass: noStaticPC.Name},
+			Name: "no-static-endpoints",
+			Spec: tsapi.ConnectorSpec{ProxyClass: noStaticPC.Name},
 		},
 		// No ProxyClass at all.
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "no-proxyclass"},
+			Name: "no-proxyclass",
 		},
 		// Also matches the node, listed after the Connector with the
 		// missing ProxyClass.
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "matching-after-missing"},
-			Spec:       tsapi.ConnectorSpec{ProxyClass: pc.Name},
+			Name: "matching-after-missing",
+			Spec: tsapi.ConnectorSpec{ProxyClass: pc.Name},
 		},
 	}
 	fc := fake.NewClientBuilder().
@@ -2224,11 +2131,11 @@ func TestNodeHandlerForConnector(t *testing.T) {
 	handler := nodeHandlerForConnector(fc, zap.Must(zap.NewDevelopment()).Sugar())
 
 	t.Run("matching_node", func(t *testing.T) {
-		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}}}
+		node := &corev1.Node{Name: "node-a", Labels: map[string]string{"zone": "eu"}}
 		got := handler(t.Context(), node)
 		want := []reconcile.Request{
-			{NamespacedName: types.NamespacedName{Name: "matching"}},
-			{NamespacedName: types.NamespacedName{Name: "matching-after-missing"}},
+			{Name: "matching"},
+			{Name: "matching-after-missing"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Fatalf("unexpected reconcile requests (-want +got):\n%s", diff)
@@ -2236,7 +2143,7 @@ func TestNodeHandlerForConnector(t *testing.T) {
 	})
 
 	t.Run("non_matching_node", func(t *testing.T) {
-		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"zone": "us"}}}
+		node := &corev1.Node{Name: "node-b", Labels: map[string]string{"zone": "us"}}
 		got := handler(t.Context(), node)
 		if len(got) != 0 {
 			t.Fatalf("expected no reconcile requests, got %v", got)

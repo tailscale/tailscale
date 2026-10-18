@@ -5488,7 +5488,10 @@ func (b *LocalBackend) startReconnectTimerLocked(d time.Duration) {
 			return
 		}
 
-		mp := &ipn.MaskedPrefs{WantRunningSet: true, Prefs: ipn.Prefs{WantRunning: true}}
+		mp := &ipn.MaskedPrefs{
+			WantRunningSet: true,
+			WantRunning:    true,
+		}
 		if _, err := b.editPrefsLocked(ipnauth.Self, mp); err != nil {
 			b.logf("failed to automatically reconnect as %q after %v: %v", cp.Name(), d, err)
 		} else {
@@ -7212,7 +7215,8 @@ func (b *LocalBackend) Logout(ctx context.Context, actor ipnauth.Actor) error {
 		&ipn.MaskedPrefs{
 			WantRunningSet: true,
 			LoggedOutSet:   true,
-			Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
+			WantRunning:    false,
+			LoggedOut:      true,
 		})
 	b.mu.Unlock()
 	if err != nil {
@@ -8127,13 +8131,13 @@ func (b *LocalBackend) DebugRotateDiscoKey() error {
 	// Bounce WantRunning to fully reset wireguard-go state for all peers.
 	if wantRunning {
 		if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-			Prefs:          ipn.Prefs{WantRunning: false},
+			WantRunning:    false,
 			WantRunningSet: true,
 		}); err != nil {
 			return err
 		}
 		if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-			Prefs:          ipn.Prefs{WantRunning: true},
+			WantRunning:    true,
 			WantRunningSet: true,
 		}); err != nil {
 			return err
@@ -8705,9 +8709,7 @@ func (b *LocalBackend) AdvertiseRoute(ipps ...netip.Prefix) error {
 
 	b.logf("advertising new app connector routes: %v", newRoutes)
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
+		AdvertiseRoutes:    finalRoutes,
 		AdvertiseRoutesSet: true,
 	})
 	return err
@@ -8747,9 +8749,7 @@ func (b *LocalBackend) UnadvertiseRoute(toRemove ...netip.Prefix) error {
 	}
 
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: finalRoutes,
-		},
+		AdvertiseRoutes:    finalRoutes,
 		AdvertiseRoutesSet: true,
 	})
 	return err

@@ -85,15 +85,17 @@ func (tn testNet) udpPacket(src, dst netip.AddrPort) *packet.Parsed {
 	var b []byte
 	if tn.ipVersion == 6 {
 		b = packet.Generate(packet.UDP6Header{
-			IP6Header: packet.IP6Header{Src: src.Addr(), Dst: dst.Addr()},
-			SrcPort:   src.Port(),
-			DstPort:   dst.Port(),
+			Src:     src.Addr(),
+			Dst:     dst.Addr(),
+			SrcPort: src.Port(),
+			DstPort: dst.Port(),
 		}, []byte("hello"))
 	} else {
 		b = packet.Generate(packet.UDP4Header{
-			IP4Header: packet.IP4Header{Src: src.Addr(), Dst: dst.Addr()},
-			SrcPort:   src.Port(),
-			DstPort:   dst.Port(),
+			Src:     src.Addr(),
+			Dst:     dst.Addr(),
+			SrcPort: src.Port(),
+			DstPort: dst.Port(),
 		}, []byte("hello"))
 	}
 	p := &packet.Parsed{}
@@ -136,17 +138,17 @@ func (tn testNet) checkICMPUnreachable(t *testing.T, got []byte, from, to netip.
 		// without exceeding the minimum IPv6 MTU. The test packets are
 		// far below that, so the whole packet is quoted.
 		want = packet.Generate(packet.ICMP6Header{
-			IP6Header: packet.IP6Header{Src: from, Dst: to},
-			Type:      packet.ICMP6Unreachable,
-			Code:      packet.ICMP6AddressUnreachable,
+			Src: from, Dst: to,
+			Type: packet.ICMP6Unreachable,
+			Code: packet.ICMP6AddressUnreachable,
 		}, append(make([]byte, 4), invoking.Buffer()...))
 	} else {
 		// RFC 792: the IPv4 header, which is 20 bytes for the option-less
 		// test packets, plus the first 64 bits of the datagram.
 		want = packet.Generate(packet.ICMP4Header{
-			IP4Header: packet.IP4Header{Src: from, Dst: to},
-			Type:      packet.ICMP4Unreachable,
-			Code:      packet.ICMP4HostUnreachable,
+			Src: from, Dst: to,
+			Type: packet.ICMP4Unreachable,
+			Code: packet.ICMP4HostUnreachable,
 		}, append(make([]byte, 4), invoking.Buffer()[:20+8]...))
 	}
 	if !bytes.Equal(got, want) {

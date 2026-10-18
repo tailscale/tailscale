@@ -47,18 +47,14 @@ const (
 func TestDNSRecordsReconciler(t *testing.T) {
 	// Preconfigure a cluster with a DNSConfig
 	dnsConfig := &tsapi.DNSConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-		},
-		TypeMeta: metav1.TypeMeta{Kind: "DNSConfig"},
+		Name: "test",
+		Kind: "DNSConfig",
 		Spec: tsapi.DNSConfigSpec{
 			Nameserver: &tsapi.Nameserver{},
 		}}
 	ing := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ts-ingress",
-			Namespace: "test",
-		},
+		Name:      "ts-ingress",
+		Namespace: "test",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 		},
@@ -69,7 +65,7 @@ func TestDNSRecordsReconciler(t *testing.T) {
 			},
 		},
 	}
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "dnsrecords", Namespace: "tailscale"}}
+	cm := &corev1.ConfigMap{Name: "dnsrecords", Namespace: "tailscale"}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		WithObjects(cm).
@@ -95,11 +91,9 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	// 1. DNS record is created for an egress proxy configured via
 	// tailscale.com/tailnet-fqdn annotation
 	egressSvcFQDN := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "egress-fqdn",
-			Namespace:   "test",
-			Annotations: map[string]string{"tailscale.com/tailnet-fqdn": "foo.bar.ts.net"},
-		},
+		Name:        "egress-fqdn",
+		Namespace:   "test",
+		Annotations: map[string]string{"tailscale.com/tailnet-fqdn": "foo.bar.ts.net"},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "unused",
 			Type:         corev1.ServiceTypeExternalName,
@@ -180,12 +174,10 @@ func TestDNSRecordsReconciler(t *testing.T) {
 
 	// Create the parent ExternalName service with tailnet-fqdn annotation
 	parentEgressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "external-service",
-			Namespace: "default",
-			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "external-service.example.ts.net",
-			},
+		Name:      "external-service",
+		Namespace: "default",
+		Annotations: map[string]string{
+			dnsrecords.AnnotationTailnetTargetFQDN: "external-service.example.ts.net",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:         corev1.ServiceTypeExternalName,
@@ -195,17 +187,15 @@ func TestDNSRecordsReconciler(t *testing.T) {
 	mustCreate(t, fc, parentEgressSvc)
 
 	proxyGroupEgressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ts-proxygroup-egress-abcd1",
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				kubetypes.LabelManaged:          "true",
-				reconciler.LabelParentName:      "external-service",
-				reconciler.LabelParentNamespace: "default",
-				reconciler.LabelParentType:      "svc",
-				labelProxyGroup:                 "test-proxy-group",
-				labelSvcType:                    typeEgress,
-			},
+		Name:      "ts-proxygroup-egress-abcd1",
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			kubetypes.LabelManaged:          "true",
+			reconciler.LabelParentName:      "external-service",
+			reconciler.LabelParentNamespace: "default",
+			reconciler.LabelParentType:      "svc",
+			labelProxyGroup:                 "test-proxy-group",
+			labelSvcType:                    typeEgress,
 		},
 		Spec: corev1.ServiceSpec{
 			Type:      corev1.ServiceTypeClusterIP,
@@ -219,18 +209,16 @@ func TestDNSRecordsReconciler(t *testing.T) {
 
 	// Create EndpointSlice with Pod IPs (these should NOT be used in DNS records)
 	proxyGroupEps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ts-proxygroup-egress-abcd1-ipv4",
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				discoveryv1.LabelServiceName:    "ts-proxygroup-egress-abcd1",
-				kubetypes.LabelManaged:          "true",
-				reconciler.LabelParentName:      "external-service",
-				reconciler.LabelParentNamespace: "default",
-				reconciler.LabelParentType:      "svc",
-				labelProxyGroup:                 "test-proxy-group",
-				labelSvcType:                    typeEgress,
-			},
+		Name:      "ts-proxygroup-egress-abcd1-ipv4",
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			discoveryv1.LabelServiceName:    "ts-proxygroup-egress-abcd1",
+			kubetypes.LabelManaged:          "true",
+			reconciler.LabelParentName:      "external-service",
+			reconciler.LabelParentNamespace: "default",
+			reconciler.LabelParentType:      "svc",
+			labelProxyGroup:                 "test-proxy-group",
+			labelSvcType:                    typeEgress,
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints: []discoveryv1.Endpoint{{
@@ -284,9 +272,9 @@ func TestDNSRecordsReconcilerOptimisticLockError(t *testing.T) {
 	}
 
 	dnsCfg := &tsapi.DNSConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig"},
-		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
+		Name: "test",
+		Kind: "DNSConfig",
+		Spec: tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
 	}
 	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, metav1.Condition{
 		Type:   string(tsapi.NameserverReady),
@@ -294,12 +282,10 @@ func TestDNSRecordsReconcilerOptimisticLockError(t *testing.T) {
 	})
 
 	egressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "lock-service",
-			Namespace: "default",
-			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "lock-service.example.ts.net",
-			},
+		Name:      "lock-service",
+		Namespace: "default",
+		Annotations: map[string]string{
+			dnsrecords.AnnotationTailnetTargetFQDN: "lock-service.example.ts.net",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:         corev1.ServiceTypeExternalName,
@@ -308,17 +294,15 @@ func TestDNSRecordsReconcilerOptimisticLockError(t *testing.T) {
 	}
 
 	proxyGroupEgressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ts-proxygroup-egress-abcd1",
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				kubetypes.LabelManaged:          "true",
-				reconciler.LabelParentName:      "lock-service",
-				reconciler.LabelParentNamespace: "default",
-				reconciler.LabelParentType:      "svc",
-				labelProxyGroup:                 "test-proxy-group",
-				labelSvcType:                    typeEgress,
-			},
+		Name:      "ts-proxygroup-egress-abcd1",
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			kubetypes.LabelManaged:          "true",
+			reconciler.LabelParentName:      "lock-service",
+			reconciler.LabelParentNamespace: "default",
+			reconciler.LabelParentType:      "svc",
+			labelProxyGroup:                 "test-proxy-group",
+			labelSvcType:                    typeEgress,
 		},
 	}
 
@@ -362,9 +346,9 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 
 	// Preconfigure cluster with DNSConfig
 	dnsCfg := &tsapi.DNSConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		TypeMeta:   metav1.TypeMeta{Kind: "DNSConfig"},
-		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
+		Name: "test",
+		Kind: "DNSConfig",
+		Spec: tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{}},
 	}
 	dnsCfg.Status.Conditions = append(dnsCfg.Status.Conditions, metav1.Condition{
 		Type:   string(tsapi.NameserverReady),
@@ -373,10 +357,8 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 
 	// Create dual-stack ingress
 	ing := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "dual-stack-ingress",
-			Namespace: "test",
-		},
+		Name:      "dual-stack-ingress",
+		Namespace: "test",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 		},
@@ -404,10 +386,8 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 
 	// Create the dnsrecords ConfigMap
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      operatorutils.DNSRecordsCMName,
-			Namespace: "tailscale",
-		},
+		Name:      operatorutils.DNSRecordsCMName,
+		Namespace: "tailscale",
 	}
 
 	fc := fake.NewClientBuilder().
@@ -432,12 +412,10 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 	// Test ProxyGroup with dual-stack ClusterIPs
 	// First create parent service
 	parentEgressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pg-service",
-			Namespace: "tailscale",
-			Annotations: map[string]string{
-				dnsrecords.AnnotationTailnetTargetFQDN: "pg-service.example.ts.net",
-			},
+		Name:      "pg-service",
+		Namespace: "tailscale",
+		Annotations: map[string]string{
+			dnsrecords.AnnotationTailnetTargetFQDN: "pg-service.example.ts.net",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:         corev1.ServiceTypeExternalName,
@@ -446,20 +424,18 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 	}
 
 	proxyGroupSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ts-proxygroup-dualstack",
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				kubetypes.LabelManaged:          "true",
-				labelProxyGroup:                 "test-pg",
-				labelSvcType:                    typeEgress,
-				reconciler.LabelParentName:      "pg-service",
-				reconciler.LabelParentNamespace: "tailscale",
-				reconciler.LabelParentType:      "svc",
-			},
-			Annotations: map[string]string{
-				annotationTSMagicDNSName: "pg-service.example.ts.net",
-			},
+		Name:      "ts-proxygroup-dualstack",
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			kubetypes.LabelManaged:          "true",
+			labelProxyGroup:                 "test-pg",
+			labelSvcType:                    typeEgress,
+			reconciler.LabelParentName:      "pg-service",
+			reconciler.LabelParentNamespace: "tailscale",
+			reconciler.LabelParentType:      "svc",
+		},
+		Annotations: map[string]string{
+			annotationTSMagicDNSName: "pg-service.example.ts.net",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:       corev1.ServiceTypeClusterIP,
@@ -479,15 +455,13 @@ func TestDNSRecordsReconcilerDualStack(t *testing.T) {
 
 func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      o.GetName(),
-			Namespace: "tailscale",
-			Labels: map[string]string{
-				kubetypes.LabelManaged:          "true",
-				reconciler.LabelParentName:      o.GetName(),
-				reconciler.LabelParentNamespace: o.GetNamespace(),
-				reconciler.LabelParentType:      typ,
-			},
+		Name:      o.GetName(),
+		Namespace: "tailscale",
+		Labels: map[string]string{
+			kubetypes.LabelManaged:          "true",
+			reconciler.LabelParentName:      o.GetName(),
+			reconciler.LabelParentNamespace: o.GetNamespace(),
+			reconciler.LabelParentType:      typ,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -499,11 +473,9 @@ func headlessSvcForParent(o client.Object, typ string) *corev1.Service {
 
 func endpointSliceForService(svc *corev1.Service, ip string, fam discoveryv1.AddressType) *discoveryv1.EndpointSlice {
 	return &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", svc.Name, string(fam)),
-			Namespace: svc.Namespace,
-			Labels:    map[string]string{discoveryv1.LabelServiceName: svc.Name},
-		},
+		Name:        fmt.Sprintf("%s-%s", svc.Name, string(fam)),
+		Namespace:   svc.Namespace,
+		Labels:      map[string]string{discoveryv1.LabelServiceName: svc.Name},
 		AddressType: fam,
 		Endpoints: []discoveryv1.Endpoint{{
 			Addresses: []string{ip},
@@ -566,7 +538,7 @@ func expectHostsRecordsWithIPv6(t *testing.T, cl client.Client, wantsHostsIPv4, 
 func expectReconciled(t *testing.T, r *dnsrecords.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 	}
 	res, err := r.Reconcile(context.Background(), req)
 	if err != nil {

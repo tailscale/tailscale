@@ -55,9 +55,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -81,9 +79,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -91,10 +87,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 			},
 			ExpectedConditions: []metav1.Condition{
 				{
@@ -113,9 +107,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -123,10 +115,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_secret": []byte("test"),
 				},
@@ -148,9 +138,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -158,10 +146,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id": []byte("test"),
 				},
@@ -183,9 +169,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -193,10 +177,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id":     []byte("test"),
 					"client_secret": []byte("test"),
@@ -222,9 +204,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -232,10 +212,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id":     []byte("test"),
 					"client_secret": []byte("test"),
@@ -261,9 +239,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -271,10 +247,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id":     []byte("test"),
 					"client_secret": []byte("test"),
@@ -300,9 +274,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "default",
-				},
+				Name: "default",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -310,10 +282,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id":     []byte("test"),
 					"client_secret": []byte("test"),
@@ -339,9 +309,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Tailnet: &tsapi.Tailnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "default",
-				},
+				Name: "default",
 				Spec: tsapi.TailnetSpec{
 					Credentials: tsapi.TailnetCredentials{
 						SecretName: "test",
@@ -349,10 +317,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				},
 			},
 			Secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test",
-					Namespace: "tailscale",
-				},
+				Name:      "test",
+				Namespace: "tailscale",
 				Data: map[string][]byte{
 					"client_id": []byte("test"),
 					"audience":  []byte("https://tailscale.com"),

@@ -727,7 +727,7 @@ func TestUnpackLinuxTarball(t *testing.T) {
 			tarPath := filepath.Join(tmp, "tailscale.tgz")
 			genTarball(t, tarPath, tt.tarball)
 
-			up := &Updater{Arguments: Arguments{Logf: t.Logf}}
+			up := &Updater{Logf: t.Logf}
 			err := up.unpackLinuxTarball(tarPath)
 			if err != nil {
 				if !tt.wantErr {
@@ -928,7 +928,7 @@ func TestCleanupOldDownloads(t *testing.T) {
 				}
 			}
 
-			up := &Updater{Arguments: Arguments{Logf: t.Logf}}
+			up := &Updater{Logf: t.Logf}
 			up.cleanupOldDownloads(filepath.Join(dir, tt.glob))
 
 			var after []string
@@ -1069,11 +1069,9 @@ func TestConfirm(t *testing.T) {
 			CurrentTrack = tt.fromTrack
 			up := Updater{
 				currentVersion: tt.fromVer,
-				Arguments: Arguments{
-					Track:   tt.toTrack,
-					Confirm: tt.confirm,
-					Logf:    t.Logf,
-				},
+				Track:          tt.toTrack,
+				Confirm:        tt.confirm,
+				Logf:           t.Logf,
 			}
 
 			if got := up.confirm(tt.toVer); got != tt.want {

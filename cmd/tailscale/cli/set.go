@@ -146,30 +146,28 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	// user passed the flag, the value is only used if the user passed the flag.
 	// See updateMaskedPrefsFromUpOrSetFlag.
 	maskedPrefs := &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ProfileName:            setArgs.profileName,
-			RouteAll:               setArgs.acceptRoutes,
-			CorpDNS:                setArgs.acceptDNS,
-			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
-			ShieldsUp:              setArgs.shieldsUp,
-			RunSSH:                 setArgs.runSSH,
-			RunWebClient:           setArgs.runWebClient,
-			Hostname:               setArgs.hostname,
-			OperatorUser:           setArgs.opUser,
-			NoSNAT:                 !setArgs.snat,
-			ForceDaemon:            setArgs.forceDaemon,
-			Sync:                   opt.NewBool(setArgs.sync),
-			AutoUpdate: ipn.AutoUpdatePrefs{
-				Check: setArgs.updateCheck,
-				Apply: opt.NewBool(setArgs.updateApply),
-			},
-			AppConnector: ipn.AppConnectorPrefs{
-				Advertise: setArgs.advertiseConnector,
-			},
-			PostureChecking:     setArgs.reportPosture,
-			RemoteConfig:        setArgs.remoteConfig,
-			NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
+		ProfileName:            setArgs.profileName,
+		RouteAll:               setArgs.acceptRoutes,
+		CorpDNS:                setArgs.acceptDNS,
+		ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
+		ShieldsUp:              setArgs.shieldsUp,
+		RunSSH:                 setArgs.runSSH,
+		RunWebClient:           setArgs.runWebClient,
+		Hostname:               setArgs.hostname,
+		OperatorUser:           setArgs.opUser,
+		NoSNAT:                 !setArgs.snat,
+		ForceDaemon:            setArgs.forceDaemon,
+		Sync:                   opt.NewBool(setArgs.sync),
+		AutoUpdate: ipn.AutoUpdatePrefs{
+			Check: setArgs.updateCheck,
+			Apply: opt.NewBool(setArgs.updateApply),
 		},
+		AppConnector: ipn.AppConnectorPrefs{
+			Advertise: setArgs.advertiseConnector,
+		},
+		PostureChecking:     setArgs.reportPosture,
+		RemoteConfig:        setArgs.remoteConfig,
+		NoStatefulFiltering: opt.NewBool(!setArgs.statefulFiltering),
 	}
 
 	if effectiveGOOS() == "linux" {

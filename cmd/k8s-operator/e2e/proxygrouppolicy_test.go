@@ -10,7 +10,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 )
@@ -26,16 +25,14 @@ func TestProxyGroupPolicy(t *testing.T) {
 	// operator generates for our ProxyGroupPolicies don't affect Services/Ingresses
 	// created by the other parallel tests in the default namespace.
 	pgPolicyNs := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("test-pgpolicy")},
+		Name: generateName("test-pgpolicy"),
 	}
 	createAndCleanup(t, kubeClient, pgPolicyNs)
 
 	// Apply deny-all policy
 	denyAllPolicy := &tsapi.ProxyGroupPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "deny-all",
-			Namespace: pgPolicyNs.Name,
-		},
+		Name:      "deny-all",
+		Namespace: pgPolicyNs.Name,
 		Spec: tsapi.ProxyGroupPolicySpec{
 			Ingress: []string{},
 			Egress:  []string{},
@@ -48,13 +45,11 @@ func TestProxyGroupPolicy(t *testing.T) {
 	// Attempt to create an egress Service within the namespace, the above policy should
 	// reject it.
 	egressService := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "egress-to-proxy-group",
-			Namespace: pgPolicyNs.Name,
-			Annotations: map[string]string{
-				"tailscale.com/tailnet-fqdn": "test.something.ts.net",
-				"tailscale.com/proxy-group":  "test",
-			},
+		Name:      "egress-to-proxy-group",
+		Namespace: pgPolicyNs.Name,
+		Annotations: map[string]string{
+			"tailscale.com/tailnet-fqdn": "test.something.ts.net",
+			"tailscale.com/proxy-group":  "test",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -81,12 +76,10 @@ func TestProxyGroupPolicy(t *testing.T) {
 	// Attempt to create an ingress Service within the namespace, the above policy should
 	// reject it.
 	ingressService := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingress-to-proxy-group",
-			Namespace: pgPolicyNs.Name,
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test",
-			},
+		Name:      "ingress-to-proxy-group",
+		Namespace: pgPolicyNs.Name,
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -112,12 +105,10 @@ func TestProxyGroupPolicy(t *testing.T) {
 
 	// Attempt to create an Ingress within the namespace, the above policy should reject it
 	ingress := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingress-to-proxy-group",
-			Namespace: pgPolicyNs.Name,
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test",
-			},
+		Name:      "ingress-to-proxy-group",
+		Namespace: pgPolicyNs.Name,
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -149,10 +140,8 @@ func TestProxyGroupPolicy(t *testing.T) {
 	// Ordinary resources without annotations must remain admissible while the
 	// deny-all policy rejects unauthorized proxy-group annotations.
 	annotationlessService := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "annotationless-service",
-			Namespace: pgPolicyNs.Name,
-		},
+		Name:      "annotationless-service",
+		Namespace: pgPolicyNs.Name,
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
@@ -167,10 +156,8 @@ func TestProxyGroupPolicy(t *testing.T) {
 	createAndCleanup(t, kubeClient, annotationlessService)
 
 	annotationlessTSService := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "annotationless-ts-service",
-			Namespace: pgPolicyNs.Name,
-		},
+		Name:      "annotationless-ts-service",
+		Namespace: pgPolicyNs.Name,
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
 			LoadBalancerClass: new("tailscale"),
@@ -186,10 +173,8 @@ func TestProxyGroupPolicy(t *testing.T) {
 	createAndCleanup(t, kubeClient, annotationlessTSService)
 
 	annotationlessIngress := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "annotationless-ingress",
-			Namespace: pgPolicyNs.Name,
-		},
+		Name:      "annotationless-ingress",
+		Namespace: pgPolicyNs.Name,
 		Spec: networkingv1.IngressSpec{
 			DefaultBackend: &networkingv1.IngressBackend{
 				Service: &networkingv1.IngressServiceBackend{
@@ -206,10 +191,8 @@ func TestProxyGroupPolicy(t *testing.T) {
 	// Add policy to allow ingress/egress using the "test" proxy-group. This should be merged with the deny-all
 	// policy so they do not conflict.
 	allowTestPolicy := &tsapi.ProxyGroupPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "allow-test",
-			Namespace: pgPolicyNs.Name,
-		},
+		Name:      "allow-test",
+		Namespace: pgPolicyNs.Name,
 		Spec: tsapi.ProxyGroupPolicySpec{
 			Ingress: []string{"test"},
 			Egress:  []string{"test"},

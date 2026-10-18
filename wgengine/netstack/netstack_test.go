@@ -156,13 +156,11 @@ func TestShouldHandlePing(t *testing.T) {
 	t.Run("ICMP4", func(t *testing.T) {
 		dst := netip.MustParseAddr("5.6.7.8")
 		icmph := packet.ICMP4Header{
-			IP4Header: packet.IP4Header{
-				IPProto: ipproto.ICMPv4,
-				Src:     srcIP,
-				Dst:     dst,
-			},
-			Type: packet.ICMP4EchoRequest,
-			Code: packet.ICMP4NoCode,
+			IPProto: ipproto.ICMPv4,
+			Src:     srcIP,
+			Dst:     dst,
+			Type:    packet.ICMP4EchoRequest,
+			Code:    packet.ICMP4NoCode,
 		}
 		_, payload := packet.ICMPEchoPayload(nil)
 		icmpPing := packet.Generate(icmph, payload)
@@ -184,13 +182,11 @@ func TestShouldHandlePing(t *testing.T) {
 	t.Run("ICMP6-no-via", func(t *testing.T) {
 		dst := netip.MustParseAddr("2a09:8280:1::4169")
 		icmph := packet.ICMP6Header{
-			IP6Header: packet.IP6Header{
-				IPProto: ipproto.ICMPv6,
-				Src:     srcIP,
-				Dst:     dst,
-			},
-			Type: packet.ICMP6EchoRequest,
-			Code: packet.ICMP6NoCode,
+			IPProto: ipproto.ICMPv6,
+			Src:     srcIP,
+			Dst:     dst,
+			Type:    packet.ICMP6EchoRequest,
+			Code:    packet.ICMP6NoCode,
 		}
 		_, payload := packet.ICMPEchoPayload(nil)
 		icmpPing := packet.Generate(icmph, payload)
@@ -215,13 +211,11 @@ func TestShouldHandlePing(t *testing.T) {
 	t.Run("ICMP6-tailscale-addr", func(t *testing.T) {
 		dst := netip.MustParseAddr("fd7a:115c:a1e0:ab12::1")
 		icmph := packet.ICMP6Header{
-			IP6Header: packet.IP6Header{
-				IPProto: ipproto.ICMPv6,
-				Src:     srcIP,
-				Dst:     dst,
-			},
-			Type: packet.ICMP6EchoRequest,
-			Code: packet.ICMP6NoCode,
+			IPProto: ipproto.ICMPv6,
+			Src:     srcIP,
+			Dst:     dst,
+			Type:    packet.ICMP6EchoRequest,
+			Code:    packet.ICMP6NoCode,
 		}
 		_, payload := packet.ICMPEchoPayload(nil)
 		icmpPing := packet.Generate(icmph, payload)
@@ -247,13 +241,11 @@ func TestShouldHandlePing(t *testing.T) {
 			dst := netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:7:a01:109")
 			expectedPingDst := netip.MustParseAddr("10.1.1.9")
 			icmph := packet.ICMP6Header{
-				IP6Header: packet.IP6Header{
-					IPProto: ipproto.ICMPv6,
-					Src:     srcIP,
-					Dst:     dst,
-				},
-				Type: packet.ICMP6EchoRequest,
-				Code: packet.ICMP6NoCode,
+				IPProto: ipproto.ICMPv6,
+				Src:     srcIP,
+				Dst:     dst,
+				Type:    packet.ICMP6EchoRequest,
+				Code:    packet.ICMP6NoCode,
 			}
 			_, payload := packet.ICMPEchoPayload(nil)
 			icmpPing := packet.Generate(icmph, payload)
@@ -1381,13 +1373,11 @@ func TestShouldHandlePingViaHostScoped(t *testing.T) {
 	srcIP := netip.AddrFrom4([4]byte{1, 2, 3, 4})
 	pingPkt := func(dst netip.Addr) *packet.Parsed {
 		icmph := packet.ICMP6Header{
-			IP6Header: packet.IP6Header{
-				IPProto: ipproto.ICMPv6,
-				Src:     srcIP,
-				Dst:     dst,
-			},
-			Type: packet.ICMP6EchoRequest,
-			Code: packet.ICMP6NoCode,
+			IPProto: ipproto.ICMPv6,
+			Src:     srcIP,
+			Dst:     dst,
+			Type:    packet.ICMP6EchoRequest,
+			Code:    packet.ICMP6NoCode,
 		}
 		_, payload := packet.ICMPEchoPayload(nil)
 		pkt := &packet.Parsed{}

@@ -278,21 +278,17 @@ func TestServiceListJSON(t *testing.T) {
 	// the full Addrs and Ports) round-trips, decorated with the hostname.
 	want := []serviceListEntry{
 		{
-			ServiceDetails: tailcfg.ServiceDetails{
-				Name:  "svc:db",
-				Addrs: []netip.Addr{netip.MustParseAddr("100.80.0.1")},
-				Ports: mustParsePorts(t, "tcp:5432"),
-			},
+			Name:     "svc:db",
+			Addrs:    []netip.Addr{netip.MustParseAddr("100.80.0.1")},
+			Ports:    mustParsePorts(t, "tcp:5432"),
 			Hostname: "db.ts-tailnet.ts.net",
 		},
 		{
-			ServiceDetails: tailcfg.ServiceDetails{
-				Name:        "svc:web",
-				DisplayName: "Web",
-				Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
-				Ports:       mustParsePorts(t, "tcp:443", "tcp:8443"),
-			},
-			Hostname: "web.ts-tailnet.ts.net",
+			Name:        "svc:web",
+			DisplayName: "Web",
+			Addrs:       []netip.Addr{netip.MustParseAddr("100.80.0.2"), netip.MustParseAddr("fd7a::2")},
+			Ports:       mustParsePorts(t, "tcp:443", "tcp:8443"),
+			Hostname:    "web.ts-tailnet.ts.net",
 		},
 	}
 	// netip.Addr has unexported fields but is comparable, so compare it by ==.

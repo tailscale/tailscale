@@ -39,14 +39,12 @@ func TestIngressPGReconciler(t *testing.T) {
 	ingPGR, fc, ft := setupIngressTest(t)
 
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -76,9 +74,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	// Verify that Role and RoleBinding have been created for the first Ingress.
 	// Do not verify the cert Secret as that was already verified implicitly above.
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pg",
-		},
+		Name: "test-pg",
 	}
 	expectEqual(t, fc, certSecretRole("test-pg", "operator-ns", "my-svc.ts.net"))
 	expectEqual(t, fc, certSecretRoleBinding(pg, "operator-ns", "my-svc.ts.net"))
@@ -106,14 +102,12 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Create second Ingress
 	ing2 := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-other-ingress",
-			Namespace: "default",
-			UID:       types.UID("5678-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "my-other-ingress",
+		Namespace: "default",
+		UID:       types.UID("5678-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -192,9 +186,7 @@ func TestIngressPGReconciler(t *testing.T) {
 	expectReconciled(t, ingPGR, "default", "test-ingress")
 	expectEqual(t, fc, certSecretRole("test-pg-second", "operator-ns", "my-svc.ts.net"))
 	pg = &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-pg-second",
-		},
+		Name: "test-pg-second",
 	}
 	expectEqual(t, fc, certSecretRoleBinding(pg, "operator-ns", "my-svc.ts.net"))
 
@@ -231,14 +223,12 @@ func TestIngressPGReconciler(t *testing.T) {
 
 	// Create a third ingress
 	ing3 := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-other-ingress",
-			Namespace: "default",
-			UID:       types.UID("5678-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "my-other-ingress",
+		Namespace: "default",
+		UID:       types.UID("5678-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -275,14 +265,12 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 	ingPGR, fc, ft := setupIngressTest(t)
 
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -331,13 +319,11 @@ func TestIngressPGReconciler_UpdateIngressHostname(t *testing.T) {
 
 func TestValidateIngress(t *testing.T) {
 	baseIngress := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationProxyGroup: "test-pg",
-			},
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationProxyGroup: "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -348,10 +334,8 @@ func TestValidateIngress(t *testing.T) {
 	}
 
 	readyProxyGroup := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-pg",
-			Generation: 1,
-		},
+		Name:       "test-pg",
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -393,12 +377,10 @@ func TestValidateIngress(t *testing.T) {
 		{
 			name: "invalid_tags",
 			ing: &networkingv1.Ingress{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      baseIngress.Name,
-					Namespace: baseIngress.Namespace,
-					Annotations: map[string]string{
-						AnnotationTags: "tag:invalid!",
-					},
+				Name:      baseIngress.Name,
+				Namespace: baseIngress.Namespace,
+				Annotations: map[string]string{
+					AnnotationTags: "tag:invalid!",
 				},
 			},
 			pg:      readyProxyGroup,
@@ -466,12 +448,10 @@ func TestValidateIngress(t *testing.T) {
 			ing:  baseIngress,
 			pg:   readyProxyGroup,
 			existingIngs: []networkingv1.Ingress{{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "existing-ingress",
-					Namespace: "default",
-					Annotations: map[string]string{
-						AnnotationProxyGroup: "test-pg",
-					},
+				Name:      "existing-ingress",
+				Namespace: "default",
+				Annotations: map[string]string{
+					AnnotationProxyGroup: "test-pg",
 				},
 				Spec: networkingv1.IngressSpec{
 					IngressClassName: new("tailscale"),
@@ -510,15 +490,13 @@ func TestIngressPGReconciler_HTTPEndpoint(t *testing.T) {
 
 	// Create test Ingress with HTTP endpoint enabled
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group":   "test-pg",
-				"tailscale.com/http-endpoint": "enabled",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group":   "test-pg",
+			"tailscale.com/http-endpoint": "enabled",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -624,10 +602,8 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 
 	// Create backend Service that the Ingress will route to
 	backendSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
+		Name:      "test",
+		Namespace: "default",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.0.0.1",
 			Ports: []corev1.ServicePort{
@@ -641,15 +617,13 @@ func TestIngressPGReconciler_HTTPRedirect(t *testing.T) {
 
 	// Create test Ingress with HTTP redirect enabled
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group":   "test-pg",
-				"tailscale.com/http-redirect": "true",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group":   "test-pg",
+			"tailscale.com/http-redirect": "true",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -749,10 +723,8 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 
 	// Create backend Service that the Ingress will route to
 	backendSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
+		Name:      "test",
+		Namespace: "default",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.0.0.1",
 			Ports: []corev1.ServicePort{
@@ -766,16 +738,14 @@ func TestIngressPGReconciler_HTTPEndpointAndRedirectConflict(t *testing.T) {
 
 	// Create test Ingress with both HTTP endpoint and HTTP redirect enabled
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group":   "test-pg",
-				"tailscale.com/http-endpoint": "enabled",
-				"tailscale.com/http-redirect": "true",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group":   "test-pg",
+			"tailscale.com/http-endpoint": "enabled",
+			"tailscale.com/http-redirect": "true",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -859,14 +829,12 @@ func TestIngressPGReconciler_MultiCluster(t *testing.T) {
 
 	// Create initial Ingress
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ingress",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
@@ -996,15 +964,13 @@ func populateTLSSecret(t *testing.T, c client.Client, pgName, domain string) {
 	t.Helper()
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      domain,
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				kubetypes.LabelManaged:    "true",
-				labelProxyGroup:           pgName,
-				labelDomain:               domain,
-				kubetypes.LabelSecretType: kubetypes.LabelSecretTypeCerts,
-			},
+		Name:      domain,
+		Namespace: "operator-ns",
+		Labels: map[string]string{
+			kubetypes.LabelManaged:    "true",
+			labelProxyGroup:           pgName,
+			labelDomain:               domain,
+			kubetypes.LabelSecretType: kubetypes.LabelSecretTypeCerts,
 		},
 		Type: corev1.SecretTypeTLS,
 		Data: map[string][]byte{
@@ -1100,11 +1066,9 @@ func verifyTailscaledConfig(t *testing.T, fc client.Client, pgName string, expec
 		expected = fmt.Sprintf(`,"AdvertiseServices":%s`, expectedServicesJSON)
 	}
 	expectEqual(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgConfigSecretName(pgName, 0),
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
-		},
+		Name:      pgConfigSecretName(pgName, 0),
+		Namespace: "operator-ns",
+		Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): fmt.Appendf(nil, `{"Version":""%s}`, expected),
 		},
@@ -1116,10 +1080,8 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       pgName,
-			Generation: 1,
-		},
+		Name:       pgName,
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -1128,10 +1090,8 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 
 	// Pre-create the ConfigMap for the ProxyGroup
 	pgConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ingress-config", pgName),
-			Namespace: "operator-ns",
-		},
+		Name:      fmt.Sprintf("%s-ingress-config", pgName),
+		Namespace: "operator-ns",
 		BinaryData: map[string][]byte{
 			"serve-config.json": []byte(`{"Services":{}}`),
 		},
@@ -1140,11 +1100,9 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 
 	// Pre-create a config Secret for the ProxyGroup
 	pgCfgSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgConfigSecretName(pgName, 0),
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
-		},
+		Name:      pgConfigSecretName(pgName, 0),
+		Namespace: "operator-ns",
+		Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte("{}"),
 		},
@@ -1162,11 +1120,9 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 
 	// Pre-create a state secret for the ProxyGroup
 	pgStateSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgStateSecretName(pgName, 0),
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
-		},
+		Name:      pgStateSecretName(pgName, 0),
+		Namespace: "operator-ns",
+		Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
 		Data: map[string][]byte{
 			currentProfileKey: []byte("test"),
 			"test":            p,
@@ -1188,8 +1144,8 @@ func createPGResources(t *testing.T, fc client.Client, pgName string) {
 
 func setupIngressTest(t *testing.T) (*HAIngressReconciler, client.Client, *fakeTSClient) {
 	tsIngressClass := &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
-		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
+		Name: "tailscale",
+		Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
 	}
 
 	fc := fake.NewClientBuilder().

@@ -120,9 +120,7 @@ func (esrr *egressSvcsReadinessReconciler) Reconcile(ctx context.Context, req re
 		}
 	}
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: svc.Annotations[AnnotationProxyGroup],
-		},
+		Name: svc.Annotations[AnnotationProxyGroup],
 	}
 	err = esrr.Get(ctx, client.ObjectKeyFromObject(pg), pg)
 	if apierrors.IsNotFound(err) {

@@ -985,10 +985,8 @@ func (e *Env) SetExitNode(client, exitNode *Node) {
 	}
 
 	if _, err := client.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ExitNodeID: "",
-			ExitNodeIP: ip,
-		},
+		ExitNodeID:    "",
+		ExitNodeIP:    ip,
 		ExitNodeIDSet: true,
 		ExitNodeIPSet: true,
 	}); err != nil {
@@ -1011,10 +1009,8 @@ func (e *Env) SetExitNodeIP(client *Node, ip netip.Addr) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := client.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ExitNodeID: "",
-			ExitNodeIP: ip,
-		},
+		ExitNodeID:    "",
+		ExitNodeIP:    ip,
 		ExitNodeIDSet: true,
 		ExitNodeIPSet: true,
 	}); err != nil {
@@ -1229,7 +1225,7 @@ func (e *Env) SetAcceptRoutes(n *Node, on bool) {
 	defer cancel()
 
 	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:       ipn.Prefs{RouteAll: on},
+		RouteAll:    on,
 		RouteAllSet: true,
 	}); err != nil {
 		e.t.Fatalf("SetAcceptRoutes(%s, %v): %v", n.name, on, err)
@@ -1250,7 +1246,7 @@ func (e *Env) SetAcceptDNS(n *Node, on bool) {
 	defer cancel()
 
 	if _, err := n.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:      ipn.Prefs{CorpDNS: on},
+		CorpDNS:    on,
 		CorpDNSSet: true,
 	}); err != nil {
 		e.t.Fatalf("SetAcceptDNS(%s, %v): %v", n.name, on, err)
@@ -1288,7 +1284,7 @@ func (e *Env) ApproveRoutes(n *Node, routes ...string) {
 			continue
 		}
 		if _, err := other.agent.EditPrefs(ctx, &ipn.MaskedPrefs{
-			Prefs:       ipn.Prefs{RouteAll: true},
+			RouteAll:    true,
 			RouteAllSet: true,
 		}); err != nil {
 			e.t.Fatalf("ApproveRoutes: set accept-routes on %s: %v", other.name, err)

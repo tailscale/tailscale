@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
@@ -183,8 +182,8 @@ func TestValidateNodePortRangesKubeRange(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			pc := &tsapi.ProxyClass{
-				ObjectMeta: metav1.ObjectMeta{Name: "pc"},
-				Spec:       tsapi.ProxyClassSpec{StaticEndpoints: nodePortWith(tc.ports)},
+				Name: "pc",
+				Spec: tsapi.ProxyClassSpec{StaticEndpoints: nodePortWith(tc.ports)},
 			}
 			fc := fake.NewClientBuilder().WithScheme(tsapi.GlobalScheme).WithObjects(pc).Build()
 

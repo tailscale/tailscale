@@ -234,9 +234,7 @@ func TestWatchConfigSecret_Rewatches(t *testing.T) {
 
 func secretFrom(content string) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "config-secret",
-		},
+		Name: "config-secret",
 		Data: map[string][]byte{
 			kubetypes.KubeAPIServerConfigFile: []byte(content),
 		},

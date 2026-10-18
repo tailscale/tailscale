@@ -194,7 +194,7 @@ func (r *resolver) newestAged(ctx context.Context, base, cur string) (versionInf
 		return versionInfo{}, err
 	}
 	var candidates []string
-	for _, v := range strings.Fields(string(list)) {
+	for v := range strings.FieldsSeq(string(list)) {
 		if semver.IsValid(v) && semver.Prerelease(v) == "" && isNewer(v, cur) {
 			candidates = append(candidates, v)
 		}

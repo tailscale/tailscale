@@ -651,10 +651,8 @@ func TestNewWithClient(t *testing.T) {
 	// Helper function to create Secret objects for testing
 	makeSecret := func(name string, labels map[string]string, certSuffix string) kubeapi.Secret {
 		return kubeapi.Secret{
-			ObjectMeta: kubeapi.ObjectMeta{
-				Name:   name,
-				Labels: labels,
-			},
+			Name:   name,
+			Labels: labels,
 			Data: map[string][]byte{
 				"tls.crt": []byte(testCert + certSuffix),
 				"tls.key": []byte(testKey + certSuffix),

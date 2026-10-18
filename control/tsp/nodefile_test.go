@@ -19,10 +19,8 @@ func TestNodeFileRoundTrip(t *testing.T) {
 	nf := NodeFile{
 		NodeKey:    key.NewNode(),
 		MachineKey: key.NewMachine(),
-		ServerInfo: ServerInfo{
-			URL: "https://controlplane.tailscale.com",
-			Key: key.NewMachine().Public(),
-		},
+		URL:        "https://controlplane.tailscale.com",
+		Key:        key.NewMachine().Public(),
 	}
 
 	if err := WriteNodeFile(path, nf); err != nil {
@@ -89,10 +87,8 @@ func TestNodeFileWriteFormat(t *testing.T) {
 	nf := NodeFile{
 		NodeKey:    key.NewNode(),
 		MachineKey: key.NewMachine(),
-		ServerInfo: ServerInfo{
-			URL: "https://example.com",
-			Key: key.NewMachine().Public(),
-		},
+		URL:        "https://example.com",
+		Key:        key.NewMachine().Public(),
 	}
 
 	if err := WriteNodeFile(path, nf); err != nil {

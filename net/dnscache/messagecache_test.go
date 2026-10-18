@@ -150,7 +150,8 @@ func makeDNSPkt(txID uint16, name string, opt ...any) []byte {
 	}
 	qname := dnsmessage.MustNewName(name)
 	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{ID: txID, Response: response},
+		ID:       txID,
+		Response: response,
 		Questions: []dnsmessage.Question{
 			{
 				Name:  qname,

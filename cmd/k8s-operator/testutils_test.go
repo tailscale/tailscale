@@ -125,10 +125,8 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 	volumes = []corev1.Volume{
 		{
 			Name: "tailscaledconfig-0",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: opts.secretName,
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: opts.secretName,
 			},
 		},
 	}
@@ -176,14 +174,12 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		})
 		volumes = append(volumes, corev1.Volume{
 			Name: "serve-config-0",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: opts.secretName,
-					Items: []corev1.KeyToPath{{
-						Key:  "serve-config",
-						Path: "serve-config",
-					}},
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: opts.secretName,
+				Items: []corev1.KeyToPath{{
+					Key:  "serve-config",
+					Path: "serve-config",
+				}},
 			},
 		})
 		tsContainer.VolumeMounts = append(tsContainer.VolumeMounts, corev1.VolumeMount{Name: "serve-config-0", ReadOnly: true, MountPath: path.Join("/etc/tailscaled", opts.secretName)})
@@ -216,19 +212,15 @@ func expectedSTS(t *testing.T, cl client.Client, opts configOpts) *appsv1.Statef
 		)
 	}
 	ss := &appsv1.StatefulSet{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "StatefulSet",
-			APIVersion: "apps/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.stsName,
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				"tailscale.com/managed":              "true",
-				"tailscale.com/parent-resource":      "test",
-				"tailscale.com/parent-resource-ns":   opts.namespace,
-				"tailscale.com/parent-resource-type": opts.parentType,
-			},
+		Kind:       "StatefulSet",
+		APIVersion: "apps/v1",
+		Name:       opts.stsName,
+		Namespace:  "operator-ns",
+		Labels: map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource":      "test",
+			"tailscale.com/parent-resource-ns":   opts.namespace,
+			"tailscale.com/parent-resource-type": opts.parentType,
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: opts.replicas,
@@ -340,36 +332,28 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 	volumes := []corev1.Volume{
 		{
 			Name: "tailscaledconfig-0",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: opts.secretName,
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: opts.secretName,
 			},
 		},
 		{
 			Name: "serve-config-0",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: opts.secretName,
-					Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: opts.secretName,
+				Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
 			},
 		},
 	}
 	ss := &appsv1.StatefulSet{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "StatefulSet",
-			APIVersion: "apps/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.stsName,
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				"tailscale.com/managed":              "true",
-				"tailscale.com/parent-resource":      "test",
-				"tailscale.com/parent-resource-ns":   opts.namespace,
-				"tailscale.com/parent-resource-type": opts.parentType,
-			},
+		Kind:       "StatefulSet",
+		APIVersion: "apps/v1",
+		Name:       opts.stsName,
+		Namespace:  "operator-ns",
+		Labels: map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource":      "test",
+			"tailscale.com/parent-resource-ns":   opts.namespace,
+			"tailscale.com/parent-resource-type": opts.parentType,
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: new(int32(1)),
@@ -412,16 +396,14 @@ func expectedSTSUserspace(t *testing.T, cl client.Client, opts configOpts) *apps
 
 func expectedHeadlessService(name string, parentType string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:         name,
-			GenerateName: "ts-test-",
-			Namespace:    "operator-ns",
-			Labels: map[string]string{
-				"tailscale.com/managed":              "true",
-				"tailscale.com/parent-resource":      "test",
-				"tailscale.com/parent-resource-ns":   "default",
-				"tailscale.com/parent-resource-type": parentType,
-			},
+		Name:         name,
+		GenerateName: "ts-test-",
+		Namespace:    "operator-ns",
+		Labels: map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource":      "test",
+			"tailscale.com/parent-resource-ns":   "default",
+			"tailscale.com/parent-resource-type": parentType,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -444,11 +426,9 @@ func expectedMetricsService(opts configOpts) *corev1.Service {
 		selector["tailscale.com/parent-resource-ns"] = opts.namespace
 	}
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      metricsResourceName(opts.stsName),
-			Namespace: opts.tailscaleNamespace,
-			Labels:    labels,
-		},
+		Name:      metricsResourceName(opts.stsName),
+		Namespace: opts.tailscaleNamespace,
+		Labels:    labels,
 		Spec: corev1.ServiceSpec{
 			Selector: selector,
 			Type:     corev1.ServiceTypeClusterIP,
@@ -483,17 +463,13 @@ func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstruc
 	}
 	name := metricsResourceName(opts.stsName)
 	sm := &ServiceMonitor{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			Namespace:       opts.tailscaleNamespace,
-			Labels:          smLabels,
-			ResourceVersion: opts.resourceVersion,
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: new(true), Controller: new(true)}},
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ServiceMonitor",
-			APIVersion: "monitoring.coreos.com/v1",
-		},
+		Name:            name,
+		Namespace:       opts.tailscaleNamespace,
+		Labels:          smLabels,
+		ResourceVersion: opts.resourceVersion,
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Service", Name: name, BlockOwnerDeletion: new(true), Controller: new(true)}},
+		Kind:            "ServiceMonitor",
+		APIVersion:      "monitoring.coreos.com/v1",
 		Spec: ServiceMonitorSpec{
 			Selector: metav1.LabelSelector{MatchLabels: metricsLabels(opts)},
 			Endpoints: []ServiceMonitorEndpoint{{
@@ -520,10 +496,8 @@ func expectedServiceMonitor(t *testing.T, opts configOpts) *unstructured.Unstruc
 func expectedSecret(t *testing.T, cl client.Client, opts configOpts) *corev1.Secret {
 	t.Helper()
 	s := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.secretName,
-			Namespace: "operator-ns",
-		},
+		Name:      opts.secretName,
+		Namespace: "operator-ns",
 	}
 	if opts.serveConfig != nil {
 		serveConfigBs, err := json.Marshal(opts.serveConfig)
@@ -771,10 +745,8 @@ func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns
 func expectReconciled(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Namespace: ns,
-			Name:      name,
-		},
+		Namespace: ns,
+		Name:      name,
 	}
 	res, err := sr.Reconcile(context.Background(), req)
 	if err != nil {
@@ -791,10 +763,8 @@ func expectReconciled(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      name,
-			Namespace: ns,
-		},
+		Name:      name,
+		Namespace: ns,
 	}
 	res, err := sr.Reconcile(context.Background(), req)
 	if err != nil {
@@ -807,10 +777,8 @@ func expectRequeue(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 func expectError(t *testing.T, sr reconcile.Reconciler, ns, name string) {
 	t.Helper()
 	req := reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      name,
-			Namespace: ns,
-		},
+		Name:      name,
+		Namespace: ns,
 	}
 	_, err := sr.Reconcile(context.Background(), req)
 	if err == nil {

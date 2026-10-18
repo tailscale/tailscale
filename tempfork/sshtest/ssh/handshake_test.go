@@ -541,9 +541,7 @@ func TestDisconnect(t *testing.T) {
 
 func TestHandshakeRekeyDefault(t *testing.T) {
 	clientConf := &ClientConfig{
-		Config: Config{
-			Ciphers: []string{"aes128-ctr"},
-		},
+		Ciphers:         []string{"aes128-ctr"},
 		HostKeyCallback: InsecureIgnoreHostKey(),
 	}
 	trC, trS, err := handshakePair(clientConf, "addr", false)
@@ -573,10 +571,8 @@ func TestHandshakeAEADCipherNoMAC(t *testing.T) {
 			called: make(chan int, 1),
 		}
 		clientConf := &ClientConfig{
-			Config: Config{
-				Ciphers: []string{cipher},
-				MACs:    []string{},
-			},
+			Ciphers:         []string{cipher},
+			MACs:            []string{},
 			HostKeyCallback: checker.Check,
 		}
 		trC, trS, err := handshakePair(clientConf, "addr", false)

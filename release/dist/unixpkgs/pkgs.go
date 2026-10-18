@@ -260,40 +260,38 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		License:     "MIT",
 		Section:     "net",
 		Priority:    "extra",
-		Overridables: nfpm.Overridables{
-			Contents: contents,
-			Scripts: nfpm.Scripts{
-				PostInstall: filepath.Join(repoDir, "release/deb/debian.postinst.sh"),
-				PreRemove:   filepath.Join(repoDir, "release/deb/debian.prerm.sh"),
-				PostRemove:  filepath.Join(repoDir, "release/deb/debian.postrm.sh"),
-			},
-			Depends: []string{
-				// iptables is almost always required but not strictly needed.
-				// Even if you can technically run Tailscale without it (by
-				// manually configuring nftables or userspace mode), we still
-				// mark this as "Depends" because our previous experiment in
-				// https://github.com/tailscale/tailscale/issues/9236 of making
-				// it only Recommends caused too many problems. Until our
-				// nftables table is more mature, we'd rather err on the side of
-				// wasting a little disk by including iptables for people who
-				// might not need it rather than handle reports of it being
-				// missing.
-				"iptables",
-			},
-			Recommends: []string{
-				"tailscale-archive-keyring (>= 1.35.181)",
-				// The "ip" command isn't needed since 2021-11-01 in
-				// 408b0923a61972ed but kept as an option as of
-				// 2021-11-18 in d24ed3f68e35e802d531371.  See
-				// https://github.com/tailscale/tailscale/issues/391.
-				// We keep it recommended because it's usually
-				// installed anyway and it's useful for debugging. But
-				// we can live without it, so it's not Depends.
-				"iproute2",
-			},
-			Replaces:  []string{"tailscale-relay"},
-			Conflicts: []string{"tailscale-relay"},
+		Contents:    contents,
+		Scripts: nfpm.Scripts{
+			PostInstall: filepath.Join(repoDir, "release/deb/debian.postinst.sh"),
+			PreRemove:   filepath.Join(repoDir, "release/deb/debian.prerm.sh"),
+			PostRemove:  filepath.Join(repoDir, "release/deb/debian.postrm.sh"),
 		},
+		Depends: []string{
+			// iptables is almost always required but not strictly needed.
+			// Even if you can technically run Tailscale without it (by
+			// manually configuring nftables or userspace mode), we still
+			// mark this as "Depends" because our previous experiment in
+			// https://github.com/tailscale/tailscale/issues/9236 of making
+			// it only Recommends caused too many problems. Until our
+			// nftables table is more mature, we'd rather err on the side of
+			// wasting a little disk by including iptables for people who
+			// might not need it rather than handle reports of it being
+			// missing.
+			"iptables",
+		},
+		Recommends: []string{
+			"tailscale-archive-keyring (>= 1.35.181)",
+			// The "ip" command isn't needed since 2021-11-01 in
+			// 408b0923a61972ed but kept as an option as of
+			// 2021-11-18 in d24ed3f68e35e802d531371.  See
+			// https://github.com/tailscale/tailscale/issues/391.
+			// We keep it recommended because it's usually
+			// installed anyway and it's useful for debugging. But
+			// we can live without it, so it's not Depends.
+			"iproute2",
+		},
+		Replaces:  []string{"tailscale-relay"},
+		Conflicts: []string{"tailscale-relay"},
 	})
 	pkg, err := nfpm.Get("deb")
 	if err != nil {
@@ -411,22 +409,20 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		Description: "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO",
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
-		Overridables: nfpm.Overridables{
-			Contents: contents,
-			Scripts: nfpm.Scripts{
-				PostInstall: filepath.Join(repoDir, "release/rpm/rpm.postinst.sh"),
-				PreRemove:   filepath.Join(repoDir, "release/rpm/rpm.prerm.sh"),
-				PostRemove:  filepath.Join(repoDir, "release/rpm/rpm.postrm.sh"),
-			},
-			Depends:   []string{"iptables", "iproute"},
-			Replaces:  []string{"tailscale-relay"},
-			Conflicts: []string{"tailscale-relay"},
-			RPM: nfpm.RPM{
-				Group: "Network",
-				Signature: nfpm.RPMSignature{
-					PackageSignature: nfpm.PackageSignature{
-						SignFn: t.signer,
-					},
+		Contents:    contents,
+		Scripts: nfpm.Scripts{
+			PostInstall: filepath.Join(repoDir, "release/rpm/rpm.postinst.sh"),
+			PreRemove:   filepath.Join(repoDir, "release/rpm/rpm.prerm.sh"),
+			PostRemove:  filepath.Join(repoDir, "release/rpm/rpm.postrm.sh"),
+		},
+		Depends:   []string{"iptables", "iproute"},
+		Replaces:  []string{"tailscale-relay"},
+		Conflicts: []string{"tailscale-relay"},
+		RPM: nfpm.RPM{
+			Group: "Network",
+			Signature: nfpm.RPMSignature{
+				PackageSignature: nfpm.PackageSignature{
+					SignFn: t.signer,
 				},
 			},
 		},

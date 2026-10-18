@@ -64,14 +64,12 @@ func TestEgressPodReadiness(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "operator-ns",
-					Name:      "pod",
-					UID:       podUID,
-					Labels: map[string]string{
-						LabelParentType: "proxygroup",
-						LabelParentName: "dev",
-					},
+				Namespace: "operator-ns",
+				Name:      "pod",
+				UID:       podUID,
+				Labels: map[string]string{
+					LabelParentType: "proxygroup",
+					LabelParentName: "dev",
 				},
 				Spec: corev1.PodSpec{
 					ReadinessGates: []corev1.PodReadinessGate{{
@@ -80,7 +78,7 @@ func TestEgressPodReadiness(t *testing.T) {
 				},
 			}
 			pg := &tsapi.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{Name: "dev"},
+				Name: "dev",
 				Spec: tsapi.ProxyGroupSpec{
 					Type:     "egress",
 					Replicas: new(int32(3)),
@@ -125,11 +123,9 @@ func TestEgressPodReadiness(t *testing.T) {
 // newSvc returns an egress ClusterIP Service for the "dev" ProxyGroup.
 func newSvc(name string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "operator-ns",
-			Name:      name,
-			Labels:    egressLabels(),
-		},
+		Namespace: "operator-ns",
+		Name:      name,
+		Labels:    egressLabels(),
 	}
 }
 
@@ -139,11 +135,9 @@ func newEps(svcName string, addrType discoveryv1.AddressType, podUIDs ...string)
 	lbls := egressLabels()
 	lbls[discoveryv1.LabelServiceName] = svcName
 	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "operator-ns",
-			Name:      svcName + "-" + string(addrType),
-			Labels:    lbls,
-		},
+		Namespace:   "operator-ns",
+		Name:        svcName + "-" + string(addrType),
+		Labels:      lbls,
 		AddressType: addrType,
 	}
 	for _, uid := range podUIDs {

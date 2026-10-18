@@ -27,9 +27,7 @@ func TestConnectorExitNode(t *testing.T) {
 	t.Parallel()
 
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("exit-node"),
-		},
+		Name: generateName("exit-node"),
 		Spec: tsapi.ConnectorSpec{
 			ExitNode:   true,
 			ProxyClass: "default",
@@ -76,9 +74,7 @@ func TestConnectorAppConnector(t *testing.T) {
 	const route = "10.50.0.0/16"
 
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("app-connector"),
-		},
+		Name: generateName("app-connector"),
 		Spec: tsapi.ConnectorSpec{
 			AppConnector: &tsapi.AppConnector{
 				Routes: []tsapi.Route{route},
@@ -123,9 +119,7 @@ func TestConnectorSubnetRouter(t *testing.T) {
 	const route = "10.40.0.0/14"
 
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("subnet-router"),
-		},
+		Name: generateName("subnet-router"),
 		Spec: tsapi.ConnectorSpec{
 			SubnetRouter: &tsapi.SubnetRouter{
 				AdvertiseRoutes: []tsapi.Route{route},
@@ -170,9 +164,7 @@ func TestConnectorMultiTailnet(t *testing.T) {
 	t.Parallel()
 
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("connector-multi-tn"),
-		},
+		Name: generateName("connector-multi-tn"),
 		Spec: tsapi.ConnectorSpec{
 			Tailnet:    "second-tailnet",
 			ExitNode:   true,
@@ -222,9 +214,7 @@ func TestConnectorStaticEndpoints(t *testing.T) {
 	pc := applyStaticEndpointsProxyClass(t, ports)
 
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("static-endpoints"),
-		},
+		Name: generateName("static-endpoints"),
 		Spec: tsapi.ConnectorSpec{
 			// A route in 10.0.0.0/8 so it is auto-approved by the ACL in acl.hujson.
 			SubnetRouter: &tsapi.SubnetRouter{
@@ -241,7 +231,7 @@ func TestConnectorStaticEndpoints(t *testing.T) {
 	verifyStaticEndpoints(t, "connector", cn.Name, 2, ports, externalIPs, devices)
 
 	// Scaling down must delete the NodePort Service of the removed replica.
-	patchObject(t, &tsapi.Connector{ObjectMeta: metav1.ObjectMeta{Name: cn.Name}}, func(cn *tsapi.Connector) {
+	patchObject(t, &tsapi.Connector{Name: cn.Name}, func(cn *tsapi.Connector) {
 		cn.Spec.Replicas = new(int32(1))
 	})
 	waitForNodePortServices(t, "connector", cn.Name, 1)
@@ -328,7 +318,7 @@ func waitForConnectorDevices(t *testing.T, name string, replicas int, wantStatic
 
 	var devices []staticEndpointsDevice
 	if err := tstest.WaitFor(5*time.Minute, func() error {
-		cn := &tsapi.Connector{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		cn := &tsapi.Connector{Name: name}
 		if err := get(t.Context(), kubeClient, cn); err != nil {
 			return err
 		}

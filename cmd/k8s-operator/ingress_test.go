@@ -152,11 +152,9 @@ func TestTailscaleIngressHostname(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 	mustCreate(t, fc, &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fullName,
-			Namespace: "operator-ns",
-			UID:       "test-uid",
-		},
+		Name:      fullName,
+		Namespace: "operator-ns",
+		UID:       "test-uid",
 	})
 	opts := configOpts{
 		stsName:    shortName,
@@ -241,7 +239,7 @@ func TestTailscaleIngressHostname(t *testing.T) {
 func TestTailscaleIngressWithProxyClass(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Name: "custom-metadata",
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
 			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
@@ -349,8 +347,8 @@ func TestTailscaleIngressWithProxyClass(t *testing.T) {
 
 func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "metrics", Generation: 1},
-		Spec:       tsapi.ProxyClassSpec{},
+		Name: "metrics", Generation: 1,
+		Spec: tsapi.ProxyClassSpec{},
 		Status: tsapi.ProxyClassStatus{
 			Conditions: []metav1.Condition{{
 				Status:             metav1.ConditionTrue,
@@ -359,7 +357,7 @@ func TestTailscaleIngressWithServiceMonitor(t *testing.T) {
 			}},
 		},
 	}
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{Name: serviceMonitorCRD}
 
 	// Create fake client with ProxyClass, IngressClass, Ingress with metrics ProxyClass, and Service
 	ing := ingress()
@@ -732,11 +730,9 @@ func TestEmptyPath(t *testing.T) {
 
 			fullName, shortName := findGenName(t, fc, "default", "test", "ingress")
 			mustCreate(t, fc, &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fullName,
-					Namespace: "operator-ns",
-					UID:       "test-uid",
-				},
+				Name:      fullName,
+				Namespace: "operator-ns",
+				UID:       "test-uid",
 			})
 			opts := configOpts{
 				stsName:    shortName,
@@ -766,17 +762,15 @@ func TestEmptyPath(t *testing.T) {
 
 func ingressClass() *networkingv1.IngressClass {
 	return &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "tailscale"},
-		Spec:       networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
+		Name: "tailscale",
+		Spec: networkingv1.IngressClassSpec{Controller: "tailscale.com/ts-ingress"},
 	}
 }
 
 func service() *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-		},
+		Name:      "test",
+		Namespace: "default",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "1.2.3.4",
 			Ports: []corev1.ServicePort{
@@ -791,12 +785,10 @@ func service() *corev1.Service {
 
 func ingress() *networkingv1.Ingress {
 	return &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       "1234-UID",
-		},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test",
+		Namespace: "default",
+		UID:       "1234-UID",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 			DefaultBackend:   backend(),
@@ -809,21 +801,17 @@ func ingress() *networkingv1.Ingress {
 
 func ingressWithPaths(paths []networkingv1.HTTPIngressPath) *networkingv1.Ingress {
 	return &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-		},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 			Rules: []networkingv1.IngressRule{
 				{
 					Host: "foo.tailnetxyz.ts.net",
-					IngressRuleValue: networkingv1.IngressRuleValue{
-						HTTP: &networkingv1.HTTPIngressRuleValue{
-							Paths: paths,
-						},
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: paths,
 					},
 				},
 			},
@@ -952,10 +940,8 @@ func TestTailscaleIngressIPv6(t *testing.T) {
 
 	// Create a Service with an IPv6 ClusterIP
 	ipv6Svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ipv6",
-			Namespace: "default",
-		},
+		Name:      "test-ipv6",
+		Namespace: "default",
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "fda9:e575:6e22:2::25",
 			Ports: []corev1.ServicePort{
@@ -970,12 +956,10 @@ func TestTailscaleIngressIPv6(t *testing.T) {
 
 	// Create an Ingress that routes to the IPv6 service
 	ing := &networkingv1.Ingress{
-		TypeMeta: metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ipv6",
-			Namespace: "default",
-			UID:       "1234-UID-IPV6",
-		},
+		Kind: "Ingress", APIVersion: "networking.k8s.io/v1",
+		Name:      "test-ipv6",
+		Namespace: "default",
+		UID:       "1234-UID-IPV6",
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 			DefaultBackend: &networkingv1.IngressBackend{

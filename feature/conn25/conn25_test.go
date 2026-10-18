@@ -1479,14 +1479,12 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 							TTL:   wantTTL,
 						},
 						Body: &dnsmessage.HTTPSResource{
-							SVCBResource: dnsmessage.SVCBResource{
-								Priority: 1,
-								Target:   dnsMessageName,
-								Params: []dnsmessage.SVCParam{
-									{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
-									{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
-									{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
-								},
+							Priority: 1,
+							Target:   dnsMessageName,
+							Params: []dnsmessage.SVCParam{
+								{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
+								{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
+								{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
 							},
 						},
 					},
@@ -2219,14 +2217,12 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 							TTL:   300,
 						},
 						Body: &dnsmessage.HTTPSResource{
-							SVCBResource: dnsmessage.SVCBResource{
-								Priority: 1,
-								Target:   dnsMessageName,
-								Params: []dnsmessage.SVCParam{
-									{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
-									{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
-									{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
-								},
+							Priority: 1,
+							Target:   dnsMessageName,
+							Params: []dnsmessage.SVCParam{
+								{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
+								{Key: dnsmessage.SVCParamIPv4Hint, Value: netip.MustParseAddr("1.2.3.4").AsSlice()},
+								{Key: dnsmessage.SVCParamIPv6Hint, Value: netip.MustParseAddr("2606:4700::6812:1a78").AsSlice()},
 							},
 						},
 					},
@@ -2236,12 +2232,10 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			assertFx: func(t *testing.T, bs []byte) {
 				want := []dnsmessage.HTTPSResource{
 					{
-						SVCBResource: dnsmessage.SVCBResource{
-							Priority: 1,
-							Target:   dnsMessageName,
-							Params: []dnsmessage.SVCParam{
-								{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
-							},
+						Priority: 1,
+						Target:   dnsMessageName,
+						Params: []dnsmessage.SVCParam{
+							{Key: dnsmessage.SVCParamALPN, Value: []byte{0x02, 'h', '2'}},
 						},
 					},
 				}

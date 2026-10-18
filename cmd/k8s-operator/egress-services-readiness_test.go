@@ -38,36 +38,28 @@ func TestEgressServiceReadiness(t *testing.T) {
 	}
 	tailnetFQDN := "my-app.tailnetxyz.ts.net"
 	egressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "dev",
-			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: tailnetFQDN,
-			},
+		Name:      "my-app",
+		Namespace: "dev",
+		Annotations: map[string]string{
+			AnnotationProxyGroup:        "dev",
+			AnnotationTailnetTargetFQDN: tailnetFQDN,
 		},
 	}
 	fakeClusterIPSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
-		},
-		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1"}},
+		Name:      "my-app",
+		Namespace: "operator-ns",
+		Labels:    egressSvcChildResourceLabels(egressSvc),
+		Spec:      corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1"}},
 	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:        "my-app",
+		Namespace:   "operator-ns",
+		Labels:      labels,
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "dev",
-		},
+		Name: "dev",
 	}
 	mustCreate(t, fc, egressSvc)
 	mustCreate(t, fc, fakeClusterIPSvc)
@@ -140,45 +132,35 @@ func TestEgressServiceReadinessDualStack(t *testing.T) {
 	}
 	tailnetFQDN := "my-app.tailnetxyz.ts.net"
 	egressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "dev",
-			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: tailnetFQDN,
-			},
+		Name:      "my-app",
+		Namespace: "dev",
+		Annotations: map[string]string{
+			AnnotationProxyGroup:        "dev",
+			AnnotationTailnetTargetFQDN: tailnetFQDN,
 		},
 	}
 	fakeClusterIPSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
-		},
-		Spec: corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1", "fd00::1"}},
+		Name:      "my-app",
+		Namespace: "operator-ns",
+		Labels:    egressSvcChildResourceLabels(egressSvc),
+		Spec:      corev1.ServiceSpec{ClusterIPs: []string{"10.0.0.1", "fd00::1"}},
 	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	epsV4 := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app-ipv4",
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:        "my-app-ipv4",
+		Namespace:   "operator-ns",
+		Labels:      labels,
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
 	labelsV6 := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	epsV6 := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app-ipv6",
-			Namespace: "operator-ns",
-			Labels:    labelsV6,
-		},
+		Name:        "my-app-ipv6",
+		Namespace:   "operator-ns",
+		Labels:      labelsV6,
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "dev",
-		},
+		Name: "dev",
 		Spec: tsapi.ProxyGroupSpec{
 			Replicas: new(int32(1)),
 			Type:     tsapi.ProxyGroupTypeEgress,
@@ -247,36 +229,28 @@ func TestEgressServiceReadinessIPv6Only(t *testing.T) {
 		clock:       cl,
 	}
 	egressSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "dev",
-			Annotations: map[string]string{
-				AnnotationProxyGroup:        "dev",
-				AnnotationTailnetTargetFQDN: "my-app.tailnetxyz.ts.net",
-			},
+		Name:      "my-app",
+		Namespace: "dev",
+		Annotations: map[string]string{
+			AnnotationProxyGroup:        "dev",
+			AnnotationTailnetTargetFQDN: "my-app.tailnetxyz.ts.net",
 		},
 	}
 	fakeClusterIPSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "operator-ns",
-			Labels:    egressSvcChildResourceLabels(egressSvc),
-		},
-		Spec: corev1.ServiceSpec{ClusterIPs: []string{"fd00::1"}},
+		Name:      "my-app",
+		Namespace: "operator-ns",
+		Labels:    egressSvcChildResourceLabels(egressSvc),
+		Spec:      corev1.ServiceSpec{ClusterIPs: []string{"fd00::1"}},
 	}
 	labels := egressSvcEpsLabels(egressSvc, fakeClusterIPSvc)
 	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app-ipv6",
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:        "my-app-ipv6",
+		Namespace:   "operator-ns",
+		Labels:      labels,
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "dev",
-		},
+		Name: "dev",
 	}
 	mustCreate(t, fc, egressSvc)
 	mustCreate(t, fc, fakeClusterIPSvc)
@@ -320,11 +294,9 @@ func ipv6OnlyPod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
 	labels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
 	ip := fmt.Sprintf("fd00::%d", ordinal+1) // +1 to avoid fd00::0 normalization issues
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%d", pg.Name, ordinal),
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:      fmt.Sprintf("%s-%d", pg.Name, ordinal),
+		Namespace: "operator-ns",
+		Labels:    labels,
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{{IP: ip}},
 		},
@@ -370,11 +342,9 @@ func pod(pg *tsapi.ProxyGroup, ordinal int32) *corev1.Pod {
 	labels[appsv1.PodIndexLabel] = fmt.Sprintf("%d", ordinal)
 	ip := fmt.Sprintf("10.0.0.%d", ordinal)
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%d", pg.Name, ordinal),
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:      fmt.Sprintf("%s-%d", pg.Name, ordinal),
+		Namespace: "operator-ns",
+		Labels:    labels,
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{{IP: ip}},
 		},

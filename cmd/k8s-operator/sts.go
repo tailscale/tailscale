@@ -318,11 +318,9 @@ func (r *tailscaleSTSReconciler) reconcileStaticEndpoints(ctx context.Context, s
 // NodePort Services must not match it.
 func nodePortService(sts *tailscaleSTSConfig, hsvc *corev1.Service, ordinal int32, name, namespace string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels:    reconciler.Labels(sts.proxyType, sts.ParentResourceName, ""),
-		},
+		Name:      name,
+		Namespace: namespace,
+		Labels:    reconciler.Labels(sts.proxyType, sts.ParentResourceName, ""),
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeNodePort,
 			Ports: []corev1.ServicePort{
@@ -495,11 +493,9 @@ func statefulSetNameBase(parent string) string {
 func (r *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	nameBase := statefulSetNameBase(sts.ParentResourceName)
 	hsvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: nameBase,
-			Namespace:    r.operatorNamespace,
-			Labels:       sts.ChildResourceLabels,
-		},
+		GenerateName: nameBase,
+		Namespace:    r.operatorNamespace,
+		Labels:       sts.ChildResourceLabels,
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
 			Selector: map[string]string{
@@ -519,11 +515,9 @@ func (r *tailscaleSTSReconciler) provisionSecrets(ctx context.Context, tsClient 
 	// up a StatefulSet.
 	for i := range stsC.Replicas {
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%d", hsvc.Name, i),
-				Namespace: r.operatorNamespace,
-				Labels:    stsC.ChildResourceLabels,
-			},
+			Name:      fmt.Sprintf("%s-%d", hsvc.Name, i),
+			Namespace: r.operatorNamespace,
+			Labels:    stsC.ChildResourceLabels,
 		}
 
 		// If we only have a single replica, use the hostname verbatim. Otherwise, use the hostname prefix and add
@@ -893,10 +887,8 @@ func (r *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	for i, secret := range proxySecrets {
 		configVolume := corev1.Volume{
 			Name: "tailscaledconfig-" + strconv.Itoa(i),
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: secret,
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: secret,
 			},
 		}
 
@@ -956,11 +948,9 @@ func (r *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 
 			pod.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 				Name: "serve-config-" + strconv.Itoa(i),
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: secret,
-						Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
-					},
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: secret,
+					Items:      []corev1.KeyToPath{{Key: "serve-config", Path: "serve-config"}},
 				},
 			})
 		}

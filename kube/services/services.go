@@ -21,9 +21,7 @@ import (
 func EnsureServicesAdvertised(ctx context.Context, services []string, lc localclient.LocalClient, logf logger.Logf) error {
 	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseServices: services,
-		},
+		AdvertiseServices:    services,
 	}); err != nil {
 		// EditPrefs only returns an error if it fails _set_ its local prefs.
 		// If it fails to _persist_ the prefs in state, we don't get an error
@@ -68,9 +66,7 @@ func EnsureServicesNotAdvertised(ctx context.Context, lc *local.Client, logf log
 	logf("unadvertising services: %v", prefs.AdvertiseServices)
 	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseServices: nil,
-		},
+		AdvertiseServices:    nil,
 	}); err != nil {
 		// EditPrefs only returns an error if it fails _set_ its local prefs.
 		// If it fails to _persist_ the prefs in state, we don't get an error

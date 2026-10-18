@@ -42,13 +42,11 @@ func Test_client_Event(t *testing.T) {
 					wantsMethod: "POST",
 					wantsURL:    "test-apiserver/api/v1/namespaces/test-ns/events",
 					wantsIn: &kubeapi.Event{
-						ObjectMeta: kubeapi.ObjectMeta{
-							Name:      "test-pod.test-uid.testreason",
-							Namespace: "test-ns",
-						},
-						Type:    "Normal",
-						Reason:  "TestReason",
-						Message: "TestMessage",
+						Name:      "test-pod.test-uid.testreason",
+						Namespace: "test-ns",
+						Type:      "Normal",
+						Reason:    "TestReason",
+						Message:   "TestMessage",
 						Source: kubeapi.EventSource{
 							Component: "test-client",
 						},

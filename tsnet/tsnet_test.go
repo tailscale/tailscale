@@ -446,9 +446,7 @@ func TestConn(t *testing.T) {
 	lc1 := must.Get(s1.LocalClient())
 
 	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
-		},
+		AdvertiseRoutes:    []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
 		AdvertiseRoutesSet: true,
 	}))
 	c.SetSubnetRoutes(s1PubKey, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
@@ -460,9 +458,7 @@ func TestConn(t *testing.T) {
 	lc2 := must.Get(s2.LocalClient())
 
 	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			RouteAll: true,
-		},
+		RouteAll:    true,
 		RouteAllSet: true,
 	}))
 
@@ -595,9 +591,7 @@ func TestDialThroughExitNode(t *testing.T) {
 
 	lc1 := must.Get(s1.LocalClient())
 	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: tsaddr.ExitRoutes(),
-		},
+		AdvertiseRoutes:    tsaddr.ExitRoutes(),
 		AdvertiseRoutesSet: true,
 	}))
 	c.SetSubnetRoutes(s1PubKey, tsaddr.ExitRoutes())
@@ -613,9 +607,7 @@ func TestDialThroughExitNode(t *testing.T) {
 	must.Get(lc2.Ping(pingCtx, s1ip, tailcfg.PingTSMP))
 
 	must.Get(lc2.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ExitNodeID: c.Node(s1PubKey).StableID,
-		},
+		ExitNodeID:    c.Node(s1PubKey).StableID,
 		ExitNodeIDSet: true,
 	}))
 
@@ -1154,9 +1146,7 @@ func setUpServiceState(t *testing.T, name, ip string, host, client *Server,
 	// (RouteAll is equivalent to --accept-routes).
 	must.Get(client.localClient.EditPrefs(t.Context(), &ipn.MaskedPrefs{
 		RouteAllSet: true,
-		Prefs: ipn.Prefs{
-			RouteAll: true,
-		},
+		RouteAll:    true,
 	}))
 
 	// Do the test's extra setup before configuring DNS. This allows
@@ -2007,7 +1997,7 @@ func TestPingSubnetRouteOfDeltaPeer(t *testing.T) {
 	// install the route locally even with the fix.
 	lc1 := must.Get(s1.LocalClient())
 	must.Get(lc1.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:       ipn.Prefs{RouteAll: true},
+		RouteAll:    true,
 		RouteAllSet: true,
 	}))
 
@@ -2524,13 +2514,11 @@ func TestUserMetricsRouteGauges(t *testing.T) {
 	defer s2.Close()
 
 	s1.lb.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: []netip.Prefix{
-				netip.MustParsePrefix("192.0.2.0/24"),
-				netip.MustParsePrefix("192.0.3.0/24"),
-				netip.MustParsePrefix("192.0.5.1/32"),
-				netip.MustParsePrefix("0.0.0.0/0"),
-			},
+		AdvertiseRoutes: []netip.Prefix{
+			netip.MustParsePrefix("192.0.2.0/24"),
+			netip.MustParsePrefix("192.0.3.0/24"),
+			netip.MustParsePrefix("192.0.5.1/32"),
+			netip.MustParsePrefix("0.0.0.0/0"),
 		},
 		AdvertiseRoutesSet: true,
 	})
@@ -3501,20 +3489,16 @@ func buildDNSQuery(name string, srcIP netip.Addr) []byte {
 
 	if srcIP.Is4() {
 		h := packet.UDP4Header{
-			IP4Header: packet.IP4Header{
-				Src: srcIP,
-				Dst: netip.MustParseAddr("100.100.100.100"),
-			},
+			Src:     srcIP,
+			Dst:     netip.MustParseAddr("100.100.100.100"),
 			SrcPort: 12345,
 			DstPort: 53,
 		}
 		return packet.Generate(h, dns)
 	}
 	h := packet.UDP6Header{
-		IP6Header: packet.IP6Header{
-			Src: srcIP,
-			Dst: netip.MustParseAddr("fd7a:115c:a1e0::53"),
-		},
+		Src:     srcIP,
+		Dst:     netip.MustParseAddr("fd7a:115c:a1e0::53"),
 		SrcPort: 12345,
 		DstPort: 53,
 	}

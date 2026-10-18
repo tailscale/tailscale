@@ -40,14 +40,10 @@ func TestConnector(t *testing.T) {
 	// Create a Connector that defines a Tailscale node that advertises
 	// 10.40.0.0/14 route and acts as an exit node.
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.com/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.com/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
@@ -183,14 +179,10 @@ func TestConnector(t *testing.T) {
 
 	// Create a Connector that advertises a route and is not an exit node.
 	cn = &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.io/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.io/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
@@ -239,21 +231,17 @@ func TestConnector(t *testing.T) {
 func TestConnectorWithProxyClass(t *testing.T) {
 	// Setup
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Name: "custom-metadata",
 		Spec: tsapi.ProxyClassSpec{StatefulSet: &tsapi.StatefulSet{
 			Labels:      tsapi.Labels{"foo": "bar"},
 			Annotations: map[string]string{"bar.io/foo": "some-val"},
 			Pod:         &tsapi.Pod{Annotations: map[string]string{"foo.io/bar": "some-val"}}}},
 	}
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.io/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.io/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas: new(int32(1)),
 			SubnetRouter: &tsapi.SubnetRouter{
@@ -343,14 +331,10 @@ func TestConnectorWithProxyClass(t *testing.T) {
 func TestConnectorWithAppConnector(t *testing.T) {
 	// Setup
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.io/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.io/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas:     new(int32(1)),
 			AppConnector: &tsapi.AppConnector{},
@@ -442,14 +426,10 @@ func TestConnectorWithAppConnector(t *testing.T) {
 
 func TestConnectorWithMultipleReplicas(t *testing.T) {
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.io/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.io/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas:       new(int32(3)),
 			AppConnector:   &tsapi.AppConnector{},
@@ -533,7 +513,7 @@ func TestConnectorWithMultipleReplicas(t *testing.T) {
 
 func TestConnectorWithStaticEndpoints(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "static-endpoints"},
+		Name: "static-endpoints",
 		Spec: tsapi.ProxyClassSpec{
 			StaticEndpoints: &tsapi.StaticEndpointsConfig{
 				NodePort: &tsapi.NodePortConfig{
@@ -544,14 +524,10 @@ func TestConnectorWithStaticEndpoints(t *testing.T) {
 		},
 	}
 	cn := &tsapi.Connector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			UID:  types.UID("1234-UID"),
-		},
-		TypeMeta: metav1.TypeMeta{
-			Kind:       tsapi.ConnectorKind,
-			APIVersion: "tailscale.com/v1alpha1",
-		},
+		Name:       "test",
+		UID:        types.UID("1234-UID"),
+		Kind:       tsapi.ConnectorKind,
+		APIVersion: "tailscale.com/v1alpha1",
 		Spec: tsapi.ConnectorSpec{
 			Replicas:       new(int32(2)),
 			HostnamePrefix: "test-connector",
@@ -561,20 +537,23 @@ func TestConnectorWithStaticEndpoints(t *testing.T) {
 	}
 	nodes := []*corev1.Node{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"zone": "eu"}},
+			Name:   "node-a",
+			Labels: map[string]string{"zone": "eu"},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 				{Type: corev1.NodeInternalIP, Address: "10.0.0.1"},
 				{Type: corev1.NodeExternalIP, Address: "152.88.10.11"},
 			}},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"zone": "eu"}},
+			Name:   "node-b",
+			Labels: map[string]string{"zone": "eu"},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 				{Type: corev1.NodeExternalIP, Address: "152.88.10.12"},
 			}},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-c", Labels: map[string]string{"zone": "us"}},
+			Name:   "node-c",
+			Labels: map[string]string{"zone": "us"},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 				{Type: corev1.NodeExternalIP, Address: "152.88.10.13"},
 			}},

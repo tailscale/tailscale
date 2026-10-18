@@ -681,10 +681,8 @@ func parsed(proto ipproto.Proto, src, dst string, sport, dport uint16) packet.Pa
 
 func raw6(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLen int) []byte {
 	u := packet.UDP6Header{
-		IP6Header: packet.IP6Header{
-			Src: mustIP(src),
-			Dst: mustIP(dst),
-		},
+		Src:     mustIP(src),
+		Dst:     mustIP(dst),
 		SrcPort: sport,
 		DstPort: dport,
 	}
@@ -710,10 +708,8 @@ func raw6(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLen int
 
 func raw4(proto ipproto.Proto, src, dst string, sport, dport uint16, trimLength int) []byte {
 	u := packet.UDP4Header{
-		IP4Header: packet.IP4Header{
-			Src: mustIP(src),
-			Dst: mustIP(dst),
-		},
+		Src:     mustIP(src),
+		Dst:     mustIP(dst),
 		SrcPort: sport,
 		DstPort: dport,
 	}

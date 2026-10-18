@@ -162,16 +162,14 @@ func (e *extension) onAllocReq(req magicsock.UDPRelayAllocReq) {
 		ReqRxFromNodeKey:  req.RxFromNodeKey,
 		ReqRxFromDiscoKey: req.RxFromDiscoKey,
 		Message: &disco.AllocateUDPRelayEndpointResponse{
-			Generation: req.Message.Generation,
-			UDPRelayEndpoint: disco.UDPRelayEndpoint{
-				ServerDisco:         se.ServerDisco,
-				ClientDisco:         se.ClientDisco,
-				LamportID:           se.LamportID,
-				VNI:                 se.VNI,
-				BindLifetime:        se.BindLifetime.Duration,
-				SteadyStateLifetime: se.SteadyStateLifetime.Duration,
-				AddrPorts:           se.AddrPorts,
-			},
+			Generation:          req.Message.Generation,
+			ServerDisco:         se.ServerDisco,
+			ClientDisco:         se.ClientDisco,
+			LamportID:           se.LamportID,
+			VNI:                 se.VNI,
+			BindLifetime:        se.BindLifetime.Duration,
+			SteadyStateLifetime: se.SteadyStateLifetime.Duration,
+			AddrPorts:           se.AddrPorts,
 		},
 	})
 }

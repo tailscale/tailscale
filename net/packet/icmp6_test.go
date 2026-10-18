@@ -12,13 +12,11 @@ import (
 
 func TestICMPv6PingResponse(t *testing.T) {
 	pingHdr := ICMP6Header{
-		IP6Header: IP6Header{
-			Src:     netip.MustParseAddr("1::1"),
-			Dst:     netip.MustParseAddr("2::2"),
-			IPProto: ipproto.ICMPv6,
-		},
-		Type: ICMP6EchoRequest,
-		Code: ICMP6NoCode,
+		Src:     netip.MustParseAddr("1::1"),
+		Dst:     netip.MustParseAddr("2::2"),
+		IPProto: ipproto.ICMPv6,
+		Type:    ICMP6EchoRequest,
+		Code:    ICMP6NoCode,
 	}
 
 	// echoReqLen is 2 bytes identifier + 2 bytes seq number.

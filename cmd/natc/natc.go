@@ -306,9 +306,7 @@ func ula(siteID uint16) netip.Prefix {
 func (c *connector) run(ctx context.Context, lc *local.Client) {
 	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: append(c.routes.Prefixes(), c.v6ULA),
-		},
+		AdvertiseRoutes:    append(c.routes.Prefixes(), c.v6ULA),
 	}); err != nil {
 		log.Fatalf("failed to advertise routes: %v", err)
 	}

@@ -340,9 +340,7 @@ func handleC2NSetNetfilterKind(b *LocalBackend, w http.ResponseWriter, r *http.R
 
 	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		NetfilterKindSet: true,
-		Prefs: ipn.Prefs{
-			NetfilterKind: kind,
-		},
+		NetfilterKind:    kind,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

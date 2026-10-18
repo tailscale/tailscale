@@ -42,7 +42,6 @@ import (
 	"helm.sh/helm/v3/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -396,8 +395,9 @@ func runTests(m *testing.M) (int, error) {
 		testCAPEM = bytes.Join([][]byte{pebbleMiniCACert, pebbleCAChain}, []byte("\n"))
 	}
 	caCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: testCAsConfigMap, Namespace: ns},
-		Data:       map[string]string{testCAsConfigMapKey: string(testCAPEM)},
+		Name:      testCAsConfigMap,
+		Namespace: ns,
+		Data:      map[string]string{testCAsConfigMapKey: string(testCAPEM)},
 	}
 	if err := createOrUpdate(ctx, kubeClient, caCM); err != nil {
 		return 0, fmt.Errorf("failed to publish test CAs ConfigMap: %w", err)
@@ -627,11 +627,9 @@ func runTests(m *testing.M) (int, error) {
 		secretData["client_secret"] = []byte(secondOperatorCreds.clientSecret)
 	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "second-tailnet-credentials",
-			Namespace: "tailscale",
-		},
-		Data: secretData,
+		Name:      "second-tailnet-credentials",
+		Namespace: "tailscale",
+		Data:      secretData,
 	}
 	if err := createOrUpdate(ctx, kubeClient, secret); err != nil {
 		return 0, fmt.Errorf("failed to create second-tailnet-credentials Secret: %w", err)
@@ -640,9 +638,7 @@ func runTests(m *testing.M) (int, error) {
 
 	// Create the Tailnet resource.
 	tn := &tsapi.Tailnet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "second-tailnet",
-		},
+		Name: "second-tailnet",
 		Spec: tsapi.TailnetSpec{
 			LoginURL: clusterLoginServer,
 			Credentials: tsapi.TailnetCredentials{
@@ -802,13 +798,9 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 		}
 	}
 	pc := &tsapi.ProxyClass{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: tsapi.SchemeGroupVersion.String(),
-			Kind:       tsapi.ProxyClassKind,
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "default",
-		},
+		APIVersion: tsapi.SchemeGroupVersion.String(),
+		Kind:       tsapi.ProxyClassKind,
+		Name:       "default",
 		Spec: tsapi.ProxyClassSpec{
 			UseLetsEncryptStagingEnvironment: !*fDevcontrol,
 			StatefulSet: &tsapi.StatefulSet{
@@ -853,8 +845,8 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 
 func deployNameserver(ctx context.Context, logger *zap.SugaredLogger, cl client.Client, img *tsapi.NameserverImage) (*tsapi.DNSConfig, error) {
 	dc := &tsapi.DNSConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "dns"},
-		Spec:       tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
+		Name: "dns",
+		Spec: tsapi.DNSConfigSpec{Nameserver: &tsapi.Nameserver{Image: img}},
 	}
 	if err := createOrUpdate(ctx, cl, dc); err != nil {
 		return nil, fmt.Errorf("failed to create DNSConfig: %w", err)
@@ -903,7 +895,10 @@ ts.net:53 {
 }
 
 func getDNSConfigMap(ctx context.Context, name string) *corev1.ConfigMap {
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: name}}
+	cm := &corev1.ConfigMap{
+		Namespace: "kube-system",
+		Name:      name,
+	}
 	if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil {
 		return nil
 	}
@@ -1102,10 +1097,8 @@ func createOrUpdate(ctx context.Context, cl client.Client, obj client.Object) er
 // the IP families the API server assigns.
 func detectClusterIPFamilies(ctx context.Context, logger *zap.SugaredLogger, cl client.Client) error {
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ipfamily-probe",
-			Namespace: ns,
-		},
+		Name:      "ipfamily-probe",
+		Namespace: ns,
 		Spec: corev1.ServiceSpec{
 			Type:           corev1.ServiceTypeClusterIP,
 			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),

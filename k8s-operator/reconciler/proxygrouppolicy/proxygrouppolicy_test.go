@@ -40,11 +40,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExistingResources: []client.Object{
 				&tsapi.ProxyGroupPolicy{
-					TypeMeta: metav1.TypeMeta{},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "deny-all",
-						Namespace: metav1.NamespaceDefault,
-					},
+					TypeMeta:  metav1.TypeMeta{},
+					Name:      "deny-all",
+					Namespace: metav1.NamespaceDefault,
 					Spec: tsapi.ProxyGroupPolicySpec{
 						Ingress: []string{},
 						Egress:  []string{},
@@ -63,22 +61,18 @@ func TestReconciler_Reconcile(t *testing.T) {
 			},
 			ExistingResources: []client.Object{
 				&tsapi.ProxyGroupPolicy{
-					TypeMeta: metav1.TypeMeta{},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "deny-all",
-						Namespace: metav1.NamespaceDefault,
-					},
+					TypeMeta:  metav1.TypeMeta{},
+					Name:      "deny-all",
+					Namespace: metav1.NamespaceDefault,
 					Spec: tsapi.ProxyGroupPolicySpec{
 						Ingress: []string{},
 						Egress:  []string{},
 					},
 				},
 				&tsapi.ProxyGroupPolicy{
-					TypeMeta: metav1.TypeMeta{},
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "allow-one",
-						Namespace: metav1.NamespaceDefault,
-					},
+					TypeMeta:  metav1.TypeMeta{},
+					Name:      "allow-one",
+					Namespace: metav1.NamespaceDefault,
 					Spec: tsapi.ProxyGroupPolicySpec{
 						Ingress: []string{
 							"test-ingress",

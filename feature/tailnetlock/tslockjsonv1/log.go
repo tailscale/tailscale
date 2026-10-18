@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"tailscale.com/cmd/tailscale/jsonoutput"
 	"tailscale.com/cmd/tailscale/tslockjsonv1"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
@@ -27,10 +26,8 @@ import (
 func LogResponse(updates []ipnstate.NetworkLockUpdate) (tslockjsonv1.LogResponse, error) {
 	var zero tslockjsonv1.LogResponse
 	resp := tslockjsonv1.LogResponse{
-		ResponseEnvelope: jsonoutput.ResponseEnvelope{
-			SchemaVersion: "1",
-		},
-		Messages: make([]tslockjsonv1.LogMessage, len(updates)),
+		SchemaVersion: "1",
+		Messages:      make([]tslockjsonv1.LogMessage, len(updates)),
 	}
 
 	for i, update := range updates {

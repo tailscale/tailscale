@@ -98,11 +98,9 @@ func reconcileMetricsResources(ctx context.Context, logger *zap.SugaredLogger, o
 		return maybeCleanupMetricsResources(ctx, opts, cl)
 	}
 	metricsSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      metricsResourceName(opts.proxyStsName),
-			Namespace: opts.tsNamespace,
-			Labels:    metricsResourceLabels(opts),
-		},
+		Name:      metricsResourceName(opts.proxyStsName),
+		Namespace: opts.tsNamespace,
+		Labels:    metricsResourceLabels(opts),
 		Spec: corev1.ServiceSpec{
 			Selector: opts.proxyLabels,
 			Type:     corev1.ServiceTypeClusterIP,
@@ -275,14 +273,10 @@ func metricsSvcSelector(proxyLabels map[string]string, proxyType string) map[str
 // can be used in kube API server calls via the c/r client.
 func serviceMonitorTemplate(name, ns string) *ServiceMonitor {
 	return &ServiceMonitor{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ServiceMonitor",
-			APIVersion: "monitoring.coreos.com/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
+		Kind:       "ServiceMonitor",
+		APIVersion: "monitoring.coreos.com/v1",
+		Name:       name,
+		Namespace:  ns,
 	}
 }
 

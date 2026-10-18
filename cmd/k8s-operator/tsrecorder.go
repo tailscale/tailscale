@@ -545,10 +545,8 @@ func (r *RecorderReconciler) validate(ctx context.Context, tsr *tsapi.Recorder) 
 
 func (r *RecorderReconciler) getStateSecret(ctx context.Context, tsrName string, replica int32) (*corev1.Secret, error) {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: r.tsNamespace,
-			Name:      fmt.Sprintf("%s-%d", tsrName, replica),
-		},
+		Namespace: r.tsNamespace,
+		Name:      fmt.Sprintf("%s-%d", tsrName, replica),
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
 		if apierrors.IsNotFound(err) {

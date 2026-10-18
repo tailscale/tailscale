@@ -84,24 +84,16 @@ func (r *Reconciler) delete(ctx context.Context, namespace string) (reconcile.Re
 
 	objects := []client.Object{
 		&admr.ValidatingAdmissionPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ingress,
-			},
+			Name: ingress,
 		},
 		&admr.ValidatingAdmissionPolicyBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ingress,
-			},
+			Name: ingress,
 		},
 		&admr.ValidatingAdmissionPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: egress,
-			},
+			Name: egress,
 		},
 		&admr.ValidatingAdmissionPolicyBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: egress,
-			},
+			Name: egress,
 		},
 	}
 
@@ -237,10 +229,8 @@ func (r *Reconciler) generateIngressPolicy(ctx context.Context, namespace string
 	}
 
 	return &admr.ValidatingAdmissionPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			ResourceVersion: policy.ResourceVersion,
-		},
+		Name:            name,
+		ResourceVersion: policy.ResourceVersion,
 		Spec: admr.ValidatingAdmissionPolicySpec{
 			FailurePolicy: new(admr.Fail),
 			MatchConstraints: &admr.MatchResources{
@@ -249,30 +239,22 @@ func (r *Reconciler) generateIngressPolicy(ctx context.Context, namespace string
 				// to keep out of each other's way.
 				ResourceRules: []admr.NamedRuleWithOperations{
 					{
-						RuleWithOperations: admr.RuleWithOperations{
-							Operations: []admr.OperationType{
-								admr.Create,
-								admr.Update,
-							},
-							Rule: admr.Rule{
-								APIGroups:   []string{"networking.k8s.io"},
-								APIVersions: []string{"*"},
-								Resources:   []string{"ingresses"},
-							},
+						Operations: []admr.OperationType{
+							admr.Create,
+							admr.Update,
 						},
+						APIGroups:   []string{"networking.k8s.io"},
+						APIVersions: []string{"*"},
+						Resources:   []string{"ingresses"},
 					},
 					{
-						RuleWithOperations: admr.RuleWithOperations{
-							Operations: []admr.OperationType{
-								admr.Create,
-								admr.Update,
-							},
-							Rule: admr.Rule{
-								APIGroups:   []string{""},
-								APIVersions: []string{"v1"},
-								Resources:   []string{"services"},
-							},
+						Operations: []admr.OperationType{
+							admr.Create,
+							admr.Update,
 						},
+						APIGroups:   []string{""},
+						APIVersions: []string{"v1"},
+						Resources:   []string{"services"},
 					},
 				},
 			},
@@ -298,28 +280,20 @@ func (r *Reconciler) generateEgressPolicy(ctx context.Context, namespace string,
 	}
 
 	return &admr.ValidatingAdmissionPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			ResourceVersion: policy.ResourceVersion,
-		},
+		Name:            name,
+		ResourceVersion: policy.ResourceVersion,
 		Spec: admr.ValidatingAdmissionPolicySpec{
 			FailurePolicy: new(admr.Fail),
 			MatchConstraints: &admr.MatchResources{
-				ResourceRules: []admr.NamedRuleWithOperations{
-					{
-						RuleWithOperations: admr.RuleWithOperations{
-							Operations: []admr.OperationType{
-								admr.Create,
-								admr.Update,
-							},
-							Rule: admr.Rule{
-								APIGroups:   []string{""},
-								APIVersions: []string{"v1"},
-								Resources:   []string{"services"},
-							},
-						},
+				ResourceRules: []admr.NamedRuleWithOperations{{
+					Operations: []admr.OperationType{
+						admr.Create,
+						admr.Update,
 					},
-				},
+					APIGroups:   []string{""},
+					APIVersions: []string{"v1"},
+					Resources:   []string{"services"},
+				}},
 			},
 			Validations: []admr.Validation{
 				generateValidation(names, egressCEL),
@@ -369,10 +343,8 @@ func (r *Reconciler) generatePolicyBinding(ctx context.Context, namespace string
 	}
 
 	return &admr.ValidatingAdmissionPolicyBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            policy.Name,
-			ResourceVersion: binding.ResourceVersion,
-		},
+		Name:            policy.Name,
+		ResourceVersion: binding.ResourceVersion,
 		Spec: admr.ValidatingAdmissionPolicyBindingSpec{
 			PolicyName: policy.Name,
 			ValidationActions: []admr.ValidationAction{

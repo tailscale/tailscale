@@ -164,7 +164,7 @@ func (r *Reconciler) enqueuePeerRelaysForProxyClass(ctx context.Context, o clien
 	var reqs []reconcile.Request
 	for _, pr := range list.Items {
 		if pr.Spec.ProxyClass == pc.Name {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: pr.Name}})
+			reqs = append(reqs, reconcile.Request{Name: pr.Name})
 		}
 	}
 	return reqs
@@ -620,7 +620,7 @@ func (r *Reconciler) ensureStatefulSet(ctx context.Context, logger *zap.SugaredL
 
 func (r *Reconciler) deleteStatefulSet(ctx context.Context, logger *zap.SugaredLogger, pr *tsapi.PeerRelay) error {
 	ss := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: resourceName(pr.Name), Namespace: r.tailscaleNamespace},
+		Name: resourceName(pr.Name), Namespace: r.tailscaleNamespace,
 	}
 	logger.Debugf("deleting StatefulSet %q", ss.Name)
 	if err := r.Delete(ctx, ss); err != nil && !apierrors.IsNotFound(err) {

@@ -36,7 +36,7 @@ func TestPeerRelay(t *testing.T) {
 	staticEndpoints := []netip.AddrPort{netip.MustParseAddrPort("203.0.113.10:6969")}
 
 	pr := &tsapi.PeerRelay{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("peer-relay")},
+		Name: generateName("peer-relay"),
 		Spec: tsapi.PeerRelaySpec{
 			ProxyClass:      "default",
 			Service:         &tsapi.PeerRelayService{Port: new(port)},
@@ -61,7 +61,7 @@ func TestPeerRelayHA(t *testing.T) {
 	staticEndpoints := []netip.AddrPort{netip.MustParseAddrPort("203.0.113.20:41641")}
 
 	pr := &tsapi.PeerRelay{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("peer-relay-ha")},
+		Name: generateName("peer-relay-ha"),
 		Spec: tsapi.PeerRelaySpec{
 			Replicas:        new(replicas),
 			ProxyClass:      "default",

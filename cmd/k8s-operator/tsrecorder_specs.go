@@ -25,13 +25,11 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 	}
 
 	ss := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsr.Name,
-			Namespace:       namespace,
-			Labels:          tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
-			OwnerReferences: tsrOwnerReference(tsr),
-			Annotations:     tsr.Spec.StatefulSet.Annotations,
-		},
+		Name:            tsr.Name,
+		Namespace:       namespace,
+		Labels:          tsrLabels("recorder", tsr.Name, tsr.Spec.StatefulSet.Labels),
+		OwnerReferences: tsrOwnerReference(tsr),
+		Annotations:     tsr.Spec.StatefulSet.Annotations,
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: new(replicas),
 			Selector: &metav1.LabelSelector{
@@ -73,9 +71,7 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 
 								return []corev1.EnvFromSource{{
 									SecretRef: &corev1.SecretEnvSource{
-										LocalObjectReference: corev1.LocalObjectReference{
-											Name: tsr.Spec.Storage.S3.Credentials.Secret.Name,
-										},
+										Name: tsr.Spec.Storage.S3.Credentials.Secret.Name,
 									},
 								}}
 							}(),
@@ -91,10 +87,8 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: "data",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
+							Name:     "data",
+							EmptyDir: &corev1.EmptyDirVolumeSource{},
 						},
 					},
 				},
@@ -113,11 +107,9 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 
 		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
 			Name: volumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
-					Items:      []corev1.KeyToPath{{Key: authKeySecretKey, Path: authKeySecretKey}},
-				},
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+				Items:      []corev1.KeyToPath{{Key: authKeySecretKey, Path: authKeySecretKey}},
 			},
 		})
 	}
@@ -127,13 +119,11 @@ func tsrStatefulSet(tsr *tsapi.Recorder, namespace string, loginServer string) *
 
 func tsrServiceAccount(tsr *tsapi.Recorder, namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsrServiceAccountName(tsr),
-			Namespace:       namespace,
-			Labels:          tsrLabels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-			Annotations:     tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations,
-		},
+		Name:            tsrServiceAccountName(tsr),
+		Namespace:       namespace,
+		Labels:          tsrLabels("recorder", tsr.Name, nil),
+		OwnerReferences: tsrOwnerReference(tsr),
+		Annotations:     tsr.Spec.StatefulSet.Pod.ServiceAccount.Annotations,
 	}
 }
 
@@ -162,12 +152,10 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 	}
 
 	return &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsr.Name,
-			Namespace:       namespace,
-			Labels:          tsrLabels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-		},
+		Name:            tsr.Name,
+		Namespace:       namespace,
+		Labels:          tsrLabels("recorder", tsr.Name, nil),
+		OwnerReferences: tsrOwnerReference(tsr),
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{""},
@@ -194,12 +182,10 @@ func tsrRole(tsr *tsapi.Recorder, namespace string) *rbacv1.Role {
 
 func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            tsr.Name,
-			Namespace:       namespace,
-			Labels:          tsrLabels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-		},
+		Name:            tsr.Name,
+		Namespace:       namespace,
+		Labels:          tsrLabels("recorder", tsr.Name, nil),
+		OwnerReferences: tsrOwnerReference(tsr),
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
@@ -216,12 +202,10 @@ func tsrRoleBinding(tsr *tsapi.Recorder, namespace string) *rbacv1.RoleBinding {
 
 func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       namespace,
-			Name:            fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
-			Labels:          tsrLabels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-		},
+		Namespace:       namespace,
+		Name:            fmt.Sprintf("%s-auth-%d", tsr.Name, replica),
+		Labels:          tsrLabels("recorder", tsr.Name, nil),
+		OwnerReferences: tsrOwnerReference(tsr),
 		StringData: map[string]string{
 			authKeySecretKey: authKey,
 		},
@@ -230,12 +214,10 @@ func tsrAuthSecret(tsr *tsapi.Recorder, namespace string, authKey string, replic
 
 func tsrStateSecret(tsr *tsapi.Recorder, namespace string, replica int32) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s-%d", tsr.Name, replica),
-			Namespace:       namespace,
-			Labels:          tsrLabels("recorder", tsr.Name, nil),
-			OwnerReferences: tsrOwnerReference(tsr),
-		},
+		Name:            fmt.Sprintf("%s-%d", tsr.Name, replica),
+		Namespace:       namespace,
+		Labels:          tsrLabels("recorder", tsr.Name, nil),
+		OwnerReferences: tsrOwnerReference(tsr),
 	}
 }
 

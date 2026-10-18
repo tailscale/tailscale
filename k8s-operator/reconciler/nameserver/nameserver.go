@@ -172,7 +172,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	r.tracker.Add(dnsCfg.UID)
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: r.tsNamespace},
+		Name:      "nameserver",
+		Namespace: r.tsNamespace,
 	}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
 		return res, fmt.Errorf("error getting Service: %w", err)
@@ -246,13 +247,13 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	replicas     int32
-	imageRepo    string
-	imageTag     string
-	labels       map[string]string
-	ownerRefs    []metav1.OwnerReference
-	namespace    string
-	clusterIP    string
+	replicas         int32
+	imageRepo        string
+	imageTag         string
+	labels           map[string]string
+	ownerRefs        []metav1.OwnerReference
+	namespace        string
+	clusterIP        string
 	tolerations      []corev1.Toleration
 	affinity         *corev1.Affinity
 	nodeSelector     map[string]string

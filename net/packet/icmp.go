@@ -54,9 +54,10 @@ func GenerateICMPHostUnreachable(from, to netip.Addr, invoking *Parsed) []byte {
 		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		ipHeaderLen := len(buf) - len(invoking.Transport())
 		return Generate(ICMP4Header{
-			IP4Header: IP4Header{Src: from, Dst: to},
-			Type:      ICMP4Unreachable,
-			Code:      ICMP4HostUnreachable,
+			Src:  from,
+			Dst:  to,
+			Type: ICMP4Unreachable,
+			Code: ICMP4HostUnreachable,
 		}, icmpDestUnreachablePayload(buf, ipHeaderLen+8))
 	case from.Is6() && to.Is6():
 		// RFC 4443, section 3.1
@@ -72,9 +73,10 @@ func GenerateICMPHostUnreachable(from, to netip.Addr, invoking *Parsed) []byte {
 		// |                exceeding the minimum IPv6 MTU                 |
 		maxOrig := minIPv6MTU - (ICMP6Header{}).Len() - icmpDestUnreachableUnusedLen
 		return Generate(ICMP6Header{
-			IP6Header: IP6Header{Src: from, Dst: to},
-			Type:      ICMP6Unreachable,
-			Code:      ICMP6AddressUnreachable,
+			Src:  from,
+			Dst:  to,
+			Type: ICMP6Unreachable,
+			Code: ICMP6AddressUnreachable,
 		}, icmpDestUnreachablePayload(buf, maxOrig))
 	default:
 		return nil

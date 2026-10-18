@@ -335,13 +335,11 @@ func (c *client) Event(ctx context.Context, typ, reason, msg string) error {
 		}
 		// Event not found - create it
 		ev := kubeapi.Event{
-			ObjectMeta: kubeapi.ObjectMeta{
-				Name:      name,
-				Namespace: c.ns,
-			},
-			Type:    typ,
-			Reason:  reason,
-			Message: msg,
+			Name:      name,
+			Namespace: c.ns,
+			Type:      typ,
+			Reason:    reason,
+			Message:   msg,
 			Source: kubeapi.EventSource{
 				Component: c.name,
 			},

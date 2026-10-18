@@ -37,12 +37,10 @@ const (
 
 func pgNodePortService(pg *tsapi.ProxyGroup, name string, namespace string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeNodePort,
 			Ports: []corev1.ServicePort{
@@ -112,22 +110,16 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 		for i := range pgReplicas(pg) {
 			volumes = append(volumes, corev1.Volume{
 				Name: fmt.Sprintf("tailscaledconfig-%d", i),
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: pgConfigSecretName(pg.Name, i),
-					},
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: pgConfigSecretName(pg.Name, i),
 				},
 			})
 		}
 
 		volumes = append(volumes, corev1.Volume{
 			Name: proxyConfigVolName,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: proxyConfigVolName,
-					},
-				},
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				Name: proxyConfigVolName,
 			},
 		})
 
@@ -318,12 +310,10 @@ func pgStatefulSet(pg *tsapi.ProxyGroup, namespace, image, tsFirewallMode string
 
 func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, port *uint16) (*appsv1.StatefulSet, error) {
 	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pg.Name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pg.Name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: new(pgReplicas(pg)),
 			Selector: &metav1.LabelSelector{
@@ -425,23 +415,19 @@ func kubeAPIServerStatefulSet(pg *tsapi.ProxyGroup, namespace, image string, por
 
 func pgServiceAccount(pg *tsapi.ProxyGroup, namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pg.Name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pg.Name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 	}
 }
 
 func pgRole(pg *tsapi.ProxyGroup, namespace string, shareACMEAccount bool) *rbacv1.Role {
 	return &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pg.Name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pg.Name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{""},
@@ -490,12 +476,10 @@ func pgRole(pg *tsapi.ProxyGroup, namespace string, shareACMEAccount bool) *rbac
 
 func pgRoleBinding(pg *tsapi.ProxyGroup, namespace string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pg.Name,
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pg.Name,
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
@@ -527,15 +511,13 @@ func pgACMEAccountField(pg *tsapi.ProxyGroup) string {
 // so it outlives ProxyGroup deletion.
 func pgACMEAccountSecret(namespace string) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      kubetypes.ACMEAccountsSecretName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-			},
-			// Block accidental deletion.
-			Finalizers: []string{kubetypes.ACMEAccountsFinalizer},
+		Name:      kubetypes.ACMEAccountsSecretName,
+		Namespace: namespace,
+		Labels: map[string]string{
+			kubetypes.LabelManaged: "true",
 		},
+		// Block accidental deletion.
+		Finalizers: []string{kubetypes.ACMEAccountsFinalizer},
 	}
 }
 
@@ -563,12 +545,10 @@ func isAuthAPIServerProxy(pg *tsapi.ProxyGroup) bool {
 func pgStateSecrets(pg *tsapi.ProxyGroup, namespace string) (secrets []*corev1.Secret) {
 	for i := range pgReplicas(pg) {
 		secrets = append(secrets, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:            pgStateSecretName(pg.Name, i),
-				Namespace:       namespace,
-				Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState),
-				OwnerReferences: pgOwnerReference(pg),
-			},
+			Name:            pgStateSecretName(pg.Name, i),
+			Namespace:       namespace,
+			Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeState),
+			OwnerReferences: pgOwnerReference(pg),
 		})
 	}
 
@@ -579,24 +559,20 @@ func pgEgressCM(pg *tsapi.ProxyGroup, namespace string) (*corev1.ConfigMap, []by
 	hp := hepPings(pg)
 	hpBs := []byte(strconv.Itoa(hp))
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgEgressCMName(pg.Name),
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
-		BinaryData: map[string][]byte{egressservices.KeyHEPPings: hpBs},
+		Name:            pgEgressCMName(pg.Name),
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
+		BinaryData:      map[string][]byte{egressservices.KeyHEPPings: hpBs},
 	}, hpBs
 }
 
 func pgIngressCM(pg *tsapi.ProxyGroup, namespace string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgIngressCMName(pg.Name),
-			Namespace:       namespace,
-			Labels:          pgLabels(pg.Name, nil),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pgIngressCMName(pg.Name),
+		Namespace:       namespace,
+		Labels:          pgLabels(pg.Name, nil),
+		OwnerReferences: pgOwnerReference(pg),
 	}
 }
 

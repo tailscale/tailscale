@@ -573,9 +573,7 @@ func (e *serveEnv) addServiceToPrefs(ctx context.Context, serviceName tailcfg.Se
 	advertisedServices = append(advertisedServices, serviceName.String())
 	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseServices: advertisedServices,
-		},
+		AdvertiseServices:    advertisedServices,
 	})
 	return err
 }
@@ -595,9 +593,7 @@ func (e *serveEnv) removeServiceFromPrefs(ctx context.Context, serviceName tailc
 	}
 	_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		AdvertiseServicesSet: true,
-		Prefs: ipn.Prefs{
-			AdvertiseServices: prefs.AdvertiseServices,
-		},
+		AdvertiseServices:    prefs.AdvertiseServices,
 	})
 	return err
 }
@@ -991,9 +987,7 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 	if changed {
 		_, err = e.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
-			Prefs: ipn.Prefs{
-				AdvertiseServices: servicesList,
-			},
+			AdvertiseServices:    servicesList,
 		})
 		if err != nil {
 			return err

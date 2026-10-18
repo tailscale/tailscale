@@ -445,9 +445,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			menu.rebuild()
 		case <-menu.connect.ClickedCh:
 			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					WantRunning: true,
-				},
+				WantRunning:    true,
 				WantRunningSet: true,
 			})
 			if err != nil {
@@ -456,9 +454,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 
 		case <-menu.disconnect.ClickedCh:
 			_, err := menu.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					WantRunning: false,
-				},
+				WantRunning:    false,
 				WantRunningSet: true,
 			})
 			if err != nil {
@@ -482,9 +478,7 @@ func (menu *Menu) eventLoop(ctx context.Context) {
 			} else {
 				log.Printf("enable exit node: %v", exitNode)
 				mp := &ipn.MaskedPrefs{
-					Prefs: ipn.Prefs{
-						ExitNodeID: exitNode,
-					},
+					ExitNodeID:    exitNode,
 					ExitNodeIDSet: true,
 				}
 				if _, err := menu.lc.EditPrefs(ctx, mp); err != nil {

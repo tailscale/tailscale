@@ -115,10 +115,8 @@ func TestServicePGReconciler_UpdateHostname(t *testing.T) {
 func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, client.Client, *fakeTSClient, *tstest.Clock) {
 	// Pre-create the ProxyGroup
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-pg",
-			Generation: 1,
-		},
+		Name:       "test-pg",
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -126,10 +124,8 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 
 	// Pre-create the ConfigMap for the ProxyGroup
 	pgConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-ingress-config",
-			Namespace: "operator-ns",
-		},
+		Name:      "test-pg-ingress-config",
+		Namespace: "operator-ns",
 		BinaryData: map[string][]byte{
 			"serve-config.json": []byte(`{"Services":{}}`),
 		},
@@ -137,30 +133,24 @@ func setupServiceTest(t *testing.T) (*HAServiceReconciler, *corev1.Secret, clien
 
 	// Pre-create a config Secret for the ProxyGroup
 	pgCfgSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgConfigSecretName("test-pg", 0),
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeConfig),
-		},
+		Name:      pgConfigSecretName("test-pg", 0),
+		Namespace: "operator-ns",
+		Labels:    pgSecretLabels("test-pg", kubetypes.LabelSecretTypeConfig),
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): []byte(`{"Version":""}`),
 		},
 	}
 
 	pgStateSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-		},
-		Data: map[string][]byte{},
+		Name:      "test-pg-0",
+		Namespace: "operator-ns",
+		Data:      map[string][]byte{},
 	}
 
 	pgPod := &corev1.Pod{
-		TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: "operator-ns",
-		},
+		Kind: "Pod", APIVersion: "v1",
+		Name:      "test-pg-0",
+		Namespace: "operator-ns",
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{
 				{
@@ -215,15 +205,13 @@ func TestValidateService(t *testing.T) {
 	// Test that no more than one Kubernetes Service in a cluster refers to the same Tailscale Service.
 	pgr, _, lc, _, cl := setupServiceTest(t)
 	svc := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app",
-			Namespace: "ns-1",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-				"tailscale.com/hostname":    "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "my-app",
+		Namespace: "ns-1",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
+			"tailscale.com/hostname":    "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.4",
@@ -232,15 +220,13 @@ func TestValidateService(t *testing.T) {
 		},
 	}
 	svc2 := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app2",
-			Namespace: "ns-2",
-			UID:       types.UID("1235-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-				"tailscale.com/hostname":    "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "my-app2",
+		Namespace: "ns-2",
+		UID:       types.UID("1235-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
+			"tailscale.com/hostname":    "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.5",
@@ -284,15 +270,13 @@ func TestValidateService_SingleProxyServiceDoesNotCollideWithProxyGroup(t *testi
 	// the ProxyGroup-managed Service below, but it lives in a different
 	// reconciler entirely and must not be flagged as a duplicate.
 	singleProxySvc := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "single-proxy",
-			Namespace: "ns-1",
-			UID:       types.UID("single-proxy-uid"),
-			Annotations: map[string]string{
-				"tailscale.com/expose":   "true",
-				"tailscale.com/hostname": "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "single-proxy",
+		Namespace: "ns-1",
+		UID:       types.UID("single-proxy-uid"),
+		Annotations: map[string]string{
+			"tailscale.com/expose":   "true",
+			"tailscale.com/hostname": "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "1.2.3.4",
@@ -301,15 +285,13 @@ func TestValidateService_SingleProxyServiceDoesNotCollideWithProxyGroup(t *testi
 	}
 	// ProxyGroup-managed Service for the same hostname.
 	pgSvc := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pg-svc",
-			Namespace: "ns-2",
-			UID:       types.UID("pg-svc-uid"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-				"tailscale.com/hostname":    "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "pg-svc",
+		Namespace: "ns-2",
+		UID:       types.UID("pg-svc-uid"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
+			"tailscale.com/hostname":    "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.5",
@@ -343,10 +325,8 @@ func TestValidateService_DifferentTailnetDoesNotCollide(t *testing.T) {
 	pgr, _, lc, _, _ := setupServiceTest(t)
 	// Pre-create a ProxyGroup joined to a different tailnet.
 	secondaryPG := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "secondary-pg",
-			Generation: 1,
-		},
+		Name:       "secondary-pg",
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type:    tsapi.ProxyGroupTypeIngress,
 			Tailnet: "secondary",
@@ -357,15 +337,13 @@ func TestValidateService_DifferentTailnetDoesNotCollide(t *testing.T) {
 	}
 	// Pre-existing Service on the secondary tailnet with the conflicting hostname.
 	otherTailnetSvc := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "other-tailnet-svc",
-			Namespace: "ns-2",
-			UID:       types.UID("other-tailnet-svc-uid"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "secondary-pg",
-				"tailscale.com/hostname":    "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "other-tailnet-svc",
+		Namespace: "ns-2",
+		UID:       types.UID("other-tailnet-svc-uid"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "secondary-pg",
+			"tailscale.com/hostname":    "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.5",
@@ -377,15 +355,13 @@ func TestValidateService_DifferentTailnetDoesNotCollide(t *testing.T) {
 
 	// Service being reconciled: same hostname, default tailnet ProxyGroup.
 	primarySvc := &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "primary-svc",
-			Namespace: "ns-1",
-			UID:       types.UID("primary-svc-uid"),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-				"tailscale.com/hostname":    "my-app",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      "primary-svc",
+		Namespace: "ns-1",
+		UID:       types.UID("primary-svc-uid"),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
+			"tailscale.com/hostname":    "my-app",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "1.2.3.4",
@@ -439,16 +415,14 @@ func TestIgnoreRegularService(t *testing.T) {
 	pgr, _, fc, ft, _ := setupServiceTest(t)
 
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: types.UID("1234-UID"),
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -507,14 +481,12 @@ func updateIngressConfigSecret(t *testing.T, fc client.Client, stateSecret *core
 func setupTestService(t *testing.T, svcName string, hostname string, clusterIP string, fc client.Client, stateSecret *corev1.Secret) (svc *corev1.Service, eps *discoveryv1.EndpointSlice) {
 	uid := rand.IntN(100)
 	svc = &corev1.Service{
-		TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      svcName,
-			Namespace: "default",
-			UID:       types.UID(fmt.Sprintf("%d-UID", uid)),
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": "test-pg",
-			},
+		Kind: "Service", APIVersion: "v1",
+		Name:      svcName,
+		Namespace: "default",
+		UID:       types.UID(fmt.Sprintf("%d-UID", uid)),
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": "test-pg",
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -525,13 +497,11 @@ func setupTestService(t *testing.T, svcName string, hostname string, clusterIP s
 	}
 
 	eps = &discoveryv1.EndpointSlice{
-		TypeMeta: metav1.TypeMeta{Kind: "EndpointSlice", APIVersion: "v1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      svcName,
-			Namespace: "default",
-			Labels: map[string]string{
-				discoveryv1.LabelServiceName: svcName,
-			},
+		Kind: "EndpointSlice", APIVersion: "v1",
+		Name:      svcName,
+		Namespace: "default",
+		Labels: map[string]string{
+			discoveryv1.LabelServiceName: svcName,
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints: []discoveryv1.Endpoint{
@@ -641,7 +611,7 @@ func TestProxyGroupFromServiceFinalizers(t *testing.T) {
 		{"encoded_among_others", []string{"tailscale.com/finalizer", "my-pg.tailscale.com/service-pg-finalizer"}, "my-pg", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Finalizers: tt.finalizers}}
+			svc := &corev1.Service{Finalizers: tt.finalizers}
 			gotPG, gotOK := proxyGroupFromServiceFinalizers(svc)
 			if gotPG != tt.wantPG || gotOK != tt.wantOK {
 				t.Errorf("proxyGroupFromServiceFinalizers() = (%q, %v), want (%q, %v)", gotPG, gotOK, tt.wantPG, tt.wantOK)

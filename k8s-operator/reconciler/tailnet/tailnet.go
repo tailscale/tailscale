@@ -295,10 +295,8 @@ func (r *Reconciler) createClient(tailnet *tsapi.Tailnet, secret *corev1.Secret)
 func (r *Reconciler) createToken(audience string) func() (string, error) {
 	return func() (string, error) {
 		serviceAccount := &corev1.ServiceAccount{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      r.operatorSAName,
-				Namespace: r.tailscaleNamespace,
-			},
+			Name:      r.operatorSAName,
+			Namespace: r.tailscaleNamespace,
 		}
 
 		tokenRequest := &authnv1.TokenRequest{

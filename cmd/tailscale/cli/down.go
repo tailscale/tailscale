@@ -55,9 +55,7 @@ func runDown(ctx context.Context, args []string) error {
 	}
 	ctx = apitype.RequestReasonKey.WithValue(ctx, downArgs.reason)
 	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			WantRunning: false,
-		},
+		WantRunning:    false,
 		WantRunningSet: true,
 	})
 	return err

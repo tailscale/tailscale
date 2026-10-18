@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
-	"os/user"
 	"slices"
 	"strings"
 	"testing"
@@ -63,7 +62,7 @@ func newTestSession(t *testing.T, acceptEnv []string, clientEnviron []string) *s
 			dst:     netip.MustParseAddrPort("100.100.100.102:22"),
 			node:    (&tailcfg.Node{}).View(),
 		},
-		localUser:    &userMeta{User: user.User{Username: "alice", Uid: "1000", Gid: "1000", HomeDir: "/home/alice"}},
+		localUser:    &userMeta{Username: "alice", Uid: "1000", Gid: "1000", HomeDir: "/home/alice"},
 		userGroupIDs: []string{"1000"},
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())

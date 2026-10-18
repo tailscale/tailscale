@@ -22,7 +22,7 @@ func RequireNXDOMAIN(t testing.TB, query func(context.Context, []byte, string, n
 		t.Fatalf("invalid DNS name %q: %v", name, err)
 	}
 	packet, err := (&dns.Message{
-		Header: dns.Header{ID: 1},
+		ID: 1,
 		Questions: []dns.Question{{
 			Name:  qname,
 			Type:  dns.TypeA,

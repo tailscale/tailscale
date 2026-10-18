@@ -10,7 +10,6 @@ import (
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestGetClusterIPServiceIPs(t *testing.T) {
@@ -24,8 +23,8 @@ func TestGetClusterIPServiceIPs(t *testing.T) {
 	}
 
 	testSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
+		Name: "test",
+		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 	}
 
 	// Test invalid IP format

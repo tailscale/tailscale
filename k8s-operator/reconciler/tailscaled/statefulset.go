@@ -85,10 +85,8 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 	for i := int32(0); i < opts.Replicas; i++ {
 		volName := fmt.Sprintf("tailscaledconfig-%d", i)
 		volumes = append(volumes, corev1.Volume{
-			Name: volName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: opts.ConfigSecretNameFunc(i)},
-			},
+			Name:   volName,
+			Secret: &corev1.SecretVolumeSource{SecretName: opts.ConfigSecretNameFunc(i)},
 		})
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      volName,
@@ -98,15 +96,11 @@ func NewStatefulSet(opts StatefulSetOptions) *appsv1.StatefulSet {
 	}
 
 	return &appsv1.StatefulSet{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps/v1",
-			Kind:       "StatefulSet",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.Name,
-			Namespace: opts.Namespace,
-			Labels:    opts.Labels,
-		},
+		APIVersion: "apps/v1",
+		Kind:       "StatefulSet",
+		Name:       opts.Name,
+		Namespace:  opts.Namespace,
+		Labels:     opts.Labels,
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    &opts.Replicas,
 			ServiceName: opts.Name,
@@ -187,15 +181,11 @@ func NewConfigSecret(opts ConfigSecretOptions) (*corev1.Secret, error) {
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeConfig
 
 	return &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Secret",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.Name,
-			Namespace: opts.Namespace,
-			Labels:    labels,
-		},
+		APIVersion: "v1",
+		Kind:       "Secret",
+		Name:       opts.Name,
+		Namespace:  opts.Namespace,
+		Labels:     labels,
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(cap): body,
 		},
@@ -222,15 +212,11 @@ func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
 
 	return &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Secret",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      opts.Name,
-			Namespace: opts.Namespace,
-			Labels:    labels,
-		},
+		APIVersion: "v1",
+		Kind:       "Secret",
+		Name:       opts.Name,
+		Namespace:  opts.Namespace,
+		Labels:     labels,
 	}
 }
 

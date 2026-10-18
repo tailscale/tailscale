@@ -1341,7 +1341,7 @@ func TestOnPolicyChangeSkipsPreAuthConns(t *testing.T) {
 						src:     netip.MustParseAddrPort("1.2.3.4:30343"),
 						dst:     netip.MustParseAddrPort("100.100.100.102:22"),
 					},
-					localUser: &userMeta{User: user.User{Username: currentUser}},
+					localUser: &userMeta{Username: currentUser},
 				}
 				srv.activeConns = map[*conn]bool{c: true}
 				ctx, cancel := context.WithCancelCause(context.Background())

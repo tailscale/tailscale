@@ -25,7 +25,7 @@ import (
 
 func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "custom-metadata"},
+		Name: "custom-metadata",
 		Spec: tsapi.ProxyClassSpec{
 			TailscaleConfig: &tsapi.TailscaleConfig{
 				AcceptRoutes: true,
@@ -62,14 +62,12 @@ func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
 	// 1. A new tailscale LoadBalancer Service is created but the default
 	// ProxyClass is not ready yet.
 	mustCreate(t, fc, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID: types.UID("1234-UID"),
-		},
+		Name:      "test",
+		Namespace: "default",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID: types.UID("1234-UID"),
 		Spec: corev1.ServiceSpec{
 			ClusterIP:         "10.20.30.40",
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -122,12 +120,10 @@ func TestService_DefaultProxyClassInitiallyNotReady(t *testing.T) {
 func TestProxyClassHandlerForSvc(t *testing.T) {
 	svc := func(name string, annotations, labels map[string]string) *corev1.Service {
 		return &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        name,
-				Namespace:   "default",
-				Annotations: annotations,
-				Labels:      labels,
-			},
+			Name:        name,
+			Namespace:   "default",
+			Annotations: annotations,
+			Labels:      labels,
 			Spec: corev1.ServiceSpec{
 				ClusterIP: "1.2.3.4",
 			},
@@ -135,11 +131,9 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 	}
 	lbSvc := func(name string, annotations map[string]string, class *string) *corev1.Service {
 		return &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        name,
-				Namespace:   "foo",
-				Annotations: annotations,
-			},
+			Name:        name,
+			Namespace:   "foo",
+			Annotations: annotations,
 			Spec: corev1.ServiceSpec{
 				Type:              corev1.ServiceTypeLoadBalancer,
 				LoadBalancerClass: class,
@@ -183,19 +177,19 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 			name:           "default_ProxyClass",
 			proxyClassName: defaultPCName,
 			expected: []reconcile.Request{
-				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "exposed-default"}},
-				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "annotated"}},
-				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "labelled"}},
-				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc"}},
-				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc-no-class"}},
+				{Namespace: "default", Name: "exposed-default"},
+				{Namespace: "default", Name: "annotated"},
+				{Namespace: "default", Name: "labelled"},
+				{Namespace: "foo", Name: "lb-svc"},
+				{Namespace: "foo", Name: "lb-svc-no-class"},
 			},
 		},
 		{
 			name:           "other_ProxyClass",
 			proxyClassName: otherPCName,
 			expected: []reconcile.Request{
-				{NamespacedName: types.NamespacedName{Namespace: "default", Name: "exposed-other"}},
-				{NamespacedName: types.NamespacedName{Namespace: "foo", Name: "lb-svc-other-pc"}},
+				{Namespace: "default", Name: "exposed-other"},
+				{Namespace: "foo", Name: "lb-svc-other-pc"},
 			},
 		},
 		{
@@ -206,9 +200,7 @@ func TestProxyClassHandlerForSvc(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reqs := mapFunc(t.Context(), &tsapi.ProxyClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: tc.proxyClassName,
-				},
+				Name: tc.proxyClassName,
 			})
 			if len(reqs) != len(tc.expected) {
 				t.Fatalf("expected %d requests, got %d: %v", len(tc.expected), len(reqs), reqs)

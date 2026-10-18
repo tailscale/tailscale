@@ -422,9 +422,7 @@ func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	// Give it an initial exit node in use.
 	if _, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
-		Prefs: ipn.Prefs{
-			ExitNodeID: "foo",
-		},
+		ExitNodeID:    "foo",
 	}, user); err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
 	}
@@ -437,9 +435,7 @@ func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	// Zero the exit node
 	pv, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
-		Prefs: ipn.Prefs{
-			ExitNodeID: "",
-		},
+		ExitNodeID:    "",
 	}, user)
 	if err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
@@ -469,9 +465,7 @@ func TestSetUseExitNodeEnabled(t *testing.T) {
 	// Give it an initial exit node in use.
 	if _, err := lb.EditPrefsAs(&ipn.MaskedPrefs{
 		ExitNodeIDSet: true,
-		Prefs: ipn.Prefs{
-			ExitNodeID: "foo",
-		},
+		ExitNodeID:    "foo",
 	}, user); err != nil {
 		t.Fatalf("enabling first exit node: %v", err)
 	}
@@ -794,7 +788,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:         ipn.Prefs{ExitNodeID: exitNode1.StableID()},
+				ExitNodeID:    exitNode1.StableID(),
 				ExitNodeIDSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -811,7 +805,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:         ipn.Prefs{ExitNodeIP: exitNode1.Addresses().At(0).Addr()},
+				ExitNodeIP:    exitNode1.Addresses().At(0).Addr(),
 				ExitNodeIPSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -828,7 +822,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNode:    "any",
 				AutoExitNodeSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -848,7 +842,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:         ipn.Prefs{ExitNodeID: exitNode2.StableID()},
+				ExitNodeID:    exitNode2.StableID(),
 				ExitNodeIDSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -865,7 +859,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			netMap: clientNetmap,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNode:    "any",
 				AutoExitNodeSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -882,7 +876,7 @@ func TestConfigureExitNode(t *testing.T) {
 			},
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNode:    "any",
 				AutoExitNodeSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -900,7 +894,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "foo"},
+				AutoExitNode:    "foo",
 				AutoExitNodeSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -918,7 +912,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "any"},
+				AutoExitNode:    "any",
 				AutoExitNodeSet: true,
 			},
 			useExitNodeEnabled: new(false),
@@ -1191,7 +1185,7 @@ func TestConfigureExitNode(t *testing.T) {
 			netMap: clientNetmap,
 			report: report,
 			changePrefs: &ipn.MaskedPrefs{
-				Prefs:           ipn.Prefs{AutoExitNode: "foo"},
+				AutoExitNode:    "foo",
 				AutoExitNodeSet: true,
 			},
 			wantPrefs: ipn.Prefs{
@@ -3708,10 +3702,8 @@ func TestReconfigureAppConnector(t *testing.T) {
 	}
 
 	b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{
-				Advertise: true,
-			},
+		AppConnector: ipn.AppConnectorPrefs{
+			Advertise: true,
 		},
 		AppConnectorSet: true,
 	})
@@ -3751,10 +3743,8 @@ func TestReconfigureAppConnector(t *testing.T) {
 
 	// disable the connector in order to assert that the service is removed
 	b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{
-				Advertise: false,
-			},
+		AppConnector: ipn.AppConnectorPrefs{
+			Advertise: false,
 		},
 		AppConnectorSet: true,
 	})
@@ -3783,9 +3773,7 @@ func TestBackfillAppConnectorRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AppConnector: ipn.AppConnectorPrefs{Advertise: true},
-		},
+		AppConnector:    ipn.AppConnectorPrefs{Advertise: true},
 		AppConnectorSet: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -5657,9 +5645,7 @@ func TestValidPopBrowserURL(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			if _, err := b.EditPrefs(&ipn.MaskedPrefs{
 				ControlURLSet: true,
-				Prefs: ipn.Prefs{
-					ControlURL: tt.controlURL,
-				},
+				ControlURL:    tt.controlURL,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -7012,10 +6998,8 @@ func TestEnableAutoUpdates(t *testing.T) {
 		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
 			ApplySet: true,
 		},
-		Prefs: ipn.Prefs{
-			AutoUpdate: ipn.AutoUpdatePrefs{
-				Apply: opt.NewBool(true),
-			},
+		AutoUpdate: ipn.AutoUpdatePrefs{
+			Apply: opt.NewBool(true),
 		},
 	})
 	// Enabling may fail, depending on which environment we are running this
@@ -7031,10 +7015,8 @@ func TestEnableAutoUpdates(t *testing.T) {
 		AutoUpdateSet: ipn.AutoUpdatePrefsMask{
 			ApplySet: true,
 		},
-		Prefs: ipn.Prefs{
-			AutoUpdate: ipn.AutoUpdatePrefs{
-				Apply: opt.NewBool(false),
-			},
+		AutoUpdate: ipn.AutoUpdatePrefs{
+			Apply: opt.NewBool(false),
 		},
 	}); err != nil {
 		t.Fatalf("disabling auto-updates: got error: %v", err)
@@ -7669,7 +7651,7 @@ func TestLoginNotifications(t *testing.T) {
 			lb := newLocalBackendWithTestControl(t, enableLogging, func(tb testing.TB, opts controlclient.Options) controlclient.Client {
 				return newClient(tb, opts)
 			})
-			if _, err := lb.EditPrefs(&ipn.MaskedPrefs{ControlURLSet: true, Prefs: ipn.Prefs{ControlURL: controlURL}}); err != nil {
+			if _, err := lb.EditPrefs(&ipn.MaskedPrefs{ControlURLSet: true, ControlURL: controlURL}); err != nil {
 				t.Fatalf("(*EditPrefs).Start(): %v", err)
 			}
 			if err := lb.Start(ipn.Options{}); err != nil {
@@ -9519,9 +9501,7 @@ func TestEditPrefs_InvalidAdvertiseRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mp := &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					AdvertiseRoutes: tt.routes,
-				},
+				AdvertiseRoutes:    tt.routes,
 				AdvertiseRoutesSet: true,
 			}
 
@@ -9648,7 +9628,7 @@ func TestStartPreservesLoginFlags(t *testing.T) {
 	}
 
 	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs:          ipn.Prefs{WantRunning: true},
+		WantRunning:    true,
 		WantRunningSet: true,
 	}); err != nil {
 		t.Fatalf("EditPrefs: %v", err)

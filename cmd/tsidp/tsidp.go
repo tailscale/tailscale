@@ -942,15 +942,13 @@ func (s *idpServer) serveToken(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	_, tcd, _ := strings.Cut(n.Name(), ".")
 	tsClaims := tailscaleClaims{
-		Claims: jwt.Claims{
-			Audience:  jwt.Audience{ar.clientID},
-			Expiry:    jwt.NewNumericDate(now.Add(5 * time.Minute)),
-			ID:        jti,
-			IssuedAt:  jwt.NewNumericDate(now),
-			Issuer:    s.serverURL,
-			NotBefore: jwt.NewNumericDate(now),
-			Subject:   n.User().String(),
-		},
+		Audience:  jwt.Audience{ar.clientID},
+		Expiry:    jwt.NewNumericDate(now.Add(5 * time.Minute)),
+		ID:        jti,
+		IssuedAt:  jwt.NewNumericDate(now),
+		Issuer:    s.serverURL,
+		NotBefore: jwt.NewNumericDate(now),
+		Subject:   n.User().String(),
 		Nonce:     ar.nonce,
 		Key:       n.Key(),
 		Addresses: n.Addresses(),

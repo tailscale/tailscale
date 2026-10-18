@@ -314,7 +314,7 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 		for _, pc := range pcl.Items {
 			if pc.Spec.Metrics != nil && pc.Spec.Metrics.ServiceMonitor != nil && pc.Spec.Metrics.ServiceMonitor.Enable {
 				reqs = append(reqs, reconcile.Request{
-					NamespacedName: types.NamespacedName{Namespace: pc.Namespace, Name: pc.Name},
+					Namespace: pc.Namespace, Name: pc.Name,
 				})
 			}
 		}
@@ -329,12 +329,10 @@ func proxyClassesWithServiceMonitor(cl client.Client, logger *zap.SugaredLogger)
 // https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport
 func getServicesNodePortRange(ctx context.Context, c client.Client, tsNamespace string, logger *zap.SugaredLogger) *tsapi.PortRange {
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nodePortProbeSvcName,
-			Namespace: tsNamespace,
-			Labels: map[string]string{
-				kubetypes.LabelManaged: "true",
-			},
+		Name:      nodePortProbeSvcName,
+		Namespace: tsNamespace,
+		Labels: map[string]string{
+			kubetypes.LabelManaged: "true",
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeNodePort,

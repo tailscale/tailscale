@@ -598,9 +598,7 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 			cl := tstest.NewClock(tstest.ClockOpts{})
 
 			pc := &tsapi.ProxyClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "default-pc",
-				},
+				Name: "default-pc",
 				Spec: tsapi.ProxyClassSpec{
 					StatefulSet: &tsapi.StatefulSet{
 						Annotations: defaultProxyClassAnnotations,
@@ -618,10 +616,8 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 			}
 
 			pg := &tsapi.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       "test",
-					Finalizers: []string{"tailscale.com/finalizer"},
-				},
+				Name:       "test",
+				Finalizers: []string{"tailscale.com/finalizer"},
 				Spec: tsapi.ProxyGroupSpec{
 					Type:       tsapi.ProxyGroupTypeEgress,
 					ProxyClass: pc.Name,
@@ -653,10 +649,8 @@ func TestProxyGroupWithStaticEndpoints(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, n := range r.nodes {
 						no := &corev1.Node{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:   n.name,
-								Labels: n.labels,
-							},
+							Name:   n.name,
+							Labels: n.labels,
 							Status: corev1.NodeStatus{
 								Addresses: []corev1.NodeAddress{},
 							},
@@ -823,7 +817,7 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 	)
 
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-pc"},
+		Name: "test-pc",
 		Spec: tsapi.ProxyClassSpec{
 			StaticEndpoints: &tsapi.StaticEndpointsConfig{
 				NodePort: &tsapi.NodePortConfig{
@@ -848,19 +842,19 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 		t.Fatalf("marshal config: %v", err)
 	}
 	existingSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-0-config", Namespace: tsNamespace},
-		Data:       map[string][]byte{tsoperator.TailscaledConfigFileName(106): cfgJSON},
+		Name: "test-0-config", Namespace: tsNamespace,
+		Data: map[string][]byte{tsoperator.TailscaledConfigFileName(106): cfgJSON},
 	}
 
 	nodes := []*corev1.Node{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{"foo/bar": "baz"}},
+			Name: "node-a", Labels: map[string]string{"foo/bar": "baz"},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 				{Type: corev1.NodeExternalIP, Address: addrA},
 			}},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "node-b", Labels: map[string]string{"foo/bar": "baz"}},
+			Name: "node-b", Labels: map[string]string{"foo/bar": "baz"},
 			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 				{Type: corev1.NodeExternalIP, Address: addrB},
 			}},
@@ -894,9 +888,7 @@ func TestFindStaticEndpointsStableOrder(t *testing.T) {
 
 func TestProxyGroup(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "default-pc",
-		},
+		Name: "default-pc",
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
 				Annotations: defaultProxyClassAnnotations,
@@ -904,11 +896,9 @@ func TestProxyGroup(t *testing.T) {
 		},
 	}
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Finalizers: []string{"tailscale.com/finalizer"},
-			Generation: 1,
-		},
+		Name:       "test",
+		Finalizers: []string{"tailscale.com/finalizer"},
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeEgress,
 		},
@@ -938,7 +928,7 @@ func TestProxyGroup(t *testing.T) {
 		reissuer: tailscaled.NewReissuer(),
 	}
 
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: serviceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{Name: serviceMonitorCRD}
 	opts := configOpts{
 		proxyType:          "proxygroup",
 		stsName:            pg.Name,
@@ -1109,11 +1099,9 @@ func TestProxyGroup(t *testing.T) {
 
 func TestProxyGroupTypes(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyClassSpec{},
+		Name:       "test",
+		Generation: 1,
+		Spec:       tsapi.ProxyClassSpec{},
 	}
 	// Passing ProxyGroup as status subresource is a way to get around fake
 	// client's limitations for updating resource statuses.
@@ -1144,10 +1132,8 @@ func TestProxyGroupTypes(t *testing.T) {
 
 	t.Run("egress_type", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-egress",
-				UID:  "test-egress-uid",
-			},
+			Name: "test-egress",
+			UID:  "test-egress-uid",
 			Spec: tsapi.ProxyGroupSpec{
 				Type:     tsapi.ProxyGroupTypeEgress,
 				Replicas: new(int32(0)),
@@ -1176,12 +1162,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		expectedVolumes := []corev1.Volume{
 			{
 				Name: cmName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: cmName,
-						},
-					},
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					Name: cmName,
 				},
 			},
 		}
@@ -1224,10 +1206,8 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 	t.Run("egress_type_no_lifecycle_hook_when_local_addr_port_set", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-egress-no-lifecycle",
-				UID:  "test-egress-no-lifecycle-uid",
-			},
+			Name: "test-egress-no-lifecycle",
+			UID:  "test-egress-no-lifecycle-uid",
 			Spec: tsapi.ProxyGroupSpec{
 				Type:       tsapi.ProxyGroupTypeEgress,
 				Replicas:   new(int32(0)),
@@ -1266,12 +1246,10 @@ func TestProxyGroupTypes(t *testing.T) {
 
 	t.Run("ingress_type", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-ingress",
-				UID:  "test-ingress-uid",
-				Annotations: map[string]string{
-					AnnotationShareACMEAccount: "true",
-				},
+			Name: "test-ingress",
+			UID:  "test-ingress-uid",
+			Annotations: map[string]string{
+				AnnotationShareACMEAccount: "true",
 			},
 			Spec: tsapi.ProxyGroupSpec{
 				Type:     tsapi.ProxyGroupTypeIngress,
@@ -1335,12 +1313,8 @@ func TestProxyGroupTypes(t *testing.T) {
 		cmName := fmt.Sprintf("%s-ingress-config", pg.Name)
 		expectedVolume := corev1.Volume{
 			Name: cmName,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: cmName,
-					},
-				},
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				Name: cmName,
 			},
 		}
 
@@ -1366,12 +1340,10 @@ func TestProxyGroupTypes(t *testing.T) {
 		// access to the shared Secret, and TS_DEBUG_ACME_FORCE_RENEWAL
 		// must still be set so ARI "replaces" doesn't silently fail.
 		pg := &tsapi.ProxyGroup{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-ingress-optout",
-				UID:  "test-ingress-optout-uid",
-				Annotations: map[string]string{
-					AnnotationShareACMEAccount: "false",
-				},
+			Name: "test-ingress-optout",
+			UID:  "test-ingress-optout-uid",
+			Annotations: map[string]string{
+				AnnotationShareACMEAccount: "false",
 			},
 			Spec: tsapi.ProxyGroupSpec{
 				Type:     tsapi.ProxyGroupTypeIngress,
@@ -1415,10 +1387,8 @@ func TestProxyGroupTypes(t *testing.T) {
 
 	t.Run("kubernetes_api_server_type", func(t *testing.T) {
 		pg := &tsapi.ProxyGroup{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-k8s-apiserver",
-				UID:  "test-k8s-apiserver-uid",
-			},
+			Name: "test-k8s-apiserver",
+			UID:  "test-k8s-apiserver-uid",
 			Spec: tsapi.ProxyGroupSpec{
 				Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
 				Replicas: new(int32(2)),
@@ -1454,11 +1424,9 @@ func TestProxyGroupTypes(t *testing.T) {
 
 func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-k8s-apiserver",
-			UID:        "test-k8s-apiserver-uid",
-			Generation: 1,
-		},
+		Name:       "test-k8s-apiserver",
+		UID:        "test-k8s-apiserver-uid",
+		Generation: 1,
 		Spec: tsapi.ProxyGroupSpec{
 			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
 			Replicas: new(int32(1)),
@@ -1468,10 +1436,8 @@ func TestKubeAPIServerStatusConditionFlow(t *testing.T) {
 		},
 	}
 	stateSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgStateSecretName(pg.Name, 0),
-			Namespace: tsNamespace,
-		},
+		Name:      pgStateSecretName(pg.Name, 0),
+		Namespace: tsNamespace,
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -1543,10 +1509,8 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 	}
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-k8s-apiserver",
-			UID:  "test-k8s-apiserver-uid",
-		},
+		Name: "test-k8s-apiserver",
+		UID:  "test-k8s-apiserver-uid",
 		Spec: tsapi.ProxyGroupSpec{
 			Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
 			Replicas: new(int32(1)),
@@ -1584,12 +1548,10 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 	}
 
 	cfgSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgConfigSecretName(pg.Name, 0),
-			Namespace:       tsNamespace,
-			Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
-			OwnerReferences: pgOwnerReference(pg),
-		},
+		Name:            pgConfigSecretName(pg.Name, 0),
+		Namespace:       tsNamespace,
+		Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
+		OwnerReferences: pgOwnerReference(pg),
 		Data: map[string][]byte{
 			kubetypes.KubeAPIServerConfigFile: cfgB,
 		},
@@ -1639,20 +1601,16 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 
 	const pgName = "test-ingress"
 	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgConfigSecretName(pgName, 0),
-			Namespace: tsNamespace,
-		},
+		Name:      pgConfigSecretName(pgName, 0),
+		Namespace: tsNamespace,
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): existingConfigBytes,
 		},
 	})
 
 	mustCreate(t, fc, &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: pgName,
-			UID:  "test-ingress-uid",
-		},
+		Name: pgName,
+		UID:  "test-ingress-uid",
 		Spec: tsapi.ProxyGroupSpec{
 			Type:     tsapi.ProxyGroupTypeIngress,
 			Replicas: new(int32(1)),
@@ -1675,11 +1633,9 @@ func TestIngressAdvertiseServicesConfigPreserved(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectEqual(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            pgConfigSecretName(pgName, 0),
-			Namespace:       tsNamespace,
-			ResourceVersion: "2",
-		},
+		Name:            pgConfigSecretName(pgName, 0),
+		Namespace:       tsNamespace,
+		ResourceVersion: "2",
 		Data: map[string][]byte{
 			tsoperator.TailscaledConfigFileName(pgMinCapabilityVersion): expectedConfigBytes,
 		},
@@ -1774,9 +1730,7 @@ func TestValidateProxyGroup(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pc := &tsapi.ProxyClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "some-pc",
-				},
+				Name: "some-pc",
 				Spec: tsapi.ProxyClassSpec{
 					StatefulSet: &tsapi.StatefulSet{
 						Pod: &tsapi.Pod{},
@@ -1796,9 +1750,7 @@ func TestValidateProxyGroup(t *testing.T) {
 				pgName = tc.pgName
 			}
 			pg := &tsapi.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: pgName,
-				},
+				Name: pgName,
 				Spec: tsapi.ProxyGroupSpec{
 					Type: tc.typ,
 				},
@@ -1812,10 +1764,8 @@ func TestValidateProxyGroup(t *testing.T) {
 			var objs []client.Object
 			if tc.staticSAExists {
 				objs = append(objs, &corev1.ServiceAccount{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      authAPIServerProxySAName,
-						Namespace: tsNamespace,
-					},
+					Name:      authAPIServerProxySAName,
+					Namespace: tsNamespace,
 				})
 			}
 			r := ProxyGroupReconciler{
@@ -1852,10 +1802,8 @@ func TestValidateProxyGroup(t *testing.T) {
 
 func TestProxyGroupGetAuthKey(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test",
-			Finalizers: []string{"tailscale.com/finalizer"},
-		},
+		Name:       "test",
+		Finalizers: []string{"tailscale.com/finalizer"},
 		Spec: tsapi.ProxyGroupSpec{
 			Type:     tsapi.ProxyGroupTypeEgress,
 			Replicas: new(int32(1)),
@@ -1974,20 +1922,16 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 			var cfgSecret *corev1.Secret
 			if tc.configData != nil {
 				cfgSecret = &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      pgConfigSecretName(pg.Name, 0),
-						Namespace: tsNamespace,
-					},
-					Data: tc.configData,
+					Name:      pgConfigSecretName(pg.Name, 0),
+					Namespace: tsNamespace,
+					Data:      tc.configData,
 				}
 			}
 			if tc.stateData != nil {
 				mustCreate(t, fc, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      pgStateSecretName(pg.Name, 0),
-						Namespace: tsNamespace,
-					},
-					Data: tc.stateData,
+					Name:      pgStateSecretName(pg.Name, 0),
+					Namespace: tsNamespace,
+					Data:      tc.stateData,
 				})
 			}
 
@@ -2020,31 +1964,25 @@ func TestProxyGroupGetAuthKey(t *testing.T) {
 
 func proxyClassesForLEStagingTest() (*tsapi.ProxyClass, *tsapi.ProxyClass, *tsapi.ProxyClass) {
 	pcLEStaging := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "le-staging",
-			Generation: 1,
-		},
+		Name:       "le-staging",
+		Generation: 1,
 		Spec: tsapi.ProxyClassSpec{
 			UseLetsEncryptStagingEnvironment: true,
 		},
 	}
 
 	pcLEStagingFalse := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "le-staging-false",
-			Generation: 1,
-		},
+		Name:       "le-staging-false",
+		Generation: 1,
 		Spec: tsapi.ProxyClassSpec{
 			UseLetsEncryptStagingEnvironment: false,
 		},
 	}
 
 	pcOther := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "other",
-			Generation: 1,
-		},
-		Spec: tsapi.ProxyClassSpec{},
+		Name:       "other",
+		Generation: 1,
+		Spec:       tsapi.ProxyClassSpec{},
 	}
 
 	return pcLEStaging, pcLEStagingFalse, pcOther
@@ -2178,11 +2116,9 @@ func addNodeIDToStateSecrets(t *testing.T, fc client.WithWatch, pg *tsapi.ProxyG
 
 		podUID := fmt.Sprintf("pod-uid-%d", i)
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%d", pg.Name, i),
-				Namespace: "tailscale",
-				UID:       types.UID(podUID),
-			},
+			Name:      fmt.Sprintf("%s-%d", pg.Name, i),
+			Namespace: "tailscale",
+			UID:       types.UID(podUID),
 		}
 		if _, err := createOrUpdate(t.Context(), fc, "tailscale", pod, nil); err != nil {
 			t.Fatalf("failed to create or update Pod %s: %v", pod.Name, err)
@@ -2221,12 +2157,10 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 		})
 	}
 	tests = append(tests, proxyGroupLETestCase{
-		leStagingTestCase: leStagingTestCase{
-			name:                  "egress_pg_with_staging_proxyclass",
-			proxyClassPerResource: "le-staging",
-			useLEStagingEndpoint:  false,
-		},
-		pgType: tsapi.ProxyGroupTypeEgress,
+		name:                  "egress_pg_with_staging_proxyclass",
+		proxyClassPerResource: "le-staging",
+		useLEStagingEndpoint:  false,
+		pgType:                tsapi.ProxyGroupTypeEgress,
 	})
 
 	for _, tt := range tests {
@@ -2235,9 +2169,7 @@ func TestProxyGroupLetsEncryptStaging(t *testing.T) {
 				WithScheme(tsapi.GlobalScheme)
 
 			pg := &tsapi.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "test",
-				},
+				Name: "test",
 				Spec: tsapi.ProxyGroupSpec{
 					Type:       tt.pgType,
 					Replicas:   new(int32(1)),

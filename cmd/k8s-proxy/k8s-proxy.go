@@ -342,7 +342,7 @@ func run(logger *zap.SugaredLogger) error {
 	if v, ok := cfg.Parsed.AcceptRoutes.Get(); ok {
 		_, err = lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			RouteAllSet: true,
-			Prefs:       ipn.Prefs{RouteAll: v},
+			RouteAll:    v,
 		})
 		if err != nil {
 			return fmt.Errorf("error editing prefs: %w", err)
@@ -368,9 +368,7 @@ func run(logger *zap.SugaredLogger) error {
 	if cfg.Parsed.AdvertiseServices != nil {
 		if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
-			Prefs: ipn.Prefs{
-				AdvertiseServices: cfg.Parsed.AdvertiseServices,
-			},
+			AdvertiseServices:    cfg.Parsed.AdvertiseServices,
 		}); err != nil {
 			return fmt.Errorf("error setting prefs AdvertiseServices: %w", err)
 		}

@@ -35,14 +35,10 @@ func applyPebbleResources(ctx context.Context, cl client.Client) error {
 
 func pebbleDeployment(tag string) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Deployment",
-			APIVersion: "apps/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pebble",
-			Namespace: ns,
-		},
+		Kind:       "Deployment",
+		APIVersion: "apps/v1",
+		Name:       "pebble",
+		Namespace:  ns,
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
@@ -104,14 +100,10 @@ func pebbleDeployment(tag string) *appsv1.Deployment {
 
 func pebbleService() *corev1.Service {
 	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pebble",
-			Namespace: ns,
-		},
+		Kind:       "Service",
+		APIVersion: "v1",
+		Name:       "pebble",
+		Namespace:  ns,
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{
@@ -140,13 +132,9 @@ func pebbleService() *corev1.Service {
 
 func tailscaleNamespace() *corev1.Namespace {
 	return &corev1.Namespace{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Namespace",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tailscale",
-		},
+		Kind:       "Namespace",
+		APIVersion: "v1",
+		Name:       "tailscale",
 	}
 }
 
@@ -154,14 +142,10 @@ func tailscaleNamespace() *corev1.Namespace {
 // can reach pebble on a DNS name (pebble) that matches its TLS cert.
 func pebbleExternalNameService() *corev1.Service {
 	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pebble",
-			Namespace: "tailscale",
-		},
+		Kind:       "Service",
+		APIVersion: "v1",
+		Name:       "pebble",
+		Namespace:  "tailscale",
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeExternalName,
 			Selector: map[string]string{

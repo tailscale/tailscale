@@ -1263,10 +1263,8 @@ func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
 	// If this is not a managed Service we want to enqueue it
 	return []reconcile.Request{
 		{
-			NamespacedName: types.NamespacedName{
-				Namespace: o.GetNamespace(),
-				Name:      o.GetName(),
-			},
+			Namespace: o.GetNamespace(),
+			Name:      o.GetName(),
 		},
 	}
 }
@@ -1287,10 +1285,8 @@ func egressSvcsHandler(_ context.Context, o client.Object) []reconcile.Request {
 	}
 	return []reconcile.Request{
 		{
-			NamespacedName: types.NamespacedName{
-				Namespace: o.GetNamespace(),
-				Name:      o.GetName(),
-			},
+			Namespace: o.GetNamespace(),
+			Name:      o.GetName(),
 		},
 	}
 }
@@ -1303,10 +1299,8 @@ func egressEpsHandler(_ context.Context, o client.Object) []reconcile.Request {
 	}
 	return []reconcile.Request{
 		{
-			NamespacedName: types.NamespacedName{
-				Namespace: o.GetNamespace(),
-				Name:      o.GetName(),
-			},
+			Namespace: o.GetNamespace(),
+			Name:      o.GetName(),
 		},
 	}
 }
@@ -1317,10 +1311,8 @@ func egressPodsHandler(_ context.Context, o client.Object) []reconcile.Request {
 	}
 	return []reconcile.Request{
 		{
-			NamespacedName: types.NamespacedName{
-				Namespace: o.GetNamespace(),
-				Name:      o.GetName(),
-			},
+			Namespace: o.GetNamespace(),
+			Name:      o.GetName(),
 		},
 	}
 }
@@ -1389,10 +1381,8 @@ func ingressSvcFromEps(cl client.Client, logger *zap.SugaredLogger) handler.MapF
 
 		return []reconcile.Request{
 			{
-				NamespacedName: types.NamespacedName{
-					Namespace: ns,
-					Name:      svcName,
-				},
+				Namespace: ns,
+				Name:      svcName,
 			},
 		}
 	}
@@ -1417,10 +1407,8 @@ func egressSvcFromEps(_ context.Context, o client.Object) []reconcile.Request {
 	}
 	return []reconcile.Request{
 		{
-			NamespacedName: types.NamespacedName{
-				Namespace: svcNs,
-				Name:      svcName,
-			},
+			Namespace: svcNs,
+			Name:      svcName,
 		},
 	}
 }
@@ -1435,10 +1423,8 @@ func reconcileRequestsForPG(pg string, cl client.Client, ns string) []reconcile.
 	reqs := make([]reconcile.Request, 0)
 	for _, ep := range epsList.Items {
 		reqs = append(reqs, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Namespace: ep.Namespace,
-				Name:      ep.Name,
-			},
+			Namespace: ep.Namespace,
+			Name:      ep.Name,
 		})
 	}
 	return reqs
@@ -1471,10 +1457,8 @@ func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.
 		if isTLSSecret(secret) {
 			return []reconcile.Request{
 				{
-					NamespacedName: types.NamespacedName{
-						Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
-						Name:      secret.ObjectMeta.Labels[LabelParentName],
-					},
+					Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
+					Name:      secret.ObjectMeta.Labels[LabelParentName],
 				},
 			}
 		}
@@ -1494,10 +1478,8 @@ func HAIngressesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.
 		reqs := make([]reconcile.Request, 0)
 		for _, ing := range ingList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: ing.Namespace,
-					Name:      ing.Name,
-				},
+				Namespace: ing.Namespace,
+				Name:      ing.Name,
 			})
 		}
 		return reqs
@@ -1529,10 +1511,8 @@ func HAServicesFromSecret(cl client.Client, logger *zap.SugaredLogger) handler.M
 		reqs := make([]reconcile.Request, 0)
 		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: svc.Namespace,
-					Name:      svc.Name,
-				},
+				Namespace: svc.Namespace,
+				Name:      svc.Name,
 			})
 		}
 		return reqs
@@ -1568,10 +1548,8 @@ func kubeAPIServerPGsFromSecret(cl client.Client, logger *zap.SugaredLogger) han
 
 		return []reconcile.Request{
 			{
-				NamespacedName: types.NamespacedName{
-					Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
-					Name:      secret.ObjectMeta.Labels[LabelParentName],
-				},
+				Namespace: secret.ObjectMeta.Labels[LabelParentNamespace],
+				Name:      secret.ObjectMeta.Labels[LabelParentName],
 			},
 		}
 
@@ -1599,10 +1577,8 @@ func egressSvcsFromEgressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 		reqs := make([]reconcile.Request, 0)
 		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: svc.Namespace,
-					Name:      svc.Name,
-				},
+				Namespace: svc.Namespace,
+				Name:      svc.Name,
 			})
 		}
 		return reqs
@@ -1630,10 +1606,8 @@ func ingressesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger)
 		reqs := make([]reconcile.Request, 0)
 		for _, svc := range ingList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: svc.Namespace,
-					Name:      svc.Name,
-				},
+				Namespace: svc.Namespace,
+				Name:      svc.Name,
 			})
 		}
 		return reqs
@@ -1661,10 +1635,8 @@ func servicesFromIngressProxyGroup(cl client.Client, logger *zap.SugaredLogger) 
 		reqs := make([]reconcile.Request, 0)
 		for _, svc := range svcList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: svc.Namespace,
-					Name:      svc.Name,
-				},
+				Namespace: svc.Namespace,
+				Name:      svc.Name,
 			})
 		}
 		return reqs
@@ -1693,10 +1665,8 @@ func epsFromExternalNameService(cl client.Client, logger *zap.SugaredLogger, ns 
 		reqs := make([]reconcile.Request, 0)
 		for _, eps := range epsList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: eps.Namespace,
-					Name:      eps.Name,
-				},
+				Namespace: eps.Namespace,
+				Name:      eps.Name,
 			})
 		}
 		return reqs
@@ -1731,10 +1701,8 @@ func podsFromEgressEps(cl client.Client, logger *zap.SugaredLogger, ns string) h
 		reqs := make([]reconcile.Request, 0)
 		for _, pod := range podList.Items {
 			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Namespace: pod.Namespace,
-					Name:      pod.Name,
-				},
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
 			})
 		}
 		return reqs

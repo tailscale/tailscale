@@ -26,15 +26,14 @@ import (
 
 func TestProxyClass(t *testing.T) {
 	pc := &tsapi.ProxyClass{
-		TypeMeta: metav1.TypeMeta{Kind: "ProxyClass", APIVersion: "tailscale.com/v1alpha1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-			// The apiserver is supposed to set the UID, but the fake client
-			// doesn't. So, set it explicitly because other code later depends
-			// on it being set.
-			UID:        types.UID("1234-UID"),
-			Finalizers: []string{"tailscale.com/finalizer"},
-		},
+		Kind:       "ProxyClass",
+		APIVersion: "tailscale.com/v1alpha1",
+		Name:       "test",
+		// The apiserver is supposed to set the UID, but the fake client
+		// doesn't. So, set it explicitly because other code later depends
+		// on it being set.
+		UID:        types.UID("1234-UID"),
+		Finalizers: []string{"tailscale.com/finalizer"},
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
 				Labels:      tsapi.Labels{"foo": "bar", "xyz1234": "abc567"},
@@ -71,7 +70,7 @@ func TestProxyClass(t *testing.T) {
 
 	mustReconcile := func(t *testing.T, name string) {
 		t.Helper()
-		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name}}
+		req := reconcile.Request{Name: name}
 		if _, err := pcr.Reconcile(context.Background(), req); err != nil {
 			t.Fatalf("Reconcile(%q): %v", name, err)
 		}
@@ -199,7 +198,7 @@ func TestProxyClass(t *testing.T) {
 	expectEvents(t, []string{"Warning ProxyClassInvalid " + wantMsg})
 
 	// 7. A ProxyClass with ServiceMonitor enabled in a cluster that has the ServiceMonitor CRD is valid.
-	crd := &apiextensionsv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: proxyclass.ServiceMonitorCRD}}
+	crd := &apiextensionsv1.CustomResourceDefinition{Name: proxyclass.ServiceMonitorCRD}
 	mustCreate(t, crd)
 	mustReconcile(t, "test")
 	expectStatus(t, metav1.ConditionTrue, proxyclass.ReasonProxyClassValid, proxyclass.ReasonProxyClassValid)
@@ -225,7 +224,7 @@ func TestProxyClassValidation(t *testing.T) {
 	// candidate range that spans them is rejected.
 	cl := tstest.NewClock(tstest.ClockOpts{})
 	existingPC := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "existing-pc"},
+		Name: "existing-pc",
 		Spec: tsapi.ProxyClassSpec{
 			StaticEndpoints: &tsapi.StaticEndpointsConfig{
 				NodePort: &tsapi.NodePortConfig{
@@ -327,8 +326,10 @@ func TestProxyClassValidation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			pc := &tsapi.ProxyClass{
-				TypeMeta:   metav1.TypeMeta{Kind: "ProxyClass", APIVersion: "tailscale.com/v1alpha1"},
-				ObjectMeta: metav1.ObjectMeta{Name: "pc", UID: types.UID("pc-uid")},
+				Kind:       "ProxyClass",
+				APIVersion: "tailscale.com/v1alpha1",
+				Name:       "pc",
+				UID:        types.UID("pc-uid"),
 				Spec:       tc.spec,
 			}
 
@@ -355,7 +356,7 @@ func TestProxyClassValidation(t *testing.T) {
 				Clock:    cl,
 			})
 
-			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: pc.Name}}
+			req := reconcile.Request{Name: pc.Name}
 			if _, err := pcr.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}

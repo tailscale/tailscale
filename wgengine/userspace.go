@@ -1326,23 +1326,19 @@ func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.No
 	var icmph packet.Header
 	if srcIP.Is4() {
 		icmph = packet.ICMP4Header{
-			IP4Header: packet.IP4Header{
-				IPProto: ipproto.ICMPv4,
-				Src:     srcIP,
-				Dst:     destIP,
-			},
-			Type: packet.ICMP4EchoRequest,
-			Code: packet.ICMP4NoCode,
+			IPProto: ipproto.ICMPv4,
+			Src:     srcIP,
+			Dst:     destIP,
+			Type:    packet.ICMP4EchoRequest,
+			Code:    packet.ICMP4NoCode,
 		}
 	} else {
 		icmph = packet.ICMP6Header{
-			IP6Header: packet.IP6Header{
-				IPProto: ipproto.ICMPv6,
-				Src:     srcIP,
-				Dst:     destIP,
-			},
-			Type: packet.ICMP6EchoRequest,
-			Code: packet.ICMP6NoCode,
+			IPProto: ipproto.ICMPv6,
+			Src:     srcIP,
+			Dst:     destIP,
+			Type:    packet.ICMP6EchoRequest,
+			Code:    packet.ICMP6NoCode,
 		}
 	}
 

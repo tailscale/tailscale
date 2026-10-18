@@ -1255,14 +1255,10 @@ func ParseDSAPrivateKey(der []byte) (*dsa.PrivateKey, error) {
 	}
 
 	return &dsa.PrivateKey{
-		PublicKey: dsa.PublicKey{
-			Parameters: dsa.Parameters{
-				P: k.P,
-				Q: k.Q,
-				G: k.G,
-			},
-			Y: k.Pub,
-		},
+		P: k.P,
+		Q: k.Q,
+		G: k.G,
+		Y: k.Pub,
 		X: k.Priv,
 	}, nil
 }
@@ -1381,10 +1377,8 @@ func parseOpenSSHPrivateKey(key []byte, decrypt openSSHDecryptFunc) (crypto.Priv
 		}
 
 		pk := &rsa.PrivateKey{
-			PublicKey: rsa.PublicKey{
-				N: key.N,
-				E: int(key.E.Int64()),
-			},
+			N:      key.N,
+			E:      int(key.E.Int64()),
 			D:      key.D,
 			Primes: []*big.Int{key.P, key.Q},
 		}
@@ -1450,12 +1444,10 @@ func parseOpenSSHPrivateKey(key []byte, decrypt openSSHDecryptFunc) (crypto.Priv
 		}
 
 		return &ecdsa.PrivateKey{
-			PublicKey: ecdsa.PublicKey{
-				Curve: curve,
-				X:     X,
-				Y:     Y,
-			},
-			D: key.D,
+			Curve: curve,
+			X:     X,
+			Y:     Y,
+			D:     key.D,
 		}, nil
 	default:
 		return nil, errors.New("ssh: unhandled key type")

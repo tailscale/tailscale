@@ -83,9 +83,7 @@ func TestHAEgress(t *testing.T) {
 	target := startEgressTarget(t, tsClient)
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("egress"),
-		},
+		Name: generateName("egress"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeEgress,
 		},
@@ -139,9 +137,7 @@ func TestHAEgressMultiTailnet(t *testing.T) {
 	t.Parallel()
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("egress"),
-		},
+		Name: generateName("egress"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type:    tsapi.ProxyGroupTypeEgress,
 			Tailnet: "second-tailnet",
@@ -201,11 +197,9 @@ func startEgressTarget(t *testing.T, cl *tailscale.Client) tailnetTarget {
 
 func egressService(name string, annotations map[string]string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   ns,
-			Annotations: annotations,
-		},
+		Name:        name,
+		Namespace:   ns,
+		Annotations: annotations,
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
 			Type:         corev1.ServiceTypeExternalName,

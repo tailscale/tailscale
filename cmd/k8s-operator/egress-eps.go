@@ -18,7 +18,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -59,10 +58,8 @@ func (er *egressEpsReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	// Get the user-created ExternalName Service and use its status conditions to determine whether cluster
 	// resources are set up for this tailnet service.
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      eps.Labels[LabelParentName],
-			Namespace: eps.Labels[LabelParentNamespace],
-		},
+		Name:      eps.Labels[LabelParentName],
+		Namespace: eps.Labels[LabelParentNamespace],
 	}
 	err = er.Get(ctx, client.ObjectKeyFromObject(svc), svc)
 	if apierrors.IsNotFound(err) {
@@ -186,10 +183,8 @@ func (er *egressEpsReconciler) podIsReadyToRouteTraffic(ctx context.Context, pod
 	}
 
 	stateS := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
-		},
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
 	}
 
 	err = er.Get(ctx, client.ObjectKeyFromObject(stateS), stateS)

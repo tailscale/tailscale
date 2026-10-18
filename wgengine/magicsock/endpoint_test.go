@@ -169,7 +169,7 @@ func Test_endpoint_maybeProbeUDPLifetimeLocked(t *testing.T) {
 		lowerPriv = privB
 		higherPriv = privA
 	}
-	addr := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("1.1.1.1:1")}}
+	addr := addrQuality{ap: netip.MustParseAddrPort("1.1.1.1:1")}
 	newProbeUDPLifetime := func() *probeUDPLifetime {
 		return &probeUDPLifetime{
 			config: *defaultProbeUDPLifetimeConfig,
@@ -370,25 +370,25 @@ func Test_epAddr_isDirectUDP(t *testing.T) {
 }
 
 func Test_endpoint_udpRelayEndpointReady(t *testing.T) {
-	directAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.1:7")}}
-	peerRelayAddrQuality := addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort("192.0.2.2:77")}, latency: time.Second}
+	directAddrQuality := addrQuality{ap: netip.MustParseAddrPort("192.0.2.1:7")}
+	peerRelayAddrQuality := addrQuality{ap: netip.MustParseAddrPort("192.0.2.2:77"), latency: time.Second}
 	peerRelayAddrQuality.vni.Set(1)
 	peerRelayAddrQualityHigherLatencySameServer := addrQuality{
-		epAddr:  epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni,
 		latency: peerRelayAddrQuality.latency * 10,
 	}
 	peerRelayAddrQualityHigherLatencyDiffServer := addrQuality{
-		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni},
+		ap: netip.MustParseAddrPort("192.0.2.3:77"), vni: peerRelayAddrQuality.vni,
 		latency:          peerRelayAddrQuality.latency * 10,
 		relayServerDisco: key.NewDisco().Public(),
 	}
 	peerRelayAddrQualityLowerLatencyDiffServer := addrQuality{
-		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni,
 		latency:          peerRelayAddrQuality.latency / 10,
 		relayServerDisco: key.NewDisco().Public(),
 	}
 	peerRelayAddrQualityEqualLatencyDiffServer := addrQuality{
-		epAddr:           epAddr{ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni},
+		ap: netip.MustParseAddrPort("192.0.2.4:77"), vni: peerRelayAddrQuality.vni,
 		latency:          peerRelayAddrQuality.latency,
 		relayServerDisco: key.NewDisco().Public(),
 	}

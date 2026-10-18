@@ -62,11 +62,9 @@ func udp4(src, dst string, sport, dport uint16) []byte {
 		panic(err)
 	}
 	header := &packet.UDP4Header{
-		IP4Header: packet.IP4Header{
-			Src:  sip,
-			Dst:  dip,
-			IPID: 0,
-		},
+		Src:     sip,
+		Dst:     dip,
+		IPID:    0,
 		SrcPort: sport,
 		DstPort: dport,
 	}
@@ -685,11 +683,9 @@ func TestFilterDiscoLoop(t *testing.T) {
 	tw := &Wrapper{logf: memLog.Logf, limitedLogf: memLog.Logf}
 	tw.SetDiscoKey(discoPub)
 	uh := packet.UDP4Header{
-		IP4Header: packet.IP4Header{
-			IPProto: ipproto.UDP,
-			Src:     netaddr.IPv4(1, 2, 3, 4),
-			Dst:     netaddr.IPv4(5, 6, 7, 8),
-		},
+		IPProto: ipproto.UDP,
+		Src:     netaddr.IPv4(1, 2, 3, 4),
+		Dst:     netaddr.IPv4(5, 6, 7, 8),
 		SrcPort: 9,
 		DstPort: 10,
 	}

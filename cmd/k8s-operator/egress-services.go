@@ -361,11 +361,9 @@ func (esr *egressSvcsReconciler) provision(ctx context.Context, proxyGroupName s
 	}
 	for _, addrType := range addrTypes {
 		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
-				Namespace: esr.tsNamespace,
-				Labels:    crl,
-			},
+			Name:        fmt.Sprintf("%s-%s", clusterIPSvc.Name, strings.ToLower(string(addrType))),
+			Namespace:   esr.tsNamespace,
+			Labels:      crl,
 			AddressType: addrType,
 			Ports:       epsPortsFromSvc(clusterIPSvc),
 		}
@@ -491,11 +489,9 @@ func (esr *egressSvcsReconciler) usedPortsForPG(ctx context.Context, pg string) 
 // by an EndpointSlice created for this egress service.
 func (esr *egressSvcsReconciler) clusterIPSvcForEgress(crl map[string]string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: svcNameBase(crl[LabelParentName]),
-			Namespace:    esr.tsNamespace,
-			Labels:       crl,
-		},
+		GenerateName: svcNameBase(crl[LabelParentName]),
+		Namespace:    esr.tsNamespace,
+		Labels:       crl,
 		Spec: corev1.ServiceSpec{
 			Type:           corev1.ServiceTypeClusterIP,
 			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
@@ -507,10 +503,8 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 	crl := egressSvcChildResourceLabels(svc)
 	cmName := pgEgressCMName(crl[labelProxyGroup])
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      cmName,
-			Namespace: esr.tsNamespace,
-		},
+		Name:      cmName,
+		Namespace: esr.tsNamespace,
 	}
 	lggr := logger.With("ConfigMap", client.ObjectKeyFromObject(cm))
 	lggr.Debug("ensuring that egress service configuration is removed from proxy config")
@@ -549,9 +543,7 @@ func (esr *egressSvcsReconciler) ensureEgressSvcCfgDeleted(ctx context.Context, 
 func (esr *egressSvcsReconciler) validateClusterResources(ctx context.Context, svc *corev1.Service, lg *zap.SugaredLogger) (bool, error) {
 	proxyGroupName := svc.Annotations[AnnotationProxyGroup]
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: proxyGroupName,
-		},
+		Name: proxyGroupName,
 	}
 	if err := esr.Get(ctx, client.ObjectKeyFromObject(pg), pg); apierrors.IsNotFound(err) {
 		lg.Infof("ProxyGroup %q not found, waiting...", proxyGroupName)
@@ -692,10 +684,8 @@ func isEgressSvcForProxyGroup(obj client.Object) bool {
 func egressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs egressservices.Configs, err error) {
 	name := pgEgressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: tsNamespace,
-		},
+		Name:      name,
+		Namespace: tsNamespace,
 	}
 	err = cl.Get(ctx, client.ObjectKeyFromObject(cm), cm)
 	if apierrors.IsNotFound(err) { // ProxyGroup resources have not been created (yet)

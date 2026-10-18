@@ -24,7 +24,7 @@ func TestRelayManagerInitAndIdle(t *testing.T) {
 	rm = relayManager{}
 	c1 := &Conn{}
 	c1.discoAtomic.Set(key.NewDisco())
-	rm.handleCallMeMaybeVia(&endpoint{c: c1}, addrQuality{}, false, &disco.CallMeMaybeVia{UDPRelayEndpoint: disco.UDPRelayEndpoint{ServerDisco: key.NewDisco().Public()}})
+	rm.handleCallMeMaybeVia(&endpoint{c: c1}, addrQuality{}, false, &disco.CallMeMaybeVia{ServerDisco: key.NewDisco().Public()})
 	<-rm.runLoopStoppedCh
 
 	rm = relayManager{}

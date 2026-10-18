@@ -49,10 +49,8 @@ func init() {
 		Reserved:        []byte{},                       // To pass reflect.DeepEqual after marshal & parse, this must be non-nil
 		Key:             testPublicKeys["ecdsa"],
 		SignatureKey:    testPublicKeys["rsa"],
-		Permissions: Permissions{
-			CriticalOptions: map[string]string{},
-			Extensions:      map[string]string{},
-		},
+		CriticalOptions: map[string]string{},
+		Extensions:      map[string]string{},
 	}
 	testCert.SignCert(rand.Reader, testSigners["rsa"])
 	testPrivateKeys["cert"] = testPrivateKeys["ecdsa"]

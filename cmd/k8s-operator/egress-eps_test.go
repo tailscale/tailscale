@@ -27,14 +27,12 @@ import (
 func TestTailscaleEgressEndpointSlices(t *testing.T) {
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
+			AnnotationProxyGroup:        "foo",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -72,15 +70,13 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		tsNamespace: "operator-ns",
 	}
 	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo",
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				LabelParentName:      "test",
-				LabelParentNamespace: "default",
-				labelSvcType:         typeEgress,
-				labelProxyGroup:      "foo"},
-		},
+		Name:      "foo",
+		Namespace: "operator-ns",
+		Labels: map[string]string{
+			LabelParentName:      "test",
+			LabelParentNamespace: "default",
+			labelSvcType:         typeEgress,
+			labelProxyGroup:      "foo"},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
 	mustCreate(t, fc, eps)
@@ -127,28 +123,24 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 
 	// Dual-stack.
 	epsV6 := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo-ipv6",
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				LabelParentName:      "test",
-				LabelParentNamespace: "default",
-				labelSvcType:         typeEgress,
-				labelProxyGroup:      "foo",
-			},
+		Name:      "foo-ipv6",
+		Namespace: "operator-ns",
+		Labels: map[string]string{
+			LabelParentName:      "test",
+			LabelParentNamespace: "default",
+			labelSvcType:         typeEgress,
+			labelProxyGroup:      "foo",
 		},
 		AddressType: discoveryv1.AddressTypeIPv6,
 	}
 	mustCreate(t, fc, epsV6)
 	t.Run("dual_stack_pod_ready_to_route", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		mustDeleteAll(t, fc, &corev1.Pod{Name: "foo-0", Namespace: "operator-ns"})
 		dualPod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "foo-0",
-				Namespace: "operator-ns",
-				Labels:    pgLabels("foo", nil),
-				UID:       "foo",
-			},
+			Name:      "foo-0",
+			Namespace: "operator-ns",
+			Labels:    pgLabels("foo", nil),
+			UID:       "foo",
 			Status: corev1.PodStatus{
 				PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}, {IP: "fd00::1"}},
 			},
@@ -184,7 +176,7 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 
 	// IPv6-only.
 	t.Run("ipv4_only_pod_skipped_for_ipv6_slice", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		mustDeleteAll(t, fc, &corev1.Pod{Name: "foo-0", Namespace: "operator-ns"})
 		ipv4Pod, _ := podAndSecretForProxyGroup("foo")
 		mustCreate(t, fc, ipv4Pod)
 		stBs := serviceStatusForPodIPs(t, svc, "10.0.0.1", "", port)
@@ -197,18 +189,16 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 		expectEqual(t, fc, epsV6)
 	})
 	ipv6Pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo-0",
-			Namespace: "operator-ns",
-			Labels:    pgLabels("foo", nil),
-			UID:       "foo",
-		},
+		Name:      "foo-0",
+		Namespace: "operator-ns",
+		Labels:    pgLabels("foo", nil),
+		UID:       "foo",
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{{IP: "fd00::1"}},
 		},
 	}
 	t.Run("ipv6_status_does_not_match_pod_ip", func(t *testing.T) {
-		mustDeleteAll(t, fc, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "foo-0", Namespace: "operator-ns"}})
+		mustDeleteAll(t, fc, &corev1.Pod{Name: "foo-0", Namespace: "operator-ns"})
 		mustCreate(t, fc, ipv6Pod)
 		stBs := serviceStatusForPodIPs(t, svc, "", "fd00::99", port)
 		mustUpdate(t, fc, "operator-ns", "foo-0", func(s *corev1.Secret) {
@@ -243,14 +233,12 @@ func TestTailscaleEgressEndpointSlices(t *testing.T) {
 func TestEgressEndpointSliceEndpointsSorted(t *testing.T) {
 	clock := tstest.NewClock(tstest.ClockOpts{})
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "foo.bar.ts.net",
+			AnnotationProxyGroup:        "foo",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -267,15 +255,13 @@ func TestEgressEndpointSliceEndpointsSorted(t *testing.T) {
 	port := randomPort()
 	cm := configMapForSvc(t, svc, port)
 	eps := &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo",
-			Namespace: "operator-ns",
-			Labels: map[string]string{
-				LabelParentName:      "test",
-				LabelParentNamespace: "default",
-				labelSvcType:         typeEgress,
-				labelProxyGroup:      "foo",
-			},
+		Name:      "foo",
+		Namespace: "operator-ns",
+		Labels: map[string]string{
+			LabelParentName:      "test",
+			LabelParentNamespace: "default",
+			labelSvcType:         typeEgress,
+			labelProxyGroup:      "foo",
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 	}
@@ -297,21 +283,17 @@ func TestEgressEndpointSliceEndpointsSorted(t *testing.T) {
 		ip  string
 	}{{"pod-b", "10.0.0.2"}, {"pod-a", "10.0.0.1"}} {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      p.uid,
-				Namespace: "operator-ns",
-				Labels:    pgLabels("foo", nil),
-				UID:       types.UID(p.uid),
-			},
-			Status: corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: p.ip}}},
+			Name:      p.uid,
+			Namespace: "operator-ns",
+			Labels:    pgLabels("foo", nil),
+			UID:       types.UID(p.uid),
+			Status:    corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: p.ip}}},
 		}
 		mustCreate(t, fc, pod)
 		s := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      p.uid,
-				Namespace: "operator-ns",
-				Labels:    pgSecretLabels("foo", kubetypes.LabelSecretTypeState),
-			},
+			Name:      p.uid,
+			Namespace: "operator-ns",
+			Labels:    pgSecretLabels("foo", kubetypes.LabelSecretTypeState),
 		}
 		stBs := serviceStatusForPodIPs(t, svc, p.ip, "", port)
 		mak.Set(&s.Data, egressservices.KeyEgressServices, stBs)
@@ -364,10 +346,8 @@ func configMapForSvc(t *testing.T, svc *corev1.Service, p uint16) *corev1.Config
 		t.Fatalf("error marshalling config: %v", err)
 	}
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName(svc.Annotations[AnnotationProxyGroup]),
-			Namespace: "operator-ns",
-		},
+		Name:       pgEgressCMName(svc.Annotations[AnnotationProxyGroup]),
+		Namespace:  "operator-ns",
 		BinaryData: map[string][]byte{egressservices.KeyEgressServices: bs},
 	}
 	return cm
@@ -401,12 +381,10 @@ func serviceStatusForPodIPs(t *testing.T, svc *corev1.Service, ipv4, ipv6 string
 
 func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-0", pg),
-			Namespace: "operator-ns",
-			Labels:    pgLabels(pg, nil),
-			UID:       "foo",
-		},
+		Name:      fmt.Sprintf("%s-0", pg),
+		Namespace: "operator-ns",
+		Labels:    pgLabels(pg, nil),
+		UID:       "foo",
 		Status: corev1.PodStatus{
 			PodIPs: []corev1.PodIP{
 				{IP: "10.0.0.1"},
@@ -414,11 +392,9 @@ func podAndSecretForProxyGroup(pg string) (*corev1.Pod, *corev1.Secret) {
 		},
 	}
 	s := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-0", pg),
-			Namespace: "operator-ns",
-			Labels:    pgSecretLabels(pg, kubetypes.LabelSecretTypeState),
-		},
+		Name:      fmt.Sprintf("%s-0", pg),
+		Namespace: "operator-ns",
+		Labels:    pgSecretLabels(pg, kubetypes.LabelSecretTypeState),
 	}
 	return p, s
 }

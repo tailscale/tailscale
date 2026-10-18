@@ -107,9 +107,7 @@ func TestKeepStateKeysUpdated(t *testing.T) {
 	errs := make(chan error)
 	notifyChan := make(chan ipn.Notify)
 	lc := &klc.FakeLocalClient{
-		FakeIPNBusWatcher: klc.FakeIPNBusWatcher{
-			NotifyChan: notifyChan,
-		},
+		NotifyChan: notifyChan,
 	}
 
 	go func() {

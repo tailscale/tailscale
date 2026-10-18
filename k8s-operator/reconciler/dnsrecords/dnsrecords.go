@@ -555,7 +555,7 @@ func endpointSliceHandler(ctx context.Context, o client.Object) []reconcile.Requ
 	if !ok {
 		return nil
 	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: headlessSvcName}}}
+	return []reconcile.Request{{Namespace: o.GetNamespace(), Name: headlessSvcName}}
 }
 
 // serviceHandler filters Service events for which dns-records-reconciler
@@ -563,7 +563,7 @@ func endpointSliceHandler(ctx context.Context, o client.Object) []reconcile.Requ
 // proxy's headless Service, returns the Service for reconcile.
 func serviceHandler(ctx context.Context, o client.Object) []reconcile.Request {
 	if reconciler.IsManagedByType(o, serviceTypeSvc) || reconciler.IsManagedByType(o, serviceTypeIngress) {
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}}}
+		return []reconcile.Request{{Namespace: o.GetNamespace(), Name: o.GetName()}}
 	}
 	return nil
 }
@@ -589,7 +589,7 @@ func ingressHandlerForNamespace(ns string, isDefaultLoadBalancer bool, cl client
 		if headlessSvc == nil {
 			return nil
 		}
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}}
+		return []reconcile.Request{{Namespace: headlessSvc.Namespace, Name: headlessSvc.Name}}
 	}
 }
 
@@ -607,7 +607,7 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 			return nil
 		}
 		for _, svc := range svcHeadlessSvcList.Items {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
+			reqs = append(reqs, reconcile.Request{Namespace: svc.Namespace, Name: svc.Name})
 		}
 
 		// Get all headless Services for proxies configured using Ingress.
@@ -617,7 +617,7 @@ func enqueueAllIngressEgressProxySvcsInNS(ns string, cl client.Client, logger *z
 			return nil
 		}
 		for _, svc := range ingHeadlessSvcList.Items {
-			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
+			reqs = append(reqs, reconcile.Request{Namespace: svc.Namespace, Name: svc.Name})
 		}
 		return reqs
 	}

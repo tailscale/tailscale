@@ -45,10 +45,9 @@ const tsNamespace = "tailscale"
 
 func TestNameserverReconciler(t *testing.T) {
 	dnsConfig := &tsapi.DNSConfig{
-		TypeMeta: metav1.TypeMeta{Kind: "DNSConfig", APIVersion: "tailscale.com/v1alpha1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test",
-		},
+		Kind:       "DNSConfig",
+		APIVersion: "tailscale.com/v1alpha1",
+		Name:       "test",
 		Spec: tsapi.DNSConfigSpec{
 			Nameserver: &tsapi.Nameserver{
 				Replicas: new(int32(3)),
@@ -115,7 +114,7 @@ func TestNameserverReconciler(t *testing.T) {
 		Logger:             logger.Sugar(),
 		Clock:              clock,
 	})
-	mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+	mustReconcile(t, r, reconcile.Request{Name: "test"})
 
 	ownerReference := metav1.NewControllerRef(dnsConfig, tsapi.SchemeGroupVersion.WithKind("DNSConfig"))
 	nameserverLabels := map[string]string{
@@ -127,7 +126,7 @@ func TestNameserverReconciler(t *testing.T) {
 		"app.kubernetes.io/component":        "nameserver",
 	}
 
-	wantsDeploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: tsNamespace}, TypeMeta: metav1.TypeMeta{Kind: "Deployment", APIVersion: appsv1.SchemeGroupVersion.Identifier()}}
+	wantsDeploy := &appsv1.Deployment{Name: "nameserver", Namespace: tsNamespace, Kind: "Deployment", APIVersion: appsv1.SchemeGroupVersion.Identifier()}
 	t.Run("deployment-expected-fields", func(t *testing.T) {
 		if err = yaml.Unmarshal(deployYAML, wantsDeploy); err != nil {
 			t.Fatalf("unmarshalling yaml: %v", err)
@@ -172,7 +171,7 @@ func TestNameserverReconciler(t *testing.T) {
 		expectEqual(t, fc, wantsDeploy)
 	})
 
-	wantsSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "nameserver", Namespace: tsNamespace}, TypeMeta: metav1.TypeMeta{Kind: "Service", APIVersion: corev1.SchemeGroupVersion.Identifier()}}
+	wantsSvc := &corev1.Service{Name: "nameserver", Namespace: tsNamespace, Kind: "Service", APIVersion: corev1.SchemeGroupVersion.Identifier()}
 	t.Run("service-expected-fields", func(t *testing.T) {
 		if err = yaml.Unmarshal(svcYAML, wantsSvc); err != nil {
 			t.Fatalf("unmarshalling yaml: %v", err)
@@ -190,7 +189,7 @@ func TestNameserverReconciler(t *testing.T) {
 		mustUpdate(t, fc, "tailscale", "nameserver", func(svc *corev1.Service) {
 			svc.Spec.ClusterIP = "1.2.3.4"
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		mustReconcile(t, r, reconcile.Request{Name: "test"})
 
 		dnsConfig.Finalizers = []string{reconciler.Finalizer}
 		dnsConfig.Status.Nameserver = &tsapi.NameserverStatus{
@@ -212,7 +211,7 @@ func TestNameserverReconciler(t *testing.T) {
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image.Tag = "v0.0.2"
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		mustReconcile(t, r, reconcile.Request{Name: "test"})
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "test:v0.0.2"
 		expectEqual(t, fc, wantsDeploy)
 	})
@@ -230,17 +229,15 @@ func TestNameserverReconciler(t *testing.T) {
 			mak.Set(&cm.Data, "records.json", string(bs))
 		})
 
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		mustReconcile(t, r, reconcile.Request{Name: "test"})
 
 		wantCm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:            "dnsrecords",
-				Namespace:       "tailscale",
-				Labels:          nameserverLabels,
-				OwnerReferences: []metav1.OwnerReference{*ownerReference},
-			},
-			TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"},
-			Data:     map[string]string{"records.json": string(bs)},
+			Name:            "dnsrecords",
+			Namespace:       "tailscale",
+			Labels:          nameserverLabels,
+			OwnerReferences: []metav1.OwnerReference{*ownerReference},
+			Kind:            "ConfigMap", APIVersion: "v1",
+			Data: map[string]string{"records.json": string(bs)},
 		}
 
 		expectEqual(t, fc, wantCm)
@@ -252,7 +249,7 @@ func TestNameserverReconciler(t *testing.T) {
 		mustUpdate(t, fc, "", "test", func(dnsCfg *tsapi.DNSConfig) {
 			dnsCfg.Spec.Nameserver.Image = nil
 		})
-		mustReconcile(t, r, reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}})
+		mustReconcile(t, r, reconcile.Request{Name: "test"})
 		wantsDeploy.Spec.Template.Spec.Containers[0].Image = "tailscale/k8s-nameserver:stable"
 		expectEqual(t, fc, wantsDeploy)
 	})

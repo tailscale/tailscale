@@ -18,7 +18,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -303,9 +302,7 @@ func (a *IngressReconciler) shouldExpose(ing *networkingv1.Ingress) bool {
 // to attempt to enable features that we do not support.
 func validateIngressClass(ctx context.Context, cl client.Client, ingressClassName string) error {
 	ic := &networkingv1.IngressClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ingressClassName,
-		},
+		Name: ingressClassName,
 	}
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(ic), ic); apierrors.IsNotFound(err) {
 		return errors.New("'tailscale' IngressClass not found in cluster.")

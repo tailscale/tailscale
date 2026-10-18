@@ -17,8 +17,8 @@ type Hello struct {
 
 func ExampleResponseEnvelope() {
 	hi := Hello{
-		ResponseEnvelope: jsonoutput.ResponseEnvelope{SchemaVersion: "1"},
-		Greeting:         "Hello, world",
+		SchemaVersion: "1",
+		Greeting:      "Hello, world",
 	}
 	out, err := json.MarshalIndent(hi, "", "    ")
 	if err != nil {

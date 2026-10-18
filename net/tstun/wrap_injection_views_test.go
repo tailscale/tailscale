@@ -36,8 +36,9 @@ func TestInjectOutboundPacketBufferViews(t *testing.T) {
 		for _, viewSize := range []int{7, 1280} {
 			t.Run(fmt.Sprintf("%s/view=%d", layout, viewSize), func(t *testing.T) {
 				h := &packet.UDP4Header{
-					IP4Header: packet.IP4Header{Src: netip.MustParseAddr("1.2.3.4"), Dst: netip.MustParseAddr("5.6.7.8")},
-					SrcPort:   98, DstPort: 98,
+					Src:     netip.MustParseAddr("1.2.3.4"),
+					Dst:     netip.MustParseAddr("5.6.7.8"),
+					SrcPort: 98, DstPort: 98,
 				}
 				data := packet.Generate(h, bytes.Repeat([]byte{0x55}, 1280-h.Len()))
 				body := data

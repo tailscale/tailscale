@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tsoperator "tailscale.com/k8s-operator"
@@ -32,9 +31,7 @@ func TestProxyGroupStaticEndpoints(t *testing.T) {
 	pc := applyStaticEndpointsProxyClass(t, ports)
 
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("static-endpoints"),
-		},
+		Name: generateName("static-endpoints"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type:       tsapi.ProxyGroupTypeEgress,
 			ProxyClass: pc.Name,
@@ -65,7 +62,7 @@ func waitForProxyGroupDevices(t *testing.T, name string, replicas int, wantStati
 	var devices []staticEndpointsDevice
 	if err := tstest.WaitFor(5*time.Minute, func() error {
 		trigger()
-		pg := &tsapi.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		pg := &tsapi.ProxyGroup{Name: name}
 		if err := get(t.Context(), kubeClient, pg); err != nil {
 			return err
 		}

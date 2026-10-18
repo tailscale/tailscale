@@ -463,13 +463,9 @@ func (s *Store) updateSecret(data map[string][]byte, secretName string) (err err
 		// If the Secret does not exist, create it with the required data.
 		if kubeclient.IsNotFoundErr(err) && s.canCreateSecret(secretName) {
 			return s.client.CreateSecret(ctx, &kubeapi.Secret{
-				TypeMeta: kubeapi.TypeMeta{
-					APIVersion: "v1",
-					Kind:       "Secret",
-				},
-				ObjectMeta: kubeapi.ObjectMeta{
-					Name: secretName,
-				},
+				APIVersion: "v1",
+				Kind:       "Secret",
+				Name:       secretName,
 				Data: func(m map[string][]byte) map[string][]byte {
 					d := make(map[string][]byte, len(m))
 					for key, val := range m {

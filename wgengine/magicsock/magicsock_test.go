@@ -2022,10 +2022,10 @@ func TestEndpointSetsEqual(t *testing.T) {
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
 	al := func(ipps string, d time.Duration) addrQuality {
-		return addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort(ipps)}, latency: d}
+		return addrQuality{ap: netip.MustParseAddrPort(ipps), latency: d}
 	}
 	almtu := func(ipps string, d time.Duration, mtu tstun.WireMTU) addrQuality {
-		return addrQuality{epAddr: epAddr{ap: netip.MustParseAddrPort(ipps)}, latency: d, wireMTU: mtu}
+		return addrQuality{ap: netip.MustParseAddrPort(ipps), latency: d, wireMTU: mtu}
 	}
 	avl := func(ipps string, vni uint32, d time.Duration) addrQuality {
 		q := al(ipps, d)

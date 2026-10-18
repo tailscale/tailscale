@@ -808,10 +808,8 @@ func dnsNameForService(ctx context.Context, cl client.Client, svc tailcfg.Servic
 func ingressSvcsConfigs(ctx context.Context, cl client.Client, proxyGroupName, tsNamespace string) (cm *corev1.ConfigMap, cfgs ingressservices.Configs, err error) {
 	name := pgIngressCMName(proxyGroupName)
 	cm = &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: tsNamespace,
-		},
+		Name:      name,
+		Namespace: tsNamespace,
 	}
 	err = cl.Get(ctx, client.ObjectKeyFromObject(cm), cm)
 	if apierrors.IsNotFound(err) { // ProxyGroup resources have not been created (yet)

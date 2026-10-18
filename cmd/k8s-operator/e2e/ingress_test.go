@@ -39,12 +39,10 @@ func TestL3Ingress(t *testing.T) {
 	createAndCleanup(t, kubeClient, nginx)
 	// Apply service to expose it as ingress
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("test-ingress"),
-			Namespace: ns,
-			Annotations: map[string]string{
-				"tailscale.com/expose": "true",
-			},
+		Name:      generateName("test-ingress"),
+		Namespace: ns,
+		Annotations: map[string]string{
+			"tailscale.com/expose": "true",
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -126,9 +124,7 @@ func TestL3HAIngress(t *testing.T) {
 
 	// Create an ingress ProxyGroup.
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("ingress"),
-		},
+		Name: generateName("ingress"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -137,12 +133,10 @@ func TestL3HAIngress(t *testing.T) {
 
 	// Apply a Service to expose nginx via the ProxyGroup.
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("test-ingress"),
-			Namespace: ns,
-			Annotations: map[string]string{
-				"tailscale.com/proxy-group": pg.Name,
-			},
+		Name:      generateName("test-ingress"),
+		Namespace: ns,
+		Annotations: map[string]string{
+			"tailscale.com/proxy-group": pg.Name,
 		},
 		Spec: corev1.ServiceSpec{
 			Type:              corev1.ServiceTypeLoadBalancer,
@@ -210,10 +204,8 @@ func TestL7Ingress(t *testing.T) {
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nginx.Name,
-			Namespace: ns,
-		},
+		Name:      nginx.Name,
+		Namespace: ns,
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
 				"app.kubernetes.io/name": nginx.Name,
@@ -252,10 +244,8 @@ func TestL7IngressDNSConfig(t *testing.T) {
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nginx.Name,
-			Namespace: ns,
-		},
+		Name:      nginx.Name,
+		Namespace: ns,
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
 				"app.kubernetes.io/name": nginx.Name,
@@ -290,10 +280,8 @@ func TestL7HAIngress(t *testing.T) {
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nginx.Name,
-			Namespace: ns,
-		},
+		Name:      nginx.Name,
+		Namespace: ns,
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
 				"app.kubernetes.io/name": nginx.Name,
@@ -309,9 +297,7 @@ func TestL7HAIngress(t *testing.T) {
 
 	// Create ProxyGroup that the Ingress will reference.
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("ingress"),
-		},
+		Name: generateName("ingress"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
@@ -344,10 +330,8 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 	nginx := nginxDeployment(ns)
 	createAndCleanup(t, kubeClient, nginx)
 	createAndCleanup(t, kubeClient, &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nginx.Name,
-			Namespace: ns,
-		},
+		Name:      nginx.Name,
+		Namespace: ns,
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
 				"app.kubernetes.io/name": nginx.Name,
@@ -363,18 +347,14 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 
 	// Create Ingress ProxyGroup for each Tailnet.
 	firstTailnetPG := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("first-tailnet"),
-		},
+		Name: generateName("first-tailnet"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeIngress,
 		},
 	}
 	createAndCleanup(t, kubeClient, firstTailnetPG)
 	secondTailnetPG := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: generateName("second-tailnet"),
-		},
+		Name: generateName("second-tailnet"),
 		Spec: tsapi.ProxyGroupSpec{
 			Type:    tsapi.ProxyGroupTypeIngress,
 			Tailnet: "second-tailnet",
@@ -418,11 +398,9 @@ func TestL7HAIngressMultiTailnet(t *testing.T) {
 func l7Ingress(namespace, svc string, annotations map[string]string) *networkingv1.Ingress {
 	name := generateName("test-ingress")
 	ingress := &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			Annotations: annotations,
-		},
+		Name:        name,
+		Namespace:   namespace,
+		Annotations: annotations,
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: new("tailscale"),
 			TLS: []networkingv1.IngressTLS{
@@ -430,18 +408,16 @@ func l7Ingress(namespace, svc string, annotations map[string]string) *networking
 			},
 			Rules: []networkingv1.IngressRule{
 				{
-					IngressRuleValue: networkingv1.IngressRuleValue{
-						HTTP: &networkingv1.HTTPIngressRuleValue{
-							Paths: []networkingv1.HTTPIngressPath{
-								{
-									Path:     "/",
-									PathType: new(networkingv1.PathTypePrefix),
-									Backend: networkingv1.IngressBackend{
-										Service: &networkingv1.IngressServiceBackend{
-											Name: svc,
-											Port: networkingv1.ServiceBackendPort{
-												Number: 80,
-											},
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							{
+								Path:     "/",
+								PathType: new(networkingv1.PathTypePrefix),
+								Backend: networkingv1.IngressBackend{
+									Service: &networkingv1.IngressServiceBackend{
+										Name: svc,
+										Port: networkingv1.ServiceBackendPort{
+											Number: 80,
 										},
 									},
 								},
@@ -458,12 +434,10 @@ func l7Ingress(namespace, svc string, annotations map[string]string) *networking
 func nginxDeployment(namespace string) *appsv1.Deployment {
 	name := generateName("nginx")
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name": name,
-			},
+		Name:      name,
+		Namespace: namespace,
+		Labels: map[string]string{
+			"app.kubernetes.io/name": name,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(1)),

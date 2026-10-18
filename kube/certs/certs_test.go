@@ -213,9 +213,7 @@ func TestEnsureCertLoops(t *testing.T) {
 			}()
 			cm := &CertManager{
 				lc: &localclient.FakeLocalClient{
-					FakeIPNBusWatcher: localclient.FakeIPNBusWatcher{
-						NotifyChan: notifyChan,
-					},
+					NotifyChan: notifyChan,
 					CertDomainsResult: []string{
 						"my-app.tailnetxyz.ts.net",
 						"my-other-app.tailnetxyz.ts.net",

@@ -643,9 +643,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// running, if there's ever been a login.
 	if simpleUp {
 		_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-			Prefs: ipn.Prefs{
-				WantRunning: true,
-			},
+			WantRunning:    true,
 			WantRunningSet: true,
 		})
 		if err != nil {

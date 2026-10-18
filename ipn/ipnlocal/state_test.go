@@ -532,9 +532,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(3)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		ControlURLSet: true,
-		Prefs: ipn.Prefs{
-			ControlURL: "https://localhost:1/",
-		},
+		ControlURL:    "https://localhost:1/",
 	})
 	url1 := "https://localhost:1/1"
 	cc.send(sendOpt{url: url1})
@@ -681,7 +679,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: false},
+		WantRunning:    false,
 	})
 	{
 		nn := notifies.drain(2)
@@ -698,7 +696,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: true},
+		WantRunning:    true,
 	})
 	{
 		nn := notifies.drain(2)
@@ -807,9 +805,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(1)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		ControlURLSet: true,
-		Prefs: ipn.Prefs{
-			ControlURL: "https://localhost:1/",
-		},
+		ControlURL:    "https://localhost:1/",
 	})
 	notifies.drain(1)
 
@@ -856,7 +852,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: false},
+		WantRunning:    false,
 	})
 	{
 		nn := notifies.drain(2)
@@ -920,7 +916,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: true},
+		WantRunning:    true,
 	})
 	{
 		nn := notifies.drain(2)
@@ -936,7 +932,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(2)
 	b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
-		Prefs:          ipn.Prefs{WantRunning: false},
+		WantRunning:    false,
 	})
 	{
 		nn := notifies.drain(2)
@@ -1115,9 +1111,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 		t.Fatalf("PrivateNodeKey not set")
 	}
 	p, err := b.EditPrefs(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			Hostname: "foo",
-		},
+		Hostname:    "foo",
 		HostnameSet: true,
 	})
 	if err != nil {
@@ -1234,8 +1228,8 @@ func TestWGEngineStatusRace(t *testing.T) {
 // profiles, or disconnects from Tailscale.
 func TestEngineReconfigOnStateChange(t *testing.T) {
 	enableLogging := false
-	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
-	disconnect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: false}, WantRunningSet: true}
+	connect := &ipn.MaskedPrefs{WantRunning: true, WantRunningSet: true}
+	disconnect := &ipn.MaskedPrefs{WantRunning: false, WantRunningSet: true}
 	node1 := buildNetmapWithPeers(
 		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32")), withAllowedIPs(netip.MustParsePrefix("100.64.1.1/32"))),
 	)
@@ -1651,7 +1645,7 @@ func TestEngineReconfigOnStateChange(t *testing.T) {
 // changes a peer's allowed IPs is visible through the live per-peer
 // config source that LocalBackend installs on the engine.
 func TestPeerConfigUpdatedOnPeerRouteDelta(t *testing.T) {
-	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	connect := &ipn.MaskedPrefs{WantRunning: true, WantRunningSet: true}
 	peerAddr := netip.MustParsePrefix("100.64.1.1/32")
 	vipAddr := netip.MustParsePrefix("100.99.99.99/32")
 
@@ -1731,7 +1725,7 @@ func TestSendPreservesAuthURL(t *testing.T) {
 }
 
 func TestServicesNotClearedByStart(t *testing.T) {
-	connect := &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: true}, WantRunningSet: true}
+	connect := &ipn.MaskedPrefs{WantRunning: true, WantRunningSet: true}
 	node1 := buildNetmapWithPeers(
 		makePeer(1, withName("node-1"), withAddresses(netip.MustParsePrefix("100.64.1.1/32"))),
 	)

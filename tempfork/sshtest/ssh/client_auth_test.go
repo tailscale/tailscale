@@ -330,9 +330,7 @@ func TestClientHMAC(t *testing.T) {
 			Auth: []AuthMethod{
 				PublicKeys(testSigners["rsa"]),
 			},
-			Config: Config{
-				MACs: []string{mac},
-			},
+			MACs:            []string{mac},
 			HostKeyCallback: InsecureIgnoreHostKey(),
 		}
 		if err := tryAuth(t, config); err != nil {
@@ -366,9 +364,7 @@ func TestClientUnsupportedKex(t *testing.T) {
 		Auth: []AuthMethod{
 			PublicKeys(),
 		},
-		Config: Config{
-			KeyExchanges: []string{"non-existent-kex"},
-		},
+		KeyExchanges:    []string{"non-existent-kex"},
 		HostKeyCallback: InsecureIgnoreHostKey(),
 	}
 	if err := tryAuth(t, config); err == nil || !strings.Contains(err.Error(), "common algorithm") {

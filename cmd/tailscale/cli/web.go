@@ -173,7 +173,7 @@ func runWeb(ctx context.Context, args []string) error {
 
 func setRunWebClient(ctx context.Context, val bool) error {
 	_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:           ipn.Prefs{RunWebClient: val},
+		RunWebClient:    val,
 		RunWebClientSet: true,
 	})
 	return err

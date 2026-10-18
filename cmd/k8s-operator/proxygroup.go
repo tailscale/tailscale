@@ -571,10 +571,8 @@ func (r *ProxyGroupReconciler) cleanupDanglingResources(ctx context.Context, tsC
 		}
 		// NOTE(ChaosInTheCRD): we shouldn't need to get the service first, checking for a not found error should be enough
 		svc := &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-nodeport", m.stateSecret.Name),
-				Namespace: m.stateSecret.Namespace,
-			},
+			Name:      fmt.Sprintf("%s-nodeport", m.stateSecret.Name),
+			Namespace: m.stateSecret.Namespace,
 		}
 		if err := r.Delete(ctx, svc); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -643,12 +641,10 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 	for i := range pgReplicas(pg) {
 		logger = logger.With("Pod", fmt.Sprintf("%s-%d", pg.Name, i))
 		cfgSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:            pgConfigSecretName(pg.Name, i),
-				Namespace:       r.tsNamespace,
-				Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
-				OwnerReferences: pgOwnerReference(pg),
-			},
+			Name:            pgConfigSecretName(pg.Name, i),
+			Namespace:       r.tsNamespace,
+			Labels:          pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig),
+			OwnerReferences: pgOwnerReference(pg),
 		}
 
 		var existingCfgSecret *corev1.Secret // unmodified copy of secret
@@ -811,10 +807,8 @@ func (r *ProxyGroupReconciler) getAuthKey(ctx context.Context, tsClient tsclient
 	// Get state Secret to check if it's already authed or has requested
 	// a fresh auth key.
 	stateSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgStateSecretName(pg.Name, ordinal),
-			Namespace: r.tsNamespace,
-		},
+		Name:      pgStateSecretName(pg.Name, ordinal),
+		Namespace: r.tsNamespace,
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(stateSecret), stateSecret); err != nil && !apierrors.IsNotFound(err) {
 		return nil, err

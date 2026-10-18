@@ -22,15 +22,17 @@ func TestGenerateICMPHostUnreachable(t *testing.T) {
 		var invoking []byte
 		if dst.Is6() {
 			invoking = Generate(UDP6Header{
-				IP6Header: IP6Header{Src: src, Dst: dst},
-				SrcPort:   clientPort,
-				DstPort:   serverPort,
+				Src:     src,
+				Dst:     dst,
+				SrcPort: clientPort,
+				DstPort: serverPort,
 			}, udpPayload)
 		} else {
 			invoking = Generate(UDP4Header{
-				IP4Header: IP4Header{Src: src, Dst: dst},
-				SrcPort:   clientPort,
-				DstPort:   serverPort,
+				Src:     src,
+				Dst:     dst,
+				SrcPort: clientPort,
+				DstPort: serverPort,
 			}, udpPayload)
 		}
 		var invokingPacket Parsed

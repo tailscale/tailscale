@@ -870,15 +870,13 @@ func (r *relayManager) sendCallMeMaybeVia(ep *endpoint, se udprelay.ServerEndpoi
 		return
 	}
 	callMeMaybeVia := &disco.CallMeMaybeVia{
-		UDPRelayEndpoint: disco.UDPRelayEndpoint{
-			ServerDisco:         se.ServerDisco,
-			ClientDisco:         se.ClientDisco,
-			LamportID:           se.LamportID,
-			VNI:                 se.VNI,
-			BindLifetime:        se.BindLifetime.Duration,
-			SteadyStateLifetime: se.SteadyStateLifetime.Duration,
-			AddrPorts:           se.AddrPorts,
-		},
+		ServerDisco:         se.ServerDisco,
+		ClientDisco:         se.ClientDisco,
+		LamportID:           se.LamportID,
+		VNI:                 se.VNI,
+		BindLifetime:        se.BindLifetime.Duration,
+		SteadyStateLifetime: se.SteadyStateLifetime.Duration,
+		AddrPorts:           se.AddrPorts,
 	}
 	ep.c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, epDisco.key(), callMeMaybeVia, discoVerboseLog)
 }

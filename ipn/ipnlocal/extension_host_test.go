@@ -333,8 +333,8 @@ func TestFindMatchingExtension(t *testing.T) {
 	)
 
 	// Register extensions A and B, but not C.
-	extA := &extensionA{testExtension: testExtension{name: "A"}}
-	extB := &extensionB{testExtension: testExtension{name: "B"}}
+	extA := &extensionA{name: "A"}
+	extB := &extensionB{name: "B"}
 	h := newExtensionHostForTest[ipnext.Extension](t, &testBackend{}, true, extA, extB)
 
 	var gotA *extensionA

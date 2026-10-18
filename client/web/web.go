@@ -1058,9 +1058,7 @@ func (s *Server) serveUpdatePrefs(ctx context.Context, prefs maskedPrefs) error 
 
 	_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
 		RunSSHSet: prefs.RunSSHSet,
-		Prefs: ipn.Prefs{
-			RunSSH: prefs.RunSSH,
-		},
+		RunSSH:    prefs.RunSSH,
 	})
 	return err
 }
@@ -1122,10 +1120,8 @@ func (s *Server) servePostRoutes(ctx context.Context, data postRoutesRequest) er
 	p := &ipn.MaskedPrefs{
 		AdvertiseRoutesSet: true,
 		ExitNodeIDSet:      true,
-		Prefs: ipn.Prefs{
-			ExitNodeID:      data.UseExitNode,
-			AdvertiseRoutes: routes,
-		},
+		ExitNodeID:         data.UseExitNode,
+		AdvertiseRoutes:    routes,
 	}
 	_, err = s.lc.EditPrefs(ctx, p)
 	return err
@@ -1146,9 +1142,7 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tails
 		case st.BackendState == ipn.Stopped.String():
 			// stopped and not reauthenticating, so just start running
 			_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-				Prefs: ipn.Prefs{
-					WantRunning: true,
-				},
+				WantRunning:    true,
 				WantRunningSet: true,
 			})
 			return "", err
@@ -1174,9 +1168,7 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, opt tails
 			ipnOptions := ipn.Options{AuthKey: opt.AuthKey}
 			if opt.ControlURL != "" {
 				_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-					Prefs: ipn.Prefs{
-						ControlURL: opt.ControlURL,
-					},
+					ControlURL:    opt.ControlURL,
 					ControlURLSet: true,
 				})
 				if err != nil {

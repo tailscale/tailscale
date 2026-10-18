@@ -1421,7 +1421,7 @@ func TestPeerRelay(t *testing.T) {
 	enableRelayStep.Begin()
 	editCtx, editCancel := context.WithTimeout(t.Context(), 30*time.Second)
 	_, err := relay.Agent().EditPrefs(editCtx, &ipn.MaskedPrefs{
-		Prefs:              ipn.Prefs{RelayServerPort: new(uint16(0))},
+		RelayServerPort:    new(uint16(0)),
 		RelayServerPortSet: true,
 	})
 	editCancel()

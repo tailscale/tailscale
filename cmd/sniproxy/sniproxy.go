@@ -214,9 +214,7 @@ func (s *sniproxy) advertiseRoutesFromConfig(ctx context.Context, c *appctype.Ap
 	})
 
 	_, err := s.lc.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AdvertiseRoutes: routes,
-		},
+		AdvertiseRoutes:    routes,
 		AdvertiseRoutesSet: true,
 	})
 	return err

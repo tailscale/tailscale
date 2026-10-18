@@ -95,14 +95,12 @@ func NewTrafficGen(onFirstPacket func()) *TrafficGen {
 // and unlocks it.
 func (t *TrafficGen) Start(src, dst netip.Addr, bytesPerPacket int, maxPackets int64) {
 	h12 := packet.ICMP4Header{
-		IP4Header: packet.IP4Header{
-			IPProto: ipproto.ICMPv4,
-			IPID:    0,
-			Src:     src,
-			Dst:     dst,
-		},
-		Type: packet.ICMP4EchoRequest,
-		Code: packet.ICMP4NoCode,
+		IPProto: ipproto.ICMPv4,
+		IPID:    0,
+		Src:     src,
+		Dst:     dst,
+		Type:    packet.ICMP4EchoRequest,
+		Code:    packet.ICMP4NoCode,
 	}
 
 	// ensure there's room for ICMP header plus sequence number

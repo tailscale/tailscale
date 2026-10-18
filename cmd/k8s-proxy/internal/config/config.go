@@ -171,10 +171,8 @@ func (ld *configLoader) watchConfigFileChanges(ctx context.Context, path string)
 func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretNamespace, secretName string) error {
 	secrets := ld.client.Secrets(secretNamespace)
 	w, err := secrets.Watch(ctx, metav1.ListOptions{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Secret",
-			APIVersion: "v1",
-		},
+		Kind:       "Secret",
+		APIVersion: "v1",
 		// Re-watch regularly to avoid relying on long-lived connections.
 		// See https://github.com/kubernetes-client/javascript/issues/596#issuecomment-786419380
 		TimeoutSeconds: new(int64(600)),
@@ -211,10 +209,8 @@ func (ld *configLoader) watchConfigSecretChanges(ctx context.Context, secretName
 			if !ok {
 				w.Stop()
 				w, err = secrets.Watch(ctx, metav1.ListOptions{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Secret",
-						APIVersion: "v1",
-					},
+					Kind:           "Secret",
+					APIVersion:     "v1",
 					TimeoutSeconds: new(int64(600)),
 					FieldSelector:  fmt.Sprintf("metadata.name=%s", secretName),
 					Watch:          true,

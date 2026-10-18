@@ -602,9 +602,7 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 					}
 					_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 						AdvertiseServicesSet: true,
-						Prefs: ipn.Prefs{
-							AdvertiseServices: []string{},
-						},
+						AdvertiseServices:    []string{},
 					})
 					if err != nil {
 						svcAdErr = fmt.Errorf("clearing Service advertisements: %w", err)
@@ -1803,9 +1801,7 @@ func (s *Server) advertiseService(name tailcfg.ServiceName) error {
 		newAdvertised = append(newAdvertised, name.String())
 		_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
-			Prefs: ipn.Prefs{
-				AdvertiseServices: newAdvertised,
-			},
+			AdvertiseServices:    newAdvertised,
 		})
 		if err != nil {
 			return err
@@ -1835,9 +1831,7 @@ func (s *Server) decrementServiceAdvertisementLocked(name tailcfg.ServiceName) e
 		}
 		_, err := s.lb.EditPrefs(&ipn.MaskedPrefs{
 			AdvertiseServicesSet: true,
-			Prefs: ipn.Prefs{
-				AdvertiseServices: newAdvertised,
-			},
+			AdvertiseServices:    newAdvertised,
 		})
 		return err
 	}

@@ -220,7 +220,7 @@ func runNewNode(ctx context.Context, args []string) error {
 	nf := tsp.NodeFile{
 		NodeKey:    nodeKey,
 		MachineKey: machineKey,
-		ServerInfo: tsp.ServerInfo{URL: serverURL, Key: serverKey},
+		URL:        serverURL, Key: serverKey,
 	}
 
 	out, err := json.MarshalIndent(nf, "", "  ")

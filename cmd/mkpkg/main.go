@@ -89,13 +89,11 @@ func main() {
 		Description: *description,
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
-		Overridables: nfpm.Overridables{
-			Contents: contents,
-			Scripts: nfpm.Scripts{
-				PostInstall: *postinst,
-				PreRemove:   *prerm,
-				PostRemove:  *postrm,
-			},
+		Contents:    contents,
+		Scripts: nfpm.Scripts{
+			PostInstall: *postinst,
+			PreRemove:   *prerm,
+			PostRemove:  *postrm,
 		},
 	})
 

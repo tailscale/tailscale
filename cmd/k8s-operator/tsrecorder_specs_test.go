@@ -19,9 +19,7 @@ import (
 func TestRecorderSpecs(t *testing.T) {
 	t.Run("spec-fields-passthrough", func(t *testing.T) {
 		tsr := &tsapi.Recorder{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test",
-			},
+			Name: "test",
 			Spec: tsapi.RecorderSpec{
 				Replicas: new(int32(3)),
 				StatefulSet: tsapi.RecorderStatefulSet{

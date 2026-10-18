@@ -24,7 +24,6 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -639,10 +638,8 @@ func pgIngressCMName(pg string) string {
 func (r *HAIngressReconciler) proxyGroupServeConfig(ctx context.Context, pg string) (cm *corev1.ConfigMap, cfg *ipn.ServeConfig, err error) {
 	name := pgIngressCMName(pg)
 	cm = &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: r.tsNamespace,
-		},
+		Name:      name,
+		Namespace: r.tsNamespace,
 	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(cm), cm); err != nil && !apierrors.IsNotFound(err) {
 		return nil, nil, fmt.Errorf("error retrieving ingress serve config ConfigMap %s: %v", name, err)
@@ -1027,11 +1024,9 @@ func requeueInterval() time.Duration {
 // Secret for the given domain. Domain must be a valid Kubernetes resource name.
 func certSecretRole(pgName, namespace, domain string) *rbacv1.Role {
 	return &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      domain,
-			Namespace: namespace,
-			Labels:    certResourceLabels(pgName, domain),
-		},
+		Name:      domain,
+		Namespace: namespace,
+		Labels:    certResourceLabels(pgName, domain),
 		Rules: []rbacv1.PolicyRule{
 			{
 				APIGroups:     []string{""},
@@ -1053,11 +1048,9 @@ func certSecretRole(pgName, namespace, domain string) *rbacv1.Role {
 // Kubernetes resource name.
 func certSecretRoleBinding(pg *tsapi.ProxyGroup, namespace, domain string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      domain,
-			Namespace: namespace,
-			Labels:    certResourceLabels(pg.Name, domain),
-		},
+		Name:      domain,
+		Namespace: namespace,
+		Labels:    certResourceLabels(pg.Name, domain),
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
@@ -1086,15 +1079,11 @@ func certSecret(pgName, namespace, domain string, parent client.Object) *corev1.
 		labels[LabelParentNamespace] = ns
 	}
 	return &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
-			Kind:       "Secret",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      domain,
-			Namespace: namespace,
-			Labels:    labels,
-		},
+		APIVersion: "v1",
+		Kind:       "Secret",
+		Name:       domain,
+		Namespace:  namespace,
+		Labels:     labels,
 		Data: map[string][]byte{
 			corev1.TLSCertKey:       nil,
 			corev1.TLSPrivateKeyKey: nil,

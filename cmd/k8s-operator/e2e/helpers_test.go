@@ -19,7 +19,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"tailscale.com/client/tailscale/v2"
 	"tailscale.com/ipn/store/mem"
@@ -40,10 +39,8 @@ func requireTargetIsReachable(t *testing.T, url string) {
 	volumes, mounts, cacertFlag := certVolumesForURL(url)
 
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateName("curl"),
-			Namespace: ns,
-		},
+		Name:      generateName("curl"),
+		Namespace: ns,
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Volumes:       volumes,
@@ -89,10 +86,8 @@ func certVolumesForURL(url string) ([]corev1.Volume, []corev1.VolumeMount, strin
 	const mountPath = "/etc/test-cas"
 	volumes := []corev1.Volume{{
 		Name: "test-cas",
-		VolumeSource: corev1.VolumeSource{
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: testCAsConfigMap},
-			},
+		ConfigMap: &corev1.ConfigMapVolumeSource{
+			Name: testCAsConfigMap,
 		},
 	}}
 	mounts := []corev1.VolumeMount{{Name: "test-cas", MountPath: mountPath, ReadOnly: true}}
@@ -295,7 +290,7 @@ func applyStaticEndpointsProxyClass(t *testing.T, ports tsapi.PortRange) *tsapi.
 	}
 
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: generateName("static-endpoints")},
+		Name: generateName("static-endpoints"),
 		Spec: tsapi.ProxyClassSpec{
 			UseLetsEncryptStagingEnvironment: !*fDevcontrol,
 			StatefulSet: &tsapi.StatefulSet{
@@ -327,7 +322,7 @@ func waitForProxyClassReady(t *testing.T, name string) {
 	t.Helper()
 
 	if err := tstest.WaitFor(time.Minute, func() error {
-		pc := &tsapi.ProxyClass{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		pc := &tsapi.ProxyClass{Name: name}
 		if err := get(t.Context(), kubeClient, pc); err != nil {
 			return err
 		}
@@ -345,7 +340,7 @@ func waitForProxyClassReady(t *testing.T, name string) {
 func removeStaticEndpoints(t *testing.T, name string) {
 	t.Helper()
 
-	patchObject(t, &tsapi.ProxyClass{ObjectMeta: metav1.ObjectMeta{Name: name}}, func(pc *tsapi.ProxyClass) {
+	patchObject(t, &tsapi.ProxyClass{Name: name}, func(pc *tsapi.ProxyClass) {
 		pc.Spec.StaticEndpoints = nil
 	})
 	waitForProxyClassReady(t, name)

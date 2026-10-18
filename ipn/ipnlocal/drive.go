@@ -241,9 +241,7 @@ func (b *LocalBackend) driveRemoveShareLocked(name string) (views.SliceView[*dri
 func (b *LocalBackend) driveSetSharesLocked(shares []*drive.Share) error {
 	prefs := b.pm.prefs.AsStruct()
 	prefs.ApplyEdits(&ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			DriveShares: shares,
-		},
+		DriveShares:    shares,
 		DriveSharesSet: true,
 	})
 	return b.pm.setPrefsNoPermCheck(prefs.View())

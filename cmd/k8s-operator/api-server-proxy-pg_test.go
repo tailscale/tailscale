@@ -36,11 +36,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		defaultDomain = "test-pg.ts.net"
 	)
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       pgName,
-			Generation: 1,
-			UID:        pgUID,
-		},
+		Name:       pgName,
+		Generation: 1,
+		UID:        pgUID,
 		Spec: tsapi.ProxyGroupSpec{
 			Type: tsapi.ProxyGroupTypeKubernetesAPIServer,
 		},
@@ -69,11 +67,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 		t.Fatalf("marshaling initial config: %v", err)
 	}
 	pgCfgSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgConfigSecretName(pgName, 0),
-			Namespace: ns,
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
-		},
+		Name:      pgConfigSecretName(pgName, 0),
+		Namespace: ns,
+		Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeConfig),
 		Data: map[string][]byte{
 			// Existing config should be preserved.
 			kubetypes.KubeAPIServerConfigFile: initialCfgB,
@@ -144,11 +140,9 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 
 	// Create the state secret for the ProxyGroup without services being advertised.
 	mustCreate(t, fc, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pg-0",
-			Namespace: ns,
-			Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
-		},
+		Name:      "test-pg-0",
+		Namespace: ns,
+		Labels:    pgSecretLabels(pgName, kubetypes.LabelSecretTypeState),
 		Data: map[string][]byte{
 			"_current-profile": []byte("test"),
 			"test":             []byte(`{"Config":{"NodeID":"node-foo", "UserProfile": {"LoginName": "test-pg.ts.net" }}}`),
@@ -289,10 +283,8 @@ func TestAPIServerProxyReconciler(t *testing.T) {
 
 func TestExclusiveOwnerAnnotations(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "pg1",
-			UID:  "pg1-uid",
-		},
+		Name: "pg1",
+		UID:  "pg1-uid",
 	}
 	const (
 		pg1Owner = `{"ownerRefs":[{"operatorID":"self-id","resource":{"kind":"ProxyGroup","name":"pg1","uid":"pg1-uid"}}]}`

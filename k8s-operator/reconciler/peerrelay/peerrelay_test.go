@@ -124,7 +124,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "default-replicas",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 			},
 			ExpectedServices: []expectedService{
 				{
@@ -155,8 +155,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "multiple-replicas",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(3))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 			},
 			ExpectedServices: []expectedService{
 				{Name: "peerrelay-test-0", Labels: map[string]string{"tailscale.com/peer-relay-replica": "0"}},
@@ -169,8 +169,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "zero-replicas",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(0))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(0))},
 			},
 			ExpectStatefulSetSpec: &statefulSetSpec{Replicas: 0, Image: testProxyImage},
 		},
@@ -178,8 +178,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "scale-down",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 			},
 			ExistingResources: []client.Object{
 				managedService("test", 0),
@@ -197,8 +197,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "scale-up",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(3))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 			},
 			ExistingResources: []client.Object{
 				managedService("test", 0),
@@ -213,8 +213,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "scoped",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(1))},
 			},
 			ExistingResources: []client.Object{
 				// A Service belonging to a different PeerRelay must not be touched.
@@ -229,7 +229,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "user-annotations",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{Annotations: map[string]string{"example.com/custom": "value"}},
 				},
@@ -250,7 +250,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "cloud-annotations",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
 						"service.beta.kubernetes.io/aws-load-balancer-scheme":     "internal",
@@ -281,7 +281,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "dualstack-address-type-is-honoured",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
 						ipAddressTypeAnnotation: "dualstack",
@@ -304,7 +304,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "dualstack-respects-user-source-nat",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{Annotations: map[string]string{
 						ipAddressTypeAnnotation: "dualstack",
@@ -328,7 +328,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "ipv4-address-type-by-default",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 			},
 			ExpectedServices: []expectedService{
 				{
@@ -344,7 +344,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "ip-families-pass-through",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						IPFamilyPolicy: new(corev1.IPFamilyPolicyRequireDualStack),
@@ -368,23 +368,21 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "drift-corrected",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(1))},
 			},
 			ExistingResources: []client.Object{
 				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "peerrelay-test-0",
-						Namespace: tailscaleNamespace,
-						Labels: map[string]string{
-							"tailscale.com/managed":              "true",
-							"tailscale.com/parent-resource-type": "peerrelay",
-							"tailscale.com/parent-resource":      "test",
-							"tailscale.com/peer-relay-replica":   "0",
-						},
-						Annotations: map[string]string{
-							"service.beta.kubernetes.io/aws-load-balancer-scheme": "internal",
-						},
+					Name:      "peerrelay-test-0",
+					Namespace: tailscaleNamespace,
+					Labels: map[string]string{
+						"tailscale.com/managed":              "true",
+						"tailscale.com/parent-resource-type": "peerrelay",
+						"tailscale.com/parent-resource":      "test",
+						"tailscale.com/peer-relay-replica":   "0",
+					},
+					Annotations: map[string]string{
+						"service.beta.kubernetes.io/aws-load-balancer-scheme": "internal",
 					},
 					Spec: corev1.ServiceSpec{
 						Type: corev1.ServiceTypeClusterIP,
@@ -417,8 +415,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "endpoints-populated-from-lb-ip",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
@@ -441,8 +439,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "pods-pending-blocks-ready",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
@@ -465,7 +463,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "hostname-only-lb-is-resolved-to-ip",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						Annotations: map[string]string{eipAllocationsAnnotation: "eipalloc-aaaa"},
@@ -489,7 +487,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "dualstack-hostname-advertises-both-families",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						Annotations: map[string]string{ipAddressTypeAnnotation: "dualstack"},
@@ -524,7 +522,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "unresolvable-hostname-stays-pending",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						Annotations: map[string]string{eipAllocationsAnnotation: "eipalloc-aaaa"},
@@ -548,7 +546,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "unpinned-nlb-resolves-and-enables-cross-zone",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "test-0.elb.amazonaws.com"),
@@ -576,7 +574,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "pinned-eip-still-gets-cross-zone",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					AWS: &tsapi.PeerRelayAWS{
 						ElasticIPs: []tsapi.PeerRelayAWSElasticIP{
@@ -601,7 +599,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "user-attributes-annotation-is-not-overridden",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						Annotations: map[string]string{
@@ -625,7 +623,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "mixed-ip-and-resolved-hostname",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Replicas: new(int32(2)),
 					Service: &tsapi.PeerRelayService{
@@ -654,7 +652,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "multi-az-lb-advertises-every-address",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
@@ -676,8 +674,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "multi-az-endpoints-do-not-mask-a-replica-without-one",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "", "multi-az.elb.amazonaws.com"),
@@ -697,8 +695,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "endpoints-partial-when-lb-not-ready",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(3))},
+				Name: "test",
+				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(3))},
 			},
 			ExistingResources: []client.Object{
 				managedServiceWithLB("test", 0, "1.2.3.4", ""),
@@ -718,7 +716,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "custom-service-port",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{Port: new(uint16(3478))},
 				},
@@ -742,7 +740,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "static-endpoints-supplement-lb-endpoints",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Replicas:        new(int32(2)),
 					StaticEndpoints: []string{"203.0.113.99:41641"},
@@ -770,7 +768,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "static-endpoints-count-as-addressed",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					StaticEndpoints: []string{"203.0.113.99:6969"},
 				},
@@ -793,7 +791,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "static-endpoint-overrides-lb-port-on-same-address",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					StaticEndpoints: []string{"1.2.3.4:5000"},
 				},
@@ -814,7 +812,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "ipv6-static-endpoint",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					StaticEndpoints: []string{"[2001:db8::1]:41641"},
 				},
@@ -838,7 +836,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "custom-port-and-static-endpoints-reach-tailscaled-config",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Replicas:        new(int32(2)),
 					Service:         &tsapi.PeerRelayService{Port: new(uint16(3478))},
@@ -886,7 +884,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "invalid-static-endpoint-blocks-reconcile",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					StaticEndpoints: []string{"nonsense"},
 				},
@@ -902,7 +900,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "duplicate-static-endpoint-address-blocks-reconcile",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					StaticEndpoints: []string{"203.0.113.99:41641", "203.0.113.99:41642"},
 				},
@@ -917,7 +915,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "aws-elasticips-fan-out-per-replica",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Replicas: new(int32(2)),
 					AWS: &tsapi.PeerRelayAWS{
@@ -952,7 +950,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "aws-elasticips-override-shared-annotations",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Service: &tsapi.PeerRelayService{
 						Annotations: map[string]string{
@@ -981,23 +979,21 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "aws-elasticips-clears-eip-annotations",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 			},
 			ExistingResources: []client.Object{
 				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "peerrelay-test-0",
-						Namespace: tailscaleNamespace,
-						Labels: map[string]string{
-							"tailscale.com/managed":              "true",
-							"tailscale.com/parent-resource-type": "peerrelay",
-							"tailscale.com/parent-resource":      "test",
-							"tailscale.com/peer-relay-replica":   "0",
-						},
-						Annotations: map[string]string{
-							eipAllocationsAnnotation: "eipalloc-stale",
-							subnetsAnnotation:        "subnet-stale",
-						},
+					Name:      "peerrelay-test-0",
+					Namespace: tailscaleNamespace,
+					Labels: map[string]string{
+						"tailscale.com/managed":              "true",
+						"tailscale.com/parent-resource-type": "peerrelay",
+						"tailscale.com/parent-resource":      "test",
+						"tailscale.com/peer-relay-replica":   "0",
+					},
+					Annotations: map[string]string{
+						eipAllocationsAnnotation: "eipalloc-stale",
+						subnetsAnnotation:        "subnet-stale",
 					},
 					Spec: corev1.ServiceSpec{
 						Type: corev1.ServiceTypeLoadBalancer,
@@ -1017,7 +1013,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "aws-elasticips-insufficient",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Name: "test",
 				Spec: tsapi.PeerRelaySpec{
 					Replicas: new(int32(2)),
 					AWS: &tsapi.PeerRelayAWS{
@@ -1035,12 +1031,10 @@ func TestReconciler_Reconcile(t *testing.T) {
 			Name:    "deletion",
 			Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}},
 			PeerRelay: &tsapi.PeerRelay{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:              "test",
-					Finalizers:        []string{"tailscale.com/finalizer"},
-					DeletionTimestamp: new(metav1.Now()),
-				},
-				Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+				Name:              "test",
+				Finalizers:        []string{"tailscale.com/finalizer"},
+				DeletionTimestamp: new(metav1.Now()),
+				Spec:              tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 			},
 			ExistingResources: []client.Object{
 				managedService("test", 0),
@@ -1049,10 +1043,8 @@ func TestReconciler_Reconcile(t *testing.T) {
 				managedConfigSecret("test", 0),
 				managedConfigSecret("test", 1),
 				&appsv1.StatefulSet{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test",
-						Namespace: tailscaleNamespace,
-					},
+					Name:      "test",
+					Namespace: tailscaleNamespace,
 				},
 			},
 			ExpectedServices:      []expectedService{{Name: "peerrelay-other-0"}},
@@ -1372,15 +1364,13 @@ func assertService(t *testing.T, want expectedService, got *corev1.Service) {
 
 func managedService(prName string, idx int) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("peerrelay-%s-%d", prName, idx),
-			Namespace: tailscaleNamespace,
-			Labels: map[string]string{
-				"tailscale.com/managed":              "true",
-				"tailscale.com/parent-resource-type": "peerrelay",
-				"tailscale.com/parent-resource":      prName,
-				"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
-			},
+		Name:      fmt.Sprintf("peerrelay-%s-%d", prName, idx),
+		Namespace: tailscaleNamespace,
+		Labels: map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource-type": "peerrelay",
+			"tailscale.com/parent-resource":      prName,
+			"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
 		},
 		Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
@@ -1408,11 +1398,9 @@ func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSe
 	}
 	stsName := "peerrelay-" + prName
 	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      stsName,
-			Namespace: tailscaleNamespace,
-			Labels:    labels,
-		},
+		Name:      stsName,
+		Namespace: tailscaleNamespace,
+		Labels:    labels,
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    &replicas,
 			ServiceName: stsName,
@@ -1428,15 +1416,13 @@ func managedStatefulSet(prName string, replicas, ready int32) *appsv1.StatefulSe
 
 func managedConfigSecret(prName string, idx int) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("peerrelay-%s-%d-config", prName, idx),
-			Namespace: tailscaleNamespace,
-			Labels: map[string]string{
-				"tailscale.com/managed":              "true",
-				"tailscale.com/parent-resource-type": "peerrelay",
-				"tailscale.com/parent-resource":      prName,
-				"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
-			},
+		Name:      fmt.Sprintf("peerrelay-%s-%d-config", prName, idx),
+		Namespace: tailscaleNamespace,
+		Labels: map[string]string{
+			"tailscale.com/managed":              "true",
+			"tailscale.com/parent-resource-type": "peerrelay",
+			"tailscale.com/parent-resource":      prName,
+			"tailscale.com/peer-relay-replica":   fmt.Sprintf("%d", idx),
 		},
 	}
 }
@@ -1450,8 +1436,8 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 	}
 
 	pr := &tsapi.PeerRelay{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+		Name: "test",
+		Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 	}
 
 	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -1475,7 +1461,7 @@ func TestReconciler_TailscaledConfig(t *testing.T) {
 		Logger:             logger.Sugar(),
 	})
 
-	if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+	if _, err := r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1637,7 +1623,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 	}
 
 	t.Run("mints-key-on-first-reconcile", func(t *testing.T) {
-		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
+		pr := &tsapi.PeerRelay{Name: "test"}
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
@@ -1655,7 +1641,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err := r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1675,7 +1661,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 	})
 
 	t.Run("reuses-existing-key-across-reconciles", func(t *testing.T) {
-		pr := &tsapi.PeerRelay{ObjectMeta: metav1.ObjectMeta{Name: "test"}}
+		pr := &tsapi.PeerRelay{Name: "test"}
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
 			WithScheme(tsapi.GlobalScheme).
 			WithStatusSubresource(&tsapi.PeerRelay{}).
@@ -1693,10 +1679,10 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1712,8 +1698,8 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 
 	t.Run("uses-peer-relay-specific-tags", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{
-			ObjectMeta: metav1.ObjectMeta{Name: "test"},
-			Spec:       tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
+			Name: "test",
+			Spec: tsapi.PeerRelaySpec{Tags: tsapi.Tags{"tag:custom"}},
 		}
 
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -1734,7 +1720,7 @@ func TestReconciler_AuthKey_Lifecycle(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1769,7 +1755,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			"tailscale.com/secret-type":          "state",
 		}
 		s := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tailscaleNamespace, Labels: labels},
+			Name: name, Namespace: tailscaleNamespace, Labels: labels,
 		}
 		if deviceID != "" {
 			s.Data = map[string][]byte{"device_id": []byte(deviceID)}
@@ -1779,12 +1765,10 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 
 	t.Run("full-delete-removes-all-devices-and-state-secrets", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "test",
-				Finalizers:        []string{"tailscale.com/finalizer"},
-				DeletionTimestamp: new(metav1.Now()),
-			},
-			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(2))},
+			Name:              "test",
+			Finalizers:        []string{"tailscale.com/finalizer"},
+			DeletionTimestamp: new(metav1.Now()),
+			Spec:              tsapi.PeerRelaySpec{Replicas: new(int32(2))},
 		}
 
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -1809,7 +1793,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1832,8 +1816,8 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 
 	t.Run("scale-down-removes-devices-for-removed-replicas-only", func(t *testing.T) {
 		pr := &tsapi.PeerRelay{
-			ObjectMeta: metav1.ObjectMeta{Name: "test"},
-			Spec:       tsapi.PeerRelaySpec{Replicas: new(int32(1))},
+			Name: "test",
+			Spec: tsapi.PeerRelaySpec{Replicas: new(int32(1))},
 		}
 
 		fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -1858,7 +1842,7 @@ func TestReconciler_DeletesTailnetDevices(t *testing.T) {
 			Logger:             logger.Sugar(),
 		})
 
-		if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+		if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1892,8 +1876,8 @@ func TestReconciler_TailnetUnavailable(t *testing.T) {
 	}
 
 	pr := &tsapi.PeerRelay{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       tsapi.PeerRelaySpec{Tailnet: "missing"},
+		Name: "test",
+		Spec: tsapi.PeerRelaySpec{Tailnet: "missing"},
 	}
 
 	fc := fake.NewClientBuilder().WithInterceptorFuncs(applyPatchInterceptor()).
@@ -1912,7 +1896,7 @@ func TestReconciler_TailnetUnavailable(t *testing.T) {
 		Logger:             logger.Sugar(),
 	})
 
-	if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err == nil {
+	if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err == nil {
 		t.Fatal("expected reconcile to return the tailnet resolver error, got nil")
 	}
 
@@ -1950,12 +1934,12 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 	}
 
 	pr := &tsapi.PeerRelay{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       tsapi.PeerRelaySpec{ProxyClass: "custom"},
+		Name: "test",
+		Spec: tsapi.PeerRelaySpec{ProxyClass: "custom"},
 	}
 
 	pc := &tsapi.ProxyClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "custom"},
+		Name: "custom",
 		Spec: tsapi.ProxyClassSpec{
 			StatefulSet: &tsapi.StatefulSet{
 				Labels: tsapi.Labels{
@@ -1993,7 +1977,7 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 		Logger:             logger.Sugar(),
 	})
 
-	if _, err = r.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "test"}}); err != nil {
+	if _, err = r.Reconcile(t.Context(), reconcile.Request{Name: "test"}); err != nil {
 		t.Fatal(err)
 	}
 

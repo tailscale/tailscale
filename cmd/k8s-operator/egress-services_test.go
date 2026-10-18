@@ -32,21 +32,17 @@ import (
 
 func TestTailscaleEgressServices(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "foo",
-			UID:  types.UID("1234-UID"),
-		},
+		Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1",
+		Name: "foo",
+		UID:  types.UID("1234-UID"),
 		Spec: tsapi.ProxyGroupSpec{
 			Replicas: pointer.To[int32](3),
 			Type:     tsapi.ProxyGroupTypeEgress,
 		},
 	}
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName("foo"),
-			Namespace: "operator-ns",
-		},
+		Name:      pgEgressCMName("foo"),
+		Namespace: "operator-ns",
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -70,14 +66,12 @@ func TestTailscaleEgressServices(t *testing.T) {
 	}
 	tailnetTargetFQDN := "foo.bar.ts.net."
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: tailnetTargetFQDN,
+			AnnotationProxyGroup:        "foo",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -127,10 +121,8 @@ func TestTailscaleEgressServices(t *testing.T) {
 		epsName := fmt.Sprintf("%s-ipv4", name)
 		// Delete the EndpointSlice and verify it is recreated.
 		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      epsName,
-				Namespace: "operator-ns",
-			},
+			Name:      epsName,
+			Namespace: "operator-ns",
 		}
 		if err := fc.Delete(t.Context(), eps); err != nil {
 			t.Fatalf("error deleting EndpointSlice: %v", err)
@@ -219,12 +211,10 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 		Protocol:   "TCP",
 	})
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:         name,
-			Namespace:    "operator-ns",
-			GenerateName: fmt.Sprintf("ts-%s-", extNSvc.Name),
-			Labels:       labels,
-		},
+		Name:         name,
+		Namespace:    "operator-ns",
+		GenerateName: fmt.Sprintf("ts-%s-", extNSvc.Name),
+		Labels:       labels,
 		Spec: corev1.ServiceSpec{
 			Type:           corev1.ServiceTypeClusterIP,
 			IPFamilyPolicy: new(corev1.IPFamilyPolicyPreferDualStack),
@@ -235,10 +225,8 @@ func clusterIPSvc(name string, extNSvc *corev1.Service) *corev1.Service {
 
 func mustGetClusterIPSvc(t *testing.T, cl client.Client, name string) *corev1.Service {
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "operator-ns",
-		},
+		Name:      name,
+		Namespace: "operator-ns",
 	}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(svc), svc); err != nil {
 		t.Fatalf("error retrieving Service")
@@ -255,11 +243,9 @@ func endpointSlice(name string, extNSvc, clusterIPSvc *corev1.Service, addrType 
 		suffix = "ipv6"
 	}
 	return &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", name, suffix),
-			Namespace: "operator-ns",
-			Labels:    labels,
-		},
+		Name:        fmt.Sprintf("%s-%s", name, suffix),
+		Namespace:   "operator-ns",
+		Labels:      labels,
 		Ports:       portsForEndpointSlice(clusterIPSvc),
 		AddressType: addrType,
 	}
@@ -324,21 +310,17 @@ func configFromCM(t *testing.T, cm *corev1.ConfigMap, svcName string) *egressser
 
 func TestTailscaleEgressServicesDualStack(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "foo",
-			UID:  types.UID("1234-UID"),
-		},
+		Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1",
+		Name: "foo",
+		UID:  types.UID("1234-UID"),
 		Spec: tsapi.ProxyGroupSpec{
 			Replicas: pointer.To[int32](3),
 			Type:     tsapi.ProxyGroupTypeEgress,
 		},
 	}
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName("foo"),
-			Namespace: "operator-ns",
-		},
+		Name:      pgEgressCMName("foo"),
+		Namespace: "operator-ns",
 	}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
@@ -361,14 +343,12 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		tsNamespace: "operator-ns",
 	}
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+			AnnotationProxyGroup:        "foo",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -399,10 +379,8 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		for _, suffix := range []string{"ipv4", "ipv6"} {
 			epsName := fmt.Sprintf("%s-%s", name, suffix)
 			eps := &discoveryv1.EndpointSlice{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      epsName,
-					Namespace: "operator-ns",
-				},
+				Name:      epsName,
+				Namespace: "operator-ns",
 			}
 			if err := fc.Delete(t.Context(), eps); err != nil {
 				t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
@@ -420,10 +398,8 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 		// Delete only the IPv6 EndpointSlice.
 		epsName := fmt.Sprintf("%s-ipv6", name)
 		eps := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      epsName,
-				Namespace: "operator-ns",
-			},
+			Name:      epsName,
+			Namespace: "operator-ns",
 		}
 		if err := fc.Delete(t.Context(), eps); err != nil {
 			t.Fatalf("error deleting EndpointSlice %s: %v", epsName, err)
@@ -456,21 +432,17 @@ func TestTailscaleEgressServicesDualStack(t *testing.T) {
 // and without reshuffling the ClusterIP Service ports.
 func TestEgressServiceGatedProvision(t *testing.T) {
 	pg := &tsapi.ProxyGroup{
-		TypeMeta: metav1.TypeMeta{Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "foo",
-			UID:  types.UID("1234-UID"),
-		},
+		Kind: "ProxyGroup", APIVersion: "tailscale.com/v1alpha1",
+		Name: "foo",
+		UID:  types.UID("1234-UID"),
 		Spec: tsapi.ProxyGroupSpec{
 			Replicas: pointer.To[int32](3),
 			Type:     tsapi.ProxyGroupTypeEgress,
 		},
 	}
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pgEgressCMName("foo"),
-			Namespace: "operator-ns",
-		},
+		Name:      pgEgressCMName("foo"),
+		Namespace: "operator-ns",
 	}
 	zl, err := zap.NewDevelopment()
 	if err != nil {
@@ -497,14 +469,12 @@ func TestEgressServiceGatedProvision(t *testing.T) {
 		tsNamespace: "operator-ns",
 	}
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			UID:       types.UID("1234-UID"),
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		UID:       types.UID("1234-UID"),
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+			AnnotationProxyGroup:        "foo",
 		},
 		Spec: corev1.ServiceSpec{
 			ExternalName: "placeholder",
@@ -545,7 +515,7 @@ func TestEgressServiceGatedProvision(t *testing.T) {
 	// and recreates the slice, without reshuffling the ClusterIP Service ports.
 	clusterPortsBefore := mustGetClusterIPSvc(t, fc, name).Spec.Ports
 	if err := fc.Delete(t.Context(), &discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{Name: v4Name, Namespace: "operator-ns"},
+		Name: v4Name, Namespace: "operator-ns",
 	}); err != nil {
 		t.Fatalf("deleting EndpointSlice: %v", err)
 	}
@@ -589,16 +559,14 @@ func TestMissingEndpointSliceFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 	extNSvc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "default",
-			Annotations: map[string]string{
-				AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
-				AnnotationProxyGroup:        "foo",
-			},
+		Name:      "test",
+		Namespace: "default",
+		Annotations: map[string]string{
+			AnnotationTailnetTargetFQDN: "foo.bar.ts.net.",
+			AnnotationProxyGroup:        "foo",
 		},
 	}
-	current := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ts-foo-current", Namespace: "operator-ns"}}
+	current := &corev1.Service{Name: "ts-foo-current", Namespace: "operator-ns"}
 	fc := fake.NewClientBuilder().
 		WithScheme(tsapi.GlobalScheme).
 		Build()

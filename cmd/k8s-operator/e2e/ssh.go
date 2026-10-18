@@ -222,14 +222,10 @@ func cleanupSSHResources(ctx context.Context, cl client.Client) error {
 
 func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Deployment",
-			APIVersion: "apps/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ssh-server",
-			Namespace: ns,
-		},
+		Kind:       "Deployment",
+		APIVersion: "apps/v1",
+		Name:       "ssh-server",
+		Namespace:  ns,
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(1)),
 			Selector: &metav1.LabelSelector{
@@ -268,10 +264,8 @@ func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 								},
 							},
 							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									TCPSocket: &corev1.TCPSocketAction{
-										Port: intstr.FromInt(8022),
-									},
+								TCPSocket: &corev1.TCPSocketAction{
+									Port: intstr.FromInt(8022),
 								},
 								InitialDelaySeconds: 1,
 								PeriodSeconds:       1,
@@ -293,12 +287,8 @@ func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 					Volumes: []corev1.Volume{
 						{
 							Name: "sshd-config",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: "ssh-server-config",
-									},
-								},
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								Name: "ssh-server-config",
 							},
 						},
 					},
@@ -310,14 +300,10 @@ func sshDeployment(tag string, pubKey []byte) *appsv1.Deployment {
 
 func sshConfigMap(pubKey []byte) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ConfigMap",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ssh-server-config",
-			Namespace: ns,
-		},
+		Kind:       "ConfigMap",
+		APIVersion: "v1",
+		Name:       "ssh-server-config",
+		Namespace:  ns,
 		Data: map[string]string{
 			"reverse-tunnel.conf": sshdConfig,
 			"authorized_keys":     string(pubKey),
@@ -327,14 +313,10 @@ func sshConfigMap(pubKey []byte) *corev1.ConfigMap {
 
 func sshService() *corev1.Service {
 	return &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "control",
-			Namespace: ns,
-		},
+		Kind:       "Service",
+		APIVersion: "v1",
+		Name:       "control",
+		Namespace:  ns,
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{

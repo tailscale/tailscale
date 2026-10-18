@@ -11,9 +11,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -26,10 +24,8 @@ func TestFinalizers(t *testing.T) {
 	t.Parallel()
 
 	object := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "test",
-		},
+		Name:      "test",
+		Namespace: "test",
 		StringData: map[string]string{
 			"hello": "world",
 		},
@@ -94,7 +90,7 @@ func TestEnqueueForChild(t *testing.T) {
 				"tailscale.com/parent-resource-type": "peerrelay",
 				"tailscale.com/parent-resource":      "test",
 			},
-			want: []ctrlreconcile.Request{{NamespacedName: types.NamespacedName{Name: "test"}}},
+			want: []ctrlreconcile.Request{{Name: "test"}},
 		},
 		{
 			name: "matching-namespaced",
@@ -104,7 +100,7 @@ func TestEnqueueForChild(t *testing.T) {
 				"tailscale.com/parent-resource":      "test",
 				"tailscale.com/parent-resource-ns":   "kube-system",
 			},
-			want: []ctrlreconcile.Request{{NamespacedName: types.NamespacedName{Name: "test", Namespace: "kube-system"}}},
+			want: []ctrlreconcile.Request{{Name: "test", Namespace: "kube-system"}},
 		},
 		{
 			name: "not-managed",
@@ -135,7 +131,7 @@ func TestEnqueueForChild(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			obj := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Labels: tc.labels}}
+			obj := &corev1.Secret{Labels: tc.labels}
 			got := enqueue(t.Context(), obj)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("expected %v, got %v", tc.want, got)
@@ -194,7 +190,7 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 	}
 
 	t.Run("ensure-adds-and-is-idempotent", func(t *testing.T) {
-		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"}}
+		secret := &corev1.Secret{Name: "test", Namespace: "ns"}
 		cl := newClient(secret)
 
 		key := client.ObjectKeyFromObject(secret)
@@ -227,9 +223,7 @@ func TestEnsureAndClearFinalizer(t *testing.T) {
 	})
 
 	t.Run("clear-removes-and-is-idempotent", func(t *testing.T) {
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns", Finalizers: []string{reconciler.Finalizer}},
-		}
+		secret := &corev1.Secret{Name: "test", Namespace: "ns", Finalizers: []string{reconciler.Finalizer}}
 		cl := newClient(secret)
 
 		key := client.ObjectKeyFromObject(secret)
