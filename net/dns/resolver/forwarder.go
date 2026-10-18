@@ -146,6 +146,16 @@ func getTxID(packet []byte) txid {
 	return txid(dnsid)
 }
 
+// setTxID writes the low 16 bits of id into the DNS header ID field of packet.
+// It's used to make a cached response match the client's current query. The
+// packet must be at least headerBytes long.
+func setTxID(packet []byte, id txid) {
+	if len(packet) < headerBytes {
+		return
+	}
+	binary.BigEndian.PutUint16(packet[0:2], uint16(id))
+}
+
 func getRCode(packet []byte) dns.RCode {
 	if len(packet) < headerBytes {
 		// treat invalid packets as a refusal
@@ -355,6 +365,11 @@ type forwarder struct {
 	// queries directly - but we didn't configure it with any upstream resolvers.
 	// That's an error, but not a health error if the user has disabled CorpDNS.
 	acceptDNS bool
+
+	// lkg remembers the last-known-good response for allowlisted names so they
+	// keep resolving when the network sinkholes or drops them. Always non-nil;
+	// it no-ops when the allowlist is empty. See lastknowngood.go.
+	lkg *lastKnownGood
 }
 
 func (f *forwarder) probeLocks() {
@@ -377,6 +392,7 @@ func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkS
 		health:       health,
 		controlKnobs: knobs,
 		verboseFwd:   verboseDNSForward(),
+		lkg:          newLastKnownGood(),
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
@@ -1394,6 +1410,11 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
 	}
 
+	// lkgEligible is whether the last-known-good cache applies to this query:
+	// an A or AAAA lookup for an allowlisted name. Only these are stored and
+	// served, since the cache remembers address answers.
+	lkgEligible := f.lkg.enabled() && (typ == dns.TypeA || typ == dns.TypeAAAA) && f.lkg.allowed(domain)
+
 	resc := make(chan []byte, 1) // it's fine buffered or not
 	errc := make(chan error, 1)  // it's fine buffered or not too
 	raceStart := time.Now()      // when the startDelay of each resolver below starts running
@@ -1438,8 +1459,22 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 	}
 
-	// deliverSuccess gives the client an upstream's successful response.
+	// deliverSuccess gives the client an upstream's successful response. For an
+	// allowlisted A/AAAA name it also keeps the last-known-good cache current:
+	// it remembers a real answer, or substitutes a remembered one when the
+	// upstream sinkholed the name to an unspecified address.
 	deliverSuccess := func(v []byte) error {
+		if lkgEligible {
+			if responseHasRealAddr(v) {
+				f.lkg.store(domain, typ, bytes.Clone(v))
+			} else if isSinkholeResponse(v) {
+				if cached, ok := f.lkg.lookup(domain, typ, fq.txid); ok {
+					f.logf("forwarder: serving last-known-good response for sinkholed name %q", domain)
+					metricDNSFwdLKGServed.Add(1)
+					v = cached
+				}
+			}
+		}
 		select {
 		case <-ctx.Done():
 			metricDNSFwdErrorContext.Add(1)
@@ -1454,13 +1489,20 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 	}
 
-	// deliverHeldResponse gives the client the upstream response heldErr
-	// carries, or a synthesized SERVFAIL when it carries none. Like
+	// deliverHeldResponse gives the client a last-known-good response if one is
+	// cached for this allowlisted name, else the upstream response heldErr
+	// carries, else a synthesized SERVFAIL. This is the all-resolvers-failed
+	// path (timeout, REFUSED, SERVFAIL), so a cached answer lets an allowlisted
+	// name keep resolving when the network drops it entirely. Like
 	// forwardWithDestChan, it either sends to responseChan and returns nil, or
 	// returns heldErr without sending.
 	deliverHeldResponse := func() error {
 		var res packet
-		if rcodeErr, ok := errors.AsType[rcodeResponseError](heldErr); ok {
+		if cached, ok := lkgLookupOnFail(lkgEligible, f.lkg, domain, typ, fq.txid); ok {
+			f.logf("forwarder: serving last-known-good response for failed name %q", domain)
+			metricDNSFwdLKGServed.Add(1)
+			res = packet{cached, query.family, query.addr}
+		} else if rcodeErr, ok := errors.AsType[rcodeResponseError](heldErr); ok {
 			res = packet{rcodeErr.res, query.family, query.addr}
 		} else {
 			r, err := servfailResponse(query)

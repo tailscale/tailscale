@@ -1587,6 +1587,10 @@ var (
 	metricDNSFwdErrorType = clientmetric.NewCounter("dns_query_fwd_error_type")
 	metricDNSFwdTruncated = clientmetric.NewCounter("dns_query_fwd_truncated")
 
+	// metricDNSFwdLKGServed counts responses served from the last-known-good
+	// cache because an allowlisted name was sinkholed or its forward failed.
+	metricDNSFwdLKGServed = clientmetric.NewCounter("dns_query_fwd_lkg_served")
+
 	metricDNSFwdUDP             = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
 	metricDNSFwdUDPWrote        = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet
 	metricDNSFwdUDPDropSrc      = clientmetric.NewCounter("dns_query_fwd_udp_drop_src")
