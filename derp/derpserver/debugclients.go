@@ -517,10 +517,7 @@ func (s *Server) debugClientsPage(q *debugClientsQuery) debugClientsPage {
 	// [parseDebugClientsQuery] already caps limit, but bound the
 	// allocation here too so a request's page size demonstrably can't
 	// drive a large allocation.
-	capHint := q.limit
-	if capHint > debugClientsMaxLimit {
-		capHint = debugClientsMaxLimit
-	}
+	capHint := min(q.limit, debugClientsMaxLimit)
 	w.h.ent = make([]pageEntry, 0, capHint)
 	s.mu.Lock()
 	if !q.key.IsZero() {

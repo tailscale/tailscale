@@ -765,10 +765,9 @@ authLoop:
 			return
 		}
 		minDelay := 2 // 2 seconds
-		nextTick := time.Second * time.Duration(math.Pow(float64(minDelay), float64(failedResolveAttempts)))
-		if nextTick > defaultCheckPeriod {
-			nextTick = defaultCheckPeriod // cap at 10 minutes
-		}
+		nextTick := min(time.Second*time.Duration(math.Pow(float64(minDelay), float64(failedResolveAttempts))),
+			// cap at 10 minutes
+			defaultCheckPeriod)
 		log.Printf("reconfigureTimer: last DNS resolution attempt failed, next DNS resolution attempt in %v", nextTick)
 		t.Reset(nextTick)
 		failedResolveAttempts++

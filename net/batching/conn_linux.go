@@ -463,10 +463,7 @@ func (c *linuxBatchingConn) ReadBatch(slab []byte, packets []ReceivedPacket) (n 
 	defer c.putMsgsBatch(batch, maxMsgCount)
 	rem := slab
 	for i := range maxMsgCount {
-		end := recvmmsgSlotSize
-		if len(rem) < recvmmsgSlotSize {
-			end = len(rem)
-		}
+		end := min(len(rem), recvmmsgSlotSize)
 		batch.msgs[i].Buffers[0] = rem[:end]
 		batch.msgs[i].OOB = batch.msgs[i].OOB[:cap(batch.msgs[i].OOB)]
 		rem = rem[end:]
