@@ -59,8 +59,7 @@ func TestIssueACMECertSurfacesAuthorizationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("issueACMECert succeeded; want an authorization error")
 	}
-	var ae *xacme.AuthorizationError
-	if !errors.As(err, &ae) {
+	if _, ok := errors.AsType[*xacme.AuthorizationError](err); !ok {
 		t.Fatalf("error is %T, want *acme.AuthorizationError: %v", err, err)
 	}
 	if !strings.Contains(err.Error(), detail) {

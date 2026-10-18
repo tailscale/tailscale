@@ -34,8 +34,7 @@ func (e rateLimitedError) Unwrap() error { return e.underlying }
 // the upstream ACME CA and, if so, returns the CA's suggested wait
 // (zero if none was provided).
 func RateLimitRetryAfter(err error) (retryAfter time.Duration, ok bool) {
-	var rl rateLimitedError
-	if errors.As(err, &rl) {
+	if rl, ok := errors.AsType[rateLimitedError](err); ok {
 		return rl.retryAfter, true
 	}
 	return 0, false

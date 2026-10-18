@@ -532,8 +532,7 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 					t.Errorf("client did not get kicked out: %q", got)
 				}
 				if tt.wantExitCode != 0 {
-					var exitErr *testssh.ExitError
-					if errors.As(err, &exitErr) {
+					if exitErr, ok := errors.AsType[*testssh.ExitError](err); ok {
 						if got := exitErr.ExitStatus(); got != tt.wantExitCode {
 							t.Errorf("exit code = %d, want %d", got, tt.wantExitCode)
 						}

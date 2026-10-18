@@ -215,8 +215,7 @@ func PackageDoc(dir, importPath string) ([]byte, error) {
 
 	buildPackage, err := build.ImportDir(dir, build.ImportComment)
 	if err != nil {
-		var noGoError *build.NoGoError
-		if errors.As(err, &noGoError) {
+		if _, ok := errors.AsType[*build.NoGoError](err); ok {
 			return nil, nil
 		}
 		return nil, err

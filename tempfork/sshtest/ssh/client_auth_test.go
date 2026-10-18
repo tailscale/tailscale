@@ -652,8 +652,7 @@ func TestClientAuthMaxAuthTries(t *testing.T) {
 			} else if cliErr.Error() != expectedErr.Error() {
 				t.Fatalf("client: got %s, want %s", err, expectedErr)
 			}
-			var authErr *ServerAuthError
-			if !errors.As(srvErr, &authErr) {
+			if _, ok := errors.AsType[*ServerAuthError](srvErr); !ok {
 				t.Errorf("expected ServerAuthError, got: %v", srvErr)
 			}
 		} else {

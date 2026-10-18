@@ -701,10 +701,9 @@ func TestLookupNewer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.r.lookupNewer(context.Background(), tt.mod)
-			var held *heldError
 			switch {
 			case tt.wantHeld:
-				if !errors.As(err, &held) {
+				if _, ok := errors.AsType[*heldError](err); !ok {
 					t.Fatalf("err = %v; want heldError", err)
 				}
 			case tt.wantErr != "":

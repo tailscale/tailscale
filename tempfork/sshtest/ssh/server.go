@@ -786,8 +786,7 @@ userAuthLoop:
 			config.AuthLogCallback(s, userAuthReq.Method, authErr)
 		}
 
-		var bannerErr *BannerError
-		if errors.As(authErr, &bannerErr) {
+		if bannerErr, ok := errors.AsType[*BannerError](authErr); ok {
 			if bannerErr.Message != "" {
 				if err := s.SendAuthBanner(bannerErr.Message); err != nil {
 					return nil, err
