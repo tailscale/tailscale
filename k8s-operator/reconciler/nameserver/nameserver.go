@@ -246,13 +246,13 @@ type deployable struct {
 }
 
 type deployConfig struct {
-	replicas     int32
-	imageRepo    string
-	imageTag     string
-	labels       map[string]string
-	ownerRefs    []metav1.OwnerReference
-	namespace    string
-	clusterIP    string
+	replicas         int32
+	imageRepo        string
+	imageTag         string
+	labels           map[string]string
+	ownerRefs        []metav1.OwnerReference
+	namespace        string
+	clusterIP        string
 	tolerations      []corev1.Toleration
 	affinity         *corev1.Affinity
 	nodeSelector     map[string]string
