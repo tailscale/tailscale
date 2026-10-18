@@ -57,26 +57,26 @@ func startFakeLegacyDaemon(t *testing.T, lookup func(name string, family int) (a
 					return
 				}
 				cmd := string(buf[:n])
-				nul := strings.IndexByte(cmd, 0)
-				if nul < 0 {
+				before, _, ok := strings.Cut(cmd, "\x00")
+				if !ok {
 					t.Error("command not NUL terminated in a single read")
 					return
 				}
-				f := strings.Fields(cmd[:nul])
+				f := strings.Fields(before)
 				if len(f) == 0 || f[0] != "getaddrinfo" {
 					c.Write([]byte("500 Command not recognized\x00"))
 					return
 				}
 				// getaddrinfo <name> <service> <flags> <family> <socktype> <protocol> <netId>
 				if len(f) != 8 {
-					t.Errorf("bad getaddrinfo command %q", cmd[:nul])
+					t.Errorf("bad getaddrinfo command %q", before)
 					c.Write([]byte("501 Invalid number of arguments to getaddrinfo\x00"))
 					return
 				}
 				served.Add(1)
 				family, err := strconv.Atoi(f[4])
 				if err != nil {
-					t.Errorf("bad family in %q", cmd[:nul])
+					t.Errorf("bad family in %q", before)
 					return
 				}
 				addrs, eai := lookup(f[1], family)

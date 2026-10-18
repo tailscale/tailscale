@@ -50,14 +50,14 @@ func startFakeDaemon(t *testing.T, answer func(query []byte) (ans []byte, errno 
 					return
 				}
 				cmd := string(buf[:n])
-				nul := strings.IndexByte(cmd, 0)
-				if nul < 0 {
+				before, _, ok := strings.Cut(cmd, "\x00")
+				if !ok {
 					t.Error("command not NUL terminated in a single read")
 					return
 				}
-				f := strings.Fields(cmd[:nul])
+				f := strings.Fields(before)
 				if len(f) != 4 || f[0] != "resnsend" {
-					t.Errorf("bad command %q", cmd[:nul])
+					t.Errorf("bad command %q", before)
 					return
 				}
 				query, err := base64.StdEncoding.DecodeString(f[3])

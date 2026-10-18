@@ -570,7 +570,7 @@ func (menu *Menu) copyTailscaleIP(device *ipnstate.PeerStatus) {
 	if device == nil || len(device.TailscaleIPs) == 0 {
 		return
 	}
-	name := strings.Split(device.DNSName, ".")[0]
+	name, _, _ := strings.Cut(device.DNSName, ".")
 	ip := device.TailscaleIPs[0].String()
 	err := clipboard.WriteAll(ip)
 	if err != nil {
@@ -656,7 +656,7 @@ func (menu *Menu) rebuildExitNodeMenu(ctx context.Context) {
 			if !ps.ExitNodeOption || ps.Location != nil {
 				continue
 			}
-			name := strings.Split(ps.DNSName, ".")[0]
+			name, _, _ := strings.Cut(ps.DNSName, ".")
 			if !ps.Online {
 				name += " (offline)"
 			}

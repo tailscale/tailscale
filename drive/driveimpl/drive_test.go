@@ -149,7 +149,7 @@ func TestMissingPaths(t *testing.T) {
 		Transport: &http.Transport{DisableKeepAlives: true},
 	}
 	addr := strings.Split(fileserverAddr, "|")[1]
-	secretToken := strings.Split(fileserverAddr, "|")[0]
+	secretToken, _, _ := strings.Cut(fileserverAddr, "|")
 
 	testCases := []struct {
 		name       string

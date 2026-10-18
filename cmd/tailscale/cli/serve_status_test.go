@@ -275,7 +275,7 @@ func TestPrintServeStatusTreesParity(t *testing.T) {
 		}
 		web, _ := svc["Web"].(map[string]any)
 		for hp := range web {
-			host := strings.SplitN(hp, ":", 2)[0]
+			host, _, _ := strings.Cut(hp, ":")
 			if !strings.Contains(human, host) {
 				t.Errorf("human output missing service %s Web host %q\n--- human ---\n%s", name, host, human)
 			}
@@ -284,7 +284,7 @@ func TestPrintServeStatusTreesParity(t *testing.T) {
 
 	if web, ok := raw["Web"].(map[string]any); ok {
 		for hp := range web {
-			host := strings.SplitN(hp, ":", 2)[0]
+			host, _, _ := strings.Cut(hp, ":")
 			if !strings.Contains(human, host) {
 				t.Errorf("human output missing node Web host %q\n--- human ---\n%s", host, human)
 			}

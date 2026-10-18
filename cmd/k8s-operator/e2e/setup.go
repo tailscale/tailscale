@@ -940,11 +940,11 @@ func stripTSNetZone(corefile string) string {
 		return corefile
 	}
 	rest := corefile[idx:]
-	end := strings.Index(rest, "\n}")
-	if end == -1 {
+	_, after, ok := strings.Cut(rest, "\n}")
+	if !ok {
 		return corefile[:idx]
 	}
-	return corefile[:idx] + rest[end+len("\n}"):]
+	return corefile[:idx] + after
 }
 
 // forwardLocalPortToPod sets up port forwarding to the specified Pod and remote port.
