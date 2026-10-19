@@ -13,6 +13,7 @@ package tailscaled
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -175,9 +176,7 @@ func NewConfigSecret(opts ConfigSecretOptions) (*corev1.Secret, error) {
 	}
 
 	labels := make(map[string]string, len(opts.Labels)+1)
-	for k, v := range opts.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, opts.Labels)
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeConfig
 
 	return &corev1.Secret{
@@ -206,9 +205,7 @@ type StateSecretOptions struct {
 // automatically alongside any caller-provided labels; tailscaled populates the Data on first run.
 func NewStateSecret(opts StateSecretOptions) *corev1.Secret {
 	labels := make(map[string]string, len(opts.Labels)+1)
-	for k, v := range opts.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, opts.Labels)
 	labels[kubetypes.LabelSecretType] = kubetypes.LabelSecretTypeState
 
 	return &corev1.Secret{
