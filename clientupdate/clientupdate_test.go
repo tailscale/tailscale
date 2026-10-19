@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -581,6 +582,102 @@ unique="synology_88f6281_213air"
 			}
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDownloadLinuxTarballDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux tarball downloads are only supported on Linux")
+	}
+	for _, name := range []string{"cache", "missing-cache", "temp"} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			t.Setenv("HOME", "")
+			t.Setenv("XDG_CACHE_HOME", "")
+			t.Setenv("TMPDIR", base)
+			if name != "temp" {
+				if name == "missing-cache" {
+					base = filepath.Join(base, "cache")
+				}
+				t.Setenv("XDG_CACHE_HOME", base)
+			}
+			// Leave an existing update directory and file untouched.
+			legacyDir := filepath.Join(base, "tailscale-update")
+			if name != "missing-cache" {
+				if err := os.Mkdir(legacyDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(legacyDir, "keep"), []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			dirs := make(chan []fs.FileInfo, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/distsign.pub" {
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				entries, err := os.ReadDir(base)
+				if err != nil {
+					t.Error(err)
+				}
+				var created []fs.FileInfo
+				for _, e := range entries {
+					if e.Name() == "tailscale-update" {
+						continue
+					}
+					info, err := e.Info()
+					if err != nil {
+						t.Error(err)
+						continue
+					}
+					created = append(created, info)
+				}
+				dirs <- created
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			}))
+			defer srv.Close()
+			up := &Updater{Arguments: Arguments{Logf: t.Logf, PkgsAddr: srv.URL, Track: StableTrack}}
+			var previous string
+			for range 2 {
+				if _, err := up.downloadLinuxTarball("1.0.0"); err == nil {
+					t.Fatal("download unexpectedly succeeded")
+				}
+				var created []fs.FileInfo
+				select {
+				case created = <-dirs:
+				default:
+					t.Fatal("download failed before reaching the package server")
+				}
+				if len(created) != 1 {
+					t.Errorf("got %d new download directories, want 1", len(created))
+				} else {
+					info := created[0]
+					if !info.IsDir() || info.Mode().Perm() != 0700 {
+						t.Errorf("download directory mode = %v, want drwx------", info.Mode())
+					}
+					if info.Name() == previous {
+						t.Errorf("reused download directory %q", previous)
+					}
+					previous = info.Name()
+				}
+				entries, err := os.ReadDir(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range entries {
+					if name == "missing-cache" || e.Name() != "tailscale-update" {
+						t.Errorf("download left behind %q", e.Name())
+					}
+				}
+			}
+			if name != "missing-cache" {
+				if got, err := os.ReadFile(filepath.Join(legacyDir, "keep")); err != nil || string(got) != "keep" {
+					t.Errorf("existing file = %q, %v; want keep, nil", got, err)
+				}
 			}
 		})
 	}
