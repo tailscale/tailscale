@@ -565,7 +565,7 @@ func marshalStruct(out []byte, msg any) []byte {
 				offset := len(out)
 				out = appendU32(out, 0)
 				if n := field.Len(); n > 0 {
-					for j := 0; j < n; j++ {
+					for j := range n {
 						f := field.Index(j)
 						if j != 0 {
 							out = append(out, ',')

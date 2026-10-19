@@ -811,7 +811,7 @@ func TestMuxChannelWindowDeferredUpdates(t *testing.T) {
 	}()
 	cWritesInit := cTransport.getWriteCount()
 	buf := make([]byte, 1)
-	for i := 0; i < len(data); i++ {
+	for range data {
 		n, err := c.Read(buf)
 		if n != len(buf) || err != nil {
 			t.Fatalf("Read: %v, %v", n, err)

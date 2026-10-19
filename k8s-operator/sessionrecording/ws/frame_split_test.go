@@ -249,7 +249,7 @@ func TestBulkStdinPassthrough(t *testing.T) {
 	rng.Read(data)
 	for _, frameSize := range []int{4 << 10, 32 << 10} {
 		for _, maxSeg := range []int{1460, 16 << 10} {
-			for seed := int64(0); seed < 3; seed++ {
+			for seed := range int64(3) {
 				t.Run(fmt.Sprintf("frame%d_seg%d_seed%d", frameSize, maxSeg, seed), func(t *testing.T) {
 					runStdinThroughParser(t, data, frameSize, maxSeg, seed)
 				})
@@ -270,7 +270,7 @@ func TestBulkStdinPassthroughFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, maxSeg := range []int{1460, 16 << 10, 64 << 10} {
-		for seed := int64(0); seed < 3; seed++ {
+		for seed := range int64(3) {
 			t.Run(fmt.Sprintf("seg%d_seed%d", maxSeg, seed), func(t *testing.T) {
 				runStdinThroughParser(t, data, 32<<10, maxSeg, seed)
 			})

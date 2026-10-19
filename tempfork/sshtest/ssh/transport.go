@@ -340,7 +340,7 @@ func readVersion(r io.Reader) ([]byte, error) {
 	var ok bool
 	var buf [1]byte
 
-	for length := 0; length < maxVersionStringBytes; length++ {
+	for range maxVersionStringBytes {
 		_, err := io.ReadFull(r, buf[:])
 		if err != nil {
 			return nil, err

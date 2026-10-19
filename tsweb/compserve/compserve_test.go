@@ -530,7 +530,7 @@ func TestTranscodedFile_ReusedDecoders(t *testing.T) {
 	compressed := compressZstd(t, original)
 	tfs := mapFS(map[string][]byte{"test.zst": compressed})
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		tf := &transcodedFile{fsys: tfs, path: "test.zst", dec: Zstd.Decompress}
 		if err := tf.restart(); err != nil {
 			t.Fatal(err)

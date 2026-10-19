@@ -207,7 +207,7 @@ func TestMarshalMultiTag(t *testing.T) {
 }
 
 func randomBytes(out []byte, rand *rand.Rand) {
-	for i := 0; i < len(out); i++ {
+	for i := range out {
 		out[i] = byte(rand.Int31())
 	}
 }

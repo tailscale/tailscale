@@ -73,7 +73,7 @@ func (c *Client) autoPortListenWorkaround(laddr *net.TCPAddr) (net.Listener, err
 	var sshListener net.Listener
 	var err error
 	const tries = 10
-	for i := 0; i < tries; i++ {
+	for range tries {
 		addr := *laddr
 		addr.Port = 1024 + portRandomizer.Intn(60000)
 		sshListener, err = c.ListenTCP(&addr)

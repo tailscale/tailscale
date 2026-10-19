@@ -165,7 +165,7 @@ func (c *connector) expireTransitIPs(now time.Time) int {
 		nRemoved := 0
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		for i := 0; i < n; i++ {
+		for range n {
 			front := c.expiryQueue.Front()
 			if front == nil {
 				return nRemoved, true
@@ -191,7 +191,7 @@ func (c *connector) expireTransitIPs(now time.Time) int {
 
 	// handle at most 100,000 entries, don't just keep going if we have an
 	// unexpectedly large number of expiries, we will handle the backlog over time.
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		nRemoved, finished := doChunk(100)
 		removed += nRemoved
 		if finished {

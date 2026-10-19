@@ -156,7 +156,7 @@ func TestHandshakeBasic(t *testing.T) {
 		// change in the middle. This should not confuse the
 		// handshake in progress. We do this twice, so we test
 		// that the packet buffer is reset correctly.
-		for i := 0; i < N; i++ {
+		for i := range N {
 			p := []byte{msgRequestSuccess, byte(i)}
 			if err := trC.writePacket(p); err != nil {
 				errorCh <- err
@@ -294,7 +294,7 @@ func TestHandshakeAutoRekeyWrite(t *testing.T) {
 
 	<-checker.called
 
-	for i := 0; i < numPacket; i++ {
+	for i := range numPacket {
 		p := make([]byte, len(input))
 		copy(p, input)
 		if err := trC.writePacket(p); err != nil {
@@ -400,25 +400,25 @@ func (n *errorKeyingTransport) setStrictMode() error { return nil }
 func (n *errorKeyingTransport) setInitialKEXDone() {}
 
 func TestHandshakeErrorHandlingRead(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		testHandshakeErrorHandlingN(t, i, -1, false)
 	}
 }
 
 func TestHandshakeErrorHandlingWrite(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		testHandshakeErrorHandlingN(t, -1, i, false)
 	}
 }
 
 func TestHandshakeErrorHandlingReadCoupled(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		testHandshakeErrorHandlingN(t, i, -1, true)
 	}
 }
 
 func TestHandshakeErrorHandlingWriteCoupled(t *testing.T) {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		testHandshakeErrorHandlingN(t, -1, i, true)
 	}
 }
@@ -789,7 +789,7 @@ func TestStrictKEXResetSeqSuccessiveKEX(t *testing.T) {
 	}
 
 	// write and read five packets on either side to bump the sequence numbers
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := trC.writePacket([]byte{msgRequestSuccess}); err != nil {
 			t.Fatalf("writePacket failed: %s", err)
 		}
@@ -868,7 +868,7 @@ func TestSeqNumIncrease(t *testing.T) {
 	}
 
 	// write and read five packets on either side to bump the sequence numbers
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := trC.writePacket([]byte{msgRequestSuccess}); err != nil {
 			t.Fatalf("writePacket failed: %s", err)
 		}

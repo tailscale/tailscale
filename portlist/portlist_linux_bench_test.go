@@ -69,7 +69,7 @@ func makePortFixture(t testing.TB, pairs int) *portFixture {
 				accepted <- struct{}{}
 			}
 		}()
-		for i := 0; i < pairs; i++ {
+		for range pairs {
 			c, err := net.Dial(network, ln.Addr().String())
 			if err != nil {
 				t.Fatalf("dial %s: %v", network, err)
@@ -78,7 +78,7 @@ func makePortFixture(t testing.TB, pairs int) *portFixture {
 			f.closers = append(f.closers, c)
 			f.mu.Unlock()
 		}
-		for i := 0; i < pairs; i++ {
+		for range pairs {
 			<-accepted
 		}
 	}
@@ -111,7 +111,7 @@ func makePortFixture(t testing.TB, pairs int) *portFixture {
 
 func makeManyPortFixture(t testing.TB, pairs, extra int) *portFixture {
 	f := makePortFixture(t, pairs)
-	for i := 0; i < extra; i++ {
+	for range extra {
 		ln, err := net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("extra listener: %v", err)

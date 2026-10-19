@@ -100,7 +100,7 @@ func TestCBCOracleCounterMeasure(t *testing.T) {
 	// We corrupt each byte, but this usually will only test the
 	// 'packet too large' or 'MAC failure' cases.
 	lastRead := -1
-	for i := 0; i < packetSize; i++ {
+	for i := range packetSize {
 		server, err := newPacketCipher(clientKeys, algs, kr)
 		if err != nil {
 			t.Fatalf("newPacketCipher(client): %v", err)

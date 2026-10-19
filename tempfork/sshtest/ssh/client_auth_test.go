@@ -667,7 +667,7 @@ func TestClientAuthMaxAuthTries(t *testing.T) {
 // when more public keys are provided then MaxAuthTries
 func TestClientAuthMaxAuthTriesPublicKey(t *testing.T) {
 	signers := []Signer{}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		signers = append(signers, testSigners["dsa"])
 	}
 

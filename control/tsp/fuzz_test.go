@@ -46,7 +46,7 @@ func FuzzFramedReader(f *testing.F) {
 			maxSize: maxSize,
 		}
 		var p [8]byte
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			if _, err := fr.Read(p[:]); err != nil {
 				break
 			}
@@ -64,7 +64,7 @@ func FuzzBoundedReader(f *testing.F) {
 			remain: DefaultMaxMessageSize,
 		}
 		var p [8]byte
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			if _, err := b.Read(p[:]); err != nil {
 				break
 			}

@@ -177,7 +177,7 @@ func BenchmarkDup(b *testing.B) {
 	const n = 10000
 	h := make(myHeap[int], 0, n)
 	for range b.N {
-		for j := 0; j < n; j++ {
+		for range n {
 			Push[int](&h, 0) // all elements are the same
 		}
 		for h.Len() > 0 {

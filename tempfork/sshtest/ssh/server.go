@@ -915,7 +915,7 @@ func (c *sshClientKeyboardInteractive) Challenge(name, instruction string, quest
 		return nil, parseError(msgUserAuthInfoResponse)
 	}
 
-	for i := uint32(0); i < n; i++ {
+	for range n {
 		ans, rest, ok := parseString(packet)
 		if !ok {
 			return nil, parseError(msgUserAuthInfoResponse)

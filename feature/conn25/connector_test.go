@@ -101,7 +101,7 @@ func TestConnectorExpireTransitIPs(t *testing.T) {
 		return netip.AddrFrom4(buf)
 	}
 	var i uint32
-	for i = 0; i < 100003; i++ {
+	for i = range 100003 {
 		tip := uint32ToIPv4(i + 10)
 		dst := uint32ToIPv4(i + 100014)
 		register(peerANode, tip, dst)
