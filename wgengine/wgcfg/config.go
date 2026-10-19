@@ -33,6 +33,11 @@ type PeerConfig struct {
 	// PresharedKey is the optional WireGuard pre-shared key. The zero value
 	// disables the pre-shared-key layer.
 	PresharedKey device.NoisePresharedKey
+
+	// Hybrid is whether to use the hybrid post-quantum (Noise IKhfs+psk2)
+	// handshake with this peer. Both peers must agree on this setting to
+	// communicate; there is no fallback between handshake types.
+	Hybrid bool
 }
 
 func (c *Config) Equal(o *Config) bool {
