@@ -175,7 +175,7 @@ func TestGenerateViaTargetAdditions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := generateViaTargetAdditions(tt.v)
+			got, err := generateEnvViaTargetAdditions(tt.v)
 			if err == nil {
 				if len(tt.wantErrs) > 0 {
 					t.Error("returned no errors, want some errors")

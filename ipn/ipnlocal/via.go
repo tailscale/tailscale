@@ -14,6 +14,8 @@ import (
 	"go4.org/netipx"
 	"tailscale.com/envknob"
 	"tailscale.com/net/routelimits"
+	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 )
 
@@ -27,8 +29,8 @@ import (
 // notation), or IPv4 addresses. Spaces are permitted around the commas.
 const viaAdditionsEnv = "TS_4VIA6_ALLOW_LOCAL"
 
-var viaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
-	v, err := generateViaTargetAdditions(envknob.String(viaAdditionsEnv))
+var envViaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
+	v, err := generateEnvViaTargetAdditions(envknob.String(viaAdditionsEnv))
 	if err != nil {
 		log.Print(err)
 	}
@@ -41,7 +43,7 @@ var viaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
 	return v
 })
 
-func generateViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
+func generateEnvViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
 	rawAdditions = strings.TrimSpace(rawAdditions)
 	if rawAdditions == "" {
 		return nil, nil
@@ -101,10 +103,12 @@ func generateViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
 	return ipSet, errors.Join(errs...)
 }
 
-// viaTargetAllowed reports whether ip may be forwarded to after unmapping a
-// 4via6 destination. The packet filter only sees the outer via address, so
-// this is the sole check on the embedded IPv4 target.
-func viaTargetAllowed(ip netip.Addr) bool {
+// viaTargetDefaultAllowed reports whether ip may be forwarded to after
+// unmapping a 4via6 destination. The packet filter only sees the outer via
+// address, so this is a substitute for the normal destination IP filter in
+// [tailscale.com/wgengine/filter] when via addresses are in use. Exceptions to
+// the restrictions are handled before this func is called.
+func viaTargetDefaultAllowed(ip netip.Addr) bool {
 	if !ip.Is4() {
 		return false // UnmapVia only returns IPv4
 	}
@@ -116,4 +120,32 @@ func viaTargetAllowed(ip netip.Addr) bool {
 		}
 	}
 	return !routelimits.IsDisallowed(ip)
+}
+
+var (
+	v4Loopback  = netip.PrefixFrom(netip.AddrFrom4([4]byte{127, 0, 0, 0}), 8)
+	v4LinkLocal = netip.PrefixFrom(netip.AddrFrom4([4]byte{169, 254, 0, 1}), 16)
+)
+
+func generateViaTargetAllowed(advertisedViaRoutes views.Slice[netip.Prefix]) func(netip.Addr) bool {
+	var sb netipx.IPSetBuilder
+
+	sb.AddSet(envViaTargetAdditions())
+
+	// Loopback and link-local addresses that are normally restricted by
+	// [routelimits.IsDisallowed] are permitted if there is a specific enough
+	// route. Specific enough means that the prefix is fully contained within
+	// the restricted range.
+	for _, pfx := range advertisedViaRoutes.All() {
+		if !tsaddr.IsViaPrefix(pfx) {
+			continue
+		}
+		if pfx.Bits() < 96 {
+			// The prefix is definitely too broad to allow
+			continue
+		}
+
+		unmapped := netip.PrefixFrom(tsaddr.UnmapVia(pfx.Addr()), pfx.Bits()-96)
+
+	}
 }
