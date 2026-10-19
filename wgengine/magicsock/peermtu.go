@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/disco"
+	"tailscale.com/net/sockopts"
 	"tailscale.com/net/tstun"
 )
 
@@ -18,16 +19,16 @@ import (
 // DontFragSetting returns true if at least one of the underlying sockets of
 // this connection is a UDP socket with the don't fragment bit set, otherwise it
 // returns false. It also returns an error if either connection returned an error
-// other than errUnsupportedConnType.
+// other than [sockopts.ErrNoSocket].
 func (c *Conn) DontFragSetting() (bool, error) {
 	df4, err4 := c.getDontFragment("udp4")
 	df6, err6 := c.getDontFragment("udp6")
 	df := df4 || df6
 	err := err4
-	if err4 != nil && err4 != errUnsupportedConnType {
+	if err4 != nil && !errors.Is(err4, sockopts.ErrNoSocket) {
 		err = err6
 	}
-	if err == errUnsupportedConnType {
+	if errors.Is(err, sockopts.ErrNoSocket) {
 		err = nil
 	}
 	return df, err
@@ -103,7 +104,7 @@ func (c *Conn) UpdatePMTUD() {
 	err4 := c.setDontFragment("udp4", enable)
 	err6 := c.setDontFragment("udp6", enable)
 	anySuccess := err4 == nil || err6 == nil
-	noFailures := (err4 == nil || err4 == errUnsupportedConnType) && (err6 == nil || err6 == errUnsupportedConnType)
+	noFailures := (err4 == nil || errors.Is(err4, sockopts.ErrNoSocket)) && (err6 == nil || errors.Is(err6, sockopts.ErrNoSocket))
 
 	if anySuccess && noFailures {
 		c.logf("magicsock: peermtu: peer MTU status updated to %v", newStatus)
