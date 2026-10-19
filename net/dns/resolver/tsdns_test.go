@@ -922,6 +922,84 @@ func TestDelegateSplitRoute(t *testing.T) {
 	}
 }
 
+// TestResolverARPA verifies RFC 9462 Sections 6.1 and 6.4: names at or
+// below resolver.arpa get a local NODATA answer. The upstream holds a
+// record for test.resolver.arpa, so a forwarded query makes the test fail.
+func TestResolverARPA(t *testing.T) {
+	tstest.ResourceCheck(t)
+
+	records := []any{
+		"test.resolver.arpa.", resolveToIP(testipv4, testipv6, "dns.test.site."),
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."),
+	}
+	v4server := serveDNS(t, "127.0.0.1:0", records...)
+	defer v4server.Shutdown()
+
+	r := newResolver(t)
+	defer r.Close()
+
+	cfg := dnsCfg
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+		".": {{Addr: v4server.PacketConn.LocalAddr().String()}},
+	}
+	r.SetConfig(cfg)
+
+	tests := []struct {
+		title    string
+		query    []byte
+		response dnsResponse
+	}{
+		{
+			"apex A",
+			dnspacket("resolver.arpa.", dns.TypeA, noEdns),
+			dnsResponse{rcode: dns.RCodeSuccess},
+		},
+		{
+			"svcb",
+			dnspacket("_dns.resolver.arpa.", dns.TypeSVCB, noEdns),
+			dnsResponse{rcode: dns.RCodeSuccess},
+		},
+		{
+			"svcb mixed case",
+			dnspacket("_DNS.RESOLVER.ARPA.", dns.TypeSVCB, noEdns),
+			dnsResponse{rcode: dns.RCodeSuccess},
+		},
+		{
+			"subdomain A",
+			dnspacket("test.resolver.arpa.", dns.TypeA, noEdns),
+			dnsResponse{rcode: dns.RCodeSuccess},
+		},
+		{
+			// Control: names outside resolver.arpa still reach the
+			// upstream.
+			"forwarded",
+			dnspacket("test.site.", dns.TypeA, noEdns),
+			dnsResponse{ip: testipv4, rcode: dns.RCodeSuccess},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			payload, err := syncRespond(r, tt.query)
+			if err != nil {
+				t.Errorf("err = %v; want nil", err)
+				return
+			}
+			response, err := unpackResponse(payload)
+			if err != nil {
+				t.Errorf("extract: err = %v; want nil (in %x)", err, payload)
+				return
+			}
+			if response.rcode != tt.response.rcode {
+				t.Errorf("rcode = %v; want %v", response.rcode, tt.response.rcode)
+			}
+			if response.ip != tt.response.ip {
+				t.Errorf("ip = %v; want %v", response.ip, tt.response.ip)
+			}
+		})
+	}
+}
+
 var allResponse = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error

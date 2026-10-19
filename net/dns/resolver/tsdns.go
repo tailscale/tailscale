@@ -509,6 +509,15 @@ func (r *Resolver) HandlePeerDNSQuery(ctx context.Context, q []byte, from netip.
 		return marshalResponse(resp)
 	}
 
+	// RFC 9462 Section 6.1 applies here too, not just to local queries:
+	// peer queries for resolver.arpa must not go upstream. Answer NODATA
+	// locally instead.
+	if fqdn, err := dnsname.ToFQDN(strings.ToLower(name)); err == nil && hasResolverARPAName(fqdn) {
+		metricDNSResolverARPA.Add(1)
+		resp.Header.RCode = dns.RCodeSuccess
+		return marshalResponse(resp)
+	}
+
 	switch runtime.GOOS {
 	default:
 		return nil, errors.New("unsupported exit node OS")
@@ -1500,6 +1509,21 @@ func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
 	}
 
 	generation := r.negativeCache.queryGeneration()
+
+	// RFC 9462 (Discovery of Designated Resolvers) Section 6.1: a DNS
+	// forwarder SHOULD NOT send resolver.arpa queries (or any subdomain)
+	// upstream. The upstream would answer with its own Designated
+	// Resolver, and the client cannot authenticate that answer, because
+	// the certificate does not cover this resolver's address. Section
+	// 6.4 says to serve the name locally. tailscaled has no Designated
+	// Resolver to advertise, so answer NODATA for every type.
+	if hasResolverARPAName(name) {
+		metricDNSResolverARPA.Add(1)
+		resp := parser.response()
+		resp.Header.RCode = dns.RCodeSuccess
+		return r.marshalLocalResponse(name, resp, generation)
+	}
+
 	// Always try to handle reverse lookups; delegate inside when not found.
 	// This way, queries for existent nodes do not leak,
 	// but we behave gracefully if non-Tailscale nodes exist in CGNATRange.
@@ -1528,6 +1552,14 @@ func (r *Resolver) respondOnce(query []byte) ([]byte, error) {
 	}
 	metricDNSMagicDNSSuccessName.Add(1)
 	return r.marshalLocalResponse(name, resp, generation)
+}
+
+// hasResolverARPAName reports whether name is at or below the RFC 9462
+// special-use name "resolver.arpa". The comparison is case-sensitive;
+// name must already be lowercase.
+func hasResolverARPAName(name dnsname.FQDN) bool {
+	s := string(name)
+	return s == "resolver.arpa." || strings.HasSuffix(s, ".resolver.arpa.")
 }
 
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
@@ -1570,6 +1602,7 @@ var (
 
 	metricDNSMagicDNSSuccessName    = clientmetric.NewCounter("dns_query_magic_success_name")
 	metricDNSMagicDNSSuccessReverse = clientmetric.NewCounter("dns_query_magic_success_reverse")
+	metricDNSResolverARPA           = clientmetric.NewCounter("dns_query_resolver_arpa")
 
 	metricDNSExitProxyQuery           = clientmetric.NewCounter("dns_exit_node_query")
 	metricDNSExitProxyErrorName       = clientmetric.NewCounter("dns_exit_node_error_name")
