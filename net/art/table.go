@@ -19,6 +19,7 @@ import (
 	"io"
 	"math/bits"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -113,8 +114,8 @@ findLeaf:
 	// In the common case where path compression did not mislead us, we'll
 	// return on the first loop iteration because the last route we recorded was
 	// the correct most-specific route.
-	for i := len(strideMatch) - 1; i >= 0; i-- {
-		if m := strideMatch[i]; m.prefix.Contains(addr) {
+	for _, m := range slices.Backward(strideMatch) {
+		if m.prefix.Contains(addr) {
 			return m.route, true
 		}
 	}

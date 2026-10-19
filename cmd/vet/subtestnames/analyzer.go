@@ -18,6 +18,7 @@ package subtestnames
 import (
 	"go/ast"
 	"go/token"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -129,8 +130,8 @@ func checkCallExpr(pass *analysis.Pass, call *ast.CallExpr, rangeStack []*ast.Ra
 	}
 
 	// Find the enclosing range statement where ident is the value variable.
-	for i := len(rangeStack) - 1; i >= 0; i-- {
-		rs := rangeStack[i]
+	for _, rs := range slices.Backward(rangeStack) {
+
 		valIdent, ok := rs.Value.(*ast.Ident)
 		if !ok || valIdent.Obj != ident.Obj {
 			continue

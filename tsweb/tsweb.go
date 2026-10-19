@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -445,8 +446,8 @@ func MiddlewareStack(mw ...Middleware) Middleware {
 		return mw[0]
 	}
 	return func(h http.Handler) http.Handler {
-		for i := len(mw) - 1; i >= 0; i-- {
-			h = mw[i](h)
+		for _, m := range slices.Backward(mw) {
+			h = m(h)
 		}
 		return h
 	}

@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -838,8 +839,8 @@ func TestDeleteIsReverseOfInsert(t *testing.T) {
 		tab.Insert(p.pfx, p.val)
 	}
 
-	for i := len(prefixes) - 1; i >= 0; i-- {
-		tab.Delete(prefixes[i].pfx)
+	for i, p := range slices.Backward(prefixes) {
+		tab.Delete(p.pfx)
 		if got := tab.debugSummary(); got != want[i] {
 			t.Fatalf("after delete %d, mismatch:\n\n got: %s\n\nwant: %s", i, got, want[i])
 		}
