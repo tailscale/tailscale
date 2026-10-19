@@ -489,7 +489,7 @@ func Unmarshal(data []byte, out any) error {
 			default:
 				return fieldError(structType, i, "slice of unsupported type")
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if t == bigIntType {
 				var n *big.Int
 				if n, data, ok = parseInt(data); !ok {
@@ -578,7 +578,7 @@ func marshalStruct(out []byte, msg any) []byte {
 			default:
 				panic(fmt.Sprintf("slice of unknown type in field %d: %T", i, field.Interface()))
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if t == bigIntType {
 				var n *big.Int
 				nValue := reflect.ValueOf(&n)

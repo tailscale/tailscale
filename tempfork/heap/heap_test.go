@@ -5,13 +5,12 @@
 package heap
 
 import (
+	"cmp"
 	"math/rand"
 	"testing"
-
-	"golang.org/x/exp/constraints"
 )
 
-type myHeap[T constraints.Ordered] []T
+type myHeap[T cmp.Ordered] []T
 
 func (h *myHeap[T]) Less(i, j int) bool {
 	return (*h)[i] < (*h)[j]
