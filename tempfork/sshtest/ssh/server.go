@@ -353,7 +353,7 @@ func checkSourceAddress(addr net.Addr, sourceAddrs string) error {
 		return fmt.Errorf("ssh: remote address %v is not an TCP address when checking source-address match", addr)
 	}
 
-	for _, sourceAddr := range strings.Split(sourceAddrs, ",") {
+	for sourceAddr := range strings.SplitSeq(sourceAddrs, ",") {
 		if allowedIP := net.ParseIP(sourceAddr); allowedIP != nil {
 			if allowedIP.Equal(tcpAddr.IP) {
 				return nil

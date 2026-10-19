@@ -319,7 +319,7 @@ func rawVideoContentType(ct string) bool {
 // already set by the handler.
 func addVary(h http.Header, token string) {
 	for _, vary := range h.Values("Vary") {
-		for _, t := range strings.Split(vary, ",") {
+		for t := range strings.SplitSeq(vary, ",") {
 			if strings.EqualFold(strings.TrimSpace(t), token) {
 				return
 			}

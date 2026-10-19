@@ -368,7 +368,7 @@ type pongMsg struct {
 func typeTags(structType reflect.Type) (tags []byte) {
 	tagStr := structType.Field(0).Tag.Get("sshtype")
 
-	for _, tag := range strings.Split(tagStr, "|") {
+	for tag := range strings.SplitSeq(tagStr, "|") {
 		i, err := strconv.Atoi(tag)
 		if err == nil {
 			tags = append(tags, byte(i))

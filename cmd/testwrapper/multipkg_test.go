@@ -47,7 +47,7 @@ func importPath(pattern string) string {
 // go test invocations, which unlike retries have no --run flag.
 func firstPassRuns(out []byte) []string {
 	var runs []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if strings.HasPrefix(line, "running test") && !strings.Contains(line, "--run") {
 			runs = append(runs, line)
 		}
@@ -139,7 +139,7 @@ func TestMultiPackage(t *testing.T) {
 // jsonLines returns the flakytest and permanent failures JSON lines
 // from testwrapper output, or "" for each that is absent.
 func jsonLines(out []byte) (flaky, permanent string) {
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if strings.HasPrefix(line, "flakytest failures JSON:") {
 			flaky = line
 		}

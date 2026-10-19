@@ -37,7 +37,7 @@ var disabledByEnv = sync.OnceValue(func() set.Set[string] {
 // feature names, skipping empty entries.
 func parseDisabledList(s string) []string {
 	var names []string
-	for _, ent := range strings.Split(s, ",") {
+	for ent := range strings.SplitSeq(s, ",") {
 		if name := normalizeFeatureName(ent); name != "" {
 			names = append(names, name)
 		}

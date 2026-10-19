@@ -203,7 +203,7 @@ func negotiate(ae string, offered []Encoding) *Encoding {
 // and a malformed quality value rejects the coding.
 func parseAcceptEncoding(h string) (exact map[string]float64, wildcard float64, hasWildcard bool) {
 	exact = make(map[string]float64)
-	for _, part := range strings.Split(h, ",") {
+	for part := range strings.SplitSeq(h, ",") {
 		token, params, _ := strings.Cut(part, ";")
 		token = strings.ToLower(strings.TrimSpace(token))
 		if token == "" {
