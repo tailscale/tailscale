@@ -4,7 +4,6 @@
 package netstack
 
 import (
-	"context"
 	"io"
 	"os"
 	"sync"
@@ -68,8 +67,7 @@ func (q *queueTestTUNQueue) Read(slab []byte, packets []tun.ReadPacket) (int, er
 func TestMultiQueueNetstackReplyWithFullQueue(t *testing.T) {
 	const queues = 4
 	s, ep := newQueueTestStack(t, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ns := &Impl{ctx: ctx, ipstack: s, linkEP: ep, logf: t.Logf}
 	ns.ready.Store(true)
 	d := newQueueTestTUN(queues)

@@ -4,7 +4,6 @@
 package stunserver
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"testing"
@@ -31,8 +30,7 @@ func TestReplySourceAddr(t *testing.T) {
 		c.Close()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := New(ctx)
 	must.Do(s.Listen(":0"))
 	if !s.pktInfo {
