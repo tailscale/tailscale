@@ -367,9 +367,7 @@ func TestUDPConcurrent(t *testing.T) {
 	// goroutine closes replied once it has seen a response come back.
 	var wg sync.WaitGroup
 	replied := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		rbuf := make([]byte, 1024)
 		var n int
 		for {
@@ -381,7 +379,7 @@ func TestUDPConcurrent(t *testing.T) {
 				close(replied)
 			}
 		}
-	}()
+	})
 
 	const rounds = 200
 	for range rounds {

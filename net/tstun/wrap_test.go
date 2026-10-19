@@ -1474,27 +1474,23 @@ func TestCloseDuringInject(t *testing.T) {
 		const injectors, readers = 8, 4
 		var wg sync.WaitGroup
 		for range injectors {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for range 50 {
 					if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != nil {
 						return
 					}
 				}
-			}()
+			})
 		}
 		for range readers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				slab, packets := getSinglePacketReadArgs()
 				for {
 					if _, err := w.injectionQueue.Read(slab, packets); err != nil {
 						return
 					}
 				}
-			}()
+			})
 		}
 
 		synctest.Wait()
@@ -1523,14 +1519,12 @@ func TestCloseReturnsAllQueueReads(t *testing.T) {
 
 				var wg sync.WaitGroup
 				for i, q := range w.Queues() {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
+					wg.Go(func() {
 						slab, packets := getSinglePacketReadArgs()
 						if _, err := q.Read(slab, packets); err == nil {
 							t.Errorf("queue %d: Read returned a nil error at close", i)
 						}
-					}()
+					})
 				}
 				synctest.Wait()
 				w.Close()
@@ -1581,8 +1575,7 @@ func TestCloseIdempotent(t *testing.T) {
 	w := startedWrapper(t, 1)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Add(1)
-		go func() { defer wg.Done(); w.Close() }()
+		wg.Go(func() { ; w.Close() })
 	}
 	wg.Wait()
 	w.Close() // and once more, serially

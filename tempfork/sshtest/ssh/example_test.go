@@ -103,11 +103,9 @@ func ExampleNewServerConn() {
 	defer wg.Wait()
 
 	// The incoming Request channel must be serviced.
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		ssh.DiscardRequests(reqs)
-		wg.Done()
-	}()
+	})
 
 	// Service the incoming Channel channel.
 	for newChannel := range chans {

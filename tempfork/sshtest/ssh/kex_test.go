@@ -28,9 +28,7 @@ func TestKexes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			wg := sync.WaitGroup{}
 			for range 3 {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					a, b := memPipe()
 
 					s := make(chan kexResultErr, 1)
@@ -58,7 +56,7 @@ func TestKexes(t *testing.T) {
 					if !reflect.DeepEqual(clientRes.result, serverRes.result) {
 						t.Errorf("kex %q: mismatch %#v, %#v", name, clientRes.result, serverRes.result)
 					}
-				}()
+				})
 			}
 			wg.Wait()
 		})

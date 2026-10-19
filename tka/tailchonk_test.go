@@ -188,9 +188,7 @@ func TestTailchonkFS_ConcurrentIndexBuild(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range 30 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 
 			switch i % 3 {
@@ -207,7 +205,7 @@ func TestTailchonkFS_ConcurrentIndexBuild(t *testing.T) {
 					t.Errorf("AllAUMs() = %v, %v; want two AUMs", got, err)
 				}
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

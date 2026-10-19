@@ -113,9 +113,7 @@ func TestMuxReadWrite(t *testing.T) {
 	magicExt := "hello stderr"
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := s.Write([]byte(magic))
 		if err != nil {
 			t.Errorf("Write: %v", err)
@@ -126,7 +124,7 @@ func TestMuxReadWrite(t *testing.T) {
 			t.Errorf("Write: %v", err)
 			return
 		}
-	}()
+	})
 
 	var buf [1024]byte
 	n, err := c.Read(buf[:])
@@ -157,14 +155,12 @@ func TestMuxChannelOverflow(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := writer.Write(make([]byte, channelWindowSize)); err != nil {
 			t.Errorf("could not fill window: %v", err)
 		}
 		writer.Write(make([]byte, 1))
-	}()
+	})
 	writer.remoteWin.waitWriterBlocked()
 
 	// Send 1 byte.
@@ -190,9 +186,7 @@ func TestMuxChannelReadUnblock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := writer.Write(make([]byte, channelWindowSize)); err != nil {
 			t.Errorf("could not fill window: %v", err)
 		}
@@ -200,7 +194,7 @@ func TestMuxChannelReadUnblock(t *testing.T) {
 			t.Errorf("Write: %v", err)
 		}
 		writer.Close()
-	}()
+	})
 
 	writer.remoteWin.waitWriterBlocked()
 
@@ -224,16 +218,14 @@ func TestMuxChannelCloseWriteUnblock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := writer.Write(make([]byte, channelWindowSize)); err != nil {
 			t.Errorf("could not fill window: %v", err)
 		}
 		if _, err := writer.Write(make([]byte, 1)); err != io.EOF {
 			t.Errorf("got %v, want EOF for unblock write", err)
 		}
-	}()
+	})
 
 	writer.remoteWin.waitWriterBlocked()
 	reader.Close()
@@ -247,16 +239,14 @@ func TestMuxConnectionCloseWriteUnblock(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := writer.Write(make([]byte, channelWindowSize)); err != nil {
 			t.Errorf("could not fill window: %v", err)
 		}
 		if _, err := writer.Write(make([]byte, 1)); err != io.EOF {
 			t.Errorf("got %v, want EOF for unblock write", err)
 		}
-	}()
+	})
 
 	writer.remoteWin.waitWriterBlocked()
 	mux.Close()
@@ -269,9 +259,7 @@ func TestMuxReject(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 
 		ch, ok := <-server.incomingChannels
 		if !ok {
@@ -284,7 +272,7 @@ func TestMuxReject(t *testing.T) {
 			return
 		}
 		ch.Reject(RejectionReason(42), "message")
-	}()
+	})
 
 	ch, err := client.openChannel("ch", []byte("extra"))
 	if ch != nil {
@@ -313,14 +301,12 @@ func TestMuxChannelRequest(t *testing.T) {
 	var received int
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		for r := range server.incomingRequests {
 			received++
 			r.Reply(r.Type == "yes", nil)
 		}
-		wg.Done()
-	}()
+	})
 	_, err := client.SendRequest("yes", false, nil)
 	if err != nil {
 		t.Fatalf("SendRequest: %v", err)
@@ -591,9 +577,7 @@ func TestMuxGlobalRequest(t *testing.T) {
 	defer serverMux.Close()
 	defer clientMux.Close()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for r := range serverMux.incomingRequests {
 			sawPeek = sawPeek || r.Type == "peek"
 			if r.WantReply {
@@ -604,7 +588,7 @@ func TestMuxGlobalRequest(t *testing.T) {
 				}
 			}
 		}
-	}()
+	})
 
 	_, _, err := clientMux.SendRequest("peek", false, nil)
 	if err != nil {
@@ -776,11 +760,9 @@ func TestMuxMaxPacketSize(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		a.SendRequest("hello", false, nil)
-		wg.Done()
-	}()
+	})
 
 	_, ok := <-b.incomingRequests
 	if ok {
@@ -800,15 +782,13 @@ func TestMuxChannelWindowDeferredUpdates(t *testing.T) {
 
 	data := make([]byte, 1024)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, err := s.Write(data)
 		if err != nil {
 			t.Errorf("Write: %v", err)
 			return
 		}
-	}()
+	})
 	cWritesInit := cTransport.getWriteCount()
 	buf := make([]byte, 1)
 	for range data {

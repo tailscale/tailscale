@@ -46,11 +46,9 @@ func dial(handler serverType, t *testing.T) *Client {
 			t.Errorf("Unable to handshake: %v", err)
 			return
 		}
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			DiscardRequests(reqs)
-			wg.Done()
-		}()
+		})
 
 		for newCh := range chans {
 			if newCh.ChannelType() != "session" {
@@ -63,11 +61,9 @@ func dial(handler serverType, t *testing.T) *Client {
 				t.Errorf("Accept: %v", err)
 				continue
 			}
-			wg.Add(1)
-			go func() {
+			wg.Go(func() {
 				handler(ch, inReqs, t)
-				wg.Done()
-			}()
+			})
 		}
 		if err := conn.Wait(); err != io.EOF {
 			t.Logf("server exit reason: %v", err)
@@ -666,44 +662,36 @@ func TestSessionID(t *testing.T) {
 	t.Cleanup(wg.Wait)
 
 	srvErrCh := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		conn, chans, reqs, err := NewServerConn(c1, serverConf)
 		srvErrCh <- err
 		if err != nil {
 			return
 		}
 		serverID <- conn.SessionID()
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			DiscardRequests(reqs)
-			wg.Done()
-		}()
+		})
 		for ch := range chans {
 			ch.Reject(Prohibited, "")
 		}
-	}()
+	})
 
 	cliErrCh := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		conn, chans, reqs, err := NewClientConn(c2, "", clientConf)
 		cliErrCh <- err
 		if err != nil {
 			return
 		}
 		clientID <- conn.SessionID()
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			DiscardRequests(reqs)
-			wg.Done()
-		}()
+		})
 		for ch := range chans {
 			ch.Reject(Prohibited, "")
 		}
-	}()
+	})
 
 	if err := <-srvErrCh; err != nil {
 		t.Fatalf("server handshake: %v", err)
@@ -782,11 +770,9 @@ func TestHostKeyAlgorithms(t *testing.T) {
 		defer c1.Close()
 		defer c2.Close()
 
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			NewServerConn(c1, serverConf)
-			wg.Done()
-		}()
+		})
 		_, _, _, err = NewClientConn(c2, "", clientConf)
 		if err != nil {
 			t.Fatalf("NewClientConn: %v", err)
@@ -820,11 +806,9 @@ func TestHostKeyAlgorithms(t *testing.T) {
 	defer c1.Close()
 	defer c2.Close()
 
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		NewServerConn(c1, serverConf)
-		wg.Done()
-	}()
+	})
 	clientConf.HostKeyAlgorithms = []string{"nonexistent-hostkey-algo"}
 	_, _, _, err = NewClientConn(c2, "", clientConf)
 	if err == nil {
@@ -859,24 +843,20 @@ func TestServerClientAuthCallback(t *testing.T) {
 
 	var wg sync.WaitGroup
 	t.Cleanup(wg.Wait)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, chans, reqs, err := NewServerConn(c1, serverConf)
 		if err != nil {
 			t.Errorf("server handshake: %v", err)
 			userCh <- "error"
 			return
 		}
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			DiscardRequests(reqs)
-			wg.Done()
-		}()
+		})
 		for ch := range chans {
 			ch.Reject(Prohibited, "")
 		}
-	}()
+	})
 
 	conn, _, _, err := NewClientConn(c2, "", clientConf)
 	if err != nil {
