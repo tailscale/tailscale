@@ -433,8 +433,8 @@ func (nb *nodeBackend) srcIsUnsignedPeerLocked(src netip.Addr) bool {
 // only permits ingress requests over the PeerAPI, which unsigned peers can
 // already reach.
 func capsAllowedForUnsignedPeer(caps tailcfg.PeerCapMap) tailcfg.PeerCapMap {
-	if vals, ok := caps[tailcfg.PeerCapabilityIngress]; ok {
-		return tailcfg.PeerCapMap{tailcfg.PeerCapabilityIngress: vals}
+	if vals, ok := caps[peercap.Ingress]; ok {
+		return tailcfg.PeerCapMap{peercap.Ingress: vals}
 	}
 	return nil
 }

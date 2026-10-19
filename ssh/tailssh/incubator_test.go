@@ -17,6 +17,7 @@ import (
 	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/sys/unix"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/logger"
 )
 
@@ -47,7 +48,7 @@ func newTestSession(t *testing.T, acceptEnv []string, clientEnviron []string) *s
 		logf: logger.Discard,
 		lb: &localState{
 			sshEnabled: true,
-			caps:       []tailcfg.NodeCapability{tailcfg.NodeAttrSSHEnvironmentVariables},
+			caps:       []nodecap.Cap{nodecap.SSHEnvironmentVariables},
 		},
 		// tailscaledPath must be non-empty to take the incubator (be-child)
 		// path rather than the direct-exec fallback.

@@ -17,6 +17,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 )
 
 var whoisCmd = &ffcli.Command{
@@ -92,8 +93,8 @@ func printWhoIs(who *apitype.WhoIsResponse, tailnet *ipnstate.TailnetStatus, asJ
 	if tailnet != nil {
 		// use the tailnet display name, if present
 		var displayName string
-		if who.Node.HasCap(tailcfg.NodeAttrTailnetDisplayName) {
-			v, err := tailcfg.UnmarshalNodeCapJSON[string](who.Node.CapMap, tailcfg.NodeAttrTailnetDisplayName)
+		if who.Node.HasCap(nodecap.TailnetDisplayName) {
+			v, err := tailcfg.UnmarshalNodeCapJSON[string](who.Node.CapMap, nodecap.TailnetDisplayName)
 			if err == nil && len(v) > 0 {
 				displayName = v[0]
 			}

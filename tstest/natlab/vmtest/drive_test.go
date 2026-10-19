@@ -14,6 +14,8 @@ import (
 
 	"github.com/creachadair/mds/shell"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab/vmtest"
 	"tailscale.com/tstest/natlab/vnet"
@@ -57,8 +59,8 @@ func TestTaildrive(t *testing.T) {
 
 	// Taildrive is disabled unless control sends these node attributes.
 	driveCaps := tailcfg.NodeCapMap{
-		tailcfg.NodeAttrsTaildriveShare:  nil,
-		tailcfg.NodeAttrsTaildriveAccess: nil,
+		nodecap.TaildriveShare:  nil,
+		nodecap.TaildriveAccess: nil,
 	}
 	host := env.AddNode("drivehost", hostNet,
 		vmtest.OS(vmtest.Ubuntu2404),
@@ -80,8 +82,8 @@ func TestTaildrive(t *testing.T) {
 	// every share, plus the sharer capability that makes share hosts show up
 	// in directory listings on accessing nodes.
 	env.ControlServer().SetGlobalAppCaps(tailcfg.PeerCapMap{
-		tailcfg.PeerCapabilityTaildrive:       {`{"shares":["*"],"access":"rw"}`},
-		tailcfg.PeerCapabilityTaildriveSharer: {`true`},
+		peercap.Taildrive:       {`{"shares":["*"],"access":"rw"}`},
+		peercap.TaildriveSharer: {`true`},
 	})
 
 	setupStep.Begin()

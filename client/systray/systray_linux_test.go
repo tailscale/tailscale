@@ -25,6 +25,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/key"
 	"tailscale.com/util/cibuild"
 )
@@ -122,7 +123,7 @@ func startFakeLocalAPI(t *testing.T) string {
 		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
 		Online:       true,
 		CapMap: tailcfg.NodeCapMap{
-			tailcfg.NodeAttrSuggestExitNodeUI: nil,
+			nodecap.SuggestExitNodeUI: nil,
 		},
 	}
 	exitNode := &ipnstate.PeerStatus{
