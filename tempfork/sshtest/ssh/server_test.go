@@ -435,26 +435,26 @@ func TestPreAuthConnAndBanners(t *testing.T) {
 }
 
 type markerConn struct {
-	closed uint32
-	used   uint32
+	closed atomic.Uint32
+	used   atomic.Uint32
 }
 
 func (c *markerConn) isClosed() bool {
-	return atomic.LoadUint32(&c.closed) != 0
+	return c.closed.Load() != 0
 }
 
 func (c *markerConn) isUsed() bool {
-	return atomic.LoadUint32(&c.used) != 0
+	return c.used.Load() != 0
 }
 
 func (c *markerConn) Close() error {
-	atomic.StoreUint32(&c.closed, 1)
+	c.closed.Store(1)
 	return nil
 }
 
 func (c *markerConn) Read(b []byte) (n int, err error) {
-	atomic.StoreUint32(&c.used, 1)
-	if atomic.LoadUint32(&c.closed) != 0 {
+	c.used.Store(1)
+	if c.closed.Load() != 0 {
 		return 0, net.ErrClosed
 	} else {
 		return 0, io.EOF
@@ -462,8 +462,8 @@ func (c *markerConn) Read(b []byte) (n int, err error) {
 }
 
 func (c *markerConn) Write(b []byte) (n int, err error) {
-	atomic.StoreUint32(&c.used, 1)
-	if atomic.LoadUint32(&c.closed) != 0 {
+	c.used.Store(1)
+	if c.closed.Load() != 0 {
 		return 0, net.ErrClosed
 	} else {
 		return 0, io.ErrClosedPipe
