@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -127,12 +128,7 @@ func (c *connection) clientAuthenticate(config *ClientConfig) error {
 }
 
 func contains(list []string, e string) bool {
-	for _, s := range list {
-		if s == e {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, e)
 }
 
 // An AuthMethod represents an instance of an RFC 4252 authentication method.

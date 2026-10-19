@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"slices"
 	"strings"
 )
 
@@ -407,12 +408,7 @@ func (s *multiAlgorithmSigner) isAlgorithmSupported(algorithm string) bool {
 	if algorithm == "" {
 		algorithm = underlyingAlgo(s.PublicKey().Type())
 	}
-	for _, algo := range s.supportedAlgorithms {
-		if algorithm == algo {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.supportedAlgorithms, algorithm)
 }
 
 func (s *multiAlgorithmSigner) SignWithAlgorithm(rand io.Reader, data []byte, algorithm string) (*Signature, error) {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sort"
 	"time"
 )
@@ -394,13 +395,7 @@ func (c *CertChecker) CheckCert(principal string, cert *Certificate) error {
 			continue
 		}
 
-		found := false
-		for _, supp := range c.SupportedCriticalOptions {
-			if supp == opt {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(c.SupportedCriticalOptions, opt)
 		if !found {
 			return fmt.Errorf("ssh: unsupported critical option %q in certificate", opt)
 		}
@@ -408,13 +403,7 @@ func (c *CertChecker) CheckCert(principal string, cert *Certificate) error {
 
 	if len(cert.ValidPrincipals) > 0 {
 		// By default, certs are valid for all users/hosts.
-		found := false
-		for _, p := range cert.ValidPrincipals {
-			if p == principal {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(cert.ValidPrincipals, principal)
 		if !found {
 			return fmt.Errorf("ssh: principal %q not in the set of valid principals for given certificate: %q", principal, cert.ValidPrincipals)
 		}

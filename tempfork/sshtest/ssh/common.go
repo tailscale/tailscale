@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sync"
 
 	_ "crypto/sha1"
@@ -160,10 +161,8 @@ func parseError(tag uint8) error {
 
 func findCommon(what string, client []string, server []string) (common string, err error) {
 	for _, c := range client {
-		for _, s := range server {
-			if c == s {
-				return c, nil
-			}
+		if slices.Contains(server, c) {
+			return c, nil
 		}
 	}
 	return "", fmt.Errorf("ssh: no common algorithm for %s; client offered: %v, server offered: %v", what, client, server)

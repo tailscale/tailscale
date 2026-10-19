@@ -6,6 +6,7 @@ package vmtest_test
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -120,10 +121,8 @@ func TestJailedAndMasqueradedPeers(t *testing.T) {
 		deadline := time.Now().Add(time.Minute)
 		for time.Now().Before(deadline) {
 			if ps, ok := env.Status(on).Peer[peer]; ok {
-				for _, ip := range ps.TailscaleIPs {
-					if ip == want {
-						return
-					}
+				if slices.Contains(ps.TailscaleIPs, want) {
+					return
 				}
 			}
 			time.Sleep(500 * time.Millisecond)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -773,10 +774,8 @@ func pickHostKey(hostKeys []Signer, algo string) AlgorithmSigner {
 		if !ok {
 			continue
 		}
-		for _, a := range algorithmsForKeyFormat(k.PublicKey().Type()) {
-			if algo == a {
-				return k
-			}
+		if slices.Contains(algorithmsForKeyFormat(k.PublicKey().Type()), algo) {
+			return k
 		}
 	}
 	return nil
