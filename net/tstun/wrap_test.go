@@ -1569,14 +1569,14 @@ func TestInjectAfterClose(t *testing.T) {
 		w := startedWrapper(t, 1)
 		w.Close()
 
-		if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != nil {
-			t.Errorf("InjectOutbound after Close: %v", err)
+		if err := w.InjectOutbound(udp4("1.2.3.4", "5.6.7.8", 1, 2)); err != ErrClosed {
+			t.Errorf("InjectOutbound after Close = %v, want ErrClosed", err)
 		}
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Payload: buffer.MakeWithData(udp4("1.2.3.4", "5.6.7.8", 1, 2)),
 		})
-		if err := w.InjectOutboundPacketBuffer(pkt); err != nil {
-			t.Errorf("InjectOutboundPacketBuffer after Close: %v", err)
+		if err := w.InjectOutboundPacketBuffer(pkt); err != ErrClosed {
+			t.Errorf("InjectOutboundPacketBuffer after Close = %v, want ErrClosed", err)
 		}
 	})
 }

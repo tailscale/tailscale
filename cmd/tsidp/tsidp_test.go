@@ -37,8 +37,8 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
@@ -679,7 +679,7 @@ func TestServeToken(t *testing.T) {
 				t.Fatalf("failed to unmarshal response: %v", err)
 			}
 
-			tok, err := jwt.ParseSigned(resp.IDToken)
+			tok, err := jwt.ParseSigned(resp.IDToken, []jose.SignatureAlgorithm{jose.RS256})
 			if err != nil {
 				t.Fatalf("failed to parse ID token: %v", err)
 			}

@@ -14,6 +14,7 @@ import (
 	"tailscale.com/tstest/deptest"
 	"tailscale.com/tstest/nettest"
 	"tailscale.com/types/key"
+	"tailscale.com/util/httpm"
 )
 
 func TestGetServeConfigFromJSON(t *testing.T) {
@@ -109,6 +110,36 @@ func TestUserDialSelf(t *testing.T) {
 	}
 	if got := string(buf[:n]); got != "hello" {
 		t.Errorf("got %q, want %q", got, "hello")
+	}
+}
+
+func TestEffectivePolicyForCurrentUserUsesUnscopedEndpoint(t *testing.T) {
+	nw := nettest.GetNetwork(t)
+
+	var gotMethod, gotPath string
+	ts := nettest.NewHTTPServer(nw, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	lc := &Client{
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nw.Dial(ctx, network, ts.Listener.Addr().String())
+		},
+	}
+
+	if _, err := lc.ReloadEffectivePolicyForCurrentUser(context.Background()); err != nil {
+		t.Fatalf("ReloadEffectivePolicyForCurrentUser: %v", err)
+	}
+
+	if gotMethod != httpm.POST {
+		t.Errorf("method = %q, want %q", gotMethod, httpm.POST)
+	}
+	if gotPath != "/localapi/v0/policy/" {
+		t.Errorf("path = %q, want %q", gotPath, "/localapi/v0/policy/")
 	}
 }
 

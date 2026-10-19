@@ -1228,6 +1228,18 @@ func assertStatefulSet(t *testing.T, fc client.Client, prName string, want *stat
 	}) {
 		t.Errorf("expected container to declare TCP port 9002 for the health check, got ports %v", c.Ports)
 	}
+
+	// The relay server needs NET_ADMIN to force-set its UDP socket buffer sizes.
+	if !hasCapability(c, "NET_ADMIN") {
+		t.Errorf("expected container to add the NET_ADMIN capability, got security context %+v", c.SecurityContext)
+	}
+}
+
+func hasCapability(c corev1.Container, capability corev1.Capability) bool {
+	if c.SecurityContext == nil || c.SecurityContext.Capabilities == nil {
+		return false
+	}
+	return slices.Contains(c.SecurityContext.Capabilities.Add, capability)
 }
 
 func assertConfigSecrets(t *testing.T, fc client.Client, prName string, want []string) {
@@ -2029,5 +2041,10 @@ func TestReconciler_AppliesProxyClass(t *testing.T) {
 
 	if !foundEnv {
 		t.Errorf("expected TS_DEBUG_FIREWALL_MODE=auto env, container env is %+v", c.Env)
+	}
+
+	// The ProxyClass does not set a security context, so the default NET_ADMIN capability must survive.
+	if !hasCapability(c, "NET_ADMIN") {
+		t.Errorf("expected container to keep the NET_ADMIN capability, got security context %+v", c.SecurityContext)
 	}
 }

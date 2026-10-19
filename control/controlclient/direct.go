@@ -588,6 +588,11 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
+// ErrNodeRemoved is wrapped by the error returned from a map request that
+// control responded to with a 404, which it only does once the node, or the
+// user or login that owns it, has been deleted.
+var ErrNodeRemoved = errors.New("node removed from tailnet")
+
 type rateLimitError struct {
 	msg        string
 	retryAfter time.Duration
@@ -1212,8 +1217,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return fmt.Errorf("initial fetch failed %d: %.200s",
+		err := fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
+		if res.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w: %w", ErrNodeRemoved, err)
+		}
+		return err
 	}
 	defer res.Body.Close()
 

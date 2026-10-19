@@ -65,6 +65,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest/acmetest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -87,7 +88,15 @@ const (
 	opcodeANNOUNCE = 0 // external address lookup in NAT-PMP
 	opcodeMAP      = 1 // MAP UDP in NAT-PMP
 
+	protocolUDP = 17
+
 	versionNATPMP = 0
+	versionPCP    = 2
+
+	resultSuccess       = 0
+	resultUnsuppVersion = 1
+
+	opcodeResponseBit = 128
 )
 
 func (s *Server) PopulateDERPMapIPs() error {
@@ -940,7 +949,7 @@ type Server struct {
 	// the outer TLS); it exists only so the forced-443 dial path has a TLS peer.
 	controlTLS *tls.Config
 	derps      []*derpServer
-	fakeACME   *fakeACMEServer
+	fakeACME   *acmetest.Server
 	pcapWriter *pcapWriter
 
 	// vmWriteState holds per-VM-connection write state, serializing
@@ -1040,7 +1049,7 @@ func New(c *Config) (*Server, error) {
 			DERPMap:         derpMap,
 			ExplicitBaseURL: "http://" + controlHostname,
 		},
-		fakeACME: newFakeACMEServer("http://acme.example"),
+		fakeACME: acmetest.New("http://acme.example"),
 
 		blendReality: c.blendReality,
 		derpIPs:      set.Of[netip.Addr](),
@@ -1054,7 +1063,10 @@ func New(c *Config) (*Server, error) {
 		s.setDNSRecord(req.Name, req.Value)
 		return nil
 	}
-	s.fakeACME.lookupTXT = s.lookupTXT
+	s.fakeACME.LookupTXT = s.lookupTXT
+	// Keep issuance pending long enough for `tailscale cert` to print the
+	// cert-pending health warning the ACME vmtest watches for.
+	s.fakeACME.ValidationDelay = 3 * time.Second
 	s.controlTLS, _ = selfSignedCert(controlHostname)
 	for _, host := range derpHostnames {
 		s.derps = append(s.derps, newDERPServer(host))
@@ -1096,12 +1108,12 @@ func (s *Server) DERPCertSHA256Hex(idx int) string {
 
 // FakeACMEDirectoryURL returns the directory URL for vnet's in-process ACME CA.
 func (s *Server) FakeACMEDirectoryURL() string {
-	return s.fakeACME.directoryURL()
+	return s.fakeACME.DirectoryURL()
 }
 
 // FakeACMERootPEM returns the PEM-encoded root certificate for vnet's fake ACME CA.
 func (s *Server) FakeACMERootPEM() []byte {
-	return s.fakeACME.rootPEM()
+	return s.fakeACME.RootPEM()
 }
 
 func (s *Server) setDNSRecord(name, value string) {
@@ -2051,8 +2063,8 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if dstIP == n.lanIP4.Addr() && isNATPMP(udp) {
-		n.handleNATPMPRequest(UDPPacket{
+	if dstIP == n.lanIP4.Addr() && udp.DstPort == pxpPort && len(udp.Payload) >= 2 { // TODO(fmarier): support IPv6 PCP
+		n.handlePxPRequest(UDPPacket{
 			Src:     netip.AddrPortFrom(srcIP, uint16(udp.SrcPort)),
 			Dst:     netip.AddrPortFrom(dstIP, uint16(udp.DstPort)),
 			Payload: udp.Payload,
@@ -2111,10 +2123,10 @@ func (n *network) handleUDPPacketForRouter(ep EthernetPacket, udp *layers.UDP, t
 		return
 	}
 
-	if udp.DstPort == pxpPort || udp.DstPort == ssdpPort {
-		// We handle NAT-PMP, but not these yet.
+	if udp.DstPort == ssdpPort {
+		// We handle NAT-PMP and PCP, but not UPnP yet.
 		// TODO(bradfitz): handle? marginal utility so far.
-		// Don't log about them being unknown.
+		// Don't log about it being unknown.
 		return
 	}
 
@@ -2517,10 +2529,6 @@ func isDNSRequest(pkt gopacket.Packet) bool {
 	return ok && dns.QR == false && len(dns.Questions) > 0
 }
 
-func isNATPMP(udp *layers.UDP) bool {
-	return udp.DstPort == pxpPort && len(udp.Payload) > 0 && udp.Payload[0] == versionNATPMP
-}
-
 func makeSTUNReply(req UDPPacket) (res UDPPacket, ok bool) {
 	txid, err := stun.ParseBindingRequest(req.Payload)
 	if err != nil {
@@ -2825,6 +2833,68 @@ func (n *network) createARPResponse(pkt gopacket.Packet) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+func (n *network) handlePxPRequest(req UDPPacket) {
+	if req.Payload[1]&opcodeResponseBit != 0 {
+		n.logf("vnet: ignoring NAT-PMP/PCP packet with response bit set % 02x", req.Payload)
+		return
+	}
+	switch req.Payload[0] {
+	case versionNATPMP:
+		switch {
+		case n.svcs.Contains(NATPMP):
+			n.handleNATPMPRequest(req)
+		case n.svcs.Contains(PCP):
+			n.writePCPUnsuppVersion(req)
+		}
+	case versionPCP:
+		switch {
+		case n.svcs.Contains(PCP):
+			n.handlePCPRequest(req)
+		case n.svcs.Contains(NATPMP):
+			n.writeNATPMPUnsuppVersion(req)
+		}
+	default:
+		n.logf("vnet: ignoring NAT-PMP/PCP packet with unknown version % 02x", req.Payload)
+	}
+}
+
+func (n *network) writeNATPMPUnsuppVersion(req UDPPacket) {
+	res := make([]byte, 0, 8)
+	res = append(res,
+		versionNATPMP,
+		0, // opcode is 0 as per https://www.rfc-editor.org/rfc/rfc6886#section-3.5
+		0, resultUnsuppVersion,
+	)
+	epoch := uint32(time.Now().Unix())
+	res = binary.BigEndian.AppendUint32(res, epoch)
+	n.WriteUDPPacketNoNAT(UDPPacket{
+		Src:     req.Dst,
+		Dst:     req.Src,
+		Payload: res,
+	})
+}
+
+func (n *network) writePCPUnsuppVersion(req UDPPacket) {
+	opcode := req.Payload[1]
+	res := make([]byte, 0, 24)
+	res = append(res,
+		versionPCP,
+		opcodeResponseBit|opcode,
+		0, // reserved
+		resultUnsuppVersion,
+	)
+	lifetimeSec := uint32(1800) // 30 min
+	res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+	epoch := uint32(time.Now().Unix())
+	res = binary.BigEndian.AppendUint32(res, epoch)
+	res = append(res, make([]byte, 12)...) // reserved (96 bits)
+	n.WriteUDPPacketNoNAT(UDPPacket{
+		Src:     req.Dst,
+		Dst:     req.Src,
+		Payload: res,
+	})
+}
+
 func (n *network) handleNATPMPRequest(req UDPPacket) {
 	if !n.svcs.Contains(NATPMP) {
 		return
@@ -2834,14 +2904,14 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		return
 	}
 
-	if len(req.Payload) == 2 && req.Payload[0] == opcodeANNOUNCE {
+	if len(req.Payload) == 2 && req.Payload[1] == opcodeANNOUNCE {
 		// https://www.rfc-editor.org/rfc/rfc6886#section-3.2
 
 		res := make([]byte, 0, 12)
 		res = append(res,
 			versionNATPMP,
-			128+opcodeANNOUNCE,
-			0, 0, // result code success
+			opcodeResponseBit|opcodeANNOUNCE,
+			0, resultSuccess,
 		)
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
@@ -2875,8 +2945,8 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 		res := make([]byte, 0, 16)
 		res = append(res,
 			versionNATPMP,
-			128+opcodeMAP,
-			0, 0, // result code success
+			opcodeResponseBit|opcodeMAP,
+			0, resultSuccess,
 		)
 		epoch := uint32(time.Now().Unix())
 		res = binary.BigEndian.AppendUint32(res, epoch)
@@ -2892,6 +2962,125 @@ func (n *network) handleNATPMPRequest(req UDPPacket) {
 	}
 
 	n.logf("TODO: handle NAT-PMP packet % 02x", req.Payload)
+}
+
+func (n *network) handlePCPRequest(req UDPPacket) {
+	if !n.svcs.Contains(PCP) {
+		return
+	}
+
+	if len(req.Payload) < 24 || req.Payload[0] != versionPCP {
+		n.logf("vnet: ignoring invalid PCP packet % 02x", req.Payload)
+		return
+	}
+	// TODO(fmarier): check that client address in the packet matches req.Src
+
+	if len(req.Payload) == 24 && req.Payload[1] == opcodeANNOUNCE {
+		// https://www.rfc-editor.org/rfc/rfc6887#section-14
+		// "02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66" =>
+		//   02 ver
+		//   00 op=announce
+		//   00 00 reserved
+		//   00 00 00 00 requested lifetime in seconds
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 client IP (10.7.1.102)
+		res := make([]byte, 0, 24)
+		res = append(res,
+			versionPCP,
+			opcodeResponseBit|opcodeANNOUNCE,
+			0, // reserved
+			resultSuccess,
+			0, 0, 0, 0, // lifetime (0 for ANNOUNCE)
+		)
+		epoch := uint32(time.Now().Unix())
+		res = binary.BigEndian.AppendUint32(res, epoch)
+		res = append(res, make([]byte, 12)...) // reserved (96 bits)
+
+		// "02 80 00 00 00 00 00 00 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00" =>
+		//   02 ver
+		//   80 op=announce+128
+		//   00 reserved
+		//   00 result=success
+		//   00 00 00 00 lifetime in seconds
+		//   6a c9 62 fb epoch (2026-10-09T21:56:11 UTC)
+		//   00 00 00 00 00 00 00 00 00 00 00 00 reserved
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
+
+	if len(req.Payload) == 60 && req.Payload[1] == opcodeMAP && req.Payload[36] == protocolUDP {
+		// https://www.rfc-editor.org/rfc/rfc6887#section-11
+		// "02 01 00 00 00 00 1c 20 00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00" =>
+		//   02 ver
+		//   01 op=map
+		//   00 00 reserved
+		//   00 00 1c 20 requested lifetime in seconds (7200 sec = 2 hours)
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 0a 07 01 66 client IP (10.7.1.102)
+		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f nonce
+		//   11 protocol (17 = UDP)
+		//   00 00 00 reserved
+		//   9f 40 internal port 40768
+		//   00 00 suggested external port
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 00 00 00 00 suggested external IP
+		lifetimeSec := binary.BigEndian.Uint32(req.Payload[4:8])
+		internalPort := binary.BigEndian.Uint16(req.Payload[40:42])
+		// TODO(fmarier): reject wildcard mappings (internalPort = 0)
+		wantExtPort := binary.BigEndian.Uint16(req.Payload[42:44])
+		// TODO(fmarier): reject wantedExtAddr that doesn't match IP version
+		nonce := req.Payload[24:36]
+		// TODO(fmarier): pass the nonce into doPortmap so that it can be checked on renewals/deletions
+		gotPort, ok := n.doPortMap(req.Src.Addr(), internalPort, wantExtPort, int(lifetimeSec), PCP)
+		if !ok {
+			n.logf("PCP map request for %v:%d failed", req.Src.Addr(), internalPort)
+			return
+		}
+		res := make([]byte, 0, 60)
+		res = append(res,
+			versionPCP,
+			opcodeResponseBit|opcodeMAP,
+			0, // reserved
+			resultSuccess,
+		)
+		res = binary.BigEndian.AppendUint32(res, lifetimeSec)
+		epoch := uint32(time.Now().Unix())
+		res = binary.BigEndian.AppendUint32(res, epoch)
+		res = append(res, make([]byte, 12)...) // reserved (96 bits)
+		res = append(res, nonce...)
+		res = append(res,
+			protocolUDP,
+			0, 0, 0, // reserved
+		)
+		res = binary.BigEndian.AppendUint16(res, internalPort)
+		res = binary.BigEndian.AppendUint16(res, gotPort)
+		wan4 := n.wanIP4.As16()
+		res = append(res, wan4[:]...) // TODO(fmarier): handle non-zero requested external addresses
+
+		// "02 81 00 00 00 00 1c 20 6a c9 62 fb 00 00 00 00 00 00 00 00 00 00 00 00 95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f 11 00 00 00 9f 40 e6 59 00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01" =>
+		//   02 vers
+		//   81 op=map+128
+		//   00 reserved
+		//   00 result=success
+		//   00 00 1c 20 lifetime in seconds (7200 sec = 2 hours)
+		//   6a c9 62 fb epoch (2026-10-09T21:56:11 UTC)
+		//   00 00 00 00 00 00 00 00 00 00 00 00 reserved
+		//   95 bc b5 d9 3d 07 ec bb c8 b3 bd 4f nonce
+		//   11 protocol (17 = UDP)
+		//   00 00 00 reserved
+		//   9f 40 internal port 40768
+		//   e6 59 external port 58969
+		//   00 00 00 00 00 00 00 00 00 00 ff ff 02 01 01 01 external address (2.1.1.1)
+		n.WriteUDPPacketNoNAT(UDPPacket{
+			Src:     req.Dst,
+			Dst:     req.Src,
+			Payload: res,
+		})
+		return
+	}
+
+	n.logf("TODO: handle PCP packet % 02x", req.Payload)
 }
 
 // UDPPacket is a UDP packet.

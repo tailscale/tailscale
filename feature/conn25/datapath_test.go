@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	wgtun "github.com/tailscale/wireguard-go/tun"
@@ -571,4 +572,55 @@ func newWrappedTUN(t *testing.T, dev wgtun.Device) *tstun.Wrapper {
 	tun.Start()
 	t.Cleanup(func() { tun.Close() })
 	return tun
+}
+
+// TestUnmappedTransitIPRejectWithFullInjectionQueue verifies that the TSMP
+// rejection of an unmapped Transit IP flow does not block when the injection
+// queue is full and its reader is not draining it. The rejection is generated
+// while processing an inbound packet, on the same goroutine that wireguard-go
+// requires to complete before peer teardown can finish; a blocking injection
+// here deadlocks peer removal against inbound packet processing, as in
+// tailscale/corp#45544.
+//
+// The full queue is the only blocking operation on this path, so after
+// synctest.Wait the call either returned or is provably stuck on the queue;
+// no timeout is needed. A regressed, blocking sender is unblocked by closing
+// the TUN before failing, so the bubble can settle.
+func TestUnmappedTransitIPRejectWithFullInjectionQueue(t *testing.T) {
+	const clientPort, serverPort = 1234, 80
+
+	for _, tn := range testNets {
+		t.Run(tn.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				dph := tn.newConnectorDatapath(t, false)
+				tun := newFakeTUN(t)
+				p := tn.udpPacket(
+					netip.AddrPortFrom(tn.unknownSrcIP, clientPort),
+					netip.AddrPortFrom(tn.transitIP, serverPort))
+
+				// Fill the injection queue (depth 1) and leave it unread,
+				// as its reader may be blocked behind wireguard-go's
+				// device.peers lock held by RemovePeer.
+				if err := tun.TryInjectOutbound(tn.udpPacket(
+					netip.AddrPortFrom(tn.clientSrcIP, clientPort),
+					netip.AddrPortFrom(tn.magicIP, serverPort)).Buffer()); err != nil {
+					t.Fatal(err)
+				}
+
+				done := make(chan filter.Response, 1)
+				go func() { done <- dph.HandlePacketFromWireGuard(p, tun) }()
+				synctest.Wait()
+				select {
+				case res := <-done:
+					if res != filter.Drop {
+						t.Fatalf("unmapped Transit IP flow = %v, want Drop", res)
+					}
+				default:
+					tun.Close()
+					synctest.Wait()
+					t.Fatal("reject generation blocked on a full injection queue")
+				}
+			})
+		})
+	}
 }

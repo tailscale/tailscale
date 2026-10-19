@@ -947,7 +947,14 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 					// map source port range 1-1 to destination port range
 					destPort := ep.DestinationPorts.First + (port - ppr.Ports.First)
 					portStr := fmt.Sprint(destPort)
-					target = fmt.Sprintf("%s://%s", ep.Protocol, net.JoinHostPort(ep.Destination, portStr))
+					scheme := ep.Protocol
+					if serveType == serveTypeTCP || serveType == serveTypeTLSTerminatedTCP {
+						// applyTCPServe accepts only tcp and unix target
+						// schemes. TLS termination is carried by the serve
+						// type, so the target uses the tcp scheme.
+						scheme = conffile.ProtoTCP
+					}
+					target = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(ep.Destination, portStr))
 				}
 				err := e.setServe(sc, name.String(), serveType, port, "/", target, false, magicDNSSuffix, nil, 0 /* proxy protocol */)
 				if err != nil {

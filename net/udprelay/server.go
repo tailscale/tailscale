@@ -13,11 +13,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"runtime"
 	"slices"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -565,11 +563,11 @@ var _ batching.Conn = (*singlePacketConn)(nil)
 // singlePacketConn implements [batching.Conn] with single packet syscall
 // operations.
 type singlePacketConn struct {
-	*net.UDPConn
+	nettype.PacketConn
 }
 
 func (c *singlePacketConn) ReadBatch(slab []byte, packets []batching.ReceivedPacket) (int, error) {
-	n, ap, err := c.UDPConn.ReadFromUDPAddrPort(slab)
+	n, ap, err := c.PacketConn.ReadFromUDPAddrPort(slab)
 	if err != nil {
 		return 0, err
 	}
@@ -586,7 +584,7 @@ func (c *singlePacketConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort, gen
 		} else {
 			buff = buff[offset:]
 		}
-		_, err := c.UDPConn.WriteToUDPAddrPort(buff, addr)
+		_, err := c.PacketConn.WriteToUDPAddrPort(buff, addr)
 		if err != nil {
 			return err
 		}
@@ -642,10 +640,8 @@ func trySetSOMark(logf logger.Logf, netMon *netmon.Monitor, network, address str
 // may be bound per address family, e.g. SO_REUSEPORT, depending on platform.
 //
 // desiredPort may be zero, in which case port selection is left up to the host
-// networking stack. We make no attempt to bind a consistent port between udp4
-// and udp6 if the requested port is zero, but a consistent port is used
-// across multiple sockets within a given address family if SO_REUSEPORT is
-// supported.
+// networking stack.
+// If more than one udp4 socket was bound udp6 reuses the same port number.
 //
 // TODO: make these "re-bindable" in similar fashion to magicsock as a means to
 // deal with EDR software closing them. http://go/corp/30118. We could re-use
@@ -657,56 +653,44 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 	// arbitrary. Use GOMAXPROCS rather than NumCPU as it is container-aware
 	// and respects CPU limits/quotas set via cgroups.
 	maxSocketsPerAF := min(16, runtime.GOMAXPROCS(0))
-	listenConfig := &net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			trySetReusePort(network, address, c)
-			trySetSOMark(s.logf, s.netMon, network, address, c)
-			return nil
-		},
+	control := func(network, address string, c syscall.RawConn) error {
+		trySetSOMark(s.logf, s.netMon, network, address, c)
+		return nil
 	}
 	for _, network := range []string{"udp4", "udp6"} {
-	SocketsLoop:
-		for i := range maxSocketsPerAF {
-			if i > 0 {
-				// Use a consistent port per address family if the user-supplied
-				// port was zero, and we are binding multiple sockets.
-				if network == "udp4" {
-					desiredPort = s.uc4Port
-				} else {
-					desiredPort = s.uc6Port
-				}
+		pconns, boundPort, err := sockopts.BindUDPGroup(
+			context.Background(),
+			logger.WithPrefix(s.logf, network+": "),
+			maxSocketsPerAF,
+			control,
+			network,
+			desiredPort,
+		)
+		if err != nil {
+			if network == "udp4" {
+				return err
 			}
-			uc, boundPort, err := s.bindSocketTo(listenConfig, network, desiredPort)
-			if err != nil {
-				switch {
-				case i == 0 && network == "udp4":
-					// At least one udp4 socket is required.
-					return err
-				case i == 0 && network == "udp6":
-					// A udp6 socket is not required.
-					s.logf("ignoring IPv6 bind failure: %v", err)
-					break SocketsLoop
-				default: // i > 0
-					// Reusable sockets are not required.
-					s.logf("ignoring reusable (index=%d network=%v) socket bind failure: %v", i, network, err)
-					break SocketsLoop
-				}
-			}
-			pc := batching.TryUpgradeToConn(uc, network, "udprelay_rxq_overflows", s.controlKnobs)
+			// A udp6 socket is not required.
+			s.logf("ignoring IPv6 bind failure: %v", err)
+			continue
+		}
+		bcs := make([]batching.Conn, 0, len(pconns))
+		for _, pconn := range pconns {
+			trySetUDPSocketOptions(pconn, s.logf)
+			pc := batching.TryUpgradeToConn(pconn, network, "udprelay_rxq_overflows", s.controlKnobs)
 			bc, ok := pc.(batching.Conn)
 			if !ok {
-				bc = &singlePacketConn{uc}
+				bc = &singlePacketConn{pconn}
 			}
-			if network == "udp4" {
-				s.uc4 = append(s.uc4, bc)
-				s.uc4Port = boundPort
-			} else {
-				s.uc6 = append(s.uc6, bc)
-				s.uc6Port = boundPort
+			bcs = append(bcs, bc)
+		}
+		if network == "udp4" {
+			s.uc4, s.uc4Port = bcs, boundPort
+			if len(pconns) > 1 {
+				desiredPort = boundPort
 			}
-			if !isReusableSocket(uc) {
-				break
-			}
+		} else {
+			s.uc6, s.uc6Port = bcs, boundPort
 		}
 	}
 	s.logf("listening on udp4:%d sockets=%d", s.uc4Port, len(s.uc4))
@@ -714,26 +698,6 @@ func (s *Server) bindSockets(desiredPort uint16) error {
 		s.logf("listening on udp6:%d sockets=%d", s.uc6Port, len(s.uc6))
 	}
 	return nil
-}
-
-func (s *Server) bindSocketTo(listenConfig *net.ListenConfig, network string, port uint16) (*net.UDPConn, uint16, error) {
-	lis, err := listenConfig.ListenPacket(context.Background(), network, fmt.Sprintf(":%d", port))
-	if err != nil {
-		return nil, 0, err
-	}
-	uc := lis.(*net.UDPConn)
-	trySetUDPSocketOptions(uc, s.logf)
-	_, boundPortStr, err := net.SplitHostPort(uc.LocalAddr().String())
-	if err != nil {
-		uc.Close()
-		return nil, 0, err
-	}
-	portUint, err := strconv.ParseUint(boundPortStr, 10, 16)
-	if err != nil {
-		uc.Close()
-		return nil, 0, err
-	}
-	return uc, uint16(portUint), nil
 }
 
 // Close closes the server.

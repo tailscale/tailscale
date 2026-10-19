@@ -9,8 +9,24 @@ import (
 	"net"
 	"syscall"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/types/nettype"
 )
+
+// CanShareUDPPort reports whether this platform spreads inbound datagrams
+// across several UDP sockets sharing one local port.
+const CanShareUDPPort = true
+
+// SetReusePort sets SO_REUSEPORT on the socket underlying c.
+func SetReusePort(c syscall.RawConn) error {
+	var serr error
+	if err := c.Control(func(fd uintptr) {
+		serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+	}); err != nil {
+		return err
+	}
+	return serr
+}
 
 // SetBufferSize sets pconn's buffer to size for direction. It attempts
 // (errForce) to set SO_SNDBUFFORCE or SO_RECVBUFFORCE which can overcome the
