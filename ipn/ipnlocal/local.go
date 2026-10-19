@@ -279,6 +279,7 @@ type LocalBackend struct {
 	getTCPHandlerForFunnelFlow func(srcAddr netip.AddrPort, dstPort uint16) (handler func(net.Conn))
 
 	containsViaIPFuncAtomic                 syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
+	allowViaLocalIPFuncAtomic               syncs.AtomicValue[func(netip.Addr) bool]     // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
 	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
@@ -4622,6 +4623,8 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
+		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
+		viaLocalPrefixes :=
 		b.containsViaIPFuncAtomic.Store(ipset.NewContainsIPFunc(views.SliceOf(filtered)))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}

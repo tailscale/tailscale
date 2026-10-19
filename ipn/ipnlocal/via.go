@@ -14,11 +14,26 @@ import (
 	"go4.org/netipx"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 )
 
-// v4BroadcastAddr is 255.255.255.255, the limited broadcast address.
-var v4BroadcastAddr = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+var (
+	// allIPv4 is 0.0.0.0/0, the entire IPv4 address space
+	allIPv4 = netip.PrefixFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), 0)
+	// allIPv4Loopback is 127.0.0.0/8, the reserved loopback range. This matches
+	// addresses matched by [netip.Addr.IsLoopback].
+	allIPv4Loopback = netip.PrefixFrom(netip.AddrFrom4([4]byte{127, 0, 0, 0}), 8)
+	// allIPv4Multicast is 224.0.0.0/4, the multicast range. This matches
+	// addresses matched by [netip.Addr.IsMulticast].
+	allIPv4Multicast = netip.PrefixFrom(netip.AddrFrom4([4]byte{224, 0, 0, 0}), 4)
+	// allIPv4LinkLocal is 169.254.0.0/16, the link-local range. This matches
+	// addresses matched by [netip.Addr.IsLinkLocalUnicast].
+	allIPv4LinkLocal = netip.PrefixFrom(netip.AddrFrom4([4]byte{169, 254, 0, 0}), 16)
+
+	// v4BroadcastAddr is 255.255.255.255, the limited broadcast address.
+	v4BroadcastAddr = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+)
 
 // viaAdditionsEnv is the name of an environment variable that can be set to
 // override the 4via6 host-scoped address restrictions. Only use this if you are
@@ -30,8 +45,8 @@ var v4BroadcastAddr = netip.AddrFrom4([4]byte{255, 255, 255, 255})
 // notation), or IPv4 addresses. Spaces are permitted around the commas.
 const viaAdditionsEnv = "TS_4VIA6_ALLOW_LOCAL"
 
-var viaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
-	v, err := generateViaTargetAdditions(envknob.String(viaAdditionsEnv))
+var envViaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
+	v, err := generateEnvViaTargetAdditions(envknob.String(viaAdditionsEnv))
 	if err != nil {
 		log.Print(err)
 	}
@@ -44,7 +59,7 @@ var viaTargetAdditions = sync.OnceValue(func() *netipx.IPSet {
 	return v
 })
 
-func generateViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
+func generateEnvViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
 	rawAdditions = strings.TrimSpace(rawAdditions)
 	if rawAdditions == "" {
 		return nil, nil
@@ -104,31 +119,43 @@ func generateViaTargetAdditions(rawAdditions string) (*netipx.IPSet, error) {
 	return ipSet, errors.Join(errs...)
 }
 
-// viaTargetAllowed reports whether ip may be forwarded to after unmapping a
-// 4via6 destination. The packet filter only sees the outer via address, so
-// this is the sole check on the embedded IPv4 target.
-func viaTargetAllowed(ip netip.Addr) bool {
+// viaTargetDefaultAllowed reports whether ip may be forwarded to after
+// unmapping a 4via6 destination. The packet filter only sees the outer via
+// address, so this is a substitute for the normal destination IP filter in
+// [tailscale.com/wgengine/filter] when via addresses are in use. Exceptions to
+// the restrictions are handled before this func is called.
+func viaTargetDefaultAllowed(ip netip.Addr) bool {
 	if !ip.Is4() {
 		return false // UnmapVia only returns IPv4
-	}
-	if additions := viaTargetAdditions(); additions != nil {
-		// Permit unusual configurations to use host-scoped IP addresses as
-		// 4via6 destinations when provided in an envknob.
-		if additions.Contains(ip) {
-			return true
-		}
 	}
 	if ip.IsLoopback() || ip.IsMulticast() || ip.IsUnspecified() || ip == v4BroadcastAddr {
 		return false
 	}
 	if tsaddr.IsTailscaleIP(ip) {
-		// A CGNAT-range target may route to tailscale0 or to a site LAN
-		// depending on the tailnet and OS (see shouldUseOneCGNATRoute);
-		// it's hard to detect when forwarding would be OK, so deny always
 		return false
 	}
 	if ip.IsLinkLocalUnicast() {
 		return false
 	}
 	return true
+}
+
+func generateViaTargetAllowed(advertisedViaRoutes views.Slice[netip.Prefix]) func(netip.Addr) bool {
+	var sb netipx.IPSetBuilder
+
+	sb.AddPrefix(allIPv4)
+	sb.RemovePrefix(allIPv4Loopback)
+	sb.RemovePrefix(allIPv4Multicast)
+	sb.Remove(netip.IPv4Unspecified())
+	sb.Remove(v4BroadcastAddr)
+
+	// A CGNAT-range target may route to tailscale0 or to a site LAN
+	// depending on the tailnet and OS (see shouldUseOneCGNATRoute);
+	// it's hard to detect when forwarding would be OK, so deny always
+	sb.RemovePrefix(tsaddr.CGNATRange())
+
+	sb.RemovePrefix(allIPv4LinkLocal)
+
+	for _, pfx := range advertisedViaRoutes.All() {
+	}
 }
