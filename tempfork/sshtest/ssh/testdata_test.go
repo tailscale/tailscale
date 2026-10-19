@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	testPrivateKeys map[string]interface{}
+	testPrivateKeys map[string]any
 	testSigners     map[string]Signer
 	testPublicKeys  map[string]PublicKey
 )
@@ -25,7 +25,7 @@ func init() {
 	var err error
 
 	n := len(testdata.PEMBytes)
-	testPrivateKeys = make(map[string]interface{}, n)
+	testPrivateKeys = make(map[string]any, n)
 	testSigners = make(map[string]Signer, n)
 	testPublicKeys = make(map[string]PublicKey, n)
 	for t, k := range testdata.PEMBytes {

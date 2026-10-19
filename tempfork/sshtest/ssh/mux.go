@@ -92,7 +92,7 @@ type mux struct {
 	incomingChannels chan NewChannel
 
 	globalSentMu     sync.Mutex
-	globalResponses  chan interface{}
+	globalResponses  chan any
 	incomingRequests chan *Request
 
 	errCond *sync.Cond
@@ -117,7 +117,7 @@ func newMux(p packetConn) *mux {
 	m := &mux{
 		conn:             p,
 		incomingChannels: make(chan NewChannel, chanSize),
-		globalResponses:  make(chan interface{}, 1),
+		globalResponses:  make(chan any, 1),
 		incomingRequests: make(chan *Request, chanSize),
 		errCond:          newCond(),
 	}
@@ -129,7 +129,7 @@ func newMux(p packetConn) *mux {
 	return m
 }
 
-func (m *mux) sendMessage(msg interface{}) error {
+func (m *mux) sendMessage(msg any) error {
 	p := Marshal(msg)
 	if debugMux {
 		log.Printf("send global(%d): %#v", m.chanList.offset, msg)

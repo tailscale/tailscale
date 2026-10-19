@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/ssh/testdata"
 )
 
-func rawKey(pub PublicKey) interface{} {
+func rawKey(pub PublicKey) any {
 	switch k := pub.(type) {
 	case *rsaPublicKey:
 		return (*rsa.PublicKey)(k)

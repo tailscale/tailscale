@@ -171,7 +171,7 @@ type channel struct {
 	direction channelDirection
 
 	// Pending internal channel messages.
-	msg chan interface{}
+	msg chan any
 
 	// Since requests have no ID, there can be only one request
 	// with WantReply=true outstanding.  This lock is held by a
@@ -219,7 +219,7 @@ func (ch *channel) writePacket(packet []byte) error {
 	return err
 }
 
-func (ch *channel) sendMessage(msg interface{}) error {
+func (ch *channel) sendMessage(msg any) error {
 	if debugMux {
 		log.Printf("send(%d): %#v", ch.mux.chanList.offset, msg)
 	}
@@ -474,7 +474,7 @@ func (m *mux) newChannel(chanType string, direction channelDirection, extraData 
 		extPending:       newBuffer(),
 		direction:        direction,
 		incomingRequests: make(chan *Request, chanSize),
-		msg:              make(chan interface{}, chanSize),
+		msg:              make(chan any, chanSize),
 		chanType:         chanType,
 		extraData:        extraData,
 		mux:              m,
@@ -623,7 +623,7 @@ func (ch *channel) ackRequest(ok bool) error {
 		return errUndecided
 	}
 
-	var msg interface{}
+	var msg any
 	if !ok {
 		msg = channelRequestFailureMsg{
 			PeersID: ch.remoteId,

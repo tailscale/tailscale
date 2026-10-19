@@ -1044,7 +1044,7 @@ func (k *skEd25519PublicKey) CryptoPublicKey() crypto.PublicKey {
 // *ecdsa.PrivateKey or any other crypto.Signer and returns a
 // corresponding Signer instance. ECDSA keys must use P-256, P-384 or
 // P-521. DSA keys must use parameter size L1024N160.
-func NewSignerFromKey(key interface{}) (Signer, error) {
+func NewSignerFromKey(key any) (Signer, error) {
 	switch key := key.(type) {
 	case crypto.Signer:
 		return NewSignerFromSigner(key)
@@ -1152,7 +1152,7 @@ func (s *wrappedSigner) SignWithAlgorithm(rand io.Reader, data []byte, algorithm
 // NewPublicKey takes an *rsa.PublicKey, *dsa.PublicKey, *ecdsa.PublicKey,
 // or ed25519.PublicKey returns a corresponding PublicKey instance.
 // ECDSA keys must use P-256, P-384 or P-521.
-func NewPublicKey(key interface{}) (PublicKey, error) {
+func NewPublicKey(key any) (PublicKey, error) {
 	switch key := key.(type) {
 	case *rsa.PublicKey:
 		return (*rsaPublicKey)(key), nil
@@ -1208,7 +1208,7 @@ func (*PassphraseMissingError) Error() string {
 // ParseRawPrivateKey returns a private key from a PEM encoded private key. It supports
 // RSA, DSA, ECDSA, and Ed25519 private keys in PKCS#1, PKCS#8, OpenSSL, and OpenSSH
 // formats. If the private key is encrypted, it will return a PassphraseMissingError.
-func ParseRawPrivateKey(pemBytes []byte) (interface{}, error) {
+func ParseRawPrivateKey(pemBytes []byte) (any, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, errors.New("ssh: no key found")
