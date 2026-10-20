@@ -514,6 +514,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		ocfg.MatchDomains = cfg.matchDomains()
 	}
 	rcfg.Routes["."] = defaultRoutes
+	// mDNSResponder only sends AAAA queries to the OS resolvers when the
+	// network has IPv6. Now that quad-100 receives those queries instead,
+	// keep that behavior for names that fall through to the OS resolvers.
+	rcfg.OmitAAAAWithoutIPv6 = isSandboxedApple && !scopeApple
 	// Append base config search domains, but only if not already present.
 	// This prevents duplicates when GetBaseConfig() reads back domains that
 	// Tailscale itself previously wrote to resolv.conf.

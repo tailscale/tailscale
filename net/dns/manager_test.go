@@ -515,6 +515,7 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					".", "8.8.8.8",
 					"corp.com.", "2.2.2.2"),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,
@@ -541,6 +542,7 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					".", "8.8.8.8",
 					"corp.com.", "2.2.2.2"),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,
@@ -616,6 +618,7 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(
 					".", "192.168.1.1",
 					"corp.ts.net.", "1.2.3.4"),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos:           "darwin",
 			sandboxedMacOS: true,
@@ -804,6 +807,7 @@ func TestManager(t *testing.T) {
 					".", "192.168.1.1",
 					"corp.com.", "2.2.2.2",
 					"bigco.net.", "3.3.3.3"),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos: "ios",
 		},
@@ -904,7 +908,8 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: fqdns("ts.com."),
+				LocalDomains:        fqdns("ts.com."),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos: "ios",
 		},
@@ -1020,9 +1025,36 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
-				LocalDomains: fqdns("ts.com."),
+				LocalDomains:        fqdns("ts.com."),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos: "ios",
+		},
+		{
+			// An exit node's DoH resolver replaces the OS resolvers on the
+			// "." route, and IPv6 may be reachable through the exit node, so
+			// AAAA queries must still be forwarded.
+			name: "exit-node-forward-sandboxed-darwin-keeps-aaaa",
+			in: Config{
+				DefaultResolvers: mustRes("http://[fd7a:115c:a1e0:ab12:4843:cd96:6245:7a66]:2982/doh"),
+				Routes:           upstreams("corp.com", "2.2.2.2"),
+				SearchDomains:    fqdns("tailscale.com"),
+			},
+			split: true,
+			bs: OSConfig{
+				Nameservers: mustIPs("192.168.1.200"),
+			},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "http://[fd7a:115c:a1e0:ab12:4843:cd96:6245:7a66]:2982/doh",
+					"corp.com.", "2.2.2.2"),
+			},
+			goos:           "darwin",
+			sandboxedMacOS: true,
 		},
 		{
 			name: "exit-node-forward",
@@ -1127,7 +1159,8 @@ func TestManager(t *testing.T) {
 					"github.com", "https://dnsresolver.bigcorp.com/2f143",
 					"ts.net", "199.247.155.52",
 				),
-				LocalDomains: fqdns("optimistic-display.ts.net."),
+				LocalDomains:        fqdns("optimistic-display.ts.net."),
+				OmitAAAAWithoutIPv6: true,
 			},
 			goos: "ios",
 		},

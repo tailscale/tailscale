@@ -179,6 +179,82 @@ func TestResolversWithDelays(t *testing.T) {
 	}
 }
 
+func TestHaveGlobalIPv6(t *testing.T) {
+	iface := func(name string, up bool) netmon.Interface {
+		var flags net.Flags
+		if up {
+			flags = net.FlagUp
+		}
+		return netmon.Interface{Interface: &net.Interface{Name: name, Flags: flags}}
+	}
+	pfxs := func(ss ...string) []netip.Prefix {
+		var ret []netip.Prefix
+		for _, s := range ss {
+			ret = append(ret, netip.MustParsePrefix(s))
+		}
+		return ret
+	}
+	state := func(ifaces map[string][]netip.Prefix, down ...string) *netmon.State {
+		st := &netmon.State{
+			InterfaceIPs: ifaces,
+			Interface:    map[string]netmon.Interface{},
+		}
+		for name := range ifaces {
+			st.Interface[name] = iface(name, !slices.Contains(down, name))
+		}
+		return st
+	}
+
+	tests := []struct {
+		name  string
+		state *netmon.State
+		want  bool
+	}{
+		{
+			name:  "nil-state",
+			state: nil,
+			want:  true,
+		},
+		{
+			// An IPv4 LAN that only advertises a ULA prefix, plus the
+			// Tailscale interface: no route to the IPv6 internet.
+			name: "ula-and-tailscale-only",
+			state: state(map[string][]netip.Prefix{
+				"en0":    pfxs("192.168.1.32/24", "fe80::1/64", "fd17:1545:a0a3:1ab1::1/64"),
+				"utun15": pfxs("100.103.44.3/32", "fd7a:115c:a1e0::7d01:2c05/128", "fe80::2/64"),
+			}),
+			want: false,
+		},
+		{
+			name: "global-unicast",
+			state: state(map[string][]netip.Prefix{
+				"en0": pfxs("192.168.1.32/24", "2001:db8:1::5/64"),
+			}),
+			want: true,
+		},
+		{
+			name: "global-unicast-on-down-interface",
+			state: state(map[string][]netip.Prefix{
+				"en0": pfxs("192.168.1.32/24"),
+				"en5": pfxs("2001:db8:1::5/64"),
+			}, "en5"),
+			want: false,
+		},
+		{
+			name:  "ipv4-only",
+			state: state(map[string][]netip.Prefix{"en0": pfxs("10.0.0.2/8")}),
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := haveGlobalIPv6(tt.state); got != tt.want {
+				t.Errorf("haveGlobalIPv6 = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetRCode(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2463,7 +2539,7 @@ func TestResolversCustomScheme(t *testing.T) {
 				}
 			}
 
-			fwd.setRoutes(tt.routes, false)
+			fwd.setRoutes(tt.routes, false, false)
 
 			got := fwd.resolvers(tt.domain)
 			var gotAddrs []string

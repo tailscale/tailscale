@@ -355,6 +355,13 @@ type forwarder struct {
 	// queries directly - but we didn't configure it with any upstream resolvers.
 	// That's an error, but not a health error if the user has disabled CorpDNS.
 	acceptDNS bool
+
+	// omitAAAA is [Config.OmitAAAAWithoutIPv6].
+	omitAAAA bool
+
+	// haveGlobalIPv6ForTest, if non-nil, replaces the netMon check in
+	// omitAAAAWithoutIPv6.
+	haveGlobalIPv6ForTest func() bool
 }
 
 func (f *forwarder) probeLocks() {
@@ -471,7 +478,7 @@ func cloudResolvers() []resolverAndDelay {
 // Resolver.SetConfig on reconfig.
 //
 // The memory referenced by routesBySuffix should not be modified.
-func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver, acceptDNS bool) {
+func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver, acceptDNS, omitAAAA bool) {
 	routes := make([]route, 0, len(routesBySuffix))
 
 	cloudHostFallback := cloudResolvers()
@@ -506,6 +513,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.acceptDNS = acceptDNS
+	f.omitAAAA = omitAAAA
 	f.routes = routes
 	f.cloudHostFallback = cloudHostFallback
 }
@@ -1213,6 +1221,14 @@ func applySchemes(logf logger.Logf, rrs []resolverAndDelay, schemes views.Map[st
 
 // resolvers returns the resolvers to use for domain.
 func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
+	_, rr := f.route(domain)
+	return rr
+}
+
+// route returns the suffix of the route that domain resolves through and that
+// route's resolvers. The suffix is empty if no route matched and the cloud host
+// fallback (or nil) is returned.
+func (f *forwarder) route(domain dnsname.FQDN) (dnsname.FQDN, []resolverAndDelay) {
 	f.mu.Lock()
 	routes := f.routes
 	cloudHostFallback := f.cloudHostFallback
@@ -1228,11 +1244,78 @@ func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 		// route, fall through to the next matching route. If the resolvers
 		// were configured to be empty allow resolved to be empty.
 		if len(resolved) > 0 || len(route.Resolvers) == 0 {
-			return resolved
+			return route.Suffix, resolved
 		}
 	}
-	return cloudHostFallback // or nil if no fallback
+	return "", cloudHostFallback // or nil if no fallback
 }
+
+// forwardAAAAWithoutIPv6 disables [forwarder.omitAAAAWithoutIPv6].
+var forwardAAAAWithoutIPv6 = envknob.RegisterBool("TS_DNS_FORWARD_AAAA_WITHOUT_IPV6")
+
+// omitAAAAWithoutIPv6 returns an empty NOERROR response for query, and true,
+// if query is a AAAA query from a local client that should not be forwarded
+// because the host cannot reach the addresses it would return. See
+// [Config.OmitAAAAWithoutIPv6].
+//
+// Without this, an IPv4-only host whose OS resolvers quad-100 has replaced
+// receives AAAA records that the OS resolver would never have asked for.
+// Clients then make IPv6 connection attempts that fail with EHOSTUNREACH,
+// which on macOS stalls Chromium-based browsers. See tailscale/tailscale#21330.
+//
+// Only the "." route is affected: split DNS and app connector routes may
+// return IPv6 addresses that are reachable through the tailnet.
+func (f *forwarder) omitAAAAWithoutIPv6(query packet) (packet, bool) {
+	f.mu.Lock()
+	omit := f.omitAAAA
+	haveV6 := f.haveGlobalIPv6ForTest
+	f.mu.Unlock()
+	if !omit || forwardAAAAWithoutIPv6() {
+		return packet{}, false
+	}
+	domain, typ, err := nameFromQuery(query.bs)
+	if err != nil || typ != dns.TypeAAAA {
+		return packet{}, false
+	}
+	if suffix, _ := f.route(domain); suffix != "." {
+		return packet{}, false
+	}
+	if haveV6 == nil {
+		haveV6 = func() bool { return haveGlobalIPv6(f.netMon.InterfaceState()) }
+	}
+	if haveV6() {
+		return packet{}, false
+	}
+	res, err := noDataResponse(query)
+	if err != nil {
+		return packet{}, false
+	}
+	metricDNSFwdOmitAAAANoIPv6.Add(1)
+	return res, true
+}
+
+// haveGlobalIPv6 reports whether an interface that is up has a global unicast
+// IPv6 address. Tailscale's own addresses are ULAs, so the Tailscale interface
+// never counts. A ULA alone does not provide a route to the internet.
+func haveGlobalIPv6(st *netmon.State) bool {
+	if st == nil {
+		// Unknown; keep forwarding rather than hide records.
+		return true
+	}
+	for name, pfxs := range st.InterfaceIPs {
+		if iface, ok := st.Interface[name]; !ok || !iface.IsUp() {
+			continue
+		}
+		for _, pfx := range pfxs {
+			if globalUnicastV6.Contains(pfx.Addr()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var globalUnicastV6 = netip.MustParsePrefix("2000::/3")
 
 // GetUpstreamResolvers returns the resolvers that would be used to resolve
 // the given FQDN.
@@ -1605,6 +1688,28 @@ func nxDomainResponse(req packet) (res packet, err error) {
 	// TODO(bradfitz): should we add an SOA record in the Authority
 	// section too? (for the nxdomain negative caching TTL)
 	// For which zone? Does iOS care?
+	b.StartQuestions()
+	b.Question(p.Question)
+	res.bs, err = b.Finish()
+	res.addr = req.addr
+	return res, err
+}
+
+// noDataResponse returns an empty NOERROR reply for the provided request,
+// meaning the name may exist but has no records of the requested type.
+func noDataResponse(req packet) (res packet, err error) {
+	p := dnsParserPool.Get().(*dnsParser)
+	defer dnsParserPool.Put(p)
+
+	if err := p.parseQuery(req.bs); err != nil {
+		return packet{}, err
+	}
+
+	h := p.Header
+	h.Response = true
+	h.RecursionAvailable = h.RecursionDesired
+	h.RCode = dns.RCodeSuccess
+	b := dns.NewBuilder(nil, h)
 	b.StartQuestions()
 	b.Question(p.Question)
 	res.bs, err = b.Finish()

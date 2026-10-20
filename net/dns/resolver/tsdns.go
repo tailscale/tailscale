@@ -108,6 +108,13 @@ type Config struct {
 	// "node.tailnet.ts.net" is in SubdomainHosts, the query resolves
 	// to the IPs for "node.tailnet.ts.net".
 	SubdomainHosts set.Set[dnsname.FQDN]
+	// OmitAAAAWithoutIPv6 is whether AAAA queries that fall through to the
+	// "." route are answered with an empty NOERROR response, instead of
+	// being forwarded, while the host has no global IPv6 address. It is set
+	// when quad-100 has replaced the OS resolvers as the primary resolver on
+	// Apple platforms, where mDNSResponder would otherwise not have sent AAAA
+	// queries to those resolvers on an IPv4-only network.
+	OmitAAAAWithoutIPv6 bool
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting
@@ -380,7 +387,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		}
 	}
 
-	r.forwarder.setRoutes(cfg.Routes, cfg.AcceptDNS)
+	r.forwarder.setRoutes(cfg.Routes, cfg.AcceptDNS, cfg.OmitAAAAWithoutIPv6)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -439,6 +446,9 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, family string, from net
 
 	out, err := r.respond(bs)
 	if err == errNotOurName {
+		if res, ok := r.forwarder.omitAAAAWithoutIPv6(packet{bs, family, from}); ok {
+			return res.bs, nil
+		}
 		responses := make(chan packet, 1)
 		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
@@ -1578,6 +1588,7 @@ var (
 
 	metricDNSFwd                     = clientmetric.NewCounter("dns_query_fwd")
 	metricDNSFwdDropBonjour          = clientmetric.NewCounter("dns_query_fwd_drop_bonjour")
+	metricDNSFwdOmitAAAANoIPv6       = clientmetric.NewCounter("dns_query_fwd_omit_aaaa_no_ipv6")
 	metricDNSFwdErrorName            = clientmetric.NewCounter("dns_query_fwd_error_name")
 	metricDNSFwdErrorNoUpstream      = clientmetric.NewCounter("dns_query_fwd_error_no_upstream")
 	metricDNSFwdSuccess              = clientmetric.NewCounter("dns_query_fwd_success")

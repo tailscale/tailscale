@@ -23,6 +23,7 @@ import (
 
 	miekdns "github.com/miekg/dns"
 	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netmon"
@@ -917,6 +918,103 @@ func TestDelegateSplitRoute(t *testing.T) {
 			}
 			if response.name != tt.response.name {
 				t.Errorf("name = %v; want %v", response.name, tt.response.name)
+			}
+		})
+	}
+}
+
+func TestOmitAAAAWithoutIPv6(t *testing.T) {
+	test4 := netip.MustParseAddr("2.3.4.5")
+	test6 := netip.MustParseAddr("ff::1")
+
+	server1 := serveDNS(t, "127.0.0.1:0",
+		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
+	defer server1.Shutdown()
+	server2 := serveDNS(t, "127.0.0.1:0",
+		"test.other.", resolveToIP(test4, test6, "dns.other."))
+	defer server2.Shutdown()
+
+	r := newResolver(t)
+	defer r.Close()
+
+	tests := []struct {
+		title    string
+		omit     bool
+		haveV6   bool
+		envknob  bool
+		query    []byte
+		response dnsResponse
+	}{
+		{
+			title:    "default-route-aaaa-no-v6",
+			omit:     true,
+			query:    dnspacket("test.site.", dns.TypeAAAA, noEdns),
+			response: dnsResponse{rcode: dns.RCodeSuccess},
+		},
+		{
+			title:    "default-route-aaaa-have-v6",
+			omit:     true,
+			haveV6:   true,
+			query:    dnspacket("test.site.", dns.TypeAAAA, noEdns),
+			response: dnsResponse{ip: testipv6, rcode: dns.RCodeSuccess},
+		},
+		{
+			title:    "default-route-a-no-v6",
+			omit:     true,
+			query:    dnspacket("test.site.", dns.TypeA, noEdns),
+			response: dnsResponse{ip: testipv4, rcode: dns.RCodeSuccess},
+		},
+		{
+			// Split DNS and app connector routes can return IPv6 addresses
+			// that are reachable through the tailnet.
+			title:    "split-route-aaaa-no-v6",
+			omit:     true,
+			query:    dnspacket("test.other.", dns.TypeAAAA, noEdns),
+			response: dnsResponse{ip: test6, rcode: dns.RCodeSuccess},
+		},
+		{
+			title:    "not-configured",
+			query:    dnspacket("test.site.", dns.TypeAAAA, noEdns),
+			response: dnsResponse{ip: testipv6, rcode: dns.RCodeSuccess},
+		},
+		{
+			title:    "envknob-opt-out",
+			omit:     true,
+			envknob:  true,
+			query:    dnspacket("test.site.", dns.TypeAAAA, noEdns),
+			response: dnsResponse{ip: testipv6, rcode: dns.RCodeSuccess},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			if tt.envknob {
+				envknob.SetenvForTest(t, "TS_DNS_FORWARD_AAAA_WITHOUT_IPV6", "1")
+			}
+			cfg := dnsCfg
+			cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+				".":      {{Addr: server1.PacketConn.LocalAddr().String()}},
+				"other.": {{Addr: server2.PacketConn.LocalAddr().String()}},
+			}
+			cfg.OmitAAAAWithoutIPv6 = tt.omit
+			r.SetConfig(cfg)
+			r.forwarder.mu.Lock()
+			r.forwarder.haveGlobalIPv6ForTest = func() bool { return tt.haveV6 }
+			r.forwarder.mu.Unlock()
+
+			payload, err := syncRespond(r, tt.query)
+			if err != nil {
+				t.Fatalf("err = %v; want nil", err)
+			}
+			response, err := unpackResponse(payload)
+			if err != nil {
+				t.Fatalf("extract: err = %v; want nil (in %x)", err, payload)
+			}
+			if response.rcode != tt.response.rcode {
+				t.Errorf("rcode = %v; want %v", response.rcode, tt.response.rcode)
+			}
+			if response.ip != tt.response.ip {
+				t.Errorf("ip = %v; want %v", response.ip, tt.response.ip)
 			}
 		})
 	}
