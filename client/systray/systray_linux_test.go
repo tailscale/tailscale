@@ -216,9 +216,7 @@ func TestRun(t *testing.T) {
 	registered := startFakeWatcher(t, busAddr)
 	sock := startFakeLocalAPI(t)
 
-	// Run the systray app. It has no clean way to shut down (systray.Quit
-	// triggers a log.Fatal in the IPN bus watcher), so it is left running
-	// until the test process exits.
+	// Run the tray in this process to inspect its initial menu.
 	menu := new(Menu)
 	go menu.Run(&local.Client{Socket: sock, UseSocketOnly: true})
 
@@ -229,14 +227,21 @@ func TestRun(t *testing.T) {
 		t.Fatal("timed out waiting for StatusNotifierItem registration")
 	}
 
-	// Fetch the menu layout. GetLayout blocks server-side until the
-	// initial menu has been fully built by onReady.
+	waitForMenuLayout(t, busAddr, os.Getpid(),
+		"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Quit",
+	)
+}
+
+// waitForMenuLayout finds the tray's menu on the given session bus and
+// returns the menu object and first layout containing all the expected labels.
+func waitForMenuLayout(t *testing.T, busAddr string, pid int, wants ...string) (dbus.BusObject, *dbus.Call) {
+	t.Helper()
 	conn, err := dbus.Connect(busAddr)
 	if err != nil {
 		t.Fatalf("connecting to session bus: %v", err)
 	}
-	defer conn.Close()
-	itemName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
+	t.Cleanup(func() { conn.Close() })
+	itemName := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", pid)
 
 	// Find the menu the way a StatusNotifierHost does, via the item's
 	// Menu property, rather than assuming the object path the systray
@@ -253,10 +258,10 @@ func TestRun(t *testing.T) {
 	obj := conn.Object(itemName, menuPath)
 
 	// Poll until every expected label shows up. The systray library
+	// waits for onReady to build the menu before answering GetLayout. It
 	// answers the very first GetLayout with a depth of 1 regardless of
 	// what was asked for (and schedules a refresh), so submenu entries
 	// like the exit node list only appear on later calls.
-	wants := []string{"Connected", "This Device: self-host (100.64.0.1)", "Exit Nodes", "Recommended: exit1", "Quit"}
 	var layout string
 	var missing []string
 	deadline := time.Now().Add(30 * time.Second)
@@ -271,7 +276,7 @@ func TestRun(t *testing.T) {
 				}
 			}
 			if len(missing) == 0 {
-				break
+				return obj, call
 			}
 		}
 		if time.Now().After(deadline) {
