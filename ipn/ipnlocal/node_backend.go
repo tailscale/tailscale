@@ -928,6 +928,10 @@ type routePrefs struct {
 	// accepted.
 	RouteAll bool
 
+	// AcceptRoutesAllow and AcceptRoutesDeny filter advertised subnet routes.
+	AcceptRoutesAllow views.Slice[netip.Prefix]
+	AcceptRoutesDeny  views.Slice[netip.Prefix]
+
 	// OneCGNAT is whether the OS route set should collapse peers'
 	// CGNAT addresses into the single /10 route.
 	OneCGNAT bool
@@ -952,9 +956,11 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) routemanager.PeersW
 	}
 	rt := nb.routeMgr.Begin()
 	rt.SetPrefs(routemanager.Prefs{
-		ExitNodeID:       exitID,
-		ExitNodeSelected: p.ExitNodeSelected,
-		RouteAll:         p.RouteAll,
+		ExitNodeID:        exitID,
+		ExitNodeSelected:  p.ExitNodeSelected,
+		RouteAll:          p.RouteAll,
+		AcceptRoutesAllow: p.AcceptRoutesAllow,
+		AcceptRoutesDeny:  p.AcceptRoutesDeny,
 	})
 	rt.SetTailnetConfig(routemanager.TailnetConfig{OneCGNAT: p.OneCGNAT})
 	res := rt.Commit()

@@ -5071,6 +5071,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 			errs = append(errs, err)
 		}
 	}
+	if err := checkAcceptRoutes(p); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -6222,10 +6225,12 @@ func (b *LocalBackend) authReconfigLocked() {
 	// prefixes changed with the new prefs, such as the old and new
 	// exit node when the selection changes.
 	changedAllowedIPs := cn.updateRouteManagerPrefs(routePrefs{
-		ExitNodeID:       prefs.ExitNodeID(),
-		ExitNodeSelected: prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid(),
-		RouteAll:         flags&netmap.AllowSubnetRoutes != 0,
-		OneCGNAT:         oneCGNATRoute,
+		ExitNodeID:        prefs.ExitNodeID(),
+		ExitNodeSelected:  prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid(),
+		RouteAll:          flags&netmap.AllowSubnetRoutes != 0,
+		AcceptRoutesAllow: prefs.AcceptRoutesAllow(),
+		AcceptRoutesDeny:  prefs.AcceptRoutesDeny(),
+		OneCGNAT:          oneCGNATRoute,
 	})
 	for k := range changedAllowedIPs {
 		b.e.SyncDevicePeer(k)
