@@ -1385,6 +1385,61 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+// TestUnattendedModeOn checks that --unattended keeps a Windows node connected after the CLI exits.
+func TestUnattendedModeOn(t *testing.T) {
+	env, n1, d1 := startUnattendedModeNode(t)
+	n1.MustUp("--unattended=true")
+
+	stayed := regexp.MustCompile(`client disconnected \(.*\): staying on profile `)
+	disconnects := regexp.MustCompile(`client disconnected .*`)
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		logs := env.LogCatcher.logsString()
+		if !stayed.MatchString(logs) {
+			return fmt.Errorf("want a log line matching %#q, got %q", stayed, disconnects.FindAllString(logs, -1))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := env.Control.InServeMap(); n == 0 {
+		t.Fatalf("no control connection after the CLI exited: in serve map = %d; want 1", n)
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// TestUnattendedModeOff checks that a Windows node with no GUI disconnects once the CLI exits.
+func TestUnattendedModeOff(t *testing.T) {
+	env, n1, d1 := startUnattendedModeNode(t)
+	n1.MustUp("--unattended=false")
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		if n := env.Control.InServeMap(); n != 0 {
+			return fmt.Errorf("in serve map = %d; want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("control connection left open after the CLI exited: %v", err)
+	}
+
+	d1.MustCleanShutdown(t)
+}
+
+// startUnattendedModeNode starts a node that acts as Windows, so the tests run on every platform.
+func startUnattendedModeNode(t *testing.T) (*TestEnv, *TestNode, *Daemon) {
+	t.Helper()
+	if !*windowsUnattended {
+		t.Skip("tests unattended mode with no GUI attached (re-run with --windows-unattended)")
+	}
+	tstest.Parallel(t)
+	env := NewTestEnv(t)
+	n1 := NewTestNode(t, env)
+	n1.upFlagGOOS = "windows"
+	d1 := n1.StartDaemonAsIPNGOOS("windows")
+	n1.AwaitResponding()
+	return env, n1, d1
+}
+
 // TestClientSideJailing tests that when one node is jailed for another, the
 // jailed node cannot initiate connections to the other node however the other
 // node can initiate connections to the jailed node.

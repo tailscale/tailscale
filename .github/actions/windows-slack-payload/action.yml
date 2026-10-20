@@ -18,8 +18,12 @@ inputs:
   tests-label:
     description: Label for the line with the test counts
     required: true
+  suites:
+    description: Lines of "<artifact>=<label suffix>", one count line each from results/<artifact>, or empty for one line over all files
+    required: false
+    default: ""
   expected-files:
-    description: Number of result files the run should have uploaded
+    description: Number of result files the run should have uploaded, per suite when suites is set
     required: true
 
 runs:
@@ -34,34 +38,54 @@ runs:
         HEADER: ${{ inputs.header }}
         STATUS_LABEL: ${{ inputs.status-label }}
         TESTS_LABEL: ${{ inputs.tests-label }}
+        SUITES: ${{ inputs.suites }}
         EXPECTED_FILES: ${{ inputs.expected-files }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        # Read each artifact separately so one unreadable file can't discard the others.
-        rows='[]'; unreadable=0; reported=0
-        while IFS= read -r -d '' f; do
-          reported=$((reported + 1))
-          [ -s "$f" ] || continue
-          case "$(jq -r 'type' "$f" 2>/dev/null)" in
-            array) rows=$(printf '%s\n%s' "$rows" "$(jq -c . "$f")" | jq -s 'add') ;;
-            null)  ;; # ran none of the filtered package
-            *)     unreadable=$((unreadable + 1)) ;;
-          esac
-        done < <(find results -name windows-integration-results.json -print0 2>/dev/null)
-        # Dedupe so a re-shard reporting a test twice can't double every count.
-        rows=$(printf '%s' "$rows" | jq '[ .[] | objects ] | unique_by([.Package, .Test])')
         count() { printf '%s' "$rows" | jq "[ (. // [])[] | select(.Outcome == \"$1\") ] | length"; }
-        retried=$(count retried)
-        passed=$(( $(count pass) + retried ))
-        failed=$(count fail)
-        skipped=$(count skip)
-        executed=$((passed + failed))
-        if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
-        # Names behind the retried count, capped so one bad run can't flood the message.
-        flaky=$(printf '%s' "$rows" | jq -r '
-          [ .[] | select(.Outcome == "retried") | (.Package | sub("^tailscale\\.com/"; "")) + "." + .Test ]
-          | sort
-          | if length > 5 then (.[:5] | join(", ")) + ", and \(length - 5) more" else join(", ") end')
+        # tally counts the results under the directory $1.
+        tally() {
+          # Read each artifact separately so one unreadable file can't discard the others.
+          rows='[]'; unreadable=0; reported=0
+          while IFS= read -r -d '' f; do
+            reported=$((reported + 1))
+            [ -s "$f" ] || continue
+            case "$(jq -r 'type' "$f" 2>/dev/null)" in
+              array) rows=$(printf '%s\n%s' "$rows" "$(jq -c . "$f")" | jq -s 'add') ;;
+              null)  ;; # ran none of the filtered package
+              *)     unreadable=$((unreadable + 1)) ;;
+            esac
+          done < <(find "$1" -name windows-integration-results.json -print0 2>/dev/null)
+          # Dedupe so a re-shard reporting a test twice can't double every count.
+          rows=$(printf '%s' "$rows" | jq '[ .[] | objects ] | unique_by([.Package, .Test])')
+          retried=$(count retried)
+          passed=$(( $(count pass) + retried ))
+          failed=$(count fail)
+          skipped=$(count skip)
+          executed=$((passed + failed))
+          if [ "$executed" -gt 0 ]; then pct=$(( (passed * 100) / executed )); else pct=0; fi
+          # Names behind the retried count, capped so one bad run can't flood the message.
+          flaky=$(printf '%s' "$rows" | jq -r '
+            [ .[] | select(.Outcome == "retried") | (.Package | sub("^tailscale\\.com/"; "")) + "." + .Test ]
+            | sort
+            | if length > 5 then (.[:5] | join(", ")) + ", and \(length - 5) more" else join(", ") end')
+        }
+
+        # One count line per suite, or a single line over every file when no suites are given.
+        dirs=(results); suffixes=("")
+        if [ -n "$SUITES" ]; then
+          dirs=(); suffixes=()
+          while IFS='=' read -r artifact suffix; do
+            [ -n "$artifact" ] || continue
+            dirs+=("results/$artifact"); suffixes+=(" $suffix")
+          done <<< "$SUITES"
+        fi
+        # A job that failed with no failed test in any suite hit a build error or timeout.
+        total_failed=0
+        for dir in "${dirs[@]}"; do
+          tally "$dir"
+          total_failed=$((total_failed + failed))
+        done
 
         case "$RESULT" in
           success)   emoji=":white_check_mark:"; color="good" ;;
@@ -71,42 +95,55 @@ runs:
           *)         emoji=":question:";         color="warning" ;;
         esac
 
-        tests="${passed} passed, ${failed} failed, ${skipped} skipped"
-        if [ "$executed" -gt 0 ]; then
-          tests="${tests} (${pct}%)"
+        lines=""; listed=0
+        for i in "${!dirs[@]}"; do
+          tally "${dirs[$i]}"
+          listed=$((listed + reported))
+          tests="${passed} passed, ${failed} failed, ${skipped} skipped"
+          if [ "$executed" -gt 0 ]; then
+            tests="${tests} (${pct}%)"
+          fi
+          # Anything that makes the numbers incomplete or overstated is said out loud.
+          caveats=""
+          if [ "$unreadable" -gt 0 ]; then
+            caveats="${caveats} — ${unreadable} result file(s) unreadable"
+          fi
+          if [ "$reported" -lt "$EXPECTED_FILES" ]; then
+            caveats="${caveats} — only ${reported} of ${EXPECTED_FILES} result files reported"
+          fi
+          # Retries get their own line below, so they don't warn the count line.
+          if [ "$executed" -eq 0 ]; then
+            caveats="${caveats} — no tests executed"
+          fi
+          if [ "$RESULT" = "failure" ] && [ "$total_failed" -eq 0 ]; then
+            caveats="${caveats} — results may be partial (build error or timeout)"
+          fi
+          tests="${tests}${caveats}"
+          if [ "$failed" -gt 0 ]; then tests_emoji=":x:"
+          elif [ -n "$caveats" ]; then tests_emoji=":warning:"
+          else tests_emoji=":white_check_mark:"; fi
+          [ -z "$lines" ] || lines+=$'\n'
+          lines+="${tests_emoji} ${TESTS_LABEL}${suffixes[$i]}: ${tests}"
+          if [ -n "$flaky" ]; then
+            lines+=$'\n'"    ↳ :warning: Flaky Tests (${retried} passed on retry): ${flaky}"
+          fi
+        done
+        # A result file outside every suite would otherwise drop out of the counts unseen.
+        tally results
+        if [ "$reported" -gt "$listed" ]; then
+          lines+=$'\n'":warning: $((reported - listed)) result file(s) not in any suite"
         fi
-        # Anything that makes the numbers incomplete or overstated is said out loud.
-        caveats=""
-        if [ "$unreadable" -gt 0 ]; then
-          caveats="${caveats} — ${unreadable} result file(s) unreadable"
-        fi
-        if [ "$reported" -lt "$EXPECTED_FILES" ]; then
-          caveats="${caveats} — only ${reported} of ${EXPECTED_FILES} result files reported"
-        fi
-        # Retries get their own line below, so they don't warn the count line.
-        if [ "$executed" -eq 0 ]; then
-          caveats="${caveats} — no tests executed"
-        fi
-        if [ "$RESULT" = "failure" ] && [ "$failed" -eq 0 ]; then
-          caveats="${caveats} — results may be partial (build error or timeout)"
-        fi
-        tests="${tests}${caveats}"
-        if [ "$failed" -gt 0 ]; then tests_emoji=":x:"
-        elif [ -n "$caveats" ]; then tests_emoji=":warning:"
-        else tests_emoji=":white_check_mark:"; fi
 
-        jq -n --arg emoji "$emoji" --arg status "$RESULT" --arg tests_emoji "$tests_emoji" \
-          --arg tests "$tests" --arg flaky "$flaky" --arg retried "$retried" \
+        jq -n --arg emoji "$emoji" --arg status "$RESULT" --arg lines "$lines" \
           --arg title "$TITLE" --arg header "$HEADER" --arg status_label "$STATUS_LABEL" \
-          --arg tests_label "$TESTS_LABEL" --arg color "$color" --arg run_url "$RUN_URL" \
+          --arg color "$color" --arg run_url "$RUN_URL" \
           '{attachments: [{
             title: ($emoji + " " + $title + ": " + $status),
             title_link: $run_url,
             text: (
               $header
               + "\n\n" + (if $status_label == "" then "" else $emoji + " " + $status_label + ": " + $status + "\n" end)
-              + $tests_emoji + " " + $tests_label + ": " + $tests
-              + (if $flaky == "" then "" else "\n    ↳ :warning: Flaky Tests (" + $retried + " passed on retry): " + $flaky end)
+              + $lines
               + "\n\n<" + $run_url + "|View run details>"
             ),
             color: $color,
