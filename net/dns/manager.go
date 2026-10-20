@@ -451,7 +451,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 
 	// iOS still reads the base config below, even when scoped, so direct
 	// queries to quad-100 can be forwarded to the underlying resolver.
-	if supportsSplitDNS && !isIOS && (!isSandboxedApple || scopeApple) && !cfg.requiresPrimaryResolver() {
+	if supportsSplitDNS && !isIOS && (!isSandboxedApple || scopeApple) {
 		ocfg.MatchDomains = cfg.matchDomains()
 		return rcfg, ocfg, nil
 	}

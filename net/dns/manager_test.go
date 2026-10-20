@@ -621,6 +621,69 @@ func TestManager(t *testing.T) {
 			sandboxedMacOS: true,
 		},
 		{
+			// Windows with MagicDNS off: control sends a split route but no
+			// global resolvers. Hosts carries every node (Windows always
+			// does) and MagicDNSHostsUnrouted is set, but neither may force
+			// quad-100 to become the OS's primary (catch-all) resolver; the
+			// OS should only get an NRPT rule for the split suffix.
+			name: "windows-magicdns-off-split-route-stays-scoped",
+			in: Config{
+				Routes:        upstreams("corp.example.com.", "10.0.0.53"),
+				SearchDomains: fqdns("corp.ts.net"),
+				Hosts: hosts(
+					"self.corp.ts.net.", "100.100.0.1",
+					"peer.corp.ts.net.", "100.100.0.2"),
+				MagicDNSHostsUnrouted: true,
+			},
+			split: true,
+			bs:    OSConfig{Nameservers: mustIPs("192.168.1.1")},
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("corp.example.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams("corp.example.com.", "10.0.0.53"),
+				Hosts: hosts(
+					"self.corp.ts.net.", "100.100.0.1",
+					"peer.corp.ts.net.", "100.100.0.2"),
+			},
+			goos: "windows",
+		},
+		{
+			// Windows with MagicDNS on and a shared-in peer from another
+			// tailnet. Its name is outside our MagicDNS root, so Hosts has a
+			// name no route covers; that still must not make quad-100 the
+			// primary resolver.
+			name: "windows-magicdns-on-shared-peer-stays-scoped",
+			in: Config{
+				Routes: upstreams(
+					"corp.ts.net.", "",
+					"100.100.in-addr.arpa.", ""),
+				SearchDomains: fqdns("corp.ts.net"),
+				Hosts: hosts(
+					"self.corp.ts.net.", "100.100.0.1",
+					"shared.tail1234.ts.net.", "100.100.0.9"),
+			},
+			split: true,
+			bs:    OSConfig{Nameservers: mustIPs("192.168.1.1")},
+			os: OSConfig{
+				Hosts: []*HostEntry{
+					{Addr: netip.MustParseAddr("100.100.0.1"), Hosts: []string{"self.corp.ts.net.", "self"}},
+				},
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("corp.ts.net"),
+				MatchDomains:  fqdns("100.100.in-addr.arpa", "corp.ts.net"),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"self.corp.ts.net.", "100.100.0.1",
+					"shared.tail1234.ts.net.", "100.100.0.9"),
+				LocalDomains: fqdns("100.100.in-addr.arpa.", "corp.ts.net."),
+			},
+			goos: "windows",
+		},
+		{
 			// MagicDNSHostsUnrouted on a split-DNS manager with no base config
 			// (e.g. systemd-resolved): fall back to a scoped config instead of
 			// erroring. Two differing resolver sets keep us off the
