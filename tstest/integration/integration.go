@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -65,6 +66,8 @@ var (
 
 	// runWindowsServiceTests enables the Windows service-mode integration tests, on by default in CI.
 	runWindowsServiceTests = flag.Bool("run-windows-service-tests", cibuild.On(), "run Windows service-mode integration tests")
+	// When false, each Windows node keeps an IPN bus watcher open instead, as the GUI does.
+	windowsUnattended = flag.Bool("windows-unattended", true, "pass --unattended to tailscale up on Windows")
 )
 
 // MainError is an error that's set if an error conditions happens outside of a
@@ -761,6 +764,18 @@ func (n *TestNode) diskPrefs() *ipn.Prefs {
 	if err != nil {
 		t.Fatalf("reading prefs, NewFileStore: %v", err)
 	}
+	if runtime.GOOS == "windows" && !*windowsUnattended {
+		// Windows saves a startup profile only in unattended mode, so read the CLI user's profile.
+		u, err := user.Current()
+		if err != nil {
+			t.Fatalf("reading prefs, user.Current: %v", err)
+		}
+		p, err := ipnlocal.ReadUserPrefsForTest(t.Logf, fs, ipn.WindowsUserID(u.Uid))
+		if err != nil {
+			t.Fatalf("reading prefs, ReadUserPrefsForTest: %v", err)
+		}
+		return p.AsStruct()
+	}
 	p, err := ipnlocal.ReadStartupPrefsForTest(t.Logf, fs)
 	if err != nil {
 		t.Fatalf("reading prefs, ReadDiskPrefsForTest: %v", err)
@@ -1056,10 +1071,34 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Process.Kill()
 		cmd.Process.Wait()
 	})
+	if ipnGOOS == "windows" && !*windowsUnattended {
+		n.watchIPNBusLikeGUI()
+	}
 	return &Daemon{
 		Process: cmd.Process,
 		node:    n,
 	}
+}
+
+// watchIPNBusLikeGUI keeps an IPN bus watcher open for the rest of the test, as the GUI does.
+func (n *TestNode) watchIPNBusLikeGUI() {
+	t := n.env.t
+	t.Helper()
+	var w *local.IPNBusWatcher
+	if err := tstest.WaitFor(90*time.Second, func() (err error) {
+		w, err = n.LocalClient().WatchIPNBus(t.Context(), 0)
+		return err
+	}); err != nil {
+		t.Fatalf("watching IPN bus: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+	go func() {
+		for {
+			if _, err := w.Next(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func (n *TestNode) MustUp(extraArgs ...string) {
@@ -1234,12 +1273,15 @@ func (n *TestNode) TailscaleForOutput(arg ...string) *exec.Cmd {
 // It does not start the process.
 func (n *TestNode) Tailscale(arg ...string) *exec.Cmd {
 	isUp := len(arg) > 0 && arg[0] == "up"
-	if isUp && cmp.Or(n.upFlagGOOS, runtime.GOOS) == "windows" {
+	if isUp && *windowsUnattended && cmp.Or(n.upFlagGOOS, runtime.GOOS) == "windows" {
 		isBareUp := len(arg) == 1
 		// --unattended keeps the current profile after the CLI exits; without it
 		// Windows switches to an empty background profile and the node drops to NoState.
-		// TODO(yaruk): also run tests without --unattended; see #20751.
-		if !isBareUp && !slices.Contains(arg, "--unattended") {
+		setsUnattended := slices.ContainsFunc(arg, func(a string) bool {
+			name, _, _ := strings.Cut(a, "=")
+			return name == "--unattended" || name == "-unattended"
+		})
+		if !isBareUp && !setsUnattended {
 			arg = append(arg, "--unattended")
 		}
 	}
