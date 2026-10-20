@@ -1,10 +1,10 @@
 {
   "toolchain": {
-    "rev": "24ee2fd0610e6c505ee4ec061a81215afe119d1f",
-    "sri": "sha256-qxNiwlI/KJpwx7VZQU9C5puJGMUtN5vBXm3ApNYIolI="
+    "rev": "7ef7b403648ac3a9481a6e88e8b894eff50b0167",
+    "sri": "sha256-sdlgTLTkdhTvGCeQTwAsR+Do8rNwBzBUp5QPc09BPgI="
   },
   "vendor": {
-    "goModSum": "sha256-hjoZGDJvJX1RT3uIKMrk7o7HiMJYPP1NNqfsSd0+Dqw=",
-    "sri": "sha256-f9abuyk1qvVr6MPpfmHay6p/U/+8flm1SBmHGjZa1aU="
+    "goModSum": "sha256-hDLuPODGxjcyEeLmk27zp6W2NbBXVUtVqHjVcvLNXGA=",
+    "sri": "sha256-VxuDS8QKZ82W/MOlfng0+ZCPSPl5KnK3FYW1puDiNe4="
   }
 }
