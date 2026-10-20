@@ -376,7 +376,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
 		return rcfg, ocfg, nil
-	case cfg.hasDefaultIPResolversOnly() && !cfg.hasHostsWithoutSplitDNSRoutes():
+	case cfg.hasDefaultIPResolversOnly() && !cfg.hasHostsWithoutSplitDNSRoutes() && !cfg.DefaultResolversLocalOnly:
 		// Trivial CorpDNS configuration, just override the OS resolver.
 		//
 		// If there are hosts (ExtraRecords) that are not covered by an existing
@@ -389,13 +389,27 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// https://github.com/tailscale/tailscale/issues/1666
 		ocfg.Nameservers = toIPsOnly(cfg.DefaultResolvers)
 		return rcfg, ocfg, nil
-	case cfg.hasDefaultResolvers():
+	case cfg.hasDefaultResolvers() && !cfg.DefaultResolversLocalOnly:
 		// Default resolvers plus other stuff always ends up proxying
 		// through quad-100.
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
 		ocfg.Nameservers = cfg.serviceIPs(m.knobs)
 		return rcfg, ocfg, nil
+	}
+
+	if cfg.DefaultResolversLocalOnly && cfg.hasDefaultResolvers() {
+		// --override-dns=false: quad-100 keeps forwarding to the
+		// default resolvers, and the OS keeps its own resolver. The
+		// split-DNS paths below scope any resolver the OS gets to the
+		// tailnet's match domains.
+		routes["."] = cfg.DefaultResolvers
+		rcfg.Routes = routes
+		if !cfg.hasRoutes() && !cfg.requiresPrimaryResolver() {
+			// Nothing to scope to, and nothing that requires a
+			// primary resolver: the OS gets no resolvers at all.
+			return rcfg, ocfg, nil
+		}
 	}
 
 	// From this point on, we're figuring out split DNS
