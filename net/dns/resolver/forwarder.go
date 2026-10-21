@@ -639,7 +639,8 @@ func (f *forwarder) newDoHClientLocked(cacheKey, urlBase string, allIPs []netip.
 
 const dohType = "application/dns-message"
 
-func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
+// sendDoH sends packet as a DoH query to urlBase using client c.
+func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) (*Response, error) {
 	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderDoH, f.logf)
 	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
@@ -669,13 +670,21 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
 	}
 	res, err := io.ReadAll(hres.Body)
-	if err != nil {
-		metricDNSFwdDoHErrorBody.Add(1)
-	}
+	// Check truncated flag regardless of error.
 	if truncatedFlagSet(res) {
 		metricDNSFwdTruncated.Add(1)
 	}
-	return res, err
+	if err != nil {
+		metricDNSFwdDoHErrorBody.Add(1)
+		return nil, err
+	}
+	return &Response{
+		Bs: res,
+		DoHMeta: &DoHMetadata{
+			RequestURL:     hres.Request.URL,
+			ResponseHeader: hres.Header,
+		},
+	}, nil
 }
 
 var (
@@ -690,13 +699,17 @@ var (
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
-func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
+func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret *Response, err error) {
 	if f.verboseFwd {
 		id := forwarderCount.Add(1)
 		domain, typ, _ := nameFromQuery(fq.packet)
 		f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] ...", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id)
 		defer func() {
-			f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id, len(ret), err)
+			var n int
+			if ret != nil {
+				n = len(ret.Bs)
+			}
+			f.logf("forwarder.send(%q, %d, %v, %d) from %v [%d] = %v, %v", rr.name.Addr, fq.txid, typ, len(domain), fq.src, id, n, err)
 		}()
 	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
@@ -708,7 +721,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 			return nil, err
 		}
 		// Check response size and set TC flag if needed (only for UDP queries)
-		res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+		res.Bs = checkResponseSizeAndSetTC(res.Bs, fq.packet, fq.family, f.logf)
 		return res, nil
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
@@ -724,7 +737,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 				return nil, err
 			}
 			// Check response size and set TC flag if needed (only for UDP queries)
-			res = checkResponseSizeAndSetTC(res, fq.packet, fq.family, f.logf)
+			res.Bs = checkResponseSizeAndSetTC(res.Bs, fq.packet, fq.family, f.logf)
 			return res, nil
 		}
 		metricDNSFwdErrorType.Add(1)
@@ -818,12 +831,12 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		case dns.RCodeServerFailure, dns.RCodeRefused:
 			return nil, rcodeResponseError{rcode, resp}
 		}
-		return resp, nil
+		return &Response{Bs: resp}, nil
 	}
 
 	// If we got a truncated UDP response, return that instead of an error.
 	if trErr, ok := errors.AsType[truncatedResponseError](err); ok {
-		return trErr.res, nil
+		return &Response{Bs: trErr.res}, nil
 	}
 	return nil, err
 }
@@ -1312,7 +1325,7 @@ type forwardQuery struct {
 //
 // If resolvers is non-empty, it's used explicitly (notably, for exit
 // node DNS proxy queries), otherwise f.resolvers is used.
-func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- packet, resolvers ...resolverAndDelay) error {
+func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, responseChan chan<- *Response, resolvers ...resolverAndDelay) error {
 	metricDNSFwd.Add(1)
 	domain, typ, err := nameFromQuery(query.bs)
 	if err != nil {
@@ -1337,7 +1350,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("waiting to send NXDOMAIN: %w", ctx.Err())
-		case responseChan <- res:
+		case responseChan <- &Response{Bs: res.bs}:
 			return nil
 		}
 	}
@@ -1365,7 +1378,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("waiting to send SERVFAIL: %w", ctx.Err())
-			case responseChan <- res:
+			case responseChan <- &Response{Bs: res.bs}:
 				return nil
 			}
 		} else {
@@ -1394,9 +1407,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		f.logf("request(%d, %v, %d, %s) %d...", fq.txid, typ, len(domain), domainSig, len(fq.packet))
 	}
 
-	resc := make(chan []byte, 1) // it's fine buffered or not
-	errc := make(chan error, 1)  // it's fine buffered or not too
-	raceStart := time.Now()      // when the startDelay of each resolver below starts running
+	resc := make(chan *Response, 1) // it's fine buffered or not
+	errc := make(chan error, 1)     // it's fine buffered or not too
+	raceStart := time.Now()         // when the startDelay of each resolver below starts running
 	for i := range resolvers {
 		go func(rr *resolverAndDelay) {
 			if rr.startDelay > 0 {
@@ -1439,14 +1452,14 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	}
 
 	// deliverSuccess gives the client an upstream's successful response.
-	deliverSuccess := func(v []byte) error {
+	deliverSuccess := func(v *Response) error {
 		select {
 		case <-ctx.Done():
 			metricDNSFwdErrorContext.Add(1)
 			return fmt.Errorf("waiting to send response: %w", ctx.Err())
-		case responseChan <- packet{v, query.family, query.addr}:
+		case responseChan <- v:
 			if f.verboseFwd {
-				f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v))
+				f.logf("response(%d, %v, %d) = %d, nil", fq.txid, typ, len(domain), len(v.Bs))
 			}
 			metricDNSFwdSuccess.Add(1)
 			f.health.SetHealthy(dnsForwarderFailing)
@@ -1459,16 +1472,16 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	// forwardWithDestChan, it either sends to responseChan and returns nil, or
 	// returns heldErr without sending.
 	deliverHeldResponse := func() error {
-		var res packet
+		var res *Response
 		if rcodeErr, ok := errors.AsType[rcodeResponseError](heldErr); ok {
-			res = packet{rcodeErr.res, query.family, query.addr}
+			res = &Response{Bs: rcodeErr.res}
 		} else {
 			r, err := servfailResponse(query)
 			if err != nil {
 				f.logf("building servfail response: %v", err)
 				return heldErr
 			}
-			res = r
+			res = &Response{Bs: r.bs}
 		}
 		select {
 		case <-ctx.Done():
@@ -1483,7 +1496,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 		case responseChan <- res:
 			if f.verboseFwd {
-				f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), heldErr)
+				f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.Bs), heldErr)
 			}
 			return nil
 		}
@@ -1676,4 +1689,39 @@ func (p *closePool) Close() error {
 		c.Close()
 	}
 	return nil
+}
+
+// DoHMetadata captures data about the HTTP
+// request and response when a DNS request is
+// forwarded to a DoH server, e.g. PeerAPI DoH for
+// exit nodes or app connectors.
+//
+// As of 2026-09-24, the only known consumer is
+// feature/conn25, which uses the data to track
+// which app connector served a DNS request for
+// a client, and to extract authorization tokens
+// from the response headers, which it then uses
+// in further communication with the connector.
+type DoHMetadata struct {
+	// RequestURL is the URL of the DoH request
+	// that produced the response.
+	// It is passed as a pointer to avoid allocations.
+	// It should not be modified.
+	RequestURL *url.URL
+	// ResponseHeader is the DoH HTTP response headers.
+	// It references the actual headers which may or may
+	// not have been sent to the HTTP client.
+	// It should not be modified.
+	ResponseHeader http.Header
+}
+
+// Response is a DNS response in bytes, along with metadata
+// from the DoH server that served it, if it was served
+// by a DoH server.
+type Response struct {
+	// Bs is the wire-encoded DNS response.
+	Bs []byte
+	// DoHMeta is non-nil if the response came
+	// from a DoH server, and nil otherwise.
+	DoHMeta *DoHMetadata
 }

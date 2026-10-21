@@ -68,7 +68,7 @@ func TestSplitDNSToTailnetResolverUDP(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, err := firstAAnswer(resp); err != nil {
+		if _, err := firstAAnswer(resp.Bs); err != nil {
 			return err
 		}
 		return nil
@@ -84,7 +84,7 @@ func TestSplitDNSToTailnetResolverUDP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
-	got, err := firstAAnswer(resp)
+	got, err := firstAAnswer(resp.Bs)
 	if err != nil {
 		t.Fatalf("parsing response: %v", err)
 	}
