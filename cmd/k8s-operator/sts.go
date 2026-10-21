@@ -41,6 +41,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/mak"
 )
@@ -413,24 +414,29 @@ func (r *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 		return false, nil
 	}
 
-	devices, err := r.DeviceInfo(ctx, labels, logger)
+	devices, err := r.allDeviceInfo(ctx, labels, logger)
 	if err != nil {
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
 
 	for _, dev := range devices {
-		if dev.id != "" {
-			logger.Debugf("deleting device %s from control", string(dev.id))
-			err = tsClient.Devices().Delete(ctx, string(dev.id))
-			switch {
-			case tailscale.IsNotFound(err):
-				logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
-			case err != nil:
-				return false, fmt.Errorf("deleting device: %w", err)
+		if dev.id == "" {
+			if err = ensureUnreportedDeviceRemoved(ctx, tsClient, dev.machineKey, logger); err != nil {
+				return false, err
 			}
-
-			logger.Debugf("device %s deleted from control", string(dev.id))
+			continue
 		}
+
+		logger.Debugf("deleting device %s from control", string(dev.id))
+		err = tsClient.Devices().Delete(ctx, string(dev.id))
+		switch {
+		case tailscale.IsNotFound(err):
+			logger.Debugf("device %s not found, likely because it has already been deleted from control", string(dev.id))
+		case err != nil:
+			return false, fmt.Errorf("deleting device: %w", err)
+		}
+
+		logger.Debugf("device %s deleted from control", string(dev.id))
 	}
 
 	resourceTypes := []client.Object{
@@ -463,6 +469,32 @@ func (r *tailscaleSTSReconciler) Cleanup(ctx context.Context, tailnet string, lo
 	}
 
 	return true, nil
+}
+
+// ensureUnreportedDeviceRemoved deletes the device registered with machine key
+// mk, for a proxy that registered with control but was shut down before it
+// received a netmap, so it never learned its device ID to write to the state
+// Secret.
+func ensureUnreportedDeviceRemoved(ctx context.Context, tsClient tsclient.Client, mk key.MachinePublic, logger *zap.SugaredLogger) error {
+	devices, err := tsClient.Devices().List(ctx, tailscale.WithFilter("machineKey", []string{mk.String()}))
+	if err != nil {
+		return fmt.Errorf("failed to list devices: %w", err)
+	}
+
+	for _, dev := range devices {
+		// Control ignores filters it does not support, so check the key
+		// rather than trusting the filter.
+		if dev.MachineKey != mk.String() {
+			continue
+		}
+
+		logger.Infof("deleting device %q that registered but never reported its device ID", dev.NodeID)
+		if err := tsClient.Devices().Delete(ctx, dev.NodeID); err != nil && !tailscale.IsNotFound(err) {
+			return fmt.Errorf("failed to delete device %q: %w", dev.NodeID, err)
+		}
+	}
+
+	return nil
 }
 
 // maxStatefulSetNameLength is maximum length the StatefulSet name can
@@ -676,6 +708,17 @@ func sanitizeConfig(c ipn.ConfigVAlpha) ipn.ConfigVAlpha {
 // Pod to ensure that it is the currently running Pod that set the capver. If the Pod or the Secret does not exist, the
 // returned capver is -1. Either of device ID, hostname and IPs can be empty string if not found in the Secret.
 func (r *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
+	devices, err := r.allDeviceInfo(ctx, childLabels, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return slices.DeleteFunc(devices, func(d *device) bool { return d.id == "" }), nil
+}
+
+// allDeviceInfo is like [tailscaleSTSReconciler.DeviceInfo], but also returns devices that have not reported their
+// device ID yet, with only their machine key and ordinal set.
+func (r *tailscaleSTSReconciler) allDeviceInfo(ctx context.Context, childLabels map[string]string, logger *zap.SugaredLogger) ([]*device, error) {
 	var secrets corev1.SecretList
 	if err := r.List(ctx, &secrets, client.InNamespace(r.operatorNamespace), client.MatchingLabels(childLabels)); err != nil {
 		return nil, err
@@ -721,12 +764,29 @@ type device struct {
 	// ordinal is the replica ordinal parsed from the state Secret's name,
 	// or -1 if it could not be parsed.
 	ordinal int32
+	// machineKey is set when id is not: the proxy has not reported its
+	// device ID yet, but may already have registered with control.
+	machineKey key.MachinePublic
 }
 
 func deviceInfo(sec *corev1.Secret, podUID string, log *zap.SugaredLogger) (dev *device, err error) {
 	id := tailcfg.StableNodeID(sec.Data[kubetypes.KeyDeviceID])
 	if id == "" {
-		return dev, nil
+		mkText := sec.Data[string(ipn.MachineKeyStateKey)]
+		// tailscaled writes its machine key before registering, so no key means no device.
+		if len(mkText) == 0 {
+			return nil, nil
+		}
+
+		var mk key.MachinePrivate
+		if err := mk.UnmarshalText(mkText); err != nil {
+			// tailscaled refuses to start with an invalid machine key, so it
+			// cannot have registered a device with it.
+			log.Warnf("failed to parse machine key in state Secret %q, skipping: %v", sec.Name, err)
+			return nil, nil
+		}
+
+		return &device{machineKey: mk.Public(), ordinal: ordinalFromName(sec.Name)}, nil
 	}
 	dev = &device{id: id, ordinal: ordinalFromName(sec.Name)}
 	// Kubernetes chokes on well-formed FQDNs with the trailing dot, so we have

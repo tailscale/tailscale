@@ -33,6 +33,7 @@ import (
 	"tailscale.com/kube/kubetypes"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/util/mak"
 )
 
@@ -97,6 +98,24 @@ func TestConnector(t *testing.T) {
 	}
 	expectEqual(t, fc, expectedSecret(t, fc, opts))
 	expectEqual(t, fc, expectedSTS(t, fc, opts), removeResourceReqs)
+
+	// A proxy that has stored its machine key but not reported its device ID
+	// yet should not be listed in the Connector status.
+	mkText, err := key.NewMachine().MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustUpdate(t, fc, "operator-ns", opts.secretName, func(secret *corev1.Secret) {
+		mak.Set(&secret.Data, string(ipn.MachineKeyStateKey), mkText)
+	})
+	expectReconciled(t, cr, "", "test")
+	got := new(tsapi.Connector)
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: "test"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.Devices) != 0 {
+		t.Errorf("Connector status devices = %v, want none", got.Status.Devices)
+	}
 
 	// Connector status should get updated with the IP/hostname info when available.
 	const hostname = "foo.tailnetxyz.ts.net"
