@@ -264,7 +264,7 @@ func isRunningOrStarting(st *ipnstate.Status) (description string, ok bool) {
 	default:
 		return fmt.Sprintf("unexpected state: %s", st.BackendState), false
 	case ipn.Stopped.String():
-		return "Tailscale is stopped.", false
+		return "Tailscale is stopped. Run 'tailscale up' to connect.", false
 	case ipn.NeedsLogin.String():
 		s := "Logged out."
 		if st.AuthURL != "" {
