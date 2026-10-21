@@ -1566,7 +1566,7 @@ func TestKubeAPIServerType_DoesNotOverwriteServicesConfig(t *testing.T) {
 			AuthKey:  new("new-authkey"),
 			State:    new(fmt.Sprintf("kube:%s", pgPodName(pg.Name, 0))),
 			App:      new(kubetypes.AppProxyGroupKubeAPIServer),
-			LogLevel: new("debug"),
+			LogLevel: new("info"), // not the reconciler logger's debug
 
 			Hostname: new("test-k8s-apiserver-0"),
 			APIServerProxy: &conf.APIServerProxyConfig{

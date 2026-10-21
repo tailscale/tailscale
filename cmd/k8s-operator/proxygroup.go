@@ -18,6 +18,7 @@ import (
 
 	dockerref "github.com/distribution/reference"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	xslices "golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -93,6 +94,7 @@ type ProxyGroupReconciler struct {
 	tsFirewallMode    string
 	defaultProxyClass string
 	loginServer       string
+	logLevel          zapcore.Level // kube-apiserver proxies log at this level
 
 	reissuer *tailscaled.Reissuer
 
@@ -710,7 +712,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 					AuthKey:  authKey,
 					State:    new(fmt.Sprintf("kube:%s", pgPodName(pg.Name, i))),
 					App:      new(kubetypes.AppProxyGroupKubeAPIServer),
-					LogLevel: new(logger.Level().String()),
+					LogLevel: new(r.logLevel.String()),
 
 					// Reloadable fields.
 					Hostname: &hostname,
