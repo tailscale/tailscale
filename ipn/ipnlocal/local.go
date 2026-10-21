@@ -283,7 +283,6 @@ type LocalBackend struct {
 	shouldInterceptTCPPortAtomic            syncs.AtomicValue[func(uint16) bool]         // TODO(nickkhyl): move to nodeBackend
 	shouldInterceptVIPServicesTCPPortAtomic syncs.AtomicValue[func(netip.AddrPort) bool] // TODO(nickkhyl): move to nodeBackend
 	numClientStatusCalls                    atomic.Uint32                                // TODO(nickkhyl): move to nodeBackend
-	lastDeadlockCheckUnix                   atomic.Int64
 	deadlockChecksInFlight                  atomic.Int64
 	deadlockTimerMu                         sync.Mutex
 	deadlockTimer                           *time.Timer
