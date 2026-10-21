@@ -13,36 +13,107 @@ import (
 	"strings"
 
 	"go4.org/netipx"
+	xmaps "golang.org/x/exp/maps"
 )
+
+// omitDomains are domains that appear in the github API /meta output
+// that we do not need to have app connectors route traffic for (and
+// to do so would result in advertising more routes than we want).
+var omitDomains = map[string]bool{
+	"*.githubassets.com":      true,
+	"*.githubusercontent.com": true,
+	"*.windows.net":           true,
+	"*.azureedge.net":         true,
+}
 
 // See https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-githubs-ip-addresses
 
+// GithubMeta is a subset of the response from the github APIs /meta endpoint.
 type GithubMeta struct {
-	VerifiablePasswordAuthentication bool `json:"verifiable_password_authentication"`
-	SSHKeyFingerprints               struct {
-		Sha256Ecdsa   string `json:"SHA256_ECDSA"`
-		Sha256Ed25519 string `json:"SHA256_ED25519"`
-		Sha256Rsa     string `json:"SHA256_RSA"`
-	} `json:"ssh_key_fingerprints"`
-	SSHKeys                  []string `json:"ssh_keys"`
-	Hooks                    []string `json:"hooks"`
 	Web                      []string `json:"web"`
 	API                      []string `json:"api"`
 	Git                      []string `json:"git"`
 	GithubEnterpriseImporter []string `json:"github_enterprise_importer"`
 	Packages                 []string `json:"packages"`
 	Pages                    []string `json:"pages"`
-	Importer                 []string `json:"importer"`
-	Actions                  []string `json:"actions"`
-	Dependabot               []string `json:"dependabot"`
 	Domains                  struct {
 		Website    []string `json:"website"`
 		Codespaces []string `json:"codespaces"`
 		Copilot    []string `json:"copilot"`
-		Packages   []string `json:"packages"`
 	} `json:"domains"`
 }
 
+func (ghm GithubMeta) routesLists() [][]string {
+	return [][]string{
+		ghm.Web,
+		ghm.API,
+		ghm.Git,
+		ghm.GithubEnterpriseImporter,
+		ghm.Packages,
+		ghm.Pages,
+	}
+}
+
+func (ghm GithubMeta) domainsLists() [][]string {
+	return [][]string{
+		ghm.Domains.Website,
+		ghm.Domains.Codespaces,
+		ghm.Domains.Copilot,
+	}
+}
+
+func (ghm GithubMeta) routes() *netipx.IPSet {
+	var ips netipx.IPSetBuilder
+	for _, routes := range ghm.routesLists() {
+		for _, r := range routes {
+			ips.AddPrefix(netip.MustParsePrefix(r))
+		}
+	}
+	set, err := ips.IPSet()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return set
+}
+
+func (ghm GithubMeta) domains() []string {
+	ds := map[string]bool{}
+	for _, list := range ghm.domainsLists() {
+		for _, d := range list {
+			if !omitDomains[d] {
+				ds[d] = true
+			}
+		}
+	}
+	return xmaps.Keys(ds)
+}
+
+type Output struct {
+	Routes  []netip.Prefix `json:"routes"`
+	Domains []string       `json:"domains"`
+}
+
+func (o Output) format() []byte {
+	s, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return s
+}
+
+// github prints app connector config to standard out.
+// The /meta github endpoint lists the routes and domains needed to use GitHub. It
+// lists thousands of routes, and includes broad wildcard domains like *.microsoft.com.
+// Not all tailnets function well with an app connector that's advertising thousands of
+// routes.
+// GitHub has an enterprise "allowed IPs only" feature.  The goal of this script is
+// to capture only the domains and routes needed to configure an app connector so that
+// users of that app connector can enable that GitHub feature pointing at the app connector
+// IP address and have github work.
+// We don't know exactly which routes and domains are needed, but I got an email from GitHub
+// support saying that only the routes provided in 'web', 'api', and 'git' are needed,
+// but that doesn't seem very likely, surely users of eg private packages will
+// need to be coming from an allowed IP? Still, attempt to be reasonably restrictive.
 func github() {
 	r, err := http.Get("https://api.github.com/meta")
 	if err != nil {
@@ -50,67 +121,28 @@ func github() {
 	}
 
 	var ghm GithubMeta
-
 	if err := json.NewDecoder(r.Body).Decode(&ghm); err != nil {
 		log.Fatal(err)
 	}
 	r.Body.Close()
 
-	var ips netipx.IPSetBuilder
-
-	var lists []string
-	lists = append(lists, ghm.Hooks...)
-	lists = append(lists, ghm.Web...)
-	lists = append(lists, ghm.API...)
-	lists = append(lists, ghm.Git...)
-	lists = append(lists, ghm.GithubEnterpriseImporter...)
-	lists = append(lists, ghm.Packages...)
-	lists = append(lists, ghm.Pages...)
-	lists = append(lists, ghm.Importer...)
-	lists = append(lists, ghm.Actions...)
-	lists = append(lists, ghm.Dependabot...)
-
-	for _, s := range lists {
-		ips.AddPrefix(netip.MustParsePrefix(s))
-	}
-
-	set, err := ips.IPSet()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(`"routes": [`)
-	for _, pfx := range set.Prefixes() {
-		fmt.Printf(`"%s": ["tag:connector"],%s`, pfx.String(), "\n")
-	}
-	fmt.Println(`]`)
-
-	fmt.Println()
-
 	var domains []string
-	domains = append(domains, ghm.Domains.Website...)
-	domains = append(domains, ghm.Domains.Codespaces...)
-	domains = append(domains, ghm.Domains.Copilot...)
-	domains = append(domains, ghm.Domains.Packages...)
-	slices.Sort(domains)
-	domains = slices.Compact(domains)
-
-	var bareDomains []string
-	for _, domain := range domains {
+	for _, domain := range ghm.domains() {
+		domains = append(domains, domain)
 		trimmed := strings.TrimPrefix(domain, "*.")
 		if trimmed != domain {
-			bareDomains = append(bareDomains, trimmed)
+			domains = append(domains, trimmed)
 		}
 	}
-	domains = append(domains, bareDomains...)
 	slices.Sort(domains)
 	domains = slices.Compact(domains)
 
-	fmt.Println(`"domains": [`)
-	for _, domain := range domains {
-		fmt.Printf(`"%s",%s`, domain, "\n")
-	}
-	fmt.Println(`]`)
+	set := ghm.routes()
+
+	fmt.Println(string(Output{
+		Routes:  set.Prefixes(),
+		Domains: domains,
+	}.format()))
 
 	advertiseRoutes(set)
 }
