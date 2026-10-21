@@ -109,6 +109,10 @@ type Dialer struct {
 	// If nil, tstime.StdClock is used.
 	// This exists primarily for tests.
 	Clock tstime.Clock
+
+	// Base path for Control API endpoint requests, extracted from the
+	// taislcale endpoint URL.
+	BasePath string
 }
 
 func strDef(v1, v2 string) string {
