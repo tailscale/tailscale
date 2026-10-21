@@ -181,20 +181,17 @@ func waitForNodesToBeTaggedInStatus(t testing.TB, ctx context.Context, ts *tsnet
 			t.Fatalf("error getting status: %v", err)
 		}
 		for _, k := range nodeKeys {
-			var tags *views.Slice[string]
+			var tags views.Slice[string]
 			if k == status.Self.PublicKey {
 				tags = status.Self.Tags
 			} else {
 				tags = status.Peer[k].Tags
 			}
 			if tag == "" {
-				if tags != nil && tags.Len() != 0 {
+				if tags.Len() != 0 {
 					return false
 				}
 			} else {
-				if tags == nil {
-					return false
-				}
 				if tags.Len() != 1 || tags.At(0) != tag {
 					return false
 				}
