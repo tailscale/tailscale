@@ -15,11 +15,15 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/tsconst"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/must"
 )
 
 const (
 	fallbackInterfaceMetric = uint32(0) // Used if we cannot get the actual interface metric
 )
+
+var wintunInterfaceGUID = must.Get(windows.GUIDFromString(tsconst.WintunInterfaceGUID))
 
 func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPWindows
@@ -152,45 +156,41 @@ func getInterfaces(family winipcfg.AddressFamily, flags winipcfg.GAAFlags, match
 // GetWindowsDefault returns the interface that has the non-Tailscale
 // default route for the given address family.
 //
-// It returns (nil, nil) if no interface is found.
+// It returns (0, nil) if no interface is found.
 //
 // The family must be one of AF_INET or AF_INET6.
-func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddresses, error) {
-	ifs, err := getInterfaces(family, winipcfg.GAAFlagIncludeAllInterfaces, func(iface *winipcfg.IPAdapterAddresses) bool {
-		switch iface.IfType {
-		case winipcfg.IfTypeSoftwareLoopback:
-			return false
+func GetWindowsDefault(family winipcfg.AddressFamily) (winipcfg.LUID, error) {
+	type ipInterfaceKey struct {
+		winipcfg.LUID
+		winipcfg.AddressFamily
+	}
+	var ipInterfaces map[ipInterfaceKey]*winipcfg.MibIPInterfaceRow
+	getIPInterface := func(luid winipcfg.LUID, family winipcfg.AddressFamily) (*winipcfg.MibIPInterfaceRow, error) {
+		if ipif, ok := ipInterfaces[ipInterfaceKey{luid, family}]; ok {
+			return ipif, nil
 		}
-		switch family {
-		case windows.AF_INET:
-			if iface.Flags&winipcfg.IPAAFlagIpv4Enabled == 0 {
-				return false
-			}
-		case windows.AF_INET6:
-			if iface.Flags&winipcfg.IPAAFlagIpv6Enabled == 0 {
-				return false
-			}
+		ipif, err := luid.IPInterface(family)
+		if err != nil {
+			return nil, err
 		}
-		return iface.OperStatus == winipcfg.IfOperStatusUp && notTailscaleInterface(iface)
-	})
-	if err != nil {
-		return nil, err
+		mak.Set(&ipInterfaces, ipInterfaceKey{luid, family}, ipif)
+		return ipif, nil
 	}
 
 	routes, err := winipcfg.GetIPForwardTable2(family)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	bestMetric := ^uint32(0)
-	var bestIface *winipcfg.IPAdapterAddresses
+	var bestIface winipcfg.LUID
 	for _, route := range routes {
 		if route.DestinationPrefix.PrefixLength != 0 {
 			// Not a default route.
 			continue
 		}
-		iface := ifs[route.InterfaceLUID]
-		if iface == nil {
+		ipif, err := getIPInterface(route.InterfaceLUID, family)
+		if err != nil {
 			continue
 		}
 
@@ -201,17 +201,21 @@ func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddres
 		// metric offset specified in the Metric member of the
 		// MIB_IPFORWARD_ROW2 structure and the interface
 		// metric specified in this member for IPv4"
-		metric := route.Metric
-		switch family {
-		case windows.AF_INET:
-			metric += iface.Ipv4Metric
-		case windows.AF_INET6:
-			metric += iface.Ipv6Metric
+		metric := route.Metric + ipif.Metric
+		if metric >= bestMetric {
+			continue
 		}
-		if metric < bestMetric {
-			bestMetric = metric
-			bestIface = iface
+
+		iface, err := route.InterfaceLUID.Interface()
+		if err != nil || iface.OperStatus != winipcfg.IfOperStatusUp {
+			continue
 		}
+		if iface.InterfaceGUID == wintunInterfaceGUID {
+			continue
+		}
+
+		bestMetric = metric
+		bestIface = route.InterfaceLUID
 	}
 
 	return bestIface, nil
@@ -221,14 +225,18 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	// We always return the IPv4 default route.
 	// TODO(bradfitz): adjust API if/when anything cares. They could in theory differ, though,
 	// in which case we might send traffic to the wrong interface.
-	iface, err := GetWindowsDefault(windows.AF_INET)
+	luid, err := GetWindowsDefault(windows.AF_INET)
 	if err != nil {
 		return d, err
 	}
-	if iface != nil {
-		d.InterfaceName = iface.FriendlyName()
+	if luid != 0 {
+		iface, err := luid.Interface()
+		if err != nil {
+			return d, err
+		}
+		d.InterfaceName = iface.Alias()
 		d.InterfaceDesc = iface.Description()
-		d.InterfaceIndex = int(iface.IfIndex)
+		d.InterfaceIndex = int(iface.InterfaceIndex)
 	}
 	return d, nil
 }

@@ -19,15 +19,19 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
-	if iface == nil {
+func interfaceIndex(luid winipcfg.LUID) (uint32, error) {
+	if luid == 0 {
 		// The zero ifidx means "unspecified". If we end up passing zero
 		// to bindSocket*(), it unsets the binding and lets the socket
 		// behave as normal again, which is what we want if there's no
 		// default route we can use.
-		return 0
+		return 0, nil
 	}
-	return iface.IfIndex
+	iface, err := luid.Interface()
+	if err != nil {
+		return 0, err
+	}
+	return iface.InterfaceIndex, nil
 }
 
 func defaultInterfaceIndex(family winipcfg.AddressFamily) (uint32, error) {
@@ -36,7 +40,7 @@ func defaultInterfaceIndex(family winipcfg.AddressFamily) (uint32, error) {
 		return 0, err
 	}
 
-	return interfaceIndex(iface), nil
+	return interfaceIndex(iface)
 }
 
 func control(logf logger.Logf, _ *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
