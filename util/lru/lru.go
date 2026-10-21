@@ -118,6 +118,19 @@ func (c *Cache[K, V]) PeekOk(key K) (value V, ok bool) {
 	return zero, false
 }
 
+// PeekOldest returns the least recently used key-value pair in the cache,
+// or the zero values if the cache is empty.
+//
+// It does not move key to the front of the LRU. This should mostly be used
+// for non-intrusive debug inspection of the cache.
+func (c *Cache[K, V]) PeekOldest() (key K, value V) {
+	if c.head == nil {
+		return
+	}
+	ent := c.head.prev
+	return ent.key, ent.value
+}
+
 // Delete removes the provided key from the cache if it was present.
 func (c *Cache[K, V]) Delete(key K) {
 	if ent, ok := c.lookup[key]; ok {
