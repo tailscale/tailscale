@@ -707,13 +707,18 @@ func NewConn(opts Options) (*Conn, error) {
 		return nil, err
 	}
 
+	var disableCaptivePortalDetection func() bool
+	if c.controlKnobs != nil {
+		disableCaptivePortalDetection = c.controlKnobs.DisableCaptivePortalDetection.Load
+	}
 	c.netChecker = &netcheck.Client{
-		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
-		NetMon:              c.netMon,
-		SendPacket:          c.sendUDPNetcheck,
-		SkipExternalNetwork: inTest(),
-		PortMapper:          c.portMapper,
-		UseDNSCache:         true,
+		Logf:                          logger.WithPrefix(c.logf, "netcheck: "),
+		NetMon:                        c.netMon,
+		SendPacket:                    c.sendUDPNetcheck,
+		SkipExternalNetwork:           inTest(),
+		PortMapper:                    c.portMapper,
+		UseDNSCache:                   true,
+		DisableCaptivePortalDetection: disableCaptivePortalDetection,
 	}
 
 	c.metrics = registerMetrics(opts.Metrics)

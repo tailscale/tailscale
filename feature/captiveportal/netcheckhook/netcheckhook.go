@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/net/captivedetection"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 )
 
@@ -26,6 +27,10 @@ func init() {
 const captivePortalDelay = 200 * time.Millisecond
 
 func startCaptivePortalDetection(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
+	if c.DisableCaptivePortalDetection != nil && c.DisableCaptivePortalDetection() {
+		return syncs.ClosedChan(), func() {}
+	}
+
 	logf := c.Logf
 	if logf == nil {
 		logf = log.Printf
