@@ -18,6 +18,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
@@ -432,6 +433,30 @@ func (f *Filter) CapsWithValues(srcIP, dstIP netip.Addr) tailcfg.PeerCapMap {
 		}
 	}
 	return out
+}
+
+// HasCapability reports whether srcIP has the given capability when talking
+// to dstIP.
+func (f *Filter) HasCapability(srcIP, dstIP netip.Addr, cap peercap.Cap) bool {
+	var mm matches
+	switch {
+	case srcIP.Is4():
+		mm = f.cap4
+	case srcIP.Is6():
+		mm = f.cap6
+	}
+
+	for _, m := range mm {
+		if !m.SrcsContains(srcIP) {
+			continue
+		}
+		for _, cm := range m.Caps {
+			if cm.Cap == cap && cm.Dst.Contains(dstIP) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ShieldsUp reports whether this is a "shields up" (block everything
