@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -27,13 +28,22 @@ type eventMessage struct {
 func (eventMessage) ignore() bool { return false }
 
 type winMon struct {
-	logf                  logger.Logf
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	isActive              func() bool
-	messagec              chan eventMessage
-	addressChangeCallback *winipcfg.UnicastAddressChangeCallback
-	routeChangeCallback   *winipcfg.RouteChangeCallback
+	logf                    logger.Logf
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	isActive                func() bool
+	messagec                chan eventMessage
+	addressChangeCallback   *winipcfg.UnicastAddressChangeCallback
+	routeChangeCallback     *winipcfg.RouteChangeCallback
+	interfaceChangeCallback *winipcfg.InterfaceChangeCallback
+
+	// defaultInterface4 and defaultInterface6 cache the default interface
+	// index for each address family. They are invalidated directly by OS
+	// change notifications, rather than by the monitor's debounced State,
+	// which only records the IPv4 default route and no interface or route
+	// metrics.
+	defaultInterface4 defaultInterfaceCache
+	defaultInterface6 defaultInterfaceCache
 
 	mu      sync.Mutex
 	lastLog time.Time // time we last logged about any windows change event
@@ -59,22 +69,79 @@ func newOSMon(_ *eventbus.Bus, logf logger.Logf, pm *Monitor) (osMon, error) {
 	m.addressChangeCallback, err = winipcfg.RegisterUnicastAddressChangeCallback(m.unicastAddressChanged)
 	if err != nil {
 		m.logf("winipcfg.RegisterUnicastAddressChangeCallback error: %v", err)
-		m.cancel()
+		m.Close()
 		return nil, err
 	}
 
 	m.routeChangeCallback, err = winipcfg.RegisterRouteChangeCallback(m.routeChanged)
 	if err != nil {
-		m.addressChangeCallback.Unregister()
 		m.logf("winipcfg.RegisterRouteChangeCallback error: %v", err)
-		m.cancel()
+		m.Close()
 		return nil, err
+	}
+
+	m.interfaceChangeCallback, err = winipcfg.RegisterInterfaceChangeCallback(m.interfaceChanged)
+	if err != nil {
+		m.logf("winipcfg.RegisterInterfaceChangeCallback error: %v; default interface caching disabled", err)
+		// The cache cannot be invalidated correctly without interface change
+		// notifications, so disable it. Route and address monitoring is
+		// unaffected.
+		m.defaultInterface4.disable()
+		m.defaultInterface6.disable()
 	}
 
 	return m, nil
 }
 
+// WindowsDefaultInterfaceIndex returns the index of the non-Tailscale default
+// interface for family, which must be AF_INET or AF_INET6. Zero means no default
+// interface was found. Nonzero results are cached until an OS network change
+// notification; zero results and errors are not cached. Static and closed
+// monitors, and monitors without the required notification subscriptions,
+// perform uncached lookups, as do lookups that cannot stabilize under repeated
+// network changes.
+func (m *Monitor) WindowsDefaultInterfaceIndex(family winipcfg.AddressFamily) (uint32, error) {
+	var cache *defaultInterfaceCache
+	wm, _ := m.om.(*winMon)
+	switch family {
+	case windows.AF_INET:
+		if wm != nil {
+			cache = &wm.defaultInterface4
+		}
+	case windows.AF_INET6:
+		if wm != nil {
+			cache = &wm.defaultInterface6
+		}
+	default:
+		return 0, errors.New("invalid address family for Windows default interface")
+	}
+	lookup := func() (uint32, error) {
+		iface, err := GetWindowsDefault(family)
+		if err != nil || iface == nil {
+			return 0, err
+		}
+		return iface.IfIndex, nil
+	}
+	if cache == nil {
+		return lookup()
+	}
+	return cache.get(lookup)
+}
+
+func (m *winMon) invalidateDefaultInterfaces() {
+	m.defaultInterface4.invalidate()
+	m.defaultInterface6.invalidate()
+}
+
+// interfaceChanged covers changes to interface metrics, enabled address families,
+// and connectivity, which can change the best default without changing a route.
+func (m *winMon) interfaceChanged(_ winipcfg.MibNotificationType, _ *winipcfg.MibIPInterfaceRow) {
+	m.invalidateDefaultInterfaces()
+}
+
 func (m *winMon) Close() (ret error) {
+	m.defaultInterface4.disable()
+	m.defaultInterface6.disable()
 	m.cancel()
 	m.noDeadlockTicker.Stop()
 
@@ -93,6 +160,15 @@ func (m *winMon) Close() (ret error) {
 			ret = err
 		} else {
 			m.routeChangeCallback = nil
+		}
+	}
+
+	if m.interfaceChangeCallback != nil {
+		if err := m.interfaceChangeCallback.Unregister(); err != nil {
+			m.logf("interfaceChangeCallback.Unregister error: %v", err)
+			ret = err
+		} else {
+			m.interfaceChangeCallback = nil
 		}
 	}
 
@@ -131,6 +207,7 @@ func (m *winMon) Receive() (message, error) {
 
 // unicastAddressChanged is the callback we register with Windows to call when unicast address changes.
 func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibUnicastIPAddressRow) {
+	m.invalidateDefaultInterfaces()
 	if !m.isActive() {
 		// Avoid starting a goroutine that sends events to messagec,
 		// or sending messages to messagec directly, if the monitor
@@ -152,6 +229,7 @@ func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *wini
 
 // routeChanged is the callback we register with Windows to call when route changes.
 func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibIPforwardRow2) {
+	m.invalidateDefaultInterfaces()
 	if !m.isActive() {
 		// Avoid starting a goroutine that sends events to messagec,
 		// or sending messages to messagec directly, if the monitor
