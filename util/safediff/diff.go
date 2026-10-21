@@ -131,7 +131,8 @@ func Lines(x, y string, maxSize int) (out string, truncated bool) {
 		// Append the stats (if non-zero) and the line text.
 		// The stats reports the number of preceding identical lines.
 		if !truncated {
-			bufLen := len(buf) // original length (in case we exceed maxSize)
+			bufLen := len(buf)     // original length (in case we exceed maxSize)
+			origStats := prevStats // original stats (in case we exceed maxSize)
 			if !prevStats.isZero() {
 				buf = prevStats.appendText(buf)
 				prevStats = stats{} // just printed, so clear the stats
@@ -141,7 +142,8 @@ func Lines(x, y string, maxSize int) (out string, truncated bool) {
 			if !truncated {
 				return
 			}
-			buf = buf[:bufLen] // restore original buffer contents
+			buf = buf[:bufLen]    // restore original buffer contents
+			prevStats = origStats // restore stats since they were not printed
 		}
 
 		// Output is truncated, so just update the statistics.
