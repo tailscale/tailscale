@@ -8,6 +8,7 @@ package apiproxy
 import (
 	"net/http"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"testing"
 
@@ -127,6 +128,36 @@ func TestImpersonationHeaders(t *testing.T) {
 		if d := cmp.Diff(tc.wantHeaders, r.Header); d != "" {
 			t.Errorf("unexpected header (-want +got):\n%s", d)
 		}
+	}
+}
+
+func TestAddImpersonationHeadersAsRequiredSetsHost(t *testing.T) {
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := must.Get(url.Parse("https://198.51.100.1:443"))
+	ap := &APIServerProxy{
+		log:         zl.Sugar(),
+		authMode:    false,
+		upstreamURL: upstream,
+	}
+
+	// Client reaches the proxy over its own (tailnet) hostname, which is
+	// unrelated to the upstream apiserver.
+	r := must.Get(http.NewRequest("GET", "https://my-node.some-tailnet.ts.net/version", nil))
+
+	ap.addImpersonationHeadersAsRequired(r)
+
+	if r.URL.Host != upstream.Host {
+		t.Errorf("r.URL.Host = %q, want %q", r.URL.Host, upstream.Host)
+	}
+	// r.Host drives the outbound Host header / HTTP2 :authority. If it is
+	// left as the inbound tailnet hostname, strict HTTP/2 virtual-host
+	// matching downstream (e.g. an Istio ingress gateway in front of the
+	// apiserver) rejects the request with 421 Misdirected Request.
+	if r.Host != upstream.Host {
+		t.Errorf("r.Host = %q, want %q", r.Host, upstream.Host)
 	}
 }
 
