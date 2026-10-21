@@ -178,6 +178,37 @@ func TestPacketSideEffects(t *testing.T) {
 			},
 		},
 		{
+			netName: "custom-dhcp-dns",
+			setup: func() (*Server, error) {
+				var c Config
+				nw := c.AddNetwork("192.168.0.1/24")
+				nw.SetDHCPDNS(netip.MustParseAddr("4.11.4.12"), netip.MustParseAddr("198.51.100.53"))
+				c.AddNode(nw)
+				c.AddNode(nw)
+				return New(&c)
+			},
+			tests: []netTest{
+				{
+					name: "dhcp-discover",
+					pkt:  mkDHCP(nodeMac(1), layers.DHCPMsgTypeDiscover),
+					check: all(
+						numPkts(2),
+						pktSubstr("Option(MessageType:Offer)"),
+						pktSubstr("Option(DNS:[4 11 4 12 198 51 100 53])"),
+					),
+				},
+				{
+					name: "dhcp-request",
+					pkt:  mkDHCP(nodeMac(1), layers.DHCPMsgTypeRequest),
+					check: all(
+						numPkts(2),
+						pktSubstr("Option(MessageType:Ack)"),
+						pktSubstr("Option(DNS:[4 11 4 12 198 51 100 53])"),
+					),
+				},
+			},
+		},
+		{
 			netName: "v6",
 			setup: func() (*Server, error) {
 				var c Config
