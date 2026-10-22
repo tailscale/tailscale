@@ -111,7 +111,6 @@ func TestScoreMany(t *testing.T) {
 	}
 }
 
-
 func TestMakeRendezvousHasher(t *testing.T) {
 	t.Run("new-hasher", func(t *testing.T) {
 		f := func(from, to tailcfg.NodeID) uint64 {
