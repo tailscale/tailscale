@@ -946,9 +946,11 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 			}
 			cgnatDirty = append(cgnatDirty, pfx)
 		case osPlain:
-			var ch bool
-			osr, ch = tableSet(osr, pfx, wantOS)
-			osChanged = osChanged || ch
+			if pfx != tsaddr.CGNATRange() {
+				var ch bool
+				osr, ch = tableSet(osr, pfx, wantOS)
+				osChanged = osChanged || ch
+			}
 		}
 	}
 
@@ -963,13 +965,14 @@ func (rm *RouteManager) applyDirty(dirty set.Set[netip.Prefix], res *Result) {
 			osr, ch = tableSet(osr, pfx, !wantCoarse)
 			osChanged = osChanged || ch
 		}
-		osr, ch = tableSet(osr, tsaddr.CGNATRange(), wantCoarse)
-		osChanged = osChanged || ch
 	}
 	for _, pfx := range cgnatDirty {
 		osr, ch = tableSet(osr, pfx, !rm.coarseCGNAT && rm.cgnatPfxs.Contains(pfx))
 		osChanged = osChanged || ch
 	}
+	_, subnetCGNAT := rm.desiredFor(tsaddr.CGNATRange())
+	osr, ch = tableSet(osr, tsaddr.CGNATRange(), rm.coarseCGNAT || subnetCGNAT)
+	osChanged = osChanged || ch
 
 	rm.publish(out, outChanged, osr, osChanged, res)
 }

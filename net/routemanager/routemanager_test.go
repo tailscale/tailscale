@@ -254,6 +254,31 @@ func TestOneCGNAT(t *testing.T) {
 	wantOSRoutes(t, rm, "100.64.0.1/32", "fd7a:115c:a1e0::/48")
 }
 
+func TestOneCGNATWithOverlappingSubnetRoute(t *testing.T) {
+	rm := New(t.Logf)
+	subnetPeer := peer2()
+	subnetPeer.Routes = []netip.Prefix{pfx("100.64.0.0/10")}
+	thirdPeer := peerView{
+		ID:        3,
+		Key:       k3,
+		SelfAddrs: []netip.Prefix{pfx("100.64.0.3/32")},
+	}
+	commit(rm, func(m *Mutation) {
+		m.SetPrefs(Prefs{RouteAll: true})
+		m.SetTailnetConfig(TailnetConfig{OneCGNAT: true})
+		m.upsertPeer(peer1())
+		m.upsertPeer(subnetPeer)
+		m.upsertPeer(thirdPeer)
+	})
+	wantOSRoutes(t, rm, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+	res := commit(rm, func(m *Mutation) { m.RemovePeer(subnetPeer.ID) })
+	if res.OSRoutesChanged {
+		t.Errorf("OS routes changed after removing overlapping subnet route: %+v", res)
+	}
+	wantOSRoutes(t, rm, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+}
+
 // TestFullRebuildWhileCoarse exercises the full-rebuild path (a prefs
 // change) while CGNAT coarsening is already active.
 func TestFullRebuildWhileCoarse(t *testing.T) {
