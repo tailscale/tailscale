@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -21,6 +22,7 @@ import (
 	"tailscale.com/net/routecheck"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
@@ -460,6 +462,68 @@ func TestRoutersByPrefix(t *testing.T) {
 
 }
 
+func TestProbeAllHARouters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		self := makeNode(99, withName("self"))
+		peers := []tailcfg.NodeView{
+			// A plain peer that routes nothing: not probed.
+			makeNode(1, withName("peer1")),
+			// An HA pair sharing a prefix: both probed.
+			makeNode(21, withName("subnet21"), withRoutes(netip.MustParsePrefix("192.168.1.0/24"))),
+			// Node 22 is both an HA router and a conn25 connector for
+			// "example", so it appears in the probe set twice and must be
+			// deduplicated.
+			makeNode(22, withName("subnet22"),
+				withRoutes(netip.MustParsePrefix("192.168.1.0/24")),
+				withConn25Connector("example")),
+			// A lone subnet router: the only choice for its prefix, not probed.
+			makeNode(31, withName("subnet31"), withRoutes(netip.MustParsePrefix("192.168.3.0/24"))),
+			// Another connector for "example": probed, since "example" served by more
+			// than one connector (22, 41, 61).
+			makeNode(41, withName("connector41"), withConn25Connector("example")),
+			// The only connector for "solo": not probed, since it is the only choice for its app.
+			makeNode(51, withName("connector51"), withConn25Connector("solo")),
+			// A connector for a shared app ("example") and a solo app ("lonely"): probed via the shared app.
+			makeNode(61, withName("connector61"), withConn25Connector("example", "lonely")),
+		}
+		b := newStubBackend(self, peers)
+		t.Cleanup(func() { b.Close() })
+		c, err := routecheck.NewClient(t.Context(), t.Logf, b, b, b)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		got, err := c.ProbeAllHARouters(t.Context(), 0, routecheck.DefaultTimeout)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		wantReachable := []tailcfg.NodeID{21, 22, 41, 61}
+		gotReachable := slices.Collect(maps.Keys(got.Reachable))
+		slices.Sort(gotReachable)
+		if !slices.Equal(gotReachable, wantReachable) {
+			t.Errorf("reachable: got %v, want %v", gotReachable, wantReachable)
+		}
+
+		// Every probed node should be pinged once, confirming that the
+		// dual-role node (22) isn't double-probed, that lone routers and lone
+		// connectors (1, 31, 51) aren't probed, and that a connector serving
+		// both a shared and a solo app (61) is probed.
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		wantPinged := map[netip.Addr]int{
+			netip.MustParseAddr("192.168.0.21"): 1,
+			netip.MustParseAddr("192.168.0.22"): 1,
+			netip.MustParseAddr("192.168.0.41"): 1,
+			netip.MustParseAddr("192.168.0.61"): 1,
+		}
+		if diff := gcmp.Diff(wantPinged, b.pinged,
+			gcmpopts.EquateComparable(netip.Addr{})); diff != "" {
+			t.Errorf("pinged addresses -want +got:\n%s", diff)
+		}
+	})
+}
+
 type nodeOptFunc func(*tailcfg.Node)
 
 func makeNode(id tailcfg.NodeID, opts ...nodeOptFunc) tailcfg.NodeView {
@@ -499,6 +563,19 @@ func withRoutes(routes ...netip.Prefix) nodeOptFunc {
 	}
 }
 
+func withConn25Connector(apps ...string) nodeOptFunc {
+	return func(n *tailcfg.Node) {
+		vals := make([]tailcfg.RawMessage, 0, len(apps))
+		for _, app := range apps {
+			vals = append(vals, tailcfg.RawMessage(fmt.Sprintf("%q", app)))
+		}
+		if n.CapMap == nil {
+			n.CapMap = tailcfg.NodeCapMap{}
+		}
+		n.CapMap[nodecap.Conn25Connector] = vals
+	}
+}
+
 var _ routecheck.NodeBackender = &stubBackend{}
 var _ routecheck.NodeBackend = &stubBackend{}
 var _ routecheck.NetMapper = &stubBackend{}
@@ -513,6 +590,9 @@ type stubBackend struct {
 	cancel context.CancelFunc
 
 	donef atomic.Pointer[func()]
+
+	mu     sync.Mutex
+	pinged map[netip.Addr]int
 }
 
 type backendOptFunc func(*stubBackend)
@@ -574,6 +654,10 @@ func (nb *stubBackend) Peers() []tailcfg.NodeView {
 }
 
 func (b *stubBackend) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {
+	b.mu.Lock()
+	mak.Set(&b.pinged, ip, b.pinged[ip]+1)
+	b.mu.Unlock()
+
 	// Does the IP address match one of the peers’ addresses?
 	for _, n := range b.peers {
 		for _, a := range n.Addresses().All() {
