@@ -662,7 +662,32 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort, 
 	}, "")
 }
 
+// redirectToHTTPSHandler returns a connection handler that answers every
+// plaintext HTTP request with a redirect to the equivalent URL on HTTPS at
+// httpsPort, for svc or (if svc is empty) the node. See serveRedirectToHTTPS.
+func (b *LocalBackend) redirectToHTTPSHandler(svc tailcfg.ServiceName, httpsPort uint16) func(net.Conn) error {
+	hs := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b.serveRedirectToHTTPS(w, r, svc, httpsPort)
+		}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// One request, one redirect: there is nothing to keep the connection
+	// around for, and closing is what makes a browser move on to https.
+	hs.SetKeepAlivesEnabled(false)
+	return func(c net.Conn) error {
+		return hs.Serve(netutil.NewOneConnListener(c, nil))
+	}
+}
+
 func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport uint16, srcAddr netip.AddrPort, httpCtx *serveHTTPContext, forVIPService tailcfg.ServiceName) func(net.Conn) error {
+	if httpsPort := tcph.RedirectToHTTPSPort(); httpsPort != 0 {
+		redirect := b.redirectToHTTPSHandler(forVIPService, httpsPort)
+		return func(c net.Conn) error {
+			return redirect(b.meteredConnForService(c, forVIPService))
+		}
+	}
+
 	if tcph.HTTPS() || tcph.HTTP() {
 		hs := &http.Server{
 			Handler: http.HandlerFunc(b.serveWebHandler),
@@ -1341,6 +1366,35 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
+// serveRedirectToHTTPS answers a plaintext HTTP request with a 301 to the
+// same URL on https at port, on the name the HTTPS serve is reached by: svc's
+// MagicDNS name, or the node's own when svc is empty. That is the name the
+// certificate is for, so the Host the client used is not echoed back. A 301
+// rather than a 307 or 308, because this is the upgrade every web server does
+// and the point is for browsers to remember it.
+func (b *LocalBackend) serveRedirectToHTTPS(w http.ResponseWriter, r *http.Request, svc tailcfg.ServiceName, port uint16) {
+	// A request-target that is not a path ("GET *") has no https equivalent.
+	uri := r.URL.RequestURI()
+	if !strings.HasPrefix(uri, "/") {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	nm := b.currentNode().NetMap()
+	host := strings.TrimSuffix(nm.SelfName(), ".")
+	if host == "" {
+		// This should never happen.
+		http.Error(w, "this node has no tailnet name", http.StatusServiceUnavailable)
+		return
+	}
+	if svc != "" {
+		host = svc.WithoutPrefix() + "." + nm.MagicDNSSuffix()
+	}
+	if port != 443 {
+		host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	}
+	http.Redirect(w, r, "https://"+host+uri, http.StatusMovedPermanently)
+}
+
 func (b *LocalBackend) webServerConfig(hostname string, forVIPService tailcfg.ServiceName, port uint16) (c ipn.WebServerConfigView, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1773,6 +1827,11 @@ func validateServeConfigUpdate(existing, incoming ipn.ServeConfigView) error {
 		}
 	}
 
+	// A redirect to HTTPS is a handler of its own, not a flag on another.
+	if err := validateRedirectsToHTTPS(incoming); err != nil {
+		return err
+	}
+
 	if !existing.Valid() {
 		return nil
 	}
@@ -1851,6 +1910,41 @@ func validateServeConfigUpdate(existing, incoming ipn.ServeConfigView) error {
 	return nil
 }
 
+// validateRedirectsToHTTPS checks every TCP port handler in sc -- the node's,
+// each foreground session's and each service's -- that redirects to HTTPS:
+// it may do nothing else, and it may not point at itself.
+func validateRedirectsToHTTPS(sc ipn.ServeConfigView) error {
+	check := func(scope string, tcp views.MapFn[uint16, *ipn.TCPPortHandler, ipn.TCPPortHandlerView]) error {
+		for port, h := range tcp.All() {
+			target := h.RedirectToHTTPSPort()
+			if target == 0 {
+				continue
+			}
+			if h.HTTP() || h.HTTPS() || h.TCPForward() != "" || h.TerminateTLS() != "" || h.ProxyProtocol() != 0 {
+				return fmt.Errorf("port %d%s redirects to https and cannot also serve or forward", port, scope)
+			}
+			if target == port {
+				return fmt.Errorf("port %d%s cannot redirect to itself", port, scope)
+			}
+		}
+		return nil
+	}
+	if err := check("", sc.TCP()); err != nil {
+		return err
+	}
+	for _, fg := range sc.Foreground().All() {
+		if err := check("", fg.TCP()); err != nil {
+			return err
+		}
+	}
+	for svcName, svc := range sc.Services().All() {
+		if err := check(" for "+svcName.String(), svc.TCP()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // serveType is a high-level descriptor of the kind of serve performed by a TCP
 // port handler.
 type serveType int
@@ -1860,6 +1954,7 @@ const (
 	serveTypeHTTP
 	serveTypeTCP
 	serveTypeTLSTerminatedTCP
+	serveTypeRedirectToHTTPS
 )
 
 func (s serveType) String() string {
@@ -1872,6 +1967,8 @@ func (s serveType) String() string {
 		return "tcp"
 	case serveTypeTLSTerminatedTCP:
 		return "tls-terminated-tcp"
+	case serveTypeRedirectToHTTPS:
+		return "http-redirect"
 	default:
 		return "unknownServeType"
 	}
@@ -1889,6 +1986,8 @@ func serveTypeFromPortHandler(ph ipn.TCPPortHandlerView) serveType {
 		return serveTypeTLSTerminatedTCP
 	case ph.TCPForward() != "":
 		return serveTypeTCP
+	case ph.RedirectToHTTPSPort() != 0:
+		return serveTypeRedirectToHTTPS
 	default:
 		return -1
 	}

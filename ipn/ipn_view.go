@@ -847,13 +847,23 @@ func (v TCPPortHandlerView) TerminateTLS() string { return v.ж.TerminateTLS }
 // This is only valid if TCPForward is non-empty.
 func (v TCPPortHandlerView) ProxyProtocol() int { return v.ж.ProxyProtocol }
 
+// RedirectToHTTPSPort, if non-zero, means that tailscaled should answer
+// plaintext HTTP requests on this port with a redirect to the same URL
+// on HTTPS at the given port, where it serves HTTPS as configured by
+// ServeConfig.Web. It is what "tailscale serve --https=443
+// --http-redirect=80" sets on port 80.
+//
+// It is mutually exclusive with HTTPS, HTTP and TCPForward.
+func (v TCPPortHandlerView) RedirectToHTTPSPort() uint16 { return v.ж.RedirectToHTTPSPort }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _TCPPortHandlerViewNeedsRegeneration = TCPPortHandler(struct {
-	HTTPS         bool
-	HTTP          bool
-	TCPForward    string
-	TerminateTLS  string
-	ProxyProtocol int
+	HTTPS               bool
+	HTTP                bool
+	TCPForward          string
+	TerminateTLS        string
+	ProxyProtocol       int
+	RedirectToHTTPSPort uint16
 }{})
 
 // View returns a read-only view of HTTPHandler.

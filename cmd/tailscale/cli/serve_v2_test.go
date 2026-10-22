@@ -904,6 +904,215 @@ func TestServeDevConfigMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "http_redirect",
+			steps: []step{
+				{ // the redirect rides along with the https serve it points at
+					command: cmd("serve --bg --https=443 --http-redirect=80 text:foo"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:  {RedirectToHTTPSPort: 443},
+							443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "foo"},
+							}},
+						},
+					},
+				},
+				{ // another mount leaves it alone
+					command: cmd("serve --bg --https=443 --set-path=/bar text:bar"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:  {RedirectToHTTPSPort: 443},
+							443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/":    {Text: "foo"},
+								"/bar": {Text: "bar"},
+							}},
+						},
+					},
+				},
+				{ // the redirect can go on its own
+					command: cmd("serve --bg --http-redirect=80 off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/":    {Text: "foo"},
+								"/bar": {Text: "bar"},
+							}},
+						},
+					},
+				},
+				{ // and come back on its own, pointing at the one https serve there is
+					command: cmd("serve --bg --http-redirect=80"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:  {RedirectToHTTPSPort: 443},
+							443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/":    {Text: "foo"},
+								"/bar": {Text: "bar"},
+							}},
+						},
+					},
+				},
+				{ // the port it holds is taken, as any handler's is
+					command: cmd("serve --bg --http=80 text:plain"),
+					wantErr: anyErr(),
+				},
+				{
+					command: cmd("serve --bg --tcp=80 3000"),
+					wantErr: anyErr(),
+				},
+				{
+					command: cmd("serve --bg --https=443 --set-path=/bar off"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:  {RedirectToHTTPSPort: 443},
+							443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "foo"},
+							}},
+						},
+					},
+				},
+				{ // removing the https serve takes the redirect to it along
+					command: cmd("serve --bg --https=443 off"),
+					want:    &ipn.ServeConfig{},
+				},
+			},
+		},
+		{
+			name: "http_redirect_to_another_port",
+			steps: []step{
+				{
+					command: cmd("serve --bg --https=8443 --http-redirect=80 text:foo"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:   {RedirectToHTTPSPort: 8443},
+							8443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "foo"},
+							}},
+						},
+					},
+				},
+				{ // a second https serve makes a bare redirect ambiguous
+					command: cmd("serve --bg --https=443 text:bar"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							80:   {RedirectToHTTPSPort: 8443},
+							443:  {HTTPS: true},
+							8443: {HTTPS: true},
+						},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443":  {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "bar"}}},
+							"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Text: "foo"}}},
+						},
+					},
+				},
+				{
+					command: cmd("serve --bg --http-redirect=8080"),
+					wantErr: anyErr(),
+				},
+			},
+		},
+		{
+			name: "http_redirect_errors",
+			steps: []step{
+				{ // it redirects to https, so another kind of serve makes no sense
+					command: cmd("serve --bg --http=8080 --http-redirect=80 text:foo"),
+					wantErr: anyErr(),
+				},
+				{
+					command: cmd("serve --bg --tcp=8080 --http-redirect=80 3000"),
+					wantErr: anyErr(),
+				},
+				{ // nor does redirecting to itself
+					command: cmd("serve --bg --https=443 --http-redirect=443 text:foo"),
+					wantErr: anyErr(),
+				},
+				{ // or to nothing
+					command: cmd("serve --bg --http-redirect=80"),
+					wantErr: anyErr(),
+				},
+				{ // or taking a redirect away that is not there
+					command: cmd("serve --bg --http-redirect=80 off"),
+					wantErr: anyErr(),
+				},
+				{ // and https alone does not take port 80
+					command: cmd("serve --bg --https=443 text:foo"),
+					want: &ipn.ServeConfig{
+						TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+						Web: map[ipn.HostPort]*ipn.WebServerConfig{
+							"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+								"/": {Text: "foo"},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "http_redirect_for_service",
+			initialState: fakeLocalServeClient{
+				statusWithoutPeers: &ipnstate.Status{
+					BackendState: ipn.Running.String(),
+					Self: &ipnstate.PeerStatus{
+						DNSName: "foo.test.ts.net",
+						Tags:    ptrToReadOnlySlice([]string{"some-tag"}),
+					},
+					CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: "test.ts.net"},
+				},
+				SOMarkInUse: true,
+			},
+			steps: []step{
+				{
+					command: cmd("serve --service=svc:foo --https=443 --http-redirect=80 text:foo"),
+					want: &ipn.ServeConfig{
+						Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+							"svc:foo": {
+								TCP: map[uint16]*ipn.TCPPortHandler{
+									80:  {RedirectToHTTPSPort: 443},
+									443: {HTTPS: true},
+								},
+								Web: map[ipn.HostPort]*ipn.WebServerConfig{
+									"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+										"/": {Text: "foo"},
+									}},
+								},
+							},
+						},
+					},
+				},
+				{
+					command: cmd("serve --service=svc:foo --http-redirect=80 off"),
+					want: &ipn.ServeConfig{
+						Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+							"svc:foo": {
+								TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+								Web: map[ipn.HostPort]*ipn.WebServerConfig{
+									"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+										"/": {Text: "foo"},
+									}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "advertise_service",
 			initialState: fakeLocalServeClient{
 				statusWithoutPeers: &ipnstate.Status{
