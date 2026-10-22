@@ -1762,9 +1762,16 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 		}
 
 		for {
+			if c.connCtx.Err() != nil {
+				return 0, net.ErrClosed
+			}
 			numMsgs, err := ruc.ReadBatch(slab, batchingPackets)
 			if err != nil {
 				if neterror.PacketWasTruncated(err) {
+					continue
+				}
+				if neterror.IsUDPReadFeedback(err) {
+					metricRecvUDPErrorReachability.Add(1)
 					continue
 				}
 				return 0, err
@@ -4243,6 +4250,9 @@ var (
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
 	metricSendPeerRelayError  = clientmetric.NewCounter("magicsock_send_peer_relay_error")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
+
+	// UDP reads matching neterror.IsUDPReadFeedback.
+	metricRecvUDPErrorReachability = clientmetric.NewCounter("magicsock_recv_udp_error_reachability")
 
 	// Sends (data)
 	//
