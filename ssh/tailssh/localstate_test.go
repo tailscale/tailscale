@@ -70,11 +70,11 @@ func (ts *localState) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeVie
 	}
 
 	return (&tailcfg.Node{
-			ID:       2,
-			StableID: "peer-id",
-		}).View(), tailcfg.UserProfile{
-			LoginName: "peer",
-		}, true
+		ID:       2,
+		StableID: "peer-id",
+	}).View(), tailcfg.UserProfile{
+		LoginName: "peer",
+	}, true
 
 }
 
