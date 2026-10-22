@@ -12,6 +12,13 @@ import (
 	"strings"
 )
 
+// ReadWasAborted returns false on plan9; it is a no-op here so that callers
+// on other platforms can use it freely. See neterror_posix.go for the real
+// implementation and its rationale.
+func ReadWasAborted(err error) bool {
+	return false
+}
+
 // Reports whether err resulted from reading or writing to a closed or broken pipe.
 func IsClosedPipeError(err error) bool {
 	// Libraries may also return root errors like fs.ErrClosed/io.ErrClosedPipe
