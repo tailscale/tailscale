@@ -26,3 +26,14 @@ package. You may need to raise it further or disable the timeout entirely
 (`-timeout=0`) when running the full suite.
 
 Alternatively, select individual tests with the usual `-run`.
+
+## Matrix testing (early stages)
+
+Many tests can effectively be run across multiple variations. To wire up all
+these tests programatically and not manually, a tool exists in
+`./cmd/natlab-test-matrix` that will parse the test files in the folder
+`./tstest/natlab/vmtest` and generate a full set of tests to run.
+
+A `VariationMap` defines variations to be tested. Right now the only variation
+used is OS image variation, but this can be expanded to NAT, portmapper and so
+on.
