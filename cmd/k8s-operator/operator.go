@@ -150,6 +150,9 @@ func main() {
 		}()
 	}
 
+	// Read before the log upload tee below, which lowers the logger's level to debug.
+	logLevel := zlog.Level()
+
 	// Operator log uploads can be opted-out using the "TS_NO_LOGS_NO_SUPPORT" environment variable.
 	if !envknob.NoLogsNoSupport() {
 		zlog = zlog.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
@@ -159,6 +162,7 @@ func main() {
 
 	runReconcilers(reconcilerOpts{
 		log:                           zlog,
+		logLevel:                      logLevel,
 		tsServer:                      s,
 		tsClient:                      tsc,
 		tailscaleNamespace:            tsNamespace,
@@ -753,6 +757,7 @@ func runReconcilers(opts reconcilerOpts) {
 			tsFirewallMode:    opts.proxyFirewallMode,
 			defaultProxyClass: opts.defaultProxyClass,
 			loginServer:       opts.tsServer.ControlURL,
+			logLevel:          opts.logLevel,
 			reissuer:          tailscaled.NewReissuer(),
 
 			sharedACMEAccountKey: opts.sharedACMEAccountKey,
@@ -769,6 +774,7 @@ func runReconcilers(opts reconcilerOpts) {
 
 type reconcilerOpts struct {
 	log                *zap.SugaredLogger
+	logLevel           zapcore.Level // configured level; log's own level is debug while log uploads are on
 	tsServer           *tsnet.Server
 	tsClient           *tailscale.Client
 	tailscaleNamespace string       // namespace in which operator resources will be deployed
