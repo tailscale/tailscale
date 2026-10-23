@@ -349,6 +349,12 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 	case accepted:
 		// do nothing
 	case rejectedUser:
+		// The banner names the requested user: that name is the client's
+		// own request and reflects only tailnet policy (the client's own
+		// ACL view), never a local-host fact, so naming it leaks nothing.
+		// The local-user lookup paths below must not vary with the failure
+		// cause, so no banner is a username-existence oracle; the attempted
+		// user is logged server-side (matchRule's vlogf).
 		return nil, c.errBanner(fmt.Sprintf("tailnet policy does not permit you to SSH as user %q", c.info.sshUser), nil)
 	case rejected, noPolicy:
 		return nil, c.errBanner("tailnet policy does not permit you to SSH to this node", fmt.Errorf("failed to evaluate policy, result: %s", result))
@@ -363,6 +369,10 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 		// hold and delegate URL (if necessary).
 		lu, err := userLookup(localUser)
 		if err != nil {
+			// One fixed client-visible message for every lookup failure
+			// cause; the underlying error is logged server-side only, so
+			// the banner reveals nothing about local users beyond the name
+			// the policy already mapped for this client.
 			return nil, c.errBanner(fmt.Sprintf("failed to look up local user %q ", localUser), err)
 		}
 		gids, err := lu.GroupIds()
