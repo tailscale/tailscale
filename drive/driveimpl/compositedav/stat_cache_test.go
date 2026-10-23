@@ -70,7 +70,6 @@ func TestStatCacheNoTimeout(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	c := &StatCache{TTL: 5 * time.Second}
-	defer c.stop()
 
 	// check get before set
 	fetched := c.get(childPath, 0)
@@ -98,7 +97,6 @@ func TestStatCacheTimeout(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	c := &StatCache{TTL: 250 * time.Millisecond}
-	defer c.stop()
 
 	// set new stat
 	ce := newCacheEntry(http.StatusMultiStatus, fullChild)
@@ -130,7 +128,6 @@ func TestParentChildRelationship(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	c := &StatCache{TTL: 24 * time.Hour} // don't expire
-	defer c.stop()
 
 	missingParentPath := "/missingparent"
 	unparseableParentPath := "/unparseable"
@@ -224,7 +221,6 @@ func TestUnicodeNormalizationInsensitivity(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	c := &StatCache{TTL: 24 * time.Hour} // don't expire
-	defer c.stop()
 
 	const (
 		nfcParent = "\u30ae\u30bf\u30fc"           // ギター in NFC: ギ is the single code point U+30AE
