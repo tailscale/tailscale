@@ -982,7 +982,7 @@ func (ss *sshSession) run() {
 			ss.logf("agent forwarding failed: %v", err)
 		} else if ss.agentListener != nil {
 			// TODO(maisem/bradfitz): add a way to close all session resources
-			defer ss.agentListener.Close()
+			defer ss.closeAgentForwarding()
 		}
 
 		if ss.shouldRecord() {
