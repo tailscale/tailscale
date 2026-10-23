@@ -1425,7 +1425,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		Width:     w.Width,
 		Height:    w.Height,
 		Timestamp: now.Unix(),
-		Command:   strings.Join(ss.Command(), " "),
+		// Record the raw client-provided command, not a shell-parsed
+		// reconstruction: the SSH command is passed to the user's shell
+		// verbatim, and the shell lexer silently drops unbalanced quotes,
+		// which could otherwise be used to make the recording show a
+		// different command than the one that ran.
+		Command: ss.RawCommand(),
 		Env: map[string]string{
 			"TERM": term,
 			// TODO(bradfitz): anything else important?
