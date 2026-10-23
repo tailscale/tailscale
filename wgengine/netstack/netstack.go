@@ -1825,31 +1825,50 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}()
 
 	// Attempt to dial the outbound connection before we accept the inbound one.
-	var dialFunc netx.DialFunc
-	if ns.forwardDialFunc != nil {
-		dialFunc = ns.forwardDialFunc
-	} else {
-		var stdDialer net.Dialer
-		dialFunc = stdDialer.DialContext
-	}
-
-	// TODO: this is racy, dialing before we register our local address. See
-	// https://github.com/tailscale/tailscale/issues/1616.
-	backend, err := dialFunc(ctx, "tcp", dialAddrStr)
-	if err != nil {
-		ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
-		return
-	}
-	defer backend.Close()
-
-	backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
-	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	if isLocal {
-		if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
-			ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+	var backend net.Conn
+	var backendLocalIPPort netip.AddrPort
+	if isLocal && ns.forwardDialFunc == nil && dialAddr.Addr().IsLoopback() {
+		// A loopback backend (peerapi, serve, ...) learns about the proxied
+		// connection as soon as the kernel completes the TCP handshake and
+		// can immediately WhoIs the connection's source address against
+		// tailscaled, so the proxymap registration must exist before the
+		// connect is issued. dialTCPRegisterLocal binds the backend
+		// socket's ephemeral port and registers it before dialing; see
+		// issue #1616.
+		var err error
+		backend, backendLocalIPPort, err = dialTCPRegisterLocal(ctx, dialAddr, ns.pm, clientRemoteIP)
+		if err != nil {
+			ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
 			return
 		}
+		defer backend.Close()
 		defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
+	} else {
+		var dialFunc netx.DialFunc
+		if ns.forwardDialFunc != nil {
+			dialFunc = ns.forwardDialFunc
+		} else {
+			var stdDialer net.Dialer
+			dialFunc = stdDialer.DialContext
+		}
+
+		var err error
+		backend, err = dialFunc(ctx, "tcp", dialAddrStr)
+		if err != nil {
+			ns.logf("netstack: could not connect to local backend server at %s: %v", dialAddr.String(), err)
+			return
+		}
+		defer backend.Close()
+
+		if isLocal {
+			backendLocalAddr := backend.LocalAddr().(*net.TCPAddr)
+			backendLocalIPPort = netaddr.Unmap(backendLocalAddr.AddrPort())
+			if err := ns.pm.RegisterIPPortIdentity("tcp", backendLocalIPPort, clientRemoteIP); err != nil {
+				ns.logf("netstack: could not register TCP mapping %s: %v", backendLocalIPPort, err)
+				return
+			}
+			defer ns.pm.UnregisterIPPortIdentity("tcp", backendLocalIPPort)
+		}
 	}
 
 	// If we get here, either the getClient call below will succeed and
@@ -1901,7 +1920,7 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	}()
 	// Wait for both ends of the connection to close.
 	for range 2 {
-		err = <-connClosed
+		err := <-connClosed
 		if err != nil {
 			ns.logf("proxy connection closed with error: %v", err)
 		}
