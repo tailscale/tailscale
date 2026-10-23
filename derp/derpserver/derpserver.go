@@ -10,7 +10,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	crand "crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -835,7 +836,11 @@ func (s *Server) Accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 // and TLS proxy cleans up unnecessary certs. In that case we just fall
 // back to the extra RTT.
 func (s *Server) initMetacert() {
-	pub, priv, err := ed25519.GenerateKey(crand.Reader)
+	// Clients read only the CommonName and SerialNumber, so the key type
+	// doesn't matter to them, but it must not be Ed25519: Windows Schannel
+	// fails the handshake when the chain contains an Ed25519 certificate
+	// and the client uses manual cert validation, as all of .NET does.
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -851,7 +856,7 @@ func (s *Server) initMetacert() {
 		// macOS requires BasicConstraints when subject == issuer:
 		BasicConstraintsValid: true,
 	}
-	cert, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, pub, priv)
+	cert, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
 		log.Fatalf("CreateCertificate: %v", err)
 	}
