@@ -284,3 +284,48 @@ func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
 		t.Errorf("allowlist = %q, want [SSH_AUTH_SOCK GOOD]", keys)
 	}
 }
+
+// TestSUArgs pins the argv su is invoked with, including where --pty lands.
+// --pty is what gives a command run with a TTY a controlling terminal, and it
+// must appear only for a command: with no cmd there is no new session to lose
+// the terminal to, and passing it when no TTY was requested would allocate a
+// pty for a session that asked for none.
+func TestSUArgs(t *testing.T) {
+	keys := []string{"SSH_AUTH_SOCK", "GIT_ENV_VAR"}
+	tests := []struct {
+		name   string
+		usePty bool
+		cmd    string
+		want   []string
+	}{
+		{
+			name: "shell, no pty",
+			want: []string{"/bin/su", "-w", "SSH_AUTH_SOCK,GIT_ENV_VAR", "-l", "testuser"},
+		},
+		{
+			name: "command, no pty",
+			cmd:  "id",
+			want: []string{"/bin/su", "-w", "SSH_AUTH_SOCK,GIT_ENV_VAR", "-l", "testuser", "-c", "id"},
+		},
+		{
+			name:   "command with pty",
+			usePty: true,
+			cmd:    "id",
+			want:   []string{"/bin/su", "-w", "SSH_AUTH_SOCK,GIT_ENV_VAR", "-l", "testuser", "--pty", "-c", "id"},
+		},
+		{
+			// Not a shape findSU asks for, but the builder must not invent a -c.
+			name:   "shell with pty",
+			usePty: true,
+			want:   []string{"/bin/su", "-w", "SSH_AUTH_SOCK,GIT_ENV_VAR", "-l", "testuser", "--pty"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := suArgs("/bin/su", "testuser", keys, tt.usePty, tt.cmd)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("suArgs() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

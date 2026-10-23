@@ -573,7 +573,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 		return false, nil
 	}
 
-	su := findSU(dlogf, ia)
+	su, usePty := findSU(dlogf, ia)
 	if su == "" {
 		return false, nil
 	}
@@ -585,16 +585,7 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 
 	environ, allowListEnvKeys := ia.forwardedEnviron()
 
-	loginArgs := []string{
-		su,
-		"-w", strings.Join(allowListEnvKeys, ","),
-		"-l",
-		ia.localUser,
-	}
-	if ia.cmd != "" {
-		// Note - unlike the login command, su allows using both -l and -c.
-		loginArgs = append(loginArgs, "-c", ia.cmd)
-	}
+	loginArgs := suArgs(su, ia.localUser, allowListEnvKeys, usePty, ia.cmd)
 
 	dlogf("logging in with %+v", loginArgs)
 
@@ -605,46 +596,88 @@ func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	return true, err
 }
 
-// findSU attempts to find an su command which supports the -l and -c flags.
+// suArgs builds the argv for invoking su to run cmd (or, with an empty cmd,
+// the login shell) as localUser.
+//
+// usePty adds --pty, which util-linux su needs in order to give a command run
+// with -c a controlling terminal. su -c deliberately starts the command in a
+// new session as part of its TIOCSTI hardening, so the pty that the incubator
+// made its own controlling terminal (see startWithPTY) is not the command's.
+// Without --pty, a command run with a TTY gets a pty but no controlling
+// terminal, and any shell it starts has no job control. --pty must not be
+// passed when no TTY was requested: it allocates a pty either way, which
+// would hand a controlling terminal to a session that asked for none.
+func suArgs(su, localUser string, allowListEnvKeys []string, usePty bool, cmd string) []string {
+	args := []string{
+		su,
+		"-w", strings.Join(allowListEnvKeys, ","),
+		"-l",
+		localUser,
+	}
+	if usePty {
+		args = append(args, "--pty")
+	}
+	if cmd != "" {
+		// Note - unlike the login command, su allows using both -l and -c.
+		args = append(args, "-c", cmd)
+	}
+	return args
+}
+
+// findSU attempts to find an su command which supports the -l and -c flags,
+// and reports whether the command should be run with --pty (see suArgs).
 // This actually calls the su command, which can cause side effects like
 // triggering pam_mkhomedir. If a suitable su is not available, this returns
 // "".
-func findSU(dlogf logger.Logf, ia incubatorArgs) string {
+func findSU(dlogf logger.Logf, ia incubatorArgs) (su string, usePty bool) {
 	// Currently, we only support falling back to su on Linux. This
 	// potentially could work on BSDs as well, but requires testing.
 	if runtime.GOOS != linux {
-		return ""
+		return "", false
 	}
 
 	// gokrazy doesn't include su. And, if someone installs a breakglass/
 	// debugging package on gokrazy, we don't want to use its su.
 	if distro.Get() == distro.Gokrazy {
-		return ""
+		return "", false
 	}
 
 	su, err := exec.LookPath("su")
 	if err != nil {
 		dlogf("can't find su command: %v", err)
-		return ""
+		return "", false
 	}
 
 	_, allowListEnvKeys := ia.forwardedEnviron()
 
-	// First try to execute su -w <allow listed env> -l <user> -c true
-	// to make sure su supports the necessary arguments.
-	err = exec.Command(
-		su,
-		"-w", strings.Join(allowListEnvKeys, ","),
-		"-l",
-		ia.localUser,
-		"-c", "true",
-	).Run()
-	if err != nil {
-		dlogf("su check failed: %s", err)
-		return ""
+	// probe runs su with the flags we intend to use, so that what is checked
+	// here is what gets exec'd. The command is "true" rather than ia.cmd: this
+	// is a capability check, not the session.
+	probe := func(usePty bool) error {
+		args := suArgs(su, ia.localUser, allowListEnvKeys, usePty, "true")
+		return exec.Command(args[0], args[1:]...).Run()
 	}
 
-	return su
+	// A command run with a TTY needs --pty or it ends up without a
+	// controlling terminal. It is probed rather than assumed: --pty arrived in
+	// util-linux 2.34, and busybox su has no equivalent. A su that rejects it
+	// still gets the old arguments, which is what it got before.
+	if ia.hasTTY && ia.cmd != "" {
+		if err := probe(true); err != nil {
+			dlogf("su --pty check failed, falling back to su without it: %s", err)
+		} else {
+			return su, true
+		}
+	}
+
+	// First try to execute su -w <allow listed env> -l <user> -c true
+	// to make sure su supports the necessary arguments.
+	if err := probe(false); err != nil {
+		dlogf("su check failed: %s", err)
+		return "", false
+	}
+
+	return su, false
 }
 
 // handleSSHInProcess is a last resort if we couldn't use login or su. It
