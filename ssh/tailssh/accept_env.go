@@ -111,56 +111,46 @@ func matchAcceptEnv(acceptEnv []string, env string) bool {
 // matchAcceptEnvPattern returns true if the pattern matches against the target string.
 // Patterns may include * and ? wildcard characters which match against zero or one or
 // more characters and a single character respectively.
+//
+// Matching is iterative with a single backtracking point (the most recent
+// '*'), so it runs in time linear in the target per '*' segment. A naive
+// recursive matcher is exponential in the number of '*'s, and can be driven
+// by attacker-supplied acceptEnv patterns and variable names.
 func matchAcceptEnvPattern(pattern string, target string) bool {
-	patternIdx := 0
-	targetIdx := 0
-
-	for {
-		// If we are at the end of the pattern we can only have a match if we
-		// are also at the end of the target.
-		if patternIdx >= len(pattern) {
-			return targetIdx >= len(target)
-		}
-
-		if pattern[patternIdx] == '*' {
-			// Optimization to skip through any repeated asterisks as they
-			// have the same net effect on our search.
-			for patternIdx < len(pattern) {
-				if pattern[patternIdx] != '*' {
-					break
-				}
-
-				patternIdx++
-			}
-
-			// We are at the end of the pattern after matching the asterisk,
-			// implying a match.
-			if patternIdx >= len(pattern) {
-				return true
-			}
-
-			// Search through the target sequentially for the next character
-			// from the pattern string, recursing into matchAcceptEnvPattern
-			// to try and find a match.
-			for ; targetIdx < len(target); targetIdx++ {
-				if matchAcceptEnvPattern(pattern[patternIdx:], target[targetIdx:]) {
-					return true
-				}
-			}
-
-			// No match after searching through the entire target.
+	var (
+		p, t  int  // current position in pattern and target
+		starP = -1 // index of the most recent '*' in the pattern
+		starT = -1 // position in the target where that '*' started matching
+	)
+	for t < len(target) {
+		switch {
+		case p < len(pattern) && pattern[p] == '*':
+			// Register the most recent '*' before any literal match, so a
+			// '*' in the pattern is always a backtrack point even when the
+			// target has a literal '*' at the same position.
+			starP = p
+			starT = t
+			p++
+		case p < len(pattern) && (pattern[p] == '?' || pattern[p] == target[t]):
+			// Match one character.
+			p++
+			t++
+		case starP >= 0:
+			// Mismatch: let the most recent '*' consume one more
+			// character of the target and retry the rest of the
+			// pattern from just after it.
+			p = starP + 1
+			starT++
+			t = starT
+		default:
+			// Mismatch with no '*' left to fall back on.
 			return false
 		}
-
-		if targetIdx >= len(target) {
-			return false
-		}
-
-		if pattern[patternIdx] != '?' && pattern[patternIdx] != target[targetIdx] {
-			return false
-		}
-
-		patternIdx++
-		targetIdx++
 	}
+	// The target is exhausted; the pattern must be too, modulo trailing '*'s,
+	// which match the empty string.
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+	return p == len(pattern)
 }
