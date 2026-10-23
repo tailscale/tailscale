@@ -113,20 +113,36 @@ func newHTTPClient(cl *tsnet.Server) *http.Client {
 	}
 }
 
-func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server) error {
+// tailnetDomain returns the tailnet's MagicDNS domain for the given
+// tailnet client.
+func tailnetDomain(t *testing.T, cl *tsnet.Server) string {
 	t.Helper()
 	lc, err := cl.LocalClient()
 	if err != nil {
-		return err
+		t.Fatalf("getting local client: %v", err)
 	}
 	status, err := lc.Status(t.Context())
 	if err != nil {
-		return err
+		t.Fatalf("getting tailnet status: %v", err)
 	}
-	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
+	_, domain, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
 	if !ok {
-		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
+		t.Fatalf("unexpected DNSName format %q", status.Self.DNSName)
 	}
+	return domain
+}
+
+// via6FQDN returns the hyphenated 4via6 MagicDNS name for an IPv4 address and
+// site ID on the given tailnet, e.g. "10-1-0-5-via-7.example.ts.net".
+func via6FQDN(t *testing.T, ip netip.Addr, siteID int, cl *tsnet.Server) string {
+	t.Helper()
+	hyphenatedIP := strings.ReplaceAll(ip.String(), ".", "-")
+	return fmt.Sprintf("%s-via-%d.%s", hyphenatedIP, siteID, tailnetDomain(t, cl))
+}
+
+func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server) error {
+	t.Helper()
+	expectedTailnet := tailnetDomain(t, cl)
 	if err := tstest.WaitFor(3*time.Minute, func() error {
 		var secrets corev1.SecretList
 		if err := kubeClient.List(t.Context(), &secrets,
@@ -162,18 +178,7 @@ func verifyConnectorTailnet(t *testing.T, cn *tsapi.Connector, cl *tsnet.Server)
 func verifyProxyGroupTailnet(t *testing.T, pg *tsapi.ProxyGroup, cl *tsnet.Server) error {
 	t.Helper()
 	// Determine the expected tailnet Magic DNS Name.
-	lc, err := cl.LocalClient()
-	if err != nil {
-		return err
-	}
-	status, err := lc.Status(t.Context())
-	if err != nil {
-		return err
-	}
-	_, expectedTailnet, ok := strings.Cut(strings.TrimSuffix(status.Self.DNSName, "."), ".")
-	if !ok {
-		return fmt.Errorf("unexpected DNSName format %q", status.Self.DNSName)
-	}
+	expectedTailnet := tailnetDomain(t, cl)
 	// Read the device FQDN from the first state secret for the ProxyGroup,
 	// and verify that this matches the expected tailnet.
 	if err := tstest.WaitFor(3*time.Minute, func() error {
