@@ -131,7 +131,10 @@ func hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 		return nil, err
 	}
 	pemGen := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
-	err = os.WriteFile(path, pemGen, 0700)
+	// Private host keys are for tailscaled only: no group/other access,
+	// so 0600 rather than 0700 (which would needlessly allow the key to
+	// be walked into).
+	err = os.WriteFile(path, pemGen, 0600)
 	return pemGen, err
 }
 
