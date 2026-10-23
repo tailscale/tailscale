@@ -6,9 +6,13 @@
 package magicsock
 
 import (
-	"syscall"
-
 	"golang.org/x/sys/unix"
+)
+
+// dontFrag{Enabled,Disabled} are the values of the don't fragment sockopt.
+const (
+	dontFragEnabled  = 1
+	dontFragDisabled = 0
 )
 
 func getDontFragOpt(network string) int {
@@ -16,36 +20,4 @@ func getDontFragOpt(network string) int {
 		return unix.IP_DONTFRAG
 	}
 	return unix.IPV6_DONTFRAG
-}
-
-func (c *Conn) setDontFragment(network string, enable bool) error {
-	optArg := 1
-	if enable == false {
-		optArg = 0
-	}
-	var err error
-	rcErr := c.connControl(network, func(fd uintptr) {
-		err = syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
-	})
-
-	if rcErr != nil {
-		return rcErr
-	}
-	return err
-}
-
-func (c *Conn) getDontFragment(network string) (bool, error) {
-	var v int
-	var err error
-	rcErr := c.connControl(network, func(fd uintptr) {
-		v, err = syscall.GetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network))
-	})
-
-	if rcErr != nil {
-		return false, rcErr
-	}
-	if v == 1 {
-		return true, err
-	}
-	return false, err
 }
