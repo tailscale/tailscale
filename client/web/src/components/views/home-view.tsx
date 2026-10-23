@@ -9,9 +9,9 @@ import Machine from "src/assets/icons/machine.svg?react"
 import AddressCard from "src/components/address-copy-card"
 import ExitNodeSelector from "src/components/exit-node-selector"
 import { AuthResponse, canEdit } from "src/hooks/auth"
+import { useI18n } from "src/i18n"
 import { NodeData } from "src/types"
 import Card from "src/ui/card"
-import { pluralize } from "src/utils/util"
 import { Link, useLocation } from "wouter"
 
 export default function HomeView({
@@ -21,6 +21,7 @@ export default function HomeView({
   node: NodeData
   auth: AuthResponse
 }) {
+  const { plural, t } = useI18n()
   const [allSubnetRoutes, pendingSubnetRoutes] = useMemo(
     () => [
       node.AdvertisedRoutes?.length,
@@ -31,7 +32,7 @@ export default function HomeView({
 
   return (
     <div className="mb-12 w-full">
-      <h2 className="mb-3">This device</h2>
+      <h2 className="mb-3">{t("home.thisDevice")}</h2>
       <Card noPadding className="-mx-5 p-5 mb-9">
         <div className="flex justify-between items-center text-lg mb-5">
           <Link className="flex items-center" to="/details">
@@ -49,7 +50,9 @@ export default function HomeView({
                     "bg-gray-300": node.Status !== "Running",
                   })}
                 />
-                {node.Status === "Running" ? "Connected" : "Offline"}
+                {node.Status === "Running"
+                  ? t("home.connected")
+                  : t("home.offline")}
               </p>
             </div>
           </Link>
@@ -75,34 +78,29 @@ export default function HomeView({
           to="/details"
           onClick={() => apiFetch("/device-details-click", "POST")}
         >
-          View device details &rarr;
+          {t("home.deviceDetails")} &rarr;
         </Link>
       </Card>
-      <h2 className="mb-3">Settings</h2>
+      <h2 className="mb-3">{t("home.settings")}</h2>
       <div className="grid gap-3">
         {node.Features["advertise-routes"] && (
           <SettingsCard
             link="/subnets"
-            title="Subnet router"
-            body="Add devices to your tailnet without installing Tailscale on them."
+            title={t("home.subnetRouter")}
+            body={t("home.subnetDescription")}
             badge={
               allSubnetRoutes
                 ? {
-                    text: `${allSubnetRoutes} ${pluralize(
-                      "route",
-                      "routes",
-                      allSubnetRoutes
-                    )}`,
+                    text: `${allSubnetRoutes} ${plural(allSubnetRoutes, "home.route", "home.routes")}`,
                   }
                 : undefined
             }
             footer={
               pendingSubnetRoutes
-                ? `${pendingSubnetRoutes} ${pluralize(
-                    "route",
-                    "routes",
-                    pendingSubnetRoutes
-                  )} pending approval`
+                ? t("home.pendingApproval", {
+                    count: pendingSubnetRoutes,
+                    route: plural(pendingSubnetRoutes, "home.route", "home.routes"),
+                  })
                 : undefined
             }
           />
@@ -111,11 +109,11 @@ export default function HomeView({
           <SettingsCard
             link="/ssh"
             title="Tailscale SSH server"
-            body="Run a Tailscale SSH server on this device and allow other devices in your tailnet to SSH into it."
+            body={t("home.sshDescription")}
             badge={
               node.RunningSSHServer
                 ? {
-                    text: "Running",
+                    text: t("home.running"),
                     icon: <div className="w-2 h-2 bg-green-300 rounded-full" />,
                   }
                 : undefined
