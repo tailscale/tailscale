@@ -1415,3 +1415,28 @@ func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.
 	t.Cleanup(srv.Close)
 	return srv
 }
+
+func TestIsRootUser(t *testing.T) {
+	tests := []struct {
+		uid, username string
+		want          bool
+	}{
+		{uid: "0", username: "root", want: true},
+		{uid: "0", username: "alice", want: true},
+		// A non-canonical numeric uid 0 is also root.
+		{uid: "00", username: "alice", want: true},
+		{uid: "00000000", username: "alice", want: true},
+		{uid: "1000", username: "root", want: true},
+		{uid: "1000", username: "alice", want: false},
+		{uid: "1", username: "daemon", want: false},
+		// Non-numeric uids keep the string behavior.
+		{uid: "notanumber", username: "root", want: true},
+		{uid: "notanumber", username: "alice", want: false},
+	}
+	for _, tt := range tests {
+		got := isRootUser(&userMeta{User: user.User{Uid: tt.uid, Username: tt.username}})
+		if got != tt.want {
+			t.Errorf("isRootUser(uid=%q, username=%q) = %v; want %v", tt.uid, tt.username, got, tt.want)
+		}
+	}
+}

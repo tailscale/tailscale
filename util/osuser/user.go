@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"tailscale.com/version/distro"
@@ -272,7 +273,7 @@ func checkParsedGetentField(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if r < ' ' || r == 0x7f || r == utf8.RuneError {
+		if unicode.IsControl(r) || r == utf8.RuneError {
 			return false
 		}
 	}
