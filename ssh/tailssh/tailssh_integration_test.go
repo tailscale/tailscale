@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -192,6 +193,53 @@ func TestIntegrationSSH(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestIntegrationSSHCommandWithPTYHasControllingTerminal is the regression for
+// a command run with a TTY getting a pty but no controlling terminal. A shell
+// started that way has no job control ("cannot set terminal process group"),
+// and anything that opens /dev/tty -- a password prompt, sudo, an editor --
+// fails outright with "No such device or address".
+//
+// The TestIntegrationSSH matrix above covers pty+shell and command-without-pty,
+// but not pty+command, which is the only affected shape and the one a terminal
+// that bootstraps itself through `ssh -tt host '<command>'` always sends.
+//
+// Field 7 of /proc/<pid>/stat is tty_nr, which is 0 when the process has no
+// controlling terminal. It is read instead of running ps, which the test
+// containers do not install.
+func TestIntegrationSSHCommandWithPTYHasControllingTerminal(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc to find the controlling terminal")
+	}
+
+	// Both behaviors are checked: v1 never used su and already had a controlling
+	// terminal, so it is the control that shows the assertion is not vacuous.
+	for _, forceV1Behavior := range []bool{false, true} {
+		name := "v2"
+		if forceV1Behavior {
+			name = "v1"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := testSession(t, forceV1Behavior, false, nil)
+			if err := s.RequestPty("xterm", 40, 80, ssh.TerminalModes{
+				ssh.ECHO:          1,
+				ssh.TTY_OP_ISPEED: 14400,
+				ssh.TTY_OP_OSPEED: 14400,
+			}); err != nil {
+				t.Fatalf("unable to request PTY: %s", err)
+			}
+
+			got := s.run(t, "cut -d' ' -f7 /proc/self/stat", false)
+			ttyNr, err := strconv.Atoi(strings.TrimSpace(got))
+			if err != nil {
+				t.Fatalf("tty_nr output %q is not a number: %s", got, err)
+			}
+			if ttyNr == 0 {
+				t.Errorf("tty_nr = 0, want non-zero: the command has a pty but no controlling terminal, so a shell it starts has no job control")
+			}
+		})
 	}
 }
 
