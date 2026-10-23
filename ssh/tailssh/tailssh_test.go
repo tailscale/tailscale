@@ -658,19 +658,17 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
-	var recording []byte
-	done := make(chan struct{})
+	recordings := make(chan []byte, 2)
 	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		defer close(done)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 
-		var err error
-		recording, err = io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
+		recordings <- b
 	})
 
 	s := &server{
@@ -695,7 +693,6 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	defer s.Shutdown()
 
 	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
-	sc, dc := memnet.NewTCPConn(src, dst, 1024)
 
 	const sshUser = "alice"
 	cfg := &testssh.ClientConfig{
@@ -704,52 +701,73 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
-		if err != nil {
-			t.Errorf("client: %v", err)
-			return
+	runSession := func(command string) {
+		sc, dc := memnet.NewTCPConn(src, dst, 1024)
+		wg.Go(func() {
+			c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			client := testssh.NewClient(c, chans, reqs)
+			defer client.Close()
+			session, err := client.NewSession()
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			defer session.Close()
+			t.Logf("client established session")
+			// A non-zero exit (e.g. the shell rejecting an unbalanced
+			// quote below) is fine here; we only care about the recording.
+			if _, err := session.CombinedOutput(command); err != nil {
+				t.Logf("client: %v", err)
+			}
+		})
+		if err := s.HandleSSHConn(dc); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
-		client := testssh.NewClient(c, chans, reqs)
-		defer client.Close()
-		session, err := client.NewSession()
-		if err != nil {
-			t.Errorf("client: %v", err)
-			return
-		}
-		defer session.Close()
-		t.Logf("client established session")
-		_, err = session.CombinedOutput("sh -c 'echo Ran echo!; echo to-stderr >&2'")
-		if err != nil {
-			t.Errorf("client: %v", err)
-		}
-	})
-	if err := s.HandleSSHConn(dc); err != nil {
-		t.Errorf("unexpected error: %v", err)
+		wg.Wait()
 	}
-	wg.Wait()
 
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for recording")
+	// The first command records normally; the second has an unbalanced
+	// single quote, which the shell lexer drops when reconstructing the
+	// command. The CastHeader must record the raw client-provided command
+	// either way, since that's exactly what the user's shell runs.
+	runSession("sh -c 'echo Ran echo!; echo to-stderr >&2'")
+	runSession("sh -c 'echo unclosed-quote")
+
+	var firstRecording string
+	for i := range 2 {
+		select {
+		case recording := <-recordings:
+			ch, recordedOutput := parseRecording(t, recording)
+			if ch.SSHUser != sshUser {
+				t.Errorf("SSHUser = %q; want %q", ch.SSHUser, sshUser)
+			}
+			wantCommand := ""
+			if i == 0 {
+				wantCommand = "sh -c 'echo Ran echo!; echo to-stderr >&2'"
+				firstRecording = recordedOutput
+			} else {
+				wantCommand = "sh -c 'echo unclosed-quote"
+			}
+			if ch.Command != wantCommand {
+				t.Errorf("Command = %q; want %q", ch.Command, wantCommand)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for recording")
+		}
 	}
-	ch, recordedOutput := parseRecording(t, recording)
-	if ch.SSHUser != sshUser {
-		t.Errorf("SSHUser = %q; want %q", ch.SSHUser, sshUser)
-	}
-	const wantCommand = "sh -c echo Ran echo!; echo to-stderr >&2"
-	if ch.Command != wantCommand {
-		t.Errorf("Command = %q; want %q", ch.Command, wantCommand)
-	}
+
 	// Both stdout and stderr must be captured in the recording. On non-PTY
 	// sessions stderr is a separate stream; it must still flow through the
 	// recording writer (recorded under the "o" output direction).
-	if !strings.Contains(recordedOutput, "Ran echo!") {
-		t.Errorf("recording missing stdout output %q; got %q", "Ran echo!", recordedOutput)
+	if !strings.Contains(firstRecording, "Ran echo!") {
+		t.Errorf("recording missing stdout output %q; got %q", "Ran echo!", firstRecording)
 	}
-	if !strings.Contains(recordedOutput, "to-stderr") {
-		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", recordedOutput)
+	if !strings.Contains(firstRecording, "to-stderr") {
+		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", firstRecording)
 	}
 }
 
