@@ -264,10 +264,14 @@ func TestLoadForwardedEnvLegacyEncodedEnv(t *testing.T) {
 
 // TestLoadForwardedEnvSanitizesPairs verifies the child-side integrity check:
 // pairs that would corrupt the "su -w" allowlist (empty or comma-carrying
-// names), truncate on exec (NUL bytes), or lack "=" are dropped when the
-// payload is loaded, even though a new parent would never send them.
+// names), truncate on exec (NUL bytes), or are dangerous env vars (which a
+// new parent also rejects in filterEnv) are dropped when the payload is
+// loaded, even though a new parent would never send them.
 func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
-	pairs := []string{"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7"}
+	pairs := []string{
+		"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7",
+		"LD_PRELOAD=/tmp/evil.so", "gconv_path=/tmp/evil", "RES_OPTIONS=attempts:1",
+	}
 	raw, _ := json.Marshal(pairs)
 	ia, err := parseIncubatorArgs([]string{"--groups=1000", "--encoded-env=" + fmt.Sprintf("%q", raw)})
 	if err != nil {

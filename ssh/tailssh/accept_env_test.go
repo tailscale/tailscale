@@ -28,6 +28,17 @@ func TestIsDangerousEnvVar(t *testing.T) {
 		{"DYLD_LIBRARY_PATH", true},
 		{"DYLD_FRAMEWORK_PATH", true},
 		{"dyld_insert_libraries", true},
+		{"GOTRACEBACK", true},
+		{"GCONV_PATH", true},
+		{"gconv_path", true},
+		{"LOCPATH", true},
+		{"locpath", true},
+		{"NLSPATH", true},
+		{"nlspath", true},
+		{"HOSTALIASES", true},
+		{"hostaliases", true},
+		{"RES_OPTIONS", true},
+		{"res_options", true},
 		{"TERM", false},
 		{"LANG", false},
 		{"LC_ALL", false},
@@ -227,6 +238,22 @@ func TestFilterEnv(t *testing.T) {
 			name:             "gotraceback-rejected",
 			acceptEnv:        []string{"*"},
 			environ:          []string{"GOTRACEBACK=crash", "TERM=xterm"},
+			expectedFiltered: []string{"TERM=xterm"},
+		},
+		{
+			// glibc lookup-path variables can load attacker-controlled files
+			// (e.g. gconv modules) into privileged processes; the resolver
+			// variables redirect privileged lookups.
+			name:      "glibc-and-resolver-vars-rejected",
+			acceptEnv: []string{"*"},
+			environ: []string{
+				"GCONV_PATH=/tmp/evil",
+				"LOCPATH=/tmp/evil",
+				"NLSPATH=/tmp/evil/%N",
+				"HOSTALIASES=/tmp/aliases",
+				"RES_OPTIONS=attempts:1",
+				"TERM=xterm",
+			},
 			expectedFiltered: []string{"TERM=xterm"},
 		},
 		{
