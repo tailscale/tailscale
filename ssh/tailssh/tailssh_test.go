@@ -825,6 +825,13 @@ func TestSSHAuthFlow(t *testing.T) {
 		Message: "autogroup:nonroot",
 	})
 	autogroupNonrootRule.SSHUsers = map[string]string{"*": "="}
+	// Maps the requested user to a local user that does not exist, so the
+	// post-accept local-user lookup fails; pins that the client-visible
+	// banner is the fixed lookup-failure message, never the error cause.
+	lookupFailRule := newSSHRule(&tailcfg.SSHAction{
+		Accept: true,
+	})
+	lookupFailRule.SSHUsers = map[string]string{"alice": "no-such-local-user-tailssh-test"}
 
 	tests := []struct {
 		name         string
@@ -918,6 +925,34 @@ func TestSSHAuthFlow(t *testing.T) {
 			},
 			authErr:     true,
 			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "+0"` + "\n"},
+		},
+		{
+			// The "=" mapping forces a local lookup of a user that does not
+			// exist; the banner must be the same policy-rejection shape as
+			// the other user-mismatch cases, never a lookup-failure variant.
+			name:    "user-mismatch-no-such-local-user",
+			sshUser: "no-such-local-user-tailssh-test",
+			state: &localState{
+				sshEnabled:   true,
+				varRoot:      varRoot,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "no-such-local-user-tailssh-test"` + "\n"},
+		},
+		{
+			// Accepted by policy, but the mapped local user does not exist:
+			// the client sees one fixed message regardless of why the
+			// lookup failed (the cause goes to the server log only).
+			name:    "accept-local-user-lookup-fails",
+			sshUser: "alice",
+			state: &localState{
+				sshEnabled:   true,
+				varRoot:      varRoot,
+				matchingRule: lookupFailRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: failed to look up local user "no-such-local-user-tailssh-test" ` + "\n"},
 		},
 		{
 			name: "accept",
