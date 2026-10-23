@@ -1614,15 +1614,22 @@ func (c *Conn) maybeRebindOnError(err error) {
 	if !ok {
 		return
 	}
+	c.throttledRebind(reason)
+}
 
+// throttledRebind rebinds and ReSTUNs unless one happened in the last 5s,
+// reporting whether it did. Shares lastErrRebind with maybeRebindOnError so
+// the send and receive paths cannot stack rebinds.
+func (c *Conn) throttledRebind(reason string) bool {
 	if c.lastErrRebind.Load().Before(time.Now().Add(-5 * time.Second)) {
 		c.logf("magicsock: performing rebind due to %q", reason)
 		c.lastErrRebind.Store(time.Now())
 		c.Rebind()
 		go c.ReSTUN(reason)
-	} else {
-		c.logf("magicsock: not performing %q rebind due to throttle", reason)
+		return true
 	}
+	c.logf("magicsock: not performing %q rebind due to throttle", reason)
+	return false
 }
 
 // sendUDPNetcheck sends b via UDP to addr. It is used exclusively by netcheck.
@@ -1719,7 +1726,8 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte, is
 }
 
 func (c *Conn) receiveIPv4() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn4, c.health.ReceiveFuncStats(receiveIPv4Name),
+	return c.mkReceiveFunc(&c.pconn4, receiveIPv4Name,
+		c.health.ReceiveFuncStats(receiveIPv4Name),
 		&c.metrics.inboundPacketsIPv4Total,
 		&c.metrics.inboundPacketsPeerRelayIPv4Total,
 		&c.metrics.inboundBytesIPv4Total,
@@ -1729,7 +1737,8 @@ func (c *Conn) receiveIPv4() conn.ReceiveFunc {
 
 // receiveIPv6 creates an IPv6 ReceiveFunc reading from c.pconn6.
 func (c *Conn) receiveIPv6() conn.ReceiveFunc {
-	return c.mkReceiveFunc(&c.pconn6, c.health.ReceiveFuncStats(receiveIPv6Name),
+	return c.mkReceiveFunc(&c.pconn6, receiveIPv6Name,
+		c.health.ReceiveFuncStats(receiveIPv6Name),
 		&c.metrics.inboundPacketsIPv6Total,
 		&c.metrics.inboundPacketsPeerRelayIPv6Total,
 		&c.metrics.inboundBytesIPv6Total,
@@ -1737,23 +1746,85 @@ func (c *Conn) receiveIPv6() conn.ReceiveFunc {
 	)
 }
 
+const (
+	// receiveAbortBackoffMin/Max bound the doubling backoff between retries
+	// of consecutive aborted reads. A lone abort retries immediately; the
+	// worst case is one wakeup and one syscall per func per 5s. Unlike
+	// wireguard-go's Temporary-error path (time.Second/3, gives up after
+	// 10), we never give up — giving up is the bug this fixes — so the
+	// backoff is the only runaway guard. Sleeps only ever delay reads on
+	// a socket delivering nothing (abortedReads resets on any successful
+	// read), and select on the bind's close-wake channel so Device.Close
+	// is never delayed by a backoff.
+	receiveAbortBackoffMin = 250 * time.Millisecond
+	receiveAbortBackoffMax = 5 * time.Second
+)
+
+// abortBackoffDuration is the sleep after the abortedReads-th
+// consecutive aborted read.
+func abortBackoffDuration(abortedReads int) time.Duration {
+	if abortedReads < 2 {
+		return 0
+	}
+	if abortedReads >= 7 {
+		// 250ms << 5 is 8s, past the cap.
+		return receiveAbortBackoffMax
+	}
+	return receiveAbortBackoffMin << (abortedReads - 2)
+}
+
+const (
+	// receiveAbortsRebindEvery is the consecutive-abort count at which a
+	// receive func attempts a rebind, budgeted by receiveAbortsMaxRebinds
+	// per storm; both reset on any successful read. Lone aborts, or aborts
+	// interleaved with reads, never rebind — the socket is not sick. A run
+	// of consecutive aborts means the socket delivers nothing, the one
+	// pattern a fresh socket may heal; a rebind under this still-living
+	// reader is effective, since the next read adopts the new socket.
+	// Exponential backoff spaces attempts ~15s apart, bounding the radio
+	// cost to at most receiveAbortsMaxRebinds bursts per ~80s. After the
+	// budget: keep swallowing, never return the error.
+	receiveAbortsRebindEvery = 4
+
+	// receiveAbortsMaxRebinds bounds storm rebinds per abort storm, so a
+	// rebind-immune condition cannot reset peer endpoint state forever
+	// nor keep waking the radio.
+	receiveAbortsMaxRebinds = 5
+)
+
+// stormRebindWanted reports whether a receive func that has seen
+// abortedReads consecutive aborted reads (and already attempted
+// abortedRebinds rebinds during this storm) should attempt a rebind now.
+func stormRebindWanted(abortedReads, abortedRebinds int) bool {
+	return abortedReads >= receiveAbortsRebindEvery &&
+		abortedReads%receiveAbortsRebindEvery == 0 &&
+		abortedRebinds < receiveAbortsMaxRebinds
+}
+
 // mkReceiveFunc creates a ReceiveFunc reading from ruc.
 // The provided healthItem and metrics are updated if non-nil.
-func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
+func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, name string, healthItem *health.ReceiveFuncStats, directPacketMetric, peerRelayPacketMetric, directBytesMetric, peerRelayBytesMetric *expvar.Int) conn.ReceiveFunc {
 	// epCache caches an epAddr->endpoint for hot flows.
 	var epCache epAddrEndpointCache
 	var batchingPackets []batching.ReceivedPacket
+	// abortedReads is the number of consecutive aborted reads.
+	// abortedRebinds is the storm rebinds attempted in the current run.
+	// Both reset on any successful read.
+	abortedReads := 0
+	abortedRebinds := 0
 
 	return func(slab []byte, packets []conn.ReceivedPacket) (_ int, retErr error) {
 		if buildfeatures.HasHealth && healthItem != nil {
 			healthItem.Enter()
 			defer healthItem.Exit()
-			defer func() {
-				if retErr != nil && !c.closing.Load() {
-					c.logf("Receive func %s exiting with error: %T, %v", healthItem.Name(), retErr, retErr)
-				}
-			}()
 		}
+		// Log every error that escapes to wireguard-go, where it kills the
+		// receive goroutine. Not gated on health being compiled in.
+		defer func() {
+			if retErr != nil && !c.closing.Load() {
+				c.logf("Receive func %s exiting with error: %T, %v", name, retErr, retErr)
+			}
+		}()
 		if ruc == nil {
 			panic("nil RebindingUDPConn")
 		}
@@ -1767,8 +1838,50 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 				if neterror.PacketWasTruncated(err) {
 					continue
 				}
+				if neterror.ReadWasAborted(err) {
+					// Read aborted without a packet (macOS: EHOSTUNREACH on
+					// route/interface churn; Windows: WSAECONNRESET after a
+					// send provoked an ICMP error). The socket stays usable:
+					// sends on it keep succeeding. wireguard-go kills the
+					// receive goroutine on any non-Temporary error and nothing
+					// restarts it, which also blinds netcheck (STUN replies
+					// are ingested via receiveIP), so swallow the error and
+					// keep reading.
+					//
+					// Deliberate tradeoff: the "receive func not running"
+					// health warnable cannot fire while this func is alive;
+					// sustained aborts are visible via the metric, the
+					// rate-limited log, and the storm rebind below. A
+					// persistent-abort warnable is a possible follow-up.
+					//
+					// See #20616, #19504, #10976.
+					metricRecvUDPAborted.Add(1)
+					abortedReads++
+					if d := abortBackoffDuration(abortedReads); d > 0 {
+						// Don't hot-loop if the kernel fails immediately.
+						if abortedReads <= 5 || abortedReads%100 == 0 {
+							c.logf("magicsock: %s: read aborted %d times, most recently: %v; retrying", name, abortedReads, err)
+						}
+						select {
+						case <-time.After(d):
+						case <-c.bind.closeWake():
+							// Bind closed mid-backoff; the next read
+							// returns net.ErrClosed.
+						}
+					}
+					if stormRebindWanted(abortedReads, abortedRebinds) {
+						// Remedy for a socket stuck aborting; see
+						// receiveAbortsRebindEvery. Never return the
+						// error — that is the bug this fixes.
+						c.throttledRebind("receive-aborts")
+						abortedRebinds++
+					}
+					continue
+				}
 				return 0, err
 			}
+			abortedReads = 0
+			abortedRebinds = 0
 
 			reportToCaller := false
 			for i, batchingPacket := range batchingPackets[:numMsgs] {
@@ -3494,6 +3607,10 @@ type connBind struct {
 	*Conn
 	mu     sync.Mutex
 	closed bool
+	// closedCh is closed on Close and recreated on Open; receive funcs
+	// select on it (via closeWake) while waiting out an abort backoff, so
+	// Close is never delayed by one.
+	closedCh chan struct{}
 }
 
 // This is a compile-time assertion that connBind implements the wireguard-go
@@ -3526,6 +3643,7 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 		return nil, 0, errors.New("magicsock: connBind already open")
 	}
 	c.closed = false
+	c.closedCh = make(chan struct{})
 	var fns []conn.ReceiveFunc
 	if hasUDPTransport {
 		fns = append(fns, c.receiveIPv4(), c.receiveIPv6())
@@ -3561,6 +3679,9 @@ func (c *connBind) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.closedCh != nil {
+		close(c.closedCh)
+	}
 	// Unblock all outstanding receives.
 	c.pconn4.Close()
 	c.pconn6.Close()
@@ -3582,6 +3703,14 @@ func (c *connBind) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
+}
+
+// closeWake returns the current close-wake channel; nil before the
+// first Open, in which case a select on it never fires.
+func (c *connBind) closeWake() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closedCh
 }
 
 // Close closes the connection.
@@ -4249,6 +4378,11 @@ var (
 	metricSendUDPError        = clientmetric.NewCounter("magicsock_send_udp_error")
 	metricSendPeerRelayError  = clientmetric.NewCounter("magicsock_send_peer_relay_error")
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
+
+	// Reads aborted by the kernel and retried in place (see
+	// neterror.ReadWasAborted) instead of being returned to wireguard-go,
+	// which would kill its receive goroutine. #20616
+	metricRecvUDPAborted = clientmetric.NewCounter("magicsock_recv_udp_aborted")
 
 	// Sends (data)
 	//
