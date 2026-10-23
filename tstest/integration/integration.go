@@ -404,6 +404,8 @@ type LogCatcher struct {
 	gotErr error
 	reqs   int
 	raw    bool // indicates whether to store the raw JSON logs uploaded, instead of just the text
+
+	nodeWriters map[string]io.Writer // by /node/<key> upload path, for nodes with no stderr to read
 }
 
 // UseLogf makes the logcatcher implementation use a given logf function
@@ -446,14 +448,31 @@ func (lc *LogCatcher) Reset() {
 	lc.buf.Reset()
 }
 
+// nodePath returns a log target path whose uploaded log lines lc also writes to w.
+func (lc *LogCatcher) nodePath(w io.Writer) string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.nodeWriters == nil {
+		lc.nodeWriters = make(map[string]io.Writer)
+	}
+	key := strconv.Itoa(len(lc.nodeWriters))
+	lc.nodeWriters[key] = w
+	return "/node/" + key
+}
+
 func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// POST /c/<collection-name>/<private-ID>
+	// POST [/node/<key>]/c/<collection-name>/<private-ID>
 	if r.Method != "POST" {
 		log.Printf("bad logcatcher method: %v", r.Method)
 		http.Error(w, "only POST is supported", 400)
 		return
 	}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/c/"), "/")
+	path, nodeKey := r.URL.Path, ""
+	if rest, ok := strings.CutPrefix(path, "/node/"); ok {
+		nodeKey, path, _ = strings.Cut(rest, "/")
+		path = "/" + path
+	}
+	pathParts := strings.Split(strings.TrimPrefix(path, "/c/"), "/")
 	if len(pathParts) != 2 {
 		log.Printf("bad logcatcher path: %q", r.URL.Path)
 		http.Error(w, "bad URL", 400)
@@ -498,8 +517,9 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jreq = append(jreq, ent)
 	}
 
+	var nodeOut bytes.Buffer
 	lc.mu.Lock()
-	defer lc.mu.Unlock()
+	nodeWriter := lc.nodeWriters[nodeKey]
 	lc.reqs++
 	if lc.gotErr == nil && err != nil {
 		lc.gotErr = err
@@ -512,6 +532,9 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id := privID.Public().String()[:3] // good enough for integration tests
 		for _, ent := range jreq {
+			if text := strings.TrimSpace(ent.Text); nodeWriter != nil && text != "" {
+				fmt.Fprintf(&nodeOut, "%s\n", text)
+			}
 			if lc.raw {
 				lc.buf.Write(bodyBytes)
 				continue
@@ -521,6 +544,11 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				lc.logf("logcatch:%s: %s", id, strings.TrimSpace(ent.Text))
 			}
 		}
+	}
+	lc.mu.Unlock()
+	if nodeOut.Len() > 0 {
+		// Outside lc.mu, since the node's log line hooks run inside Write.
+		nodeWriter.Write(nodeOut.Bytes())
 	}
 	w.WriteHeader(200) // must have no content, but not a 204
 }
@@ -620,6 +648,7 @@ type TestNode struct {
 	sockFile     string
 	stateFile    string
 	upFlagGOOS   string // if non-empty, sets TS_DEBUG_UP_FLAG_GOOS for cmd/tailscale CLI
+	logTarget    string // if non-empty, sets TS_LOG_TARGET instead of the log catcher's URL
 	encryptState bool
 	allowUpdates bool
 	tunMode      bool // TUN rather than userspace networking
@@ -714,10 +743,11 @@ func NewTestNode(t *testing.T, env *TestEnv, opts ...TestNodeOpt) *TestNode {
 		n.sockFile = `\\.\pipe\tailscale-test-` + rands.HexString(8)
 	}
 
-	// Look for a data race or panic.
+	// Look for a data race or crash.
 	// Once we see the start marker, start logging the rest.
 	var sawRace bool
 	var sawPanic bool
+	var failed bool
 	n.addLogLineHook(func(line []byte) {
 		lineB := mem.B(line)
 		if mem.Contains(lineB, mem.S("DEBUG-ADDR=")) {
@@ -726,10 +756,15 @@ func NewTestNode(t *testing.T, env *TestEnv, opts ...TestNodeOpt) *TestNode {
 		if mem.Contains(lineB, mem.S("WARNING: DATA RACE")) {
 			sawRace = true
 		}
-		if mem.HasPrefix(lineB, mem.S("panic: ")) {
+		if mem.HasPrefix(lineB, mem.S("panic: ")) || mem.HasPrefix(lineB, mem.S("fatal error: ")) {
 			sawPanic = true
 		}
 		if sawRace || sawPanic {
+			if !failed {
+				failed = true
+				// Fail here, since the Windows service restarts a crashed tailscaled.
+				t.Error("tailscaled crashed or hit a data race, its output follows")
+			}
 			t.Logf("%s", line)
 		}
 	})
@@ -943,7 +978,7 @@ func (n *TestNode) awaitTailscaledRunnable() error {
 func (n *TestNode) daemonEnv(ipnGOOS string) []string {
 	env := []string{
 		"TS_DEBUG_PERMIT_HTTP_C2N=1",
-		"TS_LOG_TARGET=" + n.env.LogCatcherServer.URL,
+		"TS_LOG_TARGET=" + cmp.Or(n.logTarget, n.env.LogCatcherServer.URL),
 		"HTTP_PROXY=" + n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY=" + n.env.TrafficTrapServer.URL,
 		"TS_DEBUG_FAKE_GOOS=" + ipnGOOS,
@@ -986,8 +1021,9 @@ func (n *TestNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 	}
 
 	if runtime.GOOS == "windows" && n.tunMode {
-		// TODO(#20443): plumb service logs here so races/panics/DEBUG-ADDR are seen in service mode.
 		n.tailscaledParser = &nodeOutputParser{n: n}
+		// The service has no stderr to read, so its uploaded logs feed the parser instead.
+		n.logTarget = n.env.LogCatcherServer.URL + n.env.LogCatcher.nodePath(n.tailscaledParser)
 		return n.startWindowsServiceDaemon()
 	}
 
