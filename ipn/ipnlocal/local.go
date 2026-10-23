@@ -196,6 +196,10 @@ type watchSession struct {
 	// policyUID is the user ID used for policy snapshot scoping.
 	// Empty string means default/device scope.
 	policyUID string
+
+	// hiddenNetworkDevices is the parsed GUI visibility policy from the
+	// most recent effective policy snapshot for this session.
+	hiddenNetworkDevices hiddenNetworkDevices
 }
 
 var (
@@ -2475,7 +2479,12 @@ func (b *LocalBackend) sysPolicyChangedForSession(sess *watchSession) {
 		return
 	}
 
-	n := ipn.Notify{Policy: snapshot, Version: version.Long()}
+	sess.hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(snapshot)
+	n := ipn.Notify{
+		Policy:            snapshot,
+		NodeGUIVisibility: b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices),
+		Version:           version.Long(),
+	}
 	for _, f := range b.extHost.Hooks().MutateNotifyLocked {
 		f(&n)
 	}
@@ -3853,6 +3862,7 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	b.mu.Lock()
 
 	var policyUID string
+	var hiddenNetworkDevices hiddenNetworkDevices
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs |
 		ipn.NotifyInitialStatus |
 		ipn.NotifyInitialDriveShares | ipn.NotifyInitialSuggestedExitNode |
@@ -3897,6 +3907,9 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 			ini.Policy, err = b.polc.GetPolicySnapshot(policyUID)
 			if err != nil {
 				b.logf("syspolicy: GetPolicySnapshot(%q): %v", policyUID, err)
+			} else if ini.Policy != nil {
+				hiddenNetworkDevices = hiddenNetworkDevicesFromPolicy(ini.Policy)
+				ini.NodeGUIVisibility = b.nodeGUIVisibilityLocked(hiddenNetworkDevices)
 			}
 		}
 	}
@@ -3905,13 +3918,14 @@ func (b *LocalBackend) WatchNotificationsAs(ctx context.Context, actor ipnauth.A
 	defer cancel()
 
 	session := &watchSession{
-		ch:        ch,
-		ctx:       ctx,
-		owner:     actor,
-		sessionID: sessionID,
-		cancel:    cancel,
-		mask:      mask,
-		policyUID: policyUID,
+		ch:                   ch,
+		ctx:                  ctx,
+		owner:                actor,
+		sessionID:            sessionID,
+		cancel:               cancel,
+		mask:                 mask,
+		policyUID:            policyUID,
+		hiddenNetworkDevices: hiddenNetworkDevices,
 	}
 	mak.Set(&b.notifyWatchers, sessionID, session)
 	if mask&ipn.NotifyPeerWireGuardState != 0 {
@@ -4238,6 +4252,11 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	stripPatches := len(n.PeerChangedPatch) > 0 && !wantsPeerPatches
 	stripPeerState := len(n.PeerState) > 0 && sess.mask&ipn.NotifyPeerWireGuardState == 0
 	promotePatches := len(n.PeerChangedPatch) > 0 && wantsPeerChanges && !wantsPeerPatches
+	refreshNodeGUIVisibility :=
+		sess.mask&ipn.NotifySysPolicyChanges != 0 &&
+			(n.SelfChange != nil ||
+				len(n.PeersChanged) != 0 ||
+				len(n.PeersRemoved) != 0)
 
 	if sess.selfChangeResetsImplicitState(n.SelfChange.View()) {
 		sess.lastSentUserProfile = nil
@@ -4267,10 +4286,13 @@ func (b *LocalBackend) notifyForSessionLocked(sess *watchSession, n *ipn.Notify)
 	}
 	replaceUserProfiles := !stripUserProfiles && len(sessUserProfiles) != len(n.UserProfiles)
 
-	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches {
+	if !stripPeersChanged && !stripPeersRemoved && !stripPatches && !stripPeerState && !stripUserProfiles && !replaceUserProfiles && !promotePatches && !refreshNodeGUIVisibility {
 		return n
 	}
 	nCopy := *n
+	if refreshNodeGUIVisibility {
+		nCopy.NodeGUIVisibility = b.nodeGUIVisibilityLocked(sess.hiddenNetworkDevices)
+	}
 	if stripPeersChanged {
 		nCopy.PeersChanged = nil
 	}
