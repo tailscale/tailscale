@@ -353,10 +353,11 @@ func (ia *incubatorArgs) loadForwardedEnv() error {
 			return fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 	}
-	// Enforce "su -w" integrity child-side: old parents may not have filtered these
+	// Enforce "su -w" integrity and the dangerous-env-var denylist
+	// child-side: old parents may not have filtered these.
 	pairs = slices.DeleteFunc(pairs, func(kv string) bool {
 		k, _, ok := strings.Cut(kv, "=")
-		return !ok || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
+		return !ok || isDangerousEnvVar(k) || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
 	})
 	ia.forwardedEnv = pairs
 	return nil

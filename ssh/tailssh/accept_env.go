@@ -15,10 +15,17 @@ import (
 // linker environment variables (e.g. LD_PRELOAD, LD_LIBRARY_PATH,
 // DYLD_INSERT_LIBRARIES) or leaking of secrets (e.g. GOTRACEBACK)
 // even when a wildcard acceptEnv pattern like "*" is configured.
+//
+// The denylist also covers other root su/login environment exposure
+// classes: glibc module/file lookups (GCONV_PATH, LOCPATH, NLSPATH) that
+// can load attacker-controlled files into privileged processes, and
+// resolver configuration (HOSTALIASES, RES_OPTIONS) that can redirect
+// privileged hostname lookups.
 func isDangerousEnvVar(name string) bool {
 	upper := strings.ToUpper(name)
 	return strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_") ||
-		upper == "GOTRACEBACK"
+		upper == "GOTRACEBACK" || upper == "GCONV_PATH" || upper == "LOCPATH" ||
+		upper == "NLSPATH" || upper == "HOSTALIASES" || upper == "RES_OPTIONS"
 }
 
 // forbiddenEnvKey reports whether name must never be accepted from the client as a
