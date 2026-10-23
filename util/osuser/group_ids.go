@@ -5,8 +5,8 @@ package osuser
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os/exec"
 	"os/user"
 	"runtime"
 	"strings"
@@ -42,15 +42,20 @@ func GetGroupIds(user *user.User) ([]string, error) {
 }
 
 func getGroupIdsWithId(usernameOrUID string) ([]string, error) {
+	// Do some basic validation before passing this string to the "id"
+	// command, with the same rules as getent (see checkGetentInput), so a
+	// crafted username like "-u" can't be interpreted as an option.
+	if !checkGetentInput(usernameOrUID) {
+		return nil, errors.New("invalid username or UID")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "id", "-Gz", usernameOrUID)
+	idArgs := []string{"-Gz", usernameOrUID}
 	if runtime.GOOS == "freebsd" {
-		cmd = exec.CommandContext(ctx, "id", "-G", usernameOrUID)
+		idArgs = []string{"-G", usernameOrUID}
 	}
-
-	out, err := cmd.CombinedOutput()
+	out, err := execId(ctx, idArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("running 'id' command: %w", err)
 	}
