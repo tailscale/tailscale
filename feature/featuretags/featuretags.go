@@ -372,6 +372,12 @@ var Features = map[FeatureTag]FeatureMeta{
 		Sym:  "UserMetrics",
 		Desc: "Usermetrics (documented, stable) metrics support",
 	},
+	"via64": {
+		Sym:  "Via64",
+		Desc: "Experimental kernel 4via6 translation on Linux subnet routers (TS_DEBUG_4VIA6_KERNEL)",
+		// netstack decides which 4via6 packets the kernel gets, applying the 4via6 target policy.
+		Deps: []FeatureTag{"osrouter", "netstack"},
+	},
 	"wakeonlan": {Sym: "WakeOnLAN", Desc: "Wake-on-LAN support"},
 	"webbrowser": {
 		Sym:  "WebBrowser",
