@@ -11,12 +11,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"tailscale.com/tailcfg"
 )
 
 // maybeWithSudo returns a command with context that may be prefixed with sudo if not running as root.
@@ -176,5 +180,28 @@ func TestAuditIntegration(t *testing.T) {
 		} else {
 			t.Errorf("audit message with test_id=%s not found in journald audit log", testID)
 		}
+	}
+}
+
+func TestSSHLoginAuditMessageQuotesAcct(t *testing.T) {
+	c := &conn{
+		srv: &server{tailscaledPath: "/usr/sbin/tailscaled"},
+		info: &sshConnInfo{
+			src:  netip.MustParseAddrPort("100.100.100.101:2231"),
+			dst:  netip.MustParseAddrPort("100.100.100.102:22"),
+			node: (&tailcfg.Node{Name: "node.tail-scale.ts.net"}).View(),
+		},
+		localUser: &userMeta{User: user.User{Username: `we"ird user`, Uid: "1000", Gid: "1000"}},
+	}
+
+	msg := sshLoginAuditMessage(c, c.localUser.Username, c.localUser.Uid, c.localUser.Gid, "host", "tailscaled")
+
+	// The acct field must be quoted like the ts_* fields so a username with
+	// spaces, quotes, or '=' can't forge or corrupt other audit fields.
+	if !strings.HasPrefix(msg, `op=login acct="we\"ird user" uid=1000 gid=1000 `) {
+		t.Errorf("unexpected acct/uid/gid prefix: %q", msg)
+	}
+	if strings.Contains(msg, "acct=we") {
+		t.Errorf("acct field not quoted: %q", msg)
 	}
 }

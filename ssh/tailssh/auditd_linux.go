@@ -133,15 +133,8 @@ func logSSHLogin(logf logger.Logf, c *conn) {
 	}
 
 	srcIP := c.info.src.Addr().String()
-	srcPort := c.info.src.Port()
-	dstIP := c.info.dst.Addr().String()
-	dstPort := c.info.dst.Port()
-
 	tailscaleUser := c.info.uprof.LoginName
-	tailscaleUserID := c.info.uprof.ID
-	tailscaleDisplayName := c.info.uprof.DisplayName
 	nodeName := c.info.node.Name()
-	nodeID := c.info.node.ID()
 
 	localUser := c.localUser.Username
 	localUID := c.localUser.Uid
@@ -154,8 +147,33 @@ func logSSHLogin(logf logger.Logf, c *conn) {
 
 	// use principally the same format as ssh / PAM, which come from the audit userspace, i.e.
 	// https://github.com/linux-audit/audit-userspace/blob/b6f8c208435038df113a9795e3e202720aee6b70/lib/audit_logging.c#L515
-	msg := fmt.Sprintf(
-		"op=login acct=%s uid=%s gid=%s "+
+	// The acct field is quoted like the ts_* fields so a username containing
+	// spaces, quotes, or '=' can't forge or corrupt other audit fields.
+	msg := sshLoginAuditMessage(c, localUser, localUID, localGID, hostname, exePath)
+
+	sendAuditMessage(logf, auditUserLogin, msg)
+
+	logf("audit: SSH login: user=%s uid=%s from=%s ts_user=%s node=%s",
+		localUser, localUID, srcIP, tailscaleUser, nodeName)
+}
+
+// sshLoginAuditMessage builds the auditd USER_LOGIN message for c. It is
+// separate from logSSHLogin so the message format can be tested without
+// CAP_AUDIT_WRITE or a netlink socket.
+func sshLoginAuditMessage(c *conn, localUser, localUID, localGID, hostname, exePath string) string {
+	srcIP := c.info.src.Addr().String()
+	srcPort := c.info.src.Port()
+	dstIP := c.info.dst.Addr().String()
+	dstPort := c.info.dst.Port()
+
+	tailscaleUser := c.info.uprof.LoginName
+	tailscaleUserID := c.info.uprof.ID
+	tailscaleDisplayName := c.info.uprof.DisplayName
+	nodeName := c.info.node.Name()
+	nodeID := c.info.node.ID()
+
+	return fmt.Sprintf(
+		"op=login acct=%q uid=%s gid=%s "+
 			"src=%s src_port=%d dst=%s dst_port=%d "+
 			"hostname=%q exe=%q terminal=ssh res=success "+
 			"ts_user=%q ts_user_id=%d ts_display_name=%q ts_node=%q ts_node_id=%d",
@@ -164,11 +182,6 @@ func logSSHLogin(logf logger.Logf, c *conn) {
 		hostname, exePath,
 		tailscaleUser, tailscaleUserID, tailscaleDisplayName, nodeName, nodeID,
 	)
-
-	sendAuditMessage(logf, auditUserLogin, msg)
-
-	logf("audit: SSH login: user=%s uid=%s from=%s ts_user=%s node=%s",
-		localUser, localUID, srcIP, tailscaleUser, nodeName)
 }
 
 func init() {
