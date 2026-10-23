@@ -399,6 +399,73 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// "tailscale set --override-dns=false": the OS keeps its
+			// own resolvers, and quad-100 keeps the default resolvers
+			// for direct queries.
+			name: "override-dns-negated",
+			in: Config{
+				DefaultResolvers:          mustRes("1.1.1.1", "9.9.9.9"),
+				DefaultResolversLocalOnly: true,
+				SearchDomains:             fqdns("tailscale.com", "universe.tf"),
+			},
+			split: true,
+			os: OSConfig{
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+			},
+		},
+		{
+			// The OS only gets the split route's resolvers, scoped to
+			// the route. quad-100 keeps the default resolvers.
+			name: "override-dns-negated-corp-routes-split",
+			in: Config{
+				DefaultResolvers:          mustRes("1.1.1.1", "9.9.9.9"),
+				DefaultResolversLocalOnly: true,
+				Routes:                    upstreams("corp.com", "2.2.2.2"),
+				SearchDomains:             fqdns("tailscale.com", "universe.tf"),
+			},
+			split: true,
+			os: OSConfig{
+				Nameservers:   mustIPs("2.2.2.2"),
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("corp.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(
+					".", "1.1.1.1", "9.9.9.9",
+					"corp.com.", "2.2.2.2"),
+			},
+		},
+		{
+			// quad-100 is scoped to the MagicDNS domains; the OS's
+			// default resolver is untouched.
+			name: "override-dns-negated-corp-magic-split",
+			in: Config{
+				DefaultResolvers:          mustRes("1.1.1.1", "9.9.9.9"),
+				DefaultResolversLocalOnly: true,
+				SearchDomains:             fqdns("tailscale.com", "universe.tf"),
+				Routes:                    upstreams("ts.com", ""),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+			split: true,
+			os: OSConfig{
+				Nameservers:   serviceAddr46,
+				SearchDomains: fqdns("tailscale.com", "universe.tf"),
+				MatchDomains:  fqdns("ts.com"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+				Hosts: hosts(
+					"dave.ts.com.", "1.2.3.4",
+					"bradfitz.ts.com.", "2.3.4.5"),
+				LocalDomains: fqdns("ts.com."),
+			},
+		},
+		{
 			name: "corp-routes",
 			in: Config{
 				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),

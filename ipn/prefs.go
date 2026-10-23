@@ -134,6 +134,17 @@ type Prefs struct {
 	// the "tailscale set --accept-dns=" flag.
 	CorpDNS bool
 
+	// OverrideDNS, if explicitly false, negates the admin console's
+	// "Override DNS servers" setting on this device: the OS keeps its
+	// own default resolver, while quad-100 keeps the full tailnet DNS
+	// configuration and answers direct queries with it. If unset or
+	// true, the tailnet setting applies unchanged.
+	// It has no effect on exit node DNS or fallback resolvers, and it
+	// does not prevent quad-100 from becoming the OS's primary
+	// resolver when names would otherwise stop resolving, such as
+	// MagicDNS records without MagicDNS domain routing.
+	OverrideDNS opt.Bool `json:",omitempty"`
+
 	// RunSSH bool is whether this node should run an SSH
 	// server, permitting access to peers according to the
 	// policies as configured by the Tailnet's admin(s).
@@ -364,6 +375,7 @@ type MaskedPrefs struct {
 	InternalExitNodePriorSet      bool                `json:",omitempty"` // Internal; can't be set by LocalAPI clients
 	ExitNodeAllowLANAccessSet     bool                `json:",omitempty"`
 	CorpDNSSet                    bool                `json:",omitempty"`
+	OverrideDNSSet                bool                `json:",omitempty"`
 	RunSSHSet                     bool                `json:",omitempty"`
 	RunWebClientSet               bool                `json:",omitempty"`
 	WantRunningSet                bool                `json:",omitempty"`
@@ -675,6 +687,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.InternalExitNodePrior == p2.InternalExitNodePrior &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
 		p.CorpDNS == p2.CorpDNS &&
+		p.OverrideDNS == p2.OverrideDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.Sync.Normalized() == p2.Sync.Normalized() &&
 		p.RunWebClient == p2.RunWebClient &&

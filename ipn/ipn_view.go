@@ -296,6 +296,17 @@ func (v PrefsView) ExitNodeAllowLANAccess() bool { return v.ж.ExitNodeAllowLANA
 // the "tailscale set --accept-dns=" flag.
 func (v PrefsView) CorpDNS() bool { return v.ж.CorpDNS }
 
+// OverrideDNS, if explicitly false, negates the admin console's
+// "Override DNS servers" setting on this device: the OS keeps its
+// own default resolver, while quad-100 keeps the full tailnet DNS
+// configuration and answers direct queries with it. If unset or
+// true, the tailnet setting applies unchanged.
+// It has no effect on exit node DNS or fallback resolvers, and it
+// does not prevent quad-100 from becoming the OS's primary
+// resolver when names would otherwise stop resolving, such as
+// MagicDNS records without MagicDNS domain routing.
+func (v PrefsView) OverrideDNS() opt.Bool { return v.ж.OverrideDNS }
+
 // RunSSH bool is whether this node should run an SSH
 // server, permitting access to peers according to the
 // policies as configured by the Tailnet's admin(s).
@@ -499,6 +510,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	InternalExitNodePrior      tailcfg.StableNodeID
 	ExitNodeAllowLANAccess     bool
 	CorpDNS                    bool
+	OverrideDNS                opt.Bool
 	RunSSH                     bool
 	RunWebClient               bool
 	WantRunning                bool
