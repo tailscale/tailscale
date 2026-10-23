@@ -42,9 +42,12 @@ func (e *extension) updateCertRefreshLoop(b *ipnlocal.LocalBackend, state ipn.St
 	defer e.mu.Unlock()
 	switch {
 	case shouldRun && e.certRefreshCancel == nil:
-		ctx, cancel := context.WithCancel(context.Background())
-		e.certRefreshCancel = cancel
-		e.Go(func() { e.certRefreshLoop(ctx, b) })
+		ctx, cancel := context.WithCancel(e.baseCtx)
+		if e.Go(func() { e.certRefreshLoop(ctx, b) }) {
+			e.certRefreshCancel = cancel
+		} else {
+			cancel()
+		}
 	case !shouldRun && e.certRefreshCancel != nil:
 		e.certRefreshCancel()
 		e.certRefreshCancel = nil
