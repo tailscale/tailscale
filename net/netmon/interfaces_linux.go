@@ -29,6 +29,43 @@ import (
 
 func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPLinux
+	prefetchAddrs = prefetchAddrsLinux
+}
+
+// prefetchAddrsLinux sets AltAddrs on all interfaces via a single dump per
+// address family, which avoids taking the kernel's RTNL lock. On error, AltAddrs
+// stays nil and Interface.Addrs uses stdlib (quadratic cost + RTNL lock).
+func prefetchAddrsLinux(ifs []Interface) {
+	c, err := rtnetlink.Dial(&netlink.Config{Strict: true})
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	byIndex := make(map[int][]net.Addr)
+	for _, family := range []uint8{unix.AF_INET, unix.AF_INET6} {
+		msgs, err := c.Execute(&rtnetlink.AddressMessage{Family: family}, unix.RTM_GETADDR, netlink.Request|netlink.Dump)
+		if err != nil {
+			return
+		}
+		for _, m := range msgs {
+			am := m.(*rtnetlink.AddressMessage)
+			// Without the requested family (e.g. ipv6.disable=1), the
+			// kernel answers with an AF_UNSPEC dump.
+			if am.Family != family {
+				continue
+			}
+			// Like net.Interface.Addrs, prefer IFA_LOCAL.
+			ip := am.Attributes.Local
+			if ip == nil {
+				ip = am.Attributes.Address
+			}
+			mask := net.CIDRMask(int(am.PrefixLength), 8*len(ip))
+			byIndex[int(am.Index)] = append(byIndex[int(am.Index)], &net.IPNet{IP: ip.To16(), Mask: mask})
+		}
+	}
+	for i := range ifs {
+		ifs[i].AltAddrs = append([]net.Addr{}, byIndex[ifs[i].Index]...)
+	}
 }
 
 var procNetRouteErr atomic.Bool
