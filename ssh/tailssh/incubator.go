@@ -150,7 +150,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 		loginShell := ss.conn.localUser.LoginShell()
 		args := shellArgs(isShell, ss.RawCommand())
 		logf("directly running %s %q", loginShell, args)
-		cmd = exec.CommandContext(ss.ctx, loginShell, args...)
+		cmd = ss.command(loginShell, args...)
 
 		// While running directly instead of using `tailscaled be-child`,
 		// do what sshd does by running inside the home directory,
@@ -250,7 +250,7 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 		}
 	}
 
-	cmd = exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+	cmd = ss.command(ss.conn.srv.tailscaledPath, incubatorArgs...)
 	// The incubator will chdir into the home directory after it drops privileges.
 	cmd.Dir = "/"
 	return cmd, forwardedEnv, nil
