@@ -45,9 +45,11 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// fwdState is the conn's forwarding state. It holds the per-connection
-// monitor, spawned lazily on the first forwarding or agent need and
-// closed when the conn is torn down. The monitor's identity is bound at
+// fwdState is the conn's monitor state. It holds the per-connection
+// ssh-monitor, spawned lazily on the first forwarding, agent, or
+// session need and closed when the conn is torn down. exits
+// dispatches the monitor's async child-exit notifications to the
+// conn's sessions in sessmonitor.go. The monitor's identity is bound at
 // spawn to the conn's localUser, with the uid, gid, and groups from
 // clientAuth.
 type fwdState struct {
@@ -56,8 +58,52 @@ type fwdState struct {
 
 	// closed is set by closeFwdMonitor, before the lock is dropped. Once
 	// the conn's teardown has run, fwdMonitor refuses to spawn.
-	// fwdMonitorIfAny is unaffected and read-only.
+	// fwdMonitorIfAny is unaffected.
 	closed bool
+
+	// exits routes notifications by child handle. Its callback is installed
+	// at monitor spawn.
+	exits monExitRegistry
+}
+
+// monExitRegistry matches exit notifications to child handles, including
+// notifications received before the session registers its waiter.
+type monExitRegistry struct {
+	mu      sync.Mutex
+	waiters map[monitorProcess]*monExitStatus
+	pending map[monitorProcess]int // exits received before registration
+}
+
+// dispatchExit is the monitorClient exit callback, called from the
+// client's read-loop goroutine.
+func (s *monExitRegistry) dispatchExit(pid monitorProcess, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ch, ok := s.waiters[pid]; ok {
+		delete(s.waiters, pid)
+		ch.complete(code)
+		return
+	}
+	if s.pending == nil {
+		s.pending = make(map[monitorProcess]int)
+	}
+	s.pending[pid] = code
+}
+
+// registerSessionExit delivers and removes a pending exit, or registers
+// a waiter for a future notification.
+func (s *monExitRegistry) registerSessionExit(pid monitorProcess, ch *monExitStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if code, ok := s.pending[pid]; ok {
+		delete(s.pending, pid)
+		ch.complete(code)
+		return
+	}
+	if s.waiters == nil {
+		s.waiters = make(map[monitorProcess]*monExitStatus)
+	}
+	s.waiters[pid] = ch
 }
 
 // fwdMonitor returns the conn's monitor, spawning it on first use with
@@ -87,16 +133,18 @@ func (c *conn) fwdMonitor() (*monitorClient, error) {
 	}
 	mc, err := spawnMonitor(exe, uid, gid, groups, c.localUser.Username)
 	if err != nil {
-		return nil, fmt.Errorf("spawning ssh-monitor for forwarding as %q: %w", c.localUser.Username, err)
+		return nil, fmt.Errorf("spawning ssh-monitor for %q: %w", c.localUser.Username, err)
 	}
+	// Route the monitor's async exit notifications to the conn's
+	// sessions in sessmonitor.go.
+	mc.SetExitCallback(c.fwd.exits.dispatchExit)
 	c.fwd.mon = mc
 	return mc, nil
 }
 
 // fwdMonitorIfAny returns the conn's monitor without spawning one.
 // Callers that can race the conn's teardown must use it instead of the
-// lazy fwdMonitor. See fwdState.closed. Nil means the monitor is already
-// gone.
+// lazy fwdMonitor. See fwdState.closed.
 func (c *conn) fwdMonitorIfAny() *monitorClient {
 	c.fwd.mu.Lock()
 	defer c.fwd.mu.Unlock()

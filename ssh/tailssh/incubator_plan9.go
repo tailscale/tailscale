@@ -424,6 +424,19 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return ss.cmd.Start()
 }
 
+// waitMonitorProcess is the plan9 seam of the monitor session path.
+// plan9 has no monitor, so it always reports the direct path.
+func (ss *sshSession) waitMonitorProcess() (code int, ok bool, err error) {
+	return 0, false, nil
+}
+
+// hangupMonitorProcess is the plan9 seam of the monitor session path.
+// It always reports false, so sessions hang up their directly-started
+// child.
+func (ss *sshSession) hangupMonitorProcess() bool {
+	return false
+}
+
 func envForUser(u *userMeta) []string {
 	return []string{
 		fmt.Sprintf("user=%s", u.Username),

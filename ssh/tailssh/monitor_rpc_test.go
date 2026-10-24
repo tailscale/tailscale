@@ -158,7 +158,7 @@ func TestMonitorRPCMultiFd(t *testing.T) {
 
 	// Three fds pass, matching the exec stdio shape.
 	fds := []int{devNullFd(t), devNullFd(t), devNullFd(t)}
-	req := rpcExecReq(9, []string{"/bin/sh"}, nil, "", false, 3)
+	req := rpcExecReq(9, []string{"/bin/sh"}, nil, "", false, false, 3)
 	if err := client.writeFrame(req, fds...); err != nil {
 		t.Fatal(err)
 	}
@@ -174,18 +174,50 @@ func TestMonitorRPCMultiFd(t *testing.T) {
 		unix.Close(fd)
 	}
 
-	// A fourth fd in one frame is rejected by the receiver.
-	four := []int{devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t)}
-	defer closeFds(four)
+	// Four fds pass only with the envfd declaration, stdio plus the
+	// --env-fd pipe. The declaration and the delivered count must
+	// match.
+	envReq := rpcExecReq(10, []string{"/bin/sh"}, nil, "", false, true, 4)
+	if err := client.writeFrame(envReq, devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t)); err != nil {
+		t.Fatal(err)
+	}
+	if f, got, err := server.readFrame(); err != nil || !f.EnvFd || len(got) != 4 {
+		t.Fatalf("envfd frame = %+v, fds = %v, err = %v", f, got, err)
+	} else {
+		for _, fd := range got {
+			assertCLOEXEC(t, fd)
+			unix.Close(fd)
+		}
+	}
+
+	// Four fds without the envfd declaration (declared 3) are rejected.
 	line, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := client.c.WriteMsgUnix(append(line, '\n'), unix.UnixRights(four...), nil); err != nil {
+	rights := unix.UnixRights(
+		devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t),
+	)
+	if _, _, err := client.c.WriteMsgUnix(append(line, '\n'), rights, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := server.readFrame(); err == nil {
-		t.Fatal("4-fd frame accepted")
+		t.Fatal("4 fds without the envfd declaration accepted")
+	}
+
+	// A fifth fd in one frame is rejected by the receiver.
+	line, err = json.Marshal(envReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rights = unix.UnixRights(
+		devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t),
+	)
+	if _, _, err := client.c.WriteMsgUnix(append(line, '\n'), rights, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.readFrame(); err == nil {
+		t.Fatal("5-fd frame accepted")
 	}
 }
 
@@ -333,6 +365,10 @@ func TestMonitorRPCUndersizedOOBTruncates(t *testing.T) {
 	four := []int{devNullFd(t), devNullFd(t), devNullFd(t), devNullFd(t)}
 	// sendFds itself refuses more than rpcMaxFds descriptors. Bypass it
 	// to feed the receiver an oversized cmsg.
+	var before map[int]bool
+	if runtime.GOOS == "linux" {
+		before = openFdSet(t)
+	}
 	if _, _, err := client.c.WriteMsgUnix([]byte("{\"op\":\"exec\"}\n"), unix.UnixRights(four...), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +383,13 @@ func TestMonitorRPCUndersizedOOBTruncates(t *testing.T) {
 	}
 	if _, err := recvFdSets(tooSmall[:oobn], flags); err == nil {
 		t.Fatal("undersized OOB buffer accepted a truncated cmsg")
+	}
+	if before != nil {
+		for fd := range openFdSet(t) {
+			if !before[fd] {
+				t.Errorf("fd %d delivered by truncated cmsg remains open", fd)
+			}
+		}
 	}
 }
 
@@ -371,7 +414,7 @@ func TestMonitorRPCSplitLineFD(t *testing.T) {
 	}
 
 	big := strings.Repeat("x", 100<<10)
-	req := rpcExecReq(11, []string{big}, nil, "", false, 1)
+	req := rpcExecReq(11, []string{big}, nil, "", false, false, 1)
 	done := make(chan error, 1)
 	go func() {
 		done <- client.writeFrame(req, passed)
@@ -526,7 +569,7 @@ func TestMonitorRPCMultiplex(t *testing.T) {
 				return
 			}
 		}
-		if err := server.writeFrame(rpcExitNotify(4321, 0)); err != nil {
+		if err := server.writeFrame(rpcExitNotify(monitorProcess{PID: 4321, ID: 1}, 0)); err != nil {
 			t.Errorf("server exit write: %v", err)
 		}
 	}()
@@ -701,7 +744,7 @@ func TestMonitorRPCReadTimeoutPreservesLine(t *testing.T) {
 	peer, passed := fdPair(t)
 	defer peer.Close()
 
-	req := rpcExecReq(21, []string{"sleep 1"}, nil, "", false, 1)
+	req := rpcExecReq(21, []string{"sleep 1"}, nil, "", false, false, 1)
 	line, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
@@ -747,7 +790,7 @@ func TestMonitorRPCFrameShapes(t *testing.T) {
 	reqs := []rpcFrame{
 		rpcListenReq(7, "unix", "/tmp/x.sock", true, false),
 		rpcListenReq(8, "tcp", "127.0.0.1:0", false, true),
-		rpcSignalReq(9, 4321, "SIGKILL"),
+		rpcSignalReq(9, monitorProcess{PID: 4321, ID: 8}, "SIGKILL"),
 	}
 	go func() {
 		for _, f := range reqs {

@@ -45,7 +45,21 @@ var testFwdPrefix = []string{"-test.run=^TestSSHFwdHelperProcess$", "-test.timeo
 func TestSSHFwdHelperProcess(t *testing.T) {
 	for i, a := range os.Args {
 		if a == "--" && i+1 < len(os.Args) && os.Args[i+1] == "ssh-fwd" {
-			if err := beFwdChild(os.Args[i+2:]); err != nil {
+			// Declared-fds pin for the fwd child. When the test asks
+			// for it, the child dumps its exec-inherited fd table
+			// before performing the op. The dump path arrives by
+			// argv, from the monitor's spawn of this child: the child
+			// itself runs with no environment. The test-only flag is
+			// stripped before the op parser sees it.
+			var childArgs []string
+			for _, a := range os.Args[i+2:] {
+				if p, ok := strings.CutPrefix(a, "--test-fdinfo="); ok {
+					dumpChildFdsTo(p, "ssh-fwd")
+					continue
+				}
+				childArgs = append(childArgs, a)
+			}
+			if err := beFwdChild(childArgs); err != nil {
 				// The op's outcome was already reported on the result
 				// channel; the exit code mirrors it.
 				fmt.Fprintln(os.Stderr, "ssh-fwd child:", err)
