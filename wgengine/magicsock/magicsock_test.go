@@ -541,6 +541,43 @@ collectEndpoints:
 	}
 }
 
+func TestNetcheckCaptivePortalControlKnob(t *testing.T) {
+	bus := eventbustest.NewBus(t)
+	netMon, err := netmon.New(bus, logger.WithPrefix(t.Logf, "... netmon: "))
+	if err != nil {
+		t.Fatalf("netmon.New: %v", err)
+	}
+	defer netMon.Close()
+
+	knobs := new(controlknobs.Knobs)
+	conn, err := NewConn(Options{
+		NetMon:                 netMon,
+		EventBus:               bus,
+		HealthTracker:          health.NewTracker(bus),
+		Metrics:                new(usermetric.Registry),
+		ControlKnobs:           knobs,
+		DisablePortMapper:      true,
+		Logf:                   t.Logf,
+		Port:                   0,
+		TestOnlyPacketListener: localhostListener{},
+		EndpointsFunc:          func([]tailcfg.Endpoint) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if disabled := conn.netChecker.DisableCaptivePortalDetection; disabled == nil {
+		t.Fatal("netcheck captive portal control knob is not wired")
+	} else if disabled() {
+		t.Fatal("captive portal detection disabled by default")
+	}
+	knobs.DisableCaptivePortalDetection.Store(true)
+	if !conn.netChecker.DisableCaptivePortalDetection() {
+		t.Fatal("netcheck did not observe live captive portal control knob change")
+	}
+}
+
 // TestResetNetInfoLast verifies that ResetNetInfoLast clears the NetInfo
 // de-duplication cache, so the next NetInfo is delivered to the callback even
 // when it's structurally unchanged (which callNetInfoCallback would normally
