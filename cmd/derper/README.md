@@ -46,6 +46,12 @@ If you've decided or been advised to run your own `derper`, then read on.
 Both of those should be listed in the DERP map so the client doesn't need to
 rely on its DNS which might be broken and dependent on DERP to get back up.
 
+* When using `--certmode=letsencrypt --acme-ip-certs` behind destination NAT,
+  `--hostname` can be set to one public IP address or a comma-separated IPv4
+  and IPv6 pair. Each configured address overrides the post-NAT local address
+  for connections of the same address family; an unconfigured address family
+  continues to use the connection-local address.
+
 * A DERP server should not share an IP address with any other DERP server.
 
 * Avoid having multiple DERP nodes in a region. If you must, they all need to be
