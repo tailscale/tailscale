@@ -297,7 +297,8 @@ type LocalBackend struct {
 	// for testing and graceful shutdown purposes.
 	goTracker goroutines.Tracker
 
-	startOnce sync.Once // protects the one‑time initialization in [LocalBackend.Start]
+	startOnce    sync.Once  // protects the one‑time initialization in [LocalBackend.Start]
+	beginLoginMu sync.Mutex // serializes beginLoginAs calls; acquire before b.mu
 
 	// extHost is the bridge between [LocalBackend] and the registered [ipnext.Extension]s.
 	// It may be nil in tests that use direct composite literal initialization of [LocalBackend]
