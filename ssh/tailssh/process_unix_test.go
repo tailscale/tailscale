@@ -8,14 +8,16 @@ package tailssh
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	gliderssh "github.com/tailscale/gliderssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -64,10 +66,15 @@ type agentFwdSession struct {
 
 func (s agentFwdSession) Context() gliderssh.Context { return s.ctx }
 
-func newAgentTestSession() (*sshSession, *agentFwdSession) {
-	c := &conn{
-		srv:         &server{logf: logger.Discard},
-		finalAction: &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true},
+// newAgentTestSession returns a minimal sshSession (with its gliderssh
+// Session stub) on the given conn, for driving handleSSHAgentForwarding.
+// The conn comes from the test at hand: agent tests pass a monitor-backed
+// conn (fwdmonitor_test.go's newFwdTestConn) so the listener is created by
+// the bound-identity child.
+func newAgentTestSession(t *testing.T, c *conn) (*sshSession, *agentFwdSession) {
+	t.Helper()
+	if c.srv == nil {
+		c.srv = &server{logf: logger.Discard}
 	}
 	ctx := agentFwdContext{Context: context.Background(), Mutex: &sync.Mutex{}}
 	ss := &sshSession{
@@ -79,16 +86,21 @@ func newAgentTestSession() (*sshSession, *agentFwdSession) {
 }
 
 // TestAgentForwardDirCleanup verifies that the agent forwarding socket's
-// temp directory is removed when the session ends.
+// temp directory is removed when the session ends, driving the real
+// handleSSHAgentForwarding path (the socket and dir are created by the
+// monitor's bound-identity child).
 func TestAgentForwardDirCleanup(t *testing.T) {
-	ln, err := gliderssh.NewAgentListener()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ss, _ := newAgentTestSession()
-	ss.agentListener = ln
+	lu := fwdTestIdentity(t)
+	c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true})
+	ss, s := newAgentTestSession(t, c)
 
-	dir := filepath.Dir(ln.Addr().String())
+	if err := ss.handleSSHAgentForwarding(s, lu); err != nil {
+		t.Fatalf("handleSSHAgentForwarding: %v", err)
+	}
+	if ss.agentListener == nil {
+		t.Fatal("agent listener not set")
+	}
+	dir := filepath.Dir(ss.agentListener.Addr().String())
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("stat agent dir: %v", err)
 	}
@@ -102,23 +114,29 @@ func TestAgentForwardDirCleanup(t *testing.T) {
 
 // TestHandleSSHAgentForwardingDirHygiene verifies the socket and its
 // containing directory are accessible only by the local user (0600 socket,
-// 0700 user-owned directory), not group/world-accessible root-owned state.
+// 0700 user-owned directory), created by a child with the session user's
+// credentials, not group/world-accessible root-owned state. Root runs
+// bind the monitor to the non-root test user. Non-root runs bind to the
+// current user, where a non-root tailscaled forwards as itself.
 func TestHandleSSHAgentForwardingDirHygiene(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skipf("skipping when not running as root: os.Chown is required")
+	lu := fwdTestIdentity(t)
+	uid, err := strconv.Atoi(lu.Uid)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	const uid, gid = 1234, 1235
-	ss, s := newAgentTestSession()
-	lu := &userMeta{User: user.User{Username: "alice", Uid: fmt.Sprint(uid), Gid: fmt.Sprint(gid)}}
+	c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true, AllowAgentForwarding: true})
+	ss, s := newAgentTestSession(t, c)
 
 	if err := ss.handleSSHAgentForwarding(s, lu); err != nil {
 		t.Fatalf("handleSSHAgentForwarding: %v", err)
 	}
 	t.Cleanup(ss.closeAgentForwarding)
 
+	// The session environment's SSH_AUTH_SOCK is the listener's address.
 	socketPath := ss.agentListener.Addr().String()
-	dir := filepath.Dir(socketPath)
+	if !strings.HasPrefix(filepath.Dir(socketPath), "/tmp/auth-agent") {
+		t.Errorf("agent socket path %q not in a /tmp/auth-agent* dir", socketPath)
+	}
 
 	si, err := os.Stat(socketPath)
 	if err != nil {
@@ -131,7 +149,7 @@ func TestHandleSSHAgentForwardingDirHygiene(t *testing.T) {
 		t.Errorf("socket uid = %d; want %d", si.Sys().(*syscall.Stat_t).Uid, uid)
 	}
 
-	di, err := os.Stat(dir)
+	di, err := os.Stat(filepath.Dir(socketPath))
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
@@ -140,5 +158,66 @@ func TestHandleSSHAgentForwardingDirHygiene(t *testing.T) {
 	}
 	if int(di.Sys().(*syscall.Stat_t).Uid) != uid {
 		t.Errorf("dir uid = %d; want %d (must be owned by the session user, not root)", di.Sys().(*syscall.Stat_t).Uid, uid)
+	}
+}
+
+// fakeFileInfo backs the checkAgentDirRemovable table: it lets the
+// wrong-owner and not-a-directory cases run without a second uid.
+type fakeFileInfo struct {
+	name string
+	mode os.FileMode
+	sys  any
+}
+
+func (fi fakeFileInfo) Name() string       { return fi.name }
+func (fi fakeFileInfo) Size() int64        { return 0 }
+func (fi fakeFileInfo) Mode() os.FileMode  { return fi.mode }
+func (fi fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (fi fakeFileInfo) IsDir() bool        { return fi.Mode().IsDir() }
+func (fi fakeFileInfo) Sys() any           { return fi.sys }
+
+// TestCheckAgentDirRemovable pins the removal guard for the
+// agent-forwarding directory. The path was reported by a child running
+// as the connection's user, and the removal runs as root: only a real
+// directory (Lstat, so a symlink does not pass), owned by the bound
+// user and without group or other access, may be removed.
+func TestCheckAgentDirRemovable(t *testing.T) {
+	lu := &userMeta{User: user.User{Uid: "1000", Username: "u"}}
+	// A real MkdirTemp directory: the shape the fwd child is supposed
+	// to produce, owned by the current user.
+	dir, err := os.MkdirTemp("", "auth-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	luSelf := &userMeta{User: user.User{Uid: strconv.Itoa(os.Getuid()), Username: "self"}}
+	if err := checkAgentDirRemovable(fi, luSelf); err != nil {
+		t.Fatalf("checkAgentDirRemovable(real MkdirTemp dir) = %v, want nil", err)
+	}
+
+	if err := checkAgentDirRemovable(fakeFileInfo{name: "auth-agent1", mode: 0o700 | os.ModeDir, sys: &syscall.Stat_t{Uid: 1000}}, lu); err != nil {
+		t.Fatalf("checkAgentDirRemovable(bound-user dir) = %v, want nil", err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		fi   os.FileInfo
+		lu   *userMeta
+	}{
+		{"group-accessible dir", fakeFileInfo{name: "auth-agent1", mode: 0o750 | os.ModeDir, sys: &syscall.Stat_t{Uid: 1000}}, lu},
+		{"world-accessible dir", fakeFileInfo{name: "auth-agent1", mode: 0o755 | os.ModeDir, sys: &syscall.Stat_t{Uid: 1000}}, lu},
+		{"symlink to a directory", fakeFileInfo{name: "auth-agent1", mode: 0o777 | os.ModeSymlink, sys: &syscall.Stat_t{Uid: 1000}}, lu},
+		{"regular file", fakeFileInfo{name: "listener.sock", mode: 0o600, sys: &syscall.Stat_t{Uid: 1000}}, lu},
+		{"dir owned by another uid", fakeFileInfo{name: "auth-agent1", mode: 0o700 | os.ModeDir, sys: &syscall.Stat_t{Uid: 0}}, lu},
+		{"dir without stat owner", fakeFileInfo{name: "auth-agent1", mode: 0o700 | os.ModeDir, sys: struct{}{}}, lu},
+	} {
+		err := checkAgentDirRemovable(tt.fi, tt.lu)
+		if err == nil {
+			t.Errorf("checkAgentDirRemovable(%s) = nil, want an error", tt.name)
+		}
 	}
 }

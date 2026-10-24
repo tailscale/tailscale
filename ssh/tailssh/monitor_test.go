@@ -351,6 +351,8 @@ func TestCheckAgentSocketPath(t *testing.T) {
 		{"/tmp/auth-agent123456/listener.sock", true},
 		{"/tmp/auth-agent/listener.sock", true},
 		{"/tmp/auth-agent123/inner/listener.sock", false},     // nested dir
+		{"/home/u/auth-agent123/listener.sock", false},        // outside agentDirRoot
+		{"/var/run/auth-agent123/listener.sock", false},       // outside agentDirRoot
 		{"tmp/auth-agent123/listener.sock", false},            // not absolute
 		{"/tmp/auth-agent123/other.sock", false},              // wrong file name
 		{"/tmp/other123/listener.sock", false},                // wrong dir name
