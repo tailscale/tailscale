@@ -79,14 +79,14 @@ func (u *userMeta) LoginShell() string {
 // name)
 var defaultPathTmpl = envknob.RegisterString("TAILSCALE_SSH_DEFAULT_PATH")
 
-func defaultPathForUser(u *user.User) string {
+func defaultPathForUser(u *userMeta) string {
 	if s := defaultPathTmpl(); s != "" {
-		return expandDefaultPathTmpl(s, u)
+		return expandDefaultPathTmpl(s, &u.User)
 	}
 	if runtime.GOOS == "plan9" {
 		return "/bin"
 	}
-	isRoot := u.Uid == "0"
+	isRoot := isRootUser(u)
 	switch distro.Get() {
 	case distro.Debian, distro.Crostini:
 		hi := hostinfo.New()
@@ -101,7 +101,7 @@ func defaultPathForUser(u *user.User) string {
 		}
 		return "/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
 	case distro.NixOS:
-		return defaultPathForUserOnNixOS(u)
+		return defaultPathForUserOnNixOS(&u.User)
 	}
 	if isRoot {
 		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
