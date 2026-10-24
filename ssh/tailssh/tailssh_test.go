@@ -12,6 +12,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -769,6 +770,241 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	if !strings.Contains(firstRecording, "to-stderr") {
 		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", firstRecording)
 	}
+}
+
+// TestSSHSFTPRecording pins that sftp-subsystem sessions are subject to
+// the recording policy. With recorders configured, an sftp session
+// uploads a metadata-only cast (CastHeader identifying the peer, local
+// user, and connection, with Command "sftp"; no I/O events — the SFTP
+// wire protocol is binary). With an unreachable recorder and
+// RejectSessionWithMessage, the session is refused (exit 254) instead
+// of running silently unrecorded. With no recorders configured, sftp
+// sessions are unchanged (no recording setup, no rejection).
+func TestSSHSFTPRecording(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
+	}
+
+	recordings := make(chan []byte, 2)
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		recordings <- b
+	})
+	recorderAddr := must.Get(netip.ParseAddrPort(recordingServer.Listener.Addr().String()))
+
+	// An unreachable recorder: a port with nothing listening on it.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadRecorder := must.Get(netip.ParseAddrPort(deadLn.Addr().String()))
+	deadLn.Close()
+
+	newServer := func(recorders []netip.AddrPort) *server {
+		s := &server{
+			logf: tstest.WhileTestRunningLogger(t),
+			lb: &localState{
+				sshEnabled: true,
+				varRoot:    t.TempDir(),
+				matchingRule: newSSHRule(&tailcfg.SSHAction{
+					Accept:    true,
+					Recorders: recorders,
+					OnRecordingFailure: &tailcfg.SSHRecorderFailureAction{
+						RejectSessionWithMessage:    "session rejected",
+						TerminateSessionWithMessage: "session terminated",
+					},
+				}),
+			},
+		}
+		t.Cleanup(s.Shutdown)
+		return s
+	}
+
+	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
+	const sshUser = "alice"
+	cfg := &testssh.ClientConfig{
+		User:            sshUser,
+		HostKeyCallback: testssh.InsecureIgnoreHostKey(),
+	}
+
+	// runSFTP opens an sftp-subsystem session and returns the exit status
+	// the server sent and the channel output. With no tailscaled on PATH the
+	// sftp child can't be launched, so a session that gets past the
+	// recording gate exits 1 with no user-visible output; a session refused
+	// by the recording policy exits 254 with the policy's message.
+	runSFTP := func(s *server) (int, string) {
+		t.Helper()
+		sc, dc := memnet.NewTCPConn(src, dst, 1024)
+		if err := sc.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			status int
+			out    string
+		}
+		resCh := make(chan result, 1)
+		go func() {
+			c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			client := testssh.NewClient(c, chans, reqs)
+			defer client.Close()
+			status, out := sftpSubsystemSession(t, client)
+			resCh <- result{status, out}
+		}()
+		if err := s.HandleSSHConn(dc); err != nil {
+			t.Errorf("HandleSSHConn: %v", err)
+		}
+		select {
+		case res := <-resCh:
+			return res.status, res.out
+		case <-time.After(60 * time.Second):
+			t.Fatal("sftp session did not finish")
+			return -1, ""
+		}
+	}
+
+	t.Run("metadata-only", func(t *testing.T) {
+		s := newServer([]netip.AddrPort{recorderAddr})
+		status, out := runSFTP(s)
+		if status != 1 {
+			t.Errorf("exit status = %d; want 1 (sftp child launch failure, not recording rejection). output %q", status, out)
+		}
+		if strings.Contains(out, "session rejected") {
+			t.Errorf("sftp session was refused by the recording policy; want it to proceed to the (unavailable) sftp child: %q", out)
+		}
+
+		select {
+		case b := <-recordings:
+			ch, recordedOutput := parseRecording(t, b)
+			if ch.Command != "sftp" {
+				t.Errorf("CastHeader.Command = %q; want %q", ch.Command, "sftp")
+			}
+			if ch.SSHUser != sshUser {
+				t.Errorf("CastHeader.SSHUser = %q; want %q", ch.SSHUser, sshUser)
+			}
+			if recordedOutput != "" {
+				t.Errorf("metadata-only sftp recording contains output events %q; want none", recordedOutput)
+			}
+			if rest := restOfRecording(t, b); rest != "" {
+				t.Errorf("sftp recording has cast lines after the header; want none: %q", rest)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for sftp recording upload")
+		}
+	})
+
+	t.Run("recorder-unreachable-rejects", func(t *testing.T) {
+		s := newServer([]netip.AddrPort{deadRecorder})
+		status, out := runSFTP(s)
+		if status != 254 {
+			t.Errorf("exit status = %d; want 254 (recording-required session denied). output %q", status, out)
+		}
+		if !strings.HasSuffix(out, "session rejected\r\n") {
+			t.Errorf("client output = %q; want it to end with %q", out, "session rejected\r\n")
+		}
+	})
+
+	t.Run("no-recorders-unchanged", func(t *testing.T) {
+		s := newServer(nil)
+		status, out := runSFTP(s)
+		if status != 1 {
+			t.Errorf("exit status = %d; want 1 (sftp child launch failure, no recording involvement). output %q", status, out)
+		}
+		if strings.Contains(out, "session rejected") || strings.Contains(out, "recording") {
+			t.Errorf("no-recorder sftp session touched the recording path: %q", out)
+		}
+	})
+}
+
+// sftpSubsystemSession opens a session channel on the client, requests
+// the sftp subsystem, captures all channel output, and waits for the
+// server's exit-status (or channel close). The testssh fork's Session
+// helpers only cover exec/shell sessions; subsystem sessions need their
+// own minimal request loop. The returned status is -1 if the channel
+// closed without sending one.
+func sftpSubsystemSession(t *testing.T, client *testssh.Client) (status int, out string) {
+	t.Helper()
+	ch, in, err := client.OpenChannel("session", nil)
+	if err != nil {
+		t.Errorf("open session channel: %v", err)
+		return -1, ""
+	}
+	defer ch.Close()
+
+	var mu sync.Mutex
+	var buf strings.Builder
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch)
+	}()
+	// Refusal messages (e.g. "tailscale: access revoked") are written
+	// to the channel's stderr stream, so capture extended data too.
+	go io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch.Stderr())
+
+	ok, err := ch.SendRequest("subsystem", true, testssh.Marshal(&struct{ Subsystem string }{Subsystem: "sftp"}))
+	if err != nil || !ok {
+		t.Errorf("sftp subsystem request: ok=%v, err=%v", ok, err)
+		return -1, ""
+	}
+
+	statusCh := make(chan int, 1)
+	go func() {
+		st := -1
+		for r := range in {
+			if r.Type == "exit-status" && len(r.Payload) >= 4 {
+				st = int(binary.BigEndian.Uint32(r.Payload))
+				break
+			}
+		}
+		statusCh <- st
+	}()
+	select {
+	case status = <-statusCh:
+	case <-time.After(60 * time.Second):
+		t.Errorf("sftp session did not exit")
+		return -1, ""
+	}
+	// Let the output copier drain whatever the server wrote before the
+	// exit-status request before the deferred channel Close cuts it off.
+	select {
+	case <-copyDone:
+	case <-time.After(5 * time.Second):
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return status, buf.String()
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *strings.Builder
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+// restOfRecording returns everything after the (first line of the)
+// recording's cast header, i.e. any recorded I/O events.
+func restOfRecording(t *testing.T, recording []byte) string {
+	t.Helper()
+	i := bytes.IndexByte(recording, '\n')
+	if i == -1 {
+		return ""
+	}
+	return strings.TrimSpace(string(recording[i+1:]))
 }
 
 // parseRecording parses a session recording, returning its CastHeader and the
