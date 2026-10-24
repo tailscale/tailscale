@@ -53,7 +53,10 @@ var (
 	sshVerboseLogging    = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
 	sshDisableSFTP       = envknob.RegisterBool("TS_SSH_DISABLE_SFTP")
 	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
-	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
+	// sshForwardGatewayPorts permits reverse TCP forwards to bind
+	// non-loopback addresses. It is the equivalent of sshd's GatewayPorts.
+	sshForwardGatewayPorts = envknob.RegisterBool("TS_SSH_FORWARD_GATEWAY_PORTS")
+	sshDisablePTY          = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 
 	// sshLoginGraceTime is the TS_SSH_LOGIN_GRACE_TIME knob. It is
 	// the maximum allowed duration between accepting a connection and
@@ -177,6 +180,8 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	}
 	srv.trackActiveConn(c, true)        // add
 	defer srv.trackActiveConn(c, false) // remove
+	// The connection is done when HandleConn returns. See closeFwdMonitor.
+	defer c.closeFwdMonitor()
 	c.HandleConn(nc)
 
 	// Return nil to signal to netstack's interception that it doesn't need to
@@ -229,6 +234,9 @@ func (srv *server) OnPolicyChange() {
 // in any order.
 //   - c.handleSessionPostSSHAuth
 //   - c.mayForwardLocalPortTo followed by gliderssh.DirectTCPIPHandler
+//   - c.mayForwardLocalUnixTo, the unix -L dial
+//   - c.mayReverseUnixForwardTo, the unix -R bind
+//   - c.wireReverseForwarding's "tcpip-forward" handlers, the TCP -R bind
 type conn struct {
 	*gliderssh.Server
 	srv *server
@@ -273,6 +281,12 @@ type conn struct {
 	// acquire mu and then srv.mu.
 	mu       sync.Mutex // protects the following
 	sessions []*sshSession
+
+	// fwd is the connection's forwarding state. On unix it holds the
+	// lazily-spawned per-connection ssh-monitor that dials and binds
+	// forwarded sockets with the local user's credentials. On plan9 it is
+	// empty.
+	fwd fwdState
 }
 
 func (c *conn) logf(format string, args ...any) {
@@ -497,7 +511,6 @@ func (srv *server) newConn() (*conn, error) {
 	c := &conn{srv: srv}
 	now := srv.now()
 	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format(tstime.BasicDateTTime), randBytes(5))
-	fwdHandler := &gliderssh.ForwardedTCPHandler{}
 	streamLocalFwdHandler := &gliderssh.ForwardedUnixHandler{}
 	c.Server = &gliderssh.Server{
 		Version:              "Tailscale",
@@ -520,8 +533,6 @@ func (srv *server) newConn() (*conn, error) {
 			"direct-streamlocal@openssh.com": gliderssh.DirectStreamLocalHandler,
 		},
 		RequestHandlers: map[string]gliderssh.RequestHandler{
-			"tcpip-forward":                          fwdHandler.HandleSSHRequest,
-			"cancel-tcpip-forward":                   fwdHandler.HandleSSHRequest,
 			"streamlocal-forward@openssh.com":        streamLocalFwdHandler.HandleSSHRequest,
 			"cancel-streamlocal-forward@openssh.com": streamLocalFwdHandler.HandleSSHRequest,
 		},
@@ -530,6 +541,7 @@ func (srv *server) newConn() (*conn, error) {
 	maps.Copy(ss.RequestHandlers, gliderssh.DefaultRequestHandlers)
 	maps.Copy(ss.ChannelHandlers, gliderssh.DefaultChannelHandlers)
 	maps.Copy(ss.SubsystemHandlers, gliderssh.DefaultSubsystemHandlers)
+	c.wireReverseForwarding(ss)
 	keys, err := getHostKeys(srv.lb.TailscaleVarRoot(), srv.logf)
 	if err != nil {
 		return nil, err
@@ -571,43 +583,33 @@ func (c *conn) mayForwardLocalPortTo(ctx gliderssh.Context, destinationHost stri
 // mayForwardLocalUnixTo is the server-side handler for
 // direct-streamlocal@openssh.com (SSH -L with Unix sockets). It returns a
 // connection to the specified Unix domain socket path if forwarding is
-// permitted, or an error if not.
+// permitted, or an error if not. On unix the dial goes through
+// conn.fwdDialUnix.
 func (c *conn) mayForwardLocalUnixTo(ctx gliderssh.Context, socketPath string) (net.Conn, error) {
 	if sshDisableForwarding() {
 		return nil, gliderssh.ErrRejected
 	}
-	if c.finalAction != nil && c.finalAction.AllowLocalPortForwarding {
-		metricLocalPortForward.Add(1)
-		cb := gliderssh.NewLocalUnixForwardingCallback(c.unixForwardingOptions())
-		return cb(ctx, socketPath)
+	if c.finalAction == nil || !c.finalAction.AllowLocalPortForwarding {
+		return nil, gliderssh.ErrRejected
 	}
-	return nil, gliderssh.ErrRejected
+	metricLocalPortForward.Add(1)
+	return c.fwdDialUnix(ctx, socketPath)
 }
 
 // mayReverseUnixForwardTo is the server-side handler for
 // streamlocal-forward@openssh.com (SSH -R with Unix sockets). It returns a
-// listener for the specified Unix domain socket path if reverse forwarding is
-// permitted, or an error if not.
+// listener for the specified Unix domain socket path if reverse forwarding
+// is permitted, or an error if not. On unix the listener comes from
+// conn.fwdListenUnix.
 func (c *conn) mayReverseUnixForwardTo(ctx gliderssh.Context, socketPath string) (net.Listener, error) {
 	if sshDisableForwarding() {
 		return nil, gliderssh.ErrRejected
 	}
-	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
-		metricRemotePortForward.Add(1)
-		cb := gliderssh.NewReverseUnixForwardingCallback(c.unixForwardingOptions())
-		return cb(ctx, socketPath)
+	if c.finalAction == nil || !c.finalAction.AllowRemotePortForwarding {
+		return nil, gliderssh.ErrRejected
 	}
-	return nil, gliderssh.ErrRejected
-}
-
-// unixForwardingOptions returns the Unix forwarding options scoped to the
-// authenticated local user. Socket paths are restricted to the user's home
-// directory, /tmp, and /run/user/<uid>.
-func (c *conn) unixForwardingOptions() gliderssh.UnixForwardingOptions {
-	return gliderssh.UnixForwardingOptions{
-		AllowedDirectories: gliderssh.UserSocketDirectories(c.localUser.HomeDir, c.localUser.Uid),
-		BindUnlink:         true,
-	}
+	metricRemotePortForward.Add(1)
+	return c.fwdListenUnix(ctx, socketPath)
 }
 
 // sshPolicy returns the SSHPolicy for current node.

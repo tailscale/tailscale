@@ -67,6 +67,12 @@ type monitor struct {
 	children map[int]*monChild
 	hup      chan os.Signal
 	broken   bool // a reply or notification write failed. Leave the loop.
+
+	// pendingFds holds relayed dial/listen descriptors, keyed by request
+	// ID, from the reply write until tailscaled's fdack receipt. See
+	// replyFD and the monitor_rpc.go header for the darwin kernel
+	// behavior this coverage exists for.
+	pendingFds map[int64]int
 }
 
 // monitorArgs are the monitor's spawn arguments, in the style of
@@ -164,10 +170,11 @@ func beMonitor(args []string) error {
 	defer signal.Stop(hup)
 
 	m := &monitor{
-		conn:     newRPCConn(conn),
-		args:     ma,
-		children: make(map[int]*monChild),
-		hup:      hup,
+		conn:       newRPCConn(conn),
+		args:       ma,
+		children:   make(map[int]*monChild),
+		pendingFds: make(map[int64]int),
+		hup:        hup,
 	}
 	return m.loop()
 }
@@ -290,6 +297,12 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 	case opSignal:
 		closeFds(fds)
 		m.handleSignal(f)
+	case opFdAck:
+		closeFds(fds)
+		if fd, ok := m.pendingFds[f.ID]; ok {
+			delete(m.pendingFds, f.ID)
+			unix.Close(fd)
+		}
 	case opDial:
 		closeFds(fds)
 		m.handleDial(f)
@@ -489,8 +502,9 @@ func (m *monitor) handleListen(f rpcFrame) {
 // reports for the agent-forwarding listen op. The child runs as the
 // connection's user, and tailscaled removes the socket's directory as
 // root when the session closes, so a misbehaving child must not be able
-// to steer that removal elsewhere: the path must be an absolute
-// listener.sock inside an auth-agent temp directory.
+// to steer that removal elsewhere: the path must be a listener.sock
+// directly inside an auth-agent temp directory directly inside
+// agentDirRoot.
 func checkAgentSocketPath(p string) error {
 	if !filepath.IsAbs(p) {
 		return fmt.Errorf("agent socket path %q is not absolute", p)
@@ -498,7 +512,11 @@ func checkAgentSocketPath(p string) error {
 	if filepath.Base(p) != "listener.sock" {
 		return fmt.Errorf("agent socket path %q does not name listener.sock", p)
 	}
-	if dir := filepath.Base(filepath.Dir(p)); !strings.HasPrefix(dir, "auth-agent") {
+	dir := filepath.Dir(p)
+	if filepath.Dir(dir) != agentDirRoot {
+		return fmt.Errorf("agent socket %q is not directly inside %s", p, agentDirRoot)
+	}
+	if base := filepath.Base(dir); !strings.HasPrefix(base, "auth-agent") {
 		return fmt.Errorf("agent socket %q is not inside an auth-agent directory", p)
 	}
 	return nil
@@ -546,16 +564,23 @@ func (m *monitor) killChild(c *monChild) {
 	}
 }
 
-// replyFD writes a reply carrying one descriptor and closes the
-// monitor's copy after the write. After sendmsg the kernel holds its
-// own reference to the passed file, so the peer's copy survives ours
-// closing.
+// replyFD writes a reply carrying one descriptor. On success the
+// descriptor stays open, parked in pendingFds until tailscaled's fdack:
+// on darwin, closing the sender's copy while the descriptor's only
+// reference is the in-flight SCM_RIGHTS message lets the kernel's
+// unix-socket GC reclaim the socket (receive side flushed, buffered
+// data discarded) before the receiver's recvmsg, producing a relayed
+// socket that reads EOF with its peer still alive. The receiver's
+// acknowledgment is what releases the hold. On a write failure the
+// channel is broken and the descriptor is closed here.
 func (m *monitor) replyFD(f rpcFrame, fd int) {
 	err := m.conn.writeFrame(f, fd)
-	unix.Close(fd)
 	if err != nil {
+		unix.Close(fd)
 		m.broken = true
+		return
 	}
+	m.pendingFds[f.ID] = fd
 }
 
 // sweep reaps exited children with wait4(WNOHANG) and drops them from
@@ -629,6 +654,12 @@ func (m *monitor) notifyExit(pid, code int) {
 // survived the HUP and reaps again. Children that survive even the
 // SIGKILL are abandoned in their own groups.
 func (m *monitor) teardown() {
+	// Release every descriptor parked for an fdack: the peer is going
+	// away or gone, so no acknowledgment will arrive.
+	for id, fd := range m.pendingFds {
+		unix.Close(fd)
+		delete(m.pendingFds, id)
+	}
 	// Snapshot the pgid set at teardown entry. A group member can
 	// outlive its reaped leader, so the SIGKILL pass keys on this
 	// remembered set rather than on surviving table entries.

@@ -25,6 +25,15 @@
 // line that follows it, regardless of how the kernel shapes reads. See
 // recvFdSets, sendFds and rpcMaxLine for the descriptor and line-size
 // rules.
+//
+// A dial or listen reply's descriptor is held open by its sender until
+// the receiver acknowledges it with an fdack frame naming the reply's
+// request ID. On darwin, a socket whose only reference is an in-flight
+// SCM_RIGHTS message is reclaimed by the kernel's unix-socket garbage
+// collector: its receive side is flushed and buffered data discarded
+// while recvmsg still returns a usable descriptor. Continuous
+// process-owned coverage across the handoff, released only on receipt,
+// closes that window.
 
 package tailssh
 
@@ -49,6 +58,7 @@ const (
 	opSignal = "signal" // request {pid, sig}. reply {ok}
 	opPing   = "ping"   // request {}. reply {ok}
 	opExit   = "exit"   // unsolicited notification {pid, code}. no ID
+	opFdAck  = "fdack"  // request {id of the reply whose descriptors were received}. no fds, no reply
 )
 
 const (
@@ -155,6 +165,13 @@ func rpcErrReply(id int64, op string, err error) rpcFrame {
 // rpcExitNotify is the unsolicited child-exit notification frame.
 func rpcExitNotify(pid, code int) rpcFrame {
 	return rpcFrame{Op: opExit, Pid: pid, Code: code}
+}
+
+// rpcFdAckReq acknowledges receipt of the descriptors a reply with the
+// given request ID carried. The sender of those descriptors holds its own
+// copies until this arrives; see replyFD in monitor.go for why.
+func rpcFdAckReq(replyID int64) rpcFrame {
+	return rpcFrame{ID: replyID, Op: opFdAck}
 }
 
 // maxFdsForOp reports the maximum number of SCM_RIGHTS descriptors a

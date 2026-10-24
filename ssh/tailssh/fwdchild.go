@@ -19,6 +19,14 @@
 //	err <reason>      the op failed, with the reason preserved in
 //	                 the reply
 //
+// After a successful send the child holds its descriptor copy and stays
+// alive until the monitor closes the result channel, its receipt
+// acknowledgment, and only then closes the descriptor and exits. On
+// darwin the kernel's unix-socket GC reclaims a socket whose only
+// reference is an in-flight SCM_RIGHTS message, so the sender's copy
+// must cover the handoff until the receiver owns the descriptor; see
+// beFwdChild and the monitor_rpc.go header.
+//
 // The monitor side of the protocol, fwdSpawnChild and fwdReadResult
 // below, drives these children. The op handlers live in monitor.go.
 
@@ -47,6 +55,20 @@ import (
 // directly at 0600, matching OpenSSH StreamLocalBindMask semantics. The
 // agent dir is created before the umask change, so it keeps 0700.
 const fwdUmask = 0o177
+
+// fwdResultAckWait bounds the child's wait for the monitor's receipt
+// acknowledgment after sending its result descriptor. The monitor
+// closes the result channel immediately after taking ownership, so the
+// wait normally ends at once; the deadline only covers a monitor that
+// died without closing.
+const fwdResultAckWait = 30 * time.Second
+
+// agentDirRoot is the only parent an agent-forwarding directory is
+// created under. The child runs with no environment, so os.TempDir
+// cannot redirect it, and it names the parent explicitly anyway;
+// tailscaled's removal pins the same root. See removeAgentForwardingDir
+// and checkAgentSocketPath.
+const agentDirRoot = "/tmp"
 
 // fwdMaxStatus caps the child's status line. Anything longer is a broken
 // child, not a long error message.
@@ -292,8 +314,20 @@ func beFwdChild(args []string) error {
 		f.Close()
 		return fmt.Errorf("ssh-fwd: sending result: %w", err)
 	}
-	// Close our dup. The kernel holds its own reference from the sendmsg,
-	// so the monitor's copy survives.
+	// Hold the descriptor, and this process, until the monitor has
+	// received the relayed socket. On darwin, a socket whose only
+	// reference is an in-flight SCM_RIGHTS message is reclaimed by the
+	// kernel's unix-socket garbage collector before the receiver's
+	// recvmsg: the receive side is flushed and buffered data discarded,
+	// while recvmsg still returns a usable-looking descriptor that then
+	// reads EOF with its peer alive. The monitor closes its end of the
+	// result channel right after taking ownership of the descriptor, so
+	// the EOF here is the receipt acknowledgment. The deadline bounds
+	// the wait against a monitor that died without closing; the
+	// monitor's teardown SIGHUP also ends this process.
+	c.SetReadDeadline(time.Now().Add(fwdResultAckWait))
+	var ack [1]byte
+	c.Read(ack[:]) // EOF on receipt, or deadline: exit either way
 	f.Close()
 	return nil
 }
@@ -335,7 +369,7 @@ func fwdChildWork(fa fwdArgs) (*os.File, string, error) {
 	case fa.op == "listen" && fa.agent:
 		// Agent-forwarding socket. See fwdUmask and ListenAgent. The
 		// dir's cleanup is the caller's.
-		dir, err := os.MkdirTemp("", "auth-agent")
+		dir, err := os.MkdirTemp(agentDirRoot, "auth-agent")
 		if err != nil {
 			return nil, "", err
 		}
