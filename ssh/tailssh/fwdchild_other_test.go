@@ -15,3 +15,8 @@ import (
 func peerCredUID(c net.Conn) (int, error) {
 	return 0, errors.New("peer cred not implemented on this platform")
 }
+
+// dumpChildFdsTo is a no-op off linux. The exec-inheritance fd dump
+// reads /proc, and every test gating on it skips on these platforms
+// anyway.
+func dumpChildFdsTo(path, tag string) {}

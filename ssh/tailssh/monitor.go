@@ -8,6 +8,13 @@
 // authorized, and speaks the protocol of monitor_rpc.go over the
 // socketpair fd it inherits at spawn.
 //
+// The monitor owns every child process the connection spawns. Session
+// children are the incubator in incubator.go, spawned with the
+// monitor's credentials because the incubator needs root to exec
+// login and su and to register the login session. Forwarding children
+// in fwdchild.go are one-shot dial and bind workers, spawned with the
+// connection user's credentials.
+//
 // The connection's identity, the uid, gid, and groups of its
 // localUser, is fixed in argv at spawn. Only the event loop touches
 // the RPC channel, the child table, and file descriptors.
@@ -27,6 +34,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -55,8 +63,9 @@ const (
 // child, a dialer or listener, reports its outcome in its op's reply,
 // and its exit is reaped silently by the sweep after its SIGCHLD.
 type monChild struct {
-	pgid    int  // the child's process group. Equal to its pid.
-	oneshot bool // dialer or listener child. Outcome carried by the op reply.
+	pgid    int   // the child's process group. Equal to its pid.
+	id      int64 // exec request ID, or zero for a forwarding child
+	oneshot bool  // dialer or listener child. Outcome carried by the op reply.
 }
 
 // monitor is the running ssh-monitor process state, owned entirely by
@@ -315,6 +324,49 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 	}
 }
 
+// incubatorArgv requires and normalizes identity flags to the connection's
+// bound identity. It accepts only the canonical --name=value spelling for
+// these flags, rejecting aliases that could override a normalized value.
+// The caller is trusted to supply the executable and remaining arguments.
+func (m *monitor) incubatorArgv(argv []string) ([]string, error) {
+	values := map[string]string{
+		"--uid=":        formatID(m.args.uid),
+		"--gid=":        formatID(m.args.gid),
+		"--groups=":     joinGids(m.args.gids),
+		"--local-user=": m.args.localUser,
+	}
+	out := slices.Clone(argv)
+	seen := make(map[string]bool, len(values))
+	for i, a := range argv[1:] {
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if _, identity := values["--"+name+"="]; identity && !strings.HasPrefix(a, "--"+name+"=") {
+			return nil, fmt.Errorf("incubator exec: non-canonical identity flag %q", a)
+		}
+		for flag, val := range values {
+			if strings.HasPrefix(a, flag) {
+				out[i+1] = flag + val
+				seen[flag] = true
+			}
+		}
+	}
+	for flag := range values {
+		if !seen[flag] {
+			return nil, fmt.Errorf("incubator exec: argv has no %s flag", strings.TrimSuffix(flag, "="))
+		}
+	}
+	return out, nil
+}
+
+// joinGids renders a supplementary group list as the comma-separated
+// form the incubator's --groups flag takes.
+func joinGids(gids []uint32) string {
+	parts := make([]string, len(gids))
+	for i, g := range gids {
+		parts[i] = formatID(g)
+	}
+	return strings.Join(parts, ",")
+}
+
 // handleExec spawns one child, mapping the request's file descriptors
 // to the child's stdio. monExecOpDeadline bounds the op from dispatch
 // to the return of cmd.Start; it does not bound the child's lifetime.
@@ -328,10 +380,28 @@ func (m *monitor) handleExec(f rpcFrame, fds []int) {
 		fail(errors.New("exec: empty argv"))
 		return
 	}
+	// An envfd exec must carry exactly four descriptors, stdio plus
+	// the --env-fd pipe. This re-check catches the fourth fd without
+	// the flag, which the codec's count check cannot see.
+	if f.EnvFd != (len(fds) == 4) {
+		fail(fmt.Errorf("exec: %d fds with envfd=%v; want 4 fds with envfd, or up to 3 without", len(fds), f.EnvFd))
+		return
+	}
 	// argv[0] must be an absolute path.
 	if !filepath.IsAbs(f.Argv[0]) {
 		fail(fmt.Errorf("exec: argv[0] must be an absolute path, got %q", f.Argv[0]))
 		return
+	}
+	// The incubator starts with monitor credentials so it can run login
+	// or su and register the login session before dropping privileges.
+	// Normalize its identity flags to the connection's bound identity.
+	if f.Incubator {
+		argv, err := m.incubatorArgv(f.Argv)
+		if err != nil {
+			fail(err)
+			return
+		}
+		f.Argv = argv
 	}
 	cmd := exec.Command(f.Argv[0], f.Argv[1:]...)
 	// Env is used exactly as given. An exec request with no env gives
@@ -343,22 +413,34 @@ func (m *monitor) handleExec(f rpcFrame, fds []int) {
 		cmd.Env = []string{} // nil would inherit the monitor's environment
 	}
 	cmd.Dir = monChildDir(f.Dir)
-	// monStdio wraps the stdio descriptors. A failure before ownership
-	// moves to files closes every descriptor exactly once, in
-	// monStdio's error path.
-	files, err := monStdio(fds)
+	// monStdio wraps the stdio descriptors, fds[:3], with /dev/null
+	// for any missing stream, and takes ownership of them. The env-fd
+	// descriptor, fds[3], present exactly when EnvFd is set, is
+	// wrapped separately below. A failure before ownership moves
+	// closes every descriptor exactly once.
+	files, err := monStdio(fds[:min(3, len(fds))])
 	if err != nil {
-		// monStdio's error path already closed every descriptor. Nil
-		// the slice so fail's closeFds is a no-op rather than a double
-		// close.
+		// monStdio's error path already closed every descriptor it was
+		// given. The env-fd descriptor beyond the sub-slice is still
+		// ours. Nil the slice so fail's closeFds is a no-op rather than
+		// a double close.
+		closeFds(fds[min(3, len(fds)):])
 		fds = nil
 		fail(err)
 		return
 	}
-	// From here the raw ints in fds are owned by files, each wrapped in
-	// an *os.File that closes it exactly once. Clearing the slice makes
-	// every later fail() a no-op for them instead of a double close.
+	// From here the raw stdio ints are owned by files, each wrapped in
+	// an *os.File that closes it exactly once.
+	var envFile *os.File
+	if len(fds) == 4 {
+		envFile = os.NewFile(uintptr(fds[3]), "ssh-monitor-child-envfd")
+		defer envFile.Close()
+	}
+	// The files now own these descriptors; fail must not close them again.
 	fds = nil
+	if envFile != nil {
+		cmd.ExtraFiles = []*os.File{envFile}
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = files[0], files[1], files[2]
 	cmd.SysProcAttr = monChildAttr(f.Ctty)
 	// Re-scrub before the fork: anything opened or received since entry
@@ -388,7 +470,7 @@ func (m *monitor) handleExec(f rpcFrame, fds []int) {
 		return
 	}
 	// Its pgid is its pid. See monChildAttr.
-	m.children[cmd.Process.Pid] = &monChild{pgid: cmd.Process.Pid}
+	m.children[cmd.Process.Pid] = &monChild{pgid: cmd.Process.Pid, id: f.ID}
 	m.reply(rpcExecReply(f.ID, cmd.Process.Pid))
 }
 
@@ -408,13 +490,12 @@ func killGroupAndReap(pid int) (reaped bool) {
 	return false
 }
 
-// handleSignal signals a child process *group* whose pid is validated
-// against the monitor's child table.
+// handleSignal validates both PID and generation before signaling a child group.
 func (m *monitor) handleSignal(f rpcFrame) {
 	replyErr := func(err error) { m.reply(rpcErrReply(f.ID, opSignal, err)) }
 	c, ok := m.children[f.Pid]
-	if !ok {
-		replyErr(fmt.Errorf("signal: pid %d is not a monitor child", f.Pid))
+	if !ok || f.ChildID == 0 || c.id != f.ChildID {
+		replyErr(fmt.Errorf("signal: pid %d with child ID %d is not a monitor child", f.Pid, f.ChildID))
 		return
 	}
 	sig := unix.SignalNum(f.Sig)
@@ -597,7 +678,7 @@ func (m *monitor) sweep(notify bool) {
 			delete(m.children, pid)
 		case wpid == pid:
 			if notify && !c.oneshot {
-				m.notifyExit(pid, monExitCode(ws))
+				m.notifyExit(monitorProcess{PID: pid, ID: c.id}, monExitCode(ws))
 			}
 			delete(m.children, pid)
 		}
@@ -644,15 +725,18 @@ func (m *monitor) reply(f rpcFrame) {
 	}
 }
 
-func (m *monitor) notifyExit(pid, code int) {
-	m.reply(rpcExitNotify(pid, code))
+func (m *monitor) notifyExit(child monitorProcess, code int) {
+	m.reply(rpcExitNotify(child, code))
 }
 
 // teardown is the monitor's orderly exit path, reached from RPC EOF, a
 // protocol error, or an external SIGHUP. It SIGHUPs every child group,
 // runs a brief bounded reap sweep, then SIGKILLs every group that
-// survived the HUP and reaps again. Children that survive even the
-// SIGKILL are abandoned in their own groups.
+// survived the HUP and reaps again. A session-level escalation timer
+// in sessmonitor.go, when one was scheduled, fails its Signal against
+// this closed RPC channel, so the monitor's own teardown performs the
+// SIGKILL. Children that survive even the SIGKILL are abandoned in
+// their own groups.
 func (m *monitor) teardown() {
 	// Release every descriptor parked for an fdack: the peer is going
 	// away or gone, so no acknowledgment will arrive.

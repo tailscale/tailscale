@@ -114,7 +114,7 @@ func trueExe(t *testing.T) string {
 }
 
 type exitNote struct {
-	pid  int
+	pid  monitorProcess
 	code int
 }
 
@@ -123,7 +123,7 @@ type exitNote struct {
 // notification.
 func collectExits(mc *monitorClient) chan exitNote {
 	ch := make(chan exitNote, 8)
-	mc.SetExitCallback(func(pid, code int) { ch <- exitNote{pid, code} })
+	mc.SetExitCallback(func(pid monitorProcess, code int) { ch <- exitNote{pid, code} })
 	return ch
 }
 
@@ -170,12 +170,12 @@ func runChild(t *testing.T, mc *monitorClient, argv, env []string) string {
 	}
 	ctx, cancel := testCtx()
 	defer cancel()
-	pid, err := mc.Exec(ctx, argv, env, "/", false, stdin, stdoutW, stderrW)
+	pid, err := mc.Exec(ctx, argv, env, "/", false, nil, stdin, stdoutW, stderrW)
 	if err != nil {
 		t.Fatalf("exec %v: %v", argv, err)
 	}
-	if pid <= 0 {
-		t.Fatalf("exec %v: pid %d, want > 0", argv, pid)
+	if pid.PID <= 0 {
+		t.Fatalf("exec %v: pid %v, want > 0", argv, pid)
 	}
 	// The monitor closed its copies. Drop ours so reads see EOF once the
 	// child exits.
@@ -263,7 +263,7 @@ func TestMonitorExecNoStdio(t *testing.T) {
 	ctx, cancel := testCtx()
 	defer cancel()
 	trueExe := trueExe(t)
-	pid, err := mc.Exec(ctx, []string{trueExe}, nil, "/", false)
+	pid, err := mc.Exec(ctx, []string{trueExe}, nil, "/", false, nil)
 	if err != nil {
 		t.Fatalf("exec %s: %v", trueExe, err)
 	}
@@ -366,17 +366,92 @@ func TestCheckAgentSocketPath(t *testing.T) {
 	}
 }
 
+// runIncubatorChild execs argv on the monitor as an incubator request
+// and returns the child's stdout, fully drained until EOF so the child
+// must exit.
+func runIncubatorChild(t *testing.T, mc *monitorClient, argv []string) string {
+	t.Helper()
+	// stdin: read end handed to the child. Nothing is written to it.
+	stdin, stdinKeep, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdinKeep.Close()
+	stdout, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := testCtx()
+	defer cancel()
+	pid, err := mc.ExecIncubator(ctx, argv, nil, "/", false, nil, stdin, stdoutW, stderrW)
+	if err != nil {
+		t.Fatalf("incubator exec %v: %v", argv, err)
+	}
+	if pid.PID <= 0 {
+		t.Fatalf("incubator exec %v: pid %v, want > 0", argv, pid)
+	}
+	stdoutW.Close()
+	stderrW.Close()
+	out := readAllWithDeadline(t, stdout, 5*time.Second)
+	if e := readAllWithDeadline(t, stderr, 5*time.Second); e != "" {
+		t.Logf("child %v stderr: %s", argv, e)
+	}
+	stdout.Close()
+	stderr.Close()
+	return out
+}
+
+// TestMonitorExecIncubatorIdentityBinding pins the identity contract of
+// incubator execs: the monitor rewrites the request's identity flags to
+// its spawn-bound identity whatever the request claims, and refuses an
+// incubator argv that is missing any of them. The child prints the
+// arguments it was exec'd with, after the monitor's rewrite.
+func TestMonitorExecIncubatorIdentityBinding(t *testing.T) {
+	groups := testGroups(t)
+	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), groups)
+
+	argv := []string{"/bin/sh", "-c", `printf '%s\n' "$@"`, "sh",
+		"--uid=1", "--gid=1", "--groups=1,2", "--local-user=not-us"}
+	out := runIncubatorChild(t, mc, argv)
+	want := strings.Join([]string{
+		"--uid=" + formatID(uint32(os.Getuid())),
+		"--gid=" + formatID(uint32(os.Getgid())),
+		"--groups=" + joinGids(intToU32s(groups)),
+		"--local-user=testuser",
+	}, "\n") + "\n"
+	if out != want {
+		t.Fatalf("incubator argv after the monitor's rewrite = %q, want %q", out, want)
+	}
+}
+
+// TestMonitorExecIncubatorIdentityRequired pins that an incubator exec
+// missing an identity flag is refused before any child is spawned: the
+// incubator's own flag defaults would otherwise run the child as root.
+func TestMonitorExecIncubatorIdentityRequired(t *testing.T) {
+	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
+	argv := []string{"/bin/sh", "-c", "echo spawned", "sh", "--uid=1"}
+	ctx, cancel := testCtx()
+	defer cancel()
+	if _, err := mc.ExecIncubator(ctx, argv, nil, "/", false, nil); err == nil {
+		t.Fatal("incubator exec without --gid, --groups, and --local-user flags was accepted")
+	}
+}
+
 func TestMonitorSignal(t *testing.T) {
 	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
 	exits := collectExits(mc)
 
-	pid, err := mc.Exec(mustCtx(t), []string{"/bin/sleep", "30"}, nil, "/", false)
+	pid, err := mc.Exec(mustCtx(t), []string{"/bin/sleep", "30"}, nil, "/", false, nil)
 	if err != nil {
 		t.Fatalf("exec sleep: %v", err)
 	}
 
 	// Signaling an unknown pid must be refused.
-	if err := mc.Signal(mustCtx(t), pid+1000000, "SIGTERM"); err == nil {
+	if err := mc.Signal(mustCtx(t), monitorProcess{PID: pid.PID + 1000000, ID: pid.ID}, "SIGTERM"); err == nil {
 		t.Fatal("signal of a pid that is not a monitor child should fail")
 	}
 	// A bad signal name is an error too.
@@ -403,6 +478,58 @@ func mustCtx(t *testing.T) context.Context {
 	return ctx
 }
 
+// TestMonitorExecEnvFD pins the exec op's fourth descriptor: an envfd
+// exec carries stdin/stdout/stderr plus the env-fd pipe, which the
+// monitor maps to the child's fd 3, os/exec ExtraFiles slot 0, the
+// fd the incubator's --env-fd names.
+func TestMonitorExecEnvFD(t *testing.T) {
+	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
+	exits := collectExits(mc)
+
+	// The payload pipe: what launchProcess's forwardedEnvFile builds.
+	envR, envW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		defer envW.Close()
+		envW.Write([]byte(`["FORWARDED=pair"]`))
+	}()
+
+	stdout, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	ctx, cancel := testCtx()
+	defer cancel()
+	// The child asserts the pair is visible on fd 3, and that its
+	// stdin, fd 0, is a separate stream, the /dev/null fd the request
+	// carried.
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	argv := []string{"/bin/sh", "-c", `v=$(cat <&3); [ "$v" = '["FORWARDED=pair"]' ] && echo fd3-ok || echo fd3-bad:$v`}
+	pid, err := mc.Exec(ctx, argv, nil, "/", false, envR, devNull, stdoutW, stdoutW)
+	if err != nil {
+		t.Fatalf("exec envfd: %v", err)
+	}
+	// The monitor closed its copies; drop ours so EOF arrives when the
+	// child exits.
+	stdoutW.Close()
+	envR.Close()
+	out := readAllWithDeadline(t, stdout, 5*time.Second)
+	if got := strings.TrimSpace(out); got != "fd3-ok" {
+		t.Errorf("child output = %q; want fd3-ok", got)
+	}
+	n := waitExitNote(t, exits, 5*time.Second)
+	if n.pid != pid || n.code != 0 {
+		t.Errorf("exit notification = pid %d code %d; want pid %d code 0", n.pid, n.code, pid)
+	}
+}
+
 // TestMonitorBadExec asserts error propagation for unspawnable and
 // malformed exec requests.
 func TestMonitorBadExec(t *testing.T) {
@@ -415,7 +542,7 @@ func TestMonitorBadExec(t *testing.T) {
 		{"sh", "-c", "echo hi"}, // relative argv[0] must be refused
 		{},
 	} {
-		if _, err := mc.Exec(ctx, argv, nil, "/", false); err == nil {
+		if _, err := mc.Exec(ctx, argv, nil, "/", false, nil); err == nil {
 			t.Fatalf("exec %v: unexpectedly succeeded", argv)
 		}
 	}
@@ -432,7 +559,7 @@ func TestMonitorTeardown(t *testing.T) {
 	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
 	exits := collectExits(mc)
 
-	pid, err := mc.Exec(mustCtx(t), []string{"/bin/sleep", "30"}, nil, "/", false)
+	pid, err := mc.Exec(mustCtx(t), []string{"/bin/sleep", "30"}, nil, "/", false, nil)
 	if err != nil {
 		t.Fatalf("exec sleep: %v", err)
 	}
@@ -449,7 +576,7 @@ func TestMonitorTeardown(t *testing.T) {
 	// not our child. Check its liveness directly: gone or a reaped
 	// zombie on linux. On other platforms probe with signal 0.
 	deadline := time.Now().Add(5 * time.Second)
-	for !processDead(pid) {
+	for !processDead(pid.PID) {
 		if time.Now().After(deadline) {
 			t.Fatalf("child %d still alive %v after monitor teardown", pid, time.Since(start))
 		}

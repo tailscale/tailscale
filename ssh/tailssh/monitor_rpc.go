@@ -12,7 +12,7 @@
 //
 //	{"id":N,"op":"dial","net":"unix","addr":"/run/user/1000/x.sock"}   request
 //	{"id":N,"op":"dial","ok":true}                                     reply carrying at most one fd
-//	{"op":"exit","pid":123,"code":0}                                   unsolicited notification
+//	{"op":"exit","pid":123,"childID":1,"code":0}                                   unsolicited notification
 //
 // The caller assigns request IDs and replies echo them. The codec
 // decodes and encodes frames and descriptors. ID bookkeeping, read
@@ -54,10 +54,10 @@ import (
 const (
 	opDial   = "dial"   // request {net:"unix", addr}. reply {ok} + connected fd
 	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
-	opExec   = "exec"   // request {argv, env, dir?, ctty?, fds:0-3} + up to 3 SCM_RIGHTS stdio fds. reply {ok, pid}
-	opSignal = "signal" // request {pid, sig}. reply {ok}
+	opExec   = "exec"   // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
+	opSignal = "signal" // request {pid, childID, sig}. reply {ok}
 	opPing   = "ping"   // request {}. reply {ok}
-	opExit   = "exit"   // unsolicited notification {pid, code}. no ID
+	opExit   = "exit"   // unsolicited notification {pid, childID, code}. no request ID
 	opFdAck  = "fdack"  // request {id of the reply whose descriptors were received}. no fds, no reply
 )
 
@@ -68,8 +68,9 @@ const (
 	rpcMaxLine = 256 << 10
 
 	// rpcMaxFds is the maximum number of SCM_RIGHTS descriptors any one
-	// frame may carry: exec passes child stdin, stdout and stderr.
-	rpcMaxFds = 3
+	// frame may carry. Exec passes child stdin, stdout and stderr plus
+	// the env-fd pipe declared by rpcFrame.EnvFd.
+	rpcMaxFds = 4
 
 	// rpcFdHerald is the one-byte payload of the message that carries a
 	// frame's descriptors. It is a NUL byte, which never appears inside
@@ -115,11 +116,21 @@ type rpcFrame struct {
 	Dir  string   `json:"dir,omitempty"`
 	Ctty bool     `json:"ctty,omitzero"`
 	Fds  int      `json:"fds,omitzero"`
+	// EnvFd, when set on an exec request, declares a fourth descriptor
+	// after stdin, stdout, and stderr: the --env-fd payload pipe for
+	// the forwarded client env pairs.
+	EnvFd bool `json:"envfd,omitzero"`
+
+	// Incubator requests identity-flag normalization for an incubator argv.
+	// The RPC caller is trusted to supply the executable and other arguments;
+	// this flag is not a privilege boundary against tailscaled.
+	Incubator bool `json:"incubator,omitzero"`
 
 	// signal request, exit notification, and exec reply.
-	Pid  int    `json:"pid,omitzero"`
-	Sig  string `json:"sig,omitempty"`
-	Code int    `json:"code,omitzero"` // exit notification only
+	Pid     int    `json:"pid,omitzero"`
+	ChildID int64  `json:"childID,omitzero"` // exec request ID; required for signals
+	Sig     string `json:"sig,omitempty"`
+	Code    int    `json:"code,omitzero"` // exit notification only
 
 	// Reply fields.
 	OK   bool   `json:"ok,omitzero"`
@@ -139,19 +150,18 @@ func rpcListenReq(id int64, network, addr string, unlink, agent bool) rpcFrame {
 	return rpcFrame{ID: id, Op: opListen, Net: network, Addr: addr, Unlink: unlink, Agent: agent}
 }
 
-func rpcExecReq(id int64, argv, env []string, dir string, ctty bool, nfds int) rpcFrame {
-	return rpcFrame{ID: id, Op: opExec, Argv: argv, Env: env, Dir: dir, Ctty: ctty, Fds: nfds}
+func rpcExecReq(id int64, argv, env []string, dir string, ctty, envFd bool, nfds int) rpcFrame {
+	return rpcFrame{ID: id, Op: opExec, Argv: argv, Env: env, Dir: dir, Ctty: ctty, EnvFd: envFd, Fds: nfds}
 }
 
-func rpcSignalReq(id int64, pid int, sig string) rpcFrame {
-	return rpcFrame{ID: id, Op: opSignal, Pid: pid, Sig: sig}
+func rpcSignalReq(id int64, child monitorProcess, sig string) rpcFrame {
+	return rpcFrame{ID: id, Op: opSignal, Pid: child.PID, ChildID: child.ID, Sig: sig}
 }
 
-// rpcExecReply is the reply to an exec request, OK plus the spawned
-// child's pid. The child's exit arrives later as an unsolicited exit
-// notification. The notification carries this pid.
+// rpcExecReply returns the PID and generation of the spawned child.
+// Signals and exit notifications carry the same pair.
 func rpcExecReply(id int64, pid int) rpcFrame {
-	return rpcFrame{ID: id, Op: opExec, OK: true, Pid: pid}
+	return rpcFrame{ID: id, Op: opExec, OK: true, Pid: pid, ChildID: id}
 }
 
 func rpcOKReply(id int64, op string) rpcFrame {
@@ -163,8 +173,8 @@ func rpcErrReply(id int64, op string, err error) rpcFrame {
 }
 
 // rpcExitNotify is the unsolicited child-exit notification frame.
-func rpcExitNotify(pid, code int) rpcFrame {
-	return rpcFrame{Op: opExit, Pid: pid, Code: code}
+func rpcExitNotify(child monitorProcess, code int) rpcFrame {
+	return rpcFrame{Op: opExit, Pid: child.PID, ChildID: child.ID, Code: code}
 }
 
 // rpcFdAckReq acknowledges receipt of the descriptors a reply with the
@@ -196,6 +206,9 @@ func (f rpcFrame) checkFds(n int) error {
 	}
 	if f.Op == opExec && f.Fds > 0 && f.Fds != n {
 		return fmt.Errorf("monitor rpc: exec declared %d fds but %d arrived", f.Fds, n)
+	}
+	if f.Op == opExec && f.EnvFd && n != 4 {
+		return fmt.Errorf("monitor rpc: envfd exec carried %d fds, want exactly 4 (stdio + env fd)", n)
 	}
 	return nil
 }
@@ -248,40 +261,50 @@ func heraldFrames(rbuf []byte, sets [][]int, queued func(k int) bool) ([]int, er
 // returned, and marks every received descriptor close-on-exec before
 // returning. The caller owns the returned descriptors.
 func recvFdSets(oob []byte, flags int) ([][]int, error) {
-	if flags&unix.MSG_CTRUNC != 0 {
-		// The OOB buffer was too small for the incoming cmsgs; the
-		// kernel has already closed the descriptors that did not fit.
-		return nil, errors.New("monitor rpc: ancillary data truncated (more fds than the protocol allows)")
-	}
-	if len(oob) == 0 {
-		return nil, nil
-	}
-	cmsgs, err := unix.ParseSocketControlMessage(oob)
-	if err != nil {
-		return nil, err
-	}
 	var sets [][]int
 	var all []int
-	for _, cm := range cmsgs {
-		if cm.Header.Level != unix.SOL_SOCKET || cm.Header.Type != unix.SCM_RIGHTS {
-			return nil, fmt.Errorf("monitor rpc: unexpected control message (level %d, type %d)", cm.Header.Level, cm.Header.Type)
-		}
-		got, err := unix.ParseUnixRights(&cm)
+	fail := func(err error) ([][]int, error) {
+		closeFds(all)
+		return nil, err
+	}
+	var unexpected error
+	// Parse one cmsg at a time so rights already parsed are still owned
+	// (and can be closed) if a later control message is rejected.
+	for len(oob) >= unix.CmsgLen(0) {
+		hdr, data, rest, err := unix.ParseOneSocketControlMessage(oob)
 		if err != nil {
-			closeFds(all)
-			return nil, err
+			return fail(err)
 		}
-		for _, fd := range got {
-			if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
-				closeFds(append(all, got...))
-				return nil, err
+		oob = rest
+		if hdr.Level != unix.SOL_SOCKET || hdr.Type != unix.SCM_RIGHTS {
+			if unexpected == nil {
+				unexpected = fmt.Errorf("monitor rpc: unexpected control message (level %d, type %d)", hdr.Level, hdr.Type)
 			}
+			continue // Later cmsgs may still contain received rights.
+		}
+		got, err := unix.ParseUnixRights(&unix.SocketControlMessage{Header: hdr, Data: data})
+		if err != nil {
+			return fail(err)
 		}
 		sets = append(sets, got)
 		all = append(all, got...)
+	}
+	if flags&unix.MSG_CTRUNC != 0 {
+		// The kernel closed the descriptors that did not fit; close the
+		// subset it installed in our process before rejecting the read.
+		return fail(errors.New("monitor rpc: ancillary data truncated (more fds than the protocol allows)"))
+	}
+	if unexpected != nil {
+		return fail(unexpected)
+	}
+	for _, got := range sets {
+		for _, fd := range got {
+			if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+				return fail(err)
+			}
+		}
 		if len(got) > rpcMaxFds {
-			closeFds(all)
-			return nil, fmt.Errorf("monitor rpc: frame carried %d fds; protocol allows at most %d", len(got), rpcMaxFds)
+			return fail(fmt.Errorf("monitor rpc: frame carried %d fds; protocol allows at most %d", len(got), rpcMaxFds))
 		}
 	}
 	return sets, nil
@@ -492,7 +515,9 @@ func (m *rpcConn) readFrame() (f rpcFrame, fds []int, err error) {
 }
 
 // writeFrame encodes f as one JSON line and writes it. See sendFds for
-// descriptor attachment and ownership.
+// descriptor attachment and ownership. Validation errors leave the channel
+// usable. Transport errors close it: a partial write leaves the request outcome
+// unknown, so the peer must tear down any children it started.
 func (m *rpcConn) writeFrame(f rpcFrame, fds ...int) error {
 	if len(fds) > maxFdsForOp(f.Op) {
 		return fmt.Errorf("monitor rpc: op %q cannot carry %d fds", f.Op, len(fds))
@@ -506,10 +531,15 @@ func (m *rpcConn) writeFrame(f rpcFrame, fds ...int) error {
 		return fmt.Errorf("monitor rpc: frame of %d bytes exceeds %d-byte line cap", len(b), rpcMaxLine)
 	}
 	if err := m.c.SetWriteDeadline(time.Now().Add(m.writeTimeout)); err != nil {
+		m.c.Close()
 		return err
 	}
 	defer m.c.SetWriteDeadline(time.Time{})
-	return writeLine(unixSender{m.c}, b, fds)
+	if err := writeLine(unixSender{m.c}, b, fds); err != nil {
+		m.c.Close()
+		return err
+	}
+	return nil
 }
 
 // wrapUnixConn wraps a raw file descriptor in a *net.UnixConn for read,

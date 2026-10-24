@@ -1130,6 +1130,32 @@ func TestFwdConnLocalUnixDirSwapRaceNeverServesProtectedSocket(t *testing.T) {
 		attempts.Load(), dials.Load(), eacces.Load(), enoent.Load(), swaps.Load())
 }
 
+// TestMonExitRegistryPIDReuse checks both exit-before-registration and
+// registration-before-exit when two child generations share a PID.
+func TestMonExitRegistryPIDReuse(t *testing.T) {
+	var r monExitRegistry
+	old := monitorProcess{PID: 42, ID: 1}
+	fresh := monitorProcess{PID: 42, ID: 2}
+	ch, ch2 := newMonExitStatus(), newMonExitStatus()
+	r.dispatchExit(old, 7)
+	r.registerSessionExit(fresh, ch2)
+	r.registerSessionExit(old, ch)
+	<-ch.done
+	if ch.code != 7 {
+		t.Fatalf("old exit = %d; want 7", ch.code)
+	}
+	select {
+	case <-ch2.done:
+		t.Fatal("old notification completed the new child")
+	default:
+	}
+	r.dispatchExit(fresh, 9)
+	<-ch2.done
+	if ch2.code != 9 || ch.code != 7 {
+		t.Fatalf("exit codes = %d, %d; want 7, 9", ch.code, ch2.code)
+	}
+}
+
 // TestFwdAllowedSocketPathCaps pins the allowlist's two lexical caps:
 // a home directory that cleans to "/" must not collapse the allowlist
 // to "every absolute path", and over-long paths beyond the sun_path

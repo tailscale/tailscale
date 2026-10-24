@@ -8,8 +8,8 @@
 // current binary. It multiplexes request IDs, dispatches unsolicited
 // exit notifications, and serializes writes.
 //
-// Dial, Listen, and ListenAgent implement the conn's forwarding socket
-// ops.
+// Dial, Listen, and ListenAgent serve the conn's forwarding paths,
+// and Exec serves the session path.
 
 package tailssh
 
@@ -87,7 +87,7 @@ type monitorClient struct {
 	mu      sync.Mutex // guards the fields below
 	nextID  int64
 	pending map[int64]chan *rpcResult
-	onExit  func(pid, code int)
+	onExit  func(monitorProcess, int)
 	closed  bool
 
 	// done is closed when the read loop exits, on RPC EOF or a read
@@ -102,6 +102,8 @@ func (mc *monitorClient) Pid() int {
 
 func (mc *monitorClient) readLoop() {
 	defer close(mc.done)
+	// A protocol/read failure must also trigger monitor teardown.
+	defer mc.c.Close()
 	for {
 		f, fds, err := mc.rpc.readFrame()
 		if err != nil {
@@ -134,7 +136,7 @@ func (mc *monitorClient) dispatch(f rpcFrame, fds []int) {
 			h := mc.onExit
 			mc.mu.Unlock()
 			if h != nil {
-				h(f.Pid, f.Code)
+				h(monitorProcess{PID: f.Pid, ID: f.ChildID}, f.Code)
 			}
 		}
 		// Other unsolicited frames are ignored.
@@ -153,12 +155,14 @@ func (mc *monitorClient) dispatch(f rpcFrame, fds []int) {
 	mc.mu.Unlock()
 }
 
-// call sends one request and waits for its reply (with any descriptors it
-// carries), the context, or the RPC channel's death. On every path that
-// does not hand the descriptors to the caller they are closed exactly
-// once. See dispatch for the race-free handoff.
+// call sends a request and waits for its reply, cancellation, or channel death.
+// Dispatched exec requests ignore cancellation so their child handles cannot be
+// lost. Descriptors not handed to the caller are closed here or by dispatch.
 func (mc *monitorClient) call(ctx context.Context, f rpcFrame, fds ...int) (rpcFrame, []int, error) {
 	var zero rpcFrame
+	if err := ctx.Err(); err != nil {
+		return zero, nil, err
+	}
 	mc.mu.Lock()
 	if mc.closed {
 		mc.mu.Unlock()
@@ -172,7 +176,10 @@ func (mc *monitorClient) call(ctx context.Context, f rpcFrame, fds ...int) (rpcF
 	mc.mu.Unlock()
 
 	mc.writeMu.Lock()
-	err := mc.rpc.writeFrame(f, fds...)
+	err := ctx.Err()
+	if err == nil {
+		err = mc.rpc.writeFrame(f, fds...)
+	}
 	mc.writeMu.Unlock()
 	if err != nil {
 		mc.mu.Lock()
@@ -181,6 +188,13 @@ func (mc *monitorClient) call(ctx context.Context, f rpcFrame, fds ...int) (rpcF
 		return zero, nil, fmt.Errorf("ssh-monitor: write %q: %w", f.Op, err)
 	}
 
+	done := ctx.Done()
+	if f.Op == opExec {
+		// Once dispatched, exec must return its child handle even if the
+		// session is canceled. The caller then owns termination and waiting.
+		// Monitor death also ends this wait and tears down its children.
+		done = nil
+	}
 	select {
 	case r := <-ch:
 		if !r.f.OK {
@@ -188,7 +202,7 @@ func (mc *monitorClient) call(ctx context.Context, f rpcFrame, fds ...int) (rpcF
 			return r.f, nil, errors.New("ssh-monitor: " + r.f.Err)
 		}
 		return r.f, r.fds, nil
-	case <-ctx.Done():
+	case <-done:
 		// Delete the entry under the lock: after this, dispatch finds no
 		// waiter and closes a late reply's descriptors itself. A reply
 		// already sitting in the channel is drained here and closed.
@@ -214,13 +228,17 @@ func (mc *monitorClient) call(ctx context.Context, f rpcFrame, fds ...int) (rpcF
 	}
 }
 
-// SetExitCallback registers h for unsolicited exit notifications from the
-// monitor, one call per reaped child with the child's pid and exit code.
-// It may be replaced at any time. nil disables delivery.
-func (mc *monitorClient) SetExitCallback(h func(pid, code int)) {
+// SetExitCallback registers h for unsolicited child exit notifications.
+// nil disables delivery.
+func (mc *monitorClient) SetExitCallback(h func(monitorProcess, int)) {
 	mc.mu.Lock()
 	mc.onExit = h
 	mc.mu.Unlock()
+}
+
+// Gone returns a channel closed when the RPC read loop exits.
+func (mc *monitorClient) Gone() <-chan struct{} {
+	return mc.done
 }
 
 // Ping round-trips a ping request.
@@ -229,25 +247,67 @@ func (mc *monitorClient) Ping(ctx context.Context) error {
 	return err
 }
 
-// Exec spawns a child on the monitor with the given stdio descriptors,
-// stdin, stdout, and stderr in order. It returns the child's pid. The
-// child's exit arrives later via the exit callback.
-func (mc *monitorClient) Exec(ctx context.Context, argv, env []string, dir string, ctty bool, stdio ...*os.File) (int, error) {
-	fds := make([]int, len(stdio))
-	for i, f := range stdio {
-		fds[i] = int(f.Fd())
+// execRequest builds an exec frame and descriptor list. envFile, when
+// present, follows stdio and becomes the child's fd 3.
+func execRequest(argv, env []string, dir string, ctty bool, envFile *os.File, stdio []*os.File) (rpcFrame, []int) {
+	fds := make([]int, 0, len(stdio)+1)
+	for _, f := range stdio {
+		fds = append(fds, int(f.Fd()))
 	}
-	f := rpcExecReq(0, argv, env, dir, ctty, len(fds))
+	if envFile != nil {
+		fds = append(fds, int(envFile.Fd()))
+	}
+	f := rpcExecReq(0, argv, env, dir, ctty, envFile != nil, len(fds))
+	return f, fds
+}
+
+// execOnMonitor sends an exec frame and returns the child handle.
+func (mc *monitorClient) execOnMonitor(ctx context.Context, f rpcFrame, fds []int) (monitorProcess, error) {
 	r, _, err := mc.call(ctx, f, fds...)
 	if err != nil {
-		return 0, err
+		return monitorProcess{}, err
 	}
-	return r.Pid, nil
+	if r.Pid <= 0 || r.ChildID == 0 || r.ChildID != r.ID {
+		mc.c.Close()
+		return monitorProcess{}, errors.New("ssh-monitor: invalid exec child handle")
+	}
+	return monitorProcess{PID: r.Pid, ID: r.ChildID}, nil
+}
+
+// Exec launches trusted argv with the given environment and directory.
+// Once dispatched, it waits for the child handle or monitor death even if
+// ctx is canceled; the caller owns termination of a successfully launched child.
+func (mc *monitorClient) Exec(
+	ctx context.Context,
+	argv, env []string,
+	dir string,
+	ctty bool,
+	envFile *os.File,
+	stdio ...*os.File,
+) (monitorProcess, error) {
+	f, fds := execRequest(argv, env, dir, ctty, envFile, stdio)
+	return mc.execOnMonitor(ctx, f, fds)
+}
+
+// ExecIncubator launches a trusted incubator invocation with its identity
+// flags normalized to the monitor's bound identity. Like Exec, it returns
+// the child handle even if ctx is canceled after dispatch.
+func (mc *monitorClient) ExecIncubator(
+	ctx context.Context,
+	argv, env []string,
+	dir string,
+	ctty bool,
+	envFile *os.File,
+	stdio ...*os.File,
+) (monitorProcess, error) {
+	f, fds := execRequest(argv, env, dir, ctty, envFile, stdio)
+	f.Incubator = true
+	return mc.execOnMonitor(ctx, f, fds)
 }
 
 // Signal asks the monitor to signal a child process group.
-func (mc *monitorClient) Signal(ctx context.Context, pid int, sig string) error {
-	_, _, err := mc.call(ctx, rpcSignalReq(0, pid, sig))
+func (mc *monitorClient) Signal(ctx context.Context, child monitorProcess, sig string) error {
+	_, _, err := mc.call(ctx, rpcSignalReq(0, child, sig))
 	return err
 }
 
@@ -324,7 +384,8 @@ func wrapListenerFD(fd int, name string) (net.Listener, error) {
 
 // Close tears the connection down by closing the RPC channel, which
 // triggers the monitor's teardown. Close waits for the monitor to
-// exit. A wedged monitor is killed after 5 seconds.
+// exit. A wedged monitor is killed after the forwarding-op deadline,
+// both teardown reap sweeps, and a margin for scheduling and child reap.
 func (mc *monitorClient) Close() error {
 	mc.mu.Lock()
 	if mc.closed {
@@ -341,7 +402,7 @@ func (mc *monitorClient) Close() error {
 	select {
 	case err := <-waitErr:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(monFwdOpDeadline + 2*monTeardownReap + 5*time.Second):
 		mc.cmd.Process.Kill()
 		return <-waitErr
 	}
