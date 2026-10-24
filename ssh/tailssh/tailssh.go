@@ -8,6 +8,7 @@ package tailssh
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -976,7 +977,6 @@ func (ss *sshSession) run() {
 	// See https://github.com/tailscale/tailscale/issues/4146
 	ss.DisablePTYEmulation()
 
-	var rec *recording // or nil if disabled
 	if ss.Subsystem() != "sftp" {
 		if err := ss.handleSSHAgentForwarding(ss, lu); err != nil {
 			ss.logf("agent forwarding failed: %v", err)
@@ -984,44 +984,55 @@ func (ss *sshSession) run() {
 			// TODO(maisem/bradfitz): add a way to close all session resources
 			defer ss.closeAgentForwarding()
 		}
+	}
 
-		if ss.shouldRecord() {
-			var err error
-			rec, err = ss.startNewRecording()
-			if err != nil {
-				if uve, ok := errors.AsType[userVisibleError](err); ok {
-					fmt.Fprintf(ss, "%s\r\n", uve.SSHTerminationMessage())
-				} else {
-					fmt.Fprintf(ss, "can't start new recording\r\n")
-				}
-				ss.logf("startNewRecording: %v", err)
-				// 254 is Tailscale-specific: the SSH transport is fine
-				// and the user's command is well-formed, but the session
-				// recording policy could not be satisfied (recorder
-				// unreachable, upload denied, etc.) so we refuse to run
-				// the command at all. We need a code that operators can
-				// alert on without collapsing it into the generic buckets:
-				//   - 1   is overloaded; any program can produce it
-				//         (Bash exit-code conventions, codes 1-2)
-				//   - 127 means "command not found" (POSIX 2018, sh
-				//         §2.8.2)
-				//   - 130 is Ctrl-C (128 + SIGINT)
-				//   - 255 means "SSH itself failed" (ssh(1) EXIT STATUS)
-				// 254 sits in the reserved >128 region but is not claimed
-				// by any of the above, so it is unambiguous for
-				// "recording-required session denied".
-				// Refs:
-				//   https://man.openbsd.org/ssh#EXIT_STATUS
-				//   https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
-				//   https://tldp.org/LDP/abs/html/exitcodes.html
-				//   https://github.com/tailscale/tailscale/issues/18256
-				ss.Exit(254)
-				return
+	// Recording applies to sftp subsystem sessions (and scp -s, which
+	// rides the sftp subsystem) just as to interactive ones: a
+	// recording-mandatory tailnet must not gain an unrecorded
+	// file-transfer path, and the same OnRecordingFailure semantics
+	// apply — a recorder that can't be reached refuses the session
+	// rather than letting file access proceed silently unrecorded.
+	// SFTP recordings are metadata-only (see recording.metadataOnly):
+	// the SFTP wire protocol is binary, so pass-through capture is not
+	// human-meaningful and would balloon casts; the header still
+	// identifies the peer, local user, and connection.
+	var rec *recording // or nil if disabled
+	if ss.shouldRecord() {
+		var err error
+		rec, err = ss.startNewRecording()
+		if err != nil {
+			if uve, ok := errors.AsType[userVisibleError](err); ok {
+				fmt.Fprintf(ss, "%s\r\n", uve.SSHTerminationMessage())
+			} else {
+				fmt.Fprintf(ss, "can't start new recording\r\n")
 			}
-			ss.logf("startNewRecording: <nil>")
-			if rec != nil {
-				defer rec.Close()
-			}
+			ss.logf("startNewRecording: %v", err)
+			// 254 is Tailscale-specific: the SSH transport is fine
+			// and the user's command is well-formed, but the session
+			// recording policy could not be satisfied (recorder
+			// unreachable, upload denied, etc.) so we refuse to run
+			// the command at all. We need a code that operators can
+			// alert on without collapsing it into the generic buckets:
+			//   - 1   is overloaded; any program can produce it
+			//         (Bash exit-code conventions, codes 1-2)
+			//   - 127 means "command not found" (POSIX 2018, sh
+			//         §2.8.2)
+			//   - 130 is Ctrl-C (128 + SIGINT)
+			//   - 255 means "SSH itself failed" (ssh(1) EXIT STATUS)
+			// 254 sits in the reserved >128 region but is not claimed
+			// by any of the above, so it is unambiguous for
+			// "recording-required session denied".
+			// Refs:
+			//   https://man.openbsd.org/ssh#EXIT_STATUS
+			//   https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
+			//   https://tldp.org/LDP/abs/html/exitcodes.html
+			//   https://github.com/tailscale/tailscale/issues/18256
+			ss.Exit(254)
+			return
+		}
+		ss.logf("startNewRecording: <nil>")
+		if rec != nil {
+			defer rec.Close()
 		}
 	}
 
@@ -1361,6 +1372,9 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		ss:       ss,
 		start:    now,
 		failOpen: onFailure == nil || onFailure.TerminateSessionWithMessage == "",
+		// Subsystem sessions (sftp) record metadata only; see the
+		// recording.metadataOnly doc comment.
+		metadataOnly: ss.Subsystem() != "",
 	}
 
 	// We want to use a background context for uploading and not ss.ctx.
@@ -1430,6 +1444,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		}()
 	}
 
+	// The requested subsystem (e.g. "sftp"), or "" for interactive
+	// sessions. Subsystem requests carry no command string on the wire,
+	// so the cast header records the subsystem name instead — this is
+	// what identifies an SFTP file-transfer session.
+	subsystem := ss.Subsystem()
+
 	ch := sessionrecording.CastHeader{
 		Version:   2,
 		Width:     w.Width,
@@ -1439,8 +1459,9 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		// reconstruction: the SSH command is passed to the user's shell
 		// verbatim, and the shell lexer silently drops unbalanced quotes,
 		// which could otherwise be used to make the recording show a
-		// different command than the one that ran.
-		Command: ss.RawCommand(),
+		// different command than the one that ran. Subsystem sessions
+		// have no command; the subsystem name above is recorded instead.
+		Command: cmp.Or(subsystem, ss.RawCommand()),
 		Env: map[string]string{
 			"TERM": term,
 			// TODO(bradfitz): anything else important?
@@ -1529,6 +1550,15 @@ type recording struct {
 	// continue if writing to the recording fails.
 	failOpen bool
 
+	// metadataOnly is set for subsystem sessions (sftp). The cast
+	// records the CastHeader (peer identity, local user, connection,
+	// and the subsystem name) but no terminal output events: the SFTP
+	// wire protocol is binary, so pass-through capture would be
+	// neither human-meaningful nor reviewable, and would balloon cast
+	// sizes. The recorder upload and OnRecordingFailure lifecycle is
+	// identical to interactive sessions.
+	metadataOnly bool
+
 	mu  sync.Mutex // guards writes to, close of out
 	out io.WriteCloser
 }
@@ -1553,6 +1583,10 @@ func (r *recording) Close() error {
 // Currently (2023-03-21) we only record output, not input.
 func (r *recording) writer(dir string, w io.Writer) io.Writer {
 	if r == nil {
+		return w
+	}
+	if r.metadataOnly {
+		// Metadata-only recordings (sftp) capture no I/O events.
 		return w
 	}
 	if dir == "i" {
