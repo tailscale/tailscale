@@ -141,6 +141,10 @@ func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta
 	if !gliderssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
 		return nil
 	}
+	// The latched AllowAgentForwarding bit may be stale. See recheckPolicy.
+	if !ss.conn.recheckPolicy() {
+		return nil
+	}
 	if sshDisableForwarding() {
 		// TODO(bradfitz): or do we want to return an error here instead so the user
 		// gets an error if they ran with ssh -A? But for now we just silently

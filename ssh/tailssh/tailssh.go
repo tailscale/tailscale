@@ -22,8 +22,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	stduser "os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,9 +180,20 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	if err != nil {
 		return err
 	}
+	// Capture the raw conn and the auth-phase context, and arm the grace
+	// timer, before the conn becomes visible in activeConns: a Shutdown
+	// racing the registration must find everything it needs to close the
+	// conn. The handshake starts after registration.
+	c.authRecheckDone = make(chan struct{})
+	c.netConn = nc
+	c.preAuthCtx, c.preAuthCancel = context.WithCancel(context.Background())
+	c.armLoginGrace()
 	srv.trackActiveConn(c, true)        // add
 	defer srv.trackActiveConn(c, false) // remove
-	// The connection is done when HandleConn returns. See closeFwdMonitor.
+	defer c.preAuthCancel()
+	defer c.stopConnTimers()
+	// The connection is done when HandleConn returns. Tear down the
+	// forwarding monitor, a no-op if none was spawned.
 	defer c.closeFwdMonitor()
 	c.HandleConn(nc)
 
@@ -190,19 +203,23 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	return nil
 }
 
-// Shutdown terminates all active sessions.
+// Shutdown terminates all active connections and sessions.
+// The raw socket is closed too, through conn.closeConn. Connections
+// still inside their auth handshake, including ones parked in a
+// HoldAndDelegate wait, are torn down rather than left to their own
+// grace or hold deadline.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
 	for c := range srv.activeConns {
-		c.Close()
+		c.closeConn()
 	}
 	srv.mu.Unlock()
 	srv.sessionWaitGroup.Wait()
 }
 
-// OnPolicyChange terminates any active sessions that no longer match
-// the SSH access policy.
+// OnPolicyChange terminates any active connections and sessions that no
+// longer match the SSH access policy.
 func (srv *server) OnPolicyChange() {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
@@ -210,9 +227,10 @@ func (srv *server) OnPolicyChange() {
 		if !c.authCompleted.Load() {
 			// The connection hasn't completed authentication yet.
 			// In that case, the connection will be terminated when it does.
+			// AuthLogCallback runs a recheck on authentication success.
 			continue
 		}
-		go c.checkStillValid()
+		go c.recheckPolicy()
 	}
 }
 
@@ -255,24 +273,43 @@ type conn struct {
 	spac ssh.ServerPreAuthConn
 
 	// The following fields are set during clientAuth and are used for policy
-	// evaluation and session management. They are immutable after clientAuth
-	// completes. They must not be read from other goroutines until
+	// evaluation and session management. They are immutable after SSH
+	// authentication succeeds. They must not be read from other goroutines until
 	// authCompleted is set to true.
 
 	action0     *tailcfg.SSHAction // set by clientAuth
 	finalAction *tailcfg.SSHAction // set by clientAuth
 
-	info         *sshConnInfo // set by setInfo (during clientAuth)
-	localUser    *userMeta    // set by clientAuth
-	userGroupIDs []string     // set by clientAuth
-	acceptEnv    []string
+	info            *sshConnInfo // set by setInfo (during clientAuth)
+	localUser       *userMeta    // set by clientAuth
+	mappedLocalUser string       // policy spelling resolved to localUser at auth
+	userGroupIDs    []string     // set by clientAuth
+	acceptEnv       []string
 
-	// authCompleted is set to true after clientAuth has finished writing
-	// all authentication state fields (info, localUser, action0,
-	// finalAction, userGroupIDs, acceptEnv). It provides a memory
-	// barrier so that concurrent readers (e.g. OnPolicyChange) see
-	// fully-initialized values.
+	// authCompleted publishes the authentication state to policy rechecks.
+	// It is set on SSH authentication success, not on an unsigned key query
+	// or partial authentication success.
 	authCompleted atomic.Bool
+
+	// authRecheckDone is closed after the asynchronous auth-completion policy
+	// check. It is initialized before the connection is published.
+	authRecheckDone chan struct{}
+
+	// netConn is the raw connection, captured at accept in HandleSSHConn.
+	// It is set once, before HandleConn, and is read-only afterwards. It
+	// exists so conn.closeConn can tear down the conn even while the SSH
+	// handshake is still inside its auth callbacks, before gliderssh has
+	// published the conn to its Server.
+	netConn net.Conn
+
+	// preAuthCtx lasts from accept until conn teardown and parents the
+	// auth-phase HoldAndDelegate fetchSSHAction wait. preAuthCancel
+	// cancels it and is set once alongside netConn.
+	preAuthCtx    context.Context
+	preAuthCancel context.CancelFunc
+
+	// closeOnce makes conn.closeConn idempotent.
+	closeOnce sync.Once
 
 	// mu protects the following fields.
 	//
@@ -281,6 +318,23 @@ type conn struct {
 	// acquire mu and then srv.mu.
 	mu       sync.Mutex // protects the following
 	sessions []*sshSession
+
+	// recheckMu makes recheckPolicy's policy evaluation and its
+	// RuleExpires timer re-arm one critical section.
+	recheckMu sync.Mutex
+
+	// graceTimer is the pre-auth login-grace timer. ruleTimer fires when
+	// the currently matched rule reaches its RuleExpires. Both are
+	// guarded by mu and stopped at conn teardown in HandleSSHConn.
+	graceTimer *time.Timer
+	ruleTimer  *time.Timer
+
+	// teardownDone is set by stopConnTimers, HandleSSHConn's deferred
+	// conn teardown. Like the timers, it is guarded by mu. A recheck
+	// goroutine that started before the teardown, such as a policy-change
+	// kick or a timer fire, must not re-arm ruleTimer once the teardown
+	// has run.
+	teardownDone bool
 
 	// fwd is the connection's forwarding state. On unix it holds the
 	// lazily-spawned per-connection ssh-monitor that dials and binds
@@ -365,7 +419,7 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 		return nil, c.errBanner("failed to get connection info", err)
 	}
 
-	action, localUser, acceptEnv, result := c.evaluatePolicy()
+	action, localUser, acceptEnv, _, result := c.evaluatePolicy()
 	switch result {
 	case accepted:
 		// do nothing
@@ -402,6 +456,7 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 		}
 		c.userGroupIDs = gids
 		c.localUser = lu
+		c.mappedLocalUser = localUser
 		c.acceptEnv = acceptEnv
 	}
 
@@ -415,7 +470,6 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 				}
 			}
 			c.finalAction = action
-			c.authCompleted.Store(true)
 			return &ssh.Permissions{}, nil
 		case action.Reject:
 			metricTerminalReject.Add(1)
@@ -430,7 +484,18 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 
 			url := action.HoldAndDelegate
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			// The delegate wait is bounded by fetchSSHAction's own 30-minute
+			// context. Extend the login grace to cover it plus buffer, so
+			// the grace timer never kills a live approval flow. A wedged
+			// fetch still gets torn down at the raw socket.
+			c.extendLoginGrace(holdDelegateGrace)
+
+			// Connection teardown also cancels the delegate fetch.
+			parent := c.preAuthCtx
+			if parent == nil {
+				parent = context.Background()
+			}
+			ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 			defer cancel()
 
 			metricHolds.Add(1)
@@ -452,6 +517,23 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 // ServerConfig implements gliderssh.ServerConfigCallback.
 func (c *conn) ServerConfig(ctx gliderssh.Context) *ssh.ServerConfig {
 	return &ssh.ServerConfig{
+		AuthLogCallback: func(_ ssh.ConnMetadata, _ string, err error) {
+			// x/crypto calls this with nil only after successful authentication.
+			// Unsigned public-key queries do not reach this callback.
+			if err == nil && !c.insecureSkipTailscaleAuth {
+				c.mu.Lock()
+				c.authCompleted.Store(true)
+				c.stopLoginGraceLocked()
+				c.mu.Unlock()
+				// Cover policy changes during authentication and arm rule expiry.
+				go func() {
+					c.recheckPolicy()
+					if c.authRecheckDone != nil {
+						close(c.authRecheckDone)
+					}
+				}()
+			}
+		},
 		PreAuthConnCallback: func(spac ssh.ServerPreAuthConn) {
 			c.spac = spac
 		},
@@ -556,28 +638,30 @@ func (srv *server) newConn() (*conn, error) {
 // to the specified host and port.
 // TODO(bradfitz/maisem): should we have more checks on host/port?
 func (c *conn) mayReversePortForwardTo(ctx gliderssh.Context, destinationHost string, destinationPort uint32) bool {
-	if sshDisableForwarding() {
+	if sshDisableForwarding() || c.finalAction == nil || !c.finalAction.AllowRemotePortForwarding {
 		return false
 	}
-	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
-		metricRemotePortForward.Add(1)
-		return true
+	// The latched forwarding bit may be stale. See recheckPolicy.
+	if !c.recheckForwardingPolicy() {
+		return false
 	}
-	return false
+	metricRemotePortForward.Add(1)
+	return true
 }
 
 // mayForwardLocalPortTo reports whether the ctx should be allowed to port forward
 // to the specified host and port.
 // TODO(bradfitz/maisem): should we have more checks on host/port?
 func (c *conn) mayForwardLocalPortTo(ctx gliderssh.Context, destinationHost string, destinationPort uint32) bool {
-	if sshDisableForwarding() {
+	if sshDisableForwarding() || c.finalAction == nil || !c.finalAction.AllowLocalPortForwarding {
 		return false
 	}
-	if c.finalAction != nil && c.finalAction.AllowLocalPortForwarding {
-		metricLocalPortForward.Add(1)
-		return true
+	// The latched forwarding bit may be stale. See recheckPolicy.
+	if !c.recheckForwardingPolicy() {
+		return false
 	}
-	return false
+	metricLocalPortForward.Add(1)
+	return true
 }
 
 // mayForwardLocalUnixTo is the server-side handler for
@@ -586,10 +670,11 @@ func (c *conn) mayForwardLocalPortTo(ctx gliderssh.Context, destinationHost stri
 // permitted, or an error if not. On unix the dial goes through
 // conn.fwdDialUnix.
 func (c *conn) mayForwardLocalUnixTo(ctx gliderssh.Context, socketPath string) (net.Conn, error) {
-	if sshDisableForwarding() {
+	if sshDisableForwarding() || c.finalAction == nil || !c.finalAction.AllowLocalPortForwarding {
 		return nil, gliderssh.ErrRejected
 	}
-	if c.finalAction == nil || !c.finalAction.AllowLocalPortForwarding {
+	// The latched forwarding bit may be stale. See recheckPolicy.
+	if !c.recheckForwardingPolicy() {
 		return nil, gliderssh.ErrRejected
 	}
 	metricLocalPortForward.Add(1)
@@ -602,10 +687,11 @@ func (c *conn) mayForwardLocalUnixTo(ctx gliderssh.Context, socketPath string) (
 // is permitted, or an error if not. On unix the listener comes from
 // conn.fwdListenUnix.
 func (c *conn) mayReverseUnixForwardTo(ctx gliderssh.Context, socketPath string) (net.Listener, error) {
-	if sshDisableForwarding() {
+	if sshDisableForwarding() || c.finalAction == nil || !c.finalAction.AllowRemotePortForwarding {
 		return nil, gliderssh.ErrRejected
 	}
-	if c.finalAction == nil || !c.finalAction.AllowRemotePortForwarding {
+	// The latched forwarding bit may be stale. See recheckPolicy.
+	if !c.recheckForwardingPolicy() {
 		return nil, gliderssh.ErrRejected
 	}
 	metricRemotePortForward.Add(1)
@@ -696,20 +782,40 @@ const (
 	accepted     evalResult = "accept"
 )
 
-// evaluatePolicy returns the SSHAction and localUser after evaluating
-// the SSHPolicy for this conn.
-func (c *conn) evaluatePolicy() (_ *tailcfg.SSHAction, localUser string, acceptEnv []string, result evalResult) {
+// evaluatePolicy returns the SSHAction, localUser, acceptEnv, and matched
+// rule after evaluating the SSHPolicy for this conn. The rule is the
+// netmap rule that produced the action, nil unless result is accepted.
+// Callers use its RuleExpires to arm the conn-level expiry timer.
+func (c *conn) evaluatePolicy() (*tailcfg.SSHAction, string, []string, *tailcfg.SSHRule, evalResult) {
+	return c.evaluatePolicyWithUserLookup(userLookup)
+}
+
+func (c *conn) evaluatePolicyWithUserLookup(lookup func(string) (*userMeta, error)) (_ *tailcfg.SSHAction, localUser string, acceptEnv []string, rule *tailcfg.SSHRule, result evalResult) {
 	pol, ok := c.sshPolicy()
 	if !ok {
-		return nil, "", nil, noPolicy
+		return nil, "", nil, nil, noPolicy
 	}
-	return c.evalSSHPolicy(pol)
+	return c.evalSSHPolicyWithUserLookup(pol, lookup)
 }
 
 // handleSessionPostSSHAuth runs an SSH session after the SSH-level authentication,
 // but not necessarily before all the Tailscale-level extra verification has
 // completed. It also handles SFTP requests.
 func (c *conn) handleSessionPostSSHAuth(s gliderssh.Session) {
+	// Re-evaluate the policy before honoring a new session channel. The
+	// conn's latched finalAction, covering localUser, recorders, duration,
+	// and the env allowlist, may be stale if the policy changed since
+	// auth. A material change closes the connection, and the session
+	// exits 255 before running anything.
+	if material, why, _ := c.materialPolicyChange(); material {
+		fmt.Fprintf(s.Stderr(), "tailscale: access revoked\r\n")
+		// 255 is an SSH-layer failure. No user command ever ran. See
+		// run()'s attachSession branch, which uses the same exit code.
+		s.Exit(255)
+		c.revokeConn(why)
+		return
+	}
+
 	// Do this check after auth, but before starting the session.
 	switch s.Subsystem() {
 	case "sftp":
@@ -810,35 +916,360 @@ func (c *conn) newSSHSession(s gliderssh.Session) *sshSession {
 	}
 }
 
-// isStillValid reports whether the conn is still valid.
-func (c *conn) isStillValid() bool {
-	a, localUser, _, result := c.evaluatePolicy()
-	c.vlogf("stillValid: %+v %v %v", a, localUser, result)
-	if result != accepted {
-		return false
-	}
-	if !a.Accept && a.HoldAndDelegate == "" {
-		return false
-	}
-	return c.localUser.Username == localUser
-}
+// holdDelegateGrace is how long the login-grace timer is extended for a
+// conn waiting on a HoldAndDelegate approval. It is fetchSSHAction's own
+// 30-minute cap plus buffer, so the grace timer never kills a live
+// approval flow. A wedged fetch is still torn down at the socket.
+const holdDelegateGrace = 35 * time.Minute
 
-// checkStillValid checks that the conn is still valid per the latest SSHPolicy.
-// If not, it terminates all sessions associated with the conn.
-func (c *conn) checkStillValid() {
-	if c.isStillValid() {
-		return
-	}
-	metricPolicyChangeKick.Add(1)
-	c.logf("session no longer valid per new SSH policy; closing")
+// armLoginGrace arms the pre-auth login-grace timer; on expiry the
+// connection is closed at the raw socket. The timer is stopped at auth
+// completion by stopLoginGraceLocked in AuthLogCallback,
+// and extended while a HoldAndDelegate approval is in flight by
+// extendLoginGrace. Superseded timers are disarmed by the self-identity
+// check under mu.
+func (c *conn) armLoginGrace() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.armLoginGraceLocked(loginGraceTime())
+}
+
+func (c *conn) armLoginGraceLocked(d time.Duration) {
+	var t *time.Timer
+	t = time.AfterFunc(d, func() {
+		c.mu.Lock()
+		if c.authCompleted.Load() || c.graceTimer != t {
+			// Auth already completed, or this timer was stopped or
+			// superseded by a later re-arm.
+			c.mu.Unlock()
+			return
+		}
+		c.graceTimer = nil
+		c.mu.Unlock()
+		c.logf("ssh: login grace period expired before authentication completed; closing connection")
+		c.closeConn()
+	})
+	c.graceTimer = t
+}
+
+// stopLoginGraceLocked stops the login-grace timer once auth has
+// completed. The caller holds c.mu.
+func (c *conn) stopLoginGraceLocked() {
+	if c.graceTimer != nil {
+		c.graceTimer.Stop()
+		c.graceTimer = nil
+	}
+}
+
+// extendLoginGrace re-arms the login-grace timer to d from now.
+func (c *conn) extendLoginGrace(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopLoginGraceLocked()
+	c.armLoginGraceLocked(d)
+}
+
+// armRuleExpiryLocked arms the conn-level RuleExpires timer, which fires
+// at expiry and re-evaluates the policy; an expired rule fails closed in
+// matchRule. The timer is armed at auth completion and re-armed on every
+// non-material re-evaluation by recheckPolicy. The caller holds c.mu.
+func (c *conn) armRuleExpiryLocked(r *tailcfg.SSHRule) {
+	if c.ruleTimer != nil {
+		// Re-arming happens when recheckPolicy's non-material
+		// re-evaluation matched a differently-expiring rule. A superseded
+		// one-shot timer is stopped rather than left to fire its own
+		// extra recheck later.
+		c.ruleTimer.Stop()
+		c.ruleTimer = nil
+	}
+	if r == nil || r.RuleExpires == nil {
+		return
+	}
+	d := r.RuleExpires.Sub(c.srv.now())
+	if d < 0 {
+		d = 0
+	}
+	c.ruleTimer = time.AfterFunc(d, func() { go c.recheckPolicy() })
+}
+
+// stopConnTimers stops the login-grace and RuleExpires timers at conn
+// teardown. It also latches teardownDone, so any later non-material
+// recheck must not re-arm ruleTimer. See the field's comment.
+func (c *conn) stopConnTimers() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.teardownDone = true
+	if c.graceTimer != nil {
+		c.graceTimer.Stop()
+		c.graceTimer = nil
+	}
+	if c.ruleTimer != nil {
+		c.ruleTimer.Stop()
+		c.ruleTimer = nil
+	}
+}
+
+// closeConn cancels authentication and closes both the raw transport and
+// gliderssh connections. It is safe to call concurrently and more than once.
+func (c *conn) closeConn() {
+	c.closeOnce.Do(func() {
+		if c.preAuthCancel != nil {
+			c.preAuthCancel()
+		}
+		if c.netConn != nil {
+			c.netConn.Close()
+		}
+		if c.Server != nil {
+			c.Server.Close()
+		}
+	})
+}
+
+// revokeConn terminates the conn on a material policy change. Every
+// session gets the user-visible "Access revoked." message via its own
+// context cancel, the pre-existing kick path. The transport is then
+// closed, so sessions, forwards, listeners, and the monitor all tear
+// down with it.
+func (c *conn) revokeConn(reason string) {
+	metricPolicyChangeKick.Add(1)
+	c.logf("session no longer valid per new SSH policy (%v); closing connection", reason)
+	c.mu.Lock()
 	for _, s := range c.sessions {
 		s.cancelCtx(userVisibleError{
 			fmt.Sprintf("Access revoked.\r\n"),
 			context.Canceled,
 		})
 	}
+	c.mu.Unlock()
+	c.closeConn()
+}
+
+// recheckPolicy re-evaluates the current SSHPolicy against what the conn
+// latched at auth time and reports whether the conn still holds its grant.
+// On a material change, either revocation or narrowing, it revokes the
+// connection and returns false; see materialPolicyChange. It costs a
+// local netmap policy scan plus, only when the mapped username is
+// unchanged, a userLookup to verify account identity.
+func (c *conn) recheckPolicy() bool {
+	return c.recheckPolicyWithUserLookup(userLookup)
+}
+
+// recheckForwardingPolicy checks policy without forking an account lookup for
+// each forwarded connection (e.g. every request through SSH -D). Account
+// identity is checked at authentication, policy updates, rule expiry, and
+// session gates.
+func (c *conn) recheckForwardingPolicy() bool {
+	return c.recheckPolicyWithUserLookup(func(string) (*userMeta, error) {
+		return c.localUser, nil
+	})
+}
+
+func (c *conn) recheckPolicyWithUserLookup(lookup func(string) (*userMeta, error)) bool {
+	c.recheckMu.Lock()
+	defer c.recheckMu.Unlock()
+	material, why, rule := c.materialPolicyChangeWithUserLookup(lookup)
+	if !material {
+		// Keep the conn-level RuleExpires timer in step with the rule
+		// that currently matches: a non-material re-evaluation, from a
+		// policy edit or kick, can land on a different rule whose expiry
+		// is later, earlier, or absent. Do not re-arm past the conn's
+		// teardown; see teardownDone.
+		c.mu.Lock()
+		if !c.teardownDone {
+			c.armRuleExpiryLocked(rule)
+		}
+		c.mu.Unlock()
+		return true
+	}
+	c.revokeConn(why)
+	return false
+}
+
+// materialPolicyChange reports whether the current policy revokes or narrows
+// the authenticated grant, or changes its recording requirements.
+func (c *conn) materialPolicyChange() (material bool, why string, rule *tailcfg.SSHRule) {
+	return c.materialPolicyChangeWithUserLookup(userLookup)
+}
+
+// materialPolicyChangeWithUserLookup re-evaluates the grant using lookup for
+// account identity, including the non-root check for "=" mappings.
+func (c *conn) materialPolicyChangeWithUserLookup(lookup func(string) (*userMeta, error)) (material bool, why string, rule *tailcfg.SSHRule) {
+	// Resolve each name only once, including the lookup required by "=".
+	// An inconclusive lookup may retain the authenticated identity only for
+	// the same policy spelling; it cannot authorize a remapping or root.
+	type lookupResult struct {
+		u   *userMeta
+		err error
+	}
+	lookups := map[string]lookupResult{}
+	cachedLookup := func(name string) (*userMeta, error) {
+		r, ok := lookups[name]
+		if !ok {
+			r.u, r.err = lookup(name)
+			lookups[name] = r
+		}
+		return r.u, r.err
+	}
+	a, localUser, freshAcceptEnv, rule, result := c.evaluatePolicyWithUserLookup(func(name string) (*userMeta, error) {
+		u, err := cachedLookup(name)
+		if err != nil && !isUserMissing(err) && name == c.mappedLocalUser {
+			return c.localUser, nil
+		}
+		return u, err
+	})
+	c.vlogf("recheck: %+v %v %v", a, localUser, result)
+	if result != accepted {
+		return true, fmt.Sprintf("policy evaluation result: %v", result), nil
+	}
+	if a == nil {
+		return true, "policy returned a nil action", nil
+	}
+	if a.Reject {
+		return true, "rule changed from Accept to Reject", nil
+	}
+	if a.Accept && a.HoldAndDelegate != "" {
+		return true, "malformed action: both Accept and HoldAndDelegate", nil
+	}
+	if !a.Accept && a.HoldAndDelegate == "" {
+		return true, "malformed action: neither Accept, Reject, nor HoldAndDelegate", nil
+	}
+	// Compare the policy spelling before lookup: aliases and numeric UIDs
+	// can resolve to a different canonical username without a policy change.
+	if localUser != c.mappedLocalUser {
+		return true, fmt.Sprintf("local user changed from %q to %q", c.mappedLocalUser, localUser), nil
+	}
+	// Re-resolve the account to detect deletion or UID/primary GID changes. A lookup
+	// outage leaves identity unchanged, but must not skip policy checks.
+	lu, err := cachedLookup(localUser)
+	if err != nil {
+		if isUserMissing(err) {
+			return true, fmt.Sprintf("local user %q no longer exists", localUser), nil
+		}
+		c.logf("ssh: policy recheck: local user %q lookup failed (%v); retaining identity and checking remaining policy", localUser, err)
+	} else if lu.Uid != c.localUser.Uid || lu.Gid != c.localUser.Gid || lu.Username != c.localUser.Username {
+		return true, fmt.Sprintf("local user %q identity changed from %s (uid %s, gid %s) to %s (uid %s, gid %s)", localUser, c.localUser.Username, c.localUser.Uid, c.localUser.Gid, lu.Username, lu.Uid, lu.Gid), nil
+	}
+	old := c.finalAction
+	if old == nil || c.action0 == nil {
+		return true, "conn has no latched action", nil
+	}
+	if acceptEnvNarrowed(c.acceptEnv, freshAcceptEnv) {
+		return true, "accept-env pattern removed", nil
+	}
+	oldRecorders, oldFailure := recordingConfig(c.action0, old)
+	freshRecorders, freshFailure := recordingConfig(a, a)
+	if !a.Accept {
+		if c.action0.Accept {
+			return true, "rule changed from Accept to HoldAndDelegate", nil
+		}
+		// Keep the delegated grant, but compare any recording requirements
+		// inherited from the hold rule as well as its AcceptEnv above.
+		freshRecorders, freshFailure = recordingConfig(a, old)
+	}
+	if recordersChanged(oldRecorders, freshRecorders) {
+		return true, "session recording obligation changed", nil
+	}
+	if recFailureChanged(oldFailure, freshFailure) {
+		return true, "recording-failure policy changed", nil
+	}
+	if !a.Accept {
+		return false, "", rule
+	}
+	if old.AllowLocalPortForwarding && !a.AllowLocalPortForwarding {
+		return true, "local port forwarding revoked", nil
+	}
+	if old.AllowRemotePortForwarding && !a.AllowRemotePortForwarding {
+		return true, "remote port forwarding revoked", nil
+	}
+	if old.AllowAgentForwarding && !a.AllowAgentForwarding {
+		return true, "agent forwarding revoked", nil
+	}
+	if durShorter(a.SessionDuration, old.SessionDuration) {
+		return true, fmt.Sprintf("session duration cap shortened from %v to %v", old.SessionDuration, a.SessionDuration), nil
+	}
+	return false, "", rule
+}
+
+// recordersChanged compares recorder lists without regard to order, but with
+// duplicate counts preserved. Changes in either direction require
+// reauthentication because recording state is fixed at authentication.
+func recordersChanged(old, fresh []netip.AddrPort) bool {
+	if len(old) != len(fresh) {
+		return true
+	}
+	counts := make(map[netip.AddrPort]int, len(old))
+	for _, r := range old {
+		counts[r]++
+	}
+	for _, r := range fresh {
+		if counts[r] == 0 {
+			return true
+		}
+		counts[r]--
+	}
+	return false
+}
+
+// isUserMissing recognizes an absent account, not an unavailable lookup source.
+// NSS can report "not found" (getent exit 2) during a directory outage;
+// userLookup cannot distinguish that case from deletion.
+func isUserMissing(err error) bool {
+	_, nameMissing := errors.AsType[stduser.UnknownUserError](err)
+	_, uidMissing := errors.AsType[stduser.UnknownUserIdError](err)
+	return nameMissing || uidMissing
+}
+
+// recFailureChanged compares failure requirements in both directions, including
+// messages and notification destinations. Nil is equivalent to an empty action.
+func recFailureChanged(old, fresh *tailcfg.SSHRecorderFailureAction) bool {
+	var o, f tailcfg.SSHRecorderFailureAction
+	if old != nil {
+		o = *old
+	}
+	if fresh != nil {
+		f = *fresh
+	}
+	return o != f
+}
+
+// durShorter reports whether fresh is a shorter cap than old. Zero means
+// uncapped, the maximum. A longer or removed cap is an extension.
+func durShorter(fresh, old time.Duration) bool {
+	if fresh == 0 {
+		return false
+	}
+	if old == 0 {
+		return true
+	}
+	return fresh < old
+}
+
+// acceptEnvNarrowed reports whether the fresh accept-env patterns
+// accept strictly less than the latched ones. Literal latched patterns
+// are checked against the fresh patterns with matchAcceptEnvPattern, so
+// a widening rewrite such as FOO_1 to FOO_* is an extension. A wildcard
+// latched pattern not present verbatim is conservatively treated as a
+// removal.
+func acceptEnvNarrowed(old, fresh []string) bool {
+	for _, o := range old {
+		if slices.Contains(fresh, o) {
+			continue
+		}
+		if o == "*" || strings.ContainsAny(o, "*?") {
+			return true
+		}
+		covered := false
+		for _, f := range fresh {
+			if matchAcceptEnvPattern(f, o) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHAction, error) {
@@ -1162,10 +1593,15 @@ var recordSSHToLocalDisk = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
 // returned. Otherwise, the list of recorders from the initial action
 // is returned.
 func (ss *sshSession) recorders() ([]netip.AddrPort, *tailcfg.SSHRecorderFailureAction) {
-	if len(ss.conn.finalAction.Recorders) > 0 {
-		return ss.conn.finalAction.Recorders, ss.conn.finalAction.OnRecordingFailure
+	return recordingConfig(ss.conn.action0, ss.conn.finalAction)
+}
+
+// recordingConfig applies the delegated action's recorder override, if present.
+func recordingConfig(initial, final *tailcfg.SSHAction) ([]netip.AddrPort, *tailcfg.SSHRecorderFailureAction) {
+	if len(final.Recorders) > 0 {
+		return final.Recorders, final.OnRecordingFailure
 	}
-	return ss.conn.action0.Recorders, ss.conn.action0.OnRecordingFailure
+	return initial.Recorders, initial.OnRecordingFailure
 }
 
 func (ss *sshSession) shouldRecord() bool {
@@ -1201,11 +1637,15 @@ func (c *conn) ruleExpired(r *tailcfg.SSHRule) bool {
 	return r.RuleExpires.Before(c.srv.now())
 }
 
-func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, result evalResult) {
+func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (*tailcfg.SSHAction, string, []string, *tailcfg.SSHRule, evalResult) {
+	return c.evalSSHPolicyWithUserLookup(pol, userLookup)
+}
+
+func (c *conn) evalSSHPolicyWithUserLookup(pol *tailcfg.SSHPolicy, lookup func(string) (*userMeta, error)) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, rule *tailcfg.SSHRule, result evalResult) {
 	failedOnUser := false
 	for _, r := range pol.Rules {
-		if a, localUser, acceptEnv, err := c.matchRule(r); err == nil {
-			return a, localUser, acceptEnv, accepted
+		if a, localUser, acceptEnv, err := c.matchRuleWithUserLookup(r, lookup); err == nil {
+			return a, localUser, acceptEnv, r, accepted
 		} else if errors.Is(err, errUserMatch) {
 			failedOnUser = true
 		}
@@ -1214,7 +1654,7 @@ func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy) (a *tailcfg.SSHAction, loca
 	if failedOnUser {
 		result = rejectedUser
 	}
-	return nil, "", nil, result
+	return nil, "", nil, nil, result
 }
 
 // internal errors for testing; they don't escape to callers or logs.
@@ -1227,7 +1667,11 @@ var (
 	errInvalidConn    = errors.New("invalid connection state")
 )
 
-func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, err error) {
+func (c *conn) matchRule(r *tailcfg.SSHRule) (*tailcfg.SSHAction, string, []string, error) {
+	return c.matchRuleWithUserLookup(r, userLookup)
+}
+
+func (c *conn) matchRuleWithUserLookup(r *tailcfg.SSHRule, lookup func(string) (*userMeta, error)) (a *tailcfg.SSHAction, localUser string, acceptEnv []string, err error) {
 	defer func() {
 		c.vlogf("matchRule(%+v): %v", r, err)
 	}()
@@ -1255,7 +1699,7 @@ func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser st
 		// For all but Reject rules, SSHUsers is required.
 		// If SSHUsers is nil or empty, mapLocalUser will return an
 		// empty string anyway.
-		localUser = mapLocalUser(r.SSHUsers, c.info.sshUser)
+		localUser = mapLocalUser(r.SSHUsers, c.info.sshUser, lookup)
 		if localUser == "" {
 			return nil, "", nil, errUserMatch
 		}
@@ -1263,7 +1707,7 @@ func (c *conn) matchRule(r *tailcfg.SSHRule) (a *tailcfg.SSHAction, localUser st
 	return r.Action, localUser, r.AcceptEnv, nil
 }
 
-func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser string) {
+func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string, lookup func(string) (*userMeta, error)) (localUser string) {
 	v, ok := ruleSSHUsers[reqSSHUser]
 	if !ok {
 		v = ruleSSHUsers["*"]
@@ -1277,7 +1721,7 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 
 		// Immediately look up user information for purposes of generating
 		// hold and delegate URL (if necessary).
-		lu, err := userLookup(reqSSHUser)
+		lu, err := lookup(reqSSHUser)
 		if err != nil {
 			return ""
 		}

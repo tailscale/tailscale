@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -207,6 +209,11 @@ func newMonitorSessionServerFor(
 	// /bin/sh: a predictable direct child of the incubator.
 	um.loginShellCached = "/bin/sh"
 	sc.localUser = um
+	// Latch the auth-time policy spelling for this synthetic conn.
+	sc.mappedLocalUser = lu.Username
+	if rule != nil {
+		sc.mappedLocalUser = rule.SSHUsers["test"]
+	}
 	// The bound user's groups, like clientAuth would have captured them
 	// (the incubator argv's --groups must be non-empty): for a conn bound
 	// to another uid use that user's own primary group, not the test
@@ -866,6 +873,109 @@ func TestLaunchViaMonitorRefusesCanceledContext(t *testing.T) {
 	}
 	if mc := c.fwdMonitorIfAny(); mc != nil {
 		t.Fatal("launchViaMonitor spawned a monitor for a canceled session")
+	}
+}
+
+// TestSessionRevokedDuringRecorderStallNoMonitorLeak pins the
+// monitor-respawn leak end to end. A revocation landing while a
+// session is between attach and launch, here stalled in recorder setup,
+// the same window that contains the agent-forwarding policy recheck,
+// must not, once the recorder setup completes, spawn the session child
+// through a freshly respawned monitor.
+func TestSessionRevokedDuringRecorderStallNoMonitorLeak(t *testing.T) {
+	// A local recorder that accepts the recording POST but stalls before
+	// the 100-continue that unblocks startNewRecording, pinning run() in
+	// its recorder setup while the revocation lands.
+	postArrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	releaseRecorder := sync.OnceFunc(func() { close(release) })
+	recSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "HEAD" && r.URL.Path == "/v2/record":
+			// No V2 support is advertised. That forces the V1 /record path.
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == "POST" && r.URL.Path == "/record":
+			select {
+			case postArrived <- struct{}{}:
+			default:
+			}
+			<-release
+			// The first body read triggers the 100-continue.
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(recSrv.Close)
+	// Unblock the handler before Close waits for it, even on a Fatal path.
+	t.Cleanup(releaseRecorder)
+	recIPPort, err := netip.ParseAddrPort(recSrv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := &tailcfg.SSHRule{
+		SSHUsers: map[string]string{"test": ""},
+		Action: &tailcfg.SSHAction{
+			Accept:    true,
+			Recorders: []netip.AddrPort{recIPPort},
+		},
+	}
+	connCh := make(chan *conn, 1)
+	addr := newMonitorSessionServerFor(t, nil, nil, rule, false, func(c *conn, s gliderssh.Session) {
+		select {
+		case connCh <- c:
+		default:
+		}
+		c.newSSHSession(s).run()
+	})
+
+	cl, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	s, err := cl.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start("sleep 60"); err != nil {
+		t.Fatal(err)
+	}
+
+	c := <-connCh
+	select {
+	case <-postArrived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recorder POST never arrived; the session never reached its recorder setup")
+	}
+
+	// The revocation lands mid-stall. Every session ctx is canceled and
+	// the transport is closed.
+	c.revokeConn("test revocation")
+	// This is the conn teardown that HandleSSHConn's deferred
+	// closeFwdMonitor performs once the conn is done.
+	c.closeFwdMonitor()
+
+	// Release the recorder. startNewRecording completes and run() walks
+	// into launchProcess on the revoked conn, the spawn window. The
+	// canceled-ctx refusal and the closed monitor must each do their
+	// job, so no child and no respawned monitor appear.
+	releaseRecorder()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if mc := c.fwdMonitorIfAny(); mc != nil {
+			t.Fatal("a monitor was spawned on the torn-down conn; nobody would close it (respawn leak)")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// And the closed flag must refuse any late spawn outright.
+	if _, err := c.fwdMonitor(); err == nil {
+		t.Fatal("fwdMonitor respawned a monitor on the torn-down conn")
 	}
 }
 
