@@ -1167,12 +1167,27 @@ func updateStringInSlice(ss []string, a, b string) {
 // acceptEnvPair reports whether the environment variable key=value pair
 // should be accepted from the client. It uses the same default as OpenSSH
 // AcceptEnv.
+//
+// The value reaches root-exec'd login/su environments, where glibc treats
+// a LANG/LC_* value containing "/" as a path to locale data and a leading
+// "-" as its own options; TERM is a terminal capability name, not a path.
+// Reject path- and option-like values (and NUL, which would truncate on
+// exec) rather than trying to sanitize them.
 func acceptEnvPair(kv string) bool {
-	k, _, ok := strings.Cut(kv, "=")
+	k, v, ok := strings.Cut(kv, "=")
 	if !ok || isDangerousEnvVar(k) || forbiddenEnvKey(k) {
 		return false
 	}
-	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
+	if strings.Contains(v, "\x00") {
+		return false
+	}
+	if k == "TERM" {
+		return !strings.Contains(v, "/")
+	}
+	if k == "LANG" || strings.HasPrefix(k, "LC_") {
+		return !strings.Contains(v, "/") && !strings.HasPrefix(v, "-")
+	}
+	return false
 }
 
 func fileExists(path string) bool {

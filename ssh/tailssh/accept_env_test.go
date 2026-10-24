@@ -39,6 +39,8 @@ func TestIsDangerousEnvVar(t *testing.T) {
 		{"hostaliases", true},
 		{"RES_OPTIONS", true},
 		{"res_options", true},
+		{"GLIBC_TUNABLES", true},
+		{"glibc_tunables", true},
 		{"TERM", false},
 		{"LANG", false},
 		{"LC_ALL", false},
@@ -275,6 +277,15 @@ func TestFilterEnv(t *testing.T) {
 			acceptEnv:        []string{"*"},
 			environ:          []string{"MY VAR=1", "WEIRD\tNAME=2", "MY.VAR=3", "MY-VAR=ok", "B\xc3\xa4R=5", "MY_VAR=ok2"},
 			expectedFiltered: []string{"MY-VAR=ok", "MY_VAR=ok2"},
+		},
+		{
+			// Names are capped at 256 bytes, even when the pattern would
+			// match: real names are short, longer ones only tie up the
+			// matcher or bloat the child's "su -w" allowlist.
+			name:             "oversized-name-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{strings.Repeat("A", maxAcceptEnvNameLen) + "=x", strings.Repeat("B", maxAcceptEnvNameLen+1) + "=x", "GOOD=1"},
+			expectedFiltered: []string{strings.Repeat("A", maxAcceptEnvNameLen) + "=x", "GOOD=1"},
 		},
 	}
 

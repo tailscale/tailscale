@@ -1284,6 +1284,23 @@ func TestAcceptEnvPair(t *testing.T) {
 		{"LC_FOO=x", true},
 		{"LD_PRELOAD=naah", false},
 		{"TERM=screen-256color", true},
+		{"TERM=xterm-256color", true},
+		// TERM is a capability name, not a path.
+		{"TERM=a/b", false},
+		// Locale names reach root su/login environments where glibc treats
+		// path-like values as locale-data paths and leading dashes as its
+		// own options.
+		{"LANG=en_US.UTF-8", true},
+		{"LANG=../..", false},
+		{"LANG=../../x", false},
+		{"LANG=/x", false},
+		{"LANG=-x", false},
+		{"LC_FOO=-x", false},
+		{"LC_FOO=en_US", true},
+		{"LC_FOO=a/b", false},
+		// NUL would truncate on exec.
+		{"TERM=x\x00y", false},
+		{"LANG=x\x00y", false},
 	}
 	for _, tt := range tests {
 		if got := acceptEnvPair(tt.in); got != tt.want {
