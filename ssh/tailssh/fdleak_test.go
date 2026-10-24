@@ -592,6 +592,7 @@ func newDirectSessionServer(t *testing.T, handler func(c *conn, s gliderssh.Sess
 	t.Cleanup(sc.closeFwdMonitor)
 	sc.insecureSkipTailscaleAuth = true
 	sc.localUser = um
+	sc.mappedLocalUser = um.Username
 	for _, g := range testGroups(t) {
 		sc.userGroupIDs = append(sc.userGroupIDs, strconv.Itoa(g))
 	}

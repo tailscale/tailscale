@@ -354,7 +354,7 @@ func TestEvalSSHPolicy(t *testing.T) {
 				info: tt.ci,
 				srv:  &server{logf: tstest.WhileTestRunningLogger(t)},
 			}
-			got, gotUser, gotAcceptEnv, result := c.evalSSHPolicy(tt.policy)
+			got, gotUser, gotAcceptEnv, _, result := c.evalSSHPolicy(tt.policy)
 			if result != tt.wantResult {
 				t.Errorf("result = %v; want %v", result, tt.wantResult)
 			}
@@ -1278,18 +1278,20 @@ func TestSSHAuthFlow(t *testing.T) {
 			wantBanners:  []string{"Welcome to Tailscale SSH!"},
 		},
 	}
-	s := &server{
-		logf: tstest.WhileTestRunningLogger(t),
-	}
-	defer s.Shutdown()
 	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
 	for _, tc := range tests {
 		for _, authMethods := range [][]string{nil, {"publickey", "password"}, {"password", "publickey"}} {
 			t.Run(fmt.Sprintf("%s-skip-none-auth-%v", tc.name, strings.Join(authMethods, "-then-")), func(t *testing.T) {
-				s.logf = tstest.WhileTestRunningLogger(t)
+				// A fresh server per subtest: clientAuth's go recheckPolicy
+				// outlives the subtest's conn and races a shared server's
+				// swapped lb/logf between subtests.
+				s := &server{
+					logf: tstest.WhileTestRunningLogger(t),
+					lb:   tc.state,
+				}
+				defer s.Shutdown()
 
 				sc, dc := memnet.NewTCPConn(src, dst, 1024)
-				s.lb = tc.state
 				sshUser := "alice"
 				if tc.sshUser != "" {
 					sshUser = tc.sshUser
@@ -1648,14 +1650,25 @@ func TestOnPolicyChangeSkipsPreAuthConns(t *testing.T) {
 						matchingRule: tt.sshRule,
 					},
 				}
+				// An authed conn carries the grant and the looked-up local user
+				// it latched at auth time.
+				latched := &tailcfg.SSHAction{Accept: true}
+				lu, err := userLookup(currentUser)
+				if err != nil {
+					t.Skipf("no local user %q: %v", currentUser, err)
+				}
 				c := &conn{
-					srv: srv,
+					srv:         srv,
+					action0:     latched,
+					finalAction: latched,
 					info: &sshConnInfo{
 						sshUser: "alice",
 						src:     netip.MustParseAddrPort("1.2.3.4:30343"),
 						dst:     netip.MustParseAddrPort("100.100.100.102:22"),
 					},
-					localUser: &userMeta{User: user.User{Username: currentUser}},
+					localUser: lu,
+					// Latch the auth-time policy spelling for this synthetic conn.
+					mappedLocalUser: tt.sshRule.SSHUsers["alice"],
 				}
 				srv.activeConns = map[*conn]bool{c: true}
 				ctx, cancel := context.WithCancelCause(context.Background())

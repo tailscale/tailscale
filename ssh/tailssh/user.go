@@ -7,6 +7,7 @@ package tailssh
 
 import (
 	"os/user"
+	"strconv"
 
 	"tailscale.com/util/osuser"
 )
@@ -23,7 +24,13 @@ type userMeta struct {
 // userLookup is like os/user.Lookup but it returns a *userMeta wrapper
 // around a *user.User with extra fields.
 func userLookup(username string) (*userMeta, error) {
-	u, s, err := osuser.LookupByUsernameWithShell(username)
+	// getent accepts numeric UIDs as well as names. Use the same semantics
+	// in the os/user fallback, rather than looking a UID up as a name.
+	lookup := osuser.LookupByUsernameWithShell
+	if _, err := strconv.ParseUint(username, 10, 32); err == nil {
+		lookup = osuser.LookupByUIDWithShell
+	}
+	u, s, err := lookup(username)
 	if err != nil {
 		return nil, err
 	}
