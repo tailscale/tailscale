@@ -948,8 +948,14 @@ func sftpSubsystemSession(t *testing.T, client *testssh.Client) (status int, out
 		io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch)
 	}()
 	// Refusal messages (e.g. "tailscale: access revoked") are written
-	// to the channel's stderr stream, so capture extended data too.
-	go io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch.Stderr())
+	// to the channel's stderr stream. Capture extended data too. The
+	// stderr copier gets its own done channel. The wait loop below
+	// lets it drain before the deferred channel Close runs.
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch.Stderr())
+	}()
 
 	ok, err := ch.SendRequest("subsystem", true, testssh.Marshal(&struct{ Subsystem string }{Subsystem: "sftp"}))
 	if err != nil || !ok {
@@ -974,11 +980,13 @@ func sftpSubsystemSession(t *testing.T, client *testssh.Client) (status int, out
 		t.Errorf("sftp session did not exit")
 		return -1, ""
 	}
-	// Let the output copier drain whatever the server wrote before the
+	// Let both copiers drain whatever the server wrote before the
 	// exit-status request before the deferred channel Close cuts it off.
-	select {
-	case <-copyDone:
-	case <-time.After(5 * time.Second):
+	for _, done := range []chan struct{}{copyDone, stderrDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
