@@ -150,7 +150,10 @@ func checkGetentInput(usernameOrUID string) bool {
 // tailscaled binaries without cgo (as we distribute), we can still look up
 // PAM/NSS users which the standard library's os/user without cgo won't get
 // (because of no libc hooks). If "getent" fails, userLookupGetent falls back
-// to the standard library.
+// to the standard library. If both fail, an explicit getent failure is
+// preserved rather than turning a directory outage into an absent local user.
+// getent exit 2 is treated as not found, though NSS may also report it during
+// an outage; that case cannot be distinguished from account deletion.
 func userLookupGetent(usernameOrUID string, std lookupStd) (*user.User, string, error) {
 	// Do some basic validation before passing this string to "getent", even though
 	// getent should do its own validation.
@@ -172,16 +175,28 @@ func userLookupGetent(usernameOrUID string, std lookupStd) (*user.User, string, 
 	out, err := execGetent(ctx, args...)
 	if err != nil {
 		log.Printf("error calling getent for user %q: %v", usernameOrUID, err)
-		u, err := std(usernameOrUID)
-		return u, "", err
+		return getentFallback(usernameOrUID, std, err)
 	}
 	u, shell, err := parseGetentUser(out)
 	if err != nil {
 		log.Printf("getent for user %q returned invalid output %q: %v", usernameOrUID, out, err)
-		u, err := std(usernameOrUID)
-		return u, "", err
+		return getentFallback(usernameOrUID, std, err)
 	}
 	return u, shell, nil
+}
+
+func getentFallback(name string, std lookupStd, getentErr error) (*user.User, string, error) {
+	u, err := std(name)
+	if err == nil {
+		return u, "", nil
+	}
+	// If getent is unavailable on this system, os/user is authoritative.
+	// Otherwise only exit 2 means the requested key was not found.
+	exit, _ := errors.AsType[*exec.ExitError](getentErr)
+	if errors.Is(getentErr, exec.ErrNotFound) || (exit != nil && exit.ExitCode() == 2) {
+		return nil, "", err
+	}
+	return nil, "", fmt.Errorf("getent lookup failed: %w (os/user fallback: %v)", getentErr, err)
 }
 
 func probeGetentDoubleDashSupport() bool {

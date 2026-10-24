@@ -89,17 +89,34 @@ func newFwdTestConn(t *testing.T, lu *userMeta, final *tailcfg.SSHAction) *conn 
 	} else {
 		t.Fatalf("os.Getgroups: %v", err)
 	}
+	// Install a matching policy and authenticated state for forwarding rechecks.
+	rule := &tailcfg.SSHRule{
+		SSHUsers:   map[string]string{lu.Username: lu.Username},
+		Action:     final,
+		Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+	}
 	c := &conn{
 		// t.Logf so bind/spawn failures are visible in test output.
 		// tailscaledPath is the reachable copy of the test binary: the
 		// monitor exec'd from it spawns the fwd children from the same
 		// path, and under a root run the bound user can exec the copy
 		// but not the original.
-		srv:          &server{logf: t.Logf, tailscaledPath: exe},
-		localUser:    lu,
-		userGroupIDs: groups,
-		finalAction:  final,
+		srv: &server{logf: t.Logf, tailscaledPath: exe, lb: &localState{
+			sshEnabled:   true,
+			matchingRule: rule,
+		}},
+		localUser:       lu,
+		mappedLocalUser: lu.Username,
+		userGroupIDs:    groups,
+		action0:         final,
+		finalAction:     final,
+		info: &sshConnInfo{
+			sshUser: lu.Username,
+			src:     netip.MustParseAddrPort("100.100.100.101:2231"),
+			dst:     netip.MustParseAddrPort("100.100.100.102:22"),
+		},
 	}
+	c.authCompleted.Store(true)
 	t.Cleanup(c.closeFwdMonitor)
 	return c
 }
