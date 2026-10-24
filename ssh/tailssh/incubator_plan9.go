@@ -428,7 +428,7 @@ func envForUser(u *userMeta) []string {
 	return []string{
 		fmt.Sprintf("user=%s", u.Username),
 		fmt.Sprintf("home=%s", u.HomeDir),
-		fmt.Sprintf("path=%s", defaultPathForUser(&u.User)),
+		fmt.Sprintf("path=%s", defaultPathForUser(u)),
 	}
 }
 

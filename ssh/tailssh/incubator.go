@@ -1145,7 +1145,7 @@ func envForUser(u *userMeta) []string {
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),
 		fmt.Sprintf("HOME=%s", u.HomeDir),
-		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
+		fmt.Sprintf("PATH=%s", defaultPathForUser(u)),
 	}
 }
 
