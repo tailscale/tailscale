@@ -216,9 +216,15 @@ func (c *StatCache) setLocked(name string, depth int, ce *cacheEntry) {
 		cache = ttlcache.New(
 			ttlcache.WithTTL[string, *cacheEntry](c.TTL),
 		)
-		go cache.Start()
 		c.cachesByDepthAndPath[depth] = cache
 	}
+	// Rather than running ttlcache's background cleanup goroutine (which
+	// would need to be started and stopped, and which races if Stop is
+	// called before Start runs), evict expired entries opportunistically
+	// on each write. Get already ignores expired entries, so this only
+	// bounds memory. DeleteExpired is cheap: it pops from the front of the
+	// expiration heap and stops at the first unexpired entry.
+	cache.DeleteExpired()
 	cache.Set(name, ce, ttlcache.DefaultTTL)
 }
 
@@ -233,15 +239,6 @@ func (c *StatCache) invalidate() {
 
 	for _, cache := range c.cachesByDepthAndPath {
 		cache.DeleteAll()
-	}
-}
-
-func (c *StatCache) stop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for _, cache := range c.cachesByDepthAndPath {
-		cache.Stop()
 	}
 }
 
