@@ -505,6 +505,16 @@ func TestLocalUnixForwarding(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ul.Close() })
+	// The server dials through a child bound to the session user's
+	// credentials. Make the root-created socket and its directory
+	// traversable and connectable by testuser, modeling a service socket
+	// the user is allowed to reach.
+	if err := os.Chmod(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(socketPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
 
 	// The service echoes back whatever it receives, like an API server would.
 	go func() {
@@ -592,6 +602,13 @@ func TestReverseUnixForwarding(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 	remoteSocketPath := filepath.Join(socketDir, "reverse.sock")
+	// The server-side socket is created by a child bound to the
+	// session user's credentials, so the directory must be writable and
+	// traversable by testuser. The test process, which is root, then
+	// connects to the user-owned socket.
+	if err := os.Chmod(socketDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
 
 	ln, err := cl.ListenUnix(remoteSocketPath)
 	if err != nil {
@@ -599,9 +616,14 @@ func TestReverseUnixForwarding(t *testing.T) {
 	}
 	t.Cleanup(func() { ln.Close() })
 
-	// Verify the socket file was created on the server side.
-	if _, err := os.Stat(remoteSocketPath); err != nil {
+	// Verify the socket file was created on the server side, owned by
+	// the session user and readable and writable only by them.
+	fi, err := os.Stat(remoteSocketPath)
+	if err != nil {
 		t.Fatalf("reverse forwarded socket not created: %s", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("reverse socket mode = %o; want 0600", got)
 	}
 
 	// Accept a connection from the tunnel (client side) and write data.

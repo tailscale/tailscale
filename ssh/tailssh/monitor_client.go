@@ -107,6 +107,17 @@ func (mc *monitorClient) readLoop() {
 		if err != nil {
 			return
 		}
+		// Acknowledge receipt of any relayed descriptors so the monitor
+		// releases its hold on its copies. The recvmsg in readFrame is
+		// what transfers ownership; see the monitor_rpc.go header for
+		// the darwin kernel behavior the acknowledgment covers. A write
+		// failure means the channel is going away; the monitor's
+		// teardown closes its parked copies either way.
+		if len(fds) > 0 {
+			mc.writeMu.Lock()
+			_ = mc.rpc.writeFrame(rpcFdAckReq(f.ID))
+			mc.writeMu.Unlock()
+		}
 		mc.dispatch(f, fds)
 	}
 }
@@ -242,6 +253,8 @@ func (mc *monitorClient) Signal(ctx context.Context, pid int, sig string) error 
 
 // Dial dials a unix socket through a one-shot child running with the
 // connection's bound identity and returns the connected socket.
+// The returned socket is acknowledged to the monitor on receipt, which
+// releases the monitor's held copy; see the monitor_rpc.go header.
 func (mc *monitorClient) Dial(ctx context.Context, addr string) (*net.UnixConn, error) {
 	_, fds, err := mc.call(ctx, rpcDialReq(0, addr))
 	if err != nil {
