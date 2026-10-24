@@ -28,3 +28,19 @@ func scrubFds() error {
 	}
 	return scrubFdsByScan("/proc/self/fd")
 }
+
+// fwdChildAttr returns the SysProcAttr for a one-shot forwarding child
+// whose identity must be applied, that is a root monitor's child. The
+// Credential carries the connection's bound identity from ma, and the
+// child leads its own group. This variant has no Pdeathsig field; see
+// monitor_linux.go.
+func fwdChildAttr(ma monitorArgs) *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid:    ma.uid,
+			Gid:    ma.gid,
+			Groups: fwdCredGroups(ma.gid, ma.gids),
+		},
+		Setpgid: true,
+	}
+}
