@@ -17,15 +17,18 @@ import (
 // even when a wildcard acceptEnv pattern like "*" is configured.
 //
 // The denylist also covers other root su/login environment exposure
-// classes: glibc module/file lookups (GCONV_PATH, LOCPATH, NLSPATH) that
-// can load attacker-controlled files into privileged processes, and
-// resolver configuration (HOSTALIASES, RES_OPTIONS) that can redirect
-// privileged hostname lookups.
+// classes: glibc module/file lookups and tunables parsing
+// (GCONV_PATH, LOCPATH, NLSPATH, GLIBC_TUNABLES; CVE-2023-4911 class —
+// glibc parses tunables in root su/login environments with
+// AT_SECURE=0) that can load attacker-controlled files or code into
+// privileged processes, and resolver configuration (HOSTALIASES,
+// RES_OPTIONS) that can redirect privileged hostname lookups.
 func isDangerousEnvVar(name string) bool {
 	upper := strings.ToUpper(name)
 	return strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_") ||
 		upper == "GOTRACEBACK" || upper == "GCONV_PATH" || upper == "LOCPATH" ||
-		upper == "NLSPATH" || upper == "HOSTALIASES" || upper == "RES_OPTIONS"
+		upper == "NLSPATH" || upper == "HOSTALIASES" || upper == "RES_OPTIONS" ||
+		upper == "GLIBC_TUNABLES"
 }
 
 // forbiddenEnvKey reports whether name must never be accepted from the client as a
@@ -41,6 +44,12 @@ func forbiddenEnvKey(name string) bool {
 	}
 	return name == ""
 }
+
+// maxAcceptEnvNameLen caps the length of an accepted environment variable
+// name. Names are short (LOGIN_NAME_MAX is 256 on Linux); a longer "name"
+// is bogus and would only serve to tie up the pattern matcher or bloat the
+// child's "su -w" allowlist.
+const maxAcceptEnvNameLen = 256
 
 // filterEnv filters a passed in environ string slice (a slice with strings
 // representing environment variables in the form "key=value") based on
@@ -67,6 +76,13 @@ func filterEnv(acceptEnv []string, environ []string) ([]string, error) {
 		variableName, _, ok := strings.Cut(envPair, "=")
 		if !ok {
 			return nil, fmt.Errorf(`invalid environment variable: %q. Variables must be in "KEY=VALUE" format`, envPair)
+		}
+
+		// Bound the matcher and allowlist input: names are short
+		// (LOGIN_NAME_MAX), so a longer one is bogus. Reject before any
+		// wildcard matching runs.
+		if len(variableName) > maxAcceptEnvNameLen {
+			continue
 		}
 
 		// Reject NUL bytes: envp entries are NUL-terminated, so a NUL would silently truncate on exec
