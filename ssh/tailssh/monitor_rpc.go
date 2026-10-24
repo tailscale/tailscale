@@ -1,0 +1,487 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
+//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd
+
+// Monitor RPC wire codec.
+//
+// tailscaled and the per-connection ssh-monitor speak newline-delimited
+// JSON over an AF_UNIX SOCK_STREAM socketpair, passing file descriptors
+// as SCM_RIGHTS ancillary data bound to the first byte of the frame
+// that owns them:
+//
+//	{"id":N,"op":"dial","net":"unix","addr":"/run/user/1000/x.sock"}   request
+//	{"id":N,"op":"dial","ok":true}                                     reply carrying at most one fd
+//	{"op":"exit","pid":123,"code":0}                                   unsolicited notification
+//
+// The caller assigns request IDs and replies echo them. The codec
+// decodes and encodes frames and descriptors. ID bookkeeping, read
+// deadlines and op dispatch belong to the RPC loops built on it.
+//
+// Descriptors ride a one-byte herald message, a NUL byte carrying the
+// SCM_RIGHTS data, sent before the frame line they belong to. Frame
+// lines are JSON and never contain a NUL byte, so the receiver locates
+// each herald in the byte stream and attributes its descriptors to the
+// line that follows it, regardless of how the kernel shapes reads. See
+// recvFdSets, sendFds and rpcMaxLine for the descriptor and line-size
+// rules.
+
+package tailssh
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// Monitor RPC operations.
+const (
+	opDial   = "dial"   // request {net:"unix", addr}. reply {ok} + connected fd
+	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
+	opExec   = "exec"   // request {argv, env, dir?, ctty?, fds:0-3} + up to 3 SCM_RIGHTS stdio fds. reply {ok, pid}
+	opSignal = "signal" // request {pid, sig}. reply {ok}
+	opPing   = "ping"   // request {}. reply {ok}
+	opExit   = "exit"   // unsolicited notification {pid, code}. no ID
+)
+
+const (
+	// rpcMaxLine is the line cap. Larger frames are errors in both
+	// directions. The largest legal frame is an exec with a sizeable
+	// environment. The cap keeps a frame from wedging a socketpair.
+	rpcMaxLine = 256 << 10
+
+	// rpcMaxFds is the maximum number of SCM_RIGHTS descriptors any one
+	// frame may carry: exec passes child stdin, stdout and stderr.
+	rpcMaxFds = 3
+
+	// rpcFdHerald is the one-byte payload of the message that carries a
+	// frame's descriptors. It is a NUL byte, which never appears inside
+	// a JSON frame line, so the receiver can locate it in the byte
+	// stream and attribute the descriptors to the line that follows it.
+	rpcFdHerald = 0
+
+	// rpcMaxHeraldRead is the number of herald cmsgs one read can
+	// carry. A stream read can span several messages, each carrying at
+	// most one SCM_RIGHTS cmsg, so the OOB buffer is sized for this
+	// many. Exceeding it truncates the ancillary data and the read
+	// fails.
+	rpcMaxHeraldRead = 64
+
+	// rpcWriteTimeout bounds each writeFrame call.
+	rpcWriteTimeout = 30 * time.Second
+)
+
+// rpcFrame is one wire frame. It is a request, a reply to a request, or
+// an unsolicited notification. Exactly one struct decodes all three
+// shapes because they share the wire format. Only the fields listed for
+// each op are meaningful. See the op constants above for the per-op
+// field sets.
+type rpcFrame struct {
+	// ID is the request ID, assigned by the requester and echoed in the
+	// reply. The zero ID, absent on the wire, marks an unsolicited
+	// notification.
+	ID int64 `json:"id,omitzero"`
+	// Op is the operation, one of the op* constants.
+	Op string `json:"op"`
+
+	// dial and listen requests.
+	Net    string `json:"net,omitempty"`  // dial: always "unix". listen: "unix" or "tcp"
+	Addr   string `json:"addr,omitempty"` // target address to dial or bind
+	Unlink bool   `json:"unlink,omitzero"`
+	Agent  bool   `json:"agent,omitzero"` // listen: create the agent-forwarding socket
+
+	// exec request. Stdio descriptors arrive as SCM_RIGHTS with the
+	// frame. Fds declares how many so the receiver can detect a
+	// mismatch between announced and delivered descriptors.
+	Argv []string `json:"argv,omitempty"`
+	Env  []string `json:"env,omitempty"`
+	Dir  string   `json:"dir,omitempty"`
+	Ctty bool     `json:"ctty,omitzero"`
+	Fds  int      `json:"fds,omitzero"`
+
+	// signal request, exit notification, and exec reply.
+	Pid  int    `json:"pid,omitzero"`
+	Sig  string `json:"sig,omitempty"`
+	Code int    `json:"code,omitzero"` // exit notification only
+
+	// Reply fields.
+	OK   bool   `json:"ok,omitzero"`
+	Err  string `json:"err,omitempty"`
+	Path string `json:"path,omitempty"` // listen reply: the bound socket's path
+}
+
+func rpcPingReq(id int64) rpcFrame {
+	return rpcFrame{ID: id, Op: opPing}
+}
+
+func rpcDialReq(id int64, addr string) rpcFrame {
+	return rpcFrame{ID: id, Op: opDial, Net: "unix", Addr: addr}
+}
+
+func rpcListenReq(id int64, network, addr string, unlink, agent bool) rpcFrame {
+	return rpcFrame{ID: id, Op: opListen, Net: network, Addr: addr, Unlink: unlink, Agent: agent}
+}
+
+func rpcExecReq(id int64, argv, env []string, dir string, ctty bool, nfds int) rpcFrame {
+	return rpcFrame{ID: id, Op: opExec, Argv: argv, Env: env, Dir: dir, Ctty: ctty, Fds: nfds}
+}
+
+func rpcSignalReq(id int64, pid int, sig string) rpcFrame {
+	return rpcFrame{ID: id, Op: opSignal, Pid: pid, Sig: sig}
+}
+
+// rpcExecReply is the reply to an exec request, OK plus the spawned
+// child's pid. The child's exit arrives later as an unsolicited exit
+// notification. The notification carries this pid.
+func rpcExecReply(id int64, pid int) rpcFrame {
+	return rpcFrame{ID: id, Op: opExec, OK: true, Pid: pid}
+}
+
+func rpcOKReply(id int64, op string) rpcFrame {
+	return rpcFrame{ID: id, Op: op, OK: true}
+}
+
+func rpcErrReply(id int64, op string, err error) rpcFrame {
+	return rpcFrame{ID: id, Op: op, Err: fmt.Sprint(err)}
+}
+
+// rpcExitNotify is the unsolicited child-exit notification frame.
+func rpcExitNotify(pid, code int) rpcFrame {
+	return rpcFrame{Op: opExit, Pid: pid, Code: code}
+}
+
+// maxFdsForOp reports the maximum number of SCM_RIGHTS descriptors a
+// frame of op may carry in either direction. Exec carries child stdio.
+// Dial and listen replies carry the connected or bound socket.
+func maxFdsForOp(op string) int {
+	switch op {
+	case opExec:
+		return rpcMaxFds
+	case opDial, opListen:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// checkFds validates the number of descriptors received with a frame of
+// this shape against the protocol's per-op limits.
+func (f rpcFrame) checkFds(n int) error {
+	if max := maxFdsForOp(f.Op); n > max {
+		return fmt.Errorf("monitor rpc: op %q carried %d fds; protocol allows at most %d", f.Op, n, max)
+	}
+	if f.Op == opExec && f.Fds > 0 && f.Fds != n {
+		return fmt.Errorf("monitor rpc: exec declared %d fds but %d arrived", f.Fds, n)
+	}
+	return nil
+}
+
+// closeFds closes each descriptor, ignoring errors. It is used only on
+// error and teardown paths where the set is being abandoned.
+func closeFds(fds []int) {
+	for _, fd := range fds {
+		unix.Close(fd)
+	}
+}
+
+// recvFds parses the SCM_RIGHTS descriptors from the ancillary data of
+// one ReadMsgUnix call, using the oob slice and flags that call
+// returned, and marks every received descriptor close-on-exec before
+// returning. The caller owns the returned descriptors.
+func recvFdSets(oob []byte, flags int) ([][]int, error) {
+	if flags&unix.MSG_CTRUNC != 0 {
+		// The OOB buffer was too small for the incoming cmsgs; the
+		// kernel has already closed the descriptors that did not fit.
+		return nil, errors.New("monitor rpc: ancillary data truncated (more fds than the protocol allows)")
+	}
+	if len(oob) == 0 {
+		return nil, nil
+	}
+	cmsgs, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return nil, err
+	}
+	var sets [][]int
+	var all []int
+	for _, cm := range cmsgs {
+		if cm.Header.Level != unix.SOL_SOCKET || cm.Header.Type != unix.SCM_RIGHTS {
+			return nil, fmt.Errorf("monitor rpc: unexpected control message (level %d, type %d)", cm.Header.Level, cm.Header.Type)
+		}
+		got, err := unix.ParseUnixRights(&cm)
+		if err != nil {
+			closeFds(all)
+			return nil, err
+		}
+		for _, fd := range got {
+			if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+				closeFds(append(all, got...))
+				return nil, err
+			}
+		}
+		sets = append(sets, got)
+		all = append(all, got...)
+		if len(got) > rpcMaxFds {
+			closeFds(all)
+			return nil, fmt.Errorf("monitor rpc: frame carried %d fds; protocol allows at most %d", len(got), rpcMaxFds)
+		}
+	}
+	return sets, nil
+}
+
+// sendFds writes b to c, attaching any fds as SCM_RIGHTS ancillary data
+// bound to the first byte of b. It refuses an empty payload with fds
+// and does not close the descriptors it sends. On a short write the
+// descriptors are already delivered; the caller resends only the
+// remaining bytes as plain data.
+func sendFds(c *net.UnixConn, b []byte, fds []int) (int, error) {
+	if len(fds) > rpcMaxFds {
+		return 0, fmt.Errorf("monitor rpc: refusing to send %d fds; protocol allows at most %d", len(fds), rpcMaxFds)
+	}
+	if len(b) == 0 {
+		if len(fds) > 0 {
+			return 0, errors.New("monitor rpc: refusing to send SCM_RIGHTS with an empty payload")
+		}
+		return 0, nil
+	}
+	if len(fds) == 0 {
+		return c.Write(b)
+	}
+	n, _, err := c.WriteMsgUnix(b, unix.UnixRights(fds...), nil)
+	return n, err
+}
+
+// fdSender abstracts "write bytes, maybe with descriptors" so the
+// short-write handling below can be unit-tested with a mock.
+type fdSender interface {
+	sendFds(b []byte, fds []int) (int, error)
+}
+
+type unixSender struct{ c *net.UnixConn }
+
+func (s unixSender) sendFds(b []byte, fds []int) (int, error) {
+	return sendFds(s.c, b, fds)
+}
+
+// writeLine writes one complete frame line including the newline and
+// resends the remainder after a short write. Descriptors are sent
+// before the line as a one-byte herald message, a NUL byte carrying the
+// SCM_RIGHTS data. The receiver attributes the descriptors to the line
+// following the herald byte. Frame lines are JSON and never contain a
+// NUL byte, so the herald is unambiguous in the stream.
+func writeLine(w fdSender, line []byte, fds []int) error {
+	if len(fds) > 0 {
+		if _, err := w.sendFds([]byte{rpcFdHerald}, fds); err != nil {
+			return err
+		}
+		fds = nil
+	}
+	n, err := w.sendFds(line, fds)
+	for err == nil && n < len(line) {
+		var k int
+		k, err = w.sendFds(line[n:], nil)
+		n += k
+	}
+	if err != nil {
+		if n < len(line) {
+			return fmt.Errorf("monitor rpc: short write %d/%d bytes: %w", n, len(line), err)
+		}
+		return err
+	}
+	return nil
+}
+
+// rpcConn is the frame codec for one end of the socketpair between
+// tailscaled and the ssh-monitor. It is safe for use from a single
+// goroutine per direction, the RPC loops.
+type rpcConn struct {
+	c *net.UnixConn
+
+	// The write deadline is set before and cleared after every write.
+	writeTimeout time.Duration
+
+	// rbuf holds received bytes under assembly plus any complete lines
+	// not yet returned. lineFds holds the descriptors received for each
+	// line still buffered in rbuf, front-aligned with those lines.
+	// Entries are nil for lines that carried no descriptors. Herald
+	// bytes are stripped at attribution, so rbuf holds only frame-line
+	// bytes.
+	rbuf    []byte
+	lineFds [][]int
+
+	// Scratch buffers reused by every ReadMsgUnix call. oobBuf is sized
+	// for several cmsgs, since one read can span several fd-carrying
+	// messages. See rpcMaxHeraldRead.
+	readBuf []byte
+	oobBuf  []byte
+}
+
+// newRPCConn returns a codec over c. The caller keeps ownership of c and
+// its read-side deadlines. Close c when done.
+func newRPCConn(c *net.UnixConn) *rpcConn {
+	return &rpcConn{
+		c:            c,
+		writeTimeout: rpcWriteTimeout,
+		readBuf:      make([]byte, 16<<10),
+		oobBuf:       make([]byte, rpcMaxHeraldRead*unix.CmsgSpace(rpcMaxFds*4)),
+	}
+}
+
+// readFrame reads the next complete frame and the descriptors that
+// arrived with it. The caller owns the returned descriptors and must
+// close them, typically by passing them to wrapUnixConn. Read deadlines
+// are the caller's concern; a read timeout returns os.ErrDeadlineExceeded
+// and preserves any partially received line, and any other error closes
+// the held descriptors and leaves the connection broken.
+func (m *rpcConn) readFrame() (f rpcFrame, fds []int, err error) {
+	// On any error other than a read timeout, close the descriptor sets
+	// still queued in lineFds. Each error return closes its own fd set
+	// before returning.
+	defer func() {
+		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+			closeFds(fds)
+			for _, set := range m.lineFds {
+				closeFds(set)
+			}
+			m.lineFds = nil
+			m.rbuf = nil
+		}
+	}()
+
+	for {
+		// A complete line is buffered. Strip the newline, decode and return.
+		if i := bytes.IndexByte(m.rbuf, '\n'); i >= 0 {
+			var lfds []int
+			if len(m.lineFds) > 0 {
+				lfds, m.lineFds = m.lineFds[0], m.lineFds[1:]
+			}
+			line := m.rbuf[:i]
+			m.rbuf = m.rbuf[i+1:]
+			if len(line) > rpcMaxLine {
+				closeFds(lfds)
+				return f, nil, fmt.Errorf("monitor rpc: frame of %d bytes exceeds %d-byte line cap", len(line), rpcMaxLine)
+			}
+			if bytes.IndexByte(line, 0) >= 0 {
+				closeFds(lfds)
+				return f, nil, errors.New("monitor rpc: NUL byte in frame")
+			}
+			if err := json.Unmarshal(line, &f); err != nil {
+				closeFds(lfds)
+				return f, nil, fmt.Errorf("monitor rpc: bad frame: %w", err)
+			}
+			if err := f.checkFds(len(lfds)); err != nil {
+				closeFds(lfds)
+				return f, nil, err
+			}
+			return f, lfds, nil
+		}
+
+		// No newline yet. Refuse to buffer past the cap before reading more.
+		if len(m.rbuf) > rpcMaxLine {
+			return f, nil, fmt.Errorf("monitor rpc: frame exceeds %d-byte line cap", rpcMaxLine)
+		}
+
+		n, oobn, flags, _, rerr := m.c.ReadMsgUnix(m.readBuf, m.oobBuf)
+		if rerr != nil {
+			return f, nil, rerr
+		}
+		if n == 0 && oobn == 0 {
+			return f, nil, io.EOF
+		}
+		sets, ferr := recvFdSets(m.oobBuf[:oobn], flags)
+		if ferr != nil {
+			return f, nil, ferr
+		}
+		m.rbuf = append(m.rbuf, m.readBuf[:n]...)
+
+		// The appended bytes hold one herald byte per descriptor set.
+		// The i-th herald byte in m.rbuf pairs with the i-th set, and
+		// the set belongs to the line beginning after its herald. A
+		// read can span several messages on some platforms, so a
+		// herald can arrive in the same read as later lines' bytes. The
+		// pairing is by byte position, so the attribution holds
+		// regardless of how the kernel shapes reads.
+		failSets := func(why string) error {
+			for _, set := range sets {
+				closeFds(set)
+			}
+			return errors.New(why)
+		}
+		var hers []int
+		for i, b := range m.rbuf {
+			if b == rpcFdHerald {
+				hers = append(hers, i)
+			}
+		}
+		if len(hers) != len(sets) {
+			if len(sets) > 0 {
+				return f, nil, failSets("monitor rpc: fds without a herald byte")
+			}
+			return f, nil, failSets("monitor rpc: herald byte without fds")
+		}
+		for i, h := range hers {
+			if h > 0 && m.rbuf[h-1] != '\n' {
+				return f, nil, failSets("monitor rpc: herald byte inside a frame line")
+			}
+			k := bytes.Count(m.rbuf[:h], []byte{'\n'})
+			for len(m.lineFds) <= k {
+				m.lineFds = append(m.lineFds, nil)
+			}
+			if m.lineFds[k] != nil {
+				return f, nil, failSets("monitor rpc: two fd sets attributed to one frame")
+			}
+			m.lineFds[k] = sets[i]
+		}
+		// The herald bytes are paired. Strip them so no NUL reaches
+		// the line parser.
+		m.rbuf = bytes.ReplaceAll(m.rbuf, []byte{rpcFdHerald}, nil)
+	}
+}
+
+// writeFrame encodes f as one JSON line and writes it. See sendFds for
+// descriptor attachment and ownership.
+func (m *rpcConn) writeFrame(f rpcFrame, fds ...int) error {
+	if len(fds) > maxFdsForOp(f.Op) {
+		return fmt.Errorf("monitor rpc: op %q cannot carry %d fds", f.Op, len(fds))
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	if len(b) > rpcMaxLine {
+		return fmt.Errorf("monitor rpc: frame of %d bytes exceeds %d-byte line cap", len(b), rpcMaxLine)
+	}
+	if err := m.c.SetWriteDeadline(time.Now().Add(m.writeTimeout)); err != nil {
+		return err
+	}
+	defer m.c.SetWriteDeadline(time.Time{})
+	return writeLine(unixSender{m.c}, b, fds)
+}
+
+// wrapUnixConn wraps a raw file descriptor in a *net.UnixConn for read,
+// write, CloseWrite and deadlines.
+//
+// The fd is consumed on return, whether the call succeeds or fails: it
+// is closed exactly once here, and the returned conn owns an
+// independent dup of the socket that the caller must Close.
+func wrapUnixConn(fd int) (*net.UnixConn, error) {
+	f := os.NewFile(uintptr(fd), "monitor-rpc-fd")
+	c, err := net.FileConn(f)
+	f.Close() // exactly-once close of fd. The dup in c is unaffected
+	if err != nil {
+		return nil, err
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("monitor rpc: fd %d is a %T, not a unix stream socket", fd, c)
+	}
+	return uc, nil
+}
