@@ -372,31 +372,6 @@ func TestMonitorBadExec(t *testing.T) {
 	}
 }
 
-// TestMonitorDialListenNotImplemented pins the placeholder shape. The
-// ops are parsed but answered with a descriptive not-implemented error
-// until their children are wired up.
-func TestMonitorDialListenNotImplemented(t *testing.T) {
-	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
-	ctx, cancel := testCtx()
-	defer cancel()
-
-	for _, f := range []rpcFrame{
-		rpcDialReq(0, "/tmp/some.sock"),
-		rpcListenReq(0, "unix", "/tmp/some.sock", false, false),
-		rpcListenReq(0, "tcp", "127.0.0.1:0", false, false),
-		rpcListenReq(0, "", "", false, true /* agent */),
-	} {
-		if _, err := mc.call(ctx, f); err == nil {
-			t.Fatalf("op %q: unexpectedly implemented", f.Op)
-		} else if !strings.Contains(err.Error(), "not implemented") {
-			t.Fatalf("op %q: error %q does not describe the placeholder", f.Op, err)
-		}
-	}
-	if err := mc.Ping(ctx); err != nil {
-		t.Fatalf("ping after unimplemented ops: %v", err)
-	}
-}
-
 // TestMonitorTeardown closes the client and asserts the teardown path.
 // The monitor exits promptly, through EOF, group SIGHUP, reaping,
 // SIGKILL of survivors, and exit 0. Its children die with it.

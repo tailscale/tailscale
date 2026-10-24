@@ -38,10 +38,12 @@ import (
 
 const (
 	// monExecOpDeadline bounds the exec op's spawn-and-reply phase. It
-	// does not bound the child's lifetime. monDialOpDeadline bounds a
-	// one-shot op from spawn to result.
-	monDialOpDeadline = 10 * time.Second
+	// does not bound the child's lifetime.
 	monExecOpDeadline = 30 * time.Second
+
+	// monFwdOpDeadline bounds a one-shot forwarding child from spawn to
+	// result. On expiry the child's group is SIGKILLed.
+	monFwdOpDeadline = 10 * time.Second
 
 	// monTeardownReap bounds each reap sweep in teardown. A child still
 	// alive after the SIGKILL sweep is uninterruptible. It is left in
@@ -50,9 +52,12 @@ const (
 )
 
 // monChild is one entry of the monitor's child table, keyed by pid.
-// Every child leads its own group, so pgid equals pid.
+// Every child leads its own group, so pgid equals pid. A oneshot
+// child, a dialer or listener, reports its outcome in its op's reply,
+// and its exit is reaped silently by the sweep after its SIGCHLD.
 type monChild struct {
-	pgid int // the child's process group. Equal to its pid.
+	pgid    int  // the child's process group. Equal to its pid.
+	oneshot bool // dialer or listener child. Outcome carried by the op reply.
 }
 
 // monitor is the running ssh-monitor process state, owned entirely by
@@ -259,10 +264,12 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 	case opSignal:
 		closeFds(fds)
 		m.handleSignal(f)
-	case opDial, opListen:
-		// Reply a descriptive error rather than ignoring the frame.
+	case opDial:
 		closeFds(fds)
-		m.reply(rpcErrReply(f.ID, f.Op, fmt.Errorf("op %q not implemented", f.Op)))
+		m.handleDial(f)
+	case opListen:
+		closeFds(fds)
+		m.handleListen(f)
 	default:
 		closeFds(fds)
 		m.reply(rpcErrReply(f.ID, f.Op, fmt.Errorf("unknown op %q", f.Op)))
@@ -294,6 +301,9 @@ func (m *monitor) handleExec(f rpcFrame, fds []int) {
 		cmd.Env = f.Env
 	}
 	cmd.Dir = monChildDir(f.Dir)
+	// monStdio wraps the stdio descriptors. A failure before ownership
+	// moves to files closes every descriptor exactly once, in
+	// monStdio's error path.
 	files, err := monStdio(fds)
 	if err != nil {
 		// monStdio's error path already closed every descriptor. Nil
@@ -383,11 +393,121 @@ func killGroup(pgid int, sig unix.Signal) error {
 	return unix.Kill(-pgid, sig)
 }
 
+// handleDial serves the dial op. A one-shot dialer child dials the
+// unix socket with the connection's bound identity, as documented in
+// fwdchild.go. The connected descriptor is relayed to tailscaled in
+// the reply.
+func (m *monitor) handleDial(f rpcFrame) {
+	if f.Net != "unix" {
+		m.reply(rpcErrReply(f.ID, opDial, fmt.Errorf("dial: network %q not supported; dial is unix-only", f.Net)))
+		return
+	}
+	if f.Addr == "" || !filepath.IsAbs(f.Addr) {
+		m.reply(rpcErrReply(f.ID, opDial, errors.New("dial: addr must be an absolute unix socket path")))
+		return
+	}
+	m.fwdOp(f.ID, opDial, fwdChildSpec{op: "dial", net: "unix", addr: f.Addr}, func(string) rpcFrame {
+		return rpcOKReply(f.ID, opDial)
+	})
+}
+
+// handleListen serves the listen op. A one-shot listener child runs
+// with the bound identity. See fwdchild.go for the socket and dir
+// construction. The reply carries the resulting path or address.
+func (m *monitor) handleListen(f rpcFrame) {
+	spec := fwdChildSpec{op: "listen"}
+	switch {
+	case f.Agent:
+		spec.agent = true
+	case f.Net == "unix":
+		if f.Addr == "" || !filepath.IsAbs(f.Addr) {
+			m.reply(rpcErrReply(f.ID, opListen, errors.New("listen unix: addr must be an absolute socket path")))
+			return
+		}
+		spec.net, spec.addr, spec.unlink = "unix", f.Addr, f.Unlink
+	case f.Net == "tcp":
+		if f.Addr == "" {
+			m.reply(rpcErrReply(f.ID, opListen, errors.New("listen tcp: addr is required")))
+			return
+		}
+		spec.net, spec.addr = "tcp", f.Addr
+	default:
+		m.reply(rpcErrReply(f.ID, opListen, fmt.Errorf("listen: network %q not supported (unix, tcp, or agent)", f.Net)))
+		return
+	}
+	m.fwdOp(f.ID, opListen, spec, func(payload string) rpcFrame {
+		r := rpcFrame{ID: f.ID, Op: opListen, OK: true}
+		switch {
+		case f.Agent:
+			r.Path = payload // the agent socket path
+		case f.Net == "unix":
+			r.Path = f.Addr // echo the bound path
+		case f.Net == "tcp":
+			r.Addr = payload // echo the bound address (a 127.0.0.1:0 request yields the concrete port)
+		}
+		return r
+	})
+}
+
+// fwdOp runs one one-shot forwarding op. It spawns the child with the
+// bound identity, waits for its result under monFwdOpDeadline, and
+// relays the child's socket descriptor in the ok reply. The wait blocks
+// the loop for at most the deadline.
+func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(payload string) rpcFrame) {
+	start := time.Now()
+	cmd, result, err := fwdSpawnChild(m, spec)
+	if err != nil {
+		m.reply(rpcErrReply(id, op, err))
+		return
+	}
+	child := &monChild{pgid: cmd.Process.Pid, oneshot: true}
+	m.children[cmd.Process.Pid] = child
+	ok, payload, fd, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline))
+	result.Close()
+	if rerr != nil {
+		m.killChild(child)
+		m.reply(rpcErrReply(id, op, fmt.Errorf("%s: %w", op, rerr)))
+		return
+	}
+	if !ok {
+		// The child's failure reason is preserved verbatim. It is the
+		// child's own error, e.g. the kernel's EACCES for the bound user.
+		m.reply(rpcErrReply(id, op, errors.New(payload)))
+		return
+	}
+	// The child exits by itself right after its send. The sweep reaps
+	// it silently after its SIGCHLD.
+	m.replyFD(reply(payload), fd)
+}
+
+// killChild SIGKILLs a one-shot child's group and reaps it with
+// killGroupAndReap, a bounded non-blocking wait. A child that survives
+// SIGKILL for the budget is left in the table, reaped by the sweep
+// whenever it dies.
+func (m *monitor) killChild(c *monChild) {
+	_ = killGroup(c.pgid, unix.SIGKILL)
+	if killGroupAndReap(c.pgid) {
+		delete(m.children, c.pgid)
+	}
+}
+
+// replyFD writes a reply carrying one descriptor and closes the
+// monitor's copy after the write. After sendmsg the kernel holds its
+// own reference to the passed file, so the peer's copy survives ours
+// closing.
+func (m *monitor) replyFD(f rpcFrame, fd int) {
+	err := m.conn.writeFrame(f, fd)
+	unix.Close(fd)
+	if err != nil {
+		m.broken = true
+	}
+}
+
 // sweep reaps exited children with wait4(WNOHANG) and drops them from
 // the child table. With notify set, it emits one unsolicited exit
 // notification per reaped pid.
 func (m *monitor) sweep(notify bool) {
-	for pid := range m.children {
+	for pid, c := range m.children {
 		var ws unix.WaitStatus
 		wpid, err := unix.Wait4(pid, &ws, unix.WNOHANG, nil)
 		switch {
@@ -396,7 +516,7 @@ func (m *monitor) sweep(notify bool) {
 			// either way.
 			delete(m.children, pid)
 		case wpid == pid:
-			if notify {
+			if notify && !c.oneshot {
 				m.notifyExit(pid, monExitCode(ws))
 			}
 			delete(m.children, pid)
