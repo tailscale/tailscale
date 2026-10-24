@@ -339,6 +339,31 @@ func assertChildHasStdioOnly(t *testing.T, out string) {
 	}
 }
 
+// TestCheckAgentSocketPath pins the shape the agent-forwarding socket
+// path must have. The path comes from the child and steers a root-run
+// directory removal on the session side, so anything beyond the shape
+// the child is supposed to produce is rejected.
+func TestCheckAgentSocketPath(t *testing.T) {
+	for _, tt := range []struct {
+		path  string
+		valid bool
+	}{
+		{"/tmp/auth-agent123456/listener.sock", true},
+		{"/tmp/auth-agent/listener.sock", true},
+		{"/tmp/auth-agent123/inner/listener.sock", false},     // nested dir
+		{"tmp/auth-agent123/listener.sock", false},            // not absolute
+		{"/tmp/auth-agent123/other.sock", false},              // wrong file name
+		{"/tmp/other123/listener.sock", false},                // wrong dir name
+		{"/tmp/auth-agent123/../../etc/listener.sock", false}, // traversal
+		{"/etc/passwd", false},                                // nothing like a socket path
+	} {
+		err := checkAgentSocketPath(tt.path)
+		if got := err == nil; got != tt.valid {
+			t.Errorf("checkAgentSocketPath(%q) err = %v, want valid=%v", tt.path, err, tt.valid)
+		}
+	}
+}
+
 func TestMonitorSignal(t *testing.T) {
 	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
 	exits := collectExits(mc)
@@ -395,31 +420,6 @@ func TestMonitorBadExec(t *testing.T) {
 	// The channel still works after the errors.
 	if err := mc.Ping(ctx); err != nil {
 		t.Fatalf("ping after failed execs: %v", err)
-	}
-}
-
-// TestMonitorDialListenNotImplemented pins the placeholder shape. The
-// ops are parsed but answered with a descriptive not-implemented error
-// until their children are wired up.
-func TestMonitorDialListenNotImplemented(t *testing.T) {
-	mc := startTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
-	ctx, cancel := testCtx()
-	defer cancel()
-
-	for _, f := range []rpcFrame{
-		rpcDialReq(0, "/tmp/some.sock"),
-		rpcListenReq(0, "unix", "/tmp/some.sock", false, false),
-		rpcListenReq(0, "tcp", "127.0.0.1:0", false, false),
-		rpcListenReq(0, "", "", false, true /* agent */),
-	} {
-		if _, err := mc.call(ctx, f); err == nil {
-			t.Fatalf("op %q: unexpectedly implemented", f.Op)
-		} else if !strings.Contains(err.Error(), "not implemented") {
-			t.Fatalf("op %q: error %q does not describe the placeholder", f.Op, err)
-		}
-	}
-	if err := mc.Ping(ctx); err != nil {
-		t.Fatalf("ping after unimplemented ops: %v", err)
 	}
 }
 
