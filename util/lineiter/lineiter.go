@@ -28,7 +28,7 @@ func File(name string) iter.Seq[result.Of[[]byte]] {
 // Lines may be empty.
 func Bytes(bs []byte) iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {
-		for len(bs) > 0 {
+		for bs := bs; len(bs) > 0; {
 			i := bytes.IndexByte(bs, '\n')
 			if i < 0 {
 				yield(bs)
