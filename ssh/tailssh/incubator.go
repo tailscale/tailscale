@@ -108,6 +108,19 @@ func tryExecInDir(ctx context.Context, dir string) error {
 	return exec.ErrNotFound
 }
 
+// directExecAllowed reports whether the direct-exec fallback (used when
+// ss.conn.srv.tailscaledPath is empty) may run a session for lu as the given
+// effective uid. Unlike the incubator path there is no privilege drop, so a
+// root tailscaled must refuse to run a non-root user's session as root,
+// mirroring canSwitchToLocalUser's semantics (a non-root process can only
+// run a session as itself, which run() enforces).
+func directExecAllowed(euid int, lu *userMeta) bool {
+	if euid != 0 {
+		return true
+	}
+	return isRootUser(lu)
+}
+
 // newIncubatorCommand returns a new exec.Cmd configured with
 // `tailscaled be-child ssh` as the entrypoint.
 //
@@ -145,6 +158,14 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 			// SFTP relies on the embedded Go-based SFTP server in tailscaled,
 			// so without tailscaled, we can't serve SFTP.
 			return nil, nil, errors.New("no tailscaled found on path, can't serve SFTP")
+		}
+
+		// Without tailscaled there is no be-child incubator to drop
+		// privileges, so this fallback runs the session as the current
+		// user. A root tailscaled must refuse to run a non-root user's
+		// session as root, mirroring canSwitchToLocalUser's semantics.
+		if !directExecAllowed(os.Geteuid(), ss.conn.localUser) {
+			return nil, nil, fmt.Errorf("refusing to run session for local user %q as root without tailscaled", ss.conn.localUser.Username)
 		}
 
 		loginShell := ss.conn.localUser.LoginShell()
