@@ -146,22 +146,37 @@ func RegisterNewSSHServer(fn newSSHServerFunc) {
 	newSSHServer = fn
 }
 
+// SSHAuthCallback reports whether to accept a new SSH session. It is
+// called for each session before the session is yielded to the
+// listener from [LocalBackend.ListenSSH], with the peer's node and
+// user profile. A session that the callback rejects is refused and is
+// never yielded to Accept.
+//
+// ListenSSH accepts a session from any peer that the tailnet ACL's TCP
+// rules allow. The ACL's SSHPolicy is not used. Use SSHAuthCallback to
+// reject sessions the application does not want.
+type SSHAuthCallback func(tailcfg.NodeView, tailcfg.UserProfile) (permitted bool)
+
 // HookListenSSH is set by the ssh/tailssh package (via feature/ssh) to provide
 // an implementation of ListenSSH for use by tsnet.
-var HookListenSSH feature.Hook[func(net.Listener, *LocalBackend, logger.Logf) (net.Listener, error)]
+var HookListenSSH feature.Hook[func(net.Listener, *LocalBackend, SSHAuthCallback, logger.Logf) (net.Listener, error)]
 
 // ListenSSH wraps the given listener with an SSH server that authenticates
 // connections using Tailscale peer identity. The returned listener's Accept
 // yields net.Conn values that are *tailssh.Session.
 //
+// If auth is nil, every session from a peer that the tailnet ACL's TCP
+// rules allow is accepted. If auth is non-nil, sessions that it rejects
+// are refused. See [SSHAuthCallback].
+//
 // If the ssh/tailssh package has not been linked (e.g. via
 // _ "tailscale.com/feature/ssh"), ListenSSH returns an error.
-func (b *LocalBackend) ListenSSH(ln net.Listener, logf logger.Logf) (net.Listener, error) {
+func (b *LocalBackend) ListenSSH(ln net.Listener, auth SSHAuthCallback, logf logger.Logf) (net.Listener, error) {
 	fn, ok := HookListenSSH.GetOk()
 	if !ok {
 		return nil, errors.New("SSH support not available; import _ \"tailscale.com/feature/ssh\"")
 	}
-	return fn(ln, b, logf)
+	return fn(ln, b, auth, logf)
 }
 
 // watchSession represents a WatchNotifications channel,
