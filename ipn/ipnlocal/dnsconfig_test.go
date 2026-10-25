@@ -5,12 +5,19 @@ package ipnlocal
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	dnsmessage "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
@@ -339,6 +346,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			name: "exit_nodes_need_fallbacks",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
+					ExtraRecords: []tailcfg.DNSRecord{{Name: "example.com", Value: "10.99.0.10"}},
 					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
@@ -350,7 +358,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				AcceptDNS: true,
-				Hosts:     map[dnsname.FQDN][]netip.Addr{},
+				Hosts:     map[dnsname.FQDN][]netip.Addr{"example.com.": ips("10.99.0.10")},
 				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.4.4"},
@@ -361,6 +369,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			name: "not_exit_node_NOT_need_fallbacks",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
+					ExtraRecords: []tailcfg.DNSRecord{{Name: "example.com", Value: "10.99.0.10"}},
 					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
@@ -371,8 +380,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				AcceptDNS: true,
-				Hosts:     map[dnsname.FQDN][]netip.Addr{},
-				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts:     map[dnsname.FQDN][]netip.Addr{"example.com.": ips("10.99.0.10")},
+				Routes:    map[dnsname.FQDN][]*dnstype.Resolver{"example.com.": nil},
 			},
 		},
 		{
@@ -547,6 +556,91 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				t.Errorf("log output wrong\n got: %q\nwant: %q\n", got, tt.wantLog)
 			}
 		})
+	}
+}
+
+// TestExtraRecordSubdomainsForwarded checks that an ExtraRecord with a global
+// resolver does not override upstream answers for names below it (Issue 21787).
+func TestExtraRecordSubdomainsForwarded(t *testing.T) {
+	upstreamIP := netip.MustParseAddr("192.0.2.1")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading upstream query: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var msg dnsmessage.Message
+		if err := msg.Unpack(body); err != nil || len(msg.Questions) != 1 {
+			t.Errorf("parsing upstream query: questions = %v, err = %v", msg.Questions, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		msg.Response = true
+		msg.RecursionAvailable = true
+		msg.Answers = []dnsmessage.Resource{{
+			Header: dnsmessage.ResourceHeader{Name: msg.Questions[0].Name, Class: dnsmessage.ClassINET, TTL: 60},
+			Body:   &dnsmessage.AResource{A: upstreamIP.As4()},
+		}}
+		response, err := msg.Pack()
+		if err != nil {
+			t.Errorf("packing upstream response: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/dns-message")
+		if _, err := w.Write(response); err != nil {
+			t.Errorf("writing upstream response: %v", err)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	nm := &netmap.NetworkMap{DNS: tailcfg.DNSConfig{
+		Resolvers:    []*dnstype.Resolver{{Addr: upstream.URL}},
+		ExtraRecords: []tailcfg.DNSRecord{{Name: "example.com", Type: "A", Value: "10.99.0.10"}},
+	}}
+	prefs := &ipn.Prefs{CorpDNS: true}
+	cfg := dnsConfigForNetmap(nm, nil, prefs.View(), false, t.Logf, runtime.GOOS, nil)
+	m := newTestLocalBackend(t).sys.DNSManager.Get()
+	if err := m.Set(*cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for _, query := range []struct {
+		name string
+		ip   netip.Addr
+	}{
+		{"example.com.", netip.MustParseAddr("10.99.0.10")},
+		{"www.example.com.", upstreamIP},
+	} {
+		packet, err := (&dnsmessage.Message{
+			Header: dnsmessage.Header{ID: 1, RecursionDesired: true},
+			Questions: []dnsmessage.Question{{
+				Name:  dnsmessage.MustNewName(query.name),
+				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+			}},
+		}).Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := m.Query(ctx, packet, "udp", netip.MustParseAddrPort("100.64.0.1:12345"))
+		if err != nil {
+			t.Fatalf("querying %q: %v", query.name, err)
+		}
+		var response dnsmessage.Message
+		if err := response.Unpack(out); err != nil {
+			t.Fatalf("unpacking response for %q: %v", query.name, err)
+		}
+		if response.RCode != dnsmessage.RCodeSuccess || len(response.Answers) != 1 {
+			t.Fatalf("%q: rcode = %v, answers = %v", query.name, response.RCode, response.Answers)
+		}
+		a, ok := response.Answers[0].Body.(*dnsmessage.AResource)
+		if !ok || netip.AddrFrom4(a.A) != query.ip {
+			t.Errorf("%q: answer = %v, want A %v", query.name, response.Answers[0].Body, query.ip)
+		}
 	}
 }
 

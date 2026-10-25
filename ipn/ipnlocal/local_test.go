@@ -3388,10 +3388,13 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 		// only routes that reference resolvers with the UseWithExitNode should be installed,
 		// as well as routes with 0-length resolver lists, which should be installed in all cases.
 		{
-			name:                 "tsExit/routes/noResolver",
-			exitNode:             "ts",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(baseRoutes)},
+			name:     "tsExit/routes/noResolver",
+			exitNode: "ts",
+			peers:    peers,
+			dnsConfig: &tailcfg.DNSConfig{
+				Routes:       stringifyRoutes(baseRoutes),
+				ExtraRecords: []tailcfg.DNSRecord{{Name: "route.example.com", Value: "192.0.2.1"}},
+			},
 			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
 			wantRoutes:           nil,
 		},
