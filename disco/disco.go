@@ -20,6 +20,7 @@
 package disco
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,6 +52,11 @@ const (
 	TypeCallMeMaybeVia                   = MessageType(0x07)
 	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
+	// TypeWebRTCSignal carries a WebRTC signaling message (offer, answer, or
+	// ICE candidate) between Tailscale peers via DERP, eliminating the need for
+	// an external signaling server. The specific kind and JSON-encoded WebRTC
+	// payload travel in the message body; see [WebRTCSignal].
+	TypeWebRTCSignal = MessageType(0x0A)
 )
 
 const v0 = byte(0)
@@ -103,6 +109,8 @@ func Parse(p []byte) (Message, error) {
 		return parseAllocateUDPRelayEndpointRequest(ver, p)
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
+	case TypeWebRTCSignal:
+		return parseWebRTCSignal(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -283,6 +291,55 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	return m, nil
 }
 
+// WebRTCSignalKind identifies which kind of WebRTC signaling message a
+// [WebRTCSignal] carries. It is the first byte of the message body.
+type WebRTCSignalKind uint8
+
+const (
+	WebRTCOffer        WebRTCSignalKind = 0 // Payload is a JSON webrtc.SessionDescription
+	WebRTCAnswer       WebRTCSignalKind = 1 // Payload is a JSON webrtc.SessionDescription
+	WebRTCICECandidate WebRTCSignalKind = 2 // Payload is a JSON webrtc.ICECandidateInit
+)
+
+func (k WebRTCSignalKind) String() string {
+	switch k {
+	case WebRTCOffer:
+		return "offer"
+	case WebRTCAnswer:
+		return "answer"
+	case WebRTCICECandidate:
+		return "ice-candidate"
+	}
+	return "unknown"
+}
+
+// WebRTCSignal is sent only over DERP to deliver a WebRTC signaling message to
+// a peer. Kind identifies whether it's an offer, answer, or ICE candidate;
+// Payload is the corresponding JSON-encoded WebRTC value. A single message type
+// (rather than one per kind) keeps the disco protocol and its dispatch small.
+type WebRTCSignal struct {
+	Kind    WebRTCSignalKind
+	Payload []byte
+}
+
+func (m *WebRTCSignal) AppendMarshal(b []byte) []byte {
+	// Body is one Kind byte followed by the raw JSON payload.
+	ret, p := appendMsgHeader(b, TypeWebRTCSignal, v0, 1+len(m.Payload))
+	p[0] = byte(m.Kind)
+	copy(p[1:], m.Payload)
+	return ret
+}
+
+func parseWebRTCSignal(_ uint8, p []byte) (*WebRTCSignal, error) {
+	if len(p) < 1 {
+		return nil, errShort
+	}
+	return &WebRTCSignal{
+		Kind:    WebRTCSignalKind(p[0]),
+		Payload: bytes.Clone(p[1:]),
+	}, nil
+}
+
 // MessageSummary returns a short summary of m for logging purposes.
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
@@ -304,6 +361,8 @@ func MessageSummary(m Message) string {
 		return "allocate-udp-relay-endpoint-request"
 	case *AllocateUDPRelayEndpointResponse:
 		return "allocate-udp-relay-endpoint-response"
+	case *WebRTCSignal:
+		return "webrtc-" + m.Kind.String()
 	default:
 		return fmt.Sprintf("%#v", m)
 	}
