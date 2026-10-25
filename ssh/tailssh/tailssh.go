@@ -55,6 +55,12 @@ var (
 	sshDisableForwarding = envknob.RegisterBool("TS_SSH_DISABLE_FORWARDING")
 	sshDisablePTY        = envknob.RegisterBool("TS_SSH_DISABLE_PTY")
 
+	// sshLoginGraceTime is the TS_SSH_LOGIN_GRACE_TIME knob. It is
+	// the maximum allowed duration between accepting a connection and
+	// completing authentication, like sshd's LoginGraceTime. It defaults
+	// to 120 seconds. See loginGraceTime for the accepted value forms.
+	sshLoginGraceTime = envknob.RegisterString("TS_SSH_LOGIN_GRACE_TIME")
+
 	// errTerminal is an empty ssh.PartialSuccessError (with no 'Next'
 	// authentication methods that may proceed), which results in the SSH
 	// server immediately disconnecting the client.
@@ -496,6 +502,8 @@ func (srv *server) newConn() (*conn, error) {
 	c.Server = &gliderssh.Server{
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
+
+		IdleTimeout: sshIdleTimeout(),
 
 		Handler:                       c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,

@@ -268,6 +268,15 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// SSHAuthCallback is called for each new SSH session on listeners
+	// from [Server.ListenSSH]. It receives the peer's Tailscale
+	// identity, the same values as Session.Peer and
+	// Session.UserProfile. A session that it rejects is refused and is
+	// never yielded to Accept. If it is nil, every session from a peer
+	// that the tailnet ACL's TCP rules allow is accepted. See
+	// [SSHAuthCallback].
+	SSHAuthCallback SSHAuthCallback
+
 	// ClientSecret, if non-empty, is the OAuth client secret
 	// that will be used to generate authkeys via OAuth. It
 	// will be preferred over the TS_CLIENT_SECRET environment
@@ -1313,14 +1322,54 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return s.listen(network, addr, listenOnTailnet)
 }
 
+// SSHAuthCallback reports whether to accept a new SSH session from a
+// tailscale peer, on listeners from [Server.ListenSSH]. It is an
+// alias for ipnlocal.SSHAuthCallback, the type of
+// [Server.SSHAuthCallback].
+type SSHAuthCallback = ipnlocal.SSHAuthCallback
+
 // ListenSSH listens on the Tailscale network for SSH connections at the given
 // addr (e.g. ":2222"). The returned listener's Accept method yields net.Conn
 // values that are actually *tailssh.Session, providing access to the
 // connecting peer's Tailscale identity, PTY information, signals, and more.
 //
-// Basic applications can use the returned connections as plain net.Conn
-// (Read/Write/Close). Applications that need richer SSH semantics should
-// type-assert to *tailssh.Session.
+// # Trust model
+//
+// The server enforces only the tailnet ACL's TCP rules. For any
+// further authorization, the application must use s.SSHAuthCallback, or
+// check each accepted session and close the unwanted ones.
+// SSHAuthCallback enables applications to reject sessions before they
+// are started.
+//
+// Each session is yielded as a net.Conn, with the peer's Tailscale
+// identity available as Session.Peer and Session.UserProfile. The
+// application decides what each session may do, including which local
+// user to run as, if any.
+//
+// # Timeouts and limits
+//
+// The server runs session channels only; it does not forward ports.
+//
+// TS_SSH_LOGIN_GRACE_TIME bounds the time between accepting a
+// connection and completing the handshake. The default is 120
+// seconds, matching sshd's LoginGraceTime.
+//
+// TS_SSH_IDLE_TIMEOUT bounds connections with no SSH traffic. Any
+// traffic on the connection resets the timer. Zero, the default,
+// applies no bound.
+//
+// Sessions accepted by the server wait for Accept in a bounded queue.
+// When the queue is full, the server refuses new sessions, so an
+// application that stops calling Accept parks only a bounded number of
+// sessions.
+//
+// # Basic usage
+//
+// Applications that need only a data stream can use the connections
+// as plain net.Conn (Read, Write, and Close). Applications that need
+// peer identity, PTY configuration, or signals should type-assert to
+// *tailssh.Session. On PTY sessions the server does not translate
+// "\n" to "\r\n", so Read and Write are binary safe.
 //
 // SSH support must be linked into the binary by importing
 // _ "tailscale.com/feature/ssh". Without that import, ListenSSH returns an
@@ -1332,7 +1381,7 @@ func (s *Server) ListenSSH(addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	sshLn, err := s.lb.ListenSSH(rawLn, s.logf)
+	sshLn, err := s.lb.ListenSSH(rawLn, s.SSHAuthCallback, s.logf)
 	if err != nil {
 		rawLn.Close()
 		return nil, err
