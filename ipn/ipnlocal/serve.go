@@ -86,6 +86,14 @@ var ErrProxyToTailscaledSocket = errors.New("cannot proxy to tailscaled socket")
 
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
+// appCapsContextKey holds the app capabilities accepted by the mount handling
+// the current request. It is per-request state: serveHTTPContext is shared by
+// all streams of a connection, so mount state must not be stored on it.
+var appCapsContextKey = ctxkey.New("ipnlocal.appCapsContextKey", views.Slice[peercap.Cap]{})
+
+// serveHTTPContext is connection-scoped: one value is shared by all requests on
+// the connection, including concurrent h2 streams. Do not add per-request state
+// to it, use a separate context key like appCapsContextKey instead.
 type serveHTTPContext struct {
 	SrcAddr       netip.AddrPort
 	ForVIPService tailcfg.ServiceName // "" means local
@@ -93,8 +101,6 @@ type serveHTTPContext struct {
 
 	// provides funnel-specific context, nil if not funneled
 	Funnel *funnelFlow
-	// AppCapabilities lists all PeerCapabilities that should be forwarded by serve
-	AppCapabilities views.Slice[peercap.Cap]
 }
 
 // funnelFlow represents a funneled connection initiated via IngressPeer
@@ -1149,8 +1155,8 @@ func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error 
 	if !ok || c.Funnel != nil {
 		return nil
 	}
-	acceptCaps := c.AppCapabilities
-	if acceptCaps.IsNil() {
+	acceptCaps, ok := appCapsContextKey.ValueOk(r.Out.Context())
+	if !ok || acceptCaps.IsNil() {
 		return nil
 	}
 	peerCaps := b.PeerCaps(c.SrcAddr.Addr())
@@ -1218,12 +1224,8 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
-		// Inject app capabilities to forward into the request context
-		c, ok := serveHTTPContextKey.ValueOk(r.Context())
-		if !ok {
-			return
-		}
-		c.AppCapabilities = h.AcceptAppCaps()
+		// Mount-accepted capabilities are per-request state
+		r = r.WithContext(appCapsContextKey.WithValue(r.Context(), h.AcceptAppCaps()))
 		h := p.(http.Handler)
 		// Trim the mount point from the URL path before proxying. (#6571)
 		if r.URL.Path != "/" {
