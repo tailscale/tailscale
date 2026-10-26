@@ -7,11 +7,23 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "ssh/**"
-      - "tempfork/gliderlabs/ssh/**"
-      - ".github/workflows/ssh-integrationtest"
+      # gliderssh and x/crypto/ssh bumps.
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/ssh-integrationtest.yml"
+  schedule:
+    # Changes outside ssh/** (ipn/ipnlocal, util/osuser, envknob,
+    # cmd/tailscaled) can break Tailscale SSH without triggering the
+    # pull_request paths above, so also run on main daily around
+    # midnight UK time (cron is UTC; 00:13 GMT, 01:13 BST), so results
+    # are ready the next morning. Off the hour to avoid GitHub's :00
+    # cron backlog.
+    - cron: "13 0 * * *"
 jobs:
   ssh-integrationtest:
     runs-on: ubuntu-latest
