@@ -8,8 +8,9 @@
 // running with the authenticated local user's credentials.
 //
 //   - unix -L, direct-streamlocal: the lexical allowlist check stays in
-//     tailscaled as coarse policy, then the dial runs as the user. See
-//     conn.fwdAllowedSocketPath for the path policy.
+//     tailscaled as coarse policy, then the dial and service-side payload
+//     writes run as the user in a relay child. See conn.fwdAllowedSocketPath
+//     for the path policy.
 //   - unix -R, streamlocal-forward: the listener child binds with
 //     umask-at-bind and unlink-if-owned semantics. The socket is 0600 and
 //     user-owned from the moment it exists.
@@ -36,6 +37,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -228,8 +230,56 @@ func (c *conn) fwdAllowedSocketPath(socketPath string) (string, error) {
 	return "", fmt.Errorf("socket path %q is not in an allowed directory: %w", cleaned, gliderssh.ErrRejected)
 }
 
+// fwdDirectStreamLocalHandler keeps channel lifetime separate from data EOF.
+// gliderssh's generic forwarding loop uses the connection context, which
+// does not end when just this SSH channel closes. The request stream closes
+// on CHANNEL_CLOSE (not CHANNEL_EOF), so use it to end this channel's relay.
+func fwdDirectStreamLocalHandler(srv *gliderssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gliderssh.Context) {
+	var d struct {
+		SocketPath string
+		Reserved1  string
+		Reserved2  uint32
+	}
+	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, "error parsing direct-streamlocal data: "+err.Error())
+		return
+	}
+	if srv.LocalUnixForwardingCallback == nil {
+		newChan.Reject(gossh.Prohibited, "unix forwarding is disabled")
+		return
+	}
+	dconn, err := srv.LocalUnixForwardingCallback(ctx, d.SocketPath)
+	if err != nil {
+		if errors.Is(err, gliderssh.ErrRejected) {
+			msg := err.Error()
+			if err == gliderssh.ErrRejected {
+				msg = "unix forwarding is disabled"
+			}
+			newChan.Reject(gossh.Prohibited, msg)
+		} else {
+			newChan.Reject(gossh.ConnectionFailed, fmt.Sprintf("dial unix socket %q: %v", d.SocketPath, err))
+		}
+		return
+	}
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		dconn.Close()
+		return
+	}
+	go func() {
+		gossh.DiscardRequests(reqs)
+		// CHANNEL_CLOSE ends service output, but the channel may still
+		// have buffered client payload to drain. Bound that final write
+		// rather than canceling both copy directions and losing the data.
+		dconn.SetWriteDeadline(time.Now().Add(fwdRelayCloseDrainTimeout))
+		dconn.SetReadDeadline(time.Now())
+	}()
+	fwdBicopy(ctx, ch, dconn)
+}
+
 // fwdDialUnix is the unix -L path (direct-streamlocal): dial socketPath
-// through a one-shot child with the local user's credentials.
+// through a child with the local user's credentials. The child retains the
+// service socket and relays payload bytes over the returned socketpair end.
 func (c *conn) fwdDialUnix(ctx gliderssh.Context, socketPath string) (net.Conn, error) {
 	path, err := c.fwdAllowedSocketPath(socketPath)
 	if err != nil {
@@ -497,8 +547,10 @@ func fwdHalfCloseWrite(c io.ReadWriteCloser) {
 
 // wireReverseForwarding installs the conn's reverse TCP forwarding
 // request handlers. On unix they are fwdTCPHandler's, binding through
-// the monitor.
+// the monitor. It also installs the local Unix handler that ends relay
+// children on SSH channel closure independently of connection closure.
 func (c *conn) wireReverseForwarding(ss *gliderssh.Server) {
+	ss.ChannelHandlers["direct-streamlocal@openssh.com"] = fwdDirectStreamLocalHandler
 	h := &fwdTCPHandler{conn: c}
 	ss.RequestHandlers["tcpip-forward"] = h.HandleSSHRequest
 	ss.RequestHandlers["cancel-tcpip-forward"] = h.HandleSSHRequest
