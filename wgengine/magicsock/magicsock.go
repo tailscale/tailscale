@@ -2535,7 +2535,7 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	// Pings after 1.16.0 contains its node source. See if it maps back.
 	if !dm.NodeKey.IsZero() {
 		if ep, ok := c.peerMap.endpointForNodeKey(dm.NodeKey); ok {
-			if _, knownKey := ep.checkAndUpdateDiscoKey(dk); !knownKey {
+			if _, knownKey := ep.checkAndUpdateDiscoKey(dk); knownKey {
 				return dm.NodeKey, true
 			}
 		}
