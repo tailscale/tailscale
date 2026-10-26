@@ -7,16 +7,16 @@
 // be-child ssh-fwd", one per dial/listen op.
 //
 // The child runs as the connection's bound identity, applied by the
-// monitor as SysProcAttr.Credential. A listener child binds and returns
-// its descriptor over an inherited socketpair as one status line, then
-// exits. A dial child instead returns one end of a private socketpair
+// monitor as SysProcAttr.Credential. A listener or TCP dial child returns
+// its socket descriptor over an inherited socketpair as one status line,
+// then exits. A Unix dial child instead returns one end of a private socketpair
 // and a lifetime pipe writer, and stays alive to relay bytes to the dialed
 // service as the bound user. Closing the lifetime pipe terminates the relay
 // independently of data-socket half-closes.
 //
 // The result protocol, from child to monitor over the socketpair, is one
-// short newline-terminated line with one descriptor for a listener or two
-// for a dial (data socket and lifetime pipe writer):
+// short newline-terminated line with one descriptor for a listener or TCP
+// dial, or two for a Unix dial (data socket and lifetime pipe writer):
 //
 //	ok [payload]     success, with the agent socket path or the
 //	                 bound TCP address as the payload
@@ -25,7 +25,7 @@
 //
 // After a successful send the child holds its descriptor copy until the
 // monitor closes the result channel, its receipt acknowledgment. Listener
-// children then exit; dial children keep relaying through the private
+// and TCP dial children then exit; Unix dial children relay through the private
 // socketpair until the connection closes. On darwin the kernel's unix-socket
 // GC reclaims a socket whose only reference is an in-flight SCM_RIGHTS
 // message, so the sender's copy must cover the handoff until the receiver
@@ -50,6 +50,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -100,7 +101,7 @@ func init() {
 // the child via argv.
 type fwdChildSpec struct {
 	op     string // "dial" or "listen"
-	net    string // "unix" or "tcp" for listen. Dial is always unix
+	net    string // "unix" or "tcp"
 	addr   string // socket path for unix, address for tcp. Empty for agent
 	unlink bool   // listen unix only: unlink-if-owned pre-step
 	agent  bool   // listen only: create the agent-forwarding socket
@@ -164,8 +165,8 @@ func fwdSpawnChild(m *monitor, spec fwdChildSpec) (*exec.Cmd, *net.UnixConn, err
 }
 
 // fwdReadResult reads the forwarding child's status line and result
-// descriptors from the socketpair, bounded by the deadline. Dial replies
-// carry a data socket and a lifetime pipe; listener replies carry one socket.
+// descriptors from the socketpair, bounded by the deadline. Unix dial replies
+// carry a data socket and lifetime pipe; other replies carry one socket.
 func fwdReadResult(c *net.UnixConn, deadline time.Time, wantFDs int) (ok bool, payload string, fds []int, err error) {
 	if err := c.SetReadDeadline(deadline); err != nil {
 		return false, "", nil, err
@@ -230,7 +231,7 @@ func parseFwdArgs(args []string) (fwdArgs, error) {
 
 	flags := flag.NewFlagSet("ssh-fwd", flag.ContinueOnError)
 	flags.StringVar(&fa.op, "op", "", "the op to perform: dial or listen")
-	flags.StringVar(&fa.net, "net", "", "network: unix or tcp (dial is unix-only)")
+	flags.StringVar(&fa.net, "net", "", "network: unix or tcp")
 	flags.StringVar(&fa.addr, "addr", "", "absolute socket path (unix) or address (tcp)")
 	flags.StringVar(&unlink, "unlink", "", `listen unix only: pre-bind unlink policy, "if-owned"`)
 	flags.BoolVar(&fa.agent, "agent", false, "listen only: create the agent-forwarding socket")
@@ -246,11 +247,8 @@ func parseFwdArgs(args []string) (fwdArgs, error) {
 		if fa.agent {
 			return fa, errors.New("dial does not take --agent")
 		}
-		if fa.net != "unix" {
-			return fa, fmt.Errorf("dial is unix-only, got --net=%q", fa.net)
-		}
-		if fa.addr == "" || !filepath.IsAbs(fa.addr) {
-			return fa, fmt.Errorf("dial: --addr must be an absolute unix socket path, got %q", fa.addr)
+		if err := validateFwdDial(fa.net, fa.addr); err != nil {
+			return fa, err
 		}
 	case "listen":
 		switch {
@@ -279,8 +277,36 @@ func parseFwdArgs(args []string) (fwdArgs, error) {
 	return fa, nil
 }
 
+// validateFwdDial validates the dial shape on both sides of the child spawn.
+// TCP destinations may be hostnames or IP literals; resolution happens in the
+// credentialed child, not in the privileged monitor.
+func validateFwdDial(network, addr string) error {
+	switch network {
+	case "unix":
+		if !filepath.IsAbs(addr) {
+			return fmt.Errorf("dial: addr must be an absolute unix socket path, got %q", addr)
+		}
+	case "tcp":
+		// Only validate the host:port framing and numeric port here.
+		// net.DialTimeout in the credentialed child validates/resolves the
+		// host. Keep its hostname, scoped-IPv6 and empty-host semantics;
+		// do not resolve names in the privileged monitor.
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return fmt.Errorf("dial tcp: %w", err)
+		}
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || n == 0 {
+			return fmt.Errorf("dial tcp: port %q must be between 1 and 65535", port)
+		}
+	default:
+		return fmt.Errorf("dial: unsupported network %q", network)
+	}
+	return nil
+}
+
 // beFwdChild is the entrypoint of the "tailscaled be-child ssh-fwd"
-// subcommand. It is the born-unprivileged dial relay or listener child.
+// subcommand. It is the born-unprivileged dialer, Unix relay or listener child.
 func beFwdChild(args []string) error {
 	fa, err := parseFwdArgs(args)
 	if err != nil {
@@ -301,7 +327,7 @@ func beFwdChild(args []string) error {
 	var relay *net.UnixConn
 	var service *net.UnixConn
 	var lifetimeRead, lifetimeWrite *os.File
-	if fa.op == "dial" {
+	if fa.op == "dial" && fa.net == "unix" {
 		f, relay, service, err = fwdDialRelay(fa.addr)
 		if err == nil {
 			defer relay.Close()
@@ -345,7 +371,7 @@ func beFwdChild(args []string) error {
 	_, ackErr := c.Read(ack[:])
 	f.Close()
 	if relay == nil {
-		return nil // listener children exit after the handoff
+		return nil // listener and TCP dial children exit after the handoff
 	}
 	lifetimeWrite.Close()
 	c.Close()
@@ -411,12 +437,26 @@ func fwdSendResult(c *net.UnixConn, line string, files ...*os.File) error {
 	return err
 }
 
-// fwdChildWork performs a listener op and returns its socket as an
+// fwdChildWork performs a TCP dial or listener op and returns its socket as an
 // *os.File plus a short status payload. The caller sends the file's
 // descriptor to the monitor and then closes the file. The payload is the
 // agent socket path, or the bound TCP address.
 func fwdChildWork(fa fwdArgs) (*os.File, string, error) {
 	switch {
+	case fa.op == "dial" && fa.net == "tcp":
+		// Resolve and create/connect the socket with the bound user's
+		// credentials. Passing the descriptor back does not change its
+		// kernel socket owner, including for UID-based firewall rules.
+		// Unlike Unix sockets, TCP has no per-message SCM_CREDENTIALS,
+		// so a persistent user-credential relay is unnecessary.
+		conn, err := net.DialTimeout("tcp", fa.addr, monFwdOpDeadline)
+		if err != nil {
+			return nil, "", err
+		}
+		defer conn.Close()
+		f, err := conn.(*net.TCPConn).File()
+		return f, "", err
+
 	case fa.op == "listen" && fa.agent:
 		// Agent-forwarding socket. See fwdUmask and ListenAgent. The
 		// dir's cleanup is the caller's.

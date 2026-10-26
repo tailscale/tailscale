@@ -316,7 +316,7 @@ func (mc *monitorClient) Signal(ctx context.Context, child monitorProcess, sig s
 // are acknowledged to the monitor on receipt, releasing its held copies.
 // See the monitor_rpc.go header.
 func (mc *monitorClient) Dial(ctx context.Context, addr string) (*monitorDialConn, error) {
-	_, fds, err := mc.call(ctx, rpcDialReq(0, addr))
+	_, fds, err := mc.call(ctx, rpcDialReq(0, "unix", addr))
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +331,32 @@ func (mc *monitorClient) Dial(ctx context.Context, addr string) (*monitorDialCon
 		return nil, err
 	}
 	return &monitorDialConn{UnixConn: uc, lifetime: lifetime}, nil
+}
+
+// DialTCP resolves and dials addr through a one-shot child running with the
+// connection's bound identity. The kernel socket owner is preserved when the
+// connected TCP socket is handed back to tailscaled.
+func (mc *monitorClient) DialTCP(ctx context.Context, addr string) (*net.TCPConn, error) {
+	_, fds, err := mc.call(ctx, rpcDialReq(0, "tcp", addr))
+	if err != nil {
+		return nil, err
+	}
+	if len(fds) != 1 {
+		closeFds(fds)
+		return nil, fmt.Errorf("ssh-monitor: TCP dial reply carried %d fds, want 1", len(fds))
+	}
+	f := os.NewFile(uintptr(fds[0]), "ssh-fwd-tcp")
+	defer f.Close()
+	nc, err := net.FileConn(f)
+	if err != nil {
+		return nil, err
+	}
+	tc, ok := nc.(*net.TCPConn)
+	if !ok {
+		nc.Close()
+		return nil, fmt.Errorf("ssh-monitor: TCP dial returned %T", nc)
+	}
+	return tc, nil
 }
 
 // monitorDialConn preserves UnixConn's half-close methods, but a full Close
