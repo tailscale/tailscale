@@ -909,6 +909,40 @@ func v6RangeFrom(from, to string) netipx.IPRange {
 	)
 }
 
+// Names used by the shared authority and additional section fixtures below.
+var (
+	nsName   = dnsmessage.MustNewName("ns1.example.com.")
+	soaMBox  = dnsmessage.MustNewName("hostmaster.example.com.")
+	rootName = dnsmessage.MustNewName(".")
+)
+
+func authoritySectionFor(name dnsmessage.Name) []dnsmessage.Resource {
+	return []dnsmessage.Resource{
+		{
+			Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeNS, Class: dnsmessage.ClassINET, TTL: 3600},
+			Body:   &dnsmessage.NSResource{NS: nsName},
+		},
+		{
+			Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeSOA, Class: dnsmessage.ClassINET, TTL: 3600},
+			Body:   &dnsmessage.SOAResource{NS: nsName, MBox: soaMBox, Serial: 1, MinTTL: 60},
+		},
+	}
+}
+
+func additionalSection() []dnsmessage.Resource {
+	return []dnsmessage.Resource{
+		{
+			Header: dnsmessage.ResourceHeader{Name: nsName, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 3600},
+			Body:   &dnsmessage.AResource{A: netip.MustParseAddr("9.9.9.9").As4()},
+		},
+		{
+			// EDNS0 OPT record: Class carries the requestor's UDP payload size.
+			Header: dnsmessage.ResourceHeader{Name: rootName, Type: dnsmessage.TypeOPT, Class: 4096},
+			Body:   &dnsmessage.OPTResource{},
+		},
+	}
+}
+
 func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource) []byte {
 	t.Helper()
 	name := dnsmessage.MustNewName(domain)
@@ -931,17 +965,7 @@ func makeDNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AResource)
 		}
 		answers = append(answers, ans)
 	}
-	additional := []dnsmessage.Resource{
-		{
-			Header: dnsmessage.ResourceHeader{
-				Name:  name,
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
-			},
-			Body: &dnsmessage.AResource{A: [4]byte{9, 9, 9, 9}},
-		},
-	}
-	return makeDNSResponseForSections(t, questions, answers, additional)
+	return makeDNSResponseForAllSections(t, questions, answers, authoritySectionFor(name), additionalSection())
 }
 
 func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAResource) []byte {
@@ -966,10 +990,19 @@ func makeV6DNSResponse(t *testing.T, domain string, addrs []*dnsmessage.AAAAReso
 		}
 		answers = append(answers, ans)
 	}
-	return makeDNSResponseForSections(t, questions, answers, nil)
+	return makeDNSResponseForAllSections(t, questions, answers, authoritySectionFor(name), additionalSection())
 }
 
 func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, answers []dnsmessage.Resource, additional []dnsmessage.Resource) []byte {
+	t.Helper()
+	return makeDNSResponseForAllSections(t, questions, answers, nil, additional)
+}
+
+func makeDNSResponseForAllSections(
+	t *testing.T,
+	questions []dnsmessage.Question,
+	answers, authorities, additional []dnsmessage.Resource,
+) []byte {
 	t.Helper()
 	b := dnsmessage.NewBuilder(nil,
 		dnsmessage.Header{
@@ -993,66 +1026,22 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 	if err := b.StartAnswers(); err != nil {
 		t.Fatal(err)
 	}
-
 	for _, ans := range answers {
-		switch ans.Header.Type {
-		case dnsmessage.TypeA:
-			body, _ := ans.Body.(*dnsmessage.AResource)
-			b.AResource(ans.Header, *body)
-		case dnsmessage.TypeAAAA:
-			body, _ := ans.Body.(*dnsmessage.AAAAResource)
-			b.AAAAResource(ans.Header, *body)
-		case dnsmessage.TypeCNAME:
-			body, _ := ans.Body.(*dnsmessage.CNAMEResource)
-			b.CNAMEResource(ans.Header, *body)
-		case dnsmessage.TypeHTTPS:
-			body, _ := ans.Body.(*dnsmessage.HTTPSResource)
-			b.HTTPSResource(ans.Header, *body)
-		case dnsmessage.TypeNS:
-			body, _ := ans.Body.(*dnsmessage.NSResource)
-			b.NSResource(ans.Header, *body)
-		case dnsmessage.TypeSOA:
-			body, _ := ans.Body.(*dnsmessage.SOAResource)
-			b.SOAResource(ans.Header, *body)
-		case dnsmessage.TypePTR:
-			body, _ := ans.Body.(*dnsmessage.PTRResource)
-			b.PTRResource(ans.Header, *body)
-		case dnsmessage.TypeMX:
-			body, _ := ans.Body.(*dnsmessage.MXResource)
-			b.MXResource(ans.Header, *body)
-		case dnsmessage.TypeTXT:
-			body, _ := ans.Body.(*dnsmessage.TXTResource)
-			b.TXTResource(ans.Header, *body)
-		case dnsmessage.TypeSRV:
-			body, _ := ans.Body.(*dnsmessage.SRVResource)
-			b.SRVResource(ans.Header, *body)
-		case dnsmessage.TypeOPT:
-			body, _ := ans.Body.(*dnsmessage.OPTResource)
-			b.OPTResource(ans.Header, *body)
-		case dnsmessage.TypeSVCB:
-			body, _ := ans.Body.(*dnsmessage.SVCBResource)
-			b.SVCBResource(ans.Header, *body)
-		default:
-			body, ok := ans.Body.(*dnsmessage.UnknownResource)
-			if !ok {
-				t.Fatalf("unhandled answer type, update test: %v", ans.Header.Type)
-			}
-			b.UnknownResource(ans.Header, *body)
-		}
+		buildResource(t, &b, ans)
+	}
+
+	if err := b.StartAuthorities(); err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range authorities {
+		buildResource(t, &b, ns)
 	}
 
 	if err := b.StartAdditionals(); err != nil {
 		t.Fatal(err)
 	}
 	for _, add := range additional {
-		switch body := add.Body.(type) {
-		case *dnsmessage.AResource:
-			b.AResource(add.Header, *body)
-		case *dnsmessage.AAAAResource:
-			b.AAAAResource(add.Header, *body)
-		default:
-			t.Fatalf("unexpected additional type, update test: %v", add.Header.Type)
-		}
+		buildResource(t, &b, add)
 	}
 
 	outbs, err := b.Finish()
@@ -1060,6 +1049,59 @@ func makeDNSResponseForSections(t *testing.T, questions []dnsmessage.Question, a
 		t.Fatal(err)
 	}
 	return outbs
+}
+
+// buildResource writes r into whichever section b is currently building.
+func buildResource(t *testing.T, b *dnsmessage.Builder, r dnsmessage.Resource) {
+	t.Helper()
+	var err error
+	switch r.Header.Type {
+	case dnsmessage.TypeA:
+		body, _ := r.Body.(*dnsmessage.AResource)
+		err = b.AResource(r.Header, *body)
+	case dnsmessage.TypeAAAA:
+		body, _ := r.Body.(*dnsmessage.AAAAResource)
+		err = b.AAAAResource(r.Header, *body)
+	case dnsmessage.TypeCNAME:
+		body, _ := r.Body.(*dnsmessage.CNAMEResource)
+		err = b.CNAMEResource(r.Header, *body)
+	case dnsmessage.TypeHTTPS:
+		body, _ := r.Body.(*dnsmessage.HTTPSResource)
+		err = b.HTTPSResource(r.Header, *body)
+	case dnsmessage.TypeNS:
+		body, _ := r.Body.(*dnsmessage.NSResource)
+		err = b.NSResource(r.Header, *body)
+	case dnsmessage.TypeSOA:
+		body, _ := r.Body.(*dnsmessage.SOAResource)
+		err = b.SOAResource(r.Header, *body)
+	case dnsmessage.TypePTR:
+		body, _ := r.Body.(*dnsmessage.PTRResource)
+		err = b.PTRResource(r.Header, *body)
+	case dnsmessage.TypeMX:
+		body, _ := r.Body.(*dnsmessage.MXResource)
+		err = b.MXResource(r.Header, *body)
+	case dnsmessage.TypeTXT:
+		body, _ := r.Body.(*dnsmessage.TXTResource)
+		err = b.TXTResource(r.Header, *body)
+	case dnsmessage.TypeSRV:
+		body, _ := r.Body.(*dnsmessage.SRVResource)
+		err = b.SRVResource(r.Header, *body)
+	case dnsmessage.TypeOPT:
+		body, _ := r.Body.(*dnsmessage.OPTResource)
+		err = b.OPTResource(r.Header, *body)
+	case dnsmessage.TypeSVCB:
+		body, _ := r.Body.(*dnsmessage.SVCBResource)
+		err = b.SVCBResource(r.Header, *body)
+	default:
+		body, ok := r.Body.(*dnsmessage.UnknownResource)
+		if !ok {
+			t.Fatalf("unhandled resource type, update test: %v", r.Header.Type)
+		}
+		err = b.UnknownResource(r.Header, *body)
+	}
+	if err != nil {
+		t.Fatalf("building %v resource: %v", r.Header.Type, err)
+	}
 }
 
 func TestMapDNSResponseAssignsAddrs(t *testing.T) {
@@ -1498,7 +1540,7 @@ func TestMapDNSResponsePreservesTTL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newConn25(logger.Discard)
 			c.reconfig(cfg)
-			answers, _ := parseResponse(t, c.mapDNSResponse(tt.toMap))
+			answers, _, _ := parseResponse(t, c.mapDNSResponse(tt.toMap))
 			if len(answers) != 1 {
 				t.Fatalf("got %d answers, want 1", len(answers))
 			}
@@ -1698,7 +1740,7 @@ func TestAddressAssignmentIsHandled(t *testing.T) {
 	}
 }
 
-func parseResponse(t *testing.T, buf []byte) ([]dnsmessage.Resource, []dnsmessage.Resource) {
+func parseResponse(t *testing.T, buf []byte) (answers, authorities, additionals []dnsmessage.Resource) {
 	t.Helper()
 	var p dnsmessage.Parser
 	header, err := p.Start(buf)
@@ -1711,18 +1753,19 @@ func parseResponse(t *testing.T, buf []byte) ([]dnsmessage.Resource, []dnsmessag
 	if err := p.SkipAllQuestions(); err != nil {
 		t.Fatalf("skipping questions: %v", err)
 	}
-	answers, err := p.AllAnswers()
+	answers, err = p.AllAnswers()
 	if err != nil {
 		t.Fatalf("reading answers: %v", err)
 	}
-	if err := p.SkipAllAuthorities(); err != nil {
-		t.Fatalf("skipping questions: %v", err)
+	authorities, err = p.AllAuthorities()
+	if err != nil {
+		t.Fatalf("reading authorities: %v", err)
 	}
-	additionals, err := p.AllAdditionals()
+	additionals, err = p.AllAdditionals()
 	if err != nil {
 		t.Fatalf("reading additionals: %v", err)
 	}
-	return answers, additionals
+	return answers, authorities, additionals
 }
 
 func compareToRecords(t *testing.T, resources []dnsmessage.Resource, want []netip.Addr) {
@@ -1743,8 +1786,30 @@ func compareToRecords(t *testing.T, resources []dnsmessage.Resource, want []neti
 func assertParsesToAnswers(want []netip.Addr) func(t *testing.T, bs []byte) {
 	return func(t *testing.T, bs []byte) {
 		t.Helper()
-		answers, _ := parseResponse(t, bs)
+		answers, _, _ := parseResponse(t, bs)
 		compareToRecords(t, answers, want)
+	}
+}
+
+func assertNoAuthoritiesOrAdditionals(t *testing.T, bs []byte) {
+	t.Helper()
+	_, authorities, additionals := parseResponse(t, bs)
+	if len(authorities) != 0 {
+		t.Errorf("got %d authority records, want 0: %v", len(authorities), authorities)
+	}
+	if len(additionals) != 0 {
+		t.Errorf("got %d additional records, want 0: %v", len(additionals), additionals)
+	}
+}
+
+func assertSectionMatches(t *testing.T, what string, got, want []dnsmessage.Resource) {
+	t.Helper()
+	opts := []cmp.Option{
+		cmpopts.IgnoreFields(dnsmessage.ResourceHeader{}, "Length"),
+		cmp.Comparer(func(a, b dnsmessage.Name) bool { return a.String() == b.String() }),
+	}
+	if diff := cmp.Diff(want, got, opts...); diff != "" {
+		t.Errorf("%s section mismatch (-want +got):\n%s", what, diff)
 	}
 }
 
@@ -1765,14 +1830,6 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 
 	cfg := mustConfig(t, sn)
 
-	assertParsesToAdditionals := func(want []netip.Addr) func(t *testing.T, bs []byte) {
-		return func(t *testing.T, bs []byte) {
-			t.Helper()
-			_, additionals := parseResponse(t, bs)
-			compareToRecords(t, additionals, want)
-		}
-	}
-
 	assertBytes := func(want []byte) func(t *testing.T, bs []byte) {
 		return func(t *testing.T, bs []byte) {
 			t.Helper()
@@ -1789,6 +1846,31 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		}
 		if header.RCode != dnsmessage.RCodeServerFailure {
 			t.Fatalf("RCode want: %v, got: %v", dnsmessage.RCodeServerFailure, header.RCode)
+		}
+		// A SERVFAIL we synthesize echoes the question and nothing else.
+		if err := p.SkipAllQuestions(); err != nil {
+			t.Fatalf("skipping questions: %v", err)
+		}
+		answers, err := p.AllAnswers()
+		if err != nil {
+			t.Fatalf("reading answers: %v", err)
+		}
+		if len(answers) != 0 {
+			t.Errorf("got %d answers, want 0: %v", len(answers), answers)
+		}
+		authorities, err := p.AllAuthorities()
+		if err != nil {
+			t.Fatalf("reading authorities: %v", err)
+		}
+		if len(authorities) != 0 {
+			t.Errorf("got %d authority records, want 0: %v", len(authorities), authorities)
+		}
+		additionals, err := p.AllAdditionals()
+		if err != nil {
+			t.Fatalf("reading additionals: %v", err)
+		}
+		if len(additionals) != 0 {
+			t.Errorf("got %d additional records, want 0: %v", len(additionals), additionals)
 		}
 	}
 
@@ -1882,31 +1964,32 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 			),
 		},
 		{
-			name: "unhandled-keeps-additional-section",
+			name: "unhandled-keeps-authority-and-additional-sections",
 			toMap: makeDNSResponse(t, "tailscale.com.", []*dnsmessage.AResource{
 				{A: netip.MustParseAddr("1.2.3.4").As4()},
 				{A: netip.MustParseAddr("5.6.7.8").As4()},
 			}),
-			assertFx: assertParsesToAdditionals(
-				// additionals are added in makeDNSResponse
-				[]netip.Addr{
-					netip.MustParseAddr("9.9.9.9"),
-				},
-			),
+			assertFx: func(t *testing.T, bs []byte) {
+				// Both sections come from makeDNSResponse and survive
+				// untouched, the EDNS0 OPT record included.
+				_, authorities, additionals := parseResponse(t, bs)
+				assertSectionMatches(t, "authority", authorities, authoritySectionFor(dnsmessage.MustNewName("tailscale.com.")))
+				assertSectionMatches(t, "additional", additionals, additionalSection())
+			},
 		},
 		{
-			name: "handled-strips-additional-section",
+			name: "handled-strips-authority-and-additional-sections",
 			toMap: makeDNSResponse(t, domainName, []*dnsmessage.AResource{
 				{A: netip.MustParseAddr("1.2.3.4").As4()},
 				{A: netip.MustParseAddr("5.6.7.8").As4()},
 			}),
-			assertFx: assertParsesToAdditionals(nil),
+			assertFx: assertNoAuthoritiesOrAdditionals,
 		},
 		{
 			name: "servfail-when-we-should-handle-but-cant",
-			// produced by
-			// makeDNSResponse(t, domainName, []*dnsmessage.AResource{{A: netip.MustParseAddr("1.2.3.4").As4()}})
-			// and then taking 17 bytes off the end. So that the parsing of it breaks after we have decided we should handle it.
+			// An A response for domainName holding one answer and one
+			// additional record, cut short mid-answer so that the parsing of
+			// it breaks after we have decided we should handle it.
 			// Frozen like this so that it doesn't depend on the implementation of dnsmessage.
 			toMap:    []byte{0, 1, 132, 0, 0, 1, 0, 1, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3},
 			assertFx: assertServFail,
@@ -2207,7 +2290,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 		},
 		{
 			name: "https-record-strips-address-hints",
-			toMap: makeDNSResponseForSections(
+			toMap: makeDNSResponseForAllSections(
 				t,
 				[]dnsmessage.Question{{Name: dnsMessageName, Type: dnsmessage.TypeHTTPS, Class: dnsmessage.ClassINET}},
 				[]dnsmessage.Resource{
@@ -2231,7 +2314,8 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 						},
 					},
 				},
-				nil,
+				authoritySectionFor(dnsMessageName),
+				additionalSection(),
 			),
 			assertFx: func(t *testing.T, bs []byte) {
 				want := []dnsmessage.HTTPSResource{
@@ -2245,7 +2329,7 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 						},
 					},
 				}
-				answers, _ := parseResponse(t, bs)
+				answers, _, _ := parseResponse(t, bs)
 				var got []dnsmessage.HTTPSResource
 				for _, r := range answers {
 					if b, ok := r.Body.(*dnsmessage.HTTPSResource); ok {
@@ -2255,6 +2339,9 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 				if diff := cmp.Diff(want, got); diff != "" {
 					t.Fatalf("HTTPS records mismatch (-want +got):\n%s", diff)
 				}
+				// The HTTPS rewrite rebuilds the message too, so neither
+				// upstream section survives.
+				assertNoAuthoritiesOrAdditionals(t, bs)
 			},
 		},
 	} {
@@ -2268,8 +2355,9 @@ func TestMapDNSResponseRewritesResponses(t *testing.T) {
 }
 
 // TestMapDNSResponseDropsUnhandledTypes asserts that for a configured domain,
-// every DNS record type dnsmessage supports other than the ones we handle
-// is dropped: the response is returned with the question echoed and no answers.
+// every DNS record type dnsmessage supports other than the ones we handle is
+// dropped: the response is returned with the question echoed and nothing else,
+// so the upstream authority and additional sections go away with the answers.
 func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 	configuredDomain := "example.com"
 	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
@@ -2301,7 +2389,7 @@ func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 			if tt.typ == dnsmessage.TypeALL {
 				answerType = dnsmessage.TypeA
 			}
-			toMap := makeDNSResponseForSections(
+			toMap := makeDNSResponseForAllSections(
 				t,
 				[]dnsmessage.Question{{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET}},
 				[]dnsmessage.Resource{
@@ -2310,22 +2398,25 @@ func TestMapDNSResponseDropsUnhandledTypes(t *testing.T) {
 						Body:   tt.body,
 					},
 				},
-				nil,
+				authoritySectionFor(dnsMessageName),
+				additionalSection(),
 			)
 			c := newConn25(logger.Discard)
 			c.reconfig(cfg)
 			bs := c.mapDNSResponse(toMap)
-			answers, _ := parseResponse(t, bs)
+			answers, _, _ := parseResponse(t, bs)
 			if len(answers) != 0 {
 				t.Fatalf("expected response to be dropped (0 answers), got %d: %v", len(answers), answers)
 			}
+			assertNoAuthoritiesOrAdditionals(t, bs)
 		})
 	}
 }
 
 // TestMapDNSResponseWritesThroughNonAddressTypes checks that a question type
-// whose RDATA can't hold an address is answered with the upstream records
-// rather than an empty answer section.
+// the we write through is answered with the upstream records
+// rather than an empty answer section. Such a response is passed through
+// untouched, so it keeps its authority and additional sections.
 func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
 	configuredDomain := "example.com"
 	dnsMessageName := dnsmessage.MustNewName(configuredDomain + ".")
@@ -2350,15 +2441,20 @@ func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
 	for _, tt := range writtenThrough {
 		t.Run(tt.name, func(t *testing.T) {
 			hdr := dnsmessage.ResourceHeader{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET, TTL: 300}
-			toMap := makeDNSResponseForSections(
+			toMap := makeDNSResponseForAllSections(
 				t,
 				[]dnsmessage.Question{{Name: dnsMessageName, Type: tt.typ, Class: dnsmessage.ClassINET}},
 				[]dnsmessage.Resource{{Header: hdr, Body: tt.body}},
-				nil,
+				authoritySectionFor(dnsMessageName),
+				additionalSection(),
 			)
 			c := newConn25(logger.Discard)
 			c.reconfig(cfg)
-			answers, _ := parseResponse(t, c.mapDNSResponse(toMap))
+			mapped := c.mapDNSResponse(toMap)
+			if diff := cmp.Diff(toMap, mapped); diff != "" {
+				t.Errorf("response was not written through unchanged (-want +got):\n%s", diff)
+			}
+			answers, authorities, additionals := parseResponse(t, mapped)
 			if len(answers) != 1 {
 				t.Fatalf("got %d answers, want 1: %v", len(answers), answers)
 			}
@@ -2374,6 +2470,10 @@ func TestMapDNSResponseWritesThroughNonAddressTypes(t *testing.T) {
 			if diff := cmp.Diff(tt.body, answers[0].Body); diff != "" {
 				t.Errorf("answer body mismatch (-want +got):\n%s", diff)
 			}
+			// The upstream authority and additional sections survive intact,
+			// including the EDNS0 OPT record a rewrite would have dropped.
+			assertSectionMatches(t, "authority", authorities, authoritySectionFor(dnsMessageName))
+			assertSectionMatches(t, "additional", additionals, additionalSection())
 		})
 	}
 }
