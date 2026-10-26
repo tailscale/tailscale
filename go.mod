@@ -112,7 +112,7 @@ require (
 	github.com/studio-b12/gowebdav v0.13.0
 	github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d
 	github.com/tailscale/depaware v0.0.0-20260720165112-f20f66241ec6
-	github.com/tailscale/gliderssh v0.3.4-0.20261025202817-66627641389f
+	github.com/tailscale/gliderssh v0.3.4-0.20261026144310-31f7cf365d3a
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
 	github.com/tailscale/golang-x-crypto v0.0.0-20260720160339-c86ca1284b96
