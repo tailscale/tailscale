@@ -53,26 +53,9 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 	if sc == nil {
 		return fmt.Errorf("[unexpected] ensureCertLoops called with nil ServeConfig")
 	}
-	currentDomains := make(map[string]bool)
-	const httpsPort = "443"
-	for _, service := range sc.Services {
-		// L7 Web handlers (HA Ingress).
-		for hostPort := range service.Web {
-			domain, port, err := net.SplitHostPort(string(hostPort))
-			if err != nil {
-				return fmt.Errorf("[unexpected] unable to parse HostPort %s", hostPort)
-			}
-			if port != httpsPort { // HA Ingress' HTTP endpoint
-				continue
-			}
-			currentDomains[domain] = true
-		}
-		// L4 TCP handlers with TLS termination (kube-apiserver proxy).
-		for _, handler := range service.TCP {
-			if handler != nil && handler.TerminateTLS != "" {
-				currentDomains[handler.TerminateTLS] = true
-			}
-		}
+	currentDomains, err := certDomainsForServeConfig(sc)
+	if err != nil {
+		return err
 	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -95,6 +78,59 @@ func (cm *CertManager) EnsureCertLoops(ctx context.Context, sc *ipn.ServeConfig)
 		}
 	}
 	return nil
+}
+
+// certDomainsForServeConfig returns the set of domains that need a TLS cert for
+// the HTTPS endpoints in sc.
+func certDomainsForServeConfig(sc *ipn.ServeConfig) (map[string]bool, error) {
+	domains := make(map[string]bool)
+	const httpsPort = "443"
+	for _, service := range sc.Services {
+		// L7 Web handlers (HA Ingress).
+		for hostPort := range service.Web {
+			domain, port, err := net.SplitHostPort(string(hostPort))
+			if err != nil {
+				return nil, fmt.Errorf("[unexpected] unable to parse HostPort %s", hostPort)
+			}
+			if port != httpsPort { // HA Ingress' HTTP endpoint
+				continue
+			}
+			domains[domain] = true
+		}
+		// L4 TCP handlers with TLS termination (kube-apiserver proxy).
+		for _, handler := range service.TCP {
+			if handler != nil && handler.TerminateTLS != "" {
+				domains[handler.TerminateTLS] = true
+			}
+		}
+	}
+	return domains, nil
+}
+
+// AllCertsPresent reports whether a TLS cert is already cached for every HTTPS
+// endpoint in sc. It reads cached certs only and never triggers issuance,
+// so it is safe to call from a readiness probe. A ServeConfig with no HTTPS
+// endpoints reports true. Only a missing cert reports false: an expired cert or
+// a failed read from the cert store counts as present.
+func (cm *CertManager) AllCertsPresent(ctx context.Context, sc *ipn.ServeConfig) (bool, error) {
+	if sc == nil {
+		return true, nil
+	}
+	domains, err := certDomainsForServeConfig(sc)
+	if err != nil {
+		return false, err
+	}
+	for domain := range domains {
+		info, err := cm.lc.CertStatus(ctx, domain)
+		if err != nil {
+			return false, fmt.Errorf("failed to get cert status for %q: %w", domain, err)
+		}
+		// Expired counts: else a rollout stalls before the replica that renews.
+		if info.Missing {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // isTransientCertErr reports whether err represents a failure that did not

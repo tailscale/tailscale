@@ -21,6 +21,7 @@ import (
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/kube/certs"
+	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
 	"tailscale.com/kube/services"
@@ -32,7 +33,7 @@ import (
 // is written to when the certDomain changes, causing the serve config to be
 // re-read and applied. prevServeConfig is the serve config that was fetched
 // during startup. This will be refreshed by the goroutine when serve config changes.
-func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig) {
+func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *local.Client, kc *kubeClient, cfg *settings, prevServeConfig *ipn.ServeConfig, applied *healthz.Condition) {
 	if certDomainAtomic == nil {
 		panic("certDomainAtomic must not be nil")
 	}
@@ -88,9 +89,13 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 			}
 			if sc == nil {
 				log.Printf("serve proxy: no serve config at %q, skipping", cfg.ServeConfigPath)
+				// Nothing to serve, e.g. a ProxyGroup that only fronts Services.
+				applied.Set(true)
 				continue
 			}
 			if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
+				// Already applied, e.g. persisted in state from before a restart.
+				applied.Set(true)
 				continue
 			}
 			if err := updateServeConfig(ctx, sc, certDomain, klc.New(lc)); err != nil {
@@ -102,6 +107,7 @@ func watchServeConfigChanges(ctx context.Context, cdChanged <-chan bool, certDom
 				}
 			}
 			prevServeConfig = sc
+			applied.Set(true)
 			if cfg.CertShareMode != "rw" {
 				continue
 			}

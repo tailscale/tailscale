@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
 
 // LocalClient is roughly a subset of the local.Client struct's methods, used
@@ -32,6 +33,9 @@ type IPNBusWatcher interface {
 
 type CertIssuer interface {
 	CertPair(context.Context, string) ([]byte, []byte, error)
+	// CertStatus reports the state of the cached cert for domain without
+	// fetching or issuing one.
+	CertStatus(context.Context, string) (*tailcfg.C2NTLSCertInfo, error)
 }
 
 // New returns a LocalClient that wraps the provided local.Client.
@@ -57,6 +61,10 @@ func (lc *localClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt)
 
 func (lc *localClient) CertPair(ctx context.Context, domain string) ([]byte, []byte, error) {
 	return lc.lc.CertPair(ctx, domain)
+}
+
+func (lc *localClient) CertStatus(ctx context.Context, domain string) (*tailcfg.C2NTLSCertInfo, error) {
+	return lc.lc.CertStatus(ctx, domain)
 }
 
 func (lc *localClient) CertDomains(ctx context.Context) ([]string, error) {
