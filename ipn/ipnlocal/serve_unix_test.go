@@ -320,3 +320,75 @@ func TestTCPForwardUnixSocket(t *testing.T) {
 		t.Fatal("handler did not finish in time")
 	}
 }
+
+func TestSetServeConfigUnixSocketSandboxedMacOS(t *testing.T) {
+	tests := []struct {
+		name      string
+		sandboxed bool
+		conf      *ipn.ServeConfig
+		wantErr   bool
+	}{
+		{
+			name:      "tcp-unix-sandboxed",
+			sandboxed: true,
+			conf: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {TCPForward: "unix:/tmp/test.sock"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "web-unix-sandboxed",
+			sandboxed: true,
+			conf: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Web: map[ipn.HostPort]*ipn.WebServerConfig{
+					"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+						"/": {Proxy: "unix:/tmp/test.sock"},
+					}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "tcp-localhost-sandboxed",
+			sandboxed: true,
+			conf: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {TCPForward: "127.0.0.1:8080"},
+				},
+			},
+		},
+		{
+			name: "tcp-unix-not-sandboxed",
+			conf: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					80: {TCPForward: "unix:/tmp/test.sock"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tstest.Replace(t, &isSandboxedMacOS, func() bool { return tt.sandboxed })
+			b := newTestBackend(t)
+			err := b.SetServeConfig(tt.conf, "")
+			if tt.wantErr {
+				if !errors.Is(err, errServeUnixSandboxed) {
+					t.Fatalf("SetServeConfig error = %v, want %v", err, errServeUnixSandboxed)
+				}
+				if b.ServeConfig().Valid() {
+					t.Error("serve config was saved despite error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SetServeConfig: %v", err)
+			}
+		})
+	}
+}
