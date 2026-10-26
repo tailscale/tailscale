@@ -13,6 +13,7 @@ import (
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -250,6 +251,8 @@ var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
 	Text          string
 	AcceptAppCaps []peercap.Cap
 	Redirect      string
+	Check         bool
+	CheckPeriod   tstime.GoDuration
 }{})
 
 // Clone makes a deep copy of WebServerConfig.

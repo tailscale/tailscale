@@ -19,6 +19,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tailcfg/peercap"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -183,6 +184,15 @@ type HTTPHandler struct {
 	//   - ${HOST}: replaced with the request's Host header value
 	//   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
 	Redirect string `json:",omitempty"`
+
+	// Check, if true, requires each peer node to have recently proved user
+	// presence with a security key (WebAuthn) before its requests reach this
+	// handler. Checks are tracked per (peer node, handler).
+	Check bool `json:",omitempty"`
+
+	// CheckPeriod is how long a successful check lasts for a given peer node
+	// and handler. Zero means the default of 12 hours.
+	CheckPeriod tstime.GoDuration `json:",omitzero"`
 
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes?

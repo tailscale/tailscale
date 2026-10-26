@@ -16,6 +16,7 @@ import (
 	"tailscale.com/drive"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -946,6 +947,15 @@ func (v HTTPHandlerView) AcceptAppCaps() views.Slice[peercap.Cap] {
 //   - ${REQUEST_URI}: replaced with the request's full URI (path and query string)
 func (v HTTPHandlerView) Redirect() string { return v.ж.Redirect }
 
+// Check, if true, requires each peer node to have recently proved user
+// presence with a security key (WebAuthn) before its requests reach this
+// handler. Checks are tracked per (peer node, handler).
+func (v HTTPHandlerView) Check() bool { return v.ж.Check }
+
+// CheckPeriod is how long a successful check lasts for a given peer node
+// and handler. Zero means the default of 12 hours.
+func (v HTTPHandlerView) CheckPeriod() tstime.GoDuration { return v.ж.CheckPeriod }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Path          string
@@ -953,6 +963,8 @@ var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Text          string
 	AcceptAppCaps []peercap.Cap
 	Redirect      string
+	Check         bool
+	CheckPeriod   tstime.GoDuration
 }{})
 
 // View returns a read-only view of WebServerConfig.

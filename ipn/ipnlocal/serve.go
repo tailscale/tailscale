@@ -833,22 +833,27 @@ func (b *LocalBackend) forwardTCPWithProxyProtocol(conn, backConn net.Conn, prox
 	return <-errc
 }
 
+// serveRequestHostname returns the serve hostname r is for: its SNI, or for
+// plain HTTP its Host qualified with the MagicDNS suffix.
+func (b *LocalBackend) serveRequestHostname(r *http.Request) string {
+	if r.TLS != nil {
+		return r.TLS.ServerName
+	}
+	hostname := r.Host
+	tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
+	if host, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = host
+	}
+	if !strings.HasSuffix(hostname, tcd) {
+		hostname += tcd
+	}
+	return hostname
+}
+
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
 	var z ipn.HTTPHandlerView // zero value
 
-	hostname := r.Host
-	if r.TLS == nil {
-		tcd := "." + b.CurrentProfile().NetworkProfile().MagicDNSName
-		if host, _, err := net.SplitHostPort(hostname); err == nil {
-			hostname = host
-		}
-		if !strings.HasSuffix(hostname, tcd) {
-			hostname += tcd
-		}
-	} else {
-		hostname = r.TLS.ServerName
-	}
-
+	hostname := b.serveRequestHostname(r)
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
 	if !ok {
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
@@ -1247,9 +1252,15 @@ func parseRedirectWithCode(redirect string) (code int, url string) {
 // serveWebHandler is an http.HandlerFunc that maps incoming requests to the
 // correct *http.
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, serveCheckPathPrefix) && b.serveCheckEndpoint(w, r) {
+		return
+	}
 	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if h.Check() && !b.serveCheckPassed(w, r, h, mountPoint) {
 		return
 	}
 	if s := h.Text(); s != "" {

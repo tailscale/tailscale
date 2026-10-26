@@ -412,6 +412,7 @@ type LocalBackend struct {
 
 	serveListeners     map[netip.AddrPort]*localListener // listeners for local serve traffic
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *reverseProxy
+	serveCheck         serveCheckState                   // step-up checks for serve handlers with Check set
 
 	// dialPlan is any dial plan that we've received from the control
 	// server during a previous connection; it is cleared on logout.

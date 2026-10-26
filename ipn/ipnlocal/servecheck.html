@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tailscale check</title>
+<style>
+body { font: 16px/1.5 system-ui, sans-serif; background: #f7f5f4; color: #1f1e1e; margin: 0; }
+main { max-width: 28rem; margin: 12vh auto; background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0 0 1.5rem; }
+dt { color: #706e6d; }
+dd { margin: 0; font-family: ui-monospace, monospace; font-size: .9rem; word-break: break-all; }
+button { font: inherit; background: #1f1e1e; color: #fff; border: 0; border-radius: 8px; padding: .6rem 1.2rem; cursor: pointer; }
+button:disabled { opacity: .5; }
+#status { margin-top: 1rem; min-height: 1.5em; }
+.err { color: #b3261e; }
+</style>
+</head>
+<body>
+<main>
+<h1>Confirm it's you</h1>
+<p>This page needs a fresh security key check from this device.</p>
+<dl>
+<dt>Device</dt><dd id="device">{{.Device}}</dd>
+<dt>User</dt><dd>{{.User}}</dd>
+<dt>Page</dt><dd id="target">{{.Target}}</dd>
+<dt>Valid for</dt><dd>{{.Period}}</dd>
+</dl>
+<button id="go">Use security key</button>
+<div id="status"></div>
+</main>
+<script>
+const q = new URLSearchParams(location.search);
+const api = op => location.pathname + op + "?m=" + encodeURIComponent(q.get("m"));
+const b64d = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+const b64e = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const status = document.getElementById("status");
+const btn = document.getElementById("go");
+
+async function check() {
+  btn.disabled = true;
+  status.className = "";
+  status.textContent = "Waiting for your security key…";
+  try {
+    const br = await fetch(api("begin"), {method: "POST"});
+    if (!br.ok) throw new Error(await br.text());
+    const o = await br.json();
+    let body;
+    if (o.register) {
+      status.textContent = "First time: enrol a security key for " + o.userName + ".";
+      const c = await navigator.credentials.create({publicKey: {
+        rp: {id: o.rpId, name: "Tailscale check"},
+        user: {id: b64d(o.userId), name: o.userName, displayName: o.displayName || o.userName},
+        challenge: b64d(o.challenge),
+        pubKeyCredParams: [{type: "public-key", alg: -7}, {type: "public-key", alg: -8}],
+        authenticatorSelection: {userVerification: "discouraged"},
+        attestation: "none",
+        timeout: 60000,
+      }});
+      body = {
+        Challenge: o.challenge,
+        CredentialID: b64e(c.rawId),
+        ClientDataJSON: b64e(c.response.clientDataJSON),
+        AuthenticatorData: b64e(c.response.getAuthenticatorData()),
+        PublicKey: b64e(c.response.getPublicKey()),
+      };
+    } else {
+      const c = await navigator.credentials.get({publicKey: {
+        rpId: o.rpId,
+        challenge: b64d(o.challenge),
+        allowCredentials: o.allow.map(id => ({type: "public-key", id: b64d(id)})),
+        userVerification: "discouraged",
+        timeout: 60000,
+      }});
+      body = {
+        Challenge: o.challenge,
+        CredentialID: b64e(c.rawId),
+        ClientDataJSON: b64e(c.response.clientDataJSON),
+        AuthenticatorData: b64e(c.response.authenticatorData),
+        Signature: b64e(c.response.signature),
+      };
+    }
+    const fr = await fetch(api("finish"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (!fr.ok) throw new Error(await fr.text());
+    status.textContent = "Checked. Taking you back…";
+    let next = q.get("next") || "/";
+    if (!next.startsWith("/") || next.startsWith("//")) next = "/";
+    location.replace(next);
+  } catch (e) {
+    status.className = "err";
+    status.textContent = e.message || String(e);
+    btn.disabled = false;
+  }
+}
+btn.addEventListener("click", check);
+</script>
+</body>
+</html>

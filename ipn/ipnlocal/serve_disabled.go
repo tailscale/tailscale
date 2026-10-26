@@ -35,3 +35,5 @@ func (*LocalBackend) HasFunnelForHostPort(host string, port uint16) bool {
 func (b *LocalBackend) vipServicesFromPrefsLocked(prefs ipn.PrefsView) []*tailcfg.VIPService {
 	return nil
 }
+
+type serveCheckState struct{}
