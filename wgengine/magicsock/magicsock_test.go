@@ -4929,3 +4929,55 @@ func TestUpsertPeerTSMPKeyPreservedOnControlUpdate(t *testing.T) {
 		t.Error("control key dk1 shoud not be in peermap")
 	}
 }
+
+func TestUnambiguousNodeKeyOfPingLocked(t *testing.T) {
+	nk1 := key.NewNode().Public()
+	dk2 := key.NewDisco().Public()
+	// Test that if the discoKey is not matching the nodeKey, AND the discoKey is
+	// used by more than one node, then the match fails.
+	t.Run("discopubkey_nodepubkey_mismatch", func(t *testing.T) {
+		conn := newTestConn(t)
+		peer1 := &tailcfg.Node{
+			ID:        1,
+			Key:       nk1,
+			DiscoKey:  randDiscoKey(),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		}
+		peer2 := &tailcfg.Node{
+			ID:        2,
+			Key:       randNodeKey(),
+			DiscoKey:  dk2,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+		}
+		peer3 := &tailcfg.Node{
+			ID:        3,
+			Key:       randNodeKey(),
+			DiscoKey:  dk2,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")},
+		}
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{peer1, peer2, peer3}))
+		conn.mu.Lock()
+		nk, ok := conn.unambiguousNodeKeyOfPingLocked(&disco.Ping{NodeKey: nk1}, dk2, key.NodePublic{})
+		conn.mu.Unlock()
+		if ok {
+			t.Errorf("expected mismatch, got match, nodekey: %v", nk)
+		}
+	})
+
+	t.Run("discopubkey_nodepubkey_match", func(t *testing.T) {
+		conn := newTestConn(t)
+		peer1 := &tailcfg.Node{
+			ID:        1,
+			Key:       randNodeKey(),
+			DiscoKey:  randDiscoKey(),
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		}
+		conn.SetNetworkMap(tailcfg.NodeView{}, nodeViews([]*tailcfg.Node{peer1}))
+		conn.mu.Lock()
+		nk, ok := conn.unambiguousNodeKeyOfPingLocked(&disco.Ping{NodeKey: peer1.Key}, peer1.DiscoKey, key.NodePublic{})
+		conn.mu.Unlock()
+		if !ok {
+			t.Errorf("expected match, got mismatch, nodekey: %v", nk)
+		}
+	})
+}
