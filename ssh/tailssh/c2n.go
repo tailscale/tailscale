@@ -80,7 +80,7 @@ func getSSHUsernames(b *ipnlocal.LocalBackend, req *tailcfg.C2NSSHUsernamesReque
 		max = min(req.Max, maxSSHUsernameHints)
 	}
 
-	var exclude set.Set[string]
+	exclude := make(set.Set[string])
 	for u, e := range req.Exclude {
 		if e {
 			exclude.Add(u)
