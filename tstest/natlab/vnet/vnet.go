@@ -3196,6 +3196,7 @@ func (s *Server) takeAgentConnOne(n *node) (ac *agentConn, miss int) {
 		s.agentConns.Delete(ac)
 		if st := tcp.EndpointState(ac.ep.State()); st != tcp.StateEstablished {
 			log.Printf("takeAgentConn: discarding idle agent conn for %v that the agent already closed (state %v)", n.mac, st)
+			ac.tc.Close()
 			continue
 		}
 		return ac, 0
