@@ -12,7 +12,7 @@
 // children are the incubator in incubator.go, spawned with the
 // monitor's credentials because the incubator needs root to exec
 // login and su and to register the login session. Forwarding children
-// in fwdchild.go are one-shot dial and bind workers, spawned with the
+// in fwdchild.go are dial relays and one-shot bind workers, spawned with the
 // connection user's credentials.
 //
 // The connection's identity, the uid, gid, and groups of its
@@ -48,7 +48,7 @@ const (
 	// does not bound the child's lifetime.
 	monExecOpDeadline = 30 * time.Second
 
-	// monFwdOpDeadline bounds a one-shot forwarding child from spawn to
+	// monFwdOpDeadline bounds a forwarding child from spawn to
 	// result. On expiry the child's group is SIGKILLed.
 	monFwdOpDeadline = 10 * time.Second
 
@@ -62,6 +62,7 @@ const (
 // Every child leads its own group, so pgid equals pid. A oneshot
 // child, a dialer or listener, reports its outcome in its op's reply,
 // and its exit is reaped silently by the sweep after its SIGCHLD.
+// A dialer stays alive to relay bytes after reporting its outcome.
 type monChild struct {
 	pgid    int   // the child's process group. Equal to its pid.
 	id      int64 // exec request ID, or zero for a forwarding child
@@ -81,7 +82,7 @@ type monitor struct {
 	// ID, from the reply write until tailscaled's fdack receipt. See
 	// replyFD and the monitor_rpc.go header for the darwin kernel
 	// behavior this coverage exists for.
-	pendingFds map[int64]int
+	pendingFds map[int64][]int
 }
 
 // monitorArgs are the monitor's spawn arguments, in the style of
@@ -182,7 +183,7 @@ func beMonitor(args []string) error {
 		conn:       newRPCConn(conn),
 		args:       ma,
 		children:   make(map[int]*monChild),
-		pendingFds: make(map[int64]int),
+		pendingFds: make(map[int64][]int),
 		hup:        hup,
 	}
 	return m.loop()
@@ -308,9 +309,9 @@ func (m *monitor) handle(f rpcFrame, fds []int) {
 		m.handleSignal(f)
 	case opFdAck:
 		closeFds(fds)
-		if fd, ok := m.pendingFds[f.ID]; ok {
+		if fds, ok := m.pendingFds[f.ID]; ok {
 			delete(m.pendingFds, f.ID)
-			unix.Close(fd)
+			closeFds(fds)
 		}
 	case opDial:
 		closeFds(fds)
@@ -516,10 +517,11 @@ func killGroup(pgid int, sig unix.Signal) error {
 	return unix.Kill(-pgid, sig)
 }
 
-// handleDial serves the dial op. A one-shot dialer child dials the
-// unix socket with the connection's bound identity, as documented in
-// fwdchild.go. The connected descriptor is relayed to tailscaled in
-// the reply.
+// handleDial serves the dial op. A relay child dials the unix socket
+// with the connection's bound identity, as documented in fwdchild.go.
+// The reply relays a socketpair descriptor and a lifetime pipe writer to
+// tailscaled; the child relays payload as the bound user until the pipe
+// closes or both data directions finish.
 func (m *monitor) handleDial(f rpcFrame) {
 	if f.Net != "unix" {
 		m.reply(rpcErrReply(f.ID, opDial, fmt.Errorf("dial: network %q not supported; dial is unix-only", f.Net)))
@@ -603,7 +605,7 @@ func checkAgentSocketPath(p string) error {
 	return nil
 }
 
-// fwdOp runs one one-shot forwarding op. It spawns the child with the
+// fwdOp runs one forwarding op. It spawns the child with the
 // bound identity, waits for its result under monFwdOpDeadline, and
 // relays the child's socket descriptor in the ok reply. The wait blocks
 // the loop for at most the deadline.
@@ -616,7 +618,11 @@ func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(paylo
 	}
 	child := &monChild{pgid: cmd.Process.Pid, oneshot: true}
 	m.children[cmd.Process.Pid] = child
-	ok, payload, fd, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline))
+	wantFDs := 1
+	if op == opDial {
+		wantFDs = 2 // data socket and lifetime pipe writer
+	}
+	ok, payload, fds, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline), wantFDs)
 	result.Close()
 	if rerr != nil {
 		m.killChild(child)
@@ -629,12 +635,13 @@ func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(paylo
 		m.reply(rpcErrReply(id, op, errors.New(payload)))
 		return
 	}
-	// The child exits by itself right after its send. The sweep reaps
-	// it silently after its SIGCHLD.
-	m.replyFD(reply(payload), fd)
+	// Listener children exit after the descriptor handoff; dial children
+	// keep relaying until the connection closes. The sweep silently reaps
+	// each child after its SIGCHLD.
+	m.replyFD(reply(payload), fds...)
 }
 
-// killChild SIGKILLs a one-shot child's group and reaps it with
+// killChild SIGKILLs a forwarding child's group and reaps it with
 // killGroupAndReap, a bounded non-blocking wait. A child that survives
 // SIGKILL for the budget is left in the table, reaped by the sweep
 // whenever it dies.
@@ -645,8 +652,8 @@ func (m *monitor) killChild(c *monChild) {
 	}
 }
 
-// replyFD writes a reply carrying one descriptor. On success the
-// descriptor stays open, parked in pendingFds until tailscaled's fdack:
+// replyFD writes a reply carrying descriptors. On success they stay
+// open, parked in pendingFds until tailscaled's fdack:
 // on darwin, closing the sender's copy while the descriptor's only
 // reference is the in-flight SCM_RIGHTS message lets the kernel's
 // unix-socket GC reclaim the socket (receive side flushed, buffered
@@ -654,14 +661,14 @@ func (m *monitor) killChild(c *monChild) {
 // socket that reads EOF with its peer still alive. The receiver's
 // acknowledgment is what releases the hold. On a write failure the
 // channel is broken and the descriptor is closed here.
-func (m *monitor) replyFD(f rpcFrame, fd int) {
-	err := m.conn.writeFrame(f, fd)
+func (m *monitor) replyFD(f rpcFrame, fds ...int) {
+	err := m.conn.writeFrame(f, fds...)
 	if err != nil {
-		unix.Close(fd)
+		closeFds(fds)
 		m.broken = true
 		return
 	}
-	m.pendingFds[f.ID] = fd
+	m.pendingFds[f.ID] = fds
 }
 
 // sweep reaps exited children with wait4(WNOHANG) and drops them from
@@ -740,8 +747,8 @@ func (m *monitor) notifyExit(child monitorProcess, code int) {
 func (m *monitor) teardown() {
 	// Release every descriptor parked for an fdack: the peer is going
 	// away or gone, so no acknowledgment will arrive.
-	for id, fd := range m.pendingFds {
-		unix.Close(fd)
+	for id, fds := range m.pendingFds {
+		closeFds(fds)
 		delete(m.pendingFds, id)
 	}
 	// Snapshot the pgid set at teardown entry. A group member can

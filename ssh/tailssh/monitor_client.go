@@ -311,20 +311,40 @@ func (mc *monitorClient) Signal(ctx context.Context, child monitorProcess, sig s
 	return err
 }
 
-// Dial dials a unix socket through a one-shot child running with the
-// connection's bound identity and returns the connected socket.
-// The returned socket is acknowledged to the monitor on receipt, which
-// releases the monitor's held copy; see the monitor_rpc.go header.
-func (mc *monitorClient) Dial(ctx context.Context, addr string) (*net.UnixConn, error) {
+// Dial dials a unix socket through a relay child running with the
+// connection's bound identity. The returned data socket and lifetime pipe
+// are acknowledged to the monitor on receipt, releasing its held copies.
+// See the monitor_rpc.go header.
+func (mc *monitorClient) Dial(ctx context.Context, addr string) (*monitorDialConn, error) {
 	_, fds, err := mc.call(ctx, rpcDialReq(0, addr))
 	if err != nil {
 		return nil, err
 	}
-	if len(fds) != 1 {
+	if len(fds) != 2 {
 		closeFds(fds)
-		return nil, fmt.Errorf("ssh-monitor: dial reply carried %d fds, want 1", len(fds))
+		return nil, fmt.Errorf("ssh-monitor: dial reply carried %d fds, want 2", len(fds))
 	}
-	return wrapUnixConn(fds[0]) // consumes the descriptor
+	lifetime := os.NewFile(uintptr(fds[1]), "ssh-fwd-lifetime")
+	uc, err := wrapUnixConn(fds[0]) // consumes the descriptor
+	if err != nil {
+		lifetime.Close()
+		return nil, err
+	}
+	return &monitorDialConn{UnixConn: uc, lifetime: lifetime}, nil
+}
+
+// monitorDialConn preserves UnixConn's half-close methods, but a full Close
+// also ends the relay even if the service remains open and silent. Discarding
+// an unclaimed RPC reply closes the lifetime fd too, without needing a wrapper.
+type monitorDialConn struct {
+	*net.UnixConn
+	lifetime *os.File
+}
+
+func (c *monitorDialConn) Close() error {
+	err := c.UnixConn.Close()
+	c.lifetime.Close()
+	return err
 }
 
 // Listen asks the monitor for a listener bound with the connection's

@@ -11,7 +11,7 @@
 // that owns them:
 //
 //	{"id":N,"op":"dial","net":"unix","addr":"/run/user/1000/x.sock"}   request
-//	{"id":N,"op":"dial","ok":true}                                     reply carrying at most one fd
+//	{"id":N,"op":"dial","ok":true}                                reply carrying data and lifetime fds
 //	{"op":"exit","pid":123,"childID":1,"code":0}                                   unsolicited notification
 //
 // The caller assigns request IDs and replies echo them. The codec
@@ -52,7 +52,7 @@ import (
 
 // Monitor RPC operations.
 const (
-	opDial   = "dial"   // request {net:"unix", addr}. reply {ok} + connected fd
+	opDial   = "dial"   // request {net:"unix", addr}. reply {ok} + data socket and lifetime pipe writer
 	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
 	opExec   = "exec"   // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
 	opSignal = "signal" // request {pid, childID, sig}. reply {ok}
@@ -186,12 +186,15 @@ func rpcFdAckReq(replyID int64) rpcFrame {
 
 // maxFdsForOp reports the maximum number of SCM_RIGHTS descriptors a
 // frame of op may carry in either direction. Exec carries child stdio.
-// Dial and listen replies carry the connected or bound socket.
+// Dial replies carry a data socket and lifetime pipe writer; listen replies
+// carry the bound socket.
 func maxFdsForOp(op string) int {
 	switch op {
 	case opExec:
 		return rpcMaxFds
-	case opDial, opListen:
+	case opDial:
+		return 2
+	case opListen:
 		return 1
 	default:
 		return 0
