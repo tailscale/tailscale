@@ -3558,7 +3558,7 @@ const (
 	receiveDERPName = "ReceiveDERP"
 )
 
-// udpReceiveConfigs returns the [conn.ReceiveFunc] configs in order they are
+// udpReceiveConfigs returns the [conn.ReceiveFunc] configs in the order they are
 // opened within [Conn.Open].
 // It is empty when there is no UDP transport.
 func (c *Conn) udpReceiveConfigs() []udpReceiveConfig {
