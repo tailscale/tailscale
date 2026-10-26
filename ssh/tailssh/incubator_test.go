@@ -178,9 +178,9 @@ func TestIncubatorEnvServerOnly(t *testing.T) {
 			}
 		}
 	}
-	// USER/HOME come from the server; TERM is the one client-controlled value
-	// allowed in (OpenSSH parity).
-	for _, want := range []string{"USER=alice", "HOME=/home/alice", "TERM=xterm-256color"} {
+	// USER/LOGNAME/HOME come from the server; TERM is the one client-controlled
+	// value allowed in (OpenSSH parity).
+	for _, want := range []string{"USER=alice", "LOGNAME=alice", "HOME=/home/alice", "TERM=xterm-256color"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("%q missing from child environment: %q", want, env)
 		}
