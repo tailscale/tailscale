@@ -83,8 +83,8 @@ func newSession(sess gliderssh.Session, peer peerIdentity, done chan struct{}) *
 	// Start draining window changes now, even when the application
 	// never calls Pty. gliderssh writes window changes from the session
 	// request loop, so an undrained channel blocks the session's
-	// requests. Pty returns winCh. Window changes are dropped when the
-	// application is not reading it.
+	// requests. Pty returns winCh, which retains the latest size
+	// when the application is not reading it.
 	if gPty, gWinCh, ok := sess.Pty(); ok {
 		s.pty = &Pty{
 			Term: gPty.Term,
@@ -108,6 +108,13 @@ func newSession(sess gliderssh.Session, peer peerIdentity, done chan struct{}) *
 					Height:       gw.Height,
 					WidthPixels:  gw.WidthPixels,
 					HeightPixels: gw.HeightPixels,
+				}
+				// Replace any stale size. This is the only sender to the
+				// one-slot channel, so draining leaves room for the latest
+				// size even if the consumer races with the receive.
+				select {
+				case <-s.winCh:
+				default:
 				}
 				select {
 				case s.winCh <- w:
@@ -190,8 +197,8 @@ func (s *Session) Subsystem() string {
 }
 
 // Pty returns PTY information, a channel of window size changes, and
-// whether a PTY was requested. Window changes are dropped when the
-// returned channel is not being read.
+// whether a PTY was requested. When the returned channel is not being
+// read, it retains the latest window size.
 func (s *Session) Pty() (_ Pty, _ <-chan Window, ok bool) {
 	if s.pty == nil {
 		return Pty{}, nil, false
