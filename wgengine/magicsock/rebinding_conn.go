@@ -21,7 +21,14 @@ import (
 
 // socketGroup contains sockets sharing one port.
 type socketGroup struct {
+	// conns hold the group members.
+	// Consumers expect at least one, and will panic otherwise.
 	conns []nettype.PacketConn
+
+	// bound tracks the number of live conns to manage their lifecycle.
+	//
+	// Subject to OS capabilities and state, conns[bound:] connections may
+	// be backed by a [blockForeverConn].
 	bound int
 }
 
