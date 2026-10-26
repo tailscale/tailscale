@@ -1442,10 +1442,16 @@ func (ss *sshSession) run() {
 		var err error
 		rec, err = ss.startNewRecording()
 		if err != nil {
+			// SFTP stdout is a binary protocol stream; report rejection on
+			// stderr without changing shell-session output behavior.
+			out := io.Writer(ss)
+			if ss.Subsystem() == "sftp" {
+				out = ss.Stderr()
+			}
 			if uve, ok := errors.AsType[userVisibleError](err); ok {
-				fmt.Fprintf(ss, "%s\r\n", uve.SSHTerminationMessage())
+				fmt.Fprintf(out, "%s\r\n", uve.SSHTerminationMessage())
 			} else {
-				fmt.Fprintf(ss, "can't start new recording\r\n")
+				fmt.Fprintf(out, "can't start new recording\r\n")
 			}
 			ss.logf("startNewRecording: %v", err)
 			// 254 is Tailscale-specific: the SSH transport is fine
@@ -1875,23 +1881,26 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 					err = errors.New("recording upload ended before the SSH session")
 				}
 			}
-			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
-				lastAttempt := attempts[len(attempts)-1]
-				lastAttempt.FailureMessage = err.Error()
-
-				eventType := tailcfg.SSHSessionRecordingFailed
-				if onFailure.TerminateSessionWithMessage != "" {
-					eventType = tailcfg.SSHSessionRecordingTerminated
-				}
-
-				ss.notifyControl(ctx, nodeKey, eventType, attempts, onFailure.NotifyURL)
-			}
-			if onFailure != nil && onFailure.TerminateSessionWithMessage != "" {
+			terminate := onFailure != nil && onFailure.TerminateSessionWithMessage != ""
+			if terminate {
 				ss.logf("recording: error uploading recording (closing session): %v", err)
 				ss.cancelCtx(userVisibleError{
 					error: err,
 					msg:   onFailure.TerminateSessionWithMessage,
 				})
+			}
+			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
+				lastAttempt := attempts[len(attempts)-1]
+				lastAttempt.FailureMessage = err.Error()
+
+				eventType := tailcfg.SSHSessionRecordingFailed
+				if terminate {
+					eventType = tailcfg.SSHSessionRecordingTerminated
+				}
+
+				ss.notifyControl(ctx, nodeKey, eventType, attempts, onFailure.NotifyURL)
+			}
+			if terminate {
 				return
 			}
 			ss.logf("recording: error uploading recording (failing open): %v", err)
@@ -1958,8 +1967,14 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 
 // notifyControl sends a SSHEventNotifyRequest to control over noise.
 // A SSHEventNotifyRequest is sent when an action or state reached during
-// an SSH session is a defined EventType.
+// an SSH session is a defined EventType. Each notification is bounded so
+// an unresponsive control request cannot indefinitely block session startup
+// after a recorder connection failure or retain an upload watcher. The
+// timeout is local to the notification, not the recording upload or session.
 func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic, notifyType tailcfg.SSHEventType, attempts []*tailcfg.SSHRecordingAttempt, url string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	re := tailcfg.SSHEventNotifyRequest{
 		EventType:         notifyType,
 		ConnectionID:      ss.conn.connID,
