@@ -154,13 +154,22 @@ func (srv *server) attachSessionToConnIfNotShutdown(ss *sshSession) bool {
 	return true
 }
 
-func (srv *server) trackActiveConn(c *conn, add bool) {
+// registerConn registers c unless shutdown has started, and reports whether
+// c was successfully registered. The caller must initialize c's transport
+// and authentication context before calling it.
+func (srv *server) registerConn(c *conn) bool {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if add {
-		mak.Set(&srv.activeConns, c, true)
-		return
+	if srv.shutdownCalled {
+		return false
 	}
+	mak.Set(&srv.activeConns, c, true)
+	return true
+}
+
+func (srv *server) unregisterConn(c *conn) {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
 	delete(srv.activeConns, c)
 }
 
@@ -175,6 +184,7 @@ func (srv *server) NumActiveConns() int {
 // This is the entry point for all SSH connections.
 // When this returns, the connection is closed.
 func (srv *server) HandleSSHConn(nc net.Conn) error {
+	defer nc.Close()
 	metricIncomingConnections.Add(1)
 	c, err := srv.newConn()
 	if err != nil {
@@ -188,8 +198,12 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	c.netConn = nc
 	c.preAuthCtx, c.preAuthCancel = context.WithCancel(context.Background())
 	c.armLoginGrace()
-	srv.trackActiveConn(c, true)        // add
-	defer srv.trackActiveConn(c, false) // remove
+	if !srv.registerConn(c) {
+		c.stopConnTimers()
+		c.closeConn()
+		return errors.New("server is shutting down")
+	}
+	defer srv.unregisterConn(c)
 	defer c.preAuthCancel()
 	defer c.stopConnTimers()
 	// The connection is done when HandleConn returns. Tear down the
@@ -584,9 +598,8 @@ func (srv *server) newConn() (*conn, error) {
 	srv.mu.Lock()
 	if srv.shutdownCalled {
 		srv.mu.Unlock()
-		// Stop accepting new connections.
-		// Connections in the auth phase are handled in handleConnPostSSHAuth.
-		// Existing sessions are terminated by Shutdown.
+		// Avoid constructing a connection after shutdown. registerConn
+		// checks again before publishing the initialized connection.
 		return nil, errors.New("server is shutting down")
 	}
 	srv.mu.Unlock()
