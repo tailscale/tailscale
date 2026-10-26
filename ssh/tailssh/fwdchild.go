@@ -26,10 +26,8 @@
 // After a successful send the child holds its descriptor copy until the
 // monitor closes the result channel, its receipt acknowledgment. Listener
 // and TCP dial children then exit; Unix dial children relay through the private
-// socketpair until the connection closes. On darwin the kernel's unix-socket
-// GC reclaims a socket whose only reference is an in-flight SCM_RIGHTS
-// message, so the sender's copy must cover the handoff until the receiver
-// owns the descriptor; see beFwdChild and the monitor_rpc.go header.
+// socketpair until the connection closes. See monitor_rpc.go for the Darwin
+// socket-lifetime requirement that makes acknowledgment necessary.
 //
 // The monitor side of the protocol, fwdSpawnChild and fwdReadResult
 // below, drives these children. The op handlers live in monitor.go.
@@ -66,8 +64,8 @@ const fwdUmask = 0o177
 // fwdResultAckWait bounds the child's wait for the monitor's receipt
 // acknowledgment after sending its result descriptor. The monitor
 // closes the result channel immediately after taking ownership, so the
-// wait normally ends at once; the deadline only covers a monitor that
-// died without closing.
+// wait normally ends at once. The deadline bounds the wait if the monitor
+// does not acknowledge receipt.
 const fwdResultAckWait = 30 * time.Second
 
 // fwdRelayCloseDrainTimeout bounds delivery of queued client payload after a
@@ -359,13 +357,8 @@ func beFwdChild(args []string) error {
 	if err := fwdSendResult(c, "ok "+payload, files...); err != nil {
 		return fmt.Errorf("ssh-fwd: sending result: %w", err)
 	}
-	// Hold the descriptors, and this process, until the monitor has
-	// received them. On darwin, a socket whose only reference is an
-	// in-flight SCM_RIGHTS message is reclaimed by the kernel's unix-socket
-	// garbage collector. The monitor closes the result channel after
-	// taking ownership, so EOF is the receipt acknowledgment. The deadline
-	// bounds a monitor that died without closing; teardown SIGHUP also
-	// ends this process.
+	// Keep the descriptors open until the monitor acknowledges receipt by
+	// closing the result channel. See the protocol description above.
 	c.SetReadDeadline(time.Now().Add(fwdResultAckWait))
 	var ack [1]byte
 	_, ackErr := c.Read(ack[:])

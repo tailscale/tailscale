@@ -217,11 +217,9 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	return nil
 }
 
-// Shutdown terminates all active connections and sessions.
-// The raw socket is closed too, through conn.closeConn. Connections
-// still inside their auth handshake, including ones parked in a
-// HoldAndDelegate wait, are torn down rather than left to their own
-// grace or hold deadline.
+// Shutdown closes all active connections and waits for their sessions to exit.
+// Closing the raw transport also interrupts authentication and cancels pending
+// HoldAndDelegate requests.
 func (srv *server) Shutdown() {
 	srv.mu.Lock()
 	srv.shutdownCalled = true
@@ -343,11 +341,8 @@ type conn struct {
 	graceTimer *time.Timer
 	ruleTimer  *time.Timer
 
-	// teardownDone is set by stopConnTimers, HandleSSHConn's deferred
-	// conn teardown. Like the timers, it is guarded by mu. A recheck
-	// goroutine that started before the teardown, such as a policy-change
-	// kick or a timer fire, must not re-arm ruleTimer once the teardown
-	// has run.
+	// teardownDone is set by stopConnTimers under mu. It prevents policy
+	// rechecks from arming ruleTimer after connection cleanup.
 	teardownDone bool
 
 	// fwd is the connection's forwarding state. On unix it holds the
@@ -1038,11 +1033,9 @@ func (c *conn) closeConn() {
 	})
 }
 
-// revokeConn terminates the conn on a material policy change. Every
-// session gets the user-visible "Access revoked." message via its own
-// context cancel, the pre-existing kick path. The transport is then
-// closed, so sessions, forwards, listeners, and the monitor all tear
-// down with it.
+// revokeConn cancels each session with an "Access revoked." message and
+// closes the connection. This is triggered when a policy change invalidates
+// its grant.
 func (c *conn) revokeConn(reason string) {
 	metricPolicyChangeKick.Add(1)
 	c.logf("session no longer valid per new SSH policy (%v); closing connection", reason)
@@ -1390,16 +1383,8 @@ func (ss *sshSession) run() {
 
 	if attached := ss.conn.srv.attachSessionToConnIfNotShutdown(ss); !attached {
 		fmt.Fprintf(ss, "Tailscale SSH is shutting down\r\n")
-		// 255 signals an SSH-layer failure (the session never reached the
-		// user's command), distinct from any exit status the remote
-		// program might produce. The ssh(1) EXIT STATUS section
-		// documents this as the value the client reports "if an error
-		// occurred", and OpenSSH's own ssh.c uses exit(255) for every
-		// transport/protocol fatal path. Wrappers and CI use the 255
-		// boundary to tell "connection broke" from "command exited N".
-		// See:
-		//   https://man.openbsd.org/ssh#EXIT_STATUS
-		//   https://github.com/openssh/openssh-portable/blob/V_10_2_P1/ssh.c#L1693
+		// Use 255 for server failures before the command starts, following
+		// the ssh(1) convention for SSH errors.
 		ss.Exit(255)
 		return
 	}
@@ -1421,8 +1406,7 @@ func (ss *sshSession) run() {
 	if err := canSwitchToLocalUser(lu); err != nil {
 		ss.logf("%v", err)
 		fmt.Fprintf(ss, "can't switch user\r\n")
-		// 255: SSH-layer failure, no user command ever ran. See the
-		// attachSession branch above for the full citation.
+		// The server could not start the command.
 		ss.Exit(255)
 		return
 	}
@@ -1440,16 +1424,9 @@ func (ss *sshSession) run() {
 		}
 	}
 
-	// Recording applies to sftp subsystem sessions (and scp -s, which
-	// rides the sftp subsystem) just as to interactive ones: a
-	// recording-mandatory tailnet must not gain an unrecorded
-	// file-transfer path, and the same OnRecordingFailure semantics
-	// apply — a recorder that can't be reached refuses the session
-	// rather than letting file access proceed silently unrecorded.
-	// SFTP recordings are metadata-only (see recording.metadataOnly):
-	// the SFTP wire protocol is binary, so pass-through capture is not
-	// human-meaningful and would balloon casts; the header still
-	// identifies the peer, local user, and connection.
+	// Recording policy also applies to SFTP sessions, including scp -s.
+	// These record session metadata rather than the binary protocol; see
+	// recording.metadataOnly.
 	var rec *recording // or nil if disabled
 	if ss.shouldRecord() {
 		var err error
@@ -1467,26 +1444,7 @@ func (ss *sshSession) run() {
 				fmt.Fprintf(out, "can't start new recording\r\n")
 			}
 			ss.logf("startNewRecording: %v", err)
-			// 254 is Tailscale-specific: the SSH transport is fine
-			// and the user's command is well-formed, but the session
-			// recording policy could not be satisfied (recorder
-			// unreachable, upload denied, etc.) so we refuse to run
-			// the command at all. We need a code that operators can
-			// alert on without collapsing it into the generic buckets:
-			//   - 1   is overloaded; any program can produce it
-			//         (Bash exit-code conventions, codes 1-2)
-			//   - 127 means "command not found" (POSIX 2018, sh
-			//         §2.8.2)
-			//   - 130 is Ctrl-C (128 + SIGINT)
-			//   - 255 means "SSH itself failed" (ssh(1) EXIT STATUS)
-			// 254 sits in the reserved >128 region but is not claimed
-			// by any of the above, so it is unambiguous for
-			// "recording-required session denied".
-			// Refs:
-			//   https://man.openbsd.org/ssh#EXIT_STATUS
-			//   https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
-			//   https://tldp.org/LDP/abs/html/exitcodes.html
-			//   https://github.com/tailscale/tailscale/issues/18256
+			// Exit 254 indicates that recording policy prevented session startup.
 			ss.Exit(254)
 			return
 		}
@@ -1508,16 +1466,8 @@ func (ss *sshSession) run() {
 				}
 			}
 		} else if isNotFoundOrExecutable(err) {
-			// 127 = "command not found" per POSIX 2018 sh §2.8.2
-			// ("if a command is not found, the exit status shall be
-			// 127"). 126 is reserved for "found but not executable";
-			// we collapse both into 127 because exec.ErrNotFound and
-			// os.ErrNotExist don't distinguish the underlying cause
-			// reliably across platforms, and 127 is what users
-			// recognise (it's what bash / dash / zsh report).
-			// Refs:
-			//   https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
-			//   https://tldp.org/LDP/abs/html/exitcodes.html
+			// Use the POSIX shell convention for a missing command:
+			// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02
 			exitCode = 127
 		}
 		ss.Exit(exitCode)
@@ -1526,14 +1476,9 @@ func (ss *sshSession) run() {
 	ss.exitHandled = make(chan struct{})
 	go ss.killProcessOnContextDone()
 
-	// wg covers stdout and stderr only: their close ordering is
-	// load-bearing for the wire-level frame sequence below.
-	//
-	// The stdin copier is deliberately NOT in wg. It blocks reading from
-	// the SSH channel until the client half-closes its write side; many
-	// clients (go-scp, non-SFTP exec) don't half-close before they
-	// receive CHANNEL_CLOSE from us. Including it would deadlock. It
-	// self-cleans when deferred ss.Close runs.
+	// Wait for both output streams before sending CHANNEL_EOF.
+	// Do not wait for stdin: clients may keep it open until CHANNEL_CLOSE.
+	// The deferred ss.Close unblocks the stdin copier.
 	var wg sync.WaitGroup
 
 	go func() {
@@ -1555,12 +1500,8 @@ func (ss *sshSession) run() {
 	if ss.rdStderr != nil {
 		wg.Go(func() {
 			defer ss.rdStderr.Close()
-			// Record stderr under the "o" (output) direction: the
-			// asciinema cast format has no separate stderr channel,
-			// and pty sessions already fold stdout+stderr into the
-			// single recorded "o" stream. Wrapping it in rec.writer
-			// (rather than copying raw) is what keeps stderr in the
-			// recording for non-pty sessions.
+			// The asciinema format has no separate stderr channel. Record
+			// stderr as output, as for PTY sessions.
 			if _, err := io.Copy(rec.writer("o", ss.Stderr()), ss.rdStderr); err != nil {
 				logf("stderr copy: %v", err)
 			}
@@ -2032,13 +1973,9 @@ type recording struct {
 	// continue if writing to the recording fails.
 	failOpen bool
 
-	// metadataOnly is set for subsystem sessions (sftp). The cast
-	// records the CastHeader (peer identity, local user, connection,
-	// and the subsystem name) but no terminal output events: the SFTP
-	// wire protocol is binary, so pass-through capture would be
-	// neither human-meaningful nor reviewable, and would balloon cast
-	// sizes. The recorder upload and OnRecordingFailure lifecycle is
-	// identical to interactive sessions.
+	// metadataOnly disables I/O recording for subsystem sessions (SFTP).
+	// The cast header identifies the peer, local user, connection, and
+	// subsystem. Upload and recording-failure policy still apply.
 	metadataOnly bool
 
 	mu  sync.Mutex // guards writes to, close of out
