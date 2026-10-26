@@ -28,12 +28,11 @@
 //
 // A dial or listen reply's descriptor is held open by its sender until
 // the receiver acknowledges it with an fdack frame naming the reply's
-// request ID. On darwin, a socket whose only reference is an in-flight
-// SCM_RIGHTS message is reclaimed by the kernel's unix-socket garbage
-// collector: its receive side is flushed and buffered data discarded
-// while recvmsg still returns a usable descriptor. Continuous
-// process-owned coverage across the handoff, released only on receipt,
-// closes that window.
+// request ID. On Darwin, a socket whose only reference is an in-flight
+// SCM_RIGHTS message can be reclaimed by the kernel's Unix-socket garbage
+// collector. In that case, recvmsg still returns a valid descriptor, but
+// the socket's receive buffer has been flushed and its data discarded.
+// Keeping the sender's copy open until receipt is acknowledged prevents this.
 
 package tailssh
 
@@ -178,8 +177,8 @@ func rpcExitNotify(child monitorProcess, code int) rpcFrame {
 }
 
 // rpcFdAckReq acknowledges receipt of the descriptors a reply with the
-// given request ID carried. The sender of those descriptors holds its own
-// copies until this arrives; see replyFD in monitor.go for why.
+// given request ID carried. The sender keeps its copies open until this
+// acknowledgment arrives; see the socket-lifetime requirement above.
 func rpcFdAckReq(replyID int64) rpcFrame {
 	return rpcFrame{ID: replyID, Op: opFdAck}
 }
@@ -259,7 +258,7 @@ func heraldFrames(rbuf []byte, sets [][]int, queued func(k int) bool) ([]int, er
 	return frames, nil
 }
 
-// recvFds parses the SCM_RIGHTS descriptors from the ancillary data of
+// recvFdSets parses the SCM_RIGHTS descriptors from the ancillary data of
 // one ReadMsgUnix call, using the oob slice and flags that call
 // returned, and marks every received descriptor close-on-exec before
 // returning. The caller owns the returned descriptors.
