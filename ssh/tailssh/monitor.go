@@ -44,17 +44,17 @@ import (
 )
 
 const (
-	// monExecOpDeadline bounds the exec op's spawn-and-reply phase. It
-	// does not bound the child's lifetime.
+	// monExecOpDeadline is the maximum accepted duration of an exec spawn.
+	// It is checked after cmd.Start returns; it does not interrupt Start
+	// or limit the child's lifetime.
 	monExecOpDeadline = 30 * time.Second
 
 	// monFwdOpDeadline bounds a forwarding child from spawn to
 	// result. On expiry the child's group is SIGKILLed.
 	monFwdOpDeadline = 10 * time.Second
 
-	// monTeardownReap bounds each reap sweep in teardown. A child still
-	// alive after the SIGKILL sweep is uninterruptible. It is left in
-	// its own group and abandoned.
+	// monTeardownReap bounds each reap phase in teardown. The monitor
+	// stops waiting after this interval even if children remain.
 	monTeardownReap = 2 * time.Second
 )
 
@@ -368,9 +368,9 @@ func joinGids(gids []uint32) string {
 	return strings.Join(parts, ",")
 }
 
-// handleExec spawns one child, mapping the request's file descriptors
-// to the child's stdio. monExecOpDeadline bounds the op from dispatch
-// to the return of cmd.Start; it does not bound the child's lifetime.
+// handleExec spawns one child, mapping the request's file descriptors to
+// the child's stdio. If cmd.Start returns after monExecOpDeadline, the
+// child is killed and the request fails.
 func (m *monitor) handleExec(f rpcFrame, fds []int) {
 	start := time.Now()
 	fail := func(err error) {
@@ -646,15 +646,10 @@ func (m *monitor) killChild(c *monChild) {
 	}
 }
 
-// replyFD writes a reply carrying descriptors. On success they stay
-// open, parked in pendingFds until tailscaled's fdack:
-// on darwin, closing the sender's copy while the descriptor's only
-// reference is the in-flight SCM_RIGHTS message lets the kernel's
-// unix-socket GC reclaim the socket (receive side flushed, buffered
-// data discarded) before the receiver's recvmsg, producing a relayed
-// socket that reads EOF with its peer still alive. The receiver's
-// acknowledgment is what releases the hold. On a write failure the
-// channel is broken and the descriptor is closed here.
+// replyFD writes a reply carrying descriptors and retains them in pendingFds
+// until tailscaled acknowledges receipt. See monitor_rpc.go for the Darwin
+// socket-lifetime requirement. A write failure closes the descriptors and
+// marks the RPC channel broken.
 func (m *monitor) replyFD(f rpcFrame, fds ...int) {
 	err := m.conn.writeFrame(f, fds...)
 	if err != nil {
@@ -739,8 +734,7 @@ func (m *monitor) notifyExit(child monitorProcess, code int) {
 // SIGKILL. Children that survive even the SIGKILL are abandoned in
 // their own groups.
 func (m *monitor) teardown() {
-	// Release every descriptor parked for an fdack: the peer is going
-	// away or gone, so no acknowledgment will arrive.
+	// Close descriptors whose receipt has not been acknowledged.
 	for id, fds := range m.pendingFds {
 		closeFds(fds)
 		delete(m.pendingFds, id)
@@ -766,11 +760,8 @@ func (m *monitor) teardown() {
 		}
 	}
 	if len(pgids) > 0 {
-		// SIGKILL every remembered group, those whose leader survived
-		// the HUP and those whose leader died to it, then run one more
-		// bounded silent reap sweep. Anything still alive after this is
-		// in uninterruptible state and is abandoned, orphaned in its
-		// own group.
+		// Kill surviving group members even if their leader has exited,
+		// then wait for children to exit for at most monTeardownReap.
 		for pgid := range pgids {
 			_ = killGroup(pgid, unix.SIGKILL)
 		}
