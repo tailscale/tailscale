@@ -1551,14 +1551,41 @@ func TestProxyGroupTypes(t *testing.T) {
 	})
 
 	t.Run("kubernetes_api_server_type", func(t *testing.T) {
+		healthzPC := &tsapi.ProxyClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-healthz",
+				Generation: 1,
+			},
+			Spec: tsapi.ProxyClassSpec{
+				StatefulSet: &tsapi.StatefulSet{
+					Pod: &tsapi.Pod{
+						TailscaleContainer: &tsapi.Container{
+							// k8s-proxy ignores this, so the probes must stay on defaultLocalAddrPort.
+							Env:            []tsapi.Env{{Name: "TS_LOCAL_ADDR_PORT", Value: "0.0.0.0:8080"}},
+							LivenessProbe:  &tsapi.Probe{},
+							ReadinessProbe: &tsapi.Probe{},
+						},
+					},
+				},
+			},
+		}
+		mustCreate(t, fc, healthzPC)
+		mustUpdateStatus(t, fc, "", healthzPC.Name, func(p *tsapi.ProxyClass) {
+			p.Status.Conditions = []metav1.Condition{{
+				Type:               string(tsapi.ProxyClassReady),
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: 1,
+			}}
+		})
 		pg := &tsapi.ProxyGroup{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test-k8s-apiserver",
 				UID:  "test-k8s-apiserver-uid",
 			},
 			Spec: tsapi.ProxyGroupSpec{
-				Type:     tsapi.ProxyGroupTypeKubernetesAPIServer,
-				Replicas: new(int32(2)),
+				Type:       tsapi.ProxyGroupTypeKubernetesAPIServer,
+				Replicas:   new(int32(2)),
+				ProxyClass: healthzPC.Name,
 				KubeAPIServer: &tsapi.KubeAPIServerConfig{
 					Mode: new(tsapi.APIServerProxyModeNoAuth),
 				},
@@ -1588,6 +1615,15 @@ func TestProxyGroupTypes(t *testing.T) {
 		}
 		if sts.Spec.PodManagementPolicy != appsv1.ParallelPodManagement {
 			t.Errorf("unexpected PodManagementPolicy %q, want %q", sts.Spec.PodManagementPolicy, appsv1.ParallelPodManagement)
+		}
+		if diff := cmp.Diff(httpProbe("/livez", defaultLocalAddrPort, &tsapi.Probe{}, 5), sts.Spec.Template.Spec.Containers[0].LivenessProbe); diff != "" {
+			t.Errorf("unexpected liveness probe (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(httpProbe("/readyz", defaultLocalAddrPort, &tsapi.Probe{}, 1), sts.Spec.Template.Spec.Containers[0].ReadinessProbe); diff != "" {
+			t.Errorf("unexpected readiness probe (-want +got):\n%s", diff)
+		}
+		if _, ok := lookupEnv(sts.Spec.Template.Spec.Containers[0].Env, "TS_ENABLE_HEALTH_CHECK"); ok {
+			t.Errorf("TS_ENABLE_HEALTH_CHECK set on k8s-proxy container, which doesn't read it")
 		}
 	})
 }
@@ -2355,9 +2391,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 		t.Fatal(err)
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
-	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
-		applyHealthzProbes(proxyClass, statefulSet, false)
-	}
+	applyHealthzProbes(proxyClass, statefulSet, pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer)
 
 	if shouldExist {
 		expectEqual(t, fc, role)
