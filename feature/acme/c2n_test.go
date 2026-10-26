@@ -125,6 +125,14 @@ func TestHandleC2NTLSCertStatus(t *testing.T) {
 				if !reflect.DeepEqual(&got, tt.want) {
 					t.Errorf("got %v; want %v", logger.AsJSON(got), logger.AsJSON(tt.want))
 				}
+				// The localapi cert-status endpoint reads the same cache via LocalBackend.CertStatus.
+				gotLocal, err := b.CertStatus(tt.domain)
+				if err != nil {
+					t.Fatalf("CertStatus: %v", err)
+				}
+				if !reflect.DeepEqual(gotLocal, tt.want) {
+					t.Errorf("CertStatus = %v; want %v", logger.AsJSON(gotLocal), logger.AsJSON(tt.want))
+				}
 			} else if tt.wantError != "" {
 				if got := rec.Body.String(); got != tt.wantError {
 					t.Errorf("body = %q; want %q", got, tt.wantError)
