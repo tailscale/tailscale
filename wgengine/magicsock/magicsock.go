@@ -3805,7 +3805,7 @@ func (c *Conn) ReSTUN(why string) {
 	}
 }
 
-// canShareUDPPort reports whether magisock supports per-faimly UDP port sharing.
+// canShareUDPPort reports whether magicsock supports per-family UDP port sharing.
 // See [Options.UDPSockets].
 var canShareUDPPort = sockopts.CanShareUDPPort && runtime.GOOS != "android"
 
