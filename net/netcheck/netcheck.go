@@ -1466,6 +1466,15 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(rs *reportState, r *Report,
 			d = time.Duration(float64(d) * score)
 		}
 
+		// A STUN-only region has no DERP server to relay through, so it must
+		// never become the preferred DERP even though its STUN probe gives it
+		// a RegionLatency entry. Regions missing from the map, or present
+		// without any nodes (latency-only test fixtures), keep the old
+		// behavior.
+		if reg, ok := dm.Regions().GetOk(regionID); ok && reg.Nodes().Len() > 0 && !regionHasDERPNodeView(reg) {
+			continue
+		}
+
 		if regionID == prevDERP {
 			oldRegionCurLatency = d
 		}
@@ -1758,6 +1767,17 @@ func (c *Client) nodeAddrPort(ctx context.Context, n *tailcfg.DERPNode, port int
 func regionHasDERPNode(r *tailcfg.DERPRegion) bool {
 	for _, n := range r.Nodes {
 		if !n.STUNOnly {
+			return true
+		}
+	}
+	return false
+}
+
+// regionHasDERPNodeView is regionHasDERPNode for tailcfg.DERPRegionView.
+func regionHasDERPNodeView(v tailcfg.DERPRegionView) bool {
+	nodes := v.Nodes()
+	for i := range nodes.Len() {
+		if !nodes.At(i).STUNOnly() {
 			return true
 		}
 	}

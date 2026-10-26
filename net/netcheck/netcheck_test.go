@@ -47,7 +47,12 @@ func TestBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()), nil)
+	dm := stuntest.DERPMapOf(stunAddr.String())
+	// stuntest nodes are all STUNOnly; make this a regular DERP region so
+	// that the PreferredDERP assertion below exercises the normal path.
+	dm.Regions[1].Nodes[0].STUNOnly = false
+
+	r, err := c.GetReport(ctx, dm, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +132,51 @@ func TestSTUNResponseProvesCanSend(t *testing.T) {
 				t.Errorf("STUN response from %v did not set %sCanSend", test.addr, test.name)
 			}
 		})
+	}
+}
+
+// TestSTUNOnlyRegionNotPreferredDERP verifies a STUNOnly region is
+// never selected as the preferred DERP, even when it's the only region
+// with a STUN latency sample (as in real setups where only a public
+// STUN server is reachable, e.g. self-hosted DERP behind a TCP-only
+// tunnel), where selecting it would blackhole all relay traffic.
+func TestSTUNOnlyRegionNotPreferredDERP(t *testing.T) {
+	// Region 1: a real, reachable STUN server marked STUNOnly.
+	stunAddr, cleanup := stuntest.Serve(t)
+	defer cleanup()
+
+	// Region 2: a UDP blackhole (unreachable) normal DERP region.
+	blackhole, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to open blackhole STUN listener: %v", err)
+	}
+	defer blackhole.Close()
+
+	dm := stuntest.DERPMapOf(stunAddr.String(), blackhole.LocalAddr().String())
+	dm.Regions[1].Nodes[0].STUNOnly = true
+	dm.Regions[2].Nodes[0].STUNOnly = false
+
+	c := newTestClient(t)
+
+	ctx := t.Context()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := c.GetReport(ctx, dm, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The STUN-only region must have produced a latency sample...
+	if _, ok := r.RegionLatency[1]; !ok {
+		t.Fatalf("expected region 1 (STUNOnly) to have a STUN latency sample; got %+v", r.RegionLatency)
+	}
+	// ...but must not be selected as the preferred DERP, even though it
+	// is the only region with a latency sample.
+	if r.PreferredDERP == 1 {
+		t.Errorf("PreferredDERP = 1 (STUNOnly region); want a region with DERP nodes")
 	}
 }
 
