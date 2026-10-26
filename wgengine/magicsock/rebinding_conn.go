@@ -19,7 +19,7 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-// socketGroup is sockets sharing one port.
+// socketGroup contains sockets sharing one port.
 type socketGroup struct {
 	conns []nettype.PacketConn
 	bound int
