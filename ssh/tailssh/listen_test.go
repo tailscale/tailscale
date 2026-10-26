@@ -469,6 +469,94 @@ func TestListenSSHWindowChangesWithoutPty(t *testing.T) {
 	}
 }
 
+// TestListenSSHWindowChangesLatest tests that a slow or late reader sees
+// the last window size, even after earlier changes filled the buffer.
+func TestListenSSHWindowChangesLatest(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		slowReader bool
+	}{
+		{"late-reader", false},
+		{"slow-reader", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sl, rawLn := startTestSSHListener(t, nil)
+				defer sl.Close()
+				sc, client := startTestSSHClient(t, rawLn)
+				defer sc.Close()
+				defer client.Close()
+
+				sess, err := client.NewSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer sess.Close()
+				if err := sess.RequestPty("xterm-256color", 24, 80, nil); err != nil {
+					t.Fatalf("RequestPty: %v", err)
+				}
+				if err := sess.Shell(); err != nil {
+					t.Fatalf("Shell: %v", err)
+				}
+				conn, err := sl.Accept()
+				if err != nil {
+					t.Fatal(err)
+				}
+				s := conn.(*Session)
+				defer s.Close()
+				pty, winCh, ok := s.Pty()
+				if !ok || pty.Window.Width != 80 || pty.Window.Height != 24 {
+					t.Fatalf("Pty = %+v, ok = %v; want 80x24", pty, ok)
+				}
+
+				// Let the pump buffer the initial size without a reader.
+				synctest.Wait()
+				if got := len(winCh); got != 1 {
+					t.Fatalf("initial buffered window count = %d; want 1", got)
+				}
+				if tt.slowReader {
+					if got := <-winCh; got.Width != 80 || got.Height != 24 {
+						t.Fatalf("initial window = %+v; want 80x24", got)
+					}
+				}
+
+				// A reply confirms gliderssh processed each resize; Wait
+				// confirms the adapter drained its upstream notification.
+				resize := func(width, height uint32) {
+					msg := struct{ Columns, Rows, Width, Height uint32 }{
+						width, height, width * 8, height * 8,
+					}
+					ok, err := sess.SendRequest("window-change", true, testssh.Marshal(&msg))
+					if err != nil || !ok {
+						t.Fatalf("window-change %dx%d: ok=%v, err=%v", width, height, ok, err)
+					}
+					synctest.Wait()
+					_, upstream, _ := s.sess.Pty()
+					if got := len(upstream); got != 0 {
+						t.Fatalf("upstream buffered windows = %d; want 0", got)
+					}
+				}
+				if tt.slowReader {
+					resize(100, 30)
+					if got := <-winCh; got.Width != 100 || got.Height != 30 {
+						t.Fatalf("first resize = %+v; want 100x30", got)
+					}
+					// Do not receive from winCh between these final two
+					// resizes: 120x40 must replace the buffered 110x35.
+					resize(110, 35)
+				}
+				resize(120, 40)
+
+				// Start reading only after the final change has been drained.
+				// No later resize can mask a stale value in the buffer.
+				if got := <-winCh; got.Width != 120 || got.Height != 40 {
+					t.Fatalf("last window = %+v; want 120x40", got)
+				}
+			})
+		})
+	}
+}
+
 // TestListenSSHListenerCloseClosesSessions tests that closing the
 // listener ends the sessions it accepted, so they do not outlive the
 // listener.
