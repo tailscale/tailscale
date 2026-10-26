@@ -459,11 +459,7 @@ func (r *ProxyGroupReconciler) maybeProvision(ctx context.Context, tsClient tscl
 		proxyType: string(pg.Spec.Type),
 	}
 	ss = applyProxyClassToStatefulSet(proxyClass, ss, cfg, logger)
-
-	// TODO(ChaosInTheCRD): temporary check, remove when probes are added for kube-apiserver ProxyGroups.
-	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
-		applyHealthzProbes(proxyClass, ss)
-	}
+	applyHealthzProbes(proxyClass, ss, pg.Spec.Type == tsapi.ProxyGroupTypeKubernetesAPIServer)
 
 	if replaced, err := r.maybeReplaceStatefulSet(ctx, ss, logger); err != nil {
 		return r.notReadyErrf(pg, logger, "failed to replace StatefulSet: %w", err)
@@ -797,7 +793,7 @@ func (r *ProxyGroupReconciler) ensureConfigSecretsCreated(
 						// as containerboot does for ingress-pg-reconciler.
 						IssueCerts: opt.NewBool(i == 0),
 					},
-					LocalPort:          new(uint16(9002)),
+					LocalPort:          new(uint16(defaultLocalAddrPort)),
 					HealthCheckEnabled: opt.NewBool(true),
 				},
 			}
