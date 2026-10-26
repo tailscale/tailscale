@@ -198,7 +198,7 @@ func newMonitorSessionServerFor(
 	}
 	// Tear the conn's monitor down with the conn (HandleConn is driven
 	// directly below, so HandleSSHConn's teardown does not run).
-	t.Cleanup(sc.closeFwdMonitor)
+	t.Cleanup(sc.closeConnMonitor)
 
 	sc.insecureSkipTailscaleAuth = true
 
@@ -490,10 +490,10 @@ func TestSessionMonitorConnCloseKillsHupImmuneChild(t *testing.T) {
 				ss.hangupMonitorProcess()
 			}
 			// The conn teardown: every conn-close path funnels here
-			// (HandleSSHConn's deferred closeFwdMonitor). Close waits for
+			// (HandleSSHConn's deferred closeConnMonitor). Close waits for
 			// the monitor to exit, so on return the teardown sweeps
 			// (HUP, then SIGKILL for survivors) have run.
-			c.closeFwdMonitor()
+			c.closeConnMonitor()
 
 			// The child must be dead and reaped by the monitor's own
 			// teardown: signal 0 returns ESRCH once the monitor has reaped
@@ -589,10 +589,10 @@ func TestSessionMonitorTeardownKillsSamePgidStraggler(t *testing.T) {
 		}
 	}
 
-	// The conn teardown: closeFwdMonitor runs the monitor's teardown,
+	// The conn teardown: closeConnMonitor runs the monitor's teardown,
 	// group SIGHUP (kills the leader, sweep reaps it, entry dropped),
 	// then the SIGKILL pass over the snapshot pgid set.
-	c.closeFwdMonitor()
+	c.closeConnMonitor()
 
 	// The straggler must be dead and gone. Bound: the teardown's two
 	// sweeps (≤2s each) inside Close's 5s monitor-exit wait, plus slack.
@@ -871,7 +871,7 @@ func TestLaunchViaMonitorRefusesCanceledContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("launchViaMonitor = %v; want context.Canceled", err)
 	}
-	if mc := c.fwdMonitorIfAny(); mc != nil {
+	if mc := c.connMonitorIfAny(); mc != nil {
 		t.Fatal("launchViaMonitor spawned a monitor for a canceled session")
 	}
 }
@@ -958,8 +958,8 @@ func TestSessionRevokedDuringRecorderStallNoMonitorLeak(t *testing.T) {
 	// the transport is closed.
 	c.revokeConn("test revocation")
 	// This is the conn teardown that HandleSSHConn's deferred
-	// closeFwdMonitor performs once the conn is done.
-	c.closeFwdMonitor()
+	// closeConnMonitor performs once the conn is done.
+	c.closeConnMonitor()
 
 	// Release the recorder. startNewRecording completes and run() walks
 	// into launchProcess on the revoked conn, the spawn window. The
@@ -968,14 +968,14 @@ func TestSessionRevokedDuringRecorderStallNoMonitorLeak(t *testing.T) {
 	releaseRecorder()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if mc := c.fwdMonitorIfAny(); mc != nil {
+		if mc := c.connMonitorIfAny(); mc != nil {
 			t.Fatal("a monitor was spawned on the torn-down conn; nobody would close it (respawn leak)")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	// And the closed flag must refuse any late spawn outright.
-	if _, err := c.fwdMonitor(); err == nil {
-		t.Fatal("fwdMonitor respawned a monitor on the torn-down conn")
+	if _, err := c.connMonitor(); err == nil {
+		t.Fatal("connMonitor respawned a monitor on the torn-down conn")
 	}
 }
 
@@ -984,10 +984,10 @@ func TestSessionRevokedDuringRecorderStallNoMonitorLeak(t *testing.T) {
 func TestHangupMonitorProcessAfterMonitorClosed(t *testing.T) {
 	lu := fwdTestIdentity(t)
 	c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true})
-	if _, err := c.fwdMonitor(); err != nil {
+	if _, err := c.connMonitor(); err != nil {
 		t.Fatal(err)
 	}
-	c.closeFwdMonitor()
+	c.closeConnMonitor()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1014,7 +1014,7 @@ func TestHangupMonitorProcessAfterMonitorClosed(t *testing.T) {
 	if !ss.hangupMonitorProcess() {
 		t.Fatal("monitor session took the direct hangup path")
 	}
-	if got := c.fwdMonitorIfAny(); got != nil {
+	if got := c.connMonitorIfAny(); got != nil {
 		t.Fatal("hangup recreated a closed monitor")
 	}
 	if _, err := io.WriteString(stdin, "alive\n"); err != nil {
