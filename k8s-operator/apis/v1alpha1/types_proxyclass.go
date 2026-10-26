@@ -437,7 +437,8 @@ type Container struct {
 	// Services, has applied its serve config and has a TLS cert for each
 	// HTTPS-only Tailscale Service. Off unless set; {} runs it with the default
 	// timing. Older proxy images don't serve /readyz and fail the probe.
-	// Only used by ProxyGroups.
+	// Only used by ProxyGroups. On kube-apiserver ProxyGroups it only waits
+	// for the tailnet IP address.
 	// +optional
 	ReadinessProbe *Probe `json:"readinessProbe,omitempty"`
 }

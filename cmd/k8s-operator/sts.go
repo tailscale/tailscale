@@ -1267,8 +1267,10 @@ func isMainContainer(c *corev1.Container) bool {
 // /livez and /readyz endpoints to the main container, and enables those
 // endpoints via TS_ENABLE_HEALTH_CHECK. Each probe is off unless the ProxyClass
 // sets it. pc may be nil. It is a no-op if neither probe is set, or if the
-// container's env leaves the endpoints unreachable, see [healthzPort].
-func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) {
+// container's env leaves the endpoints unreachable, see [healthzPort]. If
+// k8sProxy is set, the container runs k8s-proxy, which serves the endpoints on
+// defaultLocalAddrPort from its config file and ignores the env.
+func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet, k8sProxy bool) {
 	var liveness, readiness *tsapi.Probe
 	if pc != nil && pc.Spec.StatefulSet != nil && pc.Spec.StatefulSet.Pod != nil && pc.Spec.StatefulSet.Pod.TailscaleContainer != nil {
 		liveness = pc.Spec.StatefulSet.Pod.TailscaleContainer.LivenessProbe
@@ -1282,13 +1284,16 @@ func applyHealthzProbes(pc *tsapi.ProxyClass, ss *appsv1.StatefulSet) {
 		if !isMainContainer(&c) {
 			continue
 		}
-		port, ok := healthzPort(c.Env)
-		if !ok {
-			return
-		}
-		if _, ok := lookupEnv(c.Env, "TS_ENABLE_HEALTH_CHECK"); !ok {
-			ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
-				corev1.EnvVar{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"})
+		port := defaultLocalAddrPort
+		if !k8sProxy {
+			var ok bool
+			if port, ok = healthzPort(c.Env); !ok {
+				return
+			}
+			if _, ok := lookupEnv(c.Env, "TS_ENABLE_HEALTH_CHECK"); !ok {
+				ss.Spec.Template.Spec.Containers[i].Env = append(ss.Spec.Template.Spec.Containers[i].Env,
+					corev1.EnvVar{Name: "TS_ENABLE_HEALTH_CHECK", Value: "true"})
+			}
 		}
 		if liveness != nil {
 			// Longer than for readiness, as a restart drops the traffic a slow tailscaled still carries.
