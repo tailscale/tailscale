@@ -501,18 +501,16 @@ func TestFwdTCPHandler(t *testing.T) {
 		t.Errorf("echo = %q; want %q", got, want)
 	}
 
-	// Canceling the request's context closes the listener through the
-	// conn's ctx-done goroutine.
+	// Connection cancellation must close the forwarded listener.
 	cancel()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if conn, err := net.DialTimeout("tcp", fwdAddr, time.Second); err != nil {
-			break // listener closed
-		} else {
-			conn.Close()
-			time.Sleep(50 * time.Millisecond)
+	eventually(t, 5*time.Second, "forwarded listener remained open after cancellation", func() bool {
+		conn, err := net.DialTimeout("tcp", fwdAddr, time.Second)
+		if err != nil {
+			return true
 		}
-	}
+		conn.Close()
+		return false
+	})
 
 	// Non-loopback binds are rejected without the gateway-ports knob…
 	ctx2, cancel2 := fwdTestCtx(fwdTestSSHConn{})

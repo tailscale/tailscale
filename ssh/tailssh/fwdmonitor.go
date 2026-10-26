@@ -339,16 +339,12 @@ func (h *fwdTCPHandler) HandleSSHRequest(ctx gliderssh.Context, _ *gliderssh.Ser
 		h.mu.Lock()
 		h.forwards[addr] = ln
 		h.mu.Unlock()
+		// Close this listener when the SSH connection ends. Stop watching
+		// the connection when the accept loop exits, including on cancellation
+		// of this forward while the connection remains open.
+		stop := context.AfterFunc(ctx, func() { ln.Close() })
 		go func() {
-			<-ctx.Done()
-			h.mu.Lock()
-			fln, ok := h.forwards[addr]
-			h.mu.Unlock()
-			if ok {
-				fln.Close()
-			}
-		}()
-		go func() {
+			defer stop()
 			defer func() {
 				h.mu.Lock()
 				if h.forwards[addr] == ln {
