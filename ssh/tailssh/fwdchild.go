@@ -3,29 +3,33 @@
 
 //go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd
 
-// The ssh-monitor spawns one-shot forwarding children as "tailscaled
+// The ssh-monitor spawns forwarding children as "tailscaled
 // be-child ssh-fwd", one per dial/listen op.
 //
 // The child runs as the connection's bound identity, applied by the
-// monitor as SysProcAttr.Credential. It performs one dial or bind,
-// returns the result descriptor to the monitor over an inherited
-// socketpair as one status line, and exits.
+// monitor as SysProcAttr.Credential. A listener child binds and returns
+// its descriptor over an inherited socketpair as one status line, then
+// exits. A dial child instead returns one end of a private socketpair
+// and a lifetime pipe writer, and stays alive to relay bytes to the dialed
+// service as the bound user. Closing the lifetime pipe terminates the relay
+// independently of data-socket half-closes.
 //
 // The result protocol, from child to monitor over the socketpair, is one
-// short newline-terminated line with at most one descriptor attached:
+// short newline-terminated line with one descriptor for a listener or two
+// for a dial (data socket and lifetime pipe writer):
 //
 //	ok [payload]     success, with the agent socket path or the
 //	                 bound TCP address as the payload
 //	err <reason>      the op failed, with the reason preserved in
 //	                 the reply
 //
-// After a successful send the child holds its descriptor copy and stays
-// alive until the monitor closes the result channel, its receipt
-// acknowledgment, and only then closes the descriptor and exits. On
-// darwin the kernel's unix-socket GC reclaims a socket whose only
-// reference is an in-flight SCM_RIGHTS message, so the sender's copy
-// must cover the handoff until the receiver owns the descriptor; see
-// beFwdChild and the monitor_rpc.go header.
+// After a successful send the child holds its descriptor copy until the
+// monitor closes the result channel, its receipt acknowledgment. Listener
+// children then exit; dial children keep relaying through the private
+// socketpair until the connection closes. On darwin the kernel's unix-socket
+// GC reclaims a socket whose only reference is an in-flight SCM_RIGHTS
+// message, so the sender's copy must cover the handoff until the receiver
+// owns the descriptor; see beFwdChild and the monitor_rpc.go header.
 //
 // The monitor side of the protocol, fwdSpawnChild and fwdReadResult
 // below, drives these children. The op handlers live in monitor.go.
@@ -34,9 +38,11 @@ package tailssh
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -62,6 +68,10 @@ const fwdUmask = 0o177
 // wait normally ends at once; the deadline only covers a monitor that
 // died without closing.
 const fwdResultAckWait = 30 * time.Second
+
+// fwdRelayCloseDrainTimeout bounds delivery of queued client payload after a
+// full close. A service that stops reading must not retain the relay forever.
+const fwdRelayCloseDrainTimeout = 5 * time.Second
 
 // agentDirRoot is the only parent an agent-forwarding directory is
 // created under. The child runs with no environment, so os.TempDir
@@ -153,63 +163,51 @@ func fwdSpawnChild(m *monitor, spec fwdChildSpec) (*exec.Cmd, *net.UnixConn, err
 	return spawnRPCChild("ssh-fwd", exe, argv, nil, attr)
 }
 
-// fwdReadResult reads the one-shot child's status line and result
-// descriptor from the socketpair, bounded by the deadline.
-func fwdReadResult(c *net.UnixConn, deadline time.Time) (ok bool, payload string, fd int, err error) {
+// fwdReadResult reads the forwarding child's status line and result
+// descriptors from the socketpair, bounded by the deadline. Dial replies
+// carry a data socket and a lifetime pipe; listener replies carry one socket.
+func fwdReadResult(c *net.UnixConn, deadline time.Time, wantFDs int) (ok bool, payload string, fds []int, err error) {
 	if err := c.SetReadDeadline(deadline); err != nil {
-		return false, "", -1, err
+		return false, "", nil, err
 	}
 	defer c.SetReadDeadline(time.Time{})
-	oob := make([]byte, unix.CmsgSpace(4))
+	oob := make([]byte, unix.CmsgSpace(2*4))
 	var line []byte
-	var fds []int
-	defer func() {
-		if err != nil {
-			closeFds(fds)
-		}
-	}()
+	var received []int
+	defer func() { closeFds(received) }()
 	for {
 		if i := bytes.IndexByte(line, '\n'); i >= 0 {
 			status, rest, _ := strings.Cut(string(line[:i]), " ")
-			var got int = -1
-			if len(fds) > 1 {
-				return false, "", -1, fmt.Errorf("child sent %d descriptors, want at most 1", len(fds))
-			}
-			if len(fds) == 1 {
-				got, fds = fds[0], nil
-			}
 			switch status {
 			case "ok":
-				if got < 0 {
-					return false, "", -1, errors.New("child reported ok without a socket")
+				if len(received) != wantFDs {
+					return false, "", nil, fmt.Errorf("child sent %d descriptors, want %d", len(received), wantFDs)
 				}
-				return true, rest, got, nil
+				fds, received = received, nil
+				return true, rest, fds, nil
 			case "err":
-				if got >= 0 {
-					// Refuse defensively.
-					unix.Close(got)
-				}
-				return false, rest, -1, nil
+				return false, rest, nil, nil
 			default:
-				return false, "", -1, fmt.Errorf("bad child status %q", string(line[:i]))
+				return false, "", nil, fmt.Errorf("bad child status %q", string(line[:i]))
 			}
 		}
 		if len(line) > fwdMaxStatus {
-			return false, "", -1, fmt.Errorf("child status line exceeds %d bytes", fwdMaxStatus)
+			return false, "", nil, fmt.Errorf("child status line exceeds %d bytes", fwdMaxStatus)
 		}
 		buf := make([]byte, 1024)
 		n, oobn, flags, _, rerr := c.ReadMsgUnix(buf, oob)
 		if rerr != nil {
-			// Deadline expiry with os.ErrDeadlineExceeded, or EOF from the
-			// child dying without a result. The caller distinguishes by context.
-			return false, "", -1, fmt.Errorf("waiting for child result: %w", rerr)
+			return false, "", nil, fmt.Errorf("waiting for child result: %w", rerr)
 		}
 		sets, ferr := recvFdSets(oob[:oobn], flags)
 		if ferr != nil {
-			return false, "", -1, ferr
+			return false, "", nil, ferr
 		}
 		for _, set := range sets {
-			fds = append(fds, set...)
+			received = append(received, set...)
+		}
+		if len(received) > wantFDs {
+			return false, "", nil, fmt.Errorf("child sent %d descriptors, want at most %d", len(received), wantFDs)
 		}
 		line = append(line, buf[:n]...)
 	}
@@ -282,8 +280,7 @@ func parseFwdArgs(args []string) (fwdArgs, error) {
 }
 
 // beFwdChild is the entrypoint of the "tailscaled be-child ssh-fwd"
-// subcommand. It is the one-shot, born-unprivileged dialer/listener
-// child.
+// subcommand. It is the born-unprivileged dial relay or listener child.
 func beFwdChild(args []string) error {
 	fa, err := parseFwdArgs(args)
 	if err != nil {
@@ -298,74 +295,128 @@ func beFwdChild(args []string) error {
 	if err != nil {
 		return fmt.Errorf("ssh-fwd: result fd: %w", err)
 	}
-	f, payload, err := fwdChildWork(fa)
-	if err != nil {
-		if f != nil {
-			f.Close()
+	defer c.Close()
+	var f *os.File
+	var payload string
+	var relay *net.UnixConn
+	var service *net.UnixConn
+	var lifetimeRead, lifetimeWrite *os.File
+	if fa.op == "dial" {
+		f, relay, service, err = fwdDialRelay(fa.addr)
+		if err == nil {
+			defer relay.Close()
+			defer service.Close()
+			lifetimeRead, lifetimeWrite, err = os.Pipe()
+			if err == nil {
+				defer lifetimeRead.Close()
+				defer lifetimeWrite.Close()
+			}
 		}
+	} else {
+		f, payload, err = fwdChildWork(fa)
+	}
+	if f != nil {
+		defer f.Close()
+	}
+	if err != nil {
 		// The op's error is the result. Deliver it, then exit non-zero.
 		// The monitor has the reason either way.
-		if serr := fwdSendResult(c, nil, "err "+err.Error()); serr != nil {
+		if serr := fwdSendResult(c, "err "+err.Error()); serr != nil {
 			return fmt.Errorf("ssh-fwd: %v (and reporting it: %w)", err, serr)
 		}
 		return err
 	}
-	if err := fwdSendResult(c, f, "ok "+payload); err != nil {
-		f.Close()
+	files := []*os.File{f}
+	if lifetimeWrite != nil {
+		files = append(files, lifetimeWrite)
+	}
+	if err := fwdSendResult(c, "ok "+payload, files...); err != nil {
 		return fmt.Errorf("ssh-fwd: sending result: %w", err)
 	}
-	// Hold the descriptor, and this process, until the monitor has
-	// received the relayed socket. On darwin, a socket whose only
-	// reference is an in-flight SCM_RIGHTS message is reclaimed by the
-	// kernel's unix-socket garbage collector before the receiver's
-	// recvmsg: the receive side is flushed and buffered data discarded,
-	// while recvmsg still returns a usable-looking descriptor that then
-	// reads EOF with its peer alive. The monitor closes its end of the
-	// result channel right after taking ownership of the descriptor, so
-	// the EOF here is the receipt acknowledgment. The deadline bounds
-	// the wait against a monitor that died without closing; the
-	// monitor's teardown SIGHUP also ends this process.
+	// Hold the descriptors, and this process, until the monitor has
+	// received them. On darwin, a socket whose only reference is an
+	// in-flight SCM_RIGHTS message is reclaimed by the kernel's unix-socket
+	// garbage collector. The monitor closes the result channel after
+	// taking ownership, so EOF is the receipt acknowledgment. The deadline
+	// bounds a monitor that died without closing; teardown SIGHUP also
+	// ends this process.
 	c.SetReadDeadline(time.Now().Add(fwdResultAckWait))
 	var ack [1]byte
-	c.Read(ack[:]) // EOF on receipt, or deadline: exit either way
+	_, ackErr := c.Read(ack[:])
 	f.Close()
+	if relay == nil {
+		return nil // listener children exit after the handoff
+	}
+	lifetimeWrite.Close()
+	c.Close()
+	if !errors.Is(ackErr, io.EOF) {
+		return fmt.Errorf("ssh-fwd: dial result not acknowledged: %v", ackErr)
+	}
+	// The service socket never leaves the credentialed child. The lifetime
+	// pipe distinguishes full closure from a data-socket write-half-close:
+	// neither data EOF nor a silent service may retain an abandoned relay.
+	done := make(chan struct{})
+	go func() {
+		var buf [1]byte
+		_, err := lifetimeRead.Read(buf[:]) // EOF when tailscaled closes or discards the reply
+		if !errors.Is(err, os.ErrClosed) {
+			// Stop waiting for service output, but let queued client payload
+			// drain to the service before closing its write side. Immediate
+			// cancellation would discard bytes already accepted by tailscaled.
+			deadline := time.Now().Add(fwdRelayCloseDrainTimeout)
+			relay.SetReadDeadline(deadline)
+			service.SetWriteDeadline(deadline)
+			service.CloseRead()
+		}
+		close(done)
+	}()
+	fwdBicopy(context.Background(), relay, service)
+	lifetimeRead.Close() // stop the lifetime reader if both data directions ended
+	<-done
 	return nil
 }
 
-// fwdSendResult delivers the status line and the result descriptor.
-func fwdSendResult(c *net.UnixConn, f *os.File, line string) error {
+// fwdDialRelay dials the service as the bound user and returns only the
+// daemon-facing end of a private socketpair. The child keeps the service
+// socket and the other end for the lifetime of the forwarded connection.
+func fwdDialRelay(addr string) (result *os.File, relay, service *net.UnixConn, err error) {
+	service, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: addr, Net: "unix"})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		service.Close()
+		return nil, nil, nil, err
+	}
+	unix.CloseOnExec(pair[0])
+	unix.CloseOnExec(pair[1])
+	result = os.NewFile(uintptr(pair[0]), "ssh-fwd-dial-result")
+	relay, err = wrapUnixConn(pair[1]) // consumes pair[1]
+	if err != nil {
+		result.Close()
+		service.Close()
+		return nil, nil, nil, err
+	}
+	return result, relay, service, nil
+}
+
+// fwdSendResult delivers the status line and result descriptors.
+func fwdSendResult(c *net.UnixConn, line string, files ...*os.File) error {
 	var fds []int
-	if f != nil {
-		fds = []int{int(f.Fd())}
+	for _, f := range files {
+		fds = append(fds, int(f.Fd()))
 	}
 	_, err := sendFds(c, []byte(line+"\n"), fds)
 	return err
 }
 
-// fwdChildWork performs the op and returns the resulting socket as an
+// fwdChildWork performs a listener op and returns its socket as an
 // *os.File plus a short status payload. The caller sends the file's
 // descriptor to the monitor and then closes the file. The payload is the
 // agent socket path, or the bound TCP address.
 func fwdChildWork(fa fwdArgs) (*os.File, string, error) {
 	switch {
-	case fa.op == "dial":
-		// Dial is unix-only.
-		conn, err := (&net.Dialer{}).Dial("unix", fa.addr)
-		if err != nil {
-			return nil, "", err
-		}
-		uc, ok := conn.(*net.UnixConn)
-		if !ok {
-			conn.Close()
-			return nil, "", fmt.Errorf("ssh-fwd: dial returned %T", conn)
-		}
-		f, err := uc.File()
-		uc.Close()
-		if err != nil {
-			return nil, "", err
-		}
-		return f, "", nil
-
 	case fa.op == "listen" && fa.agent:
 		// Agent-forwarding socket. See fwdUmask and ListenAgent. The
 		// dir's cleanup is the caller's.

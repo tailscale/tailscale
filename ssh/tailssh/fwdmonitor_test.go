@@ -973,7 +973,9 @@ func TestFwdConnLocalUnixSymlinkToProtectedSocket(t *testing.T) {
 			if m != "PROTECTED" {
 				t.Fatalf("unexpected canary marker %q", m)
 			}
-		default:
+		case <-time.After(5 * time.Second):
+			// Reading the socket marker does not synchronize with the
+			// canary goroutine's subsequent channel send.
 			t.Fatal("control marker not recorded by canary")
 		}
 		// The five forwarded attempts through the symlink were all refused.
