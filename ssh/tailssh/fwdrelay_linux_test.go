@@ -55,7 +55,7 @@ func TestFwdDialRelayCloseReapsChild(t *testing.T) {
 			} else {
 				// Model the descriptor cleanup of a reply whose caller has
 				// abandoned it: no connection wrapper is ever constructed.
-				_, fds, err := mc.call(ctx, rpcDialReq(0, path))
+				_, fds, err := mc.call(ctx, rpcDialReq(0, "unix", path))
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -7,6 +7,9 @@
 // dialed and bound by one-shot children of the per-connection ssh-monitor
 // running with the authenticated local user's credentials.
 //
+//   - TCP -L/-D, direct-tcpip: policy stays in tailscaled, then name
+//     resolution and dialing run in a one-shot child as the bound user.
+//     The connected socket is handed back without changing its kernel owner.
 //   - unix -L, direct-streamlocal: the lexical allowlist check stays in
 //     tailscaled as coarse policy, then the dial and service-side payload
 //     writes run as the user in a relay child. See conn.fwdAllowedSocketPath
@@ -30,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -230,6 +234,44 @@ func (c *conn) fwdAllowedSocketPath(socketPath string) (string, error) {
 	return "", fmt.Errorf("socket path %q is not in an allowed directory: %w", cleaned, gliderssh.ErrRejected)
 }
 
+// fwdDirectTCPIPHandler serves both TCP -L and SOCKS -D forwards: both use
+// RFC 4254 direct-tcpip channels. Policy is checked before spawning a monitor
+// or dialer. The child resolves/dials using the local account selected during
+// SSH authentication (c.localUser): its UID, GID and supplementary groups are
+// fixed when the per-connection monitor is spawned. The forwarding request
+// supplies no user identity and cannot change those credentials.
+func (c *conn) fwdDirectTCPIPHandler(srv *gliderssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx gliderssh.Context) {
+	var d struct {
+		DestAddr   string
+		DestPort   uint32
+		OriginAddr string
+		OriginPort uint32
+	}
+	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
+		return
+	}
+	if d.DestPort == 0 || d.DestPort > math.MaxUint16 {
+		newChan.Reject(gossh.ConnectionFailed, "destination port must be between 1 and 65535")
+		return
+	}
+	if srv.LocalPortForwardingCallback == nil || !srv.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
+		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
+		return
+	}
+	mc, err := c.fwdMonitor()
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
+	}
+	dconn, err := mc.DialTCP(ctx, net.JoinHostPort(d.DestAddr, strconv.FormatUint(uint64(d.DestPort), 10)))
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		return
+	}
+	fwdAcceptAndBicopy(ctx, newChan, dconn)
+}
+
 // fwdDirectStreamLocalHandler keeps channel lifetime separate from data EOF.
 // gliderssh's generic forwarding loop uses the connection context, which
 // does not end when just this SSH channel closes. The request stream closes
@@ -261,6 +303,13 @@ func fwdDirectStreamLocalHandler(srv *gliderssh.Server, _ *gossh.ServerConn, new
 		}
 		return
 	}
+	fwdAcceptAndBicopy(ctx, newChan, dconn)
+}
+
+// fwdAcceptAndBicopy owns dconn, accepting the channel and copying data until
+// completion or closure. Channel EOF permits a response; full channel closure
+// stops waiting for the service while allowing buffered client payload to drain.
+func fwdAcceptAndBicopy(ctx context.Context, newChan gossh.NewChannel, dconn net.Conn) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		dconn.Close()
@@ -545,11 +594,11 @@ func fwdHalfCloseWrite(c io.ReadWriteCloser) {
 	}
 }
 
-// wireReverseForwarding installs the conn's reverse TCP forwarding
-// request handlers. On unix they are fwdTCPHandler's, binding through
-// the monitor. It also installs the local Unix handler that ends relay
-// children on SSH channel closure independently of connection closure.
-func (c *conn) wireReverseForwarding(ss *gliderssh.Server) {
+// wireForwarding installs the conn's direct forwarding and reverse TCP
+// handlers. Socket creation goes through the credential-bound monitor children;
+// direct forwarding also handles channel closure independently of the connection.
+func (c *conn) wireForwarding(ss *gliderssh.Server) {
+	ss.ChannelHandlers["direct-tcpip"] = c.fwdDirectTCPIPHandler
 	ss.ChannelHandlers["direct-streamlocal@openssh.com"] = fwdDirectStreamLocalHandler
 	h := &fwdTCPHandler{conn: c}
 	ss.RequestHandlers["tcpip-forward"] = h.HandleSSHRequest

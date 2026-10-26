@@ -251,10 +251,10 @@ func (srv *server) OnPolicyChange() {
 // channels concurrently. At which point any of the following can be called
 // in any order.
 //   - c.handleSessionPostSSHAuth
-//   - c.mayForwardLocalPortTo followed by gliderssh.DirectTCPIPHandler
+//   - c.mayForwardLocalPortTo followed by a credentialed TCP dial (gliderssh on plan9)
 //   - c.mayForwardLocalUnixTo, the unix -L dial
 //   - c.mayReverseUnixForwardTo, the unix -R bind
-//   - c.wireReverseForwarding's "tcpip-forward" handlers, the TCP -R bind
+//   - c.wireForwarding's "tcpip-forward" handlers, the TCP -R bind
 type conn struct {
 	*gliderssh.Server
 	srv *server
@@ -623,7 +623,7 @@ func (srv *server) newConn() (*conn, error) {
 	maps.Copy(ss.RequestHandlers, gliderssh.DefaultRequestHandlers)
 	maps.Copy(ss.ChannelHandlers, gliderssh.DefaultChannelHandlers)
 	maps.Copy(ss.SubsystemHandlers, gliderssh.DefaultSubsystemHandlers)
-	c.wireReverseForwarding(ss)
+	c.wireForwarding(ss)
 	keys, err := getHostKeys(srv.lb.TailscaleVarRoot(), srv.logf)
 	if err != nil {
 		return nil, err

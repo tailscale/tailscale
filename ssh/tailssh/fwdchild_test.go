@@ -745,7 +745,8 @@ func zombieChildrenOf(ppid int) int {
 // shapes carry no identity keys on the wire.
 func TestFwdRequestsCarryNoIdentity(t *testing.T) {
 	for _, f := range []rpcFrame{
-		rpcDialReq(1, "/tmp/x.sock"),
+		rpcDialReq(1, "unix", "/tmp/x.sock"),
+		rpcDialReq(6, "tcp", "localhost:443"),
 		rpcListenReq(2, "unix", "/tmp/x.sock", false, false),
 		rpcListenReq(3, "unix", "/tmp/x.sock", true, false),
 		rpcListenReq(4, "tcp", "127.0.0.1:0", false, false),
@@ -763,14 +764,16 @@ func TestFwdRequestsCarryNoIdentity(t *testing.T) {
 		}
 	}
 
-	// The ops refuse unsupported shapes (dial is unix-only and absolute;
-	// listen net must be unix, tcp, or agent), and the channel stays
-	// healthy afterwards.
+	// The ops refuse unsupported networks and malformed addresses, and
+	// the channel stays healthy afterwards.
 	mc := startFwdTestMonitor(t, os.Getuid(), os.Getgid(), testGroups(t))
 	ctx, cancel := testCtx()
 	defer cancel()
 	for _, f := range []rpcFrame{
-		{Op: opDial, Net: "tcp", Addr: "127.0.0.1:1"},
+		{Op: opDial, Net: "udp", Addr: "127.0.0.1:1"},
+		{Op: opDial, Net: "tcp", Addr: "127.0.0.1:65536"},
+		{Op: opDial, Net: "tcp", Addr: "localhost:http"},
+		{Op: opDial, Net: "tcp", Addr: "missing-port"},
 		{Op: opDial, Net: "unix", Addr: "relative.sock"},
 		{Op: opDial, Net: "unix", Addr: "@/abstract"},
 		{Op: opListen, Net: "udp", Addr: "x"},

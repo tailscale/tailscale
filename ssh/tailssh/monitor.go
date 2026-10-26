@@ -12,7 +12,7 @@
 // children are the incubator in incubator.go, spawned with the
 // monitor's credentials because the incubator needs root to exec
 // login and su and to register the login session. Forwarding children
-// in fwdchild.go are dial relays and one-shot bind workers, spawned with the
+// in fwdchild.go are Unix dial relays and one-shot TCP dial/bind workers, spawned with the
 // connection user's credentials.
 //
 // The connection's identity, the uid, gid, and groups of its
@@ -62,7 +62,7 @@ const (
 // Every child leads its own group, so pgid equals pid. A oneshot
 // child, a dialer or listener, reports its outcome in its op's reply,
 // and its exit is reaped silently by the sweep after its SIGCHLD.
-// A dialer stays alive to relay bytes after reporting its outcome.
+// A Unix dialer stays alive to relay bytes after reporting its outcome.
 type monChild struct {
 	pgid    int   // the child's process group. Equal to its pid.
 	id      int64 // exec request ID, or zero for a forwarding child
@@ -517,21 +517,15 @@ func killGroup(pgid int, sig unix.Signal) error {
 	return unix.Kill(-pgid, sig)
 }
 
-// handleDial serves the dial op. A relay child dials the unix socket
-// with the connection's bound identity, as documented in fwdchild.go.
-// The reply relays a socketpair descriptor and a lifetime pipe writer to
-// tailscaled; the child relays payload as the bound user until the pipe
-// closes or both data directions finish.
+// handleDial serves the dial op with the connection's bound identity.
+// Unix dials return a private data socket and lifetime pipe for a relay child;
+// TCP dials return the connected socket and the child exits after handoff.
 func (m *monitor) handleDial(f rpcFrame) {
-	if f.Net != "unix" {
-		m.reply(rpcErrReply(f.ID, opDial, fmt.Errorf("dial: network %q not supported; dial is unix-only", f.Net)))
+	if err := validateFwdDial(f.Net, f.Addr); err != nil {
+		m.reply(rpcErrReply(f.ID, opDial, err))
 		return
 	}
-	if f.Addr == "" || !filepath.IsAbs(f.Addr) {
-		m.reply(rpcErrReply(f.ID, opDial, errors.New("dial: addr must be an absolute unix socket path")))
-		return
-	}
-	m.fwdOp(f.ID, opDial, fwdChildSpec{op: "dial", net: "unix", addr: f.Addr}, func(string) rpcFrame {
+	m.fwdOp(f.ID, opDial, fwdChildSpec{op: "dial", net: f.Net, addr: f.Addr}, func(string) rpcFrame {
 		return rpcOKReply(f.ID, opDial)
 	})
 }
@@ -619,7 +613,7 @@ func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(paylo
 	child := &monChild{pgid: cmd.Process.Pid, oneshot: true}
 	m.children[cmd.Process.Pid] = child
 	wantFDs := 1
-	if op == opDial {
+	if op == opDial && spec.net == "unix" {
 		wantFDs = 2 // data socket and lifetime pipe writer
 	}
 	ok, payload, fds, rerr := fwdReadResult(result, start.Add(monFwdOpDeadline), wantFDs)
@@ -635,8 +629,8 @@ func (m *monitor) fwdOp(id int64, op string, spec fwdChildSpec, reply func(paylo
 		m.reply(rpcErrReply(id, op, errors.New(payload)))
 		return
 	}
-	// Listener children exit after the descriptor handoff; dial children
-	// keep relaying until the connection closes. The sweep silently reaps
+	// Listener and TCP dial children exit after the handoff; Unix dial
+	// children relay until the connection closes. The sweep silently reaps
 	// each child after its SIGCHLD.
 	m.replyFD(reply(payload), fds...)
 }
