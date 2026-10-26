@@ -36,7 +36,7 @@ func isRootUser(u *userMeta) bool {
 	// denotes root, and must not bypass the non-root checks that later
 	// parse the uid numerically (e.g. the incubator's --uid). Non-numeric
 	// uids keep the previous string behavior (not root).
-	if uid, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
+	if uid, err := strconv.ParseInt(u.Uid, 0, strconv.IntSize); err == nil {
 		return uid == 0
 	}
 	return false
