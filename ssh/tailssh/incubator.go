@@ -1273,6 +1273,9 @@ func envForUser(u *userMeta) []string {
 	return []string{
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),
+		// Some systems require $LOGNAME. Just like OpenSSH sshd, set it to the
+		// same value as $USER.
+		fmt.Sprintf("LOGNAME=%s", u.Username),
 		fmt.Sprintf("HOME=%s", u.HomeDir),
 		fmt.Sprintf("PATH=%s", defaultPathForUser(u)),
 	}
