@@ -490,19 +490,16 @@ func (c *conn) clientAuth(cm ssh.ConnMetadata) (perms *ssh.Permissions, retErr e
 
 			url := action.HoldAndDelegate
 
-			// The delegate wait is bounded by fetchSSHAction's own 30-minute
-			// context. Extend the login grace to cover it plus buffer, so
-			// the grace timer never kills a live approval flow. A wedged
-			// fetch still gets torn down at the raw socket.
+			// Allow the delegate fetch to reach its own timeout before
+			// login grace closes the transport. Keep the transport deadline
+			// in case the fetch does not return on context cancellation.
 			c.extendLoginGrace(holdDelegateGrace)
 
 			// Connection teardown also cancels the delegate fetch.
-			parent := c.preAuthCtx
-			if parent == nil {
-				parent = context.Background()
+			ctx := c.preAuthCtx
+			if ctx == nil {
+				ctx = context.Background()
 			}
-			ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
-			defer cancel()
 
 			metricHolds.Add(1)
 			url = c.expandDelegateURLLocked(url)
@@ -921,11 +918,14 @@ func (c *conn) newSSHSession(s gliderssh.Session) *sshSession {
 	}
 }
 
-// holdDelegateGrace is how long the login-grace timer is extended for a
-// conn waiting on a HoldAndDelegate approval. It is fetchSSHAction's own
-// 30-minute cap plus buffer, so the grace timer never kills a live
-// approval flow. A wedged fetch is still torn down at the socket.
-const holdDelegateGrace = 35 * time.Minute
+const (
+	// delegateFetchTimeout bounds one delegated action fetch, including retries.
+	delegateFetchTimeout = 30 * time.Minute
+
+	// holdDelegateGrace is the login-grace period while fetching a delegated
+	// action. It allows the fetch to time out before closing the transport.
+	holdDelegateGrace = delegateFetchTimeout + 5*time.Minute
+)
 
 // armLoginGrace arms the pre-auth login-grace timer; on expiry the
 // connection is closed at the raw socket. The timer is stopped at auth
@@ -1276,7 +1276,7 @@ func acceptEnvNarrowed(old, fresh []string) bool {
 }
 
 func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHAction, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, delegateFetchTimeout)
 	defer cancel()
 	bo := backoff.NewBackoff("fetch-ssh-action", c.logf, 10*time.Second)
 	for {
