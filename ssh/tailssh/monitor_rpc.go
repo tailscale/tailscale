@@ -52,7 +52,7 @@ import (
 
 // Monitor RPC operations.
 const (
-	opDial   = "dial"   // request {net:"unix", addr}. reply {ok} + data socket and lifetime pipe writer
+	opDial   = "dial"   // request {net:"unix"|"tcp", addr}. reply {ok} + socket (and lifetime pipe writer for unix)
 	opListen = "listen" // request {net:"unix"|"tcp", addr, unlink?, agent?}. reply {ok, path} + listener fd
 	opExec   = "exec"   // request {argv, env, dir?, ctty?, envfd?, fds:0-4} + SCM_RIGHTS fds. reply {ok, pid, childID}
 	opSignal = "signal" // request {pid, childID, sig}. reply {ok}
@@ -103,7 +103,7 @@ type rpcFrame struct {
 	Op string `json:"op"`
 
 	// dial and listen requests.
-	Net    string `json:"net,omitempty"`  // dial: always "unix". listen: "unix" or "tcp"
+	Net    string `json:"net,omitempty"`  // dial and listen: "unix" or "tcp"
 	Addr   string `json:"addr,omitempty"` // target address to dial or bind
 	Unlink bool   `json:"unlink,omitzero"`
 	Agent  bool   `json:"agent,omitzero"` // listen: create the agent-forwarding socket
@@ -142,8 +142,8 @@ func rpcPingReq(id int64) rpcFrame {
 	return rpcFrame{ID: id, Op: opPing}
 }
 
-func rpcDialReq(id int64, addr string) rpcFrame {
-	return rpcFrame{ID: id, Op: opDial, Net: "unix", Addr: addr}
+func rpcDialReq(id int64, network, addr string) rpcFrame {
+	return rpcFrame{ID: id, Op: opDial, Net: network, Addr: addr}
 }
 
 func rpcListenReq(id int64, network, addr string, unlink, agent bool) rpcFrame {
@@ -186,8 +186,8 @@ func rpcFdAckReq(replyID int64) rpcFrame {
 
 // maxFdsForOp reports the maximum number of SCM_RIGHTS descriptors a
 // frame of op may carry in either direction. Exec carries child stdio.
-// Dial replies carry a data socket and lifetime pipe writer; listen replies
-// carry the bound socket.
+// Unix dial replies carry a data socket and lifetime pipe writer; TCP dial
+// and listen replies carry one socket.
 func maxFdsForOp(op string) int {
 	switch op {
 	case opExec:

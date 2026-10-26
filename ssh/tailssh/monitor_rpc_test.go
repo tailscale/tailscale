@@ -109,7 +109,7 @@ func TestMonitorRPCFdRoundTrip(t *testing.T) {
 	client, server := rpcTestPair(t)
 	peer, passed := fdPair(t)
 
-	if err := client.writeFrame(rpcDialReq(7, "/run/user/1000/test.sock"), passed); err != nil {
+	if err := client.writeFrame(rpcDialReq(7, "unix", "/run/user/1000/test.sock"), passed); err != nil {
 		t.Fatal(err)
 	}
 	unix.Close(passed) // per sendFds, the sender may close after the write
@@ -458,7 +458,7 @@ func TestMonitorRPCLineCapAndNUL(t *testing.T) {
 	client, server := rpcTestPair(t)
 
 	// Sender side: oversized frames are refused.
-	if err := client.writeFrame(rpcDialReq(1, strings.Repeat("x", rpcMaxLine))); err == nil {
+	if err := client.writeFrame(rpcDialReq(1, "unix", strings.Repeat("x", rpcMaxLine))); err == nil {
 		t.Fatal("oversized write accepted")
 	}
 
@@ -601,7 +601,7 @@ func TestMonitorRPCMultiplex(t *testing.T) {
 			mu.Lock()
 			var err error
 			if i%5 == 0 {
-				err = client.writeFrame(rpcDialReq(int64(i+1), "/tmp/monitor-rpc-test.sock"))
+				err = client.writeFrame(rpcDialReq(int64(i+1), "unix", "/tmp/monitor-rpc-test.sock"))
 			} else {
 				err = client.writeFrame(rpcPingReq(int64(i + 1)))
 			}

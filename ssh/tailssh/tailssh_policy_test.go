@@ -247,6 +247,11 @@ func TestSSHRevokeMidSessionClosesConn(t *testing.T) {
 // established forward. A pure extension, false to true, leaves the conn
 // alive.
 func TestSSHNarrowingClosesForwardOnlyConn(t *testing.T) {
+	// TCP -L dials now use the credentialed monitor child, like -R binds.
+	exe := makeExecutableReachable(t)
+	t.Setenv("TS_TEST_SSH_FWD_PREFIX", strings.Join(testFwdPrefix, " "))
+	tstest.Replace(t, &monitorSpawnPrefix, testMonitorPrefix)
+
 	// A local TCP service to -L forward to.
 	svc, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -277,6 +282,7 @@ func TestSSHNarrowingClosesForwardOnlyConn(t *testing.T) {
 		rule: newPolicyRule(allow, lu),
 	}
 	s, client, _ := dialPolicyConn(t, p)
+	s.tailscaledPath = exe
 
 	// Establish a live -L forward with no session channel anywhere.
 	fwd, err := client.Dial("tcp", svc.Addr().String())
@@ -296,7 +302,7 @@ func TestSSHNarrowingClosesForwardOnlyConn(t *testing.T) {
 	p.setRule(newPolicyRule(&tailcfg.SSHAction{Accept: true}, lu))
 	s.OnPolicyChange()
 
-	// The conn closes. The established forward dies and new sessions fail.
+	// Both the established forward and its SSH transport close.
 	fwdErr := make(chan error, 1)
 	go func() {
 		_, err := fwd.Read(got)
@@ -310,9 +316,18 @@ func TestSSHNarrowingClosesForwardOnlyConn(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("established forward not torn down after narrowing")
 	}
-	eventually(t, 10*time.Second, "connection not closed after narrowing", func() bool {
-		return sessionFails(client)
-	})
+	// Wait for transport shutdown rather than racing NewSession against
+	// the test client's mux teardown (which can strand a channel-open wait).
+	clientDone := make(chan error, 1)
+	go func() { clientDone <- client.Wait() }()
+	select {
+	case err := <-clientDone:
+		if err == nil {
+			t.Fatal("client Wait returned nil after policy revocation")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("connection not closed after narrowing")
+	}
 }
 
 // TestSSHRevokeClosesReverseForwardListener pins the forwarding-only
