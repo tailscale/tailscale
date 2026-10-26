@@ -74,10 +74,8 @@
 //   - TS_ENABLE_METRICS: if true, a metrics endpoint will be served at /metrics on
 //     the address specified by TS_LOCAL_ADDR_PORT. See https://tailscale.com/kb/1482/client-metrics
 //     for more information on the metrics exposed.
-//   - TS_ENABLE_HEALTH_CHECK: if true, a health check endpoint will be served at /healthz on
-//     the address specified by TS_LOCAL_ADDR_PORT. The health endpoint will return 200
-//     OK if this node has at least one tailnet IP address, otherwise returns 503.
-//     NB: the health criteria might change in the future.
+//   - TS_ENABLE_HEALTH_CHECK: if true, the health check endpoints described below are
+//     served on the address specified by TS_LOCAL_ADDR_PORT.
 //   - TS_EXPERIMENTAL_VERSIONED_CONFIG_DIR: if specified, a path to a
 //     directory that containers tailscaled config in file. The config file needs to be
 //     named cap-<current-tailscaled-cap>.hujson. If this is set, TS_HOSTNAME,
@@ -108,6 +106,15 @@
 //   - TS_BOOT_TIMEOUT: if set, overrides the default 60s timeout for the
 //     initial map response wait during boot. Accepts any time.Duration
 //     string (e.g. "90s", "3m").
+//
+// The health check endpoints return 200 OK while all of their checks pass,
+// otherwise 503. NB: the health criteria might change in the future.
+//
+//   - /healthz: this node has at least one tailnet IP address.
+//   - /livez: for Kubernetes liveness probes. tailscaled answers LocalAPI requests.
+//   - /readyz: for Kubernetes readiness probes. This node has tailnet IPs and, with
+//     TS_SERVE_CONFIG, the serve config is applied and there is a TLS cert for each
+//     advertised HTTPS Service.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -148,6 +155,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	kubeutils "tailscale.com/k8s-operator"
 	"tailscale.com/kube/authkey"
+	"tailscale.com/kube/certs"
 	healthz "tailscale.com/kube/health"
 	"tailscale.com/kube/kubetypes"
 	klc "tailscale.com/kube/localclient"
@@ -511,6 +519,7 @@ func run() error {
 	defer killTailscaled()
 
 	var healthCheck *healthz.Healthz
+	var readiness readinessConditions
 	ep := &egressProxy{}
 	if cfg.HealthCheckAddrPort != "" {
 		mux := http.NewServeMux()
@@ -533,6 +542,8 @@ func run() error {
 		if cfg.localHealthEnabled() {
 			log.Printf("Running healthcheck endpoint at %s/healthz", cfg.LocalAddrPort)
 			healthCheck = healthz.RegisterHealthHandlers(mux, cfg.PodIPv4, cfg.PodIPv6, log.Printf)
+
+			readiness = registerHealthChecks(mux, cfg, client, certs.NewCertManager(klc.New(client), log.Printf))
 		}
 
 		if cfg.egressSvcsTerminateEPEnabled() {
@@ -988,6 +999,7 @@ runLoop:
 			if healthCheck != nil {
 				healthCheck.Update(len(addrs) != 0)
 			}
+			readiness.netmap.Set(len(addrs) != 0)
 
 			var prevServeConfig *ipn.ServeConfig
 			if getAutoAdvertiseBool() {
@@ -1004,7 +1016,7 @@ runLoop:
 
 			if cfg.ServeConfigPath != "" {
 				triggerWatchServeConfigChanges.Do(func() {
-					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig)
+					go watchServeConfigChanges(ctx, certDomainChanged, certDomain, client, kc, cfg, prevServeConfig, readiness.serve)
 				})
 			}
 
