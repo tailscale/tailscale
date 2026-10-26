@@ -15,11 +15,52 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
 // hangupEscalation is the delay between SIGHUP and SIGKILL on session teardown.
 const hangupEscalation = 5 * time.Second
+
+// monExitRegistry matches exit notifications to child handles, including
+// notifications received before the session registers its waiter.
+type monExitRegistry struct {
+	mu      sync.Mutex
+	waiters map[monitorProcess]*monExitStatus
+	pending map[monitorProcess]int // exits received before registration
+}
+
+// dispatchExit is the monitorClient exit callback, called from the
+// client's read-loop goroutine.
+func (s *monExitRegistry) dispatchExit(pid monitorProcess, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ch, ok := s.waiters[pid]; ok {
+		delete(s.waiters, pid)
+		ch.complete(code)
+		return
+	}
+	if s.pending == nil {
+		s.pending = make(map[monitorProcess]int)
+	}
+	s.pending[pid] = code
+}
+
+// registerSessionExit delivers and removes a pending exit, or registers
+// a waiter for a future notification.
+func (s *monExitRegistry) registerSessionExit(pid monitorProcess, ch *monExitStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if code, ok := s.pending[pid]; ok {
+		delete(s.pending, pid)
+		ch.complete(code)
+		return
+	}
+	if s.waiters == nil {
+		s.waiters = make(map[monitorProcess]*monExitStatus)
+	}
+	s.waiters[pid] = ch
+}
 
 func newMonExitStatus() *monExitStatus {
 	return &monExitStatus{done: make(chan struct{})}
@@ -40,7 +81,7 @@ func (ss *sshSession) launchViaMonitor(cmd *exec.Cmd, envFile *os.File, stdio []
 	if err := ss.ctx.Err(); err != nil {
 		return err
 	}
-	mc, err := ss.conn.fwdMonitor()
+	mc, err := ss.conn.connMonitor()
 	if err != nil {
 		return err
 	}
@@ -49,7 +90,7 @@ func (ss *sshSession) launchViaMonitor(cmd *exec.Cmd, envFile *os.File, stdio []
 		return fmt.Errorf("exec on session monitor: %w", err)
 	}
 	exit := newMonExitStatus()
-	ss.conn.fwd.exits.registerSessionExit(child, exit)
+	ss.conn.monitor.exits.registerSessionExit(child, exit)
 	ss.monChild = child
 	ss.monExit = exit
 	ss.monDead = mc.Gone()
@@ -83,7 +124,7 @@ func (ss *sshSession) hangupMonitorProcess() bool {
 	if ss.monChild.PID == 0 {
 		return false
 	}
-	mc := ss.conn.fwdMonitorIfAny()
+	mc := ss.conn.connMonitorIfAny()
 	if mc == nil {
 		// Monitor teardown owns cleanup. Its reaped PIDs may already have
 		// been reused, so tailscaled must not signal them directly.

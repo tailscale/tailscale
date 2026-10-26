@@ -51,151 +51,6 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// fwdState is the conn's monitor state. It holds the per-connection
-// ssh-monitor, spawned lazily on the first forwarding, agent, or
-// session need and closed when the conn is torn down. exits
-// dispatches the monitor's async child-exit notifications to the
-// conn's sessions in sessmonitor.go. The monitor's identity is bound at
-// spawn to the conn's localUser, with the uid, gid, and groups from
-// clientAuth.
-type fwdState struct {
-	mu  sync.Mutex
-	mon *monitorClient
-
-	// closed is set by closeFwdMonitor, before the lock is dropped. Once
-	// the conn's teardown has run, fwdMonitor refuses to spawn.
-	// fwdMonitorIfAny is unaffected.
-	closed bool
-
-	// exits routes notifications by child handle. Its callback is installed
-	// at monitor spawn.
-	exits monExitRegistry
-}
-
-// monExitRegistry matches exit notifications to child handles, including
-// notifications received before the session registers its waiter.
-type monExitRegistry struct {
-	mu      sync.Mutex
-	waiters map[monitorProcess]*monExitStatus
-	pending map[monitorProcess]int // exits received before registration
-}
-
-// dispatchExit is the monitorClient exit callback, called from the
-// client's read-loop goroutine.
-func (s *monExitRegistry) dispatchExit(pid monitorProcess, code int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if ch, ok := s.waiters[pid]; ok {
-		delete(s.waiters, pid)
-		ch.complete(code)
-		return
-	}
-	if s.pending == nil {
-		s.pending = make(map[monitorProcess]int)
-	}
-	s.pending[pid] = code
-}
-
-// registerSessionExit delivers and removes a pending exit, or registers
-// a waiter for a future notification.
-func (s *monExitRegistry) registerSessionExit(pid monitorProcess, ch *monExitStatus) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if code, ok := s.pending[pid]; ok {
-		delete(s.pending, pid)
-		ch.complete(code)
-		return
-	}
-	if s.waiters == nil {
-		s.waiters = make(map[monitorProcess]*monExitStatus)
-	}
-	s.waiters[pid] = ch
-}
-
-// fwdMonitor returns the conn's monitor, spawning it on first use with
-// the spawn-bound identity documented on fwdState.
-func (c *conn) fwdMonitor() (*monitorClient, error) {
-	c.fwd.mu.Lock()
-	defer c.fwd.mu.Unlock()
-	if c.fwd.mon != nil {
-		return c.fwd.mon, nil
-	}
-	if c.fwd.closed {
-		return nil, errors.New("monitor closed at connection teardown")
-	}
-	uid, gid, groups, err := c.fwdCreds()
-	if err != nil {
-		return nil, err
-	}
-	// The monitor is exec'd from the tailscaled binary; in tests
-	// os.Executable() is the test binary. The incubator spawn takes the
-	// same path from srv.tailscaledPath.
-	exe := c.srv.tailscaledPath
-	if exe == "" {
-		exe, err = os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("ssh-monitor: executable: %w", err)
-		}
-	}
-	mc, err := spawnMonitor(exe, uid, gid, groups, c.localUser.Username)
-	if err != nil {
-		return nil, fmt.Errorf("spawning ssh-monitor for %q: %w", c.localUser.Username, err)
-	}
-	// Route the monitor's async exit notifications to the conn's
-	// sessions in sessmonitor.go.
-	mc.SetExitCallback(c.fwd.exits.dispatchExit)
-	c.fwd.mon = mc
-	return mc, nil
-}
-
-// fwdMonitorIfAny returns the conn's monitor without spawning one.
-// Callers that can race the conn's teardown must use it instead of the
-// lazy fwdMonitor. See fwdState.closed.
-func (c *conn) fwdMonitorIfAny() *monitorClient {
-	c.fwd.mu.Lock()
-	defer c.fwd.mu.Unlock()
-	return c.fwd.mon
-}
-
-// fwdCreds returns the monitor's spawn identity, parsing like the
-// incubator's argv does. The ids are carried at their 32-bit ABI width.
-func (c *conn) fwdCreds() (uid, gid uint32, groups []uint32, err error) {
-	u64, err := strconv.ParseUint(c.localUser.Uid, 10, 32)
-	if err != nil {
-		return 0, 0, nil, fmt.Errorf("forwarding: parsing local user uid %q: %w", c.localUser.Uid, err)
-	}
-	g64, err := strconv.ParseUint(c.localUser.Gid, 10, 32)
-	if err != nil {
-		return 0, 0, nil, fmt.Errorf("forwarding: parsing local user gid %q: %w", c.localUser.Gid, err)
-	}
-	for _, g := range c.userGroupIDs {
-		v, err := strconv.ParseUint(g, 10, 32)
-		if err != nil {
-			return 0, 0, nil, fmt.Errorf("forwarding: parsing local user group %q: %w", g, err)
-		}
-		groups = append(groups, uint32(v))
-	}
-	return uint32(u64), uint32(g64), groups, nil
-}
-
-// closeFwdMonitor closes the conn's monitor, if one was spawned. It
-// runs from HandleSSHConn's defer after the SSH connection is done.
-// Closing the RPC channel triggers the monitor's teardown in monitor.go.
-// Closing a second time is a no-op.
-func (c *conn) closeFwdMonitor() {
-	c.fwd.mu.Lock()
-	mc := c.fwd.mon
-	c.fwd.mon = nil
-	c.fwd.closed = true
-	c.fwd.mu.Unlock()
-	if mc == nil {
-		return
-	}
-	if err := mc.Close(); err != nil {
-		c.logf("ssh: closing forwarding monitor: %v", err)
-	}
-}
-
 // fwdMaxSunPathLen is the sun_path capacity. It is the lexical length
 // cap on unix socket paths, the same one gliderssh's path validator
 // enforced. The cap is 108 on Linux and 104 on macOS.
@@ -259,7 +114,7 @@ func (c *conn) fwdDirectTCPIPHandler(srv *gliderssh.Server, _ *gossh.ServerConn,
 		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
 		return
 	}
-	mc, err := c.fwdMonitor()
+	mc, err := c.connMonitor()
 	if err != nil {
 		newChan.Reject(gossh.ConnectionFailed, err.Error())
 		return
@@ -334,7 +189,7 @@ func (c *conn) fwdDialUnix(ctx gliderssh.Context, socketPath string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	mc, err := c.fwdMonitor()
+	mc, err := c.connMonitor()
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +212,7 @@ func (c *conn) fwdListenUnix(ctx gliderssh.Context, socketPath string) (net.List
 	if err != nil {
 		return nil, err
 	}
-	mc, err := c.fwdMonitor()
+	mc, err := c.connMonitor()
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +226,7 @@ func (c *conn) fwdListenUnix(ctx gliderssh.Context, socketPath string) (net.List
 // local user, unused on unix.
 func (c *conn) fwdListenAgent(ctx gliderssh.Context, lu *userMeta) (net.Listener, string, error) {
 	_ = lu
-	mc, err := c.fwdMonitor()
+	mc, err := c.connMonitor()
 	if err != nil {
 		return nil, "", err
 	}
@@ -462,7 +317,7 @@ func (h *fwdTCPHandler) HandleSSHRequest(ctx gliderssh.Context, _ *gliderssh.Ser
 		if !ok {
 			return false, []byte("binding to non-loopback addresses is not permitted")
 		}
-		mc, err := h.conn.fwdMonitor()
+		mc, err := h.conn.connMonitor()
 		if err != nil {
 			h.conn.logf("ssh: reverse port forward: %v", err)
 			return false, []byte{}

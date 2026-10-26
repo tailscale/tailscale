@@ -9,7 +9,7 @@
 // handleSSHAgentForwarding. The forwarding-path tests drive a real conn
 // with a real monitor and real one-shot fwd children through the
 // self-exec seams in fwdchild_test.go. TestFwdAllowedSocketPathCaps and
-// TestFwdMonitorClosedRefusesRespawn exercise the lexical policy and
+// TestConnMonitorClosedRefusesRespawn exercise the lexical policy and
 // the closed flag directly. Under root the conn binds to the non-root
 // test user, so the cross-uid closures are pinned: socket ownership,
 // permission-denied dials, and kernel privileged-port refusal. Non-root
@@ -117,7 +117,7 @@ func newFwdTestConn(t *testing.T, lu *userMeta, final *tailcfg.SSHAction) *conn 
 		},
 	}
 	c.authCompleted.Store(true)
-	t.Cleanup(c.closeFwdMonitor)
+	t.Cleanup(c.closeConnMonitor)
 	return c
 }
 
@@ -1205,26 +1205,26 @@ func TestFwdAllowedSocketPathCaps(t *testing.T) {
 	}
 }
 
-// TestFwdMonitorClosedRefusesRespawn pins the closed flag on fwdState.
-// See fwdState.closed. Once the conn's teardown has run, fwdMonitor must
+// TestConnMonitorClosedRefusesRespawn pins the closed flag on connMonitorState.
+// See connMonitorState.closed. Once the conn's teardown has run, connMonitor must
 // refuse to spawn for every late caller, including session launch, unix
 // and TCP forwarding, and agent forwarding.
-func TestFwdMonitorClosedRefusesRespawn(t *testing.T) {
+func TestConnMonitorClosedRefusesRespawn(t *testing.T) {
 	lu := fwdTestIdentity(t)
 	c := newFwdTestConn(t, lu, &tailcfg.SSHAction{Accept: true})
-	if _, err := c.fwdMonitor(); err != nil {
+	if _, err := c.connMonitor(); err != nil {
 		t.Fatalf("spawning monitor: %v", err)
 	}
-	c.closeFwdMonitor()
+	c.closeConnMonitor()
 
-	if _, err := c.fwdMonitor(); err == nil {
-		t.Fatal("fwdMonitor spawned a monitor after closeFwdMonitor; want refusal (nobody would close it)")
+	if _, err := c.connMonitor(); err == nil {
+		t.Fatal("connMonitor spawned a monitor after closeConnMonitor; want refusal (nobody would close it)")
 	}
-	if mc := c.fwdMonitorIfAny(); mc != nil {
-		t.Fatal("fwdMonitor left a monitor in fwd.mon after closeFwdMonitor")
+	if mc := c.connMonitorIfAny(); mc != nil {
+		t.Fatal("connMonitor left a monitor in monitor.mon after closeConnMonitor")
 	}
 	// Closing again stays a no-op.
-	c.closeFwdMonitor()
+	c.closeConnMonitor()
 }
 
 // TestRemoveAgentForwardingDirRefuses pins the session-end removal guard
