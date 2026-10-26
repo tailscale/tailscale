@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": "22.14.0",
+    "node": "22.23.4",
     "yarn": "1.22.19"
   },
   "type": "module",
