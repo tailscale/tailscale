@@ -132,19 +132,44 @@ func (ss *sshSession) handleSSHAgentForwarding(s gliderssh.Session, lu *userMeta
 	}
 	socket := ln.Addr().String()
 	dir := filepath.Dir(socket)
-	// Make sure the socket is accessible only by the user.
+	// Make sure the socket is accessible only by the user, and hand the
+	// socket and its containing directory to the user (like sshd's
+	// agent forwarding): the dir stays 0700 (as MkdirTemp created it)
+	// until the socket is in place and owned by the user, then the dir
+	// is chowned to the user too so the session can reach its socket
+	// without it being group/world-accessible.
 	if err := os.Chmod(socket, 0600); err != nil {
 		return err
 	}
 	if err := os.Chown(socket, int(uid), int(gid)); err != nil {
 		return err
 	}
-	// Make sure the dir is also accessible.
-	if err := os.Chmod(dir, 0755); err != nil {
+	if err := os.Chown(dir, int(uid), int(gid)); err != nil {
+		return err
+	}
+	// Defensively restore the 0700 mode in case the umask or a future
+	// change loosened it.
+	if err := os.Chmod(dir, 0700); err != nil {
 		return err
 	}
 
 	go gliderssh.ForwardAgentConnections(ln, s)
 	ss.agentListener = ln
 	return nil
+}
+
+// closeAgentForwarding closes the agent forwarding listener and removes the
+// temporary directory that holds its socket, so neither outlives the
+// session.
+func (ss *sshSession) closeAgentForwarding() {
+	ln := ss.agentListener
+	if ln == nil {
+		return
+	}
+	ss.agentListener = nil
+	dir := filepath.Dir(ln.Addr().String())
+	ln.Close()
+	if err := os.RemoveAll(dir); err != nil {
+		ss.logf("ssh: removing agent forwarding dir: %v", err)
+	}
 }

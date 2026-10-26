@@ -53,12 +53,15 @@ const (
 	windows = "windows"
 )
 
-// registerIncubator registers the incubator child process handlers.
+// registerIncubator registers the incubator child process handlers and
+// the per-connection ssh monitor.
 // It is called from [Register], which is called from the init of
 // tailscale.com/feature/ssh.
 func registerIncubator() {
 	childproc.Add("ssh", beIncubator)
 	childproc.Add("sftp", beSFTP)
+	childproc.Add("ssh-monitor", beMonitor)
+	childproc.Add("ssh-fwd", beFwdChild)
 }
 
 var ptyName = func(f *os.File) (string, error) {
@@ -108,6 +111,19 @@ func tryExecInDir(ctx context.Context, dir string) error {
 	return exec.ErrNotFound
 }
 
+// directExecAllowed reports whether the direct-exec fallback (used when
+// ss.conn.srv.tailscaledPath is empty) may run a session for lu as the given
+// effective uid. Unlike the incubator path there is no privilege drop, so a
+// root tailscaled must refuse to run a non-root user's session as root,
+// mirroring canSwitchToLocalUser's semantics (a non-root process can only
+// run a session as itself, which run() enforces).
+func directExecAllowed(euid int, lu *userMeta) bool {
+	if euid != 0 {
+		return true
+	}
+	return isRootUser(lu)
+}
+
 // newIncubatorCommand returns a new exec.Cmd configured with
 // `tailscaled be-child ssh` as the entrypoint.
 //
@@ -145,6 +161,14 @@ func (ss *sshSession) newIncubatorCommand(logf logger.Logf) (cmd *exec.Cmd, forw
 			// SFTP relies on the embedded Go-based SFTP server in tailscaled,
 			// so without tailscaled, we can't serve SFTP.
 			return nil, nil, errors.New("no tailscaled found on path, can't serve SFTP")
+		}
+
+		// Without tailscaled there is no be-child incubator to drop
+		// privileges, so this fallback runs the session as the current
+		// user. A root tailscaled must refuse to run a non-root user's
+		// session as root, mirroring canSwitchToLocalUser's semantics.
+		if !directExecAllowed(os.Geteuid(), ss.conn.localUser) {
+			return nil, nil, fmt.Errorf("refusing to run session for local user %q as root without tailscaled", ss.conn.localUser.Username)
 		}
 
 		loginShell := ss.conn.localUser.LoginShell()
@@ -353,10 +377,11 @@ func (ia *incubatorArgs) loadForwardedEnv() error {
 			return fmt.Errorf("unable to parse encodedEnv %q: %w", ia.encodedEnv, err)
 		}
 	}
-	// Enforce "su -w" integrity child-side: old parents may not have filtered these
+	// Enforce "su -w" integrity and the dangerous-env-var denylist
+	// child-side: old parents may not have filtered these.
 	pairs = slices.DeleteFunc(pairs, func(kv string) bool {
 		k, _, ok := strings.Cut(kv, "=")
-		return !ok || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
+		return !ok || isDangerousEnvVar(k) || forbiddenEnvKey(k) || strings.Contains(kv, "\x00")
 	})
 	ia.forwardedEnv = pairs
 	return nil
@@ -1127,7 +1152,7 @@ func envForUser(u *userMeta) []string {
 		fmt.Sprintf("SHELL=%s", u.LoginShell()),
 		fmt.Sprintf("USER=%s", u.Username),
 		fmt.Sprintf("HOME=%s", u.HomeDir),
-		fmt.Sprintf("PATH=%s", defaultPathForUser(&u.User)),
+		fmt.Sprintf("PATH=%s", defaultPathForUser(u)),
 	}
 }
 
@@ -1145,12 +1170,27 @@ func updateStringInSlice(ss []string, a, b string) {
 // acceptEnvPair reports whether the environment variable key=value pair
 // should be accepted from the client. It uses the same default as OpenSSH
 // AcceptEnv.
+//
+// The value reaches root-exec'd login/su environments, where glibc treats
+// a LANG/LC_* value containing "/" as a path to locale data and a leading
+// "-" as its own options; TERM is a terminal capability name, not a path.
+// Reject path- and option-like values (and NUL, which would truncate on
+// exec) rather than trying to sanitize them.
 func acceptEnvPair(kv string) bool {
-	k, _, ok := strings.Cut(kv, "=")
+	k, v, ok := strings.Cut(kv, "=")
 	if !ok || isDangerousEnvVar(k) || forbiddenEnvKey(k) {
 		return false
 	}
-	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
+	if strings.Contains(v, "\x00") {
+		return false
+	}
+	if k == "TERM" {
+		return !strings.Contains(v, "/")
+	}
+	if k == "LANG" || strings.HasPrefix(k, "LC_") {
+		return !strings.Contains(v, "/") && !strings.HasPrefix(v, "-")
+	}
+	return false
 }
 
 func fileExists(path string) bool {

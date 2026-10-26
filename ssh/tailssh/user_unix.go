@@ -29,7 +29,17 @@ func (u *userMeta) GroupIds() ([]string, error) {
 
 // isRootUser reports whether u is the superuser.
 func isRootUser(u *userMeta) bool {
-	return u.Uid == "0" || u.Username == "root"
+	if u.Username == "root" {
+		return true
+	}
+	// Compare the uid numerically: a non-canonical uid like "00" also
+	// denotes root, and must not bypass the non-root checks that later
+	// parse the uid numerically (e.g. the incubator's --uid). Non-numeric
+	// uids keep the previous string behavior (not root).
+	if uid, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
+		return uid == 0
+	}
+	return false
 }
 
 func (u *userMeta) LoginShell() string {
@@ -69,14 +79,14 @@ func (u *userMeta) LoginShell() string {
 // name)
 var defaultPathTmpl = envknob.RegisterString("TAILSCALE_SSH_DEFAULT_PATH")
 
-func defaultPathForUser(u *user.User) string {
+func defaultPathForUser(u *userMeta) string {
 	if s := defaultPathTmpl(); s != "" {
-		return expandDefaultPathTmpl(s, u)
+		return expandDefaultPathTmpl(s, &u.User)
 	}
 	if runtime.GOOS == "plan9" {
 		return "/bin"
 	}
-	isRoot := u.Uid == "0"
+	isRoot := isRootUser(u)
 	switch distro.Get() {
 	case distro.Debian, distro.Crostini:
 		hi := hostinfo.New()
@@ -91,7 +101,7 @@ func defaultPathForUser(u *user.User) string {
 		}
 		return "/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
 	case distro.NixOS:
-		return defaultPathForUserOnNixOS(u)
+		return defaultPathForUserOnNixOS(&u.User)
 	}
 	if isRoot {
 		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

@@ -5,7 +5,10 @@ package tailssh
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -25,6 +28,19 @@ func TestIsDangerousEnvVar(t *testing.T) {
 		{"DYLD_LIBRARY_PATH", true},
 		{"DYLD_FRAMEWORK_PATH", true},
 		{"dyld_insert_libraries", true},
+		{"GOTRACEBACK", true},
+		{"GCONV_PATH", true},
+		{"gconv_path", true},
+		{"LOCPATH", true},
+		{"locpath", true},
+		{"NLSPATH", true},
+		{"nlspath", true},
+		{"HOSTALIASES", true},
+		{"hostaliases", true},
+		{"RES_OPTIONS", true},
+		{"res_options", true},
+		{"GLIBC_TUNABLES", true},
+		{"glibc_tunables", true},
 		{"TERM", false},
 		{"LANG", false},
 		{"LC_ALL", false},
@@ -227,6 +243,22 @@ func TestFilterEnv(t *testing.T) {
 			expectedFiltered: []string{"TERM=xterm"},
 		},
 		{
+			// glibc lookup-path variables can load attacker-controlled files
+			// (e.g. gconv modules) into privileged processes; the resolver
+			// variables redirect privileged lookups.
+			name:      "glibc-and-resolver-vars-rejected",
+			acceptEnv: []string{"*"},
+			environ: []string{
+				"GCONV_PATH=/tmp/evil",
+				"LOCPATH=/tmp/evil",
+				"NLSPATH=/tmp/evil/%N",
+				"HOSTALIASES=/tmp/aliases",
+				"RES_OPTIONS=attempts:1",
+				"TERM=xterm",
+			},
+			expectedFiltered: []string{"TERM=xterm"},
+		},
+		{
 			name:             "nul-in-name-rejected",
 			acceptEnv:        []string{"*"},
 			environ:          []string{"A\x00B=x", "GOOD=1"},
@@ -246,6 +278,15 @@ func TestFilterEnv(t *testing.T) {
 			environ:          []string{"MY VAR=1", "WEIRD\tNAME=2", "MY.VAR=3", "MY-VAR=ok", "B\xc3\xa4R=5", "MY_VAR=ok2"},
 			expectedFiltered: []string{"MY-VAR=ok", "MY_VAR=ok2"},
 		},
+		{
+			// Names are capped at 256 bytes, even when the pattern would
+			// match: real names are short, longer ones only tie up the
+			// matcher or bloat the child's "su -w" allowlist.
+			name:             "oversized-name-rejected",
+			acceptEnv:        []string{"*"},
+			environ:          []string{strings.Repeat("A", maxAcceptEnvNameLen) + "=x", strings.Repeat("B", maxAcceptEnvNameLen+1) + "=x", "GOOD=1"},
+			expectedFiltered: []string{strings.Repeat("A", maxAcceptEnvNameLen) + "=x", "GOOD=1"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -264,4 +305,78 @@ func TestFilterEnv(t *testing.T) {
 			}
 		})
 	}
+}
+
+// naiveMatchAcceptEnvPattern is a straightforward backtracking reference
+// implementation of the acceptEnv wildcard semantics, used to cross-check
+// matchAcceptEnvPattern.
+func naiveMatchAcceptEnvPattern(pattern, target string) bool {
+	if pattern == "" {
+		return target == ""
+	}
+	switch pattern[0] {
+	case '*':
+		for i := 0; i <= len(target); i++ {
+			if naiveMatchAcceptEnvPattern(pattern[1:], target[i:]) {
+				return true
+			}
+		}
+		return false
+	case '?':
+		return len(target) >= 1 && naiveMatchAcceptEnvPattern(pattern[1:], target[1:])
+	default:
+		return len(target) >= 1 && pattern[0] == target[0] && naiveMatchAcceptEnvPattern(pattern[1:], target[1:])
+	}
+}
+
+// TestMatchAcceptEnvPatternAgainstNaive checks matchAcceptEnvPattern against a
+// naive backtracking reference matcher over random patterns and targets.
+func TestMatchAcceptEnvPatternAgainstNaive(t *testing.T) {
+	// Patterns and targets are built from an alphabet containing literals,
+	// the wildcard characters themselves (as literals in the target), and a
+	// separator that commonly follows '*'s in acceptEnv patterns.
+	alphabet := []string{"a", "b", "_", "?", "*", "T"}
+
+	rnd := rand.New(rand.NewPCG(1, 2))
+	gen := func(maxLen int) string {
+		n := rnd.IntN(maxLen + 1)
+		var sb strings.Builder
+		for range n {
+			sb.WriteString(alphabet[rnd.IntN(len(alphabet))])
+		}
+		return sb.String()
+	}
+
+	for range 5000 {
+		pattern, target := gen(12), gen(20)
+		want := naiveMatchAcceptEnvPattern(pattern, target)
+		if got := matchAcceptEnvPattern(pattern, target); got != want {
+			t.Fatalf("matchAcceptEnvPattern(%q, %q) = %v; want %v", pattern, target, got, want)
+		}
+	}
+}
+
+// TestMatchAcceptEnvPatternNoBacktrackingBlowup is a timing regression test:
+// the recursive matcher took ~2.7s on this input at n=400. The iterative
+// matcher must stay far below a generous bound.
+func TestMatchAcceptEnvPatternNoBacktrackingBlowup(t *testing.T) {
+	pattern := "TS_*_*_*_*_*_TOKEN"
+	// No "TOKEN" suffix, so every '*' combination must be tried, but with
+	// many '_' separators for the '*'s to fan out over.
+	target := "TS_" + strings.Repeat("a_", 198) + "a"
+	if len(target) != 400 {
+		t.Fatalf("target len = %d, want 400", len(target))
+	}
+
+	start := time.Now()
+	got := matchAcceptEnvPattern(pattern, target)
+	elapsed := time.Since(start)
+
+	if got {
+		t.Errorf("matchAcceptEnvPattern(%q, %q) = true; want false", pattern, target)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("matchAcceptEnvPattern took %v; want < 100ms", elapsed)
+	}
+	t.Logf("matched %d-byte target in %v", len(target), elapsed)
 }

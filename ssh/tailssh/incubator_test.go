@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/user"
 	"slices"
 	"strings"
@@ -264,10 +265,14 @@ func TestLoadForwardedEnvLegacyEncodedEnv(t *testing.T) {
 
 // TestLoadForwardedEnvSanitizesPairs verifies the child-side integrity check:
 // pairs that would corrupt the "su -w" allowlist (empty or comma-carrying
-// names), truncate on exec (NUL bytes), or lack "=" are dropped when the
-// payload is loaded, even though a new parent would never send them.
+// names), truncate on exec (NUL bytes), or are dangerous env vars (which a
+// new parent also rejects in filterEnv) are dropped when the payload is
+// loaded, even though a new parent would never send them.
 func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
-	pairs := []string{"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7"}
+	pairs := []string{
+		"GOOD=1", "A,B=x", "C\x00D=2", "E=3\x004", "=x", "malformed", "MY VAR=6", "MY.VAR=7",
+		"LD_PRELOAD=/tmp/evil.so", "gconv_path=/tmp/evil", "RES_OPTIONS=attempts:1",
+	}
 	raw, _ := json.Marshal(pairs)
 	ia, err := parseIncubatorArgs([]string{"--groups=1000", "--encoded-env=" + fmt.Sprintf("%q", raw)})
 	if err != nil {
@@ -282,5 +287,40 @@ func TestLoadForwardedEnvSanitizesPairs(t *testing.T) {
 	_, keys := ia.forwardedEnviron()
 	if !slices.Equal(keys, []string{"SSH_AUTH_SOCK", "GOOD"}) {
 		t.Errorf("allowlist = %q, want [SSH_AUTH_SOCK GOOD]", keys)
+	}
+}
+
+// TestDirectExecRootFallbackRefused verifies that the direct-exec fallback
+// (no tailscaledPath) refuses to run a non-root local user's session when
+// tailscaled runs as root, since without the be-child incubator there is no
+// privilege drop and the session would run as root.
+func TestDirectExecRootFallbackRefused(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		euid int
+		uid  string
+		want bool
+	}{
+		{name: "root-euid-root-user", euid: 0, uid: "0", want: true},
+		{name: "root-euid-noncanonical-root-user", euid: 0, uid: "00", want: true},
+		{name: "root-euid-non-root-user", euid: 0, uid: "1000", want: false},
+		{name: "non-root-euid", euid: 1000, uid: "1000", want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lu := &userMeta{User: user.User{Username: "alice", Uid: tt.uid, Gid: tt.uid}}
+			if got := directExecAllowed(tt.euid, lu); got != tt.want {
+				t.Errorf("directExecAllowed(euid=%d, uid=%s) = %v; want %v", tt.euid, tt.uid, got, tt.want)
+			}
+		})
+	}
+
+	// Wiring: as root, the direct-exec fallback must refuse the session
+	// for the non-root local user (newTestSession's alice is uid 1000).
+	if os.Geteuid() == 0 {
+		ss := newTestSession(t, nil, nil)
+		ss.conn.srv.tailscaledPath = ""
+		if _, _, err := ss.newIncubatorCommand(logger.Discard); err == nil {
+			t.Error("newIncubatorCommand (direct exec, root euid, non-root local user) = nil error; want refusal")
+		}
 	}
 }

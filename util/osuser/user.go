@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"tailscale.com/version/distro"
@@ -55,6 +56,10 @@ type lookupStd func(string) (*user.User, error)
 
 var execGetent = func(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "getent", args...).Output()
+}
+
+var execId = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "id", args...).CombinedOutput()
 }
 
 var getentDoubleDashSupported = sync.OnceValue(probeGetentDoubleDashSupport)
@@ -217,7 +222,21 @@ func probeGetentDoubleDashSupport() bool {
 
 func parseGetentUser(out []byte) (*user.User, string, error) {
 	// output is "alice:x:1001:1001:Alice Smith,,,:/home/alice:/bin/bash"
-	f := strings.SplitN(strings.TrimSpace(string(out)), ":", 10)
+	//
+	// A single getent record is one line; embedded newlines mean getent
+	// returned multiple or corrupted records. A record is exactly seven
+	// colon-separated fields — the passwd format has no escaping (gecos
+	// sub-fields are comma-separated), so an eighth field means a stray
+	// colon shifted every later field: home would parse as a gecos
+	// fragment and shell as the real home directory.
+	s := strings.TrimSpace(string(out))
+	if strings.ContainsRune(s, '\n') {
+		return nil, "", errors.New("getent passwd output is not a single line")
+	}
+	f := strings.SplitN(s, ":", 10)
+	if len(f) > 7 {
+		return nil, "", fmt.Errorf("getent passwd output has %d fields, want 7", len(f))
+	}
 	for len(f) < 7 {
 		f = append(f, "")
 	}
@@ -227,6 +246,15 @@ func parseGetentUser(out []byte) (*user.User, string, error) {
 			return nil, "", fmt.Errorf("missing mandatory field %q", v)
 		}
 	}
+	// The username and shell are used to look up and run a session; reject
+	// corrupted values (control characters, invalid UTF-8, leading dashes)
+	// with the same rules as getent input (see checkGetentInput).
+	if !checkParsedGetentField(f[0]) {
+		return nil, "", fmt.Errorf("invalid username field %q", f[0])
+	}
+	if !checkParsedGetentField(f[6]) {
+		return nil, "", fmt.Errorf("invalid shell field %q", f[6])
+	}
 	return &user.User{
 		Username: f[0],
 		Uid:      f[2],
@@ -234,4 +262,20 @@ func parseGetentUser(out []byte) (*user.User, string, error) {
 		Name:     f[4],
 		HomeDir:  f[5],
 	}, f[6], nil
+}
+
+// checkParsedGetentField reports whether a parsed getent passwd field (the
+// username or shell) is safe to use: no leading dash and no control or
+// invalid-UTF-8 characters. It doesn't require the field to be non-empty;
+// mandatory fields are checked by the caller.
+func checkParsedGetentField(s string) bool {
+	if strings.HasPrefix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return false
+		}
+	}
+	return true
 }

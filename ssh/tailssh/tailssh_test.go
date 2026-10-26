@@ -12,6 +12,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -658,19 +659,17 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
 	}
-	var recording []byte
-	done := make(chan struct{})
+	recordings := make(chan []byte, 2)
 	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
-		defer close(done)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
 
-		var err error
-		recording, err = io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
+		recordings <- b
 	})
 
 	s := &server{
@@ -695,7 +694,6 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	defer s.Shutdown()
 
 	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
-	sc, dc := memnet.NewTCPConn(src, dst, 1024)
 
 	const sshUser = "alice"
 	cfg := &testssh.ClientConfig{
@@ -704,53 +702,317 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
-		if err != nil {
-			t.Errorf("client: %v", err)
-			return
+	runSession := func(command string) {
+		sc, dc := memnet.NewTCPConn(src, dst, 1024)
+		wg.Go(func() {
+			c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			client := testssh.NewClient(c, chans, reqs)
+			defer client.Close()
+			session, err := client.NewSession()
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			defer session.Close()
+			t.Logf("client established session")
+			// A non-zero exit (e.g. the shell rejecting an unbalanced
+			// quote below) is fine here; we only care about the recording.
+			if _, err := session.CombinedOutput(command); err != nil {
+				t.Logf("client: %v", err)
+			}
+		})
+		if err := s.HandleSSHConn(dc); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
-		client := testssh.NewClient(c, chans, reqs)
-		defer client.Close()
-		session, err := client.NewSession()
-		if err != nil {
-			t.Errorf("client: %v", err)
-			return
-		}
-		defer session.Close()
-		t.Logf("client established session")
-		_, err = session.CombinedOutput("sh -c 'echo Ran echo!; echo to-stderr >&2'")
-		if err != nil {
-			t.Errorf("client: %v", err)
-		}
-	})
-	if err := s.HandleSSHConn(dc); err != nil {
-		t.Errorf("unexpected error: %v", err)
+		wg.Wait()
 	}
-	wg.Wait()
 
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for recording")
+	// The first command records normally; the second has an unbalanced
+	// single quote, which the shell lexer drops when reconstructing the
+	// command. The CastHeader must record the raw client-provided command
+	// either way, since that's exactly what the user's shell runs.
+	runSession("sh -c 'echo Ran echo!; echo to-stderr >&2'")
+	runSession("sh -c 'echo unclosed-quote")
+
+	var firstRecording string
+	for i := range 2 {
+		select {
+		case recording := <-recordings:
+			ch, recordedOutput := parseRecording(t, recording)
+			if ch.SSHUser != sshUser {
+				t.Errorf("SSHUser = %q; want %q", ch.SSHUser, sshUser)
+			}
+			wantCommand := ""
+			if i == 0 {
+				wantCommand = "sh -c 'echo Ran echo!; echo to-stderr >&2'"
+				firstRecording = recordedOutput
+			} else {
+				wantCommand = "sh -c 'echo unclosed-quote"
+			}
+			if ch.Command != wantCommand {
+				t.Errorf("Command = %q; want %q", ch.Command, wantCommand)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for recording")
+		}
 	}
-	ch, recordedOutput := parseRecording(t, recording)
-	if ch.SSHUser != sshUser {
-		t.Errorf("SSHUser = %q; want %q", ch.SSHUser, sshUser)
-	}
-	const wantCommand = "sh -c echo Ran echo!; echo to-stderr >&2"
-	if ch.Command != wantCommand {
-		t.Errorf("Command = %q; want %q", ch.Command, wantCommand)
-	}
+
 	// Both stdout and stderr must be captured in the recording. On non-PTY
 	// sessions stderr is a separate stream; it must still flow through the
 	// recording writer (recorded under the "o" output direction).
-	if !strings.Contains(recordedOutput, "Ran echo!") {
-		t.Errorf("recording missing stdout output %q; got %q", "Ran echo!", recordedOutput)
+	if !strings.Contains(firstRecording, "Ran echo!") {
+		t.Errorf("recording missing stdout output %q; got %q", "Ran echo!", firstRecording)
 	}
-	if !strings.Contains(recordedOutput, "to-stderr") {
-		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", recordedOutput)
+	if !strings.Contains(firstRecording, "to-stderr") {
+		t.Errorf("recording missing stderr output %q; got %q", "to-stderr", firstRecording)
 	}
+}
+
+// TestSSHSFTPRecording pins that sftp-subsystem sessions are subject to
+// the recording policy. With recorders configured, an sftp session
+// uploads a metadata-only cast (CastHeader identifying the peer, local
+// user, and connection, with Command "sftp"; no I/O events — the SFTP
+// wire protocol is binary). With an unreachable recorder and
+// RejectSessionWithMessage, the session is refused (exit 254) instead
+// of running silently unrecorded. With no recorders configured, sftp
+// sessions are unchanged (no recording setup, no rejection).
+func TestSSHSFTPRecording(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("skipping on %q; only runs on linux and darwin", runtime.GOOS)
+	}
+
+	recordings := make(chan []byte, 2)
+	recordingServer := mockRecordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		recordings <- b
+	})
+	recorderAddr := must.Get(netip.ParseAddrPort(recordingServer.Listener.Addr().String()))
+
+	// An unreachable recorder: a port with nothing listening on it.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadRecorder := must.Get(netip.ParseAddrPort(deadLn.Addr().String()))
+	deadLn.Close()
+
+	newServer := func(recorders []netip.AddrPort) *server {
+		s := &server{
+			logf: tstest.WhileTestRunningLogger(t),
+			lb: &localState{
+				sshEnabled: true,
+				varRoot:    t.TempDir(),
+				matchingRule: newSSHRule(&tailcfg.SSHAction{
+					Accept:    true,
+					Recorders: recorders,
+					OnRecordingFailure: &tailcfg.SSHRecorderFailureAction{
+						RejectSessionWithMessage:    "session rejected",
+						TerminateSessionWithMessage: "session terminated",
+					},
+				}),
+			},
+		}
+		t.Cleanup(s.Shutdown)
+		return s
+	}
+
+	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
+	const sshUser = "alice"
+	cfg := &testssh.ClientConfig{
+		User:            sshUser,
+		HostKeyCallback: testssh.InsecureIgnoreHostKey(),
+	}
+
+	// runSFTP opens an sftp-subsystem session and returns the exit status
+	// the server sent and the channel output. With no tailscaled on PATH the
+	// sftp child can't be launched, so a session that gets past the
+	// recording gate exits 1 with no user-visible output; a session refused
+	// by the recording policy exits 254 with the policy's message.
+	runSFTP := func(s *server) (int, string) {
+		t.Helper()
+		sc, dc := memnet.NewTCPConn(src, dst, 1024)
+		if err := sc.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			status int
+			out    string
+		}
+		resCh := make(chan result, 1)
+		go func() {
+			c, chans, reqs, err := testssh.NewClientConn(sc, sc.RemoteAddr().String(), cfg)
+			if err != nil {
+				t.Errorf("client: %v", err)
+				return
+			}
+			client := testssh.NewClient(c, chans, reqs)
+			defer client.Close()
+			status, out := sftpSubsystemSession(t, client)
+			resCh <- result{status, out}
+		}()
+		if err := s.HandleSSHConn(dc); err != nil {
+			t.Errorf("HandleSSHConn: %v", err)
+		}
+		select {
+		case res := <-resCh:
+			return res.status, res.out
+		case <-time.After(60 * time.Second):
+			t.Fatal("sftp session did not finish")
+			return -1, ""
+		}
+	}
+
+	t.Run("metadata-only", func(t *testing.T) {
+		s := newServer([]netip.AddrPort{recorderAddr})
+		status, out := runSFTP(s)
+		if status != 1 {
+			t.Errorf("exit status = %d; want 1 (sftp child launch failure, not recording rejection). output %q", status, out)
+		}
+		if strings.Contains(out, "session rejected") {
+			t.Errorf("sftp session was refused by the recording policy; want it to proceed to the (unavailable) sftp child: %q", out)
+		}
+
+		select {
+		case b := <-recordings:
+			ch, recordedOutput := parseRecording(t, b)
+			if ch.Command != "sftp" {
+				t.Errorf("CastHeader.Command = %q; want %q", ch.Command, "sftp")
+			}
+			if ch.SSHUser != sshUser {
+				t.Errorf("CastHeader.SSHUser = %q; want %q", ch.SSHUser, sshUser)
+			}
+			if recordedOutput != "" {
+				t.Errorf("metadata-only sftp recording contains output events %q; want none", recordedOutput)
+			}
+			if rest := restOfRecording(t, b); rest != "" {
+				t.Errorf("sftp recording has cast lines after the header; want none: %q", rest)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for sftp recording upload")
+		}
+	})
+
+	t.Run("recorder-unreachable-rejects", func(t *testing.T) {
+		s := newServer([]netip.AddrPort{deadRecorder})
+		status, out := runSFTP(s)
+		if status != 254 {
+			t.Errorf("exit status = %d; want 254 (recording-required session denied). output %q", status, out)
+		}
+		if !strings.HasSuffix(out, "session rejected\r\n") {
+			t.Errorf("client output = %q; want it to end with %q", out, "session rejected\r\n")
+		}
+	})
+
+	t.Run("no-recorders-unchanged", func(t *testing.T) {
+		s := newServer(nil)
+		status, out := runSFTP(s)
+		if status != 1 {
+			t.Errorf("exit status = %d; want 1 (sftp child launch failure, no recording involvement). output %q", status, out)
+		}
+		if strings.Contains(out, "session rejected") || strings.Contains(out, "recording") {
+			t.Errorf("no-recorder sftp session touched the recording path: %q", out)
+		}
+	})
+}
+
+// sftpSubsystemSession opens a session channel on the client, requests
+// the sftp subsystem, captures all channel output, and waits for the
+// server's exit-status (or channel close). The testssh fork's Session
+// helpers only cover exec/shell sessions; subsystem sessions need their
+// own minimal request loop. The returned status is -1 if the channel
+// closed without sending one.
+func sftpSubsystemSession(t *testing.T, client *testssh.Client) (status int, out string) {
+	t.Helper()
+	ch, in, err := client.OpenChannel("session", nil)
+	if err != nil {
+		t.Errorf("open session channel: %v", err)
+		return -1, ""
+	}
+	defer ch.Close()
+
+	var mu sync.Mutex
+	var buf strings.Builder
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch)
+	}()
+	// Refusal messages (e.g. "tailscale: access revoked") are written
+	// to the channel's stderr stream. Capture extended data too. The
+	// stderr copier gets its own done channel. The wait loop below
+	// lets it drain before the deferred channel Close runs.
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		io.Copy(&lockedWriter{mu: &mu, w: &buf}, ch.Stderr())
+	}()
+
+	ok, err := ch.SendRequest("subsystem", true, testssh.Marshal(&struct{ Subsystem string }{Subsystem: "sftp"}))
+	if err != nil || !ok {
+		t.Errorf("sftp subsystem request: ok=%v, err=%v", ok, err)
+		return -1, ""
+	}
+
+	statusCh := make(chan int, 1)
+	go func() {
+		st := -1
+		for r := range in {
+			if r.Type == "exit-status" && len(r.Payload) >= 4 {
+				st = int(binary.BigEndian.Uint32(r.Payload))
+				break
+			}
+		}
+		statusCh <- st
+	}()
+	select {
+	case status = <-statusCh:
+	case <-time.After(60 * time.Second):
+		t.Errorf("sftp session did not exit")
+		return -1, ""
+	}
+	// Let both copiers drain whatever the server wrote before the
+	// exit-status request before the deferred channel Close cuts it off.
+	for _, done := range []chan struct{}{copyDone, stderrDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return status, buf.String()
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *strings.Builder
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+// restOfRecording returns everything after the (first line of the)
+// recording's cast header, i.e. any recorded I/O events.
+func restOfRecording(t *testing.T, recording []byte) string {
+	t.Helper()
+	i := bytes.IndexByte(recording, '\n')
+	if i == -1 {
+		return ""
+	}
+	return strings.TrimSpace(string(recording[i+1:]))
 }
 
 // parseRecording parses a session recording, returning its CastHeader and the
@@ -807,6 +1069,13 @@ func TestSSHAuthFlow(t *testing.T) {
 		Message: "autogroup:nonroot",
 	})
 	autogroupNonrootRule.SSHUsers = map[string]string{"*": "="}
+	// Maps the requested user to a local user that does not exist, so the
+	// post-accept local-user lookup fails; pins that the client-visible
+	// banner is the fixed lookup-failure message, never the error cause.
+	lookupFailRule := newSSHRule(&tailcfg.SSHAction{
+		Accept: true,
+	})
+	lookupFailRule.SSHUsers = map[string]string{"alice": "no-such-local-user-tailssh-test"}
 
 	tests := []struct {
 		name         string
@@ -900,6 +1169,34 @@ func TestSSHAuthFlow(t *testing.T) {
 			},
 			authErr:     true,
 			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "+0"` + "\n"},
+		},
+		{
+			// The "=" mapping forces a local lookup of a user that does not
+			// exist; the banner must be the same policy-rejection shape as
+			// the other user-mismatch cases, never a lookup-failure variant.
+			name:    "user-mismatch-no-such-local-user",
+			sshUser: "no-such-local-user-tailssh-test",
+			state: &localState{
+				sshEnabled:   true,
+				varRoot:      varRoot,
+				matchingRule: autogroupNonrootRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: tailnet policy does not permit you to SSH as user "no-such-local-user-tailssh-test"` + "\n"},
+		},
+		{
+			// Accepted by policy, but the mapped local user does not exist:
+			// the client sees one fixed message regardless of why the
+			// lookup failed (the cause goes to the server log only).
+			name:    "accept-local-user-lookup-fails",
+			sshUser: "alice",
+			state: &localState{
+				sshEnabled:   true,
+				varRoot:      varRoot,
+				matchingRule: lookupFailRule,
+			},
+			authErr:     true,
+			wantBanners: []string{`tailscale: failed to look up local user "no-such-local-user-tailssh-test" ` + "\n"},
 		},
 		{
 			name: "accept",
@@ -1231,6 +1528,23 @@ func TestAcceptEnvPair(t *testing.T) {
 		{"LC_FOO=x", true},
 		{"LD_PRELOAD=naah", false},
 		{"TERM=screen-256color", true},
+		{"TERM=xterm-256color", true},
+		// TERM is a capability name, not a path.
+		{"TERM=a/b", false},
+		// Locale names reach root su/login environments where glibc treats
+		// path-like values as locale-data paths and leading dashes as its
+		// own options.
+		{"LANG=en_US.UTF-8", true},
+		{"LANG=../..", false},
+		{"LANG=../../x", false},
+		{"LANG=/x", false},
+		{"LANG=-x", false},
+		{"LC_FOO=-x", false},
+		{"LC_FOO=en_US", true},
+		{"LC_FOO=a/b", false},
+		// NUL would truncate on exec.
+		{"TERM=x\x00y", false},
+		{"LANG=x\x00y", false},
 	}
 	for _, tt := range tests {
 		if got := acceptEnvPair(tt.in); got != tt.want {
@@ -1396,4 +1710,29 @@ func mockRecordingServer(t *testing.T, handleRecord http.HandlerFunc) *httptest.
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestIsRootUser(t *testing.T) {
+	tests := []struct {
+		uid, username string
+		want          bool
+	}{
+		{uid: "0", username: "root", want: true},
+		{uid: "0", username: "alice", want: true},
+		// A non-canonical numeric uid 0 is also root.
+		{uid: "00", username: "alice", want: true},
+		{uid: "00000000", username: "alice", want: true},
+		{uid: "1000", username: "root", want: true},
+		{uid: "1000", username: "alice", want: false},
+		{uid: "1", username: "daemon", want: false},
+		// Non-numeric uids keep the string behavior.
+		{uid: "notanumber", username: "root", want: true},
+		{uid: "notanumber", username: "alice", want: false},
+	}
+	for _, tt := range tests {
+		got := isRootUser(&userMeta{User: user.User{Uid: tt.uid, Username: tt.username}})
+		if got != tt.want {
+			t.Errorf("isRootUser(uid=%q, username=%q) = %v; want %v", tt.uid, tt.username, got, tt.want)
+		}
+	}
 }
