@@ -31,8 +31,8 @@ func TestMonitorExecCancellationAfterDispatch(t *testing.T) {
 		<-mc.done
 	})
 	c := &conn{srv: &server{logf: t.Logf}}
-	c.fwd.mon = mc
-	mc.SetExitCallback(c.fwd.exits.dispatchExit)
+	c.monitor.mon = mc
+	mc.SetExitCallback(c.monitor.exits.dispatchExit)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ss := &sshSession{conn: c, ctx: ctx, logf: t.Logf}

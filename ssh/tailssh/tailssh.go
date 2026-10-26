@@ -206,9 +206,8 @@ func (srv *server) HandleSSHConn(nc net.Conn) error {
 	defer srv.unregisterConn(c)
 	defer c.preAuthCancel()
 	defer c.stopConnTimers()
-	// The connection is done when HandleConn returns. Tear down the
-	// forwarding monitor, a no-op if none was spawned.
-	defer c.closeFwdMonitor()
+	// Close the process monitor when the SSH connection ends.
+	defer c.closeConnMonitor()
 	c.HandleConn(nc)
 
 	// Return nil to signal to netstack's interception that it doesn't need to
@@ -345,11 +344,9 @@ type conn struct {
 	// rechecks from arming ruleTimer after connection cleanup.
 	teardownDone bool
 
-	// fwd is the connection's forwarding state. On unix it holds the
-	// lazily-spawned per-connection ssh-monitor that dials and binds
-	// forwarded sockets with the local user's credentials. On plan9 it is
-	// empty.
-	fwd fwdState
+	// monitor owns the process monitor for sessions and forwarding.
+	// It is empty on Plan 9.
+	monitor connMonitorState
 }
 
 func (c *conn) logf(format string, args ...any) {

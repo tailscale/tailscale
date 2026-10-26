@@ -589,7 +589,7 @@ func newDirectSessionServer(t *testing.T, handler func(c *conn, s gliderssh.Sess
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(sc.closeFwdMonitor)
+	t.Cleanup(sc.closeConnMonitor)
 	sc.insecureSkipTailscaleAuth = true
 	sc.localUser = um
 	sc.mappedLocalUser = um.Username

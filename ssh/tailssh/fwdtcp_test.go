@@ -273,7 +273,7 @@ func TestFwdTCPPortRange(t *testing.T) {
 			if !ch.rejected || ch.reason != wantReason || policyCalled != valid {
 				t.Fatalf("rejected=%v reason=%v policyCalled=%v; want reason=%v policyCalled=%v", ch.rejected, ch.reason, policyCalled, wantReason, valid)
 			}
-			if c.fwdMonitorIfAny() != nil {
+			if c.connMonitorIfAny() != nil {
 				t.Fatal("rejected request spawned a monitor")
 			}
 		})
