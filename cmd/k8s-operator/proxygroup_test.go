@@ -2356,7 +2356,7 @@ func expectProxyGroupResources(t *testing.T, fc client.WithWatch, pg *tsapi.Prox
 	}
 	statefulSet.Annotations = defaultProxyClassAnnotations
 	if pg.Spec.Type != tsapi.ProxyGroupTypeKubernetesAPIServer {
-		applyHealthzProbes(proxyClass, statefulSet)
+		applyHealthzProbes(proxyClass, statefulSet, false)
 	}
 
 	if shouldExist {
