@@ -2301,3 +2301,40 @@ func TestSetServeConfigRejectsTailscaledSocket(t *testing.T) {
 		t.Fatal("setServeConfigLocked accepted a forward to the tailscaled socket; want it refused")
 	}
 }
+
+// TestReverseProxyRechecksTailscaledSocketPerDial covers the time-of-check gap
+// in the unix-socket proxy: proxyHandlerForBackend checks the target when the
+// handler is built, but the dial happens per request, so a path that was
+// benign at config time and later becomes a symlink to the tailscaled socket
+// must still be refused at dial time.
+func TestReverseProxyRechecksTailscaledSocketPerDial(t *testing.T) {
+	b := newTestBackend(t)
+	sock := mkTempSocket(t)
+	b.sys.SocketPath = sock
+	benign := mkTempSocket(t)
+
+	// Benign at config time, so the handler is built.
+	h, err := b.proxyHandlerForBackend("unix:" + benign)
+	if err != nil {
+		t.Fatalf("proxyHandlerForBackend(benign) = %v; want handler", err)
+	}
+	rp, ok := h.(*reverseProxy)
+	if !ok {
+		t.Fatalf("handler is %T; want *reverseProxy", h)
+	}
+	if _, err := rp.lb.dialServeUnixSocket(t.Context(), rp.socketPath); errors.Is(err, ErrProxyToTailscaledSocket) {
+		t.Fatalf("dial to the benign path was refused as the tailscaled socket")
+	}
+
+	// The path is swapped for a symlink to the tailscaled socket after the
+	// handler exists; the next dial must catch it.
+	if err := os.Remove(benign); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sock, benign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rp.lb.dialServeUnixSocket(t.Context(), rp.socketPath); !errors.Is(err, ErrProxyToTailscaledSocket) {
+		t.Fatalf("dial after the symlink swap = %v; want ErrProxyToTailscaledSocket", err)
+	}
+}
