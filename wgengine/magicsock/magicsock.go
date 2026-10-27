@@ -3814,7 +3814,7 @@ var canShareUDPPort = sockopts.CanShareUDPPort && runtime.GOOS != "android"
 //
 // Incomplete group is returned without error.
 // The network must be "udp4" or "udp6".
-func (c *Conn) listenGroup(network string, port uint16) ([]nettype.PacketConn, uint16, error) {
+func (c *Conn) listenGroup(network string, port uint16) (_ []nettype.PacketConn, boundPort uint16, _ error) {
 	ctx := context.Background() // unused without DNS name to resolve
 	if network == "udp4" {
 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4, c.logf)
