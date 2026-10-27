@@ -20,6 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 	"tailscale.com/envknob"
@@ -962,6 +963,31 @@ func TestTCPForwardLimits_PerClient(t *testing.T) {
 	// client metric
 	if v := metricPerClientForwardLimit.Value(); v != 1 {
 		t.Errorf("got clientmetric limit metric=%d, want 1", v)
+	}
+}
+
+// TestEnableRACKKnob verifies that RACK remains enabled by default and that
+// TS_NETSTACK_ENABLE_RACK must be explicitly false to disable it.
+func TestEnableRACKKnob(t *testing.T) {
+	for _, tt := range []struct {
+		env  string
+		want tcpip.TCPRecovery
+	}{
+		{"", tcpip.TCPRACKLossDetection},
+		{"false", 0},
+		{"true", tcpip.TCPRACKLossDetection},
+	} {
+		t.Run("TS_NETSTACK_ENABLE_RACK="+tt.env, func(t *testing.T) {
+			envknob.SetenvForTest(t, "TS_NETSTACK_ENABLE_RACK", tt.env)
+			ns := makeNetstack(t, nil)
+			var got tcpip.TCPRecovery
+			if err := ns.ipstack.TransportProtocolOption(tcp.ProtocolNumber, &got); err != nil {
+				t.Fatalf("TransportProtocolOption: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("TCP loss recovery = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
