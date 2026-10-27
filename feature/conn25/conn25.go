@@ -570,6 +570,7 @@ const (
 	unknownAppNameMessage         = "The App name in the request does not match a configured App"
 	missingAppPermissionMessage   = "You do not have permission to use this App"
 	transitIPNotInPoolMessage     = "The transit address is not in a configured transit IP pool"
+	disallowedDestinationMessage  = "Destination address is in a disallowed address range"
 )
 
 // handleConnectorTransitIPRequest creates a ConnectorTransitIPResponse in response
@@ -706,6 +707,11 @@ const (
 	// which sees this has most likely allocated from a pool configuration that
 	// the connector has not received yet, or has already replaced.
 	TransitIPNotInPool = 7
+
+	// DisallowedDestination indicates that the destination IP address is not
+	// allowed (including but not limited to loopback, Tailscale, and link-local
+	// addresses).
+	DisallowedDestination = 8
 )
 
 // TransitIPResponse is the response to a TransitIPRequest

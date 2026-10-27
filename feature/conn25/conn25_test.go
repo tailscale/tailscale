@@ -6,6 +6,7 @@ package conn25
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -59,47 +60,78 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 	const appName = "TestApp"
 	const invalidAppName = "InvalidApp"
 
-	// Peer IPs
-	pipV4_1 := netip.MustParseAddr("100.101.101.101")
-	pipV4_2 := netip.MustParseAddr("100.101.101.102")
+	type v4OrV6 int
+	const (
+		v4 v4OrV6 = 1
+		v6 v4OrV6 = 2
+	)
 
-	pipV6_1 := netip.MustParseAddr("fd7a:115c:a1e0::101")
-	pipV6_3 := netip.MustParseAddr("fd7a:115c:a1e0::103")
+	ipGenerator := func(name string, first4, first6 netip.Addr) func(ver v4OrV6, idx int) netip.Addr {
+		if !first4.Is4() {
+			panic("first4 is not ipv4")
+		}
+		if !first6.Is6() {
+			panic("first6 is not ipv6")
+		}
+
+		// We don't want to deal with carries
+		maxAddrs := math.MaxUint8 - int(max(first4.As4()[3], first6.As16()[15]))
+
+		return func(ver v4OrV6, idx int) netip.Addr {
+			if idx < 0 || idx > maxAddrs {
+				panic(fmt.Sprintf("%s out of range", name))
+			}
+
+			switch ver {
+			case v4:
+				addr := first4.As4()
+				addr[3] += byte(idx)
+				return netip.AddrFrom4(addr)
+			case v6:
+				addr := first6.As16()
+				addr[15] += byte(idx)
+				return netip.AddrFrom16(addr)
+			}
+			panic("unknown address type")
+		}
+	}
+
+	// Peer IPs:
+	// v4 100.101.101.100 - 100.101.101.255
+	// v6 fd7a:115c:a1e0::0100 - fd7a:115c:a1e0::01ff
+	pip := ipGenerator("pip", netip.MustParseAddr("100.101.101.100"), netip.MustParseAddr("fd7a:115c:a1e0::0100"))
 
 	// Transit IPs, from the pools configured on the connector below.
-	tipV4_1 := netip.MustParseAddr("169.254.0.1")
-	tipV4_2 := netip.MustParseAddr("169.254.0.2")
-
-	tipV6_1 := netip.MustParseAddr("FE80::1")
+	// v4 169.254.0.0 - 169.254.0.255
+	// v6 fe80:: - fe80::ff
+	tip := ipGenerator("tip", netip.MustParseAddr("169.254.0.0"), netip.MustParseAddr("fe80::"))
 
 	// Transit IPs from outside of the configured pools.
 	tipV4Outside := netip.MustParseAddr("192.0.2.1")
 	tipV6Outside := netip.MustParseAddr("2001:db8::1")
 
-	// tipV4_1 written in its IPv4-in-IPv6 form; the same address as tipV4_1.
+	// tip(v4, 1) written in its IPv4-in-IPv6 form; the same address as tip(v4, 1).
 	tipV4_1In6 := netip.MustParseAddr("::ffff:169.254.0.1")
 
 	// Destination IPs
-	dipV4_1 := netip.MustParseAddr("10.0.0.1")
-	dipV4_2 := netip.MustParseAddr("10.0.0.2")
-	dipV4_3 := netip.MustParseAddr("10.0.0.3")
-
-	dipV6_1 := netip.MustParseAddr("fc00::1")
+	// v4 10.0.0.0 - 10.0.0.255
+	// v6 fc00:: - fc00::ff
+	dip := ipGenerator("dip", netip.MustParseAddr("10.0.0.0"), netip.MustParseAddr("fc00::"))
 
 	// Peer nodes
 	peerV4V6 := (&tailcfg.Node{
 		ID:        tailcfg.NodeID(1),
-		Addresses: []netip.Prefix{netip.PrefixFrom(pipV4_1, 32), netip.PrefixFrom(pipV6_1, 128)},
+		Addresses: []netip.Prefix{netip.PrefixFrom(pip(v4, 1), 32), netip.PrefixFrom(pip(v6, 1), 128)},
 	}).View()
 
 	peerV4Only := (&tailcfg.Node{
 		ID:        tailcfg.NodeID(2),
-		Addresses: []netip.Prefix{netip.PrefixFrom(pipV4_2, 32)},
+		Addresses: []netip.Prefix{netip.PrefixFrom(pip(v4, 2), 32)},
 	}).View()
 
 	peerV6Only := (&tailcfg.Node{
 		ID:        tailcfg.NodeID(3),
-		Addresses: []netip.Prefix{netip.PrefixFrom(pipV6_3, 128)},
+		Addresses: []netip.Prefix{netip.PrefixFrom(pip(v6, 3), 128)},
 	}).View()
 
 	tests := []struct {
@@ -122,13 +154,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-one-req-ipv4",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}},
 			},
 		},
 		// Single peer, single request with success ipV6
@@ -136,13 +168,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-one-req-ipv6",
 			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v6, 1), DestinationIP: dip(v6, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV6_3, tipV6_1, dipV6_1}},
+				{{pip(v6, 3), tip(v6, 1), dip(v6, 1)}},
 			},
 		},
 		// Single peer, multi request with success, ipV4
@@ -150,16 +182,16 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-multi-req-ipv4",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only, peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 2), DestinationIP: dip(v4, 2), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}},
-				{{pipV4_2, tipV4_2, dipV4_2}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}},
+				{{pip(v4, 2), tip(v4, 2), dip(v4, 2)}},
 			},
 		},
 		// Single peer, multi request remap tip, ipV4
@@ -167,16 +199,16 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-remap-tip",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only, peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 2), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}},
-				{{pipV4_2, tipV4_1, dipV4_2}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 2)}},
 			},
 		},
 		// Single peer, multi request with success, ipV4 and ipV6
@@ -184,16 +216,16 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-multi-req-ipv4-ipv6",
 			ctipReqPeers: []tailcfg.NodeView{peerV4V6, peerV4V6},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v6, 1), DestinationIP: dip(v6, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_1, tipV4_1, dipV4_1}},
-				{{pipV4_1, tipV4_1, dipV4_1}, {pipV6_1, tipV6_1, dipV6_1}, {pipV4_1, tipV6_1, netip.Addr{}}},
+				{{pip(v4, 1), tip(v4, 1), dip(v4, 1)}},
+				{{pip(v4, 1), tip(v4, 1), dip(v4, 1)}, {pip(v6, 1), tip(v6, 1), dip(v6, 1)}, {pip(v4, 1), tip(v6, 1), netip.Addr{}}},
 			},
 		},
 		// Single peer, multi map with success, ipV4
@@ -202,15 +234,15 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
-					{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: dip(v4, 2), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_2}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}, {pip(v4, 2), tip(v4, 2), dip(v4, 2)}},
 			},
 		},
 		// Single peer, error reuse same tip in one request, ensure all non-dup requests are processed
@@ -219,9 +251,9 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
-					{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName},
-					{TransitIP: tipV4_2, DestinationIP: dipV4_3, App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 2), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: dip(v4, 3), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
@@ -234,7 +266,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_3}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}, {pip(v4, 2), tip(v4, 2), dip(v4, 3)}},
 			},
 		},
 		// Multi peer, success reuse same tip in one request
@@ -242,16 +274,16 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "multi-peer-duplicate-tip",
 			ctipReqPeers: []tailcfg.NodeView{peerV4V6, peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_2, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 2), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_1, tipV4_1, dipV4_1}},
-				{{pipV4_1, tipV4_1, dipV4_1}, {pipV4_2, tipV4_1, dipV4_2}},
+				{{pip(v4, 1), tip(v4, 1), dip(v4, 1)}},
+				{{pip(v4, 1), tip(v4, 1), dip(v4, 1)}, {pip(v4, 2), tip(v4, 1), dip(v4, 2)}},
 			},
 		},
 		// Single peer, multi map, multiple tip to same dip
@@ -260,15 +292,15 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
-					{TransitIP: tipV4_2, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: dip(v4, 1), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}, {Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_2, dipV4_1}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}, {pip(v4, 2), tip(v4, 2), dip(v4, 1)}},
 			},
 		},
 		// Single peer, ipv4 tip, no ipv4 pip, but ipv6 tip works
@@ -277,8 +309,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
-					{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName},
+					{TransitIP: tip(v6, 1), DestinationIP: dip(v6, 1), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
@@ -288,7 +320,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV6_3, tipV4_1, netip.Addr{}}, {pipV6_3, tipV6_1, dipV6_1}},
+				{{pip(v6, 3), tip(v4, 1), netip.Addr{}}, {pip(v6, 3), tip(v6, 1), dip(v6, 1)}},
 			},
 		},
 		// Single peer, ipv6 tip, no ipv6 pip, but ipv4 tip works
@@ -297,8 +329,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV6_1, DestinationIP: dipV6_1, App: appName},
-					{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName},
+					{TransitIP: tip(v6, 1), DestinationIP: dip(v6, 1), App: appName},
+					{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
@@ -308,7 +340,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV6_1, netip.Addr{}}, {pipV4_2, tipV4_1, dipV4_1}},
+				{{pip(v4, 2), tip(v6, 1), netip.Addr{}}, {pip(v4, 2), tip(v4, 1), dip(v4, 1)}},
 			},
 		},
 		// Single peer, mismatched transit and destination ips
@@ -316,13 +348,47 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-mismatched-tip-dip",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV6_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v6, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, netip.Addr{}}},
+				{{pip(v4, 2), tip(v4, 1), netip.Addr{}}},
+			},
+		},
+		// Single peer, host-scoped destinations
+		{
+			name:         "one-peer-host-scoped-dip",
+			ctipReqPeers: []tailcfg.NodeView{peerV4V6},
+			ctipReqs: []ConnectorTransitIPRequest{
+				{TransitIPs: []TransitIPRequest{
+					{TransitIP: tip(v4, 1), DestinationIP: netip.MustParseAddr("127.0.0.123"), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: netip.MustParseAddr("169.254.255.255"), App: appName},
+					{TransitIP: tip(v4, 3), DestinationIP: netip.MustParseAddr("224.0.0.1"), App: appName},
+					{TransitIP: tip(v4, 4), DestinationIP: netip.IPv4Unspecified(), App: appName},
+					{TransitIP: tip(v4, 5), DestinationIP: netip.MustParseAddr("255.255.255.255"), App: appName},
+					{TransitIP: tip(v6, 1), DestinationIP: netip.MustParseAddr("::1"), App: appName},
+					{TransitIP: tip(v6, 2), DestinationIP: netip.MustParseAddr("fe80::1"), App: appName},
+					{TransitIP: tip(v6, 3), DestinationIP: netip.MustParseAddr("ff00::1"), App: appName},
+					{TransitIP: tip(v6, 4), DestinationIP: netip.IPv6Unspecified(), App: appName},
+				}},
+			},
+			wants: []ConnectorTransitIPResponse{
+				{TransitIPs: slices.Repeat([]TransitIPResponse{{Code: DisallowedDestination, Message: disallowedDestinationMessage}}, 9)},
+			},
+			wantLookups: [][][]netip.Addr{
+				{
+					{pip(v4, 1), tip(v4, 1), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 2), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 3), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 4), netip.Addr{}},
+					{pip(v4, 1), tip(v4, 5), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 1), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 2), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 3), netip.Addr{}},
+					{pip(v6, 1), tip(v6, 4), netip.Addr{}},
+				},
 			},
 		},
 		// Single peer, invalid app name
@@ -330,13 +396,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-invalid-app",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: invalidAppName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, netip.Addr{}}},
+				{{pip(v4, 2), tip(v4, 1), netip.Addr{}}},
 			},
 		},
 		// Missing PeerCap
@@ -344,21 +410,21 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "missing-peercap",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: appName}}},
 			},
 			missingPeerCap: true,
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: MissingAppPermission, Message: missingAppPermissionMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, netip.Addr{}}},
+				{{pip(v4, 2), tip(v4, 1), netip.Addr{}}},
 			},
 		},
 		{
 			name:         "invalid-app-with-peercap",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: invalidAppName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: UnknownAppName, Message: unknownAppNameMessage}}},
@@ -371,7 +437,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "invalid-app-without-peercap",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1, DestinationIP: dipV4_1, App: invalidAppName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tip(v4, 1), DestinationIP: dip(v4, 1), App: invalidAppName}}},
 			},
 			missingPeerCap: true,
 			wants: []ConnectorTransitIPResponse{
@@ -386,13 +452,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-tip-not-in-pool-ipv4",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4Outside, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4Outside, DestinationIP: dip(v4, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4Outside, netip.Addr{}}},
+				{{pip(v4, 2), tipV4Outside, netip.Addr{}}},
 			},
 		},
 		// Single peer, ipv6 transit IP from outside the configured pool
@@ -400,13 +466,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-tip-not-in-pool-ipv6",
 			ctipReqPeers: []tailcfg.NodeView{peerV6Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6Outside, DestinationIP: dipV6_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV6Outside, DestinationIP: dip(v6, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: TransitIPNotInPool, Message: transitIPNotInPoolMessage}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV6_3, tipV6Outside, netip.Addr{}}},
+				{{pip(v6, 3), tipV6Outside, netip.Addr{}}},
 			},
 		},
 		// Single peer, an out of pool transit IP does not stop the other
@@ -416,8 +482,8 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
 				{TransitIPs: []TransitIPRequest{
-					{TransitIP: tipV4Outside, DestinationIP: dipV4_1, App: appName},
-					{TransitIP: tipV4_2, DestinationIP: dipV4_2, App: appName},
+					{TransitIP: tipV4Outside, DestinationIP: dip(v4, 1), App: appName},
+					{TransitIP: tip(v4, 2), DestinationIP: dip(v4, 2), App: appName},
 				}},
 			},
 			wants: []ConnectorTransitIPResponse{
@@ -427,7 +493,7 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 				}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4Outside, netip.Addr{}}, {pipV4_2, tipV4_2, dipV4_2}},
+				{{pip(v4, 2), tipV4Outside, netip.Addr{}}, {pip(v4, 2), tip(v4, 2), dip(v4, 2)}},
 			},
 		},
 		// Single peer, a transit IP in its IPv4-in-IPv6 form is canonicalized
@@ -436,13 +502,13 @@ func TestHandleConnectorTransitIPRequest(t *testing.T) {
 			name:         "one-peer-tip-4in6",
 			ctipReqPeers: []tailcfg.NodeView{peerV4Only},
 			ctipReqs: []ConnectorTransitIPRequest{
-				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1In6, DestinationIP: dipV4_1, App: appName}}},
+				{TransitIPs: []TransitIPRequest{{TransitIP: tipV4_1In6, DestinationIP: dip(v4, 1), App: appName}}},
 			},
 			wants: []ConnectorTransitIPResponse{
 				{TransitIPs: []TransitIPResponse{{Code: OK, Message: ""}}},
 			},
 			wantLookups: [][][]netip.Addr{
-				{{pipV4_2, tipV4_1, dipV4_1}, {pipV4_2, tipV4_1In6, netip.Addr{}}},
+				{{pip(v4, 2), tip(v4, 1), dip(v4, 1)}, {pip(v4, 2), tipV4_1In6, netip.Addr{}}},
 			},
 		},
 	}
