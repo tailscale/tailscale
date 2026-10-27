@@ -84,6 +84,14 @@ var ErrETagMismatch = errors.New("etag mismatch")
 // to the tailscaled socket itself, which would create a loop.
 var ErrProxyToTailscaledSocket = errors.New("cannot proxy to tailscaled socket")
 
+// errServeUnixSandboxed is returned when a serve config targets a Unix socket
+// but tailscaled runs in the macOS App Sandbox (the App Store and Standalone
+// variants), which does not permit connecting to arbitrary Unix sockets.
+var errServeUnixSandboxed = errors.New("serving a Unix socket is not supported by the macOS App Store or Standalone variants of Tailscale due to sandbox restrictions; use the open-source tailscaled distribution instead, see https://tailscale.com/kb/1065/macos-variants")
+
+// isSandboxedMacOS is [version.IsSandboxedMacOS], overridden in tests.
+var isSandboxedMacOS = version.IsSandboxedMacOS
+
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
 
 // appCapsContextKey holds the app capabilities accepted by the mount handling
@@ -355,6 +363,9 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 	if b.isConfigLocked_Locked() {
 		return errors.New("can't reconfigure tailscaled when using a config file; config file is locked")
+	}
+	if config.IsServingUnixAny() && isSandboxedMacOS() {
+		return errServeUnixSandboxed
 	}
 
 	nm := b.NetMapNoPeers()

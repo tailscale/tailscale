@@ -141,6 +141,7 @@ var serveHelpCommon = strings.TrimSpace(`
 local machine. The location to the location service can be expressed as a port number (e.g., 3000),
 a partial URL (e.g., localhost:3000), or a full URL including a path (e.g., http://localhost:3000/foo).
 On Unix-like systems, you can also specify a Unix domain socket (e.g., unix:/tmp/myservice.sock).
+Unix sockets are not supported by the macOS App Store or Standalone apps; use tailscaled instead.
 
 EXAMPLES
   - Expose an HTTP server running at 127.0.0.1:3000 in the foreground:
@@ -1004,6 +1005,12 @@ func (e *serveEnv) runServeSetConfig(ctx context.Context, args []string) (err er
 }
 
 func (e *serveEnv) setServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool, mds string, caps []peercap.Cap, proxyProtocol int) error {
+	if strings.HasPrefix(target, "unix:") && (version.IsMacAppStore() || version.IsMacSys()) {
+		// The Tailscale network extension cannot connect to arbitrary Unix
+		// sockets on macOS due to sandbox restrictions. See issue 21900.
+		return errors.New("Unix socket serving is not supported on macOS due to sandbox restrictions. To serve a Unix socket on macOS, switch to the open-source tailscaled distribution. See https://tailscale.com/kb/1065/macos-variants for more information.")
+	}
+
 	// update serve config based on the type
 	switch srvType {
 	case serveTypeHTTPS, serveTypeHTTP:
