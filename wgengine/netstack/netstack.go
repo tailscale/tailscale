@@ -139,6 +139,20 @@ var netstackKeepaliveIdle = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_IDLE
 // at the netstack default. Value is a Go duration, e.g. "15s".
 var netstackKeepaliveInterval = envknob.RegisterDuration("TS_NETSTACK_KEEPALIVE_INTERVAL")
 
+// netstackEnableRACK overrides whether netstack's TCP uses RACK-TLP loss
+// detection (RFC 8985). RACK remains enabled by default; only explicitly
+// setting TS_NETSTACK_ENABLE_RACK=false disables it. When false, TCP falls
+// back to RFC 6675 SACK loss recovery, as netstack did from 1.82 through 1.102.
+//
+// Why: until go.mod has google/gvisor#15432 and google/gvisor#16081, RACK's
+// loss marks do not reduce the SACK recovery pipe, and after an RTO, RACK
+// starts fast recovery for the same flight with a cwnd of 5. After a burst
+// loss the sender can then retransmit about two segments per RTO for seconds
+// to tens of seconds (tailscale/tailscale#21946). RACK off is in turn slower
+// on paths that reorder packets (tailscale/tailscale#20893), so unset keeps
+// gVisor's default.
+var netstackEnableRACK = envknob.RegisterOptBool("TS_NETSTACK_ENABLE_RACK")
+
 var (
 	serviceIP   = tsaddr.TailscaleServiceIP()
 	serviceIPv6 = tsaddr.TailscaleServiceIPv6()
@@ -394,6 +408,16 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	tcpipErr := ns.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &cubicOpt)
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not set cubic congestion control: %v", tcpipErr)
+	}
+	if rack, ok := netstackEnableRACK().Get(); ok {
+		recovery := tcpip.TCPRecovery(0)
+		if rack {
+			recovery = tcpip.TCPRACKLossDetection
+		}
+		tcpipErr = ns.ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &recovery)
+		if tcpipErr != nil {
+			return nil, fmt.Errorf("could not set TCP loss recovery: %v", tcpipErr)
+		}
 	}
 	err := setTCPBufSizes(ns.ipstack)
 	if err != nil {
