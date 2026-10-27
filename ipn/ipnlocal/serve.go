@@ -382,6 +382,10 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 		return err
 	}
 
+	if b.serveTargetsTailscaledSocket(config.View()) {
+		return errors.New("serving to the tailscaled socket is prohibited for security reasons")
+	}
+
 	var bs []byte
 	if config != nil {
 		j, err := json.Marshal(config)
@@ -695,10 +699,19 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 		return func(conn net.Conn) error {
 			defer conn.Close()
 			conn = b.meteredConnForService(conn, forVIPService)
+			// Never forward to tailscaled's own socket: the local API
+			// authorizes a unix-socket caller by the peer credentials of the
+			// dialing process, which here is tailscaled itself, so a forward
+			// would hand a remote peer a root-authorized local API.
+			socketPath, isUnix := strings.CutPrefix(backDst, "unix:")
+			if isUnix && b.isTailscaledSocket(socketPath) {
+				b.logf("localbackend: refusing TCP proxy on port %v (from %v) to the tailscaled socket %q", dport, srcAddr, socketPath)
+				return ErrProxyToTailscaledSocket
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			var backConn net.Conn
 			var err error
-			if socketPath, ok := strings.CutPrefix(backDst, "unix:"); ok {
+			if isUnix {
 				var d net.Dialer
 				backConn, err = d.DialContext(ctx, "unix", socketPath)
 			} else {
@@ -1753,6 +1766,47 @@ func vipServiceHash(logf logger.Logf, services []*tailcfg.VIPService) string {
 	var buf [sha256.Size]byte
 	h.Sum(buf[:0])
 	return hex.EncodeToString(buf[:])
+}
+
+// serveTargetsTailscaledSocket reports whether sc has any TCP-forward or web
+// handler that proxies to tailscaled's own socket.
+//
+// The local API authorizes a unix-socket caller by the peer credentials of the
+// dialing process, which is tailscaled itself, running as root. Proxying serve
+// to it would hand a tailnet peer a root-authorized local API, so it is
+// refused -- the same reason proxyHandlerForBackend and the TCP-forward dial
+// return ErrProxyToTailscaledSocket. Foreground and VIP-service handlers are as
+// exposed as background ones, so all are checked.
+func (b *LocalBackend) serveTargetsTailscaledSocket(sc ipn.ServeConfigView) bool {
+	if !sc.Valid() {
+		return false
+	}
+	isProhibitedSock := func(target string) bool {
+		p, ok := strings.CutPrefix(target, "unix:")
+		return ok && b.isTailscaledSocket(p)
+	}
+	// Webs covers top-level, foreground and service handlers; TCPs covers
+	// top-level and foreground but not services, so those are checked below.
+	for _, wc := range sc.Webs() {
+		for _, h := range wc.Handlers().All() {
+			if isProhibitedSock(h.Proxy()) {
+				return true
+			}
+		}
+	}
+	for _, h := range sc.TCPs() {
+		if isProhibitedSock(h.TCPForward()) {
+			return true
+		}
+	}
+	for _, svc := range sc.Services().All() {
+		for _, h := range svc.TCP().All() {
+			if isProhibitedSock(h.TCPForward()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateServeConfigUpdate validates changes proposed by incoming serve
