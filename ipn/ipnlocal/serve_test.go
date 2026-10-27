@@ -2213,3 +2213,91 @@ func TestValidateServeConfigUpdate(t *testing.T) {
 		})
 	}
 }
+
+// mkTempSocket creates an empty file to stand in for a unix socket and returns
+// its path. isTailscaledSocket matches by os.SameFile, so a regular file is
+// enough and its name does not matter.
+func mkTempSocket(t *testing.T) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+// TestServeTargetsTailscaledSocket checks the guard that refuses a serve config
+// proxying to tailscaled's own socket, across every place a handler can live and
+// through a symlink alias.
+func TestServeTargetsTailscaledSocket(t *testing.T) {
+	b := newTestBackend(t)
+
+	sock := mkTempSocket(t)
+	b.sys.SocketPath = sock
+	other := mkTempSocket(t)
+	alias := sock + ".symlink"
+	if err := os.Symlink(sock, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	tcpTo := func(target string) *ipn.ServeConfig {
+		return &ipn.ServeConfig{TCP: map[uint16]*ipn.TCPPortHandler{443: {TCPForward: target}}}
+	}
+
+	tests := []struct {
+		name string
+		conf *ipn.ServeConfig
+		want bool
+	}{
+		{"nil", nil, false},
+		{"no-unix-tcp", tcpTo("127.0.0.1:8080"), false},
+		{"other-socket", tcpTo("unix:" + other), false},
+		{"tcp-forward", tcpTo("unix:" + sock), true},
+		{"tcp-forward-via-symlink", tcpTo("unix:" + alias), true},
+		{
+			"web-proxy",
+			&ipn.ServeConfig{Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{"/": {Proxy: "unix:" + sock}}},
+			}},
+			true,
+		},
+		{
+			"foreground-tcp",
+			&ipn.ServeConfig{Foreground: map[string]*ipn.ServeConfig{
+				"sess": tcpTo("unix:" + sock),
+			}},
+			true,
+		},
+		{
+			"service-tcp",
+			&ipn.ServeConfig{Services: map[tailcfg.ServiceName]*ipn.ServiceConfig{
+				"svc:foo": {TCP: map[uint16]*ipn.TCPPortHandler{443: {TCPForward: "unix:" + sock}}},
+			}},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := b.serveTargetsTailscaledSocket(tt.conf.View()); got != tt.want {
+				t.Errorf("serveTargetsTailscaledSocket = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSetServeConfigRejectsTailscaledSocket confirms the guard is wired into
+// the config-set path, so "tailscale serve" is refused with a surfaced error
+// rather than silently accepted.
+func TestSetServeConfigRejectsTailscaledSocket(t *testing.T) {
+	b := newTestBackend(t)
+	sock := mkTempSocket(t)
+	b.sys.SocketPath = sock
+
+	err := b.setServeConfigLocked(&ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{443: {TCPForward: "unix:" + sock}},
+	}, "")
+	if err == nil {
+		t.Fatal("setServeConfigLocked accepted a forward to the tailscaled socket; want it refused")
+	}
+}
