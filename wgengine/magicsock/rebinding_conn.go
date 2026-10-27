@@ -84,7 +84,7 @@ func (c *RebindingUDPConn) connAt(i int) nettype.PacketConn {
 	return c.groupAtomic.Load().conns[i]
 }
 
-// controleEach applies fn on the currently bound sockets.
+// controlEach applies fn on the currently bound sockets.
 func (c *RebindingUDPConn) controlEach(fn func(fd uintptr) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
