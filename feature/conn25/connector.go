@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tailscale.com/net/packet"
+	"tailscale.com/net/routelimits"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
@@ -27,6 +28,10 @@ func (c *connector) handleTransitIPRequest(n tailcfg.NodeView, peerV4 netip.Addr
 		c.logf("[Unexpected] peer attempt to map a transit IP to dest IP did not have matching families: node: %s, tIPv4: %v dIPv4: %v",
 			n.StableID(), tipr.TransitIP.Is4(), tipr.DestinationIP.Is4())
 		return TransitIPResponse{Code: AddrFamilyMismatch, Message: addrFamilyMismatchMessage}
+	}
+
+	if routelimits.IsDisallowed(tipr.DestinationIP) {
+		return TransitIPResponse{Code: DisallowedDestination, Message: disallowedDestinationMessage}
 	}
 
 	// The transit address has to come from a transit IP pool we're configured with.
