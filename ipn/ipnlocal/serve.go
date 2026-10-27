@@ -80,8 +80,11 @@ const (
 // current etag of a resource.
 var ErrETagMismatch = errors.New("etag mismatch")
 
-// ErrProxyToTailscaledSocket is returned when attempting to proxy
-// to the tailscaled socket itself, which would create a loop.
+// ErrProxyToTailscaledSocket is returned when attempting to proxy to the
+// tailscaled socket itself. The LocalAPI authorizes a unix-socket caller by
+// the peer credentials of the dialing process, which would be tailscaled
+// running as root, so such a proxy would hand a remote client a
+// root-authorized LocalAPI.
 var ErrProxyToTailscaledSocket = errors.New("cannot proxy to tailscaled socket")
 
 var serveHTTPContextKey ctxkey.Key[*serveHTTPContext]
@@ -699,27 +702,20 @@ func (b *LocalBackend) tcpHandlerForServeTCP(tcph ipn.TCPPortHandlerView, dport 
 		return func(conn net.Conn) error {
 			defer conn.Close()
 			conn = b.meteredConnForService(conn, forVIPService)
-			// Never forward to tailscaled's own socket: the local API
-			// authorizes a unix-socket caller by the peer credentials of the
-			// dialing process, which here is tailscaled itself, so a forward
-			// would hand a remote peer a root-authorized local API.
-			socketPath, isUnix := strings.CutPrefix(backDst, "unix:")
-			if isUnix && b.isTailscaledSocket(socketPath) {
-				b.logf("localbackend: refusing TCP proxy on port %v (from %v) to the tailscaled socket %q", dport, srcAddr, socketPath)
-				return ErrProxyToTailscaledSocket
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			var backConn net.Conn
 			var err error
-			if isUnix {
-				var d net.Dialer
-				backConn, err = d.DialContext(ctx, "unix", socketPath)
+			if socketPath, isUnix := strings.CutPrefix(backDst, "unix:"); isUnix {
+				backConn, err = b.dialServeUnixSocket(ctx, socketPath)
 			} else {
 				backConn, err = b.dialer.SystemDial(ctx, "tcp", backDst)
 			}
 			cancel()
 			if err != nil {
-				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				// dialServeUnixSocket already logged a refusal; don't double-log.
+				if !errors.Is(err, ErrProxyToTailscaledSocket) {
+					b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				}
 				return nil
 			}
 			defer backConn.Close()
@@ -1033,6 +1029,49 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.ServeHTTP(w, r)
 }
 
+// dialServeUnixSocket dials a unix-socket serve/funnel backend. It returns
+// ErrProxyToTailscaledSocket if the backend is tailscaled's own socket,
+// which would give the caller a root-authorized LocalAPI.
+//
+// The configured path can be replaced by anyone who can write to its
+// directory, so the socket is re-checked on every dial, not only at
+// config time. dialServeUnixSocketSafe avoids re-resolving the path
+// where the platform allows it. On the remaining dials,
+// refuseIfConnectedToTailscaledSocket re-checks the connected peer.
+func (b *LocalBackend) dialServeUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	if b.isTailscaledSocket(socketPath) {
+		b.logf("serve: refusing to proxy to the tailscaled socket %q", socketPath)
+		return nil, ErrProxyToTailscaledSocket
+	}
+	conn, err := b.dialServeUnixSocketSafe(ctx, socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.refuseIfConnectedToTailscaledSocket(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// refuseIfConnectedToTailscaledSocket returns ErrProxyToTailscaledSocket
+// if conn is a unix connection to the tailscaled socket. The peer address
+// is the path the listening socket was bound to, not the path that was
+// dialed, so the check still sees the tailscaled socket through a symlink
+// swapped in before the dial. This check is best-effort: connections
+// that have no determinable peer name are allowed.
+func (b *LocalBackend) refuseIfConnectedToTailscaledSocket(conn net.Conn) error {
+	ua, ok := conn.RemoteAddr().(*net.UnixAddr)
+	if !ok || ua.Name == "" {
+		return nil
+	}
+	if ua.Name == b.sys.SocketPath || b.isTailscaledSocket(ua.Name) {
+		b.logf("serve: refusing connected unix backend peer %q: it is the tailscaled socket", ua.Name)
+		return ErrProxyToTailscaledSocket
+	}
+	return nil
+}
+
 // getTransport returns the Transport used for regular (non-GRPC) requests
 // to the backend. The Transport gets created lazily, at most once.
 func (rp *reverseProxy) getTransport() *http.Transport {
@@ -1042,8 +1081,7 @@ func (rp *reverseProxy) getTransport() *http.Transport {
 		dial := rp.lb.dialer.SystemDial
 		if rp.socketPath != "" {
 			dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", rp.socketPath)
+				return rp.lb.dialServeUnixSocket(ctx, rp.socketPath)
 			}
 		}
 
@@ -1073,8 +1111,7 @@ func (rp *reverseProxy) getH2CTransport() http.RoundTripper {
 			Protocols: &p,
 			DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 				if rp.socketPath != "" {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", rp.socketPath)
+					return rp.lb.dialServeUnixSocket(ctx, rp.socketPath)
 				}
 				return rp.lb.dialer.SystemDial(ctx, "tcp", rp.url.Host)
 			},
