@@ -3178,6 +3178,9 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 		prefsChanged = true
 		prefsChangedWhy = append(prefsChangedWhy, "opts.UpdatePrefs")
 	}
+	// Reset the always-on override whenever Start is called.
+	b.resetAlwaysOnOverrideLocked()
+
 	// Apply any syspolicy overrides, resolve exit node ID, etc.
 	// As of 2025-07-03, this is primarily needed in two cases:
 	//  - when opts.UpdatePrefs is not nil
@@ -3217,8 +3220,6 @@ func (b *LocalBackend) startLocked(opts ipn.Options) error {
 	}
 	prefs := newPrefs.View()
 
-	// Reset the always-on override whenever Start is called.
-	b.resetAlwaysOnOverrideLocked()
 	b.setAtomicValuesFromPrefsLocked(prefs)
 	b.updateNoSNATExitNodeWarning(prefs)
 

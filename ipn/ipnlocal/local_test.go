@@ -415,6 +415,45 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 }
 
+func TestStartResetsAlwaysOnOverrideBeforeReconcilingPrefs(t *testing.T) {
+	var polc policytest.Config
+	polc.Set(pkey.AlwaysOn, true)
+
+	sys := tsd.NewSystem()
+	sys.PolicyClient.Set(polc)
+
+	b := newTestLocalBackendWithSys(t, sys)
+	b.ForTest().SetControlClientGetter(func(opts controlclient.Options) (controlclient.Client, error) {
+		return newClient(t, opts), nil
+	})
+	b.ForTest().SetPrefs(&ipn.Prefs{
+		ControlURL:  "https://localhost:1/",
+		WantRunning: false,
+	})
+
+	// Simulate a user disconnecting while AlwaysOn.OverrideWithReason is
+	// enabled. The override prevents Always-On from immediately setting
+	// WantRunning back to true.
+	b.mu.Lock()
+	b.overrideAlwaysOn = true
+	b.mu.Unlock()
+
+	if err := b.Start(ipn.Options{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if got := b.Prefs().WantRunning(); !got {
+		t.Errorf("WantRunning = false after Start with Always-On enabled; want true")
+	}
+
+	b.mu.Lock()
+	overrideAlwaysOn := b.overrideAlwaysOn
+	b.mu.Unlock()
+	if overrideAlwaysOn {
+		t.Error("overrideAlwaysOn remains set after Start")
+	}
+}
+
 func TestZeroExitNodeViaLocalAPI(t *testing.T) {
 	lb := newTestLocalBackend(t)
 	user := &ipnauth.TestActor{}
