@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"go.uber.org/zap"
@@ -63,6 +64,9 @@ type ReconcilerOptions struct {
 	TailscaleNamespace string
 	Logger             *zap.SugaredLogger
 	Clock              tstime.Clock
+	// LookupIP overrides DNS lookups for tests. An empty server uses the Pod's
+	// configured resolver; otherwise server is the nameserver Service IP.
+	LookupIP func(ctx context.Context, network, host, server string) ([]netip.Addr, error)
 }
 
 // Reconciler knows how to create nameserver resources in cluster in
@@ -74,6 +78,7 @@ type Reconciler struct {
 	clock       tstime.Clock
 	tsNamespace string
 	tracker     *reconciler.ResourceTracker
+	dnsProbe    *resolutionProbe
 }
 
 // NewReconciler creates a new Reconciler.
@@ -89,6 +94,7 @@ func NewReconciler(options ReconcilerOptions) *Reconciler {
 		logger:      options.Logger.Named(reconcilerName),
 		clock:       clock,
 		tracker:     reconciler.NewResourceTracker(gaugeNameserverResources),
+		dnsProbe:    newResolutionProbe(clock, options.LookupIP),
 	}
 }
 
@@ -133,13 +139,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 		return reconcile.Result{}, nil
 	}
 
+	res.RequeueAfter = dnsProbeInterval
 	oldCnStatus := dnsCfg.Status.DeepCopy()
 	setStatus := func(dnsCfg *tsapi.DNSConfig, status metav1.ConditionStatus, reason, message string) (reconcile.Result, error) {
 		tsoperator.SetDNSConfigCondition(dnsCfg, tsapi.NameserverReady, status, reason, message, dnsCfg.Generation, r.clock, logger)
+		if status != metav1.ConditionTrue {
+			r.dnsProbe.reset()
+			r.setResolutionCondition(dnsCfg, resolutionObservation{metav1.ConditionUnknown, "NameserverNotReady", "Waiting for nameserver resources before checking DNS resolution."})
+		}
 		if !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
 			// An error encountered here should get returned by the Reconcile function.
 			if updateErr := r.Client.Status().Update(ctx, dnsCfg); updateErr != nil {
 				err = errors.Join(err, updateErr)
+			} else {
+				r.reportResolutionTransition(oldCnStatus.Conditions, dnsCfg)
 			}
 		}
 		return res, err
@@ -151,8 +164,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	if len(dnsCfgs.Items) > 1 { // enforce DNSConfig to be a singleton
 		msg := "invalid cluster configuration: more than one tailscale.com/dnsconfigs found. Please ensure that no more than one is created."
 		logger.Error(msg)
-		r.recorder.Event(&dnsCfg, corev1.EventTypeWarning, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
-		setStatus(&dnsCfg, metav1.ConditionFalse, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
+		res, err := setStatus(&dnsCfg, metav1.ConditionFalse, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
+		if err == nil && !apiequality.Semantic.DeepEqual(oldCnStatus, &dnsCfg.Status) {
+			r.recorder.Event(&dnsCfg, corev1.EventTypeWarning, reasonMultipleDNSConfigsPresent, messageMultipleDNSConfigsPresent)
+		}
+		return res, err
 	}
 
 	if err := reconciler.EnsureFinalizer(ctx, r.Client, &dnsCfg, reconciler.Finalizer); err != nil {
@@ -163,9 +179,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 	if err = r.maybeProvision(ctx, &dnsCfg); err != nil {
 		if strings.Contains(err.Error(), optimisticLockErrorMsg) {
 			logger.Infof("optimistic lock error, retrying: %s", err)
-			return reconcile.Result{}, nil
+			return res, nil
 		} else {
-			return reconcile.Result{}, fmt.Errorf("error provisioning nameserver resources: %w", err)
+			return setStatus(&dnsCfg, metav1.ConditionFalse, reasonNameserverCreationFailed, fmt.Sprintf(messageNameserverCreationFailed, err))
 		}
 	}
 
@@ -181,10 +197,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (res 
 		dnsCfg.Status.Nameserver = &tsapi.NameserverStatus{
 			IP: ip,
 		}
+		observation, after, probeErr := r.checkDNSResolution(ctx, &dnsCfg, ip)
+		if ctx.Err() != nil {
+			return res, ctx.Err()
+		}
+		r.setResolutionCondition(&dnsCfg, observation)
+		res.RequeueAfter = after
+		err = probeErr
 		return setStatus(&dnsCfg, metav1.ConditionTrue, ReasonNameserverCreated, ReasonNameserverCreated)
 	}
-	logger.Info("nameserver Service does not have an IP address allocated, waiting...")
-	return reconcile.Result{}, nil
+	return setStatus(&dnsCfg, metav1.ConditionFalse, "NameserverPending", "Waiting for the nameserver Service to receive an IP address.")
 }
 
 func nameserverResourceLabels(name, namespace string) map[string]string {
@@ -302,7 +324,7 @@ var (
 			sa.ObjectMeta.Labels = cfg.labels
 			sa.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			sa.ObjectMeta.Namespace = cfg.namespace
-			_, err := reconciler.CreateOrUpdate(ctx, kubeClient, cfg.namespace, sa, func(*corev1.ServiceAccount) {})
+			_, err := reconciler.CreateOrMaybeUpdate(ctx, kubeClient, cfg.namespace, sa, nil)
 			return err
 		},
 	}
@@ -317,7 +339,7 @@ var (
 			svc.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			svc.ObjectMeta.Namespace = cfg.namespace
 			svc.Spec.ClusterIP = cfg.clusterIP
-			_, err := reconciler.CreateOrUpdate[corev1.Service](ctx, kubeClient, cfg.namespace, svc, func(*corev1.Service) {})
+			_, err := reconciler.CreateOrMaybeUpdate[corev1.Service](ctx, kubeClient, cfg.namespace, svc, nil)
 			return err
 		},
 	}
@@ -331,7 +353,7 @@ var (
 			cm.ObjectMeta.Labels = cfg.labels
 			cm.ObjectMeta.OwnerReferences = cfg.ownerRefs
 			cm.ObjectMeta.Namespace = cfg.namespace
-			_, err := reconciler.CreateOrUpdate[corev1.ConfigMap](ctx, kubeClient, cfg.namespace, cm, func(cm *corev1.ConfigMap) {})
+			_, err := reconciler.CreateOrMaybeUpdate[corev1.ConfigMap](ctx, kubeClient, cfg.namespace, cm, nil)
 			return err
 		},
 	}

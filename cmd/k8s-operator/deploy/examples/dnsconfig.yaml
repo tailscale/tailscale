@@ -1,3 +1,9 @@
+# Configure your cluster DNS to forward ts.net queries to status.nameserver.ip.
+# Inspect automatic DNS checks with: kubectl describe dnsconfig ts-dns
+# NameserverReady reports provisioning; DNSResolutionReady separately checks
+# a sampled managed record from the operator Pod. Confirmed resolver-path
+# mismatches produce warnings after a grace period; an unavailable nameserver
+# reports Unknown. Successful rechecks report recovery.
 apiVersion: tailscale.com/v1alpha1
 kind: DNSConfig 
 metadata:

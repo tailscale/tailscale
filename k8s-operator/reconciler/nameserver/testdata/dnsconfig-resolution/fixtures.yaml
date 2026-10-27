@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tailscale
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dnsconfig-controller
+  namespace: tailscale
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dnsconfig-test-controller
+rules:
+- apiGroups: ["tailscale.com"]
+  resources: ["dnsconfigs", "dnsconfigs/status", "dnsconfigs/finalizers"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["services", "configmaps", "serviceaccounts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dnsconfig-test-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dnsconfig-test-controller
+subjects:
+- kind: ServiceAccount
+  name: dnsconfig-controller
+  namespace: tailscale
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnsconfig-controller
+  namespace: tailscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dnsconfig-controller
+  template:
+    metadata:
+      labels:
+        app: dnsconfig-controller
+    spec:
+      serviceAccountName: dnsconfig-controller
+      containers:
+      - name: controller
+        image: tailscale-dns-implementation:local
+        imagePullPolicy: Never
+        command: ["/controller"]
+---
+apiVersion: tailscale.com/v1alpha1
+kind: DNSConfig
+metadata:
+  name: implementation
+spec:
+  nameserver:
+    image:
+      repo: tailscale-dns-implementation
+      tag: unavailable
