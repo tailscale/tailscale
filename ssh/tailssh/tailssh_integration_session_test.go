@@ -323,9 +323,6 @@ func TestIntegrationPTYTerminalModes(t *testing.T) {
 		t.Run("shell", func(t *testing.T) {
 			for _, tt := range tests {
 				p := startPTYShell(t, cl, ptyRequest{term: "xterm", rows: 24, cols: 80, modes: tt.modes})
-				if p.loginWaitsForShell(t) && !isBusyBoxLogin() {
-					t.Skip("KNOWN BUG: shadow-utils login resets the client's terminal modes")
-				}
 				out := p.queryValue(t, `printf 'modes=%s\n' "$(stty -a | tr ' \n' ',,')"`, "modes")
 				p.send(t, "exit")
 				check(t, tt.modes, tt.want, strings.ReplaceAll(out, ",", " "))

@@ -142,7 +142,7 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 	echo "Testing on $$bases (in parallel)"; \
 	failed=$$(mktemp); \
 	for base in $$bases; do \
-		{ docker build --progress=plain --build-arg="BASE=$$base" -t "ssh-$$(echo $$base | tr : -)" ssh/tailssh/testcontainers || echo $$base >>$$failed; } & \
+		{ docker build --build-arg="BASE=$$base" -t "ssh-$$(echo $$base | tr : -)" ssh/tailssh/testcontainers || echo $$base >>$$failed; } & \
 	done; \
 	wait; \
 	if [ -s $$failed ]; then echo "FAILED on:" $$(cat $$failed); rm -f $$failed; exit 1; fi; \

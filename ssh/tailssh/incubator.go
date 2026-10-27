@@ -492,6 +492,13 @@ func beIncubator(args []string) error {
 		return handleInProcess(dlogf, ia)
 	}
 
+	// We will attempt to use a login shell with either the login or the su
+	// command. We do this in order to get some level of PAM integration to
+	// allow for things like mkhomedir. See https://go.corp.ts.net/ssh-with-pam.
+	//
+	// We prefer login when possible because it uses the "remote" PAM profile as
+	// opposed to su, which uses the "login" PAM profile.
+
 	// First try the login command
 	if err := tryExecLogin(dlogf, ia); err != nil {
 		return err
@@ -500,7 +507,7 @@ func beIncubator(args []string) error {
 	// If we got here, we weren't able to use login (because tryExecLogin
 	// returned without replacing the running process), maybe we can use
 	// su.
-	if handled, err := trySU(dlogf, ia); handled {
+	if handled, err := tryExecSU(dlogf, ia); handled {
 		return err
 	} else {
 		dlogf("not attempting su")
@@ -593,6 +600,11 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 			// breaks things like mosh and VSCode.
 			return nil
 		}
+		hi := hostinfo.New()
+		if hi.Distro == "ubuntu" {
+			dlogf("can't use login on Ubuntu because it fails to preserve the pty's terminal modes")
+			return nil
+		}
 	}
 
 	loginCmdPath, err := exec.LookPath("login")
@@ -612,7 +624,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 	return err
 }
 
-// trySU attempts to start a login shell using su. If su is available and
+// tryExecSU attempts to start a login shell using su. If su is available and
 // supports the necessary arguments, this returns true, plus the result of
 // executing su. Otherwise, it returns (false, nil).
 //
@@ -622,7 +634,7 @@ func tryExecLogin(dlogf logger.Logf, ia incubatorArgs) error {
 // Unlike login, su often does not require a TTY, so on Linux hosts that have
 // an su command which accepts the right flags, we'll use su instead of login
 // when no TTY is available.
-func trySU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
+func tryExecSU(dlogf logger.Logf, ia incubatorArgs) (handled bool, err error) {
 	if ia.forceV1Behavior {
 		// v1 behavior did not use su.
 		dlogf("Forcing v1 behavior, won't use su")
