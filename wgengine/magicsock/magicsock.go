@@ -3827,6 +3827,14 @@ func (c *Conn) listenGroup(network string, port uint16) ([]nettype.PacketConn, u
 		if err != nil {
 			return nil, 0, err
 		}
+		addrStr := pconn.LocalAddr().String()
+		ap, err := netip.ParseAddrPort(addrStr)
+		if err == nil {
+			return []nettype.PacketConn{pconn}, ap.Port(), nil
+		}
+		if debugBindSocket() {
+			c.logf("[unexpected] magicsock: unparseable local address (from %T): %s", pconn, addrStr)
+		}
 		return []nettype.PacketConn{pconn}, port, nil
 	}
 	pconns, boundPort, err := sockopts.BindUDPGroup(
