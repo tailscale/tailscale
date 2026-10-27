@@ -336,6 +336,9 @@ func useWebsockets() bool {
 	return false
 }
 
+// maxErrBodyBytes is how much of a non-101 response body to include in the connect error message.
+const maxErrBodyBytes = 1 << 10
+
 func (c *Client) connect(ctx context.Context, caller string) (client *derp.Client, connGen int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -551,9 +554,9 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			return nil, 0, err
 		}
 		if resp.StatusCode != http.StatusSwitchingProtocols {
-			b, _ := io.ReadAll(resp.Body)
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBodyBytes))
 			resp.Body.Close()
-			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
+			return nil, 0, fmt.Errorf("GET failed: status %v: %q", resp.Status, b)
 		}
 	}
 	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf,
