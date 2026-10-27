@@ -55,6 +55,7 @@ import (
 	tsapi "tailscale.com/k8s-operator/apis/v1alpha1"
 	"tailscale.com/k8s-operator/reconciler/dnsrecords"
 	"tailscale.com/k8s-operator/reconciler/nameserver"
+	"tailscale.com/k8s-operator/reconciler/nodekey"
 	"tailscale.com/k8s-operator/reconciler/peerrelay"
 	"tailscale.com/k8s-operator/reconciler/proxyclass"
 	"tailscale.com/k8s-operator/reconciler/proxygrouppolicy"
@@ -387,6 +388,26 @@ func runReconcilers(opts reconcilerOpts) {
 
 	if err = peerrelay.NewReconciler(peerRelayOptions).Register(mgr); err != nil {
 		startlog.Fatalf("could not register peerrelay reconciler: %v", err)
+	}
+
+	// NodeKey reconciler.
+	// Only start the NodeKey reconciler if autoSignNodeKeys is set to true.
+	if opts.autoSignNodeKeys {
+		localClient, err := opts.tsServer.LocalClient()
+		if err != nil {
+			startlog.Fatalf("getting local tailscale client: %v", err)
+		}
+
+		nodeKeyOptions := nodekey.ReconcilerOptions{
+			Client:             mgr.GetClient(),
+			TailscaleNamespace: opts.tailscaleNamespace,
+			LocalClient:        localClient,
+			Logger:             opts.log,
+		}
+
+		if err = nodekey.NewReconciler(nodeKeyOptions).Register(mgr); err != nil {
+			startlog.Fatalf("could not register nodekey reconciler: %v", err)
+		}
 	}
 
 	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
@@ -763,28 +784,6 @@ func runReconcilers(opts reconcilerOpts) {
 		startlog.Fatalf("could not create ProxyGroup reconciler: %v", err)
 	}
 
-	// NodeKeySigner reconciler.
-	// Only start the NodeKeySigner reconciler if autoSignNodeKeys is set to true.
-	if opts.autoSignNodeKeys {
-		secFilter := handler.EnqueueRequestsFromMapFunc(managedSecretHandler(opts.tailscaleNamespace))
-		tsLocalClient, err := opts.tsServer.LocalClient()
-		if err != nil {
-			startlog.Fatalf("getting local tailscale client: %v", err)
-		}
-		err = builder.
-			ControllerManagedBy(mgr).
-			Named("node-key-signer-reconciler").
-			Watches(&corev1.Secret{}, secFilter).
-			Complete(&NodeKeySignerReconciler{
-				Client:        mgr.GetClient(),
-				logger:        opts.log.Named("node-key-signer-reconciler"),
-				tsLocalClient: tsLocalClient,
-			})
-		if err != nil {
-			startlog.Fatalf("could not create node key signer reconciler: %v", err)
-		}
-	}
-
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
@@ -975,22 +974,6 @@ func proxyClassHandlerForSvc(cl client.Client, logger *zap.SugaredLogger, defaul
 		}
 
 		return reqs
-	}
-}
-
-// managedSecretHandler filters Secret events to only those which
-// are managed by the operator.
-func managedSecretHandler(ns string) handler.MapFunc {
-	return func(_ context.Context, o client.Object) []reconcile.Request {
-		if o.GetNamespace() != ns {
-			return nil
-		}
-		if !isManagedResource(o) {
-			return nil
-		}
-		return []reconcile.Request{
-			{NamespacedName: client.ObjectKeyFromObject(o)},
-		}
 	}
 }
 
