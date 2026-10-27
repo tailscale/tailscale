@@ -13,11 +13,55 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 	"tailscale.com/util/must"
 )
+
+func TestCallerLogger(t *testing.T) {
+	tests := []struct {
+		name       string
+		who        *apitype.WhoIsResponse
+		wantCaller string
+	}{
+		{
+			name: "user",
+			who: &apitype.WhoIsResponse{
+				Node:        &tailcfg.Node{},
+				UserProfile: &tailcfg.UserProfile{LoginName: "foo@example.com"},
+			},
+			wantCaller: "foo@example.com",
+		},
+		{
+			name: "tagged node",
+			who: &apitype.WhoIsResponse{
+				Node: &tailcfg.Node{Name: "build-node.example.ts.net.", Tags: []string{"tag:ci"}},
+			},
+			wantCaller: "build-node.example.ts.net",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			core, logs := observer.New(zap.ErrorLevel)
+			callerLogger(zap.New(core).Sugar(), tt.who, "100.64.0.1:54321").Error("refused")
+
+			entries := logs.All()
+			if len(entries) != 1 {
+				t.Fatalf("got %d log entries, want 1", len(entries))
+			}
+			fields := entries[0].ContextMap()
+			if got := fields["caller"]; got != tt.wantCaller {
+				t.Errorf("caller = %q, want %q", got, tt.wantCaller)
+			}
+			if got := fields["remote"]; got != "100.64.0.1:54321" {
+				t.Errorf("remote = %q, want %q", got, "100.64.0.1:54321")
+			}
+		})
+	}
+}
 
 func TestImpersonationHeaders(t *testing.T) {
 	zl, err := zap.NewDevelopment()
